@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.db
+.env
+storage/books/
+storage/extracted_images/
+storage/processed/
+tests/test_sample.pdf
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
