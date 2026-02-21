@@ -327,7 +327,28 @@ elif page == "🧠 Analyse Chapter":
             if already_done:
                 st.info("This chapter has already been analysed. You can re-analyse or view results.")
 
-            if st.button("🚀 Run Analysis", type="primary"):
+            # Check API key availability
+            _api_key_available = False
+            try:
+                _key = st.secrets.get("ANTHROPIC_API_KEY", "")
+                if _key:
+                    _api_key_available = True
+            except Exception:
+                pass
+            if not _api_key_available:
+                import os as _os
+                if _os.getenv("ANTHROPIC_API_KEY"):
+                    _api_key_available = True
+
+            if not _api_key_available:
+                st.warning(
+                    "**API key not configured.** To use AI analysis, add your Anthropic API key:\n\n"
+                    "**Streamlit Cloud:** Go to app Settings → Secrets → add:\n"
+                    "```\nANTHROPIC_API_KEY = \"sk-ant-...\"\n```\n\n"
+                    "**Locally:** Create `.streamlit/secrets.toml` with the same line."
+                )
+
+            if st.button("🚀 Run Analysis", type="primary", disabled=not _api_key_available):
                 # Get the chapter content
                 chapter_content = None
                 for ch in chapters:
