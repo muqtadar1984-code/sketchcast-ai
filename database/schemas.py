@@ -82,3 +82,22 @@ class Image(Base):
 
     book: Mapped["Book"] = relationship(back_populates="images")
     chapter: Mapped["Chapter"] = relationship(back_populates="images")
+
+
+class ChapterAnalysis(Base):
+    __tablename__ = "chapter_analyses"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    book_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("books.id", ondelete="CASCADE"), nullable=False
+    )
+    chapter_num: Mapped[int] = mapped_column(Integer, nullable=False)
+    difficulty_level: Mapped[str] = mapped_column(String(50), default="middle_school")
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    total_concepts: Mapped[int] = mapped_column(Integer, default=0)
+    total_visual_opportunities: Mapped[int] = mapped_column(Integer, default=0)
+    total_episodes: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens_used: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    analyzed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    analysis_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
