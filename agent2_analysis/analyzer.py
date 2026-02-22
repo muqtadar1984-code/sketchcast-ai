@@ -1,4 +1,9 @@
-"""Orchestrates the full Agent 2 analysis pipeline."""
+"""Orchestrates the full Agent 2 analysis pipeline.
+
+Max 2 API calls per chapter:
+  Call 1 — combined text analysis (concepts + difficulty + visuals)
+  Call 2 — batch image analysis (skipped if no images)
+"""
 
 from __future__ import annotations
 
@@ -7,11 +12,17 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agent2_analysis.concept_extractor import extract_concepts
-from agent2_analysis.image_analyzer import analyze_images
-from agent2_analysis.models import MasterAnalysis, TokenUsage
-from agent2_analysis.segmenter import segment_episodes
-from agent2_analysis.visual_detector import detect_visual_opportunities
+from agent2_analysis.image_analyzer import analyze_images_batch
+from agent2_analysis.models import (
+    ConceptResult,
+    Episode,
+    EpisodePlan,
+    MasterAnalysis,
+    TokenUsage,
+    VisualOpportunity,
+)
+from agent2_analysis.prompts import FULL_CHAPTER_ANALYSIS_PROMPT
+from agent2_analysis.segmenter import build_single_episode
 from shared.claude_client import ClaudeClient
 
 ANALYSIS_DIR = Path(__file__).resolve().parent.parent / "storage" / "analysis"
@@ -27,10 +38,9 @@ def run_full_analysis(
     Run the complete analysis pipeline on a single chapter.
 
     Steps:
-      1. Concept extraction + difficulty assessment
-      2. Visual opportunity detection
-      3. Image analysis (if images exist)
-      4. Episode segmentation
+      1. ONE combined Claude call  -> concepts, difficulty, visuals
+      2. ONE batch Claude Vision call -> all images (skipped if none)
+      3. Build single episode mechanically (no API call)
 
     Returns a MasterAnalysis with all results combined.
     """
@@ -41,54 +51,115 @@ def run_full_analysis(
     chapter_num = chapter_content.get("chapter_num", 0)
     chapter_title = chapter_content.get("title", "Untitled")
 
-    # ── Step 1: Concepts + Difficulty ────────────────────────────────
-    concept_result, difficulty_assessments, usage_concepts = extract_concepts(
-        chapter_content, level=level, client=client,
+    # ── Build chapter content string ──────────────────────────────────
+    sections = chapter_content.get("sections", [])
+    content_parts: list[str] = []
+    word_count = 0
+
+    for sec in sections:
+        content_parts.append(f"## {sec.get('section_title', '')}")
+        text = sec.get("content", "")
+        content_parts.append(text)
+        word_count += len(text.split())
+        for sub in sec.get("subsections", []):
+            content_parts.append(f"### {sub.get('section_title', '')}")
+            sub_text = sub.get("content", "")
+            content_parts.append(sub_text)
+            word_count += len(sub_text.split())
+
+    for box in chapter_content.get("key_boxes", []):
+        content_parts.append(f"[{box.get('type', 'box').upper()}: {box.get('title', '')}]")
+        box_text = box.get("content", "")
+        content_parts.append(box_text)
+        word_count += len(box_text.split())
+
+    full_content = "\n\n".join(content_parts)
+
+    # ══════════════════════════════════════════════════════════════════
+    #  API CALL 1 — Combined chapter analysis
+    # ══════════════════════════════════════════════════════════════════
+    prompt = FULL_CHAPTER_ANALYSIS_PROMPT.format(
+        chapter_title=chapter_title,
+        level=level,
+        word_count=word_count,
+        content=full_content[:15000],  # cap to stay within context window
     )
 
-    # ── Step 2: Visual Opportunities ─────────────────────────────────
-    visual_opportunities, usage_visuals = detect_visual_opportunities(
-        chapter_content, level=level, client=client,
+    result = client.analyze(prompt, max_tokens=8000)
+    data = result["data"]
+    usage_chapter = result["usage"]
+
+    # ── Parse concepts ────────────────────────────────────────────────
+    concept_result = ConceptResult(
+        concepts=data.get("concepts", []),
+        dependencies=data.get("dependencies", []),
+        prerequisites=data.get("prerequisites", []),
     )
 
-    # ── Step 3: Image Analysis ───────────────────────────────────────
-    image_analyses, usage_images = analyze_images(
+    # ── Parse difficulty assessments ──────────────────────────────────
+    raw_diff = data.get("difficulty_assessments", [])
+    if isinstance(raw_diff, dict):
+        difficulty_assessments = [raw_diff]
+    elif isinstance(raw_diff, list):
+        difficulty_assessments = raw_diff
+    else:
+        difficulty_assessments = []
+
+    # ── Parse visual opportunities ────────────────────────────────────
+    raw_visuals = data.get("visual_opportunities", [])
+    if isinstance(raw_visuals, dict):
+        raw_visuals = [raw_visuals]
+    visual_opportunities: list[VisualOpportunity] = []
+    for v in (raw_visuals if isinstance(raw_visuals, list) else []):
+        try:
+            visual_opportunities.append(VisualOpportunity(**v))
+        except Exception:
+            visual_opportunities.append(VisualOpportunity(
+                opportunity_id=v.get("opportunity_id", f"v{len(visual_opportunities)+1:03d}"),
+                title=v.get("title", "Visual"),
+                description=v.get("description", ""),
+                visual_type=v.get("visual_type", "diagram"),
+            ))
+
+    # ══════════════════════════════════════════════════════════════════
+    #  EPISODE — built mechanically (no API call)
+    # ══════════════════════════════════════════════════════════════════
+    episode_dict = build_single_episode(chapter_content)
+    # Enrich with IDs from the combined analysis
+    episode_dict["visual_opportunities_in_episode"] = [
+        v.opportunity_id for v in visual_opportunities
+    ]
+    episode_dict["key_concepts_introduced"] = [
+        c.concept_id for c in concept_result.concepts
+    ]
+
+    episode = Episode(**episode_dict)
+    episode_plan = EpisodePlan(
+        chapter_title=chapter_title,
+        total_episodes=1,
+        episodes=[episode],
+    )
+
+    # ══════════════════════════════════════════════════════════════════
+    #  API CALL 2 — Batch image analysis (skipped if no images)
+    # ══════════════════════════════════════════════════════════════════
+    image_analyses, usage_images = analyze_images_batch(
         chapter_content, book_id=book_id, client=client,
     )
 
-    # ── Step 4: Episode Segmentation ─────────────────────────────────
-    concept_ids = [c.concept_id for c in concept_result.concepts]
-    visual_ids = [v.opportunity_id for v in visual_opportunities]
-
-    episode_plan, usage_episodes = segment_episodes(
-        chapter_content,
-        concept_ids=concept_ids,
-        visual_ids=visual_ids,
-        level=level,
-        client=client,
-    )
-
-    # ── Combine token usage ──────────────────────────────────────────
+    # ── Token usage ───────────────────────────────────────────────────
     total_tokens = (
-        usage_concepts.get("concept_extraction", 0)
-        + usage_concepts.get("difficulty_assessment", 0)
-        + usage_visuals.get("visual_detection", 0)
-        + usage_images.get("image_analysis", 0)
-        + usage_episodes.get("segmentation", 0)
+        usage_chapter.get("total_tokens", 0)
+        + usage_images.get("total_tokens", 0)
     )
     total_cost = (
-        usage_concepts.get("estimated_cost_usd", 0)
-        + usage_visuals.get("estimated_cost_usd", 0)
+        usage_chapter.get("estimated_cost_usd", 0)
         + usage_images.get("estimated_cost_usd", 0)
-        + usage_episodes.get("estimated_cost_usd", 0)
     )
 
     token_usage = TokenUsage(
-        concept_extraction=usage_concepts.get("concept_extraction", 0),
-        difficulty_assessment=usage_concepts.get("difficulty_assessment", 0),
-        visual_detection=usage_visuals.get("visual_detection", 0),
-        image_analysis=usage_images.get("image_analysis", 0),
-        segmentation=usage_episodes.get("segmentation", 0),
+        chapter_analysis=usage_chapter.get("total_tokens", 0),
+        image_analysis=usage_images.get("total_tokens", 0),
         total=total_tokens,
         estimated_cost_usd=round(total_cost, 6),
     )

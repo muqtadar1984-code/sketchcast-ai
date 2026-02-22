@@ -378,17 +378,15 @@ elif page == "🧠 Analyse Chapter":
                             st.success("Analysis complete!")
 
                             # Summary metrics
-                            m = st.columns(5)
+                            m = st.columns(4)
                             with m[0]:
                                 st.metric("Concepts", len(result.concepts.concepts))
                             with m[1]:
                                 st.metric("Visual Opps", len(result.visual_opportunities))
                             with m[2]:
-                                st.metric("Episodes", result.episodes.total_episodes)
+                                ep = result.episodes.episodes[0] if result.episodes.episodes else None
+                                st.metric("Episode Duration", f"{ep.estimated_duration_minutes:.1f} min" if ep else "N/A")
                             with m[3]:
-                                total_dur = sum(ep.estimated_duration_minutes for ep in result.episodes.episodes)
-                                st.metric("Est. Duration", f"{total_dur:.0f} min")
-                            with m[4]:
                                 st.metric("Tokens", f"{result.token_usage.total:,}")
 
                             st.write(f"**Estimated cost:** ${result.token_usage.estimated_cost_usd:.4f}")
@@ -442,7 +440,12 @@ elif page == "📊 Analysis Results":
             st.metric("Visuals", len(a.get("visual_opportunities", [])))
         with mc[2]:
             eps = a.get("episodes", {})
-            st.metric("Episodes", eps.get("total_episodes", 0))
+            ep_list = eps.get("episodes", [])
+            if ep_list:
+                dur = ep_list[0].get("estimated_duration_minutes", 0)
+                st.metric("Episode Duration", f"{dur:.1f} min")
+            else:
+                st.metric("Episode Duration", "N/A")
         with mc[3]:
             st.metric("Tokens", f"{tu.get('total', 0):,}")
         with mc[4]:
@@ -452,7 +455,7 @@ elif page == "📊 Analysis Results":
 
         # Tabs
         tab1, tab2, tab3, tab4, tab5 = st.tabs(
-            ["Concepts", "Visual Opportunities", "Episodes", "Images", "Raw JSON"]
+            ["Concepts", "Visual Opportunities", "Episode", "Images", "Raw JSON"]
         )
 
         # ── Tab 1: Concepts ──────────────────────────────────────────
@@ -533,36 +536,32 @@ elif page == "📊 Analysis Results":
                         if elements:
                             st.write(f"**Elements:** {', '.join(elements)}")
 
-        # ── Tab 3: Episodes ──────────────────────────────────────────
+        # ── Tab 3: Episode ───────────────────────────────────────────
         with tab3:
             eps = a.get("episodes", {})
             episodes = eps.get("episodes", [])
             if not episodes:
-                st.info("No episodes planned.")
+                st.info("No episode data available.")
             else:
-                total_dur = sum(ep.get("estimated_duration_minutes", 0) for ep in episodes)
+                ep = episodes[0]  # always exactly 1 episode per chapter
                 ec = st.columns(3)
                 with ec[0]:
-                    st.metric("Total Episodes", len(episodes))
+                    st.metric("Duration", f"{ep.get('estimated_duration_minutes', 0):.1f} min")
                 with ec[1]:
-                    st.metric("Total Duration", f"{total_dur:.1f} min")
+                    st.metric("Word Count", f"{ep.get('estimated_word_count', 0):,}")
                 with ec[2]:
-                    st.metric("Avg Duration", f"{total_dur / len(episodes):.1f} min")
+                    st.metric("Sections", len(ep.get("sections_covered", [])))
                 st.divider()
 
-                for ep in episodes:
-                    with st.expander(f"Episode {ep.get('episode_num', '')}: {ep.get('title', '')}"):
-                        st.write(f"**Duration:** {ep.get('estimated_duration_minutes', 0)} min "
-                                 f"({ep.get('estimated_word_count', 0)} words)")
-                        st.write(f"**Sections:** {', '.join(ep.get('sections_covered', []))}")
-                        st.write(f"**Opening hook:** _{ep.get('opening_hook', '')}_")
-                        st.write(f"**Closing bridge:** _{ep.get('closing_bridge', '')}_")
-                        concepts_in = ep.get("key_concepts_introduced", [])
-                        if concepts_in:
-                            st.write(f"**Concepts:** {', '.join(concepts_in)}")
-                        vis_in = ep.get("visual_opportunities_in_episode", [])
-                        if vis_in:
-                            st.write(f"**Visuals:** {', '.join(vis_in)}")
+                st.subheader(ep.get("title", "Episode"))
+                st.write(f"**Sections covered:** {', '.join(ep.get('sections_covered', []))}")
+                concepts_in = ep.get("key_concepts_introduced", [])
+                if concepts_in:
+                    st.write(f"**Concepts:** {', '.join(concepts_in)}")
+                vis_in = ep.get("visual_opportunities_in_episode", [])
+                if vis_in:
+                    st.write(f"**Visual opportunities:** {', '.join(vis_in)}")
+                st.caption("Opening hook and closing bridge will be generated by Agent 3 (Script Generation).")
 
         # ── Tab 4: Images ────────────────────────────────────────────
         with tab4:

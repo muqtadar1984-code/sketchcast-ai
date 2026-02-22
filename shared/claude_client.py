@@ -103,6 +103,53 @@ class ClaudeClient:
         parsed = self._extract_json(text)
         return {"data": parsed, "usage": usage}
 
+    # ── batch image analysis ─────────────────────────────────────────
+
+    def analyze_images_batch(
+        self,
+        image_paths: list[str | Path],
+        prompt: str,
+        max_tokens: int = 4096,
+        retries: int = 3,
+    ) -> dict:
+        """Send multiple images + prompt in a single Claude Vision call."""
+        content: list[dict] = []
+        for src in image_paths:
+            path = Path(src)
+            if not path.exists():
+                continue
+            with open(path, "rb") as f:
+                img_bytes = f.read()
+            ext = path.suffix.lower().lstrip(".")
+            media_map = {
+                "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                "png": "image/png", "gif": "image/gif", "webp": "image/webp",
+            }
+            media_type = media_map.get(ext, "image/png")
+            b64 = base64.standard_b64encode(img_bytes).decode("utf-8")
+            content.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": media_type, "data": b64},
+            })
+        if not content:
+            # No valid images found — return empty result
+            return {
+                "data": [],
+                "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0},
+            }
+        content.append({"type": "text", "text": prompt})
+        messages = [{"role": "user", "content": content}]
+        response = self._call_messages(
+            system="You are an expert educational content analyst specializing in visual materials.",
+            messages=messages,
+            max_tokens=max_tokens,
+            retries=retries,
+        )
+        text = response.content[0].text
+        usage = self.track_tokens(response)
+        parsed = self._extract_json(text)
+        return {"data": parsed, "usage": usage}
+
     # ── token tracking ───────────────────────────────────────────────
 
     def track_tokens(self, response) -> dict:

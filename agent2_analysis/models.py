@@ -107,8 +107,6 @@ class Episode(BaseModel):
     sections_covered: list[str] = Field(default_factory=list)
     estimated_word_count: int = 0
     estimated_duration_minutes: float = 4.0
-    opening_hook: str = ""
-    closing_bridge: str = ""
     key_concepts_introduced: list[str] = Field(default_factory=list)
     visual_opportunities_in_episode: list[str] = Field(default_factory=list)
 
@@ -122,11 +120,8 @@ class EpisodePlan(BaseModel):
 # ── Token usage ──────────────────────────────────────────────────────
 
 class TokenUsage(BaseModel):
-    concept_extraction: int = 0
-    difficulty_assessment: int = 0
-    visual_detection: int = 0
-    image_analysis: int = 0
-    segmentation: int = 0
+    chapter_analysis: int = 0   # single combined call (concepts + difficulty + visuals)
+    image_analysis: int = 0     # single batch image call (0 if no images)
     total: int = 0
     estimated_cost_usd: float = 0.0
 
