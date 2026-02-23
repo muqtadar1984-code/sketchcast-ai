@@ -15,26 +15,44 @@ from shared.claude_client import ClaudeClient
 logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+MIN_IMAGE_DIMENSION = 10  # pixels — skip images smaller than 10x10
+
+
+def _validate_dimensions(path: str) -> bool:
+    """Return True if the image is large enough for Claude Vision."""
+    try:
+        with Image.open(path) as img:
+            w, h = img.size
+            if w < MIN_IMAGE_DIMENSION or h < MIN_IMAGE_DIMENSION:
+                logger.warning("Skipped: too small (%dx%d) — %s", w, h, path)
+                return False
+            return True
+    except Exception:
+        logger.warning("Skipped: cannot read dimensions — %s", path)
+        return False
 
 
 def convert_to_supported_format(image_path: str) -> str | None:
     """
     Convert any image to PNG if it's not already PNG or JPEG.
+    Also validates that the image meets minimum dimension requirements.
 
     Returns the path to a usable image, or None if the file is
-    unreadable / corrupted.
+    unreadable / corrupted / too small.
     """
     ext = os.path.splitext(image_path)[1].lower()
 
-    # Already a supported format — verify it's readable
+    # Already a supported format — verify readable and big enough
     if ext in SUPPORTED_EXTENSIONS:
         try:
             with Image.open(image_path) as img:
                 img.verify()
-            return image_path
         except Exception:
             logger.warning("Skipped: unreadable file — %s", image_path)
             return None
+        if not _validate_dimensions(image_path):
+            return None
+        return image_path
 
     # Unsupported extension (.jpx, .jp2, .bmp, .tiff, etc.) — convert to PNG
     output_path = os.path.splitext(image_path)[0] + "_converted.png"
@@ -42,10 +60,16 @@ def convert_to_supported_format(image_path: str) -> str | None:
         with Image.open(image_path) as img:
             img = img.convert("RGB")
             img.save(output_path, "PNG")
-        return output_path
     except Exception:
         logger.warning("Skipped: unsupported or unreadable format — %s", image_path)
         return None
+    if not _validate_dimensions(output_path):
+        try:
+            os.remove(output_path)
+        except Exception:
+            pass
+        return None
+    return output_path
 
 
 def analyze_images_batch(
