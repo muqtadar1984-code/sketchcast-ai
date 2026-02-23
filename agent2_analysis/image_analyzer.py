@@ -16,6 +16,23 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 MIN_IMAGE_DIMENSION = 10  # pixels — skip images smaller than 10x10
+BLANK_VARIANCE_THRESHOLD = 50  # pixel variance below this = solid-color / blank
+
+
+def _is_blank_image(path: str) -> bool:
+    """Return True if the image is essentially a solid colour (black, white, etc.)."""
+    try:
+        with Image.open(path) as img:
+            # Convert to grayscale, sample stats
+            gray = img.convert("L")
+            pixels = list(gray.getdata())
+            if not pixels:
+                return True
+            mean = sum(pixels) / len(pixels)
+            variance = sum((p - mean) ** 2 for p in pixels) / len(pixels)
+            return variance < BLANK_VARIANCE_THRESHOLD
+    except Exception:
+        return False  # if we can't check, let Claude decide
 
 
 def _validate_dimensions(path: str) -> bool:
@@ -113,27 +130,24 @@ def analyze_images_batch(
         img_path = images_dir / filename
 
         if not img_path.exists():
-            # Image not on disk (e.g. Streamlit Cloud ephemeral FS)
-            analyses.append(ImageAnalysis(
-                image_filename=filename,
-                description=f"Image from page {img_info.get('page_num', 0) + 1}. "
-                            f"Context: {img_info.get('context_label', '')}",
-                educational_value="Image could not be analysed (file not found on server).",
-                can_be_recreated_as_sketch=False,
-            ))
-            logger.warning("Skipped: file not found — %s", img_path)
+            logger.info("Excluded: file not found — %s", img_path)
             continue
 
         # Convert if needed (.jpx -> .png, etc.) and validate readability
         usable_path = convert_to_supported_format(str(img_path))
         if usable_path is None:
-            analyses.append(ImageAnalysis(
-                image_filename=filename,
-                description=f"Image from page {img_info.get('page_num', 0) + 1}. "
-                            f"Skipped: unsupported or unreadable format ({img_path.suffix})",
-                educational_value="Could not be analysed (unsupported image format).",
-                can_be_recreated_as_sketch=False,
-            ))
+            logger.info("Excluded: unsupported or unreadable — %s", filename)
+            continue
+
+        # Skip blank / solid-colour images (e.g. black filler from PDFs)
+        if _is_blank_image(usable_path):
+            logger.info("Excluded: blank/solid-colour image — %s", filename)
+            # Clean up converted file if we made one
+            if usable_path != str(img_path):
+                try:
+                    os.remove(usable_path)
+                except Exception:
+                    pass
             continue
 
         valid.append(img_info)
@@ -177,6 +191,11 @@ def analyze_images_batch(
 
         for i, item in enumerate(raw_list):
             filename = valid[i].get("filename", "") if i < len(valid) else item.get("image_filename", "")
+            desc = item.get("description", "").lower()
+            # Filter out images Claude identifies as blank/empty
+            if any(kw in desc for kw in ("completely black", "no visible content", "solid black", "blank image", "empty image")):
+                logger.info("Excluded after analysis: blank image — %s", filename)
+                continue
             analyses.append(ImageAnalysis(
                 image_filename=item.get("image_filename", filename),
                 visual_type=item.get("visual_type", "image"),
