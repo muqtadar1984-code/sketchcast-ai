@@ -3,8 +3,13 @@
 Build an SVG document by calling draw_* methods, then call to_svg()
 to get the complete document string.  All coordinates are in pixels
 on a default 1280 × 720 canvas.
+
+Enhancement: every generated SVG now applies SVG filter effects that
+make clean geometric shapes look hand-drawn and slightly wobbly, and
+includes a subtle paper-texture background.
 """
 
+import hashlib
 import math
 from typing import List
 
@@ -23,6 +28,80 @@ FONT = "Arial, Helvetica, sans-serif"
 
 _BRANCH_COLORS = [BLUE, ORANGE, GREEN, PURPLE, RED, "#1ABC9C", "#F39C12", "#16A085"]
 
+# ── SVG filter defs (hand-drawn + paper texture) ─────────────────────
+
+_SVG_DEFS = """<defs>
+  <filter id="hand-drawn" x="-5%" y="-5%" width="110%" height="110%">
+    <feTurbulence
+      type="fractalNoise"
+      baseFrequency="0.035"
+      numOctaves="3"
+      seed="2"
+      result="noise"/>
+    <feDisplacementMap
+      in="SourceGraphic"
+      in2="noise"
+      scale="2.5"
+      xChannelSelector="R"
+      yChannelSelector="G"/>
+  </filter>
+  <filter id="hand-drawn-text" x="-5%" y="-5%" width="110%" height="110%">
+    <feTurbulence
+      type="fractalNoise"
+      baseFrequency="0.025"
+      numOctaves="2"
+      seed="5"
+      result="noise"/>
+    <feDisplacementMap
+      in="SourceGraphic"
+      in2="noise"
+      scale="1.2"
+      xChannelSelector="R"
+      yChannelSelector="G"/>
+  </filter>
+  <filter id="paper">
+    <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/>
+    <feColorMatrix type="saturate" values="0"/>
+    <feBlend in="SourceGraphic" mode="multiply"/>
+  </filter>
+</defs>"""
+
+
+# ── style helpers ─────────────────────────────────────────────────────
+
+def _seeded_stroke(base: float, seed: str) -> float:
+    """Return a slightly varied stroke width (range 1.8–2.4) using a deterministic seed."""
+    h = int(hashlib.md5(seed.encode()).hexdigest()[:4], 16)
+    delta = (h % 13) * 0.05          # 0 … 0.60 in steps of 0.05
+    varied = max(base - 0.2, 1.6) + delta * 0.4
+    return round(varied, 2)
+
+
+def _wobbly_path(x1: float, y1: float, x2: float, y2: float, seed: str) -> str:
+    """Convert a straight line to a slightly wobbly cubic bezier SVG path (max ±3 px)."""
+    h1 = int(hashlib.md5((seed + "a").encode()).hexdigest()[:4], 16)
+    h2 = int(hashlib.md5((seed + "b").encode()).hexdigest()[:4], 16)
+    ox1 = (h1 % 7) - 3               # −3 … +3
+    oy1 = ((h1 >> 4) % 7) - 3
+    ox2 = (h2 % 7) - 3
+    oy2 = ((h2 >> 4) % 7) - 3
+    dx, dy = x2 - x1, y2 - y1
+    cp1x, cp1y = x1 + dx / 3 + ox1, y1 + dy / 3 + oy1
+    cp2x, cp2y = x1 + 2 * dx / 3 + ox2, y1 + 2 * dy / 3 + oy2
+    return (
+        f"M{x1:.1f},{y1:.1f} "
+        f"C{cp1x:.1f},{cp1y:.1f} {cp2x:.1f},{cp2y:.1f} {x2:.1f},{y2:.1f}"
+    )
+
+
+def _paper_bg(width: int, height: int, color: str) -> str:
+    """Return SVG markup for a paper-textured background."""
+    return (
+        f'<rect width="{width}" height="{height}" fill="{color}"/>\n'
+        f'  <rect width="{width}" height="{height}" '
+        f'fill="#A08060" opacity="0.04" filter="url(#paper)"/>'
+    )
+
 
 def _esc(text: str) -> str:
     """Escape XML special characters."""
@@ -34,6 +113,8 @@ def _esc(text: str) -> str:
         .replace('"', "&quot;")
     )
 
+
+# ── SVG canvas class ─────────────────────────────────────────────────
 
 class SVGCanvas:
     """Accumulates SVG elements and renders them into a complete SVG document."""
@@ -60,9 +141,13 @@ class SVGCanvas:
         stroke_width: float = 2,
         fill: str = "none",
     ) -> str:
+        """Draw a circle.  Applies hand-drawn displacement filter."""
+        sw = _seeded_stroke(stroke_width, f"c{cx:.0f}{cy:.0f}{r:.0f}")
         el = (
             f'<circle cx="{cx}" cy="{cy}" r="{r}" '
-            f'stroke="{color}" stroke-width="{stroke_width}" fill="{fill}"/>'
+            f'stroke="{color}" stroke-width="{sw}" fill="{fill}" '
+            f'stroke-linecap="round" stroke-linejoin="round" '
+            f'filter="url(#hand-drawn)"/>'
         )
         self._elements.append(el)
         return el
@@ -78,10 +163,14 @@ class SVGCanvas:
         corner_radius: float = 0,
         fill: str = "none",
     ) -> str:
+        """Draw a rectangle.  Applies hand-drawn displacement filter."""
+        sw = _seeded_stroke(stroke_width, f"r{x:.0f}{y:.0f}{width:.0f}{height:.0f}")
         el = (
             f'<rect x="{x}" y="{y}" width="{width}" height="{height}" '
             f'rx="{corner_radius}" ry="{corner_radius}" '
-            f'stroke="{color}" stroke-width="{stroke_width}" fill="{fill}"/>'
+            f'stroke="{color}" stroke-width="{sw}" fill="{fill}" '
+            f'stroke-linecap="round" stroke-linejoin="round" '
+            f'filter="url(#hand-drawn)"/>'
         )
         self._elements.append(el)
         return el
@@ -95,9 +184,14 @@ class SVGCanvas:
         color: str = PRIMARY,
         stroke_width: float = 2,
     ) -> str:
+        """Draw a slightly wobbly line (cubic bezier).  Applies hand-drawn filter."""
+        seed = f"l{x1:.0f}{y1:.0f}{x2:.0f}{y2:.0f}"
+        sw = _seeded_stroke(stroke_width, seed)
+        d = _wobbly_path(x1, y1, x2, y2, seed)
         el = (
-            f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
-            f'stroke="{color}" stroke-width="{stroke_width}" stroke-linecap="round"/>'
+            f'<path d="{d}" stroke="{color}" stroke-width="{sw}" '
+            f'stroke-linecap="round" stroke-linejoin="round" fill="none" '
+            f'filter="url(#hand-drawn)"/>'
         )
         self._elements.append(el)
         return el
@@ -111,14 +205,14 @@ class SVGCanvas:
         color: str = PRIMARY,
         stroke_width: float = 2,
     ) -> str:
-        """Draw a line with a filled arrowhead at (x2, y2)."""
+        """Draw a wobbly line with a filled arrowhead at (x2, y2)."""
         arrow_size = max(10.0, stroke_width * 4)
         dx, dy = x2 - x1, y2 - y1
         length = math.sqrt(dx * dx + dy * dy)
         if length < 1:
             return ""
-        nx, ny = dx / length, dy / length   # unit along line
-        px, py = -ny, nx                    # perpendicular
+        nx, ny = dx / length, dy / length
+        px, py = -ny, nx
 
         shaft_x2 = x2 - nx * arrow_size
         shaft_y2 = y2 - ny * arrow_size
@@ -128,12 +222,16 @@ class SVGCanvas:
         br = (shaft_x2 - px * half_w, shaft_y2 - py * half_w)
         pts = f"{x2:.1f},{y2:.1f} {bl[0]:.1f},{bl[1]:.1f} {br[0]:.1f},{br[1]:.1f}"
 
-        line = (
-            f'<line x1="{x1}" y1="{y1}" x2="{shaft_x2:.1f}" y2="{shaft_y2:.1f}" '
-            f'stroke="{color}" stroke-width="{stroke_width}" stroke-linecap="round"/>'
+        seed = f"a{x1:.0f}{y1:.0f}{x2:.0f}{y2:.0f}"
+        sw = _seeded_stroke(stroke_width, seed)
+        d = _wobbly_path(x1, y1, shaft_x2, shaft_y2, seed)
+
+        shaft = (
+            f'<path d="{d}" stroke="{color}" stroke-width="{sw}" '
+            f'stroke-linecap="round" fill="none"/>'
         )
         head = f'<polygon points="{pts}" fill="{color}" stroke="none"/>'
-        el = f"<g>{line}{head}</g>"
+        el = f'<g filter="url(#hand-drawn)">{shaft}{head}</g>'
         self._elements.append(el)
         return el
 
@@ -147,12 +245,14 @@ class SVGCanvas:
         bold: bool = False,
         align: str = "center",
     ) -> str:
+        """Draw text with a lighter hand-drawn-text filter for readability."""
         anchor = {"left": "start", "center": "middle", "right": "end"}.get(align, "middle")
         weight = "bold" if bold else "normal"
         el = (
             f'<text x="{x}" y="{y}" font-size="{font_size}" fill="{color}" '
             f'font-weight="{weight}" text-anchor="{anchor}" '
-            f'font-family="{FONT}" dominant-baseline="middle">{_esc(text)}</text>'
+            f'font-family="{FONT}" dominant-baseline="middle" '
+            f'filter="url(#hand-drawn-text)">{_esc(text)}</text>'
         )
         self._elements.append(el)
         return el
@@ -169,21 +269,22 @@ class SVGCanvas:
         height: float,
         color: str = "#CCCCCC",
     ) -> str:
+        """Draw a grid.  Whole shape gets hand-drawn filter."""
         parts = []
         cell_w, cell_h = width / max(cols, 1), height / max(rows, 1)
         for i in range(cols + 1):
             cx = x + i * cell_w
             parts.append(
                 f'<line x1="{cx:.1f}" y1="{y}" x2="{cx:.1f}" y2="{y + height}" '
-                f'stroke="{color}" stroke-width="1"/>'
+                f'stroke="{color}" stroke-width="1" stroke-linecap="round"/>'
             )
         for j in range(rows + 1):
             cy = y + j * cell_h
             parts.append(
                 f'<line x1="{x}" y1="{cy:.1f}" x2="{x + width}" y2="{cy:.1f}" '
-                f'stroke="{color}" stroke-width="1"/>'
+                f'stroke="{color}" stroke-width="1" stroke-linecap="round"/>'
             )
-        el = f'<g>{"".join(parts)}</g>'
+        el = f'<g filter="url(#hand-drawn)">{"".join(parts)}</g>'
         self._elements.append(el)
         return el
 
@@ -200,15 +301,11 @@ class SVGCanvas:
         events: [{"label": "...", "year": "..."}]
         """
         parts = []
-        # Main line
         parts.append(
             f'<line x1="{x}" y1="{y}" x2="{x + width - 12}" y2="{y}" '
             f'stroke="{color}" stroke-width="3" stroke-linecap="round"/>'
         )
-        # Arrowhead at end
-        pts = (
-            f"{x + width},{y} {x + width - 12},{y - 5} {x + width - 12},{y + 5}"
-        )
+        pts = f"{x + width},{y} {x + width - 12},{y - 5} {x + width - 12},{y + 5}"
         parts.append(f'<polygon points="{pts}" fill="{color}"/>')
 
         n = max(len(events), 1)
@@ -216,7 +313,7 @@ class SVGCanvas:
             ex = x + (i + 1) * width / (n + 1)
             parts.append(
                 f'<line x1="{ex:.1f}" y1="{y - 8}" x2="{ex:.1f}" y2="{y + 8}" '
-                f'stroke="{color}" stroke-width="2"/>'
+                f'stroke="{color}" stroke-width="2" stroke-linecap="round"/>'
             )
             label = _esc(event.get("label", ""))
             year = _esc(str(event.get("year", "")))
@@ -230,7 +327,7 @@ class SVGCanvas:
                     f'<text x="{ex:.1f}" y="{y + 24}" text-anchor="middle" '
                     f'font-size="12" fill="{color}" font-family="{FONT}">{year}</text>'
                 )
-        el = f'<g>{"".join(parts)}</g>'
+        el = f'<g filter="url(#hand-drawn)">{"".join(parts)}</g>'
         self._elements.append(el)
         return el
 
@@ -267,7 +364,7 @@ class SVGCanvas:
             parts.append(
                 f'<line x1="{root_cx:.1f}" y1="{root_cy + node_r:.1f}" '
                 f'x2="{cx:.1f}" y2="{child_y - node_r:.1f}" '
-                f'stroke="{color}" stroke-width="2"/>'
+                f'stroke="{color}" stroke-width="2" stroke-linecap="round"/>'
             )
             parts.append(
                 f'<circle cx="{cx:.1f}" cy="{child_y:.1f}" r="{node_r}" '
@@ -280,7 +377,7 @@ class SVGCanvas:
                 f'font-family="{FONT}">{_esc(str(label)[:15])}</text>'
             )
 
-        el = f'<g>{"".join(parts)}</g>'
+        el = f'<g filter="url(#hand-drawn)">{"".join(parts)}</g>'
         self._elements.append(el)
         return el
 
@@ -295,7 +392,7 @@ class SVGCanvas:
     ) -> str:
         """Radial mind map: center node + branches at equal angles."""
         parts = []
-        cr = 55  # center node radius
+        cr = 55
 
         parts.append(
             f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{cr}" fill="{BLUE}" stroke="none"/>'
@@ -318,7 +415,7 @@ class SVGCanvas:
             sy = cy + cr * math.sin(angle)
             parts.append(
                 f'<line x1="{sx:.1f}" y1="{sy:.1f}" x2="{bx:.1f}" y2="{by:.1f}" '
-                f'stroke="{bc}" stroke-width="2.5"/>'
+                f'stroke="{bc}" stroke-width="2.5" stroke-linecap="round"/>'
             )
             parts.append(
                 f'<circle cx="{bx:.1f}" cy="{by:.1f}" r="{br}" '
@@ -330,7 +427,7 @@ class SVGCanvas:
                 f'font-family="{FONT}">{_esc(str(branch)[:15])}</text>'
             )
 
-        el = f'<g>{"".join(parts)}</g>'
+        el = f'<g filter="url(#hand-drawn)">{"".join(parts)}</g>'
         self._elements.append(el)
         return el
 
@@ -356,7 +453,8 @@ class SVGCanvas:
             bc = colors[i % len(colors)]
             parts.append(
                 f'<rect x="{lx:.1f}" y="{ly:.1f}" width="{lw:.1f}" '
-                f'height="{level_h:.1f}" fill="{bc}" stroke="white" stroke-width="2"/>'
+                f'height="{level_h:.1f}" fill="{bc}" stroke="white" '
+                f'stroke-width="2" stroke-linejoin="round"/>'
             )
             ty = ly + level_h / 2
             parts.append(
@@ -365,7 +463,7 @@ class SVGCanvas:
                 f'font-family="{FONT}" font-weight="bold">{_esc(str(label)[:30])}</text>'
             )
 
-        el = f'<g>{"".join(parts)}</g>'
+        el = f'<g filter="url(#hand-drawn)">{"".join(parts)}</g>'
         self._elements.append(el)
         return el
 
@@ -403,7 +501,7 @@ class SVGCanvas:
                 f'font-family="{FONT}" font-weight="bold">{label}</text>'
             )
 
-        el = f'<g>{"".join(parts)}</g>'
+        el = f'<g filter="url(#hand-drawn)">{"".join(parts)}</g>'
         self._elements.append(el)
         return el
 
@@ -428,7 +526,7 @@ class SVGCanvas:
             parts.append(
                 f'<rect x="{bx:.1f}" y="{by:.1f}" width="{box_w:.1f}" '
                 f'height="{box_h}" rx="8" ry="8" fill="{BLUE}" '
-                f'stroke="{color}" stroke-width="1.5"/>'
+                f'stroke="{color}" stroke-width="1.5" stroke-linejoin="round"/>'
             )
             parts.append(
                 f'<text x="{bx + box_w / 2:.1f}" y="{by + box_h / 2:.1f}" '
@@ -443,7 +541,7 @@ class SVGCanvas:
                 parts.append(
                     f'<line x1="{ax1:.1f}" y1="{ay:.1f}" '
                     f'x2="{ax2 - 7:.1f}" y2="{ay:.1f}" '
-                    f'stroke="{color}" stroke-width="2"/>'
+                    f'stroke="{color}" stroke-width="2" stroke-linecap="round"/>'
                 )
                 pts = (
                     f"{ax2:.1f},{ay:.1f} {ax2 - 8:.1f},{ay - 4:.1f} "
@@ -451,7 +549,7 @@ class SVGCanvas:
                 )
                 parts.append(f'<polygon points="{pts}" fill="{color}"/>')
 
-        el = f'<g>{"".join(parts)}</g>'
+        el = f'<g filter="url(#hand-drawn)">{"".join(parts)}</g>'
         self._elements.append(el)
         return el
 
@@ -466,24 +564,27 @@ class SVGCanvas:
         self._elements.clear()
 
     def to_svg(self) -> str:
-        """Return the complete SVG document as a string."""
+        """Return the complete SVG document with hand-drawn filters and paper texture."""
         body = "\n  ".join(self._elements)
+        bg = _paper_bg(self.width, self.height, self.bg_color)
         return (
             f'<svg xmlns="http://www.w3.org/2000/svg" '
             f'viewBox="0 0 {self.width} {self.height}" '
             f'width="{self.width}" height="{self.height}">\n'
-            f'  <rect width="{self.width}" height="{self.height}" '
-            f'fill="{self.bg_color}"/>\n'
+            f'  {_SVG_DEFS}\n'
+            f'  {bg}\n'
             f'  {body}\n'
             f'</svg>'
         )
 
 
 def blank_svg(width: int = CANVAS_WIDTH, height: int = CANVAS_HEIGHT) -> str:
-    """Return a minimal blank whiteboard SVG."""
+    """Return a blank whiteboard SVG with paper texture (no sketch elements)."""
+    bg = _paper_bg(width, height, BG_COLOR)
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" '
         f'viewBox="0 0 {width} {height}" width="{width}" height="{height}">\n'
-        f'  <rect width="{width}" height="{height}" fill="{BG_COLOR}"/>\n'
+        f'  {_SVG_DEFS}\n'
+        f'  {bg}\n'
         f'</svg>'
     )

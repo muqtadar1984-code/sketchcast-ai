@@ -17,6 +17,7 @@ from .canvas import SVGCanvas, blank_svg
 from .manifest_builder import build_manifest
 from .models import AnimationManifest, ManifestSegment
 from .prompts import build_sketch_plan_prompt
+from .roughjs_renderer import generate_roughjs_html
 
 ANIMATIONS_DIR = Path(__file__).parent.parent / "storage" / "animations"
 
@@ -187,12 +188,25 @@ def _generate_for_episode(
                 encoding="utf-8",
             )
 
+            # Generate Rough.js HTML for Agent 6 video rendering
+            roughjs_path_str: str | None = None
+            try:
+                roughjs_path_str = generate_roughjs_html(
+                    segment_id=seg_id,
+                    sketch_plan=plan,
+                    animation_json=animation.model_dump(),
+                    output_dir=anim_dir,
+                )
+            except Exception:
+                pass  # Rough.js generation is non-critical
+
             manifest_segments.append(ManifestSegment(
                 segment_id=seg_id,
                 type=seg.get("type", "explore"),
                 has_animation=True,
                 svg_path=str(svg_path),
                 animation_path=str(anim_path),
+                roughjs_html_path=roughjs_path_str,
                 estimated_duration_seconds=int(seg.get("estimated_duration_seconds", 30)),
                 sketch_cue_timing=sketch_cue.get("timing", "during"),
             ))

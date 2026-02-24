@@ -53,6 +53,7 @@ class ManifestSegment(BaseModel):
     has_animation: bool
     svg_path: Optional[str] = None
     animation_path: Optional[str] = None
+    roughjs_html_path: Optional[str] = None   # Rough.js HTML for Agent 6 video rendering
     estimated_duration_seconds: int
     sketch_cue_timing: Optional[str] = None
 

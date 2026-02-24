@@ -1002,32 +1002,47 @@ elif page == "🎨 Animations":
                         st.caption(f"Sketch cue timing: `{timing}`")
 
                     svg_path = ms.get("svg_path")
-                    if svg_path and Path(svg_path).exists():
-                        with open(svg_path, encoding="utf-8") as f:
-                            svg_content = f.read()
-                        # Scale SVG to fit the page
-                        display_svg = svg_content.replace(
-                            'width="1280"', 'width="100%"'
-                        ).replace(
-                            'height="720"', 'height="auto"'
-                        )
-                        components.html(display_svg, height=420, scrolling=False)
-                        st.download_button(
-                            f"⬇️ Download SVG ({seg_id})",
-                            data=svg_content,
-                            file_name=f"{seg_id}.svg",
-                            mime="image/svg+xml",
-                            key=f"dl_svg_{seg_id}_{anim_key}",
-                        )
-                    else:
-                        st.caption("SVG file not found on disk.")
+                    roughjs_path = ms.get("roughjs_html_path")
+                    has_roughjs = bool(roughjs_path and Path(roughjs_path).exists())
 
-                    anim_path = ms.get("animation_path")
-                    if anim_path and Path(anim_path).exists():
-                        with open(anim_path, encoding="utf-8") as f:
-                            anim_data = json.load(f)
-                        with st.expander("Animation timing JSON"):
-                            st.json(anim_data)
+                    if has_roughjs:
+                        tab_svg, tab_rough = st.tabs(["📐 SVG Preview", "✏️ Rough.js Preview"])
+                    else:
+                        tab_svg = st.container()
+                        tab_rough = None
+
+                    with tab_svg:
+                        if svg_path and Path(svg_path).exists():
+                            with open(svg_path, encoding="utf-8") as f:
+                                svg_content = f.read()
+                            display_svg = svg_content.replace(
+                                'width="1280"', 'width="100%"'
+                            ).replace(
+                                'height="720"', 'height="auto"'
+                            )
+                            components.html(display_svg, height=420, scrolling=False)
+                            st.download_button(
+                                f"⬇️ Download SVG ({seg_id})",
+                                data=svg_content,
+                                file_name=f"{seg_id}.svg",
+                                mime="image/svg+xml",
+                                key=f"dl_svg_{seg_id}_{anim_key}",
+                            )
+                        else:
+                            st.caption("SVG file not found on disk.")
+
+                        anim_path = ms.get("animation_path")
+                        if anim_path and Path(anim_path).exists():
+                            with open(anim_path, encoding="utf-8") as f:
+                                anim_data = json.load(f)
+                            with st.expander("Animation timing JSON"):
+                                st.json(anim_data)
+
+                    if tab_rough is not None:
+                        with tab_rough:
+                            with open(roughjs_path, encoding="utf-8") as f:
+                                rough_html = f.read()
+                            components.html(rough_html, width=1280, height=720, scrolling=False)
 
             st.divider()
             # Download full manifest
