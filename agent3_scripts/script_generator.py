@@ -117,7 +117,7 @@ def generate_episode_script(
         max_tokens=8000,
     )
 
-    raw_segments = result.get("segments", [])
+    raw_segments = result.get("data", result).get("segments", [])
 
     segments = []
     for i, seg in enumerate(raw_segments):
