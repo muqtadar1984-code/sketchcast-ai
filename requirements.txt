@@ -12,3 +12,12 @@ httpx>=0.25.0
 streamlit>=1.30.0
 anthropic>=0.20.0
 pillow>=10.0.0
+
+# Quality Checking & Code Analysis
+pylint>=3.0.0
+mypy>=1.7.0
+isort>=5.13.0
+autopep8>=2.0.0
+pydocstyle>=6.3.0
+radon>=6.1.0
+watchdog>=3.0.0

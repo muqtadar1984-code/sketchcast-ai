@@ -15,8 +15,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from database.db import Base, get_db
 from agent1_ingestion.main import app
+from database.db import Base, get_db
 
 # Use a file-based test database (shared across endpoint + background tasks)
 TEST_DB_PATH = PROJECT_ROOT / "test_sketchcast.db"

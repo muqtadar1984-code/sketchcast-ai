@@ -9,7 +9,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-
 # --- Enums ---
 
 class BookStatus(str, enum.Enum):

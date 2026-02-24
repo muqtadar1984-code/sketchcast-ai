@@ -1,6 +1,6 @@
 """
 SketchCast AI — Streamlit UI
-Agent 1: Library & Ingestion  +  Agent 2: Content Analysis
+Agent 1: Library & Ingestion  +  Agent 2: Content Analysis  +  Agent 3: Script Generation
 
 Standalone mode: all processing runs in-process (no separate API server needed).
 Works on Streamlit Cloud and locally.
@@ -22,10 +22,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from rapidfuzz import fuzz
+
 from agent1_ingestion.extractor import extract_pdf
 from agent1_ingestion.image_extractor import extract_images
 from agent1_ingestion.structurer import structure_book
-from rapidfuzz import fuzz
 
 st.set_page_config(
     page_title="SketchCast AI",
@@ -40,6 +41,9 @@ if "library" not in st.session_state:
 
 if "analyses" not in st.session_state:
     st.session_state.analyses = {}  # key: "{book_id}_{chapter_num}" -> MasterAnalysis dict
+
+if "scripts" not in st.session_state:
+    st.session_state.scripts = {}  # key: "{book_id}_{chapter_num}" -> ChapterScripts dict
 
 if "selected_book_id" not in st.session_state:
     st.session_state.selected_book_id = None
@@ -106,7 +110,7 @@ with st.sidebar:
     st.caption("Multi-Agent EdTech Platform")
     st.divider()
     st.success("Embedded mode — no API server needed", icon="✅")
-    st.caption(f"{len(st.session_state.library)} book(s) | {len(st.session_state.analyses)} analysis(es)")
+    st.caption(f"{len(st.session_state.library)} book(s) | {len(st.session_state.analyses)} analysis(es) | {len(st.session_state.scripts)} script(s)")
     st.divider()
     page = st.radio(
         "Navigate",
@@ -116,6 +120,7 @@ with st.sidebar:
             "🔍 Book Viewer",
             "🧠 Analyse Chapter",
             "📊 Analysis Results",
+            "🎙️ Scripts",
         ],
         label_visibility="collapsed",
     )
@@ -361,7 +366,8 @@ elif page == "🧠 Analyse Chapter":
                 else:
                     with st.spinner("Analysing chapter with Claude AI... this may take 30–60 seconds"):
                         try:
-                            from agent2_analysis.analyzer import run_full_analysis
+                            from agent2_analysis.analyzer import \
+                                run_full_analysis
                             from shared.claude_client import ClaudeClient
 
                             client = ClaudeClient()
@@ -390,6 +396,42 @@ elif page == "🧠 Analyse Chapter":
                                 st.metric("Tokens", f"{result.token_usage.total:,}")
 
                             st.write(f"**Estimated cost:** ${result.token_usage.estimated_cost_usd:.4f}")
+
+                            # ── Agent 3: Auto-generate Socratic script ────────────────────
+                            st.divider()
+                            with st.spinner("🎙️ Generating Socratic script with Agent 3..."):
+                                try:
+                                    from agent3_scripts.script_generator import (
+                                        generate_chapter_scripts_from_analysis,
+                                    )
+
+                                    chapter_scripts = generate_chapter_scripts_from_analysis(
+                                        book_id=book_id,
+                                        chapter_num=chapter_num,
+                                        analysis_dict=result.model_dump(),
+                                        client=client,
+                                    )
+
+                                    st.session_state.scripts[analysis_key] = chapter_scripts.model_dump()
+
+                                    ep_script = chapter_scripts.episodes[0] if chapter_scripts.episodes else None
+                                    if ep_script:
+                                        st.success("🎙️ Socratic script generated!")
+                                        sm = st.columns(3)
+                                        with sm[0]:
+                                            st.metric("Script Segments", len(ep_script.segments))
+                                        with sm[1]:
+                                            st.metric("Question Hooks", ep_script.question_hook_count)
+                                        with sm[2]:
+                                            total_sec = ep_script.total_estimated_duration_seconds
+                                            st.metric("Script Duration", f"{total_sec // 60}m {total_sec % 60}s")
+                                        st.caption("View the full script on the 🎙️ Scripts page.")
+
+                                except Exception as script_err:
+                                    st.warning(f"Script generation failed: {script_err}")
+                                    import traceback as _tb
+                                    with st.expander("Script error details"):
+                                        st.code(_tb.format_exc())
 
                         except Exception as e:
                             st.error(f"Analysis failed: {str(e)}")
@@ -454,8 +496,8 @@ elif page == "📊 Analysis Results":
         st.divider()
 
         # Tabs
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(
-            ["Concepts", "Visual Opportunities", "Episode", "Images", "Raw JSON"]
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+            ["Concepts", "Visual Opportunities", "Episode", "Images", "📜 Script", "Raw JSON"]
         )
 
         # ── Tab 1: Concepts ──────────────────────────────────────────
@@ -584,8 +626,80 @@ elif page == "📊 Analysis Results":
                             st.write(f"**Sketch notes:** {img.get('sketch_recreation_notes', '')}")
                         st.write(f"**Complexity:** {img.get('complexity', '')}")
 
-        # ── Tab 5: Raw JSON ──────────────────────────────────────────
+        # ── Tab 5: Script ────────────────────────────────────────────
         with tab5:
+            script_data = st.session_state.scripts.get(key)
+            if not script_data:
+                st.info("No script generated yet. Re-run analysis from the 🧠 Analyse Chapter page.")
+            else:
+                episodes = script_data.get("episodes", [])
+                if not episodes:
+                    st.warning("Script exists but has no episodes.")
+                else:
+                    ep_script = episodes[0]
+                    segments = ep_script.get("segments", [])
+
+                    # Header metrics
+                    sc = st.columns(3)
+                    with sc[0]:
+                        st.metric("Segments", len(segments))
+                    with sc[1]:
+                        st.metric("Question Hooks", ep_script.get("question_hook_count", 0))
+                    with sc[2]:
+                        total_sec = ep_script.get("total_estimated_duration_seconds", 0)
+                        st.metric("Duration", f"{total_sec // 60}m {total_sec % 60}s")
+
+                    # ElevenLabs full-text export
+                    el_full_text = "\n\n".join(
+                        seg.get("elevenlabs_text", seg.get("text", ""))
+                        for seg in segments
+                    )
+                    st.download_button(
+                        "⬇️ Download ElevenLabs Script",
+                        data=el_full_text,
+                        file_name=f"script_{ep_script.get('episode_title', 'episode')[:30]}.txt",
+                        mime="text/plain",
+                    )
+
+                    st.divider()
+
+                    # Type → display config
+                    type_config = {
+                        "hook":          ("🪝", "Hook",          "#1a1a2e"),
+                        "activate":      ("⚡", "Activate",      "#16213e"),
+                        "explore":       ("🔍", "Explore",       "#0f3460"),
+                        "question_hook": ("❓", "Question Hook", "#533483"),
+                        "synthesis":     ("🎯", "Synthesis",     "#e94560"),
+                        "preview":       ("👉", "Preview",       "#1a1a2e"),
+                    }
+
+                    for seg in segments:
+                        seg_type = seg.get("type", "explore")
+                        icon, label, _ = type_config.get(seg_type, ("•", seg_type, "#333"))
+                        dur = seg.get("estimated_duration_seconds", 0)
+                        pauq = seg.get("pause_for_question", False)
+                        header = f"{icon} **{label}** — {dur}s"
+                        if pauq:
+                            header += " ⏸️ *[waits for student question]*"
+
+                        with st.expander(header, expanded=(seg_type == "hook")):
+                            st.write(seg.get("text", ""))
+
+                            sketch = seg.get("sketch_cue")
+                            if sketch:
+                                st.caption(
+                                    f"🎨 **Sketch cue ({sketch.get('timing', 'during')}):** "
+                                    f"`{sketch.get('action', 'draw')}` — {sketch.get('element', '')}"
+                                )
+
+                            with st.expander("ElevenLabs markup"):
+                                st.code(
+                                    seg.get("elevenlabs_text", seg.get("text", "")),
+                                    language=None,
+                                )
+
+        # ── Tab 6: Raw JSON ──────────────────────────────────────────
+        with tab6:
             st.json(a)
             st.download_button(
                 "Download analysis JSON",
@@ -593,3 +707,130 @@ elif page == "📊 Analysis Results":
                 file_name=f"analysis_{a.get('chapter_title', 'chapter')[:20]}.json",
                 mime="application/json",
             )
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  PAGE: Scripts (Agent 3)
+# ══════════════════════════════════════════════════════════════════════
+
+elif page == "🎙️ Scripts":
+    st.header("🎙️ Episode Scripts")
+    st.caption("Socratic dialogue scripts generated by Agent 3, ready for ElevenLabs TTS.")
+
+    scripts = st.session_state.scripts
+    if not scripts:
+        st.info(
+            "No scripts generated yet. Go to **🧠 Analyse Chapter** and run an analysis — "
+            "scripts are generated automatically after analysis completes."
+        )
+    else:
+        books = st.session_state.library
+        analyses = st.session_state.analyses
+
+        # Build selector labels
+        labels = {}
+        for skey, sc_data in scripts.items():
+            bid = sc_data.get("book_id", "")
+            book_title = books.get(bid, {}).get("title", "Unknown")
+            ch_title = sc_data.get("chapter_title", "")
+            ch_num = sc_data.get("chapter_num", 0)
+            labels[f"{book_title[:30]} → Ch {ch_num}: {ch_title[:30]}"] = skey
+
+        sel = st.selectbox("Select a script", list(labels.keys()))
+        skey = labels[sel]
+        sc_data = scripts[skey]
+
+        episodes = sc_data.get("episodes", [])
+        if not episodes:
+            st.warning("Script has no episodes.")
+        else:
+            # If multiple episodes, allow selection (future-proof)
+            if len(episodes) > 1:
+                ep_labels = {f"Episode {ep['episode_num']}: {ep['episode_title'][:40]}": i for i, ep in enumerate(episodes)}
+                sel_ep = st.selectbox("Select episode", list(ep_labels.keys()))
+                ep_idx = ep_labels[sel_ep]
+            else:
+                ep_idx = 0
+
+            ep = episodes[ep_idx]
+            segments = ep.get("segments", [])
+            total_sec = ep.get("total_estimated_duration_seconds", 0)
+
+            st.subheader(ep.get("episode_title", "Episode"))
+            st.caption(
+                f"Generated: {ep.get('generated_at', '')[:19]} | "
+                f"Narrator: {ep.get('narrator_persona', 'Socratic')} | "
+                f"Script ID: `{ep.get('script_id', '')[:8]}...`"
+            )
+
+            hc = st.columns(4)
+            with hc[0]:
+                st.metric("Segments", len(segments))
+            with hc[1]:
+                st.metric("Question Hooks", ep.get("question_hook_count", 0))
+            with hc[2]:
+                st.metric("Duration", f"{total_sec // 60}m {total_sec % 60}s")
+            with hc[3]:
+                sketch_count = sum(1 for s in segments if s.get("sketch_cue"))
+                st.metric("Sketch Cues", sketch_count)
+
+            st.divider()
+
+            # Download buttons
+            dc1, dc2 = st.columns(2)
+            with dc1:
+                el_full_text = "\n\n".join(
+                    seg.get("elevenlabs_text", seg.get("text", "")) for seg in segments
+                )
+                st.download_button(
+                    "⬇️ Download ElevenLabs Script (.txt)",
+                    data=el_full_text,
+                    file_name=f"elevenlabs_{ep.get('episode_title', 'episode')[:30]}.txt",
+                    mime="text/plain",
+                )
+            with dc2:
+                st.download_button(
+                    "⬇️ Download Full Script JSON",
+                    data=json.dumps(ep, indent=2, ensure_ascii=False),
+                    file_name=f"script_ch{ep.get('chapter_num', 0)}_ep{ep.get('episode_num', 1)}.json",
+                    mime="application/json",
+                )
+
+            st.divider()
+            st.subheader("Script Segments")
+
+            type_config = {
+                "hook":          ("🪝", "Hook"),
+                "activate":      ("⚡", "Activate"),
+                "explore":       ("🔍", "Explore"),
+                "question_hook": ("❓", "Question Hook"),
+                "synthesis":     ("🎯", "Synthesis"),
+                "preview":       ("👉", "Preview"),
+            }
+
+            for seg in segments:
+                seg_type = seg.get("type", "explore")
+                icon, label = type_config.get(seg_type, ("•", seg_type))
+                dur = seg.get("estimated_duration_seconds", 0)
+                pauq = seg.get("pause_for_question", False)
+
+                header = f"{icon} **{label}** `{seg.get('segment_id', '')}` — {dur}s"
+                if pauq:
+                    header += "  ⏸️ *pause for student question*"
+
+                with st.expander(header, expanded=(seg_type in ("hook", "question_hook"))):
+                    st.write(seg.get("text", ""))
+
+                    sketch = seg.get("sketch_cue")
+                    if sketch:
+                        st.info(
+                            f"🎨 **Sketch cue** | timing: `{sketch.get('timing', 'during')}` | "
+                            f"action: `{sketch.get('action', 'draw')}` | "
+                            f"element: {sketch.get('element', '')}"
+                        )
+
+                    with st.expander("ElevenLabs markup text"):
+                        st.code(
+                            seg.get("elevenlabs_text", seg.get("text", "")),
+                            language=None,
+                        )

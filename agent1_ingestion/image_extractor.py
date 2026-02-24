@@ -7,12 +7,8 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 
-from agent1_ingestion.config import (
-    EXTRACTED_IMAGES_DIR,
-    IMAGE_CONTEXT_WORDS,
-    MIN_IMAGE_HEIGHT,
-    MIN_IMAGE_WIDTH,
-)
+from agent1_ingestion.config import (EXTRACTED_IMAGES_DIR, IMAGE_CONTEXT_WORDS,
+                                     MIN_IMAGE_HEIGHT, MIN_IMAGE_WIDTH)
 
 
 @dataclass

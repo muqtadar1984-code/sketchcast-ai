@@ -13,14 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agent2_analysis.image_analyzer import analyze_images_batch
-from agent2_analysis.models import (
-    ConceptResult,
-    Episode,
-    EpisodePlan,
-    MasterAnalysis,
-    TokenUsage,
-    VisualOpportunity,
-)
+from agent2_analysis.models import (ConceptResult, Episode, EpisodePlan,
+                                    MasterAnalysis, TokenUsage,
+                                    VisualOpportunity)
 from agent2_analysis.prompts import FULL_CHAPTER_ANALYSIS_PROMPT
 from agent2_analysis.segmenter import build_single_episode
 from shared.claude_client import ClaudeClient

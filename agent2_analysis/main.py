@@ -7,7 +7,8 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 
-from agent2_analysis.analyzer import load_analysis, run_full_analysis, ANALYSIS_DIR
+from agent2_analysis.analyzer import (ANALYSIS_DIR, load_analysis,
+                                      run_full_analysis)
 
 app = FastAPI(
     title="SketchCast AI — Agent 2: Content Analysis",

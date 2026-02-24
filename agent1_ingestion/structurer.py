@@ -8,18 +8,12 @@ from pathlib import Path
 from typing import Optional
 
 from agent1_ingestion.config import PROCESSED_DIR
-from agent1_ingestion.extractor import ExtractionResult, FontProfile, PageData, TextSpan, TOCItem
+from agent1_ingestion.extractor import (ExtractionResult, FontProfile,
+                                        PageData, TextSpan, TOCItem)
 from agent1_ingestion.image_extractor import ExtractedImage
-from agent1_ingestion.models import (
-    ChapterContent,
-    ImageInfo,
-    ImagePosition,
-    KeyBox,
-    Section,
-    StructuredBook,
-    Subsection,
-    TOCEntry,
-)
+from agent1_ingestion.models import (ChapterContent, ImageInfo, ImagePosition,
+                                     KeyBox, Section, StructuredBook,
+                                     Subsection, TOCEntry)
 
 # Patterns for special textbook boxes
 BOX_PATTERNS: list[tuple[str, re.Pattern]] = [

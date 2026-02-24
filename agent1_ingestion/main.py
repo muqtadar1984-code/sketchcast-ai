@@ -8,23 +8,19 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import (BackgroundTasks, Depends, FastAPI, File, Form,
+                     HTTPException, UploadFile)
 from sqlalchemy.orm import Session, sessionmaker
 
 from agent1_ingestion.config import BOOKS_DIR, MAX_UPLOAD_SIZE_MB
 from agent1_ingestion.extractor import extract_pdf
 from agent1_ingestion.image_extractor import extract_images
-from agent1_ingestion.library import check_duplicate, compute_file_hash, get_all_books, get_book_by_id
-from agent1_ingestion.models import (
-    BookListItem,
-    BookListResponse,
-    BookResponse,
-    BookStatus,
-    ChapterResponse,
-    ProcessingStatusResponse,
-    StructuredBook,
-    UploadResponse,
-)
+from agent1_ingestion.library import (check_duplicate, compute_file_hash,
+                                      get_all_books, get_book_by_id)
+from agent1_ingestion.models import (BookListItem, BookListResponse,
+                                     BookResponse, BookStatus, ChapterResponse,
+                                     ProcessingStatusResponse, StructuredBook,
+                                     UploadResponse)
 from agent1_ingestion.structurer import save_structured_book, structure_book
 from database.db import SessionLocal, get_db, init_db
 from database.schemas import Book, Chapter, Image
