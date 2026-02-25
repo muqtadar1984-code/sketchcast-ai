@@ -2,11 +2,15 @@
 # Install locally with: pip install -r requirements-dev.txt
 -r requirements.txt
 
+# PDF extraction (local pre-processing only — not deployed to Streamlit Cloud)
+docling>=2.0.0
+easyocr>=1.7.0
+
 # Quality Checking & Code Analysis
 pylint>=3.0.0
 mypy>=1.7.0
 isort>=5.13.0
 autopep8>=2.0.0
 pydocstyle>=6.3.0
-radon>=6.1.0
+radon>=6.0.0
 watchdog>=3.0.0

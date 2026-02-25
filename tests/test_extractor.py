@@ -40,11 +40,11 @@ class TestExtractor:
         assert result.total_pages == 6
         assert result.readability_score > 0
 
-    def test_font_profile(self, sample_pdf_path):
+    def test_heading_detection(self, sample_pdf_path):
         result = extract_pdf(sample_pdf_path)
-        profile = result.font_profile
-        # Chapter titles should be larger than body text
-        assert profile.chapter_title_size >= profile.body_size
+        # Should detect at least one heading (level >= 1)
+        headings = [i for i in result.items if i.level >= 1]
+        assert len(headings) >= 1
 
     def test_toc_extraction(self, sample_pdf_path):
         result = extract_pdf(sample_pdf_path)
@@ -54,7 +54,8 @@ class TestExtractor:
     def test_page_text(self, sample_pdf_path):
         result = extract_pdf(sample_pdf_path)
         # Page 0 (title page) should have "Exploring Society"
-        assert "Exploring" in result.pages[0].text or "Society" in result.pages[0].text
+        page0_text = " ".join(i.text for i in result.items if i.page_num == 0)
+        assert "Exploring" in page0_text or "Society" in page0_text
 
 
 class TestImageExtractor:

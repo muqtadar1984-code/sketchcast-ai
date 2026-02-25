@@ -13,9 +13,10 @@ STORAGE_DIR = BASE_DIR / "storage"
 BOOKS_DIR = STORAGE_DIR / "books"
 EXTRACTED_IMAGES_DIR = STORAGE_DIR / "extracted_images"
 PROCESSED_DIR = STORAGE_DIR / "processed"
+DOCLING_CACHE_DIR = STORAGE_DIR / "docling_cache"
 
 # Ensure directories exist
-for d in [BOOKS_DIR, EXTRACTED_IMAGES_DIR, PROCESSED_DIR]:
+for d in [BOOKS_DIR, EXTRACTED_IMAGES_DIR, PROCESSED_DIR, DOCLING_CACHE_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # Database

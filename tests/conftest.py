@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+
+# Force PyMuPDF backend in tests — avoids downloading heavy Docling ML models
+os.environ.setdefault("DOCLING_BACKEND", "pymupdf")
 
 import pytest
 from fastapi.testclient import TestClient
