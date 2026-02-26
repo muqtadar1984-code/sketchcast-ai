@@ -447,13 +447,156 @@ elif page == "🧠 Analyse Chapter":
                                         with sm[2]:
                                             total_sec = ep_script.total_estimated_duration_seconds
                                             st.metric("Script Duration", f"{total_sec // 60}m {total_sec % 60}s")
-                                        st.caption("View the full script on the 🎙️ Scripts page.")
 
                                 except Exception as script_err:
                                     st.warning(f"Script generation failed: {script_err}")
                                     import traceback as _tb
                                     with st.expander("Script error details"):
                                         st.code(_tb.format_exc())
+
+                            # ── Agent 4: Auto-generate sketch animations ──────────────────
+                            if analysis_key in st.session_state.scripts:
+                                st.divider()
+                                with st.spinner("🎨 Generating sketch animations with Agent 4... this may take a minute"):
+                                    try:
+                                        from agent4_animation.sketch_generator import (
+                                            generate_episode_animations_from_script,
+                                        )
+
+                                        _a4_progress_bar = st.progress(0)
+                                        _a4_status = st.empty()
+
+                                        def _a4_progress(current, total, seg_id):
+                                            pct = int(current / max(total, 1) * 100)
+                                            _a4_progress_bar.progress(pct)
+                                            if seg_id != "done":
+                                                _a4_status.caption(f"Animating segment {current + 1}/{total}: `{seg_id}`")
+                                            else:
+                                                _a4_status.caption("Animations done!")
+
+                                        anim_manifest = generate_episode_animations_from_script(
+                                            script_data=st.session_state.scripts[analysis_key],
+                                            analysis_dict=result.model_dump(),
+                                            client=client,
+                                            progress_callback=_a4_progress,
+                                        )
+                                        st.session_state.animations[analysis_key] = anim_manifest.model_dump()
+                                        st.success(
+                                            f"🎨 Animations generated: "
+                                            f"{anim_manifest.animated_segments} sketched + "
+                                            f"{anim_manifest.blank_segments} blank"
+                                        )
+
+                                    except Exception as anim_err:
+                                        st.warning(f"Animation generation failed: {anim_err}")
+                                        import traceback as _tb
+                                        with st.expander("Animation error details"):
+                                            st.code(_tb.format_exc())
+
+                            # ── Agent 5: Auto-generate audio (if ElevenLabs keys available) ─
+                            _el_key_ok = False
+                            try:
+                                if st.secrets.get("ELEVENLABS_API_KEY", ""):
+                                    _el_key_ok = True
+                            except Exception:
+                                pass
+                            if not _el_key_ok and os.getenv("ELEVENLABS_API_KEY"):
+                                _el_key_ok = True
+
+                            _el_voice_ok = False
+                            try:
+                                if st.secrets.get("ELEVENLABS_VOICE_ID", ""):
+                                    _el_voice_ok = True
+                            except Exception:
+                                pass
+                            if not _el_voice_ok and os.getenv("ELEVENLABS_VOICE_ID"):
+                                _el_voice_ok = True
+
+                            if analysis_key in st.session_state.scripts:
+                                if _el_key_ok and _el_voice_ok:
+                                    st.divider()
+                                    _ep_data = st.session_state.scripts[analysis_key].get("episodes", [])
+                                    _ep = _ep_data[0] if _ep_data else None
+                                    if _ep:
+                                        with st.spinner("🔊 Generating audio with Agent 5... each segment calls ElevenLabs TTS"):
+                                            try:
+                                                from agent5_audio.audio_generator import generate_episode_audio
+
+                                                _a5_progress_bar = st.progress(0)
+                                                _a5_status = st.empty()
+
+                                                def _a5_progress(current, total, seg_id):
+                                                    pct = int(current / max(total, 1) * 100)
+                                                    _a5_progress_bar.progress(pct)
+                                                    if seg_id != "done":
+                                                        _a5_status.caption(f"TTS segment {current + 1}/{total}: `{seg_id}`")
+                                                    else:
+                                                        _a5_status.caption("Stitching master audio...")
+
+                                                audio_manifest = generate_episode_audio(
+                                                    script_id=_ep.get("script_id"),
+                                                    book_id=book_id,
+                                                    chapter_num=chapter_num,
+                                                    episode_num=_ep.get("episode_num", 1),
+                                                    script_data=_ep,
+                                                    progress_callback=_a5_progress,
+                                                )
+                                                st.session_state.audio[analysis_key] = audio_manifest.model_dump()
+                                                _dur = audio_manifest.total_duration_seconds
+                                                st.success(
+                                                    f"🔊 Audio generated: {len(audio_manifest.segments)} segments, "
+                                                    f"{int(_dur) // 60}m {int(_dur) % 60}s"
+                                                )
+
+                                            except Exception as audio_err:
+                                                st.warning(f"Audio generation failed: {audio_err}")
+                                                import traceback as _tb
+                                                with st.expander("Audio error details"):
+                                                    st.code(_tb.format_exc())
+                                else:
+                                    st.divider()
+                                    st.info(
+                                        "⏭️ **Skipping audio generation** — ElevenLabs API key or Voice ID not configured. "
+                                        "Add them in Settings → Secrets to enable automatic audio."
+                                    )
+
+                            # ── Agent 6: Auto-build player (if animations + audio ready) ──
+                            _has_anim = analysis_key in st.session_state.animations
+                            _has_audio = analysis_key in st.session_state.audio
+                            if _has_anim and _has_audio:
+                                st.divider()
+                                with st.spinner("▶️ Building player with Agent 6..."):
+                                    try:
+                                        from agent6_player.player_builder import (
+                                            build_player_package,
+                                            save_player_package,
+                                        )
+
+                                        timeline, player_html = build_player_package(
+                                            audio_manifest=st.session_state.audio[analysis_key],
+                                            animation_manifest=st.session_state.animations[analysis_key],
+                                            script_data=st.session_state.scripts[analysis_key],
+                                            embed_audio=True,
+                                        )
+                                        save_player_package(timeline, player_html, book_id, chapter_num)
+                                        st.session_state.players[analysis_key] = {
+                                            "timeline": timeline.model_dump(),
+                                            "html": player_html,
+                                        }
+                                        st.success(
+                                            f"▶️ Player ready: {len(timeline.segments)} segments, "
+                                            f"{timeline.total_duration_seconds:.1f}s — "
+                                            f"go to the ▶️ Player page to watch!"
+                                        )
+
+                                    except Exception as player_err:
+                                        st.warning(f"Player build failed: {player_err}")
+                                        import traceback as _tb
+                                        with st.expander("Player error details"):
+                                            st.code(_tb.format_exc())
+                            elif _has_anim and not _has_audio:
+                                st.divider()
+                                st.info("⏭️ **Skipping player build** — audio not available. Configure ElevenLabs to enable.")
 
                         except Exception as e:
                             st.error(f"Analysis failed: {str(e)}")
@@ -1506,142 +1649,9 @@ elif page == "📺 YouTube Export":
 # ══════════════════════════════════════════════════════════════════════
 
 elif page == "❓ Question Bank":
-    st.header("❓ Question Bank")
-    st.caption(
-        "Agent 8 banks every student question and answer. "
-        "Repeated questions are served from cache at zero LLM cost."
+    st.title("❓ Question Bank")
+    st.info(
+        "🔒 Question Bank is not enabled in this version. "
+        "This feature will be activated in a future release."
     )
-
-    scripts = st.session_state.scripts
-    books = st.session_state.library
-    audio_store = st.session_state.audio
-
-    if not scripts:
-        st.info("No scripts found. Generate a script first via 🧠 Analyse Chapter.")
-    else:
-        # Build selector
-        labels = {}
-        for skey, sc_data in scripts.items():
-            bid = sc_data.get("book_id", "")
-            book_title = books.get(bid, {}).get("title", "Unknown")
-            ch_title = sc_data.get("chapter_title", "")
-            ch_num_val = sc_data.get("chapter_num", 0)
-            labels[f"{book_title[:30]} → Ch {ch_num_val}: {ch_title[:30]}"] = skey
-
-        sel_label = st.selectbox("Select a chapter", list(labels.keys()), key="qa_sel")
-        qa_key = labels[sel_label]
-        sc_data = scripts[qa_key]
-        bid = sc_data.get("book_id", "")
-        ch_num_val = sc_data.get("chapter_num", 0)
-
-        # Check API key for testing Q&A
-        _api_key_available = False
-        try:
-            _key = st.secrets.get("ANTHROPIC_API_KEY", "")
-            if _key:
-                _api_key_available = True
-        except Exception:
-            pass
-        if not _api_key_available:
-            if os.getenv("ANTHROPIC_API_KEY"):
-                _api_key_available = True
-
-        # Load question bank
-        try:
-            from agent8_qa import question_bank
-            from agent8_qa.question_handler import handle_question
-            from agent8_qa.models import QuestionRequest
-
-            bank_entries = question_bank.get_all(bid, ch_num_val)
-            stats = question_bank.get_stats(bid, ch_num_val)
-
-            # Stats
-            st.divider()
-            sc = st.columns(4)
-            with sc[0]:
-                st.metric("Total Questions Banked", stats.total_questions)
-            with sc[1]:
-                st.metric("Verified (10+ uses)", stats.verified_questions)
-            with sc[2]:
-                st.metric("Cache Hit Rate", f"{stats.cache_hit_rate:.0%}")
-            with sc[3]:
-                st.metric("Est. Cost Savings", f"${stats.estimated_savings_usd:.4f}")
-
-            # Test Q&A
-            st.divider()
-            st.subheader("Test Q&A")
-
-            if not _api_key_available:
-                st.warning("Anthropic API key not configured. Q&A generation requires it.")
-
-            test_q = st.text_input(
-                "Ask a test question",
-                placeholder="e.g. What is social science?",
-                key="test_question",
-            )
-
-            if st.button("🧠 Ask", disabled=not _api_key_available or not test_q):
-                with st.spinner("Processing question..."):
-                    try:
-                        # Get analysis data if available
-                        analysis_data = st.session_state.analyses.get(qa_key, {})
-
-                        request = QuestionRequest(
-                            text=test_q,
-                            book_id=bid,
-                            chapter_num=ch_num_val,
-                            narrator_persona="Socratic",
-                        )
-                        result = handle_question(
-                            request=request,
-                            script_data=sc_data,
-                            analysis_data=analysis_data,
-                        )
-
-                        if result.get("served_from_cache"):
-                            st.success(f"✅ Served from cache ({result['latency_seconds']:.2f}s, 0 tokens)")
-                        else:
-                            st.info(
-                                f"🧠 Generated with Claude ({result['latency_seconds']:.2f}s, "
-                                f"{result.get('tokens_used', 0)} tokens)"
-                            )
-
-                        st.write(result["answer_text"])
-
-                        # Refresh bank entries
-                        bank_entries = question_bank.get_all(bid, ch_num_val)
-
-                    except Exception as qa_err:
-                        st.error(f"Q&A failed: {qa_err}")
-                        import traceback as _tb
-                        with st.expander("Error details"):
-                            st.code(_tb.format_exc())
-
-            # Display banked Q&A pairs
-            st.divider()
-            st.subheader("Banked Q&A Pairs")
-
-            if not bank_entries:
-                st.caption("No questions banked yet for this chapter. Try asking one above!")
-            else:
-                for entry in bank_entries:
-                    verified_badge = " ✅ verified" if entry.is_verified else ""
-                    header = (
-                        f"❓ {entry.question_text[:60]}... | "
-                        f"Used: {entry.usage_count}x{verified_badge}"
-                    )
-                    with st.expander(header, expanded=False):
-                        st.write(f"**Question:** {entry.question_text}")
-                        st.write(f"**Answer:** {entry.answer_text}")
-                        st.caption(
-                            f"Segment: `{entry.segment_id or 'N/A'}` | "
-                            f"Tokens: {entry.tokens_used} | "
-                            f"Created: {entry.created_at[:19]} | "
-                            f"Last used: {(entry.last_used_at or '')[:19]}"
-                        )
-
-        except Exception as bank_err:
-            st.error(f"Could not load question bank: {bank_err}")
-            import traceback as _tb
-            with st.expander("Error details"):
-                st.code(_tb.format_exc())
+    st.stop()

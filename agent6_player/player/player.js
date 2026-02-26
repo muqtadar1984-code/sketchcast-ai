@@ -232,18 +232,8 @@
   var handledPauses = {};
 
   function checkPausePoints(t) {
-    for (var i = 0; i < segments.length; i++) {
-      var seg = segments[i];
-      if (!seg.pause_for_question || !seg.pause_at_second) continue;
-      if (handledPauses[seg.segment_id]) continue;
-
-      // Trigger pause within 0.5s window
-      if (t >= seg.pause_at_second - 0.3 && t <= seg.pause_at_second + 0.3) {
-        handledPauses[seg.segment_id] = true;
-        triggerQuestionPause(seg);
-        return;
-      }
-    }
+    // Interjection disabled — play through question segments without pausing
+    return;
   }
 
   function triggerQuestionPause(seg) {
