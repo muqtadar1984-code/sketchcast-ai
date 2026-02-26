@@ -1,3 +1,4 @@
 libmupdf-dev
 mupdf-tools
 libopenjp2-7-dev
+ffmpeg

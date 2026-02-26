@@ -101,3 +101,24 @@ class ChapterAnalysis(Base):
     estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     analyzed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     analysis_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+
+class EpisodeAudio(Base):
+    __tablename__ = "episode_audio"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    script_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    book_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("books.id", ondelete="CASCADE"), nullable=False
+    )
+    chapter_num: Mapped[int] = mapped_column(Integer, nullable=False)
+    episode_num: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending/processing/completed/failed
+    voice_id: Mapped[str] = mapped_column(String(100), default="")
+    model: Mapped[str] = mapped_column(String(100), default="eleven_turbo_v2")
+    total_segments: Mapped[int] = mapped_column(Integer, default=0)
+    completed_segments: Mapped[int] = mapped_column(Integer, default=0)
+    total_duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    master_audio_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    manifest_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
