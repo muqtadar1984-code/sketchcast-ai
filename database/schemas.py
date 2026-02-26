@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from agent1_ingestion.models import BookStatus, UploaderRole
@@ -122,3 +122,57 @@ class EpisodeAudio(Base):
     master_audio_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     manifest_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     generated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class EpisodePlayer(Base):
+    __tablename__ = "episode_player"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    script_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    book_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("books.id", ondelete="CASCADE"), nullable=False
+    )
+    chapter_num: Mapped[int] = mapped_column(Integer, nullable=False)
+    episode_num: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending/building/ready/failed
+    timeline_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    player_package_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    built_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class QuestionBankEntry(Base):
+    __tablename__ = "question_bank"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    book_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("books.id", ondelete="CASCADE"), nullable=False
+    )
+    chapter_num: Mapped[int] = mapped_column(Integer, nullable=False)
+    segment_id: Mapped[str] = mapped_column(String(50), default="")
+    question_text: Mapped[str] = mapped_column(Text, nullable=False)
+    answer_text: Mapped[str] = mapped_column(Text, nullable=False)
+    usage_count: Mapped[int] = mapped_column(Integer, default=0)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    tokens_used: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class QuestionLog(Base):
+    __tablename__ = "question_log"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    book_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("books.id", ondelete="CASCADE"), nullable=False
+    )
+    chapter_num: Mapped[int] = mapped_column(Integer, nullable=False)
+    segment_id: Mapped[str] = mapped_column(String(50), default="")
+    student_id: Mapped[str] = mapped_column(String(100), default="anonymous")
+    question_text: Mapped[str] = mapped_column(Text, nullable=False)
+    served_from_cache: Mapped[bool] = mapped_column(Boolean, default=False)
+    response_latency_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    asked_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )

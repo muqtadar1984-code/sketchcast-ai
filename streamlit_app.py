@@ -52,6 +52,9 @@ if "animations" not in st.session_state:
 if "audio" not in st.session_state:
     st.session_state.audio = {}  # key: "{book_id}_{chapter_num}" -> AudioManifest dict
 
+if "players" not in st.session_state:
+    st.session_state.players = {}  # key: "{book_id}_{chapter_num}" -> {timeline, html} dict
+
 if "selected_book_id" not in st.session_state:
     st.session_state.selected_book_id = None
 
@@ -122,7 +125,8 @@ with st.sidebar:
         f"{len(st.session_state.analyses)} analysis(es) | "
         f"{len(st.session_state.scripts)} script(s) | "
         f"{len(st.session_state.animations)} animation(s) | "
-        f"{len(st.session_state.audio)} audio(s)"
+        f"{len(st.session_state.audio)} audio(s) | "
+        f"{len(st.session_state.players)} player(s)"
     )
     st.divider()
     page = st.radio(
@@ -136,6 +140,9 @@ with st.sidebar:
             "🎙️ Scripts",
             "🎨 Animations",
             "🔊 Audio",
+            "▶️ Player",
+            "📺 YouTube Export",
+            "❓ Question Bank",
         ],
         label_visibility="collapsed",
     )
@@ -1313,3 +1320,328 @@ elif page == "🔊 Audio":
                 file_name=f"audio_manifest_ch{ch_num_val}.json",
                 mime="application/json",
             )
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  PAGE: Player (Agent 6)
+# ══════════════════════════════════════════════════════════════════════
+
+elif page == "▶️ Player":
+    import streamlit.components.v1 as components
+
+    st.header("▶️ Live Playback Engine")
+    st.caption("Audio + sketch animations synchronised in real-time by Agent 6.")
+
+    scripts = st.session_state.scripts
+    animations = st.session_state.animations
+    audio_store = st.session_state.audio
+    players = st.session_state.players
+    books = st.session_state.library
+
+    if not scripts:
+        st.info(
+            "No scripts found. Go to **🧠 Analyse Chapter** to run analysis — "
+            "scripts are generated automatically."
+        )
+    else:
+        labels = {}
+        for skey, sc_data in scripts.items():
+            bid = sc_data.get("book_id", "")
+            book_title = books.get(bid, {}).get("title", "Unknown")
+            ch_title = sc_data.get("chapter_title", "")
+            ch_num_val = sc_data.get("chapter_num", 0)
+            labels[f"{book_title[:30]} → Ch {ch_num_val}: {ch_title[:30]}"] = skey
+
+        sel_label = st.selectbox("Select a chapter", list(labels.keys()), key="player_sel")
+        player_key = labels[sel_label]
+        sc_data = scripts[player_key]
+        bid = sc_data.get("book_id", "")
+        ch_num_val = sc_data.get("chapter_num", 0)
+
+        # Check prerequisites
+        has_animation = player_key in animations
+        has_audio = player_key in audio_store
+
+        pc1, pc2 = st.columns(2)
+        with pc1:
+            if has_animation:
+                st.success("Agent 4 Animations ✅")
+            else:
+                st.warning("Agent 4 Animations ❌ — Generate on 🎨 Animations page")
+        with pc2:
+            if has_audio:
+                st.success("Agent 5 Audio ✅")
+            else:
+                st.warning("Agent 5 Audio ❌ — Generate on 🔊 Audio page")
+
+        existing_player = players.get(player_key)
+
+        col_btn, col_status = st.columns([1, 3])
+        with col_btn:
+            build_btn = st.button(
+                "▶️ Build Player",
+                type="primary",
+                disabled=not (has_animation and has_audio),
+            )
+        with col_status:
+            if existing_player:
+                st.success("Player ready!")
+            elif not (has_animation and has_audio):
+                st.caption("Both animations and audio must be generated first.")
+            else:
+                st.caption("Click Build Player to assemble the playback package.")
+
+        if build_btn:
+            with st.spinner("Building player package..."):
+                try:
+                    from agent6_player.player_builder import (
+                        build_player_package,
+                        save_player_package,
+                    )
+
+                    audio_manifest = audio_store[player_key]
+                    animation_manifest = animations[player_key]
+
+                    timeline, player_html = build_player_package(
+                        audio_manifest=audio_manifest,
+                        animation_manifest=animation_manifest,
+                        script_data=sc_data,
+                        embed_audio=True,
+                    )
+
+                    # Save to storage
+                    save_player_package(timeline, player_html, bid, ch_num_val)
+
+                    # Store in session
+                    st.session_state.players[player_key] = {
+                        "timeline": timeline.model_dump(),
+                        "html": player_html,
+                    }
+                    existing_player = st.session_state.players[player_key]
+
+                    st.success(
+                        f"Player built: {len(timeline.segments)} segments, "
+                        f"{timeline.total_duration_seconds:.1f}s total."
+                    )
+
+                except Exception as player_err:
+                    st.error(f"Player build failed: {player_err}")
+                    import traceback as _tb
+                    with st.expander("Error details"):
+                        st.code(_tb.format_exc())
+
+        # Show player if ready
+        if existing_player:
+            st.divider()
+            timeline_data = existing_player.get("timeline", {})
+
+            # Timeline stats
+            tc = st.columns(4)
+            with tc[0]:
+                total_dur = timeline_data.get("total_duration_seconds", 0)
+                mins = int(total_dur) // 60
+                secs = int(total_dur) % 60
+                st.metric("Duration", f"{mins}m {secs}s")
+            with tc[1]:
+                st.metric("Segments", len(timeline_data.get("segments", [])))
+            with tc[2]:
+                animated = sum(1 for s in timeline_data.get("segments", []) if s.get("has_animation"))
+                st.metric("Animated", animated)
+            with tc[3]:
+                pauses = sum(1 for s in timeline_data.get("segments", []) if s.get("pause_for_question"))
+                st.metric("Pause Points", pauses)
+
+            st.divider()
+
+            # Embed the player
+            player_html = existing_player.get("html", "")
+            if player_html:
+                st.subheader("Interactive Player")
+                components.html(player_html, width=1280, height=800, scrolling=False)
+            else:
+                st.warning("Player HTML not available.")
+
+            st.divider()
+
+            # Timeline details
+            with st.expander("📋 Unified Timeline"):
+                type_icons = {
+                    "hook": "🪝", "activate": "⚡", "explore": "🔍",
+                    "question_hook": "❓", "synthesis": "🎯", "preview": "👉",
+                }
+                for seg in timeline_data.get("segments", []):
+                    icon = type_icons.get(seg.get("type", ""), "•")
+                    anim_tag = "🎨" if seg.get("has_animation") else "⬜"
+                    pause_tag = "🟠 pause" if seg.get("pause_for_question") else ""
+                    st.write(
+                        f"{icon} `{seg.get('segment_id', '')}` — "
+                        f"[{seg.get('audio_start', 0):.1f}s – {seg.get('audio_end', 0):.1f}s] "
+                        f"{anim_tag} {pause_tag}"
+                    )
+
+            # Download timeline
+            st.download_button(
+                "⬇️ Download Timeline JSON",
+                data=json.dumps(timeline_data, indent=2, ensure_ascii=False),
+                file_name=f"timeline_ch{ch_num_val}.json",
+                mime="application/json",
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  PAGE: YouTube Export (Agent 7 — DISABLED)
+# ══════════════════════════════════════════════════════════════════════
+
+elif page == "📺 YouTube Export":
+    st.title("📺 YouTube Export")
+    st.info(
+        "🔒 YouTube export is not enabled in this version. "
+        "This feature will be activated in a future release."
+    )
+    st.stop()
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  PAGE: Question Bank (Agent 8)
+# ══════════════════════════════════════════════════════════════════════
+
+elif page == "❓ Question Bank":
+    st.header("❓ Question Bank")
+    st.caption(
+        "Agent 8 banks every student question and answer. "
+        "Repeated questions are served from cache at zero LLM cost."
+    )
+
+    scripts = st.session_state.scripts
+    books = st.session_state.library
+    audio_store = st.session_state.audio
+
+    if not scripts:
+        st.info("No scripts found. Generate a script first via 🧠 Analyse Chapter.")
+    else:
+        # Build selector
+        labels = {}
+        for skey, sc_data in scripts.items():
+            bid = sc_data.get("book_id", "")
+            book_title = books.get(bid, {}).get("title", "Unknown")
+            ch_title = sc_data.get("chapter_title", "")
+            ch_num_val = sc_data.get("chapter_num", 0)
+            labels[f"{book_title[:30]} → Ch {ch_num_val}: {ch_title[:30]}"] = skey
+
+        sel_label = st.selectbox("Select a chapter", list(labels.keys()), key="qa_sel")
+        qa_key = labels[sel_label]
+        sc_data = scripts[qa_key]
+        bid = sc_data.get("book_id", "")
+        ch_num_val = sc_data.get("chapter_num", 0)
+
+        # Check API key for testing Q&A
+        _api_key_available = False
+        try:
+            _key = st.secrets.get("ANTHROPIC_API_KEY", "")
+            if _key:
+                _api_key_available = True
+        except Exception:
+            pass
+        if not _api_key_available:
+            if os.getenv("ANTHROPIC_API_KEY"):
+                _api_key_available = True
+
+        # Load question bank
+        try:
+            from agent8_qa import question_bank
+            from agent8_qa.question_handler import handle_question
+            from agent8_qa.models import QuestionRequest
+
+            bank_entries = question_bank.get_all(bid, ch_num_val)
+            stats = question_bank.get_stats(bid, ch_num_val)
+
+            # Stats
+            st.divider()
+            sc = st.columns(4)
+            with sc[0]:
+                st.metric("Total Questions Banked", stats.total_questions)
+            with sc[1]:
+                st.metric("Verified (10+ uses)", stats.verified_questions)
+            with sc[2]:
+                st.metric("Cache Hit Rate", f"{stats.cache_hit_rate:.0%}")
+            with sc[3]:
+                st.metric("Est. Cost Savings", f"${stats.estimated_savings_usd:.4f}")
+
+            # Test Q&A
+            st.divider()
+            st.subheader("Test Q&A")
+
+            if not _api_key_available:
+                st.warning("Anthropic API key not configured. Q&A generation requires it.")
+
+            test_q = st.text_input(
+                "Ask a test question",
+                placeholder="e.g. What is social science?",
+                key="test_question",
+            )
+
+            if st.button("🧠 Ask", disabled=not _api_key_available or not test_q):
+                with st.spinner("Processing question..."):
+                    try:
+                        # Get analysis data if available
+                        analysis_data = st.session_state.analyses.get(qa_key, {})
+
+                        request = QuestionRequest(
+                            text=test_q,
+                            book_id=bid,
+                            chapter_num=ch_num_val,
+                            narrator_persona="Socratic",
+                        )
+                        result = handle_question(
+                            request=request,
+                            script_data=sc_data,
+                            analysis_data=analysis_data,
+                        )
+
+                        if result.get("served_from_cache"):
+                            st.success(f"✅ Served from cache ({result['latency_seconds']:.2f}s, 0 tokens)")
+                        else:
+                            st.info(
+                                f"🧠 Generated with Claude ({result['latency_seconds']:.2f}s, "
+                                f"{result.get('tokens_used', 0)} tokens)"
+                            )
+
+                        st.write(result["answer_text"])
+
+                        # Refresh bank entries
+                        bank_entries = question_bank.get_all(bid, ch_num_val)
+
+                    except Exception as qa_err:
+                        st.error(f"Q&A failed: {qa_err}")
+                        import traceback as _tb
+                        with st.expander("Error details"):
+                            st.code(_tb.format_exc())
+
+            # Display banked Q&A pairs
+            st.divider()
+            st.subheader("Banked Q&A Pairs")
+
+            if not bank_entries:
+                st.caption("No questions banked yet for this chapter. Try asking one above!")
+            else:
+                for entry in bank_entries:
+                    verified_badge = " ✅ verified" if entry.is_verified else ""
+                    header = (
+                        f"❓ {entry.question_text[:60]}... | "
+                        f"Used: {entry.usage_count}x{verified_badge}"
+                    )
+                    with st.expander(header, expanded=False):
+                        st.write(f"**Question:** {entry.question_text}")
+                        st.write(f"**Answer:** {entry.answer_text}")
+                        st.caption(
+                            f"Segment: `{entry.segment_id or 'N/A'}` | "
+                            f"Tokens: {entry.tokens_used} | "
+                            f"Created: {entry.created_at[:19]} | "
+                            f"Last used: {(entry.last_used_at or '')[:19]}"
+                        )
+
+        except Exception as bank_err:
+            st.error(f"Could not load question bank: {bank_err}")
+            import traceback as _tb
+            with st.expander("Error details"):
+                st.code(_tb.format_exc())
