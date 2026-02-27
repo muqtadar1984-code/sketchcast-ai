@@ -12,12 +12,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
-from .animation_builder import build_animation
-from .canvas import SVGCanvas, blank_svg
+from .animation_builder import build_animation, build_scribe_timeline
+from .canvas import SVGCanvas, blank_svg, _esc, FONT, PRIMARY, BLUE, ORANGE, GREEN, PURPLE, RED, _BRANCH_COLORS
 from .manifest_builder import build_manifest
 from .models import AnimationManifest, ManifestSegment
 from .prompts import build_sketch_plan_prompt
-from .roughjs_renderer import generate_roughjs_html
+from .svg_utils import SVGPathConverter
+
+# Keep import for backward compat but no longer called in pipeline
+try:
+    from .roughjs_renderer import generate_roughjs_html  # noqa: F401
+except ImportError:
+    pass
 
 ANIMATIONS_DIR = Path(__file__).parent.parent / "storage" / "animations"
 
@@ -35,6 +41,273 @@ _VALID_PARAMS: dict = {
     "venn":         ["circles", "cx", "cy"],
     "grid":         ["cols", "rows", "x", "y", "width", "height", "color"],
 }
+
+
+# ── Scribe path conversion ────────────────────────────────────────────
+
+import math
+import re
+import xml.etree.ElementTree as ET
+
+
+def _decompose_compound(el_type: str, params: dict, el_id: str, draw_order: int) -> list[dict]:
+    """Decompose a compound shape into individual path dicts.
+
+    Renders the compound via SVGCanvas, parses the resulting SVG fragment,
+    and converts each sub-element to a PathData dict.
+    """
+    canvas = SVGCanvas()
+    method = getattr(canvas, f"draw_{el_type}", None)
+
+    valid = _VALID_PARAMS.get(el_type)
+    if not method or not valid:
+        return []
+
+    filtered = {k: v for k, v in params.items() if k in valid}
+    try:
+        method(**filtered)
+    except Exception:
+        return []
+
+    # Get the SVG elements (without full document wrapper)
+    svg_body = "\n".join(canvas._elements)
+
+    # Parse sub-elements from the SVG fragment
+    paths: list[dict] = []
+    sub_idx = 0
+    color = params.get("color", PRIMARY)
+    sw = params.get("stroke_width", 2)
+
+    # Wrap in valid XML for parsing
+    try:
+        root = ET.fromstring(f"<root xmlns='http://www.w3.org/2000/svg'>{svg_body}</root>")
+    except ET.ParseError:
+        # Fallback: treat entire compound as a single bounding rect
+        x = params.get("x", 100)
+        y = params.get("y", 100)
+        w = params.get("width", 400)
+        h = params.get("height", 200)
+        pd = SVGPathConverter.rect_to_path(x, y, w, h)
+        paths.append({
+            "path_id": f"{el_id}_p{sub_idx}",
+            "element_id": el_id,
+            "element_type": el_type,
+            "d": pd["d"],
+            "total_length": pd["total_length"],
+            "stroke_color": color,
+            "stroke_width": sw,
+            "fill": "none",
+            "draw_order": draw_order,
+        })
+        return paths
+
+    # Recursively extract drawable elements
+    for elem in root.iter():
+        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        pid = f"{el_id}_p{sub_idx}"
+        elem_color = elem.get("stroke", color)
+        elem_fill = elem.get("fill", "none")
+        elem_sw = float(elem.get("stroke-width", sw) or sw)
+
+        if tag == "line":
+            x1 = float(elem.get("x1", 0))
+            y1 = float(elem.get("y1", 0))
+            x2 = float(elem.get("x2", 0))
+            y2 = float(elem.get("y2", 0))
+            pd = SVGPathConverter.line_to_path(x1, y1, x2, y2)
+            if pd["total_length"] > 1:
+                paths.append({
+                    "path_id": pid, "element_id": el_id, "element_type": "line",
+                    "d": pd["d"], "total_length": pd["total_length"],
+                    "stroke_color": elem_color, "stroke_width": elem_sw,
+                    "fill": "none", "draw_order": draw_order + sub_idx * 0.01,
+                })
+                sub_idx += 1
+
+        elif tag == "circle":
+            cx = float(elem.get("cx", 0))
+            cy = float(elem.get("cy", 0))
+            r = float(elem.get("r", 10))
+            pd = SVGPathConverter.circle_to_path(cx, cy, r)
+            paths.append({
+                "path_id": pid, "element_id": el_id, "element_type": "circle",
+                "d": pd["d"], "total_length": pd["total_length"],
+                "stroke_color": elem_color, "stroke_width": elem_sw,
+                "fill": elem_fill, "draw_order": draw_order + sub_idx * 0.01,
+            })
+            sub_idx += 1
+
+        elif tag == "rect":
+            x = float(elem.get("x", 0))
+            y = float(elem.get("y", 0))
+            w = float(elem.get("width", 10))
+            h = float(elem.get("height", 10))
+            rx = float(elem.get("rx", 0))
+            pd = SVGPathConverter.rect_to_path(x, y, w, h, rx)
+            paths.append({
+                "path_id": pid, "element_id": el_id, "element_type": "rectangle",
+                "d": pd["d"], "total_length": pd["total_length"],
+                "stroke_color": elem_color, "stroke_width": elem_sw,
+                "fill": elem_fill, "draw_order": draw_order + sub_idx * 0.01,
+            })
+            sub_idx += 1
+
+        elif tag == "path":
+            d = elem.get("d", "")
+            if d:
+                # Approximate path length from d string
+                # Use simple segment counting heuristic
+                seg_count = len(re.findall(r"[LlHhVvCcSsQqTtAa]", d))
+                approx_len = max(seg_count * 50, 20)
+                paths.append({
+                    "path_id": pid, "element_id": el_id, "element_type": "path",
+                    "d": d, "total_length": approx_len,
+                    "stroke_color": elem_color, "stroke_width": elem_sw,
+                    "fill": elem_fill, "draw_order": draw_order + sub_idx * 0.01,
+                })
+                sub_idx += 1
+
+        elif tag == "polygon":
+            points_str = elem.get("points", "")
+            if points_str:
+                try:
+                    nums = [float(n) for n in points_str.replace(",", " ").split()]
+                    point_tuples = [(nums[i], nums[i + 1]) for i in range(0, len(nums) - 1, 2)]
+                    pd = SVGPathConverter.polygon_to_path(point_tuples)
+                    if pd["total_length"] > 1:
+                        paths.append({
+                            "path_id": pid, "element_id": el_id, "element_type": "polygon",
+                            "d": pd["d"], "total_length": pd["total_length"],
+                            "stroke_color": elem_color, "stroke_width": elem_sw,
+                            "fill": elem_fill, "draw_order": draw_order + sub_idx * 0.01,
+                        })
+                        sub_idx += 1
+                except (ValueError, IndexError):
+                    pass
+
+        elif tag == "text":
+            text_content = elem.text or ""
+            if text_content.strip():
+                x_val = float(elem.get("x", 0))
+                y_val = float(elem.get("y", 0))
+                paths.append({
+                    "path_id": pid, "element_id": el_id, "element_type": "text",
+                    "d": "", "total_length": 0,
+                    "stroke_color": elem.get("fill", color), "stroke_width": 0,
+                    "fill": elem.get("fill", color),
+                    "draw_order": draw_order + sub_idx * 0.01,
+                    "text_params": {
+                        "x": x_val, "y": y_val,
+                        "text": text_content.strip(),
+                        "font_size": int(float(elem.get("font-size", 14))),
+                        "color": elem.get("fill", color),
+                        "bold": elem.get("font-weight", "") == "bold",
+                        "align": {"start": "left", "middle": "center", "end": "right"}.get(
+                            elem.get("text-anchor", "middle"), "center"
+                        ),
+                    },
+                })
+                sub_idx += 1
+
+    return paths
+
+
+def convert_plan_to_paths(plan: dict) -> list[dict]:
+    """Convert a Claude sketch plan into a list of PathData dicts.
+
+    Iterates over plan["elements"], sorted by draw_order.
+    For each element, calls the appropriate SVGPathConverter method
+    to produce path d-strings and total_lengths.
+
+    Text elements get a special entry with d="" and total_length=0,
+    since they animate via opacity fade rather than stroke-dashoffset.
+    """
+    paths: list[dict] = []
+    elements = sorted(plan.get("elements", []), key=lambda e: e.get("draw_order", 99))
+
+    for el in elements:
+        el_type = el.get("type", "")
+        params = el.get("params", {})
+        el_id = el.get("id", f"el_{uuid.uuid4().hex[:6]}")
+        draw_order = el.get("draw_order", 99)
+        color = params.get("color", PRIMARY)
+        sw = params.get("stroke_width", 2)
+        fill = params.get("fill", "none")
+
+        if el_type == "text":
+            paths.append({
+                "path_id": f"{el_id}_p0",
+                "element_id": el_id,
+                "element_type": "text",
+                "d": "",
+                "total_length": 0,
+                "stroke_color": color,
+                "stroke_width": 0,
+                "fill": color,
+                "draw_order": draw_order,
+                "text_params": {
+                    "x": params.get("x", 640),
+                    "y": params.get("y", 360),
+                    "text": params.get("text", ""),
+                    "font_size": params.get("font_size", 16),
+                    "color": color,
+                    "bold": params.get("bold", False),
+                    "align": params.get("align", "center"),
+                },
+            })
+        elif el_type == "circle":
+            pd = SVGPathConverter.circle_to_path(
+                params.get("cx", 640), params.get("cy", 360), params.get("r", 50)
+            )
+            paths.append({
+                "path_id": f"{el_id}_p0", "element_id": el_id, "element_type": "circle",
+                "d": pd["d"], "total_length": pd["total_length"],
+                "stroke_color": color, "stroke_width": sw, "fill": fill,
+                "draw_order": draw_order,
+            })
+        elif el_type == "rectangle":
+            pd = SVGPathConverter.rect_to_path(
+                params.get("x", 100), params.get("y", 100),
+                params.get("width", 200), params.get("height", 100),
+                params.get("corner_radius", 0),
+            )
+            paths.append({
+                "path_id": f"{el_id}_p0", "element_id": el_id, "element_type": "rectangle",
+                "d": pd["d"], "total_length": pd["total_length"],
+                "stroke_color": color, "stroke_width": sw, "fill": fill,
+                "draw_order": draw_order,
+            })
+        elif el_type == "line":
+            pd = SVGPathConverter.line_to_path(
+                params.get("x1", 0), params.get("y1", 0),
+                params.get("x2", 100), params.get("y2", 100),
+            )
+            paths.append({
+                "path_id": f"{el_id}_p0", "element_id": el_id, "element_type": "line",
+                "d": pd["d"], "total_length": pd["total_length"],
+                "stroke_color": color, "stroke_width": sw, "fill": "none",
+                "draw_order": draw_order,
+            })
+        elif el_type == "arrow":
+            arrow_paths = SVGPathConverter.arrow_to_paths(
+                params.get("x1", 0), params.get("y1", 0),
+                params.get("x2", 100), params.get("y2", 100),
+            )
+            for idx, ap in enumerate(arrow_paths):
+                paths.append({
+                    "path_id": f"{el_id}_p{idx}", "element_id": el_id,
+                    "element_type": "arrow",
+                    "d": ap["d"], "total_length": ap["total_length"],
+                    "stroke_color": color, "stroke_width": sw,
+                    "fill": "none" if idx == 0 else color,
+                    "draw_order": draw_order + idx * 0.01,
+                })
+        elif el_type in ("mind_map", "process_flow", "pyramid", "timeline", "tree", "venn", "grid"):
+            compound_paths = _decompose_compound(el_type, params, el_id, draw_order)
+            paths.extend(compound_paths)
+        # else: unknown type, skip
+
+    return paths
 
 
 # ── plan execution ────────────────────────────────────────────────────
@@ -180,7 +453,7 @@ def _generate_for_episode(
             svg_path = anim_dir / f"{seg_id}_sketch.svg"
             svg_path.write_text(svg_content, encoding="utf-8")
 
-            # Build animation timing JSON
+            # Build animation timing JSON (legacy frame-based)
             animation = build_animation(plan, seg, sketch_cue)
             anim_path = anim_dir / f"{seg_id}_animation.json"
             anim_path.write_text(
@@ -188,17 +461,11 @@ def _generate_for_episode(
                 encoding="utf-8",
             )
 
-            # Generate Rough.js HTML for Agent 6 video rendering
-            roughjs_path_str: str | None = None
-            try:
-                roughjs_path_str = generate_roughjs_html(
-                    segment_id=seg_id,
-                    sketch_plan=plan,
-                    animation_json=animation.model_dump(),
-                    output_dir=anim_dir,
-                )
-            except Exception:
-                pass  # Rough.js generation is non-critical
+            # Convert plan elements to Scribe path data
+            path_data_list = convert_plan_to_paths(plan)
+
+            # Build Scribe per-path keyframes
+            scribe_kf = build_scribe_timeline(path_data_list, seg, sketch_cue)
 
             manifest_segments.append(ManifestSegment(
                 segment_id=seg_id,
@@ -206,7 +473,9 @@ def _generate_for_episode(
                 has_animation=True,
                 svg_path=str(svg_path),
                 animation_path=str(anim_path),
-                roughjs_html_path=roughjs_path_str,
+                roughjs_html_path=None,       # Rough.js superseded by Scribe
+                paths=path_data_list,         # Scribe path data
+                scribe_keyframes=scribe_kf,   # Per-path timing
                 estimated_duration_seconds=int(seg.get("estimated_duration_seconds", 30)),
                 sketch_cue_timing=sketch_cue.get("timing", "during"),
             ))

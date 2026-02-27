@@ -1157,14 +1157,14 @@ elif page == "🎨 Animations":
                         st.caption(f"Sketch cue timing: `{timing}`")
 
                     svg_path = ms.get("svg_path")
-                    roughjs_path = ms.get("roughjs_html_path")
-                    has_roughjs = bool(roughjs_path and Path(roughjs_path).exists())
+                    paths_data = ms.get("paths")
+                    has_paths = bool(paths_data)
 
-                    if has_roughjs:
-                        tab_svg, tab_rough = st.tabs(["📐 SVG Preview", "✏️ Rough.js Preview"])
+                    if has_paths:
+                        tab_svg, tab_paths = st.tabs(["📐 SVG Preview", "✏️ Scribe Paths"])
                     else:
                         tab_svg = st.container()
-                        tab_rough = None
+                        tab_paths = None
 
                     with tab_svg:
                         if svg_path and Path(svg_path).exists():
@@ -1193,11 +1193,15 @@ elif page == "🎨 Animations":
                             with st.expander("Animation timing JSON"):
                                 st.json(anim_data)
 
-                    if tab_rough is not None:
-                        with tab_rough:
-                            with open(roughjs_path, encoding="utf-8") as f:
-                                rough_html = f.read()
-                            components.html(rough_html, width=1280, height=720, scrolling=False)
+                    if tab_paths is not None:
+                        with tab_paths:
+                            path_count = len(paths_data)
+                            text_count = sum(1 for p in paths_data if p.get("element_type") == "text")
+                            draw_count = path_count - text_count
+                            st.caption(f"**{draw_count}** drawable paths + **{text_count}** text elements")
+                            scribe_kf = ms.get("scribe_keyframes", [])
+                            if scribe_kf:
+                                st.json(scribe_kf)
 
             st.divider()
             # Download full manifest

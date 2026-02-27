@@ -74,6 +74,22 @@ def build_unified_timeline(
         # Pause point
         pause_at = audio_end if pause else None
 
+        # Scribe path data (carried from Agent 4 manifest)
+        paths_data = anim.get("paths") if has_animation else None
+
+        # Scribe keyframes: offset from segment-local time to master audio time
+        scribe_kf = anim.get("scribe_keyframes")
+        if scribe_kf and animation_trigger is not None:
+            offset = animation_trigger
+            scribe_kf = [
+                {
+                    **kf,
+                    "audio_start": round(kf["audio_start"] + offset, 3),
+                    "audio_end": round(kf["audio_end"] + offset, 3),
+                }
+                for kf in scribe_kf
+            ]
+
         ts = TimelineSegment(
             segment_id=seg_id,
             type=seg_type,
@@ -86,6 +102,8 @@ def build_unified_timeline(
             pause_for_question=pause,
             pause_at_second=round(pause_at, 2) if pause_at is not None else None,
             segment_text=seg_text,
+            paths=paths_data,
+            scribe_keyframes=scribe_kf if has_animation else None,
         )
         timeline_segments.append(ts)
 

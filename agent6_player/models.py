@@ -23,12 +23,15 @@ class TimelineSegment(BaseModel):
     audio_start: float  # seconds in master audio
     audio_end: float
     has_animation: bool = False
-    roughjs_html_path: Optional[str] = None
+    roughjs_html_path: Optional[str] = None  # DEPRECATED — kept for backward compat
     animation_trigger: Optional[float] = None  # second to start animation
     sketch_cue_timing: Optional[str] = None  # before | during | after
     pause_for_question: bool = False
     pause_at_second: Optional[float] = None  # auto-pause at this second
     segment_text: str = ""  # narration text for display
+    # Scribe / Speed Paint fields
+    paths: Optional[list] = None              # PathData dicts from Agent 4
+    scribe_keyframes: Optional[list] = None   # Per-path timing (master-audio-relative)
 
 
 class UnifiedTimeline(BaseModel):

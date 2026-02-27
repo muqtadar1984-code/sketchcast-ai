@@ -53,7 +53,9 @@ class ManifestSegment(BaseModel):
     has_animation: bool
     svg_path: Optional[str] = None
     animation_path: Optional[str] = None
-    roughjs_html_path: Optional[str] = None   # Rough.js HTML for Agent 6 video rendering
+    roughjs_html_path: Optional[str] = None   # DEPRECATED — kept for backward compat
+    paths: Optional[List[Dict]] = None         # Scribe path data (d, total_length, etc.)
+    scribe_keyframes: Optional[List[Dict]] = None  # Per-path timing for Scribe player
     estimated_duration_seconds: int
     sketch_cue_timing: Optional[str] = None
 
