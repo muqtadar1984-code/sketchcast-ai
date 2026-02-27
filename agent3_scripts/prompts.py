@@ -43,6 +43,27 @@ Use ONLY these — no other SSML tags:
 - action: draw | highlight | label | clear | point | annotate
 - timing: before (draw before speaking) | during (draw while speaking) | after (draw after segment)
 
+=== SCRIBE DIRECTOR (visual_action) ===
+The whiteboard uses a Ghost → Ink pipeline:
+  1. Ghost outlines appear first (faint dashed lines showing where the drawing will go)
+  2. A pen marker traces over them in real time, filling in the ink layer
+
+You MUST set visual_action for every segment that has a sketch_cue. This controls the Scribe player state machine:
+
+- "DRAW_START"    — Ghost outlines fade in and the pen starts tracing ink over them.
+                    Use for the FIRST segment of a new visual (new sketch_cue element).
+                    A short travel-time pause is automatically inserted before the narrator speaks.
+- "DRAW_CONTINUE" — Pen continues tracing remaining paths of the current visual.
+                    Use for subsequent segments that are STILL describing the same sketch_cue element.
+- "GHOST_ONLY"    — Ghost outlines are visible but the pen is idle. No new ink is drawn.
+                    Use for question_hook segments where the visual stays on screen for reference.
+
+Rules:
+- Every segment with a sketch_cue MUST have a visual_action
+- question_hook segments MUST use "GHOST_ONLY" (never draw during a thinking pause)
+- Segments without a sketch_cue should NOT have visual_action (omit it or set null)
+- When a new sketch_cue appears, use "DRAW_START"; when the same visual continues, use "DRAW_CONTINUE"
+
 === OUTPUT FORMAT ===
 Return ONLY valid JSON — no preamble, no markdown fences, no explanation.
 
@@ -57,8 +78,22 @@ Return ONLY valid JSON — no preamble, no markdown fences, no explanation.
         "element": "specific description of what to draw",
         "timing": "before"
       }},
+      "visual_action": "DRAW_START",
       "pause_for_question": false,
       "estimated_duration_seconds": 30
+    }},
+    {{
+      "type": "explore",
+      "text": "Now let's look more closely at how this works...",
+      "elevenlabs_text": "Now let's look more closely <break time='0.3s'/> at how this works...",
+      "sketch_cue": {{
+        "action": "draw",
+        "element": "continue adding details to the previous diagram",
+        "timing": "during"
+      }},
+      "visual_action": "DRAW_CONTINUE",
+      "pause_for_question": false,
+      "estimated_duration_seconds": 90
     }},
     {{
       "type": "question_hook",

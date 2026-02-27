@@ -4,15 +4,57 @@ Generates Socratic episode scripts from Agent 2 analysis output.
 """
 
 import json
+import logging
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from .models import ChapterScripts, EpisodeScript, ScriptSegment, SegmentType, SketchCue
 from .prompts import EPISODE_SCRIPT_PROMPT
 
+logger = logging.getLogger(__name__)
+
 STORAGE_DIR = Path(__file__).parent.parent / "storage" / "scripts"
+
+_VALID_VISUAL_ACTIONS = {"DRAW_START", "DRAW_CONTINUE", "GHOST_ONLY"}
+
+
+def process_director_manifest(segments: List[ScriptSegment]) -> List[ScriptSegment]:
+    """Post-process segments to enforce Scribe Director invariants.
+
+    1. Forces visual_action=None for segments without a sketch_cue.
+    2. Forces visual_action="GHOST_ONLY" for question_hook segments with a sketch_cue.
+    3. Inserts a 300ms <break> at the start of elevenlabs_text for DRAW_START segments
+       (hand travel time before the pen starts tracing).
+    """
+    travel_break = '<break time="0.3s"/>'
+
+    for seg in segments:
+        # No sketch_cue → no visual action
+        if seg.sketch_cue is None:
+            seg.visual_action = None
+            continue
+
+        # question_hook must be GHOST_ONLY
+        if seg.type == SegmentType.question_hook:
+            seg.visual_action = "GHOST_ONLY"
+            continue
+
+        # Validate visual_action; default to DRAW_START if invalid/missing
+        if seg.visual_action not in _VALID_VISUAL_ACTIONS:
+            seg.visual_action = "DRAW_START"
+
+        # Insert travel-time break for DRAW_START segments
+        if seg.visual_action == "DRAW_START":
+            if not seg.elevenlabs_text.startswith(travel_break):
+                seg.elevenlabs_text = travel_break + " " + seg.elevenlabs_text
+
+    logger.debug(
+        "Director manifest processed: %s",
+        [(s.segment_id, s.visual_action) for s in segments],
+    )
+    return segments
 
 
 def _build_episode_context(episode: dict, analysis: dict) -> str:
@@ -141,15 +183,23 @@ def generate_episode_script(
         plain_text = seg.get("text", "")
         el_text = seg.get("elevenlabs_text") or plain_text
 
+        # Parse visual_action from Claude output
+        raw_va = seg.get("visual_action")
+        visual_action = raw_va if raw_va in _VALID_VISUAL_ACTIONS else None
+
         segments.append(ScriptSegment(
             segment_id=f"s{i + 1:03d}",
             type=seg_type,
             text=plain_text,
             elevenlabs_text=el_text,
             sketch_cue=sketch_cue,
+            visual_action=visual_action,
             pause_for_question=bool(seg.get("pause_for_question", False)),
             estimated_duration_seconds=int(seg.get("estimated_duration_seconds", 30)),
         ))
+
+    # Post-process: enforce Scribe Director invariants + travel-time breaks
+    segments = process_director_manifest(segments)
 
     total_duration = sum(s.estimated_duration_seconds for s in segments)
     question_hook_count = sum(1 for s in segments if s.type == SegmentType.question_hook)

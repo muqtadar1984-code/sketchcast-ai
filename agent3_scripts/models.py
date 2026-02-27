@@ -33,6 +33,7 @@ class ScriptSegment(BaseModel):
     text: str  # plain text — what the narrator says
     elevenlabs_text: str  # same text with ElevenLabs <break> markup
     sketch_cue: Optional[SketchCue] = None
+    visual_action: Optional[str] = None  # DRAW_START | DRAW_CONTINUE | GHOST_ONLY
     pause_for_question: bool = False
     estimated_duration_seconds: int
 
