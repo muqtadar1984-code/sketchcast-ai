@@ -10,7 +10,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from .models import ChapterScripts, EpisodeScript, ScriptSegment, SegmentType, SketchCue
+from .models import (
+    ChapterScripts,
+    EpisodeScript,
+    ScriptSegment,
+    SegmentType,
+    SketchCue,
+    VisualAssetRequest,
+)
 from .prompts import EPISODE_SCRIPT_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -20,21 +27,42 @@ STORAGE_DIR = Path(__file__).parent.parent / "storage" / "scripts"
 _VALID_VISUAL_ACTIONS = {"DRAW_START", "DRAW_CONTINUE", "GHOST_ONLY"}
 
 
+def _synthesize_sketch_cue(visual_request: Optional[VisualAssetRequest]) -> Optional[SketchCue]:
+    """BRIDGE: Synthesize a backward-compatible sketch_cue from visual_request.
+
+    Allows Agent 4 to continue reading sketch_cue until it is refactored
+    for Nanobana Pro.  Remove when Agent 4 reads visual_request directly.
+    """
+    if visual_request is None:
+        return None
+    return SketchCue(
+        action="draw",
+        element=visual_request.prompt[:200],
+        timing="during",
+    )
+
+
 def process_director_manifest(segments: List[ScriptSegment]) -> List[ScriptSegment]:
     """Post-process segments to enforce Scribe Director invariants.
 
-    1. Forces visual_action=None for segments without a sketch_cue.
-    2. Forces visual_action="GHOST_ONLY" for question_hook segments with a sketch_cue.
-    3. Inserts a 300ms <break> at the start of elevenlabs_text for DRAW_START segments
-       (hand travel time before the pen starts tracing).
+    1. Forces visual_action=None for segments without a visual_request.
+    2. Forces visual_action="GHOST_ONLY" for question_hook segments.
+    3. Inserts a 300ms <break> at the start of elevenlabs_text for DRAW_START
+       segments (hand travel time before the pen starts tracing).
+    4. Synthesizes bridge sketch_cue from visual_request for Agent 4 compat.
     """
     travel_break = '<break time="0.3s"/>'
 
     for seg in segments:
-        # No sketch_cue → no visual action
-        if seg.sketch_cue is None:
+        # No visual_request → no visual action, clear bridge
+        if seg.visual_request is None:
             seg.visual_action = None
+            seg.sketch_cue = None
             continue
+
+        # Ensure bridge sketch_cue is populated
+        if seg.sketch_cue is None:
+            seg.sketch_cue = _synthesize_sketch_cue(seg.visual_request)
 
         # question_hook must be GHOST_ONLY
         if seg.type == SegmentType.question_hook:
@@ -92,7 +120,7 @@ def _build_episode_context(episode: dict, analysis: dict) -> str:
     relevant_visuals = [v for v in all_visuals if v.get("opportunity_id") in ep_visual_ids]
 
     if relevant_visuals:
-        lines.append("WHITEBOARD SKETCH OPPORTUNITIES (use these for sketch_cue):")
+        lines.append("VISUAL OPPORTUNITIES (use these for visual_request prompts):")
         for v in relevant_visuals:
             lines.append(f"  [{v.get('opportunity_id', '')}] {v.get('title', '')}")
             lines.append(f"    What to draw: {v.get('description', '')}")
@@ -170,15 +198,22 @@ def generate_episode_script(
         except ValueError:
             seg_type = SegmentType.explore
 
-        # Parse sketch cue
-        sketch_cue = None
-        sc_data = seg.get("sketch_cue")
-        if sc_data and isinstance(sc_data, dict) and sc_data.get("element"):
-            sketch_cue = SketchCue(
-                action=sc_data.get("action", "draw"),
-                element=sc_data["element"],
-                timing=sc_data.get("timing", "during"),
+        # Parse visual_request (Art Director image prompt)
+        visual_request = None
+        vr_data = seg.get("visual_request")
+        if vr_data and isinstance(vr_data, dict) and vr_data.get("prompt"):
+            visual_request = VisualAssetRequest(
+                prompt=vr_data["prompt"],
+                negative_prompt=vr_data.get(
+                    "negative_prompt",
+                    "color, shading, 3d, realistic, photo, gradient, "
+                    "complex background, text, watermark",
+                ),
+                style_preset=vr_data.get("style_preset", "line-art"),
             )
+
+        # Bridge: synthesize sketch_cue for Agent 4 backward compatibility
+        sketch_cue = _synthesize_sketch_cue(visual_request)
 
         plain_text = seg.get("text", "")
         el_text = seg.get("elevenlabs_text") or plain_text
@@ -192,6 +227,7 @@ def generate_episode_script(
             type=seg_type,
             text=plain_text,
             elevenlabs_text=el_text,
+            visual_request=visual_request,
             sketch_cue=sketch_cue,
             visual_action=visual_action,
             pause_for_question=bool(seg.get("pause_for_question", False)),

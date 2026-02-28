@@ -3,9 +3,9 @@ Pydantic models for Agent 3: Script & Dialogue Generation.
 """
 
 from enum import Enum
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SegmentType(str, Enum):
@@ -18,11 +18,31 @@ class SegmentType(str, Enum):
 
 
 class SketchCue(BaseModel):
-    """Instruction for Agent 5 (animation) — what to draw and when."""
+    """DEPRECATED — backward-compat bridge for Agent 4.
 
-    action: str  # draw | highlight | label | clear | point | annotate
-    element: str  # specific description of what to draw
-    timing: str  # before | during | after  (relative to narrator speaking this segment)
+    Populated automatically by _synthesize_sketch_cue() from visual_request.
+    Will be removed when Agent 4 is refactored for Nanobana Pro.
+    """
+
+    action: str  # always "draw" in bridge mode
+    element: str  # first 200 chars of visual_request.prompt
+    timing: str  # always "during" in bridge mode
+
+
+class VisualAssetRequest(BaseModel):
+    """Art Director instruction for Nanobana Pro image generation."""
+
+    prompt: str = Field(
+        description="Detailed text-to-image prompt optimized for clean line-art generation."
+    )
+    negative_prompt: str = Field(
+        default=(
+            "color, shading, 3d, realistic, photo, gradient, "
+            "complex background, text, watermark"
+        ),
+        description="Standard negative prompt to ensure clean vectorizable output.",
+    )
+    style_preset: Literal["line-art", "technical-drawing", "hand-drawn-sketch"] = "line-art"
 
 
 class ScriptSegment(BaseModel):
@@ -32,8 +52,9 @@ class ScriptSegment(BaseModel):
     type: SegmentType
     text: str  # plain text — what the narrator says
     elevenlabs_text: str  # same text with ElevenLabs <break> markup
-    sketch_cue: Optional[SketchCue] = None
-    visual_action: Optional[str] = None  # DRAW_START | DRAW_CONTINUE | GHOST_ONLY
+    visual_request: Optional[VisualAssetRequest] = None  # Art Director image prompt
+    sketch_cue: Optional[SketchCue] = None  # BRIDGE — auto-generated from visual_request
+    visual_action: Optional[Literal["DRAW_START", "DRAW_CONTINUE", "GHOST_ONLY"]] = None
     pause_for_question: bool = False
     estimated_duration_seconds: int
 

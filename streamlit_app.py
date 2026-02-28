@@ -850,8 +850,14 @@ elif page == "📊 Analysis Results":
                         with st.expander(header, expanded=(seg_type == "hook")):
                             st.write(seg.get("text", ""))
 
+                            visual_req = seg.get("visual_request")
                             sketch = seg.get("sketch_cue")
-                            if sketch:
+                            if visual_req:
+                                st.caption(
+                                    f"🎨 **Visual request** ({visual_req.get('style_preset', 'line-art')}): "
+                                    f"{visual_req.get('prompt', '')[:120]}..."
+                                )
+                            elif sketch:
                                 st.caption(
                                     f"🎨 **Sketch cue ({sketch.get('timing', 'during')}):** "
                                     f"`{sketch.get('action', 'draw')}` — {sketch.get('element', '')}"
@@ -936,8 +942,8 @@ elif page == "🎙️ Scripts":
             with hc[2]:
                 st.metric("Duration", f"{total_sec // 60}m {total_sec % 60}s")
             with hc[3]:
-                sketch_count = sum(1 for s in segments if s.get("sketch_cue"))
-                st.metric("Sketch Cues", sketch_count)
+                visual_count = sum(1 for s in segments if s.get("visual_request") or s.get("sketch_cue"))
+                st.metric("Visual Cues", visual_count)
 
             st.divider()
 
@@ -986,8 +992,14 @@ elif page == "🎙️ Scripts":
                 with st.expander(header, expanded=(seg_type in ("hook", "question_hook"))):
                     st.write(seg.get("text", ""))
 
+                    visual_req = seg.get("visual_request")
                     sketch = seg.get("sketch_cue")
-                    if sketch:
+                    if visual_req:
+                        st.info(
+                            f"🎨 **Visual request** | style: `{visual_req.get('style_preset', 'line-art')}` | "
+                            f"prompt: {visual_req.get('prompt', '')[:150]}"
+                        )
+                    elif sketch:
                         st.info(
                             f"🎨 **Sketch cue** | timing: `{sketch.get('timing', 'during')}` | "
                             f"action: `{sketch.get('action', 'draw')}` | "
@@ -1065,13 +1077,14 @@ elif page == "🎨 Animations":
                 else:
                     ep = episodes[0]
                     total_segs = len(ep.get("segments", []))
-                    sketch_count = sum(
-                        1 for s in ep.get("segments", []) if s.get("sketch_cue")
+                    visual_count = sum(
+                        1 for s in ep.get("segments", [])
+                        if s.get("visual_request") or s.get("sketch_cue")
                     )
                     st.info(
                         f"Generating animations for **{total_segs}** segments "
-                        f"({sketch_count} have sketch cues, rest get blank canvas). "
-                        "This calls Claude once per sketch segment — may take a minute."
+                        f"({visual_count} have visual cues, rest get blank canvas). "
+                        "This calls Claude once per visual segment — may take a minute."
                     )
 
                     progress_bar = st.progress(0)
@@ -1451,8 +1464,14 @@ elif page == "🔊 Audio":
                     # Show script text for reference
                     if script_seg:
                         st.write(script_seg.get("text", ""))
+                        visual_req = script_seg.get("visual_request")
                         sketch = script_seg.get("sketch_cue")
-                        if sketch:
+                        if visual_req:
+                            st.caption(
+                                f"🎨 Visual request ({visual_req.get('style_preset', 'line-art')}): "
+                                f"{visual_req.get('prompt', '')[:100]}"
+                            )
+                        elif sketch:
                             st.caption(
                                 f"🎨 Sketch cue ({sketch.get('timing', 'during')}): "
                                 f"`{sketch.get('action', 'draw')}` — {sketch.get('element', '')}"
