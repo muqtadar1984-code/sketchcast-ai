@@ -28,8 +28,8 @@ except ImportError:
 ANIMATIONS_DIR = Path(__file__).parent.parent / "storage" / "animations"
 
 _VALID_PARAMS: dict = {
-    "circle":       ["cx", "cy", "r", "color", "stroke_width", "fill"],
-    "rectangle":    ["x", "y", "width", "height", "color", "stroke_width", "corner_radius", "fill"],
+    "circle":       ["cx", "cy", "r", "color", "stroke_width"],
+    "rectangle":    ["x", "y", "width", "height", "color", "stroke_width", "corner_radius"],
     "line":         ["x1", "y1", "x2", "y2", "color", "stroke_width"],
     "arrow":        ["x1", "y1", "x2", "y2", "color", "stroke_width"],
     "text":         ["x", "y", "text", "font_size", "color", "bold", "align"],
@@ -101,15 +101,42 @@ def _decompose_compound(el_type: str, params: dict, el_id: str, draw_order: int)
         })
         return paths
 
-    # Recursively extract drawable elements
+    # Recursively extract drawable elements.
+    # Updated canvas now outputs <g> groups containing ghost+ink <path> pairs.
+    # We extract only ink-layer paths (class="ink-layer") and text elements.
     for elem in root.iter():
         tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
         pid = f"{el_id}_p{sub_idx}"
         elem_color = elem.get("stroke", color)
-        elem_fill = elem.get("fill", "none")
         elem_sw = float(elem.get("stroke-width", sw) or sw)
+        elem_class = elem.get("class", "")
 
-        if tag == "line":
+        # Skip ghost-layer elements — only process ink-layer paths
+        if elem_class == "ghost-layer":
+            continue
+
+        if tag == "path":
+            d = elem.get("d", "")
+            if not d:
+                continue
+            # Prefer data-length (exact) over heuristic
+            data_len = elem.get("data-length")
+            if data_len:
+                total_length = float(data_len)
+            else:
+                seg_count = len(re.findall(r"[LlHhVvCcSsQqTtAa]", d))
+                total_length = max(seg_count * 50, 20)
+            if total_length > 1:
+                paths.append({
+                    "path_id": pid, "element_id": el_id, "element_type": "path",
+                    "d": d, "total_length": total_length,
+                    "stroke_color": elem_color, "stroke_width": elem_sw,
+                    "fill": "none", "draw_order": draw_order + sub_idx * 0.01,
+                })
+                sub_idx += 1
+
+        elif tag == "line":
+            # Legacy fallback — should not appear after canvas update
             x1 = float(elem.get("x1", 0))
             y1 = float(elem.get("y1", 0))
             x2 = float(elem.get("x2", 0))
@@ -125,6 +152,7 @@ def _decompose_compound(el_type: str, params: dict, el_id: str, draw_order: int)
                 sub_idx += 1
 
         elif tag == "circle":
+            # Legacy fallback — should not appear after canvas update
             cx = float(elem.get("cx", 0))
             cy = float(elem.get("cy", 0))
             r = float(elem.get("r", 10))
@@ -133,11 +161,12 @@ def _decompose_compound(el_type: str, params: dict, el_id: str, draw_order: int)
                 "path_id": pid, "element_id": el_id, "element_type": "circle",
                 "d": pd["d"], "total_length": pd["total_length"],
                 "stroke_color": elem_color, "stroke_width": elem_sw,
-                "fill": elem_fill, "draw_order": draw_order + sub_idx * 0.01,
+                "fill": "none", "draw_order": draw_order + sub_idx * 0.01,
             })
             sub_idx += 1
 
         elif tag == "rect":
+            # Legacy fallback — should not appear after canvas update
             x = float(elem.get("x", 0))
             y = float(elem.get("y", 0))
             w = float(elem.get("width", 10))
@@ -148,26 +177,12 @@ def _decompose_compound(el_type: str, params: dict, el_id: str, draw_order: int)
                 "path_id": pid, "element_id": el_id, "element_type": "rectangle",
                 "d": pd["d"], "total_length": pd["total_length"],
                 "stroke_color": elem_color, "stroke_width": elem_sw,
-                "fill": elem_fill, "draw_order": draw_order + sub_idx * 0.01,
+                "fill": "none", "draw_order": draw_order + sub_idx * 0.01,
             })
             sub_idx += 1
 
-        elif tag == "path":
-            d = elem.get("d", "")
-            if d:
-                # Approximate path length from d string
-                # Use simple segment counting heuristic
-                seg_count = len(re.findall(r"[LlHhVvCcSsQqTtAa]", d))
-                approx_len = max(seg_count * 50, 20)
-                paths.append({
-                    "path_id": pid, "element_id": el_id, "element_type": "path",
-                    "d": d, "total_length": approx_len,
-                    "stroke_color": elem_color, "stroke_width": elem_sw,
-                    "fill": elem_fill, "draw_order": draw_order + sub_idx * 0.01,
-                })
-                sub_idx += 1
-
         elif tag == "polygon":
+            # Legacy fallback — should not appear after canvas update
             points_str = elem.get("points", "")
             if points_str:
                 try:
@@ -179,7 +194,7 @@ def _decompose_compound(el_type: str, params: dict, el_id: str, draw_order: int)
                             "path_id": pid, "element_id": el_id, "element_type": "polygon",
                             "d": pd["d"], "total_length": pd["total_length"],
                             "stroke_color": elem_color, "stroke_width": elem_sw,
-                            "fill": elem_fill, "draw_order": draw_order + sub_idx * 0.01,
+                            "fill": "none", "draw_order": draw_order + sub_idx * 0.01,
                         })
                         sub_idx += 1
                 except (ValueError, IndexError):
@@ -190,17 +205,18 @@ def _decompose_compound(el_type: str, params: dict, el_id: str, draw_order: int)
             if text_content.strip():
                 x_val = float(elem.get("x", 0))
                 y_val = float(elem.get("y", 0))
+                text_color = elem.get("fill", PRIMARY)
                 paths.append({
                     "path_id": pid, "element_id": el_id, "element_type": "text",
                     "d": "", "total_length": 0,
-                    "stroke_color": elem.get("fill", color), "stroke_width": 0,
-                    "fill": elem.get("fill", color),
+                    "stroke_color": text_color, "stroke_width": 0,
+                    "fill": text_color,
                     "draw_order": draw_order + sub_idx * 0.01,
                     "text_params": {
                         "x": x_val, "y": y_val,
                         "text": text_content.strip(),
                         "font_size": int(float(elem.get("font-size", 14))),
-                        "color": elem.get("fill", color),
+                        "color": text_color,
                         "bold": elem.get("font-weight", "") == "bold",
                         "align": {"start": "left", "middle": "center", "end": "right"}.get(
                             elem.get("text-anchor", "middle"), "center"
@@ -232,7 +248,8 @@ def convert_plan_to_paths(plan: dict) -> list[dict]:
         draw_order = el.get("draw_order", 99)
         color = params.get("color", PRIMARY)
         sw = params.get("stroke_width", 2)
-        fill = params.get("fill", "none")
+        # Force fill="none" — speed-paint animation requires outline-only shapes
+        fill = "none"
 
         if el_type == "text":
             paths.append({

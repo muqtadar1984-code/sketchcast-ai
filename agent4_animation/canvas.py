@@ -141,14 +141,26 @@ class SVGCanvas:
         stroke_width: float = 2,
         fill: str = "none",
     ) -> str:
-        """Draw a circle.  Applies hand-drawn displacement filter."""
+        """Draw a circle as a continuous path for Speed Paint animation."""
         sw = _seeded_stroke(stroke_width, f"c{cx:.0f}{cy:.0f}{r:.0f}")
-        el = (
-            f'<circle cx="{cx}" cy="{cy}" r="{r}" '
-            f'stroke="{color}" stroke-width="{sw}" fill="{fill}" '
-            f'stroke-linecap="round" stroke-linejoin="round" '
-            f'filter="url(#hand-drawn)"/>'
+        d = (
+            f"M {cx - r} {cy} "
+            f"A {r} {r} 0 1 1 {cx + r} {cy} "
+            f"A {r} {r} 0 1 1 {cx - r} {cy}"
         )
+        path_length = round(2 * math.pi * r, 2)
+        ghost = (
+            f'<path d="{d}" stroke="{color}" stroke-width="{sw}" fill="none" '
+            f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+            f'stroke-linecap="round" stroke-linejoin="round" class="ghost-layer"/>'
+        )
+        ink = (
+            f'<path d="{d}" stroke="{color}" stroke-width="{sw}" fill="none" '
+            f'stroke-opacity="1.0" stroke-dasharray="{path_length}" '
+            f'stroke-dashoffset="{path_length}" data-length="{path_length}" '
+            f'stroke-linecap="round" stroke-linejoin="round" class="ink-layer"/>'
+        )
+        el = f'<g filter="url(#hand-drawn)">{ghost}\n{ink}</g>'
         self._elements.append(el)
         return el
 
@@ -163,15 +175,35 @@ class SVGCanvas:
         corner_radius: float = 0,
         fill: str = "none",
     ) -> str:
-        """Draw a rectangle.  Applies hand-drawn displacement filter."""
+        """Draw a rectangle as a continuous path for Speed Paint animation."""
         sw = _seeded_stroke(stroke_width, f"r{x:.0f}{y:.0f}{width:.0f}{height:.0f}")
-        el = (
-            f'<rect x="{x}" y="{y}" width="{width}" height="{height}" '
-            f'rx="{corner_radius}" ry="{corner_radius}" '
-            f'stroke="{color}" stroke-width="{sw}" fill="{fill}" '
-            f'stroke-linecap="round" stroke-linejoin="round" '
-            f'filter="url(#hand-drawn)"/>'
+        cr = min(corner_radius, width / 2, height / 2)
+        if cr > 0:
+            d = (
+                f"M {x + cr} {y} "
+                f"H {x + width - cr} A {cr} {cr} 0 0 1 {x + width} {y + cr} "
+                f"V {y + height - cr} A {cr} {cr} 0 0 1 {x + width - cr} {y + height} "
+                f"H {x + cr} A {cr} {cr} 0 0 1 {x} {y + height - cr} "
+                f"V {y + cr} A {cr} {cr} 0 0 1 {x + cr} {y} Z"
+            )
+            straight = 2 * (width - 2 * cr) + 2 * (height - 2 * cr)
+            arcs = 2 * math.pi * cr  # four quarter-arcs = full circle
+            path_length = round(straight + arcs, 2)
+        else:
+            d = f"M {x} {y} H {x + width} V {y + height} H {x} Z"
+            path_length = round(2 * (width + height), 2)
+        ghost = (
+            f'<path d="{d}" stroke="{color}" stroke-width="{sw}" fill="none" '
+            f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+            f'stroke-linecap="round" stroke-linejoin="round" class="ghost-layer"/>'
         )
+        ink = (
+            f'<path d="{d}" stroke="{color}" stroke-width="{sw}" fill="none" '
+            f'stroke-opacity="1.0" stroke-dasharray="{path_length}" '
+            f'stroke-dashoffset="{path_length}" data-length="{path_length}" '
+            f'stroke-linecap="round" stroke-linejoin="round" class="ink-layer"/>'
+        )
+        el = f'<g filter="url(#hand-drawn)">{ghost}\n{ink}</g>'
         self._elements.append(el)
         return el
 
@@ -184,15 +216,23 @@ class SVGCanvas:
         color: str = PRIMARY,
         stroke_width: float = 2,
     ) -> str:
-        """Draw a slightly wobbly line (cubic bezier).  Applies hand-drawn filter."""
+        """Draw a slightly wobbly line as ghost+ink path pair for Speed Paint."""
         seed = f"l{x1:.0f}{y1:.0f}{x2:.0f}{y2:.0f}"
         sw = _seeded_stroke(stroke_width, seed)
         d = _wobbly_path(x1, y1, x2, y2, seed)
-        el = (
-            f'<path d="{d}" stroke="{color}" stroke-width="{sw}" '
-            f'stroke-linecap="round" stroke-linejoin="round" fill="none" '
-            f'filter="url(#hand-drawn)"/>'
+        path_length = round(math.hypot(x2 - x1, y2 - y1), 2)
+        ghost = (
+            f'<path d="{d}" stroke="{color}" stroke-width="{sw}" fill="none" '
+            f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+            f'stroke-linecap="round" stroke-linejoin="round" class="ghost-layer"/>'
         )
+        ink = (
+            f'<path d="{d}" stroke="{color}" stroke-width="{sw}" fill="none" '
+            f'stroke-opacity="1.0" stroke-dasharray="{path_length}" '
+            f'stroke-dashoffset="{path_length}" data-length="{path_length}" '
+            f'stroke-linecap="round" stroke-linejoin="round" class="ink-layer"/>'
+        )
+        el = f'<g filter="url(#hand-drawn)">{ghost}\n{ink}</g>'
         self._elements.append(el)
         return el
 
@@ -205,7 +245,7 @@ class SVGCanvas:
         color: str = PRIMARY,
         stroke_width: float = 2,
     ) -> str:
-        """Draw a wobbly line with a filled arrowhead at (x2, y2)."""
+        """Draw a wobbly arrow as ghost+ink path pairs for Speed Paint."""
         arrow_size = max(10.0, stroke_width * 4)
         dx, dy = x2 - x1, y2 - y1
         length = math.sqrt(dx * dx + dy * dy)
@@ -220,18 +260,53 @@ class SVGCanvas:
 
         bl = (shaft_x2 + px * half_w, shaft_y2 + py * half_w)
         br = (shaft_x2 - px * half_w, shaft_y2 - py * half_w)
-        pts = f"{x2:.1f},{y2:.1f} {bl[0]:.1f},{bl[1]:.1f} {br[0]:.1f},{br[1]:.1f}"
 
         seed = f"a{x1:.0f}{y1:.0f}{x2:.0f}{y2:.0f}"
         sw = _seeded_stroke(stroke_width, seed)
-        d = _wobbly_path(x1, y1, shaft_x2, shaft_y2, seed)
 
-        shaft = (
-            f'<path d="{d}" stroke="{color}" stroke-width="{sw}" '
-            f'stroke-linecap="round" fill="none"/>'
+        # Shaft: wobbly bezier path with ghost+ink
+        d_shaft = _wobbly_path(x1, y1, shaft_x2, shaft_y2, seed)
+        shaft_len = round(math.hypot(shaft_x2 - x1, shaft_y2 - y1), 2)
+        shaft_ghost = (
+            f'<path d="{d_shaft}" stroke="{color}" stroke-width="{sw}" fill="none" '
+            f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+            f'stroke-linecap="round" class="ghost-layer"/>'
         )
-        head = f'<polygon points="{pts}" fill="{color}" stroke="none"/>'
-        el = f'<g filter="url(#hand-drawn)">{shaft}{head}</g>'
+        shaft_ink = (
+            f'<path d="{d_shaft}" stroke="{color}" stroke-width="{sw}" fill="none" '
+            f'stroke-opacity="1.0" stroke-dasharray="{shaft_len}" '
+            f'stroke-dashoffset="{shaft_len}" data-length="{shaft_len}" '
+            f'stroke-linecap="round" class="ink-layer"/>'
+        )
+
+        # Arrowhead: outline-only triangle path with ghost+ink
+        d_head = (
+            f"M {x2:.1f} {y2:.1f} L {bl[0]:.1f} {bl[1]:.1f} "
+            f"L {br[0]:.1f} {br[1]:.1f} Z"
+        )
+        head_len = round(
+            math.hypot(x2 - bl[0], y2 - bl[1])
+            + math.hypot(bl[0] - br[0], bl[1] - br[1])
+            + math.hypot(br[0] - x2, br[1] - y2),
+            2,
+        )
+        head_ghost = (
+            f'<path d="{d_head}" stroke="{color}" stroke-width="{sw}" fill="none" '
+            f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+            f'stroke-linecap="round" stroke-linejoin="round" class="ghost-layer"/>'
+        )
+        head_ink = (
+            f'<path d="{d_head}" stroke="{color}" stroke-width="{sw}" fill="none" '
+            f'stroke-opacity="1.0" stroke-dasharray="{head_len}" '
+            f'stroke-dashoffset="{head_len}" data-length="{head_len}" '
+            f'stroke-linecap="round" stroke-linejoin="round" class="ink-layer"/>'
+        )
+
+        el = (
+            f'<g filter="url(#hand-drawn)">'
+            f'{shaft_ghost}\n{shaft_ink}\n{head_ghost}\n{head_ink}'
+            f'</g>'
+        )
         self._elements.append(el)
         return el
 
@@ -269,20 +344,38 @@ class SVGCanvas:
         height: float,
         color: str = "#CCCCCC",
     ) -> str:
-        """Draw a grid.  Whole shape gets hand-drawn filter."""
-        parts = []
+        """Draw a grid as ghost+ink path pairs for Speed Paint."""
+        parts: list[str] = []
         cell_w, cell_h = width / max(cols, 1), height / max(rows, 1)
         for i in range(cols + 1):
-            cx = x + i * cell_w
+            lx = x + i * cell_w
+            d = f"M{lx:.1f},{y:.1f} L{lx:.1f},{y + height:.1f}"
+            pl = round(height, 2)
             parts.append(
-                f'<line x1="{cx:.1f}" y1="{y}" x2="{cx:.1f}" y2="{y + height}" '
-                f'stroke="{color}" stroke-width="1" stroke-linecap="round"/>'
+                f'<path d="{d}" stroke="{color}" stroke-width="1" fill="none" '
+                f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+                f'stroke-linecap="round" class="ghost-layer"/>'
+            )
+            parts.append(
+                f'<path d="{d}" stroke="{color}" stroke-width="1" fill="none" '
+                f'stroke-opacity="1.0" stroke-dasharray="{pl}" '
+                f'stroke-dashoffset="{pl}" data-length="{pl}" '
+                f'stroke-linecap="round" class="ink-layer"/>'
             )
         for j in range(rows + 1):
-            cy = y + j * cell_h
+            ly = y + j * cell_h
+            d = f"M{x:.1f},{ly:.1f} L{x + width:.1f},{ly:.1f}"
+            pl = round(width, 2)
             parts.append(
-                f'<line x1="{x}" y1="{cy:.1f}" x2="{x + width}" y2="{cy:.1f}" '
-                f'stroke="{color}" stroke-width="1" stroke-linecap="round"/>'
+                f'<path d="{d}" stroke="{color}" stroke-width="1" fill="none" '
+                f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+                f'stroke-linecap="round" class="ghost-layer"/>'
+            )
+            parts.append(
+                f'<path d="{d}" stroke="{color}" stroke-width="1" fill="none" '
+                f'stroke-opacity="1.0" stroke-dasharray="{pl}" '
+                f'stroke-dashoffset="{pl}" data-length="{pl}" '
+                f'stroke-linecap="round" class="ink-layer"/>'
             )
         el = f'<g filter="url(#hand-drawn)">{"".join(parts)}</g>'
         self._elements.append(el)
@@ -296,36 +389,74 @@ class SVGCanvas:
         events: List[dict],
         color: str = PRIMARY,
     ) -> str:
-        """Horizontal timeline with event markers.
+        """Horizontal timeline as ghost+ink paths for Speed Paint.
 
         events: [{"label": "...", "year": "..."}]
         """
-        parts = []
+        parts: list[str] = []
+
+        # Main horizontal axis line
+        d_axis = f"M{x:.1f},{y:.1f} L{x + width - 12:.1f},{y:.1f}"
+        axis_len = round(width - 12, 2)
         parts.append(
-            f'<line x1="{x}" y1="{y}" x2="{x + width - 12}" y2="{y}" '
-            f'stroke="{color}" stroke-width="3" stroke-linecap="round"/>'
+            f'<path d="{d_axis}" stroke="{color}" stroke-width="3" fill="none" '
+            f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+            f'stroke-linecap="round" class="ghost-layer"/>'
         )
-        pts = f"{x + width},{y} {x + width - 12},{y - 5} {x + width - 12},{y + 5}"
-        parts.append(f'<polygon points="{pts}" fill="{color}"/>')
+        parts.append(
+            f'<path d="{d_axis}" stroke="{color}" stroke-width="3" fill="none" '
+            f'stroke-opacity="1.0" stroke-dasharray="{axis_len}" '
+            f'stroke-dashoffset="{axis_len}" data-length="{axis_len}" '
+            f'stroke-linecap="round" class="ink-layer"/>'
+        )
+
+        # Arrowhead at end — outline-only triangle path
+        ax = x + width
+        d_head = (
+            f"M {ax:.1f} {y:.1f} L {ax - 12:.1f} {y - 5:.1f} "
+            f"L {ax - 12:.1f} {y + 5:.1f} Z"
+        )
+        head_len = round(12 + 10 + math.hypot(12, 5), 2)
+        parts.append(
+            f'<path d="{d_head}" stroke="{color}" stroke-width="1.5" fill="none" '
+            f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+            f'stroke-linecap="round" stroke-linejoin="round" class="ghost-layer"/>'
+        )
+        parts.append(
+            f'<path d="{d_head}" stroke="{color}" stroke-width="1.5" fill="none" '
+            f'stroke-opacity="1.0" stroke-dasharray="{head_len}" '
+            f'stroke-dashoffset="{head_len}" data-length="{head_len}" '
+            f'stroke-linecap="round" stroke-linejoin="round" class="ink-layer"/>'
+        )
 
         n = max(len(events), 1)
         for i, event in enumerate(events):
             ex = x + (i + 1) * width / (n + 1)
+            # Tick mark
+            d_tick = f"M{ex:.1f},{y - 8:.1f} L{ex:.1f},{y + 8:.1f}"
+            tick_len = 16.0
             parts.append(
-                f'<line x1="{ex:.1f}" y1="{y - 8}" x2="{ex:.1f}" y2="{y + 8}" '
-                f'stroke="{color}" stroke-width="2" stroke-linecap="round"/>'
+                f'<path d="{d_tick}" stroke="{color}" stroke-width="2" fill="none" '
+                f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+                f'stroke-linecap="round" class="ghost-layer"/>'
+            )
+            parts.append(
+                f'<path d="{d_tick}" stroke="{color}" stroke-width="2" fill="none" '
+                f'stroke-opacity="1.0" stroke-dasharray="{tick_len}" '
+                f'stroke-dashoffset="{tick_len}" data-length="{tick_len}" '
+                f'stroke-linecap="round" class="ink-layer"/>'
             )
             label = _esc(event.get("label", ""))
             year = _esc(str(event.get("year", "")))
             parts.append(
                 f'<text x="{ex:.1f}" y="{y - 22}" text-anchor="middle" '
-                f'font-size="13" fill="{color}" font-family="{FONT}" '
+                f'font-size="13" fill="{PRIMARY}" font-family="{FONT}" '
                 f'font-weight="bold">{label}</text>'
             )
             if year:
                 parts.append(
                     f'<text x="{ex:.1f}" y="{y + 24}" text-anchor="middle" '
-                    f'font-size="12" fill="{color}" font-family="{FONT}">{year}</text>'
+                    f'font-size="12" fill="{PRIMARY}" font-family="{FONT}">{year}</text>'
                 )
         el = f'<g filter="url(#hand-drawn)">{"".join(parts)}</g>'
         self._elements.append(el)
@@ -341,19 +472,33 @@ class SVGCanvas:
         height: float,
         color: str = PRIMARY,
     ) -> str:
-        """Simple 2-level tree: root at top, children spread below."""
-        parts = []
+        """Simple 2-level tree as ghost+ink paths for Speed Paint."""
+        parts: list[str] = []
         node_r = 30
         root_cx = x + width / 2
         root_cy = y + node_r + 10
 
+        # Root circle — outline-only path
+        d_root = (
+            f"M {root_cx - node_r} {root_cy} "
+            f"A {node_r} {node_r} 0 1 1 {root_cx + node_r} {root_cy} "
+            f"A {node_r} {node_r} 0 1 1 {root_cx - node_r} {root_cy}"
+        )
+        root_len = round(2 * math.pi * node_r, 2)
         parts.append(
-            f'<circle cx="{root_cx:.1f}" cy="{root_cy:.1f}" r="{node_r}" '
-            f'fill="{BLUE}" stroke="none"/>'
+            f'<path d="{d_root}" stroke="{BLUE}" stroke-width="2" fill="none" '
+            f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+            f'stroke-linecap="round" class="ghost-layer"/>'
+        )
+        parts.append(
+            f'<path d="{d_root}" stroke="{BLUE}" stroke-width="2" fill="none" '
+            f'stroke-opacity="1.0" stroke-dasharray="{root_len}" '
+            f'stroke-dashoffset="{root_len}" data-length="{root_len}" '
+            f'stroke-linecap="round" class="ink-layer"/>'
         )
         parts.append(
             f'<text x="{root_cx:.1f}" y="{root_cy:.1f}" text-anchor="middle" '
-            f'dominant-baseline="middle" font-size="13" fill="white" '
+            f'dominant-baseline="middle" font-size="13" fill="{PRIMARY}" '
             f'font-family="{FONT}" font-weight="bold">{_esc(str(root_label)[:20])}</text>'
         )
 
@@ -361,19 +506,44 @@ class SVGCanvas:
         child_y = y + height - node_r - 10
         for i, child in enumerate(children):
             cx = x + (i + 0.5) * width / n
+            # Connector line — ghost+ink path
+            lx1, ly1 = root_cx, root_cy + node_r
+            lx2, ly2 = cx, child_y - node_r
+            d_line = f"M{lx1:.1f},{ly1:.1f} L{lx2:.1f},{ly2:.1f}"
+            line_len = round(math.hypot(lx2 - lx1, ly2 - ly1), 2)
             parts.append(
-                f'<line x1="{root_cx:.1f}" y1="{root_cy + node_r:.1f}" '
-                f'x2="{cx:.1f}" y2="{child_y - node_r:.1f}" '
-                f'stroke="{color}" stroke-width="2" stroke-linecap="round"/>'
+                f'<path d="{d_line}" stroke="{color}" stroke-width="2" fill="none" '
+                f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+                f'stroke-linecap="round" class="ghost-layer"/>'
             )
             parts.append(
-                f'<circle cx="{cx:.1f}" cy="{child_y:.1f}" r="{node_r}" '
-                f'fill="{ORANGE}" stroke="none"/>'
+                f'<path d="{d_line}" stroke="{color}" stroke-width="2" fill="none" '
+                f'stroke-opacity="1.0" stroke-dasharray="{line_len}" '
+                f'stroke-dashoffset="{line_len}" data-length="{line_len}" '
+                f'stroke-linecap="round" class="ink-layer"/>'
+            )
+            # Child circle — outline-only path
+            d_child = (
+                f"M {cx - node_r} {child_y} "
+                f"A {node_r} {node_r} 0 1 1 {cx + node_r} {child_y} "
+                f"A {node_r} {node_r} 0 1 1 {cx - node_r} {child_y}"
+            )
+            child_len = round(2 * math.pi * node_r, 2)
+            parts.append(
+                f'<path d="{d_child}" stroke="{ORANGE}" stroke-width="2" fill="none" '
+                f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+                f'stroke-linecap="round" class="ghost-layer"/>'
+            )
+            parts.append(
+                f'<path d="{d_child}" stroke="{ORANGE}" stroke-width="2" fill="none" '
+                f'stroke-opacity="1.0" stroke-dasharray="{child_len}" '
+                f'stroke-dashoffset="{child_len}" data-length="{child_len}" '
+                f'stroke-linecap="round" class="ink-layer"/>'
             )
             label = child if isinstance(child, str) else child.get("label", str(child))
             parts.append(
                 f'<text x="{cx:.1f}" y="{child_y:.1f}" text-anchor="middle" '
-                f'dominant-baseline="middle" font-size="12" fill="white" '
+                f'dominant-baseline="middle" font-size="12" fill="{PRIMARY}" '
                 f'font-family="{FONT}">{_esc(str(label)[:15])}</text>'
             )
 
@@ -390,16 +560,31 @@ class SVGCanvas:
         radius: float,
         color: str = PRIMARY,
     ) -> str:
-        """Radial mind map: center node + branches at equal angles."""
-        parts = []
+        """Radial mind map as ghost+ink paths for Speed Paint."""
+        parts: list[str] = []
         cr = 55
 
+        # Center circle — outline-only path
+        d_center = (
+            f"M {cx - cr} {cy} "
+            f"A {cr} {cr} 0 1 1 {cx + cr} {cy} "
+            f"A {cr} {cr} 0 1 1 {cx - cr} {cy}"
+        )
+        center_len = round(2 * math.pi * cr, 2)
         parts.append(
-            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{cr}" fill="{BLUE}" stroke="none"/>'
+            f'<path d="{d_center}" stroke="{BLUE}" stroke-width="2.5" fill="none" '
+            f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+            f'stroke-linecap="round" class="ghost-layer"/>'
+        )
+        parts.append(
+            f'<path d="{d_center}" stroke="{BLUE}" stroke-width="2.5" fill="none" '
+            f'stroke-opacity="1.0" stroke-dasharray="{center_len}" '
+            f'stroke-dashoffset="{center_len}" data-length="{center_len}" '
+            f'stroke-linecap="round" class="ink-layer"/>'
         )
         parts.append(
             f'<text x="{cx:.1f}" y="{cy:.1f}" text-anchor="middle" '
-            f'dominant-baseline="middle" font-size="14" fill="white" '
+            f'dominant-baseline="middle" font-size="14" fill="{PRIMARY}" '
             f'font-family="{FONT}" font-weight="bold">{_esc(str(center_label)[:20])}</text>'
         )
 
@@ -413,17 +598,43 @@ class SVGCanvas:
 
             sx = cx + cr * math.cos(angle)
             sy = cy + cr * math.sin(angle)
+
+            # Connector line — ghost+ink
+            d_conn = f"M{sx:.1f},{sy:.1f} L{bx:.1f},{by:.1f}"
+            conn_len = round(math.hypot(bx - sx, by - sy), 2)
             parts.append(
-                f'<line x1="{sx:.1f}" y1="{sy:.1f}" x2="{bx:.1f}" y2="{by:.1f}" '
-                f'stroke="{bc}" stroke-width="2.5" stroke-linecap="round"/>'
+                f'<path d="{d_conn}" stroke="{bc}" stroke-width="2.5" fill="none" '
+                f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+                f'stroke-linecap="round" class="ghost-layer"/>'
             )
             parts.append(
-                f'<circle cx="{bx:.1f}" cy="{by:.1f}" r="{br}" '
-                f'fill="{bc}" stroke="none"/>'
+                f'<path d="{d_conn}" stroke="{bc}" stroke-width="2.5" fill="none" '
+                f'stroke-opacity="1.0" stroke-dasharray="{conn_len}" '
+                f'stroke-dashoffset="{conn_len}" data-length="{conn_len}" '
+                f'stroke-linecap="round" class="ink-layer"/>'
+            )
+
+            # Branch circle — outline-only path
+            d_branch = (
+                f"M {bx - br} {by} "
+                f"A {br} {br} 0 1 1 {bx + br} {by} "
+                f"A {br} {br} 0 1 1 {bx - br} {by}"
+            )
+            branch_len = round(2 * math.pi * br, 2)
+            parts.append(
+                f'<path d="{d_branch}" stroke="{bc}" stroke-width="2" fill="none" '
+                f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+                f'stroke-linecap="round" class="ghost-layer"/>'
+            )
+            parts.append(
+                f'<path d="{d_branch}" stroke="{bc}" stroke-width="2" fill="none" '
+                f'stroke-opacity="1.0" stroke-dasharray="{branch_len}" '
+                f'stroke-dashoffset="{branch_len}" data-length="{branch_len}" '
+                f'stroke-linecap="round" class="ink-layer"/>'
             )
             parts.append(
                 f'<text x="{bx:.1f}" y="{by:.1f}" text-anchor="middle" '
-                f'dominant-baseline="middle" font-size="12" fill="white" '
+                f'dominant-baseline="middle" font-size="12" fill="{PRIMARY}" '
                 f'font-family="{FONT}">{_esc(str(branch)[:15])}</text>'
             )
 
@@ -439,8 +650,8 @@ class SVGCanvas:
         width: float,
         height: float,
     ) -> str:
-        """Layered pyramid, apex at top, base at bottom."""
-        parts = []
+        """Layered pyramid as ghost+ink paths for Speed Paint."""
+        parts: list[str] = []
         colors = [BLUE, ORANGE, GREEN, PURPLE, RED]
         n = max(len(levels), 1)
         level_h = height / n
@@ -451,15 +662,24 @@ class SVGCanvas:
             lx = x + (width - lw) / 2
             ly = y + i * level_h
             bc = colors[i % len(colors)]
+            # Rectangle as outline-only path
+            d_rect = f"M {lx:.1f} {ly:.1f} H {lx + lw:.1f} V {ly + level_h:.1f} H {lx:.1f} Z"
+            rect_len = round(2 * (lw + level_h), 2)
             parts.append(
-                f'<rect x="{lx:.1f}" y="{ly:.1f}" width="{lw:.1f}" '
-                f'height="{level_h:.1f}" fill="{bc}" stroke="white" '
-                f'stroke-width="2" stroke-linejoin="round"/>'
+                f'<path d="{d_rect}" stroke="{bc}" stroke-width="2" fill="none" '
+                f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+                f'stroke-linecap="round" stroke-linejoin="round" class="ghost-layer"/>'
+            )
+            parts.append(
+                f'<path d="{d_rect}" stroke="{bc}" stroke-width="2" fill="none" '
+                f'stroke-opacity="1.0" stroke-dasharray="{rect_len}" '
+                f'stroke-dashoffset="{rect_len}" data-length="{rect_len}" '
+                f'stroke-linecap="round" stroke-linejoin="round" class="ink-layer"/>'
             )
             ty = ly + level_h / 2
             parts.append(
                 f'<text x="{x + width / 2:.1f}" y="{ty:.1f}" text-anchor="middle" '
-                f'dominant-baseline="middle" font-size="13" fill="white" '
+                f'dominant-baseline="middle" font-size="13" fill="{PRIMARY}" '
                 f'font-family="{FONT}" font-weight="bold">{_esc(str(label)[:30])}</text>'
             )
 
@@ -473,11 +693,11 @@ class SVGCanvas:
         cx: float,
         cy: float,
     ) -> str:
-        """Overlapping Venn diagram circles.
+        """Overlapping Venn diagram as ghost+ink paths for Speed Paint.
 
         circles: [{"label": "...", "color": "..."}]
         """
-        parts = []
+        parts: list[str] = []
         r = 110
         offsets = {
             1: [(0, 0)],
@@ -491,12 +711,26 @@ class SVGCanvas:
             ox, oy = offs[i] if i < len(offs) else (0, 0)
             c = circle.get("color", _BRANCH_COLORS[i % len(_BRANCH_COLORS)])
             label = _esc(str(circle.get("label", ""))[:15])
+            vcx, vcy = cx + ox, cy + oy
+            d_venn = (
+                f"M {vcx - r} {vcy} "
+                f"A {r} {r} 0 1 1 {vcx + r} {vcy} "
+                f"A {r} {r} 0 1 1 {vcx - r} {vcy}"
+            )
+            venn_len = round(2 * math.pi * r, 2)
             parts.append(
-                f'<circle cx="{cx + ox:.1f}" cy="{cy + oy:.1f}" r="{r}" '
-                f'fill="{c}" fill-opacity="0.30" stroke="{c}" stroke-width="2"/>'
+                f'<path d="{d_venn}" stroke="{c}" stroke-width="2" fill="none" '
+                f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+                f'stroke-linecap="round" class="ghost-layer"/>'
             )
             parts.append(
-                f'<text x="{cx + ox:.1f}" y="{cy + oy:.1f}" text-anchor="middle" '
+                f'<path d="{d_venn}" stroke="{c}" stroke-width="2" fill="none" '
+                f'stroke-opacity="1.0" stroke-dasharray="{venn_len}" '
+                f'stroke-dashoffset="{venn_len}" data-length="{venn_len}" '
+                f'stroke-linecap="round" class="ink-layer"/>'
+            )
+            parts.append(
+                f'<text x="{vcx:.1f}" y="{vcy:.1f}" text-anchor="middle" '
                 f'dominant-baseline="middle" font-size="13" fill="{PRIMARY}" '
                 f'font-family="{FONT}" font-weight="bold">{label}</text>'
             )
@@ -513,41 +747,80 @@ class SVGCanvas:
         width: float,
         color: str = PRIMARY,
     ) -> str:
-        """Horizontal boxes connected by arrows."""
-        parts = []
+        """Horizontal boxes connected by arrows as ghost+ink paths for Speed Paint."""
+        parts: list[str] = []
         n = max(len(steps), 1)
         gap = 18
         box_w = (width - gap * (n - 1)) / n
         box_h = 52
+        cr = 8  # corner radius
 
         for i, step in enumerate(steps):
             bx = x + i * (box_w + gap)
             by = y
+            # Rounded rectangle as outline-only path
+            d_box = (
+                f"M {bx + cr:.1f} {by:.1f} "
+                f"H {bx + box_w - cr:.1f} A {cr} {cr} 0 0 1 {bx + box_w:.1f} {by + cr:.1f} "
+                f"V {by + box_h - cr:.1f} A {cr} {cr} 0 0 1 {bx + box_w - cr:.1f} {by + box_h:.1f} "
+                f"H {bx + cr:.1f} A {cr} {cr} 0 0 1 {bx:.1f} {by + box_h - cr:.1f} "
+                f"V {by + cr:.1f} A {cr} {cr} 0 0 1 {bx + cr:.1f} {by:.1f} Z"
+            )
+            straight = 2 * (box_w - 2 * cr) + 2 * (box_h - 2 * cr)
+            arcs = 2 * math.pi * cr
+            box_len = round(straight + arcs, 2)
             parts.append(
-                f'<rect x="{bx:.1f}" y="{by:.1f}" width="{box_w:.1f}" '
-                f'height="{box_h}" rx="8" ry="8" fill="{BLUE}" '
-                f'stroke="{color}" stroke-width="1.5" stroke-linejoin="round"/>'
+                f'<path d="{d_box}" stroke="{BLUE}" stroke-width="2" fill="none" '
+                f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+                f'stroke-linecap="round" stroke-linejoin="round" class="ghost-layer"/>'
+            )
+            parts.append(
+                f'<path d="{d_box}" stroke="{BLUE}" stroke-width="2" fill="none" '
+                f'stroke-opacity="1.0" stroke-dasharray="{box_len}" '
+                f'stroke-dashoffset="{box_len}" data-length="{box_len}" '
+                f'stroke-linecap="round" stroke-linejoin="round" class="ink-layer"/>'
             )
             parts.append(
                 f'<text x="{bx + box_w / 2:.1f}" y="{by + box_h / 2:.1f}" '
                 f'text-anchor="middle" dominant-baseline="middle" '
-                f'font-size="12" fill="white" font-family="{FONT}" '
+                f'font-size="12" fill="{PRIMARY}" font-family="{FONT}" '
                 f'font-weight="bold">{_esc(str(step)[:22])}</text>'
             )
             if i < n - 1:
                 ax1 = bx + box_w
                 ay = by + box_h / 2
                 ax2 = bx + box_w + gap
+                # Connector line — ghost+ink
+                d_conn = f"M{ax1:.1f},{ay:.1f} L{ax2 - 7:.1f},{ay:.1f}"
+                conn_len = round(gap - 7, 2)
                 parts.append(
-                    f'<line x1="{ax1:.1f}" y1="{ay:.1f}" '
-                    f'x2="{ax2 - 7:.1f}" y2="{ay:.1f}" '
-                    f'stroke="{color}" stroke-width="2" stroke-linecap="round"/>'
+                    f'<path d="{d_conn}" stroke="{color}" stroke-width="2" fill="none" '
+                    f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+                    f'stroke-linecap="round" class="ghost-layer"/>'
                 )
-                pts = (
-                    f"{ax2:.1f},{ay:.1f} {ax2 - 8:.1f},{ay - 4:.1f} "
-                    f"{ax2 - 8:.1f},{ay + 4:.1f}"
+                parts.append(
+                    f'<path d="{d_conn}" stroke="{color}" stroke-width="2" fill="none" '
+                    f'stroke-opacity="1.0" stroke-dasharray="{conn_len}" '
+                    f'stroke-dashoffset="{conn_len}" data-length="{conn_len}" '
+                    f'stroke-linecap="round" class="ink-layer"/>'
                 )
-                parts.append(f'<polygon points="{pts}" fill="{color}"/>')
+                # Arrowhead — outline-only triangle path
+                d_head = (
+                    f"M {ax2:.1f} {ay:.1f} L {ax2 - 8:.1f} {ay - 4:.1f} "
+                    f"L {ax2 - 8:.1f} {ay + 4:.1f} Z"
+                )
+                head_len = round(8 + 8 + math.hypot(8, 4), 2)
+                parts.append(
+                    f'<path d="{d_head}" stroke="{color}" stroke-width="1.5" fill="none" '
+                    f'stroke-opacity="0.1" stroke-dasharray="5,5" '
+                    f'stroke-linecap="round" stroke-linejoin="round" class="ghost-layer"/>'
+                )
+                parts.append(
+                    f'<path d="{d_head}" stroke="{color}" stroke-width="1.5" fill="none" '
+                    f'stroke-opacity="1.0" stroke-dasharray="{head_len}" '
+                    f'stroke-dashoffset="{head_len}" data-length="{head_len}" '
+                    f'stroke-linecap="round" stroke-linejoin="round" class="ink-layer"/>'
+                )
 
         el = f'<g filter="url(#hand-drawn)">{"".join(parts)}</g>'
         self._elements.append(el)

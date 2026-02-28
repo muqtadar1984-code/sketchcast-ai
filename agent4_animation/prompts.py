@@ -52,8 +52,8 @@ CANVAS SPECIFICATIONS:
 AVAILABLE ELEMENT TYPES AND THEIR PARAMS:
 
 Basic shapes (preferred — use these unless a compound shape fits perfectly):
-- "circle":       cx, cy, r, color, stroke_width, fill ("none" or a color hex)
-- "rectangle":    x, y, width, height, color, stroke_width, corner_radius, fill
+- "circle":       cx, cy, r, color, stroke_width
+- "rectangle":    x, y, width, height, color, stroke_width, corner_radius
 - "line":         x1, y1, x2, y2, color, stroke_width
 - "arrow":        x1, y1, x2, y2, color, stroke_width
 - "text":         x, y, text (string), font_size (int ≥ 14), color, bold (bool), align ("left"/"center"/"right")
@@ -72,7 +72,7 @@ DESIGN RULES:
 2. assign draw_order 1, 2, 3… — lower order = drawn first (appears earlier in animation)
 3. Keep everything inside the canvas: x in [20, 1260], y in [20, 700]
 4. Place the main concept/shape first (draw_order 1), then supporting elements
-5. For text inside filled colored shapes, use white (#FFFFFF) or very light text
+5. DO NOT use fills or background colors for shapes. This is a speed-paint line-drawing animation. Everything must be outlines only. Always use dark text (#2C3E50)
 6. Minimum font_size for any text: 14
 7. Leave comfortable margins — do not crowd the edges
 8. Use a centered or balanced layout; leave breathing room between elements
@@ -87,14 +87,14 @@ Return ONLY a valid JSON object — no markdown fences, no explanation — with 
     {{
       "id": "e001",
       "type": "circle",
-      "params": {{"cx": 640, "cy": 360, "r": 90, "color": "#4A90D9", "stroke_width": 3, "fill": "#4A90D9"}},
+      "params": {{"cx": 640, "cy": 360, "r": 90, "color": "#4A90D9", "stroke_width": 3}},
       "label": "Central concept node",
       "draw_order": 1
     }},
     {{
       "id": "e002",
       "type": "text",
-      "params": {{"x": 640, "y": 360, "text": "Social Science", "font_size": 20, "color": "#FFFFFF", "bold": true, "align": "center"}},
+      "params": {{"x": 640, "y": 360, "text": "Social Science", "font_size": 20, "color": "#2C3E50", "bold": true, "align": "center"}},
       "label": "Label for central node",
       "draw_order": 2
     }}
