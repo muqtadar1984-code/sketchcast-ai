@@ -1,369 +1,132 @@
-/**
- * SketchCast Player Engine
- *
- * Synchronises master MP3 audio with Rough.js sketch animations,
- * handles pause-for-question interactions, and connects to Agent 8
- * for live Q&A.
- *
- * Expects three globals injected by player.html:
- *   TIMELINE  — unified timeline JSON (from sync_engine)
- *   ANIMATIONS — { segment_id: roughjs_html_string }
- *   AUDIO_SOURCE — data URI or file path for master MP3
- */
+(function() {
+    const audio = new Audio(AUDIO_SOURCE);
+    const svg = document.getElementById("drawing-board");
+    const hand = document.getElementById("marker-hand");
+    const playBtn = document.getElementById("play-btn");
+    const progressBar = document.getElementById("progress-bar");
+    const progressContainer = document.getElementById("progress-container");
+    const title = document.getElementById("segment-title");
 
-(function () {
-  "use strict";
+    let isPlaying = false;
+    let currentPaths = []; // Active paths for current segment
 
-  // ── DOM refs ──────────────────────────────────────────────
-  const playBtn = document.getElementById("play-btn");
-  const timeDisplay = document.getElementById("time-display");
-  const progressBar = document.getElementById("progress-bar");
-  const progressContainer = document.getElementById("progress-container");
-  const progressDots = document.getElementById("progress-dots");
-  const segTitle = document.getElementById("segment-title");
-  const segIcon = document.getElementById("segment-icon");
-  const segCounter = document.getElementById("segment-counter");
-  const volumeSlider = document.getElementById("volume-slider");
-  const volumeIcon = document.getElementById("volume-icon");
-  const animFrame = document.getElementById("animation-frame");
-  const blankCanvas = document.getElementById("blank-canvas");
-  const questionOverlay = document.getElementById("question-overlay");
-  const questionInput = document.getElementById("question-input");
-  const askBtn = document.getElementById("ask-btn");
-  const continueBtn = document.getElementById("continue-btn");
-  const resumeBtn = document.getElementById("resume-btn");
-  const answerArea = document.getElementById("answer-area");
-  const answerText = document.getElementById("answer-text");
-  const questionInputArea = document.getElementById("question-input-area");
+    // --- SETUP ---
+    playBtn.onclick = () => isPlaying ? audio.pause() : audio.play();
+    audio.onplay = () => { isPlaying = true; playBtn.innerText = "||"; requestAnimationFrame(loop); };
+    audio.onpause = () => { isPlaying = false; playBtn.innerText = "\u25B6"; };
 
-  // ── State ─────────────────────────────────────────────────
-  const audio = new Audio();
-  let isPlaying = false;
-  let currentSegmentIdx = -1;
-  let pausedForQuestion = false;
-  let animationShowing = false;
+    progressContainer.onclick = (e) => {
+        const rect = progressContainer.getBoundingClientRect();
+        const pos = (e.clientX - rect.left) / rect.width;
+        audio.currentTime = pos * audio.duration;
+    };
 
-  const segments = TIMELINE.segments || [];
-  const totalDuration = TIMELINE.total_duration_seconds || 0;
-
-  const TYPE_ICONS = {
-    hook: "\uD83E\uDE9D",
-    activate: "\u26A1",
-    explore: "\uD83D\uDD0D",
-    question_hook: "\u2753",
-    synthesis: "\uD83C\uDFAF",
-    preview: "\uD83D\uDC49",
-  };
-
-  // ── Init ──────────────────────────────────────────────────
-  function init() {
-    audio.src = AUDIO_SOURCE;
-    audio.preload = "auto";
-    audio.volume = parseFloat(volumeSlider.value);
-
-    // Build progress dots for segment boundaries
-    buildProgressDots();
-
-    // Event listeners
-    playBtn.addEventListener("click", togglePlay);
-    volumeSlider.addEventListener("input", onVolumeChange);
-    volumeIcon.addEventListener("click", toggleMute);
-    progressContainer.addEventListener("click", onProgressClick);
-    continueBtn.addEventListener("click", onContinue);
-    askBtn.addEventListener("click", onAsk);
-    resumeBtn.addEventListener("click", onResume);
-    questionInput.addEventListener("keydown", function (e) {
-      if (e.key === "Enter") onAsk();
-    });
-
-    audio.addEventListener("timeupdate", onTimeUpdate);
-    audio.addEventListener("ended", onAudioEnded);
-    audio.addEventListener("loadedmetadata", function () {
-      updateTimeDisplay(0, audio.duration || totalDuration);
-    });
-
-    updateTimeDisplay(0, totalDuration);
-    segCounter.textContent = segments.length + " sections";
-  }
-
-  // ── Playback controls ────────────────────────────────────
-  function togglePlay() {
-    if (pausedForQuestion) return;
-    if (isPlaying) {
-      audio.pause();
-      isPlaying = false;
-      playBtn.innerHTML = "&#9654;";
-    } else {
-      audio.play().catch(function () {});
-      isPlaying = true;
-      playBtn.innerHTML = "&#10074;&#10074;";
-    }
-  }
-
-  function onVolumeChange() {
-    audio.volume = parseFloat(volumeSlider.value);
-    volumeIcon.innerHTML = audio.volume === 0 ? "&#128263;" : "&#128266;";
-  }
-
-  function toggleMute() {
-    if (audio.volume > 0) {
-      volumeSlider.dataset.prev = audio.volume;
-      audio.volume = 0;
-      volumeSlider.value = 0;
-      volumeIcon.innerHTML = "&#128263;";
-    } else {
-      audio.volume = parseFloat(volumeSlider.dataset.prev || 0.8);
-      volumeSlider.value = audio.volume;
-      volumeIcon.innerHTML = "&#128266;";
-    }
-  }
-
-  function onProgressClick(e) {
-    if (pausedForQuestion) return;
-    var rect = progressContainer.getBoundingClientRect();
-    var pct = (e.clientX - rect.left) / rect.width;
-    var dur = audio.duration || totalDuration;
-    audio.currentTime = pct * dur;
-  }
-
-  // ── Time update loop ─────────────────────────────────────
-  function onTimeUpdate() {
-    var t = audio.currentTime;
-    var dur = audio.duration || totalDuration;
-
-    // Update progress bar
-    var pct = dur > 0 ? (t / dur) * 100 : 0;
-    progressBar.style.width = pct + "%";
-
-    updateTimeDisplay(t, dur);
-
-    // Find current segment
-    var newIdx = findSegmentAt(t);
-    if (newIdx !== currentSegmentIdx) {
-      currentSegmentIdx = newIdx;
-      onSegmentChange(newIdx);
+    // --- MAIN LOOP ---
+    function loop() {
+        if (!isPlaying) return;
+        const t = audio.currentTime;
+        updateUI(t);
+        renderFrame(t);
+        requestAnimationFrame(loop);
     }
 
-    // Check for animation triggers
-    checkAnimationTriggers(t);
+    // --- RENDER LOGIC ---
+    let lastSegmentId = null;
 
-    // Check for pause points
-    checkPausePoints(t);
-  }
+    function renderFrame(t) {
+        // 1. Find active segment
+        const seg = TIMELINE.segments.find(s => t >= s.audio_start && t < s.audio_end);
+        if (!seg) return;
 
-  function findSegmentAt(t) {
-    for (var i = 0; i < segments.length; i++) {
-      if (t >= segments[i].audio_start && t < segments[i].audio_end) {
-        return i;
-      }
-    }
-    // If past all segments, return last
-    if (segments.length > 0 && t >= segments[segments.length - 1].audio_start) {
-      return segments.length - 1;
-    }
-    return 0;
-  }
+        // 2. Setup Canvas if Segment Changed
+        if (seg.segment_id !== lastSegmentId) {
+            lastSegmentId = seg.segment_id;
+            title.innerText = seg.segment_text || seg.type;
 
-  function onSegmentChange(idx) {
-    if (idx < 0 || idx >= segments.length) return;
-    var seg = segments[idx];
-    var icon = TYPE_ICONS[seg.type] || "\u2022";
-    segIcon.textContent = icon;
+            // If DRAW_START, clear canvas and load new paths
+            if (seg.visual_action === "DRAW_START" && seg.paths) {
+                svg.innerHTML = ""; // Clear board
+                currentPaths = [];
 
-    // Show segment text preview
-    var text = seg.segment_text || seg.type;
-    segTitle.textContent = text.substring(0, 80) + (text.length > 80 ? "..." : "");
-    segCounter.textContent = "Section " + (idx + 1) + " of " + segments.length;
-  }
+                // Inject SVG elements
+                seg.paths.forEach(p => {
+                    // Ghost
+                    const g = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                    g.setAttribute("d", p.d);
+                    g.setAttribute("style", p.ghost_style);
+                    svg.appendChild(g);
 
-  // ── Animation sync ────────────────────────────────────────
-  var activeAnimSegId = null;
+                    // Ink
+                    const i = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                    i.setAttribute("id", "ink_" + p.path_id);
+                    i.setAttribute("d", p.d);
+                    i.setAttribute("style", p.ink_style);
+                    // Store metadata for animation
+                    i._totalLength = p.total_length;
+                    svg.appendChild(i);
 
-  function checkAnimationTriggers(t) {
-    for (var i = 0; i < segments.length; i++) {
-      var seg = segments[i];
-      if (!seg.has_animation || !seg.animation_trigger) continue;
-
-      // Trigger animation when current time crosses trigger point
-      if (
-        t >= seg.animation_trigger &&
-        t < seg.audio_end + 0.5 &&
-        activeAnimSegId !== seg.segment_id
-      ) {
-        showAnimation(seg.segment_id);
-        return;
-      }
-    }
-
-    // If we're in a segment without animation, show blank
-    if (currentSegmentIdx >= 0 && currentSegmentIdx < segments.length) {
-      var curSeg = segments[currentSegmentIdx];
-      if (!curSeg.has_animation && animationShowing) {
-        showBlank();
-      }
-    }
-  }
-
-  function showAnimation(segmentId) {
-    var htmlContent = ANIMATIONS[segmentId];
-    if (!htmlContent) {
-      showBlank();
-      return;
-    }
-
-    activeAnimSegId = segmentId;
-    animationShowing = true;
-    blankCanvas.style.display = "none";
-    animFrame.style.display = "block";
-
-    // Write animation HTML into iframe
-    animFrame.srcdoc = htmlContent;
-  }
-
-  function showBlank() {
-    activeAnimSegId = null;
-    animationShowing = false;
-    animFrame.style.display = "none";
-    blankCanvas.style.display = "flex";
-    animFrame.srcdoc = "";
-  }
-
-  // ── Pause for question ────────────────────────────────────
-  var handledPauses = {};
-
-  function checkPausePoints(t) {
-    // Interjection disabled — play through question segments without pausing
-    return;
-  }
-
-  function triggerQuestionPause(seg) {
-    audio.pause();
-    isPlaying = false;
-    pausedForQuestion = true;
-    playBtn.innerHTML = "&#9654;";
-
-    // Show question overlay
-    questionOverlay.style.display = "flex";
-    questionInputArea.style.display = "flex";
-    answerArea.style.display = "none";
-    questionInput.value = "";
-    questionInput.focus();
-  }
-
-  function onContinue() {
-    questionOverlay.style.display = "none";
-    pausedForQuestion = false;
-    audio.play().catch(function () {});
-    isPlaying = true;
-    playBtn.innerHTML = "&#10074;&#10074;";
-  }
-
-  function onAsk() {
-    var q = questionInput.value.trim();
-    if (!q) {
-      onContinue();
-      return;
-    }
-
-    // Show answer area, hide input
-    questionInputArea.style.display = "none";
-    answerArea.style.display = "block";
-    answerText.textContent = "Thinking...";
-
-    // Call Agent 8 endpoint
-    var scriptId = TIMELINE.script_id || "";
-    var segId = segments[currentSegmentIdx]
-      ? segments[currentSegmentIdx].segment_id
-      : "";
-    var bookId = TIMELINE.book_id || "";
-    var chapterNum = TIMELINE.chapter_num || 0;
-
-    // Try SSE streaming from Agent 8
-    try {
-      var url =
-        "/ask/" + scriptId + "/" + segId +
-        "?q=" + encodeURIComponent(q) +
-        "&book_id=" + encodeURIComponent(bookId) +
-        "&chapter_num=" + chapterNum;
-
-      var eventSource = new EventSource(url);
-      answerText.textContent = "";
-
-      eventSource.addEventListener("text", function (e) {
-        answerText.textContent += e.data;
-      });
-
-      eventSource.addEventListener("audio", function (e) {
-        // Audio chunk handling (base64 encoded)
-        try {
-          var audioChunk = atob(e.data);
-          // Play audio chunk if Web Audio API available
-        } catch (err) {
-          // Ignore audio decode errors
+                    currentPaths.push(i);
+                });
+            }
         }
-      });
 
-      eventSource.addEventListener("complete", function () {
-        eventSource.close();
-      });
+        // 3. Animate Paths based on Segment Progress
+        if (seg.visual_action === "DRAW_START" || seg.visual_action === "DRAW_CONTINUE") {
+            const segDuration = seg.audio_end - seg.audio_start;
+            const segProgress = Math.max(0, (t - seg.audio_start) / segDuration);
 
-      eventSource.addEventListener("error", function () {
-        if (answerText.textContent === "") {
-          answerText.textContent =
-            "I could not connect to the Q&A service right now. " +
-            "Tap Resume to continue the episode.";
+            // Distribute progress across all paths in this segment
+            // Simple approach: Draw paths sequentially based on total length ratio
+            let totalCanvasLength = currentPaths.reduce((sum, p) => sum + p._totalLength, 0);
+            let currentDrawDistance = totalCanvasLength * segProgress;
+
+            let covered = 0;
+            let handPos = null;
+
+            currentPaths.forEach(path => {
+                const len = path._totalLength;
+                const startAt = covered;
+                const endAt = covered + len;
+
+                if (currentDrawDistance >= endAt) {
+                    // Path fully drawn
+                    path.style.strokeDashoffset = 0;
+                } else if (currentDrawDistance > startAt) {
+                    // Path partially drawn
+                    const localDraw = currentDrawDistance - startAt;
+                    path.style.strokeDashoffset = len - localDraw;
+
+                    // Update Hand Position
+                    try {
+                        const pt = path.getPointAtLength(localDraw);
+                        handPos = pt;
+                    } catch(e){}
+                } else {
+                    // Path not started
+                    path.style.strokeDashoffset = len;
+                }
+                covered += len;
+            });
+
+            // Move Hand
+            if (handPos) {
+                hand.style.display = "block";
+                // Offset by -10, -300 to align pen tip (tweak based on image)
+                hand.style.transform = "translate(" + handPos.x + "px, " + (handPos.y - 300) + "px)";
+            } else {
+                hand.style.display = "none";
+            }
+        } else {
+            hand.style.display = "none"; // Hide hand during GHOST_ONLY
         }
-        eventSource.close();
-      });
-    } catch (err) {
-      answerText.textContent =
-        "Q&A service not available. Tap Resume to continue.";
     }
-  }
 
-  function onResume() {
-    questionOverlay.style.display = "none";
-    pausedForQuestion = false;
-    audio.play().catch(function () {});
-    isPlaying = true;
-    playBtn.innerHTML = "&#10074;&#10074;";
-  }
-
-  // ── Progress dots ─────────────────────────────────────────
-  function buildProgressDots() {
-    progressDots.innerHTML = "";
-    if (totalDuration <= 0) return;
-
-    for (var i = 0; i < segments.length; i++) {
-      var seg = segments[i];
-      var pct = (seg.audio_start / totalDuration) * 100;
-      var dot = document.createElement("div");
-      dot.className = "progress-dot" + (seg.pause_for_question ? " pause-dot" : "");
-      dot.style.left = pct + "%";
-      dot.title = seg.type + (seg.pause_for_question ? " (pause)" : "");
-      progressDots.appendChild(dot);
+    function updateUI(t) {
+        if (audio.duration) {
+            const pct = (t / audio.duration) * 100;
+            progressBar.style.width = pct + "%";
+            document.getElementById("time-display").innerText =
+                Math.floor(t/60) + ":" + Math.floor(t%60).toString().padStart(2, '0');
+        }
     }
-  }
-
-  // ── Helpers ───────────────────────────────────────────────
-  function updateTimeDisplay(current, total) {
-    timeDisplay.textContent = formatTime(current) + " / " + formatTime(total);
-  }
-
-  function formatTime(s) {
-    var m = Math.floor(s / 60);
-    var sec = Math.floor(s % 60);
-    return m + ":" + (sec < 10 ? "0" : "") + sec;
-  }
-
-  function onAudioEnded() {
-    isPlaying = false;
-    playBtn.innerHTML = "&#9654;";
-    showBlank();
-    segTitle.textContent = "Episode complete";
-    segCounter.textContent = "";
-  }
-
-  // ── Boot ──────────────────────────────────────────────────
-  init();
 })();

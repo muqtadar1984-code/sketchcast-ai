@@ -1,327 +1,136 @@
-/* SketchCast Player — Responsive Whiteboard Player */
-
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
 body {
   background: #1a1a2e;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  color: #e0e0e0;
+  color: #fff;
+  font-family: sans-serif;
+  margin: 0;
   overflow: hidden;
 }
 
 #sketchcast-player {
-  width: 100%;
-  max-width: 1280px;
-  margin: 0 auto;
   display: flex;
   flex-direction: column;
   height: 100vh;
-  max-height: 800px;
+  max-width: 1280px;
+  margin: 0 auto;
 }
-
-/* ── Canvas area ────────────────────────────────────── */
 
 #canvas-container {
   flex: 1;
   position: relative;
   background: #FAFAFA;
-  border-radius: 8px 8px 0 0;
   overflow: hidden;
-  aspect-ratio: 16 / 9;
-  max-height: 720px;
+  border-bottom: 4px solid #16213e;
 }
 
-#whiteboard {
+#drawing-board {
   width: 100%;
   height: 100%;
-  position: relative;
+  display: block;
 }
 
-#animation-frame {
-  width: 100%;
-  height: 100%;
-  border: none;
+/* Scribe Layer Styles */
+.ghost-layer {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: opacity 0.5s;
+}
+
+.ink-layer {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  will-change: stroke-dashoffset;
+}
+
+#marker-hand {
   position: absolute;
+  width: 300px;
   top: 0;
   left: 0;
-  z-index: 2;
-  background: transparent;
+  pointer-events: none;
   display: none;
+  z-index: 10;
+  /* Pivot point: pen tip is at top-left of image */
+  transform-origin: 0 0;
+  filter: drop-shadow(5px 10px 10px rgba(0, 0, 0, 0.3));
 }
 
-#blank-canvas {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #FAFAFA;
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 1;
-}
-
-#blank-logo {
-  font-size: 3rem;
-  font-weight: 300;
-  color: #ddd;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-}
-
-/* ── Segment title bar ──────────────────────────────── */
-
-#segment-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
+#controls {
   background: #16213e;
-  font-size: 0.9rem;
-  min-height: 36px;
+  padding: 15px;
+  display: flex;
+  align-items: center;
+  gap: 15px;
 }
 
-#segment-icon {
-  font-size: 1.1rem;
+#play-btn {
+  background: #e94560;
+  border: none;
+  color: white;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 16px;
 }
-
-#segment-title {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-#segment-counter {
-  font-size: 0.8rem;
-  color: #aaa;
-  white-space: nowrap;
-}
-
-/* ── Progress bar ───────────────────────────────────── */
 
 #progress-container {
-  position: relative;
+  flex: 1;
   height: 6px;
   background: #0f3460;
+  position: relative;
   cursor: pointer;
+  border-radius: 3px;
 }
 
 #progress-bar {
   height: 100%;
   background: #e94560;
   width: 0%;
-  transition: width 0.25s linear;
-}
-
-#progress-dots {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-
-.progress-dot {
-  position: absolute;
-  top: -3px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #533483;
-  border: 2px solid #16213e;
-  transform: translateX(-50%);
-  z-index: 3;
-}
-
-.progress-dot.pause-dot {
-  background: #f0a500;
-}
-
-/* ── Controls ───────────────────────────────────────── */
-
-#controls {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
-  background: #1a1a2e;
-  border-radius: 0 0 8px 8px;
-}
-
-#play-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: 2px solid #e94560;
-  background: transparent;
-  color: #e94560;
-  font-size: 1rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.2s;
-}
-
-#play-btn:hover {
-  background: rgba(233, 69, 96, 0.15);
+  border-radius: 3px;
 }
 
 #time-display {
-  font-size: 0.85rem;
-  color: #aaa;
-  font-variant-numeric: tabular-nums;
-  min-width: 100px;
+  font-size: 0.9em;
+  min-width: 40px;
 }
 
-#volume-slider {
-  width: 80px;
-  accent-color: #e94560;
+#segment-bar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(22, 33, 62, 0.9);
+  padding: 5px 15px;
+  border-radius: 20px;
+  font-size: 0.9em;
+  pointer-events: none;
+  color: #fff;
 }
-
-#volume-icon {
-  font-size: 1.1rem;
-  cursor: pointer;
-}
-
-/* ── Question overlay ───────────────────────────────── */
 
 #question-overlay {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(26, 26, 46, 0.92);
-  z-index: 100;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
   display: flex;
   align-items: center;
   justify-content: center;
+  z-index: 100;
 }
 
 #question-card {
   background: #16213e;
-  border-radius: 16px;
-  padding: 32px;
-  max-width: 500px;
-  width: 90%;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  padding: 30px;
+  border-radius: 10px;
   text-align: center;
+  color: #fff;
 }
 
-#question-prompt {
-  font-size: 1.1rem;
-  margin-bottom: 20px;
-  color: #f0a500;
-  font-style: italic;
-}
-
-#question-input-area {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-#question-input {
-  flex: 1;
-  min-width: 200px;
-  padding: 10px 14px;
-  border-radius: 8px;
-  border: 1px solid #533483;
-  background: #0f3460;
-  color: #e0e0e0;
-  font-size: 0.95rem;
-}
-
-#question-input::placeholder {
-  color: #888;
-}
-
-#ask-btn,
-#continue-btn,
-#resume-btn {
-  padding: 10px 20px;
-  border-radius: 8px;
+#question-card button {
+  background: #e94560;
   border: none;
-  font-size: 0.9rem;
+  color: white;
+  padding: 10px 25px;
+  border-radius: 5px;
   cursor: pointer;
-  font-weight: 600;
-  transition: opacity 0.2s;
-}
-
-#ask-btn {
-  background: #533483;
-  color: white;
-}
-
-#continue-btn {
-  background: #e94560;
-  color: white;
-}
-
-#resume-btn {
-  background: #e94560;
-  color: white;
-  margin-top: 16px;
-}
-
-#ask-btn:hover,
-#continue-btn:hover,
-#resume-btn:hover {
-  opacity: 0.85;
-}
-
-#answer-area {
-  margin-top: 20px;
-}
-
-#answer-text {
-  font-size: 0.95rem;
-  line-height: 1.6;
-  color: #e0e0e0;
-  text-align: left;
-  padding: 12px;
-  background: #0f3460;
-  border-radius: 8px;
-  min-height: 40px;
-}
-
-/* ── Responsive ─────────────────────────────────────── */
-
-@media (max-width: 768px) {
-  #blank-logo {
-    font-size: 1.5rem;
-  }
-
-  #segment-bar {
-    font-size: 0.8rem;
-    padding: 6px 10px;
-  }
-
-  #controls {
-    padding: 8px 10px;
-    gap: 8px;
-  }
-
-  #play-btn {
-    width: 34px;
-    height: 34px;
-    font-size: 0.85rem;
-  }
-
-  #volume-slider {
-    width: 60px;
-  }
-
-  #question-card {
-    padding: 20px;
-  }
+  font-size: 1em;
+  margin-top: 15px;
 }

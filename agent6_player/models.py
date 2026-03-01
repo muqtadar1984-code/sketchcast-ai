@@ -15,28 +15,38 @@ class PlayerStatus(str, Enum):
     failed = "failed"
 
 
+class ScribePath(BaseModel):
+    """Represents a single vector path to be drawn."""
+
+    path_id: str
+    d: str
+    total_length: float
+    # We pass raw style strings to keep frontend logic simple
+    ghost_style: str
+    ink_style: str
+
+
 class TimelineSegment(BaseModel):
     """One segment in the unified timeline."""
 
     segment_id: str
-    type: str  # hook, activate, explore, question_hook, synthesis, preview
-    audio_start: float  # seconds in master audio
+    type: str
+    audio_start: float
     audio_end: float
+
+    # Scribe specific fields
+    visual_action: str = "GHOST_ONLY"  # DRAW_START, DRAW_CONTINUE, GHOST_ONLY
+    paths: Optional[List[ScribePath]] = None
+
+    # Legacy/Fallback (can be kept or ignored)
     has_animation: bool = False
-    roughjs_html_path: Optional[str] = None  # DEPRECATED — kept for backward compat
-    animation_trigger: Optional[float] = None  # second to start animation
-    sketch_cue_timing: Optional[str] = None  # before | during | after
+
     pause_for_question: bool = False
-    pause_at_second: Optional[float] = None  # auto-pause at this second
-    segment_text: str = ""  # narration text for display
-    # Scribe / Speed Paint fields
-    paths: Optional[list] = None              # PathData dicts from Agent 4
-    scribe_keyframes: Optional[list] = None   # Per-path timing (master-audio-relative)
+    pause_at_second: Optional[float] = None
+    segment_text: str = ""
 
 
 class UnifiedTimeline(BaseModel):
-    """Merged audio + animation timeline consumed by player.js."""
-
     timeline_id: str
     script_id: str
     book_id: str
@@ -49,14 +59,7 @@ class UnifiedTimeline(BaseModel):
 
 
 class PlayerPackage(BaseModel):
-    """Metadata for a built playback package."""
-
     package_id: str
-    script_id: str
-    book_id: str
-    chapter_num: int
-    episode_num: int = 1
     status: PlayerStatus = PlayerStatus.pending
     timeline_path: Optional[str] = None
     player_html_path: Optional[str] = None
-    built_at: str = ""
