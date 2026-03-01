@@ -28,30 +28,17 @@ body {
   display: block;
 }
 
-/* Scribe Layer Styles */
-.ghost-layer {
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  transition: opacity 0.5s;
-}
-
-.ink-layer {
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  will-change: stroke-dashoffset;
-}
-
 #marker-hand {
   position: absolute;
-  width: 300px;
-  top: 0;
-  left: 0;
+  width: 250px; /* Adjust based on your image */
+  top: -250px;
+  left: 20px; /* Offset so the pen tip aligns with (0,0) of the transform */
   pointer-events: none;
   display: none;
   z-index: 10;
-  /* Pivot point: pen tip is at top-left of image */
-  transform-origin: 0 0;
-  filter: drop-shadow(5px 10px 10px rgba(0, 0, 0, 0.3));
+  transition: transform 0.05s linear; /* Smooth movement */
+  filter: drop-shadow(5px 10px 5px rgba(0, 0, 0, 0.3));
+  transform-origin: 0% 100%; /* Pivot at bottom-left where tip is assumed to be */
 }
 
 #controls {

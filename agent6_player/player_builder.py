@@ -60,7 +60,7 @@ def build_player_package(
         else timeline.master_audio_path
     )
 
-    # NEW HTML STRUCTURE — Scribe Speed Paint player
+    # NEW HTML STRUCTURE FOR SCRIBE
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -78,8 +78,8 @@ def build_player_package(
     <div id="segment-bar"><span id="segment-title">Ready</span></div>
     <div id="question-overlay" style="display:none">
        <div id="question-card">
-         <p>Pause for reflection...</p>
-         <button id="resume-btn">Resume</button>
+         <p id="question-text">The narrator is pausing for you to think...</p>
+         <button id="resume-btn">Resume Episode</button>
        </div>
     </div>
   </div>

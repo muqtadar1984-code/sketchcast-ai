@@ -3,57 +3,11 @@
 from __future__ import annotations
 
 import logging
-import re
 import uuid
-from pathlib import Path
 
-from agent6_player.models import ScribePath, TimelineSegment, UnifiedTimeline
+from agent6_player.models import TimelineSegment, UnifiedTimeline, ScribePath
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_svg_paths(svg_path_str: str) -> list[ScribePath]:
-    """Read an SVG file and extract path data for the Scribe player."""
-    path_obj = Path(svg_path_str)
-    if not path_obj.exists():
-        return []
-
-    content = path_obj.read_text(encoding="utf-8")
-
-    # Match any <path> tag that has class="ink-layer" (attribute order varies).
-    tag_pattern = re.compile(r'<path\s[^>]*class="ink-layer"[^>]*/?>',)
-
-    paths: list[ScribePath] = []
-
-    for match in tag_pattern.finditer(content):
-        tag = match.group(0)
-
-        # Extract d="..." and data-length="..." from the matched tag
-        d_match = re.search(r'\sd="([^"]+)"', tag)
-        len_match = re.search(r'data-length="([^"]+)"', tag)
-        if not d_match or not len_match:
-            continue
-
-        d = d_match.group(1)
-        length = float(len_match.group(1))
-
-        # Construct styles matching the Vectorizer output
-        paths.append(ScribePath(
-            path_id=f"p_{len(paths)}",
-            d=d,
-            total_length=length,
-            ghost_style=(
-                'stroke="#2C3E50" stroke-width="2" stroke-opacity="0.1" '
-                'stroke-dasharray="5,5" fill="none"'
-            ),
-            ink_style=(
-                f'stroke="#2C3E50" stroke-width="2" stroke-opacity="1.0" '
-                f'fill="none" stroke-dasharray="{length}" '
-                f'stroke-dashoffset="{length}"'
-            ),
-        ))
-
-    return paths
 
 
 def build_unified_timeline(
@@ -63,8 +17,8 @@ def build_unified_timeline(
 ) -> UnifiedTimeline:
     """Build a unified timeline by merging audio and animation manifests.
 
-    Uses actual audio timestamps from Agent 5 only — never estimated durations.
-    Reads SVG files from Agent 4 to extract Scribe path data.
+    Reads paths directly from the animation manifest JSON (populated by Agent 4).
+    Uses actual audio timestamps from Agent 5 only.
     """
     # Index animation segments
     anim_segments = {
@@ -89,19 +43,23 @@ def build_unified_timeline(
 
         # Get Animation Data
         anim = anim_segments.get(seg_id, {})
-        svg_path = anim.get("svg_path")
-        # In Agent 4, we stored 'visual_action' in 'sketch_cue_timing' field
-        visual_action = anim.get("sketch_cue_timing", "GHOST_ONLY")
+
+        # KEY: Retrieve the paths list directly from the manifest JSON
+        raw_paths = anim.get("paths", [])
+        parsed_paths: list[ScribePath] = []
+        if raw_paths:
+            for p in raw_paths:
+                parsed_paths.append(ScribePath(**p))
+
+        visual_action = anim.get(
+            "visual_action",
+            "DRAW_START" if raw_paths else "GHOST_ONLY",
+        )
 
         # Get Script Text
         script_seg = script_segments.get(seg_id, {})
         seg_text = script_seg.get("text", "")
         seg_type = script_seg.get("type", "explore")
-
-        # Extract Paths if this is a new drawing
-        parsed_paths: list[ScribePath] = []
-        if svg_path and visual_action == "DRAW_START":
-            parsed_paths = _parse_svg_paths(svg_path)
 
         timeline_segments.append(TimelineSegment(
             segment_id=seg_id,
@@ -110,7 +68,7 @@ def build_unified_timeline(
             audio_end=round(audio_end, 2),
             visual_action=visual_action,
             paths=parsed_paths if parsed_paths else None,
-            has_animation=bool(parsed_paths),
+            scribe_keyframes=anim.get("scribe_keyframes"),
             pause_for_question=audio_seg.get("pause_for_question", False),
             pause_at_second=audio_end if audio_seg.get("pause_for_question", False) else None,
             segment_text=seg_text,

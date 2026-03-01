@@ -6,6 +6,7 @@
     const progressBar = document.getElementById("progress-bar");
     const progressContainer = document.getElementById("progress-container");
     const title = document.getElementById("segment-title");
+    const timeDisplay = document.getElementById("time-display");
 
     let isPlaying = false;
     let currentPaths = []; // Active paths for current segment
@@ -41,78 +42,143 @@
         // 2. Setup Canvas if Segment Changed
         if (seg.segment_id !== lastSegmentId) {
             lastSegmentId = seg.segment_id;
-            title.innerText = seg.segment_text || seg.type;
+            title.innerText = seg.segment_text ? seg.segment_text.substring(0, 50) + "..." : seg.type;
 
-            // If DRAW_START, clear canvas and load new paths
-            if (seg.visual_action === "DRAW_START" && seg.paths) {
-                svg.innerHTML = ""; // Clear board
-                currentPaths = [];
+            // Re-draw SVG from scratch for this segment
+            svg.innerHTML = "";
+            currentPaths = [];
 
-                // Inject SVG elements
-                seg.paths.forEach(p => {
-                    // Ghost
-                    const g = document.createElementNS("http://www.w3.org/2000/svg", "path");
-                    g.setAttribute("d", p.d);
-                    g.setAttribute("style", p.ghost_style);
-                    svg.appendChild(g);
+            if (seg.paths && seg.paths.length > 0) {
+                seg.paths.sort((a,b) => a.draw_order - b.draw_order).forEach(p => {
+                    // Create element (Path, Circle, Text, etc based on p.d)
+                    // For Scribe, everything is a path except Text
+                    if (p.element_type === 'text') {
+                        const txt = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                        txt.setAttribute("x", p.text_params.x);
+                        txt.setAttribute("y", p.text_params.y);
+                        txt.setAttribute("fill", p.text_params.color);
+                        txt.setAttribute("font-size", p.text_params.font_size);
+                        txt.setAttribute("font-weight", p.text_params.bold ? "bold" : "normal");
+                        txt.textContent = p.text_params.text;
+                        txt.style.opacity = "0"; // Start hidden
+                        txt._id = p.path_id;
+                        svg.appendChild(txt);
+                        currentPaths.push({el: txt, type: 'text', id: p.path_id});
+                    } else {
+                        // GHOST (Faint outline)
+                        const ghost = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                        ghost.setAttribute("d", p.d);
+                        ghost.setAttribute("stroke", p.stroke_color);
+                        ghost.setAttribute("stroke-width", p.stroke_width);
+                        ghost.setAttribute("fill", "none");
+                        ghost.style.opacity = "0.1";
+                        svg.appendChild(ghost);
 
-                    // Ink
-                    const i = document.createElementNS("http://www.w3.org/2000/svg", "path");
-                    i.setAttribute("id", "ink_" + p.path_id);
-                    i.setAttribute("d", p.d);
-                    i.setAttribute("style", p.ink_style);
-                    // Store metadata for animation
-                    i._totalLength = p.total_length;
-                    svg.appendChild(i);
-
-                    currentPaths.push(i);
+                        // INK (Actual drawing)
+                        const ink = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                        ink.setAttribute("d", p.d);
+                        ink.setAttribute("stroke", p.stroke_color);
+                        ink.setAttribute("stroke-width", p.stroke_width);
+                        ink.setAttribute("fill", "none"); // Always no-fill for ink line
+                        ink.setAttribute("stroke-dasharray", p.total_length);
+                        ink.setAttribute("stroke-dashoffset", p.total_length); // Hidden
+                        ink._totalLength = p.total_length;
+                        ink._id = p.path_id;
+                        svg.appendChild(ink);
+                        currentPaths.push({el: ink, type: 'path', len: p.total_length, id: p.path_id});
+                    }
                 });
             }
         }
 
-        // 3. Animate Paths based on Segment Progress
-        if (seg.visual_action === "DRAW_START" || seg.visual_action === "DRAW_CONTINUE") {
+        // 3. Animate Elements based on Keyframes
+        if (seg.scribe_keyframes) {
+            let activeHandPos = null;
+
+            seg.scribe_keyframes.forEach(kf => {
+                const target = currentPaths.find(x => x.id === kf.path_id);
+                if (!target) return;
+
+                // Check where we are in this specific keyframe's timeline
+                if (t >= kf.audio_end) {
+                    // Completed
+                    if (target.type === 'text') {
+                        target.el.style.opacity = "1";
+                    } else {
+                        target.el.style.strokeDashoffset = "0";
+                    }
+                } else if (t < kf.audio_start) {
+                    // Not started
+                    if (target.type === 'text') {
+                        target.el.style.opacity = "0";
+                    } else {
+                        target.el.style.strokeDashoffset = target.len;
+                    }
+                } else {
+                    // IN PROGRESS
+                    const duration = kf.audio_end - kf.audio_start;
+                    const progress = (t - kf.audio_start) / duration;
+
+                    if (target.type === 'text') {
+                        target.el.style.opacity = progress; // Fade in text
+                    } else {
+                        // Draw path
+                        const drawLen = target.len * (1 - progress);
+                        target.el.style.strokeDashoffset = drawLen;
+
+                        // Move Hand
+                        try {
+                            const point = target.el.getPointAtLength(target.len * progress);
+                            activeHandPos = point;
+                        } catch(e) {}
+                    }
+                }
+            });
+
+            // Update Hand
+            if (activeHandPos) {
+                hand.style.display = "block";
+                hand.style.transform = `translate(${activeHandPos.x}px, ${activeHandPos.y}px) rotate(-10deg)`;
+            } else {
+                hand.style.display = "none";
+            }
+        } else if (seg.paths && seg.paths.length > 0) {
+            // FALLBACK: No keyframes — use simple progressive animation
             const segDuration = seg.audio_end - seg.audio_start;
             const segProgress = Math.max(0, (t - seg.audio_start) / segDuration);
 
-            // Distribute progress across all paths in this segment
-            // Simple approach: Draw paths sequentially based on total length ratio
-            let totalCanvasLength = currentPaths.reduce((sum, p) => sum + p._totalLength, 0);
+            let totalCanvasLength = currentPaths.reduce((sum, p) => sum + (p.len || 0), 0);
             let currentDrawDistance = totalCanvasLength * segProgress;
-
             let covered = 0;
             let handPos = null;
 
-            currentPaths.forEach(path => {
-                const len = path._totalLength;
+            currentPaths.forEach(cp => {
+                if (cp.type === 'text') {
+                    cp.el.style.opacity = segProgress;
+                    return;
+                }
+                const len = cp.len;
                 const startAt = covered;
                 const endAt = covered + len;
 
                 if (currentDrawDistance >= endAt) {
-                    // Path fully drawn
-                    path.style.strokeDashoffset = 0;
+                    cp.el.style.strokeDashoffset = 0;
                 } else if (currentDrawDistance > startAt) {
-                    // Path partially drawn
                     const localDraw = currentDrawDistance - startAt;
-                    path.style.strokeDashoffset = len - localDraw;
-
-                    // Update Hand Position
+                    cp.el.style.strokeDashoffset = len - localDraw;
                     try {
-                        const pt = path.getPointAtLength(localDraw);
+                        const pt = cp.el.getPointAtLength(localDraw);
                         handPos = pt;
-                    } catch(e){}
+                    } catch(e) {}
                 } else {
-                    // Path not started
-                    path.style.strokeDashoffset = len;
+                    cp.el.style.strokeDashoffset = len;
                 }
                 covered += len;
             });
 
-            // Move Hand
             if (handPos) {
                 hand.style.display = "block";
-                // Offset by -10, -300 to align pen tip (tweak based on image)
-                hand.style.transform = "translate(" + handPos.x + "px, " + (handPos.y - 300) + "px)";
+                hand.style.transform = `translate(${handPos.x}px, ${handPos.y}px) rotate(-10deg)`;
             } else {
                 hand.style.display = "none";
             }
@@ -125,8 +191,7 @@
         if (audio.duration) {
             const pct = (t / audio.duration) * 100;
             progressBar.style.width = pct + "%";
-            document.getElementById("time-display").innerText =
-                Math.floor(t/60) + ":" + Math.floor(t%60).toString().padStart(2, '0');
+            timeDisplay.innerText = Math.floor(t/60) + ":" + Math.floor(t%60).toString().padStart(2, '0');
         }
     }
 })();

@@ -21,9 +21,14 @@ class ScribePath(BaseModel):
     path_id: str
     d: str
     total_length: float
-    # We pass raw style strings to keep frontend logic simple
-    ghost_style: str
-    ink_style: str
+    stroke_color: str = "#2C3E50"
+    stroke_width: int = 2
+    fill: str = "none"
+    draw_order: int = 0
+    # Type allows frontend to apply specific logic (e.g. text vs shape)
+    element_type: str = "path"
+
+    text_params: Optional[dict] = None
 
 
 class TimelineSegment(BaseModel):
@@ -35,11 +40,14 @@ class TimelineSegment(BaseModel):
     audio_end: float
 
     # Scribe specific fields
-    visual_action: str = "GHOST_ONLY"  # DRAW_START, DRAW_CONTINUE, GHOST_ONLY
+    visual_action: str = "DRAW_START"  # DRAW_START, DRAW_CONTINUE, GHOST_ONLY
     paths: Optional[List[ScribePath]] = None
+    scribe_keyframes: Optional[List[dict]] = None
 
-    # Legacy/Fallback (can be kept or ignored)
+    # Legacy/Fallback (must be kept for compatibility but ignored by new player)
     has_animation: bool = False
+    roughjs_html_path: Optional[str] = None
+    sketch_cue_timing: Optional[str] = None
 
     pause_for_question: bool = False
     pause_at_second: Optional[float] = None
@@ -47,6 +55,8 @@ class TimelineSegment(BaseModel):
 
 
 class UnifiedTimeline(BaseModel):
+    """Merged timeline consumed by player.js."""
+
     timeline_id: str
     script_id: str
     book_id: str
@@ -60,6 +70,6 @@ class UnifiedTimeline(BaseModel):
 
 class PlayerPackage(BaseModel):
     package_id: str
-    status: PlayerStatus = PlayerStatus.pending
+    status: str = "pending"
     timeline_path: Optional[str] = None
     player_html_path: Optional[str] = None
