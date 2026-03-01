@@ -6,6 +6,7 @@ generate_episode_animations_from_script()   Streamlit in-process entry point.
 """
 
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,9 +14,18 @@ from typing import Callable, Optional
 
 from .manifest_builder import build_manifest
 from .models import AnimationManifest, ManifestSegment
-from .vectorizer import Vectorizer  # Import the new Vectorizer
+from .vectorizer import Vectorizer
+
+logger = logging.getLogger(__name__)
 
 ANIMATIONS_DIR = Path(__file__).parent.parent / "storage" / "animations"
+
+_BLANK_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" '
+    'width="1280" height="720">'
+    '<rect width="1280" height="720" fill="#FAFAFA"/>'
+    '</svg>\n'
+)
 
 
 def _generate_image_with_nanobana(visual_request: dict, output_path: Path) -> bool:
@@ -69,6 +79,7 @@ def _generate_for_episode(
 
         has_animation = False
         svg_path_str = None
+        paths_data = None
 
         # Only generate a new image if the action is DRAW_START
         if visual_action == "DRAW_START" and visual_request:
@@ -79,14 +90,27 @@ def _generate_for_episode(
             success = _generate_image_with_nanobana(visual_request, raw_img_path)
 
             if success and raw_img_path.exists():
-                # 2. Vectorize the image
-                paths = Vectorizer.image_to_scribe_paths(str(raw_img_path))
+                # 2. Real image exists — vectorize it
+                paths_data = Vectorizer.image_to_scribe_paths(str(raw_img_path))
+            elif success:
+                # Stub mode — API returned OK but no PNG on disk yet.
+                # Use Vectorizer placeholder so the pipeline still produces
+                # visible SVGs during development.
+                logger.info("Nano Banana Pro stub active — using placeholder SVG for %s", seg_id)
+                paths_data = Vectorizer._placeholder_paths()
 
+            if paths_data:
                 # 3. Save the dual-layer SVG
-                Vectorizer.save_svg_from_paths(paths, str(svg_path))
-
+                Vectorizer.save_svg_from_paths(paths_data, str(svg_path))
                 has_animation = True
                 svg_path_str = str(svg_path)
+
+        else:
+            # Non-animated segment — write a blank canvas SVG so the
+            # Streamlit preview has something to display.
+            blank_path = anim_dir / f"{seg_id}_blank.svg"
+            blank_path.write_text(_BLANK_SVG, encoding="utf-8")
+            svg_path_str = str(blank_path)
 
         # Append to manifest
         manifest_segments.append(ManifestSegment(
@@ -94,6 +118,7 @@ def _generate_for_episode(
             type=seg.get("type", "explore"),
             has_animation=has_animation,
             svg_path=svg_path_str,
+            paths=paths_data,  # Scribe path data for Agent 6
             animation_path=None,  # Deprecated in Scribe style
             roughjs_html_path=None,  # Deprecated in Scribe style
             estimated_duration_seconds=int(seg.get("estimated_duration_seconds", 30)),
