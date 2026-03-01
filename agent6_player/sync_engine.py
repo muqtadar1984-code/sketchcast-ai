@@ -59,15 +59,19 @@ def build_unified_timeline(
         if not seg_type or seg_type == "explore":
             seg_type = script_seg.get("type", seg_type)
 
-        # Calculate animation trigger time based on sketch_cue_timing
+        # Calculate animation trigger time based on sketch_cue_timing.
+        # Supports both legacy values (before/during/after) and new
+        # visual_action values (DRAW_START/DRAW_CONTINUE/GHOST_ONLY).
         animation_trigger = None
         if has_animation and cue_timing:
-            if cue_timing == "before":
+            if cue_timing in ("before",):
                 animation_trigger = max(0, audio_start - anim_duration)
-            elif cue_timing == "during":
+            elif cue_timing in ("during", "DRAW_START", "DRAW_CONTINUE"):
                 animation_trigger = audio_start
-            elif cue_timing == "after":
+            elif cue_timing in ("after",):
                 animation_trigger = audio_end
+            elif cue_timing == "GHOST_ONLY":
+                animation_trigger = audio_start  # ghost visible immediately
             else:
                 animation_trigger = audio_start  # default to during
 

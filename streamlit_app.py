@@ -477,7 +477,7 @@ elif page == "🧠 Analyse Chapter":
                                         anim_manifest = generate_episode_animations_from_script(
                                             script_data=st.session_state.scripts[analysis_key],
                                             analysis_dict=result.model_dump(),
-                                            client=client,
+                                            client=None,  # Claude no longer used in Agent 4
                                             progress_callback=_a4_progress,
                                         )
                                         st.session_state.animations[analysis_key] = anim_manifest.model_dump()
@@ -1084,7 +1084,7 @@ elif page == "🎨 Animations":
                     st.info(
                         f"Generating animations for **{total_segs}** segments "
                         f"({visual_count} have visual cues, rest get blank canvas). "
-                        "This calls Claude once per visual segment — may take a minute."
+                        "This generates visual assets via Nano Banana Pro — may take a minute."
                     )
 
                     progress_bar = st.progress(0)
@@ -1104,13 +1104,11 @@ elif page == "🎨 Animations":
                         from agent4_animation.sketch_generator import (
                             generate_episode_animations_from_script,
                         )
-                        from shared.claude_client import ClaudeClient
 
-                        client = ClaudeClient()
                         manifest = generate_episode_animations_from_script(
                             script_data=sc_data,
                             analysis_dict=analysis_dict,
-                            client=client,
+                            client=None,  # Claude no longer used in Agent 4
                             progress_callback=_progress,
                         )
                         st.session_state.animations[anim_key] = manifest.model_dump()

@@ -21,29 +21,48 @@ def health():
     return {"status": "ok", "agent": "4", "name": "Sketch Animation"}
 
 
+SCRIPTS_DIR = Path(__file__).parent.parent / "storage" / "scripts"
+ANALYSIS_DIR = Path(__file__).parent.parent / "storage" / "analysis"
+
+
 @app.post("/animate/{book_id}/chapter/{chapter_num}")
 def animate_episode(book_id: str, chapter_num: int, req: AnimateRequest = AnimateRequest()):
     """Generate SVG animations for a script episode.
 
     Reads Agent 3 script + Agent 2 analysis from disk,
-    generates SVGs and animation JSONs, saves and returns the manifest.
+    generates vectorized SVGs via Nano Banana Pro + Vectorizer,
+    saves and returns the manifest.
     """
     try:
-        from agent4_animation.sketch_generator import generate_episode_animations
-        from shared.claude_client import ClaudeClient
+        from agent4_animation.sketch_generator import (
+            generate_episode_animations_from_script,
+        )
 
-        client = ClaudeClient()
-        manifest = generate_episode_animations(book_id, chapter_num, req.episode_num, client)
-
-        if manifest is None:
+        # Load script from disk
+        script_path = SCRIPTS_DIR / book_id / f"chapter_{chapter_num}" / "script.json"
+        if not script_path.exists():
             raise HTTPException(
                 status_code=404,
                 detail=(
-                    f"Script or analysis not found for book {book_id} "
-                    f"chapter {chapter_num} episode {req.episode_num}. "
-                    "Run Agent 2 and Agent 3 first."
+                    f"Script not found for book {book_id} "
+                    f"chapter {chapter_num}. Run Agent 3 first."
                 ),
             )
+        with open(script_path, encoding="utf-8") as f:
+            script_data = json.load(f)
+
+        # Load analysis from disk (kept for signature compatibility)
+        analysis_dict: dict = {}
+        analysis_path = ANALYSIS_DIR / book_id / f"chapter_{chapter_num}" / "analysis.json"
+        if analysis_path.exists():
+            with open(analysis_path, encoding="utf-8") as f:
+                analysis_dict = json.load(f)
+
+        manifest = generate_episode_animations_from_script(
+            script_data=script_data,
+            analysis_dict=analysis_dict,
+            client=None,  # Claude no longer used in Agent 4
+        )
 
         return manifest.model_dump()
 
