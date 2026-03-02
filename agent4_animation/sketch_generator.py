@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from .animation_builder import build_scribe_timeline
 from .manifest_builder import build_manifest
 from .models import AnimationManifest, ManifestSegment
 from .vectorizer import Vectorizer
@@ -112,6 +113,15 @@ def _generate_for_episode(
             blank_path.write_text(_BLANK_SVG, encoding="utf-8")
             svg_path_str = str(blank_path)
 
+        # Generate per-path timing keyframes for the Scribe player
+        scribe_kf = None
+        if paths_data and visual_action == "DRAW_START":
+            scribe_kf = build_scribe_timeline(
+                paths=paths_data,
+                segment=seg,
+                sketch_cue={"timing": "during"},  # DRAW_START always uses "during"
+            )
+
         # Append to manifest
         manifest_segments.append(ManifestSegment(
             segment_id=seg_id,
@@ -119,6 +129,7 @@ def _generate_for_episode(
             has_animation=has_animation,
             svg_path=svg_path_str,
             paths=paths_data,  # Scribe path data for Agent 6
+            scribe_keyframes=scribe_kf,  # Per-path timing for Scribe player
             animation_path=None,  # Deprecated in Scribe style
             roughjs_html_path=None,  # Deprecated in Scribe style
             estimated_duration_seconds=int(seg.get("estimated_duration_seconds", 30)),

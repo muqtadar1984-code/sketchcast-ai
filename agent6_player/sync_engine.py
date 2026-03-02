@@ -51,10 +51,24 @@ def build_unified_timeline(
             for p in raw_paths:
                 parsed_paths.append(ScribePath(**p))
 
-        visual_action = anim.get(
-            "visual_action",
-            "DRAW_START" if raw_paths else "GHOST_ONLY",
+        # Read visual_action: try "visual_action" first, then legacy "sketch_cue_timing"
+        visual_action = (
+            anim.get("visual_action")
+            or anim.get("sketch_cue_timing")
+            or ("DRAW_START" if raw_paths else "GHOST_ONLY")
         )
+
+        # Offset keyframe times from segment-local to master-audio time
+        raw_kf = anim.get("scribe_keyframes")
+        scribe_keyframes = None
+        if raw_kf:
+            scribe_keyframes = []
+            for kf in raw_kf:
+                scribe_keyframes.append({
+                    **kf,
+                    "audio_start": round(audio_start + kf["audio_start"], 3),
+                    "audio_end": round(audio_start + kf["audio_end"], 3),
+                })
 
         # Get Script Text
         script_seg = script_segments.get(seg_id, {})
@@ -68,7 +82,7 @@ def build_unified_timeline(
             audio_end=round(audio_end, 2),
             visual_action=visual_action,
             paths=parsed_paths if parsed_paths else None,
-            scribe_keyframes=anim.get("scribe_keyframes"),
+            scribe_keyframes=scribe_keyframes,
             pause_for_question=audio_seg.get("pause_for_question", False),
             pause_at_second=audio_end if audio_seg.get("pause_for_question", False) else None,
             segment_text=seg_text,

@@ -177,6 +177,9 @@ class Vectorizer:
                 "total_length": total_length,
                 "stroke_color": "#2C3E50",
                 "stroke_width": 2,
+                "fill": "none",
+                "draw_order": 0,
+                "element_type": "path",
             }
         ]
 
@@ -246,6 +249,9 @@ class Vectorizer:
                     "total_length": est_length,
                     "stroke_color": "#2C3E50",
                     "stroke_width": 2,
+                    "fill": "none",
+                    "draw_order": idx,
+                    "element_type": "path",
                 }
             )
 

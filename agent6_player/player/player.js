@@ -44,51 +44,56 @@
             lastSegmentId = seg.segment_id;
             title.innerText = seg.segment_text ? seg.segment_text.substring(0, 50) + "..." : seg.type;
 
-            // Re-draw SVG from scratch for this segment
-            svg.innerHTML = "";
-            currentPaths = [];
+            // Only clear canvas on DRAW_START — DRAW_CONTINUE and GHOST_ONLY
+            // keep the existing drawn state visible.
+            if (seg.visual_action === "DRAW_START") {
+                svg.innerHTML = "";
+                currentPaths = [];
 
-            if (seg.paths && seg.paths.length > 0) {
-                seg.paths.sort((a,b) => a.draw_order - b.draw_order).forEach(p => {
-                    // Create element (Path, Circle, Text, etc based on p.d)
-                    // For Scribe, everything is a path except Text
-                    if (p.element_type === 'text') {
-                        const txt = document.createElementNS("http://www.w3.org/2000/svg", "text");
-                        txt.setAttribute("x", p.text_params.x);
-                        txt.setAttribute("y", p.text_params.y);
-                        txt.setAttribute("fill", p.text_params.color);
-                        txt.setAttribute("font-size", p.text_params.font_size);
-                        txt.setAttribute("font-weight", p.text_params.bold ? "bold" : "normal");
-                        txt.textContent = p.text_params.text;
-                        txt.style.opacity = "0"; // Start hidden
-                        txt._id = p.path_id;
-                        svg.appendChild(txt);
-                        currentPaths.push({el: txt, type: 'text', id: p.path_id});
-                    } else {
-                        // GHOST (Faint outline)
-                        const ghost = document.createElementNS("http://www.w3.org/2000/svg", "path");
-                        ghost.setAttribute("d", p.d);
-                        ghost.setAttribute("stroke", p.stroke_color);
-                        ghost.setAttribute("stroke-width", p.stroke_width);
-                        ghost.setAttribute("fill", "none");
-                        ghost.style.opacity = "0.1";
-                        svg.appendChild(ghost);
+                if (seg.paths && seg.paths.length > 0) {
+                    seg.paths.sort((a,b) => (a.draw_order || 0) - (b.draw_order || 0)).forEach(p => {
+                        if (p.element_type === 'text' && p.text_params) {
+                            const txt = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                            txt.setAttribute("x", p.text_params.x);
+                            txt.setAttribute("y", p.text_params.y);
+                            txt.setAttribute("fill", p.text_params.color || "#2C3E50");
+                            txt.setAttribute("font-size", p.text_params.font_size || "16");
+                            txt.setAttribute("font-weight", p.text_params.bold ? "bold" : "normal");
+                            txt.textContent = p.text_params.text || "";
+                            txt.style.opacity = "0";
+                            txt._id = p.path_id;
+                            svg.appendChild(txt);
+                            currentPaths.push({el: txt, type: 'text', id: p.path_id});
+                        } else {
+                            // GHOST (Faint outline)
+                            const ghost = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                            ghost.setAttribute("d", p.d);
+                            ghost.setAttribute("stroke", p.stroke_color || "#2C3E50");
+                            ghost.setAttribute("stroke-width", p.stroke_width || 2);
+                            ghost.setAttribute("fill", "none");
+                            ghost.style.opacity = "0.1";
+                            svg.appendChild(ghost);
 
-                        // INK (Actual drawing)
-                        const ink = document.createElementNS("http://www.w3.org/2000/svg", "path");
-                        ink.setAttribute("d", p.d);
-                        ink.setAttribute("stroke", p.stroke_color);
-                        ink.setAttribute("stroke-width", p.stroke_width);
-                        ink.setAttribute("fill", "none"); // Always no-fill for ink line
-                        ink.setAttribute("stroke-dasharray", p.total_length);
-                        ink.setAttribute("stroke-dashoffset", p.total_length); // Hidden
-                        ink._totalLength = p.total_length;
-                        ink._id = p.path_id;
-                        svg.appendChild(ink);
-                        currentPaths.push({el: ink, type: 'path', len: p.total_length, id: p.path_id});
-                    }
-                });
+                            // INK (Actual drawing)
+                            const ink = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                            ink.setAttribute("d", p.d);
+                            ink.setAttribute("stroke", p.stroke_color || "#2C3E50");
+                            ink.setAttribute("stroke-width", p.stroke_width || 2);
+                            ink.setAttribute("fill", "none");
+                            ink.setAttribute("stroke-dasharray", p.total_length);
+                            ink.setAttribute("stroke-dashoffset", p.total_length);
+                            ink._totalLength = p.total_length;
+                            ink._id = p.path_id;
+                            svg.appendChild(ink);
+                            currentPaths.push({el: ink, type: 'path', len: p.total_length, id: p.path_id});
+                        }
+                    });
+                }
+            } else if (seg.visual_action === "GHOST_ONLY") {
+                // Hide hand but keep existing canvas
+                hand.style.display = "none";
             }
+            // DRAW_CONTINUE: keep canvas and currentPaths as-is
         }
 
         // 3. Animate Elements based on Keyframes
