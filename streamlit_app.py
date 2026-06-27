@@ -35,6 +35,22 @@ st.set_page_config(
     layout="wide",
 )
 
+# ── Scholar theme polish (serif headings + cleaner chrome) ───────────
+st.markdown(
+    """
+    <style>
+    h1, h2, h3, h4 {
+        font-family: Georgia, "Iowan Old Style", "Times New Roman", serif !important;
+        letter-spacing: -0.01em;
+    }
+    .stButton > button { border-radius: 8px; }
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # ── Session state initialization ─────────────────────────────────────
 
 if "library" not in st.session_state:

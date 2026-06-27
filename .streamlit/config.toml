@@ -4,3 +4,12 @@ maxUploadSize = 200
 
 [browser]
 gatherUsageStats = false
+
+[theme]
+# Scholar theme — warm academic (cream + forest green, serif headings)
+base = "light"
+primaryColor = "#2E6B4E"
+backgroundColor = "#FBF6EC"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#2C2A26"
+font = "sans serif"
