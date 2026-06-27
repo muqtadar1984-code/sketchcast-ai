@@ -33,7 +33,7 @@ def _get_api_key() -> str:
 class ClaudeClient:
     """Reusable Claude API wrapper with retry, JSON parsing, and token logging."""
 
-    def __init__(self, model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, model: str = "claude-sonnet-4-6"):
         self.client = Anthropic(api_key=_get_api_key())
         self.model = model
 

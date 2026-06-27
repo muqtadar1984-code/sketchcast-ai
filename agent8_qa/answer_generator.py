@@ -53,7 +53,7 @@ def generate_answer_stream(
     )
 
     response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=200,
         system=system_prompt,
         messages=[{"role": "user", "content": question}],
@@ -95,7 +95,7 @@ async def generate_answer_stream_async(
     )
 
     async with client.messages.stream(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=200,
         system=system_prompt,
         messages=[{"role": "user", "content": question}],
