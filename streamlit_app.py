@@ -46,14 +46,17 @@ if "analyses" not in st.session_state:
 if "scripts" not in st.session_state:
     st.session_state.scripts = {}  # key: "{book_id}_{chapter_num}" -> ChapterScripts dict
 
-if "animations" not in st.session_state:
-    st.session_state.animations = {}  # key: "{book_id}_{chapter_num}" -> AnimationManifest dict
+if "images" not in st.session_state:
+    st.session_state.images = {}  # key: "{book_id}_{chapter_num}" -> ImageManifest dict
 
-if "audio" not in st.session_state:
-    st.session_state.audio = {}  # key: "{book_id}_{chapter_num}" -> AudioManifest dict
+if "slides" not in st.session_state:
+    st.session_state.slides = {}  # key: "{book_id}_{chapter_num}" -> SlideManifest dict
 
-if "players" not in st.session_state:
-    st.session_state.players = {}  # key: "{book_id}_{chapter_num}" -> {timeline, html} dict
+if "video_segments" not in st.session_state:
+    st.session_state.video_segments = {}  # key: "{book_id}_{chapter_num}" -> VideoManifest dict
+
+if "final_videos" not in st.session_state:
+    st.session_state.final_videos = {}  # key: "{book_id}_{chapter_num}" -> FinalVideoManifest dict
 
 if "selected_book_id" not in st.session_state:
     st.session_state.selected_book_id = None
@@ -124,9 +127,10 @@ with st.sidebar:
         f"{len(st.session_state.library)} book(s) | "
         f"{len(st.session_state.analyses)} analysis(es) | "
         f"{len(st.session_state.scripts)} script(s) | "
-        f"{len(st.session_state.animations)} animation(s) | "
-        f"{len(st.session_state.audio)} audio(s) | "
-        f"{len(st.session_state.players)} player(s)"
+        f"{len(st.session_state.images)} image(s) | "
+        f"{len(st.session_state.slides)} slide(s) | "
+        f"{len(st.session_state.video_segments)} video(s) | "
+        f"{len(st.session_state.final_videos)} final(s)"
     )
     st.divider()
     page = st.radio(
@@ -138,10 +142,10 @@ with st.sidebar:
             "🧠 Analyse Chapter",
             "📊 Analysis Results",
             "🎙️ Scripts",
-            "🎨 Animations",
-            "🔊 Audio",
-            "▶️ Player",
-            "📺 YouTube Export",
+            "🖼️ Images",
+            "📐 Slides",
+            "🎬 Video Segments",
+            "📺 Final Video",
             "❓ Question Bank",
         ],
         label_visibility="collapsed",
@@ -454,14 +458,12 @@ elif page == "🧠 Analyse Chapter":
                                     with st.expander("Script error details"):
                                         st.code(_tb.format_exc())
 
-                            # ── Agent 4: Auto-generate sketch animations ──────────────────
+                            # ── Agent 4: Auto-generate images ──────────────────────────────
                             if analysis_key in st.session_state.scripts:
                                 st.divider()
-                                with st.spinner("🎨 Generating sketch animations with Agent 4... this may take a minute"):
+                                with st.spinner("🖼️ Generating images with Agent 4 (Gemini)..."):
                                     try:
-                                        from agent4_animation.sketch_generator import (
-                                            generate_episode_animations_from_script,
-                                        )
+                                        from agent4_image_gen.image_generator import generate_episode_images
 
                                         _a4_progress_bar = st.progress(0)
                                         _a4_status = st.empty()
@@ -470,30 +472,62 @@ elif page == "🧠 Analyse Chapter":
                                             pct = int(current / max(total, 1) * 100)
                                             _a4_progress_bar.progress(pct)
                                             if seg_id != "done":
-                                                _a4_status.caption(f"Animating segment {current + 1}/{total}: `{seg_id}`")
+                                                _a4_status.caption(f"Image {current + 1}/{total}: `{seg_id}`")
                                             else:
-                                                _a4_status.caption("Animations done!")
+                                                _a4_status.caption("Images done!")
 
-                                        anim_manifest = generate_episode_animations_from_script(
+                                        img_manifest = generate_episode_images(
                                             script_data=st.session_state.scripts[analysis_key],
-                                            analysis_dict=result.model_dump(),
-                                            client=None,  # Claude no longer used in Agent 4
                                             progress_callback=_a4_progress,
                                         )
-                                        st.session_state.animations[analysis_key] = anim_manifest.model_dump()
+                                        st.session_state.images[analysis_key] = img_manifest.model_dump()
                                         st.success(
-                                            f"🎨 Animations generated: "
-                                            f"{anim_manifest.animated_segments} sketched + "
-                                            f"{anim_manifest.blank_segments} blank"
+                                            f"🖼️ Images generated: "
+                                            f"{img_manifest.image_segments}/{img_manifest.total_segments} segments"
                                         )
 
-                                    except Exception as anim_err:
-                                        st.warning(f"Animation generation failed: {anim_err}")
+                                    except Exception as img_err:
+                                        st.warning(f"Image generation failed: {img_err}")
                                         import traceback as _tb
-                                        with st.expander("Animation error details"):
+                                        with st.expander("Image error details"):
                                             st.code(_tb.format_exc())
 
-                            # ── Agent 5: Auto-generate audio (if ElevenLabs keys available) ─
+                            # ── Agent 5: Auto-generate slides ─────────────────────────────
+                            if analysis_key in st.session_state.images:
+                                st.divider()
+                                with st.spinner("📐 Assembling slides with Agent 5..."):
+                                    try:
+                                        from agent5_slides.slide_generator import generate_episode_slides
+
+                                        _a5_progress_bar = st.progress(0)
+                                        _a5_status = st.empty()
+
+                                        def _a5_progress(current, total, seg_id):
+                                            pct = int(current / max(total, 1) * 100)
+                                            _a5_progress_bar.progress(pct)
+                                            if seg_id != "done":
+                                                _a5_status.caption(f"Slide {current + 1}/{total}: `{seg_id}`")
+                                            else:
+                                                _a5_status.caption("Slides done!")
+
+                                        slide_manifest = generate_episode_slides(
+                                            script_data=st.session_state.scripts[analysis_key],
+                                            image_manifest=st.session_state.images[analysis_key],
+                                            progress_callback=_a5_progress,
+                                        )
+                                        st.session_state.slides[analysis_key] = slide_manifest.model_dump()
+                                        st.success(
+                                            f"📐 Slides assembled: "
+                                            f"{slide_manifest.slide_segments}/{slide_manifest.total_segments} segments"
+                                        )
+
+                                    except Exception as slide_err:
+                                        st.warning(f"Slide generation failed: {slide_err}")
+                                        import traceback as _tb
+                                        with st.expander("Slide error details"):
+                                            st.code(_tb.format_exc())
+
+                            # ── Agent 6: Auto-generate video segments (SpeedPaint + TTS) ──
                             _el_key_ok = False
                             try:
                                 if st.secrets.get("ELEVENLABS_API_KEY", ""):
@@ -512,91 +546,72 @@ elif page == "🧠 Analyse Chapter":
                             if not _el_voice_ok and os.getenv("ELEVENLABS_VOICE_ID"):
                                 _el_voice_ok = True
 
-                            if analysis_key in st.session_state.scripts:
+                            if analysis_key in st.session_state.slides:
                                 if _el_key_ok and _el_voice_ok:
                                     st.divider()
-                                    _ep_data = st.session_state.scripts[analysis_key].get("episodes", [])
-                                    _ep = _ep_data[0] if _ep_data else None
-                                    if _ep:
-                                        with st.spinner("🔊 Generating audio with Agent 5... each segment calls ElevenLabs TTS"):
-                                            try:
-                                                from agent5_audio.audio_generator import generate_episode_audio
+                                    with st.spinner("🎬 Generating video segments with Agent 6 (SpeedPaint + TTS)..."):
+                                        try:
+                                            from agent6_animation.video_composer import compose_episode_videos
 
-                                                _a5_progress_bar = st.progress(0)
-                                                _a5_status = st.empty()
+                                            _a6_progress_bar = st.progress(0)
+                                            _a6_status = st.empty()
 
-                                                def _a5_progress(current, total, seg_id):
-                                                    pct = int(current / max(total, 1) * 100)
-                                                    _a5_progress_bar.progress(pct)
-                                                    if seg_id != "done":
-                                                        _a5_status.caption(f"TTS segment {current + 1}/{total}: `{seg_id}`")
-                                                    else:
-                                                        _a5_status.caption("Stitching master audio...")
+                                            def _a6_progress(current, total, seg_id):
+                                                pct = int(current / max(total, 1) * 100)
+                                                _a6_progress_bar.progress(pct)
+                                                if seg_id != "done":
+                                                    _a6_status.caption(f"Video {current + 1}/{total}: `{seg_id}`")
+                                                else:
+                                                    _a6_status.caption("All video segments done!")
 
-                                                audio_manifest = generate_episode_audio(
-                                                    script_id=_ep.get("script_id"),
-                                                    book_id=book_id,
-                                                    chapter_num=chapter_num,
-                                                    episode_num=_ep.get("episode_num", 1),
-                                                    script_data=_ep,
-                                                    progress_callback=_a5_progress,
-                                                )
-                                                st.session_state.audio[analysis_key] = audio_manifest.model_dump()
-                                                _dur = audio_manifest.total_duration_seconds
-                                                st.success(
-                                                    f"🔊 Audio generated: {len(audio_manifest.segments)} segments, "
-                                                    f"{int(_dur) // 60}m {int(_dur) % 60}s"
-                                                )
+                                            video_manifest = compose_episode_videos(
+                                                script_data=st.session_state.scripts[analysis_key],
+                                                slide_manifest=st.session_state.slides[analysis_key],
+                                                progress_callback=_a6_progress,
+                                            )
+                                            st.session_state.video_segments[analysis_key] = video_manifest.model_dump()
+                                            _dur = video_manifest.total_duration_seconds
+                                            st.success(
+                                                f"🎬 Video segments generated: "
+                                                f"{video_manifest.video_segments_count} videos, "
+                                                f"{int(_dur) // 60}m {int(_dur) % 60}s"
+                                            )
 
-                                            except Exception as audio_err:
-                                                st.warning(f"Audio generation failed: {audio_err}")
-                                                import traceback as _tb
-                                                with st.expander("Audio error details"):
-                                                    st.code(_tb.format_exc())
+                                        except Exception as vid_err:
+                                            st.warning(f"Video generation failed: {vid_err}")
+                                            import traceback as _tb
+                                            with st.expander("Video error details"):
+                                                st.code(_tb.format_exc())
                                 else:
                                     st.divider()
                                     st.info(
-                                        "⏭️ **Skipping audio generation** — ElevenLabs API key or Voice ID not configured. "
-                                        "Add them in Settings → Secrets to enable automatic audio."
+                                        "⏭️ **Skipping video generation** — ElevenLabs API key or Voice ID not configured. "
+                                        "Add them in Settings -> Secrets to enable automatic video."
                                     )
 
-                            # ── Agent 6: Auto-build player (if animations + audio ready) ──
-                            _has_anim = analysis_key in st.session_state.animations
-                            _has_audio = analysis_key in st.session_state.audio
-                            if _has_anim and _has_audio:
+                            # ── Agent 8 Render: Auto-render final video ──────────────────
+                            if analysis_key in st.session_state.video_segments:
                                 st.divider()
-                                with st.spinner("▶️ Building player with Agent 6..."):
+                                with st.spinner("📺 Rendering final video with Agent 8..."):
                                     try:
-                                        from agent6_player.player_builder import (
-                                            build_player_package,
-                                            save_player_package,
-                                        )
+                                        from agent8_render.renderer import render_final_video
 
-                                        timeline, player_html = build_player_package(
-                                            audio_manifest=st.session_state.audio[analysis_key],
-                                            animation_manifest=st.session_state.animations[analysis_key],
-                                            script_data=st.session_state.scripts[analysis_key],
-                                            embed_audio=True,
+                                        final_manifest = render_final_video(
+                                            video_manifest=st.session_state.video_segments[analysis_key],
                                         )
-                                        save_player_package(timeline, player_html, book_id, chapter_num)
-                                        st.session_state.players[analysis_key] = {
-                                            "timeline": timeline.model_dump(),
-                                            "html": player_html,
-                                        }
+                                        st.session_state.final_videos[analysis_key] = final_manifest.model_dump()
+                                        _dur = final_manifest.total_duration_seconds
                                         st.success(
-                                            f"▶️ Player ready: {len(timeline.segments)} segments, "
-                                            f"{timeline.total_duration_seconds:.1f}s — "
-                                            f"go to the ▶️ Player page to watch!"
+                                            f"📺 Final video ready: "
+                                            f"{int(_dur) // 60}m {int(_dur) % 60}s — "
+                                            f"go to the 📺 Final Video page to watch!"
                                         )
 
-                                    except Exception as player_err:
-                                        st.warning(f"Player build failed: {player_err}")
+                                    except Exception as render_err:
+                                        st.warning(f"Final video render failed: {render_err}")
                                         import traceback as _tb
-                                        with st.expander("Player error details"):
+                                        with st.expander("Render error details"):
                                             st.code(_tb.format_exc())
-                            elif _has_anim and not _has_audio:
-                                st.divider()
-                                st.info("⏭️ **Skipping player build** — audio not available. Configure ElevenLabs to enable.")
 
                         except Exception as e:
                             st.error(f"Analysis failed: {str(e)}")
@@ -1014,137 +1029,119 @@ elif page == "🎙️ Scripts":
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  PAGE: Animations (Agent 4)
+#  PAGE: Images (Agent 4)
 # ══════════════════════════════════════════════════════════════════════
 
-elif page == "🎨 Animations":
-    import streamlit.components.v1 as components
-
-    st.header("🎨 Sketch Animations")
-    st.caption("SVG whiteboard animations generated by Agent 4, one per script segment.")
+elif page == "🖼️ Images":
+    st.header("🖼️ Generated Images")
+    st.caption("AI-generated educational illustrations by Agent 4 (Google Gemini), one per script segment.")
 
     scripts = st.session_state.scripts
-    analyses = st.session_state.analyses
-    animations = st.session_state.animations
+    images_store = st.session_state.images
     books = st.session_state.library
 
     if not scripts:
         st.info(
             "No scripts found. Go to **🧠 Analyse Chapter** to run analysis — "
-            "scripts and animations are generated automatically."
+            "scripts and images are generated automatically."
         )
     else:
-        # Build selector from available scripts
         labels = {}
         for skey, sc_data in scripts.items():
             bid = sc_data.get("book_id", "")
             book_title = books.get(bid, {}).get("title", "Unknown")
             ch_title = sc_data.get("chapter_title", "")
             ch_num = sc_data.get("chapter_num", 0)
-            labels[f"{book_title[:30]} → Ch {ch_num}: {ch_title[:30]}"] = skey
+            labels[f"{book_title[:30]} -> Ch {ch_num}: {ch_title[:30]}"] = skey
 
-        sel_label = st.selectbox("Select a chapter script to animate", list(labels.keys()))
-        anim_key = labels[sel_label]
-        sc_data = scripts[anim_key]
+        sel_label = st.selectbox("Select a chapter script", list(labels.keys()))
+        img_key = labels[sel_label]
+        sc_data = scripts[img_key]
         bid = sc_data.get("book_id", "")
         ch_num = sc_data.get("chapter_num", 0)
 
-        # Check if animations already exist for this key
-        existing_manifest = animations.get(anim_key)
+        existing_manifest = images_store.get(img_key)
 
         col_btn, col_status = st.columns([1, 3])
         with col_btn:
-            generate_btn = st.button("🎨 Generate Animations", type="primary")
+            generate_btn = st.button("🖼️ Generate Images", type="primary")
         with col_status:
             if existing_manifest:
-                animated = existing_manifest.get("animated_segments", 0)
+                img_count = existing_manifest.get("image_segments", 0)
                 total = existing_manifest.get("total_segments", 0)
-                st.success(f"Animations ready: {animated}/{total} segments animated.")
+                st.success(f"Images ready: {img_count}/{total} segments have images.")
             else:
-                st.caption("No animations yet for this chapter.")
+                st.caption("No images yet for this chapter.")
 
         if generate_btn:
-            analysis_dict = analyses.get(anim_key)
-            if not analysis_dict:
-                st.error(
-                    "Analysis not found in session. Please re-run analysis from "
-                    "**🧠 Analyse Chapter** first."
-                )
+            episodes = sc_data.get("episodes", [])
+            if not episodes:
+                st.error("Script has no episodes.")
             else:
-                episodes = sc_data.get("episodes", [])
-                if not episodes:
-                    st.error("Script has no episodes.")
-                else:
-                    ep = episodes[0]
-                    total_segs = len(ep.get("segments", []))
-                    visual_count = sum(
-                        1 for s in ep.get("segments", [])
-                        if s.get("visual_request") or s.get("sketch_cue")
+                ep = episodes[0]
+                total_segs = len(ep.get("segments", []))
+                visual_count = sum(
+                    1 for s in ep.get("segments", [])
+                    if s.get("visual_request")
+                )
+                st.info(
+                    f"Generating images for **{total_segs}** segments "
+                    f"({visual_count} have visual prompts). "
+                    "Using Google Gemini with Pillow fallback."
+                )
+
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                def _img_progress(current, total, seg_id):
+                    pct = int(current / max(total, 1) * 100)
+                    progress_bar.progress(pct)
+                    if seg_id != "done":
+                        status_text.caption(f"Image {current + 1}/{total}: `{seg_id}`")
+                    else:
+                        status_text.caption("Done!")
+
+                try:
+                    from agent4_image_gen.image_generator import generate_episode_images
+
+                    manifest = generate_episode_images(
+                        script_data=sc_data,
+                        progress_callback=_img_progress,
                     )
-                    st.info(
-                        f"Generating animations for **{total_segs}** segments "
-                        f"({visual_count} have visual cues, rest get blank canvas). "
-                        "This generates visual assets via Nano Banana Pro — may take a minute."
+                    st.session_state.images[img_key] = manifest.model_dump()
+                    existing_manifest = st.session_state.images[img_key]
+                    st.success(
+                        f"Images generated: {manifest.image_segments}/{manifest.total_segments} segments."
                     )
 
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
+                except Exception as img_err:
+                    st.error(f"Image generation failed: {img_err}")
+                    import traceback as _tb
+                    with st.expander("Error details"):
+                        st.code(_tb.format_exc())
 
-                    def _progress(current, total, seg_id):
-                        pct = int(current / max(total, 1) * 100)
-                        progress_bar.progress(pct)
-                        if seg_id != "done":
-                            status_text.caption(
-                                f"Processing segment {current + 1}/{total}: `{seg_id}`"
-                            )
-                        else:
-                            status_text.caption("Done!")
-
-                    try:
-                        from agent4_animation.sketch_generator import (
-                            generate_episode_animations_from_script,
-                        )
-
-                        manifest = generate_episode_animations_from_script(
-                            script_data=sc_data,
-                            analysis_dict=analysis_dict,
-                            client=None,  # Claude no longer used in Agent 4
-                            progress_callback=_progress,
-                        )
-                        st.session_state.animations[anim_key] = manifest.model_dump()
-                        existing_manifest = st.session_state.animations[anim_key]
-                        st.success(
-                            f"Animations generated: "
-                            f"{manifest.animated_segments} sketched + "
-                            f"{manifest.blank_segments} blank = "
-                            f"{manifest.total_segments} segments total."
-                        )
-
-                    except Exception as anim_err:
-                        st.error(f"Animation generation failed: {anim_err}")
-                        import traceback as _tb
-                        with st.expander("Error details"):
-                            st.code(_tb.format_exc())
-
-        # ── Show animation results ────────────────────────────────────
+        # ── Show image results ────────────────────────────────────────
         if existing_manifest:
             st.divider()
 
-            # Summary metrics
             mc = st.columns(4)
             with mc[0]:
                 st.metric("Total Segments", existing_manifest.get("total_segments", 0))
             with mc[1]:
-                st.metric("Animated", existing_manifest.get("animated_segments", 0))
+                st.metric("With Images", existing_manifest.get("image_segments", 0))
             with mc[2]:
-                st.metric("Blank canvas", existing_manifest.get("blank_segments", 0))
-            with mc[3]:
                 gen_at = existing_manifest.get("generated_at", "")[:19]
-                st.metric("Generated", gen_at.replace("T", " ") if gen_at else "—")
+                st.metric("Generated", gen_at.replace("T", " ") if gen_at else "-")
+            with mc[3]:
+                sources = {}
+                for s in existing_manifest.get("segments", []):
+                    src = s.get("source", "none")
+                    sources[src] = sources.get(src, 0) + 1
+                src_str = ", ".join(f"{k}: {v}" for k, v in sources.items() if k != "none")
+                st.metric("Sources", src_str or "-")
 
             st.divider()
 
-            # Segment table + SVG previews
             seg_list = existing_manifest.get("segments", [])
             type_icons = {
                 "hook": "🪝", "activate": "⚡", "explore": "🔍",
@@ -1154,352 +1151,44 @@ elif page == "🎨 Animations":
             for ms in seg_list:
                 seg_id = ms.get("segment_id", "")
                 seg_type = ms.get("type", "explore")
-                has_anim = ms.get("has_animation", False)
-                dur = ms.get("estimated_duration_seconds", 0)
-                timing = ms.get("sketch_cue_timing") or "—"
-                icon = type_icons.get(seg_type, "•")
-                anim_badge = "🎨 sketch" if has_anim else "⬜ blank"
+                has_img = ms.get("has_image", False)
+                source = ms.get("source", "none")
+                action = ms.get("visual_action", "-")
+                icon = type_icons.get(seg_type, ".")
+                badge = f"🖼️ {source}" if has_img else "⬜ no image"
 
-                header = (
-                    f"{icon} `{seg_id}` — **{seg_type}** | {anim_badge} | {dur}s"
-                )
+                header = f"{icon} `{seg_id}` -- **{seg_type}** | {badge} | {action}"
                 with st.expander(header, expanded=False):
-                    if has_anim:
-                        st.caption(f"Sketch cue timing: `{timing}`")
-
-                    svg_path = ms.get("svg_path")
-                    paths_data = ms.get("paths")
-                    has_paths = bool(paths_data)
-
-                    if has_paths:
-                        tab_svg, tab_paths = st.tabs(["📐 SVG Preview", "✏️ Scribe Paths"])
+                    image_path = ms.get("image_path")
+                    if image_path and Path(image_path).exists():
+                        st.image(image_path, use_container_width=True)
                     else:
-                        tab_svg = st.container()
-                        tab_paths = None
+                        st.caption("No image file.")
 
-                    with tab_svg:
-                        if svg_path and Path(svg_path).exists():
-                            with open(svg_path, encoding="utf-8") as f:
-                                svg_content = f.read()
-                            display_svg = svg_content.replace(
-                                'width="1280"', 'width="100%"'
-                            ).replace(
-                                'height="720"', 'height="auto"'
-                            )
-                            components.html(display_svg, height=420, scrolling=False)
-                            st.download_button(
-                                f"⬇️ Download SVG ({seg_id})",
-                                data=svg_content,
-                                file_name=f"{seg_id}.svg",
-                                mime="image/svg+xml",
-                                key=f"dl_svg_{seg_id}_{anim_key}",
-                            )
-                        else:
-                            st.caption("SVG file not found on disk.")
-
-                        anim_path = ms.get("animation_path")
-                        if anim_path and Path(anim_path).exists():
-                            with open(anim_path, encoding="utf-8") as f:
-                                anim_data = json.load(f)
-                            with st.expander("Animation timing JSON"):
-                                st.json(anim_data)
-
-                    if tab_paths is not None:
-                        with tab_paths:
-                            path_count = len(paths_data)
-                            text_count = sum(1 for p in paths_data if p.get("element_type") == "text")
-                            draw_count = path_count - text_count
-                            st.caption(f"**{draw_count}** drawable paths + **{text_count}** text elements")
-                            scribe_kf = ms.get("scribe_keyframes", [])
-                            if scribe_kf:
-                                st.json(scribe_kf)
+                    prompt = ms.get("prompt_used", "")
+                    if prompt:
+                        st.caption(f"Prompt: {prompt[:200]}")
 
             st.divider()
-            # Download full manifest
             st.download_button(
-                "⬇️ Download Animation Manifest JSON",
+                "⬇️ Download Image Manifest JSON",
                 data=json.dumps(existing_manifest, indent=2, ensure_ascii=False),
-                file_name=f"animation_manifest_ch{ch_num}.json",
+                file_name=f"image_manifest_ch{ch_num}.json",
                 mime="application/json",
             )
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  PAGE: Audio (Agent 5)
+#  PAGE: Slides (Agent 5)
 # ══════════════════════════════════════════════════════════════════════
 
-elif page == "🔊 Audio":
-    st.header("🔊 Audio Generation")
-    st.caption("ElevenLabs TTS narration generated by Agent 5, one MP3 per script segment + stitched master.")
+elif page == "📐 Slides":
+    st.header("📐 Slide Assembly")
+    st.caption("Whiteboard-style slides assembled by Agent 5 from generated images.")
 
     scripts = st.session_state.scripts
-    books = st.session_state.library
-    audio_store = st.session_state.audio
-
-    if not scripts:
-        st.info(
-            "No scripts found. Go to **🧠 Analyse Chapter** to run analysis — "
-            "scripts are generated automatically after analysis."
-        )
-    else:
-        # Build selector from available scripts
-        labels = {}
-        for skey, sc_data in scripts.items():
-            bid = sc_data.get("book_id", "")
-            book_title = books.get(bid, {}).get("title", "Unknown")
-            ch_title = sc_data.get("chapter_title", "")
-            ch_num_val = sc_data.get("chapter_num", 0)
-            labels[f"{book_title[:30]} → Ch {ch_num_val}: {ch_title[:30]}"] = skey
-
-        sel_label = st.selectbox("Select a chapter script", list(labels.keys()))
-        audio_key = labels[sel_label]
-        sc_data = scripts[audio_key]
-        bid = sc_data.get("book_id", "")
-        ch_num_val = sc_data.get("chapter_num", 0)
-
-        # Check existing audio
-        existing_audio = audio_store.get(audio_key)
-
-        # Check ElevenLabs API key
-        _el_key_available = False
-        try:
-            _el_key = st.secrets.get("ELEVENLABS_API_KEY", "")
-            if _el_key:
-                _el_key_available = True
-        except Exception:
-            pass
-        if not _el_key_available:
-            if os.getenv("ELEVENLABS_API_KEY"):
-                _el_key_available = True
-
-        _el_voice_available = False
-        try:
-            _el_voice = st.secrets.get("ELEVENLABS_VOICE_ID", "")
-            if _el_voice:
-                _el_voice_available = True
-        except Exception:
-            pass
-        if not _el_voice_available:
-            if os.getenv("ELEVENLABS_VOICE_ID"):
-                _el_voice_available = True
-
-        if not _el_key_available or not _el_voice_available:
-            missing = []
-            if not _el_key_available:
-                missing.append("ELEVENLABS_API_KEY")
-            if not _el_voice_available:
-                missing.append("ELEVENLABS_VOICE_ID")
-            st.warning(
-                f"**Missing config:** {', '.join(missing)}.\n\n"
-                "**Streamlit Cloud:** Go to app Settings → Secrets → add:\n"
-                "```\nELEVENLABS_API_KEY = \"your-key\"\nELEVENLABS_VOICE_ID = \"your-voice-id\"\n```\n\n"
-                "**Locally:** Add to `.streamlit/secrets.toml` or set as env vars."
-            )
-
-        col_btn, col_status = st.columns([1, 3])
-        with col_btn:
-            generate_btn = st.button(
-                "🔊 Generate Audio",
-                type="primary",
-                disabled=not (_el_key_available and _el_voice_available),
-            )
-        with col_status:
-            if existing_audio:
-                total_dur = existing_audio.get("total_duration_seconds", 0)
-                num_segs = len(existing_audio.get("segments", []))
-                mins = int(total_dur) // 60
-                secs = int(total_dur) % 60
-                st.success(f"Audio ready: {num_segs} segments, {mins}m {secs}s total.")
-            else:
-                st.caption("No audio generated yet for this chapter.")
-
-        if generate_btn:
-            episodes = sc_data.get("episodes", [])
-            if not episodes:
-                st.error("Script has no episodes.")
-            else:
-                ep = episodes[0]
-                segments = ep.get("segments", [])
-                total_segs = len(segments)
-                estimated_sec = ep.get("total_estimated_duration_seconds", 0)
-
-                st.info(
-                    f"Generating audio for **{total_segs}** segments "
-                    f"(estimated {estimated_sec // 60}m {estimated_sec % 60}s). "
-                    "Each segment calls ElevenLabs TTS sequentially."
-                )
-
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-
-                def _audio_progress(current, total, seg_id):
-                    pct = int(current / max(total, 1) * 100)
-                    progress_bar.progress(pct)
-                    if seg_id != "done":
-                        status_text.caption(
-                            f"Generating segment {current + 1}/{total}: `{seg_id}`"
-                        )
-                    else:
-                        status_text.caption("All segments generated. Stitching master...")
-
-                try:
-                    from agent5_audio.audio_generator import generate_episode_audio
-
-                    manifest = generate_episode_audio(
-                        script_id=ep.get("script_id"),
-                        book_id=bid,
-                        chapter_num=ch_num_val,
-                        episode_num=ep.get("episode_num", 1),
-                        script_data=ep,
-                        progress_callback=_audio_progress,
-                    )
-
-                    st.session_state.audio[audio_key] = manifest.model_dump()
-                    existing_audio = st.session_state.audio[audio_key]
-
-                    progress_bar.progress(100)
-                    status_text.caption("Done!")
-
-                    total_dur = manifest.total_duration_seconds
-                    mins = int(total_dur) // 60
-                    secs = int(total_dur) % 60
-                    st.success(
-                        f"Audio generated: {len(manifest.segments)} segments, "
-                        f"{mins}m {secs}s total duration."
-                    )
-
-                except Exception as audio_err:
-                    st.error(f"Audio generation failed: {audio_err}")
-                    import traceback as _tb
-                    with st.expander("Error details"):
-                        st.code(_tb.format_exc())
-
-        # ── Show audio results ────────────────────────────────────────
-        if existing_audio:
-            st.divider()
-
-            # Summary metrics
-            total_dur = existing_audio.get("total_duration_seconds", 0)
-            seg_list = existing_audio.get("segments", [])
-            pause_count = sum(1 for s in seg_list if s.get("pause_for_question"))
-
-            # Estimated duration from script
-            episodes = sc_data.get("episodes", [])
-            estimated_sec = 0
-            if episodes:
-                estimated_sec = episodes[0].get("total_estimated_duration_seconds", 0)
-
-            mc = st.columns(5)
-            with mc[0]:
-                mins = int(total_dur) // 60
-                secs = int(total_dur) % 60
-                st.metric("Actual Duration", f"{mins}m {secs}s")
-            with mc[1]:
-                est_mins = estimated_sec // 60
-                est_secs = estimated_sec % 60
-                st.metric("Estimated Duration", f"{est_mins}m {est_secs}s")
-            with mc[2]:
-                st.metric("Segments", len(seg_list))
-            with mc[3]:
-                st.metric("Pause Points", pause_count)
-            with mc[4]:
-                st.metric("Voice", existing_audio.get("voice_id", "")[:12] + "...")
-
-            st.divider()
-
-            # Master audio player
-            master_path = existing_audio.get("master_audio_path", "")
-            if master_path and Path(master_path).exists():
-                st.subheader("Master Audio")
-                with open(master_path, "rb") as audio_file:
-                    st.audio(audio_file.read(), format="audio/mp3")
-            else:
-                st.warning("Master MP3 file not found on disk (ephemeral filesystem).")
-
-            st.divider()
-            st.subheader("Segment Audio")
-
-            # Script segments for reference
-            ep_segments = []
-            if episodes:
-                ep_segments = episodes[0].get("segments", [])
-            seg_lookup = {s.get("segment_id"): s for s in ep_segments}
-
-            type_config = {
-                "hook": ("🪝", "Hook"),
-                "activate": ("⚡", "Activate"),
-                "explore": ("🔍", "Explore"),
-                "question_hook": ("❓", "Question Hook"),
-                "synthesis": ("🎯", "Synthesis"),
-                "preview": ("👉", "Preview"),
-            }
-
-            for seg_audio in seg_list:
-                seg_id = seg_audio.get("segment_id", "")
-                dur = seg_audio.get("actual_duration_seconds", 0)
-                start = seg_audio.get("master_start_seconds", 0)
-                end = seg_audio.get("master_end_seconds", 0)
-                is_pause = seg_audio.get("pause_for_question", False)
-
-                # Get script info for this segment
-                script_seg = seg_lookup.get(seg_id, {})
-                seg_type = script_seg.get("type", "explore")
-                icon, label = type_config.get(seg_type, ("•", seg_type))
-
-                header = f"{icon} `{seg_id}` — **{label}** | {dur:.1f}s | [{start:.1f}s – {end:.1f}s]"
-                if is_pause:
-                    header += "  🟠 *pause for question*"
-
-                with st.expander(header, expanded=False):
-                    # Segment audio player
-                    seg_path = seg_audio.get("audio_path", "")
-                    if seg_path and Path(seg_path).exists():
-                        with open(seg_path, "rb") as seg_file:
-                            st.audio(seg_file.read(), format="audio/mp3")
-                    else:
-                        st.caption("Segment MP3 not found on disk.")
-
-                    # Show script text for reference
-                    if script_seg:
-                        st.write(script_seg.get("text", ""))
-                        visual_req = script_seg.get("visual_request")
-                        sketch = script_seg.get("sketch_cue")
-                        if visual_req:
-                            st.caption(
-                                f"🎨 Visual request ({visual_req.get('style_preset', 'line-art')}): "
-                                f"{visual_req.get('prompt', '')[:100]}"
-                            )
-                        elif sketch:
-                            st.caption(
-                                f"🎨 Sketch cue ({sketch.get('timing', 'during')}): "
-                                f"`{sketch.get('action', 'draw')}` — {sketch.get('element', '')}"
-                            )
-
-            st.divider()
-
-            # Download manifest
-            st.download_button(
-                "⬇️ Download Audio Manifest JSON",
-                data=json.dumps(existing_audio, indent=2, ensure_ascii=False),
-                file_name=f"audio_manifest_ch{ch_num_val}.json",
-                mime="application/json",
-            )
-
-
-# ══════════════════════════════════════════════════════════════════════
-#  PAGE: Player (Agent 6)
-# ══════════════════════════════════════════════════════════════════════
-
-elif page == "▶️ Player":
-    import streamlit.components.v1 as components
-
-    st.header("▶️ Live Playback Engine")
-    st.caption("Audio + sketch animations synchronised in real-time by Agent 6.")
-
-    scripts = st.session_state.scripts
-    animations = st.session_state.animations
-    audio_store = st.session_state.audio
-    players = st.session_state.players
+    images_store = st.session_state.images
+    slides_store = st.session_state.slides
     books = st.session_state.library
 
     if not scripts:
@@ -1514,159 +1203,374 @@ elif page == "▶️ Player":
             book_title = books.get(bid, {}).get("title", "Unknown")
             ch_title = sc_data.get("chapter_title", "")
             ch_num_val = sc_data.get("chapter_num", 0)
-            labels[f"{book_title[:30]} → Ch {ch_num_val}: {ch_title[:30]}"] = skey
+            labels[f"{book_title[:30]} -> Ch {ch_num_val}: {ch_title[:30]}"] = skey
 
-        sel_label = st.selectbox("Select a chapter", list(labels.keys()), key="player_sel")
-        player_key = labels[sel_label]
-        sc_data = scripts[player_key]
+        sel_label = st.selectbox("Select a chapter", list(labels.keys()), key="slide_sel")
+        slide_key = labels[sel_label]
+        sc_data = scripts[slide_key]
         bid = sc_data.get("book_id", "")
         ch_num_val = sc_data.get("chapter_num", 0)
 
-        # Check prerequisites
-        has_animation = player_key in animations
-        has_audio = player_key in audio_store
+        has_images = slide_key in images_store
+        existing_slides = slides_store.get(slide_key)
 
-        pc1, pc2 = st.columns(2)
-        with pc1:
-            if has_animation:
-                st.success("Agent 4 Animations ✅")
-            else:
-                st.warning("Agent 4 Animations ❌ — Generate on 🎨 Animations page")
-        with pc2:
-            if has_audio:
-                st.success("Agent 5 Audio ✅")
-            else:
-                st.warning("Agent 5 Audio ❌ — Generate on 🔊 Audio page")
-
-        existing_player = players.get(player_key)
+        if not has_images:
+            st.warning("Images not yet generated. Go to **🖼️ Images** page first.")
 
         col_btn, col_status = st.columns([1, 3])
         with col_btn:
-            build_btn = st.button(
-                "▶️ Build Player",
-                type="primary",
-                disabled=not (has_animation and has_audio),
+            generate_btn = st.button(
+                "📐 Generate Slides", type="primary", disabled=not has_images,
             )
         with col_status:
-            if existing_player:
-                st.success("Player ready!")
-            elif not (has_animation and has_audio):
-                st.caption("Both animations and audio must be generated first.")
+            if existing_slides:
+                slide_count = existing_slides.get("slide_segments", 0)
+                total = existing_slides.get("total_segments", 0)
+                st.success(f"Slides ready: {slide_count}/{total} segments.")
             else:
-                st.caption("Click Build Player to assemble the playback package.")
+                st.caption("No slides yet for this chapter.")
 
-        if build_btn:
-            with st.spinner("Building player package..."):
-                try:
-                    from agent6_player.player_builder import (
-                        build_player_package,
-                        save_player_package,
-                    )
+        if generate_btn:
+            st.info("Assembling slides from images...")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
 
-                    audio_manifest = audio_store[player_key]
-                    animation_manifest = animations[player_key]
+            def _slide_progress(current, total, seg_id):
+                pct = int(current / max(total, 1) * 100)
+                progress_bar.progress(pct)
+                if seg_id != "done":
+                    status_text.caption(f"Slide {current + 1}/{total}: `{seg_id}`")
+                else:
+                    status_text.caption("Done!")
 
-                    timeline, player_html = build_player_package(
-                        audio_manifest=audio_manifest,
-                        animation_manifest=animation_manifest,
-                        script_data=sc_data,
-                        embed_audio=True,
-                    )
+            try:
+                from agent5_slides.slide_generator import generate_episode_slides
 
-                    # Save to storage
-                    save_player_package(timeline, player_html, bid, ch_num_val)
+                manifest = generate_episode_slides(
+                    script_data=sc_data,
+                    image_manifest=images_store[slide_key],
+                    progress_callback=_slide_progress,
+                )
+                st.session_state.slides[slide_key] = manifest.model_dump()
+                existing_slides = st.session_state.slides[slide_key]
+                st.success(
+                    f"Slides assembled: {manifest.slide_segments}/{manifest.total_segments} segments."
+                )
 
-                    # Store in session
-                    st.session_state.players[player_key] = {
-                        "timeline": timeline.model_dump(),
-                        "html": player_html,
-                    }
-                    existing_player = st.session_state.players[player_key]
+            except Exception as slide_err:
+                st.error(f"Slide generation failed: {slide_err}")
+                import traceback as _tb
+                with st.expander("Error details"):
+                    st.code(_tb.format_exc())
 
-                    st.success(
-                        f"Player built: {len(timeline.segments)} segments, "
-                        f"{timeline.total_duration_seconds:.1f}s total."
-                    )
-
-                except Exception as player_err:
-                    st.error(f"Player build failed: {player_err}")
-                    import traceback as _tb
-                    with st.expander("Error details"):
-                        st.code(_tb.format_exc())
-
-        # Show player if ready
-        if existing_player:
+        # ── Show slide results ────────────────────────────────────────
+        if existing_slides:
             st.divider()
-            timeline_data = existing_player.get("timeline", {})
 
-            # Timeline stats
-            tc = st.columns(4)
-            with tc[0]:
-                total_dur = timeline_data.get("total_duration_seconds", 0)
-                mins = int(total_dur) // 60
-                secs = int(total_dur) % 60
-                st.metric("Duration", f"{mins}m {secs}s")
-            with tc[1]:
-                st.metric("Segments", len(timeline_data.get("segments", [])))
-            with tc[2]:
-                animated = sum(1 for s in timeline_data.get("segments", []) if s.get("has_animation"))
-                st.metric("Animated", animated)
-            with tc[3]:
-                pauses = sum(1 for s in timeline_data.get("segments", []) if s.get("pause_for_question"))
-                st.metric("Pause Points", pauses)
+            mc = st.columns(3)
+            with mc[0]:
+                st.metric("Total Segments", existing_slides.get("total_segments", 0))
+            with mc[1]:
+                st.metric("With Slides", existing_slides.get("slide_segments", 0))
+            with mc[2]:
+                gen_at = existing_slides.get("generated_at", "")[:19]
+                st.metric("Generated", gen_at.replace("T", " ") if gen_at else "-")
 
             st.divider()
 
-            # Embed the player
-            player_html = existing_player.get("html", "")
-            if player_html:
-                st.subheader("Interactive Player")
-                components.html(player_html, width=1280, height=800, scrolling=False)
-            else:
-                st.warning("Player HTML not available.")
+            seg_list = existing_slides.get("segments", [])
+            type_icons = {
+                "hook": "🪝", "activate": "⚡", "explore": "🔍",
+                "question_hook": "❓", "synthesis": "🎯", "preview": "👉",
+            }
+
+            for ms in seg_list:
+                seg_id = ms.get("segment_id", "")
+                seg_type = ms.get("type", "explore")
+                has_slide = ms.get("has_slide", False)
+                action = ms.get("visual_action", "-")
+                icon = type_icons.get(seg_type, ".")
+                badge = "📐 slide" if has_slide else "⬜ blank"
+
+                header = f"{icon} `{seg_id}` -- **{seg_type}** | {badge} | {action}"
+                with st.expander(header, expanded=False):
+                    slide_img = ms.get("slide_image_path")
+                    if slide_img and Path(slide_img).exists():
+                        st.image(slide_img, use_container_width=True)
+                    else:
+                        st.caption("Slide image not found on disk.")
 
             st.divider()
-
-            # Timeline details
-            with st.expander("📋 Unified Timeline"):
-                type_icons = {
-                    "hook": "🪝", "activate": "⚡", "explore": "🔍",
-                    "question_hook": "❓", "synthesis": "🎯", "preview": "👉",
-                }
-                for seg in timeline_data.get("segments", []):
-                    icon = type_icons.get(seg.get("type", ""), "•")
-                    anim_tag = "🎨" if seg.get("has_animation") else "⬜"
-                    pause_tag = "🟠 pause" if seg.get("pause_for_question") else ""
-                    st.write(
-                        f"{icon} `{seg.get('segment_id', '')}` — "
-                        f"[{seg.get('audio_start', 0):.1f}s – {seg.get('audio_end', 0):.1f}s] "
-                        f"{anim_tag} {pause_tag}"
-                    )
-
-            # Download timeline
             st.download_button(
-                "⬇️ Download Timeline JSON",
-                data=json.dumps(timeline_data, indent=2, ensure_ascii=False),
-                file_name=f"timeline_ch{ch_num_val}.json",
+                "⬇️ Download Slide Manifest JSON",
+                data=json.dumps(existing_slides, indent=2, ensure_ascii=False),
+                file_name=f"slide_manifest_ch{ch_num_val}.json",
                 mime="application/json",
             )
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  PAGE: YouTube Export (Agent 7 — DISABLED)
+#  PAGE: Video Segments (Agent 6)
 # ══════════════════════════════════════════════════════════════════════
 
-elif page == "📺 YouTube Export":
-    st.title("📺 YouTube Export")
-    st.info(
-        "🔒 YouTube export is not enabled in this version. "
-        "This feature will be activated in a future release."
-    )
-    st.stop()
+elif page == "🎬 Video Segments":
+    st.header("🎬 Video Segments")
+    st.caption("SpeedPaint animation + ElevenLabs TTS narration, composed by Agent 6.")
+
+    scripts = st.session_state.scripts
+    slides_store = st.session_state.slides
+    video_store = st.session_state.video_segments
+    books = st.session_state.library
+
+    if not scripts:
+        st.info(
+            "No scripts found. Go to **🧠 Analyse Chapter** to run analysis — "
+            "scripts are generated automatically."
+        )
+    else:
+        labels = {}
+        for skey, sc_data in scripts.items():
+            bid = sc_data.get("book_id", "")
+            book_title = books.get(bid, {}).get("title", "Unknown")
+            ch_title = sc_data.get("chapter_title", "")
+            ch_num_val = sc_data.get("chapter_num", 0)
+            labels[f"{book_title[:30]} -> Ch {ch_num_val}: {ch_title[:30]}"] = skey
+
+        sel_label = st.selectbox("Select a chapter", list(labels.keys()), key="video_sel")
+        video_key = labels[sel_label]
+        sc_data = scripts[video_key]
+        bid = sc_data.get("book_id", "")
+        ch_num_val = sc_data.get("chapter_num", 0)
+
+        has_slides = video_key in slides_store
+        existing_video = video_store.get(video_key)
+
+        if not has_slides:
+            st.warning("Slides not yet generated. Go to **📐 Slides** page first.")
+
+        col_btn, col_status = st.columns([1, 3])
+        with col_btn:
+            generate_btn = st.button(
+                "🎬 Generate Videos", type="primary", disabled=not has_slides,
+            )
+        with col_status:
+            if existing_video:
+                vid_count = existing_video.get("video_segments_count", 0)
+                total = existing_video.get("total_segments", 0)
+                dur = existing_video.get("total_duration_seconds", 0)
+                mins = int(dur) // 60
+                secs = int(dur) % 60
+                st.success(f"Videos ready: {vid_count}/{total} segments, {mins}m {secs}s.")
+            else:
+                st.caption("No videos yet for this chapter.")
+
+        if generate_btn:
+            st.info("Generating TTS audio + SpeedPaint videos for each segment...")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            def _vid_progress(current, total, seg_id):
+                pct = int(current / max(total, 1) * 100)
+                progress_bar.progress(pct)
+                if seg_id != "done":
+                    status_text.caption(f"Video {current + 1}/{total}: `{seg_id}`")
+                else:
+                    status_text.caption("All video segments done!")
+
+            try:
+                from agent6_animation.video_composer import compose_episode_videos
+
+                manifest = compose_episode_videos(
+                    script_data=sc_data,
+                    slide_manifest=slides_store[video_key],
+                    progress_callback=_vid_progress,
+                )
+                st.session_state.video_segments[video_key] = manifest.model_dump()
+                existing_video = st.session_state.video_segments[video_key]
+
+                dur = manifest.total_duration_seconds
+                st.success(
+                    f"Videos generated: {manifest.video_segments_count} segments, "
+                    f"{int(dur) // 60}m {int(dur) % 60}s total."
+                )
+
+            except Exception as vid_err:
+                st.error(f"Video generation failed: {vid_err}")
+                import traceback as _tb
+                with st.expander("Error details"):
+                    st.code(_tb.format_exc())
+
+        # ── Show video results ────────────────────────────────────────
+        if existing_video:
+            st.divider()
+
+            mc = st.columns(4)
+            with mc[0]:
+                st.metric("Total Segments", existing_video.get("total_segments", 0))
+            with mc[1]:
+                st.metric("With Video", existing_video.get("video_segments_count", 0))
+            with mc[2]:
+                dur = existing_video.get("total_duration_seconds", 0)
+                st.metric("Duration", f"{int(dur) // 60}m {int(dur) % 60}s")
+            with mc[3]:
+                gen_at = existing_video.get("generated_at", "")[:19]
+                st.metric("Generated", gen_at.replace("T", " ") if gen_at else "-")
+
+            st.divider()
+
+            seg_list = existing_video.get("segments", [])
+            type_icons = {
+                "hook": "🪝", "activate": "⚡", "explore": "🔍",
+                "question_hook": "❓", "synthesis": "🎯", "preview": "👉",
+            }
+
+            for ms in seg_list:
+                seg_id = ms.get("segment_id", "")
+                seg_type = ms.get("type", "explore")
+                action = ms.get("visual_action", "-")
+                seg_dur = ms.get("audio_duration_seconds", 0)
+                icon = type_icons.get(seg_type, ".")
+                badge = "🎬 video" if ms.get("video_path") else "⬜ no video"
+
+                header = f"{icon} `{seg_id}` -- **{seg_type}** | {badge} | {seg_dur:.1f}s | {action}"
+                with st.expander(header, expanded=False):
+                    video_path = ms.get("video_path")
+                    if video_path and Path(video_path).exists():
+                        with open(video_path, "rb") as vf:
+                            st.video(vf.read())
+                    else:
+                        st.caption("Video file not found on disk.")
+
+                    audio_path = ms.get("audio_path")
+                    if audio_path and Path(audio_path).exists():
+                        with open(audio_path, "rb") as af:
+                            st.audio(af.read(), format="audio/mp3")
+
+            st.divider()
+            st.download_button(
+                "⬇️ Download Video Manifest JSON",
+                data=json.dumps(existing_video, indent=2, ensure_ascii=False),
+                file_name=f"video_manifest_ch{ch_num_val}.json",
+                mime="application/json",
+            )
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  PAGE: Question Bank (Agent 8)
+#  PAGE: Final Video (Agent 8 Render)
+# ══════════════════════════════════════════════════════════════════════
+
+elif page == "📺 Final Video":
+    st.header("📺 Final Video")
+    st.caption("Complete episode video rendered by Agent 8, concatenating all segment videos.")
+
+    scripts = st.session_state.scripts
+    video_store = st.session_state.video_segments
+    final_store = st.session_state.final_videos
+    books = st.session_state.library
+
+    if not scripts:
+        st.info(
+            "No scripts found. Go to **🧠 Analyse Chapter** to run analysis — "
+            "scripts are generated automatically."
+        )
+    else:
+        labels = {}
+        for skey, sc_data in scripts.items():
+            bid = sc_data.get("book_id", "")
+            book_title = books.get(bid, {}).get("title", "Unknown")
+            ch_title = sc_data.get("chapter_title", "")
+            ch_num_val = sc_data.get("chapter_num", 0)
+            labels[f"{book_title[:30]} -> Ch {ch_num_val}: {ch_title[:30]}"] = skey
+
+        sel_label = st.selectbox("Select a chapter", list(labels.keys()), key="final_sel")
+        final_key = labels[sel_label]
+        sc_data = scripts[final_key]
+        bid = sc_data.get("book_id", "")
+        ch_num_val = sc_data.get("chapter_num", 0)
+
+        has_video_segs = final_key in video_store
+        existing_final = final_store.get(final_key)
+
+        if not has_video_segs:
+            st.warning("Video segments not yet generated. Go to **🎬 Video Segments** page first.")
+
+        col_btn, col_status = st.columns([1, 3])
+        with col_btn:
+            render_btn = st.button(
+                "📺 Render Final Video", type="primary", disabled=not has_video_segs,
+            )
+        with col_status:
+            if existing_final:
+                dur = existing_final.get("total_duration_seconds", 0)
+                st.success(f"Final video ready: {int(dur) // 60}m {int(dur) % 60}s.")
+            else:
+                st.caption("No final video yet for this chapter.")
+
+        if render_btn:
+            with st.spinner("Rendering final video... this may take a few minutes."):
+                try:
+                    from agent8_render.renderer import render_final_video
+
+                    manifest = render_final_video(
+                        video_manifest=video_store[final_key],
+                    )
+                    st.session_state.final_videos[final_key] = manifest.model_dump()
+                    existing_final = st.session_state.final_videos[final_key]
+
+                    dur = manifest.total_duration_seconds
+                    st.success(
+                        f"Final video rendered: {manifest.total_segments} segments, "
+                        f"{int(dur) // 60}m {int(dur) % 60}s."
+                    )
+
+                except Exception as render_err:
+                    st.error(f"Final video render failed: {render_err}")
+                    import traceback as _tb
+                    with st.expander("Error details"):
+                        st.code(_tb.format_exc())
+
+        # ── Show final video ──────────────────────────────────────────
+        if existing_final:
+            st.divider()
+
+            mc = st.columns(3)
+            with mc[0]:
+                dur = existing_final.get("total_duration_seconds", 0)
+                st.metric("Duration", f"{int(dur) // 60}m {int(dur) % 60}s")
+            with mc[1]:
+                st.metric("Segments", existing_final.get("total_segments", 0))
+            with mc[2]:
+                st.metric("Resolution", existing_final.get("resolution", "1280x720"))
+
+            st.divider()
+
+            final_path = existing_final.get("final_video_path", "")
+            if final_path and Path(final_path).exists():
+                st.subheader("Episode Video")
+                with open(final_path, "rb") as vf:
+                    video_bytes = vf.read()
+                    st.video(video_bytes)
+
+                st.download_button(
+                    "⬇️ Download Final Video (MP4)",
+                    data=video_bytes,
+                    file_name=f"episode_ch{ch_num_val}_final.mp4",
+                    mime="video/mp4",
+                )
+            else:
+                st.warning("Final video file not found on disk.")
+
+            st.divider()
+            st.download_button(
+                "⬇️ Download Final Video Manifest JSON",
+                data=json.dumps(existing_final, indent=2, ensure_ascii=False),
+                file_name=f"final_video_manifest_ch{ch_num_val}.json",
+                mime="application/json",
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  PAGE: Question Bank (Agent 8 QA)
 # ══════════════════════════════════════════════════════════════════════
 
 elif page == "❓ Question Bank":

@@ -8,6 +8,11 @@ storage/books/
 storage/extracted_images/
 storage/processed/
 storage/analysis/
+storage/images/
+storage/slides/
+storage/video_segments/
+storage/final_videos/
+quality_logs/
 tests/test_sample.pdf
 .streamlit/secrets.toml
 token_log.json

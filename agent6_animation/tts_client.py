@@ -1,4 +1,8 @@
-"""ElevenLabs TTS client — generates MP3 audio from script text."""
+"""ElevenLabs TTS client — generates MP3 audio from script text.
+
+Ported verbatim from agent5_audio/tts_client.py into the new Agent 6
+animation module, which now owns both audio generation and video composition.
+"""
 
 from __future__ import annotations
 
