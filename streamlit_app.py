@@ -543,67 +543,42 @@ elif page == "🧠 Analyse Chapter":
                                         with st.expander("Slide error details"):
                                             st.code(_tb.format_exc())
 
-                            # ── Agent 6: Auto-generate video segments (SpeedPaint + TTS) ──
-                            _el_key_ok = False
-                            try:
-                                if st.secrets.get("ELEVENLABS_API_KEY", ""):
-                                    _el_key_ok = True
-                            except Exception:
-                                pass
-                            if not _el_key_ok and os.getenv("ELEVENLABS_API_KEY"):
-                                _el_key_ok = True
-
-                            _el_voice_ok = False
-                            try:
-                                if st.secrets.get("ELEVENLABS_VOICE_ID", ""):
-                                    _el_voice_ok = True
-                            except Exception:
-                                pass
-                            if not _el_voice_ok and os.getenv("ELEVENLABS_VOICE_ID"):
-                                _el_voice_ok = True
-
+                            # ── Agent 6: Auto-generate narrated video segments (free TTS) ──
                             if analysis_key in st.session_state.slides:
-                                if _el_key_ok and _el_voice_ok:
-                                    st.divider()
-                                    with st.spinner("🎬 Generating video segments with Agent 6 (SpeedPaint + TTS)..."):
-                                        try:
-                                            from agent6_animation.video_composer import compose_episode_videos
+                                st.divider()
+                                with st.spinner("🎬 Generating narrated video with Agent 6 (free TTS)..."):
+                                    try:
+                                        from agent6_animation.video_composer import compose_episode_videos
 
-                                            _a6_progress_bar = st.progress(0)
-                                            _a6_status = st.empty()
+                                        _a6_progress_bar = st.progress(0)
+                                        _a6_status = st.empty()
 
-                                            def _a6_progress(current, total, seg_id):
-                                                pct = int(current / max(total, 1) * 100)
-                                                _a6_progress_bar.progress(pct)
-                                                if seg_id != "done":
-                                                    _a6_status.caption(f"Video {current + 1}/{total}: `{seg_id}`")
-                                                else:
-                                                    _a6_status.caption("All video segments done!")
+                                        def _a6_progress(current, total, seg_id):
+                                            pct = int(current / max(total, 1) * 100)
+                                            _a6_progress_bar.progress(pct)
+                                            if seg_id != "done":
+                                                _a6_status.caption(f"Video {current + 1}/{total}: `{seg_id}`")
+                                            else:
+                                                _a6_status.caption("All video segments done!")
 
-                                            video_manifest = compose_episode_videos(
-                                                script_data=st.session_state.scripts[analysis_key],
-                                                slide_manifest=st.session_state.slides[analysis_key],
-                                                progress_callback=_a6_progress,
-                                            )
-                                            st.session_state.video_segments[analysis_key] = video_manifest.model_dump()
-                                            _dur = video_manifest.total_duration_seconds
-                                            st.success(
-                                                f"🎬 Video segments generated: "
-                                                f"{video_manifest.video_segments_count} videos, "
-                                                f"{int(_dur) // 60}m {int(_dur) % 60}s"
-                                            )
+                                        video_manifest = compose_episode_videos(
+                                            script_data=st.session_state.scripts[analysis_key],
+                                            slide_manifest=st.session_state.slides[analysis_key],
+                                            progress_callback=_a6_progress,
+                                        )
+                                        st.session_state.video_segments[analysis_key] = video_manifest.model_dump()
+                                        _dur = video_manifest.total_duration_seconds
+                                        st.success(
+                                            f"🎬 Video segments generated: "
+                                            f"{video_manifest.video_segments_count} videos, "
+                                            f"{int(_dur) // 60}m {int(_dur) % 60}s"
+                                        )
 
-                                        except Exception as vid_err:
-                                            st.warning(f"Video generation failed: {vid_err}")
-                                            import traceback as _tb
-                                            with st.expander("Video error details"):
-                                                st.code(_tb.format_exc())
-                                else:
-                                    st.divider()
-                                    st.info(
-                                        "⏭️ **Skipping video generation** — ElevenLabs API key or Voice ID not configured. "
-                                        "Add them in Settings -> Secrets to enable automatic video."
-                                    )
+                                    except Exception as vid_err:
+                                        st.warning(f"Video generation failed: {vid_err}")
+                                        import traceback as _tb
+                                        with st.expander("Video error details"):
+                                            st.code(_tb.format_exc())
 
                             # ── Agent 8 Render: Auto-render final video ──────────────────
                             if analysis_key in st.session_state.video_segments:
@@ -1331,7 +1306,7 @@ elif page == "📐 Slides":
 
 elif page == "🎬 Video Segments":
     st.header("🎬 Video Segments")
-    st.caption("SpeedPaint animation + ElevenLabs TTS narration, composed by Agent 6.")
+    st.caption("Narrated slides with free TTS, composed by Agent 6.")
 
     scripts = st.session_state.scripts
     slides_store = st.session_state.slides
@@ -1381,7 +1356,7 @@ elif page == "🎬 Video Segments":
                 st.caption("No videos yet for this chapter.")
 
         if generate_btn:
-            st.info("Generating TTS audio + SpeedPaint videos for each segment...")
+            st.info("Generating narration audio + slide videos for each segment...")
             progress_bar = st.progress(0)
             status_text = st.empty()
 
