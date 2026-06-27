@@ -1,0 +1,16 @@
+# Railway build config (Nixpacks) for the SketchCast Streamlit app.
+#
+# - aptPkgs adds ffmpeg, needed by pydub/moviepy for the video pipeline.
+#   (pymupdf and opencv-python-headless ship their own wheels, so no other
+#   system libraries are required.)
+# - The start command binds Streamlit to Railway's injected $PORT on 0.0.0.0
+#   so the platform can route traffic to it.
+#
+# Note: this file is ignored by Streamlit Community Cloud, so the existing
+# deployment is unaffected.
+
+[phases.setup]
+aptPkgs = ["ffmpeg"]
+
+[start]
+cmd = "streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --server.enableCORS false --server.enableXsrfProtection false"
