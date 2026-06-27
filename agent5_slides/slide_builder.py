@@ -1,14 +1,11 @@
 """Agent 5: Slide Builder — content slides (PNG for video, PPTX for download).
 
-Each segment becomes a clean 1280x720 lesson slide in the Scholar palette:
-- cream background, a green episode header, the narration text as readable body.
+Each segment becomes a clean 1280x720 lesson slide in the Scholar palette
+showing the TEXTBOOK CHAPTER CONTENT (a heading + key bullet points) — not the
+narration. The spoken Socratic narration is what plays as audio and what goes
+into the PPTX speaker notes.
 
-Rendering uses bundled DejaVu fonts (shipped in ./fonts) so it works on any
-OS — the old code asked for ``arial.ttf``, which doesn't exist on Linux, so
-text rendered in a tiny fallback font and slides looked blank.
-
-The PPTX version puts a short heading on the slide and the full Socratic
-narration into the speaker notes — the editable-deck deliverable.
+Rendering uses bundled DejaVu fonts (shipped in ./fonts) so it works on any OS.
 """
 
 from __future__ import annotations
@@ -58,60 +55,77 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, ma
 
 
 def export_slide_png(
-    title_text: str,
-    body_text: str,
+    heading: str,
+    points: list[str],
     output_png_path: str | Path,
     footer_text: str = "",
+    context_title: str = "",
+    fallback_text: str = "",
 ) -> Path:
-    """Render a 1280x720 lesson slide PNG used as the video background."""
+    """Render a 1280x720 lesson slide: heading + chapter bullet points."""
     output_png_path = Path(output_png_path)
     output_png_path.parent.mkdir(parents=True, exist_ok=True)
 
     canvas = Image.new("RGB", (_WIDTH, _HEIGHT), _BG)
     draw = ImageDraw.Draw(canvas)
-
-    # Header (episode title) + divider
-    header_font = _font(bold=True, size=30)
-    head = (title_text or "SketchCast AI").strip()[:70]
-    draw.text((_MARGIN_X, 56), head, fill=_GREEN, font=header_font)
-    draw.line([(_MARGIN_X, 104), (_WIDTH - _MARGIN_X, 104)], fill=_RULE, width=2)
-
-    # Body (narration) — wrapped, size auto-shrinks for long text
     max_w = _WIDTH - 2 * _MARGIN_X
-    body = " ".join((body_text or "").split())
-    body_size = 38
-    while body_size >= 22:
-        body_font = _font(bold=False, size=body_size)
-        lines = _wrap(draw, body, body_font, max_w)
-        line_h = int(body_size * 1.42)
-        block_h = line_h * len(lines)
-        if block_h <= (_HEIGHT - 200) or body_size == 22:
-            break
-        body_size -= 2
 
-    start_y = 104 + max(40, (_HEIGHT - 104 - 90 - block_h) // 2)
-    y = start_y
-    for ln in lines:
-        draw.text((_MARGIN_X, y), ln, fill=_INK, font=body_font)
-        y += line_h
+    # Context line (small, e.g. episode title)
+    y = 52
+    if context_title:
+        cf = _font(bold=False, size=20)
+        draw.text((_MARGIN_X, y), context_title.strip()[:80], fill=_MUTED, font=cf)
+        y += 34
 
-    # Footer label
+    # Heading
+    head = (heading or context_title or "SketchCast AI").strip()[:80]
+    hf = _font(bold=True, size=40)
+    for ln in _wrap(draw, head, hf, max_w)[:2]:
+        draw.text((_MARGIN_X, y), ln, fill=_GREEN, font=hf)
+        y += 52
+    draw.line([(_MARGIN_X, y + 6), (_WIDTH - _MARGIN_X, y + 6)], fill=_RULE, width=2)
+    y += 36
+
+    pts = [p for p in (points or []) if p.strip()]
+    if pts:
+        # Bullet points (chapter content)
+        size = 32
+        while size >= 20:
+            bf = _font(bold=False, size=size)
+            line_h = int(size * 1.5)
+            wrapped: list[list[str]] = [_wrap(draw, p, bf, max_w - 40) for p in pts]
+            total_h = sum(len(w) * line_h + 14 for w in wrapped)
+            if total_h <= (_HEIGHT - y - 70) or size == 20:
+                break
+            size -= 2
+        for wlines in wrapped:
+            draw.ellipse([(_MARGIN_X, y + size // 2 - 3), (_MARGIN_X + 8, y + size // 2 + 5)], fill=_GREEN)
+            for j, ln in enumerate(wlines):
+                draw.text((_MARGIN_X + 28, y), ln, fill=_INK, font=bf)
+                y += line_h
+            y += 14
+    else:
+        # Fallback: no bullets — show the narration text so the slide isn't bare
+        bf = _font(bold=False, size=30)
+        for ln in _wrap(draw, " ".join((fallback_text or "").split()), bf, max_w)[:9]:
+            draw.text((_MARGIN_X, y), ln, fill=_INK, font=bf)
+            y += int(30 * 1.45)
+
     if footer_text:
         ff = _font(bold=False, size=18)
         fw = draw.textlength(footer_text, font=ff)
         draw.text((_WIDTH - _MARGIN_X - fw, _HEIGHT - 50), footer_text, fill=_MUTED, font=ff)
 
     canvas.save(str(output_png_path), "PNG")
-    logger.info("Slide PNG exported: %s (body %dpx, %d lines)", output_png_path.name, body_size, len(lines))
+    logger.info("Slide PNG: %s (%d points)", output_png_path.name, len(pts))
     return output_png_path
 
 
-def build_slide_pptx(
-    title_text: str,
-    body_text: str,
-    output_pptx_path: str | Path,
-) -> Path:
-    """Create a single-slide PPTX: heading on the slide, narration in notes."""
+def build_episode_deck(slides: list[dict], output_pptx_path: str | Path, episode_title: str = "") -> Path:
+    """Build one editable PPTX deck: heading + bullets per slide, narration in notes.
+
+    ``slides`` is a list of {"heading", "points", "narration"} dicts.
+    """
     from pptx import Presentation
     from pptx.dml.color import RGBColor
     from pptx.util import Emu, Pt
@@ -122,34 +136,31 @@ def build_slide_pptx(
     prs = Presentation()
     prs.slide_width = Emu(12192000)
     prs.slide_height = Emu(6858000)
-    slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
 
-    bg = slide.background.fill
-    bg.solid()
-    bg.fore_color.rgb = RGBColor(*_BG)
+    for s in slides:
+        slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
+        bg = slide.background.fill
+        bg.solid()
+        bg.fore_color.rgb = RGBColor(*_BG)
 
-    box = slide.shapes.add_textbox(Emu(700000), Emu(700000), Emu(10800000), Emu(4800000))
-    tf = box.text_frame
-    tf.word_wrap = True
-    p = tf.paragraphs[0]
-    p.text = (title_text or "SketchCast AI")[:80]
-    p.font.size = Pt(28)
-    p.font.bold = True
-    p.font.color.rgb = RGBColor(*_GREEN)
+        box = slide.shapes.add_textbox(Emu(700000), Emu(600000), Emu(10800000), Emu(5200000))
+        tf = box.text_frame
+        tf.word_wrap = True
+        head = tf.paragraphs[0]
+        head.text = (s.get("heading") or episode_title or "SketchCast AI")[:90]
+        head.font.size = Pt(30)
+        head.font.bold = True
+        head.font.color.rgb = RGBColor(*_GREEN)
 
-    p2 = tf.add_paragraph()
-    p2.text = body_text or ""
-    p2.font.size = Pt(18)
-    p2.font.color.rgb = RGBColor(*_INK)
+        for pt in s.get("points") or []:
+            para = tf.add_paragraph()
+            para.text = f"•  {pt}"
+            para.font.size = Pt(20)
+            para.font.color.rgb = RGBColor(*_INK)
 
-    # Socratic narration → speaker notes (the editable-deck deliverable)
-    slide.notes_slide.notes_text_frame.text = body_text or ""
+        # Socratic narration → speaker notes
+        slide.notes_slide.notes_text_frame.text = s.get("narration") or ""
 
     prs.save(str(output_pptx_path))
-    logger.info("PPTX slide saved: %s", output_pptx_path.name)
+    logger.info("Episode deck saved: %s (%d slides)", output_pptx_path.name, len(slides))
     return output_pptx_path
-
-
-def create_blank_slide_png(title_text: str, output_png_path: str | Path) -> Path:
-    """Back-compat shim — a slide with only a heading."""
-    return export_slide_png(title_text, "", output_png_path)

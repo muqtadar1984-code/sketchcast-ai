@@ -1267,6 +1267,18 @@ elif page == "📐 Slides":
                 gen_at = existing_slides.get("generated_at", "")[:19]
                 st.metric("Generated", gen_at.replace("T", " ") if gen_at else "-")
 
+            # ── Download editable deck (with Socratic speaker notes) ──
+            _deck_path = existing_slides.get("deck_path")
+            if _deck_path and Path(_deck_path).exists():
+                with open(_deck_path, "rb") as _f:
+                    st.download_button(
+                        "⬇️ Download editable deck (.pptx — Socratic notes included)",
+                        data=_f.read(),
+                        file_name=f"sketchcast_chapter_{ch_num_val}.pptx",
+                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        type="primary",
+                    )
+
             st.divider()
 
             seg_list = existing_slides.get("segments", [])

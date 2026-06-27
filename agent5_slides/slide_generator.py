@@ -1,8 +1,9 @@
 """Agent 5: Slide Generator — one content slide per script segment.
 
-Freemium pipeline: slides are text-based (episode title + the segment's
-Socratic narration), rendered with bundled fonts. No AI images — the
-``image_manifest`` argument is accepted for backward compatibility but ignored.
+Each slide shows the textbook CHAPTER CONTENT (heading + key bullet points)
+from the segment's slide_heading/slide_points. The spoken Socratic narration
+(segment.text) becomes the video voiceover (Agent 6) and the PPTX speaker notes
+in the downloadable deck.
 
 Entry point
 -----------
@@ -19,7 +20,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .models import SlideManifest, SlideSegment
-from .slide_builder import export_slide_png
+from .slide_builder import build_episode_deck, export_slide_png
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ def generate_episode_slides(
     image_manifest: Optional[dict] = None,  # ignored (no AI images in freemium)
     progress_callback: Optional[Callable] = None,
 ) -> SlideManifest:
-    """Render one lesson slide PNG per segment from the script."""
+    """Render one chapter-content slide PNG per segment + a combined editable deck."""
     episodes = script_data.get("episodes", [script_data])
     episode = episodes[0] if isinstance(episodes, list) and episodes else script_data
 
@@ -47,20 +48,31 @@ def generate_episode_slides(
     slide_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_segments: list[SlideSegment] = []
+    deck_slides: list[dict] = []
     total = len(segments)
 
     for i, seg in enumerate(segments):
         seg_id = seg.get("segment_id", f"s{i + 1:03d}")
         seg_type = seg.get("type", "explore")
-        text = (seg.get("text") or "").strip()
+        narration = (seg.get("text") or "").strip()
+        heading = (seg.get("slide_heading") or "").strip() or episode_title
+        points = [str(p).strip() for p in (seg.get("slide_points") or []) if str(p).strip()]
 
         if progress_callback:
             progress_callback(i, total, seg_id)
 
         png_path = slide_dir / f"{seg_id}_slide.png"
         footer = f"{seg_type} · {i + 1}/{total}"
-        export_slide_png(episode_title, text, png_path, footer_text=footer)
+        export_slide_png(
+            heading=heading,
+            points=points,
+            output_png_path=png_path,
+            footer_text=footer,
+            context_title=episode_title if heading != episode_title else "",
+            fallback_text=narration,
+        )
 
+        deck_slides.append({"heading": heading, "points": points, "narration": narration})
         manifest_segments.append(SlideSegment(
             segment_id=seg_id,
             type=seg_type,
@@ -69,6 +81,17 @@ def generate_episode_slides(
             slide_image_path=str(png_path),
             visual_action=seg.get("visual_action", "GHOST_ONLY"),
         ))
+
+    # Combined editable deck (heading + bullets on slide, Socratic notes in notes)
+    deck_path: Optional[str] = None
+    try:
+        deck_file = slide_dir / f"episode_{episode_num}_deck.pptx"
+        build_episode_deck(deck_slides, deck_file, episode_title=episode_title)
+        deck_path = str(deck_file)
+        for s in manifest_segments:
+            s.slide_path = deck_path
+    except Exception as exc:  # deck is a bonus; never fail the slide step on it
+        logger.warning("Deck build failed: %s", exc)
 
     if progress_callback:
         progress_callback(total, total, "done")
@@ -82,6 +105,7 @@ def generate_episode_slides(
         generated_at=datetime.now(timezone.utc).isoformat(),
         total_segments=total,
         slide_segments=len(manifest_segments),
+        deck_path=deck_path,
         segments=manifest_segments,
     )
 
@@ -91,7 +115,7 @@ def generate_episode_slides(
         encoding="utf-8",
     )
 
-    logger.info("Slide manifest built: %d content slides", total)
+    logger.info("Slide manifest built: %d slides, deck=%s", total, bool(deck_path))
     return manifest
 
 

@@ -76,6 +76,26 @@ Rules:
 - Segments without a visual_request should NOT have visual_action (omit it or set null)
 - When a new visual_request appears, use "DRAW_START"; when the same visual continues, use "DRAW_CONTINUE"
 
+=== ON-SCREEN SLIDE CONTENT (what the student SEES on the slide) ===
+Separate from the spoken narration, every segment also drives an on-screen slide.
+The slide shows the TEXTBOOK CHAPTER CONTENT in brief — NOT the Socratic narration.
+Think of it as the study notes a student reads while listening to the voiceover.
+
+For EVERY segment, produce:
+- "slide_heading": a short on-screen title (3-7 words) naming the concept or topic
+  this part of the chapter covers.
+- "slide_points": 2-4 SHORT bullet points (each under ~12 words) stating the KEY
+  FACTS / IDEAS / DEFINITIONS from the chapter that this segment teaches. Concise,
+  factual, drawn from the chapter material — the things a student should remember.
+  These are NOT sentences of narration.
+
+Rules:
+- slide_points must be factual chapter content, not questions or narration lines.
+- For "hook" and "question_hook" segments (which spark curiosity rather than teach
+  a fact), slide_points may be a single short framing line, or empty [].
+- "text" stays the spoken Socratic narration (voiceover + presenter notes);
+  slide_heading/slide_points are what appears on the slide.
+
 === OUTPUT FORMAT ===
 Return ONLY valid JSON — no preamble, no markdown fences, no explanation.
 Do NOT output "sketch_cue" — use "visual_request" instead.
@@ -86,6 +106,8 @@ Do NOT output "sketch_cue" — use "visual_request" instead.
       "type": "hook",
       "text": "Plain text — exactly what the narrator says. No markup here.",
       "elevenlabs_text": "Same text with <break time='Xs'/> markup at natural pause points.",
+      "slide_heading": "Why study society?",
+      "slide_points": ["Social science explains how people live together", "Tools to understand the world around us"],
       "visual_request": {{
         "prompt": "A continuous line drawing of a plant cell, centered composition, white background, minimalist, sharp outlines, no shading, organelles clearly separated",
         "style_preset": "technical-drawing"
@@ -98,6 +120,8 @@ Do NOT output "sketch_cue" — use "visual_request" instead.
       "type": "explore",
       "text": "Now let's look more closely at how this works...",
       "elevenlabs_text": "Now let's look more closely <break time='0.3s'/> at how this works...",
+      "slide_heading": "How markets set prices",
+      "slide_points": ["Supply and demand meet at a price", "Scarcity pushes prices up", "Surplus pushes prices down"],
       "visual_action": "DRAW_CONTINUE",
       "pause_for_question": false,
       "estimated_duration_seconds": 90

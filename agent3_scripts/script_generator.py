@@ -222,11 +222,19 @@ def generate_episode_script(
         raw_va = seg.get("visual_action")
         visual_action = raw_va if raw_va in _VALID_VISUAL_ACTIONS else None
 
+        slide_points = [
+            str(p).strip()
+            for p in (seg.get("slide_points") or [])
+            if str(p).strip()
+        ]
+
         segments.append(ScriptSegment(
             segment_id=f"s{i + 1:03d}",
             type=seg_type,
             text=plain_text,
             elevenlabs_text=el_text,
+            slide_heading=(seg.get("slide_heading") or "").strip(),
+            slide_points=slide_points,
             visual_request=visual_request,
             sketch_cue=sketch_cue,
             visual_action=visual_action,

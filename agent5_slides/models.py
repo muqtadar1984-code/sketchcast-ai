@@ -29,4 +29,5 @@ class SlideManifest(BaseModel):
     generated_at: str = ""
     total_segments: int = 0
     slide_segments: int = 0
+    deck_path: Optional[str] = None  # combined editable .pptx with Socratic notes
     segments: List[SlideSegment] = Field(default_factory=list)

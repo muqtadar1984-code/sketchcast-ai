@@ -50,8 +50,10 @@ class ScriptSegment(BaseModel):
 
     segment_id: str
     type: SegmentType
-    text: str  # plain text — what the narrator says
+    text: str  # plain text — what the narrator SAYS (audio + presenter notes)
     elevenlabs_text: str  # same text with ElevenLabs <break> markup
+    slide_heading: str = ""  # short on-screen title (chapter content)
+    slide_points: List[str] = Field(default_factory=list)  # on-screen bullets (chapter content)
     visual_request: Optional[VisualAssetRequest] = None  # Art Director image prompt
     sketch_cue: Optional[SketchCue] = None  # BRIDGE — auto-generated from visual_request
     visual_action: Optional[Literal["DRAW_START", "DRAW_CONTINUE", "GHOST_ONLY"]] = None
