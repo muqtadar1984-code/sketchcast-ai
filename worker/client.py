@@ -89,6 +89,10 @@ def set_book_chapters(sb: Client, book_id: str, chapters: list[dict], status: st
     sb.table("books").update({"chapters": chapters, "status": status}).eq("id", book_id).execute()
 
 
+def set_book_meta(sb: Client, book_id: str, grade: Optional[str], subject: Optional[str]) -> None:
+    sb.table("books").update({"grade": grade, "subject": subject}).eq("id", book_id).execute()
+
+
 # ── storage ──────────────────────────────────────────────────────────
 
 def download_book(sb: Client, storage_path: str, dest: str | Path) -> Path:
@@ -101,6 +105,7 @@ def download_book(sb: Client, storage_path: str, dest: str | Path) -> Path:
 
 _CONTENT_TYPES = {
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".mp4": "video/mp4",
     ".pdf": "application/pdf",
     ".png": "image/png",
