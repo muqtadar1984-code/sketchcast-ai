@@ -23,7 +23,7 @@ load_dotenv(Path(__file__).resolve().parent / ".env")  # worker/.env
 load_dotenv()  # also pick up a repo-root .env if present
 
 from worker import client as db  # noqa: E402
-from worker.process import process_generation  # noqa: E402
+from worker.process import index_book, process_generation  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("worker")
@@ -36,10 +36,15 @@ def run_once(sb) -> bool:
     job = db.claim_next_job(sb)
     if not job:
         return False
+    job_type = job.get("type")
     gen_id = job.get("generation_id")
-    log.info("Claimed job %s (generation %s)", job["id"], gen_id)
+    log.info("Claimed %s job %s (generation=%s book=%s)", job_type, job["id"], gen_id, job.get("book_id"))
     try:
-        process_generation(sb, job, gen_id)
+        if job_type == "index_book":
+            index_book(sb, job)
+            db.finish_job(sb, job["id"])  # process_generation finishes itself; index_book doesn't
+        else:
+            process_generation(sb, job, gen_id)
     except Exception as exc:  # noqa: BLE001
         log.error("Job %s failed: %s", job["id"], exc)
         log.error(traceback.format_exc())
@@ -47,6 +52,12 @@ def run_once(sb) -> bool:
             db.finish_job(sb, job["id"], gen_id, error=str(exc)[:500])
         except Exception:  # noqa: BLE001
             pass
+        # Stop the UI's "Finding chapters…" spinner if indexing failed.
+        if job_type == "index_book" and job.get("book_id"):
+            try:
+                db.set_book_chapters(sb, job["book_id"], [], "error")
+            except Exception:  # noqa: BLE001
+                pass
     return True
 
 

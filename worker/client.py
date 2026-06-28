@@ -57,12 +57,14 @@ def set_progress(sb: Client, job_id: str, progress: int) -> None:
     sb.table("jobs").update({"progress": progress}).eq("id", job_id).execute()
 
 
-def finish_job(sb: Client, job_id: str, generation_id: str, error: Optional[str] = None) -> None:
+def finish_job(sb: Client, job_id: str, generation_id: Optional[str] = None, error: Optional[str] = None) -> None:
     status = "error" if error else "done"
     sb.table("jobs").update(
         {"status": status, "progress": 100 if not error else 0, "error": error}
     ).eq("id", job_id).execute()
-    sb.table("generations").update({"status": status}).eq("id", generation_id).execute()
+    # index_book jobs have no generation — only mirror status when there is one.
+    if generation_id:
+        sb.table("generations").update({"status": status}).eq("id", generation_id).execute()
 
 
 def get_generation(sb: Client, generation_id: str) -> dict:
@@ -77,6 +79,10 @@ def get_book(sb: Client, book_id: str) -> dict:
 
 def set_generation_title(sb: Client, generation_id: str, title: str) -> None:
     sb.table("generations").update({"title": title}).eq("id", generation_id).execute()
+
+
+def set_book_chapters(sb: Client, book_id: str, chapters: list[dict], status: str) -> None:
+    sb.table("books").update({"chapters": chapters, "status": status}).eq("id", book_id).execute()
 
 
 # ── storage ──────────────────────────────────────────────────────────

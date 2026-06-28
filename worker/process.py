@@ -112,3 +112,35 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
 
     db.finish_job(sb, job_id, generation_id)
     logger.info("Generation %s done", generation_id)
+
+
+def index_book(sb: Client, job: dict) -> None:
+    """Extract a book's chapter list (Agent 1) and store it on the book.
+
+    Runs once per uploaded book so the dashboard can offer a lesson per chapter.
+    Reuses the same chapter detection the generator uses (so `num` here matches
+    what `_pick_chapter` selects), but skips image extraction — only chapter
+    numbers + titles are needed for the list, which keeps indexing fast.
+    """
+    from agent1_ingestion.extractor import extract_pdf
+    from agent1_ingestion.structurer import structure_book
+
+    book_id = job["book_id"]
+    book = db.get_book(sb, book_id)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pdf_path = db.download_book(sb, book["storage_path"], Path(tmp) / "book.pdf")
+        extraction = extract_pdf(str(pdf_path))
+        structured = structure_book(
+            book_id=book_id, title=book.get("title") or "Untitled",
+            author=book.get("author") or "Unknown", isbn=None,
+            extraction=extraction, images=[],
+        ).model_dump()
+
+    chapters = [
+        {"num": int(c["chapter_num"]),
+         "title": (c.get("title") or f"Chapter {c['chapter_num']}").strip()}
+        for c in structured.get("chapters", [])
+    ]
+    db.set_book_chapters(sb, book_id, chapters, "ready")
+    logger.info("Indexed book %s: %d chapter(s)", book_id, len(chapters))
