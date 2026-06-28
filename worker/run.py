@@ -52,6 +52,23 @@ def run_once(sb) -> bool:
 
 def main() -> None:
     sb = db.admin()
+
+    # Startup key check: with a privileged (service_role/secret) key this counts
+    # ALL jobs; with a non-privileged key, RLS hides them and the count is 0.
+    try:
+        probe = sb.table("jobs").select("id", count="exact").limit(1).execute()
+        total = getattr(probe, "count", None)
+        if total and total > 0:
+            log.info("KEY CHECK OK: worker can see %s job(s) — privileged key working.", total)
+        else:
+            log.error(
+                "KEY CHECK FAILED: worker sees 0 jobs. The SUPABASE_SERVICE_ROLE_KEY "
+                "is NOT privileged (it's the anon/publishable key). Use the secret/"
+                "service_role key and redeploy."
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.error("KEY CHECK errored: %s", exc)
+
     once = "--once" in sys.argv
     if once:
         handled = run_once(sb)
