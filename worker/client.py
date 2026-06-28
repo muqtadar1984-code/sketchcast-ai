@@ -9,13 +9,21 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from supabase import Client, create_client
+from supabase import Client, ClientOptions, create_client
 
 
 def admin() -> Client:
     url = os.environ["SUPABASE_URL"]
     key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-    return create_client(url, key)
+    # storage3 defaults to a 20s timeout — far too short for downloading a real
+    # textbook PDF or uploading a rendered video over Railway↔Supabase. Give the
+    # storage + REST clients generous timeouts so large transfers don't fail with
+    # "The read operation timed out".
+    options = ClientOptions(
+        postgrest_client_timeout=60,
+        storage_client_timeout=600,
+    )
+    return create_client(url, key, options)
 
 
 # ── jobs / generations ───────────────────────────────────────────────
