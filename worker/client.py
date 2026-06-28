@@ -1,0 +1,107 @@
+"""Supabase admin client + helpers for the generation worker.
+
+Uses the service_role key, so it bypasses RLS — keep this key server-side only.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Optional
+
+from supabase import Client, create_client
+
+
+def admin() -> Client:
+    url = os.environ["SUPABASE_URL"]
+    key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+    return create_client(url, key)
+
+
+# ── jobs / generations ───────────────────────────────────────────────
+
+def claim_next_job(sb: Client) -> Optional[dict]:
+    """Atomically-ish claim the oldest queued job (sets it to processing)."""
+    res = (
+        sb.table("jobs")
+        .select("*")
+        .eq("status", "queued")
+        .order("created_at")
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        return None
+    job = res.data[0]
+    upd = (
+        sb.table("jobs")
+        .update({"status": "processing", "progress": 1})
+        .eq("id", job["id"])
+        .eq("status", "queued")  # guard against a racing worker
+        .execute()
+    )
+    if not upd.data:
+        return None  # someone else grabbed it
+    return upd.data[0]
+
+
+def set_progress(sb: Client, job_id: str, progress: int) -> None:
+    sb.table("jobs").update({"progress": progress}).eq("id", job_id).execute()
+
+
+def finish_job(sb: Client, job_id: str, generation_id: str, error: Optional[str] = None) -> None:
+    status = "error" if error else "done"
+    sb.table("jobs").update(
+        {"status": status, "progress": 100 if not error else 0, "error": error}
+    ).eq("id", job_id).execute()
+    sb.table("generations").update({"status": status}).eq("id", generation_id).execute()
+
+
+def get_generation(sb: Client, generation_id: str) -> dict:
+    return (
+        sb.table("generations").select("*").eq("id", generation_id).single().execute().data
+    )
+
+
+def get_book(sb: Client, book_id: str) -> dict:
+    return sb.table("books").select("*").eq("id", book_id).single().execute().data
+
+
+def set_generation_title(sb: Client, generation_id: str, title: str) -> None:
+    sb.table("generations").update({"title": title}).eq("id", generation_id).execute()
+
+
+# ── storage ──────────────────────────────────────────────────────────
+
+def download_book(sb: Client, storage_path: str, dest: str | Path) -> Path:
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    data = sb.storage.from_("uploads").download(storage_path)
+    dest.write_bytes(data)
+    return dest
+
+
+_CONTENT_TYPES = {
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".mp4": "video/mp4",
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+}
+
+
+def upload_artifact(sb: Client, local_path: str | Path, dest_path: str) -> str:
+    """Upload a local file to the `artifacts` bucket; return its storage path."""
+    local_path = Path(local_path)
+    ctype = _CONTENT_TYPES.get(local_path.suffix.lower(), "application/octet-stream")
+    sb.storage.from_("artifacts").upload(
+        dest_path,
+        local_path.read_bytes(),
+        {"content-type": ctype, "upsert": "true"},
+    )
+    return dest_path
+
+
+def add_artifact_row(sb: Client, generation_id: str, kind: str, storage_path: str) -> None:
+    sb.table("artifacts").insert(
+        {"generation_id": generation_id, "kind": kind, "storage_path": storage_path}
+    ).execute()

@@ -22,3 +22,5 @@ python-pptx>=0.6.23
 opencv-python-headless>=4.9.0
 moviepy>=2.0.0,<3.0.0
 numpy>=1.24.0
+edge-tts>=6.1.0
+supabase>=2.0.0
