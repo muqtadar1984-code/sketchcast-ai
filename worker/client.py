@@ -81,6 +81,10 @@ def set_generation_title(sb: Client, generation_id: str, title: str) -> None:
     sb.table("generations").update({"title": title}).eq("id", generation_id).execute()
 
 
+def set_generation_status(sb: Client, generation_id: str, status: str) -> None:
+    sb.table("generations").update({"status": status}).eq("id", generation_id).execute()
+
+
 def set_book_chapters(sb: Client, book_id: str, chapters: list[dict], status: str) -> None:
     sb.table("books").update({"chapters": chapters, "status": status}).eq("id", book_id).execute()
 

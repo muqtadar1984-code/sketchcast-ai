@@ -92,6 +92,115 @@ def _infer_chapters_from_items(
     return chapters
 
 
+_FILENAME_RE = re.compile(r"\.(pdf|docx?|epub|indd|ai)$", re.I)
+_SUBSEC_RE = re.compile(r"^(\d{1,2})\.\d")
+
+
+def _toc_is_usable(toc: list[TOCItem], total_pages: int) -> bool:
+    """Reject outlines that clearly aren't real chapters — e.g. a PDF stitched
+    from a few source files whose only bookmarks are the file names."""
+    level1 = [t for t in toc if t.level == 1]
+    if not level1:
+        return False
+    if any(_FILENAME_RE.search((t.title or "")) for t in level1):
+        return False
+    # Too few top-level entries for a sizeable book → probably not chapters.
+    if total_pages > 40 and len(level1) < 3:
+        return False
+    return True
+
+
+def _titles_from_contents(items: list[DocItem]) -> dict[int, str]:
+    """Parse a printed 'Contents' page into {chapter_number: title}.
+
+    A bare integer N is a chapter (not a page number) when an 'N.x' subsection
+    follows it shortly; the chapter title is the text in between.
+    """
+    contents_page = next(
+        (it.page_num for it in items if it.text.strip().lower() == "contents"), None
+    )
+    if contents_page is None:
+        return {}
+    page_items = [i for i in items if contents_page <= i.page_num <= contents_page + 2]
+    titles: dict[int, str] = {}
+    for i, it in enumerate(page_items):
+        t = it.text.strip()
+        if not t.isdigit():
+            continue
+        n = int(t)
+        if not (1 <= n <= 99):
+            continue
+        window = page_items[i + 1 : i + 4]
+        sub_ok = any(
+            (m := _SUBSEC_RE.match(w.text.strip())) and int(m.group(1)) == n
+            for w in window
+        )
+        if not sub_ok:
+            continue
+        for w in window:
+            wt = w.text.strip()
+            if wt and not wt.isdigit() and not _SUBSEC_RE.match(wt) and any(c.isalpha() for c in wt):
+                titles.setdefault(n, wt)
+                break
+    return titles
+
+
+def _title_near(items: list[DocItem], idx: int, page: int) -> Optional[str]:
+    """Best-effort chapter title from the heading text right after a number marker."""
+    parts: list[str] = []
+    for it in items[idx + 1 : idx + 7]:
+        if it.page_num != page:
+            break
+        t = it.text.strip()
+        if not t or t.isdigit() or len(t) <= 2:
+            continue
+        if t.lower() == "getting started" or _SUBSEC_RE.match(t):
+            break
+        parts.append(t)
+        if sum(len(p) for p in parts) > 28:
+            break
+    title = " ".join(parts).strip()
+    return title if len(title) >= 3 else None
+
+
+def _detect_numbered_chapters(items: list[DocItem], total_pages: int) -> list[dict]:
+    """Detect chapters from bare-number heading markers ('1', '2', …) that form
+    an ascending run from 1 — robust for textbooks whose PDF outline is missing
+    or junk. Titles come from the printed contents page when available."""
+    contents_titles = _titles_from_contents(items)
+    first_page: dict[int, int] = {}
+    first_idx: dict[int, int] = {}
+    for idx, it in enumerate(items):
+        t = it.text.strip()
+        if it.level in (1, 2) and t.isdigit():
+            n = int(t)
+            if 1 <= n <= 99 and n not in first_page:
+                first_page[n] = it.page_num
+                first_idx[n] = idx
+
+    chapters: list[dict] = []
+    n = 1
+    while n in first_page:
+        pg = first_page[n]
+        if chapters and pg <= chapters[-1]["start_page"]:
+            break  # pages must strictly increase
+        title = (
+            contents_titles.get(n)
+            or _title_near(items, first_idx[n], pg)
+            or f"Chapter {n}"
+        )
+        chapters.append({"chapter_num": len(chapters), "title": title, "start_page": pg, "end_page": 0})
+        n += 1
+
+    if len(chapters) < 3:  # not enough signal to trust
+        return []
+    for i in range(len(chapters)):
+        chapters[i]["end_page"] = (
+            chapters[i + 1]["start_page"] - 1 if i + 1 < len(chapters) else total_pages - 1
+        )
+    return chapters
+
+
 def _build_sections_from_items(
     items: list[DocItem],
     start_page: int,
@@ -228,10 +337,14 @@ def structure_book(
       2. Fall back to level-1 DocItem heading detection.
       3. If nothing found, treat the entire document as one chapter.
     """
-    if extraction.toc:
+    if extraction.toc and _toc_is_usable(extraction.toc, extraction.total_pages):
         chapter_defs = _build_chapters_from_toc(extraction.toc, extraction.total_pages)
     else:
-        chapter_defs = _infer_chapters_from_items(extraction.items, extraction.total_pages)
+        # No usable outline → detect numbered chapter markers, then fall back to
+        # level-1 heading inference.
+        chapter_defs = _detect_numbered_chapters(extraction.items, extraction.total_pages)
+        if not chapter_defs:
+            chapter_defs = _infer_chapters_from_items(extraction.items, extraction.total_pages)
 
     # Final fallback: whole document as a single chapter
     if not chapter_defs:

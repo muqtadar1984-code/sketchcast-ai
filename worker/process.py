@@ -49,6 +49,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     from shared.claude_client import ClaudeClient
 
     job_id = job["id"]
+    db.set_generation_status(sb, generation_id, "processing")  # so the UI shows progress, not "queued"
     gen = db.get_generation(sb, generation_id)
     book = db.get_book(sb, gen["book_id"])
     owner_id = gen["owner_id"]
