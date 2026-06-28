@@ -63,7 +63,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         images = extract_images(str(pdf_path), book_id)
         structured = structure_book(
             book_id=book_id, title=book.get("title") or "Untitled",
-            author=book.get("author"), isbn=None, extraction=extraction, images=images,
+            author=book.get("author") or "Unknown", isbn=None, extraction=extraction, images=images,
         ).model_dump()
         chapter = _pick_chapter(structured.get("chapters", []), gen.get("chapter_ref"))
         chapter_num = int(chapter.get("chapter_num", 0))
