@@ -14,15 +14,21 @@ def generate_document(
     client,
     params: dict,
     out_dir: Path,
+    template: str | None = None,
 ) -> Path:
-    """Build the .docx for `kind` and return its path."""
-    if kind == "lesson_plan":
-        from docgen.lesson_plan import build
-        return build(book, chapter, analysis, client, out_dir)
-    if kind == "activity":
-        from docgen.activity import build
-        return build(book, chapter, analysis, client, out_dir)
-    if kind == "exam_paper":
-        from docgen.exam_paper import build
-        return build(book, chapter, analysis, client, params, out_dir)
-    raise ValueError(f"Unknown document kind: {kind}")
+    """Build the .docx for `kind` and return its path. `template` = optional
+    school .docx whose styles/header/footer/logo the document inherits."""
+    builders = {
+        "lesson_plan": "docgen.lesson_plan",
+        "activity": "docgen.activity",
+        "exam_paper": "docgen.exam_paper",
+        "worksheet": "docgen.worksheet",
+        "case_study": "docgen.case_study",
+    }
+    mod_name = builders.get(kind)
+    if not mod_name:
+        raise ValueError(f"Unknown document kind: {kind}")
+    import importlib
+    build = importlib.import_module(mod_name).build
+    # Every generator takes the same signature.
+    return build(book, chapter, analysis, client, params or {}, out_dir, template)

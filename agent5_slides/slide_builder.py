@@ -61,14 +61,32 @@ def export_slide_png(
     footer_text: str = "",
     context_title: str = "",
     fallback_text: str = "",
+    accent: tuple[int, int, int] | None = None,
+    logo_path: str | None = None,
 ) -> Path:
-    """Render a 1280x720 lesson slide: heading + chapter bullet points."""
+    """Render a 1280x720 lesson slide: heading + chapter bullet points.
+
+    ``accent`` (school brand colour) overrides the heading colour; ``logo_path``
+    stamps a logo top-right. Both fall back to the default Scholar style.
+    """
     output_png_path = Path(output_png_path)
     output_png_path.parent.mkdir(parents=True, exist_ok=True)
 
+    acc = accent or _GREEN
     canvas = Image.new("RGB", (_WIDTH, _HEIGHT), _BG)
     draw = ImageDraw.Draw(canvas)
     max_w = _WIDTH - 2 * _MARGIN_X
+
+    # Optional school logo, top-right.
+    if logo_path:
+        try:
+            logo = Image.open(logo_path).convert("RGBA")
+            lh = 56
+            lw = max(1, int(logo.width * lh / max(1, logo.height)))
+            logo = logo.resize((lw, lh))
+            canvas.paste(logo, (_WIDTH - _MARGIN_X - lw, 36), logo)
+        except Exception:  # noqa: BLE001
+            pass
 
     # Context line (small, e.g. episode title)
     y = 52
@@ -81,7 +99,7 @@ def export_slide_png(
     head = (heading or context_title or "SketchCast AI").strip()[:80]
     hf = _font(bold=True, size=40)
     for ln in _wrap(draw, head, hf, max_w)[:2]:
-        draw.text((_MARGIN_X, y), ln, fill=_GREEN, font=hf)
+        draw.text((_MARGIN_X, y), ln, fill=acc, font=hf)
         y += 52
     draw.line([(_MARGIN_X, y + 6), (_WIDTH - _MARGIN_X, y + 6)], fill=_RULE, width=2)
     y += 36
@@ -121,10 +139,18 @@ def export_slide_png(
     return output_png_path
 
 
-def build_episode_deck(slides: list[dict], output_pptx_path: str | Path, episode_title: str = "") -> Path:
+def build_episode_deck(
+    slides: list[dict],
+    output_pptx_path: str | Path,
+    episode_title: str = "",
+    template: str | None = None,
+    accent: tuple[int, int, int] | None = None,
+) -> Path:
     """Build one editable PPTX deck: heading + bullets per slide, narration in notes.
 
     ``slides`` is a list of {"heading", "points", "narration"} dicts.
+    When ``template`` (a school .pptx) is given, the deck inherits its theme,
+    master, fonts and logo; ``accent`` overrides the heading colour.
     """
     from pptx import Presentation
     from pptx.dml.color import RGBColor
@@ -133,34 +159,40 @@ def build_episode_deck(slides: list[dict], output_pptx_path: str | Path, episode
     output_pptx_path = Path(output_pptx_path)
     output_pptx_path.parent.mkdir(parents=True, exist_ok=True)
 
-    prs = Presentation()
-    prs.slide_width = Emu(12192000)
-    prs.slide_height = Emu(6858000)
+    prs = Presentation(template) if template else Presentation()
+    if not template:
+        prs.slide_width = Emu(12192000)
+        prs.slide_height = Emu(6858000)
+    # Prefer a blank layout; fall back gracefully for arbitrary templates.
+    layout = prs.slide_layouts[6] if len(prs.slide_layouts) > 6 else prs.slide_layouts[-1]
+    head_rgb = RGBColor(*(accent or _GREEN))
 
     for s in slides:
-        slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
-        bg = slide.background.fill
-        bg.solid()
-        bg.fore_color.rgb = RGBColor(*_BG)
+        slide = prs.slides.add_slide(layout)
+        if not template:  # keep the cream bg only for the default style
+            bg = slide.background.fill
+            bg.solid()
+            bg.fore_color.rgb = RGBColor(*_BG)
 
-        box = slide.shapes.add_textbox(Emu(700000), Emu(600000), Emu(10800000), Emu(5200000))
+        box = slide.shapes.add_textbox(Emu(700000), Emu(900000), Emu(10800000), Emu(5000000))
         tf = box.text_frame
         tf.word_wrap = True
         head = tf.paragraphs[0]
         head.text = (s.get("heading") or episode_title or "SketchCast AI")[:90]
         head.font.size = Pt(30)
         head.font.bold = True
-        head.font.color.rgb = RGBColor(*_GREEN)
+        head.font.color.rgb = head_rgb
 
         for pt in s.get("points") or []:
             para = tf.add_paragraph()
             para.text = f"•  {pt}"
             para.font.size = Pt(20)
-            para.font.color.rgb = RGBColor(*_INK)
+            if not template:
+                para.font.color.rgb = RGBColor(*_INK)
 
         # Socratic narration → speaker notes
         slide.notes_slide.notes_text_frame.text = s.get("narration") or ""
 
     prs.save(str(output_pptx_path))
-    logger.info("Episode deck saved: %s (%d slides)", output_pptx_path.name, len(slides))
+    logger.info("Episode deck saved: %s (%d slides, themed=%s)", output_pptx_path.name, len(slides), bool(template))
     return output_pptx_path

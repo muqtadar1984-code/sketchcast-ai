@@ -42,6 +42,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     from agent1_ingestion.structurer import structure_book
     from agent2_analysis.analyzer import run_full_analysis
     from shared.claude_client import ClaudeClient
+    from worker.branding import load_branding
 
     job_id = job["id"]
     db.set_generation_status(sb, generation_id, "processing")  # so the UI shows progress, not "queued"
@@ -75,6 +76,8 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         ).model_dump()
         db.set_progress(sb, job_id, 45)
 
+        # School branding (templates + derived accent/logo) — falls back to defaults.
+        branding = load_branding(sb, owner_id, Path(tmp))
         base = f"{owner_id}/{generation_id}"
 
         if kind == "presentation":
@@ -92,7 +95,9 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             db.set_progress(sb, job_id, 60)
 
             images_manifest = generate_episode_images(script_data=scripts).model_dump()
-            slides = generate_episode_slides(script_data=scripts, image_manifest=images_manifest).model_dump()
+            slides = generate_episode_slides(
+                script_data=scripts, image_manifest=images_manifest, branding=branding,
+            ).model_dump()
             db.set_progress(sb, job_id, 72)
 
             video = compose_episode_videos(script_data=scripts, slide_manifest=slides).model_dump()
@@ -111,20 +116,24 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 db.add_artifact_row(sb, generation_id, "video_mp4", f"{base}/lesson.mp4")
             title = f"{book.get('title', 'Lesson')} · {ep_title}"
 
-        elif kind in ("lesson_plan", "activity", "exam_paper"):
+        elif kind in ("lesson_plan", "activity", "exam_paper", "worksheet", "case_study"):
             # Claude-authored teacher document → editable .docx.
             from docgen import generate_document
 
             out_path = generate_document(
                 kind=kind, book=book, chapter=chapter, analysis=analysis,
                 client=client, params=gen.get("params") or {}, out_dir=Path(tmp),
+                template=branding.get("docx_template"),
             )
             db.set_progress(sb, job_id, 90)
             dest = f"{base}/{kind}.docx"
             db.upload_artifact(sb, str(out_path), dest)
             db.add_artifact_row(sb, generation_id, "docx", dest)
             db.set_progress(sb, job_id, 96)
-            label = {"lesson_plan": "Lesson plan", "activity": "Activities", "exam_paper": "Test paper"}[kind]
+            label = {
+                "lesson_plan": "Lesson plan", "activity": "Activities", "exam_paper": "Test paper",
+                "worksheet": "Worksheet", "case_study": "Case study",
+            }[kind]
             title = f"{book.get('title', 'Document')} · {chapter_title} · {label}"
 
         else:
@@ -150,6 +159,7 @@ def index_book(sb: Client, job: dict) -> None:
     book_id = job["book_id"]
     book = db.get_book(sb, book_id)
 
+    cover_dest = None
     with tempfile.TemporaryDirectory() as tmp:
         pdf_path = db.download_book(sb, book["storage_path"], Path(tmp) / "book.pdf")
         extraction = extract_pdf(str(pdf_path))
@@ -158,6 +168,20 @@ def index_book(sb: Client, job: dict) -> None:
             author=book.get("author") or "Unknown", isbn=None,
             extraction=extraction, images=[],
         ).model_dump()
+
+        # Cover thumbnail (page 0) for the library UI — best-effort.
+        try:
+            import fitz  # PyMuPDF
+            doc = fitz.open(str(pdf_path))
+            pix = doc.load_page(0).get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+            cover_png = Path(tmp) / "cover.png"
+            pix.save(str(cover_png))
+            doc.close()
+            cover_dest = f"{book['owner_id']}/covers/{book_id}.png"
+            db.upload_artifact(sb, str(cover_png), cover_dest)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("cover render failed for %s: %s", book_id, exc)
+            cover_dest = None
 
     chapters = [
         {"num": int(c["chapter_num"]),
@@ -185,5 +209,8 @@ def index_book(sb: Client, job: dict) -> None:
         logger.warning("grade/subject detection failed for %s: %s", book_id, exc)
 
     db.set_book_meta(sb, book_id, grade, subject)
+    if cover_dest:
+        db.set_book_cover(sb, book_id, cover_dest)
     db.set_book_chapters(sb, book_id, chapters, "ready")
-    logger.info("Indexed book %s: %d chapter(s), grade=%s subject=%s", book_id, len(chapters), grade, subject)
+    logger.info("Indexed book %s: %d chapter(s), grade=%s subject=%s cover=%s",
+                book_id, len(chapters), grade, subject, bool(cover_dest))

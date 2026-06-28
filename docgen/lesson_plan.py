@@ -20,24 +20,32 @@ Chapter content excerpt:
 {content}
 \"\"\"
 
+Total lesson duration: {duration} minutes.
 Return ONLY valid JSON in exactly this shape:
 {{
   "title": "Lesson plan title",
-  "duration_minutes": 45,
+  "duration_minutes": {duration},
   "learning_objectives": ["..."],
   "materials": ["..."],
   "key_vocabulary": [{{"term": "...", "definition": "..."}}],
   "lesson_flow": [
     {{"phase": "Introduction / Hook", "minutes": 5, "teacher_does": "...", "students_do": "..."}}
   ],
-  "assessment": ["..."],
-  "homework": ["..."],
-  "differentiation": {{"support": "...", "challenge": "..."}}
+  "assessment": ["..."]{homework_field}{diff_field}
 }}
-Make it specific to the chapter content. 4-6 lesson_flow phases that sum to roughly duration_minutes."""
+Make it specific to the chapter content. 4-6 lesson_flow phases that sum to roughly {duration} minutes."""
 
 
-def build(book: dict, chapter: dict, analysis: dict, client, out_dir: Path) -> Path:
+def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path,
+          template: str | None = None) -> Path:
+    p = params or {}
+    try:
+        duration = max(10, min(180, int(p.get("duration_minutes", 45))))
+    except (TypeError, ValueError):
+        duration = 45
+    want_homework = p.get("include_homework", True)
+    want_diff = p.get("include_differentiation", True)
+
     grade = book.get("grade") or "school"
     subject = book.get("subject") or "general"
     chapter_title = chapter.get("title") or "Chapter"
@@ -45,14 +53,18 @@ def build(book: dict, chapter: dict, analysis: dict, client, out_dir: Path) -> P
         grade=grade,
         subject=subject,
         chapter_title=chapter_title,
+        duration=duration,
         concepts=", ".join(dx.concept_names(analysis)) or "(see content)",
         content=dx.chapter_excerpt(chapter),
+        homework_field=',\n  "homework": ["..."]' if want_homework else "",
+        diff_field=',\n  "differentiation": {"support": "...", "challenge": "..."}' if want_diff else "",
     )
     data = client.analyze(prompt, max_tokens=3000).get("data", {}) or {}
 
     doc = dx.new_doc(
         data.get("title") or f"Lesson Plan — {chapter_title}",
-        f"{grade} · {subject}    |    Duration: {data.get('duration_minutes', 45)} minutes",
+        f"{grade} · {subject}    |    Duration: {data.get('duration_minutes', duration)} minutes",
+        template=template,
     )
 
     dx.heading(doc, "Learning objectives", 1)

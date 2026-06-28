@@ -93,6 +93,10 @@ def set_book_meta(sb: Client, book_id: str, grade: Optional[str], subject: Optio
     sb.table("books").update({"grade": grade, "subject": subject}).eq("id", book_id).execute()
 
 
+def set_book_cover(sb: Client, book_id: str, cover_path: str) -> None:
+    sb.table("books").update({"cover_path": cover_path}).eq("id", book_id).execute()
+
+
 # ── storage ──────────────────────────────────────────────────────────
 
 def download_book(sb: Client, storage_path: str, dest: str | Path) -> Path:

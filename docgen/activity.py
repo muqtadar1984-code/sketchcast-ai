@@ -40,10 +40,15 @@ Return ONLY valid JSON in exactly this shape:
     }}
   ]
 }}
-Produce 3-4 varied, hands-on activities tied to the chapter content."""
+Produce EXACTLY {n} varied, hands-on activities tied to the chapter content."""
 
 
-def build(book: dict, chapter: dict, analysis: dict, client, out_dir: Path) -> Path:
+def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path,
+          template: str | None = None) -> Path:
+    try:
+        n = max(1, min(8, int((params or {}).get("num_activities", 4))))
+    except (TypeError, ValueError):
+        n = 4
     grade = book.get("grade") or "school"
     subject = book.get("subject") or "general"
     chapter_title = chapter.get("title") or "Chapter"
@@ -51,12 +56,13 @@ def build(book: dict, chapter: dict, analysis: dict, client, out_dir: Path) -> P
         grade=grade,
         subject=subject,
         chapter_title=chapter_title,
+        n=n,
         concepts=", ".join(dx.concept_names(analysis)) or "(see content)",
         content=dx.chapter_excerpt(chapter),
     )
     data = client.analyze(prompt, max_tokens=3500).get("data", {}) or {}
 
-    doc = dx.new_doc(f"Class Activities — {chapter_title}", f"{grade} · {subject}")
+    doc = dx.new_doc(f"Class Activities — {chapter_title}", f"{grade} · {subject}", template=template)
     if data.get("intro"):
         dx.para(doc, data["intro"], italic=True)
 

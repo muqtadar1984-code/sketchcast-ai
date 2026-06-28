@@ -61,7 +61,8 @@ def _counts(params: dict) -> tuple[int, int, int, int, bool]:
     return n_fill, n_tf, n_match, n_subj, key
 
 
-def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path) -> Path:
+def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path,
+          template: str | None = None) -> Path:
     n_fill, n_tf, n_match, n_subj, want_key = _counts(params)
     grade = book.get("grade") or "school"
     subject = book.get("subject") or "general"
@@ -82,6 +83,7 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     doc = dx.new_doc(
         data.get("title") or f"Test Paper — {chapter_title}",
         f"{grade} · {subject}",
+        template=template,
     )
     if data.get("instructions"):
         dx.para(doc, data["instructions"], italic=True)

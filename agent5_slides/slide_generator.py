@@ -32,8 +32,17 @@ def generate_episode_slides(
     script_data: dict,
     image_manifest: Optional[dict] = None,  # ignored (no AI images in freemium)
     progress_callback: Optional[Callable] = None,
+    branding: Optional[dict] = None,
 ) -> SlideManifest:
-    """Render one chapter-content slide PNG per segment + a combined editable deck."""
+    """Render one chapter-content slide PNG per segment + a combined editable deck.
+
+    ``branding`` = {pptx_template, accent_rgb, logo_path} applies the school's
+    theme/colour/logo to the deck + video slides (any field may be None).
+    """
+    _b = branding or {}
+    _accent = _b.get("accent_rgb")
+    _logo = _b.get("logo_path")
+    _pptx_template = _b.get("pptx_template")
     episodes = script_data.get("episodes", [script_data])
     episode = episodes[0] if isinstance(episodes, list) and episodes else script_data
 
@@ -70,6 +79,8 @@ def generate_episode_slides(
             footer_text=footer,
             context_title=episode_title if heading != episode_title else "",
             fallback_text=narration,
+            accent=_accent,
+            logo_path=_logo,
         )
 
         deck_slides.append({"heading": heading, "points": points, "narration": narration})
@@ -86,7 +97,8 @@ def generate_episode_slides(
     deck_path: Optional[str] = None
     try:
         deck_file = slide_dir / f"episode_{episode_num}_deck.pptx"
-        build_episode_deck(deck_slides, deck_file, episode_title=episode_title)
+        build_episode_deck(deck_slides, deck_file, episode_title=episode_title,
+                           template=_pptx_template, accent=_accent)
         deck_path = str(deck_file)
         for s in manifest_segments:
             s.slide_path = deck_path

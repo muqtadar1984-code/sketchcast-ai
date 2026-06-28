@@ -13,8 +13,21 @@ GREEN = RGBColor(0x2E, 0x6B, 0x4E)
 GREY = RGBColor(0x6F, 0x6A, 0x5F)
 
 
-def new_doc(title: str, subtitle: str = "") -> Document:
-    doc = Document()
+def _clear_body(doc: Document) -> None:
+    """Drop a template's existing paragraphs/tables but keep section properties
+    (header/footer references), so generated content sits on the school styling."""
+    body = doc.element.body
+    for child in list(body):
+        if child.tag.endswith("}p") or child.tag.endswith("}tbl"):
+            body.remove(child)
+
+
+def new_doc(title: str, subtitle: str = "", template: str | None = None) -> Document:
+    if template:
+        doc = Document(template)
+        _clear_body(doc)
+    else:
+        doc = Document()
     h = doc.add_heading(title, level=0)
     for run in h.runs:
         run.font.color.rgb = GREEN
