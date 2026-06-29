@@ -16,7 +16,10 @@ from .models import (
     ScriptSegment,
     SegmentType,
     SketchCue,
+    SlideVisual,
     VisualAssetRequest,
+    VisualGroup,
+    VisualItem,
 )
 from .prompts import EPISODE_SCRIPT_PROMPT
 
@@ -25,6 +28,51 @@ logger = logging.getLogger(__name__)
 STORAGE_DIR = Path(__file__).parent.parent / "storage" / "scripts"
 
 _VALID_VISUAL_ACTIONS = {"DRAW_START", "DRAW_CONTINUE", "GHOST_ONLY"}
+_VALID_VISUAL_KINDS = {"flow", "cycle", "hierarchy", "compare", "icons"}
+
+
+def _parse_slide_visual(data) -> Optional[SlideVisual]:
+    """Validate + normalise Claude's slide_visual into a renderable spec, or None.
+
+    Clamps node/group/item counts, degrades a too-short ``cycle`` to ``flow``, and
+    rejects specs that can't render (e.g. a flow/icons with fewer than two entries)
+    so the slide falls back to bullet points.
+    """
+    if not isinstance(data, dict):
+        return None
+    kind = str(data.get("kind") or "").strip().lower()
+    if kind not in _VALID_VISUAL_KINDS:
+        return None
+
+    nodes = [str(n).strip() for n in (data.get("nodes") or []) if str(n).strip()][:5]
+    groups: list[VisualGroup] = []
+    for g in (data.get("groups") or [])[:2]:
+        if not isinstance(g, dict):
+            continue
+        gitems = [str(it).strip() for it in (g.get("items") or []) if str(it).strip()][:5]
+        groups.append(VisualGroup(heading=str(g.get("heading") or "").strip()[:48], items=gitems))
+    items: list[VisualItem] = []
+    for it in (data.get("items") or [])[:6]:
+        if not isinstance(it, dict):
+            continue
+        label = str(it.get("label") or "").strip()[:40]
+        if label:
+            items.append(VisualItem(icon=str(it.get("icon") or "").strip().lower()[:24], label=label))
+    caption = str(data.get("caption") or "").strip()[:120]
+
+    if kind == "icons":
+        if len(items) < 2:
+            return None
+    elif kind == "compare":
+        if not groups:
+            return None
+    else:
+        if kind == "cycle" and len(nodes) < 3:
+            kind = "flow"  # not enough steps for a ring — render as a process
+        if len(nodes) < 2:
+            return None
+
+    return SlideVisual(kind=kind, nodes=nodes, groups=groups, items=items, caption=caption)
 
 
 def _synthesize_sketch_cue(visual_request: Optional[VisualAssetRequest]) -> Optional[SketchCue]:
@@ -227,6 +275,7 @@ def generate_episode_script(
             for p in (seg.get("slide_points") or [])
             if str(p).strip()
         ]
+        slide_visual = _parse_slide_visual(seg.get("slide_visual"))
 
         segments.append(ScriptSegment(
             segment_id=f"s{i + 1:03d}",
@@ -235,6 +284,7 @@ def generate_episode_script(
             elevenlabs_text=el_text,
             slide_heading=(seg.get("slide_heading") or "").strip(),
             slide_points=slide_points,
+            slide_visual=slide_visual,
             visual_request=visual_request,
             sketch_cue=sketch_cue,
             visual_action=visual_action,

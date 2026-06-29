@@ -54,6 +54,138 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, ma
     return lines
 
 
+# An element is an ordered list of per-line bounding boxes (x0, y0, x1, y1) to
+# reveal left→right; a slide's animation is an ordered list of such elements.
+_Box = tuple[int, int, int, int]
+
+
+def compose_slide(
+    heading: str,
+    points: list[str],
+    footer_text: str = "",
+    context_title: str = "",
+    fallback_text: str = "",
+    accent: tuple[int, int, int] | None = None,
+    logo_path: str | None = None,
+    visual: dict | None = None,
+) -> tuple[Image.Image, list[list[_Box]], list[_Box]]:
+    """Render the canonical 1280x720 lesson slide and report its object layout.
+
+    Returns ``(image, anim_elements, static_boxes)``:
+
+    * ``image`` is the fully-drawn slide (what :func:`export_slide_png` saves and
+      what the Agent 6 native renderer animates toward — pixel-identical).
+    * ``anim_elements`` is the content (context line, heading, divider, bullets)
+      in *teaching order*; each element is a list of per-line boxes so the
+      renderer can write it on left→right.
+    * ``static_boxes`` are regions (logo, footer) shown from the first frame.
+
+    ``accent`` (school brand colour) overrides the heading colour; ``logo_path``
+    stamps a logo top-right. Both fall back to the default Scholar style.
+    """
+    acc = accent or _GREEN
+    canvas = Image.new("RGB", (_WIDTH, _HEIGHT), _BG)
+    draw = ImageDraw.Draw(canvas)
+    max_w = _WIDTH - 2 * _MARGIN_X
+    anim: list[list[_Box]] = []
+    static: list[_Box] = []
+
+    # Optional school logo, top-right (present from the first frame).
+    if logo_path:
+        try:
+            logo = Image.open(logo_path).convert("RGBA")
+            lh = 56
+            lw = max(1, int(logo.width * lh / max(1, logo.height)))
+            logo = logo.resize((lw, lh))
+            lx, ly = _WIDTH - _MARGIN_X - lw, 36
+            canvas.paste(logo, (lx, ly), logo)
+            static.append((lx, ly, lx + lw, ly + lh))
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Context line (small, e.g. episode title)
+    y = 52
+    if context_title:
+        cf = _font(bold=False, size=20)
+        txt = context_title.strip()[:80]
+        draw.text((_MARGIN_X, y), txt, fill=_MUTED, font=cf)
+        anim.append([(_MARGIN_X, y, _MARGIN_X + int(draw.textlength(txt, font=cf)), y + 26)])
+        y += 34
+
+    # Heading
+    head = (heading or context_title or "SketchCast AI").strip()[:80]
+    hf = _font(bold=True, size=40)
+    hbox: list[_Box] = []
+    for ln in _wrap(draw, head, hf, max_w)[:2]:
+        draw.text((_MARGIN_X, y), ln, fill=acc, font=hf)
+        hbox.append((_MARGIN_X, y, _MARGIN_X + int(draw.textlength(ln, font=hf)), y + 50))
+        y += 52
+    if hbox:
+        anim.append(hbox)
+
+    draw.line([(_MARGIN_X, y + 6), (_WIDTH - _MARGIN_X, y + 6)], fill=_RULE, width=2)
+    anim.append([(_MARGIN_X, y + 3, _WIDTH - _MARGIN_X, y + 10)])  # divider grows L→R
+    y += 36
+
+    # A composable diagram (Phase 2) claims the content area when present; it
+    # falls back to plain bullets if the spec is unusable, so slides are never bare.
+    diagram_elems: list[list[_Box]] = []
+    if visual:
+        from .diagram_builder import caption_element, render_diagram
+
+        region = (_MARGIN_X, y + 4, _WIDTH - _MARGIN_X, _HEIGHT - 96)
+        diagram_elems = render_diagram(draw, region, visual, accent=acc)
+        if diagram_elems:
+            anim.extend(diagram_elems)
+            cap = caption_element(draw, region, visual.get("caption", "") if isinstance(visual, dict) else "")
+            if cap:
+                anim.append(cap)
+
+    if not diagram_elems:
+        pts = [p for p in (points or []) if p.strip()]
+        if pts:
+            # Bullet points (chapter content)
+            size = 32
+            while size >= 20:
+                bf = _font(bold=False, size=size)
+                line_h = int(size * 1.5)
+                wrapped: list[list[str]] = [_wrap(draw, p, bf, max_w - 40) for p in pts]
+                total_h = sum(len(w) * line_h + 14 for w in wrapped)
+                if total_h <= (_HEIGHT - y - 70) or size == 20:
+                    break
+                size -= 2
+            for wlines in wrapped:
+                ebox: list[_Box] = []
+                draw.ellipse([(_MARGIN_X, y + size // 2 - 3), (_MARGIN_X + 8, y + size // 2 + 5)], fill=_GREEN)
+                for j, ln in enumerate(wlines):
+                    draw.text((_MARGIN_X + 28, y), ln, fill=_INK, font=bf)
+                    x0 = _MARGIN_X if j == 0 else _MARGIN_X + 28  # first line includes the bullet
+                    ebox.append((x0, y, _MARGIN_X + 28 + int(draw.textlength(ln, font=bf)), y + size))
+                    y += line_h
+                if ebox:
+                    anim.append(ebox)
+                y += 14
+        else:
+            # Fallback: no bullets — show the narration text so the slide isn't bare
+            bf = _font(bold=False, size=30)
+            fb: list[_Box] = []
+            for ln in _wrap(draw, " ".join((fallback_text or "").split()), bf, max_w)[:9]:
+                draw.text((_MARGIN_X, y), ln, fill=_INK, font=bf)
+                fb.append((_MARGIN_X, y, _MARGIN_X + int(draw.textlength(ln, font=bf)), y + 30))
+                y += int(30 * 1.45)
+            if fb:
+                anim.append(fb)
+
+    if footer_text:
+        ff = _font(bold=False, size=18)
+        fw = int(draw.textlength(footer_text, font=ff))
+        fx = _WIDTH - _MARGIN_X - fw
+        draw.text((fx, _HEIGHT - 50), footer_text, fill=_MUTED, font=ff)
+        static.append((fx, _HEIGHT - 50, _WIDTH - _MARGIN_X, _HEIGHT - 50 + 22))
+
+    return canvas, anim, static
+
+
 def export_slide_png(
     heading: str,
     points: list[str],
@@ -63,79 +195,28 @@ def export_slide_png(
     fallback_text: str = "",
     accent: tuple[int, int, int] | None = None,
     logo_path: str | None = None,
+    visual: dict | None = None,
 ) -> Path:
-    """Render a 1280x720 lesson slide: heading + chapter bullet points.
+    """Render a 1280x720 lesson slide PNG: heading + chapter bullets or a diagram.
 
-    ``accent`` (school brand colour) overrides the heading colour; ``logo_path``
-    stamps a logo top-right. Both fall back to the default Scholar style.
+    Thin wrapper over :func:`compose_slide` (the single source of slide layout,
+    shared with the Agent 6 native video renderer) that just saves the image.
     """
     output_png_path = Path(output_png_path)
     output_png_path.parent.mkdir(parents=True, exist_ok=True)
 
-    acc = accent or _GREEN
-    canvas = Image.new("RGB", (_WIDTH, _HEIGHT), _BG)
-    draw = ImageDraw.Draw(canvas)
-    max_w = _WIDTH - 2 * _MARGIN_X
-
-    # Optional school logo, top-right.
-    if logo_path:
-        try:
-            logo = Image.open(logo_path).convert("RGBA")
-            lh = 56
-            lw = max(1, int(logo.width * lh / max(1, logo.height)))
-            logo = logo.resize((lw, lh))
-            canvas.paste(logo, (_WIDTH - _MARGIN_X - lw, 36), logo)
-        except Exception:  # noqa: BLE001
-            pass
-
-    # Context line (small, e.g. episode title)
-    y = 52
-    if context_title:
-        cf = _font(bold=False, size=20)
-        draw.text((_MARGIN_X, y), context_title.strip()[:80], fill=_MUTED, font=cf)
-        y += 34
-
-    # Heading
-    head = (heading or context_title or "SketchCast AI").strip()[:80]
-    hf = _font(bold=True, size=40)
-    for ln in _wrap(draw, head, hf, max_w)[:2]:
-        draw.text((_MARGIN_X, y), ln, fill=acc, font=hf)
-        y += 52
-    draw.line([(_MARGIN_X, y + 6), (_WIDTH - _MARGIN_X, y + 6)], fill=_RULE, width=2)
-    y += 36
-
-    pts = [p for p in (points or []) if p.strip()]
-    if pts:
-        # Bullet points (chapter content)
-        size = 32
-        while size >= 20:
-            bf = _font(bold=False, size=size)
-            line_h = int(size * 1.5)
-            wrapped: list[list[str]] = [_wrap(draw, p, bf, max_w - 40) for p in pts]
-            total_h = sum(len(w) * line_h + 14 for w in wrapped)
-            if total_h <= (_HEIGHT - y - 70) or size == 20:
-                break
-            size -= 2
-        for wlines in wrapped:
-            draw.ellipse([(_MARGIN_X, y + size // 2 - 3), (_MARGIN_X + 8, y + size // 2 + 5)], fill=_GREEN)
-            for j, ln in enumerate(wlines):
-                draw.text((_MARGIN_X + 28, y), ln, fill=_INK, font=bf)
-                y += line_h
-            y += 14
-    else:
-        # Fallback: no bullets — show the narration text so the slide isn't bare
-        bf = _font(bold=False, size=30)
-        for ln in _wrap(draw, " ".join((fallback_text or "").split()), bf, max_w)[:9]:
-            draw.text((_MARGIN_X, y), ln, fill=_INK, font=bf)
-            y += int(30 * 1.45)
-
-    if footer_text:
-        ff = _font(bold=False, size=18)
-        fw = draw.textlength(footer_text, font=ff)
-        draw.text((_WIDTH - _MARGIN_X - fw, _HEIGHT - 50), footer_text, fill=_MUTED, font=ff)
-
+    canvas, _anim, _static = compose_slide(
+        heading=heading,
+        points=points,
+        footer_text=footer_text,
+        context_title=context_title,
+        fallback_text=fallback_text,
+        accent=accent,
+        logo_path=logo_path,
+        visual=visual,
+    )
     canvas.save(str(output_png_path), "PNG")
-    logger.info("Slide PNG: %s (%d points)", output_png_path.name, len(pts))
+    logger.info("Slide PNG: %s (%d points)", output_png_path.name, len([p for p in (points or []) if p.strip()]))
     return output_png_path
 
 

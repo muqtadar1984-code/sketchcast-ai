@@ -45,6 +45,39 @@ class VisualAssetRequest(BaseModel):
     style_preset: Literal["line-art", "technical-drawing", "hand-drawn-sketch"] = "line-art"
 
 
+class VisualGroup(BaseModel):
+    """One labelled column/branch of a slide diagram (used by ``compare``)."""
+
+    heading: str = ""
+    items: List[str] = Field(default_factory=list)
+
+
+class VisualItem(BaseModel):
+    """One labelled icon tile (used by the ``icons`` kind)."""
+
+    icon: str = ""   # an icon name from the catalogue (falls back to a generic mark)
+    label: str = ""
+
+
+class SlideVisual(BaseModel):
+    """A composable on-screen diagram for a segment (rendered + animated natively).
+
+    ``kind`` picks a deterministic layout template:
+      * ``flow``      — ``nodes`` as a left→right process, arrows between steps.
+      * ``cycle``     — ``nodes`` (3-5) arranged in a ring with arrows back to start.
+      * ``hierarchy`` — ``nodes[0]`` is the root; ``nodes[1:]`` are children below it.
+      * ``compare``   — two ``groups`` as side-by-side labelled columns.
+      * ``icons``     — 2-6 labelled ``items``, each an icon + a short caption.
+    Labels are short (2-5 words); the renderer draws shapes from the slide palette.
+    """
+
+    kind: Literal["flow", "cycle", "hierarchy", "compare", "icons"]
+    nodes: List[str] = Field(default_factory=list)
+    groups: List[VisualGroup] = Field(default_factory=list)
+    items: List[VisualItem] = Field(default_factory=list)
+    caption: str = ""
+
+
 class ScriptSegment(BaseModel):
     """One narration unit within an episode script."""
 
@@ -54,6 +87,7 @@ class ScriptSegment(BaseModel):
     elevenlabs_text: str  # same text with ElevenLabs <break> markup
     slide_heading: str = ""  # short on-screen title (chapter content)
     slide_points: List[str] = Field(default_factory=list)  # on-screen bullets (chapter content)
+    slide_visual: Optional[SlideVisual] = None  # composable diagram (animated natively)
     visual_request: Optional[VisualAssetRequest] = None  # Art Director image prompt
     sketch_cue: Optional[SketchCue] = None  # BRIDGE — auto-generated from visual_request
     visual_action: Optional[Literal["DRAW_START", "DRAW_CONTINUE", "GHOST_ONLY"]] = None

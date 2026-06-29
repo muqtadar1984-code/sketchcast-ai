@@ -96,6 +96,29 @@ Rules:
 - "text" stays the spoken Socratic narration (voiceover + presenter notes);
   slide_heading/slide_points are what appears on the slide.
 
+=== ON-SCREEN DIAGRAM (slide_visual) — OPTIONAL, for structural concepts ===
+When a concept is inherently STRUCTURAL or RELATIONAL, add a "slide_visual" object
+to that segment. It is rendered as a clean animated diagram (boxes/arrows drawn on
+in order) — far better than bullets for these shapes. Use it INSTEAD of slide_points
+on that segment (you may still give a short slide_heading). Keep every label SHORT
+(2-5 words). Use at most one diagram per segment, and only where it genuinely helps —
+most segments should still use plain slide_points.
+
+Pick the "kind" that matches the concept:
+- "flow"      — a process / sequence / cause→effect chain. "nodes": 2-5 ordered steps.
+- "cycle"     — a repeating loop (water cycle, feedback). "nodes": 3-5 stages (loops back).
+- "hierarchy" — classification / part-whole. "nodes": [root, child1, child2, ...] (2-4 children).
+- "compare"   — contrast two things. "groups": exactly 2 objects, each {{"heading", "items":[2-4 short]}}.
+- "icons"     — 2-6 key items/terms/examples, each shown as an icon + short label.
+                "items": [{{"icon": "<name>", "label": "<2-4 words>"}}, ...]
+                Choose each icon name from this catalogue (pick the closest meaning;
+                an unknown name just shows a neutral mark):
+                idea, book, search, target, globe, check, cross, star, heart, sun, cloud,
+                rain, snow, gear, scale, music, flower, sparkle, atom, recycle, warning,
+                pencil, arrow, clock, phone, flag, scissors, airplane, anchor, crown,
+                infinity, bolt, sum, sqrt, plus, question
+Optional "caption": one short line under the diagram.
+
 === OUTPUT FORMAT ===
 Return ONLY valid JSON — no preamble, no markdown fences, no explanation.
 Do NOT output "sketch_cue" — use "visual_request" instead.
@@ -118,13 +141,35 @@ Do NOT output "sketch_cue" — use "visual_request" instead.
     }},
     {{
       "type": "explore",
-      "text": "Now let's look more closely at how this works...",
-      "elevenlabs_text": "Now let's look more closely <break time='0.3s'/> at how this works...",
+      "text": "Now let's trace how a price actually gets set...",
+      "elevenlabs_text": "Now let's trace <break time='0.3s'/> how a price actually gets set...",
       "slide_heading": "How markets set prices",
-      "slide_points": ["Supply and demand meet at a price", "Scarcity pushes prices up", "Surplus pushes prices down"],
+      "slide_visual": {{
+        "kind": "flow",
+        "nodes": ["Demand rises", "Scarcity grows", "Price goes up", "Supply responds"],
+        "caption": "Supply and demand meet at a price"
+      }},
       "visual_action": "DRAW_CONTINUE",
       "pause_for_question": false,
       "estimated_duration_seconds": 90
+    }},
+    {{
+      "type": "explore",
+      "text": "Each of these forces shapes the market in its own way...",
+      "elevenlabs_text": "Each of these forces <break time='0.3s'/> shapes the market in its own way...",
+      "slide_heading": "Forces in a market",
+      "slide_visual": {{
+        "kind": "icons",
+        "items": [
+          {{"icon": "sun", "label": "Resources"}},
+          {{"icon": "gear", "label": "Production"}},
+          {{"icon": "scale", "label": "Fair pricing"}},
+          {{"icon": "globe", "label": "Global trade"}}
+        ]
+      }},
+      "visual_action": "DRAW_CONTINUE",
+      "pause_for_question": false,
+      "estimated_duration_seconds": 75
     }},
     {{
       "type": "question_hook",

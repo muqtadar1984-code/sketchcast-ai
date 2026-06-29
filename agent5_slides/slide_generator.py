@@ -28,6 +28,26 @@ STORAGE_DIR = Path(__file__).resolve().parent.parent / "storage"
 SLIDES_DIR = STORAGE_DIR / "slides"
 
 
+def _visual_to_points(visual: Optional[dict]) -> list[str]:
+    """Flatten a slide_visual's labels into deck bullet points (text-only deck)."""
+    if not isinstance(visual, dict):
+        return []
+    labels = [str(it.get("label")).strip() for it in (visual.get("items") or [])
+              if isinstance(it, dict) and str(it.get("label") or "").strip()]
+    if labels:
+        return labels[:6]
+    nodes = [str(n).strip() for n in (visual.get("nodes") or []) if str(n).strip()]
+    if nodes:
+        return nodes[:6]
+    out: list[str] = []
+    for g in visual.get("groups") or []:
+        head = str(g.get("heading") or "").strip()
+        items = ", ".join(str(it).strip() for it in (g.get("items") or []) if str(it).strip())
+        if head or items:
+            out.append(f"{head}: {items}" if head and items else (head or items))
+    return out[:6]
+
+
 def generate_episode_slides(
     script_data: dict,
     image_manifest: Optional[dict] = None,  # ignored (no AI images in freemium)
@@ -66,6 +86,7 @@ def generate_episode_slides(
         narration = (seg.get("text") or "").strip()
         heading = (seg.get("slide_heading") or "").strip() or episode_title
         points = [str(p).strip() for p in (seg.get("slide_points") or []) if str(p).strip()]
+        visual = seg.get("slide_visual")
 
         if progress_callback:
             progress_callback(i, total, seg_id)
@@ -81,9 +102,13 @@ def generate_episode_slides(
             fallback_text=narration,
             accent=_accent,
             logo_path=_logo,
+            visual=visual,
         )
 
-        deck_slides.append({"heading": heading, "points": points, "narration": narration})
+        # The deck is text-only, so a diagram-driven segment contributes its
+        # labels as bullets — keeps the downloadable PPTX from going blank.
+        deck_points = points or _visual_to_points(visual)
+        deck_slides.append({"heading": heading, "points": deck_points, "narration": narration})
         manifest_segments.append(SlideSegment(
             segment_id=seg_id,
             type=seg_type,

@@ -100,7 +100,9 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             ).model_dump()
             db.set_progress(sb, job_id, 72)
 
-            video = compose_episode_videos(script_data=scripts, slide_manifest=slides).model_dump()
+            video = compose_episode_videos(
+                script_data=scripts, slide_manifest=slides, branding=branding,
+            ).model_dump()
             db.set_progress(sb, job_id, 90)
 
             final = render_final_video(video_manifest=video).model_dump()

@@ -1,17 +1,20 @@
-"""Agent 6: Video Composer — narration + static slide → per-segment MP4.
+"""Agent 6: Video Composer — narration + native object animation → per-segment MP4.
 
 Freemium pipeline (robust, low-memory, free):
   1. Edge TTS turns each segment's narration into an MP3.
-  2. A single ffmpeg call loops the slide PNG for the audio's length and muxes
-     the audio in (libx264 / aac, 1280x720, 24fps).
+  2. The native renderer (``native_render``) animates the slide's objects writing
+     on — title, divider, bullets — paced to fit the narration, then freezes the
+     finished slide for the remainder and muxes the audio in (libx264 / aac,
+     1280x720, 24fps).
 
-This replaces the old cv2 SpeedPaint + moviepy mux, which OOM'd and produced
-silent, blank video. Every segment ends up h264/aac and uniform, so Agent 8's
-ffmpeg concat can stream-copy them with audio intact.
+This replaces the flat PNG-loop (which itself replaced the OOM-prone cv2
+SpeedPaint + moviepy mux): the slide now draws itself on screen, with perfect
+text fidelity, deterministically and for free. Every segment ends up h264/aac
+and uniform, so Agent 8's ffmpeg concat can stream-copy them with audio intact.
 
 Entry point
 -----------
-compose_episode_videos()   Streamlit in-process entry point.
+compose_episode_videos()   Streamlit / worker in-process entry point.
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .models import VideoManifest, VideoSegment
+from .native_render import render_native_segment
 from .tts_client import synthesize
 
 logger = logging.getLogger(__name__)
@@ -56,37 +60,22 @@ def _audio_duration(audio_path: str, ffmpeg: str) -> float:
     return 0.0
 
 
-def _segment_with_audio(image: str, audio: str, out: str, ffmpeg: str) -> bool:
-    cmd = [
-        ffmpeg, "-y", "-loop", "1", "-i", image, "-i", audio,
-        "-c:v", "libx264", "-tune", "stillimage", "-pix_fmt", "yuv420p",
-        "-vf", "scale=1280:720", "-r", "24",
-        "-c:a", "aac", "-b:a", "128k", "-shortest", "-movflags", "+faststart", out,
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    return proc.returncode == 0 and Path(out).exists() and Path(out).stat().st_size > 0
-
-
-def _segment_silent(image: str, duration: float, out: str, ffmpeg: str) -> bool:
-    """Fallback when TTS fails — still produces video + a silent audio track."""
-    dur = max(2.0, duration)
-    cmd = [
-        ffmpeg, "-y", "-loop", "1", "-i", image,
-        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-        "-c:v", "libx264", "-tune", "stillimage", "-pix_fmt", "yuv420p",
-        "-vf", "scale=1280:720", "-r", "24",
-        "-c:a", "aac", "-b:a", "128k", "-t", f"{dur:.2f}", "-movflags", "+faststart", out,
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    return proc.returncode == 0 and Path(out).exists() and Path(out).stat().st_size > 0
-
-
 def compose_episode_videos(
     script_data: dict,
     slide_manifest: dict,
     progress_callback: Optional[Callable] = None,
+    branding: Optional[dict] = None,
 ) -> VideoManifest:
-    """Generate a narrated MP4 per segment (slide background + Edge TTS voice)."""
+    """Generate a narrated, object-animated MP4 per segment.
+
+    ``branding`` = {accent_rgb, logo_path} applies the school's colour/logo to the
+    animated slide (must match what Agent 5 baked into the deck). Any field may be
+    None, in which case the default Scholar style is used.
+    """
+    _b = branding or {}
+    _accent = _b.get("accent_rgb")
+    _logo = _b.get("logo_path")
+
     episodes = script_data.get("episodes", [script_data])
     episode = episodes[0] if isinstance(episodes, list) and episodes else script_data
 
@@ -94,6 +83,7 @@ def compose_episode_videos(
     chapter_num = episode.get("chapter_num", script_data.get("chapter_num", 0))
     episode_num = episode.get("episode_num", script_data.get("episode_num", 1))
     script_id = episode.get("script_id", script_data.get("script_id", str(uuid.uuid4())))
+    episode_title = episode.get("episode_title") or "SketchCast AI"
 
     vid_dir = VIDEO_DIR / book_id / f"chapter_{chapter_num}"
     vid_dir.mkdir(parents=True, exist_ok=True)
@@ -108,7 +98,6 @@ def compose_episode_videos(
 
     for i, slide_seg in enumerate(slide_segments):
         seg_id = slide_seg["segment_id"]
-        slide_png = slide_seg.get("slide_image_path")
         script_seg = script_segments.get(seg_id, {})
         text = (script_seg.get("text") or "").strip()
         seg_type = script_seg.get("type", slide_seg.get("type", "explore"))
@@ -117,9 +106,18 @@ def compose_episode_videos(
         if progress_callback:
             progress_callback(i, total, seg_id)
 
-        if not slide_png or not Path(slide_png).exists():
-            logger.warning("No slide image for %s — skipping", seg_id)
-            continue
+        # Build the slide spec from the script (same inputs Agent 5 lays out), so
+        # the animated slide matches the downloadable deck.
+        heading = (script_seg.get("slide_heading") or "").strip() or episode_title
+        points = [str(p).strip() for p in (script_seg.get("slide_points") or []) if str(p).strip()]
+        spec = {
+            "heading": heading,
+            "points": points,
+            "footer": f"{seg_type} · {i + 1}/{total}",
+            "context": episode_title if heading != episode_title else "",
+            "fallback": text,
+            "visual": script_seg.get("slide_visual"),
+        }
 
         audio_path: str | None = None
         out_mp4 = vid_dir / f"{seg_id}_video.mp4"
@@ -136,14 +134,15 @@ def compose_episode_videos(
                 logger.error("TTS failed for %s: %s", seg_id, exc)
                 audio_path = None
 
-        # 2. Slide + audio (or silent fallback) → MP4
-        if audio_path:
-            ok = _segment_with_audio(slide_png, audio_path, str(out_mp4), ffmpeg)
-        else:
-            ok = _segment_silent(slide_png, duration, str(out_mp4), ffmpeg)
+        # 2. Native object animation (paced to the narration) + audio → MP4
+        ok = render_native_segment(
+            spec, audio_path, str(out_mp4), ffmpeg,
+            audio_secs=duration if audio_path else 0.0,
+            accent=_accent, logo_path=_logo,
+        )
 
         if not ok:
-            logger.error("ffmpeg failed to build segment %s", seg_id)
+            logger.error("native renderer failed to build segment %s", seg_id)
             continue
 
         total_duration += duration
@@ -152,7 +151,7 @@ def compose_episode_videos(
             type=seg_type,
             audio_path=audio_path,
             video_path=str(out_mp4),
-            slide_image_path=slide_png,
+            slide_image_path=slide_seg.get("slide_image_path"),
             audio_duration_seconds=round(duration, 2),
             visual_action=slide_seg.get("visual_action", "GHOST_ONLY"),
         ))
