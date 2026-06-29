@@ -81,4 +81,12 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         dx.heading(doc, "Answer Key", 0)
         dx.numbered(doc, [str(q.get("answer", "")) for q in questions if isinstance(q, dict)])
 
+    # Structured questions for the app's interactive quiz player (best-effort).
+    try:
+        from docgen.questions import write_worksheet
+        write_worksheet(out_dir, data.get("title") or f"Worksheet — {chapter_title}",
+                        data.get("instructions"), questions)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("questions.json (worksheet) skipped: %s", exc)
+
     return dx.save(doc, out_dir / "worksheet.docx")

@@ -131,6 +131,19 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             dest = f"{base}/{kind}.docx"
             db.upload_artifact(sb, str(out_path), dest)
             db.add_artifact_row(sb, generation_id, "docx", dest)
+
+            # Structured questions for the interactive quiz player (worksheet/exam).
+            # Additive + best-effort: a missing 'questions_json' enum value (migration
+            # not yet applied) must not fail the generation.
+            qpath = Path(tmp) / "questions.json"
+            if kind in ("worksheet", "exam_paper") and qpath.exists():
+                try:
+                    qdest = f"{base}/{kind}_questions.json"
+                    db.upload_artifact(sb, str(qpath), qdest)
+                    db.add_artifact_row(sb, generation_id, "questions_json", qdest)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("questions_json upload skipped for %s: %s", generation_id, exc)
+
             db.set_progress(sb, job_id, 96)
             label = {
                 "lesson_plan": "Lesson plan", "activity": "Activities", "exam_paper": "Test paper",

@@ -138,4 +138,12 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
             dx.heading(doc, sec_name, 2)
             dx.numbered(doc, items)
 
+    # Structured questions for the app's interactive quiz player (best-effort).
+    try:
+        from docgen.questions import write_exam
+        write_exam(out_dir, data.get("title") or f"Test Paper — {chapter_title}",
+                   data.get("instructions"), fill, tf, match, subj)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("questions.json (exam) skipped: %s", exc)
+
     return dx.save(doc, out_dir / "exam_paper.docx")
