@@ -1,700 +1,251 @@
-# SketchCast AI — Technical Architecture Document
+# SketchCast AI — Technical Document
 
-**Version:** 1.0
-**Date:** 27 February 2026
-**Repository:** github.com/muqtadar1984-code/sketchcast-ai
-**Live:** https://sketchcast.streamlit.app/
+_Last updated: 2026-06-30. Reflects the current production architecture (web app on Vercel, worker on Railway, Supabase backend), the native video engine, and the student↔teacher + analytics system._
 
 ---
 
-## 1. System Overview
+## 1. What SketchCast is
 
-SketchCast AI is a multi-agent pipeline that transforms PDF textbooks into interactive, narrated whiteboard-style video lessons. A teacher uploads a PDF; the system extracts content, analyses it with Claude AI, writes a Socratic narration script, generates hand-drawn sketch animations, synthesises speech with ElevenLabs, and assembles everything into a browser-based player — all triggered by a single click.
+SketchCast turns a **textbook chapter (PDF)** into a **narrated lesson** plus a set of teaching materials, and lets teachers **assign** that content to students and **track** their progress.
 
-### Technology Stack
+For each chapter a teacher can generate:
+
+- a **narrated lesson video** — slides whose objects *animate on* in teaching order (title writes on, divider grows, bullet points and diagrams draw in), with a free text-to-speech voiceover;
+- an **editable slide deck** (`.pptx`) with the spoken Socratic narration in the speaker notes;
+- teacher **documents** (`.docx`): lesson plan, class activities, worksheet, exam/test paper, case study.
+
+Students assigned a chapter watch the lesson in-app (it counts as complete at 100%), and complete worksheets/exams either as an **interactive in-app quiz** (auto-graded) or by **uploading an answer file**. Teachers see completion, revisions, and scores in an **analytics dashboard**.
+
+It is launching as a public **freemium beta**. The free tier deliberately uses zero-cost generation (free TTS, no AI images, deterministic native video). Paid upsells (AI images, premium voices, AI whiteboard video) are planned.
+
+---
+
+## 2. High-level architecture
+
+Three independently-deployed pieces share one Supabase project as the source of truth:
+
+```
+            ┌─────────────────────────┐
+  Teacher → │  Web app (Next.js)      │  Vercel · app.sketchcast.app
+  Student → │  - auth, dashboards     │
+            │  - upload, assign       │
+            │  - serve results        │
+            └───────────┬─────────────┘
+                        │  reads/writes (RLS) + service-role ops
+            ┌───────────▼─────────────┐
+            │  Supabase               │  Postgres + Auth + Storage
+            │  - tables + RLS         │
+            │  - job queue (triggers) │
+            │  - storage buckets      │
+            └───────────▲─────────────┘
+                        │  polls job queue, uploads artifacts (service role)
+            ┌───────────┴─────────────┐
+            │  Worker (Python)        │  Railway
+            │  - agents 1–8 pipeline  │
+            │  - docgen               │
+            └─────────────────────────┘
+```
+
+**End-to-end flow**
+
+1. Teacher uploads a chapter PDF → web app inserts a `books` row.
+2. A DB trigger enqueues an `index_book` job → the worker extracts the chapter list and writes it back onto the book.
+3. Teacher clicks **Generate** for a chapter/kind → app inserts a `generations` row.
+4. A DB trigger enqueues a job → the worker runs the pipeline → uploads artifacts (deck, video, docx, questions.json) and marks the job done.
+5. The app serves results via signed Storage URLs; teachers assign chapters to classes; students consume them; progress flows back.
+
+The client **never** writes to the `jobs` table or talks to the worker directly — it only inserts `generations`/`books` rows, and DB triggers create the jobs. This keeps the queue authoritative and RLS-safe.
+
+---
+
+## 3. Repositories & hosting
+
+| Repo | Contents | Host | Branch |
+|------|----------|------|--------|
+| `muqtadar1984-code/sketchcast-app` | Next.js web app + Supabase migrations (`supabase/migrations/`) | **Vercel** (`app.sketchcast.app`), auto-deploy | `main` |
+| `muqtadar1984-code/sketchcast-ai` | Python worker, agents 1–8, `docgen`, legacy Streamlit monolith | **Railway** (web + worker split), auto-deploy | `master` |
+
+- **Domain**: `sketchcast.app`, registered at **Cloudflare** (free DNS/SSL/CDN; `.app` forces HTTPS). The web app runs on the `app.` subdomain.
+- **Supabase** provides Postgres, Auth, and Storage for both repos.
+- A legacy **Streamlit** app (`streamlit_app.py`) in the worker repo is the original monolith that ran the agents in-process; the same agent modules are now driven by the headless worker.
+
+---
+
+## 4. The generation pipeline (agents)
+
+The worker reuses a set of "agent" modules, each a stage of the pipeline. Orchestrated by `worker/process.py`.
+
+| Agent | Module | Responsibility |
+|-------|--------|----------------|
+| **1 — Ingestion** | `agent1_ingestion/` | Extract text (PyMuPDF), extract images, and `structure_book()` → detect the chapter list `[{num, title}]`. Also renders a page-1 cover thumbnail. |
+| **2 — Analysis** | `agent2_analysis/` | Claude analyzes a chapter → key concepts, difficulty assessment, "visual opportunities", and an episode breakdown. Detects grade + subject from the title/chapter list. |
+| **3 — Scripts** | `agent3_scripts/` | Claude writes the **Socratic narration** per segment, plus the on-screen `slide_heading`, `slide_points`, an optional composable `slide_visual` (diagram), and optional `visual_request` (for paid AI imagery). |
+| **4 — Images** | `agent4_image_gen/` | *(Free tier: skipped.)* Gemini "Nano Banana" image generation for the paid tier. |
+| **5 — Slides** | `agent5_slides/` | `compose_slide()` renders the canonical 1280×720 slide (heading + bullets, **or** a diagram) and exports a PNG + a combined editable **PPTX** (with narration in speaker notes). |
+| **6 — Video** | `agent6_animation/` | The **native renderer**: animates the slide's objects writing on, paced to the narration, with free **Edge-TTS** voiceover, then muxes audio. |
+| **8 — Render** | `agent8_render/` | Concatenates per-segment MP4s into one chapter video with ffmpeg (stream-copy concat, memory-flat). |
+| **QA** | `agent8_qa/`, `quality_checker.py` | Background quality checks. |
+
+Claude calls go through `shared/claude_client.py`. Models default to the latest Claude family (cost-leaning for the free tier).
+
+**Document generators** (`docgen/`) are dispatched by `generation_kind` for the non-video outputs: `lesson_plan`, `activity`, `worksheet`, `exam_paper`, `case_study`. Each asks Claude for structured JSON and renders it to a branded `.docx` (python-pptx/python-docx). Worksheet/exam **also** emit a `questions.json` for the interactive quiz player.
+
+---
+
+## 5. The native video engine (the differentiator)
+
+The free-tier lesson video is rendered **deterministically, on-device, for $0** — no third-party video API. Built in three phases (all shipped):
+
+- **Phase 1 — object renderer.** Instead of looping a flat slide image, the slide's *objects* animate on in teaching order (context line → title → divider grows → bullets write on, pen at the frontier). `agent5_slides/slide_builder.compose_slide()` is the single layout source; it returns the rendered image **plus ordered "reveal boxes"** which the renderer animates. The write-on phase is sized to fit inside the narration; the finished slide is then frozen (ffmpeg `tpad`) for the remainder, so the clip length equals the audio length. Perfect text fidelity, multilingual, instant.
+- **Phase 2 — composable diagrams.** A small, deterministic diagram vocabulary (`flow`, `cycle`, `hierarchy`, `compare`) via `agent5_slides/diagram_builder.render_diagram()`. It draws into the slide and returns reveal-boxes, so diagrams animate object-by-object with the **same** animation mechanism — no new code path.
+- **Phase 3 — icon objects.** An `icons` slide kind: labelled icon tiles. ~34 crisp **DejaVu symbol glyphs** + 6 hand-drawn PIL primitives (lightbulb, book, target, globe, search, clock), with an alias map and a generic fallback.
+
+Claude (Agent 3) chooses when to emit a `slide_visual` diagram/icons block for structural concepts. Output codecs are uniform (libx264 / yuv420p / 1280×720 / 24 fps / aac) so Agent 8 can stream-copy the concat.
+
+**Paid video options** were evaluated (see Roadmap): Gemini Nano Banana (static art), Google Veo (B-roll), HeyGen/D-ID (AI presenter), and **Golpo AI** (AI whiteboard explainer) — the leading candidate for the paid "speedpaint" tier.
+
+---
+
+## 6. Data model (Supabase Postgres)
+
+Defined in `sketchcast-app/supabase/migrations/` (0001 → 0008). RLS is enabled on every table.
+
+### Core tables
+
+| Table | Purpose |
+|-------|---------|
+| `schools` | Optional org; independent teachers have `school_id = NULL`. |
+| `profiles` | One row per `auth.users` user. `role` (school_admin/teacher/student), `full_name`, `school_id`, `username` (student login ID), `parent_email`, `must_reset_password`. |
+| `classes` | A class owned by a teacher; has a `join_code`. |
+| `enrollments` | Student ↔ class (many-to-many). |
+| `books` | Uploaded source PDFs (shared library within a school). Holds the auto-detected `chapters` jsonb, `grade`, `subject`, `cover_path`. |
+| `generations` | Teacher-owned generated outputs. `kind` (presentation / lesson_plan / worksheet / exam_paper / case_study / activity), `book_id`, `chapter_ref`, `params` jsonb, `status`. |
+| `artifacts` | Files produced for a generation (`deck_pptx`, `video_mp4`, `docx`, `questions_json`, …) → paths in the `artifacts` bucket. |
+| `jobs` | The worker's queue. Created by triggers, never by the client. |
+| `generation_shares` | A teacher assigns a generation to a class (with `due_at`). The assignment primitive. |
+| `branding` | A teacher's uploaded `.docx`/`.pptx` school templates. |
+| `student_progress` | Per (generation × student) completion lifecycle: `assigned → in_progress → completed → revised`, `revision_count`, `progress_pct`, timestamps. |
+| `submissions` | A student's worksheet/exam answer: `mode` (file/interactive), `answers` jsonb, `file_path`, `auto_score`/`max_score`, `teacher_score`/`feedback`, `grade_status`. |
+
+### Enums
+`user_role`, `book_kind`, `generation_kind`, `job_status`, `artifact_kind`, `progress_status`.
+
+### Storage buckets (private)
+- `uploads` — source PDFs + school branding templates (user manages own `{uid}/…` folder).
+- `artifacts` — generated outputs (owner manages; served via signed URLs).
+- `submissions` — student answer-file uploads (`{uid}/{genId}/…`).
+
+### Triggers / functions
+- `handle_new_user()` — creates a `profiles` row on signup (role from sign-up metadata).
+- `create_job_for_generation()` / `create_index_job_for_book()` — enqueue worker jobs on insert.
+- `touch_updated_at()` — maintains `updated_at`.
+
+### Row-Level Security model
+Every table is RLS-isolated. Cross-table checks use **SECURITY DEFINER helper functions** (which bypass RLS internally) to stay safe and non-recursive: `current_role_val()`, `current_school_id()`, `shared_to_me(gen)`, and (added in 0008) `owns_class(cls)`, `enrolled_in_class(cls)`, `teaches_student(stu)`.
+
+Representative policies: teachers manage their own books/generations/classes; students read content **shared to a class they're enrolled in** (`shared_to_me`); a teacher reads the profiles + progress + submissions of students they teach; school admins get read-only visibility within their school.
+
+> **Important RLS lesson (migration 0008):** never write a policy whose `USING` subqueries a table whose own policy subqueries back — Postgres raises *"infinite recursion detected in policy"* and authenticated reads silently return nothing (while the SQL editor, running as `postgres`, bypasses RLS and looks fine). Use a SECURITY DEFINER helper instead.
+
+### Migrations (apply in order, in the Supabase SQL editor)
+`0001_init` (schema + RLS) · `0002_book_chapters` · `0003_grade_subject_docs` · `0004_branding` · `0005_student_profiles` · `0006_progress_submissions` · `0007_questions_artifact` · `0008_fix_rls_recursion`.
+
+---
+
+## 7. Web app (Next.js)
+
+**Stack:** Next.js 16 (App Router, Turbopack), React 19, Tailwind v4, `@supabase/ssr`. (Note: this Next version renamed `middleware.ts` → `proxy.ts`; `cookies()` is async.)
+
+**Auth & routing**
+- `src/proxy.ts` + `utils/supabase/proxy.ts` refresh the Supabase session on every request and guard `/dashboard*` (unauthenticated → `/login`).
+- `utils/supabase/{server,client,admin}.ts` — server (cookie-bound, RLS) client, browser client, and a **service-role admin** client (server-only).
+- Login accepts a teacher **email** or a student **ID** (an ID with no `@` is mapped to `username@students.sketchcast.app`).
+
+**Teacher dashboard** (`src/app/dashboard/page.tsx`, role-gated)
+- **Library** — books grouped Grade → Subject; per-chapter content via `ChapterGenerate` (checkboxes per document type + a single "Generate (N)" button, plus "Assign chapter").
+- **Classes & students** (`classes-card.tsx`) — create classes, provision students (→ login IDs + temp passwords), roster, join code, "Show progress".
+- **School branding**, **Upload**, and the **Analytics** nav.
+
+**Student dashboard** ("My lessons") — assigned chapters grouped by class; each item is interactive: the **lesson plays in-app** and completes at 100% (re-opening a finished one → *revised*); worksheets/exams offer **Take quiz** (interactive) or **Submit file**.
+
+**Analytics** (`dashboard/analytics/page.tsx`) — metric cards (classes / students / assignments / completion % / overdue / to-grade), per-class completion bars, "most revised" hotspots, and a **grading queue** (`grade-list.tsx`).
+
+**API routes**
+- `POST /api/students` — teacher-only student provisioning (service role): creates an auth user per student (synthetic email, temp password), fills the profile, enrolls them, and returns the credentials.
+- `GET /api/submission-url` — teacher-only signed URL for a student's uploaded submission file (RLS gates the read; service role signs the object).
+
+**Design system ("Warm Scholarly")** — central tokens in `globals.css` (cream `#FBF6EC`, forest green `#2E6B4E`, warm amber `#C77F2A`, ink), **Fraunces** (serif headings) + **Inter** (body) via `next/font`, and reusable component classes authored as Tailwind v4 `@utility` (`card`, `btn-primary`, `field`, `chip`, …). (Tailwind v4 note: custom classes must be `@utility`, not `@layer components`, to be reliably emitted.)
+
+---
+
+## 8. Student ↔ teacher system
+
+Built in three phases on top of the existing `classes`/`enrollments`/`generation_shares` foundation.
+
+- **Phase A — identity + assignment.** Student provisioning (school-issued **ID + password** given to parents; the **parent's email** is stored for communication, not as the login, since siblings can share one); join-by-code; "Assign chapter" shares all *student-facing* materials (lesson video/deck, worksheet, exam, activity, case study — **never** the teacher lesson plan) to a class with a due date; the read-only student dashboard.
+- **Phase B — completion + reverse feedback.** `student_progress` lifecycle; lesson video completes at 100%, reopening → *revised*; worksheets/exams via answer-file upload; the teacher's per-class roster (Completed / Revised / Incomplete / Overdue).
+- **Phase C — interactive quizzes + analytics.** The worker emits `questions.json`; the in-app **quiz player** auto-grades objective questions (fill-blank, true/false, match) and stores answers + score; subjective/short answers are flagged for the teacher; the analytics dashboard + grading queue.
+
+**Completion rules (decided):** *Completed = 100%* for everything. *Revised = any re-open* of a completed item. Tests/worksheets support **both** an interactive auto-graded path **and** a file-upload path; grading is hybrid (auto where objective, manual otherwise).
+
+---
+
+## 9. Security & auth
+
+- **Supabase Auth** — Google + email/password, with email verification + forgot-password.
+- **Students** — for minors, school/teacher-provisioned accounts: name-derived **username** (`first.last`, numeric suffix on collision), a synthetic unique login email, a random temp password, and the parent's email for comms. Public self-signup is gated to 18+.
+- **RLS everywhere** — each user sees only their own data + what's explicitly shared (see §6).
+- **Service-role key** (`SUPABASE_SERVICE_ROLE_KEY`) — used **server-side only** (the provisioning route, and signing students' entitled artifacts/submissions). Stored in Vercel + Railway env, never shipped to the browser.
+
+---
+
+## 10. Deployment & operations
+
+- **Web app** → push to `main` → Vercel auto-builds/deploys. (Build gates on TypeScript, not ESLint.)
+- **Worker** → push to `master` → Railway auto-deploys.
+- **Supabase migrations** are applied **manually** in the SQL editor, in order, and **must precede** the matching app deploy (a migration-dependent query against a missing column errors). Migration `0007` (an `ALTER TYPE ... ADD VALUE`) is run as its own statement.
+
+**Environment variables**
+
+| Var | Where | Purpose |
+|-----|-------|---------|
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Vercel (public) | Browser/SSR Supabase client. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Vercel + Railway (secret) | Server-only admin ops (provisioning, signing). |
+| `GOOGLE_AI_API_KEY` | Railway | Gemini (paid image gen). |
+| `SKETCHCAST_TTS_VOICE` | Railway (optional) | Edge-TTS voice override. |
+
+**Generation cost levers (free tier):** free Edge/Google TTS (no ElevenLabs), no AI images, deterministic native video, a cheap Claude model, per-teacher daily generation caps (planned, enforced DB-side), and a watermark.
+
+---
+
+## 11. Tech stack summary
 
 | Layer | Technology |
 |-------|-----------|
-| UI | Streamlit (Python) |
-| AI / LLM | Anthropic Claude API (claude-sonnet-4) |
-| Text-to-Speech | ElevenLabs API (eleven_turbo_v2) |
-| PDF Extraction | Docling (primary), PyMuPDF (fallback/TOC) |
-| Animation | Rough.js (hand-drawn SVG), SVG filters |
-| Audio Processing | pydub, audioop-lts |
-| Data Models | Pydantic v2 |
-| Database | SQLAlchemy + SQLite |
-| API Layer | FastAPI (per-agent, ports 8003-8006) |
-| Hosting | Streamlit Cloud |
+| Web app | Next.js 16, React 19, TypeScript, Tailwind v4 |
+| Backend / DB | Supabase (Postgres + RLS, Auth, Storage) |
+| Worker | Python (FastAPI for the legacy API; headless job processor), PyMuPDF, Pillow, python-pptx/docx, ffmpeg (imageio-ffmpeg), Edge-TTS |
+| AI | Anthropic Claude (scripts, analysis, documents); Google Gemini (paid images) |
+| Hosting | Vercel (app), Railway (worker), Cloudflare (DNS), Supabase (data) |
 
 ---
 
-## 2. Agent Pipeline — What Has Been Built
+## 12. Key design decisions & gotchas
 
-### 2.1 Pipeline Summary
-
-| Agent | Name | Status | What It Does |
-|-------|------|--------|-------------|
-| 1 | Library & Ingestion | Complete | PDF upload, text/image extraction, chapter structuring |
-| 2 | Content Analysis | Complete | Claude-driven concept extraction, difficulty analysis, visual opportunity detection |
-| 3 | Script Generation | Complete | Socratic narration scripts with TTS markup and sketch cues |
-| 4 | Sketch Animation | Complete | SVG whiteboard drawings with Rough.js hand-drawn rendering |
-| 5 | Audio Generation | Complete | ElevenLabs TTS per segment, stitched into master MP3 |
-| 6 | Live Playback Engine | Complete | Browser player syncing audio + animations in real time |
-| 7 | YouTube Export | Disabled | Code not yet written; page locked via feature flag |
-| 8 | Q&A Interjection | Disabled | Code built but locked; question bank with fuzzy matching |
-
-### 2.2 Auto-Chain Execution
-
-One click on "Run Analysis" triggers the full pipeline sequentially:
-
-```
-PDF Upload (manual)
-    |
-    v
-Agent 1: Ingestion (manual upload)
-    |
-    v
-Agent 2: Analysis -----> triggered by "Run Analysis" button
-    |
-    v
-Agent 3: Script --------> auto-triggered after analysis
-    |
-    v
-Agent 4: Animations ----> auto-triggered after script
-    |
-    v
-Agent 5: Audio ----------> auto-triggered after animations (skips if no ElevenLabs keys)
-    |
-    v
-Agent 6: Player ---------> auto-triggered after audio
-```
-
-Each step has its own progress indicator. If one agent fails, results from prior agents are preserved.
+- **Object-animation video** beats a flat slide loop at $0 and is the product's visual identity; diagrams + icons reuse the same reveal-box animation.
+- **Derive the assigned set, record only activity** — the "what's assigned" set is `generation_shares ⋈ enrollments` (auto-adjusts to enrollment changes); `student_progress` only records actual student activity; "incomplete/overdue" falls out by absence.
+- **RLS recursion** — cross-table policies must use SECURITY DEFINER helpers (migration 0008 fixed a recursion that silently nulled authenticated reads).
+- **Tailwind v4** — custom component classes must be `@utility`; `@theme` (non-inline) emits the CSS vars used by them.
+- **React 19 purity lint** — `Date.now()` / `Math.random()` in render are flagged; compute time-based values server-side and order options deterministically.
+- **Migrations before deploys** — a migration-dependent query against a not-yet-applied column will error; the app degrades gracefully where possible.
 
 ---
 
-## 3. Agent 1 — Library & Ingestion
-
-**Location:** `agent1_ingestion/`
-**Purpose:** Accept PDF textbook uploads, extract all content, and structure it into a navigable hierarchy.
-
-### How It Works
-
-**PDF Text Extraction** (`extractor.py`):
-- **Primary backend:** Docling with OCR enabled. Uses semantic item labels (TITLE, SECTION_HEADER, PARAGRAPH, TABLE, LIST_ITEM, CAPTION, PICTURE) to classify each content block.
-- **Fallback backend:** PyMuPDF (fitz) when Docling is unavailable. Uses font-size frequency analysis — the most common font size is classified as body text; larger sizes become headings.
-- **Caching:** MD5 hash of first 4MB + file size used as cache key, enabling fast re-runs on Streamlit Cloud's ephemeral filesystem.
-- **Output:** `ExtractionResult` containing `DocItem[]` (each with item_type, text, page_num, level), `TOCItem[]`, total_pages, and readability_score.
-
-**Image Extraction** (`image_extractor.py`):
-- Uses PyMuPDF `page.get_images(full=True)` to find all embedded images by xref.
-- Filters by minimum dimensions (50x50px).
-- Extracts surrounding text as `context_label` for each image.
-- Includes a blank-image filter: pre-API pixel variance check (PIL, threshold=50) and post-API keyword filter ("completely black", "no visible content") to exclude empty/solid images.
-
-**Book Structuring** (`structurer.py`):
-- Converts flat DocItem list into `StructuredBook` with chapters, sections, subsections.
-- **Chapter detection** (priority): PDF TOC bookmarks (level=1) > Level-1 heading DocItems > treat entire document as 1 chapter.
-- **Section detection:** Level 2 DocItems become Sections; Level 3 become Subsections nested under them; Level 0 (body text) accumulates into the current section.
-- **Key box detection:** Regex matching on known patterns (activity, definition, info, exercise, quote) to tag special content blocks.
-
-### Data Models
-
-```
-StructuredBook
-  ├── book_id, title, author, isbn
-  ├── total_pages, total_chapters, readability_score
-  ├── table_of_contents: TOCEntry[]
-  └── chapters: ChapterContent[]
-        ├── chapter_num, title, start_page, end_page
-        ├── sections: Section[]
-        │     ├── section_title, content, page_num
-        │     └── subsections: Subsection[]
-        ├── images: ImageInfo[]
-        └── key_boxes: KeyBox[] (activity, definition, info, exercise, quote)
-```
-
-### Deduplication
-
-Before processing, the system checks for duplicates using:
-1. ISBN exact match
-2. Title + author fuzzy match (rapidfuzz, threshold 85%)
-3. File hash exact match (SHA-256)
-
----
-
-## 4. Agent 2 — Content Analysis
-
-**Location:** `agent2_analysis/`
-**Purpose:** Deep educational analysis of chapter content using Claude AI.
-
-### How It Works
-
-`run_full_analysis()` makes exactly **2 Claude API calls** per chapter:
-
-**Call 1 — Full Chapter Analysis:**
-- Sends chapter text (capped at 15K characters) + structured metadata.
-- Claude returns a single JSON containing:
-  - **Concepts** (id, name, definition, importance: foundational/supporting/application, dependencies, prerequisites)
-  - **Difficulty assessments** per section (score 1-10, vocabulary load, pacing recommendation, suggested analogies)
-  - **Visual opportunities** (trigger_text, visual_type, animation_sequence with step-by-step actions, sketch_elements, estimated_duration, complexity)
-
-**Call 2 — Batch Image Analysis:**
-- Sends all chapter images in a single multi-image Claude Vision call.
-- Claude returns per-image: visual_type, description, key_elements, educational_value, can_be_recreated_as_sketch, sketch_recreation_notes.
-
-**Episode Segmentation** (mechanical, no API call):
-- Builds a single-episode plan per chapter based on sections covered, concepts introduced, and visual opportunities available.
-- Estimates ~600 words per 5-minute episode.
-
-### Output: MasterAnalysis
-
-```
-MasterAnalysis
-  ├── analysis_id, book_id, chapter_num, chapter_title
-  ├── difficulty_level_requested (primary/middle/high school)
-  ├── token_usage (input, output, total, estimated_cost_usd)
-  ├── concepts: ConceptResult
-  │     ├── concepts: Concept[]
-  │     ├── dependencies: Dependency[]
-  │     └── prerequisites: Prerequisite[]
-  ├── difficulty_assessments: DifficultyAssessment[]
-  ├── visual_opportunities: VisualOpportunity[]
-  │     └── animation_sequence: AnimationStep[] (step, action, details, duration_ms)
-  ├── image_analyses: ImageAnalysis[]
-  └── episodes: EpisodePlan
-```
-
----
-
-## 5. Agent 3 — Script & Dialogue Generation
-
-**Location:** `agent3_scripts/`
-**Purpose:** Generate Socratic narration scripts with ElevenLabs TTS markup, sketch cues, and question hooks.
-
-### How It Works
-
-`generate_chapter_scripts_from_analysis()` takes the full MasterAnalysis and produces one script per episode:
-
-1. Builds an episode context string from the analysis (concepts, visuals, teaching notes).
-2. Sends to Claude with the `EPISODE_SCRIPT_PROMPT`.
-3. Parses response into typed `ScriptSegment` objects.
-
-### Script Structure (mandatory segment order)
-
-| Segment Type | Duration | Purpose |
-|-------------|----------|---------|
-| `hook` | ~30s | Surprising real-world question to grab attention |
-| `activate` | ~45s | Bridge from known to unknown ("You've probably noticed...") |
-| `explore` (1+) | 60-120s each | One per major concept, Socratic question-driven |
-| `question_hook` | ~20s | Natural pause for student reflection |
-| `synthesis` | ~45s | "Let's collect what we discovered..." |
-| `preview` | ~20s | Tease next episode |
-
-### Key Fields Per Segment
-
-- `text` — plain narrator text
-- `elevenlabs_text` — same text with `<break time="Xs"/>` TTS markup (0.3s micro, 0.5s short, 1s medium, 2s thinking)
-- `sketch_cue` — `{action, element, timing}` telling Agent 4 what to draw and when
-  - action: draw, highlight, label, clear, point, annotate
-  - timing: before, during, or after the narration
-- `pause_for_question` — boolean flag for Agent 6/8 integration
-- `estimated_duration_seconds` — word-count-based estimate
-
-### Output: EpisodeScript
-
-```
-EpisodeScript
-  ├── script_id, book_id, chapter_num, episode_num, episode_title
-  ├── narrator_persona: "Socratic"
-  ├── segments: ScriptSegment[]
-  │     ├── segment_id: "s001", "s002", ...
-  │     ├── type: hook | activate | explore | question_hook | synthesis | preview
-  │     ├── text, elevenlabs_text
-  │     ├── sketch_cue: {action, element, timing} | null
-  │     ├── pause_for_question: bool
-  │     └── estimated_duration_seconds
-  ├── total_estimated_duration_seconds
-  └── question_hook_count
-```
-
----
-
-## 6. Agent 4 — Sketch Animation
-
-**Location:** `agent4_animation/`
-**Purpose:** Generate SVG whiteboard drawings with hand-drawn style and Rough.js rendering.
-
-### How It Works
-
-`generate_episode_animations_from_script()` processes every segment:
-
-1. **Segments with `sketch_cue`** — Claude plans the sketch, then it's rendered:
-   - `_get_sketch_plan()` — Claude designs the layout: which elements (circles, rectangles, arrows, text, mind maps, process flows, timelines, pyramids, Venn diagrams, trees, grids), their positions, sizes, colours, and draw order.
-   - `execute_sketch_plan()` — `SVGCanvas` renders the plan into an SVG string (1280x720, #FAFAFA background).
-   - `build_animation()` — Creates frame-by-frame timing (progressive reveal based on draw_order).
-   - `generate_roughjs_html()` — Produces a self-contained HTML file using the Rough.js library for true hand-drawn rendering.
-
-2. **Segments without `sketch_cue`** — Marked as blank canvas (no animation).
-
-### SVG Canvas Capabilities
-
-The `SVGCanvas` class supports:
-- **Primitives:** circle, rectangle, line, arrow, text
-- **Compounds:** grid, timeline, tree, mind_map, pyramid, venn, process_flow
-- **Hand-drawn effects:** SVG `feTurbulence` + `feDisplacementMap` filter for wobbly lines, seeded stroke-width variation (±0.6px), paper texture overlay via Perlin noise
-
-### Rough.js HTML Template
-
-Each animated segment produces a standalone HTML file that:
-- Loads the Rough.js CDN library
-- Reads the sketch plan + animation timing as embedded JSON
-- Draws elements progressively using `requestAnimationFrame`
-- Default rough.js options: `roughness: 1.4, bowing: 0.8, strokeWidth: 2.2, fillStyle: 'hachure'`
-- Exposes `window.startAnimation()` for external control
-
-### Output: AnimationManifest
-
-```
-AnimationManifest
-  ├── manifest_id, script_id, book_id, chapter_num, episode_num
-  ├── canvas_size: {width: 1280, height: 720}
-  ├── total_segments, animated_segments, blank_segments
-  └── segments: ManifestSegment[]
-        ├── segment_id, type
-        ├── has_animation: bool
-        ├── svg_path: "storage/animations/.../s003_sketch.svg"
-        ├── animation_path: "storage/animations/.../s003_animation.json"
-        ├── roughjs_html_path: "storage/animations/.../s003_roughjs.html"
-        ├── estimated_duration_seconds
-        └── sketch_cue_timing: before | during | after
-```
-
----
-
-## 7. Agent 5 — Audio Generation
-
-**Location:** `agent5_audio/`
-**Purpose:** Synthesise narration audio using ElevenLabs TTS and stitch into a master MP3.
-
-### How It Works
-
-`generate_episode_audio()` runs a 3-step pipeline:
-
-**Step 1 — TTS Generation** (`tts_client.py`):
-- Iterates through script segments sequentially (no parallel calls).
-- Sends each segment's `elevenlabs_text` (with `<break>` markup) to ElevenLabs.
-- Configuration: model `eleven_turbo_v2`, output `mp3_44100_128`, voice ID from `st.secrets`.
-- 0.5s delay between API calls to respect rate limits.
-- Retry once with exponential backoff on failure.
-- Each segment saved as `{segment_id}.mp3`.
-
-**Step 2 — Stitching** (`stitcher.py`):
-- Uses pydub to concatenate all segment MP3s in order.
-- Inserts 300ms silence gaps between segments.
-- Exports as single `master.mp3` at 128kbps.
-- Returns `(total_duration_seconds, [per_segment_durations])`.
-
-**Step 3 — Manifest Building** (`manifest_builder.py`):
-- Calculates cumulative `master_start_seconds` / `master_end_seconds` from actual measured durations + 300ms gaps.
-- These are the timestamps Agent 6 uses for sync — never estimated durations.
-
-### Output: AudioManifest
-
-```
-AudioManifest
-  ├── audio_manifest_id, script_id, book_id, chapter_num, episode_num
-  ├── voice_id, model
-  ├── master_audio_path: "storage/audio/{book_id}/chapter_{n}/master.mp3"
-  ├── total_duration_seconds (actual measured)
-  └── segments: SegmentAudio[]
-        ├── segment_id
-        ├── audio_path: "storage/audio/.../s001.mp3"
-        ├── actual_duration_seconds
-        ├── master_start_seconds (cumulative position in master)
-        ├── master_end_seconds
-        ├── pause_for_question: bool
-        └── pause_point: bool
-```
-
-### Duration Discrepancy Note
-
-Agent 3 estimates duration from word count (~130 words/minute). ElevenLabs `eleven_turbo_v2` speaks significantly faster — actual durations are typically ~46% of estimated. The pipeline uses actual measured durations for all sync calculations.
-
----
-
-## 8. Agent 6 — Live Playback Engine
-
-**Location:** `agent6_player/`
-**Purpose:** Synchronise master MP3 audio with Rough.js sketch animations in a browser-based player.
-
-### How It Works
-
-`build_player_package()` runs 3 steps:
-
-**Step 1 — Timeline Merging** (`sync_engine.py`):
-- Joins audio manifest (Agent 5) and animation manifest (Agent 4) by `segment_id`.
-- Calculates `animation_trigger` from `sketch_cue_timing`:
-  - `"before"` → `max(0, audio_start - animation_duration)`
-  - `"during"` → `audio_start`
-  - `"after"` → `audio_end`
-- Carries forward `pause_at_second = audio_end` for question_hook segments.
-
-**Step 2 — Asset Embedding**:
-- Reads each animated segment's Rough.js HTML content.
-- Encodes master MP3 as base64 data URI (for Streamlit iframe embedding).
-
-**Step 3 — HTML Assembly** (`player_builder.py`):
-- Produces a single self-contained HTML file with all CSS, JS, timeline JSON, animation content, and audio embedded inline.
-- Embedded in Streamlit via `st.components.v1.html(player_html, width=1280, height=800)`.
-
-### Player Features (player.js)
-
-| Feature | Implementation |
-|---------|---------------|
-| Audio playback | HTML5 `<audio>` element with play/pause/seek/volume |
-| Animation sync | `requestAnimationFrame` loop checks `audio.currentTime` against `animation_trigger` timestamps; loads Rough.js HTML into `<iframe>` via `srcdoc` |
-| Segment tracking | Segment title bar updates with current segment type and narration text preview |
-| Progress | Red progress bar + coloured dots at each segment boundary (orange = pause point) |
-| Question pause | **Currently disabled.** `checkPausePoints()` is a no-op. When re-enabled, pauses audio at `pause_at_second` and shows question overlay. |
-
-### Output: UnifiedTimeline
-
-```
-UnifiedTimeline
-  ├── timeline_id, script_id, book_id, chapter_num, episode_num, episode_title
-  ├── total_duration_seconds (from actual audio)
-  ├── master_audio_path
-  └── segments: TimelineSegment[]
-        ├── segment_id, type
-        ├── audio_start, audio_end (seconds in master)
-        ├── has_animation: bool
-        ├── roughjs_html_path
-        ├── animation_trigger (calculated second)
-        ├── sketch_cue_timing: before | during | after
-        ├── pause_for_question: bool
-        ├── pause_at_second
-        └── segment_text
-```
-
----
-
-## 9. Agent 7 — YouTube Export (Disabled)
-
-**Status:** Locked via `config.py → YOUTUBE_EXPORT_ENABLED = False`
-**Streamlit page:** Shows "YouTube export is not enabled in this version."
-**Code:** Not yet written. Will use Remotion for MP4 rendering from the unified timeline.
-
----
-
-## 10. Agent 8 — Q&A Interjection Handler (Disabled)
-
-**Location:** `agent8_qa/`
-**Status:** Code fully built but page locked and interjection disabled in the player.
-
-### What's Built (Ready to Re-Enable)
-
-- **Question Bank** (`question_bank.py`): JSON-backed storage with rapidfuzz fuzzy matching (85% threshold). Repeated questions served from cache at zero LLM cost. Questions with 10+ uses auto-marked "verified".
-- **Answer Generator** (`answer_generator.py`): Claude streaming in the Socratic narrator voice, 2-4 sentences max, contextually aware of current segment and chapter.
-- **Streaming TTS** (`streaming_tts.py`): Buffers Claude text into sentences, sends each complete sentence to ElevenLabs streaming immediately. Target: audio starts within 1.5s.
-- **Question Handler** (`question_handler.py`): Orchestrator — bank check first, then Claude + TTS fallback, then auto-bank new answers.
-- **FastAPI SSE Endpoint** (`main.py`): `POST /ask/{script_id}/{segment_id}` returns Server-Sent Events with `text` and `audio` events.
-
----
-
-## 11. Data Flow Between Agents
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        AGENT 1                                   │
-│  PDF → Docling/PyMuPDF → ExtractionResult → StructuredBook      │
-│  PDF → PyMuPDF images → ExtractedImage[]                        │
-└────────────────────────┬────────────────────────────────────────┘
-                         │ StructuredBook.chapters[n]
-                         v
-┌─────────────────────────────────────────────────────────────────┐
-│                        AGENT 2                                   │
-│  ChapterContent + Claude → MasterAnalysis                        │
-│    (concepts, difficulty, visuals, image analyses, episode plan) │
-└────────────────────────┬────────────────────────────────────────┘
-                         │ MasterAnalysis (full dict)
-                         v
-┌─────────────────────────────────────────────────────────────────┐
-│                        AGENT 3                                   │
-│  MasterAnalysis + Claude → EpisodeScript                         │
-│    (segments with text, elevenlabs_text, sketch_cues)           │
-└──────────┬─────────────────────────────┬────────────────────────┘
-           │ sketch_cue per segment       │ elevenlabs_text per segment
-           v                              v
-┌─────────────────────────┐  ┌────────────────────────────────────┐
-│        AGENT 4          │  │            AGENT 5                  │
-│  sketch_cue + Claude    │  │  elevenlabs_text + ElevenLabs TTS  │
-│  → SketchPlan           │  │  → segment MP3s                    │
-│  → SVG + animation.json │  │  → master.mp3 (pydub stitch)      │
-│  → Rough.js HTML        │  │  → AudioManifest (actual timings)  │
-│  → AnimationManifest    │  │                                    │
-└──────────┬──────────────┘  └──────────────┬─────────────────────┘
-           │ AnimationManifest               │ AudioManifest
-           └──────────┬─────────────────────┘
-                      │ merge by segment_id
-                      v
-┌─────────────────────────────────────────────────────────────────┐
-│                        AGENT 6                                   │
-│  AudioManifest + AnimationManifest → UnifiedTimeline             │
-│  UnifiedTimeline + embedded assets → player.html                │
-│    (self-contained HTML/JS/CSS with base64 audio + animations)  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Integration Keys
-
-- **Agent 1 → 2:** `chapter_content` dict (sections, images, key_boxes)
-- **Agent 2 → 3:** `MasterAnalysis` dict (concepts, visuals, difficulty, episode plan)
-- **Agent 3 → 4:** `ScriptSegment.sketch_cue` (action, element, timing)
-- **Agent 3 → 5:** `ScriptSegment.elevenlabs_text` (with `<break>` markup)
-- **Agent 4 + 5 → 6:** Matched by `segment_id` across both manifests; sync uses **actual audio timestamps only**
-
----
-
-## 12. Storage Layout
-
-```
-storage/
-├── books/                    # Raw/cached PDF data (Agent 1)
-├── extracted_images/         # Chapter images (Agent 1)
-│   └── {book_id}/
-├── processed/                # StructuredBook JSON (Agent 1)
-│   └── {book_id}.json
-├── analysis/                 # MasterAnalysis JSON (Agent 2)
-│   └── {book_id}/
-│       └── chapter_{n}.json
-├── scripts/                  # EpisodeScript JSON (Agent 3)
-│   └── {book_id}/
-│       └── chapter_{n}_episode_{m}.json
-├── animations/               # SVG + timing + Rough.js HTML (Agent 4)
-│   └── {book_id}/
-│       └── chapter_{n}/
-│           ├── s001_sketch.svg
-│           ├── s001_animation.json
-│           ├── s001_roughjs.html
-│           ├── ...
-│           └── manifest.json
-├── audio/                    # MP3 files + audio manifest (Agent 5)
-│   └── {book_id}/
-│       └── chapter_{n}/
-│           ├── s001.mp3
-│           ├── s002.mp3
-│           ├── ...
-│           ├── master.mp3
-│           └── audio_manifest.json
-├── player/                   # Player HTML + timeline (Agent 6)
-│   └── {book_id}/
-│       └── chapter_{n}/
-│           ├── timeline.json
-│           └── player.html
-└── question_bank/            # Cached Q&A pairs (Agent 8)
-    └── {book_id}/
-        └── chapter_{n}_bank.json
-```
-
----
-
-## 13. Database Schema
-
-```sql
-books           -- id, title, author, isbn, file_hash, pages, chapters, readability, status
-chapters        -- id, book_id (FK), chapter_num, title, start/end page
-images          -- id, book_id (FK), chapter_id (FK), filename, page_num, context, path
-chapter_analyses-- id, book_id (FK), chapter_num, difficulty_level, status, tokens, cost
-episode_audio   -- id, script_id, book_id (FK), chapter_num, status, voice_id, model, duration
-episode_player  -- id, script_id, book_id (FK), chapter_num, status, timeline_path, built_at
-question_bank   -- id, book_id (FK), chapter_num, segment_id, question, answer, usage_count, verified
-question_log    -- id, book_id (FK), chapter_num, student_id, question, served_from_cache, latency
-```
-
----
-
-## 14. Streamlit UI Pages
-
-| # | Page | Agent | Purpose |
-|---|------|-------|---------|
-| 1 | Upload Book | 1 | PDF drag-and-drop with dedup check |
-| 2 | Library | 1 | All uploaded books with metadata |
-| 3 | Book Viewer | 1 | Chapter/section reader with ToC |
-| 4 | Analyse Chapter | 2-6 | Triggers full pipeline (single button) |
-| 5 | Analysis Results | 2 | Concepts, visuals, episodes, images, script tabs |
-| 6 | Scripts | 3 | Segment-by-segment narration viewer with ElevenLabs markup |
-| 7 | Animations | 4 | SVG + Rough.js previews per segment |
-| 8 | Audio | 5 | Master + segment MP3 players, actual vs estimated duration |
-| 9 | Player | 6 | Embedded interactive player (audio + animations synced) |
-| 10 | YouTube Export | 7 | Locked ("Coming Soon") |
-| 11 | Question Bank | 8 | Locked ("Coming Soon") |
-
----
-
-## 15. Configuration & Secrets
-
-**Streamlit Cloud Secrets:**
-```toml
-ANTHROPIC_API_KEY = "sk-ant-..."
-ELEVENLABS_API_KEY = "sk_..."
-ELEVENLABS_VOICE_ID = "SDNKIYEpTz0h56jQX8rA"
-```
-
-**Feature Flags** (`config.py`):
-```python
-YOUTUBE_EXPORT_ENABLED = False   # Set True when ready for YouTube launch
-```
-
-**Dependencies** (`requirements.txt`):
-```
-fastapi>=0.104.0, uvicorn>=0.24.0, pymupdf>=1.23.0, sqlalchemy>=2.0.0,
-pydantic>=2.0.0, rapidfuzz>=3.0.0, python-multipart>=0.0.6, python-dotenv>=1.0.0,
-aiofiles>=23.0.0, streamlit>=1.30.0, anthropic>=0.20.0, pillow>=10.0.0,
-elevenlabs>=1.0.0, pydub>=0.25.0, audioop-lts>=0.2.1
-```
-
-**System packages** (`packages.txt`): `ffmpeg`
-
----
-
-## 16. Proposed Refactor — Scribe / Speed Paint Visual Style
-
-The next evolution of the pipeline replaces the current Rough.js iframe-based animation with a "Scribe" (speed-paint) visual style. This is a CSS `stroke-dashoffset` animation where a virtual hand draws SVG paths in real time, synchronised to the narrator's voice.
-
-### 16.1 What Changes
-
-| Component | Current | Proposed |
-|-----------|---------|----------|
-| Agent 3 output | Script segments with `sketch_cue` | Director's Manifest with `visual_action` markers (DRAW_START, DRAW_CONTINUE, GHOST_ONLY) and PAUSE_FOR_QUESTION markers |
-| Agent 4 SVG | Primitives (rect, circle, line) + Rough.js rendering | All primitives converted to `<path>` elements with computed `pathLength`. Two layers per element: Ghost (opacity 0.1, dashed) and Ink (opacity 1.0) |
-| Agent 6 player | Rough.js HTML in iframe, frame-based reveal | CSS `stroke-dashoffset` animation from L to 0 synced to audio duration. `requestAnimationFrame` loop positions a follower hand (marker_hand.png) at the current draw point |
-| Playback experience | Rough.js elements appear in batches per frame | Continuous pen-drawing effect with visible hand tracing each path |
-
-### 16.2 Agent 3 — The Socratic Director
-
-The script prompt will be rewritten to output a "Director's Manifest" where each segment includes:
-
-```json
-{
-  "segment_id": "s003",
-  "type": "explore",
-  "visual_action": "DRAW_START",
-  "narration": "...",
-  "elevenlabs_text": "... <break time='300ms'/> ...",
-  "sketch_cue": { "action": "draw", "element": "...", "timing": "during" },
-  "pause_for_question": false
-}
-```
-
-- `DRAW_START` — begin drawing the sketch for this segment
-- `DRAW_CONTINUE` — continue drawing from where the last segment left off
-- `GHOST_ONLY` — show the ghost outline but don't ink it yet
-- `PAUSE_FOR_QUESTION` — stop audio, freeze hand, trigger Q&A modal
-
-ElevenLabs `<break time="300ms"/>` tags are inserted between segments so the Speed Paint hand can move between canvas areas without overlapping audio.
-
-### 16.3 Agent 4 — SVG Path & Ghost Sketch Logic
-
-**Path Conversion** (`agent_4_svg_utils.py`):
-- All SVG primitives (rect, circle, line) converted to `<path d="...">` elements.
-- For each path, total length L is computed (Python `svgpathtools` or JS `getTotalLength()`).
-
-**Dual-Layer Rendering:**
-- **Ghost Layer:** `stroke-opacity: 0.1`, `stroke-dasharray: "5,5"` — shows the full sketch outline immediately on segment start (student sees where the drawing is going).
-- **Ink Layer:** `stroke-opacity: 1.0` — drawn progressively via CSS `stroke-dashoffset` animation, perfectly synced to audio duration.
-
-**Manifest addition per path:**
-```json
-{
-  "path_id": "p001",
-  "d": "M 100 200 L 300 400 ...",
-  "total_length": 542.7,
-  "ghost_style": { "stroke-opacity": 0.1, "stroke-dasharray": "5,5" },
-  "ink_style": { "stroke-opacity": 1.0 }
-}
-```
-
-### 16.4 Agent 6 — The Scribe Playback Engine
-
-**New player component** (`scribe_player.html`):
-
-**The Animation:**
-```css
-.ink-path {
-  stroke-dasharray: L;          /* total path length */
-  stroke-dashoffset: L;         /* starts fully hidden */
-  animation: draw Xs linear;    /* X = segment audio duration */
-}
-@keyframes draw {
-  to { stroke-dashoffset: 0; }  /* fully visible */
-}
-```
-
-**The Follower Hand:**
-- A `marker_hand.png` overlay positioned via absolute CSS.
-- `requestAnimationFrame` loop reads `audio.currentTime`, calculates draw progress, calls `path.getPointAtLength(progress * L)` to get (x, y), and positions the hand image there.
-
-**State Machine:**
-1. **On segment start:** Show Ghost sketch for the full chapter immediately.
-2. **During narration:** Animate Ink path and move Hand along the draw point.
-3. **On question hook:** Stop audio, freeze Hand at current (x, y), trigger Q&A modal.
-4. **On resume:** Continue drawing from frozen position.
-
-### 16.5 Pipeline Manifest (`pipeline_manifest.py`)
-
-A new utility that merges:
-- Agent 3's Director's Manifest (segment order, visual_actions, narration)
-- Agent 4's path lengths (per-path L values, ghost/ink layer data)
-- Agent 5's audio timestamps (actual measured durations per segment)
-
-Into a single **Master Timeline** that the Scribe player reads:
-
-```json
-{
-  "master_timeline": [
-    {
-      "segment_id": "s003",
-      "audio_start": 82.1,
-      "audio_end": 150.3,
-      "visual_action": "DRAW_START",
-      "paths": [
-        {
-          "path_id": "p001",
-          "d": "M 100 200 ...",
-          "total_length": 542.7,
-          "draw_start_offset": 82.1,
-          "draw_duration": 68.2
-        }
-      ]
-    }
-  ]
-}
-```
-
-### 16.6 Technical Deliverables for Scribe Refactor
-
-| File | Purpose |
-|------|---------|
-| `pipeline_manifest.py` | Merge Agent 3 script + Agent 4 paths + Agent 5 timestamps into Master Timeline |
-| `scribe_player.html` | Frontend JS/CSS for stroke-dashoffset animation + follower hand |
-| `agent_4_svg_utils.py` | Convert basic SVG primitives to animated `<path>` elements with length metadata |
-| Updated Agent 3 prompts | Director's Manifest output format with visual_action markers |
-| Updated Agent 4 renderer | Ghost + Ink dual-layer SVG output |
-| Updated Agent 6 builder | Build Scribe player instead of Rough.js iframe player |
-
----
-
-## 17. Key Architectural Decisions
-
-1. **Actual durations only.** Agent 6 never uses Agent 3's estimated durations. All sync is based on Agent 5's measured MP3 lengths. This prevents audio/visual desync.
-
-2. **Single-click pipeline.** The entire pipeline triggers from one "Run Analysis" button. Each agent auto-chains to the next. Manual pages exist for re-runs.
-
-3. **Graceful degradation.** If ElevenLabs keys aren't configured, audio and player steps skip with a warning. Prior results (analysis, script, animations) are still saved.
-
-4. **Agent 7 disabled by design.** MP4 rendering is separated from the student experience. Students see live browser playback (Agent 6); MP4 is only for YouTube distribution (Agent 7, future).
-
-5. **Question bank flywheel.** Agent 8's cost structure improves over time — early users pay LLM cost, their answers get banked, later users get instant cached responses at zero cost.
-
-6. **Embedded mode.** The entire pipeline runs in-process within Streamlit — no separate API server needed for deployment. FastAPI endpoints exist but are optional.
+## 13. Roadmap
+
+- **Paid video tier** — **Golpo AI** (AI whiteboard explainer; REST API; ~$2/min; accepts our `custom_script` + our own narration audio) is the leading candidate, with HeyGen/D-ID (AI presenter) and Veo (B-roll) as later layers. Weigh cost, data-egress/copyright, and latency before committing.
+- **Paid feature gates** — AI images (Nano Banana), premium voices (ElevenLabs), the whiteboard video.
+- **Per-teacher daily generation caps** — enforced DB-side (a `BEFORE INSERT` trigger / RPC on `generations`) so the client can't bypass.
+- **Parent communications** — wire `parent_email` to a provider (Resend/SES) for assignment/completion notifications + password resets.
+- **Native mobile apps** (Android + iOS) using the `.app` universal links.
+- **Forced password reset** on first student login; a delete-class UI; richer diagram/icon objects.
