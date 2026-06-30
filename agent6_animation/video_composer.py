@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -33,7 +34,13 @@ from .models import VideoManifest, VideoSegment
 from .native_render import render_native_segment
 from .tts_client import synthesize
 
+from agent5_slides.theme import concept_for
+
 logger = logging.getLogger(__name__)
+
+# Dev-only on-frame label (segment type + index). OFF in production so no debug
+# text is ever burned into shipped video. Set DEBUG_VIDEO=1 to enable locally.
+DEBUG_VIDEO = os.getenv("DEBUG_VIDEO", "").strip().lower() in ("1", "true", "yes", "on")
 
 STORAGE_DIR = Path(__file__).resolve().parent.parent / "storage"
 VIDEO_DIR = STORAGE_DIR / "video_segments"
@@ -101,6 +108,8 @@ def compose_episode_videos(
         script_seg = script_segments.get(seg_id, {})
         text = (script_seg.get("text") or "").strip()
         seg_type = script_seg.get("type", slide_seg.get("type", "explore"))
+        # Clean string label (e.g. "hook"), never a SegmentType repr ("SegmentType.hook").
+        seg_label = getattr(seg_type, "value", None) or str(seg_type)
         est = float(script_seg.get("estimated_duration_seconds", 8) or 8)
 
         if progress_callback:
@@ -113,10 +122,13 @@ def compose_episode_videos(
         spec = {
             "heading": heading,
             "points": points,
-            "footer": f"{seg_type} · {i + 1}/{total}",
+            # Footer is a dev label only — empty in production (no debug overlay).
+            "footer": f"{seg_label} · {i + 1}/{total}" if DEBUG_VIDEO else "",
             "context": episode_title if heading != episode_title else "",
             "fallback": text,
             "visual": script_seg.get("slide_visual"),
+            "number": i + 1,
+            "concept": concept_for(heading, i),
         }
 
         audio_path: str | None = None
@@ -148,7 +160,7 @@ def compose_episode_videos(
         total_duration += duration
         manifest_segments.append(VideoSegment(
             segment_id=seg_id,
-            type=seg_type,
+            type=seg_label,
             audio_path=audio_path,
             video_path=str(out_mp4),
             slide_image_path=slide_seg.get("slide_image_path"),

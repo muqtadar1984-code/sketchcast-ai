@@ -15,17 +15,14 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from .theme import CANVAS as _BG, GRAPHITE as _MUTED, INK as _INK, LINE as _RULE, TEAL as _GREEN, WHITE as _WHITE
+
 logger = logging.getLogger(__name__)
 
 _WIDTH = 1280
 _HEIGHT = 720
-
-# Scholar palette
-_BG = (251, 246, 236)        # cream  #FBF6EC
-_INK = (44, 42, 38)          # near-black #2C2A26
-_GREEN = (46, 107, 78)       # forest green #2E6B4E
-_MUTED = (111, 106, 95)      # #6F6A5F
-_RULE = (224, 217, 200)      # divider
+# Palette names kept for back-compat: _GREEN is now the Live Ink teal accent and
+# _BG the near-white canvas. Values live in theme.py (shared with the deck).
 
 _FONT_DIR = Path(__file__).resolve().parent / "fonts"
 _MARGIN_X = 90
@@ -68,25 +65,30 @@ def compose_slide(
     accent: tuple[int, int, int] | None = None,
     logo_path: str | None = None,
     visual: dict | None = None,
+    number: int | None = None,
+    concept: str | None = None,
 ) -> tuple[Image.Image, list[list[_Box]], list[_Box]]:
-    """Render the canonical 1280x720 lesson slide and report its object layout.
+    """Render the canonical 1280x720 Live Ink lesson slide + its object layout.
 
     Returns ``(image, anim_elements, static_boxes)``:
 
-    * ``image`` is the fully-drawn slide (what :func:`export_slide_png` saves and
-      what the Agent 6 native renderer animates toward — pixel-identical).
-    * ``anim_elements`` is the content (context line, heading, divider, bullets)
-      in *teaching order*; each element is a list of per-line boxes so the
+    * ``image`` is the fully-drawn slide (what the Agent 6 native renderer
+      animates toward — pixel-identical).
+    * ``anim_elements`` is the content in *teaching order* (badge → title →
+      bullets / diagram); each element is a list of per-line boxes so the
       renderer can write it on left→right.
-    * ``static_boxes`` are regions (logo, footer) shown from the first frame.
+    * ``static_boxes`` are regions shown from the first frame — the concept
+      illustration (introduced at slide entry, NOT interleaved with the bullet
+      reveal), the logo, and any footer.
 
-    ``accent`` (school brand colour) overrides the heading colour; ``logo_path``
-    stamps a logo top-right. Both fall back to the default Scholar style.
+    ``accent`` overrides the teal accent; ``logo_path`` stamps a logo top-right;
+    ``number`` draws the teal number badge (the repeated motif); ``concept`` is
+    a keyword/icon name for the right-column illustration.
     """
-    acc = accent or _GREEN
+    acc = accent or _GREEN  # teal
     canvas = Image.new("RGB", (_WIDTH, _HEIGHT), _BG)
     draw = ImageDraw.Draw(canvas)
-    max_w = _WIDTH - 2 * _MARGIN_X
+    M = _MARGIN_X
     anim: list[list[_Box]] = []
     static: list[_Box] = []
 
@@ -94,46 +96,61 @@ def compose_slide(
     if logo_path:
         try:
             logo = Image.open(logo_path).convert("RGBA")
-            lh = 56
+            lh = 52
             lw = max(1, int(logo.width * lh / max(1, logo.height)))
             logo = logo.resize((lw, lh))
-            lx, ly = _WIDTH - _MARGIN_X - lw, 36
+            lx, ly = _WIDTH - M - lw, 34
             canvas.paste(logo, (lx, ly), logo)
             static.append((lx, ly, lx + lw, ly + lh))
         except Exception:  # noqa: BLE001
             pass
 
-    # Context line (small, e.g. episode title)
-    y = 52
-    if context_title:
-        cf = _font(bold=False, size=20)
-        txt = context_title.strip()[:80]
-        draw.text((_MARGIN_X, y), txt, fill=_MUTED, font=cf)
-        anim.append([(_MARGIN_X, y, _MARGIN_X + int(draw.textlength(txt, font=cf)), y + 26)])
-        y += 34
+    has_visual = bool(visual)
+    show_illus = bool(concept) and not has_visual
+    content_right = 800 if show_illus else _WIDTH - M  # leave the right column for the illustration
 
-    # Heading
-    head = (heading or context_title or "SketchCast AI").strip()[:80]
-    hf = _font(bold=True, size=40)
+    # Number badge (teal circle) — the repeated motif and first reveal element.
+    title_x = M
+    if number is not None:
+        br = 27
+        bcx, bcy = M + br, 92
+        draw.ellipse([bcx - br, bcy - br, bcx + br, bcy + br], fill=acc)
+        nf = _font(bold=True, size=22)
+        ns = str(number)
+        nw = draw.textlength(ns, font=nf)
+        draw.text((bcx - nw / 2, bcy - 15), ns, fill=_WHITE, font=nf)
+        anim.append([(bcx - br, bcy - br, bcx + br, bcy + br)])
+        title_x = bcx + br + 22
+
+    # Title (ink), to the right of the badge — no under-title rule (AI-tell).
+    head = (heading or context_title or "SketchCast AI").strip()[:90]
+    hf = _font(bold=True, size=38)
+    ty = 66
     hbox: list[_Box] = []
-    for ln in _wrap(draw, head, hf, max_w)[:2]:
-        draw.text((_MARGIN_X, y), ln, fill=acc, font=hf)
-        hbox.append((_MARGIN_X, y, _MARGIN_X + int(draw.textlength(ln, font=hf)), y + 50))
-        y += 52
+    for ln in _wrap(draw, head, hf, content_right - title_x)[:2]:
+        draw.text((title_x, ty), ln, fill=_INK, font=hf)
+        hbox.append((title_x, ty, title_x + int(draw.textlength(ln, font=hf)), ty + 46))
+        ty += 50
     if hbox:
         anim.append(hbox)
 
-    draw.line([(_MARGIN_X, y + 6), (_WIDTH - _MARGIN_X, y + 6)], fill=_RULE, width=2)
-    anim.append([(_MARGIN_X, y + 3, _WIDTH - _MARGIN_X, y + 10)])  # divider grows L→R
-    y += 36
+    # Concept illustration (static — shown at slide entry, opposite the text).
+    if show_illus:
+        from .theme import draw_concept
 
-    # A composable diagram (Phase 2) claims the content area when present; it
-    # falls back to plain bullets if the spec is unusable, so slides are never bare.
+        disc = 300
+        icx, icy = _WIDTH - M - disc // 2, 422
+        static.append(draw_concept(canvas, icx, icy, disc, concept, accent=acc))
+
+    y = max(ty + 30, 212)
+
+    # A composable diagram claims the content area when present; it falls back to
+    # plain bullets if the spec is unusable, so slides are never bare.
     diagram_elems: list[list[_Box]] = []
-    if visual:
+    if has_visual:
         from .diagram_builder import caption_element, render_diagram
 
-        region = (_MARGIN_X, y + 4, _WIDTH - _MARGIN_X, _HEIGHT - 96)
+        region = (M, y, _WIDTH - M, _HEIGHT - 70)
         diagram_elems = render_diagram(draw, region, visual, accent=acc)
         if diagram_elems:
             anim.extend(diagram_elems)
@@ -141,47 +158,51 @@ def compose_slide(
             if cap:
                 anim.append(cap)
 
-    if not diagram_elems:
+    if not has_visual or not diagram_elems:
         pts = [p for p in (points or []) if p.strip()]
+        text_w = content_right - M
         if pts:
-            # Bullet points (chapter content)
-            size = 32
+            # Bullet points (chapter content) — teal dots + ink text.
+            size = 30
             while size >= 20:
                 bf = _font(bold=False, size=size)
                 line_h = int(size * 1.5)
-                wrapped: list[list[str]] = [_wrap(draw, p, bf, max_w - 40) for p in pts]
-                total_h = sum(len(w) * line_h + 14 for w in wrapped)
-                if total_h <= (_HEIGHT - y - 70) or size == 20:
+                wrapped: list[list[str]] = [_wrap(draw, p, bf, text_w - 40) for p in pts]
+                total_h = sum(len(w) * line_h + 16 for w in wrapped)
+                if total_h <= (_HEIGHT - y - 60) or size == 20:
                     break
                 size -= 2
+            dot_r = 7
             for wlines in wrapped:
                 ebox: list[_Box] = []
-                draw.ellipse([(_MARGIN_X, y + size // 2 - 3), (_MARGIN_X + 8, y + size // 2 + 5)], fill=_GREEN)
+                draw.ellipse([(M, y + size // 2 - dot_r + 2), (M + 2 * dot_r, y + size // 2 + dot_r + 2)], fill=acc)
                 for j, ln in enumerate(wlines):
-                    draw.text((_MARGIN_X + 28, y), ln, fill=_INK, font=bf)
-                    x0 = _MARGIN_X if j == 0 else _MARGIN_X + 28  # first line includes the bullet
-                    ebox.append((x0, y, _MARGIN_X + 28 + int(draw.textlength(ln, font=bf)), y + size))
+                    draw.text((M + 30, y), ln, fill=_INK, font=bf)
+                    x0 = M if j == 0 else M + 30  # first line includes the bullet dot
+                    ebox.append((x0, y, M + 30 + int(draw.textlength(ln, font=bf)), y + size))
                     y += line_h
                 if ebox:
                     anim.append(ebox)
-                y += 14
-        else:
+                y += 16
+        elif not has_visual:
             # Fallback: no bullets — show the narration text so the slide isn't bare
-            bf = _font(bold=False, size=30)
+            bf = _font(bold=False, size=28)
             fb: list[_Box] = []
-            for ln in _wrap(draw, " ".join((fallback_text or "").split()), bf, max_w)[:9]:
-                draw.text((_MARGIN_X, y), ln, fill=_INK, font=bf)
-                fb.append((_MARGIN_X, y, _MARGIN_X + int(draw.textlength(ln, font=bf)), y + 30))
-                y += int(30 * 1.45)
+            for ln in _wrap(draw, " ".join((fallback_text or "").split()), bf, text_w)[:8]:
+                draw.text((M, y), ln, fill=_MUTED, font=bf)
+                fb.append((M, y, M + int(draw.textlength(ln, font=bf)), y + 28))
+                y += int(28 * 1.45)
             if fb:
                 anim.append(fb)
 
+    # Footer is a dev label only — the video composer passes "" in production
+    # (gated behind DEBUG_VIDEO), so it never appears in shipped frames.
     if footer_text:
-        ff = _font(bold=False, size=18)
+        ff = _font(bold=False, size=16)
         fw = int(draw.textlength(footer_text, font=ff))
-        fx = _WIDTH - _MARGIN_X - fw
-        draw.text((fx, _HEIGHT - 50), footer_text, fill=_MUTED, font=ff)
-        static.append((fx, _HEIGHT - 50, _WIDTH - _MARGIN_X, _HEIGHT - 50 + 22))
+        fx = _WIDTH - M - fw
+        draw.text((fx, _HEIGHT - 46), footer_text, fill=_MUTED, font=ff)
+        static.append((fx, _HEIGHT - 46, _WIDTH - M, _HEIGHT - 46 + 20))
 
     return canvas, anim, static
 
@@ -220,15 +241,17 @@ def export_slide_png(
     return output_png_path
 
 
-# "Live Ink" deck palette (matches the web app): one dominant ink, white content,
-# a single teal accent carried by the repeated icon-in-circle motif.
-_LI_INK = (0x14, 0x18, 0x1F)
-_LI_WHITE = (0xFF, 0xFF, 0xFF)
-_LI_TEAL = (0x1F, 0xB8, 0xA6)
-_LI_TEAL_DK = (0x0C, 0x81, 0x75)
-_LI_GRAPHITE = (0x5B, 0x64, 0x70)
-_LI_MIST = (0xF5, 0xF6, 0xF3)
-_LI_DIM = (0x9A, 0xA1, 0xAA)
+# "Live Ink" deck palette — the same single source as the video (theme.py), so
+# deck and video can't drift: one dominant ink, white content, one teal accent.
+from .theme import (  # noqa: E402
+    FAINT as _LI_DIM,
+    GRAPHITE as _LI_GRAPHITE,
+    INK as _LI_INK,
+    MIST as _LI_MIST,
+    TEAL as _LI_TEAL,
+    TEAL_DK as _LI_TEAL_DK,
+    WHITE as _LI_WHITE,
+)
 
 
 def build_episode_deck(
@@ -369,6 +392,32 @@ def _build_designed_deck(slides, output_pptx_path, episode_title, accent):
             para(tf, str(pt), size, INK, first=True, space=0)
             y += step * IN
 
+    # Concept illustrations: rendered once per concept to a temp PNG, then
+    # embedded as a discrete picture shape (the SAME drawing the video composites,
+    # via theme.draw_concept) so deck and video show identical imagery.
+    import shutil
+    import tempfile
+
+    from .theme import concept_for, render_concept_png
+
+    img_dir = Path(tempfile.mkdtemp(prefix="deck_imgs_"))
+    _img_cache: dict[str, str] = {}
+
+    def concept_png(name):
+        if name not in _img_cache:
+            p = img_dir / f"{name}.png"
+            try:
+                render_concept_png(name, p, size=560, accent=(accent or _LI_TEAL))
+                _img_cache[name] = str(p)
+            except Exception:  # noqa: BLE001
+                _img_cache[name] = ""
+        return _img_cache[name]
+
+    def add_illus(s, name, left, top, size):
+        path = concept_png(name)
+        if path:
+            s.shapes.add_picture(path, int(left), int(top), int(size), int(size))
+
     # Title (dark)
     s = new_slide(INK)
     circle(s, 1.0 * IN, 0.95 * IN, 0.62 * IN, ACC, "S", label_size=20)
@@ -377,24 +426,26 @@ def _build_designed_deck(slides, output_pptx_path, episode_title, accent):
     para(tf, "A narrated, Socratic lesson", 18, ACC, space=0)
     para(textbox(s, 1.0 * IN, 6.7 * IN, 11.3 * IN, 0.5 * IN), "SketchCast AI", 12, DIM, first=True, space=0)
 
-    # Content (light), alternating layouts
+    # Content (light) — every slide carries a concept illustration; the text and
+    # the illustration swap columns slide-to-slide so no two are laid out alike.
+    DISC = 2.7 * IN
+    ILL_T = 2.95 * IN
     for i, sd in enumerate(slides, 1):
         heading = (sd.get("heading") or "").strip()
         points = [str(p).strip() for p in (sd.get("points") or []) if str(p).strip()][:5]
+        concept = concept_for(heading or episode_title, i - 1)
         s = new_slide(WHITE)
         heading_block(s, i, heading)
         if not points:
-            para(textbox(s, 1.45 * IN, 2.2 * IN, 10.8 * IN, 3.0 * IN),
-                 "Pause here — discuss this together before moving on.", 16, GRA, first=True, space=0)
+            add_illus(s, concept, 9.15 * IN, ILL_T, DISC)
+            para(textbox(s, 0.95 * IN, 2.6 * IN, 7.6 * IN, 2.2 * IN, anchor=MSO_ANCHOR.MIDDLE),
+                 "Pause here — discuss this together before moving on.", 18, GRA, first=True, space=0)
         elif i % 2 == 1:
-            bullet_rows(s, points, 0.95 * IN, 2.15 * IN, 11.0 * IN)
+            bullet_rows(s, points, 0.95 * IN, 2.4 * IN, 7.6 * IN, step=0.7)
+            add_illus(s, concept, 9.15 * IN, ILL_T, DISC)
         else:
-            panel(s, 0.95 * IN, 2.1 * IN, 5.2 * IN, 2.85 * IN, MIST)
-            tf = textbox(s, 1.28 * IN, 2.32 * IN, 4.55 * IN, 2.4 * IN, anchor=MSO_ANCHOR.MIDDLE)
-            para(tf, "KEY IDEA", 11, ACC_DK, bold=True, first=True, space=8)
-            para(tf, points[0], 19, INK, bold=True, space=0)
-            if len(points) > 1:
-                bullet_rows(s, points[1:], 6.5 * IN, 2.25 * IN, 5.65 * IN, size=15, step=0.62)
+            add_illus(s, concept, 0.95 * IN, ILL_T, DISC)
+            bullet_rows(s, points, 4.3 * IN, 2.4 * IN, 7.9 * IN, step=0.7)
         s.notes_slide.notes_text_frame.text = sd.get("narration") or ""
 
     # Closing (dark)
@@ -407,5 +458,6 @@ def _build_designed_deck(slides, output_pptx_path, episode_title, accent):
     para(textbox(s, 1.0 * IN, 6.7 * IN, 11.3 * IN, 0.5 * IN), "SketchCast AI", 12, DIM, first=True, space=0)
 
     prs.save(str(output_pptx_path))
+    shutil.rmtree(img_dir, ignore_errors=True)  # images are embedded in the .pptx by now
     logger.info("Episode deck (designed) saved: %s (%d content slides)", output_pptx_path.name, len(slides))
     return output_pptx_path
