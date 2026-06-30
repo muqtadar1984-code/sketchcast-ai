@@ -105,6 +105,8 @@ def render_native_segment(
             accent=accent,
             logo_path=logo_path,
             visual=spec.get("visual"),
+            number=spec.get("number"),
+            concept=spec.get("concept"),
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("native render layout failed: %s", exc)
