@@ -34,7 +34,7 @@ from .models import VideoManifest, VideoSegment
 from .native_render import render_native_segment
 from shared.tts import synthesize
 
-from agent5_slides.theme import concept_for
+from agent5_slides.theme import concepts_for_slides
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +104,13 @@ def compose_episode_videos(
     slide_segments = slide_manifest.get("segments", [])
     script_segments = {seg["segment_id"]: seg for seg in episode.get("segments", [])}
 
+    # Art-direction: one coherent, non-repeating concept set for the whole episode,
+    # from the same heading sequence the deck uses → deck + video illustrations match.
+    seg_concepts = concepts_for_slides([
+        (script_segments.get(ss["segment_id"], {}).get("slide_heading") or "").strip() or episode_title
+        for ss in slide_segments
+    ])
+
     ffmpeg = _ffmpeg_exe()
     manifest_segments: list[VideoSegment] = []
     total = len(slide_segments)
@@ -134,7 +141,7 @@ def compose_episode_videos(
             "fallback": text,
             "visual": script_seg.get("slide_visual"),
             "number": i + 1,
-            "concept": concept_for(heading, i),
+            "concept": seg_concepts[i],
         }
 
         audio_path: str | None = None

@@ -398,7 +398,7 @@ def _build_designed_deck(slides, output_pptx_path, episode_title, accent):
     import shutil
     import tempfile
 
-    from .theme import concept_for, render_concept_png
+    from .theme import concepts_for_slides, render_concept_png
 
     img_dir = Path(tempfile.mkdtemp(prefix="deck_imgs_"))
     _img_cache: dict[str, str] = {}
@@ -430,10 +430,12 @@ def _build_designed_deck(slides, output_pptx_path, episode_title, accent):
     # the illustration swap columns slide-to-slide so no two are laid out alike.
     DISC = 2.7 * IN
     ILL_T = 2.95 * IN
+    # One art-direction pass over the whole chapter → a coherent, non-repeating set.
+    slide_concepts = concepts_for_slides([(sd.get("heading") or "").strip() or episode_title for sd in slides])
     for i, sd in enumerate(slides, 1):
         heading = (sd.get("heading") or "").strip()
         points = [str(p).strip() for p in (sd.get("points") or []) if str(p).strip()][:5]
-        concept = concept_for(heading or episode_title, i - 1)
+        concept = slide_concepts[i - 1]
         s = new_slide(WHITE)
         heading_block(s, i, heading)
         if not points:

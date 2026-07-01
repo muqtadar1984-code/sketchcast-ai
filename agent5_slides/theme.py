@@ -62,6 +62,45 @@ def concept_for(text: str, index: int = 0) -> str:
     return _NEUTRAL[index % len(_NEUTRAL)]
 
 
+def _ranked_concepts(text: str) -> list[str]:
+    """Every catalogue concept whose keywords appear in `text`, in map order."""
+    t = (text or "").lower()
+    return [name for keys, name in _CONCEPT_MAP if any(k in t for k in keys)]
+
+
+def concepts_for_slides(headings: list[str]) -> list[str]:
+    """One art-direction pass for a whole chapter: assign a concept illustration
+    to each slide as a COHERENT, NON-REPEATING set — concept-relevant where a
+    keyword matches, but never the same asset on two consecutive slides and never
+    one glyph stamped across the deck. Deterministic on the heading sequence, so
+    the deck (agent5) and the video (agent6) — which share that sequence — match.
+    """
+    chosen: list[str] = []
+    counts: dict[str, int] = {}
+    neutral_i = 0
+    for heading in headings:
+        prev = chosen[-1] if chosen else None
+        prev2 = chosen[-2] if len(chosen) >= 2 else None
+        # Concept-relevant candidates, least-used first to spread variety.
+        cands = sorted(_ranked_concepts(heading), key=lambda c: counts.get(c, 0))
+        pick = next((c for c in cands if c != prev and c != prev2), None)
+        if pick is None:
+            # No fresh keyword match — rotate a neutral that isn't a recent repeat
+            # (prefer a varied neutral over repeating the previous slide's asset).
+            for _ in range(len(_NEUTRAL) * 2):
+                cand = _NEUTRAL[neutral_i % len(_NEUTRAL)]
+                neutral_i += 1
+                if cand != prev and cand != prev2:
+                    pick = cand
+                    break
+            if pick is None:
+                pick = _NEUTRAL[neutral_i % len(_NEUTRAL)]
+                neutral_i += 1
+        chosen.append(pick)
+        counts[pick] = counts.get(pick, 0) + 1
+    return chosen
+
+
 def draw_concept(canvas, cx: int, cy: int, size: int, name: str, accent=None) -> tuple[int, int, int, int]:
     """Draw a concept illustration (glyph in a soft teal-tint disc) centred at
     (cx, cy) onto a PIL image. Returns its bounding box."""
