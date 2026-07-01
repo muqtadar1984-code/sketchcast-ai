@@ -32,9 +32,9 @@ from typing import Callable, Optional
 
 from .models import VideoManifest, VideoSegment
 from .native_render import render_native_segment
-from .tts_client import synthesize
+from shared.tts import synthesize
 
-from agent5_slides.theme import concept_for
+from agent5_slides.theme import concepts_for_slides
 
 logger = logging.getLogger(__name__)
 
@@ -72,12 +72,18 @@ def compose_episode_videos(
     slide_manifest: dict,
     progress_callback: Optional[Callable] = None,
     branding: Optional[dict] = None,
+    tts_voice: Optional[str] = None,
+    allow_premium: bool = False,
 ) -> VideoManifest:
     """Generate a narrated, object-animated MP4 per segment.
 
     ``branding`` = {accent_rgb, logo_path} applies the school's colour/logo to the
     animated slide (must match what Agent 5 baked into the deck). Any field may be
     None, in which case the default Scholar style is used.
+
+    ``tts_voice`` is a voice-registry id (default = the free Edge voice);
+    ``allow_premium`` is the server-resolved gate for ElevenLabs voices. The TTS
+    layer enforces the gate + spend cap and falls back to the free voice.
     """
     _b = branding or {}
     _accent = _b.get("accent_rgb")
@@ -97,6 +103,13 @@ def compose_episode_videos(
 
     slide_segments = slide_manifest.get("segments", [])
     script_segments = {seg["segment_id"]: seg for seg in episode.get("segments", [])}
+
+    # Art-direction: one coherent, non-repeating concept set for the whole episode,
+    # from the same heading sequence the deck uses → deck + video illustrations match.
+    seg_concepts = concepts_for_slides([
+        (script_segments.get(ss["segment_id"], {}).get("slide_heading") or "").strip() or episode_title
+        for ss in slide_segments
+    ])
 
     ffmpeg = _ffmpeg_exe()
     manifest_segments: list[VideoSegment] = []
@@ -128,18 +141,19 @@ def compose_episode_videos(
             "fallback": text,
             "visual": script_seg.get("slide_visual"),
             "number": i + 1,
-            "concept": concept_for(heading, i),
+            "concept": seg_concepts[i],
         }
 
         audio_path: str | None = None
         out_mp4 = vid_dir / f"{seg_id}_video.mp4"
         duration = est
 
-        # 1. TTS
+        # 1. TTS (provider-agnostic: free Edge default; premium ElevenLabs gated)
         if text:
             mp3 = vid_dir / f"{seg_id}_audio.mp3"
+            ssml = script_seg.get("elevenlabs_text") or text
             try:
-                synthesize(text, mp3)
+                synthesize(text, mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=ssml)
                 audio_path = str(mp3)
                 duration = _audio_duration(audio_path, ffmpeg) or est
             except Exception as exc:
