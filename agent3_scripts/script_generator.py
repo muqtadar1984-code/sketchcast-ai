@@ -21,7 +21,7 @@ from .models import (
     VisualGroup,
     VisualItem,
 )
-from .prompts import EPISODE_SCRIPT_PROMPT
+from .prompts import build_episode_prompt, normalize_style
 
 logger = logging.getLogger(__name__)
 
@@ -213,27 +213,36 @@ def generate_episode_script(
     analysis: dict,
     chapter_num: int,
     client,
+    narration_style: str = "socratic",
 ) -> EpisodeScript:
-    """Generate a complete Socratic script for one episode via Claude."""
+    """Generate a complete episode script via Claude in the chosen narration style.
+
+    ``narration_style`` changes persona/arc/tone only — the emitted segment schema
+    (and thus slide/video rendering) is identical for every style.
+    """
+    style = normalize_style(narration_style)
     episode_context = _build_episode_context(episode, analysis)
     target_duration = episode.get("estimated_duration_minutes", 5)
 
-    prompt = EPISODE_SCRIPT_PROMPT.format(
+    prompt = build_episode_prompt(
+        style,
         chapter_title=analysis.get("chapter_title", f"Chapter {chapter_num}"),
         difficulty_level=analysis.get("difficulty_level_requested", "middle_school").replace("_", " ").title(),
         target_duration=f"{target_duration:.1f}",
         episode_context=episode_context,
     )
 
-    result = client.analyze(
-        prompt=prompt,
-        system=(
-            "You are a master Socratic educator and script writer for SketchCast AI. "
-            "You write engaging, question-driven educational scripts that guide students "
-            "to discover ideas themselves. Always return valid JSON only."
-        ),
-        max_tokens=8000,
+    system = (
+        "You are a master Socratic educator and script writer for SketchCast AI. "
+        "You write engaging, question-driven educational scripts that guide students "
+        "to discover ideas themselves. Always return valid JSON only."
+    ) if style == "socratic" else (
+        "You are a master educator and script writer for SketchCast AI. You write "
+        "engaging educational scripts in the requested narration style, keeping the "
+        "on-screen slide content and the JSON schema exactly as instructed. "
+        "Always return valid JSON only."
     )
+    result = client.analyze(prompt=prompt, system=system, max_tokens=8000)
 
     raw_segments = result.get("data", result).get("segments", [])
 
@@ -305,6 +314,7 @@ def generate_episode_script(
         episode_num=episode.get("episode_num", 1),
         episode_title=episode.get("title", "Episode 1"),
         generated_at=datetime.now().isoformat(),
+        narrator_persona=style,
         segments=segments,
         total_estimated_duration_seconds=total_duration,
         question_hook_count=question_hook_count,
@@ -316,17 +326,19 @@ def generate_chapter_scripts_from_analysis(
     chapter_num: int,
     analysis_dict: dict,
     client,
+    narration_style: str = "socratic",
 ) -> ChapterScripts:
     """Generate scripts for all episodes using an already-loaded analysis dict.
 
-    This is the primary entry point used by Streamlit (in-process).
+    This is the primary entry point used by the worker (in-process).
+    ``narration_style`` selects the persona/arc; the segment schema is unchanged.
     """
     episodes = analysis_dict.get("episodes", {}).get("episodes", [])
     chapter_title = analysis_dict.get("chapter_title", f"Chapter {chapter_num}")
 
     episode_scripts = []
     for episode in episodes:
-        script = generate_episode_script(episode, analysis_dict, chapter_num, client)
+        script = generate_episode_script(episode, analysis_dict, chapter_num, client, narration_style)
         episode_scripts.append(script)
         save_script(script)
 

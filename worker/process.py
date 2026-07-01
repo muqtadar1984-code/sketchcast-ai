@@ -21,6 +21,16 @@ logger = logging.getLogger("worker")
 DEFAULT_LEVEL = "middle_school"
 
 
+def _elevenlabs_enabled() -> bool:
+    """Worker-side gate for premium (ElevenLabs) TTS — defense in depth. Premium
+    voices run ONLY when the deployment enables the flag AND the key is present,
+    no matter what voice the request asked for."""
+    import os
+
+    on = os.getenv("ELEVENLABS_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+    return on and bool(os.getenv("ELEVENLABS_API_KEY"))
+
+
 def _pick_chapter(chapters: list[dict], chapter_ref: str | None) -> dict:
     real = [c for c in chapters if c.get("chapter_num") is not None]
     pool = real or chapters
@@ -88,8 +98,14 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             from agent6_animation.video_composer import compose_episode_videos
             from agent8_render.renderer import render_final_video
 
+            params = gen.get("params") or {}
+            narration_style = params.get("narration_style") or "socratic"
+            tts_voice = params.get("tts_voice")  # voice-registry id; None → free Edge default
+            allow_premium = _elevenlabs_enabled()
+
             scripts = generate_chapter_scripts_from_analysis(
                 book_id=book_id, chapter_num=chapter_num, analysis_dict=analysis, client=client,
+                narration_style=narration_style,
             ).model_dump()
             ep_title = (scripts.get("episodes") or [{}])[0].get("episode_title") or chapter_title
             db.set_progress(sb, job_id, 60)
@@ -102,6 +118,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
 
             video = compose_episode_videos(
                 script_data=scripts, slide_manifest=slides, branding=branding,
+                tts_voice=tts_voice, allow_premium=allow_premium,
             ).model_dump()
             db.set_progress(sb, job_id, 90)
 
