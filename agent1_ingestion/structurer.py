@@ -123,8 +123,10 @@ def _marker_number(token: str) -> Optional[int]:
 
 
 def _toc_is_usable(toc: list[TOCItem], total_pages: int) -> bool:
-    """Reject outlines that clearly aren't real chapters — e.g. a PDF stitched
-    from a few source files whose only bookmarks are the file names."""
+    """Reject outlines that clearly aren't real chapters — a PDF stitched from a
+    few source files whose only bookmarks are the file names, or (the opposite
+    failure) an auto-generated bookmark per PAGE (some export tools do this),
+    which would shred the book into one-page pseudo-chapters."""
     level1 = [t for t in toc if t.level == 1]
     if not level1:
         return False
@@ -132,6 +134,27 @@ def _toc_is_usable(toc: list[TOCItem], total_pages: int) -> bool:
         return False
     # Too few top-level entries for a sizeable book → probably not chapters.
     if total_pages > 40 and len(level1) < 3:
+        return False
+    # Too many entries → per-page/per-heading bookmarks, not chapters.
+    if len(level1) > max(30, total_pages // 3):
+        return False
+    # Mostly bare-number / trivial titles (page labels) → not chapters.
+    trivial = sum(1 for t in level1 if len((t.title or "").strip()) <= 2 or (t.title or "").strip().isdigit())
+    if trivial * 2 > len(level1):
+        return False
+    return True
+
+
+def _chapters_plausible(chapters: list[dict], total_pages: int) -> bool:
+    """Sanity-check any detected chapter list before trusting it. Degenerate
+    splits (a 'chapter' per page, digit-only titles) cost real generation money
+    downstream — better to fall through to the Claude fallback."""
+    if not chapters:
+        return False
+    if len(chapters) > max(30, total_pages // 3):
+        return False
+    digit_titles = sum(1 for c in chapters if str(c.get("title", "")).strip().isdigit())
+    if digit_titles * 2 > len(chapters):
         return False
     return True
 
@@ -450,6 +473,12 @@ def structure_book(
         if not chapter_defs:
             chapter_defs = _infer_chapters_from_items(extraction.items, extraction.total_pages)
 
+    # Sanity-check whatever the outline/heuristics produced: a degenerate split
+    # (per-page pseudo-chapters, digit titles) must not be trusted — reset it so
+    # the Claude fallback gets its chance.
+    if not used_known and chapter_defs and not _chapters_plausible(chapter_defs, extraction.total_pages):
+        chapter_defs = []
+
     # Claude fallback: heuristics found nothing usable (0 or 1 pseudo-chapter).
     # Never second-guess stored known_chapters — the split must stay identical
     # to what indexing stored (and vision must not be re-billed per generation).
@@ -460,12 +489,13 @@ def structure_book(
             extraction_has_text,
         )
 
+        smart: list[dict] = []
         if extraction_has_text(extraction):
             smart = detect_chapters_from_text_llm(extraction, client)
-        elif pdf_path:
+        # Vision reads the rendered pages, so it works whether or not a text
+        # layer exists — use it whenever the text route came up empty.
+        if not smart and pdf_path:
             smart = detect_chapters_vision(pdf_path, extraction.total_pages, client)
-        else:
-            smart = []
         if smart:
             chapter_defs = smart
 
