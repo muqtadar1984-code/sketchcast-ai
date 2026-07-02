@@ -508,8 +508,11 @@ def structure_book(
             "end_page": extraction.total_pages - 1,
         }]
 
-    # Ensure the last chapter covers all remaining pages
-    if chapter_defs:
+    # Ensure the last chapter covers all remaining pages — but never stretch
+    # stored known_chapters bounds: they are authoritative (stretching would,
+    # e.g., balloon a 12-page unit to the whole book when fewer chapters are
+    # passed than the book has).
+    if chapter_defs and not used_known:
         chapter_defs[-1]["end_page"] = extraction.total_pages - 1
 
     toc_entries: list[TOCEntry] = []
