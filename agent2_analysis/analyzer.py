@@ -8,9 +8,12 @@ Max 2 API calls per chapter:
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from agent2_analysis.image_analyzer import analyze_images_batch
 from agent2_analysis.models import (ConceptResult, Episode, EpisodePlan,
@@ -80,9 +83,19 @@ def run_full_analysis(
         content=full_content[:15000],  # cap to stay within context window
     )
 
-    result = client.analyze(prompt, max_tokens=8000)
+    result = client.analyze(prompt, max_tokens=16000)
     data = result["data"]
     usage_chapter = result["usage"]
+    if not isinstance(data, dict):
+        data = {}
+    if not data.get("concepts") and word_count > 500:
+        # A substantial chapter with zero extracted concepts almost always means
+        # the reply truncated or failed to parse — the lesson would then be
+        # grounded in nothing but the title. Surface it loudly in worker logs.
+        logger.warning(
+            "combined analysis returned no concepts for a %d-word chapter — reply began: %r",
+            word_count, str(result.get("data"))[:200],
+        )
 
     # ── Parse concepts ────────────────────────────────────────────────
     concept_result = ConceptResult(

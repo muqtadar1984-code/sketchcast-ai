@@ -24,12 +24,18 @@ def build_single_episode(chapter: dict) -> dict:
     for box in chapter.get("key_boxes", []):
         total_words += len(box.get("content", "").split())
 
+    # A lesson episode is 3-12 minutes regardless of how long the chapter text
+    # is (a 50k-char transcribed chapter would otherwise "plan" a 70-minute
+    # episode, and the script generator's reply then truncates mid-JSON and
+    # yields zero segments). The script teaches the chapter's KEY ideas, not a
+    # read-through, so the duration target must stay in lesson range.
+    duration = min(12.0, max(3.0, round(total_words / 130, 1)))
     return {
         "episode_num": 1,
         "title": chapter.get("title", "Untitled"),
         "sections_covered": [s.get("section_title", "") for s in sections],
         "estimated_word_count": total_words,
-        "estimated_duration_minutes": round(total_words / 130, 1),
+        "estimated_duration_minutes": duration,
         "key_concepts_introduced": [],      # populated from combined analysis call
         "visual_opportunities_in_episode": [],  # populated from combined analysis call
     }

@@ -200,7 +200,10 @@ def generate_episode_script(
     """
     style = normalize_style(narration_style)
     episode_context = _build_episode_context(episode, analysis)
-    target_duration = episode.get("estimated_duration_minutes", 5)
+    # Defense in depth: never ask for more than a 12-minute script — an
+    # oversized target makes Claude's reply overrun max_tokens, truncating the
+    # JSON and silently yielding zero segments.
+    target_duration = min(12.0, float(episode.get("estimated_duration_minutes", 5) or 5))
 
     prompt = build_episode_prompt(
         style,
@@ -220,9 +223,10 @@ def generate_episode_script(
         "on-screen slide content and the JSON schema exactly as instructed. "
         "Always return valid JSON only."
     )
-    result = client.analyze(prompt=prompt, system=system, max_tokens=8000)
+    result = client.analyze(prompt=prompt, system=system, max_tokens=16000)
 
-    raw_segments = result.get("data", result).get("segments", [])
+    data = result.get("data", result)
+    raw_segments = data.get("segments", []) if isinstance(data, dict) else []
 
     segments = []
     for i, seg in enumerate(raw_segments):
@@ -274,6 +278,16 @@ def generate_episode_script(
             pause_for_question=bool(seg.get("pause_for_question", False)),
             estimated_duration_seconds=int(seg.get("estimated_duration_seconds", 30)),
         ))
+
+    # Fail LOUDLY here rather than letting an empty script cascade into a
+    # cryptic "No valid video segments" failure four agents later. The most
+    # common cause is an unparseable (truncated) Claude reply.
+    if not segments:
+        snippet = str(data.get("raw_text", data) if isinstance(data, dict) else data)[:300]
+        raise RuntimeError(
+            f"Script generation produced no segments for episode "
+            f"{episode.get('episode_num', 1)} — Claude reply began: {snippet!r}"
+        )
 
     # Post-process: enforce Scribe Director invariants + travel-time breaks
     segments = process_director_manifest(segments)
