@@ -95,6 +95,32 @@ def _infer_chapters_from_items(
 _FILENAME_RE = re.compile(r"\.(pdf|docx?|epub|indd|ai)$", re.I)
 _SUBSEC_RE = re.compile(r"^(\d{1,2})\.\d")
 
+# Labeled chapter markers: "Chapter 3", "UNIT 3", "Lesson Three", "Topic 3:",
+# "Module 3 — Fractions", etc. Group 2 = the number (digits or a word),
+# group 3 = any title text on the same line.
+_LABEL_RE = re.compile(
+    r"^(chapter|unit|lesson|topic|module|theme|week|part)\s+"
+    r"(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)"
+    r"\s*[:.\-–—]?\s*(.{0,80})$",
+    re.IGNORECASE,
+)
+_WORD_NUMS = {
+    w: n for n, w in enumerate(
+        ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+         "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+         "seventeen", "eighteen", "nineteen", "twenty"], start=1,
+    )
+}
+
+
+def _marker_number(token: str) -> Optional[int]:
+    token = token.strip().lower()
+    if token.isdigit():
+        n = int(token)
+        return n if 1 <= n <= 99 else None
+    return _WORD_NUMS.get(token)
+
 
 def _toc_is_usable(toc: list[TOCItem], total_pages: int) -> bool:
     """Reject outlines that clearly aren't real chapters — e.g. a PDF stitched
@@ -161,6 +187,58 @@ def _title_near(items: list[DocItem], idx: int, page: int) -> Optional[str]:
             break
     title = " ".join(parts).strip()
     return title if len(title) >= 3 else None
+
+
+def _detect_labeled_chapters(items: list[DocItem], total_pages: int) -> list[dict]:
+    """Detect chapters from labelled heading markers — "Chapter 3", "Unit 3",
+    "Lesson Three", "Topic 3: Fractions", … — forming an ascending run from 1.
+    Higher-signal than bare numbers, so it runs first.
+
+    Each label family (chapter/unit/lesson/…) is tracked separately so a book
+    with "Unit 1" containing "Lesson 1..12" doesn't interleave the two
+    sequences; the family with the longest ascending run wins."""
+    contents_titles = _titles_from_contents(items)
+    # family -> {n -> (page, idx, inline_title)}
+    families: dict[str, dict[int, tuple[int, int, str]]] = {}
+    for idx, it in enumerate(items):
+        if it.level not in (1, 2):
+            continue
+        m = _LABEL_RE.match(it.text.strip())
+        if not m:
+            continue
+        n = _marker_number(m.group(2))
+        if n is None:
+            continue
+        fam = families.setdefault(m.group(1).lower(), {})
+        if n not in fam:
+            fam[n] = (it.page_num, idx, m.group(3).strip(" .:-–—"))
+
+    best: list[dict] = []
+    for first in families.values():
+        chapters: list[dict] = []
+        n = 1
+        while n in first:
+            pg, idx, inline = first[n]
+            if chapters and pg <= chapters[-1]["start_page"]:
+                break  # pages must strictly increase
+            title = (
+                (inline if any(c.isalpha() for c in inline) else "")
+                or contents_titles.get(n)
+                or _title_near(items, idx, pg)
+                or f"Chapter {n}"
+            )
+            chapters.append({"chapter_num": len(chapters), "title": title, "start_page": pg, "end_page": 0})
+            n += 1
+        if len(chapters) >= 3 and len(chapters) > len(best):
+            best = chapters
+
+    if not best:
+        return []
+    for i in range(len(best)):
+        best[i]["end_page"] = (
+            best[i + 1]["start_page"] - 1 if i + 1 < len(best) else total_pages - 1
+        )
+    return best
 
 
 def _detect_numbered_chapters(items: list[DocItem], total_pages: int) -> list[dict]:
@@ -328,23 +406,68 @@ def structure_book(
     isbn: Optional[str],
     extraction: ExtractionResult,
     images: list[ExtractedImage],
+    pdf_path: Optional[str] = None,
+    client=None,
+    known_chapters: Optional[list[dict]] = None,
 ) -> StructuredBook:
     """
     Transform extraction results into the full StructuredBook hierarchy.
 
-    Chapter detection strategy:
-      1. Use PDF TOC bookmarks if available.
-      2. Fall back to level-1 DocItem heading detection.
-      3. If nothing found, treat the entire document as one chapter.
+    Chapter detection cascade (first hit wins):
+      0. ``known_chapters`` — boundaries already detected at indexing time
+         (num/title/start_page/end_page), so re-processing is cheap + identical.
+      1. The PDF's outline (TOC bookmarks), if it looks like real chapters.
+      2. Labelled markers — "Chapter 3" / "Unit 3" / "Lesson Three" / "Topic 3"…
+      3. Bare-number heading markers ("1", "2", … ascending).
+      4. Level-1 heading inference.
+      5. When a ``client`` (Claude) is provided and the above found nothing:
+         a text book gets an LLM pass over its headings digest; a SCANNED book
+         (no text layer) gets a vision pass that READS the rendered pages —
+         handling any labelling convention, since Claude reads pages like a
+         person does.
+      6. Whole document as a single chapter.
     """
-    if extraction.toc and _toc_is_usable(extraction.toc, extraction.total_pages):
+    used_known = bool(known_chapters) and all(
+        "start_page" in c and "end_page" in c for c in known_chapters
+    )
+    if used_known:
+        chapter_defs = [
+            {
+                "chapter_num": c.get("chapter_num", c.get("num", i)),
+                "title": c.get("title") or f"Chapter {i + 1}",
+                "start_page": int(c["start_page"]),
+                "end_page": int(c["end_page"]),
+            }
+            for i, c in enumerate(known_chapters)
+        ]
+    elif extraction.toc and _toc_is_usable(extraction.toc, extraction.total_pages):
         chapter_defs = _build_chapters_from_toc(extraction.toc, extraction.total_pages)
     else:
-        # No usable outline → detect numbered chapter markers, then fall back to
-        # level-1 heading inference.
-        chapter_defs = _detect_numbered_chapters(extraction.items, extraction.total_pages)
+        # No usable outline → labelled markers, bare numbers, heading inference.
+        chapter_defs = _detect_labeled_chapters(extraction.items, extraction.total_pages)
+        if not chapter_defs:
+            chapter_defs = _detect_numbered_chapters(extraction.items, extraction.total_pages)
         if not chapter_defs:
             chapter_defs = _infer_chapters_from_items(extraction.items, extraction.total_pages)
+
+    # Claude fallback: heuristics found nothing usable (0 or 1 pseudo-chapter).
+    # Never second-guess stored known_chapters — the split must stay identical
+    # to what indexing stored (and vision must not be re-billed per generation).
+    if client is not None and not used_known and len(chapter_defs) <= 1:
+        from agent1_ingestion.vision_chapters import (
+            detect_chapters_from_text_llm,
+            detect_chapters_vision,
+            extraction_has_text,
+        )
+
+        if extraction_has_text(extraction):
+            smart = detect_chapters_from_text_llm(extraction, client)
+        elif pdf_path:
+            smart = detect_chapters_vision(pdf_path, extraction.total_pages, client)
+        else:
+            smart = []
+        if smart:
+            chapter_defs = smart
 
     # Final fallback: whole document as a single chapter
     if not chapter_defs:
