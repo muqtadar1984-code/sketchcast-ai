@@ -1,0 +1,88 @@
+[2026-02-24 14:44:09] INFO: ============================================================
+[2026-02-24 14:44:09] INFO: Quality Check Started - 2026-02-24 14:44:09.479821
+========
+[2026-02-24 14:44:09] INFO: ============================================================
+[2026-02-24 14:44:09] INFO: Starting syntax checks...
+=================================
+[2026-02-24 14:44:09] INFO: Starting syntax checks...
+[2026-02-24 14:44:09] OK: ✓ All files passed syntax checks
+[2026-02-24 14:44:09] INFO: Starting linting checks (PEP 8)...
+[2026-02-24 14:44:09] OK: ✓ All files passed syntax checks
+[2026-02-24 14:44:09] INFO: Starting linting checks (PEP 8)...
+[2026-02-24 14:45:23] OK: ✓ All files passed linting checks
+[2026-02-24 14:45:23] INFO: Starting type checking (mypy)...
+[2026-02-24 14:45:24] OK: ✓ Type checking complete (no critical issues)
+[2026-02-24 14:45:24] INFO: Starting import organization checks...
+[2026-02-24 14:45:29] OK: ✓ All files passed linting checks
+[2026-02-24 14:45:29] INFO: Starting type checking (mypy)...
+[2026-02-24 14:45:30] OK: ✓ Type checking complete (no critical issues)
+[2026-02-24 14:45:30] INFO: Starting import organization checks...
+[2026-02-24 14:45:42] OK: ✓ All imports properly organized
+[2026-02-24 14:45:42] INFO: Running unit tests (pytest)...
+[2026-02-24 14:45:43] ERROR: Some tests failed
+[2026-02-24 14:45:43] INFO: Checking documentation (docstrings)...
+[2026-02-24 14:45:45] WARNING: Documentation issue in agent1_ingestion\extractor.py
+[2026-02-24 14:45:46] WARNING: Documentation issue in agent1_ingestion\image_extractor.py
+[2026-02-24 14:45:47] WARNING: Documentation issue in agent1_ingestion\library.py
+[2026-02-24 14:45:47] WARNING: Documentation issue in agent1_ingestion\main.py
+[2026-02-24 14:45:48] WARNING: Documentation issue in agent1_ingestion\models.py
+[2026-02-24 14:45:49] WARNING: Documentation issue in agent1_ingestion\structurer.py
+[2026-02-24 14:45:50] OK: ✓ All imports properly organized
+[2026-02-24 14:45:50] INFO: Running unit tests (pytest)...
+[2026-02-24 14:45:51] WARNING: Documentation issue in agent2_analysis\analyzer.py
+[2026-02-24 14:45:51] ERROR: Some tests failed
+[2026-02-24 14:45:51] INFO: Checking documentation (docstrings)...
+[2026-02-24 14:45:51] WARNING: Documentation issue in agent2_analysis\concept_extractor.py
+[2026-02-24 14:45:52] WARNING: Documentation issue in agent2_analysis\image_analyzer.py
+[2026-02-24 14:45:52] WARNING: Documentation issue in agent2_analysis\main.py
+[2026-02-24 14:45:53] WARNING: Documentation issue in agent1_ingestion\extractor.py
+[2026-02-24 14:45:53] WARNING: Documentation issue in agent2_analysis\models.py
+[2026-02-24 14:45:53] WARNING: Documentation issue in agent1_ingestion\image_extractor.py
+[2026-02-24 14:45:54] WARNING: Documentation issue in agent1_ingestion\library.py
+[2026-02-24 14:45:54] WARNING: Documentation issue in agent2_analysis\segmenter.py
+[2026-02-24 14:45:55] WARNING: Documentation issue in agent1_ingestion\main.py
+[2026-02-24 14:45:55] WARNING: Documentation issue in agent2_analysis\visual_detector.py
+[2026-02-24 14:45:55] WARNING: Documentation issue in agent1_ingestion\models.py
+[2026-02-24 14:45:55] WARNING: Documentation issue in background_quality_checker.py
+[2026-02-24 14:45:56] WARNING: Documentation issue in agent1_ingestion\structurer.py
+[2026-02-24 14:45:56] WARNING: Documentation issue in database\db.py
+[2026-02-24 14:45:57] WARNING: Documentation issue in agent2_analysis\analyzer.py
+[2026-02-24 14:45:57] WARNING: Documentation issue in database\schemas.py
+[2026-02-24 14:45:57] WARNING: Documentation issue in agent2_analysis\concept_extractor.py
+[2026-02-24 14:45:58] WARNING: Documentation issue in issue_reporter.py
+[2026-02-24 14:45:58] WARNING: Documentation issue in agent2_analysis\image_analyzer.py
+[2026-02-24 14:45:58] WARNING: Documentation issue in quality_checker.py
+[2026-02-24 14:45:59] WARNING: Documentation issue in agent2_analysis\main.py
+[2026-02-24 14:45:59] WARNING: Documentation issue in quality_control.py
+[2026-02-24 14:45:59] WARNING: Documentation issue in agent2_analysis\models.py
+[2026-02-24 14:45:59] WARNING: Documentation issue in quality_watcher.py
+[2026-02-24 14:46:00] WARNING: Documentation issue in agent2_analysis\segmenter.py
+[2026-02-24 14:46:00] WARNING: Documentation issue in shared\claude_client.py
+[2026-02-24 14:46:01] WARNING: Documentation issue in agent2_analysis\visual_detector.py
+[2026-02-24 14:46:01] WARNING: Documentation issue in streamlit_app.py
+[2026-02-24 14:46:01] WARNING: Documentation issue in background_quality_checker.py
+[2026-02-24 14:46:02] WARNING: Documentation issue in tests\conftest.py
+[2026-02-24 14:46:02] WARNING: Documentation issue in database\db.py
+[2026-02-24 14:46:03] WARNING: Documentation issue in tests\generate_test_pdf.py
+[2026-02-24 14:46:03] WARNING: Documentation issue in database\schemas.py
+[2026-02-24 14:46:04] WARNING: Documentation issue in issue_reporter.py
+[2026-02-24 14:46:04] INFO: Checking code complexity...
+[2026-02-24 14:46:04] WARNING: Documentation issue in quality_checker.py
+[2026-02-24 14:46:05] OK: ✓ Code complexity acceptable
+[2026-02-24 14:46:05] INFO: 
+============================================================
+[2026-02-24 14:46:05] INFO: Attempting Auto-Fixes...
+[2026-02-24 14:46:05] INFO: ============================================================
+[2026-02-24 14:46:05] INFO: 
+Re-running checks after fixes...
+[2026-02-24 14:46:05] INFO: ============================================================
+[2026-02-24 14:46:05] INFO: Quality Check Started - 2026-02-24 14:46:05.399175
+[2026-02-24 14:46:05] INFO: ============================================================
+[2026-02-24 14:46:05] INFO: Starting syntax checks...
+[2026-02-24 14:46:05] WARNING: Documentation issue in quality_control.py
+[2026-02-24 14:46:05] OK: ✓ All files passed syntax checks
+[2026-02-24 14:46:05] INFO: Starting linting checks (PEP 8)...
+[2026-02-24 14:46:05] WARNING: Documentation issue in quality_watcher.py
+[2026-02-24 14:46:06] WARNING: Documentation issue in shared\claude_client.py
+[2026-02-24 14:46:07] WARNING: Documentation issue in streamlit_app.py
+[2026-02-24 14:46:09] WARNING: Documentation issue in tests\conftest.py

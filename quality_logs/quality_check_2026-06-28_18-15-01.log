@@ -1,0 +1,16 @@
+[2026-06-28 18:15:01] INFO: ============================================================
+[2026-06-28 18:15:01] INFO: Quality Check Started - 2026-06-28 18:15:01.124126
+[2026-06-28 18:15:01] INFO: ============================================================
+[2026-06-28 18:15:01] INFO: Starting syntax checks...
+[2026-06-28 18:15:03] OK: ✓ All files passed syntax checks
+[2026-06-28 18:15:03] INFO: Starting linting checks (PEP 8)...
+[2026-06-28 18:23:45] OK: ✓ All files passed linting checks
+[2026-06-28 18:23:45] INFO: Starting type checking (mypy)...
+[2026-06-28 18:23:47] OK: ✓ Type checking complete (no critical issues)
+[2026-06-28 18:23:47] INFO: Starting import organization checks...
+[2026-06-28 18:23:52] WARNING: Import organization issue in agent1_ingestion\extractor.py
+[2026-06-28 18:24:07] WARNING: Import organization issue in agent3_scripts\script_generator.py
+[2026-06-28 18:24:35] WARNING: Import organization issue in database\schemas.py
+[2026-06-28 18:24:41] WARNING: Import organization issue in streamlit_app.py
+[2026-06-28 18:24:48] WARNING: Import organization issue in worker\process.py
+[2026-06-28 18:24:49] INFO: Running unit tests (pytest)...

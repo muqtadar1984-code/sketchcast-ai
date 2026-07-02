@@ -1,0 +1,44 @@
+[2026-02-25 16:30:05] INFO: ============================================================
+[2026-02-25 16:30:05] INFO: Quality Check Started - 2026-02-25 16:30:05.810324
+[2026-02-25 16:30:05] INFO: ============================================================
+[2026-02-25 16:30:05] INFO: Starting syntax checks...
+[2026-02-25 16:30:06] OK: ✓ All files passed syntax checks
+[2026-02-25 16:30:06] INFO: Starting linting checks (PEP 8)...
+[2026-02-26 04:13:27] WARNING: Pylint check timed out
+[2026-02-26 04:13:27] OK: ✓ All files passed linting checks
+[2026-02-26 04:13:27] INFO: Starting type checking (mypy)...
+[2026-02-26 04:13:40] OK: ✓ Type checking complete (no critical issues)
+[2026-02-26 04:13:40] INFO: Starting import organization checks...
+[2026-02-26 04:13:56] WARNING: Import organization issue in agent1_ingestion\extractor.py
+[2026-02-26 04:14:17] WARNING: Import organization issue in agent3_scripts\script_generator.py
+[2026-02-26 04:14:21] WARNING: Import organization issue in agent4_animation\main.py
+[2026-02-26 04:14:26] WARNING: Import organization issue in agent4_animation\sketch_generator.py
+[2026-02-26 04:14:38] WARNING: Import organization issue in streamlit_app.py
+[2026-02-26 04:14:42] INFO: Running unit tests (pytest)...
+[2026-02-26 04:14:42] ERROR: Some tests failed
+[2026-02-26 04:14:43] INFO: Checking documentation (docstrings)...
+[2026-02-26 04:14:46] WARNING: Documentation issue in agent1_ingestion\extractor.py
+[2026-02-26 04:14:47] WARNING: Documentation issue in agent1_ingestion\image_extractor.py
+[2026-02-26 04:14:48] WARNING: Documentation issue in agent1_ingestion\library.py
+[2026-02-26 04:14:50] WARNING: Documentation issue in agent1_ingestion\main.py
+[2026-02-26 04:14:51] WARNING: Documentation issue in agent1_ingestion\models.py
+[2026-02-26 04:14:52] WARNING: Documentation issue in agent1_ingestion\structurer.py
+[2026-02-26 04:14:54] WARNING: Documentation issue in agent2_analysis\analyzer.py
+[2026-02-26 04:14:55] WARNING: Documentation issue in agent2_analysis\concept_extractor.py
+[2026-02-26 04:14:56] WARNING: Documentation issue in agent2_analysis\image_analyzer.py
+[2026-02-26 04:14:57] WARNING: Documentation issue in agent2_analysis\main.py
+[2026-02-26 04:14:58] WARNING: Documentation issue in agent2_analysis\models.py
+[2026-02-26 04:15:00] WARNING: Documentation issue in agent2_analysis\segmenter.py
+[2026-02-26 04:15:01] WARNING: Documentation issue in agent2_analysis\visual_detector.py
+[2026-02-26 04:15:03] WARNING: Documentation issue in agent3_scripts\main.py
+[2026-02-26 04:15:04] WARNING: Documentation issue in agent3_scripts\models.py
+[2026-02-26 04:15:05] WARNING: Documentation issue in agent3_scripts\prompts.py
+[2026-02-26 04:15:06] WARNING: Documentation issue in agent3_scripts\script_generator.py
+[2026-02-26 04:15:08] WARNING: Documentation issue in agent4_animation\animation_builder.py
+[2026-02-26 04:15:09] WARNING: Documentation issue in agent4_animation\canvas.py
+[2026-02-26 04:15:10] WARNING: Documentation issue in agent4_animation\main.py
+[2026-02-26 04:15:12] WARNING: Documentation issue in agent4_animation\models.py
+[2026-02-26 04:15:13] WARNING: Documentation issue in agent4_animation\prompts.py
+[2026-02-26 04:15:14] WARNING: Documentation issue in agent4_animation\roughjs_renderer.py
+[2026-02-26 04:15:15] WARNING: Documentation issue in agent4_animation\sketch_generator.py
+[2026-02-26 04:15:16] WARNING: Documentation issue in background_quality_checker.py

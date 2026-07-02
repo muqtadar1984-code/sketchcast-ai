@@ -1,0 +1,299 @@
+[2026-06-27 18:48:56] INFO: ============================================================
+[2026-06-27 18:48:56] INFO: Quality Check Started - 2026-06-27 18:48:56.254201
+[2026-06-27 18:48:56] INFO: ============================================================
+[2026-06-27 18:48:56] INFO: Starting syntax checks...
+[2026-06-27 18:48:58] OK: ✓ All files passed syntax checks
+[2026-06-27 18:48:58] INFO: Starting linting checks (PEP 8)...
+[2026-06-27 18:53:31] OK: ✓ All files passed linting checks
+[2026-06-27 18:53:31] INFO: Starting type checking (mypy)...
+[2026-06-27 18:53:33] OK: ✓ Type checking complete (no critical issues)
+[2026-06-27 18:53:33] INFO: Starting import organization checks...
+[2026-06-27 18:53:36] WARNING: Import organization issue in agent1_ingestion\extractor.py
+[2026-06-27 18:53:46] WARNING: Import organization issue in agent3_scripts\script_generator.py
+[2026-06-27 18:54:03] WARNING: Import organization issue in database\schemas.py
+[2026-06-27 18:54:07] WARNING: Import organization issue in streamlit_app.py
+[2026-06-27 18:54:09] INFO: Running unit tests (pytest)...
+[2026-06-27 18:54:18] OK: ✓ All tests passed
+[2026-06-27 18:54:18] INFO: Checking documentation (docstrings)...
+[2026-06-27 18:54:22] WARNING: Documentation issue in agent1_ingestion\extractor.py
+[2026-06-27 18:54:23] WARNING: Documentation issue in agent1_ingestion\image_extractor.py
+[2026-06-27 18:54:23] WARNING: Documentation issue in agent1_ingestion\library.py
+[2026-06-27 18:54:24] WARNING: Documentation issue in agent1_ingestion\main.py
+[2026-06-27 18:54:24] WARNING: Documentation issue in agent1_ingestion\models.py
+[2026-06-27 18:54:25] WARNING: Documentation issue in agent1_ingestion\structurer.py
+[2026-06-27 18:54:26] WARNING: Documentation issue in agent2_analysis\analyzer.py
+[2026-06-27 18:54:26] WARNING: Documentation issue in agent2_analysis\concept_extractor.py
+[2026-06-27 18:54:27] WARNING: Documentation issue in agent2_analysis\image_analyzer.py
+[2026-06-27 18:54:28] WARNING: Documentation issue in agent2_analysis\main.py
+[2026-06-27 18:54:29] WARNING: Documentation issue in agent2_analysis\models.py
+[2026-06-27 18:54:30] WARNING: Documentation issue in agent2_analysis\segmenter.py
+[2026-06-27 18:54:30] WARNING: Documentation issue in agent2_analysis\visual_detector.py
+[2026-06-27 18:54:32] WARNING: Documentation issue in agent3_scripts\main.py
+[2026-06-27 18:54:32] WARNING: Documentation issue in agent3_scripts\models.py
+[2026-06-27 18:54:33] WARNING: Documentation issue in agent3_scripts\prompts.py
+[2026-06-27 18:54:33] WARNING: Documentation issue in agent3_scripts\script_generator.py
+[2026-06-27 18:54:35] WARNING: Documentation issue in agent4_image_gen\gemini_client.py
+[2026-06-27 18:54:35] WARNING: Documentation issue in agent4_image_gen\image_generator.py
+[2026-06-27 18:54:36] WARNING: Documentation issue in agent4_image_gen\main.py
+[2026-06-27 18:54:36] WARNING: Documentation issue in agent4_image_gen\models.py
+[2026-06-27 18:54:37] WARNING: Documentation issue in agent4_image_gen\pillow_fallback.py
+[2026-06-27 18:54:38] WARNING: Documentation issue in agent5_slides\main.py
+[2026-06-27 18:54:39] WARNING: Documentation issue in agent5_slides\models.py
+[2026-06-27 18:54:39] WARNING: Documentation issue in agent5_slides\slide_builder.py
+[2026-06-27 18:54:40] WARNING: Documentation issue in agent5_slides\slide_generator.py
+[2026-06-27 18:54:41] WARNING: Documentation issue in agent6_animation\main.py
+[2026-06-27 18:54:42] WARNING: Documentation issue in agent6_animation\models.py
+[2026-06-27 18:54:42] WARNING: Documentation issue in agent6_animation\speedpaint.py
+[2026-06-27 18:54:43] WARNING: Documentation issue in agent6_animation\tts_client.py
+[2026-06-27 18:54:43] WARNING: Documentation issue in agent6_animation\video_composer.py
+[2026-06-27 18:54:44] WARNING: Documentation issue in agent8_qa\answer_generator.py
+[2026-06-27 18:54:45] WARNING: Documentation issue in agent8_qa\main.py
+[2026-06-27 18:54:45] WARNING: Documentation issue in agent8_qa\models.py
+[2026-06-27 18:54:46] WARNING: Documentation issue in agent8_qa\question_bank.py
+[2026-06-27 18:54:46] WARNING: Documentation issue in agent8_qa\question_handler.py
+[2026-06-27 18:54:47] WARNING: Documentation issue in agent8_qa\streaming_tts.py
+[2026-06-27 18:54:48] WARNING: Documentation issue in agent8_render\main.py
+[2026-06-27 18:54:48] WARNING: Documentation issue in agent8_render\models.py
+[2026-06-27 18:54:49] WARNING: Documentation issue in agent8_render\renderer.py
+[2026-06-27 18:54:50] WARNING: Documentation issue in background_quality_checker.py
+[2026-06-27 18:54:51] WARNING: Documentation issue in database\db.py
+[2026-06-27 18:54:52] WARNING: Documentation issue in database\schemas.py
+[2026-06-27 18:54:52] WARNING: Documentation issue in issue_reporter.py
+[2026-06-27 18:54:53] WARNING: Documentation issue in quality_checker.py
+[2026-06-27 18:54:53] WARNING: Documentation issue in quality_control.py
+[2026-06-27 18:54:54] WARNING: Documentation issue in quality_watcher.py
+[2026-06-27 18:54:55] WARNING: Documentation issue in shared\claude_client.py
+[2026-06-27 18:54:56] WARNING: Documentation issue in streamlit_app.py
+[2026-06-27 18:54:57] WARNING: Documentation issue in tests\conftest.py
+[2026-06-27 18:54:58] WARNING: Documentation issue in tests\generate_test_pdf.py
+[2026-06-27 18:54:59] INFO: Checking code complexity...
+[2026-06-27 18:55:02] OK: ✓ Code complexity acceptable
+
+
+[1m======================================================================[0m
+[1mQUALITY CHECK REPORT[0m
+[1m======================================================================[0m
+
+Timestamp: 2026-06-27 18:55:02
+Project Root: C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast
+Total Files Checked: 67
+Total Issues Found: 55
+
+[1mCheck Results:[0m
+  syntax               [92m✓ PASS[0m
+  linting              [92m✓ PASS[0m
+  type_hints           [92m✓ PASS[0m
+  imports              [91m✗ FAIL (4)[0m
+  tests                [92m✓ PASS[0m
+  docstrings           [91m✗ FAIL (51)[0m
+  complexity           [92m✓ PASS[0m
+
+[92m[1m✓ ALL CHECKS PASSED![0m
+
+[1mDetailed Issues:[0m
+
+[93mIMPORTS:[0m
+  [96magent1_ingestion\extractor.py[0m:
+    - Imports not properly organized
+  [96magent3_scripts\script_generator.py[0m:
+    - Imports not properly organized
+  [96mdatabase\schemas.py[0m:
+    - Imports not properly organized
+  [96mstreamlit_app.py[0m:
+    - Imports not properly organized
+
+[93mDOCSTRINGS:[0m
+  [96magent1_ingestion\extractor.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent1_ingestion\extractor.py:1 at module level:
+    -         D213: Multi-line docstring summary should start at the second line
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent1_ingestion\extractor.py:27 in public class `DocItem`:
+  [96magent1_ingestion\image_extractor.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent1_ingestion\image_extractor.py:15 in public class `ExtractedImage`:
+    -         D101: Missing docstring in public class
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent1_ingestion\image_extractor.py:27 in private function `_get_context`:
+  [96magent1_ingestion\library.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent1_ingestion\library.py:29 in public function `check_duplicate`:
+    -         D212: Multi-line docstring summary should start at the first line
+  [96magent1_ingestion\main.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent1_ingestion\main.py:35 in public function `lifespan`:
+    -         D103: Missing docstring in public function
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent1_ingestion\main.py:138 in public function `health_check`:
+  [96magent1_ingestion\models.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent1_ingestion\models.py:14 in public class `BookStatus`:
+    -         D101: Missing docstring in public class
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent1_ingestion\models.py:20 in public class `UploaderRole`:
+  [96magent1_ingestion\structurer.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent1_ingestion\structurer.py:1 at module level:
+    -         D213: Multi-line docstring summary should start at the second line
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent1_ingestion\structurer.py:223 in public function `structure_book`:
+  [96magent2_analysis\analyzer.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent2_analysis\analyzer.py:1 at module level:
+    -         D213: Multi-line docstring summary should start at the second line
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent2_analysis\analyzer.py:32 in public function `run_full_analysis`:
+  [96magent2_analysis\concept_extractor.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent2_analysis\concept_extractor.py:1 at module level:
+    -         D213: Multi-line docstring summary should start at the second line
+  [96magent2_analysis\image_analyzer.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent2_analysis\image_analyzer.py:53 in public function `convert_to_supported_format`:
+    -         D205: 1 blank line required between summary line and description (found 0)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent2_analysis\image_analyzer.py:53 in public function `convert_to_supported_format`:
+  [96magent2_analysis\main.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent2_analysis\main.py:20 in public function `health`:
+    -         D103: Missing docstring in public function
+  [96magent2_analysis\models.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent2_analysis\models.py:13 in public class `AnalysisStatus`:
+    -         D101: Missing docstring in public class
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent2_analysis\models.py:20 in public class `DifficultyLevel`:
+  [96magent2_analysis\segmenter.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent2_analysis\segmenter.py:7 in public function `build_single_episode`:
+    -         D212: Multi-line docstring summary should start at the first line
+  [96magent2_analysis\visual_detector.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent2_analysis\visual_detector.py:1 at module level:
+    -         D213: Multi-line docstring summary should start at the second line
+  [96magent3_scripts\main.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent3_scripts\main.py:1 at module level:
+    -         D200: One-line docstring should fit on one line with quotes (found 3)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent3_scripts\main.py:1 at module level:
+  [96magent3_scripts\models.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent3_scripts\models.py:1 at module level:
+    -         D200: One-line docstring should fit on one line with quotes (found 3)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent3_scripts\models.py:1 at module level:
+  [96magent3_scripts\prompts.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent3_scripts\prompts.py:1 at module level:
+    -         D200: One-line docstring should fit on one line with quotes (found 3)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent3_scripts\prompts.py:1 at module level:
+  [96magent3_scripts\script_generator.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent3_scripts\script_generator.py:1 at module level:
+    -         D205: 1 blank line required between summary line and description (found 0)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent3_scripts\script_generator.py:1 at module level:
+  [96magent4_image_gen\gemini_client.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent4_image_gen\gemini_client.py:42 in public function `generate_image`:
+    -         D213: Multi-line docstring summary should start at the second line
+  [96magent4_image_gen\image_generator.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent4_image_gen\image_generator.py:1 at module level:
+    -         D213: Multi-line docstring summary should start at the second line
+  [96magent4_image_gen\main.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent4_image_gen\main.py:17 in public class `GenerateRequest`:
+    -         D101: Missing docstring in public class
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent4_image_gen\main.py:33 in public function `health`:
+  [96magent4_image_gen\models.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent4_image_gen\models.py:11 in public class `ImageSegment`:
+    -         D203: 1 blank line required before class docstring (found 0)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent4_image_gen\models.py:23 in public class `ImageManifest`:
+  [96magent4_image_gen\pillow_fallback.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent4_image_gen\pillow_fallback.py:1 at module level:
+    -         D213: Multi-line docstring summary should start at the second line
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent4_image_gen\pillow_fallback.py:29 in public function `generate_placeholder`:
+  [96magent5_slides\main.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent5_slides\main.py:16 in public class `GenerateRequest`:
+    -         D101: Missing docstring in public class
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent5_slides\main.py:33 in public function `health`:
+  [96magent5_slides\models.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent5_slides\models.py:11 in public class `SlideSegment`:
+    -         D203: 1 blank line required before class docstring (found 0)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent5_slides\models.py:22 in public class `SlideManifest`:
+  [96magent5_slides\slide_builder.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent5_slides\slide_builder.py:1 at module level:
+    -         D213: Multi-line docstring summary should start at the second line
+  [96magent5_slides\slide_generator.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent5_slides\slide_generator.py:1 at module level:
+    -         D213: Multi-line docstring summary should start at the second line
+  [96magent6_animation\main.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent6_animation\main.py:16 in public class `GenerateRequest`:
+    -         D101: Missing docstring in public class
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent6_animation\main.py:33 in public function `health`:
+  [96magent6_animation\models.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent6_animation\models.py:11 in public class `VideoSegment`:
+    -         D203: 1 blank line required before class docstring (found 0)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent6_animation\models.py:23 in public class `VideoManifest`:
+  [96magent6_animation\speedpaint.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent6_animation\speedpaint.py:1 at module level:
+    -         D213: Multi-line docstring summary should start at the second line
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent6_animation\speedpaint.py:28 in public function `create_speedpaint_video`:
+  [96magent6_animation\tts_client.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent6_animation\tts_client.py:1 at module level:
+    -         D213: Multi-line docstring summary should start at the second line
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent6_animation\tts_client.py:22 in public function `default_voice`:
+  [96magent6_animation\video_composer.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent6_animation\video_composer.py:1 at module level:
+    -         D213: Multi-line docstring summary should start at the second line
+  [96magent8_qa\answer_generator.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent8_qa\answer_generator.py:33 in public function `generate_answer_stream`:
+    -         D212: Multi-line docstring summary should start at the first line
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent8_qa\answer_generator.py:75 in public function `generate_answer_stream_async`:
+  [96magent8_qa\main.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent8_qa\main.py:33 in public function `ask_question`:
+    -         D212: Multi-line docstring summary should start at the first line
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent8_qa\main.py:101 in public function `health`:
+  [96magent8_qa\models.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent8_qa\models.py:12 in public class `QuestionRequest`:
+    -         D203: 1 blank line required before class docstring (found 0)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent8_qa\models.py:22 in public class `BankedQA`:
+  [96magent8_qa\question_bank.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent8_qa\question_bank.py:53 in public function `find_similar`:
+    -         D212: Multi-line docstring summary should start at the first line
+  [96magent8_qa\question_handler.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent8_qa\question_handler.py:25 in public function `handle_question`:
+    -         D212: Multi-line docstring summary should start at the first line
+  [96magent8_qa\streaming_tts.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent8_qa\streaming_tts.py:43 in public function `synthesize_answer`:
+    -         D212: Multi-line docstring summary should start at the first line
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent8_qa\streaming_tts.py:71 in public function `stream_answer_audio`:
+  [96magent8_render\main.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent8_render\main.py:16 in public class `RenderRequest`:
+    -         D101: Missing docstring in public class
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent8_render\main.py:32 in public function `health`:
+  [96magent8_render\models.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent8_render\models.py:9 in public class `FinalVideoManifest`:
+    -         D203: 1 blank line required before class docstring (found 0)
+  [96magent8_render\renderer.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent8_render\renderer.py:1 at module level:
+    -         D213: Multi-line docstring summary should start at the second line
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\agent8_render\renderer.py:34 in private function `_ffmpeg_exe`:
+  [96mbackground_quality_checker.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\background_quality_checker.py:1 at module level:
+    -         D205: 1 blank line required between summary line and description (found 0)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\background_quality_checker.py:1 at module level:
+  [96mdatabase\db.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\database\db.py:9 in public class `Base`:
+    -         D101: Missing docstring in public class
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\database\db.py:23 in public function `get_db`:
+  [96mdatabase\schemas.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\database\schemas.py:17 in public class `Book`:
+    -         D101: Missing docstring in public class
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\database\schemas.py:48 in public class `Chapter`:
+  [96missue_reporter.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\issue_reporter.py:1 at module level:
+    -         D205: 1 blank line required between summary line and description (found 0)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\issue_reporter.py:1 at module level:
+  [96mquality_checker.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\quality_checker.py:1 at module level:
+    -         D205: 1 blank line required between summary line and description (found 0)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\quality_checker.py:1 at module level:
+  [96mquality_control.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\quality_control.py:1 at module level:
+    -         D205: 1 blank line required between summary line and description (found 0)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\quality_control.py:1 at module level:
+  [96mquality_watcher.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\quality_watcher.py:1 at module level:
+    -         D205: 1 blank line required between summary line and description (found 0)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\quality_watcher.py:1 at module level:
+  [96mshared\claude_client.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\shared\claude_client.py:34 in public class `ClaudeClient`:
+    -         D203: 1 blank line required before class docstring (found 0)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\shared\claude_client.py:36 in public method `__init__`:
+  [96mstreamlit_app.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\streamlit_app.py:1 at module level:
+    -         D205: 1 blank line required between summary line and description (found 0)
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\streamlit_app.py:1 at module level:
+  [96mtests\conftest.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\tests\conftest.py:33 in public function `override_get_db`:
+    -         D103: Missing docstring in public function
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\tests\conftest.py:58 in public function `client`:
+  [96mtests\generate_test_pdf.py[0m:
+    - C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\tests\generate_test_pdf.py:9 in public function `create_test_pdf`:
+    -         D103: Missing docstring in public function
+
+[1mLog File: C:\Users\Arieb\OneDrive\Desktop\Arieb folder\Edtech\sketchcast\quality_logs\quality_check_2026-06-27_18-48-56.log[0m
+[1m======================================================================[0m
+

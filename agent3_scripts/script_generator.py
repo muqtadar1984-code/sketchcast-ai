@@ -15,7 +15,6 @@ from .models import (
     EpisodeScript,
     ScriptSegment,
     SegmentType,
-    SketchCue,
     SlideVisual,
     VisualAssetRequest,
     VisualGroup,
@@ -75,21 +74,6 @@ def _parse_slide_visual(data) -> Optional[SlideVisual]:
     return SlideVisual(kind=kind, nodes=nodes, groups=groups, items=items, caption=caption)
 
 
-def _synthesize_sketch_cue(visual_request: Optional[VisualAssetRequest]) -> Optional[SketchCue]:
-    """BRIDGE: Synthesize a backward-compatible sketch_cue from visual_request.
-
-    Allows Agent 4 to continue reading sketch_cue until it is refactored
-    for Nanobana Pro.  Remove when Agent 4 reads visual_request directly.
-    """
-    if visual_request is None:
-        return None
-    return SketchCue(
-        action="draw",
-        element=visual_request.prompt[:200],
-        timing="during",
-    )
-
-
 def process_director_manifest(segments: List[ScriptSegment]) -> List[ScriptSegment]:
     """Post-process segments to enforce Scribe Director invariants.
 
@@ -97,20 +81,14 @@ def process_director_manifest(segments: List[ScriptSegment]) -> List[ScriptSegme
     2. Forces visual_action="GHOST_ONLY" for question_hook segments.
     3. Inserts a 300ms <break> at the start of elevenlabs_text for DRAW_START
        segments (hand travel time before the pen starts tracing).
-    4. Synthesizes bridge sketch_cue from visual_request for Agent 4 compat.
     """
     travel_break = '<break time="0.3s"/>'
 
     for seg in segments:
-        # No visual_request → no visual action, clear bridge
+        # No visual_request → no visual action
         if seg.visual_request is None:
             seg.visual_action = None
-            seg.sketch_cue = None
             continue
-
-        # Ensure bridge sketch_cue is populated
-        if seg.sketch_cue is None:
-            seg.sketch_cue = _synthesize_sketch_cue(seg.visual_request)
 
         # question_hook must be GHOST_ONLY
         if seg.type == SegmentType.question_hook:
@@ -269,9 +247,6 @@ def generate_episode_script(
                 style_preset=vr_data.get("style_preset", "line-art"),
             )
 
-        # Bridge: synthesize sketch_cue for Agent 4 backward compatibility
-        sketch_cue = _synthesize_sketch_cue(visual_request)
-
         plain_text = seg.get("text", "")
         el_text = seg.get("elevenlabs_text") or plain_text
 
@@ -295,7 +270,6 @@ def generate_episode_script(
             slide_points=slide_points,
             slide_visual=slide_visual,
             visual_request=visual_request,
-            sketch_cue=sketch_cue,
             visual_action=visual_action,
             pause_for_question=bool(seg.get("pause_for_question", False)),
             estimated_duration_seconds=int(seg.get("estimated_duration_seconds", 30)),

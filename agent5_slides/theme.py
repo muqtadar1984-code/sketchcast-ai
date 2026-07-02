@@ -53,15 +53,6 @@ _CONCEPT_MAP: list[tuple[tuple[str, ...], str]] = [
 _NEUTRAL = ["idea", "book", "target", "search"]
 
 
-def concept_for(text: str, index: int = 0) -> str:
-    """Pick a concept icon name for a slide from its heading/title (deterministic)."""
-    t = (text or "").lower()
-    for keys, name in _CONCEPT_MAP:
-        if any(k in t for k in keys):
-            return name
-    return _NEUTRAL[index % len(_NEUTRAL)]
-
-
 def _ranked_concepts(text: str) -> list[str]:
     """Every catalogue concept whose keywords appear in `text`, in map order."""
     t = (text or "").lower()

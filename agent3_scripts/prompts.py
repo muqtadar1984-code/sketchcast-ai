@@ -215,7 +215,6 @@ Optional "caption": one short line under the diagram.
 
 === OUTPUT FORMAT ===
 Return ONLY valid JSON — no preamble, no markdown fences, no explanation.
-Do NOT output "sketch_cue" — use "visual_request" instead.
 
 {
   "segments": [

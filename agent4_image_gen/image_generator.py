@@ -1,12 +1,13 @@
 """Agent 4: Image Generator.
 
-Freemium pipeline uses text-based slides (Agent 5), so AI image generation is
-skipped — this returns an empty manifest quickly without calling Gemini. The
-Gemini path (gemini_client) is kept in the module for a future paid tier.
+The pipeline renders slides natively (Agent 5), so AI image generation is
+skipped — this returns an empty manifest. Kept only so the local Streamlit dev
+UI's pipeline view keeps working; a future paid tier would reimplement it
+(the old Gemini client lives in git history).
 
 Entry point
 -----------
-generate_episode_images()   Streamlit in-process entry point.
+generate_episode_images()   local Streamlit dev-UI entry point.
 """
 
 from __future__ import annotations

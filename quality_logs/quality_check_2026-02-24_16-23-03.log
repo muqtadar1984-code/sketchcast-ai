@@ -1,0 +1,28 @@
+[2026-02-24 16:23:03] INFO: ============================================================
+[2026-02-24 16:23:03] INFO: Quality Check Started - 2026-02-24 16:23:03.546201
+[2026-02-24 16:23:03] INFO: ============================================================
+[2026-02-24 16:23:03] INFO: Starting syntax checks...
+[2026-02-24 16:23:04] OK: ✓ All files passed syntax checks
+[2026-02-24 16:23:04] INFO: Starting linting checks (PEP 8)...
+[2026-02-24 16:47:58] WARNING: Pylint check timed out
+[2026-02-24 16:47:58] OK: ✓ All files passed linting checks
+[2026-02-24 16:47:58] INFO: Starting type checking (mypy)...
+[2026-02-24 16:48:05] OK: ✓ Type checking complete (no critical issues)
+[2026-02-24 16:48:05] INFO: Starting import organization checks...
+[2026-02-24 16:48:35] WARNING: Import organization issue in agent3_scripts\script_generator.py
+[2026-02-24 16:48:44] WARNING: Import organization issue in streamlit_app.py
+[2026-02-24 16:48:48] INFO: Running unit tests (pytest)...
+[2026-02-24 16:48:48] ERROR: Some tests failed
+[2026-02-24 16:48:48] INFO: Checking documentation (docstrings)...
+[2026-02-24 16:48:51] WARNING: Documentation issue in agent1_ingestion\extractor.py
+[2026-02-24 16:48:52] WARNING: Documentation issue in agent1_ingestion\image_extractor.py
+[2026-02-24 16:48:53] WARNING: Documentation issue in agent1_ingestion\library.py
+[2026-02-24 16:48:54] WARNING: Documentation issue in agent1_ingestion\main.py
+[2026-02-24 16:48:54] WARNING: Documentation issue in agent1_ingestion\models.py
+[2026-02-24 16:48:55] WARNING: Documentation issue in agent1_ingestion\structurer.py
+[2026-02-24 16:48:57] WARNING: Documentation issue in agent2_analysis\analyzer.py
+[2026-02-24 16:48:58] WARNING: Documentation issue in agent2_analysis\concept_extractor.py
+[2026-02-24 16:48:59] WARNING: Documentation issue in agent2_analysis\image_analyzer.py
+[2026-02-24 16:49:01] WARNING: Documentation issue in agent2_analysis\main.py
+[2026-02-24 16:49:02] WARNING: Documentation issue in agent2_analysis\models.py
+[2026-02-24 16:49:05] WARNING: Documentation issue in agent2_analysis\segmenter.py
