@@ -1,13 +1,12 @@
-# Railway build config (Nixpacks) for the SketchCast Streamlit app.
+# Railway build config (Nixpacks).
 #
-# - aptPkgs adds ffmpeg, needed by pydub/moviepy for the video pipeline.
-#   (pymupdf and opencv-python-headless ship their own wheels, so no other
-#   system libraries are required.)
-# - The start command binds Streamlit to Railway's injected $PORT on 0.0.0.0
-#   so the platform can route traffic to it.
-#
-# Note: this file is ignored by Streamlit Community Cloud, so the existing
-# deployment is unaffected.
+# - aptPkgs adds ffmpeg, required by the video pipeline (agent6/agent8 shell out
+#   to it; imageio-ffmpeg's bundled binary is the fallback).
+# - The [start] cmd below launches the legacy Streamlit UI. The PRODUCTION
+#   worker service overrides its start command in the Railway dashboard to:
+#       python -m worker.run
+#   If no service still uses the Streamlit UI, switch this cmd to the worker
+#   command — check the Railway dashboard before changing it.
 
 [phases.setup]
 aptPkgs = ["ffmpeg"]

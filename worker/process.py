@@ -93,7 +93,6 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         if kind == "presentation":
             # Narrated deck + video.
             from agent3_scripts.script_generator import generate_chapter_scripts_from_analysis
-            from agent4_image_gen.image_generator import generate_episode_images
             from agent5_slides.slide_generator import generate_episode_slides
             from agent6_animation.video_composer import compose_episode_videos
             from agent8_render.renderer import render_final_video
@@ -110,9 +109,9 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             ep_title = (scripts.get("episodes") or [{}])[0].get("episode_title") or chapter_title
             db.set_progress(sb, job_id, 60)
 
-            images_manifest = generate_episode_images(script_data=scripts).model_dump()
+            # (No AI-image step in the freemium path — slides are rendered natively.)
             slides = generate_episode_slides(
-                script_data=scripts, image_manifest=images_manifest, branding=branding,
+                script_data=scripts, branding=branding,
             ).model_dump()
             db.set_progress(sb, job_id, 72)
 

@@ -17,18 +17,6 @@ class SegmentType(str, Enum):
     preview = "preview"
 
 
-class SketchCue(BaseModel):
-    """DEPRECATED — backward-compat bridge for Agent 4.
-
-    Populated automatically by _synthesize_sketch_cue() from visual_request.
-    Will be removed when Agent 4 is refactored for Nanobana Pro.
-    """
-
-    action: str  # always "draw" in bridge mode
-    element: str  # first 200 chars of visual_request.prompt
-    timing: str  # always "during" in bridge mode
-
-
 class VisualAssetRequest(BaseModel):
     """Art Director instruction for Nanobana Pro image generation."""
 
@@ -89,7 +77,6 @@ class ScriptSegment(BaseModel):
     slide_points: List[str] = Field(default_factory=list)  # on-screen bullets (chapter content)
     slide_visual: Optional[SlideVisual] = None  # composable diagram (animated natively)
     visual_request: Optional[VisualAssetRequest] = None  # Art Director image prompt
-    sketch_cue: Optional[SketchCue] = None  # BRIDGE — auto-generated from visual_request
     visual_action: Optional[Literal["DRAW_START", "DRAW_CONTINUE", "GHOST_ONLY"]] = None
     pause_for_question: bool = False
     estimated_duration_seconds: int
