@@ -66,19 +66,45 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         pdf_path = db.download_book(sb, book["storage_path"], Path(tmp) / "book.pdf")
         db.set_progress(sb, job_id, 10)
 
-        # Agent 1 — ingest
+        client = ClaudeClient()
+
+        # Agent 1 — ingest. Chapter boundaries stored at indexing time are reused
+        # (known_chapters) so every generation splits the book identically without
+        # re-running detection; client+pdf_path enable the Claude fallback for
+        # books the heuristics can't read (see structure_book's cascade).
         extraction = extract_pdf(str(pdf_path))
         images = extract_images(str(pdf_path), book_id)
         structured = structure_book(
             book_id=book_id, title=book.get("title") or "Untitled",
             author=book.get("author") or "Unknown", isbn=None, extraction=extraction, images=images,
+            pdf_path=str(pdf_path), client=client, known_chapters=book.get("chapters"),
         ).model_dump()
         chapter = _pick_chapter(structured.get("chapters", []), gen.get("chapter_ref"))
         chapter_num = int(chapter.get("chapter_num", 0))
         chapter_title = chapter.get("title") or f"Chapter {chapter_num}"
-        db.set_progress(sb, job_id, 20)
 
-        client = ClaudeClient()
+        # Scanned book (no text layer) → the chapter has no content for the
+        # pipeline to teach from. Transcribe its pages with Claude vision once,
+        # up front, so every generation kind gets real chapter text.
+        section_chars = sum(
+            len(s.get("content") or "")
+            + sum(len(ss.get("content") or "") for ss in (s.get("subsections") or []))
+            for s in (chapter.get("sections") or [])
+        )
+        if section_chars < 200:
+            from agent1_ingestion.vision_chapters import chapter_text_vision
+
+            ocr_text = chapter_text_vision(
+                str(pdf_path), int(chapter.get("start_page", 0)),
+                int(chapter.get("end_page", 0)), client,
+            )
+            if ocr_text:
+                chapter["sections"] = [{
+                    "section_title": "Content", "section_type": "body",
+                    "content": ocr_text, "page_num": chapter.get("start_page", 0),
+                    "subsections": [],
+                }]
+        db.set_progress(sb, job_id, 20)
 
         # Agent 2 — analysis (shared by every kind)
         analysis = run_full_analysis(
@@ -190,6 +216,16 @@ def index_book(sb: Client, job: dict) -> None:
     book_id = job["book_id"]
     book = db.get_book(sb, book_id)
 
+    # Claude enables chapter detection for books the text heuristics can't read
+    # (scanned pages, unconventional labels). Best-effort: without a key,
+    # indexing still works for conventional books.
+    try:
+        from shared.claude_client import ClaudeClient
+        client = ClaudeClient()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Claude unavailable for indexing (%s) — heuristics only", exc)
+        client = None
+
     cover_dest = None
     with tempfile.TemporaryDirectory() as tmp:
         pdf_path = db.download_book(sb, book["storage_path"], Path(tmp) / "book.pdf")
@@ -198,6 +234,7 @@ def index_book(sb: Client, job: dict) -> None:
             book_id=book_id, title=book.get("title") or "Untitled",
             author=book.get("author") or "Unknown", isbn=None,
             extraction=extraction, images=[],
+            pdf_path=str(pdf_path), client=client,
         ).model_dump()
 
         # Cover thumbnail (page 0) for the library UI — best-effort.
@@ -214,9 +251,14 @@ def index_book(sb: Client, job: dict) -> None:
             logger.warning("cover render failed for %s: %s", book_id, exc)
             cover_dest = None
 
+    # Persist page boundaries too, so generations reuse the exact same split
+    # without re-running detection (crucial for scanned books, where detection
+    # is a vision pass).
     chapters = [
         {"num": int(c["chapter_num"]),
-         "title": (c.get("title") or f"Chapter {c['chapter_num']}").strip()}
+         "title": (c.get("title") or f"Chapter {c['chapter_num']}").strip(),
+         "start_page": int(c.get("start_page", 0)),
+         "end_page": int(c.get("end_page", 0))}
         for c in structured.get("chapters", [])
     ]
 
@@ -224,7 +266,8 @@ def index_book(sb: Client, job: dict) -> None:
     # never block indexing). This is identified for the teacher, not entered.
     grade = subject = None
     try:
-        from shared.claude_client import ClaudeClient
+        if client is None:
+            raise RuntimeError("Claude unavailable")
         sample = "\n".join(c["title"] for c in chapters[:25])
         prompt = (
             "From this textbook's title and chapter list, identify the school GRADE/level "
@@ -233,7 +276,7 @@ def index_book(sb: Client, job: dict) -> None:
             "(e.g. \"Mathematics\", \"Science\", \"History\"). Best guess if unsure.\n\n"
             f"Title: {book.get('title') or 'Unknown'}\n\nChapters:\n{sample}"
         )
-        data = ClaudeClient().analyze(prompt, max_tokens=200).get("data", {}) or {}
+        data = client.analyze(prompt, max_tokens=200).get("data", {}) or {}
         grade = (str(data.get("grade") or "").strip() or None)
         subject = (str(data.get("subject") or "").strip() or None)
     except Exception as exc:  # noqa: BLE001
