@@ -5,6 +5,7 @@ Uses the service_role key, so it bypasses RLS — keep this key server-side only
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Optional
@@ -55,6 +56,17 @@ def claim_next_job(sb: Client) -> Optional[dict]:
 
 def set_progress(sb: Client, job_id: str, progress: int) -> None:
     sb.table("jobs").update({"progress": progress}).eq("id", job_id).execute()
+
+
+def set_job_usage(sb: Client, job_id: str, usage: Optional[dict]) -> None:
+    """Persist a job's Claude token/cost total (jobs.usage). Best-effort: a
+    deployment whose migration hasn't added the column must not fail the job."""
+    if not usage or not usage.get("calls"):
+        return
+    try:
+        sb.table("jobs").update({"usage": usage}).eq("id", job_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning("job usage not persisted for %s: %s", job_id, exc)
 
 
 def finish_job(sb: Client, job_id: str, generation_id: Optional[str] = None, error: Optional[str] = None) -> None:

@@ -36,6 +36,10 @@ class ClaudeClient:
     def __init__(self, model: str = "claude-sonnet-4-6"):
         self.client = Anthropic(api_key=_get_api_key())
         self.model = model
+        # Per-instance running total across every call this client makes — the
+        # worker persists it per job (jobs.usage) so spend is attributable to a
+        # user/book/generation instead of vanishing with the container.
+        self.session_usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
 
     # ── text analysis ────────────────────────────────────────────────
 
@@ -197,6 +201,10 @@ class ClaudeClient:
             "total_tokens": total,
             "estimated_cost_usd": round(cost, 6),
         }
+        self.session_usage["calls"] += 1
+        self.session_usage["input_tokens"] += inp
+        self.session_usage["output_tokens"] += out
+        self.session_usage["cost_usd"] = round(self.session_usage["cost_usd"] + cost, 6)
         self._log_usage(usage)
         return usage
 
