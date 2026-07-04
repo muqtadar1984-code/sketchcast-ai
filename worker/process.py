@@ -216,8 +216,10 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
 
         db.set_generation_title(sb, generation_id, title)
 
+    # Attribute this job's Claude spend to the row (unit economics per lesson).
+    db.set_job_usage(sb, job_id, client.session_usage)
     db.finish_job(sb, job_id, generation_id)
-    logger.info("Generation %s (%s) done", generation_id, kind)
+    logger.info("Generation %s (%s) done — %s", generation_id, kind, client.session_usage)
 
 
 def index_book(sb: Client, job: dict) -> None:
@@ -338,6 +340,8 @@ def index_book(sb: Client, job: dict) -> None:
     db.set_book_meta(sb, book_id, grade, subject)
     if cover_dest:
         db.set_book_cover(sb, book_id, cover_dest)
+    if client is not None:
+        db.set_job_usage(sb, job["id"], client.session_usage)
     db.set_book_chapters(sb, book_id, chapters, "ready")
     logger.info("Indexed book %s: %d chapter(s), grade=%s subject=%s cover=%s",
                 book_id, len(chapters), grade, subject, bool(cover_dest))
