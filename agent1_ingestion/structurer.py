@@ -85,7 +85,7 @@ def _infer_chapters_from_items(
         end_page = (titles[idx + 1].page_num - 1) if idx + 1 < len(titles) else total_pages - 1
         chapters.append({
             "chapter_num": idx,
-            "title": item.text.strip(),
+            "title": _clean_title(item.text.strip()),
             "start_page": item.page_num,
             "end_page": end_page,
         })
@@ -210,6 +210,118 @@ def _title_near(items: list[DocItem], idx: int, page: int) -> Optional[str]:
             break
     title = " ".join(parts).strip()
     return title if len(title) >= 3 else None
+
+
+def _clean_title(text: str) -> str:
+    """Bound an inferred title. Extraction sometimes glues a heading to the first
+    body sentence ("Flowcharts A sequence of steps that make up…"); a chapter
+    label must stay a label — cut at a sentence end when one lands early, else
+    hard-wrap on a word boundary."""
+    t = " ".join(text.split())
+    if len(t) <= 64:
+        return t
+    m = re.match(r"^(.{8,63}?[.!?:])\s", t)
+    if m:
+        return m.group(1).rstrip(".!?:")
+    return t[:56].rsplit(" ", 1)[0] + "…"
+
+
+def _detect_running_header_chapters(items: list[DocItem], total_pages: int) -> list[dict]:
+    """Detect chapters from RUNNING HEADERS — books (Cambridge, Oxford, …) that
+    print "Unit 3: Selecting hardware and software" on every page of the unit.
+
+    ``_detect_labeled_chapters`` (first occurrence per number) fails on these
+    books: every unit's first occurrence is the printed Contents page, so its
+    ascending run collapses and detection falls through to heading inference —
+    which produces blurb titles and drifted boundaries. Here the signal is the
+    opposite one: a label on MOST pages, forming dense per-unit page clusters
+    whose transitions are the exact boundaries and whose modal inline title is
+    the clean chapter title. Scans ALL items (running headers are small text,
+    not level-1/2 headings)."""
+    # family -> page -> set of (n, inline_title) seen on that page
+    by_family: dict[str, dict[int, set[tuple[int, str]]]] = {}
+    for idx, it in enumerate(items):
+        m = _LABEL_RE.match(it.text.strip())
+        if not m:
+            continue
+        n = _marker_number(m.group(2))
+        if n is None:
+            continue
+        title = m.group(3).strip(" .:-–—")
+        if not any(c.isalpha() for c in title) and idx + 1 < len(items):
+            # Extraction often splits the header into spans — "Unit 3" then
+            # ": Selecting hardware and software" — so peek at the neighbour.
+            nxt = items[idx + 1]
+            nt = nxt.text.strip().strip(" .:-–—")
+            if nxt.page_num == it.page_num and nt and len(nt) <= 64 and any(c.isalpha() for c in nt):
+                title = nt
+        fam = by_family.setdefault(m.group(1).lower(), {})
+        fam.setdefault(it.page_num, set()).add((n, title))
+
+    best: list[dict] = []
+    for pages_map in by_family.values():
+        # A page mentioning 3+ different unit numbers is a Contents/index page,
+        # not a running header — drop it from the signal.
+        page_n: dict[int, tuple[int, str]] = {}
+        for pg, marks in pages_map.items():
+            nums = {n for n, _ in marks}
+            if len(nums) > 2:
+                continue
+            n = min(nums)
+            title = next(
+                (t for num, t in sorted(marks) if num == n and any(c.isalpha() for c in t)), ""
+            )
+            page_n[pg] = (n, title)
+        # Running headers = the label appears on a large share of the book.
+        if len(page_n) < max(8, total_pages // 5):
+            continue
+
+        # Per number: the dense page cluster (longest run with small gaps) is the
+        # unit's true extent; stray cross-references ("see Unit 7") sit far from
+        # their number's cluster and fall out of it.
+        clusters: dict[int, tuple[int, int]] = {}
+        titles: dict[int, dict[str, int]] = {}
+        for n in sorted({v[0] for v in page_n.values()}):
+            pgs = sorted(pg for pg, (num, _) in page_n.items() if num == n)
+            runs: list[list[int]] = [[pgs[0]]]
+            for pg in pgs[1:]:
+                if pg - runs[-1][-1] <= 4:
+                    runs[-1].append(pg)
+                else:
+                    runs.append([pg])
+            main = max(runs, key=len)
+            if len(main) < 3:  # too sparse to be a unit's running header
+                continue
+            clusters[n] = (main[0], main[-1])
+            tcounts = titles.setdefault(n, {})
+            for pg in main:
+                t = page_n[pg][1]
+                if t:
+                    tcounts[t] = tcounts.get(t, 0) + 1
+
+        # Consecutive numbering from 1, strictly increasing starts.
+        chapters: list[dict] = []
+        n = 1
+        while n in clusters:
+            start, _last = clusters[n]
+            if chapters and start <= chapters[-1]["start_page"]:
+                break
+            tcounts = titles.get(n) or {}
+            title = max(tcounts, key=tcounts.get) if tcounts else f"Chapter {n}"
+            chapters.append({
+                "chapter_num": len(chapters), "title": _clean_title(title),
+                "start_page": start, "end_page": 0,
+            })
+            n += 1
+
+        if len(chapters) >= 3 and len(chapters) > len(best):
+            for i in range(len(chapters)):
+                chapters[i]["end_page"] = (
+                    chapters[i + 1]["start_page"] - 1 if i + 1 < len(chapters)
+                    else clusters[len(chapters)][1]
+                )
+            best = chapters
+    return best
 
 
 def _detect_labeled_chapters(items: list[DocItem], total_pages: int) -> list[dict]:
@@ -466,8 +578,12 @@ def structure_book(
     elif extraction.toc and _toc_is_usable(extraction.toc, extraction.total_pages):
         chapter_defs = _build_chapters_from_toc(extraction.toc, extraction.total_pages)
     else:
-        # No usable outline → labelled markers, bare numbers, heading inference.
-        chapter_defs = _detect_labeled_chapters(extraction.items, extraction.total_pages)
+        # No usable outline → running headers, labelled markers, bare numbers,
+        # heading inference. Running headers go first: when a book prints its
+        # unit on every page, that beats any first-occurrence heuristic.
+        chapter_defs = _detect_running_header_chapters(extraction.items, extraction.total_pages)
+        if not chapter_defs:
+            chapter_defs = _detect_labeled_chapters(extraction.items, extraction.total_pages)
         if not chapter_defs:
             chapter_defs = _detect_numbered_chapters(extraction.items, extraction.total_pages)
         if not chapter_defs:
