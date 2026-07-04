@@ -58,6 +58,11 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     db.set_generation_status(sb, generation_id, "processing")  # so the UI shows progress, not "queued"
     gen = db.get_generation(sb, generation_id)
     book = db.get_book(sb, gen["book_id"])
+    # Console takedown racing a queued job: taken-down content must not be
+    # (re)generated. Columns arrive with app migration 0015 — .get() is safe
+    # either way.
+    if gen.get("removed_at") or book.get("removed_at"):
+        raise RuntimeError("content removed")
     owner_id = gen["owner_id"]
     book_id = book["id"]
     kind = gen.get("kind") or "presentation"
@@ -235,6 +240,8 @@ def index_book(sb: Client, job: dict) -> None:
 
     book_id = job["book_id"]
     book = db.get_book(sb, book_id)
+    if book.get("removed_at"):
+        raise RuntimeError("content removed")
 
     # Claude enables chapter detection for books the text heuristics can't read
     # (scanned pages, unconventional labels). Best-effort: without a key,
