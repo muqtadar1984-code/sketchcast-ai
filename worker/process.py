@@ -104,6 +104,24 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     "content": ocr_text, "page_num": chapter.get("start_page", 0),
                     "subsections": [],
                 }]
+
+        # Guard: the sliced text must actually belong to the requested chapter.
+        # Wrong stored boundaries/titles fail LOUD here instead of shipping a
+        # lesson about a different unit (user-reported failure mode).
+        from agent1_ingestion.chapter_check import verify_chapter_content
+
+        sample = " ".join(
+            (s.get("content") or "") + " "
+            + " ".join(ss.get("content") or "" for ss in (s.get("subsections") or []))
+            for s in (chapter.get("sections") or [])
+        )
+        ok, actual = verify_chapter_content(chapter_title, sample, client)
+        if not ok:
+            raise RuntimeError(
+                f"Chapter check failed: \"{chapter_title}\" was requested but its pages "
+                f"read as \"{actual}\". The book's chapter list looks stale or wrong — "
+                "delete and re-upload the book to re-detect chapters, then generate again."
+            )
         db.set_progress(sb, job_id, 20)
 
         # Agent 2 — analysis (shared by every kind)
@@ -236,6 +254,41 @@ def index_book(sb: Client, job: dict) -> None:
             extraction=extraction, images=[],
             pdf_path=str(pdf_path), client=client,
         ).model_dump()
+
+        # Audit the detected list BEFORE it becomes the book's stored truth:
+        # Claude reads each chapter's opening text, fixes garbled titles, and —
+        # when most entries look wrong — the whole list is re-detected by the
+        # vision reader. Best-effort: any failure keeps the heuristic result.
+        chapter_defs = structured.get("chapters", [])
+        if client is not None and len(chapter_defs) > 1:
+            try:
+                from agent1_ingestion.chapter_check import audit_chapter_list
+
+                audit = audit_chapter_list(extraction, chapter_defs, client)
+                for c in chapter_defs:
+                    fix = audit["titles"].get(int(c.get("chapter_num", 0)))
+                    if fix:
+                        c["title"] = fix
+                bad = audit["mismatched"]
+                if len(bad) * 2 >= len(chapter_defs):
+                    from agent1_ingestion.vision_chapters import detect_chapters_vision
+
+                    logger.warning(
+                        "chapter audit flagged %d/%d entries for %s — escalating to vision",
+                        len(bad), len(chapter_defs), book_id,
+                    )
+                    smart = detect_chapters_vision(str(pdf_path), extraction.total_pages, client)
+                    if smart:
+                        re_audit = audit_chapter_list(extraction, smart, client)
+                        if len(re_audit["mismatched"]) < len(bad):
+                            for c in smart:
+                                fix = re_audit["titles"].get(int(c.get("chapter_num", 0)))
+                                if fix:
+                                    c["title"] = fix
+                            chapter_defs = smart
+                structured["chapters"] = chapter_defs
+            except Exception as exc:  # noqa: BLE001 — audit must never block indexing
+                logger.warning("chapter audit skipped for %s: %s", book_id, exc)
 
         # Cover thumbnail (page 0) for the library UI — best-effort.
         try:
