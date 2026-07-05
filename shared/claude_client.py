@@ -14,6 +14,17 @@ from anthropic import Anthropic, RateLimitError
 TOKEN_LOG_PATH = Path(__file__).resolve().parent.parent / "token_log.json"
 
 
+def _first_text(response) -> str:
+    """The first TEXT block's text. Extended-thinking models (e.g. Sonnet 5)
+    put a ThinkingBlock at content[0] which has no `.text`, so never index
+    content[0] blindly — scan for the first block that actually carries text."""
+    for block in response.content:
+        txt = getattr(block, "text", None)
+        if txt is not None:
+            return txt
+    return ""
+
+
 def _get_api_key() -> str:
     """Read API key from Streamlit secrets first, then env var."""
     try:
@@ -52,7 +63,7 @@ class ClaudeClient:
     ) -> dict:
         """Send a text prompt, return parsed JSON dict."""
         response = self._call(system=system, prompt=prompt, max_tokens=max_tokens, retries=retries)
-        text = response.content[0].text
+        text = _first_text(response)
         usage = self.track_tokens(response)
         parsed = self._extract_json(text)
         return {"data": parsed, "usage": usage}
@@ -102,7 +113,7 @@ class ClaudeClient:
             max_tokens=max_tokens,
             retries=retries,
         )
-        text = response.content[0].text
+        text = _first_text(response)
         usage = self.track_tokens(response)
         parsed = self._extract_json(text)
         return {"data": parsed, "usage": usage}
@@ -154,7 +165,7 @@ class ClaudeClient:
             max_tokens=max_tokens,
             retries=retries,
         )
-        text = response.content[0].text
+        text = _first_text(response)
         usage = self.track_tokens(response)
         parsed = self._extract_json(text)
         return {"data": parsed, "usage": usage}
@@ -184,7 +195,7 @@ class ClaudeClient:
             retries=retries,
         )
         usage = self.track_tokens(response)
-        return {"text": response.content[0].text.strip(), "usage": usage}
+        return {"text": _first_text(response).strip(), "usage": usage}
 
     # ── token tracking ───────────────────────────────────────────────
 
@@ -214,25 +225,35 @@ class ClaudeClient:
         messages = [{"role": "user", "content": prompt}]
         return self._call_messages(system=system, messages=messages, max_tokens=max_tokens, retries=retries)
 
+    def _create(self, system: str, messages: list, max_tokens: int):
+        """One API call. Extended-thinking is DISABLED: this client is built for
+        deterministic small-output JSON (tiny max_tokens, JSON in the first
+        block), and thinking-on models (e.g. Sonnet 5) otherwise emit a
+        ThinkingBlock and consume the token budget before the answer. Fall back
+        to a plain call if a model rejects the thinking parameter."""
+        try:
+            return self.client.messages.create(
+                model=self.model, max_tokens=max_tokens, system=system,
+                messages=messages, thinking={"type": "disabled"},
+            )
+        except TypeError:
+            pass  # SDK too old for the param
+        except Exception as exc:  # noqa: BLE001 — model rejected the param
+            if "thinking" not in str(exc).lower():
+                raise
+        return self.client.messages.create(
+            model=self.model, max_tokens=max_tokens, system=system, messages=messages,
+        )
+
     def _call_messages(self, system: str, messages: list, max_tokens: int, retries: int):
         for attempt in range(retries):
             try:
-                return self.client.messages.create(
-                    model=self.model,
-                    max_tokens=max_tokens,
-                    system=system,
-                    messages=messages,
-                )
+                return self._create(system, messages, max_tokens)
             except RateLimitError:
                 wait = 2 ** (attempt + 1)
                 time.sleep(wait)
         # Final attempt without catching
-        return self.client.messages.create(
-            model=self.model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=messages,
-        )
+        return self._create(system, messages, max_tokens)
 
     @staticmethod
     def _extract_json(text: str) -> dict | list:
