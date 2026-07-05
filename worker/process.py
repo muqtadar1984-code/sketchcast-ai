@@ -299,6 +299,17 @@ def index_book(sb: Client, job: dict) -> None:
             except Exception as exc:  # noqa: BLE001 — audit must never block indexing
                 logger.warning("chapter audit skipped for %s: %s", book_id, exc)
 
+        # Book Health Score — a predictive read from signals we already have,
+        # shown the moment indexing finishes so a bad scan is caught before it
+        # generates failed lessons. Best-effort: never block indexing.
+        health = None
+        try:
+            from agent1_ingestion.book_health import compute_book_health
+
+            health = compute_book_health(extraction, structured.get("chapters", []))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("book health skipped for %s: %s", book_id, exc)
+
         # Cover thumbnail (page 0) for the library UI — best-effort.
         try:
             import fitz  # PyMuPDF
@@ -347,6 +358,8 @@ def index_book(sb: Client, job: dict) -> None:
     db.set_book_meta(sb, book_id, grade, subject)
     if cover_dest:
         db.set_book_cover(sb, book_id, cover_dest)
+    if health is not None:
+        db.set_book_health(sb, book_id, health)
     if client is not None:
         db.set_job_usage(sb, job["id"], client.session_usage)
     db.set_book_chapters(sb, book_id, chapters, "ready")
