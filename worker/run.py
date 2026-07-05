@@ -31,6 +31,62 @@ log = logging.getLogger("worker")
 POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "5"))
 
 
+def _support_agent_enabled() -> bool:
+    return os.getenv("SUPPORT_AGENT_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _auto_file_support_issue(sb, job: dict, error: str) -> None:
+    """A failed job auto-triggers the support agent: file a console issue for
+    the content owner and queue a diagnosis job. Never for support jobs
+    themselves (no recursion), never twice for the same generation while an
+    issue is still open, and never allowed to break the failure path."""
+    try:
+        gen_id = job.get("generation_id")
+        if not gen_id:
+            return  # index failures already surface on the book row
+        gen = sb.table("generations").select("owner_id, book_id, kind").eq("id", gen_id).maybe_single().execute()
+        gen_d = getattr(gen, "data", None)
+        if not gen_d:
+            return
+        open_q = (
+            sb.table("platform_issues")
+            .select("id")
+            .eq("generation_id", gen_id)
+            .eq("trigger_source", "auto")
+            .neq("status", "resolved")
+            .limit(1)
+            .execute()
+        )
+        if getattr(open_q, "data", None):
+            return  # an open auto-issue already covers this generation
+        ins = (
+            sb.table("platform_issues")
+            .insert(
+                {
+                    "reporter_id": gen_d["owner_id"],
+                    "category": "generation_failed",
+                    "trigger_source": "auto",
+                    "title": f"Generation failed: {gen_d.get('kind') or 'lesson'}",
+                    "description": None,
+                    "generation_id": gen_id,
+                    "book_id": gen_d.get("book_id"),
+                    "job_id": job["id"],
+                    "context": {"error": error[:300]},
+                }
+            )
+            .execute()
+        )
+        issue_id = (getattr(ins, "data", None) or [{}])[0].get("id")
+        if issue_id:
+            sb.table("jobs").insert(
+                {"type": "support_diagnose", "status": "queued", "issue_id": issue_id,
+                 "generation_id": gen_id, "book_id": gen_d.get("book_id")}
+            ).execute()
+            log.info("Support agent queued for failed job %s (issue %s)", job["id"], issue_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("support auto-trigger skipped: %s", exc)
+
+
 def run_once(sb) -> bool:
     """Claim and process one job. Returns True if a job was handled."""
     job = db.claim_next_job(sb)
@@ -43,13 +99,21 @@ def run_once(sb) -> bool:
         if job_type == "index_book":
             index_book(sb, job)
             db.finish_job(sb, job["id"])  # process_generation finishes itself; index_book doesn't
+        elif job_type == "support_diagnose":
+            from support_agent.agent import run_support_job
+
+            run_support_job(sb, job)
+            db.finish_job(sb, job["id"])
         else:
             process_generation(sb, job, gen_id)
     except Exception as exc:  # noqa: BLE001
         log.error("Job %s failed: %s", job["id"], exc)
         log.error(traceback.format_exc())
         try:
-            db.finish_job(sb, job["id"], gen_id, error=str(exc)[:500])
+            # A support job's generation_id is the REPORTED (possibly healthy,
+            # assigned) generation — an agent crash must never flip it to error.
+            mirror_gen = None if job_type == "support_diagnose" else gen_id
+            db.finish_job(sb, job["id"], mirror_gen, error=str(exc)[:500])
         except Exception:  # noqa: BLE001
             pass
         # Stop the UI's "Finding chapters…" spinner if indexing failed.
@@ -58,6 +122,10 @@ def run_once(sb) -> bool:
                 db.set_book_chapters(sb, job["book_id"], [], "error")
             except Exception:  # noqa: BLE001
                 pass
+        # A failed generation triggers the diagnosis agent (flag-gated; never
+        # for a support job itself — that would recurse).
+        if _support_agent_enabled() and job_type not in ("support_diagnose", "index_book"):
+            _auto_file_support_issue(sb, job, str(exc))
     return True
 
 
