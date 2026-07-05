@@ -120,6 +120,15 @@ def set_book_cover(sb: Client, book_id: str, cover_path: str) -> None:
     sb.table("books").update({"cover_path": cover_path}).eq("id", book_id).execute()
 
 
+def set_book_health(sb: Client, book_id: str, health: dict) -> None:
+    """Persist the Book Health Score (books.health). Best-effort: a deployment
+    whose migration hasn't added the column must not fail indexing."""
+    try:
+        sb.table("books").update({"health": health}).eq("id", book_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning("book health not persisted for %s: %s", book_id, exc)
+
+
 # ── storage ──────────────────────────────────────────────────────────
 
 def download_book(sb: Client, storage_path: str, dest: str | Path) -> Path:
