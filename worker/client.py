@@ -59,12 +59,23 @@ def set_progress(sb: Client, job_id: str, progress: int) -> None:
 
 
 def set_job_usage(sb: Client, job_id: str, usage: Optional[dict]) -> None:
-    """Persist a job's Claude token/cost total (jobs.usage). Best-effort: a
-    deployment whose migration hasn't added the column must not fail the job."""
+    """Persist a job's Claude token/cost total (jobs.usage), MERGING additively
+    with any existing value — a support-agent run reuses its job id for an
+    inline re-index, and the expensive half of the spend must not be clobbered
+    by the final write. Best-effort: a deployment whose migration hasn't added
+    the column must not fail the job."""
     if not usage or not usage.get("calls"):
         return
     try:
-        sb.table("jobs").update({"usage": usage}).eq("id", job_id).execute()
+        prev_q = sb.table("jobs").select("usage").eq("id", job_id).maybe_single().execute()
+        prev = (getattr(prev_q, "data", None) or {}).get("usage") or {}
+        merged = {
+            "calls": int(prev.get("calls") or 0) + int(usage.get("calls") or 0),
+            "input_tokens": int(prev.get("input_tokens") or 0) + int(usage.get("input_tokens") or 0),
+            "output_tokens": int(prev.get("output_tokens") or 0) + int(usage.get("output_tokens") or 0),
+            "cost_usd": round(float(prev.get("cost_usd") or 0) + float(usage.get("cost_usd") or 0), 6),
+        }
+        sb.table("jobs").update({"usage": merged}).eq("id", job_id).execute()
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("worker").warning("job usage not persisted for %s: %s", job_id, exc)
 
