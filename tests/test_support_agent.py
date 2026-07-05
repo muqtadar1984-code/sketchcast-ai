@@ -333,3 +333,36 @@ def test_diagnosis_vocab_validation(monkeypatch):
     assert out["recommended_action"] == "escalate"
     assert out["confidence"] == 1.0  # clamped
     assert out["category"] in CATEGORIES and out["recommended_action"] in ACTIONS
+
+
+def test_gate_ground_truth_forces_reindex(monkeypatch):
+    # The model timidly escalates, but the validation gate concretely found the
+    # source slice wrong (and the artifact fine) → code forces reindex_regenerate.
+    from support_agent import diagnose as dg
+
+    class MockClient:
+        def analyze(self, prompt, max_tokens=0, **k):
+            return {"data": {"category": "wrong_chapter_slicing", "confidence": 0.6,
+                             "recommended_action": "escalate", "user_message": "u", "staff_note": "s"}}
+
+    monkeypatch.setattr(dg, "_gate_signals", lambda bundle, client: {
+        "source_matches_title": False, "artifact_matches_title": True})
+    out = dg.diagnose(MockClient(), {"chapters": []})
+    assert out["recommended_action"] == "reindex_regenerate"
+    assert out["confidence"] >= 0.85
+
+
+def test_gate_artifact_mismatch_stays_escalated(monkeypatch):
+    # Source is fine but the ARTIFACT drifted → NOT a reindex case; respect the
+    # model's escalate (reindexing wouldn't fix generation drift).
+    from support_agent import diagnose as dg
+
+    class MockClient:
+        def analyze(self, prompt, max_tokens=0, **k):
+            return {"data": {"category": "generation_drift", "confidence": 0.7,
+                             "recommended_action": "escalate", "user_message": "u", "staff_note": "s"}}
+
+    monkeypatch.setattr(dg, "_gate_signals", lambda bundle, client: {
+        "source_matches_title": True, "artifact_matches_title": False})
+    out = dg.diagnose(MockClient(), {"chapters": []})
+    assert out["recommended_action"] == "escalate"

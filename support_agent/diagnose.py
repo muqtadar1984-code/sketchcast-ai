@@ -87,6 +87,23 @@ def diagnose(client, bundle: dict) -> dict:
         confidence = max(0.0, min(1.0, float(data.get("confidence", 0))))
     except (TypeError, ValueError):
         confidence = 0.0
+
+    # Ground-truth override: the validation gate RE-RAN the check and concretely
+    # found the requested chapter's stored slice does NOT match its title, while
+    # the artifact does match (or there is no artifact) — that is a
+    # detection/slicing error the reindex path fixes deterministically. Don't
+    # leave the auto-fix to model timidity: route to reindex_regenerate (the
+    # downstream guards still gate the mutation — post-reindex verify, assigned
+    # → pending, loop cap, rollback). Never override toward regenerate when the
+    # ARTIFACT is what mismatches with a good source (that's drift → escalate).
+    source_wrong = signals.get("source_matches_title") is False
+    artifact_ok = signals.get("artifact_matches_title") is not False
+    if source_wrong and artifact_ok:
+        action = "reindex_regenerate"
+        if category not in ("wrong_chapter_detection", "wrong_chapter_slicing"):
+            category = "wrong_chapter_slicing"
+        confidence = max(confidence, 0.85)  # the gate confirmed it
+
     return {
         "category": category,
         "confidence": confidence,
