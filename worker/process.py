@@ -135,6 +135,11 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         ).model_dump()
         db.set_progress(sb, job_id, 45)
 
+        # Persist chapter grounding for the AI Tutor — the concept analysis now
+        # (covers every kind); the narrated lesson's script is added below for
+        # the presentation kind. This is the tutor's curriculum fence. Best-effort.
+        db.set_chapter_grounding(sb, book_id, chapter_num, chapter_title, analysis)
+
         # School branding (templates + derived accent/logo) — falls back to defaults.
         branding = load_branding(sb, owner_id, Path(tmp))
         base = f"{owner_id}/{generation_id}"
@@ -157,6 +162,15 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             ).model_dump()
             ep_title = (scripts.get("episodes") or [{}])[0].get("episode_title") or chapter_title
             db.set_progress(sb, job_id, 60)
+
+            # Enrich the tutor grounding with the lesson's own narration text —
+            # the best source for answers that "sound like the lesson".
+            _script_text = " ".join(
+                (seg.get("text") or "")
+                for ep in (scripts.get("episodes") or [])
+                for seg in (ep.get("segments") or [])
+            ).strip()
+            db.set_chapter_grounding(sb, book_id, chapter_num, chapter_title, analysis, _script_text)
 
             # (No AI-image step in the freemium path — slides are rendered natively.)
             slides = generate_episode_slides(

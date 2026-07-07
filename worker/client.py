@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -127,6 +128,37 @@ def set_book_health(sb: Client, book_id: str, health: dict) -> None:
         sb.table("books").update({"health": health}).eq("id", book_id).execute()
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("worker").warning("book health not persisted for %s: %s", book_id, exc)
+
+
+def set_chapter_grounding(
+    sb: Client,
+    book_id: str,
+    chapter_num: int,
+    chapter_title: str,
+    concepts: dict,
+    script_text: Optional[str] = None,
+) -> None:
+    """Persist a chapter's grounding (Agent-2 concept analysis + the lesson
+    narration text) so the AI Tutor can answer STRICTLY from this chapter.
+    Upsert keyed (book_id, chapter_num) — shared across every generation of the
+    chapter. Best-effort: a deployment missing app migration 0025 must not fail
+    the generation. `script_text` is only written when present, so a docx-only
+    generation never wipes a prior lesson's script."""
+    try:
+        row = {
+            "book_id": book_id,
+            "chapter_num": int(chapter_num),
+            "chapter_title": chapter_title,
+            "concepts": concepts,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if script_text:
+            row["script_text"] = script_text
+        sb.table("chapter_grounding").upsert(row, on_conflict="book_id,chapter_num").execute()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning(
+            "chapter grounding not persisted for %s ch%s: %s", book_id, chapter_num, exc
+        )
 
 
 # ── storage ──────────────────────────────────────────────────────────
