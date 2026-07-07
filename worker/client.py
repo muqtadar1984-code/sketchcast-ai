@@ -239,3 +239,54 @@ def add_artifact_row(sb: Client, generation_id: str, kind: str, storage_path: st
     sb.table("artifacts").insert(
         {"generation_id": generation_id, "kind": kind, "storage_path": storage_path}
     ).execute()
+
+
+# ── AI Tutor sketch queue (Phase 2) ──────────────────────────────────
+# tutor_sketch is its OWN lightweight queue + cache (app migration 0028), kept off
+# the generations/jobs rail so coach doodles never clutter the teacher's library.
+
+def claim_next_sketch(sb: Client) -> Optional[dict]:
+    """Atomically-ish claim the oldest queued sketch (queued → processing)."""
+    res = (
+        sb.table("tutor_sketch")
+        .select("*")
+        .eq("status", "queued")
+        .order("created_at")
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        return None
+    row = res.data[0]
+    upd = (
+        sb.table("tutor_sketch")
+        .update({"status": "processing", "updated_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", row["id"])
+        .eq("status", "queued")  # guard against a racing worker
+        .execute()
+    )
+    if not upd.data:
+        return None  # lost the race
+    return row
+
+
+def set_sketch_done(sb: Client, sketch_id: str, storage_path: str) -> None:
+    sb.table("tutor_sketch").update(
+        {"status": "done", "storage_path": storage_path, "updated_at": datetime.now(timezone.utc).isoformat()}
+    ).eq("id", sketch_id).execute()
+
+
+def set_sketch_error(sb: Client, sketch_id: str, error: str) -> None:
+    sb.table("tutor_sketch").update(
+        {"status": "error", "error": (error or "")[:500], "updated_at": datetime.now(timezone.utc).isoformat()}
+    ).eq("id", sketch_id).execute()
+
+
+def upload_sketch(sb: Client, local_path: str | Path, dest_path: str) -> str:
+    """Upload a rendered sketch MP4 to the private `tutor-sketch` bucket."""
+    sb.storage.from_("tutor-sketch").upload(
+        dest_path,
+        Path(local_path).read_bytes(),
+        {"content-type": "video/mp4", "upsert": "true"},
+    )
+    return dest_path

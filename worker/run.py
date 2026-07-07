@@ -88,7 +88,26 @@ def _auto_file_support_issue(sb, job: dict, error: str) -> None:
 
 
 def run_once(sb) -> bool:
-    """Claim and process one job. Returns True if a job was handled."""
+    """Claim and process one unit of work. Returns True if something was handled.
+
+    AI-Tutor sketches are claimed FIRST: they're small, interactive (a student is
+    waiting live) and drain fast, so they shouldn't sit behind a long batch lesson.
+    They're monthly-capped per account, so they can't starve the lesson queue."""
+    sketch = db.claim_next_sketch(sb)
+    if sketch:
+        log.info("Claimed tutor sketch %s (book=%s)", sketch["id"], sketch.get("book_id"))
+        try:
+            from worker.tutor_sketch import render_sketch
+
+            render_sketch(sb, sketch)  # self-contained: marks its own done/error
+        except Exception as exc:  # noqa: BLE001
+            log.error("Sketch %s failed: %s", sketch["id"], exc)
+            try:
+                db.set_sketch_error(sb, sketch["id"], str(exc))
+            except Exception:  # noqa: BLE001
+                pass
+        return True
+
     job = db.claim_next_job(sb)
     if not job:
         return False
