@@ -161,6 +161,49 @@ def set_chapter_grounding(
         )
 
 
+def insert_tutor_seed_qa(
+    sb: Client,
+    book_id: str,
+    chapter_num: int,
+    rows: list[dict],
+) -> int:
+    """Bank pre-computed tutor Q&A (see worker.tutor_warm) into the shared answer
+    cache so the FIRST student to ask a common question gets an instant, $0 reply.
+    Seed rows are marked is_verified so the conservative serve-rule replays them on
+    a fuzzy match. Skips any question already cached for the chapter (idempotent —
+    re-generating a lesson won't duplicate). Best-effort: never fails a generation."""
+    try:
+        existing = (
+            sb.table("tutor_qa")
+            .select("question_norm")
+            .eq("book_id", book_id)
+            .eq("chapter_num", int(chapter_num))
+            .execute()
+        )
+        seen = {r.get("question_norm") for r in (existing.data or [])}
+        fresh = [
+            {
+                "book_id": book_id,
+                "chapter_num": int(chapter_num),
+                "question_text": r["question_text"],
+                "question_norm": r["question_norm"],
+                "answer_text": r["answer_text"],
+                "is_verified": True,  # curated at build time → safe to serve on a fuzzy match
+            }
+            for r in rows
+            if r.get("question_norm") and r["question_norm"] not in seen
+        ]
+        if not fresh:
+            return 0
+        sb.table("tutor_qa").insert(fresh).execute()
+        return len(fresh)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning(
+            "tutor seed Q&A not banked for %s ch%s: %s", book_id, chapter_num, exc
+        )
+        return 0
+
+
 # ── storage ──────────────────────────────────────────────────────────
 
 def download_book(sb: Client, storage_path: str, dest: str | Path) -> Path:

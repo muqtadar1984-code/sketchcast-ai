@@ -172,6 +172,12 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             ).strip()
             db.set_chapter_grounding(sb, book_id, chapter_num, chapter_title, analysis, _script_text)
 
+            # Warm the AI Tutor cache: pre-compute the questions a student is most
+            # likely to ask so the first "Ask Coach" is instant + $0. Gated
+            # (TUTOR_WARM_CACHE) and best-effort — never affects this lesson.
+            from worker.tutor_warm import warm_tutor_cache
+            warm_tutor_cache(sb, client, book_id, chapter_num, chapter_title, analysis, _script_text)
+
             # (No AI-image step in the freemium path — slides are rendered natively.)
             slides = generate_episode_slides(
                 script_data=scripts, branding=branding,
