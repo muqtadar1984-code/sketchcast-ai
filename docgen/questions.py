@@ -60,11 +60,27 @@ def write_exam(out_dir: Path, title: str, instructions, fill, tf, match, subj) -
     return _write(out_dir, title, instructions, qs)
 
 
-def write_worksheet(out_dir: Path, title: str, instructions, questions) -> Path:
+def write_worksheet(out_dir: Path, title: str, instructions, fill, tf, match, short) -> Path:
+    """Typed, grouped worksheet → the quiz player's unified schema. Mirrors
+    write_exam but the free-response section is `short` (with answers) rather than
+    long-form `subjective`. Grouped so the player renders one section per kind."""
     qs: list[dict] = []
-    n = 0
-    for q in (questions or []):
+    i = 0
+    for q in (fill or []):
         if isinstance(q, dict) and str(q.get("q", "")).strip():
-            n += 1
-            qs.append({"id": f"q{n}", "type": "short", "prompt": str(q.get("q", "")), "answer": str(q.get("answer", "")), "marks": 1})
+            i += 1
+            qs.append({"id": f"q{i}", "type": "fill_blank", "prompt": str(q.get("q", "")), "answer": str(q.get("answer", "")), "marks": 1})
+    for q in (tf or []):
+        if isinstance(q, dict) and str(q.get("statement", "")).strip():
+            i += 1
+            qs.append({"id": f"q{i}", "type": "true_false", "prompt": str(q.get("statement", "")), "answer": bool(q.get("answer")), "marks": 1})
+    pairs = [{"left": str(p.get("left", "")), "right": str(p.get("right", ""))}
+             for p in (match or []) if isinstance(p, dict) and str(p.get("left", "")).strip()]
+    if pairs:
+        i += 1
+        qs.append({"id": f"q{i}", "type": "match", "prompt": "Match each item in Column A to the correct item in Column B.", "pairs": pairs, "marks": len(pairs)})
+    for q in (short or []):
+        if isinstance(q, dict) and str(q.get("q", "")).strip():
+            i += 1
+            qs.append({"id": f"q{i}", "type": "short", "prompt": str(q.get("q", "")), "answer": str(q.get("answer", "")), "marks": 1})
     return _write(out_dir, title, instructions, qs)
