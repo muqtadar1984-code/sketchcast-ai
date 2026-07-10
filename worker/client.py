@@ -30,16 +30,14 @@ def admin() -> Client:
 
 # ── jobs / generations ───────────────────────────────────────────────
 
-def claim_next_job(sb: Client) -> Optional[dict]:
-    """Atomically-ish claim the oldest queued job (sets it to processing)."""
-    res = (
-        sb.table("jobs")
-        .select("*")
-        .eq("status", "queued")
-        .order("created_at")
-        .limit(1)
-        .execute()
-    )
+def claim_next_job(sb: Client, job_type: Optional[str] = None) -> Optional[dict]:
+    """Atomically-ish claim the oldest queued job (sets it to processing).
+    With `job_type`, only that type is considered — lets the loop prioritise
+    small interactive work (support diagnoses) over long batch renders."""
+    q = sb.table("jobs").select("*").eq("status", "queued")
+    if job_type:
+        q = q.eq("type", job_type)
+    res = q.order("created_at").limit(1).execute()
     if not res.data:
         return None
     job = res.data[0]
@@ -107,6 +105,22 @@ def set_generation_title(sb: Client, generation_id: str, title: str) -> None:
 
 def set_generation_status(sb: Client, generation_id: str, status: str) -> None:
     sb.table("generations").update({"status": status}).eq("id", generation_id).execute()
+
+
+def merge_generation_params(sb: Client, generation_id: str, patch: dict) -> None:
+    """Merge keys into generations.params (read-modify-write). Best-effort: TTS
+    telemetry must never fail a finished lesson. Used to record the voice that was
+    ACTUALLY rendered (params.tts_voice_used / tts_voice_downgraded) so a silent
+    premium→free downgrade is visible in the app instead of only in the audio."""
+    if not patch:
+        return
+    try:
+        cur = sb.table("generations").select("params").eq("id", generation_id).maybe_single().execute()
+        params = dict((getattr(cur, "data", None) or {}).get("params") or {})
+        params.update(patch)
+        sb.table("generations").update({"params": params}).eq("id", generation_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning("generation params not merged for %s: %s", generation_id, exc)
 
 
 def set_book_chapters(sb: Client, book_id: str, chapters: list[dict], status: str) -> None:

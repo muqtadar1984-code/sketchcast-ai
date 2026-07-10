@@ -184,11 +184,27 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             ).model_dump()
             db.set_progress(sb, job_id, 72)
 
+            voice_report: dict = {}
             video = compose_episode_videos(
                 script_data=scripts, slide_manifest=slides, branding=branding,
-                tts_voice=tts_voice, allow_premium=allow_premium,
+                tts_voice=tts_voice, allow_premium=allow_premium, voice_report=voice_report,
             ).model_dump()
             db.set_progress(sb, job_id, 90)
+
+            # Record the voice that ACTUALLY rendered so a silent premium→free
+            # downgrade (ElevenLabs not enabled/keyed on the worker, spend cap, or
+            # an API failure) is visible in the app — not discovered by listening.
+            if voice_report:
+                db.merge_generation_params(sb, generation_id, {
+                    "tts_voice_used": (voice_report.get("used") or [None])[0],
+                    "tts_voice_downgraded": bool(voice_report.get("downgraded")),
+                })
+                if voice_report.get("downgraded"):
+                    log.warning(
+                        "generation %s: requested premium voice %r but rendered %s — "
+                        "set ELEVENLABS_ENABLED=true + ELEVENLABS_API_KEY on the worker.",
+                        generation_id, tts_voice, voice_report.get("used"),
+                    )
 
             final = render_final_video(video_manifest=video).model_dump()
             db.set_progress(sb, job_id, 96)

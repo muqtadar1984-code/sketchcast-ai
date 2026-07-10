@@ -142,10 +142,49 @@ def reindex_and_regenerate(sb, issue: dict, gen: dict, book: dict, diagnosis: di
     }
 
 
+def notify_staff(issue: dict, reason: str) -> None:
+    """Best-effort Resend email to the SketchCast team when the agent ESCALATES.
+    A 'triaged' status nobody is told about isn't an escalation — staff must get
+    an actionable email with a console deep-link, or reports rot silently."""
+    key = os.getenv("RESEND_API_KEY")
+    to = os.getenv("SUPPORT_STAFF_EMAIL", "muqtadar.quraishi@sketchcast.app")
+    if not key:
+        logger.warning("staff escalation email SKIPPED (RESEND_API_KEY not set) for issue %s", issue.get("id"))
+        return
+    try:
+        import requests
+
+        requests.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={
+                "from": "SketchCast AI <noreply@sketchcast.app>",
+                "to": [to],
+                "subject": f"[Escalated] {issue.get('category', 'issue')}: {(issue.get('title') or 'support issue')[:120]}",
+                "text": "\n".join(
+                    [
+                        "The support agent escalated an issue it couldn't safely fix.",
+                        "",
+                        f"Reason:   {reason[:500]}",
+                        f"Severity: {issue.get('severity', 'normal')}",
+                        f"Reported: {issue.get('created_at', '?')}",
+                        f"Details:  {(issue.get('description') or '—')[:800]}",
+                        "",
+                        f"Console: https://app.sketchcast.app/console/issues/{issue.get('id')}",
+                    ]
+                ),
+            },
+            timeout=15,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("staff notify failed for issue %s: %s", issue.get("id"), exc)
+
+
 def notify_owner(sb, owner_id: str, subject: str, text: str) -> None:
     """Best-effort Resend email to the content owner (worker-side)."""
     key = os.getenv("RESEND_API_KEY")
     if not key:
+        logger.warning("owner notify skipped: RESEND_API_KEY not set")
         return
     try:
         r = sb.auth.admin.get_user_by_id(owner_id)

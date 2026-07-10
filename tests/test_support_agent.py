@@ -366,3 +366,52 @@ def test_gate_artifact_mismatch_stays_escalated(monkeypatch):
         "source_matches_title": True, "artifact_matches_title": False})
     out = dg.diagnose(MockClient(), {"chapters": []})
     assert out["recommended_action"] == "escalate"
+
+
+# ── escalation notifies staff ─────────────────────────────────────────────────
+def test_escalate_sends_staff_email(monkeypatch):
+    # "Escalated to the SketchCast team" must actually reach the team: the
+    # escalate path fires a staff email (a triaged status nobody reads is not
+    # an escalation).
+    pytest.importorskip("supabase")  # agent → worker.client needs it
+    from support_agent import agent as agent_mod
+
+    calls = []
+    monkeypatch.setattr(agent_mod, "notify_staff", lambda issue, reason: calls.append((issue["id"], reason)))
+    sb = FakeSB({})
+    issue = {"id": "iss-1", "category": "video", "severity": "normal", "title": "t"}
+    agent_mod._escalate(sb, issue, {"user_message": "u"}, "no safe automatic action")
+
+    assert calls == [("iss-1", "no safe automatic action")]
+    # and the issue row was still updated to triaged/escalated
+    assert any(t == "platform_issues" and r.get("agent_action") == "escalated" for t, r in sb.updates)
+
+
+def test_notify_staff_skips_cleanly_without_key(monkeypatch):
+    # Without RESEND_API_KEY the email is skipped (logged), never raised — an
+    # unconfigured mailer must not crash the agent run.
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    actions.notify_staff({"id": "iss-2", "category": "other"}, "reason")  # no raise
+
+
+def test_notify_staff_posts_console_link(monkeypatch):
+    monkeypatch.setenv("RESEND_API_KEY", "test-key")
+    monkeypatch.setenv("SUPPORT_STAFF_EMAIL", "team@example.com")
+    import requests
+
+    sent = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        sent["url"] = url
+        sent["json"] = json
+        return SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    actions.notify_staff(
+        {"id": "iss-3", "category": "video", "severity": "high", "title": "Wrong chapter", "description": "d"},
+        "agent crashed: boom",
+    )
+    assert sent["url"] == "https://api.resend.com/emails"
+    assert sent["json"]["to"] == ["team@example.com"]
+    assert "https://app.sketchcast.app/console/issues/iss-3" in sent["json"]["text"]
+    assert "agent crashed: boom" in sent["json"]["text"]

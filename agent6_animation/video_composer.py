@@ -74,6 +74,7 @@ def compose_episode_videos(
     branding: Optional[dict] = None,
     tts_voice: Optional[str] = None,
     allow_premium: bool = False,
+    voice_report: Optional[dict] = None,
 ) -> VideoManifest:
     """Generate a narrated, object-animated MP4 per segment.
 
@@ -115,6 +116,8 @@ def compose_episode_videos(
     manifest_segments: list[VideoSegment] = []
     total = len(slide_segments)
     total_duration = 0.0
+    _voices_used: set[str | None] = set()
+    _any_downgrade = False
 
     for i, slide_seg in enumerate(slide_segments):
         seg_id = slide_seg["segment_id"]
@@ -153,7 +156,11 @@ def compose_episode_videos(
             mp3 = vid_dir / f"{seg_id}_audio.mp3"
             ssml = script_seg.get("elevenlabs_text") or text
             try:
-                synthesize(text, mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=ssml)
+                seg_report: dict = {}
+                synthesize(text, mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=ssml, report=seg_report)
+                _voices_used.add(seg_report.get("used"))
+                if seg_report.get("downgraded"):
+                    _any_downgrade = True
                 audio_path = str(mp3)
                 duration = _audio_duration(audio_path, ffmpeg) or est
             except Exception as exc:
@@ -186,6 +193,12 @@ def compose_episode_videos(
         progress_callback(total, total, "done")
 
     vid_count = sum(1 for s in manifest_segments if s.video_path)
+    # Report which voice(s) actually rendered, so the caller can persist a silent
+    # premium→free downgrade (whole video may have degraded, or only some segments).
+    if voice_report is not None:
+        used = sorted(v for v in _voices_used if v)
+        voice_report.update({"requested": tts_voice, "used": used, "downgraded": _any_downgrade})
+
     manifest = VideoManifest(
         manifest_id=str(uuid.uuid4()),
         script_id=script_id,

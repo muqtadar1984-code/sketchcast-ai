@@ -108,7 +108,10 @@ def run_once(sb) -> bool:
                 pass
         return True
 
-    job = db.claim_next_job(sb)
+    # Support diagnoses are claimed before batch work for the same reason as
+    # sketches: they're small and a reporter is watching the status — one queued
+    # lesson render must not leave an issue sitting at "diagnosing" for minutes.
+    job = db.claim_next_job(sb, job_type="support_diagnose") or db.claim_next_job(sb)
     if not job:
         return False
     job_type = job.get("type")

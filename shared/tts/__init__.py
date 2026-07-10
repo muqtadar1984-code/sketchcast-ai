@@ -44,6 +44,7 @@ def synthesize(
     allow_premium: bool = False,
     ssml_text: str | None = None,
     stream: bool = False,
+    report: dict | None = None,
 ) -> Path:
     """Synthesize `text` to an MP3 at `out_path`. Returns the path.
 
@@ -51,9 +52,17 @@ def synthesize(
     server-resolved gate. `ssml_text` (ElevenLabs <break> markup) is used for
     ElevenLabs; Edge speaks plain `text`. `stream` is reserved for the future
     tutor path (lesson narration is non-streaming) and currently ignored.
+
+    If `report` (a dict) is passed, it is filled with what ACTUALLY happened —
+    {requested, used, provider, downgraded} — so callers can surface a silent
+    premium→free downgrade (gate off / cap hit / API failure) instead of a
+    teacher discovering the wrong voice only by listening. `downgraded` is True
+    when a premium voice was requested but a free voice was rendered.
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    requested = get_voice(voice_id)
+    requested_premium = bool(requested and requested.tier == "premium")
     voice = resolve_voice(voice_id, allow_premium=allow_premium)
 
     say = text
@@ -80,5 +89,16 @@ def synthesize(
         edge.synthesize(say, out_path, voice.ref)
 
     cost.record(len((say or "").strip()), voice.provider)
+    downgraded = requested_premium and voice.tier != "premium"
+    if downgraded:
+        logger.warning(
+            "VOICE DOWNGRADE: requested premium %r but rendered %r (%s) — check "
+            "ELEVENLABS_ENABLED + ELEVENLABS_API_KEY on the worker, or the spend cap.",
+            voice_id, voice.voice_id, voice.provider,
+        )
+    if report is not None:
+        report.update(
+            {"requested": voice_id, "used": voice.voice_id, "provider": voice.provider, "downgraded": downgraded}
+        )
     logger.info("TTS ok: voice=%s provider=%s -> %s", voice.voice_id, voice.provider, out_path.name)
     return out_path

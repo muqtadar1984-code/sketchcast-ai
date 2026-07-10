@@ -14,7 +14,7 @@ import logging
 from shared.claude_client import ClaudeClient
 from worker import client as db
 
-from support_agent.actions import notify_owner, reindex_and_regenerate, retry_transient
+from support_agent.actions import notify_owner, notify_staff, reindex_and_regenerate, retry_transient
 from support_agent.bundle import ScopeViolation, assemble_bundle
 from support_agent.diagnose import DIAGNOSIS_MODEL, diagnose
 
@@ -73,6 +73,7 @@ def run_support_job(sb, job: dict) -> None:
                 },
             )
             _audit(sb, issue, "agent_error", {"error": str(exc)[:300]})
+            notify_staff(issue, f"agent crashed: {str(exc)[:300]}")
         except Exception:  # noqa: BLE001
             pass
     finally:
@@ -99,6 +100,7 @@ def _run(sb, job: dict, issue: dict, client) -> None:
             },
         )
         _audit(sb, issue, "scope_refused", {"reason": str(exc)})
+        notify_staff(issue, f"scope refused: {str(exc)[:300]}")
         return
 
     dx = diagnose(client, bundle)
@@ -220,3 +222,4 @@ def _escalate(sb, issue: dict, user_dx: dict, staff_reason: str) -> None:
         },
     )
     _audit(sb, issue, "escalated", {"reason": staff_reason[:300]})
+    notify_staff(issue, staff_reason)
