@@ -92,3 +92,23 @@ sketchcast/
 ├── requirements.txt
 └── .env.example
 ```
+
+## Math Microservice (mathsvc/)
+
+A constrained SymPy service the AI tutor calls to compute/verify math for
+students — deployed as a SECOND Railway service from this same repo. The LLM
+sends a structured tool call (`op` + expression strings); only whitelisted
+operations on validated expressions ever run, and errors are always
+child-safe (never a guess, never a traceback).
+
+```bash
+# Run locally (from the repo root)
+pip install -r mathsvc/requirements.txt
+uvicorn mathsvc.app:app --port 8090   # requires MATH_SVC_TOKEN env
+
+# Tests
+python -m pytest tests/test_mathsvc.py -q
+```
+
+See `mathsvc/README.md` for the API contract and the Railway deploy steps
+(custom start command + `MATH_SVC_TOKEN`).
