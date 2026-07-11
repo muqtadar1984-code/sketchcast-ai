@@ -235,6 +235,54 @@ def test_double_equals_rejected():
 
 
 # ---------------------------------------------------------------------------
+# safety: complexity / resource guards (astronomically large results)
+# ---------------------------------------------------------------------------
+
+
+def test_numeric_power_tower_rejected():
+    # 9^9^9 would materialize a ~370-million-digit integer at PARSE time and,
+    # because the op timeout cannot kill the worker thread, OOM the process.
+    # The guard must reject it early (before any bignum forms), not hang.
+    error = clean_error({"op": "evaluate", "expr": "9^9^9"})
+    assert "large" in error.lower()
+
+
+def test_huge_single_exponent_rejected():
+    clean_error({"op": "evaluate", "expr": "9^9999999999"})
+
+
+def test_huge_negative_exponent_rejected():
+    # 2^-500000 has a 500000-bit denominator — same blow-up via the fraction.
+    clean_error({"op": "evaluate", "expr": "2^-500000"})
+
+
+def test_symbolic_degree_blowup_rejected():
+    # (x+1)^9999999 expands into ~10^7 terms and would hang the worker.
+    clean_error({"op": "expand", "expr": "(x + 1)^9999999"})
+
+
+def test_reasonable_power_still_computes():
+    result, _ = ok_result({"op": "simplify", "expr": "2^10"})
+    assert result == "1024"
+
+
+def test_large_but_bounded_power_still_computes():
+    result, _ = ok_result({"op": "simplify", "expr": "2^100"})
+    assert result == "1267650600228229401496703205376"
+
+
+def test_moderate_symbolic_expand_still_works():
+    result, _ = ok_result({"op": "expand", "expr": "(x + 1)^5"})
+    assert "x**5" in result and "5*x**4" in result
+
+
+def test_symbolic_exponent_is_not_treated_as_a_bignum():
+    # 2**x is lazy (a symbolic exponent) — it must NOT be rejected as "too large".
+    result, _ = ok_result({"op": "differentiate", "expr": "2^x"})
+    assert "log(2)" in result
+
+
+# ---------------------------------------------------------------------------
 # fallback: never a guess, never a traceback
 # ---------------------------------------------------------------------------
 

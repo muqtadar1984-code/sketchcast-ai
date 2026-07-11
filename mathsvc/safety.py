@@ -41,6 +41,15 @@ MAX_EXPRS = 8
 MAX_SUBSTITUTIONS = 12
 OP_TIMEOUT_SECONDS = 5.0
 
+# Block "tiny string, astronomical value" inputs (9^9^9, (x+1)^9999999) BEFORE
+# SymPy ever materializes them. The thread timeout below cannot reclaim a
+# runaway allocation — CPython can't kill the worker thread — so the allocation
+# must never start. These bounds are checked on the UNEVALUATED parse tree.
+MAX_RESULT_BITS = 200_000     # a materialized constant may need at most ~60k digits
+MAX_SYMBOLIC_DEGREE = 1_000   # a symbol may be raised to at most this power
+_EXP_SIZING_BITS = 40         # only an exponent below 2**40 is safe to size by materializing
+_TOO_LARGE_MSG = "That works out to a number far too large for me — please try smaller values."
+
 
 class MathError(Exception):
     """Base for handled failures. str(exc) is relayed to students — keep it child-safe."""
@@ -118,6 +127,65 @@ _MATH_GLOBALS: dict[str, Any] = {
     "E": sp.E,
 }
 
+# For the evaluate=False structural pre-parse ONLY. SymPy's un-evaluated codegen
+# rewrites a+b/a*b/a**b into Add/Mul/Pow(...) constructors that the compute dict
+# deliberately omits, so the pre-parse needs them. This is safe: the constructors
+# build inert AST nodes (they don't execute code), __builtins__ stays blanked, and
+# the character whitelist has already run. We inspect this tree for size, then
+# discard it and compute the real result from a fresh evaluate=True parse.
+_STRUCTURE_GLOBALS: dict[str, Any] = {**_MATH_GLOBALS, "Add": sp.Add, "Mul": sp.Mul, "Pow": sp.Pow}
+
+
+def _estimate_numeric_bits(node: sp.Basic) -> float:
+    """Upper-bound the bits needed to MATERIALIZE ``node`` if it is a pure number,
+    raising MathInputError the instant that bound passes MAX_RESULT_BITS — WITHOUT
+    ever building the giant integer. Anything SymPy keeps lazy (a symbol, or a
+    symbolic exponent like ``2**x``) contributes 0. Meant for the unevaluated
+    (evaluate=False) tree, where ``9**9`` is still a Pow, not a bignum.
+    """
+    if node.is_Symbol:
+        return 0.0
+    if node.is_Integer:
+        return float(abs(int(node)).bit_length() or 1)
+    if node.is_Rational:
+        return float(max(abs(node.p).bit_length(), abs(node.q).bit_length(), 1))
+    if node.is_Float:
+        return 64.0
+    if isinstance(node, sp.Pow):
+        base, exp = node.as_base_exp()
+        if exp.free_symbols:                       # 2**x stays lazy — no bignum here
+            _estimate_numeric_bits(base)           # but a huge constant base still counts
+            return 0.0
+        if _estimate_numeric_bits(exp) > _EXP_SIZING_BITS:
+            raise MathInputError(_TOO_LARGE_MSG)    # the exponent alone is astronomically large
+        exp_val = abs(int(exp))                     # safe: exp < 2**40
+        base_bits = _estimate_numeric_bits(base)
+        if base.free_symbols:                       # x**5 is a polynomial, not a bignum
+            return 0.0
+        if base.is_Integer and abs(int(base)) <= 1:  # 1**n, 0**n, (-1)**n never grow
+            return max(base_bits, 1.0)
+        result_bits = base_bits * max(exp_val, 1)
+        if result_bits > MAX_RESULT_BITS:
+            raise MathInputError(_TOO_LARGE_MSG)
+        return result_bits
+    total = 0.0
+    for arg in node.args:                           # Add / Mul / function args materialize apart
+        total += _estimate_numeric_bits(arg)
+        if total > MAX_RESULT_BITS:
+            raise MathInputError(_TOO_LARGE_MSG)
+    return total
+
+
+def _reject_absurd_degree(node: sp.Basic) -> None:
+    """Reject a symbolic power with an absurd degree: ``(x+1)**9999999`` expands
+    into millions of terms and hangs the worker. School powers are tiny."""
+    if isinstance(node, sp.Pow):
+        base, exp = node.as_base_exp()
+        if base.free_symbols and exp.is_Integer and abs(int(exp)) > MAX_SYMBOLIC_DEGREE:
+            raise MathInputError(_TOO_LARGE_MSG)
+    for arg in node.args:
+        _reject_absurd_degree(arg)
+
 
 def validate_text(text: Any, *, field: str = "expression", allow_equals: bool = False) -> str:
     """Reject anything that is not plain school-math text. Returns the stripped string."""
@@ -143,13 +211,35 @@ def validate_text(text: Any, *, field: str = "expression", allow_equals: bool = 
 def _parse(text: str, local_dict: Optional[Mapping[str, Any]] = None) -> sp.Basic:
     """Parse pre-validated text with the restricted dicts.
 
-    Every parser exception (SyntaxError, TokenError, ...) is collapsed into a
-    child-safe MathInputError so tracebacks can never leak to a student.
+    Two passes. First evaluate=False, to inspect the expression's SIZE and reject
+    astronomically large numbers/degrees BEFORE SymPy materializes them (the op
+    timeout cannot reclaim a runaway allocation). Then evaluate=True for the real
+    result. Every parser exception (SyntaxError, TokenError, ...) is collapsed
+    into a child-safe MathInputError so tracebacks can never leak to a student.
     """
+    ld = dict(local_dict or {})
+    try:
+        skeleton = parse_expr(
+            text,
+            local_dict=ld,
+            global_dict=dict(_STRUCTURE_GLOBALS),
+            transformations=_TRANSFORMATIONS,
+            evaluate=False,
+        )
+    except MathError:
+        raise
+    except Exception as exc:
+        log.info("parse rejected %r: %s", text[:80], type(exc).__name__)
+        raise MathInputError("I could not read that expression — please check it and try again.") from exc
+
+    # Guards run on the UNEVALUATED tree, before any bignum can form.
+    _estimate_numeric_bits(skeleton)
+    _reject_absurd_degree(skeleton)
+
     try:
         return parse_expr(
             text,
-            local_dict=dict(local_dict or {}),
+            local_dict=ld,
             global_dict=dict(_MATH_GLOBALS),
             transformations=_TRANSFORMATIONS,
             evaluate=True,

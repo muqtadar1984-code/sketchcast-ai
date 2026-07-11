@@ -7,7 +7,9 @@ expression strings); this service parses and computes with SymPy.
 **No model-generated code is ever executed.** Only the whitelisted operations
 in `ops.py` run, on expressions vetted by `safety.py` (character whitelist, no
 attribute access / indexing / lambdas / quotes, restricted parse dict, blanked
-builtins, 500-char cap, 5s hard timeout). A wrong answer to a child is the
+builtins, 500-char cap, a pre-parse magnitude/degree guard that rejects
+astronomically large results — e.g. `9^9^9`, `(x+1)^9999999` — *before* they
+materialize, and a 5s hard timeout backstop). A wrong answer to a child is the
 worst failure mode: when in doubt the service returns a clean
 `{"ok": false, "error": "<child-safe reason>"}` — never a guess, never a
 traceback.
