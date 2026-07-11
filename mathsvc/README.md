@@ -68,30 +68,29 @@ Tests (from the repo root): `python -m pytest tests/test_mathsvc.py -q`
 
 ## Deploy — second Railway service from this repo
 
-Same pattern the worker already uses: `nixpacks.toml`'s `[start]` cmd is a
-default that each Railway service **overrides in the dashboard** — do not
-edit it.
+Deploy via the dedicated **`mathsvc/Dockerfile`** so this service builds LIGHT
+(fastapi + uvicorn + sympy only) and stays isolated from the worker's heavy
+nixpacks build (ffmpeg, pymupdf, …).
 
-1. Railway project → **New service → GitHub repo** → pick this repo
-   (leave Root Directory as the repo root — the code imports `mathsvc.*`).
-2. Service → **Settings → Deploy → Custom Start Command**:
-
-   ```
-   pip install -r mathsvc/requirements.txt && uvicorn mathsvc.app:app --host 0.0.0.0 --port $PORT
-   ```
-
-   (The build still installs the repo-root `requirements.txt`; the extra
-   `pip install` adds sympy, which is deliberately NOT in the worker's
-   requirements.)
+1. Railway project → **New → GitHub repo** → pick this repo. Name it e.g.
+   `mathsvc`.
+2. Service → **Settings → Build**: set **Dockerfile Path** to
+   `mathsvc/Dockerfile` (build context stays the repo root, so the Dockerfile's
+   `COPY mathsvc` works and `from mathsvc.*` imports resolve). Leave Root
+   Directory at the repo root. No start command needed — the Dockerfile's `CMD`
+   runs `uvicorn mathsvc.app:app` on `$PORT`.
 3. Service → **Variables**: set `MATH_SVC_TOKEN` to a long random secret
    (e.g. `openssl rand -hex 32`). The service returns 503 until it is set.
-4. Settings → **Networking → Generate Domain** (or a private domain if only
-   the Next.js app calls it), and optionally point the health check at
-   `/health`.
-5. In the Next.js app (Vercel), set the matching env vars, e.g.
-   `MATH_SVC_URL=https://<service>.up.railway.app` and
-   `MATH_SVC_TOKEN=<same secret>`, and send the token as the `x-math-token`
+4. Settings → **Networking → Generate Domain**; optionally set the health check
+   path to `/health`.
+5. In the Next.js app (Vercel), set `MATH_SVC_URL=https://<service>.up.railway.app`
+   and the same `MATH_SVC_TOKEN`. The app sends the token as the `x-math-token`
    header on every `POST /math`.
+
+_(Alternative without Docker: leave the Dockerfile unset and add a Custom Start
+Command `pip install -r mathsvc/requirements.txt && uvicorn mathsvc.app:app
+--host 0.0.0.0 --port $PORT` — but that inherits the worker's heavy nixpacks
+build.)_
 
 ### Env
 
