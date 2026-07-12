@@ -1,5 +1,10 @@
 # SketchCast AI — Technical Document
 
+> ⚠️ **Superseded (2026-07-12).** The current, comprehensive technical document now lives in the
+> app repo at **`sketchcast-app/docs/TECHNICAL_DOCUMENT.md`** — it covers every subsystem
+> (parent portal, AI assistant/tutor/ERE, billing, support agent + autofix, onboarding, console,
+> flags/secrets, security, ops). This file is kept only for the worker-side deploy notes below.
+
 _Last updated: 2026-06-30. Reflects the current production architecture (web app on Vercel, worker on Railway, Supabase backend), the native video engine, and the student↔teacher + analytics system._
 
 ---
