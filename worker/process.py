@@ -8,6 +8,7 @@ final deck (.pptx) + video (.mp4) are uploaded to the `artifacts` bucket under
 from __future__ import annotations
 
 import logging
+import re
 import tempfile
 import uuid
 from pathlib import Path
@@ -15,6 +16,33 @@ from pathlib import Path
 from supabase import Client
 
 from . import client as db
+
+# Book-title cleanup — uploaded PDFs often carry junk filenames
+# (e.g. "pdfcoffee.com_cambridge-maths-5-learner-book-pdf-free"). Mirrors the app's
+# src/utils/book.ts so worker and UI agree on what a "filename-like" title is.
+_DOMAIN_HEAD = re.compile(r"^[a-z0-9-]+\.(?:com|net|org|pub|io|in|co|info|xyz)[._-]+", re.I)
+_JUNK_TAIL = re.compile(r"[\s._-]*(pdf[\s._-]*free|free[\s._-]*pdf|ebook|pdf|free|download)\s*$", re.I)
+
+
+def _looks_like_filename(s: str) -> bool:
+    s = (s or "").strip()
+    if not s:
+        return True
+    return (
+        " " not in s
+        or s.lower().endswith(".pdf")
+        or bool(_DOMAIN_HEAD.search(s))
+        or bool(re.search(r"[\s._-](pdf|free)", s, re.I))
+    )
+
+
+def _clean_title_fallback(s: str) -> str:
+    t = re.sub(r"\.pdf$", "", s or "", flags=re.I)
+    t = _DOMAIN_HEAD.sub("", t)
+    t = _JUNK_TAIL.sub("", _JUNK_TAIL.sub("", t))
+    t = re.sub(r"[_-]+", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t.title() if t else "Untitled book"
 
 logger = logging.getLogger("worker")
 
@@ -379,27 +407,46 @@ def index_book(sb: Client, job: dict) -> None:
         for c in structured.get("chapters", [])
     ]
 
-    # Auto-detect grade + subject from the title + chapter list (best-effort;
-    # never block indexing). This is identified for the teacher, not entered.
+    # Auto-detect grade + subject + a clean title/author from the (often filename-derived)
+    # title and chapter list (best-effort; never block indexing). Identified for the teacher.
     grade = subject = None
+    detected_title = detected_author = None
     try:
         if client is None:
             raise RuntimeError("Claude unavailable")
         sample = "\n".join(c["title"] for c in chapters[:25])
         prompt = (
-            "From this textbook's title and chapter list, identify the school GRADE/level "
-            "and the SUBJECT. Respond ONLY as JSON: {\"grade\": \"...\", \"subject\": \"...\"}. "
-            "Use a short canonical grade label (e.g. \"Grade 5\") and a canonical subject "
-            "(e.g. \"Mathematics\", \"Science\", \"History\"). Best guess if unsure.\n\n"
-            f"Title: {book.get('title') or 'Unknown'}\n\nChapters:\n{sample}"
+            "From this textbook's filename-derived title and chapter list, identify metadata. "
+            "Respond ONLY as JSON with keys: "
+            "\"grade\" (short canonical, e.g. \"Grade 5\"), "
+            "\"subject\" (canonical, e.g. \"Mathematics\", \"Science\", \"History\"), "
+            "\"title\" (a clean, human-readable book title: REMOVE download-site names, file "
+            "extensions and slug dashes — e.g. "
+            "\"pdfcoffee.com_cambridge-maths-5-learner-book-pdf-free\" becomes "
+            "\"Cambridge Primary Mathematics Learner's Book 5\" if you recognise it, else a tidied "
+            "version like \"Cambridge Maths 5 Learner Book\"), "
+            "and \"author\" (the book's author OR publisher only if clearly identifiable, e.g. "
+            "\"Cambridge University Press\"; use null if you are not reasonably sure — do NOT invent "
+            "a person's name). Best guess for grade/subject if unsure.\n\n"
+            f"Filename-derived title: {book.get('title') or 'Unknown'}\n\nChapters:\n{sample}"
         )
-        data = client.analyze(prompt, max_tokens=200).get("data", {}) or {}
+        data = client.analyze(prompt, max_tokens=300).get("data", {}) or {}
         grade = (str(data.get("grade") or "").strip() or None)
         subject = (str(data.get("subject") or "").strip() or None)
+        detected_title = (str(data.get("title") or "").strip() or None)
+        _a = data.get("author")
+        _a_str = str(_a).strip() if _a is not None else ""
+        detected_author = _a_str if _a_str and _a_str.lower() not in ("null", "none", "unknown", "n/a") else None
     except Exception as exc:  # noqa: BLE001
-        logger.warning("grade/subject detection failed for %s: %s", book_id, exc)
+        logger.warning("metadata detection failed for %s: %s", book_id, exc)
 
-    db.set_book_meta(sb, book_id, grade, subject)
+    # Only replace the title when the stored one looks like a filename — never clobber a title
+    # the teacher deliberately typed. Fill author only when it is currently empty.
+    current_title = (book.get("title") or "").strip()
+    new_title = (detected_title or _clean_title_fallback(current_title)) if _looks_like_filename(current_title) else None
+    new_author = detected_author if (not (book.get("author") or "").strip() and detected_author) else None
+
+    db.set_book_meta(sb, book_id, grade, subject, title=new_title, author=new_author)
     if cover_dest:
         db.set_book_cover(sb, book_id, cover_dest)
     if health is not None:

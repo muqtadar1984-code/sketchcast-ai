@@ -127,8 +127,22 @@ def set_book_chapters(sb: Client, book_id: str, chapters: list[dict], status: st
     sb.table("books").update({"chapters": chapters, "status": status}).eq("id", book_id).execute()
 
 
-def set_book_meta(sb: Client, book_id: str, grade: Optional[str], subject: Optional[str]) -> None:
-    sb.table("books").update({"grade": grade, "subject": subject}).eq("id", book_id).execute()
+def set_book_meta(
+    sb: Client,
+    book_id: str,
+    grade: Optional[str],
+    subject: Optional[str],
+    title: Optional[str] = None,
+    author: Optional[str] = None,
+) -> None:
+    # grade/subject are always written (detection is best-effort → may be None). title/author
+    # are only touched when a value is supplied, so we never wipe a teacher-entered title.
+    patch: dict = {"grade": grade, "subject": subject}
+    if title is not None:
+        patch["title"] = title
+    if author is not None:
+        patch["author"] = author
+    sb.table("books").update(patch).eq("id", book_id).execute()
 
 
 def set_book_cover(sb: Client, book_id: str, cover_path: str) -> None:
