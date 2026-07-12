@@ -175,6 +175,49 @@ def set_chapter_grounding(
         )
 
 
+def get_chapter_source_text(sb: Client, book_id: str, chapter_num: int) -> Optional[str]:
+    """Return a chapter's cached source text (Claude-vision OCR of a scanned book),
+    or None. Keyed (book_id, chapter_num) so a scanned chapter is transcribed ONCE
+    and reused by every later generation of ANY kind, for ANY owner. Best-effort:
+    a deployment missing app migration 0036 just means no cache (re-transcribe)."""
+    try:
+        res = (
+            sb.table("chapter_grounding")
+            .select("source_text")
+            .eq("book_id", book_id)
+            .eq("chapter_num", int(chapter_num))
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        return (rows[0].get("source_text") if rows else None) or None
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning(
+            "chapter source_text lookup failed for %s ch%s: %s", book_id, chapter_num, exc
+        )
+        return None
+
+
+def set_chapter_source_text(sb: Client, book_id: str, chapter_num: int, text: str) -> None:
+    """Cache a chapter's transcribed source text (upsert keyed book_id+chapter_num).
+    Best-effort: never fails the generation, and does not disturb the concepts/
+    script_text columns written later by set_chapter_grounding."""
+    try:
+        sb.table("chapter_grounding").upsert(
+            {
+                "book_id": book_id,
+                "chapter_num": int(chapter_num),
+                "source_text": text,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="book_id,chapter_num",
+        ).execute()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning(
+            "chapter source_text not cached for %s ch%s: %s", book_id, chapter_num, exc
+        )
+
+
 def insert_tutor_seed_qa(
     sb: Client,
     book_id: str,

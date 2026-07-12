@@ -97,12 +97,20 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             for s in (chapter.get("sections") or [])
         )
         if section_chars < 200:
-            from agent1_ingestion.vision_chapters import chapter_text_vision
+            # Scanned chapter: transcribe the pages with Claude vision ONCE and
+            # cache the text (chapter_grounding.source_text, keyed book+chapter).
+            # Every later generation of this chapter — any kind, any owner —
+            # reuses it instead of re-running the multi-call, ~minutes-long OCR.
+            ocr_text = db.get_chapter_source_text(sb, book_id, chapter_num)
+            if not ocr_text:
+                from agent1_ingestion.vision_chapters import chapter_text_vision
 
-            ocr_text = chapter_text_vision(
-                str(pdf_path), int(chapter.get("start_page", 0)),
-                int(chapter.get("end_page", 0)), client,
-            )
+                ocr_text = chapter_text_vision(
+                    str(pdf_path), int(chapter.get("start_page", 0)),
+                    int(chapter.get("end_page", 0)), client,
+                )
+                if ocr_text:
+                    db.set_chapter_source_text(sb, book_id, chapter_num, ocr_text)
             if ocr_text:
                 chapter["sections"] = [{
                     "section_title": "Content", "section_type": "body",
@@ -200,7 +208,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     "tts_voice_downgraded": bool(voice_report.get("downgraded")),
                 })
                 if voice_report.get("downgraded"):
-                    log.warning(
+                    logger.warning(
                         "generation %s: requested premium voice %r but rendered %s — "
                         "set ELEVENLABS_ENABLED=true + ELEVENLABS_API_KEY on the worker.",
                         generation_id, tts_voice, voice_report.get("used"),
