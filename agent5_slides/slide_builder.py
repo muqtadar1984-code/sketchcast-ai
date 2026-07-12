@@ -423,7 +423,7 @@ def _build_designed_deck(slides, output_pptx_path, episode_title, accent):
     circle(s, 1.0 * IN, 0.95 * IN, 0.62 * IN, ACC, "S", label_size=20)
     tf = textbox(s, 1.0 * IN, 2.45 * IN, 11.3 * IN, 2.3 * IN)
     para(tf, episode_title or "SketchCast Lesson", 40, WHITE, bold=True, first=True, space=8)
-    para(tf, "A narrated, Socratic lesson", 18, ACC, space=0)
+    para(tf, "A narrated lesson", 18, ACC, space=0)
     para(textbox(s, 1.0 * IN, 6.7 * IN, 11.3 * IN, 0.5 * IN), "SketchCast AI", 12, DIM, first=True, space=0)
 
     # Content (light) — every slide carries a concept illustration; the text and
@@ -456,7 +456,7 @@ def _build_designed_deck(slides, output_pptx_path, episode_title, accent):
     tf = textbox(s, 1.0 * IN, 2.5 * IN, 11.3 * IN, 2.4 * IN)
     para(tf, "Ready to teach.", 34, WHITE, bold=True, first=True, space=8)
     para(tf, episode_title or "", 18, ACC, space=12)
-    para(tf, "Every slide's speaker notes carry the Socratic questions.", 14, DIM, space=0)
+    para(tf, "Every lesson slide's speaker notes carry the narration.", 14, DIM, space=0)
     para(textbox(s, 1.0 * IN, 6.7 * IN, 11.3 * IN, 0.5 * IN), "SketchCast AI", 12, DIM, first=True, space=0)
 
     prs.save(str(output_pptx_path))
