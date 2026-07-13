@@ -116,6 +116,10 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     owner_id = gen["owner_id"]
     book_id = book["id"]
     kind = gen.get("kind") or "presentation"
+    # Idempotent re-run: if the reaper requeued this generation after the worker
+    # died mid-run, drop any artifact rows it already produced so the re-run can't
+    # leave duplicates (deterministic storage paths are overwritten on re-upload).
+    db.clear_artifacts(sb, generation_id)
 
     with tempfile.TemporaryDirectory() as tmp:
         pdf_path = db.download_book(sb, book["storage_path"], Path(tmp) / "book.pdf")

@@ -172,12 +172,36 @@ def main() -> None:
 
     once = "--once" in sys.argv
     if once:
+        # No startup reap in --once: it would requeue the live daemon's in-flight
+        # job if run against the same project while the daemon is mid-generation.
         handled = run_once(sb)
         log.info("Done (%s).", "processed 1 job" if handled else "no queued jobs")
         return
 
-    log.info("Worker started; polling every %ss", POLL_SECONDS)
+    # Reaper: a worker restart (deploy / crash / OOM) leaves the job/sketch it was
+    # running stranded in 'processing', and claims only ever pick 'queued' — so it
+    # would sit forever ("Finding chapters…" / a frozen generation / a stuck coach
+    # doodle). This is a single worker, so at startup every 'processing' row is
+    # orphaned: requeue them all for instant recovery.
+    rj, rs = db.requeue_stale_jobs(sb), db.requeue_stale_sketches(sb)
+    if rj or rs:
+        log.warning("Reaper: requeued %d job(s) + %d sketch(es) left 'processing' by a prior run", rj, rs)
+
+    stale_min = int(os.getenv("STALE_JOB_MINUTES", "15"))
+    last_reap = time.time()
+    log.info("Worker started; polling every %ss (stale reaper %sm)", POLL_SECONDS, stale_min)
     while True:
+        # Windowed backstop at the TOP of the loop (throttled), so it fires even
+        # while the queue is busy — a single worker here has nothing in flight, so
+        # anything 'processing' past the window is orphaned (e.g. a completed run
+        # whose finish_job write failed). Catches orphans created WITHOUT a restart.
+        now = time.time()
+        if now - last_reap > 60:
+            r = db.requeue_stale_jobs(sb, older_than_minutes=stale_min)
+            db.requeue_stale_sketches(sb, older_than_minutes=stale_min)
+            if r:
+                log.warning("Reaper: requeued %d stale job(s) (>%sm in 'processing')", r, stale_min)
+            last_reap = now
         try:
             worked = run_once(sb)
         except Exception as exc:  # noqa: BLE001

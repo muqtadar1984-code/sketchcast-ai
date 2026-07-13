@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +51,81 @@ def claim_next_job(sb: Client, job_type: Optional[str] = None) -> Optional[dict]
     if not upd.data:
         return None  # someone else grabbed it
     return upd.data[0]
+
+
+def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max_attempts: int = 3) -> int:
+    """Return orphaned 'processing' jobs to 'queued' so a live worker re-runs them.
+
+    ``claim_next_job`` only ever claims 'queued' rows, so a job the worker was
+    running when it died (a deploy, crash or OOM) is stranded in 'processing'
+    forever — the book sits at "Finding chapters…" / a generation freezes. This is
+    a SINGLE-worker service, so:
+
+    * at STARTUP, every 'processing' job is orphaned (nothing else is running it) —
+      call with ``older_than_minutes=None`` to reap them all and recover instantly;
+    * a windowed backstop passes ``older_than_minutes`` so an orphan created without
+      a restart (e.g. a failed finish_job write) is eventually recovered.
+
+    Each requeue bumps ``attempts``; a job that has already been retried
+    ``max_attempts`` times is marked 'error' instead of requeued, so a poison-pill
+    job that keeps hard-crashing the worker can't loop forever and block the queue.
+
+    Returns the number requeued. Best-effort — never raises. (Scaling past one
+    replica would require gating the startup reap-all, or a peer's in-flight job
+    could be requeued.)"""
+    try:
+        q = sb.table("jobs").select("id,type,book_id,attempts").eq("status", "processing")
+        if older_than_minutes is not None:
+            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)).isoformat()
+            q = q.lt("updated_at", cutoff)
+        rows = q.execute().data or []
+        requeued = failed = 0
+        for j in rows:
+            att = int(j.get("attempts") or 0)
+            # The .eq("status","processing") guard means a job another actor already
+            # moved is skipped (returns no rows) — safe under any race.
+            if att >= max_attempts:
+                sb.table("jobs").update({
+                    "status": "error",
+                    "error": f"Auto-failed after {att} attempts — the worker kept dying on this job.",
+                }).eq("id", j["id"]).eq("status", "processing").execute()
+                if j.get("type") == "index_book" and j.get("book_id"):
+                    try:  # stop the UI's "Finding chapters…" spinner
+                        sb.table("books").update({"status": "error"}).eq("id", j["book_id"]).execute()
+                    except Exception:  # noqa: BLE001
+                        pass
+                failed += 1
+            else:
+                upd = sb.table("jobs").update(
+                    {"status": "queued", "progress": 0, "attempts": att + 1}
+                ).eq("id", j["id"]).eq("status", "processing").execute()
+                if upd.data:
+                    requeued += 1
+        if failed:
+            logging.getLogger("worker").error(
+                "Reaper: %d job(s) auto-failed after %d attempts (poison pill)", failed, max_attempts
+            )
+        return requeued
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning("stale-job requeue failed: %s", exc)
+        return 0
+
+
+def requeue_stale_sketches(sb: Client, older_than_minutes: Optional[int] = None) -> int:
+    """Same as ``requeue_stale_jobs`` for the separate tutor_sketch queue (claimed
+    FIRST each loop, so a restart is disproportionately likely to strand one mid-
+    render and leave a student's coach doodle frozen). No attempt cap: a sketch is
+    a tiny SVG→MP4 render, a hard crash on one is very unlikely, and a sketch that
+    merely raises is already caught and set 'error'. Best-effort."""
+    try:
+        q = sb.table("tutor_sketch").update({"status": "queued"}).eq("status", "processing")
+        if older_than_minutes is not None:
+            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)).isoformat()
+            q = q.lt("updated_at", cutoff)
+        return len((q.execute().data) or [])
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning("stale-sketch requeue failed: %s", exc)
+        return 0
 
 
 def set_progress(sb: Client, job_id: str, progress: int) -> None:
@@ -402,6 +477,18 @@ def add_artifact_row(sb: Client, generation_id: str, kind: str, storage_path: st
     sb.table("artifacts").insert(
         {"generation_id": generation_id, "kind": kind, "storage_path": storage_path}
     ).execute()
+
+
+def clear_artifacts(sb: Client, generation_id: str) -> None:
+    """Delete a generation's existing artifact rows before (re)generating, so a
+    re-run — e.g. after the worker was killed mid-generation and the reaper
+    requeued the job — doesn't leave DUPLICATE deck/video rows. Storage paths are
+    deterministic and overwritten on re-upload, so only the rows need clearing.
+    Best-effort (a first run just deletes nothing)."""
+    try:
+        sb.table("artifacts").delete().eq("generation_id", generation_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning("artifact rows not cleared for %s: %s", generation_id, exc)
 
 
 # ── AI Tutor sketch queue (Phase 2) ──────────────────────────────────
