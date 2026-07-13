@@ -31,9 +31,9 @@ def generate_scripts(book_id: str, chapter_num: int, req: GenerateRequest = Gene
     """
     try:
         from agent3_scripts.script_generator import generate_chapter_scripts
-        from shared.claude_client import ClaudeClient
+        from shared.claude_client import ClaudeClient, artifact_model
 
-        client = ClaudeClient()
+        client = ClaudeClient(model=artifact_model())
         chapter_scripts = generate_chapter_scripts(book_id, chapter_num, client)
 
         if chapter_scripts is None:

@@ -26,6 +26,23 @@ MODEL_PRICING = {
 _DEFAULT_PRICING = (3.0, 15.0)
 
 
+def artifact_model(kind: str | None = None) -> str:
+    """Model for CONTENT GENERATION (chapter analysis + artifact authoring) — Haiku
+    by default, ~1/3 the price of Sonnet. Ingestion (chapter detection, vision OCR)
+    and the chapter-content check deliberately stay on the general CLAUDE_MODEL
+    (Sonnet), since a bad read there poisons every downstream artifact.
+
+    Override globally with ARTIFACT_MODEL, or per artifact kind with
+    ARTIFACT_MODEL_<KIND> (e.g. ARTIFACT_MODEL_EXAM_PAPER=claude-sonnet-5) to bump a
+    reasoning-heavy kind back to Sonnet if Haiku dips. Revert generation entirely
+    with ARTIFACT_MODEL=claude-sonnet-4-6."""
+    if kind:
+        specific = os.getenv("ARTIFACT_MODEL_" + kind.upper())
+        if specific:
+            return specific
+    return os.getenv("ARTIFACT_MODEL", "claude-haiku-4-5")
+
+
 def _first_text(response) -> str:
     """The first TEXT block's text. Extended-thinking models (e.g. Sonnet 5)
     put a ThinkingBlock at content[0] which has no `.text`, so never index

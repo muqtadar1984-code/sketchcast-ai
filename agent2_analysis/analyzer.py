@@ -21,7 +21,7 @@ from agent2_analysis.models import (ConceptResult, Episode, EpisodePlan,
                                     VisualOpportunity)
 from agent2_analysis.prompts import FULL_CHAPTER_ANALYSIS_PROMPT
 from agent2_analysis.segmenter import build_single_episode
-from shared.claude_client import ClaudeClient
+from shared.claude_client import ClaudeClient, artifact_model
 
 ANALYSIS_DIR = Path(__file__).resolve().parent.parent / "storage" / "analysis"
 
@@ -43,7 +43,7 @@ def run_full_analysis(
     Returns a MasterAnalysis with all results combined.
     """
     if client is None:
-        client = ClaudeClient()
+        client = ClaudeClient(model=artifact_model())
 
     analysis_id = str(uuid.uuid4())
     chapter_num = chapter_content.get("chapter_num", 0)

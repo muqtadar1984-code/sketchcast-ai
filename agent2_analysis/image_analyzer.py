@@ -10,7 +10,7 @@ from PIL import Image
 
 from agent2_analysis.models import ImageAnalysis
 from agent2_analysis.prompts import BATCH_IMAGE_ANALYSIS_PROMPT
-from shared.claude_client import ClaudeClient
+from shared.claude_client import ClaudeClient, artifact_model
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ def analyze_images_batch(
     Returns (list_of_analyses, usage_dict).
     """
     if client is None:
-        client = ClaudeClient()
+        client = ClaudeClient(model=artifact_model())
 
     images = chapter_content.get("images", [])
     if not images:

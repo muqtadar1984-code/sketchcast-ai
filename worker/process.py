@@ -258,12 +258,19 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         elif kind in ("lesson_plan", "activity", "exam_paper", "worksheet", "case_study"):
             # Claude-authored teacher document → editable .docx.
             from docgen import generate_document
+            from shared.claude_client import artifact_model
 
+            # Authoring runs on the cheaper artifact model (Haiku by default); the
+            # ingestion/analysis above stay on Sonnet. Fold its spend into the job so
+            # jobs.usage still reflects the full per-lesson cost.
+            gen_client = ClaudeClient(model=artifact_model(kind))
             out_path = generate_document(
                 kind=kind, book=book, chapter=chapter, analysis=analysis,
-                client=client, params=gen.get("params") or {}, out_dir=Path(tmp),
+                client=gen_client, params=gen.get("params") or {}, out_dir=Path(tmp),
                 template=branding.get("docx_template"),
             )
+            for _k, _v in gen_client.session_usage.items():
+                client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
             db.set_progress(sb, job_id, 90)
             dest = f"{base}/{kind}.docx"
             db.upload_artifact(sb, str(out_path), dest)
