@@ -59,6 +59,28 @@ def _elevenlabs_enabled() -> bool:
     return on and bool(os.getenv("ELEVENLABS_API_KEY"))
 
 
+def _chapter_heal_enabled() -> bool:
+    """Generation-time chapter self-heal (persisted per-chapter overrides). Turn on
+    ONLY after applying app migration 0040 (the heal_* columns) — otherwise every
+    override read/write is a best-effort no-op and the expensive relocation would
+    re-run on every generation instead of being paid once. Index-time healing does
+    not depend on this flag (it writes books.chapters, no new columns)."""
+    import os
+
+    return os.getenv("FEATURE_CHAPTER_HEAL", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _chapter_check_error(title: str, actual: str) -> str:
+    """The loud-fail message when a chapter can't be matched to any pages — shown
+    after self-heal has already tried and failed to relocate."""
+    return (
+        f'Chapter check failed: "{title}" was requested but its pages read as '
+        f'"{actual}", and no pages matching the title were found in the book. The '
+        "book may be a scan we could not read cleanly — re-upload a text-based PDF "
+        "if you have one, or delete and re-upload to re-detect chapters."
+    )
+
+
 def _pick_chapter(chapters: list[dict], chapter_ref: str | None) -> dict:
     real = [c for c in chapters if c.get("chapter_num") is not None]
     pool = real or chapters
@@ -116,53 +138,114 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         chapter_num = int(chapter.get("chapter_num", 0))
         chapter_title = chapter.get("title") or f"Chapter {chapter_num}"
 
+        # Self-heal overlay (behind FEATURE_CHAPTER_HEAL, which the operator turns on
+        # only AFTER applying migration 0040 — the heal_* columns): a book indexed
+        # before the boundary fix may have wrong pages stored for this chapter. A
+        # per-chapter relocation override (persisted the first time we healed it)
+        # wins over the stored pages, so the fix is paid once. 'not_found' means an
+        # earlier relocation PROVED the topic isn't in this book — fail fast.
+        heal_on = _chapter_heal_enabled()
+        heal = db.get_chapter_heal(sb, book_id, chapter_num) if heal_on else None
+        if heal and heal.get("status") == "not_found":
+            raise RuntimeError(_chapter_check_error(chapter_title, "a different topic"))
+        healed_text = None
+        if heal and heal.get("status") == "ok" and heal.get("start_page") is not None:
+            chapter["start_page"] = int(heal["start_page"])
+            chapter["end_page"] = int(heal["end_page"])
+            healed_text = heal.get("source_text")
+
         # Scanned book (no text layer) → the chapter has no content for the
         # pipeline to teach from. Transcribe its pages with Claude vision once,
         # up front, so every generation kind gets real chapter text.
-        section_chars = sum(
-            len(s.get("content") or "")
-            + sum(len(ss.get("content") or "") for ss in (s.get("subsections") or []))
-            for s in (chapter.get("sections") or [])
-        )
-        if section_chars < 200:
-            # Scanned chapter: transcribe the pages with Claude vision ONCE and
-            # cache the text (chapter_grounding.source_text, keyed book+chapter).
-            # Every later generation of this chapter — any kind, any owner —
-            # reuses it instead of re-running the multi-call, ~minutes-long OCR.
-            ocr_text = db.get_chapter_source_text(sb, book_id, chapter_num)
-            if not ocr_text:
-                from agent1_ingestion.vision_chapters import chapter_text_vision
+        if healed_text:
+            chapter["sections"] = [{
+                "section_title": "Content", "section_type": "body",
+                "content": healed_text, "page_num": chapter.get("start_page", 0),
+                "subsections": [],
+            }]
+        else:
+            section_chars = sum(
+                len(s.get("content") or "")
+                + sum(len(ss.get("content") or "") for ss in (s.get("subsections") or []))
+                for s in (chapter.get("sections") or [])
+            )
+            if section_chars < 200:
+                # Scanned chapter: transcribe the pages with Claude vision ONCE and
+                # cache the text (chapter_grounding.source_text, keyed book+chapter).
+                # Every later generation of this chapter — any kind, any owner —
+                # reuses it instead of re-running the multi-call, ~minutes-long OCR.
+                ocr_text = db.get_chapter_source_text(sb, book_id, chapter_num)
+                if not ocr_text:
+                    from agent1_ingestion.vision_chapters import chapter_text_vision
 
-                ocr_text = chapter_text_vision(
-                    str(pdf_path), int(chapter.get("start_page", 0)),
-                    int(chapter.get("end_page", 0)), client,
-                )
+                    ocr_text = chapter_text_vision(
+                        str(pdf_path), int(chapter.get("start_page", 0)),
+                        int(chapter.get("end_page", 0)), client,
+                    )
+                    if ocr_text:
+                        db.set_chapter_source_text(sb, book_id, chapter_num, ocr_text)
                 if ocr_text:
-                    db.set_chapter_source_text(sb, book_id, chapter_num, ocr_text)
-            if ocr_text:
-                chapter["sections"] = [{
-                    "section_title": "Content", "section_type": "body",
-                    "content": ocr_text, "page_num": chapter.get("start_page", 0),
-                    "subsections": [],
-                }]
+                    chapter["sections"] = [{
+                        "section_title": "Content", "section_type": "body",
+                        "content": ocr_text, "page_num": chapter.get("start_page", 0),
+                        "subsections": [],
+                    }]
 
         # Guard: the sliced text must actually belong to the requested chapter.
-        # Wrong stored boundaries/titles fail LOUD here instead of shipping a
-        # lesson about a different unit (user-reported failure mode).
+        # On mismatch, SELF-HEAL — find the pages that actually teach this title,
+        # transcribe + strict-confirm them, generate from those, and persist the
+        # correction so it is paid once. Only a topic genuinely absent from the
+        # book fails loud (and is remembered, so it fails fast next time).
         from agent1_ingestion.chapter_check import verify_chapter_content
 
-        sample = " ".join(
-            (s.get("content") or "") + " "
-            + " ".join(ss.get("content") or "" for ss in (s.get("subsections") or []))
-            for s in (chapter.get("sections") or [])
-        )
-        ok, actual = verify_chapter_content(chapter_title, sample, client)
-        if not ok:
-            raise RuntimeError(
-                f"Chapter check failed: \"{chapter_title}\" was requested but its pages "
-                f"read as \"{actual}\". The book's chapter list looks stale or wrong — "
-                "delete and re-upload the book to re-detect chapters, then generate again."
+        def _sample_text() -> str:
+            return " ".join(
+                (s.get("content") or "") + " "
+                + " ".join(ss.get("content") or "" for ss in (s.get("subsections") or []))
+                for s in (chapter.get("sections") or [])
             )
+
+        ok, actual = verify_chapter_content(chapter_title, _sample_text(), client)
+        if not ok:
+            # Without the flag/migration, keep the pre-heal behavior: fail loud.
+            if not heal_on:
+                raise RuntimeError(_chapter_check_error(chapter_title, actual))
+            result = {"status": "incomplete"}
+            try:
+                from agent1_ingestion.vision_chapters import relocate_chapter_for_generation
+
+                result = relocate_chapter_for_generation(
+                    str(pdf_path), extraction, chapter, client,
+                )
+            except Exception as exc:  # noqa: BLE001 — relocation is best-effort
+                logger.warning("relocation failed for %s ch%s: %s", book_id, chapter_num, exc)
+            if result.get("status") == "ok":
+                chapter["start_page"] = result["start_page"]
+                chapter["end_page"] = result["end_page"]
+                chapter["sections"] = [{
+                    "section_title": "Content", "section_type": "body",
+                    "content": result["source_text"],
+                    "page_num": result["start_page"], "subsections": [],
+                }]
+                db.set_chapter_heal(
+                    sb, book_id, chapter_num, result["start_page"],
+                    result["end_page"], result["source_text"], "ok",
+                )
+                logger.info(
+                    "self-healed chapter %s of book %s → pages %d-%d (%s)",
+                    chapter_num, book_id, result["start_page"],
+                    result["end_page"], result.get("actual_topic") or "",
+                )
+            elif result.get("status") == "absent":
+                # We searched properly and the topic isn't in the book — remember it
+                # so the next click fails fast instead of re-running a vision sweep.
+                db.set_chapter_heal(sb, book_id, chapter_num, None, None, None, "not_found")
+                raise RuntimeError(_chapter_check_error(chapter_title, actual))
+            else:
+                # Could NOT prove absence (vision outage, empty OCR, error). Fail
+                # loud but DO NOT persist — a transient blip must not brick a chapter
+                # that is actually present; the next run can recover.
+                raise RuntimeError(_chapter_check_error(chapter_title, actual))
         db.set_progress(sb, job_id, 20)
 
         # Agent 2 — analysis (shared by every kind)
@@ -343,40 +426,24 @@ def index_book(sb: Client, job: dict) -> None:
             pdf_path=str(pdf_path), client=client,
         ).model_dump()
 
-        # Audit the detected list BEFORE it becomes the book's stored truth:
-        # Claude reads each chapter's opening text, fixes garbled titles, and —
-        # when most entries look wrong — the whole list is re-detected by the
-        # vision reader. Best-effort: any failure keeps the heuristic result.
+        # Audit the detected list BEFORE it becomes the book's stored truth, and
+        # SELF-HEAL it: Claude reads each chapter's opening page (vision, so a
+        # scanned book is no longer a blind spot), fixes garbled titles, and moves
+        # any chapter whose pages don't match its title to the pages that do —
+        # preserving chapter_num, validate-or-revert so a bad heal can't corrupt
+        # storage. Best-effort: any failure keeps the heuristic result.
         chapter_defs = structured.get("chapters", [])
+        relocated_nums: list[int] = []
         if client is not None and len(chapter_defs) > 1:
             try:
-                from agent1_ingestion.chapter_check import audit_chapter_list
+                from agent1_ingestion.vision_chapters import heal_chapter_boundaries
 
-                audit = audit_chapter_list(extraction, chapter_defs, client)
-                for c in chapter_defs:
-                    fix = audit["titles"].get(int(c.get("chapter_num", 0)))
-                    if fix:
-                        c["title"] = fix
-                bad = audit["mismatched"]
-                if len(bad) * 2 >= len(chapter_defs):
-                    from agent1_ingestion.vision_chapters import detect_chapters_vision
-
-                    logger.warning(
-                        "chapter audit flagged %d/%d entries for %s — escalating to vision",
-                        len(bad), len(chapter_defs), book_id,
-                    )
-                    smart = detect_chapters_vision(str(pdf_path), extraction.total_pages, client)
-                    if smart:
-                        re_audit = audit_chapter_list(extraction, smart, client)
-                        if len(re_audit["mismatched"]) < len(bad):
-                            for c in smart:
-                                fix = re_audit["titles"].get(int(c.get("chapter_num", 0)))
-                                if fix:
-                                    c["title"] = fix
-                            chapter_defs = smart
-                structured["chapters"] = chapter_defs
-            except Exception as exc:  # noqa: BLE001 — audit must never block indexing
-                logger.warning("chapter audit skipped for %s: %s", book_id, exc)
+                healed, relocated_nums = heal_chapter_boundaries(
+                    str(pdf_path), extraction, chapter_defs, client
+                )
+                structured["chapters"] = healed
+            except Exception as exc:  # noqa: BLE001 — healing must never block indexing
+                logger.warning("chapter heal skipped for %s: %s", book_id, exc)
 
         # Book Health Score — a predictive read from signals we already have,
         # shown the moment indexing finishes so a bad scan is caught before it
@@ -460,6 +527,23 @@ def index_book(sb: Client, job: dict) -> None:
         db.set_book_health(sb, book_id, health)
     if client is not None:
         db.set_job_usage(sb, job["id"], client.session_usage)
+    # Any chapter whose page range CHANGED versus the previously stored list has
+    # stale cached OCR (source_text is keyed only by chapter_num, not pages) — clear
+    # it so the new pages are transcribed fresh. Covers heal relocations AND plain
+    # re-detection drift, not just relocated_nums.
+    prev = {int(c.get("num", c.get("chapter_num", -1))): c for c in (book.get("chapters") or [])}
+    changed = [
+        c["num"] for c in chapters
+        if (old := prev.get(c["num"])) is None
+        or int(old.get("start_page", -1)) != c["start_page"]
+        or int(old.get("end_page", -1)) != c["end_page"]
+    ]
+
     db.set_book_chapters(sb, book_id, chapters, "ready")
-    logger.info("Indexed book %s: %d chapter(s), grade=%s subject=%s cover=%s",
-                book_id, len(chapters), grade, subject, bool(cover_dest))
+    # This fresh list is now authoritative, so drop any generation-time relocation
+    # overrides (consulted before book.chapters) that a prior run persisted.
+    db.clear_book_heal(sb, book_id)
+    for num in changed:
+        db.clear_chapter_source_text(sb, book_id, num)
+    logger.info("Indexed book %s: %d chapter(s), grade=%s subject=%s cover=%s relocated=%s ocr_cleared=%s",
+                book_id, len(chapters), grade, subject, bool(cover_dest), relocated_nums, changed)

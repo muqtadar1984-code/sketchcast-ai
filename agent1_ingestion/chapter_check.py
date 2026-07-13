@@ -41,21 +41,30 @@ def _page_snippet(extraction, page: int, chars: int = _SNIPPET_CHARS) -> str:
     return " ".join(txt.split())[:chars]
 
 
-def audit_chapter_list(extraction, chapters: list[dict], client) -> dict:
+def audit_chapter_list(
+    extraction, chapters: list[dict], client, snippets: dict[int, str] | None = None
+) -> dict:
     """One Claude call over every chapter's title + opening snippet.
 
     Returns ``{"mismatched": [nums], "titles": {num: better_title}}``.
     ``mismatched`` = chapters whose opening text clearly does NOT start a unit
     matching the title (wrong boundary or meaningless title). ``titles`` =
     corrections where the page itself shows the real unit name.
+
+    ``snippets`` (``{chapter_num: opening_text}``) overrides the text-layer
+    snippet per chapter. It is how a SCANNED book gets audited at all: the text
+    layer is empty, so ``_page_snippet`` returns nothing and every chapter looks
+    "fine" — the exact blind spot that let a mislabeled unit reach storage. The
+    caller passes vision-read snippets there instead.
     """
     if client is None or len(chapters) < 2:
         return {"mismatched": [], "titles": {}}
+    snippets = snippets or {}
 
     lines = []
     for c in chapters:
         n = int(c.get("num", c.get("chapter_num", 0)))
-        snippet = _page_snippet(extraction, int(c.get("start_page", 0)))
+        snippet = snippets.get(n) or _page_snippet(extraction, int(c.get("start_page", 0)))
         lines.append(f'#{n} title={c.get("title")!r} opening_text={snippet!r}')
 
     prompt = (
@@ -90,30 +99,57 @@ def audit_chapter_list(extraction, chapters: list[dict], client) -> dict:
     return {"mismatched": mismatched, "titles": titles}
 
 
-def verify_chapter_content(title: str, text: str, client) -> tuple[bool, str]:
-    """Generation-time guard: does this chapter text plausibly belong under
-    ``title``? Returns ``(ok, actual_topic)``. Permissive by design — only a
-    CLEAR different-topic mismatch fails; generic titles always pass; any API
-    problem counts as "no opinion" (ok)."""
+def topic_of(title: str) -> str:
+    """The descriptive topic inside a chapter title: strip a leading generic
+    "Unit 3 / Chapter 3 / Lesson Three" prefix. "" when the title is purely
+    generic (nothing to verify)."""
+    return _GENERIC_PREFIX.sub("", (title or "").strip()).strip()
+
+
+def verify_chapter_content(title: str, text: str, client, strict: bool = False) -> tuple[bool, str]:
+    """Does this chapter text plausibly belong under ``title``? Returns
+    ``(ok, actual_topic)``. Any API problem counts as "no opinion" (ok).
+
+    Two modes:
+
+    * default (permissive) — the generation-time guard. Only a CLEAR
+      different-topic mismatch fails; partial overlap / sub-topics / activity
+      prose all pass. Wrong stored boundaries fail loud without false alarms.
+    * ``strict`` — the independent CONFIRMER used when self-heal relocates a
+      chapter to new pages. The pages' PRIMARY teaching topic must actually BE
+      the label (not merely "not confidently different"), so a near-miss region
+      (e.g. networking prose that mentions "network-attached storage") is
+      rejected before we commit the relocation."""
     title = (title or "").strip()
     text = " ".join((text or "").split())[:_VERIFY_CHARS]
     # Skip only when there's genuinely nothing to verify: no text, the whole-book
     # fallback, or a GENERIC label ("Unit 3", "Chapter 3") once its prefix is
     # stripped. A descriptive label ("Unit 3: Computer storage") keeps its topic
     # and IS verified — this is the guard that must catch a scanned-book mislabel.
-    topic = _GENERIC_PREFIX.sub("", title).strip()
+    topic = topic_of(title)
     if client is None or not text or not topic or title.lower().startswith("full document"):
         return True, ""
     try:
-        prompt = (
-            "A lesson is about to be generated from a textbook chapter. Confirm the "
-            f"chapter text matches its label.\n\nLabel: {title!r}\n\nChapter text "
-            f"(opening): {text!r}\n\n"
-            "Answer mismatch ONLY when the text is confidently about a DIFFERENT "
-            "topic than the label — partial overlap, sub-topics, intros and activity "
-            "prose under a matching theme are all a match. Respond ONLY as JSON: "
-            "{\"match\": true|false, \"actual_topic\": \"<=8 words\"}"
-        )
+        if strict:
+            prompt = (
+                "A lesson is about to be generated from these textbook pages. Confirm the "
+                f"pages are PRIMARILY teaching this topic.\n\nTopic: {topic!r}\n\nPage text "
+                f"(opening): {text!r}\n\n"
+                "Answer match=true ONLY when the MAIN teaching subject of these pages IS this "
+                "topic. A page that merely mentions the topic in passing, or is about a "
+                "different but related subject, is match=false. Respond ONLY as JSON: "
+                "{\"match\": true|false, \"actual_topic\": \"<=8 words\"}"
+            )
+        else:
+            prompt = (
+                "A lesson is about to be generated from a textbook chapter. Confirm the "
+                f"chapter text matches its label.\n\nLabel: {title!r}\n\nChapter text "
+                f"(opening): {text!r}\n\n"
+                "Answer mismatch ONLY when the text is confidently about a DIFFERENT "
+                "topic than the label — partial overlap, sub-topics, intros and activity "
+                "prose under a matching theme are all a match. Respond ONLY as JSON: "
+                "{\"match\": true|false, \"actual_topic\": \"<=8 words\"}"
+            )
         data = client.analyze(prompt, max_tokens=200).get("data") or {}
         if data.get("match") is False:
             return False, str(data.get("actual_topic") or "a different topic")[:80]

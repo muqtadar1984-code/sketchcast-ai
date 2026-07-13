@@ -232,6 +232,98 @@ def set_chapter_source_text(sb: Client, book_id: str, chapter_num: int, text: st
         )
 
 
+def clear_chapter_source_text(sb: Client, book_id: str, chapter_num: int) -> None:
+    """Null a chapter's cached OCR — called when its pages MOVE (a relocation), so
+    the next generation re-transcribes the new pages instead of reusing OCR of the
+    old ones. Best-effort."""
+    try:
+        sb.table("chapter_grounding").update(
+            {"source_text": None, "updated_at": datetime.now(timezone.utc).isoformat()}
+        ).eq("book_id", book_id).eq("chapter_num", int(chapter_num)).execute()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning(
+            "chapter source_text not cleared for %s ch%s: %s", book_id, chapter_num, exc
+        )
+
+
+def clear_book_heal(sb: Client, book_id: str) -> None:
+    """Drop every generation-time relocation override for a book. Called on
+    re-index: the freshly detected+healed book.chapters is now authoritative, so a
+    stale per-chapter override (which is consulted BEFORE book.chapters) must not
+    shadow it. Leaves source_text alone. Best-effort."""
+    try:
+        sb.table("chapter_grounding").update(
+            {"heal_status": None, "heal_start_page": None, "heal_end_page": None}
+        ).eq("book_id", book_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning("book heal not cleared for %s: %s", book_id, exc)
+
+
+def get_chapter_heal(sb: Client, book_id: str, chapter_num: int) -> Optional[dict]:
+    """Read a chapter's generation-time relocation override (chapter_grounding
+    heal_* columns), or None. Consulted BEFORE trusting book.chapters so a book
+    indexed with wrong pages self-heals once: ``{start_page, end_page, status,
+    source_text}`` where status is 'ok' (use these pages) or 'not_found' (the
+    topic isn't in the book — fail fast). Best-effort: a deployment missing the
+    heal_* columns just means no override."""
+    try:
+        res = (
+            sb.table("chapter_grounding")
+            .select("heal_start_page,heal_end_page,heal_status,source_text")
+            .eq("book_id", book_id)
+            .eq("chapter_num", int(chapter_num))
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        if not rows or not rows[0].get("heal_status"):
+            return None
+        r = rows[0]
+        return {
+            "start_page": r.get("heal_start_page"),
+            "end_page": r.get("heal_end_page"),
+            "status": r.get("heal_status"),
+            "source_text": r.get("source_text"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning(
+            "chapter heal lookup failed for %s ch%s: %s", book_id, chapter_num, exc
+        )
+        return None
+
+
+def set_chapter_heal(
+    sb: Client,
+    book_id: str,
+    chapter_num: int,
+    start_page: Optional[int],
+    end_page: Optional[int],
+    source_text: Optional[str],
+    status: str,
+) -> None:
+    """Persist a per-chapter relocation override (upsert keyed book_id+chapter_num).
+    status='ok' with the corrected pages + confirmed OCR, or 'not_found' so a
+    genuinely-absent topic fails fast on every later request instead of re-running
+    a minutes-long relocation. Writes only the columns it sets, so it never wipes
+    the concepts/script_text a prior generation stored. Best-effort."""
+    try:
+        row: dict = {
+            "book_id": book_id,
+            "chapter_num": int(chapter_num),
+            "heal_status": status,
+            "heal_start_page": int(start_page) if start_page is not None else None,
+            "heal_end_page": int(end_page) if end_page is not None else None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if source_text:
+            row["source_text"] = source_text
+        sb.table("chapter_grounding").upsert(row, on_conflict="book_id,chapter_num").execute()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning(
+            "chapter heal not persisted for %s ch%s: %s", book_id, chapter_num, exc
+        )
+
+
 def insert_tutor_seed_qa(
     sb: Client,
     book_id: str,
