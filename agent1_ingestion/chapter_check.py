@@ -19,8 +19,15 @@ generation on its own, so callers treat errors as "no opinion".
 from __future__ import annotations
 
 import logging
+import re
 
 logger = logging.getLogger(__name__)
+
+# Strip a bare "Unit 3 / Chapter 3 / Lesson Three" prefix to expose the DESCRIPTIVE
+# topic that follows (if any). "Unit 3" → "" (generic, nothing to verify); but
+# "Unit 3: Computer storage" → "Computer storage" (a real topic that MUST be
+# verified against the page text, or a scanned-book mislabel ships the wrong unit).
+_GENERIC_PREFIX = re.compile(r"^\s*(chapter|unit|lesson|topic|module|section)\s+[\w-]+\s*[:.\-–—]?\s*", re.I)
 
 _SNIPPET_CHARS = 320
 _VERIFY_CHARS = 1400
@@ -90,7 +97,12 @@ def verify_chapter_content(title: str, text: str, client) -> tuple[bool, str]:
     problem counts as "no opinion" (ok)."""
     title = (title or "").strip()
     text = " ".join((text or "").split())[:_VERIFY_CHARS]
-    if client is None or not text or not title or title.lower().startswith(("chapter", "unit", "full document")):
+    # Skip only when there's genuinely nothing to verify: no text, the whole-book
+    # fallback, or a GENERIC label ("Unit 3", "Chapter 3") once its prefix is
+    # stripped. A descriptive label ("Unit 3: Computer storage") keeps its topic
+    # and IS verified — this is the guard that must catch a scanned-book mislabel.
+    topic = _GENERIC_PREFIX.sub("", title).strip()
+    if client is None or not text or not topic or title.lower().startswith("full document"):
         return True, ""
     try:
         prompt = (
