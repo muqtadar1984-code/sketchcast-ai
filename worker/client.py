@@ -73,10 +73,13 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
     Returns the number requeued. Best-effort — never raises. (Scaling past one
     replica would require gating the startup reap-all, or a peer's in-flight job
     could be requeued.)"""
+    cutoff = (
+        (datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)).isoformat()
+        if older_than_minutes is not None else None
+    )
     try:
         q = sb.table("jobs").select("id,type,book_id,attempts").eq("status", "processing")
-        if older_than_minutes is not None:
-            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)).isoformat()
+        if cutoff:
             q = q.lt("updated_at", cutoff)
         rows = q.execute().data or []
         requeued = failed = 0
@@ -107,8 +110,17 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
             )
         return requeued
     except Exception as exc:  # noqa: BLE001
-        logging.getLogger("worker").warning("stale-job requeue failed: %s", exc)
-        return 0
+        # The 'attempts' column may not exist yet (app migration 0041 not applied) —
+        # recovery must still work, so fall back to a plain reap with no cap.
+        logging.getLogger("worker").warning("capped requeue failed (%s); plain reap", exc)
+        try:
+            q = sb.table("jobs").update({"status": "queued", "progress": 0}).eq("status", "processing")
+            if cutoff:
+                q = q.lt("updated_at", cutoff)
+            return len((q.execute().data) or [])
+        except Exception as exc2:  # noqa: BLE001
+            logging.getLogger("worker").warning("stale-job requeue failed: %s", exc2)
+            return 0
 
 
 def requeue_stale_sketches(sb: Client, older_than_minutes: Optional[int] = None) -> int:
