@@ -17,16 +17,9 @@ logger = logging.getLogger("worker")
 _WORDS = {"short": "150-250", "medium": "300-450", "long": "500-700"}
 
 PROMPT = """You are an educator writing a CASE STUDY that applies a chapter's concepts
-to a realistic, age-appropriate real-world scenario.
+to a realistic, age-appropriate real-world scenario, based on the chapter provided above.
 
-Audience: {grade} {subject} students.
-Chapter: "{chapter_title}"
 Scenario length: about {words} words.
-
-Chapter content excerpt:
-\"\"\"
-{content}
-\"\"\"
 
 Return ONLY valid JSON:
 {{
@@ -53,11 +46,9 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     subject = book.get("subject") or "general"
     chapter_title = chapter.get("title") or "Chapter"
 
-    prompt = PROMPT.format(
-        grade=grade, subject=subject, chapter_title=chapter_title,
-        words=_WORDS[length], n=n, content=dx.chapter_excerpt(chapter),
-    )
-    data = client.analyze(prompt, max_tokens=4096).get("data", {}) or {}
+    prompt = PROMPT.format(words=_WORDS[length], n=n)
+    grounding = dx.chapter_grounding(book, chapter, analysis)
+    data = client.analyze(prompt, max_tokens=4096, cache_prefix=grounding).get("data", {}) or {}
 
     doc = dx.new_doc(
         data.get("title") or f"Case Study — {chapter_title}",

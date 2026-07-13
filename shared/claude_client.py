@@ -13,6 +13,18 @@ from anthropic import Anthropic, RateLimitError
 
 TOKEN_LOG_PATH = Path(__file__).resolve().parent.parent / "token_log.json"
 
+# $/1M tokens (standard list price). Sonnet 5's intro discount ($2/$10 through
+# 2026-08-31) is deliberately NOT encoded — pricing at standard keeps the
+# console spend figure a safe upper bound during the promo. Cached reads bill at
+# 0.1x input and cache writes at 2x (1-hour TTL); track_tokens applies those.
+MODEL_PRICING = {
+    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-sonnet-5": (3.0, 15.0),
+    "claude-haiku-4-5": (1.0, 5.0),
+    "claude-opus-4-8": (5.0, 25.0),
+}
+_DEFAULT_PRICING = (3.0, 15.0)
+
 
 def _first_text(response) -> str:
     """The first TEXT block's text. Extended-thinking models (e.g. Sonnet 5)
@@ -44,13 +56,18 @@ def _get_api_key() -> str:
 class ClaudeClient:
     """Reusable Claude API wrapper with retry, JSON parsing, and token logging."""
 
-    def __init__(self, model: str = "claude-sonnet-4-6"):
+    def __init__(self, model: str | None = None):
         self.client = Anthropic(api_key=_get_api_key())
-        self.model = model
+        # Model is env-selectable (CLAUDE_MODEL) so it can be flipped to
+        # claude-sonnet-5 in Railway without a code change; default stays on 4.6.
+        self.model = model or os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
         # Per-instance running total across every call this client makes — the
         # worker persists it per job (jobs.usage) so spend is attributable to a
         # user/book/generation instead of vanishing with the container.
-        self.session_usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+        self.session_usage = {
+            "calls": 0, "input_tokens": 0, "output_tokens": 0,
+            "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "cost_usd": 0.0,
+        }
 
     # ── text analysis ────────────────────────────────────────────────
 
@@ -60,9 +77,28 @@ class ClaudeClient:
         system: str = "You are an expert educational content analyst.",
         max_tokens: int = 4096,
         retries: int = 3,
+        cache_prefix: str | None = None,
     ) -> dict:
-        """Send a text prompt, return parsed JSON dict."""
-        response = self._call(system=system, prompt=prompt, max_tokens=max_tokens, retries=retries)
+        """Send a text prompt, return parsed JSON dict.
+
+        `cache_prefix` is a large, STABLE block (e.g. the chapter grounding shared
+        by all of a book's artifacts) placed first and marked with cache_control,
+        so the first artifact pays to write it and the rest read it at ~0.1x. It
+        must be byte-identical across calls to hit, and comfortably exceed the
+        model's minimum cacheable prefix (~2K tokens) — below that it silently
+        won't cache (no error), so short prefixes just behave like a normal call.
+        """
+        if cache_prefix:
+            messages = [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+                    {"type": "text", "text": prompt},
+                ],
+            }]
+            response = self._call_messages(system=system, messages=messages, max_tokens=max_tokens, retries=retries)
+        else:
+            response = self._call(system=system, prompt=prompt, max_tokens=max_tokens, retries=retries)
         text = _first_text(response)
         usage = self.track_tokens(response)
         parsed = self._extract_json(text)
@@ -200,21 +236,37 @@ class ClaudeClient:
     # ── token tracking ───────────────────────────────────────────────
 
     def track_tokens(self, response) -> dict:
-        """Extract token usage and estimate cost from a response."""
-        inp = getattr(response.usage, "input_tokens", 0)
-        out = getattr(response.usage, "output_tokens", 0)
-        total = inp + out
-        # Sonnet pricing: $3/M input, $15/M output
-        cost = (inp * 3 + out * 15) / 1_000_000
+        """Extract token usage and estimate cost from a response.
+
+        Model-aware (MODEL_PRICING) and cache-aware: cached reads bill at 0.1x
+        input, cache writes at 2x (1-hour TTL). `input_tokens` from the API is
+        already the UNCACHED remainder, so the three input buckets are additive."""
+        u = response.usage
+        inp = getattr(u, "input_tokens", 0) or 0
+        out = getattr(u, "output_tokens", 0) or 0
+        cache_read = getattr(u, "cache_read_input_tokens", 0) or 0
+        cache_write = getattr(u, "cache_creation_input_tokens", 0) or 0
+        in_rate, out_rate = MODEL_PRICING.get(self.model, _DEFAULT_PRICING)
+        cost = (
+            inp * in_rate
+            + cache_read * in_rate * 0.1
+            + cache_write * in_rate * 2.0
+            + out * out_rate
+        ) / 1_000_000
+        total = inp + out + cache_read + cache_write
         usage = {
             "input_tokens": inp,
             "output_tokens": out,
+            "cache_read_input_tokens": cache_read,
+            "cache_creation_input_tokens": cache_write,
             "total_tokens": total,
             "estimated_cost_usd": round(cost, 6),
         }
         self.session_usage["calls"] += 1
         self.session_usage["input_tokens"] += inp
         self.session_usage["output_tokens"] += out
+        self.session_usage["cache_read_input_tokens"] += cache_read
+        self.session_usage["cache_creation_input_tokens"] += cache_write
         self.session_usage["cost_usd"] = round(self.session_usage["cost_usd"] + cost, 6)
         self._log_usage(usage)
         return usage

@@ -9,16 +9,7 @@ from docgen import docx_builder as dx
 
 logger = logging.getLogger("worker")
 
-PROMPT = """You are an expert teacher writing a classroom-ready LESSON PLAN.
-
-Audience: {grade} {subject} students.
-Chapter: "{chapter_title}"
-Key concepts: {concepts}
-
-Chapter content excerpt:
-\"\"\"
-{content}
-\"\"\"
+PROMPT = """You are an expert teacher writing a classroom-ready LESSON PLAN based on the chapter provided above.
 
 Total lesson duration: {duration} minutes.
 Return ONLY valid JSON in exactly this shape:
@@ -50,16 +41,12 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     subject = book.get("subject") or "general"
     chapter_title = chapter.get("title") or "Chapter"
     prompt = PROMPT.format(
-        grade=grade,
-        subject=subject,
-        chapter_title=chapter_title,
         duration=duration,
-        concepts=", ".join(dx.concept_names(analysis)) or "(see content)",
-        content=dx.chapter_excerpt(chapter),
         homework_field=',\n  "homework": ["..."]' if want_homework else "",
         diff_field=',\n  "differentiation": {"support": "...", "challenge": "..."}' if want_diff else "",
     )
-    data = client.analyze(prompt, max_tokens=3000).get("data", {}) or {}
+    grounding = dx.chapter_grounding(book, chapter, analysis)
+    data = client.analyze(prompt, max_tokens=3000, cache_prefix=grounding).get("data", {}) or {}
 
     doc = dx.new_doc(
         data.get("title") or f"Lesson Plan — {chapter_title}",

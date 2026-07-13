@@ -16,15 +16,7 @@ from docgen import docx_builder as dx
 
 logger = logging.getLogger("worker")
 
-PROMPT = """You are an examiner writing a test paper from the chapter below.
-
-Audience: {grade} {subject} students.
-Chapter: "{chapter_title}"
-
-Chapter content excerpt:
-\"\"\"
-{content}
-\"\"\"
+PROMPT = """You are an examiner writing a test paper from the chapter provided above.
 
 Write EXACTLY:
 - {n_fill} fill-in-the-blank questions
@@ -68,12 +60,9 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     subject = book.get("subject") or "general"
     chapter_title = chapter.get("title") or "Chapter"
 
-    prompt = PROMPT.format(
-        grade=grade, subject=subject, chapter_title=chapter_title,
-        n_fill=n_fill, n_tf=n_tf, n_match=n_match, n_subj=n_subj,
-        content=dx.chapter_excerpt(chapter),
-    )
-    data = client.analyze(prompt, max_tokens=4096).get("data", {}) or {}
+    prompt = PROMPT.format(n_fill=n_fill, n_tf=n_tf, n_match=n_match, n_subj=n_subj)
+    grounding = dx.chapter_grounding(book, chapter, analysis)
+    data = client.analyze(prompt, max_tokens=4096, cache_prefix=grounding).get("data", {}) or {}
 
     fill = (data.get("fill_blank") or [])[:n_fill]
     tf = (data.get("true_false") or [])[:n_tf]

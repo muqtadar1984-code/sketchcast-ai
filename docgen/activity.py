@@ -13,16 +13,7 @@ from docgen import docx_builder as dx
 logger = logging.getLogger("worker")
 
 PROMPT = """You are an expert teacher designing IN-CLASS ACTIVITIES that a teacher
-runs and supervises physically in the classroom.
-
-Audience: {grade} {subject} students.
-Chapter: "{chapter_title}"
-Key concepts: {concepts}
-
-Chapter content excerpt:
-\"\"\"
-{content}
-\"\"\"
+runs and supervises physically in the classroom, based on the chapter provided above.
 
 Return ONLY valid JSON in exactly this shape:
 {{
@@ -52,15 +43,9 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     grade = book.get("grade") or "school"
     subject = book.get("subject") or "general"
     chapter_title = chapter.get("title") or "Chapter"
-    prompt = PROMPT.format(
-        grade=grade,
-        subject=subject,
-        chapter_title=chapter_title,
-        n=n,
-        concepts=", ".join(dx.concept_names(analysis)) or "(see content)",
-        content=dx.chapter_excerpt(chapter),
-    )
-    data = client.analyze(prompt, max_tokens=3500).get("data", {}) or {}
+    prompt = PROMPT.format(n=n)
+    grounding = dx.chapter_grounding(book, chapter, analysis)
+    data = client.analyze(prompt, max_tokens=3500, cache_prefix=grounding).get("data", {}) or {}
 
     doc = dx.new_doc(f"Class Activities — {chapter_title}", f"{grade} · {subject}", template=template)
     if data.get("intro"):

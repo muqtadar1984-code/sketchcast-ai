@@ -19,16 +19,9 @@ from docgen import docx_builder as dx
 
 logger = logging.getLogger("worker")
 
-PROMPT = """You are a teacher creating a practice WORKSHEET from the chapter below.
+PROMPT = """You are a teacher creating a practice WORKSHEET from the chapter provided above.
 
-Audience: {grade} {subject} students.
-Chapter: "{chapter_title}"
 Difficulty: {difficulty}
-
-Chapter content excerpt:
-\"\"\"
-{content}
-\"\"\"
 
 Create about {n} practice questions TOTAL, distributed across a MIX of kinds and
 GROUPED BY KIND. A good spread: several fill-in-the-blanks, several true/false,
@@ -64,11 +57,9 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     subject = book.get("subject") or "general"
     chapter_title = chapter.get("title") or "Chapter"
 
-    prompt = PROMPT.format(
-        grade=grade, subject=subject, chapter_title=chapter_title,
-        difficulty=p["difficulty"], n=n, content=dx.chapter_excerpt(chapter),
-    )
-    data = client.analyze(prompt, max_tokens=4096).get("data", {}) or {}
+    prompt = PROMPT.format(difficulty=p["difficulty"], n=n)
+    grounding = dx.chapter_grounding(book, chapter, analysis)
+    data = client.analyze(prompt, max_tokens=4096, cache_prefix=grounding).get("data", {}) or {}
 
     # Backward-compat: an older/looser model reply may still use the flat
     # {"questions": [...]} shape — treat those as short-answer so nothing is lost.

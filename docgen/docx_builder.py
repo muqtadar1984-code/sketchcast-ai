@@ -115,3 +115,23 @@ def concept_names(analysis: dict, limit: int = 12) -> list[str]:
             if name:
                 names.append(str(name))
     return names[:limit]
+
+
+def chapter_grounding(book: dict, chapter: dict, analysis: dict) -> str:
+    """The shared grounding block prepended to EVERY artifact prompt for a chapter.
+
+    Must be byte-identical across all of a book's artifacts (worksheet, exam, …)
+    so Claude prompt-caches it — written once, re-read at ~0.1x on the rest. Keep
+    it deterministic: only book/chapter/analysis-derived text, no per-artifact
+    params, no timestamps. Artifact-specific instructions go AFTER this, in each
+    builder's own prompt, and reference "the chapter above"."""
+    grade = book.get("grade") or "school"
+    subject = book.get("subject") or "general"
+    title = chapter.get("title") or "Chapter"
+    concepts = ", ".join(concept_names(analysis)) or "(see content)"
+    return (
+        f"Audience: {grade} {subject} students.\n"
+        f'Chapter: "{title}"\n'
+        f"Key concepts: {concepts}\n\n"
+        f'Chapter content:\n"""\n{chapter_excerpt(chapter)}\n"""'
+    )
