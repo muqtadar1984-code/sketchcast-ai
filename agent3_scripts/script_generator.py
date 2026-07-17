@@ -121,12 +121,17 @@ def _build_episode_context(episode: dict, analysis: dict) -> str:
         "",
     ]
 
-    # Concepts relevant to this episode
+    # Concepts relevant to this episode. The episode stores concept_ids (the
+    # analyzer fills key_concepts_introduced with ids like "c001"/"p2-c003"),
+    # so match on concept_id FIRST — the old name-only match silently dropped
+    # the whole "KEY CONCEPTS TO TEACH" block. For multi-part chapters this
+    # scoping is what keeps Part 2 teaching Part 2's concepts, not Part 1's.
     ep_concept_names = set(episode.get("key_concepts_introduced", []))
     all_concepts = analysis.get("concepts", {}).get("concepts", [])
     relevant_concepts = [
         c for c in all_concepts
-        if c.get("name") in ep_concept_names
+        if c.get("concept_id") in ep_concept_names
+        or c.get("name") in ep_concept_names
         or any(name in c.get("name", "") for name in ep_concept_names)
     ]
 
@@ -192,14 +197,39 @@ def generate_episode_script(
     chapter_num: int,
     client,
     narration_style: str = "socratic",
+    part_info: dict | None = None,
 ) -> EpisodeScript:
     """Generate a complete episode script via Claude in the chosen narration style.
 
     ``narration_style`` changes persona/arc/tone only — the emitted segment schema
     (and thus slide/video rendering) is identical for every style.
+
+    ``part_info`` (multi-part chapters) = {"part": k, "total": n,
+    "prev_sections": [...], "next_sections": [...]} — appended to the episode
+    context so Part k opens with a short recap bridge instead of a fresh
+    chapter intro, and only the LAST part delivers the full synthesis.
     """
     style = normalize_style(narration_style)
     episode_context = _build_episode_context(episode, analysis)
+    if part_info and part_info.get("total", 1) > 1:
+        k, n = part_info["part"], part_info["total"]
+        part_lines = [
+            "",
+            f"MULTI-PART LESSON: this is PART {k} of {n} of the chapter — the chapter was too long for one ~15-minute video, so it is taught as {n} consecutive videos.",
+        ]
+        if k > 1 and part_info.get("prev_sections"):
+            part_lines.append(
+                f"Parts 1–{k - 1} already covered: {', '.join(part_info['prev_sections'][:8])}. "
+                "Do NOT re-introduce the chapter from scratch — open with a 1-2 sentence recap that bridges from the previous part, then continue teaching."
+            )
+        if k < n and part_info.get("next_sections"):
+            part_lines.append(
+                f"Part {k + 1} will cover: {', '.join(part_info['next_sections'][:8])}. "
+                "Do NOT wrap up the whole chapter — end with a short bridge that tells students what the next part explores (use the 'preview' segment for it)."
+            )
+        if k == n:
+            part_lines.append("This is the FINAL part — close with the full chapter synthesis.")
+        episode_context += "\n".join(part_lines)
     # Defense in depth: never ask for more than a 12-minute script — an
     # oversized target makes Claude's reply overrun max_tokens, truncating the
     # JSON and silently yielding zero segments.
@@ -325,8 +355,19 @@ def generate_chapter_scripts_from_analysis(
     chapter_title = analysis_dict.get("chapter_title", f"Chapter {chapter_num}")
 
     episode_scripts = []
-    for episode in episodes:
-        script = generate_episode_script(episode, analysis_dict, chapter_num, client, narration_style)
+    total = len(episodes)
+    for idx, episode in enumerate(episodes, start=1):
+        part_info = None
+        if total > 1:
+            part_info = {
+                "part": idx,
+                "total": total,
+                "prev_sections": [s for e in episodes[: idx - 1] for s in e.get("sections_covered", [])],
+                "next_sections": episodes[idx].get("sections_covered", []) if idx < total else [],
+            }
+        script = generate_episode_script(
+            episode, analysis_dict, chapter_num, client, narration_style, part_info=part_info,
+        )
         episode_scripts.append(script)
         save_script(script)
 

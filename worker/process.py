@@ -302,17 +302,45 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             warm_tutor_cache(sb, client, book_id, chapter_num, chapter_title, analysis, _script_text)
 
             # (No AI-image step in the freemium path — slides are rendered natively.)
-            slides = generate_episode_slides(
-                script_data=scripts, branding=branding,
-            ).model_dump()
-            db.set_progress(sb, job_id, 72)
-
+            # Long chapters arrive as SEVERAL episodes (Part 1..N, each a ~15-min
+            # lesson covering its slice of the chapter). Render and upload each
+            # part SEQUENTIALLY — the per-chapter slide/video segment dirs are
+            # shared, so parts must not interleave. Part 1 keeps the legacy
+            # lesson.mp4 / deck.pptx names; later parts get _part{k} suffixes
+            # (the app sorts video artifacts by path → Part 1 first).
+            episodes_all = scripts.get("episodes") or []
+            n_parts = max(len(episodes_all), 1)
             voice_report: dict = {}
-            video = compose_episode_videos(
-                script_data=scripts, slide_manifest=slides, branding=branding,
-                tts_voice=tts_voice, allow_premium=allow_premium, voice_report=voice_report,
-            ).model_dump()
-            db.set_progress(sb, job_id, 90)
+            uploaded_videos = 0
+
+            for part_idx, ep in enumerate(episodes_all, start=1):
+                part_scripts = {**scripts, "episodes": [ep]}
+                slides = generate_episode_slides(
+                    script_data=part_scripts, branding=branding,
+                ).model_dump()
+
+                video = compose_episode_videos(
+                    script_data=part_scripts, slide_manifest=slides, branding=branding,
+                    tts_voice=tts_voice, allow_premium=allow_premium, voice_report=voice_report,
+                ).model_dump()
+
+                final = render_final_video(video_manifest=video).model_dump()
+
+                suffix = "" if part_idx == 1 else f"_part{part_idx}"
+                deck_path = slides.get("deck_path")
+                if deck_path and Path(deck_path).exists():
+                    db.upload_artifact(sb, deck_path, f"{base}/deck{suffix}.pptx")
+                    db.add_artifact_row(sb, generation_id, "deck_pptx", f"{base}/deck{suffix}.pptx")
+                final_video = final.get("final_video_path")
+                if final_video and Path(final_video).exists():
+                    db.upload_artifact(sb, final_video, f"{base}/lesson{suffix}.mp4")
+                    db.add_artifact_row(sb, generation_id, "video_mp4", f"{base}/lesson{suffix}.mp4")
+                    uploaded_videos += 1
+                # 60 → 96 spread across the parts.
+                db.set_progress(sb, job_id, 60 + round(36 * part_idx / n_parts))
+
+            if uploaded_videos == 0:
+                raise RuntimeError("no video parts were produced")
 
             # Record the voice that ACTUALLY rendered so a silent premium→free
             # downgrade (ElevenLabs not enabled/keyed on the worker, spend cap, or
@@ -328,19 +356,11 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                         "set ELEVENLABS_ENABLED=true + ELEVENLABS_API_KEY on the worker.",
                         generation_id, tts_voice, voice_report.get("used"),
                     )
-
-            final = render_final_video(video_manifest=video).model_dump()
-            db.set_progress(sb, job_id, 96)
-
-            deck_path = slides.get("deck_path")
-            if deck_path and Path(deck_path).exists():
-                db.upload_artifact(sb, deck_path, f"{base}/deck.pptx")
-                db.add_artifact_row(sb, generation_id, "deck_pptx", f"{base}/deck.pptx")
-            final_video = final.get("final_video_path")
-            if final_video and Path(final_video).exists():
-                db.upload_artifact(sb, final_video, f"{base}/lesson.mp4")
-                db.add_artifact_row(sb, generation_id, "video_mp4", f"{base}/lesson.mp4")
-            title = f"{book.get('title', 'Lesson')} · {ep_title}"
+            if n_parts > 1:
+                db.merge_generation_params(sb, generation_id, {"video_parts": uploaded_videos})
+                title = f"{book.get('title', 'Lesson')} · {chapter_title} ({uploaded_videos} parts)"
+            else:
+                title = f"{book.get('title', 'Lesson')} · {ep_title}"
 
         elif kind in ("lesson_plan", "activity", "exam_paper", "worksheet", "case_study"):
             # Claude-authored teacher document → editable .docx.

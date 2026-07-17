@@ -20,10 +20,14 @@ from agent2_analysis.models import (ConceptResult, Episode, EpisodePlan,
                                     MasterAnalysis, TokenUsage,
                                     VisualOpportunity)
 from agent2_analysis.prompts import FULL_CHAPTER_ANALYSIS_PROMPT
-from agent2_analysis.segmenter import build_single_episode
 from shared.claude_client import ClaudeClient, artifact_model
 
 ANALYSIS_DIR = Path(__file__).resolve().parent.parent / "storage" / "analysis"
+
+# Per-analysis-call content budget (chars). This used to be a silent truncation
+# of the WHOLE chapter (`full_content[:15000]`); it is now the chunk size —
+# chapters longer than this become multiple parts, each fully analysed.
+MAX_ANALYSIS_CHARS = 15000
 
 
 def run_full_analysis(
@@ -49,103 +53,168 @@ def run_full_analysis(
     chapter_num = chapter_content.get("chapter_num", 0)
     chapter_title = chapter_content.get("title", "Untitled")
 
-    # ── Build chapter content string ──────────────────────────────────
+    # ── Build chapter content UNITS (block text + owning section title) ──────
+    # Units, not one string: long chapters are CHUNKED so every part of the
+    # chapter reaches an analysis call. The old single `full_content[:15000]`
+    # silently dropped everything past ~15k chars — the "video doesn't cover
+    # the whole chapter" bug: concepts from the back of the chapter never
+    # existed, so no script could teach them.
     sections = chapter_content.get("sections", [])
-    content_parts: list[str] = []
+    units: list[tuple[str | None, str]] = []  # (section_title, block_text)
     word_count = 0
 
     for sec in sections:
-        content_parts.append(f"## {sec.get('section_title', '')}")
+        sec_title = sec.get("section_title", "")
         text = sec.get("content", "")
-        content_parts.append(text)
+        units.append((sec_title, f"## {sec_title}\n\n{text}"))
         word_count += len(text.split())
         for sub in sec.get("subsections", []):
-            content_parts.append(f"### {sub.get('section_title', '')}")
             sub_text = sub.get("content", "")
-            content_parts.append(sub_text)
+            units.append((sec_title, f"### {sub.get('section_title', '')}\n\n{sub_text}"))
             word_count += len(sub_text.split())
 
     for box in chapter_content.get("key_boxes", []):
-        content_parts.append(f"[{box.get('type', 'box').upper()}: {box.get('title', '')}]")
         box_text = box.get("content", "")
-        content_parts.append(box_text)
+        units.append((None, f"[{box.get('type', 'box').upper()}: {box.get('title', '')}]\n\n{box_text}"))
         word_count += len(box_text.split())
 
-    full_content = "\n\n".join(content_parts)
+    # Greedy chunking on unit boundaries, each chunk ≤ MAX_ANALYSIS_CHARS (the
+    # same budget the old cap used, so single-part chapters behave identically).
+    # An oversized single unit (one giant OCR'd section) is hard-split.
+    chunks: list[dict] = []  # {text, section_titles, words}
+    cur_parts: list[str] = []
+    cur_titles: list[str] = []
+    cur_len = 0
+
+    def _flush() -> None:
+        nonlocal cur_parts, cur_titles, cur_len
+        if cur_parts:
+            text = "\n\n".join(cur_parts)
+            chunks.append({
+                "text": text,
+                "section_titles": list(dict.fromkeys(t for t in cur_titles if t)),
+                "words": len(text.split()),
+            })
+        cur_parts, cur_titles, cur_len = [], [], 0
+
+    for sec_title, block in units:
+        pieces = [block[i:i + MAX_ANALYSIS_CHARS] for i in range(0, len(block), MAX_ANALYSIS_CHARS)] or [""]
+        for piece in pieces:
+            if cur_len + len(piece) > MAX_ANALYSIS_CHARS and cur_parts:
+                _flush()
+            cur_parts.append(piece)
+            if sec_title:
+                cur_titles.append(sec_title)
+            cur_len += len(piece) + 2
+    _flush()
+    if not chunks:
+        chunks = [{"text": "", "section_titles": [], "words": 0}]
+    total_parts = len(chunks)
 
     # ══════════════════════════════════════════════════════════════════
-    #  API CALL 1 — Combined chapter analysis
+    #  API CALL(s) 1..N — combined analysis per chunk (N=1 for most chapters)
     # ══════════════════════════════════════════════════════════════════
-    prompt = FULL_CHAPTER_ANALYSIS_PROMPT.format(
-        chapter_title=chapter_title,
-        level=level,
-        word_count=word_count,
-        content=full_content[:15000],  # cap to stay within context window
-    )
+    concepts_all: list = []
+    dependencies_all: list = []
+    prerequisites_all: list = []
+    difficulty_assessments: list = []
+    visual_opportunities: list[VisualOpportunity] = []
+    episodes: list[Episode] = []
+    usage_chapter = {"total_tokens": 0, "estimated_cost_usd": 0}
 
-    result = client.analyze(prompt, max_tokens=16000)
-    data = result["data"]
-    usage_chapter = result["usage"]
-    if not isinstance(data, dict):
-        data = {}
-    if not data.get("concepts") and word_count > 500:
-        # A substantial chapter with zero extracted concepts almost always means
-        # the reply truncated or failed to parse — the lesson would then be
-        # grounded in nothing but the title. Surface it loudly in worker logs.
-        logger.warning(
-            "combined analysis returned no concepts for a %d-word chapter — reply began: %r",
-            word_count, str(result.get("data"))[:200],
+    for part_idx, chunk in enumerate(chunks, start=1):
+        part_title = chapter_title if total_parts == 1 else f"{chapter_title} (Part {part_idx} of {total_parts})"
+        prompt = FULL_CHAPTER_ANALYSIS_PROMPT.format(
+            chapter_title=part_title,
+            level=level,
+            word_count=chunk["words"],
+            content=chunk["text"],
         )
 
-    # ── Parse concepts ────────────────────────────────────────────────
+        result = client.analyze(prompt, max_tokens=16000)
+        data = result["data"]
+        part_usage = result.get("usage", {})
+        usage_chapter["total_tokens"] += part_usage.get("total_tokens", 0)
+        usage_chapter["estimated_cost_usd"] += part_usage.get("estimated_cost_usd", 0)
+        if not isinstance(data, dict):
+            data = {}
+        if not data.get("concepts") and chunk["words"] > 500:
+            # A substantial chunk with zero extracted concepts almost always means
+            # the reply truncated or failed to parse — the lesson would then be
+            # grounded in nothing but the title. Surface it loudly in worker logs.
+            logger.warning(
+                "combined analysis returned no concepts for a %d-word chunk (part %d/%d) — reply began: %r",
+                chunk["words"], part_idx, total_parts, str(result.get("data"))[:200],
+            )
+
+        # Ids restart at c001/v001 in every call — prefix per part so episode →
+        # concept/visual links stay unambiguous across the whole chapter.
+        pfx = "" if total_parts == 1 else f"p{part_idx}-"
+        part_concept_ids: list[str] = []
+        for i, c in enumerate(data.get("concepts", []) or []):
+            if isinstance(c, dict):
+                c["concept_id"] = f"{pfx}{c.get('concept_id') or f'c{i + 1:03d}'}"
+                part_concept_ids.append(c["concept_id"])
+                concepts_all.append(c)
+        dependencies_all.extend(data.get("dependencies", []) or [])
+        prerequisites_all.extend(data.get("prerequisites", []) or [])
+
+        raw_diff = data.get("difficulty_assessments", [])
+        if isinstance(raw_diff, dict):
+            difficulty_assessments.append(raw_diff)
+        elif isinstance(raw_diff, list):
+            difficulty_assessments.extend(raw_diff)
+
+        raw_visuals = data.get("visual_opportunities", [])
+        if isinstance(raw_visuals, dict):
+            raw_visuals = [raw_visuals]
+        part_visual_ids: list[str] = []
+        for v in (raw_visuals if isinstance(raw_visuals, list) else []):
+            if not isinstance(v, dict):
+                continue
+            v["opportunity_id"] = f"{pfx}{v.get('opportunity_id') or f'v{len(visual_opportunities) + 1:03d}'}"
+            try:
+                vo = VisualOpportunity(**v)
+            except Exception:
+                vo = VisualOpportunity(
+                    opportunity_id=v["opportunity_id"],
+                    title=v.get("title", "Visual"),
+                    description=v.get("description", ""),
+                    visual_type=v.get("visual_type", "diagram"),
+                )
+            visual_opportunities.append(vo)
+            part_visual_ids.append(vo.opportunity_id)
+
+        # ── One EPISODE per chunk (mechanical, no API call) ────────────
+        # Same 3-12 min lesson clamp as before, per PART — a long chapter
+        # becomes Part 1..N of ~teachable length instead of one video that
+        # only covers the front of the chapter.
+        duration = min(12.0, max(3.0, round(chunk["words"] / 130, 1)))
+        episodes.append(Episode(
+            episode_num=part_idx,
+            title=chapter_title if total_parts == 1 else f"{chapter_title} — Part {part_idx}",
+            sections_covered=chunk["section_titles"],
+            estimated_word_count=chunk["words"],
+            estimated_duration_minutes=duration,
+            key_concepts_introduced=part_concept_ids,
+            visual_opportunities_in_episode=part_visual_ids,
+        ))
+
+    if total_parts > 1:
+        logger.info(
+            "chapter %s '%s': %d words split into %d parts for full coverage",
+            chapter_num, chapter_title, word_count, total_parts,
+        )
+
     concept_result = ConceptResult(
-        concepts=data.get("concepts", []),
-        dependencies=data.get("dependencies", []),
-        prerequisites=data.get("prerequisites", []),
+        concepts=concepts_all,
+        dependencies=dependencies_all,
+        prerequisites=prerequisites_all,
     )
-
-    # ── Parse difficulty assessments ──────────────────────────────────
-    raw_diff = data.get("difficulty_assessments", [])
-    if isinstance(raw_diff, dict):
-        difficulty_assessments = [raw_diff]
-    elif isinstance(raw_diff, list):
-        difficulty_assessments = raw_diff
-    else:
-        difficulty_assessments = []
-
-    # ── Parse visual opportunities ────────────────────────────────────
-    raw_visuals = data.get("visual_opportunities", [])
-    if isinstance(raw_visuals, dict):
-        raw_visuals = [raw_visuals]
-    visual_opportunities: list[VisualOpportunity] = []
-    for v in (raw_visuals if isinstance(raw_visuals, list) else []):
-        try:
-            visual_opportunities.append(VisualOpportunity(**v))
-        except Exception:
-            visual_opportunities.append(VisualOpportunity(
-                opportunity_id=v.get("opportunity_id", f"v{len(visual_opportunities)+1:03d}"),
-                title=v.get("title", "Visual"),
-                description=v.get("description", ""),
-                visual_type=v.get("visual_type", "diagram"),
-            ))
-
-    # ══════════════════════════════════════════════════════════════════
-    #  EPISODE — built mechanically (no API call)
-    # ══════════════════════════════════════════════════════════════════
-    episode_dict = build_single_episode(chapter_content)
-    # Enrich with IDs from the combined analysis
-    episode_dict["visual_opportunities_in_episode"] = [
-        v.opportunity_id for v in visual_opportunities
-    ]
-    episode_dict["key_concepts_introduced"] = [
-        c.concept_id for c in concept_result.concepts
-    ]
-
-    episode = Episode(**episode_dict)
     episode_plan = EpisodePlan(
         chapter_title=chapter_title,
-        total_episodes=1,
-        episodes=[episode],
+        total_episodes=total_parts,
+        episodes=episodes,
     )
 
     # ══════════════════════════════════════════════════════════════════
