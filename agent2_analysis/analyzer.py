@@ -29,6 +29,14 @@ ANALYSIS_DIR = Path(__file__).resolve().parent.parent / "storage" / "analysis"
 # chapters longer than this become multiple parts, each fully analysed.
 MAX_ANALYSIS_CHARS = 15000
 
+# Per-PART teaching budget (words). A part's video duration is planned at
+# words/130wpm clamped to 12 minutes — so any chunk beyond ~1560 words gets
+# COMPRESSED, not covered. Splitting at 1500 words keeps every part fully
+# teachable in its ~12-15 minute runtime (this is what actually guarantees
+# "the whole chapter is covered": chars bound the LLM context, words bound
+# the lesson).
+MAX_PART_WORDS = 1500
+
 
 def run_full_analysis(
     book_id: str,
@@ -78,16 +86,20 @@ def run_full_analysis(
         units.append((None, f"[{box.get('type', 'box').upper()}: {box.get('title', '')}]\n\n{box_text}"))
         word_count += len(box_text.split())
 
-    # Greedy chunking on unit boundaries, each chunk ≤ MAX_ANALYSIS_CHARS (the
-    # same budget the old cap used, so single-part chapters behave identically).
+    # Greedy chunking on unit boundaries. A chunk closes when EITHER budget
+    # would overflow: MAX_ANALYSIS_CHARS (the LLM context bound — same figure
+    # the old truncation used) or MAX_PART_WORDS (the lesson-duration bound —
+    # a ~2,400-word chapter fits in 15k chars but NOT in one 12-minute video,
+    # which is exactly the "video doesn't cover the chapter" complaint).
     # An oversized single unit (one giant OCR'd section) is hard-split.
     chunks: list[dict] = []  # {text, section_titles, words}
     cur_parts: list[str] = []
     cur_titles: list[str] = []
     cur_len = 0
+    cur_words = 0
 
     def _flush() -> None:
-        nonlocal cur_parts, cur_titles, cur_len
+        nonlocal cur_parts, cur_titles, cur_len, cur_words
         if cur_parts:
             text = "\n\n".join(cur_parts)
             chunks.append({
@@ -95,17 +107,19 @@ def run_full_analysis(
                 "section_titles": list(dict.fromkeys(t for t in cur_titles if t)),
                 "words": len(text.split()),
             })
-        cur_parts, cur_titles, cur_len = [], [], 0
+        cur_parts, cur_titles, cur_len, cur_words = [], [], 0, 0
 
     for sec_title, block in units:
         pieces = [block[i:i + MAX_ANALYSIS_CHARS] for i in range(0, len(block), MAX_ANALYSIS_CHARS)] or [""]
         for piece in pieces:
-            if cur_len + len(piece) > MAX_ANALYSIS_CHARS and cur_parts:
+            piece_words = len(piece.split())
+            if cur_parts and (cur_len + len(piece) > MAX_ANALYSIS_CHARS or cur_words + piece_words > MAX_PART_WORDS):
                 _flush()
             cur_parts.append(piece)
             if sec_title:
                 cur_titles.append(sec_title)
             cur_len += len(piece) + 2
+            cur_words += piece_words
     _flush()
     if not chunks:
         chunks = [{"text": "", "section_titles": [], "words": 0}]

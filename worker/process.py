@@ -505,6 +505,35 @@ def index_book(sb: Client, job: dict) -> None:
         for c in structured.get("chapters", [])
     ]
 
+    # Persist each chapter's RAW TEXT into chapter_grounding.source_text the
+    # moment the book is indexed, so the AI assistant can answer questions from
+    # ANY chapter of the book — no generated lesson required (the assistant
+    # falls back to source_text when concepts/script are absent). Text-layer
+    # books only: a scanned book yields ~no text here, and skipping it protects
+    # the vision-OCR cache the generation path fills on demand. Zero LLM cost —
+    # pure extraction. Best-effort: never blocks indexing. Runs AFTER healing,
+    # so the text matches the healed page boundaries.
+    try:
+        by_page: dict[int, list[str]] = {}
+        for it in (extraction.items or []):
+            t = (getattr(it, "text", "") or "").strip()
+            if t and getattr(it, "item_type", "") != "picture":
+                by_page.setdefault(int(getattr(it, "page_num", 0)), []).append(t)
+        persisted = 0
+        for ch in chapters:
+            if ch["end_page"] < ch["start_page"]:
+                continue
+            text = "\n".join(
+                t for p in range(ch["start_page"], ch["end_page"] + 1) for t in by_page.get(p, [])
+            ).strip()
+            if len(text) >= 200:  # substantial text only — never clobber OCR with emptiness
+                db.set_chapter_source_text(sb, book_id, ch["num"], text[:60000])
+                persisted += 1
+        if persisted:
+            logger.info("book %s: source_text persisted for %d/%d chapters", book_id, persisted, len(chapters))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("chapter source_text persistence skipped for %s: %s", book_id, exc)
+
     # Auto-detect grade + subject + a clean title/author from the (often filename-derived)
     # title and chapter list (best-effort; never block indexing). Identified for the teacher.
     grade = subject = None
