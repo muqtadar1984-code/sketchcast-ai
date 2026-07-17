@@ -202,6 +202,8 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         # book fails loud (and is remembered, so it fails fast next time).
         from agent1_ingestion.chapter_check import verify_chapter_content
 
+        relocated_now = False
+
         def _sample_text() -> str:
             return " ".join(
                 (s.get("content") or "") + " "
@@ -224,6 +226,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             except Exception as exc:  # noqa: BLE001 — relocation is best-effort
                 logger.warning("relocation failed for %s ch%s: %s", book_id, chapter_num, exc)
             if result.get("status") == "ok":
+                relocated_now = True  # pages just moved — any cached analysis is stale
                 chapter["start_page"] = result["start_page"]
                 chapter["end_page"] = result["end_page"]
                 chapter["sections"] = [{
@@ -252,10 +255,19 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 raise RuntimeError(_chapter_check_error(chapter_title, actual))
         db.set_progress(sb, job_id, 20)
 
-        # Agent 2 — analysis (shared by every kind)
-        analysis = run_full_analysis(
-            book_id=book_id, chapter_content=chapter, level=DEFAULT_LEVEL, client=client,
-        ).model_dump()
+        # Agent 2 — analysis (shared by every kind). The FULL analysis is
+        # persisted per (book, chapter) in chapter_grounding.concepts, so the
+        # 2nd..Nth artifact of the same chapter REUSES it instead of paying the
+        # analysis call(s) again — the single biggest per-job cost (a full-kit
+        # chapter previously re-analysed 6 times). Reuse is refused for v1
+        # (pre-chunking) rows and immediately after a relocation in THIS job.
+        analysis = None if relocated_now else db.get_chapter_analysis(sb, book_id, chapter_num)
+        if analysis is not None:
+            logger.info("generation %s: reusing cached analysis for %s ch%s", generation_id, book_id, chapter_num)
+        else:
+            analysis = run_full_analysis(
+                book_id=book_id, chapter_content=chapter, level=DEFAULT_LEVEL, client=client,
+            ).model_dump()
         db.set_progress(sb, job_id, 45)
 
         # Persist chapter grounding for the AI Tutor — the concept analysis now

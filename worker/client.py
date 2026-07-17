@@ -299,6 +299,39 @@ def get_chapter_source_text(sb: Client, book_id: str, chapter_num: int) -> Optio
         return None
 
 
+def get_chapter_analysis(sb: Client, book_id: str, chapter_num: int) -> Optional[dict]:
+    """Return the chapter's cached FULL Agent-2 analysis (set_chapter_grounding
+    persists the whole MasterAnalysis dump into chapter_grounding.concepts), or
+    None. Reused by later artifact jobs of the SAME chapter so the analysis LLM
+    call — the single biggest per-job cost — is paid once per chapter, not once
+    per artifact. Only v2 (chunked, full-coverage) analyses with real content
+    qualify: a v1 row predates the truncation fix and must be re-analysed."""
+    try:
+        res = (
+            sb.table("chapter_grounding")
+            .select("concepts")
+            .eq("book_id", book_id)
+            .eq("chapter_num", int(chapter_num))
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        a = rows[0].get("concepts") if rows else None
+        if (
+            isinstance(a, dict)
+            and a.get("analyzer_version") == 2
+            and (a.get("concepts") or {}).get("concepts")
+            and (a.get("episodes") or {}).get("episodes")
+        ):
+            return a
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning(
+            "chapter analysis lookup failed for %s ch%s: %s", book_id, chapter_num, exc
+        )
+        return None
+
+
 def set_chapter_source_text(sb: Client, book_id: str, chapter_num: int, text: str) -> None:
     """Cache a chapter's transcribed source text (upsert keyed book_id+chapter_num).
     Best-effort: never fails the generation, and does not disturb the concepts/
@@ -320,12 +353,14 @@ def set_chapter_source_text(sb: Client, book_id: str, chapter_num: int, text: st
 
 
 def clear_chapter_source_text(sb: Client, book_id: str, chapter_num: int) -> None:
-    """Null a chapter's cached OCR — called when its pages MOVE (a relocation), so
-    the next generation re-transcribes the new pages instead of reusing OCR of the
-    old ones. Best-effort."""
+    """Null a chapter's cached OCR AND its cached analysis — called when its
+    pages MOVE (relocation / re-index drift), so the next generation
+    re-transcribes and re-analyses the new pages instead of reusing content of
+    the old ones. (The analysis cache lives in `concepts`; script_text is left
+    alone — an existing lesson's narration is still that lesson's.) Best-effort."""
     try:
         sb.table("chapter_grounding").update(
-            {"source_text": None, "updated_at": datetime.now(timezone.utc).isoformat()}
+            {"source_text": None, "concepts": None, "updated_at": datetime.now(timezone.utc).isoformat()}
         ).eq("book_id", book_id).eq("chapter_num", int(chapter_num)).execute()
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("worker").warning(

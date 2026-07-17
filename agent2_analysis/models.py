@@ -135,6 +135,10 @@ class MasterAnalysis(BaseModel):
     chapter_title: str
     difficulty_level_requested: str = "middle_school"
     analyzed_at: str = ""
+    # 2 = the chunked full-coverage analyzer (multi-part episodes). Persisted
+    # with the analysis so the cache-reuse path can refuse v1 rows — reusing a
+    # pre-chunking analysis would resurrect the 15k-char truncation bug.
+    analyzer_version: int = 1
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     concepts: ConceptResult = Field(default_factory=ConceptResult)
     difficulty_assessments: list[DifficultyAssessment] = Field(default_factory=list)

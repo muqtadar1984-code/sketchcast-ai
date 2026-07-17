@@ -262,6 +262,7 @@ def run_full_analysis(
         chapter_title=chapter_title,
         difficulty_level_requested=level,
         analyzed_at=datetime.now(timezone.utc).isoformat(),
+        analyzer_version=2,  # chunked full-coverage analyzer — cache-reusable
         token_usage=token_usage,
         concepts=concept_result,
         difficulty_assessments=difficulty_assessments,
