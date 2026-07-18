@@ -144,6 +144,17 @@ def set_progress(sb: Client, job_id: str, progress: int) -> None:
     sb.table("jobs").update({"progress": progress}).eq("id", job_id).execute()
 
 
+def set_stage(sb: Client, job_id: str, stage: Optional[dict]) -> None:
+    """Persist the human-facing stage of a multi-part job (jobs.stage, 0053):
+    {"phase": "analysis"|"video", "part": k, "total": n, "part_pct": p}.
+    Best-effort: a deployment whose migration hasn't added the column must not
+    fail the job — stage is presentation, progress is the source of truth."""
+    try:
+        sb.table("jobs").update({"stage": stage}).eq("id", job_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").debug("set_stage skipped: %s", exc)
+
+
 def set_job_usage(sb: Client, job_id: str, usage: Optional[dict]) -> None:
     """Persist a job's Claude token/cost total (jobs.usage), MERGING additively
     with any existing value — a support-agent run reuses its job id for an

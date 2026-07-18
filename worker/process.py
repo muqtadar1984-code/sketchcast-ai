@@ -120,6 +120,8 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     # died mid-run, drop any artifact rows it already produced so the re-run can't
     # leave duplicates (deterministic storage paths are overwritten on re-upload).
     db.clear_artifacts(sb, generation_id)
+    # A requeued/re-run job must not show the dead run's part stage.
+    db.set_stage(sb, job_id, None)
 
     with tempfile.TemporaryDirectory() as tmp:
         pdf_path = db.download_book(sb, book["storage_path"], Path(tmp) / "book.pdf")
@@ -266,12 +268,21 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             logger.info("generation %s: reusing cached analysis for %s ch%s", generation_id, book_id, chapter_num)
         else:
             # Fresh multi-part analysis is the LONGEST phase — advance 20→43
-            # per chunk so a 4-part chapter never looks "stuck at 20%".
+            # per chunk (and label the stage) so a 4-part chapter never looks
+            # "stuck at 20%".
+            def _analysis_tick(part: int, total: int) -> None:
+                db.set_progress(sb, job_id, 20 + round(23 * part / total))
+                if total > 1:
+                    db.set_stage(sb, job_id, {"phase": "analysis", "part": part, "total": total, "part_pct": 100})
+
             analysis = run_full_analysis(
                 book_id=book_id, chapter_content=chapter, level=DEFAULT_LEVEL, client=client,
-                on_progress=lambda f: db.set_progress(sb, job_id, 20 + round(23 * f)),
+                on_progress=_analysis_tick,
             ).model_dump()
         db.set_progress(sb, job_id, 45)
+        # Analysis stage is over for every kind; the presentation loop writes
+        # its own per-part stages, doc kinds stay stage-less.
+        db.set_stage(sb, job_id, None)
 
         # Persist chapter grounding for the AI Tutor — the concept analysis now
         # (covers every kind); the narrated lesson's script is added below for
@@ -283,8 +294,17 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         base = f"{owner_id}/{generation_id}"
 
         if kind == "presentation":
-            # Narrated deck + video.
-            from agent3_scripts.script_generator import generate_chapter_scripts_from_analysis
+            # Narrated deck + video — PART-MAJOR (2026-07-18): each part runs
+            # script → slides → video → upload END TO END before the next part
+            # starts. Part 1 is finished (and its artifacts uploaded) while
+            # Part 2's script is still being written, and the job's stage
+            # reads "part 2/4 · 35%" instead of one opaque global bar.
+            # Sequential on purpose — the per-chapter slide/video segment dirs
+            # are shared, so parts must not interleave. Part 1 keeps the legacy
+            # lesson.mp4 / deck.pptx names; later parts get _part{k} suffixes
+            # (the app sorts video artifacts by part number → Part 1 first).
+            from datetime import datetime
+            from agent3_scripts.script_generator import generate_episode_script, save_script
             from agent5_slides.slide_generator import generate_episode_slides
             from agent6_animation.video_composer import compose_episode_videos
             from agent8_render.renderer import render_final_video
@@ -294,44 +314,53 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             tts_voice = params.get("tts_voice")  # voice-registry id; None → free Edge default
             allow_premium = _elevenlabs_enabled()
 
-            scripts = generate_chapter_scripts_from_analysis(
-                book_id=book_id, chapter_num=chapter_num, analysis_dict=analysis, client=client,
-                narration_style=narration_style,
-                # One slow model call per part: advance 45→58 as each lands.
-                on_progress=lambda f: db.set_progress(sb, job_id, 45 + round(13 * f)),
-            ).model_dump()
-            ep_title = (scripts.get("episodes") or [{}])[0].get("episode_title") or chapter_title
-            db.set_progress(sb, job_id, 60)
-
-            # Enrich the tutor grounding with the lesson's own narration text —
-            # the best source for answers that "sound like the lesson".
-            _script_text = " ".join(
-                (seg.get("text") or "")
-                for ep in (scripts.get("episodes") or [])
-                for seg in (ep.get("segments") or [])
-            ).strip()
-            db.set_chapter_grounding(sb, book_id, chapter_num, chapter_title, analysis, _script_text)
-
-            # Warm the AI Tutor cache: pre-compute the questions a student is most
-            # likely to ask so the first "Ask Coach" is instant + $0. Gated
-            # (TUTOR_WARM_CACHE) and best-effort — never affects this lesson.
-            from worker.tutor_warm import warm_tutor_cache
-            warm_tutor_cache(sb, client, book_id, chapter_num, chapter_title, analysis, _script_text)
-
-            # (No AI-image step in the freemium path — slides are rendered natively.)
-            # Long chapters arrive as SEVERAL episodes (Part 1..N, each a ~15-min
-            # lesson covering its slice of the chapter). Render and upload each
-            # part SEQUENTIALLY — the per-chapter slide/video segment dirs are
-            # shared, so parts must not interleave. Part 1 keeps the legacy
-            # lesson.mp4 / deck.pptx names; later parts get _part{k} suffixes
-            # (the app sorts video artifacts by path → Part 1 first).
-            episodes_all = scripts.get("episodes") or []
-            n_parts = max(len(episodes_all), 1)
+            episodes_plan = (analysis.get("episodes") or {}).get("episodes") or []
+            n_parts = max(len(episodes_plan), 1)
             voice_report: dict = {}
             uploaded_videos = 0
+            script_dicts: list[dict] = []
+            ep_title = chapter_title
 
-            for part_idx, ep in enumerate(episodes_all, start=1):
-                part_scripts = {**scripts, "episodes": [ep]}
+            for part_idx, episode in enumerate(episodes_plan, start=1):
+                # This part's slice of the overall bar: 45 → 96 split evenly.
+                span = 51.0 / n_parts
+                base_p = 45 + span * (part_idx - 1)
+                db.set_stage(sb, job_id, {"phase": "video", "part": part_idx, "total": n_parts, "part_pct": 5})
+                db.set_progress(sb, job_id, round(base_p))
+
+                # Same part framing the chapter-level generator builds: recap
+                # what earlier parts covered, preview what the next part will.
+                part_info = None
+                if n_parts > 1:
+                    part_info = {
+                        "part": part_idx,
+                        "total": n_parts,
+                        "prev_sections": [
+                            s for e in episodes_plan[: part_idx - 1] for s in e.get("sections_covered", [])
+                        ],
+                        "next_sections": episodes_plan[part_idx].get("sections_covered", [])
+                        if part_idx < n_parts
+                        else [],
+                    }
+                script = generate_episode_script(
+                    episode, analysis, chapter_num, client, narration_style, part_info=part_info,
+                )
+                save_script(script)
+                script_dict = script.model_dump()
+                script_dicts.append(script_dict)
+                if part_idx == 1:
+                    ep_title = script_dict.get("episode_title") or chapter_title
+                db.set_stage(sb, job_id, {"phase": "video", "part": part_idx, "total": n_parts, "part_pct": 35})
+                db.set_progress(sb, job_id, round(base_p + 0.35 * span))
+
+                part_scripts = {
+                    "book_id": book_id,
+                    "chapter_num": chapter_num,
+                    "chapter_title": chapter_title,
+                    "total_episodes": 1,
+                    "generated_at": datetime.now().isoformat(),
+                    "episodes": [script_dict],
+                }
                 slides = generate_episode_slides(
                     script_data=part_scripts, branding=branding,
                 ).model_dump()
@@ -353,11 +382,27 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     db.upload_artifact(sb, final_video, f"{base}/lesson{suffix}.mp4")
                     db.add_artifact_row(sb, generation_id, "video_mp4", f"{base}/lesson{suffix}.mp4")
                     uploaded_videos += 1
-                # 60 → 96 spread across the parts.
-                db.set_progress(sb, job_id, 60 + round(36 * part_idx / n_parts))
+                db.set_stage(sb, job_id, {"phase": "video", "part": part_idx, "total": n_parts, "part_pct": 100})
+                db.set_progress(sb, job_id, round(base_p + span))
 
             if uploaded_videos == 0:
                 raise RuntimeError("no video parts were produced")
+            db.set_stage(sb, job_id, None)  # stage is per-part; clear it once all parts are done
+
+            # Enrich the tutor grounding with the lesson's own narration text —
+            # the best source for answers that "sound like the lesson".
+            _script_text = " ".join(
+                (seg.get("text") or "")
+                for ep in script_dicts
+                for seg in (ep.get("segments") or [])
+            ).strip()
+            db.set_chapter_grounding(sb, book_id, chapter_num, chapter_title, analysis, _script_text)
+
+            # Warm the AI Tutor cache: pre-compute the questions a student is most
+            # likely to ask so the first "Ask Coach" is instant + $0. Gated
+            # (TUTOR_WARM_CACHE) and best-effort — never affects this lesson.
+            from worker.tutor_warm import warm_tutor_cache
+            warm_tutor_cache(sb, client, book_id, chapter_num, chapter_title, analysis, _script_text)
 
             # Record the voice that ACTUALLY rendered so a silent premium→free
             # downgrade (ElevenLabs not enabled/keyed on the worker, spend cap, or
