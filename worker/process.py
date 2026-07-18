@@ -265,8 +265,11 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         if analysis is not None:
             logger.info("generation %s: reusing cached analysis for %s ch%s", generation_id, book_id, chapter_num)
         else:
+            # Fresh multi-part analysis is the LONGEST phase — advance 20→43
+            # per chunk so a 4-part chapter never looks "stuck at 20%".
             analysis = run_full_analysis(
                 book_id=book_id, chapter_content=chapter, level=DEFAULT_LEVEL, client=client,
+                on_progress=lambda f: db.set_progress(sb, job_id, 20 + round(23 * f)),
             ).model_dump()
         db.set_progress(sb, job_id, 45)
 
@@ -294,6 +297,8 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             scripts = generate_chapter_scripts_from_analysis(
                 book_id=book_id, chapter_num=chapter_num, analysis_dict=analysis, client=client,
                 narration_style=narration_style,
+                # One slow model call per part: advance 45→58 as each lands.
+                on_progress=lambda f: db.set_progress(sb, job_id, 45 + round(13 * f)),
             ).model_dump()
             ep_title = (scripts.get("episodes") or [{}])[0].get("episode_title") or chapter_title
             db.set_progress(sb, job_id, 60)

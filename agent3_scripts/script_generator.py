@@ -345,6 +345,7 @@ def generate_chapter_scripts_from_analysis(
     analysis_dict: dict,
     client,
     narration_style: str = "socratic",
+    on_progress=None,
 ) -> ChapterScripts:
     """Generate scripts for all episodes using an already-loaded analysis dict.
 
@@ -370,6 +371,13 @@ def generate_chapter_scripts_from_analysis(
         )
         episode_scripts.append(script)
         save_script(script)
+        # Each episode script is a slow model call — report per part so the
+        # progress bar keeps moving on multi-part chapters. Best-effort.
+        if on_progress is not None:
+            try:
+                on_progress(idx / total)
+            except Exception:  # noqa: BLE001
+                pass
 
     return ChapterScripts(
         book_id=book_id,

@@ -43,6 +43,7 @@ def run_full_analysis(
     chapter_content: dict,
     level: str = "middle_school",
     client: ClaudeClient | None = None,
+    on_progress=None,
 ) -> MasterAnalysis:
     """
     Run the complete analysis pipeline on a single chapter.
@@ -172,6 +173,15 @@ def run_full_analysis(
                 concepts_all.append(c)
         dependencies_all.extend(data.get("dependencies", []) or [])
         prerequisites_all.extend(data.get("prerequisites", []) or [])
+
+        # A multi-part chapter spends MINUTES per chunk here — report each one
+        # so the job's progress bar moves instead of sitting frozen ("stuck at
+        # 20%" report, 2026-07-18). Best-effort: progress must never kill a job.
+        if on_progress is not None:
+            try:
+                on_progress(part_idx / total_parts)
+            except Exception:  # noqa: BLE001
+                pass
 
         raw_diff = data.get("difficulty_assessments", [])
         if isinstance(raw_diff, dict):
