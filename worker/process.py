@@ -309,6 +309,17 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 "images": chapter.get("images", []),
             }
 
+        # ── Lesson language (2026-07-18) ─────────────────────────────────────
+        # params.language (teacher's explicit choice) → books.language (detected
+        # at indexing) → English. One value drives the prompts (analysis,
+        # scripts, documents), the layout direction (Arabic = RTL) and the
+        # default narration voice.
+        from shared.languages import get_language
+
+        _lang_obj = get_language((gen.get("params") or {}).get("language") or book.get("language"))
+        lesson_lang = _lang_obj.code
+        lesson_dir = _lang_obj.direction
+
         # Agent 2 — analysis (shared by every kind). The FULL analysis is
         # persisted per (book, chapter) in chapter_grounding.concepts, so the
         # 2nd..Nth artifact of the same chapter REUSES it instead of paying the
@@ -317,6 +328,14 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         # (pre-chunking) rows, immediately after a relocation in THIS job, and
         # for single-part jobs (the cache describes the whole chapter).
         analysis = None if (relocated_now or part_ref is not None) else db.get_chapter_analysis(sb, book_id, chapter_num)
+        if analysis is not None and (analysis.get("language") or "en") != lesson_lang:
+            # The cache is language-stamped: a Malay analysis must not ground an
+            # English lesson (or vice versa) — regenerate in the right language.
+            logger.info(
+                "generation %s: cached analysis is %s, lesson is %s — re-analysing",
+                generation_id, analysis.get("language") or "en", lesson_lang,
+            )
+            analysis = None
         if analysis is not None:
             logger.info("generation %s: reusing cached analysis for %s ch%s", generation_id, book_id, chapter_num)
         else:
@@ -333,7 +352,9 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 on_progress=_analysis_tick,
                 # Part jobs analyze THEIR chunk verbatim — never re-chunked.
                 chunks_override=[part_chunk] if part_ref is not None else None,
+                language=lesson_lang,
             ).model_dump()
+            analysis["language"] = lesson_lang  # stamps the cache (see reuse guard above)
         db.set_progress(sb, job_id, 45)
         # Analysis stage is over for every kind; the presentation loop writes
         # its own per-part stages, doc kinds stay stage-less.
@@ -370,6 +391,25 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             params = gen.get("params") or {}
             narration_style = params.get("narration_style") or "socratic"
             tts_voice = params.get("tts_voice")  # voice-registry id; None → free Edge default
+            if lesson_lang != "en":
+                from shared.tts.registry import default_voice_id_for, get_voice
+
+                _v = get_voice(tts_voice)
+                if not tts_voice:
+                    # No explicit pick: the matching free Edge voice — an
+                    # English voice reading Malay/Arabic is wrong.
+                    tts_voice = default_voice_id_for(lesson_lang)
+                elif (
+                    _v is not None
+                    and _v.provider == "edge"
+                    and _v.lang != lesson_lang
+                    and not (gen.get("params") or {}).get("language")
+                ):
+                    # Stale pre-language params (e.g. edge-aria pinned before
+                    # the book's language was detected) being REGENERATED under
+                    # the book-language fallback: remap to the matching voice.
+                    # An EXPLICIT params.language choice always keeps its voice.
+                    tts_voice = default_voice_id_for(lesson_lang)
             allow_premium = _elevenlabs_enabled()
 
             episodes_plan = (analysis.get("episodes") or {}).get("episodes") or []
@@ -404,6 +444,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     }
                 script = generate_episode_script(
                     episode, analysis, chapter_num, client, narration_style, part_info=part_info,
+                    language=lesson_lang,
                 )
                 save_script(script)
                 script_dict = script.model_dump()
@@ -422,12 +463,13 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     "episodes": [script_dict],
                 }
                 slides = generate_episode_slides(
-                    script_data=part_scripts, branding=branding,
+                    script_data=part_scripts, branding=branding, direction=lesson_dir,
                 ).model_dump()
 
                 video = compose_episode_videos(
                     script_data=part_scripts, slide_manifest=slides, branding=branding,
                     tts_voice=tts_voice, allow_premium=allow_premium, voice_report=voice_report,
+                    direction=lesson_dir,
                 ).model_dump()
 
                 final = render_final_video(video_manifest=video).model_dump()
@@ -502,6 +544,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 kind=kind, book=book, chapter=chapter, analysis=analysis,
                 client=gen_client, params=gen.get("params") or {}, out_dir=Path(tmp),
                 template=branding.get("docx_template"),
+                language=lesson_lang,
             )
             for _k, _v in gen_client.session_usage.items():
                 client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
@@ -749,6 +792,7 @@ def index_book(sb: Client, job: dict) -> None:
                 if t and getattr(it, "item_type", "") != "picture":
                     by_page.setdefault(int(getattr(it, "page_num", 0)), []).append(t)
             persisted = 0
+            lang_sample: list[str] = []
             for ch in chapters:
                 if ch["end_page"] < ch["start_page"]:
                     continue
@@ -758,8 +802,19 @@ def index_book(sb: Client, job: dict) -> None:
                 if len(text) >= 200:  # substantial text only — never clobber OCR with emptiness
                     db.set_chapter_source_text(sb, book_id, ch["num"], text[:60000])
                     persisted += 1
+                    if len(lang_sample) < 3:
+                        lang_sample.append(text[:8000])
             if persisted:
                 logger.info("book %s: source_text persisted for %d/%d chapters", book_id, persisted, len(chapters))
+            # Language detection ($0, deterministic): drives the generation
+            # default, the picker preselection and the book's language chip.
+            if lang_sample:
+                from shared.languages import detect_language
+
+                detected = detect_language("\n".join(lang_sample))
+                if detected:
+                    db.set_book_language(sb, book_id, detected)
+                    logger.info("book %s: language detected as %s", book_id, detected)
     except Exception as exc:  # noqa: BLE001
         logger.warning("chapter source_text persistence skipped for %s: %s", book_id, exc)
 

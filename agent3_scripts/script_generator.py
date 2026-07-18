@@ -198,6 +198,7 @@ def generate_episode_script(
     client,
     narration_style: str = "socratic",
     part_info: dict | None = None,
+    language: str = "en",
 ) -> EpisodeScript:
     """Generate a complete episode script via Claude in the chosen narration style.
 
@@ -230,6 +231,9 @@ def generate_episode_script(
         if k == n:
             part_lines.append("This is the FINAL part — close with the full chapter synthesis.")
         episode_context += "\n".join(part_lines)
+    from shared.languages import prompt_directive
+
+    episode_context += prompt_directive(language)
     # Defense in depth: never ask for more than a 12-minute script — an
     # oversized target makes Claude's reply overrun max_tokens, truncating the
     # JSON and silently yielding zero segments.

@@ -24,6 +24,7 @@ class TTSVoice:
     tier: str              # "free" | "premium"
     ref: str               # provider-specific id: Edge voice name, or ElevenLabs voice_id
     style_tags: tuple[str, ...] = field(default_factory=tuple)
+    lang: str = "en"       # ISO 639-1 — pairs the voice with a lesson language
 
 
 # ── The registry ────────────────────────────────────────────────────────────
@@ -37,7 +38,19 @@ VOICES: list[TTSVoice] = [
     TTSVoice("edge-guy",    "Guy — warm (free)",             "edge", "free", "en-US-GuyNeural",    ("warm", "male")),
     TTSVoice("edge-neerja", "Neerja — Indian English (free)","edge", "free", "en-IN-NeerjaNeural", ("indian", "warm")),
     TTSVoice("edge-sonia",  "Sonia — British (free)",        "edge", "free", "en-GB-SoniaNeural",  ("british", "calm")),
-    # Premium — ElevenLabs (key + enabled flag required). Add more by appending.
+    # Free — per-language Edge voices (auto-picked when a lesson's language
+    # matches; see shared/languages.py). Female default + one male option each.
+    TTSVoice("edge-yasmin",    "Yasmin — Bahasa Melayu (free)",   "edge", "free", "ms-MY-YasminNeural",    ("warm",), "ms"),
+    TTSVoice("edge-osman",     "Osman — Bahasa Melayu (free)",    "edge", "free", "ms-MY-OsmanNeural",     ("male",), "ms"),
+    TTSVoice("edge-zariyah",   "Zariyah — العربية (free)",         "edge", "free", "ar-SA-ZariyahNeural",   ("warm",), "ar"),
+    TTSVoice("edge-hamed",     "Hamed — العربية (free)",           "edge", "free", "ar-SA-HamedNeural",     ("male",), "ar"),
+    TTSVoice("edge-denise",    "Denise — Français (free)",        "edge", "free", "fr-FR-DeniseNeural",    ("warm",), "fr"),
+    TTSVoice("edge-henri",     "Henri — Français (free)",         "edge", "free", "fr-FR-HenriNeural",     ("male",), "fr"),
+    TTSVoice("edge-elvira",    "Elvira — Español (free)",         "edge", "free", "es-ES-ElviraNeural",    ("warm",), "es"),
+    TTSVoice("edge-alvaro",    "Álvaro — Español (free)",         "edge", "free", "es-ES-AlvaroNeural",    ("male",), "es"),
+    TTSVoice("edge-francisca", "Francisca — Português (free)",    "edge", "free", "pt-BR-FranciscaNeural", ("warm",), "pt"),
+    TTSVoice("edge-antonio",   "Antônio — Português (free)",      "edge", "free", "pt-BR-AntonioNeural",   ("male",), "pt"),
+    # Premium — ElevenLabs (key + enabled flag required; voices are multilingual).
     TTSVoice("el-rachel",   "Rachel — natural (premium)",    "elevenlabs", "premium", _EL_DEFAULT_REF,       ("warm", "natural")),
     TTSVoice("el-adam",     "Adam — deep (premium)",         "elevenlabs", "premium", "pNInz6obpgDQGcFmaJgB", ("deep", "male")),
 ]
@@ -45,6 +58,14 @@ VOICES: list[TTSVoice] = [
 DEFAULT_VOICE_ID = "edge-aria"  # the free default — reproduces today's behaviour
 
 _BY_ID = {v.voice_id: v for v in VOICES}
+
+
+def default_voice_id_for(lang: str | None) -> str:
+    """The free default voice for a lesson language (English → global default)."""
+    for v in VOICES:
+        if v.tier == "free" and v.lang == (lang or "en"):
+            return v.voice_id
+    return DEFAULT_VOICE_ID
 
 
 def get_voice(voice_id: str | None) -> TTSVoice | None:

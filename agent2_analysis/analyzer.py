@@ -112,6 +112,7 @@ def run_full_analysis(
     client: ClaudeClient | None = None,
     on_progress=None,
     chunks_override: list[dict] | None = None,
+    language: str = "en",
 ) -> MasterAnalysis:
     """
     Run the complete analysis pipeline on a single chapter.
@@ -152,6 +153,10 @@ def run_full_analysis(
     episodes: list[Episode] = []
     usage_chapter = {"total_tokens": 0, "estimated_cost_usd": 0}
 
+    from shared.languages import prompt_directive
+
+    lang_directive = prompt_directive(language)
+
     for part_idx, chunk in enumerate(chunks, start=1):
         part_title = chapter_title if total_parts == 1 else f"{chapter_title} (Part {part_idx} of {total_parts})"
         prompt = FULL_CHAPTER_ANALYSIS_PROMPT.format(
@@ -159,7 +164,7 @@ def run_full_analysis(
             level=level,
             word_count=chunk["words"],
             content=chunk["text"],
-        )
+        ) + lang_directive
 
         result = client.analyze(prompt, max_tokens=16000)
         data = result["data"]

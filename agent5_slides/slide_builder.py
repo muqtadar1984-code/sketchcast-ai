@@ -15,6 +15,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from shared.text_shaping import display_text
 from .theme import CANVAS as _BG, GRAPHITE as _MUTED, INK as _INK, LINE as _RULE, TEAL as _GREEN, WHITE as _WHITE
 
 logger = logging.getLogger(__name__)
@@ -34,13 +35,18 @@ def _font(bold: bool, size: int) -> ImageFont.FreeTypeFont:
 
 
 def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_w: int) -> list[str]:
-    """Greedy word-wrap to a pixel width."""
+    """Greedy word-wrap to a pixel width.
+
+    Wraps on LOGICAL words but measures the SHAPED string — Arabic joins
+    letters (narrower than isolated forms), so measuring raw codepoints would
+    wrap too early. Returned lines are logical; callers shape at draw time.
+    """
     words = text.split()
     lines: list[str] = []
     cur = ""
     for w in words:
         trial = f"{cur} {w}".strip()
-        if draw.textlength(trial, font=font) <= max_w:
+        if draw.textlength(display_text(trial), font=font) <= max_w:
             cur = trial
         else:
             if cur:
@@ -67,6 +73,7 @@ def compose_slide(
     visual: dict | None = None,
     number: int | None = None,
     concept: str | None = None,
+    direction: str = "ltr",
 ) -> tuple[Image.Image, list[list[_Box]], list[_Box]]:
     """Render the canonical 1280x720 Live Ink lesson slide + its object layout.
 
@@ -86,20 +93,24 @@ def compose_slide(
     a keyword/icon name for the right-column illustration.
     """
     acc = accent or _GREEN  # teal
+    rtl = direction == "rtl"
     canvas = Image.new("RGB", (_WIDTH, _HEIGHT), _BG)
     draw = ImageDraw.Draw(canvas)
     M = _MARGIN_X
     anim: list[list[_Box]] = []
     static: list[_Box] = []
 
-    # Optional school logo, top-right (present from the first frame).
+    # Shape once at draw time (Arabic joins + bidi); no-op for other scripts.
+    disp = lambda s: display_text(s, rtl_base=rtl)  # noqa: E731
+
+    # Optional school logo — top-right for LTR, top-LEFT mirrored for RTL.
     if logo_path:
         try:
             logo = Image.open(logo_path).convert("RGBA")
             lh = 52
             lw = max(1, int(logo.width * lh / max(1, logo.height)))
             logo = logo.resize((lw, lh))
-            lx, ly = _WIDTH - M - lw, 34
+            lx, ly = (M, 34) if rtl else (_WIDTH - M - lw, 34)
             canvas.paste(logo, (lx, ly), logo)
             static.append((lx, ly, lx + lw, ly + lh))
         except Exception:  # noqa: BLE001
@@ -107,29 +118,38 @@ def compose_slide(
 
     has_visual = bool(visual)
     show_illus = bool(concept) and not has_visual
-    content_right = 800 if show_illus else _WIDTH - M  # leave the right column for the illustration
+    # Illustration column: right for LTR, LEFT for RTL (whole layout mirrors).
+    content_right = 800 if (show_illus and not rtl) else _WIDTH - M
+    content_left = (M + 480) if (show_illus and rtl) else M
 
     # Number badge (teal circle) — the repeated motif and first reveal element.
-    title_x = M
+    title_x = content_left
+    title_right = content_right
     if number is not None:
         br = 27
-        bcx, bcy = M + br, 92
+        bcx, bcy = (_WIDTH - M - br, 92) if rtl else (M + br, 92)
         draw.ellipse([bcx - br, bcy - br, bcx + br, bcy + br], fill=acc)
         nf = _font(bold=True, size=22)
         ns = str(number)
         nw = draw.textlength(ns, font=nf)
         draw.text((bcx - nw / 2, bcy - 15), ns, fill=_WHITE, font=nf)
         anim.append([(bcx - br, bcy - br, bcx + br, bcy + br)])
-        title_x = bcx + br + 22
+        if rtl:
+            title_right = bcx - br - 22
+        else:
+            title_x = bcx + br + 22
 
-    # Title (ink), to the right of the badge — no under-title rule (AI-tell).
+    # Title (ink), beside the badge — right-anchored for RTL.
     head = (heading or context_title or "SketchCast AI").strip()[:90]
     hf = _font(bold=True, size=38)
     ty = 66
     hbox: list[_Box] = []
-    for ln in _wrap(draw, head, hf, content_right - title_x)[:2]:
-        draw.text((title_x, ty), ln, fill=_INK, font=hf)
-        hbox.append((title_x, ty, title_x + int(draw.textlength(ln, font=hf)), ty + 46))
+    for ln in _wrap(draw, head, hf, title_right - title_x)[:2]:
+        s = disp(ln)
+        lw_px = int(draw.textlength(s, font=hf))
+        lx = (title_right - lw_px) if rtl else title_x
+        draw.text((lx, ty), s, fill=_INK, font=hf)
+        hbox.append((lx, ty, lx + lw_px, ty + 46))
         ty += 50
     if hbox:
         anim.append(hbox)
@@ -139,7 +159,8 @@ def compose_slide(
         from .theme import draw_concept
 
         disc = 300
-        icx, icy = _WIDTH - M - disc // 2, 422
+        icx = (M + disc // 2) if rtl else (_WIDTH - M - disc // 2)
+        icy = 422
         static.append(draw_concept(canvas, icx, icy, disc, concept, accent=acc))
 
     y = max(ty + 30, 212)
@@ -150,7 +171,7 @@ def compose_slide(
     if has_visual:
         from .diagram_builder import caption_element, render_diagram
 
-        region = (M, y, _WIDTH - M, _HEIGHT - 70)
+        region = (content_left, y, content_right, _HEIGHT - 70)
         diagram_elems = render_diagram(draw, region, visual, accent=acc)
         if diagram_elems:
             anim.extend(diagram_elems)
@@ -160,9 +181,10 @@ def compose_slide(
 
     if not has_visual or not diagram_elems:
         pts = [p for p in (points or []) if p.strip()]
-        text_w = content_right - M
+        text_w = content_right - content_left
         if pts:
-            # Bullet points (chapter content) — teal dots + ink text.
+            # Bullet points (chapter content) — teal dots + ink text. RTL puts
+            # the dot on the RIGHT edge with text right-anchored beside it.
             size = 30
             while size >= 20:
                 bf = _font(bold=False, size=size)
@@ -175,11 +197,23 @@ def compose_slide(
             dot_r = 7
             for wlines in wrapped:
                 ebox: list[_Box] = []
-                draw.ellipse([(M, y + size // 2 - dot_r + 2), (M + 2 * dot_r, y + size // 2 + dot_r + 2)], fill=acc)
+                if rtl:
+                    dot_x0 = content_right - 2 * dot_r
+                    draw.ellipse([(dot_x0, y + size // 2 - dot_r + 2), (content_right, y + size // 2 + dot_r + 2)], fill=acc)
+                else:
+                    draw.ellipse([(content_left, y + size // 2 - dot_r + 2), (content_left + 2 * dot_r, y + size // 2 + dot_r + 2)], fill=acc)
                 for j, ln in enumerate(wlines):
-                    draw.text((M + 30, y), ln, fill=_INK, font=bf)
-                    x0 = M if j == 0 else M + 30  # first line includes the bullet dot
-                    ebox.append((x0, y, M + 30 + int(draw.textlength(ln, font=bf)), y + size))
+                    s = disp(ln)
+                    lw_px = int(draw.textlength(s, font=bf))
+                    if rtl:
+                        tx = content_right - 30 - lw_px
+                        x1 = content_right if j == 0 else content_right - 30
+                        ebox.append((tx, y, x1, y + size))
+                    else:
+                        tx = content_left + 30
+                        x0 = content_left if j == 0 else content_left + 30
+                        ebox.append((x0, y, tx + lw_px, y + size))
+                    draw.text((tx, y), s, fill=_INK, font=bf)
                     y += line_h
                 if ebox:
                     anim.append(ebox)
@@ -189,8 +223,11 @@ def compose_slide(
             bf = _font(bold=False, size=28)
             fb: list[_Box] = []
             for ln in _wrap(draw, " ".join((fallback_text or "").split()), bf, text_w)[:8]:
-                draw.text((M, y), ln, fill=_MUTED, font=bf)
-                fb.append((M, y, M + int(draw.textlength(ln, font=bf)), y + 28))
+                s = disp(ln)
+                lw_px = int(draw.textlength(s, font=bf))
+                lx = (content_right - lw_px) if rtl else content_left
+                draw.text((lx, y), s, fill=_MUTED, font=bf)
+                fb.append((lx, y, lx + lw_px, y + 28))
                 y += int(28 * 1.45)
             if fb:
                 anim.append(fb)
@@ -217,6 +254,7 @@ def export_slide_png(
     accent: tuple[int, int, int] | None = None,
     logo_path: str | None = None,
     visual: dict | None = None,
+    direction: str = "ltr",
 ) -> Path:
     """Render a 1280x720 lesson slide PNG: heading + chapter bullets or a diagram.
 
@@ -235,6 +273,7 @@ def export_slide_png(
         accent=accent,
         logo_path=logo_path,
         visual=visual,
+        direction=direction,
     )
     canvas.save(str(output_png_path), "PNG")
     logger.info("Slide PNG: %s (%d points)", output_png_path.name, len([p for p in (points or []) if p.strip()]))
@@ -260,6 +299,7 @@ def build_episode_deck(
     episode_title: str = "",
     template: str | None = None,
     accent: tuple[int, int, int] | None = None,
+    direction: str = "ltr",
 ) -> Path:
     """Build one editable PPTX deck: a designed lesson deck, narration in notes.
 
@@ -272,8 +312,34 @@ def build_episode_deck(
     output_pptx_path = Path(output_pptx_path)
     output_pptx_path.parent.mkdir(parents=True, exist_ok=True)
     if template:
-        return _build_branded_deck(slides, output_pptx_path, episode_title, template, accent)
-    return _build_designed_deck(slides, output_pptx_path, episode_title, accent)
+        path = _build_branded_deck(slides, output_pptx_path, episode_title, template, accent)
+    else:
+        path = _build_designed_deck(slides, output_pptx_path, episode_title, accent)
+    # RTL (Arabic) lessons: PowerPoint does the SHAPING itself — the deck only
+    # needs paragraph-level right alignment + the rtl flag. Applied as a post-
+    # pass over the saved file so both deck builders stay untouched.
+    if direction == "rtl":
+        try:
+            _mirror_deck_rtl(path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RTL deck pass failed for %s: %s", path, exc)
+    return path
+
+
+def _mirror_deck_rtl(pptx_path: Path) -> None:
+    from pptx import Presentation
+    from pptx.enum.text import PP_ALIGN
+
+    prs = Presentation(str(pptx_path))
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if not getattr(shape, "has_text_frame", False):
+                continue
+            for p in shape.text_frame.paragraphs:
+                p.alignment = PP_ALIGN.RIGHT
+                # python-pptx has no first-class rtl API — set the OOXML attr.
+                p._p.get_or_add_pPr().set("rtl", "1")  # noqa: SLF001
+    prs.save(str(pptx_path))
 
 
 def _build_branded_deck(slides, output_pptx_path, episode_title, template, accent):

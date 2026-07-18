@@ -144,6 +144,17 @@ def set_progress(sb: Client, job_id: str, progress: int) -> None:
     sb.table("jobs").update({"progress": progress}).eq("id", job_id).execute()
 
 
+def set_book_language(sb: Client, book_id: str, language: Optional[str]) -> None:
+    """Persist the detected book language (books.language, 0056). Best-effort:
+    a deployment whose migration hasn't added the column must not fail indexing."""
+    if not language:
+        return
+    try:
+        sb.table("books").update({"language": language}).eq("id", book_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").debug("set_book_language skipped: %s", exc)
+
+
 def set_stage(sb: Client, job_id: str, stage: Optional[dict]) -> None:
     """Persist the human-facing stage of a multi-part job (jobs.stage, 0053):
     {"phase": "analysis"|"video", "part": k, "total": n, "part_pct": p}.

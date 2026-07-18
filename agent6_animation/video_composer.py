@@ -85,6 +85,7 @@ def compose_episode_videos(
     tts_voice: Optional[str] = None,
     allow_premium: bool = False,
     voice_report: Optional[dict] = None,
+    direction: str = "ltr",
 ) -> VideoManifest:
     """Generate a narrated, object-animated MP4 per segment.
 
@@ -154,6 +155,7 @@ def compose_episode_videos(
             "visual": script_seg.get("slide_visual"),
             "number": i + 1,
             "concept": seg_concepts[i],
+            "direction": direction,  # RTL (Arabic) mirrors the animated slide too
         }
 
         audio_path: str | None = None

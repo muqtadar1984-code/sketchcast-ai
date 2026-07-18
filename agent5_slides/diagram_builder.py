@@ -20,6 +20,7 @@ import math
 
 from PIL import ImageDraw
 
+from shared.text_shaping import display_text as _dt
 from .slide_builder import _BG, _GREEN, _INK, _MUTED, _RULE, _font, _wrap
 
 _Box = tuple[int, int, int, int]
@@ -52,8 +53,9 @@ def _node(draw, cx: int, cy: int, w: int, h: int, label: str, *,
     f, lines, line_h, _ = _fit_label(draw, label, w - 24, h - 16, bold, list(sizes))
     ty = cy - (len(lines) * line_h) // 2
     for ln in lines:
-        tw = draw.textlength(ln, font=f)
-        draw.text((cx - tw / 2, ty), ln, fill=txt_fill, font=f)
+        s = _dt(ln)  # Arabic joins correctly; centred layout is direction-neutral
+        tw = draw.textlength(s, font=f)
+        draw.text((cx - tw / 2, ty), s, fill=txt_fill, font=f)
         ty += line_h
     return (x0, y0, x1, y1)
 
@@ -168,9 +170,10 @@ def _compare(draw, region: _Region, groups: list[dict], accent) -> list[list[_Bo
             draw.ellipse([(tx, y + 8), (tx + 8, y + 16)], fill=accent)
             line_box: list[_Box] = []
             for k, ln in enumerate(_wrap(draw, it, bf, head_w - 30)):
-                draw.text((tx + 22, y), ln, fill=_INK, font=bf)
+                s = _dt(ln)
+                draw.text((tx + 22, y), s, fill=_INK, font=bf)
                 x0 = tx if k == 0 else tx + 22
-                line_box.append((x0, y, tx + 22 + int(draw.textlength(ln, font=bf)), y + 24))
+                line_box.append((x0, y, tx + 22 + int(draw.textlength(s, font=bf)), y + 24))
                 y += 28
             if line_box:
                 elements.append(line_box)
@@ -329,9 +332,10 @@ def _icons(draw, region: _Region, items: list[dict], accent) -> list[list[_Box]]
         ly = icon_cy + icon_s // 2 + 14
         maxw = icon_s
         for ln in lines:
-            tw = draw.textlength(ln, font=lf)
+            s = _dt(ln)
+            tw = draw.textlength(s, font=lf)
             maxw = max(maxw, tw)
-            draw.text((cx - tw / 2, ly), ln, fill=_INK, font=lf)
+            draw.text((cx - tw / 2, ly), s, fill=_INK, font=lf)
             ly += 28
         half = int(max(icon_s, maxw) / 2) + 8
         elements.append([(cx - half, icon_cy - icon_s // 2 - 4, cx + half, ly)])
@@ -375,6 +379,7 @@ def caption_element(draw: ImageDraw.ImageDraw, region: _Region, caption: str) ->
     rx0, ry0, rx1, ry1 = region
     f = _font(False, 20)
     cap = _wrap(draw, cap, f, rx1 - rx0)[0] if cap else cap
+    cap = _dt(cap)
     tw = draw.textlength(cap, font=f)
     x = (rx0 + rx1) // 2 - tw / 2
     y = ry1 + 6

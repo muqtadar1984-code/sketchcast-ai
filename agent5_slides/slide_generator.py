@@ -53,6 +53,7 @@ def generate_episode_slides(
     image_manifest: Optional[dict] = None,  # ignored (no AI images in freemium)
     progress_callback: Optional[Callable] = None,
     branding: Optional[dict] = None,
+    direction: str = "ltr",
 ) -> SlideManifest:
     """Render one chapter-content slide PNG per segment + a combined editable deck.
 
@@ -103,6 +104,7 @@ def generate_episode_slides(
             accent=_accent,
             logo_path=_logo,
             visual=visual,
+            direction=direction,
         )
 
         # The deck is text-only, so a diagram-driven segment contributes its
@@ -123,7 +125,7 @@ def generate_episode_slides(
     try:
         deck_file = slide_dir / f"episode_{episode_num}_deck.pptx"
         build_episode_deck(deck_slides, deck_file, episode_title=episode_title,
-                           template=_pptx_template, accent=_accent)
+                           template=_pptx_template, accent=_accent, direction=direction)
         deck_path = str(deck_file)
         for s in manifest_segments:
             s.slide_path = deck_path
