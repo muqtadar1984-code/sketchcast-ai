@@ -257,13 +257,66 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 raise RuntimeError(_chapter_check_error(chapter_title, actual))
         db.set_progress(sb, job_id, 20)
 
+        # ── ON-DEMAND SINGLE PART (params.part = k, 2026-07-18) ──────────────
+        # The part map is computed at INDEX time with the same chunker, so a
+        # teacher can generate Part 3's lesson (or worksheet, or exam…) alone.
+        # The chapter is narrowed to that part's text BEFORE analysis: every
+        # artifact of a part job is grounded on the part, and the chapter-level
+        # analysis cache/grounding is neither read nor written (it describes
+        # the WHOLE chapter; a part must not impersonate it).
+        part_ref: int | None = None
+        part_total = 1
+        forced_part_info: dict | None = None
+        _raw_part = (gen.get("params") or {}).get("part")
+        if _raw_part is not None:
+            try:
+                part_ref = int(_raw_part)
+            except (TypeError, ValueError):
+                raise RuntimeError(f"Invalid part {_raw_part!r} — expected a part number.")
+        if part_ref is not None:
+            from agent2_analysis.analyzer import build_chapter_parts
+
+            all_parts = build_chapter_parts(chapter)
+            part_total = len(all_parts)
+            if part_ref < 1 or part_ref > part_total:
+                raise RuntimeError(
+                    f"'{chapter_title}' has {part_total} part(s) — part {part_ref} does not exist. "
+                    "If the book's chapters changed, re-index it to refresh the part map."
+                )
+            pk = all_parts[part_ref - 1]
+            if part_total > 1:
+                forced_part_info = {
+                    "part": part_ref,
+                    "total": part_total,
+                    "prev_sections": [t for p in all_parts[: part_ref - 1] for t in (p.get("section_titles") or [])],
+                    "next_sections": (all_parts[part_ref].get("section_titles") or []) if part_ref < part_total else [],
+                }
+            # Narrowed chapter for docgen + image analysis; the ANALYSIS gets
+            # the chunk verbatim via chunks_override (re-chunking an at-budget
+            # chunk would split off a junk tail episode — review-caught).
+            part_chunk = dict(pk)
+            chapter = {
+                "chapter_num": chapter.get("chapter_num"),
+                "title": chapter.get("title"),
+                "sections": [{
+                    "section_title": (pk.get("section_titles") or [chapter_title])[0],
+                    "content": pk.get("text", ""),
+                    "subsections": [],
+                }],
+                "key_boxes": [],
+                # The chapter's figures still feed the visual pipeline — a part
+                # lesson must not silently lose all image analysis.
+                "images": chapter.get("images", []),
+            }
+
         # Agent 2 — analysis (shared by every kind). The FULL analysis is
         # persisted per (book, chapter) in chapter_grounding.concepts, so the
         # 2nd..Nth artifact of the same chapter REUSES it instead of paying the
         # analysis call(s) again — the single biggest per-job cost (a full-kit
         # chapter previously re-analysed 6 times). Reuse is refused for v1
-        # (pre-chunking) rows and immediately after a relocation in THIS job.
-        analysis = None if relocated_now else db.get_chapter_analysis(sb, book_id, chapter_num)
+        # (pre-chunking) rows, immediately after a relocation in THIS job, and
+        # for single-part jobs (the cache describes the whole chapter).
+        analysis = None if (relocated_now or part_ref is not None) else db.get_chapter_analysis(sb, book_id, chapter_num)
         if analysis is not None:
             logger.info("generation %s: reusing cached analysis for %s ch%s", generation_id, book_id, chapter_num)
         else:
@@ -278,6 +331,8 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             analysis = run_full_analysis(
                 book_id=book_id, chapter_content=chapter, level=DEFAULT_LEVEL, client=client,
                 on_progress=_analysis_tick,
+                # Part jobs analyze THEIR chunk verbatim — never re-chunked.
+                chunks_override=[part_chunk] if part_ref is not None else None,
             ).model_dump()
         db.set_progress(sb, job_id, 45)
         # Analysis stage is over for every kind; the presentation loop writes
@@ -287,7 +342,10 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         # Persist chapter grounding for the AI Tutor — the concept analysis now
         # (covers every kind); the narrated lesson's script is added below for
         # the presentation kind. This is the tutor's curriculum fence. Best-effort.
-        db.set_chapter_grounding(sb, book_id, chapter_num, chapter_title, analysis)
+        # Part jobs skip it: their analysis covers ONE part, and writing it here
+        # would poison the whole-chapter cache and the tutor's fence.
+        if part_ref is None:
+            db.set_chapter_grounding(sb, book_id, chapter_num, chapter_title, analysis)
 
         # School branding (templates + derived accent/logo) — falls back to defaults.
         branding = load_branding(sb, owner_id, Path(tmp))
@@ -330,8 +388,10 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
 
                 # Same part framing the chapter-level generator builds: recap
                 # what earlier parts covered, preview what the next part will.
-                part_info = None
-                if n_parts > 1:
+                # A single-part job carries its framing in forced_part_info
+                # (its analysis holds ONE episode, but the chapter has more).
+                part_info = forced_part_info
+                if part_info is None and n_parts > 1:
                     part_info = {
                         "part": part_idx,
                         "total": n_parts,
@@ -390,19 +450,22 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             db.set_stage(sb, job_id, None)  # stage is per-part; clear it once all parts are done
 
             # Enrich the tutor grounding with the lesson's own narration text —
-            # the best source for answers that "sound like the lesson".
-            _script_text = " ".join(
-                (seg.get("text") or "")
-                for ep in script_dicts
-                for seg in (ep.get("segments") or [])
-            ).strip()
-            db.set_chapter_grounding(sb, book_id, chapter_num, chapter_title, analysis, _script_text)
+            # the best source for answers that "sound like the lesson". Skipped
+            # for single-part jobs: the whole-chapter grounding is not theirs
+            # to overwrite (the assistant still answers from source_text).
+            if part_ref is None:
+                _script_text = " ".join(
+                    (seg.get("text") or "")
+                    for ep in script_dicts
+                    for seg in (ep.get("segments") or [])
+                ).strip()
+                db.set_chapter_grounding(sb, book_id, chapter_num, chapter_title, analysis, _script_text)
 
-            # Warm the AI Tutor cache: pre-compute the questions a student is most
-            # likely to ask so the first "Ask Coach" is instant + $0. Gated
-            # (TUTOR_WARM_CACHE) and best-effort — never affects this lesson.
-            from worker.tutor_warm import warm_tutor_cache
-            warm_tutor_cache(sb, client, book_id, chapter_num, chapter_title, analysis, _script_text)
+                # Warm the AI Tutor cache: pre-compute the questions a student is
+                # most likely to ask so the first "Ask Coach" is instant + $0.
+                # Gated (TUTOR_WARM_CACHE) and best-effort.
+                from worker.tutor_warm import warm_tutor_cache
+                warm_tutor_cache(sb, client, book_id, chapter_num, chapter_title, analysis, _script_text)
 
             # Record the voice that ACTUALLY rendered so a silent premium→free
             # downgrade (ElevenLabs not enabled/keyed on the worker, spend cap, or
@@ -418,7 +481,9 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                         "set ELEVENLABS_ENABLED=true + ELEVENLABS_API_KEY on the worker.",
                         generation_id, tts_voice, voice_report.get("used"),
                     )
-            if n_parts > 1:
+            if part_ref is not None:
+                title = f"{book.get('title', 'Lesson')} · {chapter_title} · Part {part_ref} of {part_total}"
+            elif n_parts > 1:
                 db.merge_generation_params(sb, generation_id, {"video_parts": uploaded_videos})
                 title = f"{book.get('title', 'Lesson')} · {chapter_title} ({uploaded_videos} parts)"
             else:
@@ -463,6 +528,8 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 "worksheet": "Worksheet", "case_study": "Case study",
             }[kind]
             title = f"{book.get('title', 'Document')} · {chapter_title} · {label}"
+            if part_ref is not None:
+                title += f" · Part {part_ref}"
 
         else:
             raise RuntimeError(f"Unsupported generation kind: {kind}")
@@ -624,6 +691,35 @@ def index_book(sb: Client, job: dict) -> None:
         or int(old.get("start_page", -1)) != c["start_page"]
         or int(old.get("end_page", -1)) != c["end_page"]
     ]
+
+    # Part map: run the SAME chunker generation uses on the SAME structured
+    # chapters, so "Part 1..N" is known (and exact) the moment indexing ends —
+    # teachers generate any part on demand. Best-effort: a chapter without a
+    # part map just renders the classic whole-chapter controls.
+    try:
+        from agent2_analysis.analyzer import build_chapter_parts
+
+        s_by_num = {}
+        for c in structured.get("chapters", []):
+            try:
+                if c.get("chapter_num") is not None:
+                    s_by_num[int(c["chapter_num"])] = c
+            except (TypeError, ValueError):
+                continue
+        for ch in chapters:
+            # Per-chapter best-effort: one odd chapter must not cost the rest
+            # of the book its part map.
+            try:
+                sc = s_by_num.get(int(ch["num"]))
+                if sc:
+                    ch["parts"] = [
+                        {"titles": (p.get("section_titles") or [])[:3], "words": int(p.get("words", 0))}
+                        for p in build_chapter_parts(sc)
+                    ]
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("part map skipped for %s ch%s: %s", book_id, ch.get("num"), exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("part map skipped for %s: %s", book_id, exc)
 
     db.set_book_chapters(sb, book_id, chapters, "ready")
     # This fresh list is now authoritative, so drop any generation-time relocation

@@ -38,61 +38,39 @@ MAX_ANALYSIS_CHARS = 15000
 MAX_PART_WORDS = 1500
 
 
-def run_full_analysis(
-    book_id: str,
-    chapter_content: dict,
-    level: str = "middle_school",
-    client: ClaudeClient | None = None,
-    on_progress=None,
-) -> MasterAnalysis:
+def build_chapter_parts(chapter_content: dict) -> list[dict]:
+    """The SINGLE source of truth for how a chapter splits into parts.
+
+    Used by INDEXING (to show "Part 1..N" per chapter the moment a book is
+    uploaded) and by GENERATION (whole-chapter analysis, and on-demand
+    single-part jobs via params.part) — both run this same deterministic
+    chunker on the same structured chapter, so they always agree.
+
+    Units, not one string: long chapters are CHUNKED so every part of the
+    chapter reaches an analysis call. The old single `full_content[:15000]`
+    silently dropped everything past ~15k chars — the "video doesn't cover
+    the whole chapter" bug. A chunk closes when EITHER budget would overflow:
+    MAX_ANALYSIS_CHARS (the LLM context bound) or MAX_PART_WORDS (the
+    lesson-duration bound — a ~2,400-word chapter fits in 15k chars but NOT
+    in one 12-minute video). An oversized single unit is hard-split.
+
+    Returns [{"text", "section_titles", "words"}], always at least one.
     """
-    Run the complete analysis pipeline on a single chapter.
-
-    Steps:
-      1. ONE combined Claude call  -> concepts, difficulty, visuals
-      2. ONE batch Claude Vision call -> all images (skipped if none)
-      3. Build single episode mechanically (no API call)
-
-    Returns a MasterAnalysis with all results combined.
-    """
-    if client is None:
-        client = ClaudeClient(model=artifact_model())
-
-    analysis_id = str(uuid.uuid4())
-    chapter_num = chapter_content.get("chapter_num", 0)
-    chapter_title = chapter_content.get("title", "Untitled")
-
-    # ── Build chapter content UNITS (block text + owning section title) ──────
-    # Units, not one string: long chapters are CHUNKED so every part of the
-    # chapter reaches an analysis call. The old single `full_content[:15000]`
-    # silently dropped everything past ~15k chars — the "video doesn't cover
-    # the whole chapter" bug: concepts from the back of the chapter never
-    # existed, so no script could teach them.
     sections = chapter_content.get("sections", [])
     units: list[tuple[str | None, str]] = []  # (section_title, block_text)
-    word_count = 0
 
     for sec in sections:
         sec_title = sec.get("section_title", "")
         text = sec.get("content", "")
         units.append((sec_title, f"## {sec_title}\n\n{text}"))
-        word_count += len(text.split())
         for sub in sec.get("subsections", []):
             sub_text = sub.get("content", "")
             units.append((sec_title, f"### {sub.get('section_title', '')}\n\n{sub_text}"))
-            word_count += len(sub_text.split())
 
     for box in chapter_content.get("key_boxes", []):
         box_text = box.get("content", "")
         units.append((None, f"[{box.get('type', 'box').upper()}: {box.get('title', '')}]\n\n{box_text}"))
-        word_count += len(box_text.split())
 
-    # Greedy chunking on unit boundaries. A chunk closes when EITHER budget
-    # would overflow: MAX_ANALYSIS_CHARS (the LLM context bound — same figure
-    # the old truncation used) or MAX_PART_WORDS (the lesson-duration bound —
-    # a ~2,400-word chapter fits in 15k chars but NOT in one 12-minute video,
-    # which is exactly the "video doesn't cover the chapter" complaint).
-    # An oversized single unit (one giant OCR'd section) is hard-split.
     chunks: list[dict] = []  # {text, section_titles, words}
     cur_parts: list[str] = []
     cur_titles: list[str] = []
@@ -124,6 +102,43 @@ def run_full_analysis(
     _flush()
     if not chunks:
         chunks = [{"text": "", "section_titles": [], "words": 0}]
+    return chunks
+
+
+def run_full_analysis(
+    book_id: str,
+    chapter_content: dict,
+    level: str = "middle_school",
+    client: ClaudeClient | None = None,
+    on_progress=None,
+    chunks_override: list[dict] | None = None,
+) -> MasterAnalysis:
+    """
+    Run the complete analysis pipeline on a single chapter.
+
+    Steps:
+      1. ONE combined Claude call  -> concepts, difficulty, visuals
+      2. ONE batch Claude Vision call -> all images (skipped if none)
+      3. Build single episode mechanically (no API call)
+
+    Returns a MasterAnalysis with all results combined.
+    """
+    if client is None:
+        client = ClaudeClient(model=artifact_model())
+
+    analysis_id = str(uuid.uuid4())
+    chapter_num = chapter_content.get("chapter_num", 0)
+    chapter_title = chapter_content.get("title", "Untitled")
+
+    word_count = sum(
+        len((sec.get("content", "") or "").split())
+        + sum(len((sub.get("content", "") or "").split()) for sub in sec.get("subsections", []))
+        for sec in chapter_content.get("sections", [])
+    ) + sum(len((box.get("content", "") or "").split()) for box in chapter_content.get("key_boxes", []))
+    # chunks_override: a single-part job passes ITS chunk verbatim — the text
+    # already carries its "## title" prefixes, and re-chunking a chunk that
+    # sits exactly at the char budget would split off a junk tail episode.
+    chunks = chunks_override if chunks_override else build_chapter_parts(chapter_content)
     total_parts = len(chunks)
 
     # ══════════════════════════════════════════════════════════════════
