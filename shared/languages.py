@@ -34,10 +34,11 @@ LANGUAGES: dict[str, Language] = {
     "fr": Language("fr", "French", "Français", "ltr", "edge-denise"),
     "es": Language("es", "Spanish", "Español", "ltr", "edge-elvira"),
     "pt": Language("pt", "Portuguese", "Português", "ltr", "edge-francisca"),
-    # Indian second languages (immediate markets). Marathi rides Devanagari —
-    # a Hindi book will currently detect as "mr" too (Hindi is a future add).
+    # Indian languages (immediate markets). Hindi and Marathi SHARE Devanagari;
+    # detection disambiguates them by function-word vote (see _devanagari_variant).
     "te": Language("te", "Telugu", "తెలుగు", "ltr", "edge-shruti"),
     "mr": Language("mr", "Marathi", "मराठी", "ltr", "edge-aarohi"),
+    "hi": Language("hi", "Hindi", "हिन्दी", "ltr", "edge-swara"),
 }
 
 
@@ -86,7 +87,7 @@ def detect_language(text: str) -> str | None:
             return "ar"
         deva = len(_DEVA_RE.findall(sample))
         if deva / letters > 0.3 and deva > latin:
-            return "mr"  # Devanagari — Marathi (Hindi becomes its own code later)
+            return _devanagari_variant(sample)
         telu = len(_TELU_RE.findall(sample))
         if telu / letters > 0.3 and telu > latin:
             return "te"
@@ -105,6 +106,21 @@ def detect_language(text: str) -> str | None:
     if scores[runner] > 0 and scores[best] < scores[runner] * 2.0:
         return None
     return best
+
+
+# Hindi vs Marathi share the script but not their function words — the copula
+# alone (है/हैं vs आहे/आहेत) is nearly decisive; the rest widens the margin.
+_HI_WORDS = frozenset("है हैं का की के में से को और नहीं लिए यह वह पर इस उस करने द्वारा".split())
+_MR_WORDS = frozenset("आहे आहेत आणि मध्ये ची चे चा म्हणून येथे तसेच किंवा असते होते ते हे".split())
+_DEVA_WORD_RE = re.compile(r"[ऀ-ॿ]+")
+
+
+def _devanagari_variant(sample: str) -> str:
+    words = _DEVA_WORD_RE.findall(sample)
+    hi = sum(1 for w in words if w in _HI_WORDS)
+    mr = sum(1 for w in words if w in _MR_WORDS)
+    # Ties and silence default to Hindi — the majority Devanagari language.
+    return "mr" if mr > hi else "hi"
 
 
 def prompt_directive(code: str | None) -> str:

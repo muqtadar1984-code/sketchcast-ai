@@ -32,6 +32,7 @@ PT = (
 
 TE = "కణం జీవానికి ప్రాథమిక ప్రమాణం మరియు అన్ని జీవులు కణాలతో నిర్మితమై ఉంటాయి"
 MR = "पेशी ही जीवनाची मूलभूत एकक आहे आणि सर्व सजीव पेशींनी बनलेले असतात"
+HI = "कोशिका जीवन की मूल इकाई है और सभी जीव कोशिकाओं से बने हैं यह अध्याय में समझाया गया है"
 
 
 class TestDetection:
@@ -44,6 +45,15 @@ class TestDetection:
         assert detect_language(PT * 3) == "pt"
         assert detect_language(TE * 2) == "te"
         assert detect_language(MR * 2) == "mr"
+        assert detect_language(HI * 2) == "hi"
+
+    def test_hindi_and_marathi_disambiguate_despite_shared_script(self):
+        # Same Devanagari script — the function-word vote must separate them.
+        assert detect_language(MR * 3) == "mr"
+        assert detect_language(HI * 3) == "hi"
+        # Signal-free Devanagari (bare nouns) defaults to Hindi, the majority
+        # Devanagari language — never None once the script dominates.
+        assert detect_language("कोशिका विज्ञान पुस्तक अध्याय " * 20) == "hi"
 
     def test_quran_quotes_do_not_flip_a_malay_book_to_arabic(self):
         # Dense Arabic quotations inside a Malay book: Arabic needs script
@@ -88,6 +98,9 @@ class TestRegistry:
         assert default_voice_id_for("fr") == "edge-denise"
         assert default_voice_id_for("es") == "edge-elvira"
         assert default_voice_id_for("pt") == "edge-francisca"
+        assert default_voice_id_for("te") == "edge-shruti"
+        assert default_voice_id_for("mr") == "edge-aarohi"
+        assert default_voice_id_for("hi") == "edge-swara"
         assert default_voice_id_for("en") == "edge-aria"
         assert default_voice_id_for(None) == "edge-aria"
 
