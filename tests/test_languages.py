@@ -30,6 +30,10 @@ PT = (
 )
 
 
+TE = "కణం జీవానికి ప్రాథమిక ప్రమాణం మరియు అన్ని జీవులు కణాలతో నిర్మితమై ఉంటాయి"
+MR = "पेशी ही जीवनाची मूलभूत एकक आहे आणि सर्व सजीव पेशींनी बनलेले असतात"
+
+
 class TestDetection:
     def test_detects_each_language(self):
         assert detect_language(EN * 4) == "en"
@@ -38,6 +42,24 @@ class TestDetection:
         assert detect_language(FR * 3) == "fr"
         assert detect_language(ES * 3) == "es"
         assert detect_language(PT * 3) == "pt"
+        assert detect_language(TE * 2) == "te"
+        assert detect_language(MR * 2) == "mr"
+
+    def test_quran_quotes_do_not_flip_a_malay_book_to_arabic(self):
+        # Dense Arabic quotations inside a Malay book: Arabic needs script
+        # DOMINANCE (more Arabic letters than Latin), not just presence.
+        mixed = MS * 4 + " " + AR
+        assert detect_language(mixed) == "ms"
+
+    def test_unsupported_languages_return_none_not_a_near_miss(self):
+        italian = (
+            "La cellula è l'unità fondamentale della vita e tutti gli esseri viventi "
+            "sono costituiti da cellule che si dividono durante la crescita del corpo umano. "
+            "Questo capitolo presenta la struttura delle cellule con esempi per gli studenti."
+        )
+        assert detect_language(italian * 3) in (None, "es") or True  # must not crash; ideally None
+        # The hardened margins should reject it outright:
+        assert detect_language(italian * 3) is None
 
     def test_ambiguous_and_empty_return_none(self):
         assert detect_language("") is None

@@ -196,6 +196,15 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                         "content": ocr_text, "page_num": chapter.get("start_page", 0),
                         "subsections": [],
                     }]
+                    # Scanned books skip index-time language detection (no text
+                    # layer) — the first OCR'd chapter fills the gap here.
+                    if not book.get("language"):
+                        from shared.languages import detect_language
+
+                        _det = detect_language(ocr_text)
+                        if _det:
+                            db.set_book_language(sb, book_id, _det)
+                            book["language"] = _det  # this job resolves with it too
 
         # Guard: the sliced text must actually belong to the requested chapter.
         # On mismatch, SELF-HEAL — find the pages that actually teach this title,

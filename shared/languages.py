@@ -34,6 +34,10 @@ LANGUAGES: dict[str, Language] = {
     "fr": Language("fr", "French", "Français", "ltr", "edge-denise"),
     "es": Language("es", "Spanish", "Español", "ltr", "edge-elvira"),
     "pt": Language("pt", "Portuguese", "Português", "ltr", "edge-francisca"),
+    # Indian second languages (immediate markets). Marathi rides Devanagari —
+    # a Hindi book will currently detect as "mr" too (Hindi is a future add).
+    "te": Language("te", "Telugu", "తెలుగు", "ltr", "edge-shruti"),
+    "mr": Language("mr", "Marathi", "मराठी", "ltr", "edge-aarohi"),
 }
 
 
@@ -50,6 +54,9 @@ def is_rtl(code: str | None) -> bool:
 # stopword frequency. Words chosen to SEPARATE the pairs that share vocabulary
 # (es/pt, fr/es) — each set avoids words common in the others.
 _AR_RE = re.compile(r"[؀-ۿݐ-ݿ]")
+_DEVA_RE = re.compile(r"[ऀ-ॿ]")
+_TELU_RE = re.compile(r"[ఀ-౿]")
+_LATIN_RE = re.compile(r"[A-Za-zÀ-ÿ]")
 _STOPWORDS: dict[str, frozenset[str]] = {
     "en": frozenset("the and of to is that with for are was this from have".split()),
     "ms": frozenset("dan yang untuk dengan ialah adalah kepada dalam ini itu tidak boleh murid bahagian soalan".split()),
@@ -65,13 +72,24 @@ def detect_language(text: str) -> str | None:
     Callers treat None as "leave books.language unset" — generation then
     defaults to English exactly as before, so detection can only ever help.
     """
-    sample = (text or "")[:20000]
+    sample = (text or "")[:30000]
     if not sample.strip():
         return None
-    # Arabic: script beats statistics.
+    # Script beats statistics — but only when the script DOMINATES the letters.
+    # (An Islamic-Education book in Malay quotes plenty of Quranic Arabic; the
+    # dominance check keeps it Malay.)
     letters = sum(1 for ch in sample if ch.isalpha())
-    if letters and len(_AR_RE.findall(sample)) / letters > 0.3:
-        return "ar"
+    latin = len(_LATIN_RE.findall(sample))
+    if letters:
+        ar = len(_AR_RE.findall(sample))
+        if ar / letters > 0.3 and ar > latin:
+            return "ar"
+        deva = len(_DEVA_RE.findall(sample))
+        if deva / letters > 0.3 and deva > latin:
+            return "mr"  # Devanagari — Marathi (Hindi becomes its own code later)
+        telu = len(_TELU_RE.findall(sample))
+        if telu / letters > 0.3 and telu > latin:
+            return "te"
 
     words = re.findall(r"[a-zà-ÿ']+", sample.lower())
     if len(words) < 30:
@@ -79,10 +97,12 @@ def detect_language(text: str) -> str | None:
     scores = {code: sum(1 for w in words if w in sw) for code, sw in _STOPWORDS.items()}
     best = max(scores, key=lambda c: scores[c])
     runner = max((c for c in scores if c != best), key=lambda c: scores[c])
-    # Confidence: the winner must be a real presence AND clearly ahead.
-    if scores[best] < max(5, len(words) * 0.02):
+    # Confidence: the winner must be a real presence AND clearly ahead — the
+    # tight margins also make UNSUPPORTED languages (Italian, German…) come
+    # back None (→ English default) instead of a near-miss like es/fr.
+    if scores[best] < max(8, len(words) * 0.025):
         return None
-    if scores[runner] > 0 and scores[best] < scores[runner] * 1.5:
+    if scores[runner] > 0 and scores[best] < scores[runner] * 2.0:
         return None
     return best
 

@@ -35,7 +35,7 @@ def generate_document(
 ) -> Path:
     """Build the .docx for `kind` and return its path. `template` = optional
     school .docx whose styles/header/footer/logo the document inherits."""
-    from shared.languages import prompt_directive
+    from shared.languages import is_rtl, prompt_directive
 
     directive = prompt_directive(language)
     if directive:
@@ -53,4 +53,41 @@ def generate_document(
     import importlib
     build = importlib.import_module(mod_name).build
     # Every generator takes the same signature.
-    return build(book, chapter, analysis, client, params or {}, out_dir, template)
+    path = build(book, chapter, analysis, client, params or {}, out_dir, template)
+    # RTL (Arabic) documents: Word does the SHAPING itself, but paragraphs
+    # need right alignment + the bidi flag. A post-pass over the saved file
+    # keeps all five builders untouched. Best-effort — never fails the doc.
+    if is_rtl(language):
+        try:
+            _mirror_docx_rtl(path)
+        except Exception:  # noqa: BLE001
+            import logging
+
+            logging.getLogger("docgen").warning("RTL docx pass failed for %s", path)
+    return path
+
+
+def _mirror_docx_rtl(docx_path) -> None:
+    import docx as _docx
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+
+    d = _docx.Document(str(docx_path))
+
+    def _mirror_paragraph(p) -> None:
+        # Centred paragraphs (titles, badges) keep their centring.
+        if p.alignment != WD_ALIGN_PARAGRAPH.CENTER:
+            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        pPr = p._p.get_or_add_pPr()  # noqa: SLF001
+        if pPr.find(qn("w:bidi")) is None:
+            bidi = pPr.makeelement(qn("w:bidi"), {})
+            pPr.append(bidi)
+
+    for p in d.paragraphs:
+        _mirror_paragraph(p)
+    for table in d.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    _mirror_paragraph(p)
+    d.save(str(docx_path))

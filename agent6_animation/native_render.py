@@ -135,13 +135,23 @@ def render_native_segment(
             comp.save(tmp / f"f{idx:05d}.png")
             idx += 1
 
+        # RTL lessons write each line from its RIGHT edge — an Arabic pen
+        # sweeping left→right would "write backwards".
+        rtl_sweep = spec.get("direction", "ltr") == "rtl"
         for element in anim:
             for (x0, y0, x1, y1) in element:
-                x = x0
-                while x < x1:
-                    md.rectangle([x0, y0, x, y1], fill=255)
-                    emit((x, (y0 + y1) // 2))
-                    x += px
+                if rtl_sweep:
+                    x = x1
+                    while x > x0:
+                        md.rectangle([x, y0, x1, y1], fill=255)
+                        emit((x, (y0 + y1) // 2))
+                        x -= px
+                else:
+                    x = x0
+                    while x < x1:
+                        md.rectangle([x0, y0, x, y1], fill=255)
+                        emit((x, (y0 + y1) // 2))
+                        x += px
                 md.rectangle([x0, y0, x1, y1], fill=255)  # snap the line fully on
         emit(None)  # final clean frame (no pen) — this is what tpad freezes onto
 

@@ -50,6 +50,10 @@ VOICES: list[TTSVoice] = [
     TTSVoice("edge-alvaro",    "Álvaro — Español (free)",         "edge", "free", "es-ES-AlvaroNeural",    ("male",), "es"),
     TTSVoice("edge-francisca", "Francisca — Português (free)",    "edge", "free", "pt-BR-FranciscaNeural", ("warm",), "pt"),
     TTSVoice("edge-antonio",   "Antônio — Português (free)",      "edge", "free", "pt-BR-AntonioNeural",   ("male",), "pt"),
+    TTSVoice("edge-shruti",    "Shruti — తెలుగు (free)",           "edge", "free", "te-IN-ShrutiNeural",    ("warm",), "te"),
+    TTSVoice("edge-mohan",     "Mohan — తెలుగు (free)",            "edge", "free", "te-IN-MohanNeural",     ("male",), "te"),
+    TTSVoice("edge-aarohi",    "Aarohi — मराठी (free)",            "edge", "free", "mr-IN-AarohiNeural",    ("warm",), "mr"),
+    TTSVoice("edge-manohar",   "Manohar — मराठी (free)",           "edge", "free", "mr-IN-ManoharNeural",   ("male",), "mr"),
     # Premium — ElevenLabs (key + enabled flag required; voices are multilingual).
     TTSVoice("el-rachel",   "Rachel — natural (premium)",    "elevenlabs", "premium", _EL_DEFAULT_REF,       ("warm", "natural")),
     TTSVoice("el-adam",     "Adam — deep (premium)",         "elevenlabs", "premium", "pNInz6obpgDQGcFmaJgB", ("deep", "male")),

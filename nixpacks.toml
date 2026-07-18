@@ -9,7 +9,10 @@
 #   command — check the Railway dashboard before changing it.
 
 [phases.setup]
-aptPkgs = ["ffmpeg"]
+# libraqm: Pillow loads it dynamically at runtime (8.2+) to enable HarfBuzz
+# complex-text shaping — required for correct Devanagari (Marathi) and Telugu
+# slide text. Without it those scripts render with misplaced vowel signs.
+aptPkgs = ["ffmpeg", "libraqm0", "libfribidi0", "libharfbuzz0b"]
 
 [start]
 cmd = "streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --server.enableCORS false --server.enableXsrfProtection false"

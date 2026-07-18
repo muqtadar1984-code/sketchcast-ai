@@ -20,23 +20,41 @@ import math
 
 from PIL import ImageDraw
 
-from shared.text_shaping import display_text as _dt
+from shared.text_shaping import display_text
 from .slide_builder import _BG, _GREEN, _INK, _MUTED, _RULE, _font, _wrap
+
+# Paragraph base direction for bidi within diagram labels — set by
+# compose_slide before rendering (all segments of one lesson share it, so a
+# concurrent write is always the same value).
+_RTL_BASE = False
+
+
+def set_direction(rtl: bool) -> None:
+    global _RTL_BASE
+    _RTL_BASE = bool(rtl)
+
+
+def _dt(s: str) -> str:
+    return display_text(s, rtl_base=_RTL_BASE)
 
 _Box = tuple[int, int, int, int]
 _Region = tuple[int, int, int, int]
 
 
 def _fit_label(draw, label: str, max_w: int, max_h: int, bold: bool, sizes: list[int]):
-    """Pick the largest font from ``sizes`` whose wrapped label fits the box."""
+    """Pick the largest font from ``sizes`` whose wrapped label fits the box.
+
+    Measures the SHAPED string (joined Arabic is narrower than raw isolated
+    forms) with a script-matched font, so labels aren't shrunk needlessly.
+    """
     label = " ".join((label or "").split())
     for size in sizes:
-        f = _font(bold, size)
+        f = _font(bold, size, label)
         lines = _wrap(draw, label, f, max_w)
         line_h = int(size * 1.25)
-        if len(lines) * line_h <= max_h and all(draw.textlength(ln, font=f) <= max_w for ln in lines):
+        if len(lines) * line_h <= max_h and all(draw.textlength(_dt(ln), font=f) <= max_w for ln in lines):
             return f, lines, line_h, size
-    f = _font(bold, sizes[-1])
+    f = _font(bold, sizes[-1], label)
     return f, _wrap(draw, label, f, max_w), int(sizes[-1] * 1.25), sizes[-1]
 
 
@@ -163,7 +181,7 @@ def _compare(draw, region: _Region, groups: list[dict], accent) -> list[list[_Bo
                                accent=accent, filled=True, bold=True, sizes=(24, 22, 20, 18))])
         # Items as a left-aligned bulleted list under the header.
         items = [str(it).strip() for it in (grp.get("items") or []) if str(it).strip()][:5]
-        bf = _font(False, 20)
+        bf = _font(False, 20, " ".join(items))
         y = ry0 + head_h + 24
         tx = cx - head_w // 2
         for it in items:
@@ -319,7 +337,7 @@ def _icons(draw, region: _Region, items: list[dict], accent) -> list[list[_Box]]
     tile_w = rw / cols
     tile_h = rh / rows
     icon_s = int(min(tile_w * 0.5, tile_h * 0.46, 120))
-    lf = _font(False, 22)
+    lf = _font(False, 22, " ".join(str(i) for i in items))
     elements: list[list[_Box]] = []
     for idx, it in enumerate(items):
         r, c = idx // cols, idx % cols
@@ -377,7 +395,7 @@ def caption_element(draw: ImageDraw.ImageDraw, region: _Region, caption: str) ->
     if not cap:
         return []
     rx0, ry0, rx1, ry1 = region
-    f = _font(False, 20)
+    f = _font(False, 20, cap)
     cap = _wrap(draw, cap, f, rx1 - rx0)[0] if cap else cap
     cap = _dt(cap)
     tw = draw.textlength(cap, font=f)

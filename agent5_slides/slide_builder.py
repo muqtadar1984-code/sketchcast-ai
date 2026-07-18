@@ -28,9 +28,35 @@ _HEIGHT = 720
 _FONT_DIR = Path(__file__).resolve().parent / "fonts"
 _MARGIN_X = 90
 
+# Script-aware font selection. DejaVu covers Latin + Arabic presentation
+# forms; Devanagari (Marathi) and Telugu need the bundled Noto families AND
+# HarfBuzz shaping (Pillow's RAQM layout engine — enabled at runtime when
+# libraqm is present; see nixpacks.toml). Without RAQM those scripts render
+# with misplaced vowel signs — we still draw (best-effort) rather than fail.
+import re as _re
 
-def _font(bold: bool, size: int) -> ImageFont.FreeTypeFont:
-    name = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
+_DEVA_RE = _re.compile(r"[ऀ-ॿ]")
+_TELU_RE = _re.compile(r"[ఀ-౿]")
+try:
+    from PIL import features as _pil_features
+
+    _RAQM = bool(_pil_features.check("raqm"))
+except Exception:  # noqa: BLE001
+    _RAQM = False
+
+
+def _font(bold: bool, size: int, sample: str = "") -> ImageFont.FreeTypeFont:
+    if sample and _DEVA_RE.search(sample):
+        name = "NotoSansDevanagari-Bold.ttf" if bold else "NotoSansDevanagari-Regular.ttf"
+    elif sample and _TELU_RE.search(sample):
+        name = "NotoSansTelugu-Bold.ttf" if bold else "NotoSansTelugu-Regular.ttf"
+    else:
+        name = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
+    if _RAQM and name.startswith("Noto"):
+        try:
+            return ImageFont.truetype(str(_FONT_DIR / name), size, layout_engine=ImageFont.Layout.RAQM)
+        except Exception:  # noqa: BLE001
+            pass
     return ImageFont.truetype(str(_FONT_DIR / name), size)
 
 
@@ -141,7 +167,7 @@ def compose_slide(
 
     # Title (ink), beside the badge — right-anchored for RTL.
     head = (heading or context_title or "SketchCast AI").strip()[:90]
-    hf = _font(bold=True, size=38)
+    hf = _font(bold=True, size=38, sample=head)
     ty = 66
     hbox: list[_Box] = []
     for ln in _wrap(draw, head, hf, title_right - title_x)[:2]:
@@ -169,8 +195,9 @@ def compose_slide(
     # plain bullets if the spec is unusable, so slides are never bare.
     diagram_elems: list[list[_Box]] = []
     if has_visual:
-        from .diagram_builder import caption_element, render_diagram
+        from .diagram_builder import caption_element, render_diagram, set_direction
 
+        set_direction(rtl)  # bidi base for mixed runs inside diagram labels
         region = (content_left, y, content_right, _HEIGHT - 70)
         diagram_elems = render_diagram(draw, region, visual, accent=acc)
         if diagram_elems:
@@ -186,8 +213,9 @@ def compose_slide(
             # Bullet points (chapter content) — teal dots + ink text. RTL puts
             # the dot on the RIGHT edge with text right-anchored beside it.
             size = 30
+            _pts_sample = " ".join(pts)
             while size >= 20:
-                bf = _font(bold=False, size=size)
+                bf = _font(bold=False, size=size, sample=_pts_sample)
                 line_h = int(size * 1.5)
                 wrapped: list[list[str]] = [_wrap(draw, p, bf, text_w - 40) for p in pts]
                 total_h = sum(len(w) * line_h + 16 for w in wrapped)
@@ -220,7 +248,7 @@ def compose_slide(
                 y += 16
         elif not has_visual:
             # Fallback: no bullets — show the narration text so the slide isn't bare
-            bf = _font(bold=False, size=28)
+            bf = _font(bold=False, size=28, sample=fallback_text or "")
             fb: list[_Box] = []
             for ln in _wrap(draw, " ".join((fallback_text or "").split()), bf, text_w)[:8]:
                 s = disp(ln)
@@ -336,7 +364,9 @@ def _mirror_deck_rtl(pptx_path: Path) -> None:
             if not getattr(shape, "has_text_frame", False):
                 continue
             for p in shape.text_frame.paragraphs:
-                p.alignment = PP_ALIGN.RIGHT
+                # Centred paragraphs (number badges, title slides) stay centred.
+                if p.alignment != PP_ALIGN.CENTER:
+                    p.alignment = PP_ALIGN.RIGHT
                 # python-pptx has no first-class rtl API — set the OOXML attr.
                 p._p.get_or_add_pPr().set("rtl", "1")  # noqa: SLF001
     prs.save(str(pptx_path))
