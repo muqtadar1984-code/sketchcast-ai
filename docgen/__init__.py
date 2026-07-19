@@ -46,25 +46,29 @@ def generate_document(
         "exam_paper": "docgen.exam_paper",
         "worksheet": "docgen.worksheet",
         "case_study": "docgen.case_study",
+        "exam": "docgen.exam",
     }
     mod_name = builders.get(kind)
     if not mod_name:
         raise ValueError(f"Unknown document kind: {kind}")
     import importlib
     build = importlib.import_module(mod_name).build
-    # Every generator takes the same signature.
-    path = build(book, chapter, analysis, client, params or {}, out_dir, template)
-    # RTL (Arabic) documents: Word does the SHAPING itself, but paragraphs
-    # need right alignment + the bidi flag. A post-pass over the saved file
-    # keeps all five builders untouched. Best-effort — never fails the doc.
+    # Every generator takes the same signature. Most return a single Path; the
+    # cumulative exam returns [paper, answer_key] — two documents from one call.
+    result = build(book, chapter, analysis, client, params or {}, out_dir, template)
+    paths = result if isinstance(result, list) else [result]
+    # RTL (Arabic / Jawi) documents: Word does the SHAPING itself, but paragraphs
+    # need right alignment + the bidi flag. A post-pass over EACH saved file keeps
+    # the builders untouched. Best-effort — never fails the doc.
     if is_rtl(language):
-        try:
-            _mirror_docx_rtl(path)
-        except Exception:  # noqa: BLE001
-            import logging
+        for path in paths:
+            try:
+                _mirror_docx_rtl(path)
+            except Exception:  # noqa: BLE001
+                import logging
 
-            logging.getLogger("docgen").warning("RTL docx pass failed for %s", path)
-    return path
+                logging.getLogger("docgen").warning("RTL docx pass failed for %s", path)
+    return result
 
 
 def _mirror_docx_rtl(docx_path) -> None:

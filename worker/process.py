@@ -169,6 +169,88 @@ def _combine_chapters(all_chapters: list[dict], wanted: list, sb: Client, book_i
     }
 
 
+def _combine_units(all_chapters: list[dict], scope: list, sb: Client, book_id: str,
+                   cap_total: int = 30000) -> dict:
+    """Merge the chosen {chapter, part} units into ONE synthetic chapter for a
+    cumulative EXAM. part 0 = the whole chapter; part N = that part's chunk (the
+    same index-time chunker the kit uses). The per-unit character budget is split
+    evenly across the selection so a wide exam still samples every unit, not just
+    the first few. chapter_num = -1 marks it synthetic (never cached).
+
+    Also carries a `coverage` list of human labels ("Chapter 2: … — Part 1") so
+    the paper and the app can name exactly what the exam tested."""
+    from agent2_analysis.analyzer import build_chapter_parts
+
+    by_num: dict[int, dict] = {}
+    for c in all_chapters:
+        try:
+            by_num[int(c.get("chapter_num", -999))] = c
+        except (TypeError, ValueError):
+            pass
+
+    units: list[tuple[int, int]] = []
+    for u in scope or []:
+        if not isinstance(u, dict):
+            continue
+        try:
+            cn = int(str(u.get("chapter")).strip())
+            pt = int(u.get("part") or 0)
+        except (TypeError, ValueError):
+            continue
+        units.append((cn, pt))
+    units = sorted(set(units))
+    if not units:
+        # Defence-in-depth: the DB requires a non-empty scope, but never trust it.
+        first = next(iter(by_num.values()), None)
+        if first is not None:
+            units = [(int(first.get("chapter_num", 0)), 0)]
+
+    # Split the grounding budget across ALL selected units (a low floor so a wide
+    # exam still samples every unit, not just the first 20).
+    per = max(800, cap_total // max(1, len(units)))
+    sections, coverage, total = [], [], 0
+    for cn, pt in units:
+        c = by_num.get(cn)
+        if not c:
+            continue
+        ctitle = c.get("title") or f"Chapter {cn + 1}"
+        if pt >= 1:
+            parts = build_chapter_parts(c)
+            if pt > len(parts):
+                continue
+            pk = parts[pt - 1]
+            text = pk.get("text", "") or ""
+            seg = [t for t in (pk.get("section_titles") or []) if t][:2]
+            label = f"Chapter {cn + 1}: {ctitle} — Part {pt}"
+            if seg:
+                label += f" ({', '.join(seg)})"
+        else:
+            text = _chapter_plain_text(c)
+            if len(text) < 200:  # thin structured text → index-time source cache
+                text = db.get_chapter_source_text(sb, book_id, cn) or text
+            label = f"Chapter {cn + 1}: {ctitle}"
+        chunk = text[:per]
+        if total + len(chunk) > cap_total:
+            chunk = chunk[: max(0, cap_total - total)]
+        # Only a unit that actually contributes text is listed as covered — the
+        # coverage line must never claim a unit the exam wasn't grounded on.
+        if chunk:
+            sections.append({
+                "section_title": label, "section_type": "body", "content": chunk,
+                "page_num": c.get("start_page", 0), "subsections": [],
+            })
+            coverage.append(label)
+            total += len(chunk)
+    return {
+        "chapter_num": -1,
+        "title": "Exam",
+        "sections": sections,
+        "coverage": coverage,
+        "start_page": 0,
+        "end_page": 0,
+    }
+
+
 def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     # Lazy imports shared by every generation kind.
     from agent1_ingestion.extractor import extract_pdf
@@ -219,13 +301,28 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         # merge the selected chapters into one synthetic chapter and generate the
         # paper from it. Marked chapter_num = -1 so its analysis/grounding is
         # never cached as a real chapter's.
+        # A cumulative EXAM (kind 'exam', 0062) merges a chosen set of covered
+        # {chapter, part} units — part-granular, so unticked parts are excluded.
+        _exam_scope = (gen.get("params") or {}).get("scope")
+        is_exam = kind == "exam" and isinstance(_exam_scope, list) and len(_exam_scope) > 0
         _rev_chapters = (gen.get("params") or {}).get("chapters")
         _rev_valid = (
             [int(str(n).strip()) for n in _rev_chapters if str(n).strip().lstrip("-").isdigit()]
             if kind in ("worksheet", "exam_paper") and isinstance(_rev_chapters, list) else []
         )
-        is_cumulative = len(_rev_valid) >= 2
-        if is_cumulative:
+        # A cumulative unit has no single chapter to heal/OCR/verify or cache.
+        is_cumulative = is_exam or len(_rev_valid) >= 2
+        if is_exam:
+            chapter = _combine_units(structured.get("chapters", []), _exam_scope, sb, book_id)
+            if not chapter.get("sections"):
+                # Every scope unit resolved to no source text (e.g. a re-index
+                # shifted chapter numbering). Fail loud — never hand the model an
+                # empty chapter and let it hallucinate a whole exam.
+                raise RuntimeError(
+                    "The selected chapters/parts have no source text to build an exam from. "
+                    "Re-index the book, then rebuild the exam."
+                )
+        elif len(_rev_valid) >= 2:
             chapter = _combine_chapters(structured.get("chapters", []), _rev_chapters, sb, book_id)
         elif _rev_valid and not gen.get("chapter_ref"):
             # A one-chapter revision paper (params.chapters=[N], no chapter_ref):
@@ -691,6 +788,41 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             title = f"{book.get('title', 'Document')} · {chapter_title} · {label}"
             if part_ref is not None:
                 title += f" · Part {part_ref}"
+
+        elif kind == "exam":
+            # Cumulative exam (0062): one model call → TWO documents (the exam
+            # paper and a SEPARATE answer key), grounded on the chosen covered
+            # units (chapter = _combine_units above). The answer key is uploaded
+            # under its OWN artifact kind so it never rides a student's download.
+            from docgen import generate_document
+            from shared.claude_client import artifact_model
+
+            gen_client = ClaudeClient() if jawi else ClaudeClient(model=artifact_model(kind))
+            out_paths = generate_document(
+                kind="exam", book=book, chapter=chapter, analysis=analysis,
+                client=gen_client, params=gen.get("params") or {}, out_dir=Path(tmp),
+                template=branding.get("docx_template"),
+                language=lesson_lang,
+            )
+            for _k, _v in gen_client.session_usage.items():
+                client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
+            db.set_progress(sb, job_id, 90)
+            paths = out_paths if isinstance(out_paths, list) else [out_paths]
+            paper_dest = f"{base}/exam.docx"
+            db.upload_artifact(sb, str(paths[0]), paper_dest)
+            db.add_artifact_row(sb, generation_id, "docx", paper_dest)
+            if len(paths) > 1:
+                key_dest = f"{base}/exam_answer_key.docx"
+                db.upload_artifact(sb, str(paths[1]), key_dest)
+                # answer_key_docx is a new artifact_kind (app migration 0062); a
+                # not-yet-applied migration must not fail the exam.
+                try:
+                    db.add_artifact_row(sb, generation_id, "answer_key_docx", key_dest)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("answer_key_docx row skipped for %s: %s", generation_id, exc)
+            db.set_progress(sb, job_id, 96)
+            _exam_title = str((gen.get("params") or {}).get("title") or "").strip()
+            title = f"{book.get('title', 'Document')} · {_exam_title or 'Exam'}"
 
         else:
             raise RuntimeError(f"Unsupported generation kind: {kind}")
