@@ -426,6 +426,18 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         lesson_lang = _lang_obj.code
         lesson_dir = _lang_obj.direction
 
+        # Jawi (Malay in Arabic script) is a WRITTEN-materials option for now:
+        # documents render it (Word/PowerPoint shape it, RTL). The narrated
+        # video + its deck are deferred (our PNG renderer lacks Jawi glyphs and
+        # Malay TTS can't read the script), so a Jawi presentation falls back to
+        # Rumi Malay — the voice reads Malay either way.
+        jawi = lesson_lang == "ms-arab"
+        if jawi and kind == "presentation":
+            _lang_obj = get_language("ms")
+            lesson_lang = _lang_obj.code
+            lesson_dir = _lang_obj.direction
+            jawi = False
+
         # Agent 2 — analysis (shared by every kind). The FULL analysis is
         # persisted per (book, chapter) in chapter_grounding.concepts, so the
         # 2nd..Nth artifact of the same chapter REUSES it instead of paying the
@@ -645,7 +657,10 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             # Authoring runs on the cheaper artifact model (Haiku by default); the
             # ingestion/analysis above stay on Sonnet. Fold its spend into the job so
             # jobs.usage still reflects the full per-lesson cost.
-            gen_client = ClaudeClient(model=artifact_model(kind))
+            # Jawi is the exception: Haiku's Jawi orthography is unreliable
+            # (verified 2026-07-19), so Jawi documents author on the stronger
+            # analysis model.
+            gen_client = ClaudeClient() if jawi else ClaudeClient(model=artifact_model(kind))
             out_path = generate_document(
                 kind=kind, book=book, chapter=chapter, analysis=analysis,
                 client=gen_client, params=gen.get("params") or {}, out_dir=Path(tmp),

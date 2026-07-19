@@ -92,6 +92,19 @@ class TestRegistry:
         d = prompt_directive("ms")
         assert "Malay" in d and "Do not translate" in d
 
+    def test_jawi_is_malay_in_arabic_script_rtl(self):
+        j = get_language("ms-arab")
+        assert j.code == "ms-arab" and j.direction == "rtl"
+        assert is_rtl("ms-arab")
+        # get_language lower-cases, so a stored "ms-Arab" still resolves.
+        assert get_language("ms-Arab").code == "ms-arab"
+
+    def test_jawi_directive_demands_jawi_not_rumi(self):
+        d = prompt_directive("ms-arab")
+        assert "JAWI" in d and "Malay" in d
+        assert "Rumi" in d  # must tell the model NOT to use Rumi/Latin
+        assert "چ" in d  # names the Jawi-specific letters
+
     def test_default_voices_per_language(self):
         assert default_voice_id_for("ms") == "edge-yasmin"
         assert default_voice_id_for("ar") == "edge-zariyah"

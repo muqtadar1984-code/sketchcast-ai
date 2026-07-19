@@ -39,6 +39,12 @@ LANGUAGES: dict[str, Language] = {
     "te": Language("te", "Telugu", "తెలుగు", "ltr", "edge-shruti"),
     "mr": Language("mr", "Marathi", "मराठी", "ltr", "edge-aarohi"),
     "hi": Language("hi", "Hindi", "हिन्दी", "ltr", "edge-swara"),
+    # Jawi — Malay written in the Arabic-derived script (RTL). SAME spoken
+    # language as ms, so the voice is the Malay one; the SCRIPT is Arabic, so
+    # it reuses the Arabic RTL rendering. Written artifacts only for now (the
+    # narrated video/deck stay Rumi until the Jawi video phase). NOT a
+    # detection target — books are in Rumi; teachers SELECT Jawi as output.
+    "ms-arab": Language("ms-arab", "Malay (Jawi)", "بهاس ملايو (جاوي)", "rtl", "edge-yasmin"),
 }
 
 
@@ -128,6 +134,18 @@ def prompt_directive(code: str | None) -> str:
     lang = get_language(code)
     if lang.code == "en":
         return ""
+    if lang.code == "ms-arab":
+        # Jawi: Malay in the Arabic script. Spell it out — models default to
+        # Rumi for Malay, so the instruction must be explicit and name the
+        # Jawi-specific letters.
+        return (
+            "\n\nLANGUAGE & SCRIPT: write ALL output in Malay (Bahasa Melayu) using the "
+            "JAWI script — the Arabic-derived script for Malay — NOT Rumi (Latin). Use "
+            "correct Jawi orthography, including the Jawi-specific letters where they belong: "
+            "چ (ca), ڠ (nga), ڤ (pa), ݢ (ga), ۏ (va), ڽ (nya). Keep religious and technical "
+            "terms in their standard Jawi/Arabic spelling. Do NOT output any Rumi/Latin "
+            "transliteration — Jawi only."
+        )
     return (
         f"\n\nLANGUAGE: this chapter is written in {lang.name} ({lang.native}). "
         f"Write ALL output — names, explanations, narration, questions, answers — in {lang.name}, "
