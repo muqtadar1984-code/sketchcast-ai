@@ -37,6 +37,10 @@ import re as _re
 
 _DEVA_RE = _re.compile(r"[ऀ-ॿ]")
 _TELU_RE = _re.compile(r"[ఀ-౿]")
+# Arabic script (Arabic + Persian/Urdu/JAWI in Arabic Extended-A + the
+# presentation forms arabic_reshaper emits). Noto Sans Arabic covers the
+# Jawi-specific letters (ڤ ڠ ۏ ݢ ڽ چ) that DejaVu lacks.
+_ARAB_RE = _re.compile(r"[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]")
 try:
     from PIL import features as _pil_features
 
@@ -50,9 +54,14 @@ def _font(bold: bool, size: int, sample: str = "") -> ImageFont.FreeTypeFont:
         name = "NotoSansDevanagari-Bold.ttf" if bold else "NotoSansDevanagari-Regular.ttf"
     elif sample and _TELU_RE.search(sample):
         name = "NotoSansTelugu-Bold.ttf" if bold else "NotoSansTelugu-Regular.ttf"
+    elif sample and _ARAB_RE.search(sample):
+        name = "NotoSansArabic-Bold.ttf" if bold else "NotoSansArabic-Regular.ttf"
     else:
         name = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
-    if _RAQM and name.startswith("Noto"):
+    # RAQM shapes the Indic scripts (they arrive un-shaped). Arabic/Jawi is
+    # PRE-SHAPED by arabic_reshaper into presentation forms before drawing, so
+    # it must be drawn WITHOUT RAQM (re-shaping presentation forms breaks them).
+    if _RAQM and name.startswith("Noto") and not name.startswith("NotoSansArabic"):
         try:
             return ImageFont.truetype(str(_FONT_DIR / name), size, layout_engine=ImageFont.Layout.RAQM)
         except Exception:  # noqa: BLE001

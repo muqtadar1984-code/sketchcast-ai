@@ -426,17 +426,14 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         lesson_lang = _lang_obj.code
         lesson_dir = _lang_obj.direction
 
-        # Jawi (Malay in Arabic script) is a WRITTEN-materials option for now:
-        # documents render it (Word/PowerPoint shape it, RTL). The narrated
-        # video + its deck are deferred (our PNG renderer lacks Jawi glyphs and
-        # Malay TTS can't read the script), so a Jawi presentation falls back to
-        # Rumi Malay — the voice reads Malay either way.
+        # Jawi (Malay in the Arabic script, RTL). Documents author it directly.
+        # The VIDEO is DUAL-SCRIPT: the slides/deck show Jawi (Noto Sans Arabic +
+        # the Arabic RTL layout), while the narration is spoken Malay — the
+        # script generator writes narration in Rumi (Malay TTS can't read the
+        # Arabic script) and the on-screen text in Jawi; the same Malay words in
+        # two scripts. The voice resolves to Malay (default_voice_id_for maps
+        # ms-arab → ms).
         jawi = lesson_lang == "ms-arab"
-        if jawi and kind == "presentation":
-            _lang_obj = get_language("ms")
-            lesson_lang = _lang_obj.code
-            lesson_dir = _lang_obj.direction
-            jawi = False
 
         # Agent 2 — analysis (shared by every kind). The FULL analysis is
         # persisted per (book, chapter) in chapter_grounding.concepts, so the

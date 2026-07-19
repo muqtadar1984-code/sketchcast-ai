@@ -67,9 +67,14 @@ _BY_ID = {v.voice_id: v for v in VOICES}
 
 
 def default_voice_id_for(lang: str | None) -> str:
-    """The free default voice for a lesson language (English → global default)."""
+    """The free default voice for a lesson language (English → global default).
+
+    Jawi (ms-arab) is written Malay in the Arabic script — SPOKEN it's Malay, so
+    its narration uses the Malay voice.
+    """
+    want = "ms" if lang == "ms-arab" else (lang or "en")
     for v in VOICES:
-        if v.tier == "free" and v.lang == (lang or "en"):
+        if v.tier == "free" and v.lang == want:
             return v.voice_id
     return DEFAULT_VOICE_ID
 

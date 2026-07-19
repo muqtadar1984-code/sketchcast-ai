@@ -233,7 +233,24 @@ def generate_episode_script(
         episode_context += "\n".join(part_lines)
     from shared.languages import prompt_directive
 
-    episode_context += prompt_directive(language)
+    if language == "ms-arab":
+        # Jawi VIDEO — two scripts, one Malay content: the voice reads Rumi,
+        # the slides show Jawi. (Malay TTS can't read Arabic script, so the
+        # narration must be Rumi; the on-screen words are the same Malay in
+        # Jawi, so drawn text and speech correspond.)
+        episode_context += (
+            "\n\nLANGUAGE — this is a JAWI lesson, written in TWO scripts:\n"
+            "• `narration` (the SPOKEN text, read aloud by a Malay voice): write it in "
+            "RUMI (Latin) Malay — ordinary Bahasa Melayu. This is what the voice says.\n"
+            "• EVERY on-screen field — `slide_heading`, each `slide_points` entry, and the "
+            "`slide_visual` heading(s), items and caption — write in the JAWI script (the "
+            "Arabic-derived script for Malay), using the Jawi-specific letters where they "
+            "belong (چ ڠ ڤ ݢ ۏ ڽ).\n"
+            "The on-screen Jawi and the spoken Rumi are the SAME Malay words in two "
+            "scripts. Do not mix them: narration stays Rumi, on-screen stays Jawi."
+        )
+    else:
+        episode_context += prompt_directive(language)
     # Defense in depth: never ask for more than a 12-minute script — an
     # oversized target makes Claude's reply overrun max_tokens, truncating the
     # JSON and silently yielding zero segments.
