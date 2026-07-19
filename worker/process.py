@@ -95,6 +95,80 @@ def _pick_chapter(chapters: list[dict], chapter_ref: str | None) -> dict:
     return pool[0]
 
 
+def _chapter_plain_text(chapter: dict) -> str:
+    """All the readable text of a structured chapter (sections + subsections)."""
+    out: list[str] = []
+    for s in chapter.get("sections") or []:
+        if s.get("content"):
+            out.append(str(s["content"]))
+        for ss in s.get("subsections") or []:
+            if ss.get("content"):
+                out.append(str(ss["content"]))
+    return "\n".join(out)
+
+
+def _range_label(nums: list[int]) -> str:
+    """Human label for a set of 0-based chapter numbers → 1-based, contiguous
+    runs collapsed: [0,1,2,4] → "Chapters 1–3, 5"."""
+    ns = sorted(set(int(n) for n in nums))
+    if not ns:
+        return "selected chapters"
+    parts, start, prev = [], ns[0], ns[0]
+    for n in ns[1:] + [None]:
+        if n == prev + 1:
+            prev = n
+            continue
+        parts.append(f"{start + 1}" if start == prev else f"{start + 1}–{prev + 1}")
+        if n is not None:
+            start = prev = n
+    return ("Chapter " if len(ns) == 1 else "Chapters ") + ", ".join(parts)
+
+
+def _combine_chapters(all_chapters: list[dict], wanted: list, sb: Client, book_id: str,
+                      cap_per: int = 6000, cap_total: int = 30000) -> dict:
+    """Merge the selected chapters into ONE synthetic chapter for a cumulative
+    revision paper: each chapter's text (structured sections, else the stored
+    source_text) bounded per-chapter and in total so the prompt stays sane.
+    chapter_num = -1 marks it synthetic — the caller must NOT persist its
+    analysis/grounding to the per-chapter cache."""
+    want_nums = []
+    for n in wanted:
+        try:
+            want_nums.append(int(str(n).strip()))
+        except (TypeError, ValueError):
+            pass
+    picked = [c for c in all_chapters if int(c.get("chapter_num", -999)) in set(want_nums)]
+    picked.sort(key=lambda c: int(c.get("chapter_num", 0)))
+    if not picked:
+        picked = all_chapters[:1]
+
+    sections, total = [], 0
+    for c in picked:
+        cnum = int(c.get("chapter_num", 0))
+        text = _chapter_plain_text(c)
+        if len(text) < 200:  # thin structured text → fall back to the index-time cache
+            text = db.get_chapter_source_text(sb, book_id, cnum) or text
+        chunk = text[:cap_per]
+        if total + len(chunk) > cap_total:
+            chunk = chunk[: max(0, cap_total - total)]
+        if chunk:
+            sections.append({
+                "section_title": c.get("title") or f"Chapter {cnum + 1}",
+                "section_type": "body", "content": chunk,
+                "page_num": c.get("start_page", 0), "subsections": [],
+            })
+            total += len(chunk)
+        if total >= cap_total:
+            break
+    return {
+        "chapter_num": -1,
+        "title": f"Revision — {_range_label([int(c.get('chapter_num', 0)) for c in picked])}",
+        "sections": sections,
+        "start_page": picked[0].get("start_page", 0) if picked else 0,
+        "end_page": picked[-1].get("end_page", 0) if picked else 0,
+    }
+
+
 def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     # Lazy imports shared by every generation kind.
     from agent1_ingestion.extractor import extract_pdf
@@ -141,6 +215,23 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             pdf_path=str(pdf_path), client=client, known_chapters=book.get("chapters"),
         ).model_dump()
         chapter = _pick_chapter(structured.get("chapters", []), gen.get("chapter_ref"))
+        # Cumulative revision paper (worksheet/exam over a GROUP of chapters):
+        # merge the selected chapters into one synthetic chapter and generate the
+        # paper from it. Marked chapter_num = -1 so its analysis/grounding is
+        # never cached as a real chapter's.
+        _rev_chapters = (gen.get("params") or {}).get("chapters")
+        _rev_valid = (
+            [int(str(n).strip()) for n in _rev_chapters if str(n).strip().lstrip("-").isdigit()]
+            if kind in ("worksheet", "exam_paper") and isinstance(_rev_chapters, list) else []
+        )
+        is_cumulative = len(_rev_valid) >= 2
+        if is_cumulative:
+            chapter = _combine_chapters(structured.get("chapters", []), _rev_chapters, sb, book_id)
+        elif _rev_valid and not gen.get("chapter_ref"):
+            # A one-chapter revision paper (params.chapters=[N], no chapter_ref):
+            # generate from THAT chapter, not the book's first (defence-in-depth
+            # — the UI blocks combining a single chapter, but never trust it).
+            chapter = _pick_chapter(structured.get("chapters", []), str(_rev_valid[0]))
         chapter_num = int(chapter.get("chapter_num", 0))
         chapter_title = chapter.get("title") or f"Chapter {chapter_num}"
 
@@ -150,7 +241,9 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         # per-chapter relocation override (persisted the first time we healed it)
         # wins over the stored pages, so the fix is paid once. 'not_found' means an
         # earlier relocation PROVED the topic isn't in this book — fail fast.
-        heal_on = _chapter_heal_enabled()
+        # Cumulative revision papers have no single chapter to heal/OCR — their
+        # text is already gathered from the per-chapter cache.
+        heal_on = _chapter_heal_enabled() and not is_cumulative
         heal = db.get_chapter_heal(sb, book_id, chapter_num) if heal_on else None
         if heal and heal.get("status") == "not_found":
             raise RuntimeError(_chapter_check_error(chapter_title, "a different topic"))
@@ -175,7 +268,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 + sum(len(ss.get("content") or "") for ss in (s.get("subsections") or []))
                 for s in (chapter.get("sections") or [])
             )
-            if section_chars < 200:
+            if section_chars < 200 and not is_cumulative:
                 # Scanned chapter: transcribe the pages with Claude vision ONCE and
                 # cache the text (chapter_grounding.source_text, keyed book+chapter).
                 # Every later generation of this chapter — any kind, any owner —
@@ -222,7 +315,11 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 for s in (chapter.get("sections") or [])
             )
 
-        ok, actual = verify_chapter_content(chapter_title, _sample_text(), client)
+        # A cumulative revision paper's title ("Revision — Chapters 1–3") names
+        # no single topic, so the topic-match check doesn't apply — skip it (it
+        # would otherwise pay a Claude call per paper and could fail loud on the
+        # synthetic label).
+        ok, actual = (True, None) if is_cumulative else verify_chapter_content(chapter_title, _sample_text(), client)
         if not ok:
             # Without the flag/migration, keep the pre-heal behavior: fail loud.
             if not heal_on:
@@ -336,7 +433,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         # chapter previously re-analysed 6 times). Reuse is refused for v1
         # (pre-chunking) rows, immediately after a relocation in THIS job, and
         # for single-part jobs (the cache describes the whole chapter).
-        analysis = None if (relocated_now or part_ref is not None) else db.get_chapter_analysis(sb, book_id, chapter_num)
+        analysis = None if (relocated_now or part_ref is not None or is_cumulative) else db.get_chapter_analysis(sb, book_id, chapter_num)
         if analysis is not None and (analysis.get("language") or "en") != lesson_lang:
             # The cache is language-stamped: a Malay analysis must not ground an
             # English lesson (or vice versa) — regenerate in the right language.
@@ -374,7 +471,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         # the presentation kind. This is the tutor's curriculum fence. Best-effort.
         # Part jobs skip it: their analysis covers ONE part, and writing it here
         # would poison the whole-chapter cache and the tutor's fence.
-        if part_ref is None:
+        if part_ref is None and not is_cumulative:
             db.set_chapter_grounding(sb, book_id, chapter_num, chapter_title, analysis)
 
         # School branding (templates + derived accent/logo) — falls back to defaults.
