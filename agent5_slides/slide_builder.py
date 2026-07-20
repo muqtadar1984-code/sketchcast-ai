@@ -97,6 +97,71 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, ma
 _Box = tuple[int, int, int, int]
 
 
+def _paste_figure(canvas, draw, region, visual, *, accent, rtl=False) -> list[list[_Box]]:
+    """Place a REAL textbook figure (Phase 3) into the content region, framed and
+    attributed as a quotation ("From the textbook · p.N") with an optional caption.
+
+    A figure is a raster paste, not vector shapes, so it lives here (compose_slide
+    owns the canvas) rather than in diagram_builder. Returns reveal elements, or []
+    if the image can't be loaded — the caller then falls back to bullets so a bad
+    ``src`` never yields an empty slide.
+    """
+    src = (visual or {}).get("src")
+    if not src or not Path(src).exists():
+        return []
+    try:
+        im = Image.open(src)
+        if im.mode in ("RGBA", "LA", "P"):  # flatten transparency onto white
+            im = im.convert("RGBA")
+            flat = Image.new("RGB", im.size, _WHITE)
+            flat.paste(im, mask=im.split()[-1])
+            fig = flat
+        else:
+            fig = im.convert("RGB")
+    except Exception:  # noqa: BLE001
+        return []
+
+    rx0, ry0, rx1, ry1 = region
+    rw, rh = rx1 - rx0, ry1 - ry0
+    attribution = str(visual.get("attribution") or "").strip()
+    caption = " ".join(str(visual.get("caption") or "").strip().split())
+
+    label_h, pad = 30, 14
+    cap_h = 30 if caption else 0
+    avail_w = rw - 2 * pad
+    avail_h = rh - label_h - cap_h - 2 * pad - 8
+    if avail_w < 60 or avail_h < 60:
+        return []
+    scale = min(avail_w / fig.width, avail_h / fig.height, 1.4)  # cap upscale — don't mush a small figure
+    fw, fh = max(1, int(fig.width * scale)), max(1, int(fig.height * scale))
+    fig = fig.resize((fw, fh))
+    fx = rx0 + (rw - fw) // 2
+    fy = ry0 + label_h + pad + max(0, (avail_h - fh) // 2)
+
+    card = [int(fx - pad), int(fy - pad), int(fx + fw + pad), int(fy + fh + pad)]
+    draw.rounded_rectangle(card, radius=12, fill=_WHITE, outline=_RULE, width=2)
+    canvas.paste(fig, (int(fx), int(fy)))
+
+    # Attribution tab (accent) above the card — the "this is quoted, not ours" signal.
+    lab = ("From the textbook" + (f"  ·  {attribution}" if attribution else "")).upper()
+    lf = _font(bold=True, size=14)
+    lw = int(draw.textlength(lab, font=lf))
+    lx, ly = card[0], card[1] - label_h + 2
+    draw.rounded_rectangle([lx, ly, lx + lw + 24, ly + 24], radius=6, fill=accent)
+    draw.text((lx + 12, ly + 4), lab, fill=_WHITE, font=lf)
+
+    reveal: list[list[_Box]] = [[(lx, ly, lx + lw + 24, ly + 24)], [tuple(card)]]
+    if caption:
+        cf = _font(bold=False, size=20, sample=caption)
+        line = display_text(_wrap(draw, caption, cf, rw)[0], rtl_base=rtl)
+        cw = int(draw.textlength(line, font=cf))
+        cx = rx0 + (rw - cw) // 2
+        cyy = card[3] + 10
+        draw.text((cx, cyy), line, fill=_MUTED, font=cf)
+        reveal.append([(cx, cyy, cx + cw, cyy + 24)])
+    return reveal
+
+
 def compose_slide(
     heading: str,
     points: list[str],
@@ -200,20 +265,26 @@ def compose_slide(
 
     y = max(ty + 30, 212)
 
-    # A composable diagram claims the content area when present; it falls back to
-    # plain bullets if the spec is unusable, so slides are never bare.
+    # A composable diagram/archetype (or a real textbook figure) claims the content
+    # area when present; it falls back to plain bullets if unusable, so slides are
+    # never bare.
     diagram_elems: list[list[_Box]] = []
     if has_visual:
         from .diagram_builder import caption_element, render_diagram, set_direction
 
         set_direction(rtl)  # bidi base for mixed runs inside diagram labels
         region = (content_left, y, content_right, _HEIGHT - 70)
-        diagram_elems = render_diagram(draw, region, visual, accent=acc)
-        if diagram_elems:
+        if isinstance(visual, dict) and visual.get("kind") == "figure":
+            # A pasted textbook figure carries its own attribution + caption.
+            diagram_elems = _paste_figure(canvas, draw, region, visual, accent=acc, rtl=rtl)
             anim.extend(diagram_elems)
-            cap = caption_element(draw, region, visual.get("caption", "") if isinstance(visual, dict) else "")
-            if cap:
-                anim.append(cap)
+        else:
+            diagram_elems = render_diagram(draw, region, visual, accent=acc)
+            if diagram_elems:
+                anim.extend(diagram_elems)
+                cap = caption_element(draw, region, visual.get("caption", "") if isinstance(visual, dict) else "")
+                if cap:
+                    anim.append(cap)
 
     if not has_visual or not diagram_elems:
         pts = [p for p in (points or []) if p.strip()]

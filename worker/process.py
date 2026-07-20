@@ -596,6 +596,8 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             # (the app sorts video artifacts by part number → Part 1 first).
             from datetime import datetime
             from agent3_scripts.script_generator import generate_episode_script, save_script
+            from agent5_slides.figures import (attach_figures_to_segments,
+                                               detect_and_crop_figures, textbook_figures_enabled)
             from agent5_slides.slide_generator import generate_episode_slides
             from agent6_animation.video_composer import compose_episode_videos
             from agent8_render.renderer import render_final_video
@@ -631,6 +633,20 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             script_dicts: list[dict] = []
             ep_title = chapter_title
 
+            # Phase 3 (gated): detect + crop this chapter's real textbook figures
+            # ONCE, then hand each part the ones that best match its segments. The
+            # crops live under the job tmp — embedded into the deck + composited
+            # into the video before cleanup. Best-effort: never breaks a lesson.
+            chapter_figures: list[dict] = []
+            used_figures: set[int] = set()
+            if textbook_figures_enabled():
+                try:
+                    chapter_figures = detect_and_crop_figures(
+                        pdf_path, chapter, client, Path(tmp) / "figures"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("figure detection failed: %s", exc)
+
             for part_idx, episode in enumerate(episodes_plan, start=1):
                 # This part's slice of the overall bar: 45 → 96 split evenly.
                 span = 51.0 / n_parts
@@ -660,6 +676,11 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 )
                 save_script(script)
                 script_dict = script.model_dump()
+                # Drop matched textbook figures onto this part's bullet segments.
+                if chapter_figures:
+                    attach_figures_to_segments(
+                        script_dict.get("segments", []), chapter_figures, used_figures
+                    )
                 script_dicts.append(script_dict)
                 if part_idx == 1:
                     ep_title = script_dict.get("episode_title") or chapter_title
