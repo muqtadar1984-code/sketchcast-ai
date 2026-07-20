@@ -48,22 +48,29 @@ class VisualItem(BaseModel):
 
 
 class SlideVisual(BaseModel):
-    """A composable on-screen diagram for a segment (rendered + animated natively).
+    """A composable on-screen layout for a segment (rendered + animated natively).
 
-    ``kind`` picks a deterministic layout template:
+    ``kind`` picks a deterministic template. Structural diagrams:
       * ``flow``      — ``nodes`` as a left→right process, arrows between steps.
       * ``cycle``     — ``nodes`` (3-5) arranged in a ring with arrows back to start.
       * ``hierarchy`` — ``nodes[0]`` is the root; ``nodes[1:]`` are children below it.
       * ``compare``   — two ``groups`` as side-by-side labelled columns.
       * ``icons``     — 2-6 labelled ``items``, each an icon + a short caption.
+    Content layouts (fill the slide instead of a few bullets):
+      * ``definition``— one key term (the slide heading) + its meaning in ``body``.
+      * ``quiz``      — the question (slide heading) + ``options`` + ``answer`` index.
+      * ``takeaways`` — 2-4 ``nodes``, each a key point, drawn as a check-list recap.
     Labels are short (2-5 words); the renderer draws shapes from the slide palette.
     """
 
-    kind: Literal["flow", "cycle", "hierarchy", "compare", "icons"]
-    nodes: List[str] = Field(default_factory=list)
-    groups: List[VisualGroup] = Field(default_factory=list)
-    items: List[VisualItem] = Field(default_factory=list)
+    kind: Literal["flow", "cycle", "hierarchy", "compare", "icons", "definition", "quiz", "takeaways"]
+    nodes: List[str] = Field(default_factory=list)  # flow/cycle/hierarchy steps; also takeaways points
+    groups: List[VisualGroup] = Field(default_factory=list)  # compare
+    items: List[VisualItem] = Field(default_factory=list)  # icons
     caption: str = ""
+    body: str = ""  # definition: the plain-language meaning (one sentence)
+    options: List[str] = Field(default_factory=list)  # quiz: 2-4 answer options
+    answer: Optional[int] = None  # quiz: 0-based index of the correct option
 
 
 class ScriptSegment(BaseModel):

@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 STORAGE_DIR = Path(__file__).parent.parent / "storage" / "scripts"
 
 _VALID_VISUAL_ACTIONS = {"DRAW_START", "DRAW_CONTINUE", "GHOST_ONLY"}
-_VALID_VISUAL_KINDS = {"flow", "cycle", "hierarchy", "compare", "icons"}
+_VALID_VISUAL_KINDS = {"flow", "cycle", "hierarchy", "compare", "icons", "definition", "quiz", "takeaways"}
 
 
 def _parse_slide_visual(data) -> Optional[SlideVisual]:
@@ -58,8 +58,23 @@ def _parse_slide_visual(data) -> Optional[SlideVisual]:
         if label:
             items.append(VisualItem(icon=str(it.get("icon") or "").strip().lower()[:24], label=label))
     caption = str(data.get("caption") or "").strip()[:120]
+    body = str(data.get("body") or "").strip()[:280]
+    options = [str(o).strip() for o in (data.get("options") or []) if str(o).strip()][:4]
+    ans_raw = data.get("answer")
+    # 0-based index into options; null it (rather than guess) if out of range — a
+    # wrong "correct answer" highlight teaches the wrong thing.
+    answer = ans_raw if isinstance(ans_raw, int) and 0 <= ans_raw < len(options) else None
 
-    if kind == "icons":
+    if kind == "definition":
+        if not body:
+            return None
+    elif kind == "quiz":
+        if len(options) < 2:
+            return None
+    elif kind == "takeaways":
+        if len(nodes) < 2:
+            return None
+    elif kind == "icons":
         if len(items) < 2:
             return None
     elif kind == "compare":
@@ -71,7 +86,8 @@ def _parse_slide_visual(data) -> Optional[SlideVisual]:
         if len(nodes) < 2:
             return None
 
-    return SlideVisual(kind=kind, nodes=nodes, groups=groups, items=items, caption=caption)
+    return SlideVisual(kind=kind, nodes=nodes, groups=groups, items=items, caption=caption,
+                       body=body, options=options, answer=answer)
 
 
 def process_director_manifest(segments: List[ScriptSegment]) -> List[ScriptSegment]:

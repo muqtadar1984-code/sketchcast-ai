@@ -360,10 +360,146 @@ def _icons(draw, region: _Region, items: list[dict], accent) -> list[list[_Box]]
     return elements
 
 
-def render_diagram(draw: ImageDraw.ImageDraw, region: _Region, visual: dict, *, accent=None) -> list[list[_Box]]:
-    """Draw a diagram into ``region`` and return its ordered reveal elements.
+# --- Content archetypes (Phase 2) --------------------------------------------
+# Not "diagrams" of a structure, but whole-slide LAYOUTS that replace a wall of
+# bullets: a key-term definition, a quick-check question, and a check-list recap.
+# Each fills the content region (the point — sparse bullet slides left it empty)
+# and returns reveal boxes, so the native video renderer animates them for free.
 
-    Returns ``[]`` for an unusable spec so the caller can fall back to bullets.
+
+def _fit_lines(draw, text: str, max_w: int, max_h: int, sizes: list[int]):
+    """Largest size in ``sizes`` whose wrapped ``text`` fits max_w x max_h."""
+    text = " ".join((text or "").split())
+    chosen, lines = sizes[-1], []
+    for size in sizes:
+        f = _font(False, size, text)
+        lines = _wrap(draw, text, f, max_w)
+        if len(lines) * int(size * 1.4) <= max_h:
+            chosen = size
+            break
+        chosen = size
+    return _font(False, chosen, text), lines, chosen, int(chosen * 1.4)
+
+
+def _definition(draw, region: _Region, body: str, accent) -> list[list[_Box]]:
+    """Key-term definition: an accent bar + the meaning in large, roomy text (the
+    term itself is the slide heading). Big type, vertically centred — a spacious
+    'here is what this word means', not a cramped bullet."""
+    rx0, ry0, rx1, ry1 = region
+    rw, rh = rx1 - rx0, ry1 - ry0
+    body = " ".join((body or "").split())
+    if not body:
+        return []
+    bar_w, pad = 7, 34
+    rtl = _RTL_BASE
+    f, lines, _size, line_h = _fit_lines(draw, body, rw - bar_w - pad, rh - 24, [40, 36, 32, 28, 24])
+    total_h = len(lines) * line_h
+    ty = ry0 + max(0, (rh - total_h) // 2)
+    if rtl:
+        bar_x0, bar_x1, text_right = rx1 - bar_w, rx1, rx1 - bar_w - pad
+    else:
+        bar_x0, bar_x1, text_left = rx0, rx0 + bar_w, rx0 + bar_w + pad
+    draw.rounded_rectangle([bar_x0, ty, bar_x1, ty + total_h], radius=bar_w // 2, fill=accent)
+    elements: list[list[_Box]] = [[(int(bar_x0), int(ty), int(bar_x1), int(ty + total_h))]]
+    yy = ty
+    for ln in lines:
+        s = _dt(ln)
+        w = int(draw.textlength(s, font=f))
+        x = (text_right - w) if rtl else text_left
+        draw.text((x, yy), s, fill=_INK, font=f)
+        elements.append([(int(x), int(yy), int(x + w), int(yy + line_h))])
+        yy += line_h
+    return elements
+
+
+def _quiz(draw, region: _Region, options: list[str], answer, accent) -> list[list[_Box]]:
+    """Quick-check: the question is the slide heading; these are the answer
+    options, the correct one ringed in the accent and ticked."""
+    rx0, ry0, rx1, ry1 = region
+    rw, rh = rx1 - rx0, ry1 - ry0
+    n = len(options)
+    gap = 18
+    row_h = min(92, max(54, (rh - (n - 1) * gap) // n))
+    box_w = min(rw, 860)
+    bx0 = rx0 + (rw - box_w) // 2
+    bx1 = bx0 + box_w
+    stack_h = n * row_h + (n - 1) * gap
+    y = ry0 + max(0, (rh - stack_h) // 2)
+    lf = _font(False, 26, " ".join(options))
+    bf = _font(True, 22)
+    rtl = _RTL_BASE
+    letters = "ABCDEFGH"
+    elements: list[list[_Box]] = []
+    for i, opt in enumerate(options):
+        is_ans = answer is not None and i == answer
+        y0, y1 = y, y + row_h
+        draw.rounded_rectangle([bx0, y0, bx1, y1], radius=14,
+                               outline=accent if is_ans else _RULE, width=4 if is_ans else 2)
+        cy = (y0 + y1) // 2
+        br = 18
+        bcx = (bx1 - 24 - br) if rtl else (bx0 + 24 + br)
+        draw.ellipse([bcx - br, cy - br, bcx + br, cy + br], fill=accent if is_ans else _MUTED)
+        ls = letters[i]
+        lw = draw.textlength(ls, font=bf)
+        draw.text((bcx - lw / 2, cy - 14), ls, fill=_BG, font=bf)
+        s = _dt(" ".join(opt.split()))
+        tw = draw.textlength(s, font=lf)
+        tx = (bcx - br - 20 - tw) if rtl else (bcx + br + 20)
+        draw.text((tx, cy - 17), s, fill=_INK, font=lf)
+        if is_ans:
+            tick_cx = (bx0 + 34) if rtl else (bx1 - 34)
+            draw_icon(draw, "check", int(tick_cx), int(cy), 30, accent=accent)
+        elements.append([(int(bx0), int(y0), int(bx1), int(y1))])
+        y += row_h + gap
+    return elements
+
+
+def _takeaways(draw, region: _Region, items: list[str], accent) -> list[list[_Box]]:
+    """The recap as a check-list: accent check-bubbles + roomy lines, so the
+    'remember this' slide fills the frame instead of trailing off in tiny bullets.
+    Checks (not numbers) — takeaways aren't a sequence."""
+    rx0, ry0, rx1, ry1 = region
+    rw, rh = rx1 - rx0, ry1 - ry0
+    n = len(items)
+    gap = 20
+    row_h = min(104, max(54, (rh - (n - 1) * gap) // n))
+    cr = 19
+    rtl = _RTL_BASE
+    lf = _font(False, 26, " ".join(items))
+    stack_h = n * row_h + (n - 1) * gap
+    y = ry0 + max(0, (rh - stack_h) // 2)
+    elements: list[list[_Box]] = []
+    for item in items:
+        cy = y + row_h // 2
+        if rtl:
+            ccx = rx1 - cr
+            tx_right = ccx - cr - 22
+            text_w = tx_right - rx0
+        else:
+            ccx = rx0 + cr
+            tx = ccx + cr + 22
+            text_w = rx1 - tx
+        draw.ellipse([ccx - cr, cy - cr, ccx + cr, cy + cr], fill=accent)
+        draw_icon(draw, "check", int(ccx), int(cy), int(cr * 1.25), accent=_BG)
+        lines = _wrap(draw, " ".join(item.split()), lf, text_w)[:2]
+        block_h = len(lines) * 34
+        ty = cy - block_h // 2
+        bx_lo, bx_hi = rx1, rx0
+        for ln in lines:
+            s = _dt(ln)
+            w = int(draw.textlength(s, font=lf))
+            x = (tx_right - w) if rtl else tx
+            draw.text((x, ty), s, fill=_INK, font=lf)
+            bx_lo, bx_hi = min(bx_lo, x), max(bx_hi, x + w)
+            ty += 34
+        elements.append([(int(min(ccx - cr, bx_lo)), int(cy - cr), int(max(ccx + cr, bx_hi)), int(cy + cr))])
+        y += row_h + gap
+    return elements
+
+
+def render_diagram(draw: ImageDraw.ImageDraw, region: _Region, visual: dict, *, accent=None) -> list[list[_Box]]:
+    """Draw a diagram/archetype into ``region`` and return its ordered reveal
+    elements. Returns ``[]`` for an unusable spec so the caller falls back to bullets.
     """
     acc = accent or _GREEN
     if not isinstance(visual, dict):
@@ -376,6 +512,18 @@ def render_diagram(draw: ImageDraw.ImageDraw, region: _Region, visual: dict, *, 
         for it in (visual.get("items") or []) if isinstance(it, dict) and str(it.get("label") or "").strip()
     ][:6]
 
+    # Content archetypes (Phase 2) — whole-slide layouts.
+    if kind == "definition":
+        return _definition(draw, region, str(visual.get("body") or ""), acc)
+    if kind == "quiz":
+        opts = [str(o).strip() for o in (visual.get("options") or []) if str(o).strip()][:4]
+        ans = visual.get("answer")
+        ans = ans if isinstance(ans, int) and 0 <= ans < len(opts) else None
+        return _quiz(draw, region, opts, ans, acc) if len(opts) >= 2 else []
+    if kind == "takeaways":
+        return _takeaways(draw, region, nodes[:4], acc) if len(nodes) >= 2 else []
+
+    # Structural diagrams.
     if kind == "icons" and len(items) >= 2:
         return _icons(draw, region, items, acc)
     if kind == "compare" and len(groups) >= 1:

@@ -190,15 +190,17 @@ Rules:
 - "text" stays the spoken narration (voiceover + presenter notes);
   slide_heading/slide_points are what appears on the slide.
 
-=== ON-SCREEN DIAGRAM (slide_visual) — OPTIONAL, for structural concepts ===
-When a concept is inherently STRUCTURAL or RELATIONAL, add a "slide_visual" object
-to that segment. It is rendered as a clean animated diagram (boxes/arrows drawn on
-in order) — far better than bullets for these shapes. Use it INSTEAD of slide_points
-on that segment (you may still give a short slide_heading). Keep every label SHORT
-(2-5 words). Use at most one diagram per segment, and only where it genuinely helps —
-most segments should still use plain slide_points.
+=== ON-SCREEN FORMAT (slide_visual) — CHOOSE THE BEST ONE PER SEGMENT ===
+Plain bullet points are the LAST resort, not the default. For each teaching segment,
+pick the on-screen FORMAT that best fits the idea and put it in a "slide_visual"
+object INSTEAD of slide_points (you may still give a short slide_heading). Keep every
+label SHORT (2-5 words). At most one visual per segment.
 
-Pick the "kind" that matches the concept:
+** ANTI-MONOTONY RULE (important): NEVER put plain slide_points on more than TWO
+segments in a row. A lesson that is all bullet lists has failed. Vary the rhythm —
+e.g. a diagram, then a definition, then a quick check, then a comparison. **
+
+STRUCTURAL DIAGRAMS — the shape of an idea:
 - "flow"      — a process / sequence / cause→effect chain. "nodes": 2-5 ordered steps.
 - "cycle"     — a repeating loop (water cycle, feedback). "nodes": 3-5 stages (loops back).
 - "hierarchy" — classification / part-whole. "nodes": [root, child1, child2, ...] (2-4 children).
@@ -211,7 +213,19 @@ Pick the "kind" that matches the concept:
                 rain, snow, gear, scale, music, flower, sparkle, atom, recycle, warning,
                 pencil, arrow, clock, phone, flag, scissors, airplane, anchor, crown,
                 infinity, bolt, sum, sqrt, plus, question
-Optional "caption": one short line under the diagram.
+
+CONTENT LAYOUTS — fill the slide instead of a few thin bullets:
+- "definition" — introduce ONE key term. Put the TERM in "slide_heading" and its
+                 plain-language meaning (one sentence, under 25 words) in "body".
+                 Use this for EVERY important vocabulary word.
+- "quiz"       — a quick comprehension check. Put the QUESTION in "slide_heading",
+                 give 2-4 short "options", and set "answer" to the 0-based index of
+                 the correct option. Add one every few segments to keep students active.
+- "takeaways"  — a recap / summary. 2-4 short "nodes", each one key point to remember.
+                 Use this for synthesis / closing segments instead of bullets.
+
+Optional "caption": one short line under a structural diagram.
+Only fall back to plain "slide_points" when NONE of the above fits — and never twice in a row.
 
 === OUTPUT FORMAT ===
 Return ONLY valid JSON — no preamble, no markdown fences, no explanation.
@@ -247,6 +261,31 @@ Return ONLY valid JSON — no preamble, no markdown fences, no explanation.
       "estimated_duration_seconds": 90
     },
     {
+      "type": "explore",
+      "text": "This balancing point has a name...",
+      "elevenlabs_text": "This balancing point has a name... <break time='0.3s'/>",
+      "slide_heading": "Equilibrium",
+      "slide_visual": {
+        "kind": "definition",
+        "body": "The price where the amount buyers want exactly matches the amount sellers offer."
+      },
+      "pause_for_question": false,
+      "estimated_duration_seconds": 30
+    },
+    {
+      "type": "explore",
+      "text": "Quick check before we go on.",
+      "elevenlabs_text": "Quick check before we go on. <break time='0.5s'/>",
+      "slide_heading": "If demand rises but supply stays the same, the price...",
+      "slide_visual": {
+        "kind": "quiz",
+        "options": ["Falls", "Rises", "Stays the same"],
+        "answer": 1
+      },
+      "pause_for_question": false,
+      "estimated_duration_seconds": 25
+    },
+    {
       "type": "question_hook",
       "text": "Before we go deeper... does anything we've covered spark a question for you? Go ahead and ask — or tap continue.",
       "elevenlabs_text": "Before we go deeper... <break time='0.5s'/> does anything we've covered spark a question for you? <break time='2s'/> Go ahead and ask — or tap continue.",
@@ -258,6 +297,11 @@ Return ONLY valid JSON — no preamble, no markdown fences, no explanation.
       "type": "synthesis",
       "text": "Let's collect what we've discovered together...",
       "elevenlabs_text": "Let's collect what we've discovered together... <break time='0.5s'/>",
+      "slide_heading": "What to remember",
+      "slide_visual": {
+        "kind": "takeaways",
+        "nodes": ["Price is set where supply meets demand", "More demand pushes price up", "Sellers respond by supplying more"]
+      },
       "pause_for_question": false,
       "estimated_duration_seconds": 45
     }

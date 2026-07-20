@@ -30,9 +30,17 @@ SLIDES_DIR = STORAGE_DIR / "slides"
 
 
 def _visual_to_points(visual: Optional[dict]) -> list[str]:
-    """Flatten a slide_visual's labels into deck bullet points (text-only deck)."""
+    """Flatten a slide_visual's labels into deck bullet points (branded-template
+    deck only — the default deck embeds the rendered image instead)."""
     if not isinstance(visual, dict):
         return []
+    kind = str(visual.get("kind") or "").strip()
+    if kind == "definition":
+        b = str(visual.get("body") or "").strip()
+        return [b] if b else []
+    if kind == "quiz":
+        return [str(o).strip() for o in (visual.get("options") or []) if str(o).strip()][:6]
+    # takeaways falls through to the `nodes` branch below.
     labels = [str(it.get("label")).strip() for it in (visual.get("items") or [])
               if isinstance(it, dict) and str(it.get("label") or "").strip()]
     if labels:
