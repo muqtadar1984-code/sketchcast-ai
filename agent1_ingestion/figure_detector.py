@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 _DETECT_WIDTH = 900          # a touch higher than chapter detection — figures are smaller than banners
 _DETECT_BATCH = 8
 _MAX_PAGES = 16              # scan at most this many of a chapter's pages
+_SKIP_BEFORE_PAGE = 2        # never scan the cover / title page (front matter, no teaching figures)
 _MAX_FIGURES = 8            # keep at most this many per chapter
 _CROP_TARGET_PX = 1100       # render the cropped region ~this wide
 _CROP_MAX_ZOOM = 4.0
@@ -66,7 +67,7 @@ def detect_figures(pdf_path: str | Path, start_page: int, end_page: int, client)
         return []
     first = max(0, int(start_page))
     last = max(first, int(end_page))
-    pages = list(range(first, min(last, first + _MAX_PAGES - 1) + 1))
+    pages = [p for p in range(first, min(last, first + _MAX_PAGES - 1) + 1) if p >= _SKIP_BEFORE_PAGE]
     if not pages:
         return []
 
@@ -83,21 +84,26 @@ def detect_figures(pdf_path: str | Path, start_page: int, end_page: int, client)
             prompt = (
                 f"You are shown {n} consecutive pages of a school textbook, in order — "
                 f"image 1 (first) through image {n} (last).\n\n"
-                "Find the FIGURES on these pages: diagrams, illustrations, labelled drawings, "
-                "photographs, charts, graphs and maps — the visual teaching aids a student would "
-                "look at. Do NOT report body text, headings, plain text tables, exercises, page "
-                "numbers, running headers/footers, publisher logos, or decorative borders.\n\n"
-                "For each figure, report:\n"
+                "Report ONLY the TEACHING FIGURES — the ones a student studies to understand a "
+                "concept: a LABELLED diagram, an annotated scientific drawing, a chart/graph, a map, "
+                "or a photograph that carries LABELS or a figure caption pointing out its parts. The "
+                "key test: it has labels, callouts, or a caption naming what it shows.\n\n"
+                "Do NOT report (these are NOT teaching figures):\n"
+                "- the book COVER, or a unit/chapter OPENER's large background or decorative photo;\n"
+                "- any photograph with NO labels/annotations that is there for visual appeal — a "
+                "magnified texture, a leaf, a landscape, a stock or watermarked photo;\n"
+                "- publisher logos, branding, edition/endorsement text, page numbers, headers/footers;\n"
+                "- body text, headings, key-word lists, 'getting started'/activity/question boxes.\n\n"
+                "For each teaching figure, report:\n"
                 f"- image_number: which image it is on (1..{n}) — the position in THIS set, never a "
                 "printed page number.\n"
-                "- bbox: [x0, y0, x1, y1] as fractions of the page from 0 to 1 (x0,y0 = top-left "
-                "corner, x1,y1 = bottom-right), tightly around the figure AND its caption.\n"
+                "- bbox: [x0, y0, x1, y1] as fractions of the page from 0 to 1 (x0,y0 = top-left, "
+                "x1,y1 = bottom-right), tight around the figure AND its caption.\n"
                 "- caption: a short description (<=12 words) of what the figure shows.\n"
-                "- label: the printed figure label if one is visible (e.g. \"Fig. 4.2\", "
-                "\"Figure 3\"), otherwise null.\n\n"
+                "- label: the printed figure label if visible (e.g. \"Fig. 4.2\"), otherwise null.\n\n"
                 'Return ONLY JSON: {"figures": [{"image_number": <int>, "bbox": [x0,y0,x1,y1], '
-                '"caption": "<text>", "label": "<text or null>"}]}. Empty list if there are no '
-                "real figures. Prefer quality over quantity — skip anything you are unsure is a figure."
+                '"caption": "<text>", "label": "<text or null>"}]}. Empty list if a page has no '
+                "labelled teaching figure. When unsure whether an image teaches or just decorates, SKIP it."
             )
             try:
                 result = client.analyze_images_batch(paths, prompt, max_tokens=1500)

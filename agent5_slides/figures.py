@@ -68,6 +68,17 @@ def detect_and_crop_figures(pdf_path, chapter: dict, client, out_dir: Path) -> l
         return []
     start = int(chapter.get("start_page", 0) or 0)
     end = int(chapter.get("end_page", start) or start)
+    # Front matter (cover, the "In this topic" opener, key-word lists) often gets
+    # absorbed into a chapter's page range — chapter 1 especially. Start scanning at
+    # the first CONTENT section when it sits deeper than start_page, so the scan
+    # window isn't spent on the opener/cover and actually REACHES the labelled
+    # figures (which live with the content, not the opener).
+    sec_pages = sorted({
+        int(s["page_num"]) for s in (chapter.get("sections") or [])
+        if isinstance(s, dict) and isinstance(s.get("page_num"), int) and int(s["page_num"]) >= start
+    })
+    if sec_pages:
+        start = sec_pages[0]
     try:
         specs = detect_figures(pdf_path, start, end, client)
     except Exception as exc:  # noqa: BLE001
