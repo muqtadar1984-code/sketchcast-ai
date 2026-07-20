@@ -678,10 +678,11 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 )
                 save_script(script)
                 script_dict = script.model_dump()
-                # Drop matched textbook figures onto this part's bullet segments.
+                # Attach matched textbook figures to this part's segments (semantic
+                # match via the model, keyword fallback).
                 if chapter_figures:
                     attach_figures_to_segments(
-                        script_dict.get("segments", []), chapter_figures, used_figures
+                        script_dict.get("segments", []), chapter_figures, used_figures, client
                     )
                 script_dicts.append(script_dict)
                 if part_idx == 1:

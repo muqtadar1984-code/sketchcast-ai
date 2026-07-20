@@ -115,13 +115,80 @@ def detect_and_crop_figures(pdf_path, chapter: dict, client, out_dir: Path) -> l
     return figures
 
 
-def attach_figures_to_segments(segments: list[dict], figures: list[dict], used: set[int]) -> int:
-    """Match still-unused ``figures`` to this part's PLAIN-BULLET segments by
-    caption↔content word overlap, and attach the best as a ``figure`` slide_visual.
+def _match_figures_llm(candidates, figures, used, client):
+    """Ask the model which figure best illustrates which slide — a SEMANTIC match.
+    'What hides inside a leaf' and 'a palisade cell' share no words but mean the
+    same thing; keyword overlap can't see that, the model can. Returns
+    ``{figure_index: segment_index}`` or None on any failure (caller falls back)."""
+    avail = [(fi, f) for fi, f in enumerate(figures)
+             if fi not in used and (f.get("caption") or f.get("label"))]
+    if not avail or not candidates or client is None:
+        return None
+    figs = "\n".join(f"[{fi}] {(f.get('caption') or f.get('label') or '').strip()}" for fi, f in avail)
+    slides = "\n".join(f"[{si}] {(seg.get('slide_heading') or '').strip()}" for si, seg in candidates)
+    prompt = (
+        "Match each textbook FIGURE to the lesson SLIDE it best illustrates.\n\n"
+        f"FIGURES:\n{figs}\n\nSLIDES:\n{slides}\n\n"
+        "For each figure choose the ONE slide index it best illustrates, or -1 if no slide "
+        "genuinely fits. A figure and a slide can match by MEANING even when they share no "
+        "words — e.g. a figure 'a palisade cell' illustrates a slide 'what hides inside a "
+        "leaf'. Each slide takes at most one figure; never force a weak match.\n"
+        'Return ONLY JSON: {"matches": [{"figure": <int>, "slide": <int or -1>}]}.'
+    )
+    try:
+        data = client.analyze(prompt, max_tokens=600).get("data") or {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("LLM figure match failed: %s", exc)
+        return None
+    raw = data.get("matches") if isinstance(data, dict) else None
+    if not isinstance(raw, list):
+        return None
+    valid_figs = {fi for fi, _ in avail}
+    valid_segs = {si for si, _ in candidates}
+    out: dict[int, int] = {}
+    seen_seg: set[int] = set()
+    for m in raw:
+        if not isinstance(m, dict):
+            continue
+        fi, si = m.get("figure"), m.get("slide")
+        if isinstance(fi, int) and isinstance(si, int) and fi in valid_figs and si in valid_segs \
+                and fi not in out and si not in seen_seg:
+            out[fi] = si
+            seen_seg.add(si)
+    return out
 
-    Mutates ``segments`` in place, records placed figures in ``used`` (indices into
-    ``figures``), and returns how many it placed. Caps placements so a part never
-    becomes all figures.
+
+def _match_figures_keywords(candidates, figures, used):
+    """Fallback matcher: caption↔slide word overlap (>= _MATCH_THRESHOLD), best first."""
+    scored: list[tuple[int, int, int]] = []
+    for fi, fig in enumerate(figures):
+        if fi in used or not fig.get("words"):
+            continue
+        for si, seg in candidates:
+            seg_words = _words(
+                f"{seg.get('slide_heading','')} {seg.get('text','')} "
+                f"{' '.join(seg.get('slide_points') or [])}"
+            )
+            if len(fig["words"] & seg_words) >= _MATCH_THRESHOLD:
+                scored.append((len(fig["words"] & seg_words), fi, si))
+    scored.sort(key=lambda t: t[0], reverse=True)
+    out: dict[int, int] = {}
+    seen_seg: set[int] = set()
+    for _score, fi, si in scored:
+        if fi in out or si in seen_seg:
+            continue
+        out[fi] = si
+        seen_seg.add(si)
+    return out
+
+
+def attach_figures_to_segments(segments: list[dict], figures: list[dict], used: set[int], client=None) -> int:
+    """Attach this part's best-matching figures as ``figure`` slide_visuals.
+
+    Matches SEMANTICALLY via the model when a ``client`` is given (so 'inside a
+    leaf' finds the leaf-cell figure), falling back to caption↔slide word overlap.
+    Mutates ``segments`` in place, records placed figures in ``used``, caps how
+    many of a part's slots become figures, and returns how many it placed.
     """
     if not figures or not segments:
         return 0
@@ -132,27 +199,16 @@ def attach_figures_to_segments(segments: list[dict], figures: list[dict], used: 
     if not candidates:
         return 0
 
-    scored: list[tuple[int, int, int]] = []  # (score, figure_index, segment_index)
-    for fi, fig in enumerate(figures):
-        if fi in used or not fig.get("words"):
-            continue
-        for si, seg in candidates:
-            seg_words = _words(
-                f"{seg.get('slide_heading','')} {seg.get('text','')} "
-                f"{' '.join(seg.get('slide_points') or [])}"
-            )
-            score = len(fig["words"] & seg_words)
-            if score >= _MATCH_THRESHOLD:
-                scored.append((score, fi, si))
-    scored.sort(key=lambda t: t[0], reverse=True)
+    assignment = _match_figures_llm(candidates, figures, used, client)
+    method = "semantic"
+    if not assignment:
+        assignment = _match_figures_keywords(candidates, figures, used)
+        method = "keyword"
 
     cap = max(1, len(candidates) // 2)  # at most half a part's open slots become figures
-    placed_seg: set[int] = set()
     placed = 0
-    for score, fi, si in scored:
-        if placed >= cap:
-            break
-        if fi in used or si in placed_seg:
+    for fi, si in sorted(assignment.items()):
+        if placed >= cap or fi in used:
             continue
         fig = figures[fi]
         segments[si]["slide_visual"] = {
@@ -163,8 +219,7 @@ def attach_figures_to_segments(segments: list[dict], figures: list[dict], used: 
         }
         segments[si]["slide_points"] = []  # the figure replaces the bullets
         used.add(fi)
-        placed_seg.add(si)
         placed += 1
     if placed:
-        logger.info("attached %d textbook figure(s) to segments", placed)
+        logger.info("attached %d textbook figure(s) to segments (%s match)", placed, method)
     return placed
