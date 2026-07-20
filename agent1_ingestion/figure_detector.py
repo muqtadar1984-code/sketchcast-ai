@@ -29,6 +29,7 @@ from .vision_chapters import _is_int, _page_of, _render_pages
 logger = logging.getLogger(__name__)
 
 _DETECT_WIDTH = 900          # a touch higher than chapter detection — figures are smaller than banners
+_REFINE_WIDTH = 1500         # single-page render for the precise per-figure box refinement (higher res)
 _DETECT_BATCH = 8
 _MAX_PAGES = 16              # scan at most this many of a chapter's pages
 _SKIP_BEFORE_PAGE = 2        # never scan the cover / title page (front matter, no teaching figures)
@@ -41,15 +42,19 @@ _MIN_AREA = 0.015            # a real figure covers at least ~1.5% of the page
 _MAX_AREA = 0.85             # ~whole page = probably not a single figure
 
 # --- crop tightening + figure gate (run on the rendered region, at crop time) ---
-# Detection boxes are loose: they sweep in the body-text line above a figure and the
-# caption / "Questions" below. These trim the render back to just the diagram and
-# reject regions that are not a labelled teaching figure at all.
+# The PALETTE-AGNOSTIC fallback: vision refine (refine_figure_box) is the authority on
+# tight boxes; this only trims residual margins and rejects two things ANY book agrees
+# are not a figure — an unlabelled colour photo, and colour confined to a header bar
+# (an activity / "Learn" / "Practise" panel). It NEVER rejects for "not colourful
+# enough", so monochrome line diagrams, greyscale screenshots and low-colour tables all
+# survive (validated on maths / computing / scanned books, not just the colourful one).
 _TRIM_GAP_FRAC = 0.028       # merge content bands across whitespace gaps up to this frac of height
-_MIN_BAND_COLOR_PX = 1500    # a real colored figure has at least this many colored pixels...
-_MIN_BAND_COLOR_FRAC = 0.010 # ...and they are a real fraction of its band, not stray specks
-_MIN_COLOR_ROW_COVER = 0.30  # colour spread across >=30% of the band's rows (a header/"continued" bar fails)
-_MIN_WHITE_FRAC = 0.45       # a labelled diagram sits on a LIGHT background...
-_MAX_COLOR_FRAC = 0.35       # ...an unlabelled colour photo fills the frame — reject only when BOTH agree "photo"
+_COLOR_SELECT_MIN = 2000     # pick the band by COLOUR only when colour is genuinely present, else by ink size
+_BAR_COLOR_MIN = 1500        # a coloured region this big whose colour sits in a thin bar = activity/header box...
+_BAR_COV_MAX = 0.30          #   ...colour spread across <30% of the band's rows (mono figures skip this — no colour)
+_PHOTO_WHITE_MAX = 0.45      # a crop with little light background...
+_PHOTO_COLOR_MIN = 0.35      #   ...AND heavy colour is an unlabelled photo — reject (BOTH required, so a mono
+                             #      screenshot (low colour) or a tinted diagram (some white) is kept)
 
 
 def _clean_bbox(bbox) -> tuple[float, float, float, float] | None:
@@ -156,18 +161,85 @@ def detect_figures(pdf_path: str | Path, start_page: int, end_page: int, client)
     return figures[:_MAX_FIGURES]
 
 
-def _tighten_to_figure(img):
-    """Trim a rendered figure region down to just the labelled diagram, or return
-    None to drop it (better no figure than the wrong one).
+def refine_figure_box(pdf_path, page_num, rough_bbox, caption, label, client):
+    """VISION authority: render the figure's single page at high resolution and ask
+    the model for a TIGHT box around just that figure — or to DROP it if the region is
+    not really a labelled teaching figure.
 
-    Detection boxes are loose — they include the body-text line above a figure and
-    the caption / "Questions" heading below. Purely from pixels we (1) split the
-    region into content bands by whitespace gaps, (2) keep the band carrying the
-    actual coloured diagram, (3) trim it tight left/right to its leader-line labels,
-    then reject anything that is not a labelled teaching diagram: an activity /
-    "...continued" box (colour only in a header bar) or an unlabelled colour photo
-    (fills the frame, no light background). Validated on a real book — see
-    scratchpad/test_figures.py.
+    Palette-independent (the model judges by meaning, not colour), so it tightens the
+    box the same way on a monochrome maths book, a screenshot-heavy computing book, or a
+    colour-diagram science book — the generalisation the pixel fallback can't guarantee.
+    Returns a tight normalised bbox, None to DROP, or the ROUGH bbox unchanged on any
+    failure (best-effort — never worse than detection alone). Never raises.
+    """
+    rough = _clean_bbox(rough_bbox)
+    if client is None:
+        return rough
+    tmp = Path(tempfile.mkdtemp(prefix="fig_refine_"))
+    paths: list = []
+    try:
+        try:
+            paths = _render_pages(pdf_path, range(int(page_num), int(page_num) + 1), _REFINE_WIDTH, tmp)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("figure refine render failed (p%d): %s", page_num, exc)
+            return rough
+        if not paths:
+            return rough
+        desc = (caption or label or "a labelled diagram").strip()
+        prompt = (
+            "This is ONE page of a school textbook. A figure detected on it is described "
+            f'as: "{desc}".\n\n'
+            "Return the TIGHT bounding box around ONLY that teaching figure and its own "
+            "leader-line labels. EXCLUDE the body-text lines above or below it, its caption "
+            "line, section headings, page numbers, and any surrounding activity-panel chrome "
+            "(a 'Learn' / 'Practise' / 'Activity' / '...continued' bar or border).\n"
+            "The figure may be a labelled diagram, a chart or graph, a number line, a worked "
+            "table or grid, a flow chart, or a software screenshot — COLOUR IS NOT REQUIRED, "
+            "a black-and-white line diagram counts.\n"
+            "If the described region is NOT actually a self-contained teaching figure — it is "
+            "running text, an activity / question box, a decorative or unlabelled photo, or you "
+            "cannot find it on this page — return null.\n"
+            "bbox is [x0, y0, x1, y1] as fractions of the page (0..1; x0,y0 = top-left, "
+            "x1,y1 = bottom-right).\n"
+            'Return ONLY JSON: {"bbox": [x0,y0,x1,y1]} or {"bbox": null}.'
+        )
+        try:
+            result = client.analyze_images_batch(paths, prompt, max_tokens=300)
+            data = result.get("data", {}) if isinstance(result, dict) else {}
+        except Exception as exc:  # noqa: BLE001 — refine must never break indexing
+            logger.warning("figure refine failed (p%d): %s", page_num, exc)
+            return rough
+        if isinstance(data, dict) and "bbox" in data:
+            raw = data.get("bbox")
+            if raw is None:
+                return None                       # model: not a real figure → drop the candidate
+            tight = _clean_bbox(raw)
+            if tight is not None:
+                return tight
+        return rough                              # unparseable answer → keep the rough box
+    finally:
+        for p in paths:
+            try:
+                p.unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _tighten_to_figure(img):
+    """Trim a rendered figure region to just the figure, or None to drop it — the
+    PALETTE-AGNOSTIC fallback (vision refine is the authority; this is what runs when
+    refine is unavailable or on already-indexed books).
+
+    Purely from layout structure (no "must be colourful" assumption): (1) split the
+    region into content bands by whitespace gaps, (2) keep the figure band — the most
+    COLOURED band when colour is present, else the largest INKED band (so a monochrome
+    diagram or a greyscale screenshot is kept, not dropped), (3) trim tight left/right
+    to its content, then reject only the two things every book agrees are not a figure:
+    an unlabelled colour PHOTO (fills the frame, little light background AND heavy
+    colour) and colour confined to a HEADER BAR (an activity / "Learn" panel).
+    Validated on colourful-diagram, monochrome-maths, screenshot-computing and scanned
+    books — see scratchpad/test_figures.py.
     """
     import numpy as np
 
@@ -208,21 +280,17 @@ def _tighten_to_figure(img):
     if not bands:
         return None
 
-    # 2. keep the band with the most coloured (diagram) pixels.
-    b0, b1, best = bands[0][0], bands[0][1], -1.0
-    for c0, c1 in bands:
-        cc = float(color[c0:c1].sum())
-        if cc > best:
-            best, b0, b1 = cc, c0, c1
-    cc = float(color[b0:b1].sum())
-    area = max(1, (b1 - b0) * w)
-    if cc < _MIN_BAND_COLOR_PX or cc / area < _MIN_BAND_COLOR_FRAC:
-        return None                       # no real coloured figure — plain text / mono region
-    row_has_color = color.sum(1) > 0.006 * w
-    if float(row_has_color[b0:b1].mean()) < _MIN_COLOR_ROW_COVER:
-        return None                       # colour only in a bar/header (activity / "continued" box)
+    # 2. keep the figure band: by COLOUR when colour is genuinely present (a coloured
+    #    diagram beats the text bands around it), otherwise by INK size — so a
+    #    monochrome line diagram or a greyscale screenshot is kept, never rejected.
+    band_color = lambda b: float(color[b[0]:b[1]].sum())   # noqa: E731
+    band_ink = lambda b: float(ink[b[0]:b[1]].sum())       # noqa: E731
+    if max((band_color(b) for b in bands), default=0.0) >= _COLOR_SELECT_MIN:
+        b0, b1 = max(bands, key=band_color)
+    else:
+        b0, b1 = max(bands, key=band_ink)
 
-    # 3. trim tight left/right to inked columns (keeps the leader-line labels).
+    # 3. trim tight left/right to inked columns (keeps leader-line labels / row labels).
     col_has = ink[b0:b1].mean(0) >= 0.004
     cols = np.where(col_has)[0]
     if len(cols) == 0:
@@ -234,16 +302,18 @@ def _tighten_to_figure(img):
     yy1 = min(h, b1 + m)
     crop = img.crop((x0, yy0, x1, yy1))
 
-    # 4. a labelled diagram sits on a LIGHT background with flat colour fills; an
-    #    unlabelled colour photo fills the frame edge-to-edge. Reject only when both
-    #    signals agree "photo", so a legitimately dense diagram still survives.
+    # 4. reject only what every palette agrees is not a figure.
+    cc = float(color[b0:b1].sum())
+    cov = float((color.sum(1) > 0.006 * w)[b0:b1].mean())
+    if cc >= _BAR_COLOR_MIN and cov < _BAR_COV_MAX:
+        return None                       # colour lives only in a header bar → activity/"Learn" panel
     ca = np.asarray(crop.convert("RGB")).astype(np.int16)
     clum = ca.mean(2)
     cmx, cmn = ca.max(2), ca.min(2)
     white_frac = float((clum > 236).mean())
     color_frac = float(((cmx - cmn > 42) & (cmx > 60)).mean())
-    if white_frac < _MIN_WHITE_FRAC and color_frac > _MAX_COLOR_FRAC:
-        return None
+    if white_frac < _PHOTO_WHITE_MAX and color_frac > _PHOTO_COLOR_MIN:
+        return None                       # little light background AND heavy colour → unlabelled photo
     return crop
 
 

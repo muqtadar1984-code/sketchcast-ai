@@ -84,7 +84,7 @@ def detect_chapter_figure_specs(pdf_path, chapter: dict, client) -> list[dict]:
     work — so we do it once here and carry the answer forward on book.chapters.
     """
     try:
-        from agent1_ingestion.figure_detector import detect_figures
+        from agent1_ingestion.figure_detector import detect_figures, refine_figure_box
     except Exception as exc:  # noqa: BLE001
         logger.warning("figure_detector import failed: %s", exc)
         return []
@@ -100,13 +100,27 @@ def detect_chapter_figure_specs(pdf_path, chapter: dict, client) -> list[dict]:
     except Exception as exc:  # noqa: BLE001
         logger.warning("detect_figures failed for chapter %s: %s", _chapter_num_of(chapter), exc)
         return []
-    out = [
-        {"page": int(s["page_num"]), "bbox": [round(float(v), 4) for v in s["bbox"]],
-         "caption": str(s.get("caption") or "")[:140], "label": str(s.get("label") or "")[:40]}
-        for s in specs
-    ]
-    logger.info("index: %d figure(s) detected in chapter %s (pages %d-%d)",
-                len(out), _chapter_num_of(chapter), start + 1, end + 1)
+    # Vision refine (the authority): tighten each detected box to just the figure and
+    # drop anything the model says is not a real teaching figure. Palette-independent,
+    # so it generalises across book styles the pixel crop-gate can't (mono / screenshots
+    # / tinted). Best-effort — a refine miss keeps the rough box (crop-time trim still
+    # tidies it); a None drops the candidate.
+    out: list[dict] = []
+    dropped = 0
+    for s in specs:
+        tight = refine_figure_box(pdf_path, int(s["page_num"]), s["bbox"],
+                                  s.get("caption", ""), s.get("label", ""), client)
+        if tight is None:
+            dropped += 1
+            continue
+        out.append({
+            "page": int(s["page_num"]),
+            "bbox": [round(float(v), 4) for v in tight],
+            "caption": str(s.get("caption") or "")[:140],
+            "label": str(s.get("label") or "")[:40],
+        })
+    logger.info("index: %d figure(s) kept in chapter %s (pages %d-%d; %d refined out by vision)",
+                len(out), _chapter_num_of(chapter), start + 1, end + 1, dropped)
     return out
 
 
