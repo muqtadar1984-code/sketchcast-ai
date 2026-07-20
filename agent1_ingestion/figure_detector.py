@@ -40,6 +40,17 @@ _MIN_CROP_H = 170
 _MIN_AREA = 0.015            # a real figure covers at least ~1.5% of the page
 _MAX_AREA = 0.85             # ~whole page = probably not a single figure
 
+# --- crop tightening + figure gate (run on the rendered region, at crop time) ---
+# Detection boxes are loose: they sweep in the body-text line above a figure and the
+# caption / "Questions" below. These trim the render back to just the diagram and
+# reject regions that are not a labelled teaching figure at all.
+_TRIM_GAP_FRAC = 0.028       # merge content bands across whitespace gaps up to this frac of height
+_MIN_BAND_COLOR_PX = 1500    # a real colored figure has at least this many colored pixels...
+_MIN_BAND_COLOR_FRAC = 0.010 # ...and they are a real fraction of its band, not stray specks
+_MIN_COLOR_ROW_COVER = 0.30  # colour spread across >=30% of the band's rows (a header/"continued" bar fails)
+_MIN_WHITE_FRAC = 0.45       # a labelled diagram sits on a LIGHT background...
+_MAX_COLOR_FRAC = 0.35       # ...an unlabelled colour photo fills the frame — reject only when BOTH agree "photo"
+
 
 def _clean_bbox(bbox) -> tuple[float, float, float, float] | None:
     """Validate a normalised [x0,y0,x1,y1] (0..1) with a sane area, or None."""
@@ -88,17 +99,20 @@ def detect_figures(pdf_path: str | Path, start_page: int, end_page: int, client)
                 "concept: a LABELLED diagram, an annotated scientific drawing, a chart/graph, a map, "
                 "or a photograph that carries LABELS or a figure caption pointing out its parts. The "
                 "key test: it has labels, callouts, or a caption naming what it shows.\n\n"
-                "Do NOT report (these are NOT teaching figures):\n"
+                "Do NOT report (these are NOT teaching figures), even when colourful:\n"
                 "- the book COVER, or a unit/chapter OPENER's large background or decorative photo;\n"
-                "- any photograph with NO labels/annotations that is there for visual appeal — a "
-                "magnified texture, a leaf, a landscape, a stock or watermarked photo;\n"
+                "- any PHOTOGRAPH with no leader-line labels naming its parts — a specimen or "
+                "cells seen under a microscope, a magnified texture, a leaf, a landscape, a stock "
+                "or watermarked photo — these teach nothing on their own, however vivid;\n"
                 "- publisher logos, branding, edition/endorsement text, page numbers, headers/footers;\n"
-                "- body text, headings, key-word lists, 'getting started'/activity/question boxes.\n\n"
+                "- body text, headings, key-word lists, worked-example tables, and 'getting "
+                "started' / 'Activity' / '...continued' / 'You will need' / question boxes.\n\n"
                 "For each teaching figure, report:\n"
                 f"- image_number: which image it is on (1..{n}) — the position in THIS set, never a "
                 "printed page number.\n"
                 "- bbox: [x0, y0, x1, y1] as fractions of the page from 0 to 1 (x0,y0 = top-left, "
-                "x1,y1 = bottom-right), tight around the figure AND its caption.\n"
+                "x1,y1 = bottom-right), tight around the figure and its leader-line labels ONLY — "
+                "do NOT include the body-text line above it, or the caption / question numbers below.\n"
                 "- caption: a short description (<=12 words) of what the figure shows.\n"
                 "- label: the printed figure label if visible (e.g. \"Fig. 4.2\"), otherwise null.\n\n"
                 'Return ONLY JSON: {"figures": [{"image_number": <int>, "bbox": [x0,y0,x1,y1], '
@@ -142,11 +156,104 @@ def detect_figures(pdf_path: str | Path, start_page: int, end_page: int, client)
     return figures[:_MAX_FIGURES]
 
 
-def crop_figure(pdf_path: str | Path, page_num: int, bbox, out_path: str | Path) -> Path | None:
-    """Render a figure's page region (normalised bbox) to a crisp PNG, or None.
+def _tighten_to_figure(img):
+    """Trim a rendered figure region down to just the labelled diagram, or return
+    None to drop it (better no figure than the wrong one).
 
-    Rejects slivers, near-page-size crops, and near-blank regions (a mis-detected
-    empty area), so only a real figure ever reaches a slide.
+    Detection boxes are loose — they include the body-text line above a figure and
+    the caption / "Questions" heading below. Purely from pixels we (1) split the
+    region into content bands by whitespace gaps, (2) keep the band carrying the
+    actual coloured diagram, (3) trim it tight left/right to its leader-line labels,
+    then reject anything that is not a labelled teaching diagram: an activity /
+    "...continued" box (colour only in a header bar) or an unlabelled colour photo
+    (fills the frame, no light background). Validated on a real book — see
+    scratchpad/test_figures.py.
+    """
+    import numpy as np
+
+    a = np.asarray(img.convert("RGB")).astype(np.int16)
+    h, w, _ = a.shape
+    if h < 40 or w < 40:
+        return None
+    lum = a.mean(2)
+    mx, mn = a.max(2), a.min(2)
+    ink = lum < 175                       # any dark mark: text, strokes, dark fills
+    color = (mx - mn > 42) & (mx > 60)    # saturated = graphical, not black text
+
+    # 1. content bands: runs of inked rows, merged across small whitespace gaps.
+    nonwhite = ink.mean(1) >= 0.002
+    gap = max(6, int(_TRIM_GAP_FRAC * h))
+    bands: list[tuple[int, int]] = []
+    y = 0
+    while y < h:
+        if not nonwhite[y]:
+            y += 1
+            continue
+        y0 = y
+        while y < h and nonwhite[y]:
+            y += 1
+        y1 = y
+        while y1 < h:                     # absorb the next run if only a small gap splits them
+            look = y1
+            while look < h and look < y1 + gap and not nonwhite[look]:
+                look += 1
+            if look < h and look < y1 + gap and nonwhite[look]:
+                while look < h and nonwhite[look]:
+                    look += 1
+                y1 = look
+            else:
+                break
+        bands.append((y0, y1))
+        y = y1
+    if not bands:
+        return None
+
+    # 2. keep the band with the most coloured (diagram) pixels.
+    b0, b1, best = bands[0][0], bands[0][1], -1.0
+    for c0, c1 in bands:
+        cc = float(color[c0:c1].sum())
+        if cc > best:
+            best, b0, b1 = cc, c0, c1
+    cc = float(color[b0:b1].sum())
+    area = max(1, (b1 - b0) * w)
+    if cc < _MIN_BAND_COLOR_PX or cc / area < _MIN_BAND_COLOR_FRAC:
+        return None                       # no real coloured figure — plain text / mono region
+    row_has_color = color.sum(1) > 0.006 * w
+    if float(row_has_color[b0:b1].mean()) < _MIN_COLOR_ROW_COVER:
+        return None                       # colour only in a bar/header (activity / "continued" box)
+
+    # 3. trim tight left/right to inked columns (keeps the leader-line labels).
+    col_has = ink[b0:b1].mean(0) >= 0.004
+    cols = np.where(col_has)[0]
+    if len(cols) == 0:
+        return None
+    m = max(6, int(0.02 * w))
+    x0 = max(0, int(cols[0]) - m)
+    x1 = min(w, int(cols[-1]) + 1 + m)
+    yy0 = max(0, b0 - m)
+    yy1 = min(h, b1 + m)
+    crop = img.crop((x0, yy0, x1, yy1))
+
+    # 4. a labelled diagram sits on a LIGHT background with flat colour fills; an
+    #    unlabelled colour photo fills the frame edge-to-edge. Reject only when both
+    #    signals agree "photo", so a legitimately dense diagram still survives.
+    ca = np.asarray(crop.convert("RGB")).astype(np.int16)
+    clum = ca.mean(2)
+    cmx, cmn = ca.max(2), ca.min(2)
+    white_frac = float((clum > 236).mean())
+    color_frac = float(((cmx - cmn > 42) & (cmx > 60)).mean())
+    if white_frac < _MIN_WHITE_FRAC and color_frac > _MAX_COLOR_FRAC:
+        return None
+    return crop
+
+
+def crop_figure(pdf_path: str | Path, page_num: int, bbox, out_path: str | Path) -> Path | None:
+    """Render a figure's page region (normalised bbox), TRIM it to just the diagram,
+    and save a crisp PNG — or None.
+
+    Rejects slivers, near-page-size crops, near-blank regions, and (via
+    :func:`_tighten_to_figure`) loose boxes and non-figure regions (activity boxes,
+    unlabelled photos), so only a real, tightly-cropped figure reaches a slide.
     """
     import fitz
     from PIL import Image
@@ -171,6 +278,16 @@ def crop_figure(pdf_path: str | Path, page_num: int, bbox, out_path: str | Path)
     except Exception as exc:  # noqa: BLE001
         logger.warning("figure crop failed (p%d): %s", page_num, exc)
         return None
+
+    # Trim the loose detection box down to just the diagram (and drop non-figures).
+    try:
+        tight = _tighten_to_figure(img)
+    except Exception as exc:  # noqa: BLE001 — trimming must never break a lesson
+        logger.warning("figure tighten failed (p%d): %s", page_num, exc)
+        tight = img
+    if tight is None:
+        return None
+    img = tight
 
     if img.width < _MIN_CROP_W or img.height < _MIN_CROP_H:
         return None
