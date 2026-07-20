@@ -321,11 +321,8 @@ def export_slide_png(
 # deck and video can't drift: one dominant ink, white content, one teal accent.
 from .theme import (  # noqa: E402
     FAINT as _LI_DIM,
-    GRAPHITE as _LI_GRAPHITE,
     INK as _LI_INK,
-    MIST as _LI_MIST,
     TEAL as _LI_TEAL,
-    TEAL_DK as _LI_TEAL_DK,
     WHITE as _LI_WHITE,
 )
 
@@ -411,7 +408,20 @@ def _build_branded_deck(slides, output_pptx_path, episode_title, template, accen
 
 
 def _build_designed_deck(slides, output_pptx_path, episode_title, accent):
-    """Default path — a designed "Live Ink" deck built deterministically."""
+    """Default path — the content slides ARE the rendered lesson slides.
+
+    Each content slide embeds the exact 1280x720 image the video animates toward
+    (``compose_slide`` output — the designed layout, diagrams and all),
+    full-bleed, with the Socratic narration in the speaker notes. So the
+    downloadable deck finally matches what the lesson shows, instead of a heading
+    plus flattened bullet labels. A dark title and closing slide bookend it.
+
+    Print sharpness note: the embedded image is 1280x720 (~96 DPI across a 13.3in
+    slide) — crisp projected and on-screen, softer in print. A true higher-res
+    render means scaling the shared ``compose_slide``/``diagram_builder`` geometry
+    (which the video path also uses), so it's deliberately deferred, not bundled
+    into this parity pass.
+    """
     from pptx import Presentation
     from pptx.dml.color import RGBColor
     from pptx.enum.shapes import MSO_SHAPE
@@ -420,13 +430,13 @@ def _build_designed_deck(slides, output_pptx_path, episode_title, accent):
 
     IN = 914400
     INK, WHITE = RGBColor(*_LI_INK), RGBColor(*_LI_WHITE)
-    ACC, ACC_DK = RGBColor(*(accent or _LI_TEAL)), RGBColor(*_LI_TEAL_DK)
-    GRA, MIST, DIM = RGBColor(*_LI_GRAPHITE), RGBColor(*_LI_MIST), RGBColor(*_LI_DIM)
+    ACC, DIM = RGBColor(*(accent or _LI_TEAL)), RGBColor(*_LI_DIM)
     BODY = "Calibri"
+    SW, SH = Emu(12192000), Emu(6858000)  # 16:9 canvas — same aspect as the 1280x720 image
 
     prs = Presentation()
-    prs.slide_width = Emu(12192000)
-    prs.slide_height = Emu(6858000)
+    prs.slide_width = SW
+    prs.slide_height = SH
     blank = prs.slide_layouts[6] if len(prs.slide_layouts) > 6 else prs.slide_layouts[-1]
 
     def new_slide(bg):
@@ -476,53 +486,6 @@ def _build_designed_deck(slides, output_pptx_path, episode_title, accent):
             r.font.color.rgb = WHITE
         return o
 
-    def panel(s, l, t, w, h, fill):
-        sh = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, int(l), int(t), int(w), int(h))
-        sh.fill.solid()
-        sh.fill.fore_color.rgb = fill
-        sh.line.fill.background()
-        sh.shadow.inherit = False
-        return sh
-
-    def heading_block(s, n, heading):
-        circle(s, 0.95 * IN, 1.02 * IN, 0.52 * IN, ACC, str(n))
-        tf = textbox(s, 1.45 * IN, 0.7 * IN, 11.1 * IN, 0.95 * IN, anchor=MSO_ANCHOR.MIDDLE)
-        para(tf, (heading or episode_title or "Lesson")[:90], 27, INK, bold=True, first=True, space=0)
-
-    def bullet_rows(s, points, left, top, width, size=16, step=0.66):
-        y = top
-        for pt in points:
-            circle(s, left + 0.09 * IN, y + 0.13 * IN, 0.17 * IN, ACC)
-            tf = textbox(s, left + 0.36 * IN, y - 0.03 * IN, width - 0.36 * IN, step * IN)
-            para(tf, str(pt), size, INK, first=True, space=0)
-            y += step * IN
-
-    # Concept illustrations: rendered once per concept to a temp PNG, then
-    # embedded as a discrete picture shape (the SAME drawing the video composites,
-    # via theme.draw_concept) so deck and video show identical imagery.
-    import shutil
-    import tempfile
-
-    from .theme import concepts_for_slides, render_concept_png
-
-    img_dir = Path(tempfile.mkdtemp(prefix="deck_imgs_"))
-    _img_cache: dict[str, str] = {}
-
-    def concept_png(name):
-        if name not in _img_cache:
-            p = img_dir / f"{name}.png"
-            try:
-                render_concept_png(name, p, size=560, accent=(accent or _LI_TEAL))
-                _img_cache[name] = str(p)
-            except Exception:  # noqa: BLE001
-                _img_cache[name] = ""
-        return _img_cache[name]
-
-    def add_illus(s, name, left, top, size):
-        path = concept_png(name)
-        if path:
-            s.shapes.add_picture(path, int(left), int(top), int(size), int(size))
-
     # Title (dark)
     s = new_slide(INK)
     circle(s, 1.0 * IN, 0.95 * IN, 0.62 * IN, ACC, "S", label_size=20)
@@ -531,28 +494,24 @@ def _build_designed_deck(slides, output_pptx_path, episode_title, accent):
     para(tf, "A narrated lesson", 18, ACC, space=0)
     para(textbox(s, 1.0 * IN, 6.7 * IN, 11.3 * IN, 0.5 * IN), "SketchCast AI", 12, DIM, first=True, space=0)
 
-    # Content (light) — every slide carries a concept illustration; the text and
-    # the illustration swap columns slide-to-slide so no two are laid out alike.
-    DISC = 2.7 * IN
-    ILL_T = 2.95 * IN
-    # One art-direction pass over the whole chapter → a coherent, non-repeating set.
-    slide_concepts = concepts_for_slides([(sd.get("heading") or "").strip() or episode_title for sd in slides])
+    # Content — one slide per segment, the rendered lesson image full-bleed.
     for i, sd in enumerate(slides, 1):
-        heading = (sd.get("heading") or "").strip()
-        points = [str(p).strip() for p in (sd.get("points") or []) if str(p).strip()][:5]
-        concept = slide_concepts[i - 1]
         s = new_slide(WHITE)
-        heading_block(s, i, heading)
-        if not points:
-            add_illus(s, concept, 9.15 * IN, ILL_T, DISC)
-            para(textbox(s, 0.95 * IN, 2.6 * IN, 7.6 * IN, 2.2 * IN, anchor=MSO_ANCHOR.MIDDLE),
-                 "Pause here — discuss this together before moving on.", 18, GRA, first=True, space=0)
-        elif i % 2 == 1:
-            bullet_rows(s, points, 0.95 * IN, 2.4 * IN, 7.6 * IN, step=0.7)
-            add_illus(s, concept, 9.15 * IN, ILL_T, DISC)
+        img = sd.get("image")
+        if img and Path(img).exists():
+            s.shapes.add_picture(str(img), 0, 0, width=SW, height=SH)
         else:
-            add_illus(s, concept, 0.95 * IN, ILL_T, DISC)
-            bullet_rows(s, points, 4.3 * IN, 2.4 * IN, 7.9 * IN, step=0.7)
+            # A render slipped — never ship a blank slide: fall back to the
+            # heading + bullets so the content still lands (rare).
+            heading = (sd.get("heading") or episode_title or "Lesson")[:90]
+            circle(s, 0.95 * IN, 1.02 * IN, 0.52 * IN, ACC, str(i))
+            para(textbox(s, 1.45 * IN, 0.7 * IN, 11.1 * IN, 0.95 * IN, anchor=MSO_ANCHOR.MIDDLE),
+                 heading, 27, INK, bold=True, first=True, space=0)
+            y = 2.4 * IN
+            for pt in [str(p).strip() for p in (sd.get("points") or []) if str(p).strip()][:6]:
+                circle(s, 1.04 * IN, y + 0.13 * IN, 0.17 * IN, ACC)
+                para(textbox(s, 1.31 * IN, y - 0.03 * IN, 10.7 * IN, 0.7 * IN), pt, 16, INK, first=True, space=0)
+                y += 0.7 * IN
         s.notes_slide.notes_text_frame.text = sd.get("narration") or ""
 
     # Closing (dark)
@@ -565,6 +524,5 @@ def _build_designed_deck(slides, output_pptx_path, episode_title, accent):
     para(textbox(s, 1.0 * IN, 6.7 * IN, 11.3 * IN, 0.5 * IN), "SketchCast AI", 12, DIM, first=True, space=0)
 
     prs.save(str(output_pptx_path))
-    shutil.rmtree(img_dir, ignore_errors=True)  # images are embedded in the .pptx by now
-    logger.info("Episode deck (designed) saved: %s (%d content slides)", output_pptx_path.name, len(slides))
+    logger.info("Episode deck (designed, image slides) saved: %s (%d content slides)", output_pptx_path.name, len(slides))
     return output_pptx_path

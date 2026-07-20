@@ -107,10 +107,18 @@ def generate_episode_slides(
             direction=direction,
         )
 
-        # The deck is text-only, so a diagram-driven segment contributes its
-        # labels as bullets — keeps the downloadable PPTX from going blank.
-        deck_points = points or _visual_to_points(visual)
-        deck_slides.append({"heading": heading, "points": deck_points, "narration": narration})
+        # The designed deck now embeds the SAME rendered slide image the video
+        # animates (diagrams and all), so the download shows exactly what the
+        # lesson shows — no more flattening a diagram to bullet labels. `points`
+        # still rides along for the branded-template path, which lays out its
+        # own text; a diagram-only segment falls back to its labels there so a
+        # branded deck never goes blank.
+        deck_slides.append({
+            "heading": heading,
+            "points": points or _visual_to_points(visual),
+            "narration": narration,
+            "image": str(png_path),
+        })
         manifest_segments.append(SlideSegment(
             segment_id=seg_id,
             type=seg_type,
