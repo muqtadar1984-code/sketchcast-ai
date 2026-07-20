@@ -70,19 +70,28 @@ def detect_and_crop_figures(pdf_path, chapter: dict, client, out_dir: Path) -> l
     except Exception as exc:  # noqa: BLE001
         logger.warning("figure_detector import failed: %s", exc)
         return []
-    start = int(chapter.get("start_page", 0) or 0)
-    end = int(chapter.get("end_page", start) or start)
-    # Front matter (cover, the "In this topic" opener, key-word lists) often gets
-    # absorbed into a chapter's page range — chapter 1 especially. Start scanning at
-    # the first CONTENT section when it sits deeper than start_page, so the scan
-    # window isn't spent on the opener/cover and actually REACHES the labelled
-    # figures (which live with the content, not the opener).
+    raw_start = int(chapter.get("start_page", 0) or 0)
+    raw_end = int(chapter.get("end_page", raw_start) or raw_start)
+    sections = chapter.get("sections") or []
     sec_pages = sorted({
-        int(s["page_num"]) for s in (chapter.get("sections") or [])
-        if isinstance(s, dict) and isinstance(s.get("page_num"), int) and int(s["page_num"]) >= start
+        int(s["page_num"]) for s in sections
+        if isinstance(s, dict) and isinstance(s.get("page_num"), int) and int(s["page_num"]) >= 0
     })
+    # The stored chapter range can absorb the cover/opener front matter (start too
+    # low) or be missing/degenerate. Section pages are the reliable signal for where
+    # the teaching content is: use them to skip front matter (start) and to widen a
+    # too-small end — but never to SHRINK a valid end (sections are sparse; figures
+    # often sit past the last detected section).
     if sec_pages:
-        start = sec_pages[0]
+        start = max(raw_start, sec_pages[0])
+        end = max(raw_end, sec_pages[-1])
+    else:
+        start, end = raw_start, raw_end
+    logger.info(
+        "figure scan input: start=%d end=%d (chapter start_page=%s end_page=%s, %d sections, section_pages=%s, keys=%s)",
+        start, end, chapter.get("start_page"), chapter.get("end_page"), len(sections),
+        sec_pages[:8], sorted(str(k) for k in chapter.keys())[:16],
+    )
     try:
         specs = detect_figures(pdf_path, start, end, client)
     except Exception as exc:  # noqa: BLE001
