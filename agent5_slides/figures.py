@@ -62,66 +62,93 @@ def _is_protected(sv) -> bool:
     return isinstance(sv, dict) and str(sv.get("kind") or "").strip() in _PROTECTED_FROM_FIGURE
 
 
-def detect_and_crop_figures(pdf_path, chapter: dict, client, out_dir: Path) -> list[dict]:
-    """Detect + crop this chapter's figures. Returns
-    ``[{src, caption, label, attribution, words}]`` (empty on any failure)."""
+def _chapter_num_of(c: dict) -> int:
+    for k in ("num", "chapter_num"):
+        v = c.get(k)
+        if v is not None:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                pass
+    return -1
+
+
+def detect_chapter_figure_specs(pdf_path, chapter: dict, client) -> list[dict]:
+    """INDEX time: detect a chapter's figures (vision) and return lightweight specs
+    to store ON the chapter — ``[{page, bbox, caption, label}]``. Cropping happens
+    later, at generation time, from these specs.
+
+    This runs at indexing where the page range is RELIABLE (structure_book has just
+    produced real start_page/end_page). At generation time the chapter dict has no
+    page range at all (start_page=None), which is why gen-time detection could never
+    work — so we do it once here and carry the answer forward on book.chapters.
+    """
     try:
-        from agent1_ingestion.figure_detector import crop_figure, detect_figures
+        from agent1_ingestion.figure_detector import detect_figures
     except Exception as exc:  # noqa: BLE001
         logger.warning("figure_detector import failed: %s", exc)
         return []
-    raw_start = int(chapter.get("start_page", 0) or 0)
-    raw_end = int(chapter.get("end_page", raw_start) or raw_start)
-    sections = chapter.get("sections") or []
-    sec_pages = sorted({
-        int(s["page_num"]) for s in sections
-        if isinstance(s, dict) and isinstance(s.get("page_num"), int) and int(s["page_num"]) >= 0
-    })
-    # The stored chapter range can absorb the cover/opener front matter (start too
-    # low) or be missing/degenerate. Section pages are the reliable signal for where
-    # the teaching content is: use them to skip front matter (start) and to widen a
-    # too-small end — but never to SHRINK a valid end (sections are sparse; figures
-    # often sit past the last detected section).
-    if sec_pages:
-        start = max(raw_start, sec_pages[0])
-        end = max(raw_end, sec_pages[-1])
-    else:
-        start, end = raw_start, raw_end
-    logger.info(
-        "figure scan input: start=%d end=%d (chapter start_page=%s end_page=%s, %d sections, section_pages=%s, keys=%s)",
-        start, end, chapter.get("start_page"), chapter.get("end_page"), len(sections),
-        sec_pages[:8], sorted(str(k) for k in chapter.keys())[:16],
-    )
+    try:
+        start = int(chapter.get("start_page") or 0)
+        end = int(chapter.get("end_page") or start)
+    except (TypeError, ValueError):
+        return []
+    if end <= start:
+        return []
     try:
         specs = detect_figures(pdf_path, start, end, client)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("detect_figures failed: %s", exc)
+        logger.warning("detect_figures failed for chapter %s: %s", _chapter_num_of(chapter), exc)
         return []
+    out = [
+        {"page": int(s["page_num"]), "bbox": [round(float(v), 4) for v in s["bbox"]],
+         "caption": str(s.get("caption") or "")[:140], "label": str(s.get("label") or "")[:40]}
+        for s in specs
+    ]
+    logger.info("index: %d figure(s) detected in chapter %s (pages %d-%d)",
+                len(out), _chapter_num_of(chapter), start + 1, end + 1)
+    return out
 
+
+def load_chapter_figures(book: dict, chapter_num, pdf_path, out_dir: Path) -> list[dict]:
+    """GEN time: crop this chapter's index-time-detected figures from the PDF.
+
+    Reads the specs stored on ``book.chapters`` (page + bbox), crops each off the
+    already-downloaded PDF, and returns ``[{src, caption, label, attribution,
+    words}]`` for :func:`attach_figures_to_segments`. Empty when the book was
+    indexed before figures existed (→ re-index to populate them).
+    """
+    try:
+        from agent1_ingestion.figure_detector import crop_figure
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("figure_detector import failed: %s", exc)
+        return []
+    try:
+        cnum = int(chapter_num)
+    except (TypeError, ValueError):
+        return []
+    stored = next(
+        (c for c in (book.get("chapters") or []) if isinstance(c, dict) and _chapter_num_of(c) == cnum),
+        None,
+    )
+    specs = (stored or {}).get("figures") or []
     out_dir = Path(out_dir)
-    figures: list[dict] = []
+    figs: list[dict] = []
     for i, sp in enumerate(specs):
-        dst = out_dir / f"figure_{i:02d}.png"
-        cropped = crop_figure(pdf_path, int(sp.get("page_num", 0)), sp.get("bbox"), dst)
+        if not isinstance(sp, dict):
+            continue
+        cropped = crop_figure(pdf_path, int(sp.get("page", 0)), sp.get("bbox"), out_dir / f"figure_{i:02d}.png")
         if not cropped:
             continue
         caption = str(sp.get("caption") or "").strip()
         label = str(sp.get("label") or "").strip()
-        figures.append({
-            "src": str(cropped),
-            "caption": caption,
-            "label": label,
-            # Attribution shown on the slide tab: the printed figure label if the
-            # book had one, else the (PDF) page. Page-only is honest about source
-            # without claiming a printed page number we didn't read.
-            # Only a printed figure label ("Fig. 4.2"); never a fabricated page
-            # number — our page index is the PDF's, which rarely equals the
-            # printed page. The caption below the figure carries the "what".
-            "attribution": label,
+        figs.append({
+            "src": str(cropped), "caption": caption, "label": label,
+            "attribution": label,  # printed label only; never a fabricated page number
             "words": _words(f"{caption} {label}"),
         })
-    logger.info("figures ready: %d cropped for chapter starting p%d", len(figures), start + 1)
-    return figures
+    logger.info("loaded %d textbook figure(s) for chapter %s (from %d stored specs)", len(figs), cnum, len(specs))
+    return figs
 
 
 def _match_figures_llm(candidates, figures, used, client):

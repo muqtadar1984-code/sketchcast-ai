@@ -597,7 +597,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             from datetime import datetime
             from agent3_scripts.script_generator import generate_episode_script, save_script
             from agent5_slides.figures import (attach_figures_to_segments,
-                                               detect_and_crop_figures, textbook_figures_enabled)
+                                               load_chapter_figures, textbook_figures_enabled)
             from agent5_slides.slide_generator import generate_episode_slides
             from agent6_animation.video_composer import compose_episode_videos
             from agent8_render.renderer import render_final_video
@@ -643,11 +643,14 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             logger.info("textbook figures flag: %s", _figures_on)  # is the env var live on THIS worker?
             if _figures_on:
                 try:
-                    chapter_figures = detect_and_crop_figures(
-                        pdf_path, chapter, client, Path(tmp) / "figures"
+                    # Figures were detected at INDEX time (page ranges are reliable
+                    # there; gen time has none) and stored on book.chapters — just
+                    # crop them from the downloaded PDF here.
+                    chapter_figures = load_chapter_figures(
+                        book, chapter_num, pdf_path, Path(tmp) / "figures"
                     )
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("figure detection failed: %s", exc)
+                    logger.warning("figure load failed: %s", exc)
 
             for part_idx, episode in enumerate(episodes_plan, start=1):
                 # This part's slice of the overall bar: 45 → 96 split evenly.
@@ -915,6 +918,27 @@ def index_book(sb: Client, job: dict) -> None:
             except Exception as exc:  # noqa: BLE001 — healing must never block indexing
                 logger.warning("chapter heal skipped for %s: %s", book_id, exc)
 
+        # Phase 3 (gated): detect each chapter's teaching figures ONCE, HERE — where
+        # the page range is reliable and the PDF is on disk. Only lightweight specs
+        # (page + bbox + caption) are kept, on the chapter; generation crops them from
+        # the PDF. This is the ONLY place with reliable page ranges — at generation
+        # time the chapter carries none (start_page=None). Best-effort: never blocks.
+        figure_specs: dict[int, list] = {}
+        try:
+            from agent5_slides.figures import detect_chapter_figure_specs, textbook_figures_enabled
+
+            if textbook_figures_enabled() and client is not None:
+                for c in structured.get("chapters", []):
+                    try:
+                        specs = detect_chapter_figure_specs(str(pdf_path), c, client)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("figure detect skipped for %s ch%s: %s", book_id, c.get("chapter_num"), exc)
+                        continue
+                    if specs:
+                        figure_specs[int(c.get("chapter_num", -1))] = specs
+        except Exception as exc:  # noqa: BLE001 — figures must never block indexing
+            logger.warning("index figure detection skipped for %s: %s", book_id, exc)
+
         # Book Health Score — a predictive read from signals we already have,
         # shown the moment indexing finishes so a bad scan is caught before it
         # generates failed lessons. Best-effort: never block indexing.
@@ -947,7 +971,11 @@ def index_book(sb: Client, job: dict) -> None:
         {"num": int(c["chapter_num"]),
          "title": (c.get("title") or f"Chapter {c['chapter_num']}").strip(),
          "start_page": int(c.get("start_page", 0)),
-         "end_page": int(c.get("end_page", 0))}
+         "end_page": int(c.get("end_page", 0)),
+         # Textbook figure specs (Phase 3) detected above, where the PDF + page range
+         # were available; generation crops them. Present only when figures were found.
+         **({"figures": figure_specs[int(c["chapter_num"])]}
+            if int(c.get("chapter_num", -1)) in figure_specs else {})}
         for c in structured.get("chapters", [])
     ]
 
