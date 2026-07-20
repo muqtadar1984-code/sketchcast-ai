@@ -30,12 +30,15 @@ def admin() -> Client:
 
 # ── jobs / generations ───────────────────────────────────────────────
 
-def claim_next_job(sb: Client, job_type: Optional[str] = None) -> Optional[dict]:
+def claim_next_job(sb: Client, job_type=None) -> Optional[dict]:
     """Atomically-ish claim the oldest queued job (sets it to processing).
-    With `job_type`, only that type is considered — lets the loop prioritise
-    small interactive work (support diagnoses) over long batch renders."""
+    `job_type` may be a single type or a LIST of types — only those are
+    considered. Lets the loop prioritise small/fast work (support diagnoses,
+    then documents) over long batch video renders."""
     q = sb.table("jobs").select("*").eq("status", "queued")
-    if job_type:
+    if isinstance(job_type, (list, tuple, set)):
+        q = q.in_("type", list(job_type))
+    elif job_type:
         q = q.eq("type", job_type)
     res = q.order("created_at").limit(1).execute()
     if not res.data:
@@ -53,7 +56,8 @@ def claim_next_job(sb: Client, job_type: Optional[str] = None) -> Optional[dict]
     return upd.data[0]
 
 
-def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max_attempts: int = 3) -> int:
+def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max_attempts: int = 3,
+                       exclude_ids: Optional[set] = None) -> int:
     """Return orphaned 'processing' jobs to 'queued' so a live worker re-runs them.
 
     ``claim_next_job`` only ever claims 'queued' rows, so a job the worker was
@@ -84,6 +88,10 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
         rows = q.execute().data or []
         requeued = failed = 0
         for j in rows:
+            # Never requeue a job THIS process is actively running (in-process
+            # concurrency): its 'processing' row is alive, not orphaned.
+            if exclude_ids and j["id"] in exclude_ids:
+                continue
             att = int(j.get("attempts") or 0)
             # The .eq("status","processing") guard means a job another actor already
             # moved is skipped (returns no rows) — safe under any race.
@@ -117,6 +125,8 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
             q = sb.table("jobs").update({"status": "queued", "progress": 0}).eq("status", "processing")
             if cutoff:
                 q = q.lt("updated_at", cutoff)
+            if exclude_ids:
+                q = q.not_.in_("id", list(exclude_ids))
             return len((q.execute().data) or [])
         except Exception as exc2:  # noqa: BLE001
             logging.getLogger("worker").warning("stale-job requeue failed: %s", exc2)

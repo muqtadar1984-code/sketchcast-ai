@@ -3,6 +3,10 @@
 Run from the sketchcast repo root:
     python -m worker.run          # poll forever
     python -m worker.run --once   # process one job (or exit if none) — handy for testing
+
+Concurrency: set WORKER_CONCURRENCY>1 to run several jobs at once IN ONE process
+(threads — the heavy work is ffmpeg/Claude/TTS, all subprocess/IO-bound, so it
+truly overlaps). Default 1 reproduces the historical single-threaded behaviour.
 """
 
 from __future__ import annotations
@@ -10,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -29,6 +34,37 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("worker")
 
 POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "5"))
+# How many jobs to run at once in this single process. 1 = the old serial
+# behaviour. Size the Railway instance's vCPU/RAM for the number of concurrent
+# VIDEO renders you set (docs are light; videos are the heavy ones).
+WORKER_CONCURRENCY = max(1, int(os.getenv("WORKER_CONCURRENCY", "1")))
+
+# Documents (papers / plans / activities / case studies / exams) are fast — one
+# model call + a .docx — so they jump AHEAD of long video renders, the same
+# "fast lane" idea already used for tutor sketches and support diagnoses. Keeps
+# a teacher's test paper from sitting behind a 15-minute lesson render.
+DOC_JOB_TYPES = ["lesson_plan", "activity", "worksheet", "exam_paper", "case_study", "exam"]
+
+# Job ids this process is ACTIVELY running. The crash-reaper must never requeue
+# these — with concurrency, a live 'processing' row is not an orphan. (Sketches
+# are seconds-long, far under the stale window, so they aren't tracked.)
+_inflight_lock = threading.Lock()
+_inflight_jobs: set[str] = set()
+
+
+def _inflight_add(job_id: str) -> None:
+    with _inflight_lock:
+        _inflight_jobs.add(job_id)
+
+
+def _inflight_remove(job_id: str) -> None:
+    with _inflight_lock:
+        _inflight_jobs.discard(job_id)
+
+
+def _inflight_snapshot() -> set:
+    with _inflight_lock:
+        return set(_inflight_jobs)
 
 
 def _support_agent_enabled() -> bool:
@@ -90,9 +126,12 @@ def _auto_file_support_issue(sb, job: dict, error: str) -> None:
 def run_once(sb) -> bool:
     """Claim and process one unit of work. Returns True if something was handled.
 
-    AI-Tutor sketches are claimed FIRST: they're small, interactive (a student is
-    waiting live) and drain fast, so they shouldn't sit behind a long batch lesson.
-    They're monthly-capped per account, so they can't starve the lesson queue."""
+    Priority (fast/interactive work never sits behind a long batch render):
+      1. AI-Tutor sketches — a student is waiting live; tiny SVG→MP4.
+      2. Support diagnoses — a reporter is watching an issue's status.
+      3. Documents — a teacher's papers/plans; one model call + a .docx.
+      4. Everything else — video lessons (presentation), index_book.
+    All of 1–3 are bounded/fast, so they can't starve the lesson queue."""
     sketch = db.claim_next_sketch(sb)
     if sketch:
         log.info("Claimed tutor sketch %s (book=%s)", sketch["id"], sketch.get("book_id"))
@@ -108,14 +147,16 @@ def run_once(sb) -> bool:
                 pass
         return True
 
-    # Support diagnoses are claimed before batch work for the same reason as
-    # sketches: they're small and a reporter is watching the status — one queued
-    # lesson render must not leave an issue sitting at "diagnosing" for minutes.
-    job = db.claim_next_job(sb, job_type="support_diagnose") or db.claim_next_job(sb)
+    job = (
+        db.claim_next_job(sb, job_type="support_diagnose")
+        or db.claim_next_job(sb, job_type=DOC_JOB_TYPES)
+        or db.claim_next_job(sb)
+    )
     if not job:
         return False
     job_type = job.get("type")
     gen_id = job.get("generation_id")
+    _inflight_add(job["id"])
     log.info("Claimed %s job %s (generation=%s book=%s)", job_type, job["id"], gen_id, job.get("book_id"))
     try:
         if job_type == "index_book":
@@ -148,7 +189,23 @@ def run_once(sb) -> bool:
         # for a support job itself — that would recurse).
         if _support_agent_enabled() and job_type not in ("support_diagnose", "index_book"):
             _auto_file_support_issue(sb, job, str(exc))
+    finally:
+        _inflight_remove(job["id"])
     return True
+
+
+def _worker_loop(idx: int) -> None:
+    """One worker thread — its OWN Supabase client (thread safety), looping
+    run_once and sleeping between empty polls."""
+    sb = db.admin()
+    while True:
+        try:
+            worked = run_once(sb)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Poll error (worker %d): %s", idx, exc)
+            worked = False
+        if not worked:
+            time.sleep(POLL_SECONDS)
 
 
 def main() -> None:
@@ -178,37 +235,35 @@ def main() -> None:
         log.info("Done (%s).", "processed 1 job" if handled else "no queued jobs")
         return
 
-    # Reaper: a worker restart (deploy / crash / OOM) leaves the job/sketch it was
-    # running stranded in 'processing', and claims only ever pick 'queued' — so it
-    # would sit forever ("Finding chapters…" / a frozen generation / a stuck coach
-    # doodle). This is a single worker, so at startup every 'processing' row is
-    # orphaned: requeue them all for instant recovery.
+    # Reaper (startup): a worker restart (deploy / crash / OOM) leaves the job(s)
+    # it was running stranded in 'processing', and claims only ever pick 'queued'.
+    # Nothing is in flight yet at startup, so every 'processing' row is orphaned —
+    # requeue them all for instant recovery.
     rj, rs = db.requeue_stale_jobs(sb), db.requeue_stale_sketches(sb)
     if rj or rs:
         log.warning("Reaper: requeued %d job(s) + %d sketch(es) left 'processing' by a prior run", rj, rs)
 
     stale_min = int(os.getenv("STALE_JOB_MINUTES", "15"))
-    last_reap = time.time()
-    log.info("Worker started; polling every %ss (stale reaper %sm)", POLL_SECONDS, stale_min)
+    log.info("Worker started; concurrency=%d, polling every %ss (stale reaper %sm)",
+             WORKER_CONCURRENCY, POLL_SECONDS, stale_min)
+
+    # Worker threads do the claiming + processing.
+    for i in range(WORKER_CONCURRENCY):
+        threading.Thread(target=_worker_loop, args=(i,), daemon=True, name=f"worker-{i}").start()
+
+    # Main thread = the windowed crash-reaper. It EXCLUDES the jobs this process
+    # is actively running (in-flight), so a long render is never requeued and
+    # double-run; only a genuinely orphaned 'processing' row (a failed finish_job
+    # write, an old row) is recovered. Runs while the queue is busy.
     while True:
-        # Windowed backstop at the TOP of the loop (throttled), so it fires even
-        # while the queue is busy — a single worker here has nothing in flight, so
-        # anything 'processing' past the window is orphaned (e.g. a completed run
-        # whose finish_job write failed). Catches orphans created WITHOUT a restart.
-        now = time.time()
-        if now - last_reap > 60:
-            r = db.requeue_stale_jobs(sb, older_than_minutes=stale_min)
+        time.sleep(60)
+        try:
+            r = db.requeue_stale_jobs(sb, older_than_minutes=stale_min, exclude_ids=_inflight_snapshot())
             db.requeue_stale_sketches(sb, older_than_minutes=stale_min)
             if r:
-                log.warning("Reaper: requeued %d stale job(s) (>%sm in 'processing')", r, stale_min)
-            last_reap = now
-        try:
-            worked = run_once(sb)
+                log.warning("Reaper: requeued %d stale job(s) (>%sm in 'processing', not in-flight)", r, stale_min)
         except Exception as exc:  # noqa: BLE001
-            log.error("Poll error: %s", exc)
-            worked = False
-        if not worked:
-            time.sleep(POLL_SECONDS)
+            log.error("Reaper error: %s", exc)
 
 
 if __name__ == "__main__":
