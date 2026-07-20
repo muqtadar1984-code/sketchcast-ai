@@ -21,6 +21,7 @@ from typing import Callable, Optional
 
 from .models import SlideManifest, SlideSegment
 from .slide_builder import build_episode_deck, export_slide_png
+from .theme import concepts_for_slides
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,14 @@ def generate_episode_slides(
     deck_slides: list[dict] = []
     total = len(segments)
 
+    # One art-direction pass over the whole chapter → the SAME coherent,
+    # non-repeating concept set the video uses (video_composer computes it
+    # identically from the same heading order), so deck slide images and video
+    # frames match glyph-for-glyph.
+    seg_concepts = concepts_for_slides([
+        (seg.get("slide_heading") or "").strip() or episode_title for seg in segments
+    ])
+
     for i, seg in enumerate(segments):
         seg_id = seg.get("segment_id", f"s{i + 1:03d}")
         seg_type = seg.get("type", "explore")
@@ -93,17 +102,20 @@ def generate_episode_slides(
             progress_callback(i, total, seg_id)
 
         png_path = slide_dir / f"{seg_id}_slide.png"
-        footer = f"{seg_type} · {i + 1}/{total}"
         export_slide_png(
             heading=heading,
             points=points,
             output_png_path=png_path,
-            footer_text=footer,
+            # Footer is a dev-only label. The deck now embeds THIS exact PNG, so
+            # it stays empty in production (the video ships no footer either).
+            footer_text="",
             context_title=episode_title if heading != episode_title else "",
             fallback_text=narration,
             accent=_accent,
             logo_path=_logo,
             visual=visual,
+            number=i + 1,
+            concept=seg_concepts[i],
             direction=direction,
         )
 

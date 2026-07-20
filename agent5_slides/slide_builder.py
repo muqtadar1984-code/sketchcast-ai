@@ -291,12 +291,17 @@ def export_slide_png(
     accent: tuple[int, int, int] | None = None,
     logo_path: str | None = None,
     visual: dict | None = None,
+    number: int | None = None,
+    concept: str | None = None,
     direction: str = "ltr",
 ) -> Path:
     """Render a 1280x720 lesson slide PNG: heading + chapter bullets or a diagram.
 
     Thin wrapper over :func:`compose_slide` (the single source of slide layout,
     shared with the Agent 6 native video renderer) that just saves the image.
+    ``number`` (the teal badge) and ``concept`` (the right-column illustration)
+    are threaded through so the DECK's slide image matches the animated video
+    frame exactly — the same badge and the same space-filling glyph.
     """
     output_png_path = Path(output_png_path)
     output_png_path.parent.mkdir(parents=True, exist_ok=True)
@@ -310,6 +315,8 @@ def export_slide_png(
         accent=accent,
         logo_path=logo_path,
         visual=visual,
+        number=number,
+        concept=concept,
         direction=direction,
     )
     canvas.save(str(output_png_path), "PNG")
