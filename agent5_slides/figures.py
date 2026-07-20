@@ -29,7 +29,11 @@ logger = logging.getLogger(__name__)
 # gives way to the real textbook figure. Protecting only bullets starved figures:
 # Phase 2 turns the figure-worthy segments into archetypes, leaving nowhere to land.
 _PROTECTED_FROM_FIGURE = {"quiz", "takeaways"}
-_MATCH_THRESHOLD = 2  # a figure needs >=2 shared content words with a segment to land
+# A figure needs >=1 shared CONTENT word with a segment to land. All figures already
+# come from THIS chapter, so a single shared topical word (e.g. "cell", "chloroplast")
+# is a real signal; requiring two missed specific captions ("A palisade cell") against
+# general slides ("cell wall"). Best-match-first + the per-part cap prevent overreach.
+_MATCH_THRESHOLD = 1
 _STOP = {
     "the", "and", "for", "with", "that", "this", "are", "was", "how", "what", "why",
     "from", "into", "over", "your", "you", "our", "its", "it", "a", "an", "of", "to",

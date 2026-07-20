@@ -326,19 +326,10 @@ def compose_slide(
                 if ebox:
                     anim.append(ebox)
                 y += 16
-        elif not has_visual:
-            # Fallback: no bullets — show the narration text so the slide isn't bare
-            bf = _font(bold=False, size=28, sample=fallback_text or "")
-            fb: list[_Box] = []
-            for ln in _wrap(draw, " ".join((fallback_text or "").split()), bf, text_w)[:8]:
-                s = disp(ln)
-                lw_px = int(draw.textlength(s, font=bf))
-                lx = (content_right - lw_px) if rtl else content_left
-                draw.text((lx, y), s, fill=_MUTED, font=bf)
-                fb.append((lx, y, lx + lw_px, y + 28))
-                y += int(28 * 1.45)
-            if fb:
-                anim.append(fb)
+        # No bullets AND no visual — a hook / question / transition segment. The
+        # heading (the hook itself) plus the concept glyph carry the slide; we do
+        # NOT print the spoken narration onto it (that read as "the script is on
+        # the slide"). fallback_text stays the video/notes voiceover only.
 
     # Footer is a dev label only — the video composer passes "" in production
     # (gated behind DEBUG_VIDEO), so it never appears in shipped frames.
