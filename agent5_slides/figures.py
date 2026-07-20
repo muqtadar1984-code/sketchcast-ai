@@ -5,10 +5,12 @@ module is the generation-side glue: run detection once per chapter, then match
 each cropped figure to the segment it best belongs to and attach it as a
 ``figure`` slide_visual, which ``compose_slide`` pastes framed + attributed.
 
-A figure only ever REPLACES a plain-bullet segment — never a purpose-built
-diagram/definition/quick-check — so it fills the gaps rather than clobbering the
-Phase-2 archetypes. Gated behind FEATURE_TEXTBOOK_FIGURES; every step is
-best-effort so a detection/crop miss silently falls back to the normal slide.
+A matched figure REPLACES a segment's visual (bullets, a synthetic diagram, or a
+definition — the narration still speaks the words) — but never a quick-check or a
+takeaways recap. A real labelled diagram from the book beats a drawn one, so it
+takes priority rather than only filling bullet gaps. Gated behind
+FEATURE_TEXTBOOK_FIGURES; every step is best-effort so a detection/crop miss
+silently falls back to the normal slide.
 """
 
 from __future__ import annotations
@@ -20,11 +22,13 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# The Phase-2 archetypes + structural diagrams — a segment already carrying one of
-# these is NOT a figure candidate (it has a purpose-built visual).
-_REAL_VISUAL_KINDS = {
-    "flow", "cycle", "hierarchy", "compare", "icons", "definition", "quiz", "takeaways",
-}
+# A real labelled figure REPLACES a segment's visual when it matches — but never a
+# quick-check (its options must stay on screen) or a takeaways recap (a
+# whole-lesson summary, not one page's figure). Everything else — bullets, our
+# synthetic diagrams, even a definition (the NARRATION still speaks the meaning) —
+# gives way to the real textbook figure. Protecting only bullets starved figures:
+# Phase 2 turns the figure-worthy segments into archetypes, leaving nowhere to land.
+_PROTECTED_FROM_FIGURE = {"quiz", "takeaways"}
 _MATCH_THRESHOLD = 2  # a figure needs >=2 shared content words with a segment to land
 _STOP = {
     "the", "and", "for", "with", "that", "this", "are", "was", "how", "what", "why",
@@ -42,11 +46,16 @@ def textbook_figures_enabled() -> bool:
 
 
 def _words(text: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z][a-z0-9]{2,}", (text or "").lower()) if w not in _STOP}
+    out: set[str] = set()
+    for w in re.findall(r"[a-z][a-z0-9]{2,}", (text or "").lower()):
+        if w in _STOP:
+            continue
+        out.add(w[:-1] if len(w) > 3 and w.endswith("s") else w)  # crude singularise: cells -> cell
+    return out
 
 
-def _has_real_visual(sv) -> bool:
-    return isinstance(sv, dict) and str(sv.get("kind") or "").strip() in _REAL_VISUAL_KINDS
+def _is_protected(sv) -> bool:
+    return isinstance(sv, dict) and str(sv.get("kind") or "").strip() in _PROTECTED_FROM_FIGURE
 
 
 def detect_and_crop_figures(pdf_path, chapter: dict, client, out_dir: Path) -> list[dict]:
@@ -81,7 +90,10 @@ def detect_and_crop_figures(pdf_path, chapter: dict, client, out_dir: Path) -> l
             # Attribution shown on the slide tab: the printed figure label if the
             # book had one, else the (PDF) page. Page-only is honest about source
             # without claiming a printed page number we didn't read.
-            "attribution": label or f"p.{int(sp.get('page_num', 0)) + 1}",
+            # Only a printed figure label ("Fig. 4.2"); never a fabricated page
+            # number — our page index is the PDF's, which rarely equals the
+            # printed page. The caption below the figure carries the "what".
+            "attribution": label,
             "words": _words(f"{caption} {label}"),
         })
     logger.info("figures ready: %d cropped for chapter starting p%d", len(figures), start + 1)
@@ -100,7 +112,7 @@ def attach_figures_to_segments(segments: list[dict], figures: list[dict], used: 
         return 0
     candidates = [
         (i, seg) for i, seg in enumerate(segments)
-        if isinstance(seg, dict) and not _has_real_visual(seg.get("slide_visual"))
+        if isinstance(seg, dict) and not _is_protected(seg.get("slide_visual"))
     ]
     if not candidates:
         return 0

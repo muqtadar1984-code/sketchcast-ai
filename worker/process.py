@@ -639,7 +639,9 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             # into the video before cleanup. Best-effort: never breaks a lesson.
             chapter_figures: list[dict] = []
             used_figures: set[int] = set()
-            if textbook_figures_enabled():
+            _figures_on = textbook_figures_enabled()
+            logger.info("textbook figures flag: %s", _figures_on)  # is the env var live on THIS worker?
+            if _figures_on:
                 try:
                     chapter_figures = detect_and_crop_figures(
                         pdf_path, chapter, client, Path(tmp) / "figures"
