@@ -37,13 +37,11 @@ def test_gate_off_for_any_single_chapter_book():
     assert _title_gate_applies("Key Skills", "Env. Management", 1, False) is False
 
 
-def test_gate_off_when_chapter_repeats_book_title_multichapter():
-    # A book-titled chapter carries no chapter-specific topic to verify.
-    assert _title_gate_applies("Biology", "Biology", 12, False) is False
-
-
-def test_gate_title_match_is_case_and_space_insensitive():
-    assert _title_gate_applies("  biology ", "Biology", 12, False) is False
+def test_gate_stays_on_when_chapter_repeats_book_title_multichapter():
+    # Adversarial-review finding: in a MULTI-chapter book a wrong stored
+    # boundary is still possible even when a chapter repeats the book title —
+    # the gate must stay on there (heal, not a skip, is the remedy).
+    assert _title_gate_applies("Biology", "Biology", 12, False) is True
 
 
 def test_gate_off_for_cumulative_papers():
@@ -100,6 +98,24 @@ def test_truncated_reply_is_retried_streamed_at_double_budget(monkeypatch):
     assert seen["create"] == [16000]
     assert seen["stream"] == [32000]  # doubled
     assert c.session_usage["calls"] == 2  # the wasted attempt is still billed
+    # The RETURNED usage covers BOTH attempts (review finding: caller
+    # aggregates must not under-report vs session_usage/jobs.usage).
+    assert out["usage"]["output_tokens"] == 10  # 5 + 5
+
+
+def test_complete_json_with_cut_trailing_prose_is_kept_without_retry(monkeypatch):
+    # Review finding: stop_reason == max_tokens with a reply whose root JSON
+    # still parses (only trailing prose was cut) must NOT burn a retry.
+    c = _client(monkeypatch)
+    streamed = []
+    monkeypatch.setattr(c, "_create", lambda system, messages, max_tokens: _msg(
+        FULL + "\nThat covers the chapter nicel", "max_tokens"))
+    monkeypatch.setattr(c, "_create_stream", lambda system, messages, max_tokens: (
+        streamed.append(max_tokens), _msg(FULL, "end_turn"))[1])
+
+    out = c.analyze("p", max_tokens=8000)
+    assert out["data"]["segments"][0]["type"] == "hook"
+    assert streamed == []  # salvaged, no second call billed
 
 
 def test_clean_reply_never_retries(monkeypatch):

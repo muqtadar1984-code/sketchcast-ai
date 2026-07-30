@@ -54,6 +54,15 @@ def _first_text(response) -> str:
     return ""
 
 
+def _merge_usage(a: dict, b: dict) -> dict:
+    """Sum two track_tokens dicts (the truncation-retry path bills two calls;
+    the RETURNED usage must cover both so caller aggregates match jobs.usage)."""
+    merged = {k: a.get(k, 0) + b.get(k, 0) for k in set(a) | set(b)}
+    if "estimated_cost_usd" in merged:
+        merged["estimated_cost_usd"] = round(merged["estimated_cost_usd"], 6)
+    return merged
+
+
 def _get_api_key() -> str:
     """Read API key from Streamlit secrets first, then env var."""
     try:
@@ -116,22 +125,31 @@ class ClaudeClient:
         else:
             messages = [{"role": "user", "content": prompt}]
         response = self._call_messages(system=system, messages=messages, max_tokens=max_tokens, retries=retries)
-        if getattr(response, "stop_reason", "") == "max_tokens" and max_tokens < 32000:
-            # The reply hit the output cap — a truncated JSON that can never
-            # parse (it downgrades to raw_text and callers see zero data, e.g.
-            # the "produced no segments" script failure). Bill the wasted
-            # attempt, then retry ONCE at double the budget, STREAMED — the SDK
-            # refuses long non-streaming calls that could outlive its HTTP
-            # timeout. Reusing `messages` keeps the cache_control block, so the
-            # retry re-reads the 1h prompt cache instead of re-writing it.
-            self.track_tokens(response)
+        text = _first_text(response)
+        usage = self.track_tokens(response)
+        parsed = self._extract_json(text)
+        if (
+            getattr(response, "stop_reason", "") == "max_tokens"
+            and max_tokens < 32000
+            and isinstance(parsed, dict) and set(parsed) == {"raw_text"}
+        ):
+            # The reply hit the output cap AND the JSON is truly truncated (a
+            # root object/array that still parses is structurally complete —
+            # only trailing prose got cut, keep it). Unparseable means callers
+            # would see zero data (the "produced no segments" script failure):
+            # retry ONCE at double the budget, STREAMED — the SDK refuses long
+            # non-streaming calls that could outlive its HTTP timeout. Reusing
+            # `messages` keeps the cache_control block, so the retry re-reads
+            # the 1h prompt cache instead of re-writing it. Both attempts are
+            # billed and BOTH are reported in the returned usage, so callers'
+            # aggregates stay consistent with session_usage/jobs.usage.
             response = self._stream_messages(
                 system=system, messages=messages,
                 max_tokens=min(max_tokens * 2, 32000), retries=retries,
             )
-        text = _first_text(response)
-        usage = self.track_tokens(response)
-        parsed = self._extract_json(text)
+            text = _first_text(response)
+            usage = _merge_usage(usage, self.track_tokens(response))
+            parsed = self._extract_json(text)
         return {"data": parsed, "usage": usage}
 
     # ── image analysis ───────────────────────────────────────────────
@@ -302,10 +320,6 @@ class ClaudeClient:
         return usage
 
     # ── internals ────────────────────────────────────────────────────
-
-    def _call(self, system: str, prompt: str, max_tokens: int, retries: int):
-        messages = [{"role": "user", "content": prompt}]
-        return self._call_messages(system=system, messages=messages, max_tokens=max_tokens, retries=retries)
 
     def _create(self, system: str, messages: list, max_tokens: int):
         """One API call. Extended-thinking is DISABLED: this client is built for

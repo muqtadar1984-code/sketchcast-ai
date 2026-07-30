@@ -355,8 +355,8 @@ def generate_episode_script(
             f"Script generation produced no segments for episode "
             f"{episode.get('episode_num', 1)} — Claude reply began: {snippet!r} "
             "(a reply that starts with valid segments JSON but parses to nothing "
-            "was almost certainly truncated — check output_tokens == max_tokens "
-            "in the job usage)"
+            "was almost certainly cut off at the output-token cap, and the "
+            "doubled streamed retry hit it too)"
         )
 
     # Post-process: enforce Scribe Director invariants + travel-time breaks

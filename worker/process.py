@@ -79,15 +79,14 @@ def _title_gate_applies(chapter_title: str, book_title: str | None,
     mislabel bug). A single whole-book chapter has no boundary to get wrong,
     and its "title" is just the book title (often a raw scanner filename like
     "DocScanner 16 Jun 2026…"), which no page can ever read as — there the
-    gate can only false-positive, bricking the book. Same for a chapter that
-    merely repeats the book title: the label carries no chapter-specific topic
-    to verify. Cumulative papers have synthetic labels — never checked.
+    gate can only false-positive, bricking the book. Cumulative papers have
+    synthetic labels — never checked. In MULTI-chapter books the gate always
+    applies (even to a chapter that repeats the book title): a wrong stored
+    boundary is possible there, and heal — not a skip — is the right remedy.
+    (book_title is kept in the signature for call-site clarity/telemetry.)
     """
-    return (
-        not is_cumulative
-        and n_chapters > 1
-        and chapter_title.strip().lower() != (book_title or "").strip().lower()
-    )
+    del book_title  # multi-chapter books are always checked — see docstring
+    return not is_cumulative and n_chapters > 1
 
 
 def _chapter_check_error(title: str, actual: str) -> str:
