@@ -353,7 +353,10 @@ def generate_episode_script(
         snippet = str(data.get("raw_text", data) if isinstance(data, dict) else data)[:300]
         raise RuntimeError(
             f"Script generation produced no segments for episode "
-            f"{episode.get('episode_num', 1)} — Claude reply began: {snippet!r}"
+            f"{episode.get('episode_num', 1)} — Claude reply began: {snippet!r} "
+            "(a reply that starts with valid segments JSON but parses to nothing "
+            "was almost certainly truncated — check output_tokens == max_tokens "
+            "in the job usage)"
         )
 
     # Post-process: enforce Scribe Director invariants + travel-time breaks

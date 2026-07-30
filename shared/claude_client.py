@@ -113,9 +113,22 @@ class ClaudeClient:
                     {"type": "text", "text": prompt},
                 ],
             }]
-            response = self._call_messages(system=system, messages=messages, max_tokens=max_tokens, retries=retries)
         else:
-            response = self._call(system=system, prompt=prompt, max_tokens=max_tokens, retries=retries)
+            messages = [{"role": "user", "content": prompt}]
+        response = self._call_messages(system=system, messages=messages, max_tokens=max_tokens, retries=retries)
+        if getattr(response, "stop_reason", "") == "max_tokens" and max_tokens < 32000:
+            # The reply hit the output cap — a truncated JSON that can never
+            # parse (it downgrades to raw_text and callers see zero data, e.g.
+            # the "produced no segments" script failure). Bill the wasted
+            # attempt, then retry ONCE at double the budget, STREAMED — the SDK
+            # refuses long non-streaming calls that could outlive its HTTP
+            # timeout. Reusing `messages` keeps the cache_control block, so the
+            # retry re-reads the 1h prompt cache instead of re-writing it.
+            self.track_tokens(response)
+            response = self._stream_messages(
+                system=system, messages=messages,
+                max_tokens=min(max_tokens * 2, 32000), retries=retries,
+            )
         text = _first_text(response)
         usage = self.track_tokens(response)
         parsed = self._extract_json(text)
@@ -323,6 +336,33 @@ class ClaudeClient:
                 time.sleep(wait)
         # Final attempt without catching
         return self._create(system, messages, max_tokens)
+
+    def _create_stream(self, system: str, messages: list, max_tokens: int):
+        """One STREAMED API call — the truncation-retry path only. Streaming is
+        required for large max_tokens (the SDK refuses long non-streaming calls
+        that could outlive its HTTP timeout) and get_final_message() returns the
+        same Message shape, so _first_text/track_tokens work unchanged. Mirrors
+        _create's thinking-disabled contract exactly (see that docstring)."""
+        kwargs = dict(model=self.model, max_tokens=max_tokens, system=system, messages=messages)
+        try:
+            with self.client.messages.stream(**kwargs, thinking={"type": "disabled"}) as s:
+                return s.get_final_message()
+        except TypeError:
+            pass  # SDK too old for the param
+        except Exception as exc:  # noqa: BLE001 — model rejected the param
+            if "thinking" not in str(exc).lower():
+                raise
+        with self.client.messages.stream(**kwargs) as s:
+            return s.get_final_message()
+
+    def _stream_messages(self, system: str, messages: list, max_tokens: int, retries: int):
+        """_call_messages, but streamed — same RateLimitError backoff loop."""
+        for attempt in range(retries):
+            try:
+                return self._create_stream(system, messages, max_tokens)
+            except RateLimitError:
+                time.sleep(2 ** (attempt + 1))
+        return self._create_stream(system, messages, max_tokens)
 
     @staticmethod
     def _extract_json(text: str) -> dict | list:

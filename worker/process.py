@@ -70,6 +70,26 @@ def _chapter_heal_enabled() -> bool:
     return os.getenv("FEATURE_CHAPTER_HEAL", "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _title_gate_applies(chapter_title: str, book_title: str | None,
+                        n_chapters: int, is_cumulative: bool) -> bool:
+    """Whether the generation-time title-vs-content check applies to a chapter.
+
+    The gate protects against WRONG BOUNDARIES in multi-chapter books (printed
+    contents-page numbers once misread as physical pages — the original
+    mislabel bug). A single whole-book chapter has no boundary to get wrong,
+    and its "title" is just the book title (often a raw scanner filename like
+    "DocScanner 16 Jun 2026…"), which no page can ever read as — there the
+    gate can only false-positive, bricking the book. Same for a chapter that
+    merely repeats the book title: the label carries no chapter-specific topic
+    to verify. Cumulative papers have synthetic labels — never checked.
+    """
+    return (
+        not is_cumulative
+        and n_chapters > 1
+        and chapter_title.strip().lower() != (book_title or "").strip().lower()
+    )
+
+
 def _chapter_check_error(title: str, actual: str) -> str:
     """The loud-fail message when a chapter can't be matched to any pages — shown
     after self-heal has already tried and failed to relocate."""
@@ -332,6 +352,13 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         chapter_num = int(chapter.get("chapter_num", 0))
         chapter_title = chapter.get("title") or f"Chapter {chapter_num}"
 
+        # Whether the title-vs-content check can validly apply here (see the
+        # helper's docstring — single/whole-book chapters would always fail it).
+        title_gate_applies = _title_gate_applies(
+            chapter_title, book.get("title"),
+            len(structured.get("chapters", [])), is_cumulative,
+        )
+
         # Self-heal overlay (behind FEATURE_CHAPTER_HEAL, which the operator turns on
         # only AFTER applying migration 0040 — the heal_* columns): a book indexed
         # before the boundary fix may have wrong pages stored for this chapter. A
@@ -342,7 +369,9 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         # text is already gathered from the per-chapter cache.
         heal_on = _chapter_heal_enabled() and not is_cumulative
         heal = db.get_chapter_heal(sb, book_id, chapter_num) if heal_on else None
-        if heal and heal.get("status") == "not_found":
+        # A stale 'not_found' verdict must not brick a chapter the gate no longer
+        # applies to (e.g. a whole-book chapter titled with the filename).
+        if heal and heal.get("status") == "not_found" and title_gate_applies:
             raise RuntimeError(_chapter_check_error(chapter_title, "a different topic"))
         healed_text = None
         if heal and heal.get("status") == "ok" and heal.get("start_page") is not None:
@@ -413,10 +442,11 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             )
 
         # A cumulative revision paper's title ("Revision — Chapters 1–3") names
-        # no single topic, so the topic-match check doesn't apply — skip it (it
-        # would otherwise pay a Claude call per paper and could fail loud on the
-        # synthetic label).
-        ok, actual = (True, None) if is_cumulative else verify_chapter_content(chapter_title, _sample_text(), client)
+        # no single topic, and a whole-book/book-titled chapter has no
+        # chapter-specific topic either — the check applies only where a wrong
+        # boundary is possible (see title_gate_applies above). Skipping also
+        # saves the Claude call per paper on the synthetic labels.
+        ok, actual = (True, None) if not title_gate_applies else verify_chapter_content(chapter_title, _sample_text(), client)
         if not ok:
             # Without the flag/migration, keep the pre-heal behavior: fail loud.
             if not heal_on:
