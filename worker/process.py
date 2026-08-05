@@ -1071,7 +1071,46 @@ def index_book(sb: Client, job: dict) -> None:
     # teachers generate any part on demand. Best-effort: a chapter without a
     # part map just renders the classic whole-chapter controls.
     try:
-        from agent2_analysis.analyzer import build_chapter_parts
+        from agent2_analysis.analyzer import MAX_PART_WORDS, build_chapter_parts
+
+        # Words per page, for a chapter whose text could not be measured.
+        #
+        # A SCANNED PDF has no text layer, so Docling's structured output is
+        # nearly empty and build_chapter_parts returns its documented fallback —
+        # a single chunk of 0 words. The chapter then renders as ONE part with
+        # ONE kit, while generation, working from the OCR'd text, finds enough
+        # for three videos. That is exactly what happened to a teacher's 12-page
+        # scanned chapter: 3 videos and 1 worksheet, where the same chapter in a
+        # digital book would have split into 4 parts with 4 of each. The videos
+        # covered the chapter; the documents covered a quarter of it.
+        #
+        # So when there is no word count to split on, estimate from PAGES.
+        # Calibrated against a book that COULD be measured rather than guessed:
+        # Cambridge Primary Science Y7 chapter 1 is 20 pages and really splits
+        # into 4 parts (389/1660/1229/991 words). 250 w/page reproduces that 4,
+        # and gives the 13-page scanned chapter 3 — which is independently what
+        # generation found when it chunked that chapter into 3 videos.
+        # 250 is the LOWEST value matching both, so the estimate errs toward
+        # fewer parts: an over-estimate would charge a teacher for kits the
+        # chapter does not contain.
+        EST_WORDS_PER_PAGE = 250
+        MAX_ESTIMATED_PARTS = 12  # a mis-detected chapter must not bill 40 kits
+
+        def parts_from_pages(ch: dict) -> list[dict]:
+            try:
+                start = int(ch.get("start_page", 0))
+                end = int(ch.get("end_page", start))
+            except (TypeError, ValueError):
+                return []
+            pages = max(1, end - start + 1)
+            n = -(-pages * EST_WORDS_PER_PAGE // MAX_PART_WORDS)  # ceil division
+            n = max(1, min(MAX_ESTIMATED_PARTS, n))
+            if n < 2:
+                return []  # one part is what a missing map already renders
+            per = pages * EST_WORDS_PER_PAGE // n
+            # `estimated` is not read by the app — it marks these as inferred so
+            # a later audit can tell them from measured ones.
+            return [{"titles": [], "words": per, "estimated": True} for _ in range(n)]
 
         s_by_num = {}
         for c in structured.get("chapters", []):
@@ -1085,11 +1124,28 @@ def index_book(sb: Client, job: dict) -> None:
             # of the book its part map.
             try:
                 sc = s_by_num.get(int(ch["num"]))
-                if sc:
-                    ch["parts"] = [
+                measured = (
+                    [
                         {"titles": (p.get("section_titles") or [])[:3], "words": int(p.get("words", 0))}
                         for p in build_chapter_parts(sc)
                     ]
+                    if sc
+                    else []
+                )
+                # Trust any real measurement, however small. Only estimate when
+                # the chapter yielded no words at all.
+                if any(p["words"] for p in measured):
+                    ch["parts"] = measured
+                else:
+                    estimated = parts_from_pages(ch)
+                    if estimated:
+                        ch["parts"] = estimated
+                        logger.info(
+                            "part map ESTIMATED from pages for %s ch%s: %d parts (no text layer)",
+                            book_id, ch.get("num"), len(estimated),
+                        )
+                    elif measured:
+                        ch["parts"] = measured
             except Exception as exc:  # noqa: BLE001
                 logger.warning("part map skipped for %s ch%s: %s", book_id, ch.get("num"), exc)
     except Exception as exc:  # noqa: BLE001
