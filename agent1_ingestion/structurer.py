@@ -185,8 +185,9 @@ _ROMAN_ALT = (
 _UNICODE_ROMAN = "Ⅰ-Ⅿⅰ-ⅿ"
 
 # Labeled chapter markers: "Chapter 3", "UNIT 3", "Lesson Three", "Topic 3:",
-# "Module 3 — Fractions", "Part IV", "PartⅠ", "Unit (1):", etc. Group 2 = the
-# number (digits, a word, or a roman numeral), group 3 = any title text.
+# "Module 3 — Fractions", "Part IV", "PartⅠ", "Unit (1):", "Concept 1.1", etc.
+# Group 2 = the number (digits, a decimal pair, a word, or a roman numeral),
+# group 3 = any title text.
 #
 # THE BRACKETS ARE NOT COSMETIC. "Unit (1): Interaction of Living Organisms" is
 # the standard heading convention in Egyptian and wider Arab-world textbooks, and
@@ -195,19 +196,45 @@ _UNICODE_ROMAN = "Ⅰ-Ⅿⅰ-ⅿ"
 # as ONE 76-page unit, leaving 78 pages — half the book — unmapped, because every
 # "Unit (n)" heading after the first was invisible to this regex.
 #
-# That is the SECOND heading format this pattern was blind to in one day (the
-# first was U+2160 roman numerals, above), and both came from non-Anglo
-# textbooks. The lesson worth carrying: this regex encodes an assumption about
-# how a chapter heading looks, and that assumption is culturally specific. When
-# a book indexes to implausibly few chapters, suspect this line first.
+# CONCEPT is the third format this one pattern was blind to, found on the SAME
+# book once the brackets landed. That book's real hierarchy is
+# Theme (2) → Unit (2) → Concept (6) → Lesson (~27), and the CONCEPT is what the
+# teacher assigns: six units of ~26 pages. Themes and Units are containers of ~78
+# pages each — the wrong altitude by the measure this module already applies —
+# and Lessons are too fine. With "concept" missing, every one of the six was
+# invisible, the two visible families were 2 entries long (under the 3-entry bar
+# in _better_family), and the book fell all the way through to heading inference:
+# a 2-page contents entry and one bounded 22-page unit, 132 of 156 pages unmapped.
+#
+# Only "concept" was added. Every word here is a new false-positive surface, and
+# the near neighbours were measured against real headings and rejected:
+#   · "activity" — already a KEY BOX type above (BOX_PATTERNS). Promoting it would
+#     turn every "Activity 3" box in a science book into a chapter.
+#   · "objective" / "outcome" — finer than a lesson ("Objective 1: identify…");
+#     they name what a lesson teaches, not a teachable unit.
+#   · "period" — collides head-on with chemistry ("Period 3 elements") and with
+#     timetables; the label word has to be rarer than the subject matter.
+#   · "term" / "block" / "strand" — "Term 1" and "Strand 2" are syllabus-document
+#     words that student books almost never print as headings, while "Term" and
+#     "Block" are ordinary nouns ("Term 1 is defined as…", "Block 1 slides…").
+# "concept" survives the same test: as an ordinary noun it appears as "Concepts…"
+# or "Conceptual…", and neither can reach the number group (pinned below).
+#
+# Three formats in one day — U+2160 roman numerals, brackets, and now the word
+# "concept" — and all three came from non-Anglo textbooks. The lesson worth
+# carrying: this regex encodes an assumption about how a chapter heading looks,
+# and that assumption is culturally specific. When a book indexes to implausibly
+# few chapters, suspect this line first, and ask what the book calls the thing a
+# teacher actually assigns before assuming it is called a chapter at all.
 #
 # The closing bracket sits AFTER the (?!\w) guard so the guard still does its
 # job — it is what stops "Parties" parsing as "Part" + roman "i", and that must
 # keep working: verified against Parties/Partition/Themes/Weekend/Sections.
 _LABEL_RE = re.compile(
-    r"^(chapter|unit|lesson|topic|module|theme|week|part|section|volume)\s*"
+    r"^(chapter|unit|lesson|concept|topic|module|theme|week|part|section|volume)\s*"
     r"[(\[]?\s*"
-    r"(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"(\d{1,2}(?:\.\d{1,2})?|"
+    r"one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
     r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|"
     f"{_ROMAN_ALT}|[{_UNICODE_ROMAN}])"
     r"(?!\w)"
@@ -247,13 +274,72 @@ def _marker_number(token: str) -> Optional[int]:
     return _WORD_NUMS.get(token) or _ROMAN_NUMS.get(token)
 
 
-def _better_family(candidate: list[dict], best: list[dict], fam: str, best_fam: str | None) -> bool:
+def _marker_key(token: str) -> Optional[tuple[int, int]]:
+    """``(major, minor)`` for a marker token, so one family can be ordered by the
+    sequence the book actually prints.
+
+    An ordinary marker keys as ``(n, 0)``; a DECIMAL marker ("Concept 1.1") keys
+    as ``(1, 1)``. The minor is what tells the two apart everywhere downstream —
+    ``minor == 0`` means "this family counts in whole numbers" and keeps the
+    consecutive-integer run rule, which is the rule that stops three stray
+    "Chapter 7" mentions forming a bogus map and must not be weakened.
+    """
+    token = token.strip().lower()
+    if "." in token:
+        major, _, minor = token.partition(".")
+        if major.isdigit() and minor.isdigit():
+            a, b = int(major), int(minor)
+            if 1 <= a <= 99 and 1 <= b <= 99:
+                return (a, b)
+        return None
+    n = _marker_number(token)
+    return None if n is None else (n, 0)
+
+
+# How much further one family must REACH into the book than another before reach
+# outranks run length. Reach is measured between a family's first and last start
+# page, because at ranking time the end pages are not assigned yet.
+#
+# This is the coverage rule at family level, and the shape it has to catch is a
+# family that is really a SUB-numbering of another: "Lesson 1.1 … 1.5" printed
+# inside chapter 1 of a 200-page book is a dense, strictly-increasing, perfectly
+# valid run of 5 that reaches 21 pages, and on length alone it beats the 10 real
+# "Chapter N" headings that reach 180. 1.5x is set well below that 8.6x ratio and
+# well above the difference between two CORRECT families of the same book, which
+# differ only by whichever one happens to include the front or back matter —
+# under 10% of the book in the corpus. Between two families that reach comparably
+# far, length still decides, so 21 Units still beat 7 Parts.
+_FAMILY_REACH_MARGIN = 1.5
+
+
+def _family_reach(chapters: list[dict]) -> int:
+    """Pages between a family's first and last chapter start (0 when unknown)."""
+    starts = []
+    for c in chapters or []:
+        try:
+            starts.append(int(c["start_page"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return (max(starts) - min(starts) + 1) if starts else 0
+
+
+def _better_family(
+    candidate: list[dict],
+    best: list[dict],
+    fam: str,
+    best_fam: str | None,
+) -> bool:
     """Family ranking for the labelled/running-header detectors: a finer family
     (chapter/unit/lesson…) beats a CONTAINER family (part/volume…) even when the
     container found more entries — 7 Parts must never win over 21 Units. Within
-    the same rank, the longer ascending run wins."""
+    the same rank, the family that REACHES materially further into the book wins,
+    and only when the two reach comparably far does the longer run decide."""
     if len(candidate) < 3:
         return False
+    reach_c, reach_b = _family_reach(candidate), _family_reach(best)
+    # Both reaches have to be known for the comparison to mean anything.
+    dominates = bool(reach_b) and reach_c >= _FAMILY_REACH_MARGIN * reach_b
+    dominated = bool(reach_c) and reach_b >= _FAMILY_REACH_MARGIN * reach_c
     if best_fam is not None and (fam in _CONTAINER_LABELS) != (best_fam in _CONTAINER_LABELS):
         if best_fam not in _CONTAINER_LABELS:
             return False  # never demote a finer family to a container
@@ -265,8 +351,13 @@ def _better_family(candidate: list[dict], best: list[dict], fam: str, best_fam: 
         # every container holds at least one chapter; half the container's length
         # leaves room for partial detection and still excludes a scrap. (The
         # failure case this ranking exists for is 21 chapters vs 7 Parts — 3x
-        # clear of the bar.)
-        return len(candidate) * 2 >= len(best)
+        # clear of the bar.) A finer family that only reaches a corner of the book
+        # is a scrap by the other measure and is refused the promotion too.
+        return len(candidate) * 2 >= len(best) and not dominated
+    if dominates:
+        return True
+    if dominated:
+        return False
     return len(candidate) > len(best)
 
 
@@ -680,6 +771,86 @@ def _chapters_plausible(
     return bool(_map_shape(bounded, total_pages, page_stats)["ok"])
 
 
+# ── how much of the book does a candidate map actually teach? ────────────────
+# The rule that would have caught today's regression on its own. Two detectors
+# looked at the same 156-page Egyptian Grade 5 science book: one produced a
+# 2-chapter map covering 24 pages, the other a 6-chapter map covering 154, and
+# nothing in this module compared them — the cascade simply took whichever rung
+# fired first. Deciding it needed someone to notice that "Theme" is a container
+# and "Concept" is the teaching unit. Coverage decides it without knowing that.
+#
+# THE TENSION, and how it is resolved: coverage on its own would crown ONE
+# whole-book chapter, which covers 100% of every book there is. Three rules keep
+# it in its place, and none of them lets it overrule the altitude checks:
+#   1. Plausibility comes FIRST and absolutely. A map that fails
+#      _chapters_plausible — wrong altitude, sections, corrupt ranges, truncated
+#      — can never displace one that passes, however much of the book it covers.
+#      Coverage only ever chooses among maps that already passed, or among maps
+#      that already failed.
+#   2. Coverage must be MATERIALLY better to displace an incumbent, not merely
+#      better, so it breaks ties and rejects clearly-worse maps instead of
+#      reshuffling equals. 10 points is comfortably above the difference between
+#      two correct maps of one book (which differ only by the front/back matter
+#      one of them includes — under 5% of a 156-page book) and comfortably below
+#      the failure it exists for (15% vs 99% on that book; 14% vs 49% on the
+#      earlier map of it).
+#   3. It may never buy coverage by giving up chapters: a challenger at a
+#      materially COARSER altitude is refused even when it covers more. The bar
+#      is the same "not a scrap" ratio _better_family uses, so one whole-book
+#      chapter (1 vs 21) is refused while a slightly shorter but far more
+#      complete map (6 vs 8) is not.
+# Cascade order breaks what is left: the higher-signal detector keeps the map.
+_COVERAGE_MARGIN = 0.10
+
+
+def _map_coverage(chapters: list[dict], total_pages: int) -> float:
+    """Share of the book's pages the map would actually teach.
+
+    Measured on the BOUNDED map for the same reason _chapters_plausible is: the
+    last-chapter bound runs before anything is stored, so an unbounded map
+    overstates its own coverage by exactly the tail the bound will discard.
+    Counts pages rather than span, so a map that misses the FRONT of the book
+    scores as badly as one that stops early — the unmapped-tail rule cannot see
+    a leading gap at all.
+    """
+    if total_pages <= 0 or not chapters:
+        return 0.0
+    bounded, _ = _bounded_last_chapter(chapters, total_pages)
+    return min(1.0, sum(_chapter_pages(c) for c in bounded) / total_pages)
+
+
+def _pick_detected_map(
+    candidates: list[list[dict]],
+    total_pages: int,
+    page_stats: dict | None = None,
+) -> list[dict]:
+    """Choose between the heuristic detectors' candidate maps.
+
+    ``candidates`` is in cascade order, highest-signal first; the first non-empty
+    one is the incumbent and only a plausible-where-it-was-not, or materially
+    more complete, challenger takes its place. See _COVERAGE_MARGIN.
+    """
+    best: list[dict] = []
+    best_ok = False
+    best_cov = 0.0
+    for cand in candidates:
+        cand = _repair_chapter_ranges(cand or [], total_pages)
+        if not cand:
+            continue
+        ok = _chapters_plausible(cand, total_pages, page_stats)
+        cov = _map_coverage(cand, total_pages)
+        if not best:
+            best, best_ok, best_cov = cand, ok, cov
+            continue
+        if ok != best_ok:
+            if ok:  # plausibility outranks coverage, always
+                best, best_ok, best_cov = cand, ok, cov
+            continue
+        if cov >= best_cov + _COVERAGE_MARGIN and len(cand) * 2 >= len(best):
+            best, best_ok, best_cov = cand, ok, cov
+    return best
+
+
 def _titles_from_contents(items: list[DocItem]) -> dict[int, str]:
     """Parse a printed 'Contents' page into {chapter_number: title}.
 
@@ -765,9 +936,20 @@ def _detect_running_header_chapters(items: list[DocItem], total_pages: int) -> l
         m = _LABEL_RE.match(it.text.strip())
         if not m:
             continue
-        n = _marker_number(m.group(2))
-        if n is None:
+        # This detector keys its page clusters on a single integer, so a DECIMAL
+        # marker contributes its MAJOR: "Unit 3.1 Feedback loops" printed across
+        # unit 3 lands on the unit, which is both the useful answer and exactly
+        # what happened before the number group learned about decimals (the old
+        # pattern matched the "3" and left "1 Feedback loops" as the title — so
+        # this keeps the clustering identical and cleans the title up). Splitting
+        # a decimal family into its own run, as _label_run does for headings, is
+        # deliberately NOT done here: a per-page decimal running header is a shape
+        # nothing in the corpus has shown, and guessing at it would be untested
+        # cluster logic on the highest-signal detector there is.
+        key = _marker_key(m.group(2))
+        if key is None:
             continue
+        n = key[0]
         title = m.group(3).strip(" .:-–—")
         if not any(c.isalpha() for c in title) and idx + 1 < len(items):
             # Extraction often splits the header into spans — "Unit 3" then
@@ -846,47 +1028,97 @@ def _detect_running_header_chapters(items: list[DocItem], total_pages: int) -> l
     return best
 
 
+def _label_run(markers: dict[tuple[int, int], object], decimal: bool) -> list[tuple[int, int]]:
+    """The keys of one label family, in the order the book prints them, cut at
+    the first gap in the sequence.
+
+    INTEGER families are unchanged and deliberately so: an ascending run of
+    CONSECUTIVE integers from 1. That rule is the only thing standing between a
+    book and a map built out of three stray "Chapter 7" cross-references, and
+    loosening it to "sort what you found" would cost far more books than it won.
+
+    DECIMAL families ("Concept 1.1, 1.2, 1.3, 2.1, 2.2, 2.3") cannot satisfy that
+    rule — there is no consecutive integer sequence to find — so they are keyed by
+    the (major, minor) pair and walked in sorted order instead. The density
+    requirement is the same rule applied on both axes rather than a weaker one:
+    the majors must run consecutively from 1, and within each major the minors
+    must run consecutively from 1. So "Concept 3.1, 3.2" alone — a sub-numbering
+    that never starts at 1 — yields nothing, exactly as a lone "Chapter 7" does.
+    """
+    out: list[tuple[int, int]] = []
+    if not decimal:
+        n = 1
+        while (n, 0) in markers:
+            out.append((n, 0))
+            n += 1
+        return out
+    major = 1
+    while (major, 1) in markers:
+        minor = 1
+        while (major, minor) in markers:
+            out.append((major, minor))
+            minor += 1
+        major += 1
+    return out
+
+
 def _detect_labeled_chapters(items: list[DocItem], total_pages: int) -> list[dict]:
     """Detect chapters from labelled heading markers — "Chapter 3", "Unit 3",
-    "Lesson Three", "Topic 3: Fractions", … — forming an ascending run from 1.
-    Higher-signal than bare numbers, so it runs first.
+    "Lesson Three", "Topic 3: Fractions", "Concept 1.1", … — forming an ascending
+    run from 1. Higher-signal than bare numbers, so it runs first.
 
     Each label family (chapter/unit/lesson/…) is tracked separately so a book
-    with "Unit 1" containing "Lesson 1..12" doesn't interleave the two
-    sequences; the family with the longest ascending run wins."""
+    with "Unit 1" containing "Lesson 1..12" doesn't interleave the two sequences;
+    the family that reaches furthest into the book wins, then the longest run.
+
+    A family's WHOLE-NUMBER and DECIMAL markers are separate families ("concept"
+    vs "concept."), because they are two different numbering schemes and mixing
+    them would let one corrupt the other's run rule. See ``_label_run``. Note that
+    this is orthogonal to ``_SUBSEC_RE`` / ``_depth_is_sections``, which identify
+    a BARE decimal ("3.2 Feedback loops") in a PDF outline title: those never
+    carry a label word, so nothing matched here can be mistaken for them, and a
+    genuine sub-section layer keeps being recognised as sections. What DOES need
+    care is a book that prints its sub-sections WITH a label word ("Section 3.1",
+    "Lesson 3.1"). Such a family is dense and strictly increasing and would win on
+    length alone, so the guards it runs into are the container rule (for
+    section/part/volume) and the reach rule in ``_better_family`` (for the rest) —
+    a sub-numbering sits inside one chapter and reaches a fraction as far as the
+    family it subdivides.
+    """
     contents_titles = _titles_from_contents(items)
-    # family -> {n -> (page, idx, inline_title)}
-    families: dict[str, dict[int, tuple[int, int, str]]] = {}
+    # (family, is_decimal) -> {(major, minor) -> (page, idx, inline_title)}
+    families: dict[tuple[str, bool], dict[tuple[int, int], tuple[int, int, str]]] = {}
     for idx, it in enumerate(items):
         if it.level not in (1, 2):
             continue
         m = _LABEL_RE.match(it.text.strip())
         if not m:
             continue
-        n = _marker_number(m.group(2))
-        if n is None:
+        key = _marker_key(m.group(2))
+        if key is None:
             continue
-        fam = families.setdefault(m.group(1).lower(), {})
-        if n not in fam:
-            fam[n] = (it.page_num, idx, m.group(3).strip(" .:-–—"))
+        fam = families.setdefault((m.group(1).lower(), key[1] > 0), {})
+        if key not in fam:
+            fam[key] = (it.page_num, idx, m.group(3).strip(" .:-–—"))
 
     best: list[dict] = []
     best_fam: str | None = None
-    for fam_name, first in families.items():
+    for (fam_name, decimal), first in families.items():
         chapters: list[dict] = []
-        n = 1
-        while n in first:
-            pg, idx, inline = first[n]
+        for key in _label_run(first, decimal):
+            pg, idx, inline = first[key]
             if chapters and pg <= chapters[-1]["start_page"]:
                 break  # pages must strictly increase
             title = (
                 (inline if any(c.isalpha() for c in inline) else "")
-                or contents_titles.get(n)
+                # The printed contents page is indexed by whole chapter number,
+                # so it has nothing to say about "Concept 1.2".
+                or (None if decimal else contents_titles.get(key[0]))
                 or _title_near(items, idx, pg)
-                or f"Chapter {n}"
+                or (f"{fam_name.capitalize()} {key[0]}.{key[1]}" if decimal
+                    else f"Chapter {key[0]}")
             )
             chapters.append({"chapter_num": len(chapters), "title": title, "start_page": pg, "end_page": 0})
-            n += 1
         if _better_family(chapters, best, fam_name, best_fam):
             best, best_fam = chapters, fam_name
 
@@ -1116,13 +1348,25 @@ def structure_book(
         # No usable outline → running headers, labelled markers, bare numbers,
         # heading inference. Running headers go first: when a book prints its
         # unit on every page, that beats any first-occurrence heuristic.
-        chapter_defs = _detect_running_header_chapters(extraction.items, extraction.total_pages)
-        if not chapter_defs:
-            chapter_defs = _detect_labeled_chapters(extraction.items, extraction.total_pages)
-        if not chapter_defs:
-            chapter_defs = _detect_numbered_chapters(extraction.items, extraction.total_pages)
-        if not chapter_defs:
-            chapter_defs = _infer_chapters_from_items(extraction.items, extraction.total_pages)
+        #
+        # These used to be a first-hit cascade, and that is how the Egyptian
+        # Grade 5 book ended up stored with 132 of its 156 pages unmapped: the
+        # rungs above heading inference found nothing, inference found a contents
+        # entry and one unit, and because it was the only map anyone built it was
+        # also the map that shipped. All four are built now and compared on how
+        # much of the book they cover; cascade order still decides between maps
+        # that are equally complete. They are pure passes over the extracted
+        # items, so building all four costs nothing that matters.
+        chapter_defs = _pick_detected_map(
+            [
+                _detect_running_header_chapters(extraction.items, extraction.total_pages),
+                _detect_labeled_chapters(extraction.items, extraction.total_pages),
+                _detect_numbered_chapters(extraction.items, extraction.total_pages),
+                _infer_chapters_from_items(extraction.items, extraction.total_pages),
+            ],
+            extraction.total_pages,
+            page_stats,
+        )
 
     # Sanity-check whatever the outline/heuristics produced: a degenerate split
     # (per-page pseudo-chapters, digit titles) must not be trusted — reset it so

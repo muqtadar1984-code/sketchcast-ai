@@ -13,14 +13,18 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from agent1_ingestion.extractor import DocItem, TOCItem
-from agent1_ingestion.structurer import (_LABEL_RE, _MAX_SPAN_RATIO,
+from agent1_ingestion.structurer import (_COVERAGE_MARGIN, _LABEL_RE,
+                                         _MAX_SPAN_RATIO,
                                          _MAX_UNMAPPED_TAIL_SHARE,
                                          _better_family, _bounded_last_chapter,
                                          _build_chapters_from_toc,
-                                         _chapters_plausible, _map_shape,
+                                         _chapters_plausible,
+                                         _detect_labeled_chapters, _label_run,
+                                         _map_coverage, _map_shape, _marker_key,
                                          _marker_number, _median,
-                                         _page_text_stats, _pick_toc_depth,
-                                         _ranges_valid, _repair_chapter_ranges,
+                                         _page_text_stats, _pick_detected_map,
+                                         _pick_toc_depth, _ranges_valid,
+                                         _repair_chapter_ranges,
                                          _toc_chapters_at_depth, _toc_is_usable,
                                          structure_book)
 
@@ -439,6 +443,246 @@ class TestLabels:
         assert _marker_number(_LABEL_RE.match("Chapter 12").group(2)) == 12
         assert _marker_number(_LABEL_RE.match("Lesson Three").group(2)) == 3
         assert _LABEL_RE.match("Unit 3: Selecting hardware").group(3) == "Selecting hardware"
+
+
+class TestConceptFamily:
+    """CONCEPT is the teaching unit in the Egyptian curriculum: the book that
+    exposed this nests Theme (2) → Unit (2) → Concept (6) → Lesson (~27) over 156
+    pages, and the six ~26-page Concepts are what a teacher assigns. With the word
+    missing from _LABEL_RE all six were invisible, both container families were
+    two entries long (under the 3-entry bar), and the book fell through to heading
+    inference — 2 chapters, 132 of 156 pages unmapped."""
+
+    def test_concept_headings_are_recognised(self):
+        for s, key, title in (
+            ("Concept 1.1 Plants Needs", (1, 1), "Plants Needs"),
+            ("Concept (1.2) Energy Flow In Ecosystem", (1, 2), "Energy Flow In Ecosystem"),
+            ("CONCEPT 2.3: Comparing changes in matter", (2, 3), "Comparing changes in matter"),
+            ("Concept 1 : Plants Needs", (1, 0), "Plants Needs"),
+            ("Concept Two Energy", (2, 0), "Energy"),
+        ):
+            m = _LABEL_RE.match(s)
+            assert m is not None, s
+            assert _marker_key(m.group(2)) == key, s
+            assert m.group(3) == title, s
+
+    def test_the_ordinary_noun_cannot_reach_the_number_group(self):
+        # Every word added to _LABEL_RE is a new false-positive surface, and
+        # "concept" earns its place only because its ordinary-noun forms cannot
+        # reach the number: "Concepts…" and "Conceptual…" put a letter where the
+        # marker has to be, and the (?!\w) guard rejects a bare roman numeral
+        # glued to a longer word ("Conception" is not "Concept" + "i").
+        for s in ("Concepts of Physics", "Conceptual framework", "Concept map",
+                  "Conceptions of matter", "Concepts and skills"):
+            assert _LABEL_RE.match(s) is None, s
+
+
+class TestDecimalMarkers:
+    """Decimal families are ordered by the (major, minor) pair, because there is
+    no consecutive integer sequence in "1.1, 1.2, 1.3, 2.1, 2.2, 2.3" for the
+    integer rule to find."""
+
+    def test_the_key_separates_whole_numbers_from_decimals(self):
+        assert _marker_key("7") == (7, 0)
+        assert _marker_key("2.3") == (2, 3)
+        assert _marker_key("iv") == (4, 0)
+        assert _marker_key("three") == (3, 0)
+        # A decimal marker is NOT an integer marker: _marker_number still refuses
+        # it, which is what keeps the running-header detector's integer cluster
+        # keys clean.
+        assert _marker_number("2.3") is None
+
+    def test_a_decimal_run_is_built_in_printed_order(self):
+        markers = {(2, 3): 0, (1, 1): 0, (2, 1): 0, (1, 3): 0, (1, 2): 0, (2, 2): 0}
+        assert _label_run(markers, decimal=True) == [
+            (1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3)]
+
+    def test_a_decimal_family_still_has_to_be_dense(self):
+        # The density requirement is the integer rule applied on BOTH axes, not a
+        # weaker one — majors consecutive from 1, minors consecutive from 1 —
+        # so a gap cuts the run exactly where a missing "Chapter 4" would.
+        assert _label_run({(1, 1): 0, (1, 2): 0, (1, 4): 0}, decimal=True) == [(1, 1), (1, 2)]
+        assert _label_run({(1, 1): 0, (1, 2): 0, (3, 1): 0}, decimal=True) == [(1, 1), (1, 2)]
+        # A sub-numbering that never starts at 1 yields nothing, exactly as a lone
+        # "Chapter 7" does.
+        assert _label_run({(3, 1): 0, (3, 2): 0, (3, 3): 0}, decimal=True) == []
+
+    def test_the_integer_rule_is_untouched(self):
+        # THE rule that must not be weakened: three stray "Chapter N" mentions
+        # cannot form a map just because they sort.
+        assert _label_run({(1, 0): 0, (3, 0): 0, (7, 0): 0}, decimal=False) == [(1, 0)]
+        assert _label_run({(1, 0): 0, (2, 0): 0, (3, 0): 0}, decimal=False) == [
+            (1, 0), (2, 0), (3, 0)]
+        assert _label_run({(2, 0): 0, (3, 0): 0}, decimal=False) == []
+
+    def test_a_sub_numbered_family_does_not_beat_the_family_it_subdivides(self):
+        # "Lesson 1.1 … 1.5" printed inside chapter 1 of a 200-page book is a
+        # dense, strictly-increasing, perfectly valid run of 5, and on LENGTH
+        # alone it beats the 10 real "Chapter N" headings. It reaches 21 pages
+        # against their 181, so the reach rule refuses it.
+        subs = [{"chapter_num": i, "start_page": i * 5} for i in range(5)]
+        chapters = [{"chapter_num": i, "start_page": i * 20} for i in range(10)]
+        assert _better_family(subs, chapters, "lesson", "chapter") is False
+        assert _better_family(chapters, subs, "chapter", "lesson") is True
+
+    def test_a_decimal_running_header_still_clusters_on_its_unit(self):
+        # REGRESSION GUARD for the change itself. A book that prints
+        # "Unit 3.1 Feedback loops" on every page of unit 3 used to cluster on the
+        # "3" — the old pattern simply stopped at the integer. Teaching the number
+        # group about decimals would have made _marker_number reject the whole
+        # marker and taken this book's running headers away, so the running-header
+        # detector reads the MAJOR. Same clusters, cleaner titles.
+        from agent1_ingestion.structurer import _detect_running_header_chapters
+        items = []
+        for unit in range(1, 6):
+            for k in range(8):
+                pg = (unit - 1) * 8 + k
+                items.append(DocItem(item_type="paragraph", level=0, page_num=pg,
+                                     text=f"Unit {unit}.{k % 3 + 1} Feedback loops"))
+        chapters = _detect_running_header_chapters(items, 40)
+        assert [c["start_page"] for c in chapters] == [0, 8, 16, 24, 32]
+        assert chapters[0]["title"] == "Feedback loops"
+
+    def test_a_decimal_layer_is_not_confused_with_a_bare_subsection_layer(self):
+        # _SUBSEC_RE / _depth_is_sections identify a BARE decimal in an outline
+        # title ("3.2 Feedback loops"). Those never carry a label word, so the two
+        # cannot collide — pinned in both directions.
+        from agent1_ingestion.structurer import _SECTION_NUMBER_RE, _SUBSEC_RE
+        assert _SUBSEC_RE.match("Concept 1.1 Plants Needs") is None
+        assert _SECTION_NUMBER_RE.match("Concept 1.1 Plants Needs") is None
+        assert _SUBSEC_RE.match("3.2 Feedback loops") is not None
+        # …and a genuine numbered-section outline layer is still never descended
+        # into (the pinned case lives in TestTocDepth).
+        toc = [TOCItem(level=1, title=f"Chapter {i + 1} Mechanics", page_num=i * 70)
+               for i in range(6)]
+        toc += [TOCItem(level=2, title=f"{i + 1}.{j + 1} Forces", page_num=i * 70 + j * 15)
+                for i in range(6) for j in range(4)]
+        toc.sort(key=lambda t: (t.page_num, t.level))
+        assert _pick_toc_depth(toc, 420, None) == 1
+
+
+class TestCoveragePreference:
+    """PREFER THE MAP THAT COVERS MORE OF THE BOOK. The rule that catches a
+    wrong-altitude regression without anyone having to notice the altitude: on the
+    Egyptian book one detector produced 24 mapped pages of 156 and another 154,
+    and nothing compared them — the cascade took whichever rung fired first."""
+
+    def _flat(self, n, span, first=0):
+        return [{"chapter_num": i, "title": f"Unit {i + 1}", "start_page": first + i * span,
+                 "end_page": first + i * span + span - 1} for i in range(n)]
+
+    def test_coverage_is_measured_on_the_map_as_it_will_be_stored(self):
+        # Bounded, like _chapters_plausible: an unbounded map overstates its own
+        # coverage by exactly the tail the bound is about to discard.
+        stretched = self._flat(10, 20)
+        stretched[-1]["end_page"] = 299
+        assert _map_coverage(stretched, 300) == 240 / 300
+        # …and a map that misses the FRONT of the book scores as badly as one
+        # that stops early, which the unmapped-tail rule cannot see at all.
+        assert _map_coverage(self._flat(5, 20, first=100), 200) == 100 / 200
+
+    def test_the_more_complete_map_wins(self):
+        # The Egyptian book in miniature: heading inference found a 2-page
+        # contents entry and one unit; the Concept family found all six.
+        thin = [{"chapter_num": 0, "title": "Table of Contents", "start_page": 0, "end_page": 1},
+                {"chapter_num": 1, "title": "System", "start_page": 2, "end_page": 155}]
+        concepts = [{"chapter_num": i, "title": f"Concept {i}", "start_page": 2 + i * 26,
+                     "end_page": 2 + i * 26 + 25} for i in range(6)]
+        assert _map_coverage(thin, 156) < 0.2 and _map_coverage(concepts, 156) > 0.9
+        # …whichever order the cascade offers them in.
+        assert _pick_detected_map([concepts, thin], 156)[0]["title"] == "Concept 0"
+        assert _pick_detected_map([thin, concepts], 156)[0]["title"] == "Concept 0"
+
+    def test_coverage_never_overrides_the_altitude_rules(self):
+        # 8 Parts of 126 pages cover 100% of a 1,008-page book and are exactly the
+        # wrong-altitude map this module exists to reject; 18 chapters of 42 pages
+        # cover 83% and are right. The coverage gap is 17 points — well past the
+        # margin — so this only comes out right because PLAUSIBILITY is compared
+        # first and absolutely.
+        parts = self._flat(8, 126)
+        chapters = self._flat(18, 42)
+        assert _chapters_plausible(parts, 1008) is False
+        assert _chapters_plausible(chapters, 1008) is True
+        assert _map_coverage(parts, 1008) - _map_coverage(chapters, 1008) > _COVERAGE_MARGIN
+        assert len(_pick_detected_map([parts, chapters], 1008)) == 18
+        assert len(_pick_detected_map([chapters, parts], 1008)) == 18
+
+    def test_one_giant_chapter_does_not_win_on_coverage(self):
+        # The tension the margin alone cannot resolve: a single whole-book chapter
+        # covers 100% of every book there is. Both maps here are plausible (a
+        # 1-chapter map is below the shape checks' size guard), and the coverage
+        # gap clears the margin — it is the altitude bar that refuses it.
+        chapters = self._flat(12, 20)
+        whole = [{"chapter_num": 0, "title": "Full Document", "start_page": 0, "end_page": 319}]
+        assert _chapters_plausible(whole, 320) is True
+        assert _map_coverage(whole, 320) - _map_coverage(chapters, 320) > _COVERAGE_MARGIN
+        assert len(_pick_detected_map([chapters, whole], 320)) == 12
+
+    def test_an_equally_complete_map_leaves_the_cascade_order_alone(self):
+        # Coverage breaks ties and rejects clearly-worse maps; it does not
+        # reshuffle equals. The higher-signal detector keeps its map.
+        first = self._flat(10, 20)
+        second = [dict(c, title=f"Runner-up {c['chapter_num']}") for c in first]
+        assert _pick_detected_map([first, second], 300)[0]["title"] == "Unit 1"
+
+
+class TestHerBook:
+    """END TO END on the Egyptian Grade 5 science book's heading sequence.
+
+    Theme (1) System / Unit (1) Interaction of living organisms
+        Concept 1.1 Plants Needs / 1.2 Energy Flow In Ecosystem / 1.3 Changes …
+    Theme (2) Matter and Energy / Unit (2) Particles in motion
+        Concept 2.1 Matter in the world … / 2.2 Describing … / 2.3 Comparing …
+
+    Measured on the live map before this change: two chapters — a 2-page contents
+    entry and one 22-page unit — with 132 of 156 pages unmapped and untaught.
+    """
+
+    _CONCEPTS = [(2, "Concept (1.1) Plants Needs", 5),
+                 (28, "Concept (1.2) Energy Flow In Ecosystem", 4),
+                 (54, "Concept (1.3) Changes in the food web", 4),
+                 (80, "Concept (2.1) Matter in the world around us", 5),
+                 (106, "Concept (2.2) Describing and measuring matter", 4),
+                 (132, "Concept (2.3) Comparing changes in matter", 5)]
+
+    def _items(self) -> list[DocItem]:
+        # The extractor tagged the contents page and the first theme's banner word
+        # as level-1 titles and everything below as headings — the shape that
+        # reproduces the production map exactly.
+        out = [DocItem(item_type="title", text="Table of Contents", page_num=0, level=1),
+               DocItem(item_type="title", text="System", page_num=2, level=1)]
+        for pg, theme, unit in ((2, "Theme (1) System", "Unit (1) Interaction of living organisms"),
+                                (80, "Theme (2) Matter and Energy", "Unit (2) Particles in motion")):
+            out.append(DocItem(item_type="section_header", text=theme, page_num=pg, level=2))
+            out.append(DocItem(item_type="section_header", text=unit, page_num=pg, level=2))
+        for pg, title, lessons in self._CONCEPTS:
+            out.append(DocItem(item_type="section_header", text=title, page_num=pg, level=2))
+            for i in range(lessons):  # too fine to be the teaching unit
+                out.append(DocItem(item_type="section_header", text=f"Lesson ({i + 1}) Investigating",
+                                   page_num=pg + 2 + i * 4, level=3))
+        out += _items(156)
+        out.sort(key=lambda i: (i.page_num, i.level))
+        return out
+
+    def test_the_concepts_are_the_detected_chapters(self):
+        chapters = _detect_labeled_chapters(self._items(), 156)
+        assert [c["title"] for c in chapters] == [
+            "Plants Needs", "Energy Flow In Ecosystem", "Changes in the food web",
+            "Matter in the world around us", "Describing and measuring matter",
+            "Comparing changes in matter"]
+        assert [c["start_page"] for c in chapters] == [2, 28, 54, 80, 106, 132]
+
+    def test_the_book_indexes_as_six_concepts_with_nothing_lost(self):
+        book = structure_book(
+            book_id="b", title="Science Grade 5", author="MOE Egypt", isbn=None,
+            extraction=_extraction([], 156, items=self._items()), images=[],
+        )
+        assert book.total_chapters == 6
+        covered = sum(c.end_page - c.start_page + 1 for c in book.chapters)
+        assert covered == 154 and book.chapters[-1].end_page == 155  # was 24 of 156
+        # …at the right altitude: not the 2 Themes (78pp each, containers) and not
+        # the 27 Lessons.
+        assert 20 <= _median([c.end_page - c.start_page + 1 for c in book.chapters]) <= 30
 
 
 class TestFileBookmarks:
