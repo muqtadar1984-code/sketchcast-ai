@@ -28,6 +28,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from agent1_ingestion.book_health import text_layer_is_usable
 from agent1_ingestion.chapter_check import (audit_chapter_list, topic_of,
                                             verify_chapter_content)
 
@@ -52,9 +53,20 @@ _MIN_TEXT_CHARS = 200
 
 
 def extraction_has_text(extraction) -> bool:
-    """True if the PDF has a usable text layer."""
+    """True if the PDF has a usable text layer.
+
+    Usable means readable, not merely present. A 1,008-page book whose text
+    layer extracted as ``Thegreatestconstantofmoderntimesischange`` (0.1%
+    spaces, CJK mojibake in the front matter) passed the volume test with a
+    million characters to spare — so the text route was taken, health scored it
+    "excellent", and 17 kits were generated from unreadable source. The quality
+    gate lives in ``book_health.text_quality``; failing it sends the book down
+    the SAME vision/OCR path a book with no text layer at all already takes,
+    which is the path that reads scans well."""
     total = sum(len(i.text or "") for i in extraction.items)
-    return total >= _MIN_TEXT_CHARS
+    if total < _MIN_TEXT_CHARS:
+        return False
+    return text_layer_is_usable(extraction)
 
 
 def _render_pages(pdf_path: str | Path, pages: range, width: int, out_dir: Path) -> list[Path]:

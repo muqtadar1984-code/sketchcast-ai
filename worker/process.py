@@ -18,31 +18,14 @@ from supabase import Client
 from . import client as db
 
 # Book-title cleanup — uploaded PDFs often carry junk filenames
-# (e.g. "pdfcoffee.com_cambridge-maths-5-learner-book-pdf-free"). Mirrors the app's
-# src/utils/book.ts so worker and UI agree on what a "filename-like" title is.
-_DOMAIN_HEAD = re.compile(r"^[a-z0-9-]+\.(?:com|net|org|pub|io|in|co|info|xyz)[._-]+", re.I)
-_JUNK_TAIL = re.compile(r"[\s._-]*(pdf[\s._-]*free|free[\s._-]*pdf|ebook|pdf|free|download)\s*$", re.I)
-
-
-def _looks_like_filename(s: str) -> bool:
-    s = (s or "").strip()
-    if not s:
-        return True
-    return (
-        " " not in s
-        or s.lower().endswith(".pdf")
-        or bool(_DOMAIN_HEAD.search(s))
-        or bool(re.search(r"[\s._-](pdf|free)", s, re.I))
-    )
-
-
-def _clean_title_fallback(s: str) -> str:
-    t = re.sub(r"\.pdf$", "", s or "", flags=re.I)
-    t = _DOMAIN_HEAD.sub("", t)
-    t = _JUNK_TAIL.sub("", _JUNK_TAIL.sub("", t))
-    t = re.sub(r"[_-]+", " ", t)
-    t = re.sub(r"\s+", " ", t).strip()
-    return t.title() if t else "Untitled book"
+# (e.g. "pdfcoffee.com_cambridge-maths-5-learner-book-pdf-free"). The rules now
+# live in shared/book_metadata.py so the app (src/utils/book.ts) has one thing
+# to mirror: the two copies drifted apart on 2026-07-12 and the worker's title
+# gate has rejected 100% of production books ever since.
+from shared.book_metadata import (clean_title_fallback as _clean_title_fallback,
+                                  looks_like_filename as _looks_like_filename,
+                                  pick_book_title, sanitise_author)
+from shared.part_label import clean_part_titles, part_label
 
 logger = logging.getLogger("worker")
 
@@ -792,7 +775,15 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                         generation_id, tts_voice, voice_report.get("used"),
                     )
             if part_ref is not None:
-                title = f"{book.get('title', 'Lesson')} · {chapter_title} · Part {part_ref} of {part_total}"
+                # The chapter name and the part's position always travel
+                # together, plus the part's own section heading when it has a
+                # real one — this string is rendered verbatim by the parent
+                # portal, the three diary views and the staff console, so
+                # "Part 1" on its own tells those readers nothing.
+                title = (
+                    f"{book.get('title', 'Lesson')} · "
+                    f"{part_label(chapter_title, part_ref, part_total, pk.get('section_titles'))}"
+                )
             elif n_parts > 1:
                 db.merge_generation_params(sb, generation_id, {"video_parts": uploaded_videos})
                 title = f"{book.get('title', 'Lesson')} · {chapter_title} ({uploaded_videos} parts)"
@@ -841,9 +832,14 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 "lesson_plan": "Lesson plan", "activity": "Activities", "exam_paper": "Test paper",
                 "worksheet": "Worksheet", "case_study": "Case study",
             }[kind]
-            title = f"{book.get('title', 'Document')} · {chapter_title} · {label}"
-            if part_ref is not None:
-                title += f" · Part {part_ref}"
+            # Same composer as the presentation path — a worksheet for part 3
+            # used to be titled "· Part 3" with no total and no heading, so
+            # part 1's and part 3's documents were indistinguishable.
+            _unit = (
+                part_label(chapter_title, part_ref, part_total, pk.get("section_titles"))
+                if part_ref is not None else chapter_title
+            )
+            title = f"{book.get('title', 'Document')} · {_unit} · {label}"
 
         elif kind == "exam":
             # Cumulative exam (0062): one model call → TWO documents (the exam
@@ -1011,10 +1007,12 @@ def index_book(sb: Client, job: dict) -> None:
     # Auto-detect grade + subject + a clean title/author from the (often filename-derived)
     # title and chapter list (best-effort; never block indexing). Identified for the teacher.
     grade = subject = None
-    detected_title = detected_author = None
+    detected_title = detected_author = detected_language = None
     try:
         if client is None:
             raise RuntimeError("Claude unavailable")
+        from shared.languages import LANGUAGES
+
         sample = "\n".join(c["title"] for c in chapters[:25])
         prompt = (
             "From this textbook's filename-derived title and chapter list, identify metadata. "
@@ -1022,29 +1020,46 @@ def index_book(sb: Client, job: dict) -> None:
             "\"grade\" (short canonical, e.g. \"Grade 5\"), "
             "\"subject\" (canonical, e.g. \"Mathematics\", \"Science\", \"History\"), "
             "\"title\" (a clean, human-readable book title: REMOVE download-site names, file "
-            "extensions and slug dashes — e.g. "
+            "extensions, slug dashes and any stray characters the scan glued on — e.g. "
             "\"pdfcoffee.com_cambridge-maths-5-learner-book-pdf-free\" becomes "
             "\"Cambridge Primary Mathematics Learner's Book 5\" if you recognise it, else a tidied "
             "version like \"Cambridge Maths 5 Learner Book\"), "
-            "and \"author\" (the book's author OR publisher only if clearly identifiable, e.g. "
-            "\"Cambridge University Press\"; use null if you are not reasonably sure — do NOT invent "
-            "a person's name). Best guess for grade/subject if unsure.\n\n"
+            "\"author\" (the book's author OR publisher only if clearly identifiable, e.g. "
+            "\"Cambridge University Press\"; give the BARE name in nominative form — strip any "
+            "possessive ending, and never put the book title in this field: if the cover reads "
+            "\"X's <Title>\", return \"X\". Use null if you are not reasonably sure — do NOT "
+            "invent a person's name), "
+            "and \"language\" (the ISO 639-1 code of the language the book is WRITTEN in, e.g. "
+            "\"en\", \"ms\", \"ar\", \"hi\"; null if you cannot tell). "
+            "Best guess for grade/subject if unsure.\n\n"
             f"Filename-derived title: {book.get('title') or 'Unknown'}\n\nChapters:\n{sample}"
         )
         data = client.analyze(prompt, max_tokens=300).get("data", {}) or {}
         grade = (str(data.get("grade") or "").strip() or None)
         subject = (str(data.get("subject") or "").strip() or None)
         detected_title = (str(data.get("title") or "").strip() or None)
-        _a = data.get("author")
-        _a_str = str(_a).strip() if _a is not None else ""
-        detected_author = _a_str if _a_str and _a_str.lower() not in ("null", "none", "unknown", "n/a") else None
+        detected_author = sanitise_author(data.get("author"), detected_title or "")
+        # Costs nothing — the call is already made. It is the only route to a
+        # language for a book whose text layer defeats the stopword heuristic.
+        # ms-arab (Jawi) is excluded on purpose: books are written in Rumi and
+        # Jawi is an OUTPUT the teacher selects, never a detection target.
+        _lang = str(data.get("language") or "").strip().lower()
+        detected_language = _lang if _lang in LANGUAGES and _lang != "ms-arab" else None
     except Exception as exc:  # noqa: BLE001
         logger.warning("metadata detection failed for %s: %s", book_id, exc)
 
-    # Only replace the title when the stored one looks like a filename — never clobber a title
-    # the teacher deliberately typed. Fill author only when it is currently empty.
+    # Replace the title only when the stored one shows a junk signature, and only
+    # with a detected title that shares a word with it — never clobber a title
+    # the teacher deliberately typed, and never let a hallucination rename a
+    # book. The old gate asked only "does this look like a filename?", which the
+    # app's own upload-time pre-cleaning made permanently false: it returned
+    # False for 19 of 19 production books, so the detection this job pays for
+    # was discarded every single time and "文字BUSINESS DYNAMICS" survived 17
+    # generations. Fill author only when it is currently empty.
     current_title = (book.get("title") or "").strip()
-    new_title = (detected_title or _clean_title_fallback(current_title)) if _looks_like_filename(current_title) else None
+    new_title = pick_book_title(current_title, detected_title)
+    if new_title == current_title:
+        new_title = None
     new_author = detected_author if (not (book.get("author") or "").strip() and detected_author) else None
 
     db.set_book_meta(sb, book_id, grade, subject, title=new_title, author=new_author)
@@ -1124,9 +1139,16 @@ def index_book(sb: Client, job: dict) -> None:
             # of the book its part map.
             try:
                 sc = s_by_num.get(int(ch["num"]))
+                # Placeholder headings are dropped HERE, at the write, so they
+                # never reach storage: the app renders `titles[0] || <ordinal>`,
+                # so a stored "Content" (the structurer's no-headings-found
+                # filler — 47% of every part in production) renders as the
+                # part's NAME, while an empty list correctly degrades to
+                # "Part 3 of 22".
                 measured = (
                     [
-                        {"titles": (p.get("section_titles") or [])[:3], "words": int(p.get("words", 0))}
+                        {"titles": clean_part_titles(p.get("section_titles"), ch.get("title", "")),
+                         "words": int(p.get("words", 0))}
                         for p in build_chapter_parts(sc)
                     ]
                     if sc
@@ -1169,6 +1191,7 @@ def index_book(sb: Client, job: dict) -> None:
     # headers) must never overwrite the paid vision-OCR cache the generation
     # path fills — those books keep the OCR flow untouched. Zero LLM cost;
     # best-effort, never blocks indexing.
+    book_language: str | None = None
     try:
         from agent1_ingestion.vision_chapters import extraction_has_text
 
@@ -1198,12 +1221,27 @@ def index_book(sb: Client, job: dict) -> None:
             if lang_sample:
                 from shared.languages import detect_language
 
-                detected = detect_language("\n".join(lang_sample))
-                if detected:
-                    db.set_book_language(sb, book_id, detected)
-                    logger.info("book %s: language detected as %s", book_id, detected)
+                book_language = detect_language("\n".join(lang_sample))
     except Exception as exc:  # noqa: BLE001
         logger.warning("chapter source_text persistence skipped for %s: %s", book_id, exc)
+
+    # The heuristic tokenises on whitespace, so a text layer with broken word
+    # boundaries yields almost nothing to score and comes back None — and a
+    # SCANNED book (or one whose text layer just failed the quality gate) never
+    # reaches it at all. 11 of 19 production books sat at language=null,
+    # including a MALAY one, and a null language silently narrates every lesson
+    # in English with an English voice. The model read this same book in the
+    # metadata call above, is not fooled by spacing, and cost nothing extra —
+    # so it is the FALLBACK, never the override.
+    try:
+        if not book_language and detected_language:
+            book_language = detected_language
+            logger.info("book %s: language from model fallback", book_id)
+        if book_language:
+            db.set_book_language(sb, book_id, book_language)
+            logger.info("book %s: language detected as %s", book_id, book_language)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("language detection skipped for %s: %s", book_id, exc)
 
     logger.info("Indexed book %s: %d chapter(s), grade=%s subject=%s cover=%s relocated=%s ocr_cleared=%s",
                 book_id, len(chapters), grade, subject, bool(cover_dest), relocated_nums, changed)

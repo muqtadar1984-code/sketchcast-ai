@@ -78,6 +78,20 @@ def detect_language(text: str) -> str | None:
 
     Callers treat None as "leave books.language unset" — generation then
     defaults to English exactly as before, so detection can only ever help.
+
+    KNOWN BLIND SPOT (2026-08-09): everything below the script checks tokenises
+    on whitespace, so a text layer with broken word boundaries
+    ("Thegreatestconstantofmoderntimesischange") collapses to a handful of giant
+    tokens, fails the `len(words) < 30` guard, and returns None. Same for a
+    scanned book, which never reaches detection at all. 11 of 19 production
+    books sat at language=null, including a MALAY one — and a null language
+    silently narrates the lesson in English with an English voice.
+
+    The margins below are deliberately NOT loosened to close that gap: a wrong
+    language is worse than the English default, because it picks a wrong TTS
+    voice and a wrong prompt directive. ``worker.process.index_book`` instead
+    falls back to the language the metadata call already returns for free, which
+    reads the book rather than counting its stopwords.
     """
     sample = (text or "")[:30000]
     if not sample.strip():
