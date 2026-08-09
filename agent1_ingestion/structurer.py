@@ -185,14 +185,33 @@ _ROMAN_ALT = (
 _UNICODE_ROMAN = "Ⅰ-Ⅿⅰ-ⅿ"
 
 # Labeled chapter markers: "Chapter 3", "UNIT 3", "Lesson Three", "Topic 3:",
-# "Module 3 — Fractions", "Part IV", "PartⅠ", etc. Group 2 = the number
-# (digits, a word, or a roman numeral), group 3 = any title text on the line.
+# "Module 3 — Fractions", "Part IV", "PartⅠ", "Unit (1):", etc. Group 2 = the
+# number (digits, a word, or a roman numeral), group 3 = any title text.
+#
+# THE BRACKETS ARE NOT COSMETIC. "Unit (1): Interaction of Living Organisms" is
+# the standard heading convention in Egyptian and wider Arab-world textbooks, and
+# without the optional brackets this pattern cannot see a single one of them.
+# Found the hard way: an organic teacher's 156-page Grade 5 science book indexed
+# as ONE 76-page unit, leaving 78 pages — half the book — unmapped, because every
+# "Unit (n)" heading after the first was invisible to this regex.
+#
+# That is the SECOND heading format this pattern was blind to in one day (the
+# first was U+2160 roman numerals, above), and both came from non-Anglo
+# textbooks. The lesson worth carrying: this regex encodes an assumption about
+# how a chapter heading looks, and that assumption is culturally specific. When
+# a book indexes to implausibly few chapters, suspect this line first.
+#
+# The closing bracket sits AFTER the (?!\w) guard so the guard still does its
+# job — it is what stops "Parties" parsing as "Part" + roman "i", and that must
+# keep working: verified against Parties/Partition/Themes/Weekend/Sections.
 _LABEL_RE = re.compile(
     r"^(chapter|unit|lesson|topic|module|theme|week|part|section|volume)\s*"
+    r"[(\[]?\s*"
     r"(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
     r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|"
     f"{_ROMAN_ALT}|[{_UNICODE_ROMAN}])"
     r"(?!\w)"
+    r"\s*[)\]]?"
     r"\s*[:.\-–—]?\s*(.{0,80})$",
     re.IGNORECASE,
 )

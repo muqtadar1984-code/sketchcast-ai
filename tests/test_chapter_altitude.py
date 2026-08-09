@@ -405,9 +405,34 @@ class TestLabels:
         assert _marker_number(_LABEL_RE.match("Part IV Tools").group(2)) == 4
         assert _marker_number(_LABEL_RE.match("Section II Overview").group(2)) == 2
 
+    def test_bracketed_numbers_are_recognised(self):
+        # "Unit (1):" is the standard heading convention in Egyptian and wider
+        # Arab-world textbooks. Verified false before this change, on a real
+        # organic upload: a 156-page Grade 5 science book indexed as ONE 76-page
+        # unit because every "Unit (n)" after the first was invisible here,
+        # leaving 78 pages — half the book — unmapped and untaught.
+        m = _LABEL_RE.match("Unit (1): Interaction of Living Organisms - Plants")
+        assert m is not None
+        assert _marker_number(m.group(2)) == 1
+        assert m.group(3) == "Interaction of Living Organisms - Plants"
+
+        for s, n in (("Unit (2): Matter and Energy", 2),
+                     ("Chapter (3): Photosynthesis", 3),
+                     ("Lesson (2): Roots", 2),
+                     ("Section [2] Forces", 2),
+                     ("Unit ( 4 ) : Water", 4),
+                     ("Chapter (10): Ecosystems", 10)):
+            hit = _LABEL_RE.match(s)
+            assert hit is not None, s
+            assert _marker_number(hit.group(2)) == n, s
+
     def test_words_that_merely_start_with_a_label_do_not_match(self):
+        # The (?!\w) guard must survive the bracket change — the closing bracket
+        # is matched AFTER it for exactly this reason. "Unitary" and "Unit (a)"
+        # are the cases the optional opening bracket could plausibly have broken.
         for s in ("Parties and Politics", "Partition Theory", "Themes of Biology",
-                  "Weekend revision"):
+                  "Weekend revision", "Partly cloudy", "Sections and topics",
+                  "Modules", "Unitary method", "Unit (a) overview"):
             assert _LABEL_RE.match(s) is None, s
 
     def test_digits_and_number_words_still_work(self):
