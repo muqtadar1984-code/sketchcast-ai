@@ -38,6 +38,22 @@ def _fold(s: str) -> str:
     return " ".join((s or "").split()).casefold()
 
 
+def names_nothing(title, chapter_title: str = "") -> bool:
+    """Whether a section heading identifies nothing — blank, a bare numeral, one
+    of the extractors' placeholders, or a bare echo of the chapter title.
+
+    Public because the coverage gate (shared/coverage.py) has to make exactly the
+    same judgement for a completely different reason: a heading that names
+    nothing is also a heading no generated script can be measured against, and
+    "Content" is the only heading 47% of production parts have. Two copies of
+    this rule would drift, which is the mistake this module was created to fix.
+    """
+    heading = " ".join(str(title or "").split())
+    if not heading or _BARE_NUMERAL_RE.match(heading) or _PLACEHOLDER_RE.match(heading):
+        return True
+    return _fold(heading) == _fold(chapter_title) if chapter_title else False
+
+
 def part_heading(titles, chapter_title: str = "") -> str | None:
     """The first section heading in ``titles`` worth showing as a part's name.
 
@@ -46,12 +62,9 @@ def part_heading(titles, chapter_title: str = "") -> str | None:
     above it doesn't already say). Returns None when nothing survives — callers
     then fall back to the ordinal, never to a placeholder.
     """
-    chapter_key = _fold(chapter_title)
     for raw in titles or []:
         heading = " ".join(str(raw).split())
-        if not heading or _BARE_NUMERAL_RE.match(heading) or _PLACEHOLDER_RE.match(heading):
-            continue
-        if _fold(heading) == chapter_key:
+        if names_nothing(heading, chapter_title):
             continue
         return heading
     return None
@@ -64,13 +77,10 @@ def clean_part_titles(titles, chapter_title: str = "", limit: int = 3) -> list[s
     ``titles[0] || <ordinal>``, so an empty list degrades to the ordinal while a
     stored "Content" renders as the part's name.
     """
-    chapter_key = _fold(chapter_title)
     out: list[str] = []
     for raw in titles or []:
         heading = " ".join(str(raw).split())
-        if not heading or _BARE_NUMERAL_RE.match(heading) or _PLACEHOLDER_RE.match(heading):
-            continue
-        if _fold(heading) == chapter_key or heading in out:
+        if names_nothing(heading, chapter_title) or heading in out:
             continue
         out.append(heading)
         if len(out) >= limit:

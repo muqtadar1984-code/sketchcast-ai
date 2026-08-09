@@ -215,6 +215,7 @@ def generate_episode_script(
     narration_style: str = "socratic",
     part_info: dict | None = None,
     language: str = "en",
+    must_cover: list[str] | None = None,
 ) -> EpisodeScript:
     """Generate a complete episode script via Claude in the chosen narration style.
 
@@ -225,6 +226,11 @@ def generate_episode_script(
     "prev_sections": [...], "next_sections": [...]} — appended to the episode
     context so Part k opens with a short recap bridge instead of a fresh
     chapter intro, and only the LAST part delivers the full synthesis.
+
+    ``must_cover`` is the coverage gate's retry channel (shared/coverage.py):
+    the topics a FIRST attempt measurably never mentioned, named back to the
+    model. A retry with the identical prompt is a coin flip; a retry that says
+    which topics were dropped is worth the second call.
     """
     style = normalize_style(narration_style)
     episode_context = _build_episode_context(episode, analysis)
@@ -247,6 +253,16 @@ def generate_episode_script(
         if k == n:
             part_lines.append("This is the FINAL part — close with the full chapter synthesis.")
         episode_context += "\n".join(part_lines)
+    if must_cover:
+        # Capped at 12 so a collapsed first attempt (which can miss nearly every
+        # topic) can't turn the retry's context into a list longer than the
+        # lesson. The named ones are the rarest-first head of the miss list.
+        episode_context += (
+            "\n\nMANDATORY COVERAGE — a previous draft of this script never mentioned "
+            "the following, and each one MUST be taught in this script, by name: "
+            + "; ".join(str(t) for t in must_cover[:12])
+            + ".\nTeach them where they belong in the arc — do not append a list at the end."
+        )
     from shared.languages import prompt_directive
 
     if language == "ms-arab":

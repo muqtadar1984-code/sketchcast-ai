@@ -22,6 +22,7 @@ from . import client as db
 # live in shared/book_metadata.py so the app (src/utils/book.ts) has one thing
 # to mirror: the two copies drifted apart on 2026-07-12 and the worker's title
 # gate has rejected 100% of production books ever since.
+from shared import coverage
 from shared.book_metadata import (clean_title_fallback as _clean_title_fallback,
                                   looks_like_filename as _looks_like_filename,
                                   pick_book_title, sanitise_author)
@@ -30,6 +31,71 @@ from shared.part_label import clean_part_titles, part_label
 logger = logging.getLogger("worker")
 
 DEFAULT_LEVEL = "middle_school"
+
+
+def _coverage_report(analysis: dict, episode: dict | None, text: str, *,
+                     kind: str, model: str, part: int | None = None,
+                     of: int | None = None) -> dict:
+    """Measure one artifact's topic coverage and log it. Never raises.
+
+    ``model`` is recorded with the number, and that is the whole reason this
+    exists: the point of the gate is to answer "is the cheaper model thinner?"
+    empirically after the flip, and a coverage figure with no model attached
+    answers nothing. Failure to MEASURE is never a failure of the artifact — a
+    measurement bug must not cost a teacher a lesson — so everything here is
+    best-effort and an unmeasured artifact simply carries no report.
+    """
+    try:
+        report = coverage.measure(analysis, episode, text)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("coverage not measured for %s: %s", kind, exc)
+        return {}
+    report["kind"] = kind
+    report["model"] = model
+    if part is not None:
+        report["part"], report["of"] = part, of
+    log = logger.warning if report.get("verdict") in ("short", "floor") else logger.info
+    log(
+        "coverage %s%s: %s of %s topics addressed (%s, %s) on %s — missed: %s",
+        kind,
+        f" part {part}/{of}" if part is not None else "",
+        report.get("addressed"), report.get("topics"), report.get("covered"),
+        report.get("verdict"), model, ", ".join(report.get("missed") or []) or "nothing",
+    )
+    return report
+
+
+def _record_coverage(sb: Client, generation_id: str, reports: list[dict]) -> None:
+    """Persist a job's coverage reports to ``generations.params.coverage``.
+
+    params is an existing JSONB column already used for post-hoc telemetry
+    (tts_voice_used / tts_voice_downgraded), so this needs NO migration and is
+    queryable today:
+
+        select c->>'model' as model, c->>'kind' as kind,
+               round(avg((c->>'covered')::numeric), 3) as mean_coverage,
+               count(*) as n
+        from generations g, jsonb_array_elements(g.params->'coverage') c
+        where g.params ? 'coverage' and c->>'covered' is not null
+        group by 1, 2 order by 2, 1;
+
+    which is the Sonnet-vs-Haiku answer in one query, per artifact kind. The
+    flat ``coverage_model`` key alongside it exists so the same split can be
+    taken without unnesting.
+
+    Best-effort: telemetry must never fail a finished lesson.
+    """
+    reports = [r for r in reports if r]
+    if not reports:
+        return
+    patch: dict = {"coverage": reports}
+    # Denormalised alongside the array so the Sonnet-vs-Haiku split can be taken
+    # without unnesting; a kit whose parts somehow ran on two models records the
+    # pair rather than silently picking one.
+    models = sorted({r.get("model") for r in reports if r.get("model")})
+    if models:
+        patch["coverage_model"] = models[0] if len(models) == 1 else ",".join(models)
+    db.merge_generation_params(sb, generation_id, patch)
 
 
 def _elevenlabs_enabled() -> bool:
@@ -643,6 +709,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             voice_report: dict = {}
             uploaded_videos = 0
             script_dicts: list[dict] = []
+            coverage_reports: list[dict] = []
             ep_title = chapter_title
 
             # Phase 3 (gated): detect + crop this chapter's real textbook figures
@@ -691,8 +758,53 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     episode, analysis, chapter_num, client, narration_style, part_info=part_info,
                     language=lesson_lang,
                 )
-                save_script(script)
                 script_dict = script.model_dump()
+
+                # ── Coverage gate (shared/coverage.py) ───────────────────────
+                # Until now nothing compared the reply back to the sections and
+                # concepts THIS episode was built from, so a script that taught
+                # a third of the part finished as a clean success. Measured here
+                # — after the script, before slides/TTS/render — so the retry
+                # below costs one script call and a hard failure wastes nothing
+                # that has been rendered.
+                report = _coverage_report(
+                    analysis, episode, coverage.script_text(script_dict),
+                    kind="presentation", model=client.model, part=part_idx, of=n_parts,
+                )
+                if coverage.should_fail(report):
+                    # Retry ONCE, naming what was dropped, and keep whichever
+                    # draft measures higher — a retry can be worse, and the
+                    # teacher should never get the worse of two scripts we paid
+                    # for. Bounded by should_fail, so it only ever fires on a
+                    # job that would otherwise have failed outright.
+                    first = report
+                    retry = generate_episode_script(
+                        episode, analysis, chapter_num, client, narration_style,
+                        part_info=part_info, language=lesson_lang,
+                        must_cover=first.get("missed") or [],
+                    )
+                    retry_dict = retry.model_dump()
+                    retry_report = _coverage_report(
+                        analysis, episode, coverage.script_text(retry_dict),
+                        kind="presentation", model=client.model, part=part_idx, of=n_parts,
+                    )
+                    if (retry_report.get("covered") or 0) > (first.get("covered") or 0):
+                        script, script_dict, report = retry, retry_dict, retry_report
+                    # Both numbers are kept: whether naming the missed topics
+                    # actually repairs a thin draft is itself a thing the
+                    # founder will want to query after the model flip.
+                    report["retried_from"] = first.get("covered")
+                    if coverage.should_fail(report):
+                        coverage_reports.append(report)
+                        _record_coverage(sb, generation_id, coverage_reports)
+                        raise RuntimeError(
+                            f"lesson script covers only {report['addressed']} of "
+                            f"{report['topics']} topics this chapter's analysis "
+                            f"lists (part {part_idx}/{n_parts}, model {client.model}) "
+                            f"— never mentioned: {', '.join(report['missed'])}"
+                        )
+                coverage_reports.append(report)
+                save_script(script)
                 # Attach matched textbook figures to this part's segments (semantic
                 # match via the model, keyword fallback).
                 if chapter_figures:
@@ -741,6 +853,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             if uploaded_videos == 0:
                 raise RuntimeError("no video parts were produced")
             db.set_stage(sb, job_id, None)  # stage is per-part; clear it once all parts are done
+            _record_coverage(sb, generation_id, coverage_reports)
 
             # Enrich the tutor grounding with the lesson's own narration text —
             # the best source for answers that "sound like the lesson". Skipped
@@ -810,6 +923,31 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             )
             for _k, _v in gen_client.session_usage.items():
                 client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
+
+            # ── Coverage: MEASURED and RECORDED for documents, never gated ────
+            # These five kinds are exactly the ones Stage 1 moves to Haiku, so
+            # they are the ones whose before/after numbers matter most — but a
+            # document is not a lesson and must not be judged like one. A
+            # 10-question worksheet cannot mention 23 concepts; its expected
+            # coverage is set by its own length, not by the chapter's size, and
+            # it differs again for a lesson plan (which does claim the whole
+            # chapter) and a case study (which is deliberately one scenario). No
+            # absolute threshold is defensible for them today because no
+            # baseline exists for any of them. What IS defensible is recording
+            # the number per kind and per model, which is precisely what the
+            # Sonnet-vs-Haiku comparison needs — a per-kind threshold becomes a
+            # one-line addition once a week of Sonnet rows is in the table.
+            # Episode is None: documents are generated per CHAPTER, never per
+            # part, so they are measured against the whole chapter's topics.
+            try:
+                _doc_report = _coverage_report(
+                    analysis, None, coverage.docx_text(out_path),
+                    kind=kind, model=gen_client.model,
+                )
+                _record_coverage(sb, generation_id, [_doc_report])
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("coverage not recorded for %s: %s", kind, exc)
+
             db.set_progress(sb, job_id, 90)
             dest = f"{base}/{kind}.docx"
             db.upload_artifact(sb, str(out_path), dest)
@@ -860,6 +998,18 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
             db.set_progress(sb, job_id, 90)
             paths = out_paths if isinstance(out_paths, list) else [out_paths]
+            # Recorded, not gated — same reasoning as the single-chapter
+            # documents above, and more so: a cumulative exam is measured
+            # against EVERY covered unit's topics, so a low number here is the
+            # exam being an exam, not the model being thin. Only the paper is
+            # measured; the answer key restates it.
+            try:
+                _record_coverage(sb, generation_id, [_coverage_report(
+                    analysis, None, coverage.docx_text(paths[0]),
+                    kind="exam", model=gen_client.model,
+                )])
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("coverage not recorded for exam: %s", exc)
             paper_dest = f"{base}/exam.docx"
             db.upload_artifact(sb, str(paths[0]), paper_dest)
             db.add_artifact_row(sb, generation_id, "docx", paper_dest)
