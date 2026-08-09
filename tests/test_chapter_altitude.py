@@ -21,6 +21,8 @@ from agent1_ingestion.structurer import (_COVERAGE_MARGIN, _LABEL_RE,
                                          _chapters_plausible,
                                          _detect_labeled_chapters, _label_run,
                                          _map_coverage, _map_shape, _marker_key,
+                                         _MIN_ESCALATION_COVERAGE,
+                                         _SHAPE_MIN_PAGES,
                                          _marker_number, _median,
                                          _page_text_stats, _pick_detected_map,
                                          _pick_toc_depth, _ranges_valid,
@@ -728,3 +730,52 @@ class TestStructureBook:
             extraction=_extraction([], 301, items=detected + items), images=[],
         )
         assert book.chapters[-1].end_page - book.chapters[-1].start_page + 1 <= 30
+
+
+class TestPoorCoverageEscalates:
+    """A map can be non-empty and still be worthless.
+
+    From a live book: a 156-page Grade 5 science text produced TWO chapters — a
+    2-page contents entry and one 76-page unit — and every gate let it through.
+    The Claude rung was fenced behind ``len(chapter_defs) <= 1`` so it never ran,
+    and ``_map_shape`` returns ok early below ``_SHAPE_MIN_CHAPTERS`` so a
+    2-chapter map is never shape-checked at all. The book's real units are six
+    "Concept 1.1 … 2.3" markers that sit INLINE IN BODY TEXT rather than as
+    headings, so no heading-based detector can reach them — reading prose is
+    exactly what the text-LLM rung is for, and it was the one thing forbidden.
+    """
+
+    @staticmethod
+    def _map(spans):
+        chapters, page = [], 0
+        for span in spans:
+            chapters.append({"chapter_num": len(chapters), "title": f"C{len(chapters)}",
+                             "start_page": page, "end_page": page + span - 1})
+            page += span
+        return chapters
+
+    @staticmethod
+    def _escalates(chapters, total_pages):
+        # Mirrors the condition in structure_book.
+        return (len(chapters) > 1
+                and total_pages >= _SHAPE_MIN_PAGES
+                and _map_coverage(chapters, total_pages) < _MIN_ESCALATION_COVERAGE)
+
+    def test_her_book_shape_escalates(self):
+        assert self._escalates(self._map([2, 76]), 156) is True
+
+    def test_detection_stopping_a_quarter_in_escalates(self):
+        assert self._escalates(self._map([7] * 11), 301) is True
+
+    def test_legitimate_shapes_never_pay_for_a_claude_call(self):
+        # These are the maps pinned elsewhere in this file as CORRECT. If any of
+        # them starts escalating, the threshold is billing good books.
+        for spans, total in ((([20] * 10), 300),      # + 100pp unbookmarked back matter
+                             (([30] * 8), 240),
+                             (([60] * 5), 300),
+                             (([26] * 6), 156)):      # the map her book should produce
+            assert self._escalates(self._map(spans), total) is False, (spans, total)
+
+    def test_a_short_upload_is_never_escalated(self):
+        # Under _SHAPE_MIN_PAGES one chapter legitimately IS the document.
+        assert self._escalates(self._map([20, 20]), 40) is False

@@ -802,6 +802,12 @@ def _chapters_plausible(
 # Cascade order breaks what is left: the higher-signal detector keeps the map.
 _COVERAGE_MARGIN = 0.10
 
+# Below this share of the book taught, a heuristic map is worth less than one
+# Claude call. Set at 0.60 rather than tighter because the legitimate shapes
+# already pinned in tests sit at 75-80% coverage (a textbook with 60-100 pages of
+# unbookmarked answers and index), and this must never fire on those.
+_MIN_ESCALATION_COVERAGE = 0.60
+
 
 def _map_coverage(chapters: list[dict], total_pages: int) -> float:
     """Share of the book's pages the map would actually teach.
@@ -1386,10 +1392,33 @@ def structure_book(
                 coarse_fallback = chapter_defs
             chapter_defs = []
 
-    # Claude fallback: heuristics found nothing usable (0 or 1 pseudo-chapter).
+    # Claude fallback: the heuristics found nothing usable (0 or 1 pseudo-chapter)
+    # — OR they found a map that leaves too much of the book untaught.
+    #
+    # THE SECOND CONDITION IS NOT COSMETIC, and it was learned from a live book.
+    # A teacher's 156-page Grade 5 science text produced exactly TWO chapters — a
+    # 2-page contents entry and one 76-page unit — covering 50% of the book. Every
+    # gate let it through: `<= 1` was false so this rung never ran, and _map_shape
+    # returns ok early below _SHAPE_MIN_CHAPTERS so a 2-chapter map is never even
+    # shape-checked. The book's real teaching units are six "Concept 1.1 … 2.3"
+    # markers that appear INLINE IN BODY TEXT, not as headings, so no
+    # heading-based detector can ever see them. Reading prose is precisely what
+    # the text-LLM rung is for, and it was the one thing not allowed to try.
+    #
+    # Threshold: a map teaching less than 60% of a book is worse than one Claude
+    # call. Indexing costs ~$0.14 today and this adds ~$0.02 to the books that
+    # trip it, against a teacher silently losing half a textbook. Gated on
+    # _SHAPE_MIN_PAGES so short uploads — where one chapter legitimately IS the
+    # document — never pay for it.
+    #
     # Never second-guess stored known_chapters — the split must stay identical
     # to what indexing stored (and vision must not be re-billed per generation).
-    if client is not None and not used_known and len(chapter_defs) <= 1:
+    poor_coverage = (
+        len(chapter_defs) > 1
+        and extraction.total_pages >= _SHAPE_MIN_PAGES
+        and _map_coverage(chapter_defs, extraction.total_pages) < _MIN_ESCALATION_COVERAGE
+    )
+    if client is not None and not used_known and (len(chapter_defs) <= 1 or poor_coverage):
         from agent1_ingestion.vision_chapters import (
             detect_chapters_from_text_llm,
             detect_chapters_vision,
@@ -1404,7 +1433,16 @@ def structure_book(
         if not smart and pdf_path:
             smart = detect_chapters_vision(pdf_path, extraction.total_pages, client)
         if smart:
-            chapter_defs = _repair_chapter_ranges(smart, extraction.total_pages)
+            cand = _repair_chapter_ranges(smart, extraction.total_pages)
+            # When we escalated because the existing map was THIN rather than
+            # absent, Claude's answer has to earn the swap: it can be worse, and
+            # silently replacing a 50%-coverage map with a 20% one would be the
+            # same class of mistake this escalation exists to fix. With 0 or 1
+            # pseudo-chapters there is nothing to lose, so take it outright.
+            if len(chapter_defs) <= 1 or _map_coverage(cand, extraction.total_pages) > _map_coverage(
+                chapter_defs, extraction.total_pages
+            ):
+                chapter_defs = cand
 
     # Nothing finer validated — a coarse map beats a single whole-book chapter.
     if len(chapter_defs) <= 1 and coarse_fallback:
