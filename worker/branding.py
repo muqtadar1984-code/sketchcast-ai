@@ -8,20 +8,53 @@ import logging
 import re
 import zipfile
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-from supabase import Client
+# Only ever used as a parameter annotation, and `from __future__ import
+# annotations` above means annotations are never evaluated at runtime — so the
+# SDK is a type-checking dependency, not an import-time one. Keeping it out of
+# the runtime path lets this module (and its tests) load without the client
+# installed.
+if TYPE_CHECKING:
+    from supabase import Client
 
 logger = logging.getLogger("worker")
 
 
+def _is_ooxml(path: Path) -> bool:
+    """True only if `path` is a real OOXML package (.docx/.pptx).
+
+    A stored file's name and its recorded mimetype both lie: the upload form
+    accepts anything and saves it as `template.docx`. One teacher uploaded a
+    187 KB JPEG as their letterhead — a natural mistake — and python-docx raised
+    `PackageNotFoundError`, which failed the whole generation. Branding is
+    documented as best-effort, so it must never be able to do that.
+
+    Checked against the BYTES, not the extension or the reported mimetype:
+    every OOXML file is a zip containing `[Content_Types].xml`.
+    """
+    try:
+        with zipfile.ZipFile(path) as z:
+            return "[Content_Types].xml" in z.namelist()
+    except Exception:  # noqa: BLE001 — not a zip at all
+        return False
+
+
 def _download(sb: Client, path: str, dest: Path) -> Optional[Path]:
+    """Download to `dest`, returning it only if it is a usable OOXML template."""
     try:
         dest.write_bytes(sb.storage.from_("uploads").download(path))
-        return dest
     except Exception as exc:  # noqa: BLE001
         logger.warning("branding download failed (%s): %s", path, exc)
         return None
+    if not _is_ooxml(dest):
+        logger.warning(
+            "branding template ignored — %s is not a valid .docx/.pptx package "
+            "(%d bytes). Falling back to the default style.",
+            path, dest.stat().st_size if dest.exists() else 0,
+        )
+        return None
+    return dest
 
 
 def _accent_from_pptx(pptx_path: str) -> Optional[tuple[int, int, int]]:
