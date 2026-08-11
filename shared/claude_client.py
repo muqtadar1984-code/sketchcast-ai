@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +14,8 @@ from pathlib import Path
 from anthropic import Anthropic, RateLimitError
 
 TOKEN_LOG_PATH = Path(__file__).resolve().parent.parent / "token_log.json"
+
+logger = logging.getLogger(__name__)
 
 # $/1M tokens (standard list price). Sonnet 5's intro discount ($2/$10 through
 # 2026-08-31) is deliberately NOT encoded — pricing at standard keeps the
@@ -24,6 +28,92 @@ MODEL_PRICING = {
     "claude-opus-4-8": (5.0, 25.0),
 }
 _DEFAULT_PRICING = (3.0, 15.0)
+
+
+# ── backend selection ────────────────────────────────────────────────────
+# The same Claude models are reachable two ways:
+#   "anthropic" — api.anthropic.com, billed to the Anthropic account (default)
+#   "vertex"    — Google Cloud Vertex AI, billed to the GCP project
+#
+# Vertex exists for two reasons. It lets GCP credits pay for generation, and it
+# is a SECOND BILLING PATH: on 2026-08-10 the Anthropic balance hit zero and
+# every generation failed with a 400 for ~13 hours. One provider is one point of
+# failure no amount of retry logic survives.
+#
+# Flip with LLM_BACKEND. Nothing else about the request changes — Vertex serves
+# the same Messages API, and everything this client uses (vision, 1h prompt
+# caching via explicit cache_control, token counts) is supported there.
+def llm_backend() -> str:
+    return os.getenv("LLM_BACKEND", "anthropic").strip().lower()
+
+
+# Vertex publishes CURRENT-generation models under the bare first-party id, and
+# dated snapshots under an "@version" separator — NOT the "-YYYYMMDD" suffix the
+# first-party API uses. Anything absent from this map is sent through unchanged.
+#
+# Haiku 4.5 is the one we cannot confirm without a live call, so it is listed
+# explicitly and every entry is overridable from the environment: a wrong id is
+# a 404, and fixing it should be a Railway variable edit, not a redeploy.
+_VERTEX_MODEL_IDS = {
+    "claude-haiku-4-5": "claude-haiku-4-5@20251001",
+}
+
+_CREDENTIALS_PATH: str | None = None
+
+
+def _vertex_model_map() -> dict[str, str]:
+    """The built-in id map, overlaid with VERTEX_MODEL_MAP (JSON) if present."""
+    mapping = dict(_VERTEX_MODEL_IDS)
+    raw = os.getenv("VERTEX_MODEL_MAP", "").strip()
+    if raw:
+        try:
+            mapping.update(json.loads(raw))
+        except json.JSONDecodeError as exc:
+            # Fail loudly at construction. A malformed map would silently leave
+            # the wrong model id on the wire, and every call would 404 anyway —
+            # better to say why than to let it look like an outage.
+            raise RuntimeError(f"VERTEX_MODEL_MAP is not valid JSON: {exc}") from exc
+    return mapping
+
+
+def _ensure_google_credentials() -> None:
+    """Materialise a service-account JSON from the environment, once per process.
+
+    google-auth's default credential chain wants a FILE path in
+    GOOGLE_APPLICATION_CREDENTIALS, but Railway (like most PaaS) only holds
+    strings. Write the JSON to a private temp file and point the variable at it.
+    A pre-set GOOGLE_APPLICATION_CREDENTIALS always wins, and with neither set
+    we fall through to ambient ADC (gcloud login locally, metadata server on GCE).
+    """
+    global _CREDENTIALS_PATH
+    if os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+        return
+    raw = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON", "").strip()
+    if not raw:
+        return
+    if _CREDENTIALS_PATH is None:
+        fd, path = tempfile.mkstemp(prefix="gcp-sa-", suffix=".json")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(raw)
+        os.chmod(path, 0o600)
+        _CREDENTIALS_PATH = path
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _CREDENTIALS_PATH
+
+
+def _build_client(backend: str):
+    """The SDK client for `backend`. Same messages surface either way."""
+    if backend == "vertex":
+        from anthropic import AnthropicVertex  # extra: anthropic[vertex]
+
+        project = os.getenv("VERTEX_PROJECT_ID", "").strip()
+        if not project:
+            raise RuntimeError("LLM_BACKEND=vertex requires VERTEX_PROJECT_ID")
+        _ensure_google_credentials()
+        # "global" spreads across regions and is the least likely to hit a
+        # per-region capacity error; override for data-residency requirements.
+        region = os.getenv("VERTEX_REGION", "global").strip() or "global"
+        return AnthropicVertex(project_id=project, region=region)
+    return Anthropic(api_key=_get_api_key())
 
 
 def artifact_model(kind: str | None = None) -> str:
@@ -83,10 +173,29 @@ class ClaudeClient:
     """Reusable Claude API wrapper with retry, JSON parsing, and token logging."""
 
     def __init__(self, model: str | None = None):
-        self.client = Anthropic(api_key=_get_api_key())
+        self.backend = llm_backend()
+        self.client = _build_client(self.backend)
         # Model is env-selectable (CLAUDE_MODEL) so it can be flipped to
         # claude-sonnet-5 in Railway without a code change; default stays on 4.6.
         self.model = model or os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+        # `model` stays the CANONICAL first-party id and `_api_model` is what
+        # goes on the wire. They differ on Vertex, and keeping them apart is
+        # load-bearing: track_tokens prices via MODEL_PRICING[self.model], so
+        # collapsing the two would miss the pricing table for any id carrying a
+        # Vertex "@version" suffix, silently fall back to _DEFAULT_PRICING
+        # (Sonnet's $3/$15), and bill every Haiku call into jobs.usage at ~3x —
+        # straight into the cost basis the financial model is built on.
+        self._api_model = (
+            _vertex_model_map().get(self.model, self.model)
+            if self.backend == "vertex"
+            else self.model
+        )
+        if self.backend == "vertex":
+            logger.info(
+                "LLM backend=vertex project=%s region=%s model %s -> %s",
+                os.getenv("VERTEX_PROJECT_ID"), os.getenv("VERTEX_REGION", "global"),
+                self.model, self._api_model,
+            )
         # Per-instance running total across every call this client makes — the
         # worker persists it per job (jobs.usage) so spend is attributable to a
         # user/book/generation instead of vanishing with the container.
@@ -329,7 +438,7 @@ class ClaudeClient:
         to a plain call if a model rejects the thinking parameter."""
         try:
             return self.client.messages.create(
-                model=self.model, max_tokens=max_tokens, system=system,
+                model=self._api_model, max_tokens=max_tokens, system=system,
                 messages=messages, thinking={"type": "disabled"},
             )
         except TypeError:
@@ -338,7 +447,7 @@ class ClaudeClient:
             if "thinking" not in str(exc).lower():
                 raise
         return self.client.messages.create(
-            model=self.model, max_tokens=max_tokens, system=system, messages=messages,
+            model=self._api_model, max_tokens=max_tokens, system=system, messages=messages,
         )
 
     def _call_messages(self, system: str, messages: list, max_tokens: int, retries: int):
@@ -357,7 +466,7 @@ class ClaudeClient:
         that could outlive its HTTP timeout) and get_final_message() returns the
         same Message shape, so _first_text/track_tokens work unchanged. Mirrors
         _create's thinking-disabled contract exactly (see that docstring)."""
-        kwargs = dict(model=self.model, max_tokens=max_tokens, system=system, messages=messages)
+        kwargs = dict(model=self._api_model, max_tokens=max_tokens, system=system, messages=messages)
         try:
             with self.client.messages.stream(**kwargs, thinking={"type": "disabled"}) as s:
                 return s.get_final_message()
