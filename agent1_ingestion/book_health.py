@@ -334,8 +334,36 @@ def _band(score: int) -> str:
     return "poor"
 
 
-def compute_book_health(extraction, chapter_defs: list[dict]) -> dict:
-    """Return {score, band, dimensions, problems, recommendation, note}.
+# ── junk-upload gate ─────────────────────────────────────────────────────────
+# Live incident (2026-08-13): a teacher uploaded a 1-page scanned class roster;
+# it scored 55 with two problems and nothing MARKED the book, so the app offered
+# Generate as usual and 6 credits were burned on a name list. The gate is
+# deliberately SOFT — ``health.gate == "confirm"`` only tells the app to ask
+# "Generate anyway?" before spending credits; the worker never blocks anything.
+#
+# Two independent signals, either sufficient:
+#   * WHAT the document is — the index-time doc_type classification
+#     (agent1_ingestion.doc_type). Only categories that are never teaching
+#     material gate. notes / exam_material / workbook do NOT — teachers
+#     legitimately upload those — and "unknown" (classification absent or
+#     failed) contributes nothing at all, so a classifier outage degrades to…
+#   * …the VOLUME rules, which need no model: a document of at most 3 pages, or
+#     a thin one that also produced no chapter structure and carries no PDF
+#     outline, is not a book whichever way it is read. The roster (1 page, 1
+#     chapter, no outline) trips both.
+_CONFIRM_DOC_TYPES = frozenset({"administrative", "form_or_roster", "other"})
+# Kept in step with doc_type.DOC_TYPES (tested), not imported: the classifier
+# leans on vision_chapters, which imports this module.
+_KNOWN_DOC_TYPES = frozenset({
+    "textbook", "workbook", "notes", "exam_material",
+    "administrative", "form_or_roster", "other", "unknown",
+})
+_GATE_MAX_PAGES = 3   # at most a leaflet — no book is 3 pages
+_GATE_THIN_PAGES = 8  # under this AND one unit AND no outline = a fragment
+
+
+def compute_book_health(extraction, chapter_defs: list[dict], doc_type: dict | None = None) -> dict:
+    """Return {score, band, gate, dimensions, facts, problems, recommendation, note}.
 
     dimensions each 0-100:
       text_layer — is the text machine-readable, and across how many pages?
@@ -343,6 +371,12 @@ def compute_book_health(extraction, chapter_defs: list[dict]) -> dict:
     The overall score weights structure a little higher, because a wrong or
     single-chapter split hurts every downstream lesson more than a slightly
     sparse text layer (which the vision path backstops).
+
+    ``doc_type`` is the optional index-time classification from
+    ``agent1_ingestion.doc_type.classify_doc_type`` ({"doc_type", "confidence"}).
+    It feeds the junk-upload gate above and is stamped into ``facts`` so the app
+    and support can read the decision's inputs; absent or "unknown" leaves the
+    volume rules to gate on their own. ``gate`` never touches the score.
     """
     total_pages = int(getattr(extraction, "total_pages", 0) or 0)
     readability = float(getattr(extraction, "readability_score", 0.0) or 0.0)
@@ -414,6 +448,36 @@ def compute_book_health(extraction, chapter_defs: list[dict]) -> dict:
             "detection stopped before the end of the book, so those pages won't be taught."
         )
 
+    # ── junk-upload gate (soft confirm — the app asks, the worker never blocks) ──
+    # Ordered most-diagnostic first: a category names WHAT the document is, the
+    # volume rules only say it is small. Each gating rule appends one sentence
+    # the app quotes in its "Generate anyway?" dialog.
+    doc = doc_type or {}
+    dt = doc.get("doc_type") if doc.get("doc_type") in _KNOWN_DOC_TYPES else "unknown"
+    try:
+        dt_conf = round(max(0.0, min(1.0, float(doc.get("confidence") or 0.0))), 2)
+    except (TypeError, ValueError):
+        dt_conf = 0.0
+    gate = "none"
+    if dt in _CONFIRM_DOC_TYPES:
+        gate = "confirm"
+        problems.append(
+            "This appears to be an administrative document or form, not teaching material."
+            if dt in ("administrative", "form_or_roster")
+            else "This doesn't appear to be teaching material — lessons built from it are unlikely to be useful."
+        )
+    elif total_pages <= _GATE_MAX_PAGES:
+        gate = "confirm"
+        problems.append(
+            f"This document is only {total_pages} page{'s' if total_pages != 1 else ''} — "
+            "too short to be teaching material."
+        )
+    elif n_chapters <= 1 and total_pages < _GATE_THIN_PAGES and not getattr(extraction, "toc", None):
+        gate = "confirm"
+        problems.append(
+            "A few pages, a single unit and no table of contents — this may not be teaching material."
+        )
+
     # ── overall (structure weighted a touch higher) ───────────────────────────
     score = round(text_layer * 0.45 + structure * 0.55)
 
@@ -469,10 +533,17 @@ def compute_book_health(extraction, chapter_defs: list[dict]) -> dict:
     return {
         "score": int(score),
         "band": band,
+        # The junk-upload gate's verdict: "confirm" = ask before generating,
+        # "none" = business as usual. Soft by design — never blocks.
+        "gate": gate,
         "dimensions": {"text_layer": int(text_layer), "structure": int(structure)},
         "facts": {
             "pages": total_pages,
             "chapters": n_chapters,
+            # What the index-time classifier said this document IS, and how
+            # sure it was — the gate's inputs, queryable by support/console.
+            "doc_type": dt,
+            "doc_type_confidence": dt_conf,
             "has_text_layer": has_text,
             "text_coverage": round(readability, 2),
             # The measured quality signals, so a support/console query can tell

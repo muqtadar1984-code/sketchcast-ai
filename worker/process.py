@@ -1136,6 +1136,21 @@ def index_book(sb: Client, job: dict) -> None:
         except Exception as exc:  # noqa: BLE001 — figures must never block indexing
             logger.warning("index figure detection skipped for %s: %s", book_id, exc)
 
+        # Junk-upload gate, part 1: what KIND of document is this? One cheap,
+        # bounded Claude call over the opening text (or the rendered opening
+        # pages of a scan). The decision itself is computed in book_health and
+        # stamped as health.gate — SOFT: the app asks "Generate anyway?",
+        # nothing here blocks. Fail-open: any trouble → "unknown" → only the
+        # volume rules gate. (A 1-page scanned class roster scored 55 and still
+        # burned 6 generations, because nothing marked it.)
+        doc_type = None
+        try:
+            from agent1_ingestion.doc_type import classify_doc_type
+
+            doc_type = classify_doc_type(str(pdf_path), extraction, client)
+        except Exception as exc:  # noqa: BLE001 — never block indexing
+            logger.warning("doc_type classification skipped for %s: %s", book_id, exc)
+
         # Book Health Score — a predictive read from signals we already have,
         # shown the moment indexing finishes so a bad scan is caught before it
         # generates failed lessons. Best-effort: never block indexing.
@@ -1143,7 +1158,7 @@ def index_book(sb: Client, job: dict) -> None:
         try:
             from agent1_ingestion.book_health import compute_book_health
 
-            health = compute_book_health(extraction, structured.get("chapters", []))
+            health = compute_book_health(extraction, structured.get("chapters", []), doc_type=doc_type)
         except Exception as exc:  # noqa: BLE001
             logger.warning("book health skipped for %s: %s", book_id, exc)
 

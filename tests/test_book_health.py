@@ -83,8 +83,9 @@ def test_json_serializable_shape():
     import json
     h = compute_book_health(_extraction(180, 0.95, 50000), _chaps(12))
     json.dumps(h)  # must not raise
-    assert set(h) == {"score", "band", "dimensions", "facts", "problems", "recommendation", "note"}
+    assert set(h) == {"score", "band", "gate", "dimensions", "facts", "problems", "recommendation", "note"}
     assert isinstance(h["score"], int)
+    assert h["gate"] == "none"  # a healthy textbook is never asked about
 
 
 # ── text QUALITY, not text VOLUME ────────────────────────────────────────────
