@@ -10,6 +10,7 @@ pytest>=7.0.0
 httpx>=0.25.0
 streamlit>=1.30.0
 anthropic[vertex]>=0.20.0   # [vertex] pulls google-auth for the Vertex AI backend (LLM_BACKEND=vertex)
+requests>=2.31.0            # Gemini-on-Vertex client (shared/gemini_client.py)
 pillow>=10.0.0
 elevenlabs>=1.0.0
 edge-tts>=6.1.0

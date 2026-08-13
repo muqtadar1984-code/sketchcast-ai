@@ -326,6 +326,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     from agent1_ingestion.structurer import structure_book
     from agent2_analysis.analyzer import run_full_analysis
     from shared.claude_client import ClaudeClient
+    from shared.llm import client_for
     from worker.branding import load_branding
 
     job_id = job["id"]
@@ -351,7 +352,13 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         pdf_path = db.download_book(sb, book["storage_path"], Path(tmp) / "book.pdf")
         db.set_progress(sb, job_id, 10)
 
-        client = ClaudeClient()
+        # Ingestion + analysis, routed by the BOOK's script (shared/model_routing).
+        # This has to route, not just authoring: measured, the Sonnet analysis
+        # DOMINATES a kit's cost — $2.08 against a modelled $1.15 — because each
+        # artifact makes 4-5 calls and only one of them is the authoring call.
+        # Moving authoring alone would shift almost none of the spend onto the
+        # GCP credits, which is the point of the exercise.
+        client = client_for(book.get("language"))
 
         # Agent 1 — ingest. Chapter boundaries stored at indexing time are reused
         # (known_chapters) so every generation splits the book identically without
@@ -914,7 +921,11 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             # Jawi is the exception: Haiku's Jawi orthography is unreliable
             # (verified 2026-07-19), so Jawi documents author on the stronger
             # analysis model.
-            gen_client = ClaudeClient() if jawi else ClaudeClient(model=artifact_model(kind))
+            # Authoring, routed by the LESSON's script. Jawi keeps its exception:
+            # ms-arab routes to Claude on script, but Haiku's Jawi orthography is
+            # unreliable (verified 2026-07-19), so kind=None asks for the stronger
+            # general model instead of the per-kind Haiku default.
+            gen_client = client_for(lesson_lang, kind=None if jawi else kind)
             out_path = generate_document(
                 kind=kind, book=book, chapter=chapter, analysis=analysis,
                 client=gen_client, params=gen.get("params") or {}, out_dir=Path(tmp),
@@ -987,7 +998,11 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             from docgen import generate_document
             from shared.claude_client import artifact_model
 
-            gen_client = ClaudeClient() if jawi else ClaudeClient(model=artifact_model(kind))
+            # Authoring, routed by the LESSON's script. Jawi keeps its exception:
+            # ms-arab routes to Claude on script, but Haiku's Jawi orthography is
+            # unreliable (verified 2026-07-19), so kind=None asks for the stronger
+            # general model instead of the per-kind Haiku default.
+            gen_client = client_for(lesson_lang, kind=None if jawi else kind)
             out_paths = generate_document(
                 kind="exam", book=book, chapter=chapter, analysis=analysis,
                 client=gen_client, params=gen.get("params") or {}, out_dir=Path(tmp),
@@ -1056,6 +1071,13 @@ def index_book(sb: Client, job: dict) -> None:
     # Claude enables chapter detection for books the text heuristics can't read
     # (scanned pages, unconventional labels). Best-effort: without a key,
     # indexing still works for conventional books.
+    #
+    # NOT script-routed, deliberately. This runs BEFORE the book's language is
+    # known — detection is what establishes books.language further down this
+    # same function — so there is no script to route on yet. It also stays on
+    # Claude because it is the escalation path for the books nothing else could
+    # read, and indexing is cheap ($0.03 median) so little credit is left on the
+    # table by the exception.
     try:
         from shared.claude_client import ClaudeClient
         client = ClaudeClient()

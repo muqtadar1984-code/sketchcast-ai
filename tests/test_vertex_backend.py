@@ -21,19 +21,28 @@ from unittest import mock
 
 import pytest
 
-# The Vertex client lives behind an optional extra; stub the symbol so these
-# tests exercise OUR routing without requiring google-auth to be installed.
-if not hasattr(sys.modules.get("anthropic"), "AnthropicVertex"):
-    import anthropic
-
-    class _StubVertex:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-    anthropic.AnthropicVertex = _StubVertex  # type: ignore[attr-defined]
+import anthropic  # noqa: E402
 
 from shared import claude_client as cc  # noqa: E402
 from shared.claude_client import ClaudeClient, MODEL_PRICING, _DEFAULT_PRICING  # noqa: E402
+
+
+class _StubVertex:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+
+@pytest.fixture(autouse=True)
+def _stub_vertex_client(monkeypatch):
+    """Always substitute the Vertex client, never conditionally.
+
+    An earlier version installed this stub only when `anthropic.AnthropicVertex`
+    was absent, which made the tests depend on import order: once another module
+    imported the SDK first, the real class was already present, the stub was
+    skipped, and the constructor-argument assertions failed against an object
+    that has no `.kwargs`. Patch unconditionally and let monkeypatch restore.
+    """
+    monkeypatch.setattr(anthropic, "AnthropicVertex", _StubVertex, raising=False)
 
 
 @pytest.fixture(autouse=True)
