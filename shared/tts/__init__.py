@@ -19,6 +19,7 @@ from pathlib import Path
 
 from . import cost
 from .registry import DEFAULT_VOICE_ID, TTSVoice, default_voice, get_voice, list_voices
+from ..text_clean import strip_ssml
 
 logger = logging.getLogger("shared.tts")
 
@@ -81,11 +82,14 @@ def synthesize(
             logger.error("ElevenLabs failed (%s) → falling back to free Edge", exc)
             from .providers import edge
 
-            voice, say = default_voice(), text
+            # Edge reads SSML tags ALOUD — it only ever gets plain text. (The
+            # ElevenLabs branch is never stripped: its <break>s are intended.)
+            voice, say = default_voice(), strip_ssml(text)
             edge.synthesize(say, out_path, voice.ref)
     else:
         from .providers import edge
 
+        say = strip_ssml(say)  # Edge reads SSML tags aloud — plain text only
         edge.synthesize(say, out_path, voice.ref)
 
     cost.record(len((say or "").strip()), voice.provider)

@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from shared.text_clean import strip_ssml
+
 from .models import SlideManifest, SlideSegment
 from .slide_builder import build_episode_deck, export_slide_png
 from .theme import concepts_for_slides
@@ -101,7 +103,9 @@ def generate_episode_slides(
     for i, seg in enumerate(segments):
         seg_id = seg.get("segment_id", f"s{i + 1:03d}")
         seg_type = seg.get("type", "explore")
-        narration = (seg.get("text") or "").strip()
+        # strip_ssml: already-saved scripts may carry Gemini's <break> tags in
+        # "text" — scrub at render time so a dirty script re-renders clean.
+        narration = strip_ssml((seg.get("text") or "").strip())
         heading = (seg.get("slide_heading") or "").strip() or episode_title
         points = [str(p).strip() for p in (seg.get("slide_points") or []) if str(p).strip()]
         visual = seg.get("slide_visual")

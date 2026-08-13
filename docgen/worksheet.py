@@ -93,13 +93,13 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
 
     if fill:
         dx.heading(doc, f"Section {chr(section)} — Fill in the blanks", 1)
-        dx.numbered(doc, [str(q.get("q", "")) for q in fill])
-        answers.append((f"Section {chr(section)} — Fill in the blanks", [str(q.get("answer", "")) for q in fill]))
+        dx.numbered(doc, [dx.strip_leading_number(str(q.get("q", ""))) for q in fill])
+        answers.append((f"Section {chr(section)} — Fill in the blanks", [dx.txt(q.get("answer")) for q in fill]))
         section += 1
 
     if tf:
         dx.heading(doc, f"Section {chr(section)} — True or False", 1)
-        dx.numbered(doc, [str(q.get("statement", "")) for q in tf])
+        dx.numbered(doc, [dx.strip_leading_number(str(q.get("statement", ""))) for q in tf])
         answers.append((f"Section {chr(section)} — True or False",
                         ["True" if q.get("answer") else "False" for q in tf]))
         section += 1
@@ -115,20 +115,20 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         rows = [[f"{i + 1}. {lefts[i]}", f"{letters[i]}. {rights[order[i]]}"] for i in range(len(lefts))]
         dx.table(doc, ["Column A", "Column B"], rows)
         answers.append((f"Section {chr(section)} — Match the columns",
-                        [f"{i + 1} → {letters[order.index(i)]}" for i in range(len(lefts))]))
+                        [letters[order.index(i)] for i in range(len(lefts))]))
         section += 1
 
     if short:
         dx.heading(doc, f"Section {chr(section)} — Short answer", 1)
         for i, q in enumerate(short, 1):
-            dx.para(doc, f"{i}. {q.get('q', '')}")
+            dx.para(doc, f"{i}. {dx.strip_leading_number(q.get('q', ''))}")
             try:
                 lines = max(0, min(6, int(q.get("work_space_lines", 2))))
             except (TypeError, ValueError):
                 lines = 2
             for _ in range(lines):
                 dx.para(doc, " ")  # blank working line
-        answers.append((f"Section {chr(section)} — Short answer", [str(q.get("answer", "")) for q in short]))
+        answers.append((f"Section {chr(section)} — Short answer", [dx.txt(q.get("answer")) for q in short]))
 
     if p.get("include_answer_key"):
         doc.add_page_break()

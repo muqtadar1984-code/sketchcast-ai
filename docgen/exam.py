@@ -175,7 +175,7 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     if mcq:
         dx.heading(paper, f"Section {chr(sec)} — Multiple choice", 1)
         for i, q in enumerate(mcq, 1):
-            dx.para(paper, f"{i}. {q.get('q', '')}   [{_marks(q, 1)}]")
+            dx.para(paper, f"{i}. {dx.strip_leading_number(q.get('q', ''))}   [{_marks(q, 1)}]")
             opts = [str(o) for o in (q.get("options") or [])][:4]
             for j, opt in enumerate(opts):
                 dx.para(paper, f"      {letters[j]}) {opt}")
@@ -183,12 +183,12 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
 
     if fill:
         dx.heading(paper, f"Section {chr(sec)} — Fill in the blanks", 1)
-        dx.numbered(paper, [str(q.get("q", "")) for q in fill])
+        dx.numbered(paper, [dx.strip_leading_number(str(q.get("q", ""))) for q in fill])
         sec += 1
 
     if tf:
         dx.heading(paper, f"Section {chr(sec)} — True or False", 1)
-        dx.numbered(paper, [str(q.get("statement", "")) for q in tf])
+        dx.numbered(paper, [dx.strip_leading_number(str(q.get("statement", ""))) for q in tf])
         sec += 1
 
     if lefts:
@@ -200,13 +200,13 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     if short:
         dx.heading(paper, f"Section {chr(sec)} — Short answer", 1)
         for i, q in enumerate(short, 1):
-            dx.para(paper, f"{i}. {q.get('q', '')}   [{_marks(q, 2)}]")
+            dx.para(paper, f"{i}. {dx.strip_leading_number(q.get('q', ''))}   [{_marks(q, 2)}]")
         sec += 1
 
     if long_:
         dx.heading(paper, f"Section {chr(sec)} — Long answer", 1)
         for i, q in enumerate(long_, 1):
-            dx.para(paper, f"{i}. {q.get('q', '')}   [{_marks(q, 5)}]")
+            dx.para(paper, f"{i}. {dx.strip_leading_number(q.get('q', ''))}   [{_marks(q, 5)}]")
 
     paper_path = dx.save(paper, out_dir / "exam.docx")
 
@@ -219,11 +219,11 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
 
     if mcq:
         dx.heading(key, f"Section {chr(ks)} — Multiple choice", 2)
-        dx.numbered(key, [f"{str(q.get('answer', '')).strip().upper()[:1] or '?'}" for q in mcq])
+        dx.numbered(key, [dx.txt(q.get('answer')).strip().upper()[:1] or '?' for q in mcq])
         ks += 1
     if fill:
         dx.heading(key, f"Section {chr(ks)} — Fill in the blanks", 2)
-        dx.numbered(key, [str(q.get("answer", "")) for q in fill])
+        dx.numbered(key, [dx.txt(q.get("answer")) for q in fill])
         ks += 1
     if tf:
         dx.heading(key, f"Section {chr(ks)} — True or False", 2)
@@ -231,15 +231,15 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         ks += 1
     if lefts:
         dx.heading(key, f"Section {chr(ks)} — Match the columns", 2)
-        dx.numbered(key, [f"{i + 1} → {letters[order.index(i)]}" for i in range(len(lefts))])
+        dx.numbered(key, [letters[order.index(i)] for i in range(len(lefts))])
         ks += 1
     if short:
         dx.heading(key, f"Section {chr(ks)} — Short answer", 2)
-        dx.numbered(key, [str(q.get("answer", "")) for q in short])
+        dx.numbered(key, [dx.txt(q.get("answer")) for q in short])
         ks += 1
     if long_:
         dx.heading(key, f"Section {chr(ks)} — Long answer", 2)
-        dx.numbered(key, [str(q.get("answer_outline", "")) for q in long_])
+        dx.numbered(key, [dx.txt(q.get("answer_outline")) for q in long_])
 
     key_path = dx.save(key, out_dir / "exam_answer_key.docx")
 

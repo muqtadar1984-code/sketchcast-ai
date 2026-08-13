@@ -64,10 +64,15 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     grounding = dx.chapter_grounding(book, chapter, analysis)
     data = client.analyze(prompt, max_tokens=4096, cache_prefix=grounding).get("data", {}) or {}
 
-    fill = (data.get("fill_blank") or [])[:n_fill]
-    tf = (data.get("true_false") or [])[:n_tf]
-    match = (data.get("match_column") or [])[:n_match]
-    subj = (data.get("subjective") or [])[:n_subj]
+    # Filter non-dicts ONCE at extraction — paper and answer key must enumerate
+    # the exact same list, or a stray string skews their numbering apart.
+    def _dicts(items) -> list[dict]:
+        return [q for q in (items or []) if isinstance(q, dict)]
+
+    fill = _dicts(data.get("fill_blank"))[:n_fill]
+    tf = _dicts(data.get("true_false"))[:n_tf]
+    match = _dicts(data.get("match_column"))[:n_match]
+    subj = _dicts(data.get("subjective"))[:n_subj]
 
     doc = dx.new_doc(
         data.get("title") or f"Test Paper — {chapter_title}",
@@ -82,22 +87,22 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
 
     if fill:
         dx.heading(doc, f"Section {chr(section)} — Fill in the blanks", 1)
-        dx.numbered(doc, [str(q.get("q", "")) for q in fill if isinstance(q, dict)])
+        dx.numbered(doc, [dx.strip_leading_number(str(q.get("q", ""))) for q in fill])
         answers.append((f"Section {chr(section)} — Fill in the blanks",
-                        [str(q.get("answer", "")) for q in fill if isinstance(q, dict)]))
+                        [dx.txt(q.get("answer")) for q in fill]))
         section += 1
 
     if tf:
         dx.heading(doc, f"Section {chr(section)} — True or False", 1)
-        dx.numbered(doc, [str(q.get("statement", "")) for q in tf if isinstance(q, dict)])
+        dx.numbered(doc, [dx.strip_leading_number(str(q.get("statement", ""))) for q in tf])
         answers.append((f"Section {chr(section)} — True or False",
-                        ["True" if q.get("answer") else "False" for q in tf if isinstance(q, dict)]))
+                        ["True" if q.get("answer") else "False" for q in tf]))
         section += 1
 
     if match:
         dx.heading(doc, f"Section {chr(section)} — Match the columns", 1)
-        lefts = [str(p.get("left", "")) for p in match if isinstance(p, dict)]
-        rights = [str(p.get("right", "")) for p in match if isinstance(p, dict)]
+        lefts = [dx.txt(p.get("left")) for p in match]
+        rights = [dx.txt(p.get("right")) for p in match]
         order = list(range(len(rights)))
         random.shuffle(order)
         letters = list(string.ascii_uppercase)
@@ -106,19 +111,18 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
             shuffled_pos = order.index(i)  # where the correct right ended up
             rows.append([f"{i + 1}. {left}", f"{letters[i]}. {rights[order[i]]}"])
         dx.table(doc, ["Column A", "Column B"], rows)
-        # answer key: question number -> letter of its correct right
-        key_lines = [f"{i + 1} → {letters[order.index(i)]}" for i in range(len(lefts))]
+        # answer key: bare letters — numbered() supplies the question numbers
+        key_lines = [letters[order.index(i)] for i in range(len(lefts))]
         answers.append((f"Section {chr(section)} — Match the columns", key_lines))
         section += 1
 
     if subj:
         dx.heading(doc, f"Section {chr(section)} — Long answer", 1)
         for i, q in enumerate(subj, 1):
-            if isinstance(q, dict):
-                marks = q.get("marks", "")
-                dx.para(doc, f"{i}. {q.get('q', '')}" + (f"   [{marks} marks]" if marks else ""))
+            marks = q.get("marks", "")
+            dx.para(doc, f"{i}. {dx.strip_leading_number(q.get('q', ''))}" + (f"   [{marks} marks]" if marks else ""))
         answers.append((f"Section {chr(section)} — Long answer",
-                        [str(q.get("answer_outline", "")) for q in subj if isinstance(q, dict)]))
+                        [dx.txt(q.get("answer_outline")) for q in subj]))
 
     if want_key:
         doc.add_page_break()

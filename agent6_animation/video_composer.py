@@ -33,6 +33,7 @@ from typing import Callable, Optional
 
 from .models import VideoManifest, VideoSegment
 from .native_render import render_native_segment
+from shared.text_clean import strip_ssml
 from shared.tts import synthesize
 
 from agent5_slides.theme import concepts_for_slides
@@ -135,7 +136,11 @@ def compose_episode_videos(
         threads and the caller aggregates deterministically by index."""
         seg_id = slide_seg["segment_id"]
         script_seg = script_segments.get(seg_id, {})
-        text = (script_seg.get("text") or "").strip()
+        # strip_ssml: already-saved scripts may carry <break> tags inside `text`
+        # (Gemini, pre-sanitizer) — keep the on-frame fallback in parity with the
+        # deck notes, which agent5 strips the same way. TTS is separately guarded
+        # at the provider boundary in shared/tts.
+        text = strip_ssml((script_seg.get("text") or "").strip())
         seg_type = script_seg.get("type", slide_seg.get("type", "explore"))
         # Clean string label (e.g. "hook"), never a SegmentType repr ("SegmentType.hook").
         seg_label = getattr(seg_type, "value", None) or str(seg_type)

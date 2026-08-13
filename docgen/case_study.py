@@ -65,21 +65,23 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         if para.strip():
             dx.para(doc, para.strip())
 
-    qs = (data.get("discussion_questions") or [])[:n]
+    # Filter non-dicts ONCE — questions and teacher notes must enumerate the
+    # same list, or a stray string skews guidance numbers off the questions.
+    qs = [q for q in (data.get("discussion_questions") or []) if isinstance(q, dict)][:n]
     if qs:
         dx.heading(doc, "Discussion questions", 1)
         for i, q in enumerate(qs, 1):
-            if isinstance(q, dict):
-                dx.para(doc, f"{i}. {q.get('q', '')}")
+            dx.para(doc, f"{i}. {dx.strip_leading_number(q.get('q', ''))}")
 
     if data.get("concepts_applied"):
         dx.heading(doc, "Concepts applied", 1)
         dx.bullets(doc, data["concepts_applied"])
 
-    # Teacher notes: answer guidance (kept on a separate page).
-    if any(isinstance(q, dict) and q.get("guidance") for q in qs):
+    # Teacher notes: answer guidance (kept on a separate page). Same list as
+    # the questions above, so guidance N always answers question N.
+    if any(q.get("guidance") for q in qs):
         doc.add_page_break()
         dx.heading(doc, "Teacher notes — answer guidance", 0)
-        dx.numbered(doc, [str(q.get("guidance", "")) for q in qs if isinstance(q, dict)])
+        dx.numbered(doc, [dx.txt(q.get("guidance")) for q in qs])
 
     return dx.save(doc, out_dir / "case_study.docx")

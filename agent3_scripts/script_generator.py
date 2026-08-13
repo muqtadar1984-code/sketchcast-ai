@@ -5,10 +5,13 @@ Generates Socratic episode scripts from Agent 2 analysis output.
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+
+from shared.text_clean import strip_ssml
 
 from .models import (
     ChapterScripts,
@@ -99,6 +102,10 @@ def process_director_manifest(segments: List[ScriptSegment]) -> List[ScriptSegme
        segments (hand travel time before the pen starts tracing).
     """
     travel_break = '<break time="0.3s"/>'
+    # Any leading break counts as travel time — startswith(travel_break) alone
+    # misses model-emitted variants ('<break time = "0.3s" />', uppercase, ...)
+    # and would stack a second pause on top.
+    _leading_break = re.compile(r"^\s*<break\b", re.IGNORECASE)
 
     for seg in segments:
         # No visual_request → no visual action
@@ -117,7 +124,7 @@ def process_director_manifest(segments: List[ScriptSegment]) -> List[ScriptSegme
 
         # Insert travel-time break for DRAW_START segments
         if seg.visual_action == "DRAW_START":
-            if not seg.elevenlabs_text.startswith(travel_break):
+            if not _leading_break.match(seg.elevenlabs_text):
                 seg.elevenlabs_text = travel_break + " " + seg.elevenlabs_text
 
     logger.debug(
@@ -334,8 +341,15 @@ def generate_episode_script(
                 style_preset=vr_data.get("style_preset", "line-art"),
             )
 
-        plain_text = seg.get("text", "")
+        # "text" is contractually markup-free (Edge TTS reads tags ALOUD, and
+        # the deck prints them in speaker notes) — but Gemini has put
+        # <break time='0.3s'/> tags in it, so strip SSML here at the source.
+        # elevenlabs_text KEEPS its breaks (ElevenLabs honors them natively);
+        # only its quote style is normalized to double quotes so the
+        # startswith() travel-break dedupe in process_director_manifest works.
+        plain_text = strip_ssml(seg.get("text", ""))
         el_text = seg.get("elevenlabs_text") or plain_text
+        el_text = re.sub(r"(<break\s+time=)'([^']*)'", r'\1"\2"', el_text)
 
         # Parse visual_action from Claude output
         raw_va = seg.get("visual_action")

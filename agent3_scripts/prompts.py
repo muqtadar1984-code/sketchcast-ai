@@ -97,35 +97,35 @@ _STRUCTURE = {
 1. hook (~30s): Open with a surprising real-world question or scenario that makes this topic feel urgent and fascinating. DO NOT introduce concepts yet — just spark curiosity.
 2. activate (~45s): "Think back to when you...", "You've probably noticed..." — bridge from what they already know to what we're about to explore.
 3. explore (60-120s each): One per major concept. MUST follow Socratic pattern. Include visual_request where visual opportunities exist.
-4. question_hook (~20s): Natural pause — "Before we go deeper... does anything spark a question for you? <break time='2s'/> Go ahead and ask — or tap continue." Set pause_for_question: true.
+4. question_hook (~20s): Natural pause — "Before we go deeper... does anything spark a question for you? <break time="2s"/> Go ahead and ask — or tap continue." Set pause_for_question: true.
 5. synthesis (~45s): "Let's collect what we've discovered together..." — frame it as the student summarising, not the narrator lecturing.
 6. preview (~20s): Tease the next episode with a question that creates genuine anticipation.""",
     "direct_explainer": """=== SCRIPT STRUCTURE (follow this exact order) ===
 1. hook (~30s): One vivid real-world reason this topic matters. Brief; no questions needed.
 2. activate (~45s): Recall the prior knowledge this builds on, stated plainly.
 3. explore (60-120s each): One per major concept. State the idea, explain why it holds, give one clear example. Include visual_request where visual opportunities exist.
-4. question_hook (~20s): A brief check-in pause — "Take a moment — anything you'd want to ask here? <break time='2s'/> Otherwise, tap continue." Set pause_for_question: true.
+4. question_hook (~20s): A brief check-in pause — "Take a moment — anything you'd want to ask here? <break time="2s"/> Otherwise, tap continue." Set pause_for_question: true.
 5. synthesis (~45s): Summarise the key points as a tidy list of what we now know.
 6. preview (~20s): One line on what the next episode covers.""",
     "storytelling": """=== SCRIPT STRUCTURE (follow this exact order) ===
 1. hook (~30s): Open the story — a scene, a character, a problem — that the whole lesson will follow.
 2. activate (~45s): Connect the story's setup to what the student already knows.
 3. explore (60-120s each): Advance the story; let each major concept emerge from what happens next. Include visual_request where visual opportunities exist.
-4. question_hook (~20s): A story cliffhanger pause — "What do you think happens next? <break time='2s'/> Take a guess, or tap continue." Set pause_for_question: true.
+4. question_hook (~20s): A story cliffhanger pause — "What do you think happens next? <break time="2s"/> Take a guess, or tap continue." Set pause_for_question: true.
 5. synthesis (~45s): Resolve the story and name the ideas it revealed.
 6. preview (~20s): Tease where the story goes next episode.""",
     "exam_focused": """=== SCRIPT STRUCTURE (follow this exact order) ===
 1. hook (~30s): Why this topic earns marks / where it shows up on the exam.
 2. activate (~45s): Quick recall of the prerequisite facts you'll need.
 3. explore (60-120s each): One per major concept — the must-know point, the common mistake, and how it's tested. Include visual_request where visual opportunities exist.
-4. question_hook (~20s): A quick self-test pause — "Could you answer this in the exam right now? <break time='2s'/> Check yourself, then tap continue." Set pause_for_question: true.
+4. question_hook (~20s): A quick self-test pause — "Could you answer this in the exam right now? <break time="2s"/> Check yourself, then tap continue." Set pause_for_question: true.
 5. synthesis (~45s): A revision recap of the must-knows and the traps to avoid.
 6. preview (~20s): The next high-value topic to revise.""",
     "conversational": """=== SCRIPT STRUCTURE (follow this exact order) ===
 1. hook (~30s): A casual, relatable opener that makes the topic feel approachable.
 2. activate (~45s): "You know how...?" — link to something from everyday life.
 3. explore (60-120s each): One per major concept, explained like you're chatting it through with a friend. Include visual_request where visual opportunities exist.
-4. question_hook (~20s): A casual pause — "What do you reckon so far? <break time='2s'/> Got a question? Ask away, or tap continue." Set pause_for_question: true.
+4. question_hook (~20s): A casual pause — "What do you reckon so far? <break time="2s"/> Got a question? Ask away, or tap continue." Set pause_for_question: true.
 5. synthesis (~45s): A friendly wrap-up of what we covered.
 6. preview (~20s): A breezy tease of what's next.""",
 }
@@ -229,13 +229,15 @@ Only fall back to plain "slide_points" when NONE of the above fits — and never
 
 === OUTPUT FORMAT ===
 Return ONLY valid JSON — no preamble, no markdown fences, no explanation.
+"text" must contain NO <break> tags or any other markup — plain prose only.
+Markup goes ONLY in "elevenlabs_text".
 
 {
   "segments": [
     {
       "type": "hook",
       "text": "Plain text — exactly what the narrator says. No markup here.",
-      "elevenlabs_text": "Same text with <break time='Xs'/> markup at natural pause points.",
+      "elevenlabs_text": "Same text with <break time="Xs"/> markup at natural pause points.",
       "slide_heading": "Why study society?",
       "slide_points": ["Social science explains how people live together", "Tools to understand the world around us"],
       "visual_request": {
@@ -249,7 +251,7 @@ Return ONLY valid JSON — no preamble, no markdown fences, no explanation.
     {
       "type": "explore",
       "text": "Now let's trace how a price actually gets set...",
-      "elevenlabs_text": "Now let's trace <break time='0.3s'/> how a price actually gets set...",
+      "elevenlabs_text": "Now let's trace <break time="0.3s"/> how a price actually gets set...",
       "slide_heading": "How markets set prices",
       "slide_visual": {
         "kind": "flow",
@@ -263,7 +265,7 @@ Return ONLY valid JSON — no preamble, no markdown fences, no explanation.
     {
       "type": "explore",
       "text": "This balancing point has a name...",
-      "elevenlabs_text": "This balancing point has a name... <break time='0.3s'/>",
+      "elevenlabs_text": "This balancing point has a name... <break time="0.3s"/>",
       "slide_heading": "Equilibrium",
       "slide_visual": {
         "kind": "definition",
@@ -275,7 +277,7 @@ Return ONLY valid JSON — no preamble, no markdown fences, no explanation.
     {
       "type": "explore",
       "text": "Quick check before we go on.",
-      "elevenlabs_text": "Quick check before we go on. <break time='0.5s'/>",
+      "elevenlabs_text": "Quick check before we go on. <break time="0.5s"/>",
       "slide_heading": "If demand rises but supply stays the same, the price...",
       "slide_visual": {
         "kind": "quiz",
@@ -288,7 +290,7 @@ Return ONLY valid JSON — no preamble, no markdown fences, no explanation.
     {
       "type": "question_hook",
       "text": "Before we go deeper... does anything we've covered spark a question for you? Go ahead and ask — or tap continue.",
-      "elevenlabs_text": "Before we go deeper... <break time='0.5s'/> does anything we've covered spark a question for you? <break time='2s'/> Go ahead and ask — or tap continue.",
+      "elevenlabs_text": "Before we go deeper... <break time="0.5s"/> does anything we've covered spark a question for you? <break time="2s"/> Go ahead and ask — or tap continue.",
       "visual_action": "GHOST_ONLY",
       "pause_for_question": true,
       "estimated_duration_seconds": 20
@@ -296,7 +298,7 @@ Return ONLY valid JSON — no preamble, no markdown fences, no explanation.
     {
       "type": "synthesis",
       "text": "Let's collect what we've discovered together...",
-      "elevenlabs_text": "Let's collect what we've discovered together... <break time='0.5s'/>",
+      "elevenlabs_text": "Let's collect what we've discovered together... <break time="0.5s"/>",
       "slide_heading": "What to remember",
       "slide_visual": {
         "kind": "takeaways",

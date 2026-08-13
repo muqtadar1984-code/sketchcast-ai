@@ -7,6 +7,7 @@ subjective ... match the column populated as running text."
 from __future__ import annotations
 
 import json
+import re
 
 from docx import Document
 
@@ -69,6 +70,91 @@ def test_worksheet_docx_groups_by_type_and_tables_the_match(tmp_path):
     assert types == ["fill_blank", "fill_blank", "true_false", "match", "short"]
     match_q = next(q for q in payload["questions"] if q["type"] == "match")
     assert len(match_q["pairs"]) == 3
+
+
+# Trips every numbering trap at once: an LLM-self-numbered fill question, a
+# blank answer (must keep its slot in the key), and a "Q1)"-prefixed short answer.
+_NUMBERING_PAYLOAD = {
+    "title": "Numbering Worksheet",
+    "instructions": "Answer all questions.",
+    "fill_blank": [
+        {"q": "1. The ____ controls the cell.", "answer": "nucleus"},
+        {"q": "Plant cells have a ____ wall.", "answer": ""},
+    ],
+    "true_false": [
+        {"statement": "Animal cells have chloroplasts.", "answer": False},
+        {"statement": "The nucleus stores DNA.", "answer": True},
+    ],
+    "match_column": [
+        {"left": "Nucleus", "right": "Controls the cell"},
+        {"left": "Chloroplast", "right": "Captures sunlight"},
+        {"left": "Vacuole", "right": "Stores water"},
+    ],
+    "short_answer": [{"q": "Q1) Why are plant cells rigid?", "answer": "The cell wall.", "work_space_lines": 1}],
+}
+
+
+def _sections(doc):
+    """Ordered (heading text, [non-empty paragraph texts under it]) pairs."""
+    out = []
+    for p in doc.paragraphs:
+        if (p.style.name or "").startswith(("Heading", "Title")):
+            out.append((p.text, []))
+        elif out and p.text.strip():
+            out[-1][1].append(p.text)
+    return out
+
+
+def test_numbering_restarts_per_section_and_key_matches_paper(tmp_path):
+    out = worksheet.build(
+        book={"grade": "Grade 7", "subject": "Science"},
+        chapter={"title": "Cells", "sections": [{"section_title": "Cells", "content": "A cell is the basic unit."}]},
+        analysis={},
+        client=_StubClient(_NUMBERING_PAYLOAD),
+        params={"num_questions": 10, "include_answer_key": True},
+        out_dir=tmp_path,
+    )
+    doc = Document(str(out))
+
+    # (c) Word's document-wide "List Number" counter must be gone entirely.
+    assert all(p.style.name != "List Number" for p in doc.paragraphs)
+
+    secs = _sections(doc)
+    names = [name for name, _ in secs]
+    key_at = names.index("Answer Key")
+    paper = dict(secs[:key_at])
+    key = dict(secs[key_at + 1:])
+
+    # (a) every section restarts at 1 — True/False must not continue fill's count.
+    assert paper["Section B — True or False"][0].startswith("1. ")
+
+    # (d) an LLM-emitted "1." / "Q1)" prefix is stripped, not doubled.
+    assert paper["Section A — Fill in the blanks"][0] == "1. The ____ controls the cell."
+    assert paper["Section D — Short answer"][0] == "1. Why are plant cells rigid?"
+
+    # (b) the key carries EXACTLY the paper's numbers, section by section.
+    for name in ("Section A — Fill in the blanks", "Section B — True or False"):
+        paper_nums = [t.split(".")[0] for t in paper[name]]
+        key_nums = [t.split(".")[0] for t in key[name]]
+        assert key_nums == paper_nums, name
+    assert key["Section B — True or False"] == ["1. False", "2. True"]
+    assert key["Section D — Short answer"] == ["1. The cell wall."]
+
+    # A blank answer keeps its slot (em-dash), so numbering stays aligned.
+    assert key["Section A — Fill in the blanks"] == ["1. nucleus", "2. —"]
+
+    # The match key is "N. <letter>" (not the old self-numbered "1. 1 → C"),
+    # and each letter points at the correct Column B row of the paper's table.
+    match_key = key["Section C — Match the columns"]
+    assert all(re.fullmatch(r"\d+\. [A-Z]", t) for t in match_key)
+    right_by_letter = {}
+    for row in doc.tables[0].rows[1:]:
+        letter, right = row.cells[1].text.split(". ", 1)
+        right_by_letter[letter] = right
+    for i, line in enumerate(match_key):
+        n, letter = line.split(". ")
+        assert int(n) == i + 1
+        assert right_by_letter[letter] == _NUMBERING_PAYLOAD["match_column"][i]["right"]
 
 
 def test_write_worksheet_orders_kinds_and_keeps_match_whole(tmp_path):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Iterable
 
@@ -66,10 +67,34 @@ def bullets(doc: Document, items: Iterable[str]) -> None:
             doc.add_paragraph(str(it), style="List Bullet")
 
 
+# One LLM-emitted question-number prefix: "1.", "12)", "Q3:", "Question 4]" …
+_LEADING_NUM_RE = re.compile(r"^\s*(?:Q(?:uestion)?\s*)?\d{1,3}\s*[.)\]:]\s+", re.IGNORECASE)
+
+
+def strip_leading_number(text: str) -> str:
+    """Remove ONE LLM-emitted "1." / "Q2)" prefix from QUESTION text — the
+    renderer owns numbering, so a model that self-numbers must not double it.
+
+    Never apply to answers: an answer like "42." would vanish."""
+    return _LEADING_NUM_RE.sub("", str(text), count=1)
+
+
+def txt(value) -> str:
+    """None-safe str() for answer-key cells: an explicit JSON null must render
+    as numbered()'s em-dash placeholder, not the string "None". Preserves
+    falsy-but-real answers ("0", False) — only None becomes blank."""
+    return "" if value is None else str(value)
+
+
 def numbered(doc: Document, items: Iterable[str]) -> None:
-    for it in items:
-        if str(it).strip():
-            doc.add_paragraph(str(it), style="List Number")
+    """Manually numbered list that restarts at 1 on EVERY call.
+
+    Word's "List Number" style is one document-wide counter that never restarts,
+    so Section B would continue Section A and the answer key would continue the
+    paper. Blank items render as an em-dash placeholder instead of being skipped
+    so paper item N and answer-key item N always stay aligned."""
+    for n, it in enumerate(items, 1):
+        doc.add_paragraph(f"{n}. {str(it).strip() or '—'}")
 
 
 def table(doc: Document, headers: list[str], rows: list[list[str]]) -> None:
