@@ -166,6 +166,49 @@ def gate_mode() -> str:
     return mode if mode in ("off", "warn", "strict") else "warn"
 
 
+# ── Arabic-script folding ────────────────────────────────────────────────────
+# The Persian incident of 2026-08-16 (issue 8b79d4e0): a Persian book detected
+# as "ar" measured 0.059 on its first draft because Arabic-script text has TWO
+# ways of writing the same word that byte-compare as different:
+#
+#   HARAKAT — the optional vowel marks (U+064B–U+065F, plus the superscript
+#             alef U+0670). A vocalised topic name "مَدْرَسَة" and the plain
+#             "مدرسة" every script writes are the same word; kept as token
+#             characters (the Devanagari rule below) they never match.
+#             Tatweel (U+0640) is the same problem in Lm clothing — a purely
+#             typographic stretch character that isalnum() happily glues in.
+#
+#   VARIANTS — Persian/Urdu reuse the Arabic block with their own codepoints
+#             for the same letters: ک (U+06A9) vs ك (U+0643), ی (U+06CC) vs
+#             ي (U+064A). An analyzer that names topics in one convention and
+#             a script generator that writes the other match ~nothing, which
+#             is exactly what 0.059 looks like.
+#
+# The fold is Arabic-block ONLY, by codepoint, so the "keep combining marks"
+# rule in _tokens below — which Devanagari and Telugu tokenisation depends on —
+# is untouched: U+094D and Telugu vowel signs are nowhere in this table.
+# Applied to BOTH sides by construction, since topics and haystack alike go
+# through _tokens (and _Haystack folds its substring text the same way).
+_ARABIC_FOLD = {
+    **{cp: None for cp in range(0x064B, 0x0660)},  # harakat: fathatan…wavy hamza
+    0x0670: None,   # superscript alef (the mark in قُرْآن-style spellings)
+    0x0640: None,   # tatweel — typographic stretch, category Lm so isalnum-true
+    0x06A9: 0x0643,  # ک Persian kaf      → ك  (گ gaf is a REAL distinct letter; stays)
+    0x06CC: 0x064A,  # ی Persian yeh      → ي
+    0x0649: 0x064A,  # ى alef maksura     → ي  (word-final yeh convention)
+    0x06D2: 0x064A,  # ے Urdu barree yeh  → ي
+    0x06C1: 0x0647,  # ہ Urdu heh goal    → ه
+    0x06C2: 0x0647,  # ۂ heh goal + hamza → ه
+    0x06C3: 0x0647,  # ۃ teh marbuta goal → ه
+    0x0629: 0x0647,  # ة teh marbuta      → ه  (Persian writes it ه: مدرسة/مدرسه)
+}
+
+
+def _fold_arabic(text: str) -> str:
+    """Normalise Arabic-script text so spelling conventions compare equal."""
+    return text.translate(_ARABIC_FOLD)
+
+
 def _tokens(text: str) -> list[str]:
     """Casefolded word tokens, in ANY script this product's books are written in.
 
@@ -184,10 +227,14 @@ def _tokens(text: str) -> list[str]:
     crude singularisation figures._words uses, which also covers the -s plurals
     of the Malay/Spanish/Portuguese/French locales and is a no-op in the scripts
     that have no ASCII letters at all.
+
+    Arabic-script text is folded first (_ARABIC_FOLD above): harakat and
+    tatweel stripped, Persian/Urdu letter variants mapped to their Arabic
+    twins. Every other script passes through the fold untouched.
     """
     out: list[str] = []
     cur: list[str] = []
-    for ch in text or "":
+    for ch in _fold_arabic(text or ""):
         if ch.isalnum() or unicodedata.category(ch)[0] == "M":
             cur.append(ch)
         elif cur:
@@ -226,7 +273,10 @@ class _Haystack:
 
     def __init__(self, text: str) -> None:
         toks = _tokens(text)
-        self.text = (text or "").casefold()
+        # Folded like the tokens are, so the spaceless-script substring path in
+        # has() compares like with like — a topic key has already been through
+        # _fold_arabic by the time it arrives here.
+        self.text = _fold_arabic(text or "").casefold()
         self.tokens = set(toks)
         self.stems = {t[:_STEM] for t in toks}
 
@@ -238,6 +288,26 @@ class _Haystack:
         # Spaceless scripts only — see _is_spaceless. Substring, because the
         # whole sentence is one token.
         return _is_spaceless(token) and token in self.text
+
+
+def _pooled_denominator(analysis: dict, episode: dict | None) -> bool:
+    """Whether topic scoping falls back to ALL of the analysis's concepts.
+
+    True when an episode declares no concept ids and the plan has at most one
+    episode — the empty-ids fallback in chapter_topics below. The claim that
+    fallback rests on ("a single-episode plan covers the whole chapter") is
+    TRUE for whole-chapter jobs and FALSE for chapter-PART jobs, which is why
+    measure() needs to know the fallback fired: a part job's analysis also
+    yields a single-episode plan with empty ids, and pooling there judges a
+    part-3 script against topics parts 1, 2 and 4 own (live incident 8b79d4e0
+    — a part 3/4 hard-failed at "3 of 17 topics").
+    """
+    if episode is None:
+        return False
+    if episode.get("key_concepts_introduced"):
+        return False
+    plan = (analysis.get("episodes") or {}).get("episodes") or []
+    return len(plan) <= 1
 
 
 def chapter_topics(analysis: dict, episode: dict | None = None) -> list[dict]:
@@ -252,14 +322,15 @@ def chapter_topics(analysis: dict, episode: dict | None = None) -> list[dict]:
     chapter_title = str(analysis.get("chapter_title") or "")
 
     concepts = (analysis.get("concepts") or {}).get("concepts") or []
-    plan = (analysis.get("episodes") or {}).get("episodes") or []
     wanted = set(episode.get("key_concepts_introduced") or []) if episode is not None else None
-    if wanted == set() and len(plan) <= 1:
+    if wanted == set() and _pooled_denominator(analysis, episode):
         # A single-episode plan that declares no concept ids covers the whole
         # chapter by definition — the pre-chunking analyzer and segmenter.py
         # both leave key_concepts_introduced empty ("populated later"), and a
         # cached v1 row still looks like that. Scoping to an empty set would
         # turn the gate off for exactly those rows instead of measuring them.
+        # (For a chapter-PART job the "by definition" is wrong — measure()
+        # detects that via _pooled_denominator and marks the report pooled.)
         wanted = None
     for concept in concepts:
         if not isinstance(concept, dict):
@@ -310,7 +381,8 @@ def _topic_keys(topics: list[dict]) -> list[list[str]]:
     return keys
 
 
-def measure(analysis: dict, episode: dict | None, produced_text: str) -> dict:
+def measure(analysis: dict, episode: dict | None, produced_text: str, *,
+            part_scoped: bool = False) -> dict:
     """Measure topic coverage of ``produced_text``. Pure; no model call.
 
     Returns ``{checked, covered, topics, addressed, missed, sections, concepts,
@@ -319,7 +391,18 @@ def measure(analysis: dict, episode: dict | None, produced_text: str) -> dict:
     heading is a placeholder), and then ``covered`` is None and means nothing —
     the same principle book_health.text_quality applies to a book with too
     little text to judge. Unjudgeable is not the same as bad.
+
+    ``part_scoped`` says the artifact was generated from ONE PART of a chapter
+    (worker/process.py's params.part path). When such a job's denominator had
+    to be pooled to the whole concept list (_pooled_denominator), the topics
+    include what OTHER parts teach, so the ratio measures the chapter split,
+    not the script. The report then carries ``"pooled": true`` and a verdict
+    that cannot fail the job — the number is still recorded (it is a data
+    point for the model comparison either way), it just stops pretending to be
+    a coverage judgment. Whole-chapter callers never set this, and pooling for
+    them keeps failing at the floor exactly as before.
     """
+    pooled = part_scoped and _pooled_denominator(analysis, episode)
     topics = chapter_topics(analysis, episode)
     keys = _topic_keys(topics)
     hay = _Haystack(produced_text)
@@ -344,6 +427,8 @@ def measure(analysis: dict, episode: dict | None, produced_text: str) -> dict:
         "gated": total >= _MIN_GATED_TOPICS,
         "verdict": "unmeasured",
     }
+    if pooled:
+        out["pooled"] = True
     if not total:
         return out
 
@@ -355,6 +440,13 @@ def measure(analysis: dict, episode: dict | None, produced_text: str) -> dict:
         out["verdict"] = "short"
     else:
         out["verdict"] = "ok"
+    if pooled and out["verdict"] in ("short", "floor"):
+        # Not a failing verdict, because it is not a failure claim: the missed
+        # list is largely other parts' topics. "pooled" in the row is what lets
+        # the analytics query exclude these ratios from the model comparison —
+        # or study them, since they measure how a chapter's concepts split
+        # across its parts.
+        out["verdict"] = "pooled"
     return out
 
 
@@ -362,14 +454,37 @@ def should_fail(report: dict, mode: str | None = None) -> bool:
     """Whether this report may fail the job, under the deployment's gate mode.
 
     A report that isn't gated (too few measurable topics — see
-    _MIN_GATED_TOPICS) never fails one, whatever the mode.
+    _MIN_GATED_TOPICS) never fails one, whatever the mode. Neither does a
+    pooled part-scoped report (see measure): its denominator is the whole
+    chapter's concept list, so a part-3 script "failing" it is the gate
+    failing, not the script — that is the belt to the verdict rewrite's
+    braces, so a pooled report stays harmless even if a future verdict
+    change forgets about it.
     """
     mode = mode or gate_mode()
     if mode == "off" or not report.get("gated") or not report.get("checked"):
         return False
+    if report.get("pooled"):
+        return False
     if mode == "strict":
         return report["verdict"] in ("short", "floor")
     return report["verdict"] == "floor"
+
+
+def should_retry(report: dict, mode: str | None = None) -> bool:
+    """Whether a first draft has earned the one must_cover retry.
+
+    Same bar as should_fail — the retry exists to rescue a job that would
+    otherwise fail outright, so it never fires below that bar — MINUS pooled
+    part-scoped reports, and that exclusion is the point of this function
+    existing separately: a pooled report's ``missed`` list is mostly OTHER
+    parts' topics, so a retry built from it explicitly orders the model to
+    teach material this part does not contain. That is the actively harmful
+    half of incident 8b79d4e0 — the part-3 must_cover retry told the script
+    to cover parts 1, 2 and 4. Kept here rather than inline in the worker so
+    the decision is testable without importing worker.process.
+    """
+    return should_fail(report, mode) and not report.get("pooled")
 
 
 def script_text(script: dict) -> str:

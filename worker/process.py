@@ -35,7 +35,7 @@ DEFAULT_LEVEL = "middle_school"
 
 def _coverage_report(analysis: dict, episode: dict | None, text: str, *,
                      kind: str, model: str, part: int | None = None,
-                     of: int | None = None) -> dict:
+                     of: int | None = None, part_scoped: bool = False) -> dict:
     """Measure one artifact's topic coverage and log it. Never raises.
 
     ``model`` is recorded with the number, and that is the whole reason this
@@ -44,9 +44,15 @@ def _coverage_report(analysis: dict, episode: dict | None, text: str, *,
     answers nothing. Failure to MEASURE is never a failure of the artifact — a
     measurement bug must not cost a teacher a lesson — so everything here is
     best-effort and an unmeasured artifact simply carries no report.
+
+    ``part_scoped`` marks a params.part job — generated from ONE part's text.
+    coverage.measure needs to know, because such a job's single-episode plan
+    is indistinguishable from a legacy whole-chapter one, and pooling the
+    denominator (correct for the latter) judges the former against every
+    concept of the chapter (incident 8b79d4e0).
     """
     try:
-        report = coverage.measure(analysis, episode, text)
+        report = coverage.measure(analysis, episode, text, part_scoped=part_scoped)
     except Exception as exc:  # noqa: BLE001
         logger.warning("coverage not measured for %s: %s", kind, exc)
         return {}
@@ -777,13 +783,19 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 report = _coverage_report(
                     analysis, episode, coverage.script_text(script_dict),
                     kind="presentation", model=client.model, part=part_idx, of=n_parts,
+                    part_scoped=part_ref is not None,
                 )
-                if coverage.should_fail(report):
+                if coverage.should_retry(report):
                     # Retry ONCE, naming what was dropped, and keep whichever
                     # draft measures higher — a retry can be worse, and the
                     # teacher should never get the worse of two scripts we paid
-                    # for. Bounded by should_fail, so it only ever fires on a
-                    # job that would otherwise have failed outright.
+                    # for. Bounded by should_retry: the same bar as the hard
+                    # failure below, so it only ever fires on a job that would
+                    # otherwise have failed outright — and NEVER on a pooled
+                    # part-scoped report, whose missed list is other parts'
+                    # topics (a must_cover built from it orders the model to
+                    # teach material this part does not contain — the harmful
+                    # half of incident 8b79d4e0).
                     first = report
                     retry = generate_episode_script(
                         episode, analysis, chapter_num, client, narration_style,
@@ -794,6 +806,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     retry_report = _coverage_report(
                         analysis, episode, coverage.script_text(retry_dict),
                         kind="presentation", model=client.model, part=part_idx, of=n_parts,
+                        part_scoped=part_ref is not None,
                     )
                     if (retry_report.get("covered") or 0) > (first.get("covered") or 0):
                         script, script_dict, report = retry, retry_dict, retry_report
