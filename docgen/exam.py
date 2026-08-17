@@ -100,7 +100,7 @@ def _marks(item: dict, default: int) -> int:
 
 
 def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path,
-          template: str | None = None) -> list[Path]:
+          template: str | None = None, language: str = "en") -> list[Path]:
     counts = _counts(params)
     difficulty = str((params or {}).get("difficulty") or "medium").lower()
     grade = book.get("grade") or "school"
@@ -149,33 +149,39 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     title = teacher_title or data.get("title") or "Exam"
     subtitle = f"{grade} · {subject} · {difficulty.capitalize()}"
 
-    # Running total for the paper header.
-    total_marks = (
-        sum(_marks(q, 1) for q in mcq)
-        + sum(_marks(q, 1) for q in fill)
-        + sum(_marks(q, 1) for q in tf)
-        + len(lefts)  # 1 mark per matched pair
-        + sum(_marks(q, 2) for q in short)
-        + sum(_marks(q, 5) for q in long_)
-    )
+    # Per-section marks (fill/tf/match default 1 per item; the rest use each
+    # question's real marks value) — feeds the examiner marks table, which
+    # also carries the total.
+    section_marks: list[int] = []
+    for present, total in (
+        (mcq, sum(_marks(q, 1) for q in mcq)),
+        (fill, sum(_marks(q, 1) for q in fill)),
+        (tf, sum(_marks(q, 1) for q in tf)),
+        (lefts, len(lefts)),  # 1 mark per matched pair
+        (short, sum(_marks(q, 2) for q in short)),
+        (long_, sum(_marks(q, 5) for q in long_)),
+    ):
+        if present:
+            section_marks.append(total)
 
     def coverage_line(doc) -> None:
         if coverage:
             dx.para(doc, "This paper covers: " + "; ".join(coverage), italic=True)
 
     # ── Exam paper (questions only) ─────────────────────────────────────────────
-    paper = dx.new_doc(title, subtitle, template=template)
+    paper = dx.new_doc(title, subtitle, template=template, kind="exam", language=language)
+    dx.marks_table(paper, [(chr(ord("A") + i), m) for i, m in enumerate(section_marks)])
     coverage_line(paper)
     if data.get("instructions"):
-        dx.para(paper, str(data["instructions"]), italic=True)
-    dx.para(paper, f"Total marks: {total_marks}", bold=True)
+        dx.instructions(paper, str(data["instructions"]))
 
     sec = ord("A")
 
     if mcq:
         dx.heading(paper, f"Section {chr(sec)} — Multiple choice", 1)
         for i, q in enumerate(mcq, 1):
-            dx.para(paper, f"{i}. {dx.strip_leading_number(q.get('q', ''))}   [{_marks(q, 1)}]")
+            dx.question(paper, f"{i}. {dx.strip_leading_number(q.get('q', ''))}   [{_marks(q, 1)}]",
+                        first=(i == 1))
             opts = [str(o) for o in (q.get("options") or [])][:4]
             for j, opt in enumerate(opts):
                 dx.para(paper, f"      {letters[j]}) {opt}")
@@ -188,7 +194,7 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
 
     if tf:
         dx.heading(paper, f"Section {chr(sec)} — True or False", 1)
-        dx.numbered(paper, [dx.strip_leading_number(str(q.get("statement", ""))) for q in tf])
+        dx.tf_boxes(paper, [dx.strip_leading_number(str(q.get("statement", ""))) for q in tf])
         sec += 1
 
     if lefts:
@@ -200,18 +206,22 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     if short:
         dx.heading(paper, f"Section {chr(sec)} — Short answer", 1)
         for i, q in enumerate(short, 1):
-            dx.para(paper, f"{i}. {dx.strip_leading_number(q.get('q', ''))}   [{_marks(q, 2)}]")
+            dx.question(paper, f"{i}. {dx.strip_leading_number(q.get('q', ''))}   [{_marks(q, 2)}]",
+                        first=(i == 1))
         sec += 1
 
     if long_:
         dx.heading(paper, f"Section {chr(sec)} — Long answer", 1)
         for i, q in enumerate(long_, 1):
-            dx.para(paper, f"{i}. {dx.strip_leading_number(q.get('q', ''))}   [{_marks(q, 5)}]")
+            dx.question(paper, f"{i}. {dx.strip_leading_number(q.get('q', ''))}   [{_marks(q, 5)}]",
+                        first=(i == 1))
 
+    dx.end_of_paper(paper)
     paper_path = dx.save(paper, out_dir / "exam.docx")
 
     # ── Answer key (separate document) ──────────────────────────────────────────
-    key = dx.new_doc(f"{title} — Answer Key", subtitle, template=template)
+    key = dx.new_doc(f"{title} — Answer Key", subtitle, template=template,
+                     kind="exam", language=language)
     coverage_line(key)
     dx.para(key, "For the teacher only — not for distribution to students.", italic=True)
 

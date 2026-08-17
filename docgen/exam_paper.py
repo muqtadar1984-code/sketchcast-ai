@@ -54,7 +54,7 @@ def _counts(params: dict) -> tuple[int, int, int, int, bool]:
 
 
 def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path,
-          template: str | None = None) -> Path:
+          template: str | None = None, language: str = "en") -> Path:
     n_fill, n_tf, n_match, n_subj, want_key = _counts(params)
     grade = book.get("grade") or "school"
     subject = book.get("subject") or "general"
@@ -77,10 +77,30 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     doc = dx.new_doc(
         data.get("title") or f"Test Paper — {chapter_title}",
         f"{grade} · {subject}",
-        template=template,
+        template=template, kind="exam_paper", language=language,
     )
+
+    # Examiner marks summary: fill/tf/match default to 1 mark per item,
+    # subjective uses each question's real marks value (default 5).
+    def _subj_marks(q: dict) -> int:
+        try:
+            m = int(q.get("marks"))
+            return m if m > 0 else 5
+        except (TypeError, ValueError):
+            return 5
+
+    marks_entries: list[tuple[str, int]] = []
+    letter = ord("A")
+    for present, total in ((fill, len(fill)), (tf, len(tf)), (match, len(match)),
+                           (subj, sum(_subj_marks(q) for q in subj))):
+        if present:
+            marks_entries.append((chr(letter), total))
+            letter += 1
+    if marks_entries:
+        dx.marks_table(doc, marks_entries)
+
     if data.get("instructions"):
-        dx.para(doc, data["instructions"], italic=True)
+        dx.instructions(doc, data["instructions"])
 
     section = ord("A")
     answers: list[tuple[str, list[str]]] = []
@@ -94,7 +114,7 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
 
     if tf:
         dx.heading(doc, f"Section {chr(section)} — True or False", 1)
-        dx.numbered(doc, [dx.strip_leading_number(str(q.get("statement", ""))) for q in tf])
+        dx.tf_boxes(doc, [dx.strip_leading_number(str(q.get("statement", ""))) for q in tf])
         answers.append((f"Section {chr(section)} — True or False",
                         ["True" if q.get("answer") else "False" for q in tf]))
         section += 1
@@ -120,9 +140,12 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         dx.heading(doc, f"Section {chr(section)} — Long answer", 1)
         for i, q in enumerate(subj, 1):
             marks = q.get("marks", "")
-            dx.para(doc, f"{i}. {dx.strip_leading_number(q.get('q', ''))}" + (f"   [{marks} marks]" if marks else ""))
+            dx.question(doc, f"{i}. {dx.strip_leading_number(q.get('q', ''))}"
+                        + (f"   [{marks} marks]" if marks else ""), first=(i == 1))
         answers.append((f"Section {chr(section)} — Long answer",
                         [dx.txt(q.get("answer_outline")) for q in subj]))
+
+    dx.end_of_paper(doc)
 
     if want_key:
         doc.add_page_break()

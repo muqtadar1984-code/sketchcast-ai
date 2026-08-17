@@ -10,6 +10,9 @@ from __future__ import annotations
 import re
 
 from docx import Document
+from docx.oxml.ns import qn
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 
 from docgen import activity, case_study, exam, exam_paper
 
@@ -28,15 +31,40 @@ _BOOK = {"grade": "Grade 7", "subject": "Science"}
 _CHAPTER = {"title": "Cells", "sections": [{"section_title": "Cells", "content": "A cell is the basic unit."}]}
 
 
+def _iter_paras(doc):
+    """Every paragraph in document order — the style layer renders section
+    headings/chips and T/F rows inside single-cell tables, so table-cell
+    paragraphs count too."""
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            yield Paragraph(child, doc)
+        elif child.tag == qn("w:tbl"):
+            for row in Table(child, doc).rows:
+                for cell in row.cells:
+                    yield from cell.paragraphs
+
+
+def _text(p):
+    """Whitespace-normalized paragraph text (the exam style tabs its question
+    numbers and right-aligns marks with a tab — layout, not content)."""
+    return re.sub(r"\s+", " ", p.text).strip()
+
+
 def _sections(doc):
     """Ordered (heading text, [non-empty paragraph texts under it]) pairs."""
     out = []
-    for p in doc.paragraphs:
+    for p in _iter_paras(doc):
         if (p.style.name or "").startswith(("Heading", "Title")):
-            out.append((p.text, []))
-        elif out and p.text.strip():
-            out[-1][1].append(p.text)
+            out.append((_text(p), []))
+        elif out and _text(p):
+            out[-1][1].append(_text(p))
     return out
+
+
+def _numbered(texts):
+    """Just the renderer-numbered items of a section — skips style chrome the
+    exam style adds around them ("[1]" mark cells, the write-in-box cue)."""
+    return [t for t in texts if re.match(r"\d+\. ", t)]
 
 
 def _no_list_number(doc):
@@ -63,7 +91,7 @@ def test_activity_steps_restart_at_one_per_activity(tmp_path):
                          {"num_activities": 2}, tmp_path)
     doc = Document(str(out))
     _no_list_number(doc)
-    texts = [p.text for p in doc.paragraphs if p.text.strip()]
+    texts = [_text(p) for p in _iter_paras(doc) if _text(p)]
     # Activity 2's steps must restart at 1, not continue Activity 1's count at 3.
     second_steps = texts.index("Steps:", texts.index("Steps:") + 1)
     assert texts[second_steps + 1] == "1. Hand out cards"
@@ -106,12 +134,13 @@ def test_exam_paper_key_numbers_match_paper(tmp_path):
 
     # Every section restarts at 1; LLM-emitted "1." / "Q1)" prefixes stripped once.
     assert paper["Section A — Fill in the blanks"][0] == "1. The ____ controls the cell."
-    assert paper["Section B — True or False"][0].startswith("1. ")
-    assert paper["Section D — Long answer"][0] == "1. Explain osmosis.   [5 marks]"
+    assert _numbered(paper["Section B — True or False"])[0].startswith("1. ")
+    assert _numbered(paper["Section D — Long answer"])[0] == "1. Explain osmosis. [5 marks]"
 
     # The key carries exactly the paper's numbers, section by section.
     for name in ("Section A — Fill in the blanks", "Section B — True or False"):
-        assert [t.split(".")[0] for t in key[name]] == [t.split(".")[0] for t in paper[name]], name
+        assert [t.split(".")[0] for t in key[name]] == \
+            [t.split(".")[0] for t in _numbered(paper[name])], name
     assert key["Section B — True or False"] == ["1. False", "2. True"]
     assert key["Section D — Long answer"] == ["1. Movement of water."]
     # Match key is "N. <letter>", not the old self-numbered "1. 1 → C".
@@ -204,9 +233,9 @@ def test_cumulative_exam_key_restarts_per_section(tmp_path):
 
     paper_secs = dict(_sections(paper))
     # LLM-emitted prefixes stripped on both the manual and numbered() paths.
-    assert paper_secs["Section A — Multiple choice"][0] == "1. Which organelle makes energy?   [1]"
+    assert paper_secs["Section A — Multiple choice"][0] == "1. Which organelle makes energy? [1]"
     assert paper_secs["Section B — Fill in the blanks"] == ["1. The ____ controls the cell."]
-    assert paper_secs["Section E — Short answer"][0] == "1. Define diffusion.   [2]"
+    assert _numbered(paper_secs["Section E — Short answer"])[0] == "1. Define diffusion. [2]"
 
     key_secs = dict(_sections(key))
     # Each key section restarts at 1 (True/False used to continue at 4 after

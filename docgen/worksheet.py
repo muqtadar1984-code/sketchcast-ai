@@ -47,7 +47,7 @@ def _dicts(items) -> list[dict]:
 
 
 def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path,
-          template: str | None = None) -> Path:
+          template: str | None = None, language: str = "en") -> Path:
     p = {**_DEFAULTS, **(params or {})}
     try:
         n = max(1, min(40, int(p["num_questions"])))
@@ -83,10 +83,10 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     doc = dx.new_doc(
         data.get("title") or f"Worksheet — {chapter_title}",
         f"{grade} · {subject}    |    Difficulty: {p['difficulty']}",
-        template=template,
+        template=template, kind="worksheet", language=language,
     )
     if data.get("instructions"):
-        dx.para(doc, data["instructions"], italic=True)
+        dx.instructions(doc, data["instructions"])
 
     section = ord("A")
     answers: list[tuple[str, list[str]]] = []
@@ -121,21 +121,19 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     if short:
         dx.heading(doc, f"Section {chr(section)} — Short answer", 1)
         for i, q in enumerate(short, 1):
-            dx.para(doc, f"{i}. {dx.strip_leading_number(q.get('q', ''))}")
+            dx.question(doc, f"{i}. {dx.strip_leading_number(q.get('q', ''))}", first=(i == 1))
             try:
                 lines = max(0, min(6, int(q.get("work_space_lines", 2))))
             except (TypeError, ValueError):
                 lines = 2
-            for _ in range(lines):
-                dx.para(doc, " ")  # blank working line
+            dx.writing_lines(doc, lines)  # ruled working space
         answers.append((f"Section {chr(section)} — Short answer", [dx.txt(q.get("answer")) for q in short]))
 
     if p.get("include_answer_key"):
         doc.add_page_break()
         dx.heading(doc, "Answer Key", 0)
         for sec_name, items in answers:
-            dx.heading(doc, sec_name, 2)
-            dx.numbered(doc, items)
+            dx.answer_section(doc, sec_name, items)
 
     # Structured questions for the app's interactive quiz player (best-effort).
     try:

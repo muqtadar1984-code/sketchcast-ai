@@ -35,7 +35,7 @@ Produce EXACTLY {n} varied, hands-on activities tied to the chapter content."""
 
 
 def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path,
-          template: str | None = None) -> Path:
+          template: str | None = None, language: str = "en") -> Path:
     try:
         n = max(1, min(8, int((params or {}).get("num_activities", 4))))
     except (TypeError, ValueError):
@@ -47,9 +47,10 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     grounding = dx.chapter_grounding(book, chapter, analysis)
     data = client.analyze(prompt, max_tokens=3500, cache_prefix=grounding).get("data", {}) or {}
 
-    doc = dx.new_doc(f"Class Activities — {chapter_title}", f"{grade} · {subject}", template=template)
+    doc = dx.new_doc(f"Class Activities — {chapter_title}", f"{grade} · {subject}",
+                     template=template, kind="activity", language=language)
     if data.get("intro"):
-        dx.para(doc, data["intro"], italic=True)
+        dx.instructions(doc, data["intro"])
 
     for i, act in enumerate(data.get("activities", []), 1):
         if not isinstance(act, dict):

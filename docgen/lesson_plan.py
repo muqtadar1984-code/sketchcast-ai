@@ -28,7 +28,7 @@ Make it specific to the chapter content. 4-6 lesson_flow phases that sum to roug
 
 
 def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path,
-          template: str | None = None) -> Path:
+          template: str | None = None, language: str = "en") -> Path:
     p = params or {}
     try:
         duration = max(10, min(180, int(p.get("duration_minutes", 45))))
@@ -51,7 +51,7 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     doc = dx.new_doc(
         data.get("title") or f"Lesson Plan — {chapter_title}",
         f"{grade} · {subject}    |    Duration: {data.get('duration_minutes', duration)} minutes",
-        template=template,
+        template=template, kind="lesson_plan", language=language,
     )
 
     dx.heading(doc, "Learning objectives", 1)

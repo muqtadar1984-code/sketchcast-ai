@@ -10,8 +10,38 @@ import json
 import re
 
 from docx import Document
+from docx.oxml.ns import qn
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 
 from docgen import questions, worksheet
+
+
+def _iter_paras(doc):
+    """Every paragraph in document order — the workbook style renders section
+    chips and answer panels inside single-cell tables, so cell paragraphs
+    count too."""
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            yield Paragraph(child, doc)
+        elif child.tag == qn("w:tbl"):
+            for row in Table(child, doc).rows:
+                for cell in row.cells:
+                    yield from cell.paragraphs
+
+
+def _text(p):
+    """Whitespace-normalized paragraph text (layout tabs are not content)."""
+    return re.sub(r"\s+", " ", p.text).strip()
+
+
+def _match_table(doc):
+    """The match-the-columns table, found by its header row — the style layer
+    adds chip/panel tables, so position in doc.tables no longer identifies it."""
+    found = [t for t in doc.tables
+             if [c.text for c in t.rows[0].cells] == ["Column A", "Column B"]]
+    assert len(found) == 1
+    return found[0]
 
 
 class _StubClient:
@@ -51,7 +81,7 @@ def test_worksheet_docx_groups_by_type_and_tables_the_match(tmp_path):
         out_dir=tmp_path,
     )
     doc = Document(str(out))
-    headings = [p.text for p in doc.paragraphs if p.text.strip()]
+    headings = [_text(p) for p in _iter_paras(doc) if _text(p)]
     blob = "\n".join(headings)
     # One grouped section per kind, in order.
     assert "Fill in the blanks" in blob
@@ -59,9 +89,7 @@ def test_worksheet_docx_groups_by_type_and_tables_the_match(tmp_path):
     assert "Match the columns" in blob
     assert "Short answer" in blob
     # The match exercise is a real 2-column TABLE, not running text.
-    assert len(doc.tables) == 1
-    t = doc.tables[0]
-    assert [c.text for c in t.rows[0].cells] == ["Column A", "Column B"]
+    t = _match_table(doc)
     assert len(t.rows) == 1 + 3  # header + 3 pairs
 
     # Structured questions.json is typed + grouped (fill → tf → match → short).
@@ -97,11 +125,11 @@ _NUMBERING_PAYLOAD = {
 def _sections(doc):
     """Ordered (heading text, [non-empty paragraph texts under it]) pairs."""
     out = []
-    for p in doc.paragraphs:
+    for p in _iter_paras(doc):
         if (p.style.name or "").startswith(("Heading", "Title")):
-            out.append((p.text, []))
-        elif out and p.text.strip():
-            out[-1][1].append(p.text)
+            out.append((_text(p), []))
+        elif out and _text(p):
+            out[-1][1].append(_text(p))
     return out
 
 
@@ -148,7 +176,7 @@ def test_numbering_restarts_per_section_and_key_matches_paper(tmp_path):
     match_key = key["Section C — Match the columns"]
     assert all(re.fullmatch(r"\d+\. [A-Z]", t) for t in match_key)
     right_by_letter = {}
-    for row in doc.tables[0].rows[1:]:
+    for row in _match_table(doc).rows[1:]:
         letter, right = row.cells[1].text.split(". ", 1)
         right_by_letter[letter] = right
     for i, line in enumerate(match_key):

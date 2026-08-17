@@ -35,7 +35,7 @@ def generate_document(
 ) -> Path:
     """Build the .docx for `kind` and return its path. `template` = optional
     school .docx whose styles/header/footer/logo the document inherits."""
-    from shared.languages import is_rtl, prompt_directive
+    from shared.languages import prompt_directive
 
     directive = prompt_directive(language)
     if directive:
@@ -55,43 +55,12 @@ def generate_document(
     build = importlib.import_module(mod_name).build
     # Every generator takes the same signature. Most return a single Path; the
     # cumulative exam returns [paper, answer_key] — two documents from one call.
-    result = build(book, chapter, analysis, client, params or {}, out_dir, template)
-    paths = result if isinstance(result, list) else [result]
-    # RTL (Arabic / Jawi) documents: Word does the SHAPING itself, but paragraphs
-    # need right alignment + the bidi flag. A post-pass over EACH saved file keeps
-    # the builders untouched. Best-effort — never fails the doc.
-    if is_rtl(language):
-        for path in paths:
-            try:
-                _mirror_docx_rtl(path)
-            except Exception:  # noqa: BLE001
-                import logging
-
-                logging.getLogger("docgen").warning("RTL docx pass failed for %s", path)
-    return result
-
-
-def _mirror_docx_rtl(docx_path) -> None:
-    import docx as _docx
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.oxml.ns import qn
-
-    d = _docx.Document(str(docx_path))
-
-    def _mirror_paragraph(p) -> None:
-        # Centred paragraphs (titles, badges) keep their centring.
-        if p.alignment != WD_ALIGN_PARAGRAPH.CENTER:
-            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        pPr = p._p.get_or_add_pPr()  # noqa: SLF001
-        if pPr.find(qn("w:bidi")) is None:
-            bidi = pPr.makeelement(qn("w:bidi"), {})
-            pPr.append(bidi)
-
-    for p in d.paragraphs:
-        _mirror_paragraph(p)
-    for table in d.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for p in cell.paragraphs:
-                    _mirror_paragraph(p)
-    d.save(str(docx_path))
+    #
+    # RTL (Arabic / Jawi): the docx_builder style layer is direction-aware
+    # NATIVELY (w:bidi paragraphs, mirrored indents, w:bidiVisual tables,
+    # swapped footer cells, complex-script fonts) — the old post-save mirror
+    # pass is gone because it would clobber the style layer's mirrored
+    # elements (e.g. re-right-aligning marks cells the style already
+    # left-aligned for RTL).
+    return build(book, chapter, analysis, client, params or {}, out_dir, template,
+                 language=language)

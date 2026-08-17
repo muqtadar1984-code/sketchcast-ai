@@ -35,7 +35,7 @@ _DEFAULTS = {"length": "medium", "num_questions": 4}
 
 
 def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path,
-          template: str | None = None) -> Path:
+          template: str | None = None, language: str = "en") -> Path:
     p = {**_DEFAULTS, **(params or {})}
     length = p["length"] if p["length"] in _WORDS else "medium"
     try:
@@ -53,7 +53,7 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     doc = dx.new_doc(
         data.get("title") or f"Case Study — {chapter_title}",
         f"{grade} · {subject}",
-        template=template,
+        template=template, kind="case_study", language=language,
     )
 
     if data.get("background"):
@@ -71,7 +71,7 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     if qs:
         dx.heading(doc, "Discussion questions", 1)
         for i, q in enumerate(qs, 1):
-            dx.para(doc, f"{i}. {dx.strip_leading_number(q.get('q', ''))}")
+            dx.question(doc, f"{i}. {dx.strip_leading_number(q.get('q', ''))}", first=(i == 1))
 
     if data.get("concepts_applied"):
         dx.heading(doc, "Concepts applied", 1)
