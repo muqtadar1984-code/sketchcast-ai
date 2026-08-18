@@ -1,9 +1,10 @@
 """Cumulative exam generator → TWO editable .docx files.
 
-Unlike the per-chapter test paper (docgen/exam_paper.py, which keeps its answer
-key inline), an EXAM is a formal, cumulative assessment over everything covered
-so far. It emits two documents from ONE model call so the key always matches the
-paper exactly:
+An EXAM is a formal, cumulative assessment over everything covered so far.
+This split — paper + separate key — was this module's pattern from birth, and
+since 2026-08-18 every document kind follows it (exam_paper/worksheet/activity/
+case_study emit their key/teacher notes as a second file too). Two documents
+from ONE model call so the key always matches the paper exactly:
   · the exam paper (questions only), and
   · a SEPARATE answer key (answers + marking notes) — never given to students.
 

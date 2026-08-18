@@ -1,8 +1,17 @@
-"""Exam / test paper generator → editable .docx.
+"""Exam / test paper generator → TWO editable .docx files.
+
+Student/teacher document split (founder direction 2026-08-18): answer keys stay
+with the teacher/parent; students must never receive a document containing its
+own answers. Like docgen/exam.py, build() returns
+[test_paper_path, answer_key_path] — the student paper carries questions only,
+and the key is a SEPARATE exam_board-styled document the worker uploads under
+its own artifact kind (answer_key_docx).
 
 Reads `params`:
   {"objective": {"fill_blank": N, "true_false": N, "match_column": N},
-   "subjective": N, "include_answer_key": bool}
+   "subjective": N}
+(`include_answer_key` is accepted but ignored: the key is always emitted as its
+own file — its presence as a sibling artifact is the app's proof the split ran.)
 """
 
 from __future__ import annotations
@@ -35,7 +44,7 @@ Return ONLY valid JSON in exactly this shape:
 All questions must be answerable from the chapter content. Honor the exact counts."""
 
 
-def _counts(params: dict) -> tuple[int, int, int, int, bool]:
+def _counts(params: dict) -> tuple[int, int, int, int]:
     obj = (params or {}).get("objective", {}) or {}
     def g(d, k):
         try:
@@ -48,13 +57,12 @@ def _counts(params: dict) -> tuple[int, int, int, int, bool]:
     n_subj = g(params or {}, "subjective")
     if n_fill + n_tf + n_match + n_subj == 0:  # sensible default
         n_fill, n_tf, n_match, n_subj = 5, 5, 4, 3
-    key = bool((params or {}).get("include_answer_key", True))
-    return n_fill, n_tf, n_match, n_subj, key
+    return n_fill, n_tf, n_match, n_subj
 
 
 def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path,
-          template: str | None = None, language: str = "en") -> Path:
-    n_fill, n_tf, n_match, n_subj, want_key = _counts(params)
+          template: str | None = None, language: str = "en") -> list[Path]:
+    n_fill, n_tf, n_match, n_subj = _counts(params)
     grade = book.get("grade") or "school"
     subject = book.get("subject") or "general"
     chapter_title = chapter.get("title") or dx._t("chapter", language)
@@ -151,12 +159,20 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
 
     dx.end_of_paper(doc)
 
-    if want_key:
-        doc.add_page_break()
-        dx.heading(doc, dx._t("answer_key", language), 0)
-        for sec_name, items in answers:
-            dx.heading(doc, sec_name, 2)
-            dx.numbered(doc, items)
+    # ── Answer key: a SEPARATE document (student/teacher split, 2026-08-18) ──
+    # Same exam_board style and the SAME `answers` list the paper's sections
+    # were built from, so key item N always answers paper item N (and match-key
+    # letters come from the same letters()/abjad sequence as the paper's table).
+    # numbered() restarts at 1 inside this file — it is its own document.
+    key_doc = dx.new_doc(
+        f"{title} — {dx._t('answer_key', language)}",
+        f"{grade} · {subject}",
+        template=template, kind="exam_paper", language=language,
+    )
+    dx.para(key_doc, dx._t("teacher_only", language), italic=True)
+    for sec_name, items in answers:
+        dx.heading(key_doc, sec_name, 2)
+        dx.numbered(key_doc, items)
 
     # Structured questions for the app's interactive quiz player (best-effort).
     try:
@@ -167,4 +183,6 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     except Exception as exc:  # noqa: BLE001
         logger.warning("questions.json (exam) skipped: %s", exc)
 
-    return dx.save(doc, out_dir / "exam_paper.docx")
+    paper_path = dx.save(doc, out_dir / "exam_paper.docx")
+    key_path = dx.save(key_doc, out_dir / "exam_paper_answer_key.docx")
+    return [paper_path, key_path]

@@ -1,8 +1,15 @@
-"""Case study generator → editable .docx.
+"""Case study generator → TWO editable .docx files.
 
 Reads `params`: {"length": "short|medium|long", "num_questions": int}
 A case study presents a real-world scenario applying the chapter's concepts,
 followed by discussion/analysis questions.
+
+Student/teacher document split (founder direction 2026-08-18): the teacher
+notes (per-question answer guidance) must never ride the student handout. Like
+docgen/exam.py, build() returns [case_study_path, teacher_notes_path] — the
+student document ends at the discussion questions, and the guidance lives in a
+SEPARATE classroom-styled teacher document whose items enumerate the SAME
+filtered question list, so guidance N always answers question N.
 """
 
 from __future__ import annotations
@@ -35,7 +42,7 @@ _DEFAULTS = {"length": "medium", "num_questions": 4}
 
 
 def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path,
-          template: str | None = None, language: str = "en") -> Path:
+          template: str | None = None, language: str = "en") -> list[Path]:
     p = {**_DEFAULTS, **(params or {})}
     length = p["length"] if p["length"] in _WORDS else "medium"
     try:
@@ -50,11 +57,10 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     grounding = dx.chapter_grounding(book, chapter, analysis)
     data = client.analyze(prompt, max_tokens=4096, cache_prefix=grounding).get("data", {}) or {}
 
-    doc = dx.new_doc(
-        data.get("title") or f"{dx._t('doc_case_study', language)} — {chapter_title}",
-        f"{grade} · {subject}",
-        template=template, kind="case_study", language=language,
-    )
+    title = data.get("title") or f"{dx._t('doc_case_study', language)} — {chapter_title}"
+    subtitle = f"{grade} · {subject}"
+    doc = dx.new_doc(title, subtitle, template=template, kind="case_study",
+                     language=language)
 
     if data.get("background"):
         dx.heading(doc, dx._t("background", language), 1)
@@ -77,11 +83,19 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         dx.heading(doc, dx._t("concepts_applied", language), 1)
         dx.bullets(doc, data["concepts_applied"])
 
-    # Teacher notes: answer guidance (kept on a separate page). Same list as
-    # the questions above, so guidance N always answers question N.
-    if any(q.get("guidance") for q in qs):
-        doc.add_page_break()
-        dx.heading(doc, dx._t("teacher_notes", language), 0)
-        dx.numbered(doc, [dx.txt(q.get("guidance")) for q in qs])
+    # ── Teacher notes: a SEPARATE document (student/teacher split, 2026-08-18)
+    # Same classroom style; the guidance enumerates the SAME filtered `qs`
+    # list as the student document's discussion questions, so guidance N
+    # always answers question N. numbered() restarts at 1 in this file — it
+    # is its own document. Masthead reuses the localized teacher_notes string.
+    key_doc = dx.new_doc(f"{title} — {dx._t('teacher_notes', language)}",
+                         subtitle, template=template, kind="case_study",
+                         language=language)
+    dx.para(key_doc, dx._t("teacher_only", language), italic=True)
+    if qs:
+        dx.heading(key_doc, dx._t("teacher_notes", language), 0)
+        dx.numbered(key_doc, [dx.txt(q.get("guidance")) for q in qs])
 
-    return dx.save(doc, out_dir / "case_study.docx")
+    study_path = dx.save(doc, out_dir / "case_study.docx")
+    key_path = dx.save(key_doc, out_dir / "case_study_teacher_notes.docx")
+    return [study_path, key_path]

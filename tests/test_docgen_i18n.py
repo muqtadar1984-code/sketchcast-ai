@@ -101,47 +101,57 @@ _CHAP_AR = {"title": "الخلية", "sections": [{"section_title": "الخلي�
 
 
 def _build_ws(payload, lang, tmp_path, book=None, chap=None):
-    out = worksheet.build(
+    # DELIBERATE pin update (2026-08-18 student/teacher split): build() now
+    # returns [student_sheet, answer_key] — both documents come back so the
+    # cross-document consistency rules (shared letters, shared T/F pair) can
+    # still be asserted.
+    paths = worksheet.build(
         book=book or _BOOK_AR, chapter=chap or _CHAP_AR, analysis={},
         client=_StubClient(payload),
-        params={"num_questions": 10, "include_answer_key": True},
+        params={"num_questions": 10},
         out_dir=tmp_path, language=lang,
     )
-    return Document(str(out))
+    return Document(str(paths[0])), Document(str(paths[1]))
 
 
 # ── Arabic ───────────────────────────────────────────────────────────────────
 
 def test_arabic_worksheet_headings_are_native_with_abjad_letters(tmp_path):
-    doc = _build_ws(_WS_PAYLOAD_AR, "ar", tmp_path)
-    blob = _blob(doc)
+    paper, key = _build_ws(_WS_PAYLOAD_AR, "ar", tmp_path)
+    blob = _blob(paper)
     assert "القسم أ — املأ الفراغات" in blob
     assert "القسم ب — صواب أو خطأ" in blob
     assert "القسم ج — صل بين العمودين" in blob
     assert "القسم د — الإجابة القصيرة" in blob
-    assert "نموذج الإجابة" in blob
-    # No English framework strings anywhere in the document body.
+    # The answer key is its own document (split, 2026-08-18) — its localized
+    # heading appears there, never in the student sheet.
+    key_blob = _blob(key)
+    assert "نموذج الإجابة" in key_blob
+    assert "نموذج الإجابة" not in blob
+    # No English framework strings anywhere in either document body.
     assert not re.search(r"\b(Section|Answer Key|Column|True|False|Difficulty|marks)\b", blob)
+    assert not re.search(r"\b(Section|Answer Key|Column|True|False|Difficulty|marks)\b", key_blob)
 
 
 def test_arabic_key_true_false_uses_the_cue_pair_not_english(tmp_path):
-    doc = _build_ws(_WS_PAYLOAD_AR, "ar", tmp_path)
-    # Paper and key share the heading string; dict(_sections) keeps the LAST
-    # occurrence — the answer-key panel, whose items are the key values.
-    secs = dict(_sections(doc))
+    _paper, key = _build_ws(_WS_PAYLOAD_AR, "ar", tmp_path)
+    # The key document's panel reuses the paper's section heading string.
+    secs = dict(_sections(key))
     # Answers were (False, True) → the key prints the localized pair.
     assert secs["القسم ب — صواب أو خطأ"] == ["1. خطأ", "2. صواب"]
 
 
 def test_arabic_match_letters_shared_between_table_and_key(tmp_path):
-    doc = _build_ws(_WS_PAYLOAD_AR, "ar", tmp_path)
-    t = _match_table(doc, ["العمود أ", "العمود ب"])
+    paper, key = _build_ws(_WS_PAYLOAD_AR, "ar", tmp_path)
+    t = _match_table(paper, ["العمود أ", "العمود ب"])
     right_by_letter = {}
     for row in t.rows[1:]:
         letter, right = row.cells[1].text.split(". ", 1)
         assert letter in _ABJAD_FIRST  # abjad, not A/B/C
         right_by_letter[letter] = right
-    secs = dict(_sections(doc))
+    # Key letters live in the SEPARATE key document but come from the SAME
+    # sequence as the paper's table — or the key can't be graded.
+    secs = dict(_sections(key))
     key_lines = secs["القسم ج — صل بين العمودين"]
     key_lines = [t for t in key_lines if re.match(r"\d+\. ", t)]
     assert len(key_lines) == 3
@@ -160,19 +170,25 @@ def test_arabic_exam_paper_marks_bracket_and_letters(tmp_path):
         "true_false": [{"statement": "الخلايا حية.", "answer": True}],
         "subjective": [{"q": "اشرح الخاصية الأسموزية.", "marks": 5, "answer_outline": "انتقال الماء."}],
     }
-    out = exam_paper.build(_BOOK_AR, _CHAP_AR, {}, _StubClient(payload),
-                           {"objective": {"fill_blank": 1, "true_false": 1},
-                            "subjective": 1, "include_answer_key": True},
-                           tmp_path, language="ar")
-    doc = Document(str(out))
+    paths = exam_paper.build(_BOOK_AR, _CHAP_AR, {}, _StubClient(payload),
+                             {"objective": {"fill_blank": 1, "true_false": 1},
+                              "subjective": 1},
+                             tmp_path, language="ar")
+    doc = Document(str(paths[0]))
     blob = _blob(doc)
     assert "[5 درجات]" in blob            # localized marks wording
     assert "[5 marks]" not in blob
     assert "اكتب صواب أو خطأ في كل مربع." in blob  # T/F cue = the key's pair
     assert "القسم أ — املأ الفراغات" in blob
     assert "نهاية الورقة" in blob
-    assert "نموذج الإجابة" in blob
     assert not re.search(r"\b(Section|Answer|Column|True|False|marks|Total)\b", blob)
+    # The key is its own document (split, 2026-08-18): localized heading +
+    # teacher-only line live there, never in the student paper.
+    key_blob = _blob(Document(str(paths[1])))
+    assert "نموذج الإجابة" in key_blob
+    assert "نموذج الإجابة" not in blob
+    assert "للمعلم فقط — لا يوزع على الطلاب." in key_blob
+    assert not re.search(r"\b(Section|Answer|Column|True|False|marks|Total)\b", key_blob)
     # Marks table letters are abjad too (أ = section A row).
     marks_tbl = doc.tables[0]
     first_col = [r.cells[0].text for r in marks_tbl.rows]
@@ -209,29 +225,32 @@ def test_arabic_cumulative_exam_mcq_key_letters_match_the_options(tmp_path):
 # ── Jawi (ms-arab): Arabic SCRIPT, MALAY vocabulary ──────────────────────────
 
 def test_jawi_worksheet_is_malay_in_arabic_script_not_arabic(tmp_path):
-    doc = _build_ws(_WS_PAYLOAD_AR, "ms-arab", tmp_path,
-                    book={"grade": "تيڠکتن 1", "subject": "ساءينس"},
-                    chap={"title": "سيل", "sections": []})
-    blob = _blob(doc)
+    paper, key = _build_ws(_WS_PAYLOAD_AR, "ms-arab", tmp_path,
+                           book={"grade": "تيڠکتن 1", "subject": "ساءينس"},
+                           chap={"title": "سيل", "sections": []})
+    blob = _blob(paper)
+    key_blob = _blob(key)
+    both = blob + "\n" + key_blob
     # Jawi/Malay framework vocabulary…
     assert "بهاݢين أ — ايسي تمڤت کوسوڠ" in blob   # Bahagian A — Isi tempat kosong
     assert "بهاݢين ب — بنر اتاو ڤلسو" in blob     # Benar atau Palsu
-    assert "سکيما جواڤن" in blob                  # Skema Jawapan
-    # …never the Arabic-language terms for the same keys.
-    assert "القسم" not in blob
-    assert "صواب" not in blob and "خطأ" not in blob
-    assert "نموذج الإجابة" not in blob
-    assert "العمود" not in blob
-    # Key True/False values are the Jawi pair.
-    secs = dict(_sections(doc))
-    assert secs["بهاݢين ب — بنر اتاو ڤلسو"] == ["1. ڤلسو", "2. بنر"]
-    # Match letters still abjad (Arabic-script doc), shared with the key.
-    t = _match_table(doc, ["لاجور أ", "لاجور ب"])
+    assert "سکيما جواڤن" in key_blob              # Skema Jawapan (key doc only)
+    assert "سکيما جواڤن" not in blob              # split: never on the student sheet
+    # …never the Arabic-language terms for the same keys, in either document.
+    assert "القسم" not in both
+    assert "صواب" not in both and "خطأ" not in both
+    assert "نموذج الإجابة" not in both
+    assert "العمود" not in both
+    # Key True/False values are the Jawi pair (in the separate key doc).
+    key_secs = dict(_sections(key))
+    assert key_secs["بهاݢين ب — بنر اتاو ڤلسو"] == ["1. ڤلسو", "2. بنر"]
+    # Match letters still abjad (Arabic-script doc), shared across the docs.
+    t = _match_table(paper, ["لاجور أ", "لاجور ب"])
     letters_in_table = {row.cells[1].text.split(". ", 1)[0] for row in t.rows[1:]}
     assert letters_in_table <= set(_ABJAD_FIRST)
-    key_lines = [x for x in secs["بهاݢين ج — ڤادنکن لاجور"] if re.match(r"\d+\. ", x)]
+    key_lines = [x for x in key_secs["بهاݢين ج — ڤادنکن لاجور"] if re.match(r"\d+\. ", x)]
     assert {line.split(". ", 1)[1] for line in key_lines} == letters_in_table
-    assert not re.search(r"\b(Section|Answer|Column|True|False)\b", blob)
+    assert not re.search(r"\b(Section|Answer|Column|True|False)\b", both)
 
 
 # ── French: Latin script keeps A B C letters ─────────────────────────────────
@@ -248,19 +267,22 @@ def test_french_worksheet_headings_and_key(tmp_path):
         ],
         "short_answer": [],
     }
-    doc = _build_ws(payload, "fr", tmp_path,
-                    book={"grade": "5e", "subject": "SVT"},
-                    chap={"title": "La cellule", "sections": []})
-    blob = _blob(doc)
+    paper, key = _build_ws(payload, "fr", tmp_path,
+                           book={"grade": "5e", "subject": "SVT"},
+                           chap={"title": "La cellule", "sections": []})
+    blob = _blob(paper)
+    key_blob = _blob(key)
     assert "Section A — Remplissez les blancs" in blob
     assert "Section B — Vrai ou Faux" in blob
     assert "Section C — Reliez les colonnes" in blob
-    assert "Corrigé" in blob
-    assert "Answer Key" not in blob
+    # Key heading lives in the separate key document (split, 2026-08-18).
+    assert "Corrigé" in key_blob
+    assert "Corrigé" not in blob
+    assert "Answer Key" not in blob and "Answer Key" not in key_blob
     assert "Fill in the blanks" not in blob
-    secs = dict(_sections(doc))
-    assert secs["Section B — Vrai ou Faux"] == ["1. Faux"]
-    _match_table(doc, ["Colonne A", "Colonne B"])  # localized headers, A/B letters
+    key_secs = dict(_sections(key))
+    assert key_secs["Section B — Vrai ou Faux"] == ["1. Faux"]
+    _match_table(paper, ["Colonne A", "Colonne B"])  # localized headers, A/B letters
 
 
 # ── English: byte-identical to the pre-i18n output ───────────────────────────
@@ -277,21 +299,24 @@ def test_english_output_unchanged(tmp_path):
         ],
         "short_answer": [{"q": "Why are plant cells rigid?", "answer": "The cell wall.", "work_space_lines": 1}],
     }
-    doc = _build_ws(payload, "en", tmp_path,
-                    book={"grade": "Grade 7", "subject": "Science"},
-                    chap={"title": "Cells", "sections": []})
-    blob = _blob(doc)
+    paper, key = _build_ws(payload, "en", tmp_path,
+                           book={"grade": "Grade 7", "subject": "Science"},
+                           chap={"title": "Cells", "sections": []})
+    blob = _blob(paper)
     # The exact current literals, character for character.
     assert "Section A — Fill in the blanks" in blob
     assert "Section B — True or False" in blob
     assert "Section C — Match the columns" in blob
     assert "Section D — Short answer" in blob
-    assert "Answer Key" in blob
+    # "Answer Key" moved to the separate key document (split, 2026-08-18).
+    key_blob = _blob(key)
+    assert "Answer Key" in key_blob
+    assert "Answer Key" not in blob
     assert "Match each item in Column A to the correct item in Column B." in blob
     assert "Difficulty: medium" in blob  # masthead subtitle, label + raw value
-    secs = dict(_sections(doc))
-    assert secs["Section B — True or False"] == ["1. False"]
-    _match_table(doc, ["Column A", "Column B"])
+    key_secs = dict(_sections(key))
+    assert key_secs["Section B — True or False"] == ["1. False"]
+    _match_table(paper, ["Column A", "Column B"])
 
 
 def test_letters_helper_sequences():

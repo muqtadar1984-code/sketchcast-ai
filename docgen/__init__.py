@@ -32,9 +32,10 @@ def generate_document(
     out_dir: Path,
     template: str | None = None,
     language: str = "en",
-) -> Path:
-    """Build the .docx for `kind` and return its path. `template` = optional
-    school .docx whose styles/header/footer/logo the document inherits."""
+) -> Path | list[Path]:
+    """Build the .docx for `kind` and return its path (or paths). `template` =
+    optional school .docx whose styles/header/footer/logo the document
+    inherits."""
     from shared.languages import prompt_directive
 
     directive = prompt_directive(language)
@@ -53,8 +54,10 @@ def generate_document(
         raise ValueError(f"Unknown document kind: {kind}")
     import importlib
     build = importlib.import_module(mod_name).build
-    # Every generator takes the same signature. Most return a single Path; the
-    # cumulative exam returns [paper, answer_key] — two documents from one call.
+    # Every generator takes the same signature. lesson_plan returns a single
+    # Path; the split kinds (exam, exam_paper, worksheet, activity, case_study)
+    # return [student_document, answer_key/teacher_notes] — two documents from
+    # one call, so the key always matches its paper exactly.
     #
     # RTL (Arabic / Jawi): the docx_builder style layer is direction-aware
     # NATIVELY (w:bidi paragraphs, mirrored indents, w:bidiVisual tables,

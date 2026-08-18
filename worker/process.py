@@ -951,6 +951,10 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 template=branding.get("docx_template"),
                 language=lesson_lang,
             )
+            # Student/teacher split (2026-08-18): exam_paper/worksheet/activity/
+            # case_study now return [student_document, answer_key] like the
+            # cumulative exam; lesson_plan still returns a single Path.
+            paths = out_path if isinstance(out_path, list) else [out_path]
             for _k, _v in gen_client.session_usage.items():
                 client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
 
@@ -969,9 +973,11 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             # one-line addition once a week of Sonnet rows is in the table.
             # Episode is None: documents are generated per CHAPTER, never per
             # part, so they are measured against the whole chapter's topics.
+            # Only the STUDENT document is measured (paths[0]) — same reasoning
+            # as the cumulative exam: the answer key restates the paper.
             try:
                 _doc_report = _coverage_report(
-                    analysis, None, coverage.docx_text(out_path),
+                    analysis, None, coverage.docx_text(paths[0]),
                     kind=kind, model=gen_client.model,
                 )
                 _record_coverage(sb, generation_id, [_doc_report])
@@ -980,8 +986,20 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
 
             db.set_progress(sb, job_id, 90)
             dest = f"{base}/{kind}.docx"
-            db.upload_artifact(sb, str(out_path), dest)
+            db.upload_artifact(sb, str(paths[0]), dest)
             db.add_artifact_row(sb, generation_id, "docx", dest)
+            if len(paths) > 1:
+                key_dest = f"{base}/answer_key.docx"
+                db.upload_artifact(sb, str(paths[1]), key_dest)
+                # answer_key_docx artifact_kind exists since app migration 0062;
+                # a not-yet-applied migration must not fail the generation
+                # (mirrors the cumulative exam block below). The presence of
+                # this sibling row is the app's proof the student 'docx' above
+                # is key-free and safe to hand to a learner.
+                try:
+                    db.add_artifact_row(sb, generation_id, "answer_key_docx", key_dest)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("answer_key_docx row skipped for %s: %s", generation_id, exc)
 
             # Structured questions for the interactive quiz player (worksheet/exam).
             # Additive + best-effort: a missing 'questions_json' enum value (migration

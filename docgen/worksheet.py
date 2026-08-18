@@ -1,7 +1,15 @@
-"""Worksheet generator → editable .docx.
+"""Worksheet generator → TWO editable .docx files.
 
-Reads `params`: {"num_questions": int, "difficulty": "easy|medium|hard",
-                 "include_answer_key": bool}
+Student/teacher document split (founder direction 2026-08-18): answer keys stay
+with the teacher/parent; students must never receive a document containing its
+own answers. Like docgen/exam.py, build() returns
+[worksheet_path, answer_key_path] — the student sheet carries questions only,
+and the key is a SEPARATE workbook-styled document (tinted answer_section
+panels) the worker uploads under its own artifact kind (answer_key_docx).
+
+Reads `params`: {"num_questions": int, "difficulty": "easy|medium|hard"}
+(`include_answer_key` is accepted but ignored: the key is always emitted as its
+own file — its presence as a sibling artifact is the app's proof the split ran.)
 A worksheet is practice-oriented (mixed short questions with working space),
 distinct from the formal exam paper — but, like the exam paper, questions are
 TYPED and GROUPED BY KIND (all fill-in-the-blanks together, etc.) and the
@@ -38,7 +46,7 @@ Put each question under the kind it belongs to (never mix kinds in one list).
 Leave a kind's list empty if it doesn't suit the content. Aim for {n} questions
 total across the kinds. Every question must be answerable from the chapter."""
 
-_DEFAULTS = {"num_questions": 10, "difficulty": "medium", "include_answer_key": True}
+_DEFAULTS = {"num_questions": 10, "difficulty": "medium"}
 
 
 def _dicts(items) -> list[dict]:
@@ -46,7 +54,7 @@ def _dicts(items) -> list[dict]:
 
 
 def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path,
-          template: str | None = None, language: str = "en") -> Path:
+          template: str | None = None, language: str = "en") -> list[Path]:
     p = {**_DEFAULTS, **(params or {})}
     try:
         n = max(1, min(40, int(p["num_questions"])))
@@ -80,12 +88,10 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     short = short[: max(0, remaining)]
 
     title = data.get("title") or f"{dx._t('doc_worksheet', language)} — {chapter_title}"
-    doc = dx.new_doc(
-        title,
-        f"{grade} · {subject}    |    {dx._t('difficulty', language)}: "
-        f"{dx.difficulty_label(p['difficulty'], language)}",
-        template=template, kind="worksheet", language=language,
-    )
+    subtitle = (f"{grade} · {subject}    |    {dx._t('difficulty', language)}: "
+                f"{dx.difficulty_label(p['difficulty'], language)}")
+    doc = dx.new_doc(title, subtitle, template=template, kind="worksheet",
+                     language=language)
     if data.get("instructions"):
         dx.instructions(doc, data["instructions"])
 
@@ -134,11 +140,17 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
             dx.writing_lines(doc, lines)  # ruled working space
         answers.append((name, [dx.txt(q.get("answer")) for q in short]))
 
-    if p.get("include_answer_key"):
-        doc.add_page_break()
-        dx.heading(doc, dx._t("answer_key", language), 0)
-        for sec_name, items in answers:
-            dx.answer_section(doc, sec_name, items)
+    # ── Answer key: a SEPARATE document (student/teacher split, 2026-08-18) ──
+    # Same workbook style (tinted answer_section panels) and the SAME `answers`
+    # list the sheet's sections were built from, so key item N always answers
+    # sheet item N — including the match-key letters, drawn from the same
+    # letters()/abjad sequence as the sheet's table. Panel numbering restarts
+    # at 1 inside this file — it is its own document.
+    key_doc = dx.new_doc(f"{title} — {dx._t('answer_key', language)}", subtitle,
+                         template=template, kind="worksheet", language=language)
+    dx.para(key_doc, dx._t("teacher_only", language), italic=True)
+    for sec_name, items in answers:
+        dx.answer_section(key_doc, sec_name, items)
 
     # Structured questions for the app's interactive quiz player (best-effort).
     try:
@@ -149,4 +161,6 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     except Exception as exc:  # noqa: BLE001
         logger.warning("questions.json (worksheet) skipped: %s", exc)
 
-    return dx.save(doc, out_dir / "worksheet.docx")
+    sheet_path = dx.save(doc, out_dir / "worksheet.docx")
+    key_path = dx.save(key_doc, out_dir / "worksheet_answer_key.docx")
+    return [sheet_path, key_path]

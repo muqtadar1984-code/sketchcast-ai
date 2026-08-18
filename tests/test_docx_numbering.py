@@ -87,8 +87,10 @@ _ACTIVITY_PAYLOAD = {
 
 
 def test_activity_steps_restart_at_one_per_activity(tmp_path):
-    out = activity.build(_BOOK, _CHAPTER, {}, _StubClient(_ACTIVITY_PAYLOAD),
-                         {"num_activities": 2}, tmp_path)
+    # DELIBERATE pin update (2026-08-18 student/teacher split): build() now
+    # returns [student_sheet, teacher_notes]; the steps live in the student sheet.
+    out, _notes = activity.build(_BOOK, _CHAPTER, {}, _StubClient(_ACTIVITY_PAYLOAD),
+                                 {"num_activities": 2}, tmp_path)
     doc = Document(str(out))
     _no_list_number(doc)
     texts = [_text(p) for p in _iter_paras(doc) if _text(p)]
@@ -99,7 +101,11 @@ def test_activity_steps_restart_at_one_per_activity(tmp_path):
     assert texts[second_steps + 3] == "3. Discuss"
 
 
-# ── exam_paper.py — inline answer key mirrors the paper's numbers ───────────────
+# ── exam_paper.py — separate answer key mirrors the paper's numbers ─────────────
+# DELIBERATE pin update (2026-08-18 student/teacher split): the answer key is no
+# longer an inline page — build() returns [paper, key] like exam.py, and the
+# numbering contract (key item N answers paper item N, every section restarts
+# at 1) now holds ACROSS the two files.
 
 _EXAM_PAPER_PAYLOAD = {
     "title": "Cells Test",
@@ -121,16 +127,16 @@ _EXAM_PAPER_PAYLOAD = {
 
 
 def test_exam_paper_key_numbers_match_paper(tmp_path):
-    out = exam_paper.build(_BOOK, _CHAPTER, {}, _StubClient(_EXAM_PAPER_PAYLOAD),
-                           {"objective": {"fill_blank": 2, "true_false": 2, "match_column": 2},
-                            "subjective": 1, "include_answer_key": True}, tmp_path)
-    doc = Document(str(out))
-    _no_list_number(doc)
-    secs = _sections(doc)
-    names = [name for name, _ in secs]
-    key_at = names.index("Answer Key")
-    paper = dict(secs[:key_at])
-    key = dict(secs[key_at + 1:])
+    paths = exam_paper.build(_BOOK, _CHAPTER, {}, _StubClient(_EXAM_PAPER_PAYLOAD),
+                             {"objective": {"fill_blank": 2, "true_false": 2, "match_column": 2},
+                              "subjective": 1}, tmp_path)
+    paper_doc, key_doc = Document(str(paths[0])), Document(str(paths[1]))
+    _no_list_number(paper_doc)
+    _no_list_number(key_doc)
+    paper = dict(_sections(paper_doc))
+    key = dict(_sections(key_doc))
+    # The student paper carries no answer-key page at all.
+    assert "Answer Key" not in paper
 
     # Every section restarts at 1; LLM-emitted "1." / "Q1)" prefixes stripped once.
     assert paper["Section A — Fill in the blanks"][0] == "1. The ____ controls the cell."
@@ -163,14 +169,10 @@ def test_exam_paper_stray_strings_cannot_skew_key_alignment(tmp_path):
             {"q": "Second real question.", "marks": 3, "answer_outline": "two"},
         ],
     }
-    out = exam_paper.build(_BOOK, _CHAPTER, {}, _StubClient(payload),
-                           {"objective": {"fill_blank": 1}, "subjective": 3,
-                            "include_answer_key": True}, tmp_path)
-    secs = _sections(Document(str(out)))
-    names = [name for name, _ in secs]
-    key_at = names.index("Answer Key")
-    paper = dict(secs[:key_at])
-    key = dict(secs[key_at + 1:])
+    paths = exam_paper.build(_BOOK, _CHAPTER, {}, _StubClient(payload),
+                             {"objective": {"fill_blank": 1}, "subjective": 3}, tmp_path)
+    paper = dict(_sections(Document(str(paths[0]))))
+    key = dict(_sections(Document(str(paths[1]))))
 
     subj = [t for t in paper["Section B — Long answer"] if re.match(r"\d+\.", t)]
     assert subj[0].startswith("1. First real question.")
@@ -183,7 +185,11 @@ def test_exam_paper_stray_strings_cannot_skew_key_alignment(tmp_path):
 
 def test_case_study_guidance_numbers_match_questions(tmp_path):
     """Same stray-string regression as the test paper: questions and teacher
-    notes must enumerate the same filtered list."""
+    notes must enumerate the same filtered list.
+
+    DELIBERATE pin update (2026-08-18 student/teacher split): the teacher notes
+    are now a SEPARATE document — guidance N still answers question N, but
+    across the two files."""
     payload = {
         "title": "Case",
         "scenario": "A scenario.",
@@ -193,12 +199,15 @@ def test_case_study_guidance_numbers_match_questions(tmp_path):
             {"q": "What limits cell size?", "guidance": "surface area"},
         ],
     }
-    out = case_study.build(_BOOK, _CHAPTER, {}, _StubClient(payload),
-                           {"num_questions": 3}, tmp_path)
-    secs = dict(_sections(Document(str(out))))
+    paths = case_study.build(_BOOK, _CHAPTER, {}, _StubClient(payload),
+                             {"num_questions": 3}, tmp_path)
+    secs = dict(_sections(Document(str(paths[0]))))
     qs = [t for t in secs["Discussion questions"] if re.match(r"\d+\.", t)]
     assert qs == ["1. Why did the cell divide?", "2. What limits cell size?"]
-    assert secs["Teacher notes — answer guidance"] == ["1. growth", "2. surface area"]
+    # The student document carries no teacher notes; the separate notes doc does.
+    assert "Teacher notes — answer guidance" not in secs
+    key_secs = dict(_sections(Document(str(paths[1]))))
+    assert key_secs["Teacher notes — answer guidance"] == ["1. growth", "2. surface area"]
 
 
 # ── exam.py — cumulative exam: separate key doc restarts per section ────────────

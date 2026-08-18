@@ -1,7 +1,16 @@
-"""In-class activities generator → editable .docx.
+"""In-class activities generator → TWO editable .docx files.
 
 Activities are run in the physical classroom, monitored and managed by the
-teacher — so each one carries explicit facilitation + grouping + timing notes."""
+teacher — so each one carries explicit facilitation + grouping + timing notes.
+
+Student/teacher document split (founder direction 2026-08-18): the teacher-only
+content (the intro overview, per-activity facilitation and success criteria —
+the "answers" of an activity) must never ride the student handout. Like
+docgen/exam.py, build() returns [student_sheet_path, teacher_notes_path]:
+the student sheet keeps everything a learner runs the activity from (name,
+objective, grouping, duration, materials, steps) and the teacher document
+carries the facilitation notes in workbook-style answer panels, enumerated
+Activity 1..N in the SAME order and count as the student sheet."""
 
 from __future__ import annotations
 
@@ -35,7 +44,7 @@ Produce EXACTLY {n} varied, hands-on activities tied to the chapter content."""
 
 
 def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path,
-          template: str | None = None, language: str = "en") -> Path:
+          template: str | None = None, language: str = "en") -> list[Path]:
     try:
         n = max(1, min(8, int((params or {}).get("num_activities", 4))))
     except (TypeError, ValueError):
@@ -47,15 +56,18 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     grounding = dx.chapter_grounding(book, chapter, analysis)
     data = client.analyze(prompt, max_tokens=3500, cache_prefix=grounding).get("data", {}) or {}
 
-    doc = dx.new_doc(f"{dx._t('doc_activities', language)} — {chapter_title}",
-                     f"{grade} · {subject}",
-                     template=template, kind="activity", language=language)
-    if data.get("intro"):
-        dx.instructions(doc, data["intro"])
+    title = f"{dx._t('doc_activities', language)} — {chapter_title}"
+    subtitle = f"{grade} · {subject}"
+    # Filter non-dicts ONCE — the student sheet and the teacher notes must
+    # enumerate the SAME list, or notes N stops describing Activity N.
+    acts = [a for a in (data.get("activities") or []) if isinstance(a, dict)]
 
-    for i, act in enumerate(data.get("activities", []), 1):
-        if not isinstance(act, dict):
-            continue
+    # ── Student sheet: everything a learner runs the activity from ──────────
+    # The intro ("overview for the teacher") and the per-activity facilitation
+    # and success criteria are teacher-only — they live in the second document.
+    doc = dx.new_doc(title, subtitle, template=template, kind="activity",
+                     language=language)
+    for i, act in enumerate(acts, 1):
         dx.heading(doc, f"{dx._t('activity', language)} {i}: "
                         f"{act.get('name', dx._t('activity', language))}", 1)
         dx.labelled(doc, dx._t("objective", language), act.get("objective", ""))
@@ -68,9 +80,30 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         if act.get("steps"):
             dx.para(doc, f"{dx._t('steps', language)}:", bold=True)
             dx.numbered(doc, act["steps"])
-        if act.get("teacher_facilitation"):
-            dx.labelled(doc, dx._t("teacher_facilitation", language), act["teacher_facilitation"])
-        if act.get("success_looks_like"):
-            dx.labelled(doc, dx._t("success_looks_like", language), act["success_looks_like"])
 
-    return dx.save(doc, out_dir / "activity.docx")
+    # ── Teacher notes: a SEPARATE document (student/teacher split, 2026-08-18)
+    # Same workbook style; one answer panel per activity, headed "Activity N:
+    # name" in the SAME order and count as the student sheet, so panel N always
+    # describes Activity N. Masthead reuses the localized teacher_facilitation
+    # string — no new docgen strings.
+    key_doc = dx.new_doc(f"{title} — {dx._t('teacher_facilitation', language)}",
+                         subtitle, template=template, kind="activity",
+                         language=language)
+    dx.para(key_doc, dx._t("teacher_only", language), italic=True)
+    if data.get("intro"):
+        dx.instructions(key_doc, data["intro"])
+    for i, act in enumerate(acts, 1):
+        items = []
+        if act.get("teacher_facilitation"):
+            items.append(f"{dx._t('teacher_facilitation', language)}: "
+                         f"{act['teacher_facilitation']}")
+        if act.get("success_looks_like"):
+            items.append(f"{dx._t('success_looks_like', language)}: "
+                         f"{act['success_looks_like']}")
+        dx.answer_section(key_doc, f"{dx._t('activity', language)} {i}: "
+                                   f"{act.get('name', dx._t('activity', language))}",
+                          items)
+
+    sheet_path = dx.save(doc, out_dir / "activity.docx")
+    key_path = dx.save(key_doc, out_dir / "activity_teacher_notes.docx")
+    return [sheet_path, key_path]

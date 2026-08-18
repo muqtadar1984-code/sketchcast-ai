@@ -72,12 +72,15 @@ _PAYLOAD = {
 
 
 def test_worksheet_docx_groups_by_type_and_tables_the_match(tmp_path):
-    out = worksheet.build(
+    # DELIBERATE pin update (2026-08-18 student/teacher split): build() now
+    # returns [student_sheet, answer_key]; the grouped sections and the match
+    # table live in the student sheet.
+    out, _key = worksheet.build(
         book={"grade": "Grade 7", "subject": "Science"},
         chapter={"title": "Cells", "sections": [{"section_title": "Cells", "content": "A cell is the basic unit."}]},
         analysis={},
         client=_StubClient(_PAYLOAD),
-        params={"num_questions": 10, "include_answer_key": True},
+        params={"num_questions": 10},
         out_dir=tmp_path,
     )
     doc = Document(str(out))
@@ -134,24 +137,28 @@ def _sections(doc):
 
 
 def test_numbering_restarts_per_section_and_key_matches_paper(tmp_path):
-    out = worksheet.build(
+    # DELIBERATE pin update (2026-08-18 student/teacher split): the answer key
+    # is now a SEPARATE document — the numbering contract (key item N answers
+    # paper item N) holds ACROSS the two files, and the student sheet carries
+    # no "Answer Key" page at all.
+    paths = worksheet.build(
         book={"grade": "Grade 7", "subject": "Science"},
         chapter={"title": "Cells", "sections": [{"section_title": "Cells", "content": "A cell is the basic unit."}]},
         analysis={},
         client=_StubClient(_NUMBERING_PAYLOAD),
-        params={"num_questions": 10, "include_answer_key": True},
+        params={"num_questions": 10},
         out_dir=tmp_path,
     )
-    doc = Document(str(out))
+    doc = Document(str(paths[0]))
+    key_doc = Document(str(paths[1]))
 
     # (c) Word's document-wide "List Number" counter must be gone entirely.
     assert all(p.style.name != "List Number" for p in doc.paragraphs)
+    assert all(p.style.name != "List Number" for p in key_doc.paragraphs)
 
-    secs = _sections(doc)
-    names = [name for name, _ in secs]
-    key_at = names.index("Answer Key")
-    paper = dict(secs[:key_at])
-    key = dict(secs[key_at + 1:])
+    paper = dict(_sections(doc))
+    key = dict(_sections(key_doc))
+    assert "Answer Key" not in paper
 
     # (a) every section restarts at 1 — True/False must not continue fill's count.
     assert paper["Section B — True or False"][0].startswith("1. ")
