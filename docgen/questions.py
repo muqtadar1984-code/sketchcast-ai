@@ -23,17 +23,22 @@ import json
 import logging
 from pathlib import Path
 
+from docgen.strings import _t, match_instruction
+
 logger = logging.getLogger("worker")
 
 
-def _write(out_dir: Path, title: str, instructions, questions: list[dict]) -> Path:
-    payload = {"title": title or "Quiz", "instructions": str(instructions or ""), "questions": questions}
+def _write(out_dir: Path, title: str, instructions, questions: list[dict],
+           language: str = "en") -> Path:
+    payload = {"title": title or _t("quiz", language),
+               "instructions": str(instructions or ""), "questions": questions}
     path = Path(out_dir) / "questions.json"
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
 
 
-def write_exam(out_dir: Path, title: str, instructions, fill, tf, match, subj) -> Path:
+def write_exam(out_dir: Path, title: str, instructions, fill, tf, match, subj,
+               language: str = "en") -> Path:
     qs: list[dict] = []
     i = 0
     for q in fill:
@@ -48,7 +53,7 @@ def write_exam(out_dir: Path, title: str, instructions, fill, tf, match, subj) -
              for p in (match or []) if isinstance(p, dict) and str(p.get("left", "")).strip()]
     if pairs:
         i += 1
-        qs.append({"id": f"q{i}", "type": "match", "prompt": "Match each item in Column A to the correct item in Column B.", "pairs": pairs, "marks": len(pairs)})
+        qs.append({"id": f"q{i}", "type": "match", "prompt": match_instruction(language), "pairs": pairs, "marks": len(pairs)})
     for q in subj:
         if isinstance(q, dict) and str(q.get("q", "")).strip():
             i += 1
@@ -57,10 +62,11 @@ def write_exam(out_dir: Path, title: str, instructions, fill, tf, match, subj) -
             except (TypeError, ValueError):
                 marks = 5
             qs.append({"id": f"q{i}", "type": "subjective", "prompt": str(q.get("q", "")), "answer_outline": str(q.get("answer_outline", "")), "marks": marks})
-    return _write(out_dir, title, instructions, qs)
+    return _write(out_dir, title, instructions, qs, language)
 
 
-def write_worksheet(out_dir: Path, title: str, instructions, fill, tf, match, short) -> Path:
+def write_worksheet(out_dir: Path, title: str, instructions, fill, tf, match, short,
+                    language: str = "en") -> Path:
     """Typed, grouped worksheet → the quiz player's unified schema. Mirrors
     write_exam but the free-response section is `short` (with answers) rather than
     long-form `subjective`. Grouped so the player renders one section per kind."""
@@ -78,9 +84,9 @@ def write_worksheet(out_dir: Path, title: str, instructions, fill, tf, match, sh
              for p in (match or []) if isinstance(p, dict) and str(p.get("left", "")).strip()]
     if pairs:
         i += 1
-        qs.append({"id": f"q{i}", "type": "match", "prompt": "Match each item in Column A to the correct item in Column B.", "pairs": pairs, "marks": len(pairs)})
+        qs.append({"id": f"q{i}", "type": "match", "prompt": match_instruction(language), "pairs": pairs, "marks": len(pairs)})
     for q in (short or []):
         if isinstance(q, dict) and str(q.get("q", "")).strip():
             i += 1
             qs.append({"id": f"q{i}", "type": "short", "prompt": str(q.get("q", "")), "answer": str(q.get("answer", "")), "marks": 1})
-    return _write(out_dir, title, instructions, qs)
+    return _write(out_dir, title, instructions, qs, language)

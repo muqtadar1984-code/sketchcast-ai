@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import logging
 import random
-import string
 from pathlib import Path
 
 from docgen import docx_builder as dx
@@ -143,11 +142,13 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     rights = [str(p.get("right", "")) for p in match]
     order = list(range(len(rights)))
     random.shuffle(order)
-    letters = list(string.ascii_uppercase)
+    # ONE localized letter sequence (A B C… / أ ب ج…) shared by the marks
+    # table, section headings, MCQ options, match options, and BOTH keys.
+    letters = dx.letters(language)
 
     teacher_title = str((params or {}).get("title") or "").strip()
-    title = teacher_title or data.get("title") or "Exam"
-    subtitle = f"{grade} · {subject} · {difficulty.capitalize()}"
+    title = teacher_title or data.get("title") or dx._t("doc_exam", language)
+    subtitle = f"{grade} · {subject} · {dx.difficulty_label(difficulty, language).capitalize()}"
 
     # Per-section marks (fill/tf/match default 1 per item; the rest use each
     # question's real marks value) — feeds the examiner marks table, which
@@ -166,19 +167,27 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
 
     def coverage_line(doc) -> None:
         if coverage:
-            dx.para(doc, "This paper covers: " + "; ".join(coverage), italic=True)
+            dx.para(doc, dx._t("paper_covers", language) + " " + "; ".join(coverage),
+                    italic=True)
+
+    def _mcq_key_letter(q: dict) -> str:
+        """Map the model's ASCII answer letter (A-D) into the document's own
+        sequence, so an Arabic key grades against أ) ب) ج) د) options."""
+        a = dx.txt(q.get("answer")).strip().upper()[:1]
+        i = ord(a) - ord("A") if a else -1
+        return letters[i] if 0 <= i < len(letters) else (a or "?")
 
     # ── Exam paper (questions only) ─────────────────────────────────────────────
     paper = dx.new_doc(title, subtitle, template=template, kind="exam", language=language)
-    dx.marks_table(paper, [(chr(ord("A") + i), m) for i, m in enumerate(section_marks)])
+    dx.marks_table(paper, [(letters[i], m) for i, m in enumerate(section_marks)])
     coverage_line(paper)
     if data.get("instructions"):
         dx.instructions(paper, str(data["instructions"]))
 
-    sec = ord("A")
+    sec = 0
 
     if mcq:
-        dx.heading(paper, f"Section {chr(sec)} — Multiple choice", 1)
+        dx.heading(paper, dx.section_heading(language, sec, "sec_mcq"), 1)
         for i, q in enumerate(mcq, 1):
             dx.question(paper, f"{i}. {dx.strip_leading_number(q.get('q', ''))}   [{_marks(q, 1)}]",
                         first=(i == 1))
@@ -188,30 +197,30 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         sec += 1
 
     if fill:
-        dx.heading(paper, f"Section {chr(sec)} — Fill in the blanks", 1)
+        dx.heading(paper, dx.section_heading(language, sec, "sec_fill_blank"), 1)
         dx.numbered(paper, [dx.strip_leading_number(str(q.get("q", ""))) for q in fill])
         sec += 1
 
     if tf:
-        dx.heading(paper, f"Section {chr(sec)} — True or False", 1)
+        dx.heading(paper, dx.section_heading(language, sec, "sec_true_false"), 1)
         dx.tf_boxes(paper, [dx.strip_leading_number(str(q.get("statement", ""))) for q in tf])
         sec += 1
 
     if lefts:
-        dx.heading(paper, f"Section {chr(sec)} — Match the columns", 1)
+        dx.heading(paper, dx.section_heading(language, sec, "sec_match"), 1)
         rows = [[f"{i + 1}. {left}", f"{letters[i]}. {rights[order[i]]}"] for i, left in enumerate(lefts)]
-        dx.table(paper, ["Column A", "Column B"], rows)
+        dx.table(paper, [dx.column_label(language, 0), dx.column_label(language, 1)], rows)
         sec += 1
 
     if short:
-        dx.heading(paper, f"Section {chr(sec)} — Short answer", 1)
+        dx.heading(paper, dx.section_heading(language, sec, "sec_short"), 1)
         for i, q in enumerate(short, 1):
             dx.question(paper, f"{i}. {dx.strip_leading_number(q.get('q', ''))}   [{_marks(q, 2)}]",
                         first=(i == 1))
         sec += 1
 
     if long_:
-        dx.heading(paper, f"Section {chr(sec)} — Long answer", 1)
+        dx.heading(paper, dx.section_heading(language, sec, "sec_long"), 1)
         for i, q in enumerate(long_, 1):
             dx.question(paper, f"{i}. {dx.strip_leading_number(q.get('q', ''))}   [{_marks(q, 5)}]",
                         first=(i == 1))
@@ -220,35 +229,37 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     paper_path = dx.save(paper, out_dir / "exam.docx")
 
     # ── Answer key (separate document) ──────────────────────────────────────────
-    key = dx.new_doc(f"{title} — Answer Key", subtitle, template=template,
-                     kind="exam", language=language)
+    key = dx.new_doc(f"{title} — {dx._t('answer_key', language)}", subtitle,
+                     template=template, kind="exam", language=language)
     coverage_line(key)
-    dx.para(key, "For the teacher only — not for distribution to students.", italic=True)
+    dx.para(key, dx._t("teacher_only", language), italic=True)
 
-    ks = ord("A")
+    ks = 0
 
     if mcq:
-        dx.heading(key, f"Section {chr(ks)} — Multiple choice", 2)
-        dx.numbered(key, [dx.txt(q.get('answer')).strip().upper()[:1] or '?' for q in mcq])
+        dx.heading(key, dx.section_heading(language, ks, "sec_mcq"), 2)
+        dx.numbered(key, [_mcq_key_letter(q) for q in mcq])
         ks += 1
     if fill:
-        dx.heading(key, f"Section {chr(ks)} — Fill in the blanks", 2)
+        dx.heading(key, dx.section_heading(language, ks, "sec_fill_blank"), 2)
         dx.numbered(key, [dx.txt(q.get("answer")) for q in fill])
         ks += 1
     if tf:
-        dx.heading(key, f"Section {chr(ks)} — True or False", 2)
-        dx.numbered(key, ["True" if q.get("answer") else "False" for q in tf])
+        dx.heading(key, dx.section_heading(language, ks, "sec_true_false"), 2)
+        # Same localized pair as the paper's T/F cue (strings.tf_word).
+        dx.numbered(key, [dx.tf_word(q.get("answer"), language) for q in tf])
         ks += 1
     if lefts:
-        dx.heading(key, f"Section {chr(ks)} — Match the columns", 2)
+        dx.heading(key, dx.section_heading(language, ks, "sec_match"), 2)
+        # Letters drawn from the SAME sequence as the paper's match table.
         dx.numbered(key, [letters[order.index(i)] for i in range(len(lefts))])
         ks += 1
     if short:
-        dx.heading(key, f"Section {chr(ks)} — Short answer", 2)
+        dx.heading(key, dx.section_heading(language, ks, "sec_short"), 2)
         dx.numbered(key, [dx.txt(q.get("answer")) for q in short])
         ks += 1
     if long_:
-        dx.heading(key, f"Section {chr(ks)} — Long answer", 2)
+        dx.heading(key, dx.section_heading(language, ks, "sec_long"), 2)
         dx.numbered(key, [dx.txt(q.get("answer_outline")) for q in long_])
 
     key_path = dx.save(key, out_dir / "exam_answer_key.docx")

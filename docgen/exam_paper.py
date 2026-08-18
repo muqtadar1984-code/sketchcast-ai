@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import random
-import string
 from pathlib import Path
 
 from docgen import docx_builder as dx
@@ -58,7 +57,7 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     n_fill, n_tf, n_match, n_subj, want_key = _counts(params)
     grade = book.get("grade") or "school"
     subject = book.get("subject") or "general"
-    chapter_title = chapter.get("title") or "Chapter"
+    chapter_title = chapter.get("title") or dx._t("chapter", language)
 
     prompt = PROMPT.format(n_fill=n_fill, n_tf=n_tf, n_match=n_match, n_subj=n_subj)
     grounding = dx.chapter_grounding(book, chapter, analysis)
@@ -74,11 +73,16 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     match = _dicts(data.get("match_column"))[:n_match]
     subj = _dicts(data.get("subjective"))[:n_subj]
 
+    title = data.get("title") or f"{dx._t('doc_test_paper', language)} — {chapter_title}"
     doc = dx.new_doc(
-        data.get("title") or f"Test Paper — {chapter_title}",
+        title,
         f"{grade} · {subject}",
         template=template, kind="exam_paper", language=language,
     )
+
+    # ONE localized letter sequence (A B C… / أ ب ج…) shared by the marks
+    # table, section headings, match options, and the answer key.
+    letters = dx.letters(language)
 
     # Examiner marks summary: fill/tf/match default to 1 mark per item,
     # subjective uses each question's real marks value (default 5).
@@ -90,66 +94,66 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
             return 5
 
     marks_entries: list[tuple[str, int]] = []
-    letter = ord("A")
     for present, total in ((fill, len(fill)), (tf, len(tf)), (match, len(match)),
                            (subj, sum(_subj_marks(q) for q in subj))):
         if present:
-            marks_entries.append((chr(letter), total))
-            letter += 1
+            marks_entries.append((letters[len(marks_entries)], total))
     if marks_entries:
         dx.marks_table(doc, marks_entries)
 
     if data.get("instructions"):
         dx.instructions(doc, data["instructions"])
 
-    section = ord("A")
+    si = 0
     answers: list[tuple[str, list[str]]] = []
 
     if fill:
-        dx.heading(doc, f"Section {chr(section)} — Fill in the blanks", 1)
+        name = dx.section_heading(language, si, "sec_fill_blank")
+        dx.heading(doc, name, 1)
         dx.numbered(doc, [dx.strip_leading_number(str(q.get("q", ""))) for q in fill])
-        answers.append((f"Section {chr(section)} — Fill in the blanks",
-                        [dx.txt(q.get("answer")) for q in fill]))
-        section += 1
+        answers.append((name, [dx.txt(q.get("answer")) for q in fill]))
+        si += 1
 
     if tf:
-        dx.heading(doc, f"Section {chr(section)} — True or False", 1)
+        name = dx.section_heading(language, si, "sec_true_false")
+        dx.heading(doc, name, 1)
         dx.tf_boxes(doc, [dx.strip_leading_number(str(q.get("statement", ""))) for q in tf])
-        answers.append((f"Section {chr(section)} — True or False",
-                        ["True" if q.get("answer") else "False" for q in tf]))
-        section += 1
+        # Key values = the SAME localized pair the tf_boxes cue names.
+        answers.append((name, [dx.tf_word(q.get("answer"), language) for q in tf]))
+        si += 1
 
     if match:
-        dx.heading(doc, f"Section {chr(section)} — Match the columns", 1)
+        name = dx.section_heading(language, si, "sec_match")
+        dx.heading(doc, name, 1)
         lefts = [dx.txt(p.get("left")) for p in match]
         rights = [dx.txt(p.get("right")) for p in match]
         order = list(range(len(rights)))
         random.shuffle(order)
-        letters = list(string.ascii_uppercase)
         rows = []
         for i, left in enumerate(lefts):
-            shuffled_pos = order.index(i)  # where the correct right ended up
             rows.append([f"{i + 1}. {left}", f"{letters[i]}. {rights[order[i]]}"])
-        dx.table(doc, ["Column A", "Column B"], rows)
-        # answer key: bare letters — numbered() supplies the question numbers
+        dx.table(doc, [dx.column_label(language, 0), dx.column_label(language, 1)], rows)
+        # answer key: bare letters — numbered() supplies the question numbers;
+        # drawn from the SAME sequence as the table, or the key is un-gradeable
         key_lines = [letters[order.index(i)] for i in range(len(lefts))]
-        answers.append((f"Section {chr(section)} — Match the columns", key_lines))
-        section += 1
+        answers.append((name, key_lines))
+        si += 1
 
     if subj:
-        dx.heading(doc, f"Section {chr(section)} — Long answer", 1)
+        name = dx.section_heading(language, si, "sec_long")
+        dx.heading(doc, name, 1)
         for i, q in enumerate(subj, 1):
             marks = q.get("marks", "")
             dx.question(doc, f"{i}. {dx.strip_leading_number(q.get('q', ''))}"
-                        + (f"   [{marks} marks]" if marks else ""), first=(i == 1))
-        answers.append((f"Section {chr(section)} — Long answer",
-                        [dx.txt(q.get("answer_outline")) for q in subj]))
+                        + (f"   {dx.marks_bracket(marks, language)}" if marks else ""),
+                        first=(i == 1))
+        answers.append((name, [dx.txt(q.get("answer_outline")) for q in subj]))
 
     dx.end_of_paper(doc)
 
     if want_key:
         doc.add_page_break()
-        dx.heading(doc, "Answer Key", 0)
+        dx.heading(doc, dx._t("answer_key", language), 0)
         for sec_name, items in answers:
             dx.heading(doc, sec_name, 2)
             dx.numbered(doc, items)
@@ -157,8 +161,9 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     # Structured questions for the app's interactive quiz player (best-effort).
     try:
         from docgen.questions import write_exam
-        write_exam(out_dir, data.get("title") or f"Test Paper — {chapter_title}",
-                   data.get("instructions"), fill, tf, match, subj)
+        write_exam(out_dir, title,
+                   data.get("instructions"), fill, tf, match, subj,
+                   language=language)
     except Exception as exc:  # noqa: BLE001
         logger.warning("questions.json (exam) skipped: %s", exc)
 

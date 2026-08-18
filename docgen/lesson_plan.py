@@ -39,7 +39,7 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
 
     grade = book.get("grade") or "school"
     subject = book.get("subject") or "general"
-    chapter_title = chapter.get("title") or "Chapter"
+    chapter_title = chapter.get("title") or dx._t("chapter", language)
     prompt = PROMPT.format(
         duration=duration,
         homework_field=',\n  "homework": ["..."]' if want_homework else "",
@@ -48,50 +48,52 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     grounding = dx.chapter_grounding(book, chapter, analysis)
     data = client.analyze(prompt, max_tokens=3000, cache_prefix=grounding).get("data", {}) or {}
 
+    minutes_text = dx._t("n_minutes", language).format(n=data.get("duration_minutes", duration))
     doc = dx.new_doc(
-        data.get("title") or f"Lesson Plan — {chapter_title}",
-        f"{grade} · {subject}    |    Duration: {data.get('duration_minutes', duration)} minutes",
+        data.get("title") or f"{dx._t('doc_lesson_plan', language)} — {chapter_title}",
+        f"{grade} · {subject}    |    {dx._t('duration', language)}: {minutes_text}",
         template=template, kind="lesson_plan", language=language,
     )
 
-    dx.heading(doc, "Learning objectives", 1)
+    dx.heading(doc, dx._t("learning_objectives", language), 1)
     dx.bullets(doc, data.get("learning_objectives", []))
 
     if data.get("materials"):
-        dx.heading(doc, "Materials", 1)
+        dx.heading(doc, dx._t("materials", language), 1)
         dx.bullets(doc, data["materials"])
 
     vocab = data.get("key_vocabulary", [])
     if vocab:
-        dx.heading(doc, "Key vocabulary", 1)
+        dx.heading(doc, dx._t("key_vocabulary", language), 1)
         dx.table(
-            doc, ["Term", "Definition"],
+            doc, [dx._t("term", language), dx._t("definition", language)],
             [[v.get("term", ""), v.get("definition", "")] for v in vocab if isinstance(v, dict)],
         )
 
     flow = data.get("lesson_flow", [])
     if flow:
-        dx.heading(doc, "Lesson flow", 1)
+        dx.heading(doc, dx._t("lesson_flow", language), 1)
         dx.table(
-            doc, ["Phase", "Min", "Teacher does", "Students do"],
+            doc, [dx._t("phase", language), dx._t("min_col", language),
+                  dx._t("teacher_does", language), dx._t("students_do", language)],
             [[f.get("phase", ""), f.get("minutes", ""), f.get("teacher_does", ""), f.get("students_do", "")]
              for f in flow if isinstance(f, dict)],
         )
 
     if data.get("assessment"):
-        dx.heading(doc, "Assessment", 1)
+        dx.heading(doc, dx._t("assessment", language), 1)
         dx.bullets(doc, data["assessment"])
 
     if data.get("homework"):
-        dx.heading(doc, "Homework", 1)
+        dx.heading(doc, dx._t("homework", language), 1)
         dx.bullets(doc, data["homework"])
 
     diff = data.get("differentiation") or {}
     if diff:
-        dx.heading(doc, "Differentiation", 1)
+        dx.heading(doc, dx._t("differentiation", language), 1)
         if diff.get("support"):
-            dx.labelled(doc, "Support", diff["support"])
+            dx.labelled(doc, dx._t("support", language), diff["support"])
         if diff.get("challenge"):
-            dx.labelled(doc, "Challenge", diff["challenge"])
+            dx.labelled(doc, dx._t("challenge", language), diff["challenge"])
 
     return dx.save(doc, out_dir / "lesson_plan.docx")

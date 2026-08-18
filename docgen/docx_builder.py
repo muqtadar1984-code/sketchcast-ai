@@ -41,6 +41,22 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
+# User-visible strings + enumeration letters, localized for every lesson
+# language, live in docgen/strings.py (one table, one _t). Re-exported here so
+# the builders keep their single `docgen import docx_builder as dx` import.
+from docgen.strings import (  # noqa: F401  (re-exports used by builders)
+    RTL_LANGS as _RTL_LANGS,
+    _STRINGS,
+    _t,
+    column_label,
+    difficulty_label,
+    letters,
+    marks_bracket,
+    match_instruction,
+    section_heading,
+    tf_word,
+)
+
 # Legacy palette (kept for compatibility with older imports).
 GREEN = RGBColor(0x2E, 0x6B, 0x4E)
 GREY = RGBColor(0x6F, 0x6A, 0x5F)
@@ -100,10 +116,6 @@ STYLE_BY_KIND: dict[str, str] = {
 _HAIR = "D9DEE4"       # hairline table border (classroom)
 _DOT_GREY = "C7CFCE"   # dotted separators (workbook)
 
-# RTL lesson languages (mirrors shared/languages.py without importing it, so
-# docgen stays importable in isolation for tests).
-_RTL_LANGS = {"ar", "ms-arab"}
-
 # Complex-script (w:cs) font per script family: Georgia/Times/Calibri carry no
 # Arabic — Word needs an explicit cs font or it substitutes unpredictably.
 _CS_FONTS = {
@@ -112,53 +124,6 @@ _CS_FONTS = {
     "_default": {"ar": "Arial", "ms-arab": "Arial",
                  "hi": "Nirmala UI", "mr": "Nirmala UI", "te": "Nirmala UI"},
 }
-
-
-# ── New user-visible strings, localized for every lesson language ────────────
-# The section-heading strings the builders emit are pinned by tests and kept
-# verbatim; only strings the STYLE LAYER introduces are added here, translated
-# for all ten lesson languages (shared/languages.py). Unknown codes → English.
-_STRINGS: dict[str, dict[str, str]] = {
-    "section": {
-        "en": "Section", "ms": "Bahagian", "ar": "القسم", "fr": "Section",
-        "es": "Sección", "pt": "Seção", "te": "విభాగం", "mr": "विभाग",
-        "hi": "खंड", "ms-arab": "بهاݢين",
-    },
-    "marks": {
-        "en": "Marks", "ms": "Markah", "ar": "الدرجات", "fr": "Points",
-        "es": "Puntos", "pt": "Pontos", "te": "మార్కులు", "mr": "गुण",
-        "hi": "अंक", "ms-arab": "مرکه",
-    },
-    "total": {
-        "en": "Total", "ms": "Jumlah", "ar": "المجموع", "fr": "Total",
-        "es": "Total", "pt": "Total", "te": "మొత్తం", "mr": "एकूण",
-        "hi": "कुल", "ms-arab": "جومله",
-    },
-    "tf_box_cue": {
-        "en": "Write True or False in each box.",
-        "ms": "Tulis Benar atau Palsu dalam setiap petak.",
-        "ar": "اكتب صواب أو خطأ في كل مربع.",
-        "fr": "Écrivez Vrai ou Faux dans chaque case.",
-        "es": "Escribe Verdadero o Falso en cada casilla.",
-        "pt": "Escreva Verdadeiro ou Falso em cada caixa.",
-        "te": "ప్రతి పెట్టెలో నిజం లేదా అబద్ధం అని రాయండి.",
-        "mr": "प्रत्येक चौकटीत खरे किंवा खोटे लिहा.",
-        "hi": "प्रत्येक बॉक्स में सही या गलत लिखें।",
-        "ms-arab": "توليس بنر اتاو ڤلسو دالم ستياڤ ڤتق.",
-    },
-    "end_of_paper": {
-        "en": "END OF PAPER", "ms": "KERTAS SOALAN TAMAT",
-        "ar": "نهاية الورقة", "fr": "FIN DE L'ÉPREUVE",
-        "es": "FIN DEL EXAMEN", "pt": "FIM DA PROVA",
-        "te": "పరీక్షా పత్రం ముగిసింది", "mr": "प्रश्नपत्रिका समाप्त",
-        "hi": "प्रश्न पत्र समाप्त", "ms-arab": "کرتس سوءالن تامت",
-    },
-}
-
-
-def _t(key: str, lang: str) -> str:
-    table = _STRINGS[key]
-    return table.get((lang or "en").strip().lower()) or table["en"]
 
 
 # ── Per-document context ─────────────────────────────────────────────────────
@@ -1049,7 +1014,11 @@ def tf_boxes(doc: Document, statements: Iterable[str]) -> None:
     if not items:
         return
     cue = _p(doc, ctx, after=6, left=_Q_INDENT)
-    _run(cue, _t("tf_box_cue", ctx.lang), ctx, size=10, italic=True)
+    # The cue names the SAME localized True/False pair the answer key prints
+    # (strings.tf_word) — one table entry serves both, so they can never drift.
+    cue_text = _t("tf_box_cue", ctx.lang).format(
+        t=tf_word(True, ctx.lang), f=tf_word(False, ctx.lang))
+    _run(cue, cue_text, ctx, size=10, italic=True)
 
     rows = 2 * len(items) - 1  # spacer rows between box rows keep boxes apart
     t = doc.add_table(rows=rows, cols=3)

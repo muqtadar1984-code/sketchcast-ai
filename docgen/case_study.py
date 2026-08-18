@@ -44,23 +44,23 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         n = 4
     grade = book.get("grade") or "school"
     subject = book.get("subject") or "general"
-    chapter_title = chapter.get("title") or "Chapter"
+    chapter_title = chapter.get("title") or dx._t("chapter", language)
 
     prompt = PROMPT.format(words=_WORDS[length], n=n)
     grounding = dx.chapter_grounding(book, chapter, analysis)
     data = client.analyze(prompt, max_tokens=4096, cache_prefix=grounding).get("data", {}) or {}
 
     doc = dx.new_doc(
-        data.get("title") or f"Case Study — {chapter_title}",
+        data.get("title") or f"{dx._t('doc_case_study', language)} — {chapter_title}",
         f"{grade} · {subject}",
         template=template, kind="case_study", language=language,
     )
 
     if data.get("background"):
-        dx.heading(doc, "Background", 1)
+        dx.heading(doc, dx._t("background", language), 1)
         dx.bullets(doc, data["background"])
 
-    dx.heading(doc, "Scenario", 1)
+    dx.heading(doc, dx._t("scenario", language), 1)
     for para in str(data.get("scenario", "")).split("\n\n"):
         if para.strip():
             dx.para(doc, para.strip())
@@ -69,19 +69,19 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     # same list, or a stray string skews guidance numbers off the questions.
     qs = [q for q in (data.get("discussion_questions") or []) if isinstance(q, dict)][:n]
     if qs:
-        dx.heading(doc, "Discussion questions", 1)
+        dx.heading(doc, dx._t("discussion_questions", language), 1)
         for i, q in enumerate(qs, 1):
             dx.question(doc, f"{i}. {dx.strip_leading_number(q.get('q', ''))}", first=(i == 1))
 
     if data.get("concepts_applied"):
-        dx.heading(doc, "Concepts applied", 1)
+        dx.heading(doc, dx._t("concepts_applied", language), 1)
         dx.bullets(doc, data["concepts_applied"])
 
     # Teacher notes: answer guidance (kept on a separate page). Same list as
     # the questions above, so guidance N always answers question N.
     if any(q.get("guidance") for q in qs):
         doc.add_page_break()
-        dx.heading(doc, "Teacher notes — answer guidance", 0)
+        dx.heading(doc, dx._t("teacher_notes", language), 0)
         dx.numbered(doc, [dx.txt(q.get("guidance")) for q in qs])
 
     return dx.save(doc, out_dir / "case_study.docx")

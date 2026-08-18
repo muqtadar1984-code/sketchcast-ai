@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import random
-import string
 from pathlib import Path
 
 from docgen import docx_builder as dx
@@ -55,7 +54,7 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         n = 10
     grade = book.get("grade") or "school"
     subject = book.get("subject") or "general"
-    chapter_title = chapter.get("title") or "Chapter"
+    chapter_title = chapter.get("title") or dx._t("chapter", language)
 
     prompt = PROMPT.format(difficulty=p["difficulty"], n=n)
     grounding = dx.chapter_grounding(book, chapter, analysis)
@@ -80,46 +79,52 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         remaining -= 1
     short = short[: max(0, remaining)]
 
+    title = data.get("title") or f"{dx._t('doc_worksheet', language)} — {chapter_title}"
     doc = dx.new_doc(
-        data.get("title") or f"Worksheet — {chapter_title}",
-        f"{grade} · {subject}    |    Difficulty: {p['difficulty']}",
+        title,
+        f"{grade} · {subject}    |    {dx._t('difficulty', language)}: "
+        f"{dx.difficulty_label(p['difficulty'], language)}",
         template=template, kind="worksheet", language=language,
     )
     if data.get("instructions"):
         dx.instructions(doc, data["instructions"])
 
-    section = ord("A")
+    # Section + match letters come from ONE localized sequence (A B C… /
+    # أ ب ج…) shared by headings, tables, and the answer key.
+    letters = dx.letters(language)
+    si = 0
     answers: list[tuple[str, list[str]]] = []
 
     if fill:
-        dx.heading(doc, f"Section {chr(section)} — Fill in the blanks", 1)
+        name = dx.section_heading(language, si, "sec_fill_blank")
+        dx.heading(doc, name, 1)
         dx.numbered(doc, [dx.strip_leading_number(str(q.get("q", ""))) for q in fill])
-        answers.append((f"Section {chr(section)} — Fill in the blanks", [dx.txt(q.get("answer")) for q in fill]))
-        section += 1
+        answers.append((name, [dx.txt(q.get("answer")) for q in fill]))
+        si += 1
 
     if tf:
-        dx.heading(doc, f"Section {chr(section)} — True or False", 1)
+        name = dx.section_heading(language, si, "sec_true_false")
+        dx.heading(doc, name, 1)
         dx.numbered(doc, [dx.strip_leading_number(str(q.get("statement", ""))) for q in tf])
-        answers.append((f"Section {chr(section)} — True or False",
-                        ["True" if q.get("answer") else "False" for q in tf]))
-        section += 1
+        answers.append((name, [dx.tf_word(q.get("answer"), language) for q in tf]))
+        si += 1
 
     if match:
-        dx.heading(doc, f"Section {chr(section)} — Match the columns", 1)
-        dx.para(doc, "Match each item in Column A to the correct item in Column B.", italic=True)
+        name = dx.section_heading(language, si, "sec_match")
+        dx.heading(doc, name, 1)
+        dx.para(doc, dx.match_instruction(language), italic=True)
         lefts = [str(pr.get("left", "")) for pr in match]
         rights = [str(pr.get("right", "")) for pr in match]
         order = list(range(len(rights)))
         random.shuffle(order)  # shuffle Column B so it's a real matching task
-        letters = list(string.ascii_uppercase)
         rows = [[f"{i + 1}. {lefts[i]}", f"{letters[i]}. {rights[order[i]]}"] for i in range(len(lefts))]
-        dx.table(doc, ["Column A", "Column B"], rows)
-        answers.append((f"Section {chr(section)} — Match the columns",
-                        [letters[order.index(i)] for i in range(len(lefts))]))
-        section += 1
+        dx.table(doc, [dx.column_label(language, 0), dx.column_label(language, 1)], rows)
+        answers.append((name, [letters[order.index(i)] for i in range(len(lefts))]))
+        si += 1
 
     if short:
-        dx.heading(doc, f"Section {chr(section)} — Short answer", 1)
+        name = dx.section_heading(language, si, "sec_short")
+        dx.heading(doc, name, 1)
         for i, q in enumerate(short, 1):
             dx.question(doc, f"{i}. {dx.strip_leading_number(q.get('q', ''))}", first=(i == 1))
             try:
@@ -127,19 +132,20 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
             except (TypeError, ValueError):
                 lines = 2
             dx.writing_lines(doc, lines)  # ruled working space
-        answers.append((f"Section {chr(section)} — Short answer", [dx.txt(q.get("answer")) for q in short]))
+        answers.append((name, [dx.txt(q.get("answer")) for q in short]))
 
     if p.get("include_answer_key"):
         doc.add_page_break()
-        dx.heading(doc, "Answer Key", 0)
+        dx.heading(doc, dx._t("answer_key", language), 0)
         for sec_name, items in answers:
             dx.answer_section(doc, sec_name, items)
 
     # Structured questions for the app's interactive quiz player (best-effort).
     try:
         from docgen.questions import write_worksheet
-        write_worksheet(out_dir, data.get("title") or f"Worksheet — {chapter_title}",
-                        data.get("instructions"), fill, tf, match, short)
+        write_worksheet(out_dir, title,
+                        data.get("instructions"), fill, tf, match, short,
+                        language=language)
     except Exception as exc:  # noqa: BLE001
         logger.warning("questions.json (worksheet) skipped: %s", exc)
 
