@@ -917,11 +917,17 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     f"{book.get('title', 'Lesson')} · "
                     f"{part_label(chapter_title, part_ref, part_total, pk.get('section_titles'))}"
                 )
-            elif n_parts > 1:
-                db.merge_generation_params(sb, generation_id, {"video_parts": uploaded_videos})
-                title = f"{book.get('title', 'Lesson')} · {chapter_title} ({uploaded_videos} parts)"
             else:
-                title = f"{book.get('title', 'Lesson')} · {ep_title}"
+                # Every chapter-level render reports its delivered part count,
+                # including 1 — app migration 0089 seeds the credit ledger from
+                # the book's part-map at insert, and the sync trigger can only
+                # correct that estimate (down as well as up) on a value the
+                # worker actually wrote. Nothing in the app reads this key.
+                db.merge_generation_params(sb, generation_id, {"video_parts": uploaded_videos})
+                if n_parts > 1:
+                    title = f"{book.get('title', 'Lesson')} · {chapter_title} ({uploaded_videos} parts)"
+                else:
+                    title = f"{book.get('title', 'Lesson')} · {ep_title}"
 
         elif kind in ("lesson_plan", "activity", "exam_paper", "worksheet", "case_study"):
             # Claude-authored teacher document → editable .docx.
