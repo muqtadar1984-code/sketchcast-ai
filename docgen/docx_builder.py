@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Iterable
 
 from docx import Document
+from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT, WD_TAB_LEADER
 from docx.oxml import OxmlElement
@@ -281,6 +282,40 @@ def _run(p, text: str, ctx: _Ctx, *, size: float | None = None,
     return run
 
 
+def _ensure_style(doc: Document, name: str):
+    """doc.styles[name], fabricating the style when the base document lacks it.
+
+    Branded documents build on a teacher's UPLOADED letterhead .docx, and Word
+    keeps its built-in styles LATENT until a document actually uses them — so
+    a perfectly normal letterhead defines no 'Title'/'Heading N', python-docx
+    cannot see latent styles, and doc.styles['Title'] raises KeyError
+    (2026-08-18 prod failure: every document for a letterhead user died with
+    "no style with name 'Title'"). Fabricate a minimal definition instead:
+    same name, based on Normal (mandatory in every valid docx), outline level
+    for Heading N so Word's navigation pane still sees the headings. Every
+    visual property is direct-formatted by the callers, so the fabricated
+    style needs no look of its own.
+    """
+    try:
+        return doc.styles[name]
+    except KeyError:
+        pass
+    st = doc.styles.add_style(name, WD_STYLE_TYPE.PARAGRAPH, builtin=True)
+    try:
+        st.base_style = doc.styles["Normal"]
+    except KeyError:
+        pass  # a styles part without Normal is broken beyond our care
+    st.quick_style = True
+    m = re.fullmatch(r"Heading (\d)", name)
+    if m:
+        # w:outlineLvl is what the navigation pane reads; python-docx has no API.
+        ppr = st.element.get_or_add_pPr()
+        lvl = OxmlElement("w:outlineLvl")
+        lvl.set(qn("w:val"), str(int(m.group(1)) - 1))
+        ppr.append(lvl)
+    return st
+
+
 def _p(doc: Document, ctx: _Ctx, *, align=None, before: float = 0,
        after: float = 0, left=None, hang=None, line=None, style: str | None = None):
     """New body paragraph with direction handling.
@@ -292,7 +327,7 @@ def _p(doc: Document, ctx: _Ctx, *, align=None, before: float = 0,
     w:ind left/hanging, so hanging indents mirror to the right edge for free.
     Callers that need a specific physical side pass `align` themselves and
     account for the swap."""
-    par = doc.add_paragraph(style=style)
+    par = doc.add_paragraph(style=_ensure_style(doc, style) if style else None)
     pf = par.paragraph_format
     pf.space_before = Pt(before)
     pf.space_after = Pt(after)
@@ -503,7 +538,7 @@ def _bar(doc: Document, ctx: _Ctx, text: str, fill: str, text_color: str,
     p = _fmt_cell_par(cell, ctx)
     # Real Heading/Title style so Word's navigation (and the tests) still see
     # a heading; every visual property is overridden by direct formatting.
-    p.style = doc.styles[heading_style]
+    p.style = _ensure_style(doc, heading_style)
     p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(0)
     _p_border(p, "bottom", val="nil")  # Title style's built-in rule off
@@ -802,9 +837,21 @@ def labelled(doc: Document, label: str, value: str) -> None:
 
 def bullets(doc: Document, items: Iterable[str]) -> None:
     ctx = _ctx(doc)
+    # A fabricated "List Bullet" would carry no numbering part — items would
+    # render flush and markless. On a letterhead that lacks the style, a
+    # literal glyph with a matching indent is the honest fallback (mirrors to
+    # the right edge under bidi like every logical-start run).
+    try:
+        bullet_style = doc.styles["List Bullet"]
+    except KeyError:
+        bullet_style = None
     for it in items:
         if str(it).strip():
-            p = doc.add_paragraph(str(it), style="List Bullet")
+            if bullet_style is not None:
+                p = doc.add_paragraph(str(it), style=bullet_style)
+            else:
+                p = doc.add_paragraph(f"• {it}")
+                p.paragraph_format.left_indent = Pt(18)
             p.paragraph_format.space_after = Pt(3)
             for run in p.runs:
                 run.font.name = ctx.style.body_font
@@ -1082,7 +1129,7 @@ def answer_section(doc: Document, heading_text: str, items: Iterable[str]) -> No
     _shade_cell(cell, tint)
     _cell_margins(cell, top=140, left=240, bottom=150, right=200)
     ph = _fmt_cell_par(cell, ctx)
-    ph.style = doc.styles["Heading 2"]
+    ph.style = _ensure_style(doc, "Heading 2")
     ph.paragraph_format.space_before = Pt(0)
     ph.paragraph_format.space_after = Pt(4)
     if ctx.rtl:
