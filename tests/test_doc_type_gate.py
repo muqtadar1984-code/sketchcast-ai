@@ -121,9 +121,17 @@ def test_no_classification_at_all_behaves_like_unknown():
     assert h["facts"]["doc_type_confidence"] == 0.0
 
 
-def test_a_thin_single_unit_fragment_without_a_toc_gates():
-    # 6 pages, one unit, no outline: a fragment, not a book. But the same six
-    # pages WITH a PDF outline is a deliberate little document — not gated.
+def test_a_thin_single_unit_fragment_gates_and_a_bookmark_cannot_excuse_it():
+    # 6 pages, one unit: a fragment, not a book.
+    #
+    # This test used to assert the OPPOSITE for the outlined case — "the same
+    # six pages WITH a PDF outline is a deliberate little document, not gated".
+    # That exemption died with the founder's 2026-08-24 decision that PDF
+    # bookmarks are ignored ENTIRELY: a bookmark can no longer build a chapter,
+    # so it cannot vouch for a document either. It was also the last place a
+    # bookmark still bought trust, and one junk bookmark — 'Untitled-1.indd',
+    # the exact class the deleted rung existed to filter — was enough to wave a
+    # 7-page fragment through the gate.
     frag = compute_book_health(_extraction(6, 0.9, 4000), _chaps(1))
     assert frag["gate"] == "confirm"
     assert any("may not be teaching material" in p for p in frag["problems"])
@@ -132,7 +140,16 @@ def test_a_thin_single_unit_fragment_without_a_toc_gates():
         _extraction(6, 0.9, 4000, toc=[SimpleNamespace(level=1, title="A", page_num=0)]),
         _chaps(1),
     )
-    assert outlined["gate"] == "none"
+    assert outlined["gate"] == "confirm", "a PDF outline must not excuse a fragment"
+
+    junk_outlined = compute_book_health(
+        _extraction(6, 0.9, 4000,
+                    toc=[SimpleNamespace(level=1, title="Untitled-1.indd", page_num=0)]),
+        _chaps(1),
+    )
+    assert junk_outlined["gate"] == "confirm"
+    # Same verdict with and without the outline — the bookmark is inert.
+    assert frag["gate"] == outlined["gate"] == junk_outlined["gate"]
 
 
 def test_a_junk_category_from_a_bad_payload_cannot_gate():

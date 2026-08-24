@@ -24,6 +24,7 @@ from __future__ import annotations
 import bisect
 import statistics
 
+from agent1_ingestion.chapter_quality import assess_chapter_map, uncovered_pages
 from shared.scripts import SPACELESS_SCRIPTS, script_profile
 
 # ── Text-layer QUALITY thresholds ────────────────────────────────────────────
@@ -306,22 +307,35 @@ _MIN_REPORTABLE_UNMAPPED = 3
 _MAX_UNMAPPED_TAIL_SHARE = 0.25
 
 
-def _unmapped_tail_pages(chapter_defs: list[dict], total_pages: int) -> int:
-    """How many pages past the last chapter's end nothing covers.
+def _unmapped_page_report(
+    chapter_defs: list[dict], total_pages: int, apparatus: list[dict] | None = None
+) -> tuple[int, int, int]:
+    """``(total_unmapped, mid_holes, tail)`` — pages no chapter covers.
+
+    ``apparatus`` ranges (recorded non-chapter sections — glossary, index,
+    contents; founder decision 2026-08-24) are subtracted before anything is
+    counted: a deliberate, RECORDED exclusion is not a detection hole, and
+    without the subtraction every correctly-trimmed book would report its own
+    glossary as "pages that won't be taught" and gate on it.
+
+    This used to be a tail-only measure, and that is exactly how Sara Junaidi's
+    book (e0459f87, 2026-08-23) reported ``facts.unmapped_pages = 0`` while 36
+    pages (26-61) belonged to no chapter: the hole was MID-BOOK, opened after
+    every validator had run by a heal relocation plus ``_clamp_overlaps``, and
+    ``(total_pages-1) - max(end_pages)`` cannot see anything before the last
+    chapter's end. Now measured as the interval union (chapter_quality) — holes
+    anywhere count. The HEAD gap (front matter before chapter 1) deliberately
+    does not: a cover, contents and preface before the first chapter is normal
+    book anatomy, and counting it would condemn every healthy book.
 
     Silent when the map carries no page bounds at all — a caller that only has
     titles is not making a claim about coverage.
     """
-    ends = []
-    for c in chapter_defs or []:
-        try:
-            ends.append(int(c["end_page"]))
-        except (KeyError, TypeError, ValueError):
-            continue
-    if not ends or total_pages <= 0:
-        return 0
-    gap = (total_pages - 1) - max(ends)
-    return gap if gap >= _MIN_REPORTABLE_UNMAPPED else 0
+    gaps = uncovered_pages(chapter_defs, total_pages, apparatus=apparatus)
+    total = gaps["holes"] + gaps["tail"]
+    if total < _MIN_REPORTABLE_UNMAPPED:
+        return 0, 0, 0
+    return total, gaps["holes"], gaps["tail"]
 
 
 def _band(score: int) -> str:
@@ -360,10 +374,47 @@ _KNOWN_DOC_TYPES = frozenset({
 })
 _GATE_MAX_PAGES = 3   # at most a leaflet — no book is 3 pages
 _GATE_THIN_PAGES = 8  # under this AND one unit AND no outline = a fragment
+# Mid-book holes big enough to gate on: pages BETWEEN chapters that no chapter
+# covers are always a detection defect (unlike a tail, which is usually
+# unbookmarked back matter). 10 pages / 5% of the book keeps a couple of
+# blank-divider pages from gating; the incident's hole was 36 pages (10.6%).
+_GATE_HOLE_PAGES = 10
+_GATE_HOLE_SHARE = 0.05
+# One detected unit gates as soon as that unit would be SPLIT INTO BILLABLE
+# PARTS — not at an arbitrary page count.
+#
+# This was 120 (structurer._SHAPE_MIN_PAGES) and it left a measured hole: the
+# part estimator in worker/process.py has no floor of its own, so a one-unit
+# map bills ceil(pages * 250 / 1500) rows, capped at 12. Measured 2026-08-24
+# across the window this constant used to leave open: 20pp -> 4 parts, 60pp ->
+# 10, 100pp -> TWELVE billable credits — every one of them ungated, on exactly
+# the detection failure the arm exists to catch (a zero-text scan that found no
+# chapters and fell back to the whole book). The dialog has to arrive before the
+# credits, so the threshold is the point where a single unit stops being ONE row.
+#
+# 7 pages is that point: 7 * 250 = 1,750 words, which is ceil(1750/1500) = 2
+# parts, while 6 pages is exactly 1,500 = one part. Both numbers mirror
+# worker/process.py (EST_WORDS_PER_PAGE, and MAX_PART_WORDS from
+# agent2_analysis.analyzer) — deliberately NOT imported, per this module's
+# convention that health's thresholds stay self-contained and directly tested;
+# test_book_health pins the arithmetic so a change to either constant fails
+# here rather than silently reopening the window.
+_ONE_UNIT_GATE_PAGES = 7
 
 
-def compute_book_health(extraction, chapter_defs: list[dict], doc_type: dict | None = None) -> dict:
+def compute_book_health(
+    extraction,
+    chapter_defs: list[dict],
+    doc_type: dict | None = None,
+    apparatus: list[dict] | None = None,
+) -> dict:
     """Return {score, band, gate, dimensions, facts, problems, recommendation, note}.
+
+    ``apparatus`` is the structurer's recorded non-chapter sections (glossary,
+    index, contents… — founder decision 2026-08-24). They are stamped into
+    ``facts.apparatus`` so the exclusion is queryable, and their pages are
+    subtracted from the unmapped-pages guardrail: recorded exclusions are
+    deliberate, not detection holes.
 
     dimensions each 0-100:
       text_layer — is the text machine-readable, and across how many pages?
@@ -385,6 +436,24 @@ def compute_book_health(extraction, chapter_defs: list[dict], doc_type: dict | N
     n_chapters = len(chapter_defs or [])
     quality = text_quality(extraction)
     unreadable_text = has_text and not quality["ok"]
+
+    # Chapter-QUALITY verdict, independent of which detection rung won (the
+    # structurer runs the same checks to demote a rung, but health must judge
+    # the STORED list too: pre-fix books re-indexed, healed lists, restored
+    # coarse fallbacks). This is the dimension the Sara incident proved
+    # missing: 13 junk bookmarks scored structure 95 because the only
+    # structure signal was n_chapters >= 3 — count, not quality, the
+    # university-stress-test failure shape all over again.
+    chap_quality = assess_chapter_map(chapter_defs or [], total_pages)
+    # …and the heal's own low-confidence markers. heal_chapter_boundaries
+    # stamps relocation="suspect" on a chapter whose pages don't match its
+    # title and could not be repaired; until 2026-08-23 the store step DROPPED
+    # that marker, so the one suspicion signal the pipeline already produced
+    # never reached health or the app.
+    reloc_suspects = sum(
+        1 for c in (chapter_defs or [])
+        if c.get("relocation") == "suspect" or c.get("suspect")
+    )
 
     problems: list[str] = []
     note: str | None = None
@@ -434,19 +503,54 @@ def compute_book_health(extraction, chapter_defs: list[dict], doc_type: dict | N
         structure = min(structure, 55)
         problems.append("Very short document — there may not be enough content to teach from.")
 
+    # ── chapter QUALITY (not count) ───────────────────────────────────────────
+    # The count rule above scored the Sara incident's 13 junk bookmarks 95.
+    # A suspect list caps structure below the count floor for a SINGLE unit,
+    # because 13 wrong boundaries are worse than one honest whole-book chapter
+    # — each one bills a kit that teaches across its real unit's edges.
+    if chap_quality["suspect"]:
+        structure = min(structure, 45)
+        problems.append(
+            "The detected chapter list doesn't look like this book's real chapters ("
+            + "; ".join(chap_quality["reasons"])
+            + "). Check the chapter list before generating — lessons follow these boundaries."
+        )
+    if reloc_suspects:
+        structure = min(structure, 70)
+        problems.append(
+            f"{reloc_suspects} chapter{'s' if reloc_suspects != 1 else ''} whose pages "
+            "don't match their titles couldn't be repaired automatically — lessons for "
+            "them may cover the wrong pages."
+        )
+
     # ── pages no chapter covers ───────────────────────────────────────────────
     # The structurer bounds how far the LAST chapter may stretch, so when
     # detection stops early the tail is left unmapped rather than bolted onto a
     # 7-page chapter. That is the right trade, but it must never be silent:
     # unmapped pages are never extracted, never analysed and never taught, and
-    # the teacher has no other way to find out.
-    unmapped_tail = _unmapped_tail_pages(chapter_defs, total_pages)
+    # the teacher has no other way to find out. Holes BETWEEN chapters count
+    # too — see _unmapped_page_report.
+    unmapped_tail, unmapped_mid, tail_only = _unmapped_page_report(
+        chapter_defs, total_pages, apparatus
+    )
     if unmapped_tail:
         structure = min(structure, 70)
-        problems.append(
-            f"The last {unmapped_tail} pages aren't covered by any chapter — chapter "
-            "detection stopped before the end of the book, so those pages won't be taught."
-        )
+        if unmapped_mid and tail_only:
+            problems.append(
+                f"{unmapped_tail} pages aren't covered by any chapter — {unmapped_mid} of them "
+                "sit BETWEEN detected chapters and the rest past the last one, so those pages "
+                "won't be taught."
+            )
+        elif unmapped_mid:
+            problems.append(
+                f"{unmapped_mid} pages in the middle of the book aren't covered by any chapter "
+                "— the detected boundaries skip them, so those pages won't be taught."
+            )
+        else:
+            problems.append(
+                f"The last {unmapped_tail} pages aren't covered by any chapter — chapter "
+                "detection stopped before the end of the book, so those pages won't be taught."
+            )
 
     # ── junk-upload gate (soft confirm — the app asks, the worker never blocks) ──
     # Ordered most-diagnostic first: a category names WHAT the document is, the
@@ -472,11 +576,63 @@ def compute_book_health(extraction, chapter_defs: list[dict], doc_type: dict | N
             f"This document is only {total_pages} page{'s' if total_pages != 1 else ''} — "
             "too short to be teaching material."
         )
-    elif n_chapters <= 1 and total_pages < _GATE_THIN_PAGES and not getattr(extraction, "toc", None):
+    elif n_chapters <= 1 and total_pages < _GATE_THIN_PAGES:
+        # The `not extraction.toc` clause that used to guard this arm is GONE
+        # (2026-08-24). It treated the mere PRESENCE of a PDF bookmark outline as
+        # evidence of a real book, so a single junk bookmark — the exact artefact
+        # the founder ruled must be ignored entirely — exempted a 7-page fragment
+        # from this gate. Measured before removal: a 7-page one-chapter extraction
+        # gated "confirm" with toc=[], and gated "none" with
+        # toc=[TOCItem(level=1, title='Untitled-1.indd', page_num=0)]. A bookmark
+        # cannot vouch for anything now that no bookmark can build a chapter.
         gate = "confirm"
         problems.append(
-            "A few pages, a single unit and no table of contents — this may not be teaching material."
+            "Only a few pages and a single unit — this may not be teaching material."
         )
+
+    # ── chapter-quality gate arm ──────────────────────────────────────────────
+    # Every rule above asks "is this junk MATERIAL?"; none asked "is this a
+    # junk MAP?" — which is how a genuine Cambridge textbook with 13 junk
+    # bookmark chapters, a 36-page hole and 11/12-part credit estimates gated
+    # "none" (Sara Junaidi, 2026-08-23). A low-confidence chapter list now
+    # rides the SAME soft-confirm: all 9 insert surfaces show "Generate
+    # anyway?" quoting problems[] — and a diagnostic sentence is guaranteed
+    # present, because each trigger below appended its own sentence in the
+    # structure section. Soft by design; the teacher can always proceed.
+    # The unmapped share gates too — mid-book holes are not the only way a map
+    # loses a book. The likeliest exit for a long scan is the vision rescue,
+    # whose detector reads only the first ~120 pages and leaves the REST as an
+    # unmapped tail: on the incident's own 341-page book that exit produced 3
+    # chapters, 110 uncovered pages (32%) and 27 estimated parts — and gated
+    # "none", because only mid holes were tested. Same 25% threshold that caps
+    # the score to 69 below; the unmapped block above already appended the
+    # problems[] sentence the dialog quotes.
+    # The one-unit arm exists for the bookmark-removal world (2026-08-24): a
+    # zero-text scan indexed with no client now collapses to ONE whole-book
+    # chapter instead of riding junk bookmarks, and the founder contract for
+    # that book ("never 13 silent good chapters") demands a sane list OR a
+    # gated one — a 341-page book as one unit is a detection failure worth a
+    # dialog, never business as usual. 120 is structurer._SHAPE_MIN_PAGES,
+    # kept in step not imported: below it one chapter legitimately IS the
+    # document.
+    # Whether the gate fired for a STRUCTURE reason is recorded, not left for
+    # the app to reverse-engineer. src/utils/junk-gate.ts keyed its
+    # structure-problem copy on facts.chapter_quality.suspect alone, so the
+    # three arms below that gate WITHOUT setting suspect — one whole-book unit,
+    # an oversized unmapped tail, repeated relocation suspicion — rendered
+    # "Doesn't look like a textbook" over a genuine textbook whose only fault
+    # was a bad map. Two independent reviewers hit it on the founder's own
+    # Cambridge scan (2026-08-24). The app cannot infer this correctly from the
+    # doc-type label either (that mistake predates it), so the worker states it.
+    structure_problem = bool(
+        chap_quality["suspect"]
+        or unmapped_mid >= max(_GATE_HOLE_PAGES, _GATE_HOLE_SHARE * total_pages)
+        or unmapped_tail > _MAX_UNMAPPED_TAIL_SHARE * total_pages
+        or reloc_suspects >= 2
+        or (n_chapters <= 1 and total_pages >= _ONE_UNIT_GATE_PAGES)
+    )
+    if gate == "none" and structure_problem:
+        gate = "confirm"
 
     # ── overall (structure weighted a touch higher) ───────────────────────────
     score = round(text_layer * 0.45 + structure * 0.55)
@@ -521,14 +677,55 @@ def compute_book_health(extraction, chapter_defs: list[dict], doc_type: dict | N
             "foreign-language reprint). Lessons will be built by reading the pages, but a "
             "text-based PDF of the same book would produce noticeably better ones."
         )
+    elif chap_quality["suspect"]:
+        # NEVER advise "a PDF with a real table of contents" here again. Chapters
+        # are read from the PAGES now — a PDF outline is ignored entirely
+        # (founder, 2026-08-24) — so that advice sent a teacher hunting for a
+        # property this system no longer looks at. It was also actively wrong on
+        # the book that prompted the rule: the founder's own Cambridge scan ships
+        # a correct 13-entry outline naming all 9 units at their true pages, and
+        # still indexed badly. What actually helps is a copy whose PAGES read
+        # well, and the report button when they do not.
+        recommendation = (
+            "Open the chapter list on this book's row and check it against the real book. "
+            "If the chapters look wrong, use \"Report an issue\" — or re-upload a clearer "
+            "copy, ideally a text-based (digitally exported) PDF rather than a scan."
+        )
+    elif unmapped_tail > _MAX_UNMAPPED_TAIL_SHARE * total_pages:
+        # The ladder had no arm for a large unmapped tail, so the `not has_text`
+        # arm below caught these and said "This scan will work" — while
+        # problems[] two lines away reported that hundreds of pages had not been
+        # mapped at all. Measured on the founder's 339-page Cambridge scan when
+        # the contents route yields nothing: 3 chapters covering pages 9-116 and
+        # 223 unmapped pages (66%), recommended as fine. The reader is owed the
+        # truth and the one action that helps, which is not "a clearer scan" —
+        # the pages were legible, the STRUCTURE was not found past the front.
+        pct = int(round(100.0 * unmapped_tail / max(1, total_pages)))
+        recommendation = (
+            f"Only the first part of this book was mapped into chapters — about {pct}% of the "
+            "pages are not covered by any chapter, so lessons cannot be made from them. Check "
+            "the chapter list, and if the book really continues past the last chapter shown, "
+            "use \"Report an issue\" so we can look at it."
+        )
     elif has_text and text_layer <= 68:
         recommendation = "Upload a higher-quality scan or a text-based PDF so the full content is captured."
     elif n_chapters <= 1:
-        recommendation = "If this book has chapters, a version with a table of contents or clearer chapter headings will split it into per-chapter lessons."
+        # Same correction as the suspect arm above: chapter HEADINGS on the pages
+        # are what split a book now, and a table of contents is not consulted.
+        recommendation = "If this book has chapters, a clearer copy with readable chapter headings will split it into per-chapter lessons."
     elif not has_text:
         recommendation = "This scan will work, but a clearer scan or a text-based PDF would produce the best lessons."
     else:
         recommendation = "Review the detected chapters before generating."
+
+    # A gated or suspect book must never carry the reassuring "works well"
+    # note. In the Sara incident the note ("Scanned book — read by AI vision
+    # (works well…)") rendered in the health badge BESIDE the nonsense chapter
+    # list, because the scanned branch sets it unconditionally and the badge
+    # renders it unconditionally (book-health-badge.tsx). Suppressing it here,
+    # worker-side, needs no app change.
+    if gate == "confirm" or chap_quality["suspect"] or reloc_suspects:
+        note = None
 
     return {
         "score": int(score),
@@ -555,7 +752,40 @@ def compute_book_health(extraction, chapter_defs: list[dict], doc_type: dict | N
             "spacing_measured": quality["spacing_measured"],
             "median_token": quality["median_token"],
             "script": quality["script"],
+            # ALL pages no chapter covers (mid-book holes + tail; head/front
+            # matter excluded, and RECORDED apparatus ranges subtracted — a
+            # deliberate exclusion is not a hole). Was tail-only — which
+            # printed 0 while 36 pages were orphaned mid-book. Same key name,
+            # honest number.
             "unmapped_pages": unmapped_tail,
+            "unmapped_mid_pages": unmapped_mid,
+            # The recorded non-chapter sections (founder decision 2026-08-24:
+            # apparatus is not a chapter) — never listed as chapters, never
+            # part-split, but queryable here so support/console can see WHY
+            # the pages past the last unit are deliberately untaught.
+            "apparatus": [
+                {"title": str(a.get("title") or "")[:120],
+                 "start_page": int(a.get("start_page", 0)),
+                 "end_page": int(a.get("end_page", 0)),
+                 "kind": str(a.get("kind") or "apparatus")}
+                for a in (apparatus or [])
+            ],
+            # TRUE when the gate fired because the MAP is wrong rather than
+            # because the DOCUMENT is junk — the app reads this to choose
+            # "check this book's chapters" over "doesn't look like a textbook".
+            # Strictly broader than chapter_quality.suspect: a one-unit map, an
+            # oversized unmapped tail and repeated relocation suspicion are all
+            # structure faults that leave `suspect` False. Absent on rows
+            # indexed before 2026-08-24, which is why the app still falls back
+            # to `suspect` (see junk-gate.ts).
+            "structure_problem": structure_problem,
+            # The chapter-quality verdict and the heal's surviving suspicion
+            # markers — the gate arm's inputs, queryable by support/console.
+            "chapter_quality": {
+                "suspect": bool(chap_quality["suspect"]),
+                "reasons": chap_quality["reasons"],
+            },
+            "suspect_chapters": reloc_suspects,
         },
         "problems": problems,
         "recommendation": recommendation,

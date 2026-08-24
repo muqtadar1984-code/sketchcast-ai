@@ -1195,7 +1195,17 @@ def index_book(sb: Client, job: dict) -> None:
         try:
             from agent1_ingestion.book_health import compute_book_health
 
-            health = compute_book_health(extraction, structured.get("chapters", []), doc_type=doc_type)
+            # structured["apparatus"] (founder decision 2026-08-24): the
+            # cover/contents/glossary/index ranges the structurer EXCLUDED from
+            # the chapter list. Health stamps them into facts.apparatus and
+            # subtracts their pages from the unmapped-pages guardrail, so the
+            # deliberate exclusion is never reported as a detection hole — and
+            # because they are not chapters, they are never part-split into
+            # credit rows below either.
+            health = compute_book_health(
+                extraction, structured.get("chapters", []), doc_type=doc_type,
+                apparatus=structured.get("apparatus") or [],
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("book health skipped for %s: %s", book_id, exc)
 
@@ -1224,7 +1234,16 @@ def index_book(sb: Client, job: dict) -> None:
          # Textbook figure specs (Phase 3) detected above, where the PDF + page range
          # were available; generation crops them. Present only when figures were found.
          **({"figures": figure_specs[int(c["chapter_num"])]}
-            if int(c.get("chapter_num", -1)) in figure_specs else {})}
+            if int(c.get("chapter_num", -1)) in figure_specs else {}),
+         # The heal's low-confidence marker SURVIVES to storage. It used to be
+         # dropped right here — heal_chapter_boundaries stamps
+         # relocation="suspect" on a chapter whose pages don't match its title
+         # and couldn't be repaired, and this trim was the only place the one
+         # suspicion signal the pipeline produced went to die (Sara Junaidi's
+         # book, 2026-08-23: every mismatched-but-unrelocatable chapter stored
+         # clean). book_health reads it from structured chapters; the app can
+         # now read it from books.chapters too.
+         **({"suspect": True} if c.get("relocation") == "suspect" else {})}
         for c in structured.get("chapters", [])
     ]
 
@@ -1335,6 +1354,16 @@ def index_book(sb: Client, job: dict) -> None:
         EST_WORDS_PER_PAGE = 250
         MAX_ESTIMATED_PARTS = 12  # a mis-detected chapter must not bill 40 kits
 
+        # A page-count estimate is only as real as the page range under it, and
+        # a gated book's ranges are exactly what health just called suspect. On
+        # Sara Junaidi's book (2026-08-23) two junk bookmark "chapters" of 66
+        # and 85 pages estimated 11 and 12 parts — 59 across the book, one
+        # credit each behind "Generate all". The gate dialog now fronts every
+        # insert surface, and each estimated part additionally carries
+        # low_confidence so the app/console can tell a measured "Part 4 of 12"
+        # from fiction. (The app ignores unknown keys — no app change needed.)
+        low_confidence_map = bool(health and health.get("gate") == "confirm")
+
         def parts_from_pages(ch: dict) -> list[dict]:
             try:
                 start = int(ch.get("start_page", 0))
@@ -1349,7 +1378,9 @@ def index_book(sb: Client, job: dict) -> None:
             per = pages * EST_WORDS_PER_PAGE // n
             # `estimated` is not read by the app — it marks these as inferred so
             # a later audit can tell them from measured ones.
-            return [{"titles": [], "words": per, "estimated": True} for _ in range(n)]
+            return [{"titles": [], "words": per, "estimated": True,
+                     **({"low_confidence": True} if low_confidence_map else {})}
+                    for _ in range(n)]
 
         s_by_num = {}
         for c in structured.get("chapters", []):
@@ -1467,5 +1498,8 @@ def index_book(sb: Client, job: dict) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("language detection skipped for %s: %s", book_id, exc)
 
-    logger.info("Indexed book %s: %d chapter(s), grade=%s subject=%s cover=%s relocated=%s ocr_cleared=%s",
-                book_id, len(chapters), grade, subject, bool(cover_dest), relocated_nums, changed)
+    logger.info(
+        "Indexed book %s: %d chapter(s), %d apparatus, grade=%s subject=%s cover=%s relocated=%s ocr_cleared=%s",
+        book_id, len(chapters), len(structured.get("apparatus") or []),
+        grade, subject, bool(cover_dest), relocated_nums, changed,
+    )

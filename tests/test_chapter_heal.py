@@ -93,7 +93,8 @@ def test_parse_openers_range_guard():
     # (printed number) -> dropped.
     data = {"openers": [{"image_number": 3, "title": "A"}, {"image_number": 99, "title": "B"}]}
     pairs = vc._parse_openers(data, list(range(20, 40)))
-    assert pairs == [(22, "A")]
+    # A reply without a "kind" field degrades to "unit" (pre-apparatus shape).
+    assert pairs == [(22, "A", "unit")]
 
 
 # ── Layer B: verifier catches descriptive titles; strict confirms primary topic ─
@@ -361,6 +362,39 @@ def test_relocate_incomplete_on_detection_outage(monkeypatch):
     requested = {"chapter_num": 2, "title": "Computer storage", "start_page": 33, "end_page": 42}
     out = vc.relocate_chapter_for_generation("x.pdf", Ext(), requested, _VerifyClient())
     assert out["status"] == "incomplete"
+
+
+def test_index_heal_refuses_a_hole_opening_relocation(monkeypatch):
+    # Sara Junaidi's book (e0459f87, 2026-08-23): the heal relocated a chapter
+    # owning pages 22-61 onto a 4-page vision unit; _clamp_overlaps shrank it
+    # to 22-25 while the next chapter still started at 62, and pages 26-61 —
+    # 36 pages — fell out of the book. _validate_chapter_list cannot see a
+    # hole (non-contiguity is structurally valid), so the heal must re-measure
+    # what it LEAVES BEHIND and refuse a relocation that uncovers a material
+    # share of the book — a suspect label is recoverable at generation time; a
+    # hole is not.
+    stored = [
+        {"chapter_num": 0, "title": "Introduction", "start_page": 0, "end_page": 21},
+        {"chapter_num": 1, "title": "Paper chromatography", "start_page": 22, "end_page": 61},
+        {"chapter_num": 2, "title": "Forces", "start_page": 62, "end_page": 87},
+    ]
+    tiny_unit = [{"chapter_num": 0, "title": "Paper chromatography", "start_page": 22, "end_page": 25}]
+    _patch_heal(monkeypatch, tiny_unit, mismatched=(1,))
+    healed, relocated = vc.heal_chapter_boundaries("x.pdf", Ext(), stored, object())
+    assert relocated == []
+    flagged = next(c for c in healed if c["chapter_num"] == 1)
+    # Pages kept (no hole), suspicion kept (health gates on the marker).
+    assert (flagged["start_page"], flagged["end_page"]) == (22, 61)
+    assert flagged["relocation"] == "suspect"
+
+
+def test_index_heal_still_accepts_a_small_legitimate_loss(monkeypatch):
+    # The other side of the bound, pinned so the refusal cannot creep: the
+    # Mona relocation (chapter moved OFF pages it never owned) loses 5 of 88
+    # pages and must keep working exactly as test_index_heal_relocates pins.
+    _patch_heal(monkeypatch, _correct_units())
+    healed, relocated = vc.heal_chapter_boundaries("x.pdf", Ext(), _mona_stored(), object())
+    assert relocated == [2]
 
 
 def test_relocate_incomplete_on_empty_ocr(monkeypatch):

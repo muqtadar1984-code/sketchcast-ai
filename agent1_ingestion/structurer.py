@@ -12,12 +12,13 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from agent1_ingestion.chapter_quality import assess_chapter_map, split_apparatus
 from agent1_ingestion.config import PROCESSED_DIR
-from agent1_ingestion.extractor import DocItem, ExtractionResult, TOCItem
+from agent1_ingestion.extractor import DocItem, ExtractionResult
 from agent1_ingestion.image_extractor import ExtractedImage
-from agent1_ingestion.models import (ChapterContent, ImageInfo, ImagePosition,
-                                     KeyBox, Section, StructuredBook,
-                                     Subsection, TOCEntry)
+from agent1_ingestion.models import (ApparatusEntry, ChapterContent, ImageInfo,
+                                     ImagePosition, KeyBox, Section,
+                                     StructuredBook, Subsection, TOCEntry)
 
 logger = logging.getLogger(__name__)
 
@@ -55,96 +56,31 @@ def _detect_key_box(text: str) -> Optional[tuple[str, str]]:
     return None
 
 
-_SECTION_NUMBER_RE = re.compile(r"^\s*\d{1,2}\.\d")
-
-
-def _toc_chapters_at_depth(toc: list[TOCItem], depth: int, total_pages: int) -> list[dict]:
-    """Chapter boundary dicts from the outline entries at exactly ``depth``.
-
-    A unit ends where the next entry at THIS depth **or shallower** begins, so a
-    level-2 chapter stops at the next level-1 Part rather than running on into
-    it. At depth 1 that is identical to the old "next level-1 entry" rule.
-    """
-    positions = [i for i, item in enumerate(toc) if item.level == depth]
-    chapters: list[dict] = []
-    for k, i in enumerate(positions):
-        item = toc[i]
-        nxt = next((t.page_num for t in toc[i + 1:] if t.level <= depth), None)
-        chapters.append({
-            "chapter_num": k,
-            "title": item.title,
-            "start_page": item.page_num,
-            "end_page": (nxt - 1) if nxt is not None else total_pages - 1,
-        })
-    return chapters
-
-
-def _depth_is_sections(entries: list[TOCItem]) -> bool:
-    """True when a depth's titles are numbered SECTIONS ("3.2 Feedback loops")
-    rather than chapters. Descending into these would shatter a book into
-    dozens of pseudo-chapters — the opposite failure to the one being fixed."""
-    if not entries:
-        return False
-    numbered = sum(1 for t in entries if _SECTION_NUMBER_RE.match(t.title or ""))
-    return numbered * 2 > len(entries)
-
-
-def _toc_map_at_depth(toc: list[TOCItem], depth: int, total_pages: int) -> list[dict]:
-    """The chapter map for one outline depth, REPAIRED.
-
-    Repair is not optional here, and leaving it out was a regression in its own
-    right. Two bookmarks on the same page — Preface + Acknowledgements, Contents
-    + "How to use this book", a Part title and the chapter that opens on the
-    same page — make ``_toc_chapters_at_depth`` emit ``end_page = start_page - 1``
-    and a repeated start, and ``_ranges_valid`` rejects both. That is an entirely
-    ordinary outline: judged unrepaired, a 200-page book with 9 real chapters
-    plus a Preface and an Acknowledgements on page 4 failed at depth 1 and
-    descended to depth 2, turning 9 chapters into 27 pseudo-chapters — and with
-    them the teacher's credits, assignments and library rows.
-
-    So ``_pick_toc_depth`` and ``_build_chapters_from_toc`` both come through
-    here: the map that is JUDGED must be the map that is RETURNED.
-    """
-    return _repair_chapter_ranges(
-        _toc_chapters_at_depth(toc, depth, total_pages), total_pages
-    )
-
-
-def _pick_toc_depth(toc: list[TOCItem], total_pages: int, page_stats: dict | None = None) -> int:
-    """Which outline depth holds the book's CHAPTERS.
-
-    This used to be hardcoded to level 1. For a 1,008-page textbook whose
-    outline nests ~21 chapters under 7 Parts, that returned the 7 Parts: units
-    of 114-254 pages that each offered 19-28 lesson-parts. Now each depth is
-    built and measured, and the SHALLOWEST one that satisfies the teaching-unit
-    envelope wins — so a book whose chapters really are at level 1 (every
-    correct book in the corpus) is unchanged, and only a failing level 1 causes
-    a descent.
-
-    Falls back to depth 1 when no depth passes: keeping today's coarse map is
-    strictly better than adopting a deeper one we could not validate.
-    """
-    for depth in (1, 2, 3):
-        entries = [t for t in toc if t.level == depth]
-        if not entries:
-            continue
-        if depth > 1 and _depth_is_sections(entries):
-            break  # this depth is sections; anything deeper is more so
-        chapters = _toc_map_at_depth(toc, depth, total_pages)
-        if not _chapters_plausible(chapters, total_pages, page_stats):
-            continue
-        return depth
-    return 1
-
-
-def _build_chapters_from_toc(
-    toc: list[TOCItem],
-    total_pages: int,
-    page_stats: dict | None = None,
-) -> list[dict]:
-    """Create chapter boundary dicts from the TOC, at the depth that holds the
-    book's chapters (see ``_pick_toc_depth``)."""
-    return _toc_map_at_depth(toc, _pick_toc_depth(toc, total_pages, page_stats), total_pages)
+# ── PDF bookmarks: GONE as a structure source (founder decision, 2026-08-24) ──
+# The outline rung (RUNG 1: _toc_is_usable / _pick_toc_depth /
+# _build_chapters_from_toc) is deleted, not disabled — a disabled rung is one
+# refactor away from being re-enabled by accident. The full-library audit made
+# the case: bookmarks are whatever a human or an export tool typed — KamiHQ
+# junk ('LEANERS BOOK 8 1..12', the Sara incident), asset file names
+# (994b8238), page-range slugs (2ea65b58), hand-made lists with Cover
+# Page/Contents/Glossary as top-level chapters (the dokumen.pub LB8 scan) —
+# and every one of those shapes shipped at score 95 before the validator
+# existed. The validator caught them AFTER the fact; the founder ruling
+# removes the source: chapter structure comes from what the book PRINTS (text
+# rungs) or what a model READS off its pages (vision), never from metadata.
+# ``extractor.py`` still extracts the outline — book_health's thin-fragment
+# gate reads its mere presence, and support triage reads it in bundles — it
+# just cannot seed chapters any more. Consequences handled deliberately:
+#   * scanned books now ALWAYS ride the vision rung (the `<= 1 or
+#     poor_coverage` fence opens whenever text rungs produce nothing);
+#   * born-digital books that rode publisher outlines re-route through the
+#     text rungs — running headers, labelled markers, bare numbers — which is
+#     what the family-ranking machinery below has always modelled. The named
+#     regressions ('BUSINESS DYNAMICS' PartⅠ-Ⅶ, the Cambridge 37-chapter
+#     shape) are pinned in tests/test_text_rungs.py.
+# The filename-title point filter (_looks_like_file_bookmark) moved to
+# chapter_quality._looks_like_filename, where it judges OUTCOMES: the defect
+# class outlives the rung that produced it (stored rows, text detectors).
 
 
 def _infer_chapters_from_items(
@@ -169,7 +105,6 @@ def _infer_chapters_from_items(
     return chapters
 
 
-_FILENAME_RE = re.compile(r"\.(pdf|docx?|epub|indd|ai)$", re.I)
 _SUBSEC_RE = re.compile(r"^(\d{1,2})\.\d")
 
 # Roman numerals, ASCII and the Unicode Number Forms block. Machine-built PDF
@@ -359,44 +294,6 @@ def _better_family(
     if dominated:
         return False
     return len(candidate) > len(best)
-
-
-def _looks_like_file_bookmark(title: str) -> bool:
-    """A bookmark that is a FILE name, not a chapter title.
-
-    ``_FILENAME_RE`` alone requires a literal extension, which missed a whole
-    production book whose five "chapters" were named
-    ``esl_cie_asl_genpaper_1ed_tr_ch1.3_wksht1.3a_TOR`` — an export slug with
-    the extension already stripped. Four-plus underscore-joined segments with
-    no spaces is a file name; a real chapter title that long has spaces in it.
-    """
-    t = (title or "").strip()
-    if not t:
-        return False
-    return bool(_FILENAME_RE.search(t)) or (" " not in t and t.count("_") >= 3)
-
-
-def _toc_is_usable(toc: list[TOCItem], total_pages: int) -> bool:
-    """Reject outlines that clearly aren't real chapters — a PDF stitched from a
-    few source files whose only bookmarks are the file names, or (the opposite
-    failure) an auto-generated bookmark per PAGE (some export tools do this),
-    which would shred the book into one-page pseudo-chapters."""
-    level1 = [t for t in toc if t.level == 1]
-    if not level1:
-        return False
-    if any(_looks_like_file_bookmark(t.title or "") for t in level1):
-        return False
-    # Too few top-level entries for a sizeable book → probably not chapters.
-    if total_pages > 40 and len(level1) < 3:
-        return False
-    # Too many entries → per-page/per-heading bookmarks, not chapters.
-    if len(level1) > max(30, total_pages // 3):
-        return False
-    # Mostly bare-number / trivial titles (page labels) → not chapters.
-    trivial = sum(1 for t in level1 if len((t.title or "").strip()) <= 2 or (t.title or "").strip().isdigit())
-    if trivial * 2 > len(level1):
-        return False
-    return True
 
 
 # ── Chapter map SHAPE ────────────────────────────────────────────────────────
@@ -743,7 +640,11 @@ def _chapters_plausible(
     """Sanity-check any detected chapter list before trusting it. Degenerate
     splits (a 'chapter' per page, digit-only titles), corrupt page ranges and
     wrong-ALTITUDE maps (the book's Parts detected instead of its chapters) all
-    cost real generation money downstream — better to try another rung."""
+    cost real generation money downstream — better to try another rung.
+
+    (A ``judge_titles=False`` geometry-only mode existed for ``_pick_toc_depth``,
+    whose remedy for a failure was a DESCENT into the same outline; it died
+    with the bookmark rung, 2026-08-24.)"""
     if not chapters:
         return False
     if len(chapters) > max(30, total_pages // 3):
@@ -768,7 +669,28 @@ def _chapters_plausible(
     # a book whose chapters were only found for its first quarter never reaches
     # the Claude/vision rescue that used to catch it.
     bounded, _ = _bounded_last_chapter(chapters, total_pages)
-    return bool(_map_shape(bounded, total_pages, page_stats)["ok"])
+    if not _map_shape(bounded, total_pages, page_stats)["ok"]:
+        return False
+    # OUTCOME validation over the winning list's TITLES, rung-independent
+    # (chapter_quality — the Sara Junaidi incident, 2026-08-23). Every check
+    # above is about page GEOMETRY, and 13 KamiHQ bookmarks named
+    # 'LEANERS BOOK 8 1..12' — the book's own cover title plus a serial —
+    # passed all of them: _looks_like_file_bookmark models file slugs not
+    # human-typed labels, the trivial-title rule needs a digit MAJORITY, and
+    # the span rule's AND missed by 0.0007 of max_share. Judging titles HERE
+    # rather than in _toc_is_usable is deliberate, twice over: (a) the repo's
+    # own history says a stronger point filter is the fix that fails ("fixing
+    # the regex is never enough — it changes which rung wins"), and this seat
+    # judges whatever won; (b) failing plausibility flows into the existing
+    # demotion machinery in structure_book — the reset block keeps the junk
+    # map aside as coarse_fallback and empties chapter_defs, which OPENS the
+    # `len(chapter_defs) <= 1` fence on the Claude/vision rung: the one
+    # detector that reads a scanned book's pages finally runs, and if it finds
+    # nothing the restored coarse map is gated and scored honestly by
+    # book_health, which runs the same checks on the stored list.
+    if assess_chapter_map(bounded, total_pages)["suspect"]:
+        return False
+    return True
 
 
 # ── how much of the book does a candidate map actually teach? ────────────────
@@ -1312,24 +1234,32 @@ def structure_book(
     Chapter detection cascade (first hit wins):
       0. ``known_chapters`` — boundaries already detected at indexing time
          (num/title/start_page/end_page), so re-processing is cheap + identical.
-      1. The PDF's outline (TOC bookmarks), if it looks like real chapters — at
-         whichever DEPTH holds the chapters, not always level 1 (see
-         ``_pick_toc_depth``).
-      2. Labelled markers — "Chapter 3" / "Unit 3" / "Lesson Three" / "Topic 3"…
-      3. Bare-number heading markers ("1", "2", … ascending).
-      4. Level-1 heading inference.
-      5. When a ``client`` (Claude) is provided and the above found nothing:
+      1. Running headers, labelled markers, bare numbers, heading inference —
+         built together and compared on coverage (see _pick_detected_map).
+         The PDF's bookmark outline used to sit above these and is GONE as a
+         structure source (founder decision, 2026-08-24 — see the block
+         comment where the rung used to live). Structure comes from what the
+         book prints, never from typed metadata.
+      2. When a ``client`` (Claude) is provided and the above found nothing:
          a text book gets an LLM pass over its headings digest; a SCANNED book
          (no text layer) gets a vision pass that READS the rendered pages —
          handling any labelling convention, since Claude reads pages like a
          person does.
-      6. Whole document as a single chapter.
+      3. Whole document as a single chapter.
 
     Every candidate map is range-repaired and then shape-checked. A CORRUPT map
     is discarded so the next rung gets its chance; a map that is merely at the
     wrong ALTITUDE (the book's Parts where its chapters should be) is kept aside
     and restored if nothing finer validates — one whole-book chapter would be
     worse for the teacher than eight over-large ones.
+
+    APPARATUS IS NOT A CHAPTER (founder decision, 2026-08-24): once a detected
+    map is settled and bounded, cover/contents/glossary/index/answer-key
+    entries are moved OUT of the chapter list and onto
+    ``StructuredBook.apparatus`` — recorded, never vanished, so coverage
+    accounting can tell a deliberate exclusion from a detection hole. Stored
+    ``known_chapters`` are never trimmed: they are authoritative, and a
+    generation must split the book exactly as indexing stored it.
     """
     used_known = bool(known_chapters) and all(
         "start_page" in c and "end_page" in c for c in known_chapters
@@ -1348,12 +1278,11 @@ def structure_book(
             }
             for i, c in enumerate(known_chapters)
         ]
-    elif extraction.toc and _toc_is_usable(extraction.toc, extraction.total_pages):
-        chapter_defs = _build_chapters_from_toc(extraction.toc, extraction.total_pages, page_stats)
     else:
-        # No usable outline → running headers, labelled markers, bare numbers,
-        # heading inference. Running headers go first: when a book prints its
-        # unit on every page, that beats any first-occurrence heuristic.
+        # Running headers, labelled markers, bare numbers, heading inference.
+        # Running headers go first: when a book prints its unit on every page,
+        # that beats any first-occurrence heuristic. (``extraction.toc`` is
+        # deliberately not consulted — see the bookmark block comment above.)
         #
         # These used to be a first-hit cascade, and that is how the Egyptian
         # Grade 5 book ended up stored with 132 of its 156 pages unmapped: the
@@ -1461,6 +1390,7 @@ def structure_book(
     # stored known_chapters bounds: they are authoritative (stretching would,
     # e.g., balloon a 12-page unit to the whole book when fewer chapters are
     # passed than the book has). See _bounded_last_chapter for the bound.
+    apparatus: list[dict] = []
     if chapter_defs and not used_known:
         chapter_defs, unmapped = _bounded_last_chapter(chapter_defs, extraction.total_pages)
         if unmapped >= _MIN_REPORTABLE_UNMAPPED:
@@ -1472,6 +1402,21 @@ def structure_book(
                 "are not covered by any chapter and will not be taught",
                 book_id, int(chapter_defs[-1]["end_page"]) + 1,
                 extraction.total_pages - 1, unmapped, extraction.total_pages,
+            )
+        # Apparatus trim — AFTER the bound, on purpose. The bound stretches the
+        # LAST entry to the end of the book, and with a trailing Glossary/Index
+        # still in the list that stretch lands on the apparatus, not on the
+        # last teaching unit — trimming first would have handed the glossary's
+        # pages straight back to unit 9, undoing the exclusion. The trimmed
+        # ranges are RECORDED on the returned book; the worker stamps them into
+        # health so the unmapped-pages guardrail can tell this deliberate tail
+        # from a detection hole.
+        chapter_defs, apparatus = split_apparatus(chapter_defs, extraction.total_pages)
+        if apparatus:
+            logger.info(
+                "book %s: %d apparatus section(s) excluded from chapters: %s",
+                book_id, len(apparatus),
+                ", ".join(f"{a['kind']}:{a['title'][:40]!r}@p{a['start_page'] + 1}" for a in apparatus),
             )
 
     toc_entries: list[TOCEntry] = []
@@ -1512,6 +1457,7 @@ def structure_book(
         readability_score=extraction.readability_score,
         table_of_contents=toc_entries,
         chapters=chapters,
+        apparatus=[ApparatusEntry(**a) for a in apparatus],
     )
 
 

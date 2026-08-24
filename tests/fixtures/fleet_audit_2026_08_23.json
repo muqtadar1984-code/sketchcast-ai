@@ -1,0 +1,303 @@
+{
+ "purpose": "REAL defect vectors from the live SketchCast library, audited 2026-08-23 after the Sara incident. Each entry is a genuine books.chapters shape from prod. Use as validator fixtures: every 'defect' book must be flagged; every 'healthy' book must pass untouched.",
+ "defective": [
+  {
+   "book": "948a9494 Grade 12 Physics",
+   "score": 95,
+   "gens": 6,
+   "classes": [
+    "empty_titles"
+   ],
+   "note": "9 of 10 chapter titles are the EMPTY STRING; first chapter is front-matter 'Contents'"
+  },
+  {
+   "book": "bb68dec6 SD",
+   "score": 95,
+   "gens": 0,
+   "classes": [
+    "duplicate_titles",
+    "fragment_titles"
+   ],
+   "titles": [
+    "Chapter 7: Environment and Sustainable Development",
+    "Chapter 7: Environment and Sustainable Development",
+    "things",
+    "Chapter 7: Environment and Sustainable Development",
+    "enough"
+   ],
+   "note": "same title 3x plus bare mid-sentence words as titles"
+  },
+  {
+   "book": "2ea65b58 علوم (the Persian-coverage-bug user)",
+   "score": 95,
+   "gens": 7,
+   "classes": [
+    "filename_titles"
+   ],
+   "titles": [
+    "000 C606",
+    "001-030-C606",
+    "031-072-C606",
+    "073-106-C606"
+   ],
+   "note": "page-range file names as chapters — the exact class _looks_like_file_bookmark exists for, and missed"
+  },
+  {
+   "book": "994b8238 Cambridge English GP Starter Pack",
+   "score": 95,
+   "gens": 6,
+   "classes": [
+    "filename_titles",
+    "invalid_ranges"
+   ],
+   "titles": [
+    "esl_cie_asl_genpaper_1ed_tr_ch1.3_wksht1.3a_TOR",
+    "..."
+   ],
+   "ranges": [
+    [
+     111,
+     111
+    ],
+    [
+     112,
+     112
+    ],
+    [
+     113,
+     114
+    ],
+    [
+     115,
+     1
+    ],
+    [
+     2,
+     127
+    ]
+   ],
+   "note": "raw asset file names AND end_page < start_page AND a [2,127] span overlapping everything"
+  },
+  {
+   "book": "9c36b003 Price elasticity of supply",
+   "score": 55,
+   "gens": 18,
+   "classes": [
+    "invalid_ranges",
+    "duplicate_titles"
+   ],
+   "ranges": [
+    [
+     0,
+     -1
+    ],
+    [
+     0,
+     3
+    ]
+   ],
+   "note": "end_page -1; duplicate chapter; 18 generations burned on this shape"
+  },
+  {
+   "book": "f22b8b64 Jawi Tajwid PSRA T5 (RTL/Jawi)",
+   "score": 55,
+   "gens": 0,
+   "classes": [
+    "blank_line_titles",
+    "invalid_ranges"
+   ],
+   "titles": [
+    ": _______________________​",
+    ":_____________"
+   ],
+   "note": "fill-in-the-blank underscore lines read as chapter titles; end -1; the founder's other-languages fear made real"
+  },
+  {
+   "book": "81c94f98 رياضيات رابع",
+   "score": 95,
+   "gens": 24,
+   "classes": [
+    "ocr_mojibake_arabic"
+   ],
+   "titles": [
+    "الْمَنْزِلِيَّةُ؟ُمَا الْقِيمَة",
+    "ما األأنماطُ؟ وما الدَّوالُّ؟",
+    "ِأُجرِيَ مسحٌ علَى عددٍ منَ الطالبِ حولَ الفاكهة"
+   ],
+   "note": "األأ is the classic lam-alef mojibake; question mark glued mid-word; 24 gens burned by an active user"
+  },
+  {
+   "book": "eb51a014 Jordanian life-skills",
+   "score": 95,
+   "gens": 0,
+   "classes": [
+    "replacement_char"
+   ],
+   "titles": [
+    "الَّتَْفْكيُرُ اِإْل� ِْبْداِعُِّي"
+   ],
+   "note": "U+FFFD REPLACEMENT CHARACTER inside a title at score 95 — the cheapest possible check"
+  },
+  {
+   "book": "f455c5bd Cambridge Science LB7 (same series as Sara's LB8)",
+   "score": 69,
+   "gens": 6,
+   "classes": [
+    "section_promotion",
+    "numbering_gaps"
+   ],
+   "titles": [
+    "Cells",
+    "1.4 Cells, tissues and organs",
+    "Materials and their structure",
+    "2.2 Changes of state",
+    "2.3 …",
+    "2.4 …",
+    "2.5 …",
+    "2.6 …",
+    "Forces and energy",
+    "3.2 …",
+    "3.3 …",
+    "3.4 …",
+    "3.5 …",
+    "3.6 …",
+    "3.7 …"
+   ],
+   "note": "unit titles interleaved with decimal SECTION titles; 1.1-1.3, 2.1, 3.1 missing — 15 'chapters' for a 9-unit book"
+  },
+  {
+   "book": "682eedf5 English for Libya",
+   "score": 55,
+   "gens": 0,
+   "classes": [
+    "duplicate_content",
+    "numbering_gaps"
+   ],
+   "titles": [
+    "Culture and Customs",
+    "Communication",
+    "Unit 2: Communication",
+    "Unit 4: Fun with English 1",
+    "Food and Drink",
+    "The Media",
+    "Leisure",
+    "Fun with English 2"
+   ],
+   "note": "'Communication' and 'Unit 2: Communication' both present; Unit 3 absent"
+  },
+  {
+   "book": "a13a45e2 Cambridge AS/A Business",
+   "score": 95,
+   "gens": 6,
+   "classes": [
+    "glued_body_text"
+   ],
+   "titles": [
+    "Enterprise This chapter covers syllabus section AS Level 1.1",
+    "Preparing for assessment LEARNING intentions"
+   ],
+   "note": "heading + first body sentence concatenated into titles, 37 chapters"
+  },
+  {
+   "book": "4e66897c Class 6 Geography",
+   "score": 95,
+   "gens": 6,
+   "classes": [
+    "glued_body_text"
+   ],
+   "titles": [
+    "MAJOR LANDFORMS OF THE EARTH You must have seen some of the landform features as",
+    "OUR COUNTRY – INDIA India is a country of vast geographical expanse. In the"
+   ]
+  },
+  {
+   "book": "e0459f87 Sciencew Book (THE SARA INCIDENT)",
+   "score": 82,
+   "gens": 0,
+   "classes": [
+    "cover_title_family",
+    "section_promotion",
+    "orphan_pages",
+    "part_explosion"
+   ],
+   "note": "the originating case; see workflow evidence"
+  },
+  {
+   "book": "FOUNDER UPLOAD 2026-08-23 - dokumen.pub Cambridge LB8 2nd ed (SAME title as Sara's, different scan)",
+   "pdf_on_disk": "C:\\Users\\Arieb\\Downloads\\dokumen.pub_cambridge-lower-secondary-science-learners-book-8-second-edition.pdf",
+   "score": 82,
+   "gens": 0,
+   "classes": [
+    "bookmark_trust",
+    "front_back_matter_chapters",
+    "part_split_backmatter"
+   ],
+   "note": "339pp RICOH-copier scan, zero text layer, 13 hand-made bookmarks that are LARGELY CORRECT (the real units 1-9 by name) plus Cover Page/Contents/Science Skills/Glossary and Index as top-level chapters; Glossary split into 3 x 1-credit parts. Twin lessons: (1) after bookmark removal, the vision rung on THIS file must recover the 9 units - it is the clean-scan regression fixture; (2) front/back-matter trimming belongs in the OUTCOME validator because vision can emit the same entries from a real contents page, and back-matter must never part-split into credit rows.",
+   "true_units": [
+    "1 Respiration",
+    "2 Properties of Materials",
+    "3 Forces and Energy",
+    "4 Ecosystems",
+    "5 Materials and Cycles on Earth",
+    "6 Light",
+    "7 Diet and Growth",
+    "8 Chemical Reactions",
+    "9 Magnetism"
+   ],
+   "true_unit_start_pages_1based": [
+    9,
+    41,
+    69,
+    127,
+    153,
+    191,
+    234,
+    264,
+    294
+   ],
+   "backmatter": {
+    "Science Skills": 322,
+    "Glossary and Index": 327,
+    "_note": "both entries here are EXCLUDED from chapters under the final policy"
+   },
+   "expected_after_fix": "EXACTLY the 9 numbered units and NOTHING else. Founder ruling: a chapter is a unit of the TEACHING SEQUENCE; Cover Page, Contents, Science Skills, Glossary and Index are all apparatus and must not appear as chapters (excluded outright, recorded internally as front/back-matter so the unmapped-pages guardrail knows they are deliberate). Science Skills excluded BY EXPLICIT FOUNDER DECISION despite being arguably teachable."
+  }
+ ],
+ "healthy_must_not_regress": [
+  {
+   "book": "c1ffabda / 4fc89a7e Cambridge Primary Science Y7",
+   "score": 95,
+   "note": "9 clean unit titles — the canonical good Cambridge book, same publisher as Sara's"
+  },
+  {
+   "book": "07c49ee4 كتاب الفيزياء الثالث متوسط",
+   "score": 95,
+   "note": "clean bilingual Arabic/English titles"
+  },
+  {
+   "book": "7bbcf45b قراءة الصف الاول الابتدائي",
+   "score": 82,
+   "note": "clean Arabic titles, scanned book"
+  },
+  {
+   "book": "a047c17a Türkiye Cumhuriyeti Anayasası",
+   "score": 95,
+   "note": "Turkish, dotted-capital İ, KISIM/BÖLÜM structure"
+  },
+  {
+   "book": "5bd0d381 BUSINESS DYNAMICS",
+   "score": 95,
+   "note": "PartⅠ-Ⅶ with U+2160 roman numerals — the recorded case the cascade already handles; must stay working"
+  },
+  {
+   "book": "c908cc53 PAI Tingkatan 1",
+   "score": 95,
+   "note": "Malay exam-paper compilation; unusual but correct chapters (Soalan/Nota)"
+  },
+  {
+   "book": "bf80cbc9 / 670defb0 Grade 5 Textbook",
+   "score": 82,
+   "note": "scanned, clean vision-read titles"
+  }
+ ]
+}

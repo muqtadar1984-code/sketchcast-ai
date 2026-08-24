@@ -75,6 +75,21 @@ class ChapterContent(BaseModel):
     key_boxes: list[KeyBox] = Field(default_factory=list)
 
 
+class ApparatusEntry(BaseModel):
+    """A non-chapter section excluded from the teaching sequence and RECORDED
+    (founder decision 2026-08-24: apparatus is not a chapter). Cover, contents,
+    glossary, index, answer keys, reference/skills sections — never listed as
+    chapters, never part-split into credit rows, but never vanished either:
+    the record is what lets coverage accounting tell a deliberate exclusion
+    from a detection hole."""
+    title: str
+    start_page: int
+    end_page: int
+    kind: str = "apparatus"  # cover | contents | imprint | acknowledgements |
+    #                          preface | glossary | index | answers |
+    #                          references | reference | apparatus
+
+
 class StructuredBook(BaseModel):
     """Full structured representation of a processed book."""
     book_id: str
@@ -86,6 +101,9 @@ class StructuredBook(BaseModel):
     readability_score: float
     table_of_contents: list[TOCEntry] = Field(default_factory=list)
     chapters: list[ChapterContent] = Field(default_factory=list)
+    # Recorded non-chapter sections. Default [] keeps every pre-existing
+    # processed-book JSON loading unchanged.
+    apparatus: list[ApparatusEntry] = Field(default_factory=list)
 
 
 # --- Request models ---

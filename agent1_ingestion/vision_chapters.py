@@ -31,6 +31,7 @@ from pathlib import Path
 from agent1_ingestion.book_health import text_layer_is_usable
 from agent1_ingestion.chapter_check import (audit_chapter_list, topic_of,
                                             verify_chapter_content)
+from agent1_ingestion.chapter_quality import covered_page_count
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,13 @@ _JPEG_QUALITY = 60
 
 # A book "has no text" when its extracted items total less than this.
 _MIN_TEXT_CHARS = 200
+
+# The most pages a heal may UNCOVER before it is refused (see the acceptance
+# check in heal_chapter_boundaries). A correct relocation legitimately loses a
+# few pages — the Mona relocation loses 5 of 88 — while the Sara incident's
+# hole was 36 of 341; 8 pages / 5% sits between them with room on both sides.
+_HEAL_MAX_LOST_PAGES = 8
+_HEAL_MAX_LOST_SHARE = 0.05
 
 
 def extraction_has_text(extraction) -> bool:
@@ -92,15 +100,25 @@ def _render_pages(pdf_path: str | Path, pages: range, width: int, out_dir: Path)
     return paths
 
 
-def _starts_to_defs(pairs: list[tuple[int, str]], total_pages: int) -> list[dict]:
-    """0-indexed (start_page, title) pairs → clean, ascending chapter defs.
+def _starts_to_defs(pairs: list[tuple], total_pages: int) -> list[dict]:
+    """0-indexed (start_page, title[, kind]) tuples → clean, ascending chapter
+    defs.
 
     Dedupes by start page, drops out-of-range starts, sorts, and fills each
     chapter's end_page from the next start. Fewer than 2 real starts is no better
-    than the whole-book fallback, so it returns []."""
+    than the whole-book fallback, so it returns [].
+
+    ``kind`` ("unit" | "apparatus") is the detector's semantic unit-vs-apparatus
+    verdict (founder decision 2026-08-24: apparatus is not a chapter). An
+    apparatus entry STAYS IN the def list — its start is what bounds the
+    previous unit's end (a Glossary opener is exactly where unit 9 stops) — and
+    carries ``kind: "apparatus"`` so the structurer's split_apparatus moves it
+    out and records it after the boundaries are settled."""
     seen: set[int] = set()
-    cleaned: list[tuple[int, str]] = []
-    for start, title in pairs:
+    cleaned: list[tuple[int, str, str]] = []
+    for tup in pairs:
+        start, title = tup[0], tup[1]
+        kind = str((tup[2] if len(tup) > 2 else None) or "unit").strip().lower()
         try:
             start = int(start)
         except (TypeError, ValueError):
@@ -109,14 +127,17 @@ def _starts_to_defs(pairs: list[tuple[int, str]], total_pages: int) -> list[dict
         if not (0 <= start < total_pages) or start in seen or not title:
             continue
         seen.add(start)
-        cleaned.append((start, title[:120]))
+        cleaned.append((start, title[:120], "apparatus" if kind == "apparatus" else "unit"))
     cleaned.sort()
     if len(cleaned) < 2:
         return []
     defs = []
-    for i, (start, title) in enumerate(cleaned):
+    for i, (start, title, kind) in enumerate(cleaned):
         end = cleaned[i + 1][0] - 1 if i + 1 < len(cleaned) else total_pages - 1
-        defs.append({"chapter_num": i, "title": title, "start_page": start, "end_page": end})
+        d = {"chapter_num": i, "title": title, "start_page": start, "end_page": end}
+        if kind == "apparatus":
+            d["kind"] = "apparatus"
+        defs.append(d)
     return defs
 
 
@@ -129,6 +150,7 @@ def _normalize_starts(raw: list[dict], total_pages: int) -> list[dict]:
         (
             (int(ch.get("start_page", 0)) - 1) if _is_int(ch.get("start_page")) else -1,
             str(ch.get("title") or "").strip(),
+            str(ch.get("kind") or "unit"),
         )
         for ch in raw
         if isinstance(ch, dict)
@@ -149,8 +171,10 @@ def _page_of(path) -> int:
     return int(Path(path).stem[1:])
 
 
-def _parse_openers(data, page_numbers: list[int]) -> list[tuple[int, str]]:
-    """Turn one batch's Claude reply into 0-indexed (physical_start, title) pairs.
+def _parse_openers(data, page_numbers: list[int]) -> list[tuple[int, str, str]]:
+    """Turn one batch's Claude reply into 0-indexed (physical_start, title,
+    kind) triples — kind "unit" or "apparatus" (missing/unknown reads "unit",
+    so a model that ignores the field degrades to the pre-apparatus behaviour).
 
     ``page_numbers`` is the physical page of each image actually shown, in order.
     The model reports each opener by its IMAGE NUMBER (1..N), and we look the
@@ -162,7 +186,7 @@ def _parse_openers(data, page_numbers: list[int]) -> list[tuple[int, str]]:
     if not isinstance(items, list):
         return []
     n = len(page_numbers)
-    pairs: list[tuple[int, str]] = []
+    pairs: list[tuple[int, str, str]] = []
     for it in items:
         if not isinstance(it, dict):
             continue
@@ -180,7 +204,9 @@ def _parse_openers(data, page_numbers: list[int]) -> list[tuple[int, str]]:
         title = str(it.get("title") or "").strip()
         if not title:
             continue
-        pairs.append((page_numbers[idx - 1], title))
+        kind = str(it.get("kind") or "unit").strip().lower()
+        pairs.append((page_numbers[idx - 1], title,
+                      "apparatus" if kind == "apparatus" else "unit"))
     return pairs
 
 
@@ -209,21 +235,27 @@ def detect_chapters_vision(pdf_path: str | Path, total_pages: int, client) -> li
             prompt = (
                 f"You are shown {n} consecutive scanned pages of a school textbook, in order. "
                 f"Call them image 1 (the FIRST) through image {n} (the LAST).\n\n"
-                "Find every image that is the OPENING page of a NEW top-level teaching unit — "
-                "the page with the big unit banner/title where a unit visibly begins. Textbooks "
-                "label these many ways: Chapter 3, Unit 3, Lesson Three, Topic 3, Module 3, a "
-                "numbered theme, or a full-page unit title. Do NOT count the cover, publisher "
-                "pages, section headings inside a unit, or exercise blocks.\n\n"
+                "Find every image that is the OPENING page of a NEW top-level section. Two kinds:\n"
+                '- kind "unit": a TEACHING unit — the page with the big unit banner/title where a '
+                "unit visibly begins. Textbooks label these many ways: Chapter 3, Unit 3, Lesson "
+                "Three, Topic 3, Module 3, a numbered theme, or a full-page unit title.\n"
+                '- kind "apparatus": book APPARATUS, in any language — the cover, a table of '
+                "contents, a copyright/imprint page, acknowledgements, a glossary, an index, an "
+                "answer key, or a reference/skills section (e.g. \"Science Skills\"). These are NOT "
+                "teaching units, but report where they BEGIN so unit boundaries land correctly.\n"
+                "Do NOT report section headings inside a unit or exercise blocks.\n\n"
                 "CRITICAL — how to report position:\n"
                 f"- Identify each opener by its IMAGE NUMBER in this set (1..{n}) — the position of "
                 "the image among the ones shown to you right now.\n"
                 "- NEVER report a printed page number. If an image is a table of contents / index "
-                "that LISTS units with page numbers, do NOT treat it as an opener and IGNORE those "
-                "printed numbers — they are the book's page numbers, not the positions of these images.\n"
-                "- Report only units whose opening page is actually among these images.\n\n"
+                "that LISTS units with page numbers, report it as an apparatus opener and IGNORE "
+                "those printed numbers — they are the book's page numbers, not the positions of "
+                "these images.\n"
+                "- Report only sections whose opening page is actually among these images.\n\n"
                 'Return ONLY JSON: {"openers": [{"image_number": <int 1..' + str(n) + '>, '
-                '"unit_number": <int or null>, "title": "<unit title>"}]}. '
-                "Empty list if no unit opens in these images."
+                '"unit_number": <int or null>, "title": "<title>", '
+                '"kind": "unit" | "apparatus"}]}. '
+                "Empty list if nothing opens in these images."
             )
             try:
                 result = client.analyze_images_batch(paths, prompt, max_tokens=1500)
@@ -239,9 +271,221 @@ def detect_chapters_vision(pdf_path: str | Path, total_pages: int, client) -> li
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
+    # CONTENTS-PAGE route (2026-08-24, with the bookmark rung removed): the
+    # page-scan window above reads only the first _DETECT_MAX_PAGES pages, so
+    # on a 339-page scan it finds units 1-3 and the rest of the book falls off
+    # the map — the dokumen.pub LB8 book would honestly gate at 3 of its 9
+    # units. Books PRINT their own structure source: read the contents page,
+    # calibrate printed→physical page numbering against the openers the window
+    # already found, extrapolate the remaining entries, and VERIFY each
+    # extrapolated opener by looking at its page. Best-effort: any failure
+    # leaves the window scan's honest partial result (which health then gates).
+    if total_pages > pages_to_scan and found:
+        try:
+            extra = _extend_from_contents(pdf_path, total_pages, pages_to_scan, found, client)
+            if extra:
+                logger.info(
+                    "vision contents-page route: %d verified opener(s) beyond the %d-page window",
+                    len(extra), pages_to_scan,
+                )
+                found.extend(extra)
+        except Exception as exc:  # noqa: BLE001 — the window result must survive
+            logger.warning("vision contents-page route failed: %s", exc)
+
     defs = _starts_to_defs(found, total_pages)
     logger.info("vision chapter detection: %d chapters", len(defs))
     return defs
+
+
+# ── contents-page route: printed page numbers, calibrated and verified ───────
+# The scanned-book mislabel incident taught this module never to TRUST a
+# printed page number as a physical index — the fix was reporting openers by
+# image position. This route does not walk that back: printed numbers are used
+# only AFTER calibration against openers whose physical pages the window scan
+# established by position, and every extrapolated page is then verified by
+# actually looking at it. Untrusted numbers in, verified positions out.
+
+_CONTENTS_SCAN_PAGES = 12   # contents pages live in the first few leaves
+_CONTENTS_MIN_ANCHORS = 2   # printed→physical offset needs 2 agreeing anchors
+
+
+def _read_contents_entries(pdf_path: str | Path, client, tmp: Path) -> list[dict]:
+    """Transcribe the printed contents page(s) in the book's opening leaves.
+
+    Returns [{"number": int|None, "title": str, "printed_page": int,
+    "kind": "unit"|"apparatus"}] — [] when no contents page is found or the
+    reply doesn't parse. The printed numbers are UNTRUSTED until calibrated.
+    """
+    paths = _render_pages(pdf_path, range(0, _CONTENTS_SCAN_PAGES), _DETECT_WIDTH, tmp)
+    if not paths:
+        return []
+    n = len(paths)
+    prompt = (
+        f"You are shown the first {n} pages of a scanned school textbook, in order "
+        f"(image 1..{n}). One or more of them may be the printed TABLE OF CONTENTS.\n\n"
+        "If a contents page is present, transcribe its TOP-LEVEL entries only — the "
+        "book's units/chapters and its end matter (glossary, index, answer key, "
+        "reference/skills sections) — with the printed page number each entry shows. "
+        "Skip sub-sections listed inside a unit.\n\n"
+        'For each entry give: "number" (the unit number, or null for unnumbered end '
+        'matter), "title", "printed_page" (the page number AS PRINTED on the contents '
+        'page), and "kind" — "unit" for a teaching unit, "apparatus" for cover/'
+        "contents/glossary/index/answers/reference-or-skills sections.\n\n"
+        'Return ONLY JSON: {"entries": [{"number": <int or null>, "title": "<t>", '
+        '"printed_page": <int>, "kind": "unit" | "apparatus"}]}. '
+        "Empty list if none of these pages is a table of contents."
+    )
+    try:
+        result = client.analyze_images_batch(paths, prompt, max_tokens=2000)
+    finally:
+        for p in paths:
+            p.unlink(missing_ok=True)
+    data = result.get("data", {})
+    entries = data.get("entries") if isinstance(data, dict) else data
+    out: list[dict] = []
+    for e in entries if isinstance(entries, list) else []:
+        if not isinstance(e, dict) or not _is_int(e.get("printed_page")):
+            continue
+        title = str(e.get("title") or "").strip()
+        if not title:
+            continue
+        out.append({
+            "number": int(e["number"]) if _is_int(e.get("number")) else None,
+            "title": title[:120],
+            "printed_page": int(e["printed_page"]),
+            "kind": "apparatus" if str(e.get("kind") or "").lower() == "apparatus" else "unit",
+        })
+    return out
+
+
+def _calibrate_printed_offset(entries: list[dict], found: list[tuple]) -> int | None:
+    """The constant ``physical_0based - (printed - 1)`` offset, or None.
+
+    Anchored on entries the window scan ALREADY located by image position:
+    an entry matches an opener when the opener's title contains the entry's
+    unit number as a leading marker, or the two titles overlap. Requires
+    _CONTENTS_MIN_ANCHORS anchors agreeing on ONE offset with no dissenter —
+    printed numbering that doesn't calibrate cleanly is printed numbering
+    this route refuses to use.
+    """
+    votes: dict[int, int] = {}
+    matched = 0
+    for e in entries:
+        printed0 = e["printed_page"] - 1
+        for tup in found:
+            phys, title = int(tup[0]), str(tup[1])
+            t_norm = " ".join(title.casefold().split())
+            e_norm = " ".join(e["title"].casefold().split())
+            title_match = bool(e_norm) and (e_norm in t_norm or t_norm in e_norm)
+            num_match = (
+                e["number"] is not None
+                and t_norm.split()[:1] == [str(e["number"])]
+            )
+            if not (title_match or num_match):
+                continue
+            votes[phys - printed0] = votes.get(phys - printed0, 0) + 1
+            matched += 1
+            break
+    if not votes:
+        return None
+    offset, count = max(votes.items(), key=lambda kv: kv[1])
+    if count < _CONTENTS_MIN_ANCHORS or count != matched:
+        return None  # too few anchors, or the anchors disagree
+    return offset
+
+
+def _extend_from_contents(
+    pdf_path: str | Path, total_pages: int, _scanned_to: int, found: list[tuple], client
+) -> list[tuple[int, str, str]]:
+    """Verified (physical_page, title, kind) openers the window scan MISSED,
+    derived from the printed contents page. See the route comment above.
+
+    `_scanned_to` is retained for call-site symmetry and logging only: the
+    window's last page is deliberately NOT a boundary for candidates any more
+    (see the filter below), because the misses this route rescues happen inside
+    the window as well as past it."""
+    tmp = Path(tempfile.mkdtemp(prefix="vision_contents_"))
+    try:
+        entries = _read_contents_entries(pdf_path, client, tmp)
+        if not entries:
+            return []
+        offset = _calibrate_printed_offset(entries, found)
+        if offset is None:
+            logger.info("contents-page route: printed numbering did not calibrate — unused")
+            return []
+        # Candidates are every contents entry the window did not ALREADY FIND —
+        # not merely every entry beyond the window's last page.
+        #
+        # `phys < scanned_to` used to skip them, on the assumption that the scan
+        # had settled everything it looked at. It has not: the window reads pages
+        # but can MISS a unit banner inside them (a full-bleed photographic
+        # opener, a banner mid-page, a page the render dropped). On the founder's
+        # 339-page Cambridge scan the window found units 1 and 2 and missed unit
+        # 3 at physical page 68 — inside the window — so the old filter discarded
+        # the contents page's own correct answer for it and the book shipped a
+        # unit short. A unit the window looked at but did not see is exactly the
+        # case the contents page exists to rescue.
+        #
+        # `phys in used` still skips: an opener the window DID find needs no
+        # rescue, and re-verifying it would spend a vision call to agree with
+        # itself. Out-of-range still skips. Everything else gets verified by
+        # looking, which is what makes admitting in-window candidates safe —
+        # a wrong extrapolation is refused by the render check below, not
+        # trusted because it came from the contents page.
+        candidates = []
+        used = {int(t[0]) for t in found}
+        for e in entries:
+            phys = e["printed_page"] - 1 + offset
+            if not (0 <= phys < total_pages) or phys in used:
+                continue
+            candidates.append((phys, e))
+        if not candidates:
+            return []
+        # VERIFY by looking: render each candidate page and ask whether a
+        # section really opens there. An extrapolated page that fails the look
+        # is dropped — a missing unit gates honestly; a wrong boundary bills
+        # kits against the wrong pages forever.
+        paths, kept_entries = [], []
+        for phys, e in candidates:
+            pp = _render_pages(pdf_path, range(phys, phys + 1), _DETECT_WIDTH, tmp)
+            if pp:
+                paths.append(pp[0])
+                kept_entries.append((phys, e))
+        if not paths:
+            return []
+        n = len(paths)
+        expect = "; ".join(
+            f"image {i + 1}: {e['title']!r}" for i, (_, e) in enumerate(kept_entries)
+        )
+        prompt = (
+            f"You are shown {n} scanned textbook pages (image 1..{n}). According to the "
+            f"book's contents page, each should be the OPENING page of: {expect}.\n\n"
+            "For EACH image say whether a top-level section really does begin on that "
+            "page (a unit banner/title, or the start of a glossary/index/answers/skills "
+            "section), and the title visible on it.\n\n"
+            'Return ONLY JSON: {"pages": [{"image_number": <int>, "opens_section": '
+            '<true|false>, "title": "<visible title or empty>"}]} with exactly '
+            f"{n} entries."
+        )
+        result = client.analyze_images_batch(paths, prompt, max_tokens=1200)
+        data = result.get("data", {})
+        rows = data.get("pages") if isinstance(data, dict) else data
+        verdicts: dict[int, bool] = {}
+        for r in rows if isinstance(rows, list) else []:
+            if isinstance(r, dict) and _is_int(r.get("image_number")):
+                verdicts[int(r["image_number"])] = bool(r.get("opens_section"))
+        out: list[tuple[int, str, str]] = []
+        for i, (phys, e) in enumerate(kept_entries):
+            if verdicts.get(i + 1):
+                out.append((phys, e["title"], e["kind"]))
+            else:
+                logger.warning(
+                    "contents-page route: %r extrapolated to page %d but no section "
+                    "opens there — dropped", e["title"], phys + 1,
+                )
+        return out
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def detect_chapters_from_text_llm(extraction, client) -> list[dict]:
@@ -267,12 +511,18 @@ def detect_chapters_from_text_llm(extraction, client) -> list[dict]:
         "Below are the headings extracted from a school textbook PDF, each prefixed "
         "with its PDF page number. Identify the TOP-LEVEL teaching units. Textbooks "
         "label these many ways — Chapter 3, Unit 3, Lesson Three, Topic 3, Module 3, "
-        "numbered themes, or plain titles. Ignore front matter, the contents list, "
-        "section headings inside a unit, and exercises.\n\n"
+        "numbered themes, or plain titles. Ignore section headings inside a unit and "
+        "exercises.\n\n"
+        "ALSO list book APPARATUS wherever it starts, in any language — the cover, "
+        "table of contents, copyright page, acknowledgements, glossary, index, answer "
+        'key, or a reference/skills section — with "kind": "apparatus". Apparatus is '
+        "not a teaching unit, but its start page is where the neighbouring unit "
+        "ends, so report it rather than skipping it.\n\n"
         f"{digest}\n\n"
         'Return ONLY JSON: {"chapters": [{"title": "<title>", "start_page": '
-        "<PDF page number from the p-prefix>}]} in reading order. Return an empty "
-        "list if this document genuinely has no chapter structure."
+        '<PDF page number from the p-prefix>, "kind": "unit" | "apparatus"}]} in '
+        "reading order. Return an empty list if this document genuinely has no "
+        "chapter structure."
     )
     try:
         result = client.analyze(prompt, max_tokens=1500)
@@ -543,10 +793,13 @@ def heal_chapter_boundaries(
         return chapters, []
 
     # One detection pass gives the canonical topic→page map to relocate against.
+    # Apparatus entries are dropped from the pool: a unit title must never be
+    # relocated onto a glossary or contents page (apparatus is not a chapter).
     if scanned:
         units = detect_chapters_vision(pdf_path, extraction.total_pages, client)
     else:
         units = detect_chapters_from_text_llm(extraction, client)
+    units = [u for u in units if u.get("kind") != "apparatus"]
     if not units:
         for c in chapters:  # mark, but keep pages — better a suspect label than a wrong move
             if int(c.get("chapter_num", c.get("num", 0))) in mismatched:
@@ -593,11 +846,40 @@ def heal_chapter_boundaries(
         or int(c.get("chapter_num", c.get("num", 0))) not in mismatched
     }
     _clamp_overlaps(candidate, extraction.total_pages, trusted)
-    if _validate_chapter_list(candidate, extraction.total_pages):
-        logger.info("heal_chapter_boundaries: relocated chapters %s", relocated)
-        return candidate, relocated
-    logger.warning("heal_chapter_boundaries: relocation did not validate — kept original list")
-    return chapters, []
+    if not _validate_chapter_list(candidate, extraction.total_pages):
+        logger.warning("heal_chapter_boundaries: relocation did not validate — kept original list")
+        return chapters, []
+
+    # A heal is judged by what it LEAVES BEHIND, exactly like the last-chapter
+    # bound in the structurer. _validate_chapter_list checks in-range / unique /
+    # end>=start only — NON-CONTIGUITY IS STRUCTURALLY VALID — and nothing
+    # downstream re-measured coverage, which is how Sara Junaidi's book
+    # (e0459f87, 2026-08-23) stored a 36-page mid-book hole: a chapter owning
+    # pages 22-61 was relocated onto a 4-page vision unit, _clamp_overlaps
+    # shrank it to 22-25 while its neighbour still started at 62, and pages
+    # 26-61 fell out of the book — invisible to health's then-tail-only
+    # unmapped_pages, un-generatable forever. A CORRECT relocation loses a few
+    # pages (moving a chapter off pages it never owned — the Mona case loses
+    # 5 of 88), so the bound is a material-loss one, not zero: a heal that
+    # uncovers more than max(8, 5%) of the book is refused wholesale and the
+    # chapters it flagged stay marked suspect instead — a suspect label is
+    # recoverable at generation time; a hole is not.
+    lost = (
+        covered_page_count(chapters, extraction.total_pages)
+        - covered_page_count(candidate, extraction.total_pages)
+    )
+    if lost > max(_HEAL_MAX_LOST_PAGES, _HEAL_MAX_LOST_SHARE * extraction.total_pages):
+        logger.warning(
+            "heal_chapter_boundaries: relocation would uncover %d pages — refused, "
+            "chapters kept with suspect markers", lost,
+        )
+        for c in chapters:
+            if int(c.get("chapter_num", c.get("num", 0))) in mismatched:
+                c["relocation"] = "suspect"
+        return chapters, []
+
+    logger.info("heal_chapter_boundaries: relocated chapters %s", relocated)
+    return candidate, relocated
 
 
 def relocate_chapter_for_generation(
@@ -628,6 +910,8 @@ def relocate_chapter_for_generation(
         units = detect_chapters_vision(pdf_path, extraction.total_pages, client)
     else:
         units = detect_chapters_from_text_llm(extraction, client)
+    # Never offer apparatus as a relocation target — see heal_chapter_boundaries.
+    units = [u for u in units if u.get("kind") != "apparatus"]
     if not units:
         return {"status": "incomplete"}  # detection outage / no structure — do NOT brick
 

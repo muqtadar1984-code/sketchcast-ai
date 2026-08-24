@@ -1,23 +1,28 @@
 """Chapter ALTITUDE — is a detected unit a chapter, or the Part that contains
 the chapters?
 
-The trigger: a 1,008-page university textbook whose PDF outline nests ~21
-chapters under 7 Parts. ``_build_chapters_from_toc`` kept level 1 only, so the
-book indexed as 8 "chapters" of 114-254 pages, each offering 19-28 lesson
-parts, and 17 kits were generated against that map. Health called it
-"excellent", because the only structure signal was ``n_chapters >= 3``.
+The trigger: a 1,008-page university textbook whose outline nested ~21
+chapters under 7 Parts and indexed as 8 "chapters" of 114-254 pages, each
+offering 19-28 lesson parts; 17 kits were generated against that map. Health
+called it "excellent", because the only structure signal was
+``n_chapters >= 3``.
+
+(2026-08-24: the bookmark rung these checks were first built against is GONE
+— founder decision, see the structurer's block comment — so every map here is
+built directly or by the TEXT detectors. The shape/coverage/altitude rules
+are rung-independent and carry over unchanged; the end-to-end text-rung
+regressions live in tests/test_text_rungs.py.)
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
-from agent1_ingestion.extractor import DocItem, TOCItem
+from agent1_ingestion.extractor import DocItem
 from agent1_ingestion.structurer import (_COVERAGE_MARGIN, _LABEL_RE,
                                          _MAX_SPAN_RATIO,
                                          _MAX_UNMAPPED_TAIL_SHARE,
                                          _better_family, _bounded_last_chapter,
-                                         _build_chapters_from_toc,
                                          _chapters_plausible,
                                          _detect_labeled_chapters, _label_run,
                                          _map_coverage, _map_shape, _marker_key,
@@ -25,9 +30,8 @@ from agent1_ingestion.structurer import (_COVERAGE_MARGIN, _LABEL_RE,
                                          _SHAPE_MIN_PAGES,
                                          _marker_number, _median,
                                          _page_text_stats, _pick_detected_map,
-                                         _pick_toc_depth, _ranges_valid,
+                                         _ranges_valid,
                                          _repair_chapter_ranges,
-                                         _toc_chapters_at_depth, _toc_is_usable,
                                          structure_book)
 
 # Roughly one academic page of text — the shape checks estimate lesson-parts
@@ -38,6 +42,13 @@ _PAGE_TEXT = (
     "a simple supply chain, run it, and compare what it does with what the managers "
     "in the case expected it to do. The gap between the two is the lesson. "
 ) * 9
+
+# Distinct real-looking unit titles, so synthetic maps never trip the
+# duplicate-title or family signals a REAL flat book would not trip either.
+_TITLES = ["Cells and organisms", "Materials and matter", "Forces and motion",
+           "Energy transfers", "Earth and space", "Ecosystems", "Light and sound",
+           "Chemical reactions", "Magnetism and electricity", "Waves",
+           "Heat and temperature", "The human body"]
 
 
 def _items(total_pages: int) -> list[DocItem]:
@@ -53,116 +64,25 @@ def _extraction(toc, total_pages, items=None):
     )
 
 
-def _nested_toc() -> list[TOCItem]:
-    """The failing book's shape: 7 Parts, ~3 chapters each, at outline depth 2."""
-    toc = [TOCItem(level=1, title="BusinessDynamics", page_num=0)]
-    page = 26
-    for part in range(1, 8):
-        toc.append(TOCItem(level=1, title=f"Part{chr(0x2160 + part - 1)} Perspective", page_num=page))
-        for ch in range(3):
-            toc.append(TOCItem(level=2, title=f"Chapter {part}.{ch} Learning in complex systems",
-                               page_num=page + ch * 45))
-        page += 140
-    return toc
-
-
-def _flat_toc(n: int, pages_each: int) -> list[TOCItem]:
-    return [TOCItem(level=1, title=f"Unit {i + 1} Living things", page_num=i * pages_each)
+def _flat_map(n: int, pages_each: int, total_pages: int) -> list[dict]:
+    """n units of ``pages_each`` pages, the last elastic to the end of the book
+    — the exact shape every detector emits (each end from the next start, the
+    final unit running to total_pages-1)."""
+    return [{"chapter_num": i,
+             "title": f"Unit {i + 1} {_TITLES[i % len(_TITLES)]}",
+             "start_page": i * pages_each,
+             "end_page": (i + 1) * pages_each - 1 if i < n - 1 else total_pages - 1}
             for i in range(n)]
 
 
-# ── the depth chooser ────────────────────────────────────────────────────────
-
-class TestTocDepth:
-    def test_nested_outline_descends_to_the_chapter_level(self):
-        toc = _nested_toc()
-        total = 1008
-        assert _pick_toc_depth(toc, total, None) == 2
-        chapters = _build_chapters_from_toc(toc, total)
-        # 21 chapters, not the 8 Parts that shipped.
-        assert len(chapters) == 21
-        assert all(c["end_page"] >= c["start_page"] for c in chapters)
-
-    def test_a_level_2_chapter_stops_at_the_next_part(self):
-        # The last chapter of Part 1 must not run on into Part 2.
-        chapters = _build_chapters_from_toc(_nested_toc(), 1008)
-        part2_start = next(t.page_num for t in _nested_toc()[1:] if t.level == 1 and t.page_num > 26)
-        third = chapters[2]
-        assert third["end_page"] < part2_start
-
-    def test_a_legitimate_eight_chapter_book_still_indexes_as_eight(self):
-        # 8 units over 240 pages = 30 pages each. Correct altitude; untouched.
-        toc = _flat_toc(8, 30)
-        assert _pick_toc_depth(toc, 240, None) == 1
-        assert len(_build_chapters_from_toc(toc, 240)) == 8
-
-    def test_a_small_book_is_never_judged(self):
-        # 3 units over 60 pages: "is this a chapter or a Part?" is meaningless
-        # below the size guard, so the map passes untouched.
-        toc = _flat_toc(3, 20)
-        assert _chapters_plausible(_build_chapters_from_toc(toc, 60), 60) is True
-
-    def test_numbered_sections_are_never_chosen_as_chapters(self):
-        # Descending into "3.1 / 3.2 / 3.3" would shatter the book — the
-        # opposite failure to the one being fixed.
-        toc = [TOCItem(level=1, title=f"Chapter {i + 1} Mechanics", page_num=i * 70)
-               for i in range(6)]
-        for i in range(6):
-            for j in range(4):
-                toc.append(TOCItem(level=2, title=f"{i + 1}.{j + 1} Forces and motion",
-                                   page_num=i * 70 + j * 15))
-        toc.sort(key=lambda t: (t.page_num, t.level))
-        assert _pick_toc_depth(toc, 420, None) == 1
-
-    def test_falls_back_to_depth_one_when_no_depth_validates(self):
-        # A single flat outline that fails the envelope has nowhere to descend
-        # to — keeping today's coarse map beats adopting an unvalidated one.
-        toc = _flat_toc(5, 200)
-        assert _pick_toc_depth(toc, 1000, None) == 1
-
-    def test_two_level_one_bookmarks_on_one_page_do_not_force_a_descent(self):
-        # REGRESSION. Preface and Acknowledgements bookmarked on the same page
-        # is one of the commonest real outlines there is (so are Contents +
-        # "How to use this book", and a Part title sharing a page with its
-        # first chapter). The raw map _toc_chapters_at_depth builds for it has
-        # end_page = start_page - 1 and a repeated start, both of which
-        # _ranges_valid rejects — so judging the map UNREPAIRED failed depth 1
-        # and descended to the section layer, turning 9 chapters into 27.
-        toc = [TOCItem(level=1, title="Preface", page_num=4),
-               TOCItem(level=1, title="Acknowledgements", page_num=4)]
-        for i in range(9):
-            start = 10 + i * 21
-            toc.append(TOCItem(level=1, title=f"Chapter {i + 1} Forces and motion",
-                               page_num=start))
-            for j in range(3):  # a real, descendable level-2 layer
-                toc.append(TOCItem(level=2, title=f"Forces at work {j}",
-                                   page_num=start + 5 * (j + 1)))
-
-        # The shape that used to cause it, asserted rather than assumed.
-        assert _ranges_valid(_toc_chapters_at_depth(toc, 1, 200), 200) is False
-        assert len(_toc_chapters_at_depth(toc, 2, 200)) == 27
-
-        assert _pick_toc_depth(toc, 200, None) == 1
-        chapters = _build_chapters_from_toc(toc, 200)
-        assert len(chapters) == 10  # Preface + 9 chapters, never 27
-        assert _ranges_valid(chapters, 200) is True
-
-    def test_a_300_page_book_with_five_60_page_chapters_stays_at_five(self):
-        # REGRESSION. An ordinary university textbook. The median-pages rule was
-        # an absolute 55 with no corroboration, so this was called "the book's
-        # parts, not its chapters" and thrown away — costing a paid detection
-        # pass on a book whose outline was correct.
-        toc = _flat_toc(5, 60)
-        page_stats = _page_text_stats(_items(300))
-        shape = _map_shape(_build_chapters_from_toc(toc, 300), 300, page_stats)
-        assert shape["ok"] is True and shape["median_pages"] == 60
-        assert _pick_toc_depth(toc, 300, page_stats) == 1
-
-        book = structure_book(
-            book_id="b", title="Thermodynamics", author="OUP", isbn=None,
-            extraction=_extraction(toc, 300), images=[],
-        )
-        assert book.total_chapters == 5
+def _heading_items(starts_titles, total_pages: int) -> list[DocItem]:
+    """Level-1 unit headings at the given (page, title) points, over body text
+    — the born-digital shape the text rungs read now that bookmarks are gone."""
+    out = [DocItem(item_type="title", text=t, page_num=p, level=1)
+           for p, t in starts_titles]
+    out += _items(total_pages)
+    out.sort(key=lambda i: (i.page_num, -i.level))
+    return out
 
 
 # ── shape validation ─────────────────────────────────────────────────────────
@@ -208,21 +128,21 @@ class TestMapShape:
 
 
 class TestLastChapterBound:
-    def test_unbookmarked_back_matter_does_not_condemn_a_good_outline(self):
+    def test_unmarked_back_matter_does_not_condemn_a_good_map(self):
         # 10 units of 20 pages in a 300-page book: 100 pages of answers,
-        # glossary and index carry no bookmark, so the final unit measures 40%
-        # of the book and 6x its siblings. Cambridge/NCERT-style textbooks carry
-        # exactly this. Judged UNBOUNDED the map was discarded; judged as it
-        # will actually be stored — with the last-chapter bound applied — it is
-        # a perfectly good 10-chapter map.
-        chapters = _build_chapters_from_toc(_flat_toc(10, 20), 300)
+        # glossary and index carry no detectable heading, so the final unit
+        # measures 40% of the book and 6x its siblings. Cambridge/NCERT-style
+        # textbooks carry exactly this. Judged UNBOUNDED the map was discarded;
+        # judged as it will actually be stored — with the last-chapter bound
+        # applied — it is a perfectly good 10-chapter map.
+        chapters = _flat_map(10, 20, 300)
         assert _map_shape(chapters, 300)["ok"] is False       # raw: rejected
         assert _chapters_plausible(chapters, 300) is True     # bounded: kept
 
     def test_the_bound_reports_the_pages_it_leaves_unmapped(self):
         # Silent content loss is worse than the over-long chapter it replaces:
         # unmapped pages are never extracted, analysed or taught.
-        chapters = _build_chapters_from_toc(_flat_toc(10, 20), 300)
+        chapters = _flat_map(10, 20, 300)
         bounded, unmapped = _bounded_last_chapter(chapters, 300)
         assert unmapped > 0
         assert bounded[-1]["end_page"] + 1 + unmapped == 300
@@ -230,7 +150,7 @@ class TestLastChapterBound:
         assert chapters[-1]["end_page"] == 299
 
     def test_a_normal_tail_is_absorbed_with_nothing_dropped(self):
-        chapters = _build_chapters_from_toc(_flat_toc(9, 38), 344)
+        chapters = _flat_map(9, 38, 344)
         bounded, unmapped = _bounded_last_chapter(chapters, 344)
         assert unmapped == 0 and bounded[-1]["end_page"] == 343
 
@@ -244,14 +164,10 @@ class TestTruncatedMap:
     """
 
     def _stopped_early(self, n, span, total_pages=301):
-        """A TOC of ``n`` units of ``span`` pages, then nothing: the classic
-        shape of detection giving up. The final unit is elastic to the end of
-        the book, exactly as _toc_chapters_at_depth builds it."""
-        return _build_chapters_from_toc(
-            [TOCItem(level=1, title=f"Skill {i + 1} Compare and evaluate",
-                     page_num=i * span) for i in range(n)],
-            total_pages,
-        )
+        """``n`` units of ``span`` pages, then nothing: the classic shape of
+        detection giving up. The final unit is elastic to the end of the book,
+        exactly as every detector builds it."""
+        return _flat_map(n, span, total_pages)
 
     def test_the_bound_alone_can_no_longer_hide_a_truncated_map(self):
         # Production shape: 11 units of 7 pages in a 301-page book. Measured
@@ -287,26 +203,25 @@ class TestTruncatedMap:
             _, unmapped = _bounded_last_chapter(chapters, 301)
             assert _chapters_plausible(chapters, 301) is False, (span, unmapped)
 
-    def test_unbookmarked_back_matter_is_still_accepted(self):
+    def test_unmarked_back_matter_is_still_accepted(self):
         # THE case the bound exists for, and the one this must not break: 10
-        # units of 20 pages in a 300-page book with 100 pages of unbookmarked
+        # units of 20 pages in a 300-page book with 100 pages of unheaded
         # answers, glossary and index. The bound leaves 60 pages unmapped —
         # 20.0% of the book, five points under the gate — so the map is kept.
-        chapters = _build_chapters_from_toc(_flat_toc(10, 20), 300)
+        chapters = _flat_map(10, 20, 300)
         _, unmapped = _bounded_last_chapter(chapters, 300)
         assert unmapped == 60 and unmapped / 300 < _MAX_UNMAPPED_TAIL_SHARE
         assert _chapters_plausible(chapters, 300) is True
 
     def test_back_matter_up_to_a_third_of_the_book_is_still_accepted(self):
         # Headroom, pinned rather than assumed. The same 200-page body of 10
-        # units still validates with a 120-page unbookmarked tail — 37.5% of the
+        # units still validates with a 120-page unheaded tail — 37.5% of the
         # book — because the last unit absorbs 60 of those pages and only the
         # remaining 80 (25.0% of 320) count as unmapped. That is the limit: one
         # page more of back matter and the map goes to the rescue path instead.
         for total in (300, 320):
-            chapters = _build_chapters_from_toc(_flat_toc(10, 20), total)
-            assert _chapters_plausible(chapters, total) is True, total
-        assert _chapters_plausible(_build_chapters_from_toc(_flat_toc(10, 20), 321), 321) is False
+            assert _chapters_plausible(_flat_map(10, 20, total), total) is True, total
+        assert _chapters_plausible(_flat_map(10, 20, 321), 321) is False
 
     def test_a_rejected_map_reaches_the_llm_rescue_again(self, monkeypatch):
         # The point of rejecting it. Before the fix this book never got here:
@@ -324,29 +239,33 @@ class TestTruncatedMap:
 
         monkeypatch.setattr(vision_chapters, "detect_chapters_from_text_llm", _fake_llm)
 
-        toc = [TOCItem(level=1, title=f"Skill {i + 1} Compare and evaluate",
-                       page_num=i * 7) for i in range(11)]
+        # Printed "Chapter N …" headings stopping at page 70 of 301 — the
+        # truncated map now arrives via the labelled text rung.
+        items = _heading_items(
+            [(i * 7, f"Chapter {i + 1} Compare and evaluate") for i in range(11)], 301)
         book = structure_book(
             book_id="b", title="General Paper", author="CUP", isbn=None,
-            extraction=_extraction(toc, 301), images=[], client=object(),
+            extraction=_extraction([], 301, items=items), images=[], client=object(),
         )
         assert calls == ["llm"]
         assert book.chapters[-1].end_page == 300  # the whole book is mapped again
 
-    def test_a_good_outline_never_reaches_the_llm_rescue(self):
+    def test_a_good_map_never_reaches_the_llm_rescue(self):
         # The other side of the same gate: the legitimate back-matter book must
         # not start paying for a detection pass it does not need.
         from agent1_ingestion import vision_chapters
 
         def _boom(*_a, **_k):
-            raise AssertionError("paid detection pass on a good outline")
+            raise AssertionError("paid detection pass on a good book")
 
         original = vision_chapters.detect_chapters_from_text_llm
         vision_chapters.detect_chapters_from_text_llm = _boom
+        items = _heading_items(
+            [(i * 20, f"Unit {i + 1} {_TITLES[i]}") for i in range(10)], 300)
         try:
             book = structure_book(
                 book_id="b", title="Science", author="CUP", isbn=None,
-                extraction=_extraction(_flat_toc(10, 20), 300), images=[],
+                extraction=_extraction([], 300, items=items), images=[],
                 client=object(),
             )
         finally:
@@ -546,21 +465,18 @@ class TestDecimalMarkers:
         assert chapters[0]["title"] == "Feedback loops"
 
     def test_a_decimal_layer_is_not_confused_with_a_bare_subsection_layer(self):
-        # _SUBSEC_RE / _depth_is_sections identify a BARE decimal in an outline
-        # title ("3.2 Feedback loops"). Those never carry a label word, so the two
-        # cannot collide — pinned in both directions.
-        from agent1_ingestion.structurer import _SECTION_NUMBER_RE, _SUBSEC_RE
+        # _SUBSEC_RE identifies a BARE decimal ("3.2 Feedback loops") — the
+        # contents-page and title-boundary helpers' shape. A LABELLED decimal
+        # ("Concept 1.1 …") never collides with it — pinned in both
+        # directions. (_depth_is_sections, the outline-level twin, died with
+        # the bookmark rung, 2026-08-24; the bare-decimal layer is now kept
+        # out of the chapter list by the labelled detectors simply never
+        # matching it, and by the shape checks when a detector-free map
+        # carries it.)
+        from agent1_ingestion.structurer import _SUBSEC_RE
         assert _SUBSEC_RE.match("Concept 1.1 Plants Needs") is None
-        assert _SECTION_NUMBER_RE.match("Concept 1.1 Plants Needs") is None
         assert _SUBSEC_RE.match("3.2 Feedback loops") is not None
-        # …and a genuine numbered-section outline layer is still never descended
-        # into (the pinned case lives in TestTocDepth).
-        toc = [TOCItem(level=1, title=f"Chapter {i + 1} Mechanics", page_num=i * 70)
-               for i in range(6)]
-        toc += [TOCItem(level=2, title=f"{i + 1}.{j + 1} Forces", page_num=i * 70 + j * 15)
-                for i in range(6) for j in range(4)]
-        toc.sort(key=lambda t: (t.page_num, t.level))
-        assert _pick_toc_depth(toc, 420, None) == 1
+        assert _LABEL_RE.match("3.2 Feedback loops") is None
 
 
 class TestCoveragePreference:
@@ -687,33 +603,35 @@ class TestHerBook:
         assert 20 <= _median([c.end_page - c.start_page + 1 for c in book.chapters]) <= 30
 
 
-class TestFileBookmarks:
-    def test_extension_less_filename_bookmarks_are_rejected(self):
-        # Production book 994b8238: all five "chapters" were export slugs, and
-        # the old test needed a literal ".pdf" to notice.
-        toc = [TOCItem(level=1, title=f"esl_cie_asl_genpaper_1ed_tr_ch1.{i}_wksht_TOR",
-                       page_num=i * 20) for i in range(5)]
-        assert _toc_is_usable(toc, 128) is False
-
-    def test_a_real_outline_is_still_usable(self):
-        assert _toc_is_usable(_flat_toc(8, 30), 240) is True
+# (TestFileBookmarks is gone with the bookmark rung, 2026-08-24. The filename
+# CLASS lives on in chapter_quality._looks_like_filename — judged on OUTCOMES,
+# pinned with the fleet fixtures in tests/test_chapter_quality.py.)
 
 
 # ── end to end through structure_book ────────────────────────────────────────
 
 class TestStructureBook:
     def test_nested_book_structures_at_the_chapter_level(self):
+        # Sterman's shape off its PRINTED headings: 7 Part banners containing
+        # 21 Chapter headings. The chapter family must win the altitude fight
+        # exactly as it did when the same shape arrived by outline.
+        starts_titles = [(i * 144, f"Part {'ⅠⅡⅢⅣⅤⅥⅦ'[i]} Perspective") for i in range(7)]
+        starts_titles += [(i * 48, f"Chapter {i + 1} {_TITLES[i % len(_TITLES)]}")
+                          for i in range(21)]
         book = structure_book(
             book_id="b", title="Business Dynamics", author="Sterman", isbn=None,
-            extraction=_extraction(_nested_toc(), 1008), images=[],
+            extraction=_extraction([], 1008, items=_heading_items(starts_titles, 1008)),
+            images=[],
         )
         assert book.total_chapters == 21
         assert max(c.end_page - c.start_page + 1 for c in book.chapters) < 120
 
     def test_flat_book_is_unchanged(self):
+        items = _heading_items(
+            [(i * 38, f"Unit {i + 1} {_TITLES[i]}") for i in range(9)], 344)
         book = structure_book(
             book_id="b", title="Science Y7", author="CUP", isbn=None,
-            extraction=_extraction(_flat_toc(9, 38), 344), images=[],
+            extraction=_extraction([], 344, items=items), images=[],
         )
         assert book.total_chapters == 9
         assert book.chapters[0].start_page == 0
