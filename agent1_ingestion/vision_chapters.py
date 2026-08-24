@@ -46,8 +46,38 @@ _DETECT_MAX_PAGES = 120
 # wrong physical page — the exact scanned-book mislabel this module guards against.
 _DETECT_BATCH = 20
 _TRANSCRIBE_WIDTH = 1000
-_TRANSCRIBE_MAX_PAGES = 18
 _TRANSCRIBE_CHUNK = 6  # pages per call — keeps output well under max_tokens
+
+# A chapter is transcribed to its OWN END — the boundary indexing already
+# established — not to a fixed page budget. The old `_TRANSCRIBE_MAX_PAGES = 18`
+# read the first 18 pages of every chapter and silently dropped the rest, which
+# on the founder's 339-page Cambridge scan meant 162 of 313 teaching pages and
+# only 30 of the book's 44 printed topics ever reached a lesson: a chapter like
+# "Forces and energy" (58pp) stopped after 3.3 Describing movement, so turning
+# forces, both pressure topics and particles on the move could not appear in any
+# worksheet, presentation or EXAM PAPER generated from it. Nothing signalled the
+# gap — the artifacts read as complete — and a real user shipped a six-artifact
+# kit, exam included, built from 19% of a 54-page biology chapter.
+#
+# This is ONLY a runaway guard, deliberately far above any real chapter (the
+# largest here is 58 pages; textbook chapters essentially never exceed ~120).
+# It can bite exactly one class of book: one whose chapter MAP is broken so that
+# a "chapter" spans a large part of the book — and those already gate at index
+# time (health.gate == "confirm", facts.structure_problem). When it does bite,
+# the caller LOGS it, because a silent partial read is the failure this change
+# exists to end.
+_TRANSCRIBE_SANITY_PAGES = 200
+
+
+def transcribe_page_range(start_page: int, end_page: int) -> range:
+    """The pages ``chapter_text_vision`` will actually read for this chapter.
+
+    A pure function of the chapter's own bounds, so a caller can tell whether the
+    read was complete WITHOUT the transcriber reporting back — which keeps the
+    return type a plain string for every existing call site."""
+    first = max(0, int(start_page))
+    last = min(int(end_page), first + _TRANSCRIBE_SANITY_PAGES - 1)
+    return range(first, max(first, last) + 1)
 _JPEG_QUALITY = 60
 
 # A book "has no text" when its extracted items total less than this.
@@ -810,9 +840,11 @@ def chapter_text_vision(pdf_path: str | Path, start_page: int, end_page: int, cl
     """Transcribe a scanned chapter's pages (0-indexed, inclusive) to plain text.
 
     Used at generation time so the lesson pipeline has real chapter content.
-    Caps at _TRANSCRIBE_MAX_PAGES pages to bound cost.
+    Reads the chapter to its OWN END — see ``transcribe_page_range`` and
+    ``_TRANSCRIBE_SANITY_PAGES`` for the one case that still stops early.
     """
-    last = min(end_page, start_page + _TRANSCRIBE_MAX_PAGES - 1)
+    pages = transcribe_page_range(start_page, end_page)
+    start_page, last = pages.start, pages.stop - 1
     prompt = (
         "These are consecutive pages of one chapter of a school textbook. "
         "Transcribe the educational content faithfully as plain text, in reading "

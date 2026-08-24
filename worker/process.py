@@ -198,6 +198,15 @@ def _range_label(nums: list[int]) -> str:
     return ("Chapter " if len(ns) == 1 else "Chapters ") + ", ".join(parts)
 
 
+# Ceiling on the per-chapter text we STORE (chapter_grounding.source_text).
+# Was an inline 60,000 (~43 pages), which silently beheaded any longer chapter.
+# Nothing sends this whole string to a model — agent2_analysis chunks it at
+# MAX_ANALYSIS_CHARS per part — so the only thing a tight bound bought was
+# missing teaching material at the end of long chapters. Kept generous rather
+# than unbounded so one pathological book cannot write an unbounded row.
+_SOURCE_TEXT_MAX_CHARS = 600_000
+
+
 def _combine_chapters(all_chapters: list[dict], wanted: list, sb: Client, book_id: str,
                       cap_per: int = 6000, cap_total: int = 30000) -> dict:
     """Merge the selected chapters into ONE synthetic chapter for a cumulative
@@ -291,6 +300,20 @@ def _combine_units(all_chapters: list[dict], scope: list, sb: Client, book_id: s
         if pt >= 1:
             parts = build_chapter_parts(c)
             if pt > len(parts):
+                # The teacher TICKED this unit for the paper and it is being
+                # dropped. Skipping stays the behaviour — failing a paid
+                # generation outright is worse — but it must never be silent:
+                # a revision paper that quietly covers fewer units than were
+                # asked for is indistinguishable from one that covered them all.
+                # Made far rarer by reading a chapter to its own end (the old
+                # 18-page transcription cap left a 58-page chapter with ~3
+                # buildable parts against the 10 its map offered), but a part map
+                # estimated from PAGE count can still outrun the text.
+                logger.error(
+                    "CUMULATIVE PAPER DROPPED A TICKED UNIT: %r part %d requested, only %d "
+                    "part(s) buildable — that unit contributes NOTHING to this paper.",
+                    ctitle, pt, len(parts),
+                )
                 continue
             pk = parts[pt - 1]
             text = pk.get("text", "") or ""
@@ -462,12 +485,29 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 # reuses it instead of re-running the multi-call, ~minutes-long OCR.
                 ocr_text = db.get_chapter_source_text(sb, book_id, chapter_num)
                 if not ocr_text:
-                    from agent1_ingestion.vision_chapters import chapter_text_vision
+                    from agent1_ingestion.vision_chapters import (
+                        chapter_text_vision, transcribe_page_range)
 
-                    ocr_text = chapter_text_vision(
-                        str(pdf_path), int(chapter.get("start_page", 0)),
-                        int(chapter.get("end_page", 0)), client,
-                    )
+                    _s = int(chapter.get("start_page", 0))
+                    _e = int(chapter.get("end_page", 0))
+                    # The chapter is read to its own end. The ONLY way it is not
+                    # is the runaway guard, which cannot trip on a real chapter —
+                    # so if it does, the chapter map is broken and the teacher is
+                    # about to be taught from part of a book. Never silent: a
+                    # partial read that looked complete is exactly how a
+                    # six-artifact kit, exam included, once shipped from 19% of a
+                    # 54-page chapter.
+                    _read = transcribe_page_range(_s, _e)
+                    if len(_read) < (_e - _s + 1):
+                        logger.error(
+                            "PARTIAL TRANSCRIPTION book=%s ch=%s: pages %d-%d requested, %d-%d read "
+                            "(%d of %d). The chapter map is almost certainly wrong — a real chapter "
+                            "is not this long. Everything past page %d is absent from every artifact "
+                            "generated for this chapter.",
+                            book_id, chapter_num, _s + 1, _e + 1, _read.start + 1, _read.stop,
+                            len(_read), _e - _s + 1, _read.stop,
+                        )
+                    ocr_text = chapter_text_vision(str(pdf_path), _s, _e, client)
                     if ocr_text:
                         db.set_chapter_source_text(sb, book_id, chapter_num, ocr_text)
                 if ocr_text:
@@ -1465,7 +1505,22 @@ def index_book(sb: Client, job: dict) -> None:
                     t for p in range(ch["start_page"], ch["end_page"] + 1) for t in by_page.get(p, [])
                 ).strip()
                 if len(text) >= 200:  # substantial text only — never clobber OCR with emptiness
-                    db.set_chapter_source_text(sb, book_id, ch["num"], text[:60000])
+                    # The text-layer twin of the OCR cap. 60,000 chars is ~43
+                    # pages, so a long chapter was silently beheaded here too:
+                    # two chapters of a live Cambridge Primary book (52pp and
+                    # 50pp) sit at EXACTLY 60000, i.e. both lost their tail. The
+                    # bound was for prompt size, but nothing prompts with this
+                    # whole string — analyzer.py chunks it at 15,000 chars per
+                    # part, so capping it only deleted the parts that would have
+                    # taught the end of the chapter.
+                    if len(text) > _SOURCE_TEXT_MAX_CHARS:
+                        logger.warning(
+                            "book %s ch%s: chapter text %d chars exceeds the %d-char store bound "
+                            "— tail dropped; pages %d-%d may be partly untaught",
+                            book_id, ch["num"], len(text), _SOURCE_TEXT_MAX_CHARS,
+                            ch["start_page"] + 1, ch["end_page"] + 1,
+                        )
+                    db.set_chapter_source_text(sb, book_id, ch["num"], text[:_SOURCE_TEXT_MAX_CHARS])
                     persisted += 1
                     if len(lang_sample) < 3:
                         lang_sample.append(text[:8000])

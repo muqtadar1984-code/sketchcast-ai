@@ -640,3 +640,84 @@ class TestContentsPageSetsTheAltitude:
                  (120, "D", "unit"), (180, "E", "unit")]
         _drop_subsections_below_contents(found, contents)
         assert (120, "D", "unit") in found and (180, "E", "unit") in found
+
+
+class TestChapterIsReadToItsOwnEnd:
+    """A chapter is transcribed to the boundary indexing established, not to a
+    fixed page budget.
+
+    THE DEFECT THIS REPLACES. `_TRANSCRIBE_MAX_PAGES = 18` read the first 18
+    pages of every chapter and silently dropped the rest. Measured on the
+    founder's 341-page Cambridge LB8 scan (book 3a6b0ecc, 9 chapters, 313
+    teaching pages): 162 pages read, and only 30 of the book's 44 printed topics
+    reachable. "Forces and energy" (58pp) stopped after 3.3 Describing movement,
+    so 3.4 Turning forces, 3.5/3.6 Pressure and 3.7 Particles on the move could
+    not appear in ANY artifact generated from that chapter.
+
+    It was not theoretical: a real user generated a six-artifact kit — lesson
+    plan, worksheet, case study, activity, presentation and EXAM PAPER, 13 files
+    — from a 54-page biology chapter of which 10 pages had been transcribed. The
+    cached text ends mid-sentence inside the Krebs cycle. Nothing in the output
+    said so, which is the point: the failure is silent, and an exam built from a
+    fifth of a chapter under-tests students on material they were taught.
+    """
+
+    # The real chapter geometry of the founder's book (0-indexed, inclusive).
+    BOOK = [(9, 40), (41, 68), (69, 126), (127, 152), (153, 190),
+            (191, 233), (234, 263), (264, 293), (294, 321)]
+
+    def test_every_chapter_of_the_founders_book_is_read_whole(self):
+        from agent1_ingestion.vision_chapters import transcribe_page_range
+
+        total = read = 0
+        for s, e in self.BOOK:
+            rng = transcribe_page_range(s, e)
+            assert (rng.start, rng.stop - 1) == (s, e), f"chapter {s}-{e} not read whole"
+            total += e - s + 1
+            read += len(rng)
+        assert (total, read) == (313, 313), "all 313 teaching pages must be transcribed"
+
+    def test_the_old_eighteen_page_budget_is_gone(self):
+        """Tripwire: an accidental reintroduction of a page budget fails loudly
+        rather than quietly costing teachers the end of every chapter."""
+        import agent1_ingestion.vision_chapters as vc
+
+        assert not hasattr(vc, "_TRANSCRIBE_MAX_PAGES")
+        # The chapter that lost the most under the old cap: 58 pages, 18 read.
+        assert len(vc.transcribe_page_range(69, 126)) == 58
+
+    def test_a_broken_chapter_map_still_cannot_run_away(self):
+        """The guard is a runaway limit, not a budget: it sits far above any real
+        chapter, so it can only trip on a map that is already wrong (and already
+        gated at index time)."""
+        from agent1_ingestion.vision_chapters import (_TRANSCRIBE_SANITY_PAGES,
+                                                      transcribe_page_range)
+
+        assert _TRANSCRIBE_SANITY_PAGES >= 120, "must not bite a real textbook chapter"
+        # Sara's book indexed to ONE whole-book chapter — the pathological case.
+        assert len(transcribe_page_range(0, 340)) == _TRANSCRIBE_SANITY_PAGES
+        # …and a real chapter of any plausible size is untouched.
+        for span in (18, 32, 58, 90, 119):
+            assert len(transcribe_page_range(10, 10 + span - 1)) == span
+
+    def test_degenerate_bounds_do_not_explode(self):
+        from agent1_ingestion.vision_chapters import transcribe_page_range
+
+        assert len(transcribe_page_range(5, 5)) == 1          # single-page chapter
+        assert len(transcribe_page_range(9, 3)) == 1          # end before start
+        assert transcribe_page_range(-4, 2).start == 0        # negative start clamped
+
+    def test_the_stored_text_bound_no_longer_beheads_a_long_chapter(self):
+        """The text-layer twin of the same bug: 60,000 chars is ~43 pages, and
+        two chapters of a live Cambridge Primary book sit at EXACTLY 60000 —
+        both lost their tail. Nothing prompts with this whole string (analyzer
+        chunks it), so the bound only deleted teaching material."""
+        import re
+        from pathlib import Path
+
+        src = Path("worker/process.py").read_text(encoding="utf-8")
+        assert "text[:60000]" not in src, "the 60,000-char behead is back"
+        m = re.search(r"_SOURCE_TEXT_MAX_CHARS\s*=\s*([0-9_]+)", src)
+        assert m, "the store bound must be a named constant, not a magic number"
+        # ~43 pages was the old ceiling; a real long chapter needs far more.
+        assert int(m.group(1).replace("_", "")) >= 200_000
