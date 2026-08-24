@@ -246,6 +246,67 @@ def set_book_chapters(sb: Client, book_id: str, chapters: list[dict], status: st
     sb.table("books").update({"chapters": chapters, "status": status}).eq("id", book_id).execute()
 
 
+def set_chapter_parts(sb: Client, book_id: str, chapter_num: int, parts: list[dict],
+                      expect_start: Optional[int] = None,
+                      expect_end: Optional[int] = None) -> bool:
+    """Replace ONE chapter's part map in books.chapters. Best-effort; never raises.
+
+    Deliberately NOT set_book_chapters, for two reasons. That one also writes
+    ``status``, and this runs in the middle of a generation — flipping a book's
+    status from under the app is not this function's business. And it takes the
+    whole array from a caller that may be holding a stale copy; this re-reads
+    immediately before writing so every OTHER chapter is carried forward at its
+    current value.
+
+    The remaining race is benign and self-healing. Two chapters of one book can
+    be generated concurrently (claim_next_job has no per-book exclusion and
+    WORKER_CONCURRENCY may exceed 1), and if both land inside this read-modify-
+    write one measurement is lost. What survives is the ESTIMATE for that
+    chapter, which the next generation of it measures again — no corruption, no
+    wrong number, just one more generation before the map is exact. Paying for a
+    migration and an RPC to close that would buy nothing a retry does not.
+
+    Returns True when the row was written.
+    """
+    try:
+        rows = sb.table("books").select("chapters").eq("id", book_id).limit(1).execute().data or []
+        chapters = (rows[0].get("chapters") if rows else None) or []
+        if not isinstance(chapters, list):
+            return False
+        hit = False
+        for ch in chapters:
+            if isinstance(ch, dict) and str(ch.get("num")) == str(chapter_num):
+                # The measurement belongs to the pages it was taken from. If the
+                # re-read shows different bounds, a re-index or a heal moved this
+                # chapter while the generation ran, and the stored map now
+                # describes a different span — writing ours would overwrite fresh
+                # truth with a stale count.
+                if expect_start is not None and expect_end is not None:
+                    try:
+                        if (int(ch.get("start_page", -1)) != int(expect_start)
+                                or int(ch.get("end_page", -1)) != int(expect_end)):
+                            logging.getLogger("worker").info(
+                                "part map skipped for %s ch%s — pages moved to %s-%s while "
+                                "measuring %s-%s", book_id, chapter_num,
+                                ch.get("start_page"), ch.get("end_page"), expect_start, expect_end,
+                            )
+                            return False
+                    except (TypeError, ValueError):
+                        return False
+                ch["parts"] = parts
+                hit = True
+                break
+        if not hit:
+            return False
+        sb.table("books").update({"chapters": chapters}).eq("id", book_id).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning(
+            "part map not persisted for %s ch%s: %s", book_id, chapter_num, exc
+        )
+        return False
+
+
 def set_book_meta(
     sb: Client,
     book_id: str,

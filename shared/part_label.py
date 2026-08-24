@@ -117,3 +117,72 @@ def part_label(
     label = f"{name} · Part {part_n} of {total_n}"
     heading = part_heading(titles, chapter_title)
     return f"{label} — {heading}" if heading else label
+
+
+# Below this much real chapter text, a "measurement" is not one. Mirrors the
+# worker's own `section_chars < 200` test for "this chapter has no usable text",
+# so the two agree on when a scanned chapter counts as transcribed.
+_MIN_MEASURABLE_CHARS = 200
+
+
+def measured_parts_for(chapter: dict, previous: list | None = None) -> list[dict] | None:
+    """The part map a chapter's REAL text produces, or None to keep what is stored.
+
+    A scanned book has no text at index time, so its map is inferred from page
+    count at EST_WORDS_PER_PAGE = 250 — while a real scanned, illustrated
+    textbook page measures about 145 words. The estimate therefore OVER-OFFERS:
+    on the reference book, 44 parts advertised against 29 that could be built,
+    and a teacher clicking part 8 of a 5-part chapter was told "part 8 does not
+    exist. If the book's chapters changed, re-index it" — advice that cannot fix
+    an estimate.
+
+    Once the chapter has been transcribed there is nothing left to guess. Call
+    this with the chapter dict whose ``sections`` hold the OCR; generation later
+    runs build_chapter_parts on that same dict, so the stored count and the
+    buildable count agree BY CONSTRUCTION instead of by calibration.
+
+    Returns None — meaning leave the stored map alone — when the text yields
+    nothing real, or when the stored map already says the same thing. Lives here
+    rather than in the worker because everything it does is pure, and worker/
+    cannot be imported without the supabase package.
+    """
+    from agent2_analysis.analyzer import build_chapter_parts
+
+    # Is there REAL text here? Ask the chapter's own content, never the chunker's
+    # output. build_chapter_parts prefixes each unit with "## <section title>",
+    # so a chapter whose OCR came back EMPTY still yields one part of two words
+    # ("##", "Content") — enough to look like a measurement and overwrite a
+    # perfectly good 8-part map with a single junk row. A failed transcription
+    # must leave the stored map exactly as it found it.
+    content_chars = sum(
+        len((sec.get("content") or ""))
+        + sum(len((sub.get("content") or "")) for sub in (sec.get("subsections") or []))
+        for sec in (chapter.get("sections") or [])
+    )
+    if content_chars < _MIN_MEASURABLE_CHARS:
+        return None
+
+    measured = [
+        {"titles": clean_part_titles(p.get("section_titles"), chapter.get("title", "")),
+         "words": int(p.get("words", 0))}
+        for p in build_chapter_parts(chapter)
+    ]
+    if not measured or not any(p["words"] for p in measured):
+        return None
+
+    old = [p for p in (previous or []) if isinstance(p, dict)]
+
+    # A gated book's PAGE RANGES are what health called suspect, and measuring
+    # words inside a suspect range does not make the range right — so
+    # low_confidence rides along if it was there. The count is real now; its
+    # provenance is not.
+    if any(p.get("low_confidence") for p in old):
+        for p in measured:
+            p["low_confidence"] = True
+
+    already = (
+        len(old) == len(measured)
+        and not any(p.get("estimated") for p in old)
+        and [p.get("words") for p in old] == [p["words"] for p in measured]
+    )
+    return None if already else measured

@@ -67,6 +67,7 @@ _TRANSCRIBE_CHUNK = 6  # pages per call — keeps output well under max_tokens
 # the caller LOGS it, because a silent partial read is the failure this change
 # exists to end.
 _TRANSCRIBE_SANITY_PAGES = 200
+_JPEG_QUALITY = 60
 
 
 def transcribe_page_range(start_page: int, end_page: int) -> range:
@@ -78,7 +79,6 @@ def transcribe_page_range(start_page: int, end_page: int) -> range:
     first = max(0, int(start_page))
     last = min(int(end_page), first + _TRANSCRIBE_SANITY_PAGES - 1)
     return range(first, max(first, last) + 1)
-_JPEG_QUALITY = 60
 
 # A book "has no text" when its extracted items total less than this.
 _MIN_TEXT_CHARS = 200
@@ -836,13 +836,25 @@ def detect_chapters_from_text_llm(extraction, client) -> list[dict]:
     return defs
 
 
-def chapter_text_vision(pdf_path: str | Path, start_page: int, end_page: int, client) -> str:
+def chapter_text_vision(pdf_path: str | Path, start_page: int, end_page: int, client,
+                        report: dict | None = None) -> str:
     """Transcribe a scanned chapter's pages (0-indexed, inclusive) to plain text.
 
     Used at generation time so the lesson pipeline has real chapter content.
     Reads the chapter to its OWN END — see ``transcribe_page_range`` and
     ``_TRANSCRIBE_SANITY_PAGES`` for the one case that still stops early.
+
+    Pass ``report`` (a dict) to learn how much was actually read: it is filled
+    with ``pages_requested`` and ``pages_done``. A caller cannot infer that from
+    the returned string, and the two differ for a reason that matters — on an
+    API failure mid-loop this returns the chunks it already has rather than
+    losing them, so a SHORT transcription can look like a complete one. Anything
+    that treats the text as a measurement of the chapter needs to know the
+    difference. Optional and ignored by every existing call site.
     """
+    if report is not None:
+        report["pages_requested"] = max(0, int(end_page) - int(start_page) + 1)
+        report["pages_done"] = 0
     pages = transcribe_page_range(start_page, end_page)
     start_page, last = pages.start, pages.stop - 1
     prompt = (
@@ -866,6 +878,8 @@ def chapter_text_vision(pdf_path: str | Path, start_page: int, end_page: int, cl
             result = client.transcribe_images(paths, prompt, max_tokens=8000)
             if result.get("text"):
                 parts.append(result["text"])
+                if report is not None:
+                    report["pages_done"] = report.get("pages_done", 0) + len(paths)
             for p in paths:
                 p.unlink(missing_ok=True)
         text = "\n\n".join(parts).strip()

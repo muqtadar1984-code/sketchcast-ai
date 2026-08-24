@@ -207,6 +207,92 @@ def _range_label(nums: list[int]) -> str:
 _SOURCE_TEXT_MAX_CHARS = 600_000
 
 
+def _measured_from_cached_ocr(sb: Client, book_id: str, ch: dict) -> list[dict] | None:
+    """A scanned chapter's part map from its ALREADY-CACHED transcription, if any.
+
+    Used at INDEX time. Re-indexing rewrites books.chapters wholesale, and for a
+    scanned book the part map falls back to a page-count estimate — so every map
+    a generation had measured from real OCR was thrown away on the next index.
+    That was self-defeating twice over, because the message a teacher gets when
+    the estimate over-offers is "part 8 does not exist. If the book's chapters
+    changed, re-index it to refresh the part map" — advice that REVERTED the
+    only thing that could fix it.
+
+    The transcription outlives the index, so when it is there the guess is
+    unnecessary. Only trusted when the cached text still describes THESE pages:
+    chapter_grounding is keyed by chapter_num alone, so a re-index that moved
+    chapter 3 would otherwise measure the new range with the old chapter's text.
+    """
+    try:
+        text = db.get_chapter_source_text(sb, book_id, int(ch["num"]))
+        if not text:
+            return None
+        heal = db.get_chapter_heal(sb, book_id, int(ch["num"])) or {}
+        hs, he = heal.get("heal_start_page"), heal.get("heal_end_page")
+        if hs is not None and he is not None and (
+            int(hs) != int(ch["start_page"]) or int(he) != int(ch["end_page"])
+        ):
+            return None  # the cache belongs to a different span than this map
+        from shared.part_label import measured_parts_for
+
+        return measured_parts_for({
+            "title": ch.get("title", ""),
+            "sections": [{"section_title": "Content", "section_type": "body",
+                          "content": text, "page_num": ch.get("start_page", 0),
+                          "subsections": []}],
+        }, [])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("cached-OCR part map skipped for %s ch%s: %s", book_id, ch.get("num"), exc)
+        return None
+
+
+def _persist_measured_parts(sb: Client, book_id: str, chapter_num: int,
+                            chapter: dict, book: dict) -> None:
+    """Swap a scanned chapter's ESTIMATED part map for the measured one.
+
+    Runs the moment OCR lands, on the very dict generation will chunk, so the
+    advertised count and the buildable count cannot disagree. Costs nothing: the
+    transcription already happened and the chunker is pure Python. The first
+    generation of a chapter fixes its count for everyone afterwards.
+
+    All the judgement lives in shared.part_label.measured_parts_for (pure, and
+    therefore testable — worker/ cannot be imported without supabase). Anything
+    that goes wrong is logged and swallowed: a part map is a LABEL, and losing
+    one must never cost a teacher the generation they paid for.
+    """
+    try:
+        from agent1_ingestion.vision_chapters import transcribe_page_range
+        from shared.part_label import measured_parts_for
+
+        start = int(chapter.get("start_page", 0))
+        end = int(chapter.get("end_page", start))
+        # Never publish a map measured from a PARTIAL read. The runaway guard
+        # stops transcription short only on a chapter whose map is already
+        # broken, and freezing that into a stored count would trade a LOUD
+        # failure ("part 8 does not exist") for a silent one: the book would
+        # simply advertise 3 parts forever and never mention the other six.
+        if len(transcribe_page_range(start, end)) < (end - start + 1):
+            logger.warning(
+                "part map NOT measured for %s ch%s — the transcription was partial, "
+                "so the count would understate the chapter", book_id, chapter_num,
+            )
+            return
+
+        stored = next((c for c in (book.get("chapters") or [])
+                       if isinstance(c, dict) and str(c.get("num")) == str(chapter_num)), None)
+        old = (stored or {}).get("parts") or []
+        measured = measured_parts_for(chapter, old)
+        if measured and db.set_chapter_parts(sb, book_id, chapter_num, measured,
+                                             expect_start=start, expect_end=end):
+            logger.info(
+                "part map MEASURED from OCR for %s ch%s: %d part(s) (was %d, %s)",
+                book_id, chapter_num, len(measured), len(old),
+                "estimated" if any(isinstance(p, dict) and p.get("estimated") for p in old) else "unset",
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("measured part map skipped for %s ch%s: %s", book_id, chapter_num, exc)
+
+
 def _combine_chapters(all_chapters: list[dict], wanted: list, sb: Client, book_id: str,
                       cap_per: int = 6000, cap_total: int = 30000) -> dict:
     """Merge the selected chapters into ONE synthetic chapter for a cumulative
@@ -463,6 +549,12 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             chapter["end_page"] = int(heal["end_page"])
             healed_text = heal.get("source_text")
 
+        # Was the chapter's text read WHOLE? Only a complete read may become a
+        # stored part count — see _persist_measured_parts. Unknown (cached or
+        # heal-supplied text) counts as complete: the alternative is refusing to
+        # ever measure a chapter transcribed before this shipped.
+        ocr_complete = True
+
         # Scanned book (no text layer) → the chapter has no content for the
         # pipeline to teach from. Transcribe its pages with Claude vision once,
         # up front, so every generation kind gets real chapter text.
@@ -507,7 +599,24 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                             book_id, chapter_num, _s + 1, _e + 1, _read.start + 1, _read.stop,
                             len(_read), _e - _s + 1, _read.stop,
                         )
-                    ocr_text = chapter_text_vision(str(pdf_path), _s, _e, client)
+                    _report: dict = {}
+                    ocr_text = chapter_text_vision(str(pdf_path), _s, _e, client, report=_report)
+                    # The bounds check above catches the runaway clamp. It cannot
+                    # catch the OTHER way this comes back short: on an API failure
+                    # mid-loop the transcriber returns the chunks it already has
+                    # rather than losing them, so a half-read chapter looks like a
+                    # whole one. Only the transcriber knows, so it now says.
+                    _done = int(_report.get("pages_done", 0))
+                    _want = int(_report.get("pages_requested", 0))
+                    if _want and _done < _want:
+                        ocr_complete = False
+                        logger.error(
+                            "PARTIAL TRANSCRIPTION book=%s ch=%s: %d of %d pages transcribed — "
+                            "the artifacts for this chapter will be built from part of it",
+                            book_id, chapter_num, _done, _want,
+                        )
+                    if len(_read) < (_e - _s + 1):
+                        ocr_complete = False
                     if ocr_text:
                         db.set_chapter_source_text(sb, book_id, chapter_num, ocr_text)
                 if ocr_text:
@@ -590,6 +699,17 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 # that is actually present; the next run can recover.
                 raise RuntimeError(_chapter_check_error(chapter_title, actual))
         db.set_progress(sb, job_id, 20)
+
+        # The chapter's text is final HERE and not before: the OCR block above
+        # is only one of three ways sections get filled — a persisted heal
+        # override installs its own text without ever entering it, and a
+        # relocation REPLACES both the text and the pages afterwards. Measuring
+        # at the OCR site therefore missed exactly the chapters whose estimates
+        # were worst, and could be stale for the third. Measuring here covers
+        # all three and cannot go stale.
+        if ocr_complete and not is_cumulative:
+            _persist_measured_parts(sb, book_id, chapter_num, chapter, book)
+
 
         # ── ON-DEMAND SINGLE PART (params.part = k, 2026-07-18) ──────────────
         # The part map is computed at INDEX time with the same chunker, so a
@@ -1454,6 +1574,23 @@ def index_book(sb: Client, job: dict) -> None:
                 if any(p["words"] for p in measured):
                     ch["parts"] = measured
                 else:
+                    # A SCANNED chapter has no text here, so this used to fall
+                    # straight to the page estimate — which silently UNDID every
+                    # map a generation had already measured from the real OCR,
+                    # because indexing rewrites books.chapters wholesale. Worse,
+                    # the error a teacher sees when the estimate over-offers
+                    # ("part 8 does not exist. If the book's chapters changed,
+                    # re-index it") advises the very action that reverts the fix.
+                    # If this chapter has been transcribed, that transcription is
+                    # still the truth: measure from it and never guess again.
+                    cached = _measured_from_cached_ocr(sb, book_id, ch)
+                    if cached:
+                        ch["parts"] = cached
+                        logger.info(
+                            "part map MEASURED from cached OCR for %s ch%s: %d part(s) "
+                            "(re-index kept the measurement)", book_id, ch.get("num"), len(cached),
+                        )
+                        continue
                     estimated = parts_from_pages(ch)
                     if estimated:
                         ch["parts"] = estimated
