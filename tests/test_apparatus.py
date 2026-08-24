@@ -375,3 +375,268 @@ class TestHealPoolExcludesApparatus:
         )
         # The only candidate is apparatus → filtered → no units → incomplete.
         assert out["status"] == "incomplete"
+
+
+class TestContentsPageSetsTheAltitude:
+    """The contents page is the book's ALTITUDE authority, not just a source of
+    pages the 120-page window never reached.
+
+    THE MEASURED FAILURE. The founder re-uploaded the dokumen.pub LB8 scan on
+    2026-08-24 against the shipped bookmark-free pipeline and got SEVENTEEN
+    chapters for a nine-unit book (stored book 3c46ac8d). Units 4-9 were
+    perfect — they came from the contents route. Units 1 and 3 were shredded
+    into their own subsections, because they sit inside the window and the
+    window scan reports whatever looks like an opener at whatever depth the
+    page happens to show:
+
+        Respiration | 1.3 Breathing | 1.4 Respiration | 1.5 Blood |
+        Properties of materials | Forces and energy | 3.3 Describing movement |
+        3.4 Turning forces | 3.5 Pressure between solids |
+        3.6 Pressure in liquids and gases | 3.7 Particles on the move |
+        Ecosystems | ... | Magnetism
+
+    The guardrails behaved correctly on it — gate "confirm", 58/fair,
+    structure_problem true, and problems[] naming the exact defect ("section
+    numbers like 1.3 appear as whole chapters"). That is the honest FLOOR. It
+    is not the answer, because the book prints its own nine units on its
+    contents page, which the pipeline had already read and calibrated.
+    """
+
+    # The real geometry: the nine unit openers the contents page names (0-indexed
+    # physical pages, calibrated offset +1 as measured), plus its two back-matter
+    # entries. Apparatus stays in the opener list to bound unit 9's end.
+    CONTENTS = [
+        (9, "1 Respiration", "unit"), (41, "2 Properties of materials", "unit"),
+        (69, "3 Forces and energy", "unit"), (127, "4 Ecosystems", "unit"),
+        (153, "5 Materials and cycles on Earth", "unit"), (191, "6 Light", "unit"),
+        (234, "7 Diet and growth", "unit"), (264, "8 Chemical reactions", "unit"),
+        (294, "9 Magnetism", "unit"), (322, "Science Skills", "apparatus"),
+        (327, "Glossary and index", "apparatus"),
+    ]
+    # Exactly what the window scan + contents route produced on the live run.
+    FOUND = [
+        (9, "Respiration", "unit"), (20, "1.3 Breathing", "unit"),
+        (26, "1.4 Respiration", "unit"), (33, "1.5 Blood", "unit"),
+        (41, "Properties of materials", "unit"), (69, "Forces and energy", "unit"),
+        (85, "3.3 Describing movement", "unit"), (92, "3.4 Turning forces", "unit"),
+        (100, "3.5 Pressure between solids", "unit"),
+        (108, "3.6 Pressure in liquids and gases", "unit"),
+        (115, "3.7 Particles on the move", "unit"), (127, "Ecosystems", "unit"),
+        (153, "Materials and cycles on Earth", "unit"), (191, "Light", "unit"),
+        (234, "Diet and growth", "unit"), (264, "Chemical reactions", "unit"),
+        (294, "Magnetism", "unit"), (322, "Science Skills", "apparatus"),
+        (327, "Glossary and index", "apparatus"),
+    ]
+
+    def test_the_live_seventeen_chapter_result_becomes_the_nine_real_units(self):
+        from agent1_ingestion.vision_chapters import (
+            _drop_subsections_below_contents, _starts_to_defs)
+
+        found = list(self.FOUND)
+        _drop_subsections_below_contents(found, self.CONTENTS)
+        defs = _starts_to_defs(found, 339)
+
+        units = [d for d in defs if d.get("kind") != "apparatus"]
+        assert [u["title"] for u in units] == [
+            "Respiration", "Properties of materials", "Forces and energy",
+            "Ecosystems", "Materials and cycles on Earth", "Light",
+            "Diet and growth", "Chemical reactions", "Magnetism",
+        ]
+        # Not one decimal section survives as a chapter.
+        assert not [u for u in units if u["title"][:2] in ("1.", "3.")]
+        # And the shredding left a 3-page hole (1.4 ended 30, 1.5 opened 33);
+        # unit 1 is contiguous again.
+        assert (units[0]["start_page"], units[0]["end_page"]) == (9, 40)
+
+    def test_a_numbering_gap_protects_the_unit_the_contents_read_missed(self):
+        """The one way this function could destroy teaching material: a PARTIAL
+        contents read deleting a real unit and merging two others into one
+        chapter. The printed unit numbers are the guard — where they jump, the
+        page has left a unit-shaped hole and whatever the window found in it
+        stands."""
+        from agent1_ingestion.vision_chapters import _drop_subsections_below_contents
+
+        # The read returned units 1,2,3,4,5,7,8,9 — "6 Light" never came back.
+        contents = [c for c in self.CONTENTS if c[0] != 191]
+        found = [(9, "Respiration", "unit"), (41, "Properties", "unit"),
+                 (69, "Forces", "unit"), (127, "Ecosystems", "unit"),
+                 (153, "Materials", "unit"), (191, "Light", "unit"),
+                 (234, "Diet", "unit"), (294, "Magnetism", "unit")]
+        _drop_subsections_below_contents(found, contents)
+        assert (191, "Light", "unit") in found, \
+            "a unit sitting in the contents page's own numbering gap must survive"
+
+    def test_a_subsection_inside_a_closed_span_still_goes_despite_a_gap(self):
+        """The gap protection is SPAN-LOCAL, not a global amnesty: units 5 and 7
+        being non-adjacent says nothing about the stretch between units 1 and 2,
+        where the page still asserts there is no room."""
+        from agent1_ingestion.vision_chapters import _drop_subsections_below_contents
+
+        contents = [c for c in self.CONTENTS if c[0] != 191]
+        found = [(9, "Respiration", "unit"), (20, "1.3 Breathing", "unit"),
+                 (41, "Properties", "unit"), (191, "Light", "unit")]
+        _drop_subsections_below_contents(found, contents)
+        pages = [p for p, _t, _k in found]
+        assert 20 not in pages and 191 in pages
+
+    def test_a_decimal_section_number_never_closes_a_span(self):
+        """If a subsection leaks into the contents list itself, reading "1.3" as
+        unit 1 would make 1.3→2 look consecutive and close a span the book never
+        closed. The number parser rejects decimals outright."""
+        from agent1_ingestion.vision_chapters import _contents_unit_number
+
+        assert _contents_unit_number("1 Respiration") == 1
+        assert _contents_unit_number("Unit 3: Forces and energy") == 3
+        assert _contents_unit_number("Bab 4 - Tenaga") == 4
+        assert _contents_unit_number("1.3 Breathing") is None
+        assert _contents_unit_number("Glossary and index") is None
+        assert _contents_unit_number("المحتويات") is None
+
+    def test_the_title_backstop_works_without_any_contents_page(self):
+        """Most defective scans in the fleet audit have no readable contents
+        page. There the reconciler has nothing to reconcile against, and a
+        numbered sub-section is caught on its own title or not at all."""
+        from agent1_ingestion.vision_chapters import _drop_subsection_openers
+
+        found = list(self.FOUND)
+        _drop_subsection_openers(found)
+        assert [t[1] for t in found] == [
+            "Respiration", "Properties of materials", "Forces and energy",
+            "Ecosystems", "Materials and cycles on Earth", "Light",
+            "Diet and growth", "Chemical reactions", "Magnetism",
+            "Science Skills", "Glossary and index",
+        ]
+
+    def test_the_backstop_stands_down_rather_than_empty_a_book(self):
+        from agent1_ingestion.vision_chapters import _drop_subsection_openers
+
+        found = [(9, "1.1 Alpha", "unit"), (20, "1.2 Beta", "unit"),
+                 (30, "1.3 Gamma", "unit"), (40, "Glossary", "apparatus")]
+        before = list(found)
+        _drop_subsection_openers(found)
+        assert found == before
+
+    def test_an_interleaved_contents_table_cannot_smuggle_subsections_in(self):
+        """Transcribed from the founder book's real contents page (physical page
+        4): a Page|Unit table printing sub-sections INTERLEAVED with the units.
+        The prompt asks for top-level entries only and the model obeyed on the
+        live run — this pins what happens the day it does not, because a single
+        non-compliant reply would make the reconciler inert AND let the contents
+        route promote "1.3 Breathing" to a chapter itself."""
+        from agent1_ingestion.vision_chapters import _drop_subsection_entries
+
+        def row(n, t, p, k="unit"):
+            return {"number": n, "title": t, "printed_page": p, "kind": k}
+
+        raw = [
+            row(1, "1 Respiration", 8),
+            row(None, "1.1 The human respiratory system", 8),
+            row(None, "1.2 Gas exchange", 12),
+            row(None, "1.3 Breathing", 19),
+            row(None, "1.4 Respiration", 25),
+            row(None, "1.5 Blood", 31),
+            row(2, "2 Properties of materials", 40),
+            row(None, "2.1 Dissolving", 40),
+            row(3, "3 Forces and energy", 68),
+            row(None, "3.7 Particles on the move", 114),
+            row(4, "4 Ecosystems", 126),
+            row(None, "Glossary and index", 320, "apparatus"),
+        ]
+        kept = _drop_subsection_entries(raw)
+        assert [e["title"] for e in kept] == [
+            "1 Respiration", "2 Properties of materials", "3 Forces and energy",
+            "4 Ecosystems", "Glossary and index",
+        ]
+
+    def test_a_book_whose_top_level_is_decimal_keeps_every_entry(self):
+        """Self-limiting: some curricula really do number their top level
+        "1.1, 1.2, 1.3". Deleting those would empty the contents list and take
+        the whole route down with it, so the filter stands down when fewer than
+        two non-decimal units would survive."""
+        from agent1_ingestion.vision_chapters import _drop_subsection_entries
+
+        raw = [{"number": None, "title": f"1.{i} Topic {i}", "printed_page": 10 * i,
+                "kind": "unit"} for i in range(1, 6)]
+        assert _drop_subsection_entries(raw) == raw
+
+    def test_the_filter_leaves_ordinary_numbering_alone(self):
+        from agent1_ingestion.vision_chapters import _SUBSECTION_TITLE_RE as R
+
+        assert R.match("1.3 Breathing") and R.match("3.7 Particles on the move")
+        for safe in ("4 Ecosystems", "Chapter 1. Introduction", "Unit 10 Magnetism",
+                     "Glossary and index", "التنفس", "第1章 呼吸"):
+            assert not R.match(safe), safe
+
+    def test_the_replys_own_number_field_beats_reading_the_title(self):
+        """_read_contents_entries already parses a `number` per entry, and on the
+        very common two-column contents layout ("4" ⟂ "Ecosystems") that field is
+        the only place the number survives — the title has none to read."""
+        from agent1_ingestion.vision_chapters import (
+            _drop_subsections_below_contents, _unit_number_of)
+
+        assert _unit_number_of((9, "Ecosystems", "unit", 4)) == 4
+        # Numbers stripped from the titles; only the 4th slot carries them.
+        contents = [(9, "Respiration", "unit", 1), (41, "Properties", "unit", 2),
+                    (69, "Forces", "unit", 3), (191, "Light", "unit", 6)]
+        found = [(9, "Respiration", "unit"), (20, "Breathing", "unit"),
+                 (41, "Properties", "unit"), (69, "Forces", "unit"),
+                 (120, "Ecosystems", "unit"), (191, "Light", "unit")]
+        _drop_subsections_below_contents(found, contents)
+        pages = [p for p, _t, _k in found]
+        # p20 sits between units 1 and 2 — closed, dropped. p120 sits in the
+        # 3→6 numbering gap — open, kept. Neither call could read a number off
+        # these titles, so both verdicts came from the reply's own field.
+        assert 20 not in pages, "a closed span must still delete"
+        assert 120 in pages, "the numbering gap must still protect"
+
+    def test_digits_inside_an_apparatus_title_are_not_a_unit_number(self):
+        """"Answers to Unit 3" is back matter, not unit 3. Reading it as one
+        would make the pair before it look consecutive and close a span the book
+        left open."""
+        from agent1_ingestion.vision_chapters import _unit_number_of
+
+        assert _unit_number_of((300, "Answers to Unit 3", "apparatus")) is None
+        assert _unit_number_of((300, "3 Forces", "apparatus", 3)) is None
+
+    def test_an_unnumbered_contents_page_falls_back_to_printed_order(self):
+        """Most non-Latin books print no unit numbers. Adjacent rows in the
+        reply are adjacent units, so the reconciler still works — this is the
+        path that keeps the fix from being English-only."""
+        from agent1_ingestion.vision_chapters import _drop_subsections_below_contents
+
+        contents = [(9, "التنفس", "unit"), (41, "خصائص المواد", "unit"),
+                    (69, "القوى والطاقة", "unit"), (127, "النظم البيئية", "unit")]
+        found = [(9, "التنفس", "unit"), (20, "التهوية", "unit"),
+                 (41, "خصائص المواد", "unit"), (69, "القوى والطاقة", "unit"),
+                 (127, "النظم البيئية", "unit")]
+        _drop_subsections_below_contents(found, contents)
+        assert [p for p, _t, _k in found] == [9, 41, 69, 127]
+
+    def test_apparatus_openers_are_never_dropped(self):
+        from agent1_ingestion.vision_chapters import _drop_subsections_below_contents
+
+        found = [(9, "U1", "unit"), (41, "U2", "unit"), (69, "U3", "unit"),
+                 (200, "Answers", "apparatus")]
+        _drop_subsections_below_contents(found, self.CONTENTS)
+        assert (200, "Answers", "apparatus") in found
+
+    def test_a_thin_contents_read_has_no_authority_to_delete(self):
+        """Two calibrated entries is a half-read page, not a map of the book."""
+        from agent1_ingestion.vision_chapters import _drop_subsections_below_contents
+
+        found = [(9, "U1", "unit"), (20, "1.3 Something", "unit"), (41, "U2", "unit")]
+        before = list(found)
+        _drop_subsections_below_contents(found, [(9, "1 U1", "unit"), (41, "2 U2", "unit")])
+        assert found == before
+
+    def test_openers_past_the_last_named_unit_survive(self):
+        """The contents page says nothing about that stretch, so the window's
+        finding stands — this is how a book whose contents page omits its final
+        units keeps them."""
+        from agent1_ingestion.vision_chapters import _drop_subsections_below_contents
+
+        contents = [(9, "1 A", "unit"), (41, "2 B", "unit"), (69, "3 C", "unit")]
+        found = [(9, "A", "unit"), (41, "B", "unit"), (69, "C", "unit"),
+                 (120, "D", "unit"), (180, "E", "unit")]
+        _drop_subsections_below_contents(found, contents)
+        assert (120, "D", "unit") in found and (180, "E", "unit") in found
