@@ -384,7 +384,24 @@ _MAX_UNMAPPED_TAIL_SHARE = 0.25
 # either budget would overflow, so parts ≈ max(chars/15000, words/1500).
 # (tests/test_chapter_altitude.py asserts these stay in step.)
 _PART_CHARS = 15000
-_PART_WORDS = 1500
+_PART_WORDS = 1500            # DELIBERATELY NOT analyzer.MAX_PART_WORDS.
+# These two were equal until 2026-08-24, when the lesson budget moved to 1,950
+# words to match the founder's 15-minute classroom video. This one did NOT move
+# with it, and must not.
+#
+# They answer different questions. analyzer.MAX_PART_WORDS asks "how much
+# teaching fits in one video?" — a CLASSROOM decision that can change whenever
+# the lesson format does. This asks "is this map entry chapter-sized, or is it
+# really a part wearing a chapter's name?" — a STRUCTURAL yardstick, and the
+# altitude thresholds downstream are calibrated against it with the real fleet
+# fixtures.
+#
+# Coupling them means every change to video length silently retunes the guard
+# that rejects wrong-altitude maps: raising the budget to 1,950 lowered the
+# estimated part count of a 126-page "chapter" and let the 8-parts-of-a-
+# 1,008-page-book map (test_coverage_never_overrides_the_altitude_rules) start
+# passing as plausible. That is the exact failure this module exists to catch,
+# and a lesson-length decision has no business loosening it.
 _EST_WORDS_PER_PAGE = 250       # same calibration as the worker's part-map
                                 # estimator: reproduces a measured book's real
                                 # 4 parts, and errs toward FEWER parts

@@ -24,12 +24,15 @@ def build_single_episode(chapter: dict) -> dict:
     for box in chapter.get("key_boxes", []):
         total_words += len(box.get("content", "").split())
 
-    # A lesson episode is 3-12 minutes regardless of how long the chapter text
+    # A lesson episode is LESSON_MIN..MAX minutes regardless of how long the text
     # is (a 50k-char transcribed chapter would otherwise "plan" a 70-minute
     # episode, and the script generator's reply then truncates mid-JSON and
     # yields zero segments). The script teaches the chapter's KEY ideas, not a
     # read-through, so the duration target must stay in lesson range.
-    duration = min(12.0, max(3.0, round(total_words / 130, 1)))
+    from agent2_analysis.analyzer import (LESSON_MAX_MINUTES, LESSON_MIN_MINUTES,
+                                          NARRATION_WPM)
+    duration = min(LESSON_MAX_MINUTES,
+                   max(LESSON_MIN_MINUTES, round(total_words / NARRATION_WPM, 1)))
     return {
         "episode_num": 1,
         "title": chapter.get("title", "Untitled"),

@@ -117,14 +117,23 @@ class TestMapShape:
                      "end_page": i * 2 + 1} for i in range(60)]
         assert _map_shape(sections, 240)["ok"] is False
 
-    def test_estimator_stays_in_step_with_the_real_chunker(self):
-        # The parts estimate models build_chapter_parts; if those budgets move
-        # and this does not, the shape check silently measures nothing.
+    def test_the_structural_yardstick_is_not_the_lesson_budget(self):
+        # These were asserted EQUAL until 2026-08-24. They are not the same
+        # decision: MAX_PART_WORDS is "how much teaching fits in one video"
+        # (moved to 1,950 for the 15-minute classroom format), while
+        # structurer._PART_WORDS is "is this entry chapter-sized or part-sized"
+        # — the yardstick the altitude thresholds are calibrated against.
+        # Coupling them let a video-length change loosen the wrong-altitude
+        # guard: at 1,950 the 8-parts-of-a-1,008-page-book map started passing
+        # as plausible. The char budget IS still shared (both are the model's
+        # context bound, which is not a classroom decision).
         from agent1_ingestion import structurer
         from agent2_analysis.analyzer import MAX_ANALYSIS_CHARS, MAX_PART_WORDS
 
         assert structurer._PART_CHARS == MAX_ANALYSIS_CHARS
-        assert structurer._PART_WORDS == MAX_PART_WORDS
+        assert structurer._PART_WORDS == 1500
+        assert MAX_PART_WORDS == 1950
+        assert structurer._PART_WORDS != MAX_PART_WORDS
 
 
 class TestLastChapterBound:
@@ -755,13 +764,24 @@ class TestNoRuntPartBillsACredit:
         parts, _ = self._parts(800)
         assert len(parts) == 1 and parts[0]["words"] > 0
 
-    def test_the_merge_only_ever_lowers_the_credit_count(self):
-        from agent2_analysis.analyzer import MAX_ANALYSIS_CHARS
+    def test_the_part_count_is_the_lesson_bound_not_the_context_bound(self):
+        """Rewritten 2026-08-24. This used to assert parts <= ceil(chars/15000),
+        which encoded the old behaviour where the MODEL's context budget decided
+        how long a lesson was. The classroom decides now: a part is bounded by
+        MAX_PART_WORDS (the 15-minute video), so text with short words yields
+        MORE parts than the character bound alone would predict — and each one
+        is a whole lesson instead of a compressed one."""
         import math
 
+        from agent2_analysis.analyzer import MAX_ANALYSIS_CHARS, MAX_PART_WORDS
+
         for chars in (45241, 60500, 75200, 90100):
-            parts, _ = self._parts(chars)
-            assert len(parts) <= math.ceil(chars / MAX_ANALYSIS_CHARS)
+            parts, text = self._parts(chars)
+            words = len(text.split())
+            assert len(parts) >= math.ceil(words / MAX_PART_WORDS)
+            assert len(parts) >= math.ceil(chars / MAX_ANALYSIS_CHARS)
+            for p in parts:
+                assert p["words"] <= MAX_PART_WORDS
 
     def test_word_count_is_recomputed_after_the_merge(self):
         """`words` drives the video-duration plan; a stale count would plan the
@@ -769,3 +789,116 @@ class TestNoRuntPartBillsACredit:
         parts, _ = self._parts(60500)
         for p in parts:
             assert p["words"] == len(p["text"].split())
+
+
+class TestFifteenMinuteClassroomBudget:
+    """The part size is a CLASSROOM decision, not a model one.
+
+    Founder's design: a 15-minute video inside a 45-minute lesson leaves ~30
+    minutes to work through what the class still needs to discuss. The week then
+    builds on it — PPT and worksheet as reading tasks, the activity next day,
+    the case study after that, then a test. Every one of those days assumes the
+    video actually taught the topic.
+
+    It did not, for scanned books. The OCR arrives as ONE section, so the only
+    thing that split it was a 15,000-CHARACTER stride — ~2,541 words of English,
+    ~19.5 minutes of narration, clamped down to a 12-minute video. Teachers were
+    getting ~61% of the material, raced through, and every following day stood
+    on ground the video never covered.
+    """
+
+    SAMPLE = ("the cell wall controls what enters and leaves a plant cell while the "
+              "membrane stays flexible and thin under most conditions ")
+    # The founder's book: real page spans, at the measured 145 words/page of a
+    # scanned illustrated textbook.
+    CHAPTERS = [32, 28, 58, 26, 38, 43, 30, 30, 28]
+
+    def _text(self, words):
+        t = self.SAMPLE * (words // len(self.SAMPLE.split()) + 2)
+        return " ".join(t.split()[:words])
+
+    def _parts(self, words):
+        from agent2_analysis.analyzer import build_chapter_parts
+
+        return build_chapter_parts({"sections": [{
+            "section_title": "Content", "section_type": "body",
+            "content": self._text(words), "page_num": 0, "subsections": []}]})
+
+    def test_the_two_numbers_agree(self):
+        """MAX_PART_WORDS and the duration clamp are the same decision written
+        twice; if they drift, the clamp silently compresses again."""
+        from agent2_analysis.analyzer import (LESSON_MAX_MINUTES, MAX_PART_WORDS,
+                                              NARRATION_WPM)
+
+        assert LESSON_MAX_MINUTES == 15.0
+        assert MAX_PART_WORDS == int(LESSON_MAX_MINUTES * NARRATION_WPM) == 1950
+
+    def test_no_part_of_a_scanned_chapter_is_over_budget(self):
+        """The regression that matters: an over-budget part is not a longer
+        video, it is a COMPRESSED one — the clamp throws the surplus away."""
+        from agent2_analysis.analyzer import (LESSON_MAX_MINUTES, MAX_PART_WORDS,
+                                              NARRATION_WPM)
+
+        for pages in self.CHAPTERS:
+            for part in self._parts(pages * 145):
+                assert part["words"] <= MAX_PART_WORDS, (
+                    f"{pages}pp chapter has a {part['words']}-word part = "
+                    f"{part['words'] / NARRATION_WPM:.1f} min of narration in a "
+                    f"{LESSON_MAX_MINUTES} min video")
+
+    def test_every_video_is_delivered_whole(self):
+        from agent2_analysis.analyzer import (LESSON_MAX_MINUTES, LESSON_MIN_MINUTES,
+                                              NARRATION_WPM)
+
+        for pages in self.CHAPTERS:
+            for part in self._parts(pages * 145):
+                needs = part["words"] / NARRATION_WPM
+                gets = min(LESSON_MAX_MINUTES, max(LESSON_MIN_MINUTES, round(needs, 1)))
+                assert gets >= needs - 0.05, f"{pages}pp: {needs:.1f}m squeezed into {gets}m"
+
+    def test_parts_within_a_chapter_are_evenly_sized(self):
+        """Balanced, not greedy. A teacher planning a week per part needs
+        predictable lengths, not 15/15/2."""
+        for pages in self.CHAPTERS:
+            words = [p["words"] for p in self._parts(pages * 145)]
+            if len(words) > 1:
+                assert max(words) - min(words) <= 50, f"{pages}pp: uneven {words}"
+
+    def test_the_split_never_loses_a_character(self):
+        from agent2_analysis.analyzer import _hard_split
+
+        for words in (3000, 9000, 20000, 45385):
+            block = self._text(words)
+            assert "".join(_hard_split(block)) == block, f"{words} words: text lost"
+
+    def test_the_split_cuts_between_words(self):
+        """`block[i:i+15000]` cut mid-word, handing the analysis a fragment at
+        every seam."""
+        from agent2_analysis.analyzer import _hard_split
+
+        block = self._text(9000)
+        for piece in _hard_split(block):
+            assert piece.strip(), "empty piece"
+            assert not piece.strip().split()[0].startswith("ondition")
+
+    def test_the_model_context_bound_still_binds(self):
+        """A script with few spaces must not smuggle a piece past the LLM's
+        context budget just because its word count is low."""
+        from agent2_analysis.analyzer import MAX_ANALYSIS_CHARS, _hard_split
+
+        dense = " ".join("字" * 400 for _ in range(300))   # 300 words, 120k chars
+        for piece in _hard_split(dense):
+            assert len(piece) <= MAX_ANALYSIS_CHARS
+
+    def test_a_runt_is_never_absorbed_past_the_budget(self):
+        """Merging a tail into a full part would push that video back over 15
+        minutes — reintroducing the compression by the back door."""
+        from agent2_analysis.analyzer import MAX_PART_WORDS, build_chapter_parts
+
+        secs = [{"section_title": f"S{i}", "section_type": "body",
+                 "content": self._text(1900), "page_num": i, "subsections": []}
+                for i in range(4)]
+        secs.append({"section_title": "tail", "section_type": "body",
+                     "content": self._text(30), "page_num": 9, "subsections": []})
+        for part in build_chapter_parts({"sections": secs}):
+            assert part["words"] <= MAX_PART_WORDS

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,20 +30,97 @@ ANALYSIS_DIR = Path(__file__).resolve().parent.parent / "storage" / "analysis"
 # chapters longer than this become multiple parts, each fully analysed.
 MAX_ANALYSIS_CHARS = 15000
 
-# Per-PART teaching budget (words). A part's video duration is planned at
-# words/130wpm clamped to 12 minutes — so any chunk beyond ~1560 words gets
-# COMPRESSED, not covered. Splitting at 1500 words keeps every part fully
-# teachable in its ~12-15 minute runtime (this is what actually guarantees
-# "the whole chapter is covered": chars bound the LLM context, words bound
-# the lesson).
-MAX_PART_WORDS = 1500
+# Per-PART teaching budget (words), set from the CLASSROOM, not from the model.
+#
+# Founder's design: a 15-minute video inside a 45-minute lesson leaves ~30
+# minutes to work through the parts the class still needs to discuss. At the
+# 130 wpm narration rate that is 15 x 130 = 1,950 words, and LESSON_MAX_MINUTES
+# below is the matching ceiling. The two numbers must move together — they are
+# the same decision expressed twice.
+#
+# They used to disagree, and scanned books paid for it. A monolithic OCR block
+# is hard-split, and the split used to cut on characters alone: 15,000 chars is
+# ~2,541 words ~ 19.5 minutes of narration, clamped down to a 12-minute video.
+# Teachers got ~61% of the material, raced through — and because the rest of the
+# week (worksheet, activity, case study, test) is built on the assumption that
+# the video taught the topic, every following day stood on ground the video
+# never covered. Digital books mostly escaped it: their sections arrive as
+# separate units, so this budget could actually fire.
+MAX_PART_WORDS = 1950
+
+# The video-duration ceiling that MAX_PART_WORDS is derived from. A part is
+# planned at words/130wpm and clamped here; keeping one part inside the budget
+# means the clamp never has to compress it.
+LESSON_MAX_MINUTES = 15.0
+LESSON_MIN_MINUTES = 3.0
+NARRATION_WPM = 130
 
 
 # A trailing chunk below this many words is folded into the part before it
 # rather than becoming a part of its own. Sized well under MAX_PART_WORDS: a
-# real part carries ~1,500-2,500 words, so this can only catch a hard-split
+# real part carries up to MAX_PART_WORDS, so this can only catch a hard-split
 # remainder, never a legitimately short final section.
 _MIN_TAIL_WORDS = 400
+
+
+def _hard_split(block: str) -> list[str]:
+    """Split one oversized unit so every piece honours BOTH budgets.
+
+    This is where a scanned book's whole chapter arrives: the OCR is stored as a
+    SINGLE "Content" section, so there is nothing to split on but the block
+    itself, and the accumulator below never gets a second unit to close a part
+    on. Splitting on characters alone therefore decided the lesson length by
+    accident — 15,000 chars is ~2,541 words of English, half again over the
+    teaching budget, and the duration clamp silently absorbed the difference.
+
+    Two properties this must have and the old slice did not:
+      * WORDS bound it too, not just chars, so a part is a lesson-sized piece of
+        teaching rather than a context-sized piece of text;
+      * cuts land between words. ``block[i:i+15000]`` cut mid-word, handing the
+        analysis a fragment at each seam.
+
+    Splitting on the whitespace-preserving token list makes it LOSSLESS —
+    ``"".join(pieces) == block`` — which matters because everything else here is
+    about not dropping teaching material.
+    """
+    tokens = re.split(r"(\s+)", block)
+    total_words = sum(1 for t in tokens if t.strip())
+    if not total_words:
+        return [block] if block else [""]
+
+    # BALANCED, not greedy. Filling each piece to the brim and letting the last
+    # one take the remainder produces a runt — 4,060 words at a 1,950 budget
+    # gives 1950/1950/160, and a 160-word "lesson" is a 3-minute video and a
+    # billed credit for nothing. Deciding the piece COUNT first and dividing
+    # evenly gives 3 x ~1,353 words: no runt, nothing over budget, and every
+    # video in a chapter roughly the same length, which is what a teacher
+    # planning a week of classes actually wants.
+    n = max(
+        -(-total_words // MAX_PART_WORDS),      # lesson bound (the classroom)
+        -(-len(block) // MAX_ANALYSIS_CHARS),   # context bound (the model)
+        1,
+    )
+    per = -(-total_words // n)
+
+    pieces: list[str] = []
+    cur: list[str] = []
+    cur_chars = cur_words = 0
+    for tok in tokens:
+        is_word = bool(tok.strip())
+        # The hard budgets still bind — `per` only decides where to aim, so an
+        # unusually long run of characters cannot smuggle a piece past the
+        # model's context bound.
+        if cur and (cur_chars + len(tok) > MAX_ANALYSIS_CHARS
+                    or (is_word and cur_words + 1 > MAX_PART_WORDS)
+                    or (is_word and cur_words >= per and len(pieces) < n - 1)):
+            pieces.append("".join(cur))
+            cur, cur_chars, cur_words = [], 0, 0
+        cur.append(tok)
+        cur_chars += len(tok)
+        cur_words += 1 if is_word else 0
+    if cur:
+        pieces.append("".join(cur))
+    return pieces or [""]
 
 
 def build_chapter_parts(chapter_content: dict) -> list[dict]:
@@ -58,8 +136,9 @@ def build_chapter_parts(chapter_content: dict) -> list[dict]:
     silently dropped everything past ~15k chars — the "video doesn't cover
     the whole chapter" bug. A chunk closes when EITHER budget would overflow:
     MAX_ANALYSIS_CHARS (the LLM context bound) or MAX_PART_WORDS (the
-    lesson-duration bound — a ~2,400-word chapter fits in 15k chars but NOT
-    in one 12-minute video). An oversized single unit is hard-split.
+    lesson-duration bound — 1,950 words is exactly the 15-minute video the
+    classroom design asks for). An oversized single unit goes through
+    _hard_split, which honours both budgets and cuts between words.
 
     Returns [{"text", "section_titles", "words"}], always at least one.
     """
@@ -96,7 +175,7 @@ def build_chapter_parts(chapter_content: dict) -> list[dict]:
         cur_parts, cur_titles, cur_len, cur_words = [], [], 0, 0
 
     for sec_title, block in units:
-        pieces = [block[i:i + MAX_ANALYSIS_CHARS] for i in range(0, len(block), MAX_ANALYSIS_CHARS)] or [""]
+        pieces = _hard_split(block)
         for piece in pieces:
             piece_words = len(piece.split())
             if cur_parts and (cur_len + len(piece) > MAX_ANALYSIS_CHARS or cur_words + piece_words > MAX_PART_WORDS):
@@ -112,10 +191,10 @@ def build_chapter_parts(chapter_content: dict) -> list[dict]:
 
     # Fold a RUNT tail back into the part before it.
     #
-    # The hard split above cuts on a fixed character stride, so unless a
-    # chapter's text is very close to a multiple of MAX_ANALYSIS_CHARS the last
-    # chunk is whatever happened to be left over — measured at 3, 20, 37, 44,
-    # 87 and 172 words on realistic prose. That runt was a full PART: its own
+    # The hard split above cuts at a budget boundary, so unless a chapter's
+    # text lands near a multiple of that budget the last chunk is whatever was
+    # left over — measured at 3, 20, 37, 44, 87 and 172 words on realistic
+    # prose, at every size tried. That runt was a full PART: its own
     # analysis call, its own script, its own slides, its own ~3-minute video
     # (the duration floor keeps it there), its own upload — and its own CREDIT,
     # since credit_ledger_sync resets a presentation's units to the number of
@@ -126,7 +205,13 @@ def build_chapter_parts(chapter_content: dict) -> list[dict]:
     # part, never dropped, which is the whole reason this is safe to do while
     # the surrounding work is about making sure nothing is lost. It also always
     # moves the credit count DOWN, never up.
-    if len(chunks) > 1 and chunks[-1]["words"] < _MIN_TAIL_WORDS:
+    # _hard_split balances a single oversized unit so it cannot leave a runt,
+    # but a chapter made of MANY small sections can still end on one. Merge only
+    # when the result stays inside the teaching budget — absorbing a tail into
+    # an already-full part would push that video back over 15 minutes, which is
+    # the exact compression this file exists to prevent.
+    if (len(chunks) > 1 and chunks[-1]["words"] < _MIN_TAIL_WORDS
+            and chunks[-2]["words"] + chunks[-1]["words"] <= MAX_PART_WORDS):
         tail = chunks.pop()
         prev = chunks[-1]
         prev["text"] = f"{prev['text']}\n\n{tail['text']}".strip()
@@ -262,10 +347,12 @@ def run_full_analysis(
             part_visual_ids.append(vo.opportunity_id)
 
         # ── One EPISODE per chunk (mechanical, no API call) ────────────
-        # Same 3-12 min lesson clamp as before, per PART — a long chapter
+        # The classroom clamp, per PART — a long chapter
         # becomes Part 1..N of ~teachable length instead of one video that
         # only covers the front of the chapter.
-        duration = min(12.0, max(3.0, round(chunk["words"] / 130, 1)))
+        duration = min(LESSON_MAX_MINUTES,
+                       max(LESSON_MIN_MINUTES,
+                           round(chunk["words"] / NARRATION_WPM, 1)))
         episodes.append(Episode(
             episode_num=part_idx,
             title=chapter_title if total_parts == 1 else f"{chapter_title} — Part {part_idx}",
