@@ -697,3 +697,75 @@ class TestPoorCoverageEscalates:
     def test_a_short_upload_is_never_escalated(self):
         # Under _SHAPE_MIN_PAGES one chapter legitimately IS the document.
         assert self._escalates(self._map([20, 20]), 40) is False
+
+
+class TestNoRuntPartBillsACredit:
+    """A hard-split remainder must not become a part of its own.
+
+    build_chapter_parts cuts a monolithic OCR string on a fixed
+    MAX_ANALYSIS_CHARS stride, so unless a chapter's text lands near a multiple
+    of that stride the final chunk is whatever was left over. Measured on
+    realistic prose before the fix: tails of 3, 20, 37, 44, 87 and 172 words —
+    at EVERY size tried, not as a rare edge.
+
+    That runt was a full part: its own analysis call, script, slides, ~3-minute
+    video (the duration floor keeps it there), upload — and its own CREDIT,
+    because credit_ledger_sync resets a presentation's units to the number of
+    videos actually rendered. A teacher paid a credit for a video built from
+    twenty words.
+
+    Reading chapters to their own end (2026-08-24) made this MORE likely by
+    making multi-chunk chapters the norm, which is why it is fixed here.
+    """
+
+    SAMPLE = ("the cell wall controls what enters and leaves a plant cell while the "
+              "membrane stays flexible and thin under most conditions ")
+
+    def _parts(self, chars):
+        from agent2_analysis.analyzer import build_chapter_parts
+
+        text = (self.SAMPLE * (chars // len(self.SAMPLE) + 2))[:chars]
+        return build_chapter_parts({"sections": [{
+            "section_title": "Content", "section_type": "body",
+            "content": text, "page_num": 0, "subsections": []}]}), text
+
+    def test_no_generated_part_is_a_runt(self):
+        from agent2_analysis.analyzer import _MIN_TAIL_WORDS
+
+        for chars in (45241, 45000, 46000, 60500, 75200, 90100, 30001, 15001):
+            parts, _ = self._parts(chars)
+            if len(parts) == 1:
+                continue
+            assert parts[-1]["words"] >= _MIN_TAIL_WORDS, (
+                f"{chars} chars -> runt tail of {parts[-1]['words']} words "
+                f"= a junk video and a billed credit")
+
+    def test_merging_never_drops_a_single_word(self):
+        """The whole point: this is a MERGE, not a trim. It runs alongside work
+        whose purpose is that nothing is lost, so it must lose nothing."""
+        for chars in (45241, 60500, 90100):
+            parts, text = self._parts(chars)
+            joined = " ".join(p["text"] for p in parts)
+            body = [w for w in joined.split() if not w.startswith("#")]
+            assert len(body) >= len(text.split()), f"{chars}: words went missing"
+            # the runt's own words survive inside the part that absorbed it
+            assert text.split()[-1] in parts[-1]["text"]
+
+    def test_a_legitimately_short_chapter_still_makes_one_part(self):
+        parts, _ = self._parts(800)
+        assert len(parts) == 1 and parts[0]["words"] > 0
+
+    def test_the_merge_only_ever_lowers_the_credit_count(self):
+        from agent2_analysis.analyzer import MAX_ANALYSIS_CHARS
+        import math
+
+        for chars in (45241, 60500, 75200, 90100):
+            parts, _ = self._parts(chars)
+            assert len(parts) <= math.ceil(chars / MAX_ANALYSIS_CHARS)
+
+    def test_word_count_is_recomputed_after_the_merge(self):
+        """`words` drives the video-duration plan; a stale count would plan the
+        absorbed part's runtime from the wrong length."""
+        parts, _ = self._parts(60500)
+        for p in parts:
+            assert p["words"] == len(p["text"].split())

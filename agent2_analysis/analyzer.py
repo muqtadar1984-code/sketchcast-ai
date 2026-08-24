@@ -38,6 +38,13 @@ MAX_ANALYSIS_CHARS = 15000
 MAX_PART_WORDS = 1500
 
 
+# A trailing chunk below this many words is folded into the part before it
+# rather than becoming a part of its own. Sized well under MAX_PART_WORDS: a
+# real part carries ~1,500-2,500 words, so this can only catch a hard-split
+# remainder, never a legitimately short final section.
+_MIN_TAIL_WORDS = 400
+
+
 def build_chapter_parts(chapter_content: dict) -> list[dict]:
     """The SINGLE source of truth for how a chapter splits into parts.
 
@@ -102,6 +109,29 @@ def build_chapter_parts(chapter_content: dict) -> list[dict]:
     _flush()
     if not chunks:
         chunks = [{"text": "", "section_titles": [], "words": 0}]
+
+    # Fold a RUNT tail back into the part before it.
+    #
+    # The hard split above cuts on a fixed character stride, so unless a
+    # chapter's text is very close to a multiple of MAX_ANALYSIS_CHARS the last
+    # chunk is whatever happened to be left over — measured at 3, 20, 37, 44,
+    # 87 and 172 words on realistic prose. That runt was a full PART: its own
+    # analysis call, its own script, its own slides, its own ~3-minute video
+    # (the duration floor keeps it there), its own upload — and its own CREDIT,
+    # since credit_ledger_sync resets a presentation's units to the number of
+    # videos actually rendered. A teacher paid a credit for a video built from
+    # twenty words.
+    #
+    # Merging is CONTENT-NEUTRAL — the text is concatenated into the previous
+    # part, never dropped, which is the whole reason this is safe to do while
+    # the surrounding work is about making sure nothing is lost. It also always
+    # moves the credit count DOWN, never up.
+    if len(chunks) > 1 and chunks[-1]["words"] < _MIN_TAIL_WORDS:
+        tail = chunks.pop()
+        prev = chunks[-1]
+        prev["text"] = f"{prev['text']}\n\n{tail['text']}".strip()
+        prev["section_titles"] = list(dict.fromkeys(prev["section_titles"] + tail["section_titles"]))
+        prev["words"] = len(prev["text"].split())
     return chunks
 
 
