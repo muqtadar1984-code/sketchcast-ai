@@ -30,6 +30,36 @@ def admin() -> Client:
 
 # ── jobs / generations ───────────────────────────────────────────────
 
+def mirror_generation_status(sb: Client, generation_id, status: str) -> None:
+    """Mirror a job's lifecycle onto its generation row. Best-effort, never raises.
+
+    generations.status used to be written ONLY by finish_job, and only ever to
+    'done' or 'error' — so a row said "queued" for the entire time it was being
+    built, however many minutes that took. Two things went wrong with that.
+
+    The Library reads generations.status (dashboard/page.tsx builds its lesson
+    objects with `status: g.status` and `progress: g.jobs[0].progress`), and its
+    whole in-flight UI is written against 'processing': the progress ring is
+    `pct={status === "processing" ? progress : 0}`, so it sat at ZERO while the
+    job reported real progress, and the ETA label never rendered at all.
+
+    Worse, delete-lesson.tsx offers a CANCEL for a 'queued' row and is inert for
+    a 'processing' one — so the ✕ invited a teacher to cancel a render that was
+    already running, and credit_ledger_void_unconsumed then refused the refund
+    because claim_next_job had already set the job's progress to 1. Measured on
+    prod 2026-08-25: two teachers lost a credit that way, both on presentations
+    (the slow artifact that looks stuck), one of them the founder.
+    """
+    if not generation_id:
+        return
+    try:
+        sb.table("generations").update({"status": status}).eq("id", generation_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning(
+            "generation %s status not mirrored to %s: %s", generation_id, status, exc
+        )
+
+
 def claim_next_job(sb: Client, job_type=None) -> Optional[dict]:
     """Atomically-ish claim the oldest queued job (sets it to processing).
     `job_type` may be a single type or a LIST of types — only those are
@@ -53,7 +83,12 @@ def claim_next_job(sb: Client, job_type=None) -> Optional[dict]:
     )
     if not upd.data:
         return None  # someone else grabbed it
-    return upd.data[0]
+    claimed = upd.data[0]
+    # The generation is being BUILT now, and the Library must say so: it is what
+    # turns on the progress ring and the ETA, and what makes the ✕ stop offering
+    # a cancel that would cost the teacher a credit for nothing.
+    mirror_generation_status(sb, claimed.get("generation_id"), "processing")
+    return claimed
 
 
 def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max_attempts: int = 3,
@@ -82,7 +117,7 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
         if older_than_minutes is not None else None
     )
     try:
-        q = sb.table("jobs").select("id,type,book_id,attempts").eq("status", "processing")
+        q = sb.table("jobs").select("id,type,book_id,attempts,generation_id").eq("status", "processing")
         if cutoff:
             q = q.lt("updated_at", cutoff)
         rows = q.execute().data or []
@@ -100,6 +135,11 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
                     "status": "error",
                     "error": f"Auto-failed after {att} attempts — the worker kept dying on this job.",
                 }).eq("id", j["id"]).eq("status", "processing").execute()
+                # Mirror the failure onto the generation. Without this a
+                # poison-pill row sat in the Library forever AND kept its credit:
+                # credit_ledger_sync only voids on generations.status = 'error',
+                # which nothing here ever wrote.
+                mirror_generation_status(sb, j.get("generation_id"), "error")
                 if j.get("type") == "index_book" and j.get("book_id"):
                     try:  # stop the UI's "Finding chapters…" spinner
                         sb.table("books").update({"status": "error"}).eq("id", j["book_id"]).execute()
@@ -111,6 +151,9 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
                     {"status": "queued", "progress": 0, "attempts": att + 1}
                 ).eq("id", j["id"]).eq("status", "processing").execute()
                 if upd.data:
+                    # Back in the queue, so the row must not stay "being built" —
+                    # a stuck 'processing' would leave the ✕ inert forever.
+                    mirror_generation_status(sb, j.get("generation_id"), "queued")
                     requeued += 1
         if failed:
             logging.getLogger("worker").error(
