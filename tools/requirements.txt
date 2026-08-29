@@ -1,0 +1,5 @@
+# Extra deps for the one-off school onboarding importer (tools/import_school.py).
+# Deliberately NOT in the worker's requirements.txt: this never runs on Railway,
+# and the worker image should not carry a spreadsheet parser it never opens.
+openpyxl>=3.1
+supabase>=2.0.0
