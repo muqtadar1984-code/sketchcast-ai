@@ -420,10 +420,14 @@ def generate_episode_script(
         try:
             from spike.scene_engine.continuity import (compile_plan,
                                                        parse_visual_plan,
-                                                       plan_stats)
+                                                       plan_stats, seed_moment)
             plan = parse_visual_plan(raw_plan)
             if plan is not None:
                 narrations = {s.segment_id: s.text for s in segments}
+                seeded = seed_moment(plan, narrations)
+                if seeded:
+                    logger.info("visual plan had no HUMAN_TEACHING_MOMENT — "
+                                "seeded a student question on %s", seeded)
                 # HOLD scenes for unplanned segments inside a chapter — the
                 # board persists instead of flashing to a slide and back.
                 # Interactive segments keep their native visuals.

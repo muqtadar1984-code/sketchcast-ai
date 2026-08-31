@@ -46,6 +46,7 @@ def synthesize(
     ssml_text: str | None = None,
     stream: bool = False,
     report: dict | None = None,
+    boundaries_out: str | Path | None = None,
 ) -> Path:
     """Synthesize `text` to an MP3 at `out_path`. Returns the path.
 
@@ -85,12 +86,14 @@ def synthesize(
             # Edge reads SSML tags ALOUD — it only ever gets plain text. (The
             # ElevenLabs branch is never stripped: its <break>s are intended.)
             voice, say = default_voice(), strip_ssml(text)
-            edge.synthesize(say, out_path, voice.ref)
+            edge.synthesize(say, out_path, voice.ref,
+                            boundaries_out=Path(boundaries_out) if boundaries_out else None)
     else:
         from .providers import edge
 
         say = strip_ssml(say)  # Edge reads SSML tags aloud — plain text only
-        edge.synthesize(say, out_path, voice.ref)
+        edge.synthesize(say, out_path, voice.ref,
+                        boundaries_out=Path(boundaries_out) if boundaries_out else None)
 
     cost.record(len((say or "").strip()), voice.provider)
     downgraded = requested_premium and voice.tier != "premium"

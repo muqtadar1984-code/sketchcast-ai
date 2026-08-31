@@ -87,6 +87,27 @@ class VisualPlan(BaseModel):
 
 # ── action sanitization (the model's dicts, value by value) ──────────────────
 
+def _guess_part_name(eid: str) -> str:
+    """'lbl_cell_membrane' / 'arr_nucleus' / 'nucleus_obj' -> the part name
+    the id is talking about."""
+    s = str(eid).lower()
+    for p in ("arr_auto_", "arr_", "arrow_", "ar_", "lbl_", "label_", "lb_",
+              "txt_"):
+        if s.startswith(p):
+            s = s[len(p):]
+            break
+    words = s.replace("_", " ").split()
+    while words and words[-1] in ("obj", "objs", "object", "item", "el",
+                                  "elem", "img", "image", "shape", "part"):
+        words.pop()
+    return " ".join(words).strip()
+
+
+def _norm_name(s: str) -> str:
+    import re as _re
+    return _re.sub(r"[^a-z0-9]+", " ", str(s).lower()).strip()
+
+
 def _pt(v) -> list[float] | None:
     try:
         if isinstance(v, (list, tuple)) and len(v) == 2:
@@ -332,6 +353,43 @@ def parse_visual_plan(raw) -> Optional[VisualPlan]:
 
 # ── camera chaining (mirrors CameraTrack's end-state logic, deterministically) ─
 
+def seed_moment(plan: VisualPlan, narrations: dict[str, str]) -> str | None:
+    """A lesson should carry at least one HUMAN_TEACHING_MOMENT. When the
+    model plans none, seed ONE student moment from a real interrogative
+    sentence in a mid-lesson planned segment — the question is lifted from the
+    narration, never invented. Returns the segment id used, or None."""
+    import re
+    if any(st.moment for ch in plan.chapters for st in ch.steps):
+        return None
+    steps = [st for ch in plan.chapters for st in ch.steps]
+    if len(steps) < 2:
+        return None
+
+    def _questions(sid: str) -> list[str]:
+        out = []
+        for m in re.finditer(r"([A-Z][^.!?]*\?)", narrations.get(sid, "")):
+            q = " ".join(m.group(1).split())
+            if len(q.split()) >= 3 and "tap continue" not in q.lower() \
+                    and "anything you'd want" not in q.lower():
+                out.append(q)
+        return out
+
+    # pass 1: a question already short enough to letter into a speech bubble
+    for st in steps[1:]:
+        for q in _questions(st.segment_id):
+            if len(q.split()) <= 8 and len(q) <= 60:
+                st.moment = {"role": "student", "text": q}
+                return st.segment_id
+    # pass 2: shorten the first real question found
+    for st in steps[1:]:
+        qs = _questions(st.segment_id)
+        if qs:
+            q = " ".join(qs[0].split()[:8]).rstrip(",;:?") + "?"
+            st.moment = {"role": "student", "text": q[:60]}
+            return st.segment_id
+    return None
+
+
 def _chain_camera(cam: dict, actions: list[dict], elements: list[dict]) -> dict:
     pos = {e.get("id"): e.get("at") for e in elements if isinstance(e, dict)}
     for a in actions:
@@ -409,22 +467,90 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
     # the dangling-reference filter), never a stacked tangle on screen
     ills = [eid for eid, e in roster.items() if e.get("type") == "illustration"]
     if len(ills) > 1:
-        # the ROOT is the illustration the plan DRAWS the most — a model that
-        # declares four visuals but lavishes 8 draw actions on one has told us
-        # which visual the chapter is actually about
-        draws = {eid: 0 for eid in ills}
+        # the ROOT is the illustration the plan REFERENCES the most (draws
+        # weighted double) — draw-count alone once kept a 2-draw practical
+        # diagram over the cell the chapter spends six highlights and eight
+        # labels teaching, leaving every label floating on an empty board
+        score = {eid: 0 for eid in ills}
         for st_ in ch.steps:
             for a_ in st_.actions:
-                if a_.get("verb") == "draw" and a_.get("target") in draws:
-                    draws[a_["target"]] += 1
-        ills.sort(key=lambda eid: -draws[eid])
+                t_ = a_.get("target")
+                if t_ in score:
+                    score[t_] += 2 if a_.get("verb") == "draw" else 1
+        ills.sort(key=lambda eid: -score[eid])
+    # per-part HANDLES vs stacked tangles: a model that declares seven
+    # "illustrations" all sharing the root's asset means "draw THAT part of
+    # the one diagram now" — convert instead of amputate. Their actions
+    # retarget to the root; the guessed part names are appended to the asset
+    # prompt as its layer-group tail so vision annotation can find them.
+    alias_parts: dict[str, str] = {}
+    merged_foreign_asset = False
+    root_asset = str(roster[ills[0]].get("asset") or "") if ills else ""
+    label_parts = [_guess_part_name(eid) for eid, e in roster.items()
+                   if e.get("type") in ("text", "arrow")]
+    label_parts = [p for p in label_parts if p]
+
+    def _label_part_for(guess: str) -> str | None:
+        g = _norm_name(guess)
+        if not g:
+            return None
+        for lp in label_parts:
+            n = _norm_name(lp)
+            if n == g or n in g or g in n:
+                return lp
+        return None
+
     for extra in ills[1:]:
+        guess = _guess_part_name(extra)
+        lbl_part = _label_part_for(guess)
+        if str(roster[extra].get("asset") or "") == root_asset:
+            alias_parts[extra] = lbl_part or guess
+        elif lbl_part is not None:
+            # a different asset but a name the chapter LABELS: still a
+            # per-part handle ('nucleus_obj' beside 'lbl_nucleus'), and the
+            # root image must be regenerated to actually contain the part
+            alias_parts[extra] = lbl_part
+            merged_foreign_asset = True
+        else:
+            report.append(f"CHAPTER {ch.concept} | DROPPED illustration "
+                          f"{extra!r} (one root visual per chapter — use "
+                          f"named layers on {ills[0]!r} instead)")
+            del roster[extra]
+            continue
+        report.append(f"CHAPTER {ch.concept} | MERGED handle {extra!r} "
+                      f"into root {ills[0]!r} as part "
+                      f"{alias_parts[extra]!r}")
         del roster[extra]
-        report.append(f"CHAPTER {ch.concept} | DROPPED illustration {extra!r} "
-                      f"(one root visual per chapter — use named layers on "
-                      f"{ills[0]!r} instead)")
+    if alias_parts:
+        prompt0 = ch.assets.get(root_asset, "")
+        names = [_guess_part_name(ills[0])] + list(alias_parts.values())
+        seen_n: set[str] = set()
+        names = [n for n in names if n and not (n in seen_n or seen_n.add(n))]
+        if merged_foreign_asset and prompt0:
+            # a NEW key: the root's cached image predates the merge and may
+            # depict only its own part — the merged diagram must exist
+            new_key = root_asset + "__merged"
+            ch.assets[new_key] = (
+                prompt0.rstrip().rstrip(".") +
+                ". The diagram MUST clearly contain all of: " +
+                ", ".join(names) + ". Name the layer groups exactly: " +
+                ", ".join(names) + ".")
+            roster[ills[0]] = dict(roster[ills[0]])
+            roster[ills[0]]["asset"] = new_key
+            report.append(f"CHAPTER {ch.concept} | ROOT ASSET rebuilt as "
+                          f"{new_key!r} with parts {names}")
+        elif prompt0 and "name the layer groups exactly" not in prompt0.lower():
+            ch.assets[root_asset] = (prompt0.rstrip().rstrip(".") +
+                                     ". Name the layer groups exactly: " +
+                                     ", ".join(names) + ".")
+        for st_ in ch.steps:
+            for a_ in st_.actions:
+                if a_.get("target") in alias_parts and a_.get("verb") in \
+                        ("draw", "zoom", "highlight", "circle", "pulse"):
+                    a_["target"] = ills[0]
     introduced: set[str] = set()
     drawn_layers: dict[str, list[str]] = {}
+    drawn_regions: dict[str, list[str]] = {}   # vision-region draw progress
     base_frac: dict[str, float] = {}      # raster progress carried from before
     draw_counts: dict[str, int] = {}
     draws_done: dict[str, int] = {}
@@ -442,10 +568,15 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                 continue        # chapter redeclares the id — its version wins
             clean = {k: v for k, v in e.items()
                      if k not in ("drawn_layers", "drawn_frac")}
+            # drawn_regions state lives in the tracker; region_order stays on
+            # the element (bucket layout must be identical across chapters)
+            clean.pop("drawn_regions", None)
             roster[eid] = clean
             if e.get("drawn_layers"):
                 drawn_layers[eid] = list(e["drawn_layers"])
                 base_frac[eid] = float(e.get("drawn_frac", 0.0))
+            elif e.get("drawn_regions"):
+                drawn_regions[eid] = list(e["drawn_regions"])
             else:
                 introduced.add(eid)
 
@@ -458,23 +589,236 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                     roster[a["target"]].get("type") == "illustration":
                 draw_counts[a["target"]] = draw_counts.get(a["target"], 0) + 1
 
+    # ── quality pass: real part geometry ────────────────────────────────────
+    # The root asset's prompt names its parts ("name the layer groups exactly:
+    # ..."); the renderer resolves those names against vision-annotated
+    # regions. Here the compiler (a) re-anchors every arrow whose id names a
+    # part onto that part — the model's eyeballed pixel guesses are what made
+    # all seven arrows converge on one spot — and (b) schedules the root's
+    # draw actions region-by-region in narration order, so the nucleus
+    # appears when the nucleus is being said, not at a uniform slice.
+    root_id = ills[0] if ills and ills[0] in roster else None
+    part_names: list[str] = []
+    if root_id:
+        try:
+            from .raster_assets import part_names_from_prompt
+            part_names = part_names_from_prompt(
+                str(seg_assets.get(str(roster[root_id].get("asset") or ""), "")))
+        except Exception:  # noqa: BLE001 — auto-anchoring is best-effort
+            part_names = []
+    if root_id and not part_names:
+        # the prompt never named its parts, but the chapter's OWN labels and
+        # arrows do (lbl_nucleus, arrow_wall, ...) — they are the ground
+        # truth of what gets taught, so they become the layer-group tail.
+        # Without this, every arrow falls back to eyeballed coordinates.
+        cand: list[str] = []
+        for eid, e in roster.items():
+            if e.get("type") in ("text", "arrow"):
+                p = _guess_part_name(eid)
+                if p and p not in cand and _norm_name(eid) != _norm_name(p):
+                    cand.append(p)
+        akey = str(roster[root_id].get("asset") or "")
+        prompt0 = ch.assets.get(akey, "")
+        if len(cand) >= 2 and prompt0:
+            ch.assets[akey] = (prompt0.rstrip().rstrip(".") +
+                               ". Name the layer groups exactly: " +
+                               ", ".join(cand) + ".")
+            seg_assets[akey] = ch.assets[akey]
+            assets_seen[akey] = ch.assets[akey]
+            part_names = cand
+            report.append(f"CHAPTER {ch.concept} | PART NAMES from labels: "
+                          f"{cand}")
+
+    def _match_part(name: str) -> str | None:
+        if not name or not part_names:
+            return None
+        from .vector_assets import match_layer_ids
+        m = match_layer_ids(part_names, [name])
+        if m:
+            return m[0]
+        # 'cell wall' (from an element id) must find 'cell_wall' (a prompt's
+        # layer-group name) — separator style is model whim, never semantics
+        import re as _re
+
+        def norm(s: str) -> str:
+            return _re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+
+        by_norm = {norm(p): p for p in part_names}
+        return by_norm.get(norm(name))
+
+    if root_id and part_names:
+        root_at = _pt(roster[root_id].get("at")) or [640, 340]
+        labels = {eid: e for eid, e in roster.items() if e.get("type") == "text"}
+        for eid, e in list(roster.items()):
+            if e.get("type") != "arrow":
+                continue
+            part = _match_part(_guess_part_name(eid))
+            if part is None:
+                continue
+            e = dict(e)
+            head = e.get("head")
+            if isinstance(head, dict) and isinstance(head.get("el"), str):
+                head.setdefault("layer", part)   # keep an explicit anchor
+            else:
+                e["head"] = {"el": root_id, "layer": part, "edge": "center"}
+            tail = e.get("tail")
+            if not (isinstance(tail, dict) and isinstance(tail.get("el"), str)):
+                lbl = next((lid for lid, le in labels.items()
+                            if _match_part(_guess_part_name(lid)) == part
+                            or _match_part(str(le.get("text", ""))) == part),
+                           None)
+                if lbl is not None:
+                    at = _pt(labels[lbl].get("at")) or root_at
+                    side = "right" if at[0] < root_at[0] else "left"
+                    e["tail"] = {"el": lbl, "edge": side,
+                                 "dx": 6.0 if side == "right" else -6.0}
+            roster[eid] = e
+            report.append(f"CHAPTER {ch.concept} | ANCHORED {eid} -> "
+                          f"{root_id}.{part}")
+
+        # a labelled part with NO arrow gets one synthesized — a label
+        # floating in a margin column teaches nothing; a leader line to the
+        # actual structure is the whole point of annotating a diagram
+        anchored_parts = {str(e["head"]["layer"]).lower()
+                          for e in roster.values()
+                          if e.get("type") == "arrow"
+                          and isinstance(e.get("head"), dict)
+                          and e["head"].get("layer")}
+        for lid, le in list(labels.items()):
+            part = _match_part(_guess_part_name(lid))
+            if part is None or part.lower() in anchored_parts:
+                continue
+            aid = f"arr_auto_{lid}"
+            if aid in roster:
+                continue
+            write_step = next(
+                (st_ for st_ in ch.steps
+                 if any(a_.get("verb") == "write" and a_.get("target") == lid
+                        for a_ in st_.actions)), None)
+            if write_step is None:
+                continue        # never point at a label that never appears
+            at = _pt(le.get("at")) or root_at
+            side = "right" if at[0] < root_at[0] else "left"
+            roster[aid] = {"id": aid, "type": "arrow", "width": 3.2,
+                           "curve": 0.0,
+                           "tail": {"el": lid, "edge": side,
+                                    "dx": 6.0 if side == "right" else -6.0},
+                           "head": {"el": root_id, "layer": part,
+                                    "edge": "center"}}
+            write_step.actions.append({"verb": "draw", "target": aid})
+            anchored_parts.add(part.lower())
+            report.append(f"CHAPTER {ch.concept} | SYNTHESIZED {aid} -> "
+                          f"{root_id}.{part}")
+
+    # narration-ordered region schedule: each step that DRAWS the root gets
+    # the parts its own labels/arrows introduce, one region per draw action.
+    # Parts never assigned stay in the base bucket (visible from the first
+    # stroke) — a label can then never point at something still hidden.
+    region_sched: list[str] = []
+    step_regions: dict[str, list[str]] = {}   # seg_id -> regions for its draws
+    if root_id and part_names and draw_counts.get(root_id, 0) > 1:
+        already = list(drawn_regions.get(root_id, []))   # from a carry chapter
+        root_fresh = root_id not in introduced and not already
+        first_draw_step = True
+        written_labels = {a.get("target") for st in ch.steps
+                          for a in st.actions if a.get("verb") == "write"}
+        drawn_arrows = {a.get("target") for st in ch.steps
+                        for a in st.actions if a.get("verb") == "draw"}
+        for st in ch.steps:
+            n_draws = sum(1 for a in st.actions
+                          if a.get("verb") == "draw" and a.get("target") == root_id)
+            if not n_draws:
+                continue
+            parts: list[str] = []
+            for a in st.actions:
+                if a.get("verb") not in _INTRODUCERS:
+                    continue
+                tgt = a.get("target")
+                if not tgt or tgt == root_id:
+                    continue
+                p = _match_part(_guess_part_name(str(tgt)))
+                if p and p not in region_sched and p not in parts \
+                        and p not in already:
+                    parts.append(p)
+            if not parts:
+                # the model declared labels/arrows but never USED them (a
+                # whole run once drew the root seven times and wrote nothing)
+                # — the step's own narration says which part it teaches, so
+                # the declared label and its anchored arrow join this step
+                narr = _norm_name(narrations.get(st.segment_id, ""))
+                for lid, le in roster.items():
+                    if len(parts) >= n_draws:
+                        break
+                    if le.get("type") != "text" or lid in written_labels:
+                        continue
+                    p = _match_part(_guess_part_name(lid))
+                    if not p or p in region_sched or p in parts \
+                            or p in already:
+                        continue
+                    if _norm_name(p) not in narr:
+                        continue
+                    st.actions.append({"verb": "write", "target": lid})
+                    written_labels.add(lid)
+                    arr = next(
+                        (aid for aid, ae in roster.items()
+                         if ae.get("type") == "arrow" and aid not in drawn_arrows
+                         and isinstance(ae.get("head"), dict)
+                         and str(ae["head"].get("layer", "")).lower() == p.lower()),
+                        None)
+                    if arr is not None:
+                        st.actions.append({"verb": "draw", "target": arr})
+                        drawn_arrows.add(arr)
+                    parts.append(p)
+                    report.append(f"CHAPTER {ch.concept} | INJECTED "
+                                  f"write->{lid}"
+                                  + (f" + draw->{arr}" if arr else "")
+                                  + f" (narration names {p!r})")
+            if first_draw_step and root_fresh and len(parts) < n_draws:
+                parts = ["__base"] + parts   # the outline/backdrop comes first
+            first_draw_step = False
+            assigned = parts[:n_draws]
+            step_regions[st.segment_id] = assigned
+            region_sched.extend(p for p in assigned if p != "__base")
+        if not region_sched:
+            # nothing real was scheduled — tagging just "__base" would carry
+            # drawn_regions with NO region_order stamped, and the renderer
+            # can compute no pre_frac from that (a lesson once went blank
+            # after its draws ended). Untagged draws keep plain whole-asset
+            # semantics instead.
+            step_regions.clear()
+        if region_sched:
+            # the bucket layout must be IDENTICAL in every scene the root
+            # appears in — a carried order is extended, never replaced
+            prev_order = list(roster[root_id].get("region_order") or [])
+            roster[root_id] = dict(roster[root_id])
+            roster[root_id]["region_order"] = prev_order + [
+                p for p in region_sched if p not in prev_order]
+            report.append(f"CHAPTER {ch.concept} | REGION SCHEDULE "
+                          f"{root_id}: {roster[root_id]['region_order']}")
+
     def carry(eid: str, e: dict) -> dict:
         el = dict(e)
-        if e.get("type") == "illustration" and eid in drawn_layers \
-                and eid not in introduced:
-            el["drawn_layers"] = list(drawn_layers[eid])
-            if draw_counts.get(eid) or base_frac.get(eid):
-                bf = base_frac.get(eid, 0.0)
-                n = draw_counts.get(eid, 0)
-                done = draws_done.get(eid, 0)
-                el["drawn_frac"] = round(
-                    bf + (done / n) * (1.0 - bf) if n else bf, 4)
+        if e.get("type") == "illustration" and eid not in introduced:
+            if eid in drawn_regions:
+                # region carry is the sole record for a region-scheduled
+                # root — the uniform drawn_frac estimate would fight the
+                # renderer's real span-based pre_frac
+                el["drawn_regions"] = list(drawn_regions[eid])
+            elif eid in drawn_layers:
+                el["drawn_layers"] = list(drawn_layers[eid])
+                if draw_counts.get(eid) or base_frac.get(eid):
+                    bf = base_frac.get(eid, 0.0)
+                    n = draw_counts.get(eid, 0)
+                    done = draws_done.get(eid, 0)
+                    el["drawn_frac"] = round(
+                        bf + (done / n) * (1.0 - bf) if n else bf, 4)
         return el
 
     def board_now() -> list[dict]:
         return [carry(eid, e) for eid, e in roster.items()
                 if eid not in erased
-                and (eid in introduced or eid in drawn_layers)]
+                and (eid in introduced or eid in drawn_layers
+                     or eid in drawn_regions)]
 
     # work order: plan steps + HOLD entries for unplanned span segments
     step_by_id = {st.segment_id: st for st in ch.steps}
@@ -526,6 +870,13 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                     if not kids:
                         continue
                     el["children"] = kids
+                # anchor REFS must rename with their targets — a synthesized
+                # arrow once became prev__arr_* while its tail still said
+                # label_*, failing schema validation at the boundary scene
+                for k in ("tail", "head", "after"):
+                    v = el.get(k)
+                    if isinstance(v, dict) and v.get("el") in ren:
+                        el[k] = {**v, "el": ren[v["el"]]}
                 elements.append(el)
             gid = "prev__board"
             while gid in roster or gid in ren.values():
@@ -549,7 +900,8 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                                      if t in roster)
         on_board = {eid for eid in roster
                     if eid not in erased
-                    and (eid in introduced or eid in drawn_layers)}
+                    and (eid in introduced or eid in drawn_layers
+                         or eid in drawn_regions)}
         valid = on_board | intro_targets
         kept_actions: list[dict] = []
         for a in st.actions:
@@ -577,6 +929,7 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         # offset by any fraction carried in from a previous (carry) chapter
         step_actions: list[dict] = []
         step_done: dict[str, int] = {}
+        step_regs = list(step_regions.get(seg_id, []))
         for a in kept_actions:
             a = dict(a)
             if a.get("verb") == "draw" and a.get("target") in draw_counts:
@@ -587,6 +940,10 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                 w = (1.0 - bf) / n
                 a["slice"] = (round(bf + k * w, 4), round(w, 4))
                 step_done[tid] = step_done.get(tid, 0) + 1
+                # narration-scheduled region: the renderer prefers this over
+                # the uniform slice whenever the asset has vision regions
+                if tid == root_id and step_regs:
+                    a["region"] = step_regs.pop(0)
             step_actions.append(a)
         for tid, c in step_done.items():
             draws_done[tid] = draws_done.get(tid, 0) + c
@@ -603,6 +960,15 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             seg_assets[hm_asset] = AVATAR_PROMPTS[hm_asset]
             moment_note = f" | HUMAN_TEACHING_MOMENT ({st.moment['role']}: "                           f"{st.moment['text']!r})"
 
+        if not elements:
+            # every declared visual of this step was dropped/converted away —
+            # an empty scene fails schema validation downstream and once fell
+            # all the way to the LEGACY renderer. No scene at all lets the
+            # segment take the whiteboard-native fallback instead.
+            report.append(f"SEGMENT {seg_id} | chapter: {ch.concept} | "
+                          f"SKIPPED empty scene (whiteboard fallback)")
+            first = False
+            continue
         scenes[seg_id] = {"id": f"vc_{seg_id}", "compiled": True, "scene_type": "process",
                           "narration": narrations.get(seg_id, ""),
                           "camera_start": dict(cam),
@@ -617,6 +983,16 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                 for t in expand(tgt):
                     erased.discard(t)   # erase -> redraw is legal teaching
                 if v == "draw" and roster[tgt].get("type") == "illustration" \
+                        and a.get("region"):
+                    # region draws carry EXACTLY what was narrated. This
+                    # branch must beat `layers`: the model stamps both, and
+                    # layer-carry's uniform drawn_frac once under-revealed a
+                    # region-reordered trace every segment start (the board
+                    # flickered sparse until the next draw caught up)
+                    drawn_regions.setdefault(tgt, [])
+                    if a["region"] not in drawn_regions[tgt]:
+                        drawn_regions[tgt].append(a["region"])
+                elif v == "draw" and roster[tgt].get("type") == "illustration" \
                         and a.get("layers"):
                     # layer draws NEVER complete the asset — marker-carry is
                     # the permanent record of exactly what was drawn
@@ -634,11 +1010,13 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                     erased.add(t)
                     introduced.discard(t)
                     drawn_layers.pop(t, None)
+                    drawn_regions.pop(t, None)
             elif v == "fade" and tgt and float(a.get("to", 0.0)) == 0.0:
                 for t in expand(tgt):
                     erased.add(t)
                     introduced.discard(t)
                     drawn_layers.pop(t, None)
+                    drawn_regions.pop(t, None)
         if boundary:
             cam = dict(_DEFAULT_CAM)    # the inserted reset ran on screen
         cam = _chain_camera(cam, step_actions, ch.elements)

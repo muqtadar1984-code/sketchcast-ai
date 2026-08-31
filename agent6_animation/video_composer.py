@@ -94,11 +94,24 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
         scene.style.hand_scale = 0.8
         prompts = {str(k): str(v)
                    for k, v in (script_seg.get("scene_assets") or {}).items()}
+        words = None
+        if audio_path:
+            wjson = Path(str(audio_path)).with_suffix(".words.json")
+            if wjson.exists():
+                try:
+                    words = json.loads(wjson.read_text(encoding="utf-8"))
+                except Exception:  # noqa: BLE001 — timing falls back gracefully
+                    words = None
         r = SceneRenderer(scene, asset_resolver=make_resolver(prompts),
                           hand_loader=lambda k: load_hand(k))
-        r.compile(audio_secs)
-        return encode_scene(r.frames(audio_secs, FPS), r.total_secs(audio_secs),
-                            audio_path, Path(str(out_mp4)), FPS)
+        r.compile(audio_secs, words=words)
+        ok = encode_scene(r.frames(audio_secs, FPS), r.total_secs(audio_secs),
+                          audio_path, Path(str(out_mp4)), FPS)
+        if ok:
+            audit = r.audit()
+            if audit["warnings"]:
+                script_seg["scene_audit"] = audit["warnings"]
+        return ok
     except Exception:  # noqa: BLE001 — scene failure must never kill a segment
         logger.exception("scene engine failed for %s; native fallback",
                          script_seg.get("segment_id"))
@@ -212,7 +225,10 @@ def compose_episode_videos(
             ssml = script_seg.get("elevenlabs_text") or text
             try:
                 seg_report: dict = {}
-                synthesize(text, mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=ssml, report=seg_report)
+                # word boundaries feed frame-accurate cue timing (scene engine)
+                bnd = mp3.with_suffix(".words.json") if os.getenv(
+                    "VIDEO_ENGINE", "").strip().lower() == "scene" else None
+                synthesize(text, mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=ssml, report=seg_report, boundaries_out=bnd)
                 used = seg_report.get("used")
                 downgraded = bool(seg_report.get("downgraded"))
                 audio_path = str(mp3)
@@ -246,6 +262,20 @@ def compose_episode_videos(
                     duration if audio_path else 0.0, out_mp4, direction,
                     scene_dict=scene_dict,
                 )
+                if not ok and attempt == "scene":
+                    # a planned scene that fails (parse or render) must step
+                    # DOWN THE SAME visual language — an empty compiled scene
+                    # once fell straight to the legacy renderer and failed
+                    # lesson validation
+                    try:
+                        from spike.scene_engine.whiteboard import build_whiteboard_scene
+                        ok = _render_scene_segment(
+                            script_seg, text, audio_path,
+                            duration if audio_path else 0.0, out_mp4,
+                            direction, scene_dict=build_whiteboard_scene(script_seg))
+                        attempt = "whiteboard"
+                    except Exception:  # noqa: BLE001
+                        logger.exception("whiteboard fallback failed for %s", seg_id)
                 if ok:
                     renderer = attempt
 
@@ -274,6 +304,7 @@ def compose_episode_videos(
                 audio_duration_seconds=round(duration, 2),
                 visual_action=slide_seg.get("visual_action", "GHOST_ONLY"),
                 renderer=renderer,
+                scene_audit=list(script_seg.get("scene_audit") or []),
             ),
         }
 

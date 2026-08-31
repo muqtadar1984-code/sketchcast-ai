@@ -21,6 +21,9 @@ class VideoSegment(BaseModel):
     # "whiteboard" (whiteboard-native fallback), or "native" (legacy slides —
     # must be ZERO in a VIDEO_ENGINE=scene lesson, validated downstream)
     renderer: str = "native"
+    # per-scene quality audit from SceneRenderer.audit(): unresolved anchors,
+    # out-of-bounds text, converging arrows, baked-text assets, timing shifts
+    scene_audit: List[str] = Field(default_factory=list)
 
 
 class VideoManifest(BaseModel):

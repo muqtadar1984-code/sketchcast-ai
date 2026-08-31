@@ -75,6 +75,48 @@ _INTRODUCERS = {"draw", "write", "reveal"}
 _PEN_VERBS = {"draw", "write", "erase", "circle", "underline", "highlight"}
 
 
+def _region_ordered_trace(trace: list, regions: dict, order: list[str]
+                          ) -> tuple[list, dict]:
+    """Re-bucket a drawing-order trace: unassigned points (the outline and
+    everything nobody narrates) first, then each named region's points in the
+    given order. Returns (new_trace, {name: (lo_frac, hi_frac)})."""
+    from .vector_assets import match_layer_ids
+    keys = list(regions.keys())
+    ordered = []
+    for want in order:
+        for k in match_layer_ids(keys, [want]):
+            if k not in ordered:
+                ordered.append(k)
+
+    def bucket_of(p) -> str | None:
+        # smallest matching box wins: region boxes NEST (a cell-wall box
+        # contains the whole cell — first-match would swallow every organelle)
+        best, best_a = None, None
+        for name in ordered:
+            for (x0, y0, x1, y1) in regions[name]:
+                if x0 <= p[0] <= x1 and y0 <= p[1] <= y1:
+                    a = (x1 - x0) * (y1 - y0)
+                    if best_a is None or a < best_a:
+                        best, best_a = name, a
+        return best
+
+    buckets: dict[str, list] = {name: [] for name in ordered}
+    base: list = []
+    for p in trace:
+        (buckets[b] if (b := bucket_of(p)) else base).append(p)
+    new_trace: list = list(base)
+    spans: dict[str, tuple[float, float]] = {}
+    n = max(1, len(trace))
+    spans["__base"] = (0.0, len(base) / n)
+    pos = len(base)
+    for name in ordered:
+        pts = buckets[name]
+        spans[name] = (pos / n, (pos + len(pts)) / n)
+        new_trace.extend(pts)
+        pos += len(pts)
+    return new_trace, spans
+
+
 def _seed(s: str) -> int:
     """Process-stable seed for hand-wobble. NEVER hash(): Python salts string
     hashes per process, and the determinism contract is cross-process (a retry
@@ -189,7 +231,16 @@ class SceneRenderer:
         self.cam: Optional[CameraTrack] = None
         self._flat: dict[str, list[BStroke]] = {}  # element -> flattened strokes
         self._fonts: dict[tuple[bool, int, str], object] = {}
+        self._audit_warnings: list[str] = []
+        self._warned: set[str] = set()
         self._bind()
+
+    def _warn(self, msg: str) -> None:
+        """Audit warning, deduplicated — resolve paths run per frame, and one
+        missing region once produced 849 copies of the same line."""
+        if msg not in self._warned:
+            self._warned.add(msg)
+            self._audit_warnings.append(msg)
 
     # ── bind ────────────────────────────────────────────────────────────────
 
@@ -217,17 +268,23 @@ class SceneRenderer:
             self.bound[el.id] = b
             self._flat[el.id] = [st for layer in b.layers for st in layer.strokes]
 
-        # PASS 2: arrows, with anchor refs resolved against real bound geometry
+        # PASS 2: arrows, with anchor refs resolved against real bound
+        # geometry. The tail (label side) resolves first so the head can pick
+        # the nearest instance and land on the part's boundary facing it.
         for el in deferred_arrows:
             b = self.bound[el.id]
             tail = self._resolve_point(el.tail)
-            head = self._resolve_point(el.head)
+            head = self._resolve_point(el.head, toward=tail)
             paths = arrow_paths(tail, head, curve=el.curve,
                                 seed=_seed(el.id),
                                 head_len=max(16.0, el.width * 4.5))
             b.layers = [BLayer("arrow", [
                 BStroke(p, el.width, el.color, None, path_length(p)) for p in paths])]
             b.box = bbox([q for p in paths for q in p])
+            b.head_pt = head          # for arrow-distinctness auditing
+            b.anchor_el = el.head.el if isinstance(el.head, AnchorRef) else None
+            b.anchor_layer = (el.head.layer
+                              if isinstance(el.head, AnchorRef) else None)
             self._flat[el.id] = [st for layer in b.layers for st in layer.strokes]
 
         # a group's box is the union of its children's (so circle/underline/
@@ -273,9 +330,12 @@ class SceneRenderer:
                     full = path_length(
                         [tgt.raster.to_world(p) for p in tgt.raster.trace[::12]]) or 800.0
                     # a sliced draw only covers 1/N of the trace — its duration
-                    # must be sized to the slice, not the whole asset. An
-                    # explicit action slice (cross-segment continuity) wins.
-                    sl = getattr(a, "slice", None) or self._draw_slices.get(i, (0.0, 1.0))
+                    # must be sized to the slice, not the whole asset. A named
+                    # region (narration-scheduled part) wins over an explicit
+                    # action slice (cross-segment continuity), which wins over
+                    # the equal-split default.
+                    sl = self._raster_slice(tgt, a) or \
+                        self._draw_slices.get(i, (0.0, 1.0))
                     self.workloads[i] = full * sl[1]
                 elif isinstance(tgt.element, IllustrationElement):
                     strokes = self._layer_strokes(tgt, a.layers)
@@ -331,9 +391,35 @@ class SceneRenderer:
             return
         kind, asset = resolved
         if kind == "raster":
-            b.raster = BRaster(ink=asset.ink, trace=asset.trace, at=el.at,
+            trace = asset.trace
+            regions = dict(getattr(asset, "regions", {}) or {})
+            spans: dict[str, tuple[float, float]] = {}
+            pre_frac = 0.0
+            if el.region_order and regions:
+                # narration-ordered drawing: re-bucket the trace so each named
+                # part's pixels draw when THAT part is narrated — base strokes
+                # (outline, anything unassigned) first, then parts in order
+                trace, spans = _region_ordered_trace(trace, regions,
+                                                     el.region_order)
+                if el.drawn_regions:
+                    ends = [spans[r][1] for r in
+                            (self._match_region_names(spans, el.drawn_regions))
+                            if r in spans]
+                    base_end = spans.get("__base", (0.0, 0.0))[1]
+                    pre_frac = max([base_end] + ends) if ends else base_end
+            elif el.drawn_regions:
+                # hostile carry state: drawn_regions without a usable span
+                # map. Blank (pre_frac 0) is catastrophic on screen; showing
+                # the asset whole is merely out of order — prefer visible.
+                self._warn(f"REGION_CARRY_WITHOUT_ORDER {el.id}")
+                pre_frac = 1.0
+            b.raster = BRaster(ink=asset.ink, trace=trace, at=el.at,
                                scale=el.scale * asset.world_scale,
                                stamp_r=asset.stamp_r)
+            b.raster.regions = regions
+            b.raster.region_spans = spans
+            b.raster.pre_frac = pre_frac
+            b.raster.baked_text = bool(getattr(asset, "baked_text", False))
             w2 = asset.ink.width * b.raster.scale / 2
             h2 = asset.ink.height * b.raster.scale / 2
             b.box = (el.at[0] - w2, el.at[1] - h2, el.at[0] + w2, el.at[1] + h2)
@@ -378,6 +464,38 @@ class SceneRenderer:
                     x0 = pred.box[0] - el.after.gap - w
                 else:
                     x0 = pred.box[2] + el.after.gap
+        # SAFE CONTENT AREA: a label must never clip against the canvas edge.
+        # Shift it in; if genuinely too wide, step the size down (never below
+        # 20 — microscopic text is not a fix), then truncate with an ellipsis.
+        SAFE_L, SAFE_R, SAFE_T, SAFE_B = 24.0, WORLD_W - 24.0, 14.0, WORLD_H - 14.0
+        max_w = SAFE_R - SAFE_L
+        size = tx_size = el.size
+        disp0 = disp
+        while w > max_w and size > 20:
+            size = max(20, size * 0.85)
+            f = self._font_for(bold, int(size), disp)
+            try:
+                w = f.getlength(disp)
+                asc, desc = f.getmetrics()
+                h = asc + desc
+            except Exception:
+                break
+        while w > max_w and len(disp) > 4:
+            disp = disp[:-2].rstrip() + "…"
+            f = self._font_for(bold, int(size), disp)
+            try:
+                w = f.getlength(disp)
+            except Exception:
+                break
+        if size != tx_size or disp != disp0:
+            b.text = BText(disp, el.at, size, el.color, bold, rtl, shaped,
+                           el.anchor, w, h)
+            x0 = min(x0, SAFE_R - w)
+        if x0 + w > SAFE_R:
+            self._warn(f"OUT_OF_BOUNDS_TEXT {el.id}")
+            x0 = SAFE_R - w
+        x0 = max(SAFE_L, x0)
+        y0 = min(max(SAFE_T, y0), SAFE_B - h)
         b.box = (x0, y0, x0 + w, y0 + h)
 
     def _sub_box(self, b: Bound, sub: str) -> tuple[float, float, float, float] | None:
@@ -400,15 +518,86 @@ class SceneRenderer:
         x0, y0, x1, y1 = b.box
         return (x0 + pre, y0, x0 + end, y1)
 
-    def _resolve_point(self, spec) -> Point:
+    def _match_region_names(self, spans: dict, names: list[str]) -> list[str]:
+        from .vector_assets import match_layer_ids
+        keys = [k for k in spans if k != "__base"]
+        out = []
+        for n in names:
+            out.extend(match_layer_ids(keys, [n]))
+        return out
+
+    def _layer_instance_boxes(self, b: Bound, layer: str) -> list[tuple]:
+        """Candidate boxes for a named PART of an illustration: raster ->
+        vision-annotated region boxes (world coords); vector -> the bbox of
+        each stroke in the matched layers (a chloroplast layer's three
+        ellipses are three instances)."""
+        from .vector_assets import match_layer_ids
+        boxes: list[tuple] = []
+        if b.raster is not None and b.raster.regions:
+            for k in match_layer_ids(list(b.raster.regions), [layer]):
+                for (x0, y0, x1, y1) in b.raster.regions[k]:
+                    p0 = b.raster.to_world((x0, y0))
+                    p1 = b.raster.to_world((x1, y1))
+                    boxes.append((p0[0], p0[1], p1[0], p1[1]))
+        elif b.layers:
+            matched = set(match_layer_ids([l.id for l in b.layers], [layer]))
+            for l in b.layers:
+                if l.id in matched:
+                    for st in l.strokes:
+                        boxes.append(bbox(st.pts))
+        return boxes
+
+    @staticmethod
+    def _toward_boundary(box: tuple, toward: Point) -> Point:
+        """The point where the line from the box centre toward `toward` exits
+        the box — arrowheads should TOUCH the structure, not stab its middle."""
+        x0, y0, x1, y1 = box
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        dx, dy = toward[0] - cx, toward[1] - cy
+        if abs(dx) < 1e-6 and abs(dy) < 1e-6:
+            return (cx, cy)
+        tx = abs(((x1 - x0) / 2) / dx) if abs(dx) > 1e-6 else float("inf")
+        ty = abs(((y1 - y0) / 2) / dy) if abs(dy) > 1e-6 else float("inf")
+        t = min(tx, ty)
+        return (cx + dx * t, cy + dy * t)
+
+    def _resolve_point(self, spec, toward: Point | None = None) -> Point:
         """A PointSpec -> world point. Tuples pass through; AnchorRefs resolve
-        against the referenced element's bound box (or substring box)."""
+        against the referenced element's bound box, substring box, or — for
+        `layer` anchors — the ACTUAL geometry of that named part (never the
+        whole illustration's bbox). `toward` (the other end of the arrow)
+        picks the nearest instance and puts the point on the part's boundary
+        facing the label."""
         if not isinstance(spec, AnchorRef):
             return tuple(spec)
         b = self.bound.get(spec.el)
         if b is None:
             return (spec.dx, spec.dy)
         box = b.box
+        if spec.layer:
+            cands = self._layer_instance_boxes(b, spec.layer)
+            if cands:
+                if spec.instance == "first" or toward is None:
+                    box = cands[0]
+                elif spec.instance == "largest":
+                    box = max(cands, key=lambda c: (c[2]-c[0]) * (c[3]-c[1]))
+                else:  # nearest to the label end — the cleanest leader line
+                    box = min(cands, key=lambda c: (
+                        ((c[0]+c[2])/2 - toward[0])**2 +
+                        ((c[1]+c[3])/2 - toward[1])**2))
+                if spec.edge == "center" and toward is not None:
+                    p = self._toward_boundary(box, toward)
+                    return (p[0] + spec.dx, p[1] + spec.dy)
+            else:
+                logger.warning("layer anchor %r.%r unresolved — falling back "
+                               "to element box", spec.el, spec.layer)
+                self._warn(
+                    f"UNRESOLVED_ANCHOR {spec.el}.{spec.layer}")
+                if toward is not None and spec.edge == "center":
+                    # point at the ELEMENT's edge facing the label — a line
+                    # stabbing the middle of the diagram reads as wrong
+                    p = self._toward_boundary(box, toward)
+                    return (p[0] + spec.dx, p[1] + spec.dy)
         if spec.sub:
             sb = self._sub_box(b, spec.sub)
             if sb is not None:
@@ -436,6 +625,29 @@ class SceneRenderer:
             BStroke(pts, el.width, el.color, "accent_mist" if el.fill else None,
                     path_length(pts))])]
         b.box = bbox(pts)
+
+    def _raster_slice(self, b: Bound, a) -> tuple[float, float] | None:
+        """The trace slice for a draw action on an annotated raster: an
+        explicit `region` wins (the nucleus draws when the nucleus is
+        narrated), then an explicit cross-segment `slice`."""
+        region = getattr(a, "region", None)
+        spans = getattr(b.raster, "region_spans", None) if b.raster else None
+        if region and spans:
+            if region == "__base" and "__base" in spans:
+                lo, hi = spans["__base"]
+                return (lo, max(0.0, hi - lo))
+            matched = self._match_region_names(spans, [region])
+            if matched:
+                lo = min(spans[m][0] for m in matched)
+                hi = max(spans[m][1] for m in matched)
+                return (lo, max(0.0, hi - lo))
+            self._warn(f"UNRESOLVED_REGION {region}")
+            # a part vision could not locate must not reveal OTHER parts'
+            # strokes — a uniform-slice fallback once drew random specks that
+            # the next segment's carry clamped away again (visible pop-off).
+            # Its ink still arrives with whichever region contains it.
+            return (0.0, 0.0)
+        return getattr(a, "slice", None)
 
     def _layer_flat_indices(self, b: Bound, layer_ids: list[str]) -> list[int]:
         """Flat-stroke indices for the named layers, via THE shared matcher."""
@@ -472,8 +684,11 @@ class SceneRenderer:
 
     # ── compile ─────────────────────────────────────────────────────────────
 
-    def compile(self, audio_secs: float) -> list[TimedAction]:
-        self.timeline = compile_timeline(self.scene, audio_secs, self.workloads)
+    def compile(self, audio_secs: float,
+                words: list | None = None) -> list[TimedAction]:
+        self.timeline = compile_timeline(self.scene, audio_secs,
+                                         self.workloads, words=words)
+        self._enforce_dependencies()
         focus: dict[int, Point] = {}
         for i, ta in enumerate(self.timeline):
             a = ta.action
@@ -495,6 +710,70 @@ class SceneRenderer:
         self.cam = CameraTrack(self.timeline, focus, start=start)
         return self.timeline
 
+    def _enforce_dependencies(self) -> None:
+        """§13: an annotation never precedes its prerequisite. Within a scene,
+        an action on element E waits for E's introducer to FINISH; an arrow
+        waits for its anchor target (and, for a region anchor, for that
+        region's draw). Starts shift forward, durations stay; the shift is
+        recorded as a timing warning when it is large."""
+        intro_end: dict[str, float] = {}
+        region_end: dict[tuple[str, str], float] = {}
+        for ta in self.timeline:
+            a = ta.action
+            if a.verb in _INTRODUCERS and a.target:
+                for nm in self._expand(a.target):
+                    intro_end.setdefault(nm, ta.end)
+                reg = getattr(a, "region", None)
+                if a.verb == "draw" and reg:
+                    region_end[(a.target, reg.lower())] = ta.end
+        new: list[TimedAction] = []
+        for ta in self.timeline:
+            a = ta.action
+            required = 0.0
+            if a.verb not in _INTRODUCERS and a.verb not in ("zoom", "pan",
+                                                            "camera_reset"):
+                for nm in self._expand(a.target):
+                    required = max(required, intro_end.get(nm, 0.0))
+            if a.verb == "draw":
+                b = self.bound.get(a.target)
+                anchor_el = getattr(b, "anchor_el", None) if b else None
+                if anchor_el:
+                    required = max(required, intro_end.get(anchor_el, 0.0))
+                    layer = getattr(b, "anchor_layer", None)
+                    if layer:
+                        for (eid, reg), end in region_end.items():
+                            if eid == anchor_el and (layer.lower() in reg
+                                                     or reg in layer.lower()):
+                                required = max(required, end)
+            if required > ta.start + 1e-6:
+                if required - ta.start > 2.0:
+                    self._warn(
+                        f"TIMING_SHIFT {a.verb}->{a.target} "
+                        f"+{required - ta.start:.1f}s (dependency)")
+                new.append(TimedAction(a, required + 0.15, ta.duration))
+            else:
+                new.append(ta)
+        self.timeline = new
+
+    def audit(self) -> dict:
+        """Per-scene quality audit for the lesson validation report."""
+        heads: dict[str, Point] = {}
+        for eid, b in self.bound.items():
+            if isinstance(b.element, ArrowElement) and hasattr(b, "head_pt"):
+                heads[eid] = b.head_pt
+        pairs = []
+        ids = list(heads)
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                a, c = heads[ids[i]], heads[ids[j]]
+                if ((a[0]-c[0])**2 + (a[1]-c[1])**2) ** 0.5 < 30.0:
+                    pairs.append(f"ARROWS_CONVERGE {ids[i]}+{ids[j]}")
+        baked = [eid for eid, b in self.bound.items()
+                 if b.raster is not None and getattr(b.raster, "baked_text", False)]
+        return {"warnings": self._audit_warnings + pairs
+                + [f"BAKED_TEXT {e}" for e in baked],
+                "arrow_heads": heads}
+
     def _next_action_focus(self, i: int) -> Point | None:
         """Where the next draw/write after timeline index i will put ink —
         the zoom target that stays correct on EVERY asset tier. A hardcoded
@@ -507,7 +786,8 @@ class SceneRenderer:
                 continue
             if a.verb == "draw":
                 if b.raster is not None:
-                    lo, w = self._draw_slices.get(j, (0.0, 1.0))
+                    lo, w = self._raster_slice(b, a) or \
+                        self._draw_slices.get(j, (0.0, 1.0))
                     tr = b.raster.trace
                     if tr:
                         mid = tr[min(len(tr) - 1, int((lo + w / 2) * len(tr)))]
@@ -544,14 +824,16 @@ class SceneRenderer:
             s = _ElState(opacity=getattr(b.element, "opacity", 1.0))
             s.visible = not b.introduced
             partial = (isinstance(b.element, IllustrationElement)
-                       and (b.element.drawn_layers or b.element.drawn_frac > 0))
+                       and (b.element.drawn_layers or b.element.drawn_frac > 0
+                            or b.element.drawn_regions))
             if partial:
                 # board state carried in from earlier segments: exactly the
                 # drawn part shows finished at t=0 — whether or not this scene
                 # draws more of it
                 s.visible = True
                 if b.raster is not None:
-                    s.raster_frac = b.element.drawn_frac
+                    s.raster_frac = max(b.element.drawn_frac,
+                                        getattr(b.raster, "pre_frac", 0.0))
                 elif b.element.drawn_layers:
                     for idx in self._layer_flat_indices(b, b.element.drawn_layers):
                         s.reveal[idx] = 1.0
@@ -669,7 +951,7 @@ class SceneRenderer:
             # otherwise the text is marked visible with text_frac 0: invisible
             s.text_frac = max(s.text_frac, p)
         if b.raster is not None:
-            lo, w = getattr(a, "slice", None) or slice_ or (0.0, 1.0)
+            lo, w = self._raster_slice(b, a) or slice_ or (0.0, 1.0)
             s.raster_frac = max(s.raster_frac, lo + p * w)
             return
         strokes = self._layer_strokes(b, getattr(a, "layers", None))
@@ -830,7 +1112,8 @@ class SceneRenderer:
             return None
         if a.verb == "draw":
             if b.raster is not None:
-                lo, w = getattr(a, "slice", None) or self._draw_slices.get(i, (0.0, 1.0))
+                lo, w = self._raster_slice(b, a) or \
+                    self._draw_slices.get(i, (0.0, 1.0))
                 k = int((lo + p * w) * len(b.raster.trace))
                 fp = b.raster.trace[k - 1] if k > 0 else None
                 return b.raster.to_world(fp) if fp else None

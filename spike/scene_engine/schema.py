@@ -56,6 +56,10 @@ class Cue(BaseModel):
     phrase: Optional[str] = None
     frac: Optional[float] = None
     sec: Optional[float] = Field(default=None, ge=0.0, le=900.0)
+    # semantic phase shift: negative = BEFORE_CUE (set-up strokes land as the
+    # words arrive), positive = AFTER_CUE (reinforcement). Applied after the
+    # base cue resolves; clamped to ±5 s at resolution time.
+    offset: float = 0.0
 
     @model_validator(mode="after")
     def _exactly_one(self) -> "Cue":
@@ -82,6 +86,12 @@ class AnchorRef(BaseModel):
 
     el: str
     sub: Optional[str] = None          # substring of a text element to target
+    # 1.4: a named PART of a layered/annotated illustration — the anchor
+    # resolves against that part's actual geometry (vector layer strokes or a
+    # vision-annotated raster region), never the whole illustration's bbox.
+    layer: Optional[str] = None
+    # several instances of a part (three mitochondria): which one to target
+    instance: Literal["nearest", "first", "largest"] = "nearest"
     edge: Literal["top", "bottom", "left", "right",
                   "center"] = "center"
     dx: float = 0.0
@@ -137,6 +147,11 @@ class IllustrationElement(_ElementBase):
     # in a previous narration segment and the board persists.
     drawn_layers: Optional[list[str]] = None
     drawn_frac: float = Field(default=0.0, ge=0.0, le=1.0)  # raster-tier carry
+    # 1.4: narration-ordered drawing of annotated raster art — the trace is
+    # re-bucketed so parts draw in THIS order; drawn_regions carries which
+    # parts earlier segments already drew.
+    region_order: Optional[list[str]] = None
+    drawn_regions: Optional[list[str]] = None
 
 
 class TextElement(_ElementBase):
@@ -243,6 +258,10 @@ class DrawAction(_ActionBase):
     # segment 3 continues exactly where segment 2's pen stopped. Overrides the
     # within-scene equal split when present.
     slice: Optional[tuple[float, float]] = None
+    # 1.4: draw exactly THIS named part of an annotated raster asset — the
+    # nucleus draws while the narrator says "nucleus", not whichever pixels
+    # the trace walk reaches next. Takes precedence over slice.
+    region: Optional[str] = None
 
 
 class WriteAction(_ActionBase):

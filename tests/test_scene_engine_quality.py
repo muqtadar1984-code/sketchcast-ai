@@ -1,0 +1,718 @@
+"""Quality-pass regression tests (video quality pass, §1-33).
+
+Covers the five defect classes the frame audit of the first full lesson found:
+arrows converging on one eyeballed point, labels clipped at the canvas edge,
+labels appearing before their structures, char-midpoint-only cue timing, and
+zero human teaching moments in a full lesson.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from PIL import Image
+
+from spike.scene_engine.continuity import (compile_plan, parse_visual_plan,
+                                           seed_moment)
+from spike.scene_engine.raster_assets import RasterAsset, part_names_from_prompt
+from spike.scene_engine.render import SceneRenderer, _region_ordered_trace
+from spike.scene_engine.schema import Scene
+from spike.scene_engine.timing import resolve_cue
+from spike.scene_engine.schema import Cue
+
+
+# ── synthetic annotated raster ───────────────────────────────────────────────
+
+NUCLEUS = [120.0, 120.0, 160.0, 160.0]
+CHLORO_A = [20.0, 20.0, 60.0, 60.0]
+CHLORO_B = [20.0, 140.0, 60.0, 180.0]
+
+
+def _cell_asset(key: str = "plant_cell") -> RasterAsset:
+    ink = Image.new("RGBA", (200, 200), (0, 0, 0, 0))
+    trace = []
+    # base: a border walk (outside every region)
+    for i in range(40):
+        trace.append((5.0 + i * 4.8, 5.0))
+    # nucleus points
+    for i in range(20):
+        trace.append((125.0 + (i % 5) * 7.0, 125.0 + (i // 5) * 8.0))
+    # chloroplast instance A then B
+    for i in range(10):
+        trace.append((25.0 + (i % 5) * 7.0, 25.0 + (i // 5) * 8.0))
+    for i in range(10):
+        trace.append((25.0 + (i % 5) * 7.0, 145.0 + (i // 5) * 8.0))
+    return RasterAsset(key=key, ink=ink, trace=trace, stamp_r=4.0,
+                       world_scale=1.0,
+                       regions={"nucleus": [NUCLEUS],
+                                "chloroplast": [CHLORO_A, CHLORO_B]})
+
+
+def _resolver(asset: RasterAsset):
+    return lambda k: ("raster", asset) if k == asset.key else None
+
+
+# ── region-ordered trace ─────────────────────────────────────────────────────
+
+class TestRegionTrace:
+    def test_buckets_base_first_then_named_regions_in_order(self):
+        a = _cell_asset()
+        new, spans = _region_ordered_trace(a.trace, a.regions,
+                                           ["nucleus", "chloroplast"])
+        assert len(new) == len(a.trace)          # nothing lost
+        b_lo, b_hi = spans["__base"]
+        n_lo, n_hi = spans["nucleus"]
+        c_lo, c_hi = spans["chloroplast"]
+        assert b_lo == 0.0 and abs(b_hi - 0.5) < 0.01      # 40/80 points
+        assert abs(n_lo - b_hi) < 1e-9 and n_hi > n_lo
+        assert abs(c_lo - n_hi) < 1e-9 and abs(c_hi - 1.0) < 1e-9
+        # every nucleus-span point actually lies in the nucleus box
+        k0, k1 = int(n_lo * len(new)), int(n_hi * len(new))
+        for p in new[k0:k1]:
+            assert NUCLEUS[0] <= p[0] <= NUCLEUS[2]
+            assert NUCLEUS[1] <= p[1] <= NUCLEUS[3]
+
+
+# ── layer anchors + arrow routing ────────────────────────────────────────────
+
+def _anchor_scene(layer: str) -> Scene:
+    return Scene.model_validate({
+        "id": "anch", "narration": "the chloroplasts catch the light",
+        "elements": [
+            {"id": "cell", "type": "illustration", "asset": "plant_cell",
+             "at": [640, 360], "scale": 1.0},
+            {"id": "lbl", "type": "text", "text": "Chloroplast",
+             "at": [80, 120], "role": "label", "anchor": "lt"},
+            {"id": "ar", "type": "arrow", "curve": 0,
+             "tail": {"el": "lbl", "edge": "right", "dx": 6},
+             "head": {"el": "cell", "layer": layer, "edge": "center"}},
+        ],
+        "actions": [{"verb": "draw", "target": "cell"},
+                    {"verb": "write", "target": "lbl"},
+                    {"verb": "draw", "target": "ar"}],
+    })
+
+
+class TestLayerAnchors:
+    def test_head_lands_on_nearest_instance_boundary(self):
+        r = SceneRenderer(_anchor_scene("chloroplast"),
+                          asset_resolver=_resolver(_cell_asset()))
+        head = r.bound["ar"].head_pt
+        # asset is centered at (640,360), 200px wide -> world box starts (540,260)
+        # nearest chloroplast instance to a label at the top-left is CHLORO_A:
+        # world box (560,280)-(600,320)
+        assert 555.0 <= head[0] <= 605.0 and 275.0 <= head[1] <= 325.0
+        # ...and NOT the element centre (the converging-arrows defect)
+        assert ((head[0] - 640) ** 2 + (head[1] - 360) ** 2) ** 0.5 > 40.0
+
+    def test_unresolved_layer_warns_and_falls_back(self):
+        r = SceneRenderer(_anchor_scene("ribosome"),
+                          asset_resolver=_resolver(_cell_asset()))
+        assert any(w.startswith("UNRESOLVED_ANCHOR")
+                   for w in r.audit()["warnings"])
+        assert r.bound["ar"].head_pt is not None   # arrow still drew
+
+    def test_two_arrows_to_distinct_parts_do_not_converge(self):
+        s = Scene.model_validate({
+            "id": "two", "narration": "nucleus and chloroplast",
+            "elements": [
+                {"id": "cell", "type": "illustration", "asset": "plant_cell",
+                 "at": [640, 360], "scale": 1.0},
+                {"id": "l1", "type": "text", "text": "Nucleus", "at": [80, 100]},
+                {"id": "l2", "type": "text", "text": "Chloroplast", "at": [80, 500]},
+                {"id": "a1", "type": "arrow",
+                 "tail": {"el": "l1", "edge": "right"},
+                 "head": {"el": "cell", "layer": "nucleus", "edge": "center"}},
+                {"id": "a2", "type": "arrow",
+                 "tail": {"el": "l2", "edge": "right"},
+                 "head": {"el": "cell", "layer": "chloroplast", "edge": "center"}},
+            ],
+            "actions": [{"verb": "draw", "target": "cell"}],
+        })
+        r = SceneRenderer(s, asset_resolver=_resolver(_cell_asset()))
+        audit = r.audit()
+        assert not any(w.startswith("ARROWS_CONVERGE")
+                       for w in audit["warnings"])
+        h1, h2 = audit["arrow_heads"]["a1"], audit["arrow_heads"]["a2"]
+        assert ((h1[0] - h2[0]) ** 2 + (h1[1] - h2[1]) ** 2) ** 0.5 > 60.0
+
+
+# ── label safe area ──────────────────────────────────────────────────────────
+
+class TestSafeArea:
+    def test_right_edge_label_is_pulled_inside(self):
+        s = Scene.model_validate({
+            "id": "safe", "narration": "x",
+            "elements": [{"id": "t", "type": "text", "anchor": "lt",
+                          "text": "Permanent vacuole", "at": [1250, 300]}],
+            "actions": [{"verb": "write", "target": "t"}],
+        })
+        r = SceneRenderer(s)
+        x0, y0, x1, y1 = r.bound["t"].box
+        assert x1 <= 1256.0 + 1e-6 and x0 >= 24.0 - 1e-6
+        assert any(w.startswith("OUT_OF_BOUNDS_TEXT")
+                   for w in r._audit_warnings)
+
+    def test_absurdly_long_label_shrinks_or_truncates_but_fits(self):
+        s = Scene.model_validate({
+            "id": "safe2", "narration": "x",
+            "elements": [{"id": "t", "type": "text", "anchor": "lt",
+                          "text": "endoplasmic reticulum " * 8, "at": [40, 40]}],
+            "actions": [{"verb": "write", "target": "t"}],
+        })
+        r = SceneRenderer(s)
+        x0, _, x1, _ = r.bound["t"].box
+        assert x1 - x0 <= 1232.0 + 1e-6 and x1 <= 1256.0 + 1e-6
+
+
+# ── word-boundary timing + cue offsets ───────────────────────────────────────
+
+class TestWordTiming:
+    NARR = "the nucleus controls everything in the cell"
+    WORDS = [{"t": 0.2, "w": "the"}, {"t": 0.5, "w": "nucleus"},
+             {"t": 1.1, "w": "controls"}, {"t": 1.7, "w": "everything"},
+             {"t": 2.2, "w": "in"}, {"t": 2.35, "w": "the"},
+             {"t": 2.5, "w": "cell"}]
+
+    def test_word_boundaries_beat_char_midpoint(self):
+        cue = Cue(phrase="nucleus controls")
+        exact = resolve_cue(cue, self.NARR, 3.0, self.WORDS)
+        approx = resolve_cue(cue, self.NARR, 3.0)
+        assert exact == 0.5                       # first word's boundary
+        assert approx is not None and abs(approx - exact) > 0.2
+
+    def test_offset_shifts_and_clamps(self):
+        cue = Cue(phrase="cell", offset=-0.4)
+        assert abs(resolve_cue(cue, self.NARR, 3.0, self.WORDS) - 2.1) < 1e-9
+        big = Cue(sec=1.0, offset=99.0)           # clamped to +5
+        assert resolve_cue(big, self.NARR, 30.0) == 6.0
+
+    def test_missing_phrase_still_falls_back(self):
+        assert resolve_cue(Cue(phrase="mitochondria"), self.NARR, 3.0,
+                           self.WORDS) is None
+
+
+# ── action dependencies ──────────────────────────────────────────────────────
+
+class TestDependencies:
+    def test_annotation_waits_for_its_introducer(self):
+        s = Scene.model_validate({
+            "id": "dep", "narration": "look at the label now " * 4,
+            "elements": [{"id": "t", "type": "text", "text": "Nucleus",
+                          "at": [200, 200]}],
+            "actions": [
+                {"verb": "circle", "target": "t", "at": {"sec": 0.0}},
+                {"verb": "write", "target": "t", "at": {"sec": 4.0}},
+            ],
+        })
+        r = SceneRenderer(s)
+        r.compile(20.0)
+        circle = next(t for t in r.timeline if t.action.verb == "circle")
+        write = next(t for t in r.timeline if t.action.verb == "write")
+        assert circle.start >= write.end          # never annotate thin air
+        assert any(w.startswith("TIMING_SHIFT") for w in r._audit_warnings)
+
+    def test_arrow_waits_for_anchored_structure(self):
+        s = Scene.model_validate({
+            "id": "dep2", "narration": "cell first then the arrow " * 3,
+            "elements": [
+                {"id": "cell", "type": "illustration", "asset": "plant_cell",
+                 "at": [640, 360]},
+                {"id": "ar", "type": "arrow", "tail": [100, 100],
+                 "head": {"el": "cell", "layer": "nucleus", "edge": "center"}},
+            ],
+            "actions": [
+                {"verb": "draw", "target": "ar", "at": {"sec": 0.0}},
+                {"verb": "draw", "target": "cell", "at": {"sec": 3.0}},
+            ],
+        })
+        r = SceneRenderer(s, asset_resolver=_resolver(_cell_asset()))
+        r.compile(20.0)
+        arrow = next(t for t in r.timeline if t.action.target == "ar")
+        cell = next(t for t in r.timeline if t.action.target == "cell")
+        assert arrow.start >= cell.end
+
+
+# ── continuity compiler: auto-anchoring, region schedule, moments ────────────
+
+_PROMPT = ("A plant cell in cross-section. Name the layer groups exactly: "
+           "wall, nucleus, chloroplast")
+
+
+def _plan_raw():
+    return {"chapters": [{
+        "concept": "plant_cell", "transition": "clear_and_redraw",
+        "assets": {"plant_cell": _PROMPT},
+        "elements": [
+            {"id": "cell", "type": "illustration", "asset": "plant_cell",
+             "at": [640, 360], "scale": 1.0},
+            {"id": "lbl_nucleus", "type": "text", "text": "Nucleus",
+             "at": [90, 120], "role": "label"},
+            {"id": "arr_nucleus", "type": "arrow", "tail": [180, 130],
+             "head": [600, 340]},
+        ],
+        "steps": [
+            {"segment": 1, "decision": "NEW_VISUAL",
+             "actions": [{"verb": "draw", "target": "cell"}]},
+            {"segment": 2, "decision": "EXTEND",
+             "actions": [{"verb": "draw", "target": "cell"},
+                         {"verb": "write", "target": "lbl_nucleus"},
+                         {"verb": "draw", "target": "arr_nucleus"}]},
+            {"segment": 3, "decision": "FOCUS",
+             "actions": [{"verb": "zoom", "target": "cell", "scale": 1.4}]},
+        ],
+    }]}
+
+
+class TestContinuityQuality:
+    def _compiled(self):
+        plan = parse_visual_plan(_plan_raw())
+        assert plan is not None
+        narr = {"s001": "here is the cell", "s002": "this is the nucleus",
+                "s003": "look closer"}
+        return compile_plan(plan, narr, all_segments=["s001", "s002", "s003"],
+                            skip_hold=set())
+
+    def test_part_names_parse(self):
+        assert part_names_from_prompt(_PROMPT) == ["wall", "nucleus",
+                                                   "chloroplast"]
+
+    def test_arrow_rewired_to_layer_anchor(self):
+        scenes, _, report = self._compiled()
+        arrow = next(e for e in scenes["s002"]["elements"]
+                     if e["id"] == "arr_nucleus")
+        assert arrow["head"] == {"el": "cell", "layer": "nucleus",
+                                 "edge": "center"}
+        assert isinstance(arrow["tail"], dict) and arrow["tail"]["el"] == "lbl_nucleus"
+        assert any("ANCHORED arr_nucleus" in ln for ln in report)
+
+    def test_draws_are_region_scheduled(self):
+        scenes, _, report = self._compiled()
+        d1 = next(a for a in scenes["s001"]["actions"]
+                  if a["verb"] == "draw" and a["target"] == "cell")
+        d2 = next(a for a in scenes["s002"]["actions"]
+                  if a["verb"] == "draw" and a["target"] == "cell")
+        assert d1.get("region") == "__base"       # outline before parts
+        assert d2.get("region") == "nucleus"      # nucleus when narrated
+        root = next(e for e in scenes["s002"]["elements"] if e["id"] == "cell")
+        assert root.get("region_order") == ["nucleus"]
+
+    def test_carried_board_remembers_drawn_regions(self):
+        scenes, _, _ = self._compiled()
+        cell3 = next(e for e in scenes["s003"]["elements"] if e["id"] == "cell")
+        assert set(cell3.get("drawn_regions") or []) == {"__base", "nucleus"}
+
+    def test_compiled_scene_renders_with_annotated_asset(self):
+        scenes, _, _ = self._compiled()
+        s = Scene.model_validate(scenes["s002"])
+        r = SceneRenderer(s, asset_resolver=_resolver(_cell_asset()))
+        r.compile(6.0)
+        assert r.timeline
+        # the region slice really narrowed the draw to the nucleus span
+        d_idx = next(i for i, a in enumerate(s.actions)
+                     if a.verb == "draw" and a.target == "cell")
+        lo, w = r._raster_slice(r.bound["cell"], s.actions[d_idx])
+        assert 0.0 < lo < 1.0 and 0.0 < w < 0.5
+
+
+class TestPerPartHandles:
+    """The observed Cambridge failure shape: the model declares one
+    'illustration' per organelle, all sharing ONE asset — per-part handles,
+    not stacked images. The compiler must convert, not amputate."""
+
+    def _raw(self):
+        return {"chapters": [{
+            "concept": "cell_anatomy", "transition": "clear_and_redraw",
+            "assets": {"cell_diagram":
+                       "A rectangular plant cell with wall, nucleus and "
+                       "chloroplasts."},
+            "elements": [
+                {"id": "cell_wall", "type": "illustration",
+                 "asset": "cell_diagram", "at": [640, 360]},
+                {"id": "lbl_cell_wall", "type": "text", "text": "Cell wall",
+                 "at": [100, 150], "role": "label"},
+                {"id": "nucleus", "type": "illustration",
+                 "asset": "cell_diagram", "at": [640, 360]},
+                {"id": "lbl_nucleus", "type": "text", "text": "Nucleus",
+                 "at": [100, 250], "role": "label"},
+                {"id": "chloroplasts", "type": "illustration",
+                 "asset": "cell_diagram", "at": [640, 360]},
+                {"id": "lbl_chloroplasts", "type": "text",
+                 "text": "Chloroplast", "at": [100, 350], "role": "label"},
+            ],
+            "steps": [
+                {"segment": 1, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "cell_wall"},
+                             {"verb": "write", "target": "lbl_cell_wall"}]},
+                {"segment": 2, "decision": "EXTEND",
+                 "actions": [{"verb": "draw", "target": "nucleus"},
+                             {"verb": "write", "target": "lbl_nucleus"}]},
+                {"segment": 3, "decision": "EXTEND",
+                 "actions": [{"verb": "draw", "target": "chloroplasts"},
+                             {"verb": "write", "target": "lbl_chloroplasts"}]},
+            ],
+        }]}
+
+    def _compiled(self):
+        plan = parse_visual_plan(self._raw())
+        assert plan is not None
+        narr = {"s001": "the wall", "s002": "the nucleus",
+                "s003": "the chloroplasts"}
+        out = compile_plan(plan, narr,
+                           all_segments=["s001", "s002", "s003"],
+                           skip_hold=set())
+        return plan, out
+
+    def test_handles_merge_not_drop(self):
+        plan, (scenes, _, report) = self._compiled()
+        assert any("MERGED handle 'nucleus'" in ln for ln in report)
+        assert not any("DROPPED draw->nucleus" in ln for ln in report)
+        d2 = [a for a in scenes["s002"]["actions"]
+              if a["verb"] == "draw" and a["target"] == "cell_wall"]
+        assert d2 and d2[0].get("region") == "nucleus"
+
+    def test_asset_prompt_learns_layer_groups(self):
+        plan, (scenes, assets, _) = self._compiled()
+        prompt = assets["s002"]["cell_diagram"]
+        assert "name the layer groups exactly:" in prompt.lower()
+        assert "nucleus" in prompt and "chloroplasts" in prompt
+
+    def test_arrows_synthesized_for_labels(self):
+        plan, (scenes, _, report) = self._compiled()
+        assert sum(1 for ln in report if "SYNTHESIZED" in ln) == 3
+        s2 = scenes["s002"]
+        arrow = next(e for e in s2["elements"]
+                     if e["id"] == "arr_auto_lbl_nucleus")
+        assert arrow["head"] == {"el": "cell_wall", "layer": "nucleus",
+                                 "edge": "center"}
+        assert arrow["tail"]["el"] == "lbl_nucleus"
+        assert any(a["verb"] == "draw" and a["target"] == "arr_auto_lbl_nucleus"
+                   for a in s2["actions"])
+
+    def test_scene_validates_and_renders(self):
+        plan, (scenes, _, _) = self._compiled()
+        s = Scene.model_validate(scenes["s002"])
+        asset = _cell_asset("cell_diagram")
+        r = SceneRenderer(s, asset_resolver=_resolver(asset))
+        r.compile(6.0)
+        assert "arr_auto_lbl_nucleus" in r.audit()["arrow_heads"]
+
+
+class TestForeignAssetHandles:
+    """Round-3 plan shape: one 'illustration' per organelle, each with its
+    OWN asset ('nucleus_obj' + asset 'nucleus_img' beside 'lbl_nucleus').
+    Labelled part names identify them as handles; the root asset is rebuilt
+    under a __merged key so the diagram actually contains the parts."""
+
+    def _raw(self):
+        return {"chapters": [{
+            "concept": "cell", "transition": "clear_and_redraw",
+            "assets": {"wall_img": "The cell wall.",
+                       "nucleus_img": "The nucleus.",
+                       "scenery": "A meadow."},
+            "elements": [
+                {"id": "wall", "type": "illustration", "asset": "wall_img",
+                 "at": [640, 360]},
+                {"id": "nucleus_obj", "type": "illustration",
+                 "asset": "nucleus_img", "at": [640, 360]},
+                {"id": "meadow", "type": "illustration", "asset": "scenery",
+                 "at": [640, 360]},
+                {"id": "lbl_nucleus", "type": "text", "text": "Nucleus",
+                 "at": [100, 250], "role": "label"},
+            ],
+            "steps": [
+                {"segment": 1, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "wall"},
+                             {"verb": "draw", "target": "wall"}]},
+                {"segment": 2, "decision": "EXTEND",
+                 "actions": [{"verb": "draw", "target": "nucleus_obj"},
+                             {"verb": "write", "target": "lbl_nucleus"}]},
+            ],
+        }]}
+
+    def _compiled(self):
+        plan = parse_visual_plan(self._raw())
+        return compile_plan(plan, {"s001": "the wall", "s002": "the nucleus"},
+                            all_segments=["s001", "s002"], skip_hold=set())
+
+    def test_part_named_foreign_asset_merges(self):
+        scenes, assets, report = self._compiled()
+        assert any("MERGED handle 'nucleus_obj'" in ln for ln in report)
+        assert any("ROOT ASSET rebuilt as 'wall_img__merged'" in ln
+                   for ln in report)
+        prompt = assets["s002"]["wall_img__merged"]
+        assert "name the layer groups exactly:" in prompt.lower()
+        assert "nucleus" in prompt
+        root = next(e for e in scenes["s002"]["elements"] if e["id"] == "wall")
+        assert root["asset"] == "wall_img__merged"
+        d = [a for a in scenes["s002"]["actions"]
+             if a["verb"] == "draw" and a["target"] == "wall"]
+        assert d and d[0].get("region") == "nucleus"
+
+    def test_unrelated_asset_still_drops(self):
+        scenes, _, report = self._compiled()
+        assert any("DROPPED illustration 'meadow'" in ln for ln in report)
+
+
+class TestRoundTwoRegressions:
+    """Defects the second full render surfaced."""
+
+    def test_underscore_part_names_still_match(self):
+        raw = _plan_raw()
+        ch = raw["chapters"][0]
+        ch["assets"]["plant_cell"] = ("A plant cell. Name the layer groups "
+                                      "exactly: cell_wall, nucleus")
+        ch["elements"][1]["id"] = "lbl_cell_wall"
+        ch["elements"][1]["text"] = "Cell wall"
+        ch["elements"][2]["id"] = "arr_cell_wall"
+        plan = parse_visual_plan(raw)
+        scenes, _, report = compile_plan(
+            plan, {"s001": "a", "s002": "b", "s003": "c"},
+            all_segments=["s001", "s002", "s003"], skip_hold=set())
+        assert any("ANCHORED arr_cell_wall -> cell.cell_wall" in ln
+                   for ln in report)
+
+    def test_empty_scene_is_skipped_not_emitted(self):
+        raw = {"chapters": [{
+            "concept": "c", "transition": "clear_and_redraw",
+            "assets": {"a1": "x", "a2": "y"},
+            "elements": [
+                {"id": "i1", "type": "illustration", "asset": "a1",
+                 "at": [600, 300]},
+                {"id": "i2", "type": "illustration", "asset": "a2",
+                 "at": [600, 300]},
+            ],
+            "steps": [
+                {"segment": 1, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "i2"}]},  # dropped
+                {"segment": 2, "decision": "EXTEND",
+                 "actions": [{"verb": "draw", "target": "i1"}]},
+            ],
+        }]}
+        plan = parse_visual_plan(raw)
+        scenes, _, report = compile_plan(plan, {"s001": "a", "s002": "b"},
+                                         all_segments=["s001", "s002"],
+                                         skip_hold=set())
+        assert "s001" not in scenes            # whiteboard fallback instead
+        assert any("SKIPPED empty scene" in ln for ln in report)
+        assert "s002" in scenes
+
+    def test_renderer_warnings_deduplicate(self):
+        r = SceneRenderer(_anchor_scene("ribosome"),
+                          asset_resolver=_resolver(_cell_asset()))
+        r.compile(5.0)
+        for _ in range(4):
+            r._warn("UNRESOLVED_ANCHOR cell.ribosome")
+        assert r.audit()["warnings"].count("UNRESOLVED_ANCHOR cell.ribosome") == 1
+
+    def test_scrub_text_erases_only_the_boxes(self):
+        from spike.scene_engine.raster_assets import scrub_text
+        ink = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+        px = ink.load()
+        for x in range(100):
+            px[x, 10] = (20, 20, 40, 255)      # a stroke to keep
+            px[x, 50] = (20, 20, 40, 255)      # "text" to erase
+        out = scrub_text(ink, [[0.0, 44.0, 100.0, 56.0]])
+        assert out.getpixel((50, 50))[3] == 0      # erased
+        assert out.getpixel((50, 10))[3] == 255    # untouched
+        assert ink.getpixel((50, 50))[3] == 255    # original not mutated
+
+
+class TestNarrationInjection:
+    """Round-7 degenerate plan: labels + arrows declared, steps only ever
+    draw the root. The narration says which part each step teaches — the
+    declared label and its anchored arrow must join that step."""
+
+    def _raw(self):
+        return {"chapters": [{
+            "concept": "cell", "transition": "clear_and_redraw",
+            "assets": {"pc": ("A plant cell. Name the layer groups exactly: "
+                              "cell wall, nucleus")},
+            "elements": [
+                {"id": "cell", "type": "illustration", "asset": "pc",
+                 "at": [640, 360]},
+                {"id": "lbl_cell_wall", "type": "text", "text": "Cell wall",
+                 "at": [90, 120], "role": "label"},
+                {"id": "arrow_cell_wall", "type": "arrow", "tail": [180, 130],
+                 "head": [600, 340]},
+                {"id": "lbl_nucleus", "type": "text", "text": "Nucleus",
+                 "at": [90, 220], "role": "label"},
+                {"id": "arrow_nucleus", "type": "arrow", "tail": [180, 230],
+                 "head": [620, 360]},
+            ],
+            "steps": [
+                {"segment": 1, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "cell"}]},
+                {"segment": 2, "decision": "EXTEND",
+                 "actions": [{"verb": "draw", "target": "cell"}]},
+                {"segment": 3, "decision": "EXTEND",
+                 "actions": [{"verb": "draw", "target": "cell"}]},
+            ],
+        }]}
+
+    def _compiled(self):
+        plan = parse_visual_plan(self._raw())
+        narr = {"s001": "Every plant cell has a strong cell wall around it.",
+                "s002": "Inside sits the nucleus, the control centre.",
+                "s003": "And that is the whole cell."}
+        return compile_plan(plan, narr, all_segments=["s001", "s002", "s003"],
+                            skip_hold=set())
+
+    def test_labels_and_arrows_join_their_narrated_steps(self):
+        scenes, _, report = self._compiled()
+        assert any("INJECTED write->lbl_cell_wall + draw->arrow_cell_wall"
+                   in ln for ln in report)
+        s1 = scenes["s001"]
+        assert any(a["verb"] == "write" and a["target"] == "lbl_cell_wall"
+                   for a in s1["actions"])
+        s2 = scenes["s002"]
+        assert any(a["verb"] == "draw" and a["target"] == "arrow_nucleus"
+                   for a in s2["actions"])
+        d2 = next(a for a in s2["actions"]
+                  if a["verb"] == "draw" and a["target"] == "cell")
+        assert d2.get("region") == "nucleus"
+
+    def test_carried_board_never_goes_blank(self):
+        scenes, _, _ = self._compiled()
+        cell3 = next(e for e in scenes["s003"]["elements"]
+                     if e["id"] == "cell")
+        # either real region carry (with order stamped) or fully introduced —
+        # never drawn_regions without region_order
+        if cell3.get("drawn_regions"):
+            assert cell3.get("region_order")
+
+
+class TestNoScheduleMeansNoRegionTags:
+    def test_draws_stay_untagged_without_a_real_schedule(self):
+        raw = {"chapters": [{
+            "concept": "c", "transition": "clear_and_redraw",
+            "assets": {"pc": "A cell. Name the layer groups exactly: wall"},
+            "elements": [{"id": "cell", "type": "illustration", "asset": "pc",
+                          "at": [640, 360]}],
+            "steps": [
+                {"segment": 1, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "cell"}]},
+                {"segment": 2, "decision": "EXTEND",
+                 "actions": [{"verb": "draw", "target": "cell"}]},
+            ],
+        }]}
+        plan = parse_visual_plan(raw)
+        scenes, _, _ = compile_plan(plan, {"s001": "hello", "s002": "world"},
+                                    all_segments=["s001", "s002"],
+                                    skip_hold=set())
+        for sid in ("s001", "s002"):
+            for a in scenes[sid]["actions"]:
+                if a["verb"] == "draw" and a["target"] == "cell":
+                    assert a.get("region") is None
+        cell2 = next(e for e in scenes["s002"]["elements"]
+                     if e["id"] == "cell")
+        assert not cell2.get("drawn_regions")
+
+
+class TestPartNamesFromLabels:
+    def test_untailed_prompt_learns_parts_from_labels(self):
+        raw = _plan_raw()
+        ch = raw["chapters"][0]
+        ch["assets"]["plant_cell"] = "A rectangular plant cell."  # no tail
+        ch["elements"].append({"id": "lbl_wall", "type": "text",
+                               "text": "Cell wall", "at": [90, 60],
+                               "role": "label"})
+        plan = parse_visual_plan(raw)
+        scenes, assets, report = compile_plan(
+            plan, {"s001": "a", "s002": "b", "s003": "c"},
+            all_segments=["s001", "s002", "s003"], skip_hold=set())
+        assert any("PART NAMES from labels" in ln for ln in report)
+        assert "name the layer groups exactly:" in assets["s002"]["plant_cell"].lower()
+        assert any("ANCHORED arr_nucleus" in ln for ln in report)
+
+
+class TestRegionCarryBeatsLayers:
+    def test_draws_with_both_layers_and_labels_carry_regions(self):
+        """The model stamps `layers` on its draws; region tracking must win
+        or the carried board under-reveals every segment start (round-5's
+        flickering wall hatch)."""
+        raw = _plan_raw()
+        for st in raw["chapters"][0]["steps"]:
+            for a in st.actions if hasattr(st, "actions") else st["actions"]:
+                if a.get("verb") == "draw" and a.get("target") == "cell":
+                    a["layers"] = ["whatever_the_model_said"]
+        plan = parse_visual_plan(raw)
+        scenes, _, _ = compile_plan(
+            plan, {"s001": "a", "s002": "b", "s003": "c"},
+            all_segments=["s001", "s002", "s003"], skip_hold=set())
+        cell3 = next(e for e in scenes["s003"]["elements"] if e["id"] == "cell")
+        assert set(cell3.get("drawn_regions") or []) == {"__base", "nucleus"}
+        assert cell3.get("drawn_frac") is None
+        assert cell3.get("drawn_layers") is None
+
+
+class TestBoundaryRenameAnchors:
+    def test_prev_board_arrow_anchors_rename_with_their_targets(self):
+        raw = {"chapters": [
+            {"concept": "one", "transition": "clear_and_redraw",
+             "assets": {"a1": "x. Name the layer groups exactly: leaf, stem"},
+             "elements": [
+                 {"id": "plant", "type": "illustration", "asset": "a1",
+                  "at": [640, 360]},
+                 {"id": "lbl_leaf", "type": "text", "text": "Leaf",
+                  "at": [100, 100], "role": "label"},
+             ],
+             "steps": [{"segment": 1, "decision": "NEW_VISUAL",
+                        "actions": [{"verb": "draw", "target": "plant"},
+                                    {"verb": "draw", "target": "plant"},
+                                    {"verb": "write", "target": "lbl_leaf"}]}]},
+            {"concept": "two", "transition": "clear_and_redraw",
+             "assets": {"a2": "y"},
+             "elements": [{"id": "next", "type": "illustration", "asset": "a2",
+                           "at": [640, 360]}],
+             "steps": [{"segment": 2, "decision": "CLEAR_AND_REDRAW",
+                        "actions": [{"verb": "draw", "target": "next"}]}]},
+        ]}
+        plan = parse_visual_plan(raw)
+        scenes, _, report = compile_plan(plan, {"s001": "a", "s002": "b"},
+                                         all_segments=["s001", "s002"],
+                                         skip_hold=set())
+        assert any("SYNTHESIZED arr_auto_lbl_leaf" in ln for ln in report)
+        s2 = scenes["s002"]
+        arrow = next(e for e in s2["elements"]
+                     if e["id"].endswith("arr_auto_lbl_leaf"))
+        assert arrow["id"].startswith("prev__")
+        assert arrow["tail"]["el"].startswith("prev__")
+        assert arrow["head"]["el"].startswith("prev__")
+        Scene.model_validate(s2)      # the boundary scene must stay valid
+
+
+class TestSeedMoment:
+    def test_seeds_one_student_question_from_narration(self):
+        plan = parse_visual_plan(_plan_raw())
+        narr = {"s001": "Here is the cell.",
+                "s002": "But why does the nucleus matter? It runs the show.",
+                "s003": "Look closer."}
+        sid = seed_moment(plan, narr)
+        assert sid == "s002"
+        st = [st for ch in plan.chapters for st in ch.steps
+              if st.segment_id == "s002"][0]
+        assert st.moment["role"] == "student"
+        assert st.moment["text"].endswith("?") and len(st.moment["text"]) <= 60
+
+    def test_never_stacks_a_second_moment(self):
+        plan = parse_visual_plan(_plan_raw())
+        plan.chapters[0].steps[1].moment = {"role": "teacher", "text": "Key idea"}
+        assert seed_moment(plan, {"s002": "Why though?"}) is None
+
+    def test_moment_expands_into_avatar_on_the_scene(self):
+        plan = parse_visual_plan(_plan_raw())
+        narr = {"s001": "Here is the cell.",
+                "s002": "Why does the nucleus matter? It runs the show.",
+                "s003": "Look closer."}
+        assert seed_moment(plan, narr) == "s002"
+        scenes, assets, _ = compile_plan(
+            plan, narr, all_segments=["s001", "s002", "s003"], skip_hold=set())
+        els = scenes["s002"]["elements"]
+        assert any(e.get("type") == "illustration"
+                   and str(e.get("asset", "")).startswith("avatar_")
+                   for e in els)
+        assert any(k.startswith("avatar_") for k in assets["s002"])

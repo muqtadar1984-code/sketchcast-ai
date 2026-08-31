@@ -44,29 +44,63 @@ class TimedAction:
         return self.start + self.duration
 
 
-def resolve_cue(cue: Cue, narration: str, audio_secs: float) -> float | None:
+def _toks(s: str) -> list[str]:
+    import re
+    return re.findall(r"[\w']+", (s or "").lower())
+
+
+def _phrase_from_words(phrase: str, words: list[dict],
+                       audio_secs: float) -> float | None:
+    """Word-accurate phrase start using TTS WordBoundary events
+    ([{"t": sec, "w": word}, ...]). Returns the timestamp of the first word of
+    the first contiguous token match, or None when the phrase isn't found."""
+    p = _toks(phrase)
+    if not p or not words:
+        return None
+    w = [_toks(x.get("w", "")) for x in words]
+    flat, owner = [], []  # token stream + which boundary each token came from
+    for bi, ts in enumerate(w):
+        for t in ts:
+            flat.append(t)
+            owner.append(bi)
+    n = len(p)
+    for i in range(len(flat) - n + 1):
+        if flat[i:i + n] == p:
+            t = float(words[owner[i]].get("t", 0.0))
+            return max(0.0, min(t, audio_secs + 10.0))
+    return None
+
+
+def resolve_cue(cue: Cue, narration: str, audio_secs: float,
+                words: list[dict] | None = None) -> float | None:
     """A cue's start time in seconds, or None when it cannot resolve (unknown
     phrase) — the caller then falls back to sequence order. Phrase resolution
-    is by character midpoint: close enough for teaching sync without word-level
-    timestamps (a v1 requirement)."""
+    prefers real TTS word boundaries when `words` is available (frame-accurate)
+    and falls back to character midpoint, which is close enough for teaching
+    sync without timestamps. `cue.offset` then shifts the result — negative for
+    BEFORE_CUE setup strokes, positive for AFTER_CUE reinforcement."""
     if audio_secs <= 0:
         # silent scene: fractions/phrases are meaningless and absolute cues
         # would pile everything at their raw times against no voice — fall
         # back to sequence order for all of them
         return None
+    off = max(-5.0, min(5.0, getattr(cue, "offset", 0.0) or 0.0))
     if cue.sec is not None:
         # never schedule far past the narration: a stray cue must not balloon
         # the clip (frames render to total_secs = anim end)
-        return max(0.0, min(cue.sec, audio_secs + 10.0))
+        return max(0.0, min(cue.sec + off, audio_secs + 10.0))
     if cue.frac is not None:
-        return cue.frac * audio_secs
+        return max(0.0, cue.frac * audio_secs + off)
     if cue.phrase:
+        t = _phrase_from_words(cue.phrase, words or [], audio_secs)
+        if t is not None:
+            return max(0.0, t + off)
         hay, needle = narration.lower(), cue.phrase.lower()
         i = hay.find(needle)
         if i < 0 or not narration:
             return None
         mid = (i + len(needle) / 2) / len(narration)
-        return mid * audio_secs
+        return max(0.0, mid * audio_secs + off)
     return None
 
 
@@ -88,7 +122,8 @@ def natural_duration(action: Action, workload: float) -> float:
 
 
 def compile_timeline(scene: Scene, audio_secs: float,
-                     workloads: dict[int, float] | None = None) -> list[TimedAction]:
+                     workloads: dict[int, float] | None = None,
+                     words: list[dict] | None = None) -> list[TimedAction]:
     """Absolute-time timeline for a scene.
 
     `workloads` maps action index -> workload hint. Actions with a cue start at
@@ -103,7 +138,7 @@ def compile_timeline(scene: Scene, audio_secs: float,
         dur = natural_duration(action, workloads.get(i, 0.0))
         start = None
         if action.at is not None:
-            start = resolve_cue(action.at, scene.narration, audio_secs)
+            start = resolve_cue(action.at, scene.narration, audio_secs, words)
         if start is None:
             start = cursor + (_GAP if timeline else 0.0)
         start = max(start, cursor - 1e-9) if action.at is None else max(start, 0.0)
