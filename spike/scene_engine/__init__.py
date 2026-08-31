@@ -27,5 +27,7 @@ Prototype layout (spike/ convention, see spike/native_render.py lineage):
 The engine is deterministic: same scene + same audio => same frames.
 """
 
-SCHEMA_VERSION = "1.2"  # 1.1: +hand_scale, +arrow width. 1.2: +AnchorRef points,
-# +TextElement.after chaining, +ZoomAction.follow (all additive)
+SCHEMA_VERSION = "1.3"  # 1.1: +hand_scale, +arrow width. 1.2: +AnchorRef points,
+# +TextElement.after chaining, +ZoomAction.follow. 1.3 (visual continuity):
+# +IllustrationElement.drawn_layers/drawn_frac (board state carried in from the
+# previous segment), +Scene.camera_start, +DrawAction.slice (all additive)

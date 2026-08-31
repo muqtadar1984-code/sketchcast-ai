@@ -39,8 +39,10 @@ NOMINAL_WORLD_W = 700.0  # an illustration at element scale 1.0 spans ~700 world
 
 _STYLE_SUFFIX = (
     " Black ink line drawing, hand-drawn whiteboard sketch style, clean confident "
-    "strokes, pure white background. No text, no labels, no numbers, no arrows, "
-    "no shading, no color fill, no watermark."
+    "strokes, pure white background. ABSOLUTELY NO TEXT OF ANY KIND anywhere in "
+    "the image: no letters, no words, no labels, no numbers, no captions, no "
+    "arrows pointing at parts — the diagram is UNLABELED (labels are added "
+    "separately by software). No shading, no color fill, no watermark."
 )
 
 

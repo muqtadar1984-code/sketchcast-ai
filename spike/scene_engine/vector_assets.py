@@ -50,21 +50,32 @@ class VectorAsset:
         return [l.id for l in self.layers]
 
     def subset(self, ids: list[str] | None) -> tuple[VLayer, ...]:
-        """Layers matching `ids`. Matching is fuzzy on purpose: a generated
-        SVG asset may name its group `cell_wall` while the scene cues `wall` —
-        exact id, then substring containment either way."""
+        """Layers matching `ids` — via the ONE shared matcher every consumer
+        uses (draw distribution, carried-state reveal, workloads). Divergent
+        matchers once made a draw reveal nothing while the carry showed it."""
         if not ids:
             return self.layers
-        want = [i.lower() for i in ids]
-        exact = tuple(l for l in self.layers if l.id.lower() in want)
-        if exact:
-            return exact
-        return tuple(l for l in self.layers
-                     if any(w in l.id.lower() or l.id.lower() in w for w in want))
+        matched = set(match_layer_ids([l.id for l in self.layers], ids))
+        return tuple(l for l in self.layers if l.id in matched)
 
     def ink_length(self, ids: list[str] | None = None) -> float:
         """Total stroke arc length — the draw-duration workload hint."""
         return sum(path_length(s.pts) for l in self.subset(ids) for s in l.strokes)
+
+
+def match_layer_ids(available: list[str], want: list[str]) -> list[str]:
+    """THE layer matcher — used by asset subsetting, carried-state reveal and
+    draw distribution alike, so 'wall' means the same strokes everywhere.
+    Exact (case-insensitive) wins outright; only when nothing matches exactly
+    does substring containment apply — which keeps 'membrane' from bleeding
+    into 'nucleus_membrane' when a literal 'membrane' layer exists."""
+    wl = [w.lower() for w in want]
+    by_lower = {a.lower(): a for a in available}
+    exact = [by_lower[w] for w in wl if w in by_lower]
+    if exact:
+        return exact
+    return [a for a in available
+            if any(w in a.lower() or a.lower() in w for w in wl)]
 
 
 # ── path helpers ─────────────────────────────────────────────────────────────

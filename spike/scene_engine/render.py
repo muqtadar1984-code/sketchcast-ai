@@ -22,10 +22,13 @@ Design rules the code below enforces:
 
 from __future__ import annotations
 
+import logging
 import math
 import zlib
 from dataclasses import dataclass, field
 from typing import Callable, Iterator, Optional
+
+logger = logging.getLogger(__name__)
 
 from PIL import Image, ImageDraw
 
@@ -270,8 +273,10 @@ class SceneRenderer:
                     full = path_length(
                         [tgt.raster.to_world(p) for p in tgt.raster.trace[::12]]) or 800.0
                     # a sliced draw only covers 1/N of the trace — its duration
-                    # must be sized to the slice, not the whole asset
-                    self.workloads[i] = full * self._draw_slices.get(i, (0.0, 1.0))[1]
+                    # must be sized to the slice, not the whole asset. An
+                    # explicit action slice (cross-segment continuity) wins.
+                    sl = getattr(a, "slice", None) or self._draw_slices.get(i, (0.0, 1.0))
+                    self.workloads[i] = full * sl[1]
                 elif isinstance(tgt.element, IllustrationElement):
                     strokes = self._layer_strokes(tgt, a.layers)
                     self.workloads[i] = sum(st.length for st in strokes)
@@ -317,7 +322,13 @@ class SceneRenderer:
     def _bind_illustration(self, el: IllustrationElement, b: Bound) -> None:
         resolved = self._resolve(el.asset)
         if resolved is None:
-            raise KeyError(f"asset {el.asset!r} unknown to resolver and has no vector fallback")
+            # §20: a missing asset never fails the scene — the element simply
+            # doesn't exist (actions on it no-op), and the rest of the scene
+            # (labels, arrows, highlights) still teaches
+            logger.warning("asset %r unresolvable — dropping element %r, scene continues",
+                           el.asset, el.id)
+            b.box = (el.at[0], el.at[1], el.at[0], el.at[1])
+            return
         kind, asset = resolved
         if kind == "raster":
             b.raster = BRaster(ink=asset.ink, trace=asset.trace, at=el.at,
@@ -426,11 +437,25 @@ class SceneRenderer:
                     path_length(pts))])]
         b.box = bbox(pts)
 
+    def _layer_flat_indices(self, b: Bound, layer_ids: list[str]) -> list[int]:
+        """Flat-stroke indices for the named layers, via THE shared matcher."""
+        from .vector_assets import match_layer_ids
+        matched = set(match_layer_ids([l.id for l in b.layers], layer_ids))
+        out: list[int] = []
+        i = 0
+        for layer in b.layers:
+            n = len(layer.strokes)
+            if layer.id in matched:
+                out.extend(range(i, i + n))
+            i += n
+        return out
+
     def _layer_strokes(self, b: Bound, layer_ids: Optional[list[str]]) -> list[BStroke]:
         if not layer_ids:
             return [st for l in b.layers for st in l.strokes]
-        want = set(layer_ids)
-        return [st for l in b.layers if l.id in want for st in l.strokes]
+        from .vector_assets import match_layer_ids
+        matched = set(match_layer_ids([l.id for l in b.layers], layer_ids))
+        return [st for l in b.layers if l.id in matched for st in l.strokes]
 
     def _font_for(self, bold: bool, size: int, sample: str):
         # quantize to even sizes: a continuously-eased zoom would otherwise
@@ -461,7 +486,13 @@ class SceneRenderer:
                 fp = self._next_action_focus(i)
                 if fp is not None:
                     focus[i] = fp
-        self.cam = CameraTrack(self.timeline, focus)
+        start = None
+        if self.scene.camera_start:
+            cs = self.scene.camera_start
+            start = CameraState(float(cs.get("cx", WORLD_W / 2)),
+                                float(cs.get("cy", WORLD_H / 2)),
+                                float(cs.get("scale", 1.0)))
+        self.cam = CameraTrack(self.timeline, focus, start=start)
         return self.timeline
 
     def _next_action_focus(self, i: int) -> Point | None:
@@ -512,6 +543,27 @@ class SceneRenderer:
         for eid, b in self.bound.items():
             s = _ElState(opacity=getattr(b.element, "opacity", 1.0))
             s.visible = not b.introduced
+            partial = (isinstance(b.element, IllustrationElement)
+                       and (b.element.drawn_layers or b.element.drawn_frac > 0))
+            if partial:
+                # board state carried in from earlier segments: exactly the
+                # drawn part shows finished at t=0 — whether or not this scene
+                # draws more of it
+                s.visible = True
+                if b.raster is not None:
+                    s.raster_frac = b.element.drawn_frac
+                elif b.element.drawn_layers:
+                    for idx in self._layer_flat_indices(b, b.element.drawn_layers):
+                        s.reveal[idx] = 1.0
+            elif s.visible:
+                # on the board from t=0 (no introducer in THIS scene — either
+                # authored that way, or completed in a PREVIOUS segment and
+                # carried over): render COMPLETE, not merely flagged visible
+                s.text_frac = 1.0
+                for idx in range(len(self._flat.get(eid, []))):
+                    s.reveal[idx] = 1.0
+                if b.raster is not None:
+                    s.raster_frac = 1.0
             if isinstance(b.element, ParticleGroupElement):
                 s.particle_off = [(0.0, 0.0)] * len(b.spawn)
             st[eid] = s
@@ -617,7 +669,7 @@ class SceneRenderer:
             # otherwise the text is marked visible with text_frac 0: invisible
             s.text_frac = max(s.text_frac, p)
         if b.raster is not None:
-            lo, w = slice_ or (0.0, 1.0)
+            lo, w = getattr(a, "slice", None) or slice_ or (0.0, 1.0)
             s.raster_frac = max(s.raster_frac, lo + p * w)
             return
         strokes = self._layer_strokes(b, getattr(a, "layers", None))
@@ -778,7 +830,7 @@ class SceneRenderer:
             return None
         if a.verb == "draw":
             if b.raster is not None:
-                lo, w = self._draw_slices.get(i, (0.0, 1.0))
+                lo, w = getattr(a, "slice", None) or self._draw_slices.get(i, (0.0, 1.0))
                 k = int((lo + p * w) * len(b.raster.trace))
                 fp = b.raster.trace[k - 1] if k > 0 else None
                 return b.raster.to_world(fp) if fp else None

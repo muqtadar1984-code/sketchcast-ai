@@ -52,13 +52,15 @@ class CameraTrack:
     state eases; before the first and after the last it holds."""
 
     def __init__(self, timed: list[TimedAction],
-                 focus_center: dict[int, Point] | None = None):
+                 focus_center: dict[int, Point] | None = None,
+                 start: CameraState | None = None):
         """`focus_center` maps timeline index -> resolved center for zoom
         actions whose center came from a target element's bbox (the renderer
-        resolves geometry; the camera only interpolates)."""
+        resolves geometry; the camera only interpolates). `start` is the state
+        carried in from the previous segment (visual continuity)."""
         focus_center = focus_center or {}
-        self._keys: list[_Key] = [_Key(0.0, CameraState(), "linear")]
-        state = CameraState()
+        state = (start or CameraState()).clamped()
+        self._keys: list[_Key] = [_Key(0.0, state, "linear")]
         for i, ta in enumerate(timed):
             a = ta.action
             if a.verb == "zoom":

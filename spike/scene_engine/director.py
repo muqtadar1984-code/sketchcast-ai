@@ -87,6 +87,70 @@ Canvas is 1280x720. RULES:
 Segments that are purely verbal (hooks, recaps) omit "scene" entirely.
 """
 
+VISUAL_CONTINUITY_SPEC = """
+=== VISUAL CONTINUITY (the persistent whiteboard) ===
+You are a teacher at ONE whiteboard. You do NOT erase the board after every
+sentence. You draw something, explain it, add to it, point at it, zoom into
+it — and erase only when the concept genuinely changes. Before every segment
+ask: "Can the visual already on the board explain this?" If YES keep it; if
+it needs an addition EXTEND it; if it can be meaningfully modified TRANSFORM
+it; only when it cannot explain the new concept CLEAR_AND_REDRAW.
+
+Return ONE top-level "visual_plan" — chapters of persistent visuals spanning
+RUNS of segments (a chapter of 5 segments with 1 root visual is ideal; never
+one visual per segment):
+
+"visual_plan": {"chapters": [
+  {"concept": "plant_cell_structure",
+   "transition": "clear_and_redraw",     // how THIS chapter replaces the last
+                                          // board: "clear_and_redraw" (fade
+                                          // out, start fresh) or "carry"
+                                          // (keep drawing on the same board)
+   "assets": {"plant_cell": "<diagram description>. Name the layer groups
+              exactly: wall, membrane, nucleus, vacuole"},
+   "elements": [ ...the chapter's WHOLE roster, STABLE ids, declared once... ],
+   "steps": [
+     {"segment": 3,                       // 1-based INDEX into your segments
+      "decision": "NEW_VISUAL",           // NEW_VISUAL | EXTEND | CONTINUE |
+                                          // FOCUS | TRANSFORM | CLEAR_AND_REDRAW
+      "reason": "first drawing of the cell",
+      "actions": [{"verb": "draw", "target": "cell", "layers": ["wall"],
+                   "at": {"phrase": "words copied from THAT segment's text"}}]},
+     {"segment": 4, "decision": "EXTEND", "reason": "nucleus is PART_OF the cell",
+      "actions": [{"verb": "draw", "target": "cell", "layers": ["nucleus"]},
+                  {"verb": "write", "target": "lbl_nucleus"}]},
+     {"segment": 5, "decision": "FOCUS", "reason": "board already shows it",
+      "actions": [{"verb": "zoom", "target": "lbl_nucleus", "scale": 1.5},
+                  {"verb": "circle", "target": "lbl_nucleus"}]}
+   ]}
+]}
+
+RULES:
+- ONE ROOT VISUAL PER CHAPTER: a chapter has AT MOST ONE illustration
+  element. Build a complex diagram as ONE asset with NAMED LAYER GROUPS and
+  draw it layer by layer across steps ({"verb": "draw", "target": "cell",
+  "layers": ["nucleus"]}) — NEVER as separate illustration elements per part:
+  independently generated images DO NOT compose, they stack into a tangle.
+  Labels, arrows, particles and shapes may be added freely.
+- reason in PART_OF / SAME_STRUCTURE / CAUSE_EFFECT terms: the nucleus is
+  PART_OF the cell, so discussing it CONTINUES the cell visual — never redraws.
+- elements are declared ONCE per chapter with stable ids; steps only reference
+  them. An element drawn in one step is STILL ON THE BOARD in later steps —
+  never redraw it, just target it (highlight/circle/zoom/move/erase).
+- draw a multi-part illustration layer by layer ACROSS steps (["wall"] now,
+  ["nucleus"] two segments later) — the renderer resumes exactly where the
+  pen stopped.
+- FOCUS/CONTINUE steps cost nothing: zoom/highlight/circle what exists.
+  Zooms use "target" (an element id), never coordinates.
+- cue phrases are copied VERBATIM from that step's OWN segment "text".
+- caps: at most 5 chapters; 12 elements and 10 steps per chapter; 6 actions
+  per step. Segments not listed in any step simply keep the current board.
+- optimise for the MINIMUM number of visual changes that explains the lesson
+  beautifully — never for one beautiful scene per segment.
+
+Elements and actions use the vocabulary below.
+"""
+
 # elements/actions caps enforced here mirror the spec (token budget, fact 9)
 _MAX_ELEMENTS, _MAX_ACTIONS = 12, 18
 
@@ -106,10 +170,27 @@ def parse_scene_response(raw: dict | str, narration: str) -> Scene | None:
         return None
     data.setdefault("id", "scene")
     data["narration"] = narration  # narration is the segment's, never the model's copy
-    if isinstance(data.get("elements"), list):
-        data["elements"] = data["elements"][:_MAX_ELEMENTS]
-    if isinstance(data.get("actions"), list):
-        data["actions"] = data["actions"][:_MAX_ACTIONS]
+    # Size caps guard RAW model scenes only. COMPILED continuity scenes carry
+    # the whole persistent board and are already sanitized upstream — clamping
+    # one once amputated an element and left its action dangling, failing a
+    # perfectly good scene at validation.
+    compiled = bool(data.get("compiled")) or str(data.get("id", "")).startswith("vc_")
+    if not compiled:
+        if isinstance(data.get("elements"), list) and \
+                len(data["elements"]) > _MAX_ELEMENTS:
+            kept = data["elements"][:_MAX_ELEMENTS]
+            kept_ids = {e.get("id") for e in kept if isinstance(e, dict)}
+            data["elements"] = kept
+            if isinstance(data.get("actions"), list):
+                # a clamp must stay COHERENT: drop actions that referenced
+                # the clamped-away elements instead of orphaning them
+                data["actions"] = [
+                    a for a in data["actions"]
+                    if not isinstance(a, dict)
+                    or a.get("verb") in ("zoom", "pan", "camera_reset")
+                    or a.get("target") in kept_ids]
+        if isinstance(data.get("actions"), list):
+            data["actions"] = data["actions"][:_MAX_ACTIONS]
     try:
         scene = parse_scene(data)
     except Exception as e:

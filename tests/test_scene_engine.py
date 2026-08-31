@@ -307,12 +307,16 @@ class TestRenderer:
         assert 0.0 < max(mid.reveal.values()) < 1.0
         assert all(v == 1.0 for v in end.reveal.values())
 
-    def test_missing_asset_raises_at_bind(self):
+    def test_missing_asset_drops_element_not_scene(self):
+        # §20: an unresolvable asset drops ITS element; the scene survives
         s = _mini_scene(elements=[
-            {"id": "x", "type": "illustration", "asset": "volcano", "at": (0, 0)}],
-            actions=[{"verb": "draw", "target": "x"}])
-        with pytest.raises(KeyError, match="volcano"):
-            SceneRenderer(s)
+            {"id": "x", "type": "illustration", "asset": "volcano", "at": (0, 0)},
+            {"id": "t", "type": "text", "text": "Still here", "at": (400, 300)}],
+            actions=[{"verb": "draw", "target": "x"},
+                     {"verb": "write", "target": "t"}])
+        r = SceneRenderer(s)          # must NOT raise
+        tl = r.compile(10.0)
+        assert r._state_at(tl[-1].end + 0.1)["t"].text_frac == 1.0
 
     def test_move_with_stop_frac_blocks_short_of_path_end(self):
         s = _mini_scene(

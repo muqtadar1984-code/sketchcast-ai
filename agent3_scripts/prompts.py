@@ -329,26 +329,17 @@ def _scene_direction_block() -> str:
     if os.getenv("VIDEO_ENGINE", "").strip().lower() != "scene":
         return ""
     try:
-        from spike.scene_engine.director import SCENE_DIRECTION_SPEC
+        from spike.scene_engine.director import (SCENE_DIRECTION_SPEC,
+                                                 VISUAL_CONTINUITY_SPEC)
     except ImportError:
         return ""
     return (
-        "=== SCENE DIRECTION (drawn whiteboard video) ===\n"
-        "The video renderer can DRAW. For AT MOST 4 segments — the BIGGEST "
-        "visual teaching moments (a structure, a process, a comparison, a "
-        "worked example; never hooks/recaps/previews) — add TWO extra keys to "
-        "that segment object:\n"
-        '  "scene": the scene object specified below. Its cue phrases are '
-        "copied VERBATIM from that same segment's `text`.\n"
-        '  "scene_assets": an object mapping each illustration asset key the '
-        "scene uses to a one-sentence description of the diagram to draw, "
-        'ending with: "Name the layer groups exactly: <the layer ids your '
-        'draw actions cue>".\n'
-        "Segments carrying a scene STILL include slide_heading/slide_points as "
-        "usual — the downloadable deck uses those; the video plays the scene.\n"
-        "A scene stays SMALL: at most 8 elements and 12 actions. Your reply is "
-        "long — return the whole JSON MINIFIED (one line, no indentation); "
-        "pretty-printing wastes your output budget and risks truncation.\n"
+        VISUAL_CONTINUITY_SPEC
+        + "\nSegments referenced by the plan STILL include slide_heading/"
+          "slide_points as usual — the downloadable deck uses those; the video "
+          "plays the plan. Your reply is long — return the whole JSON MINIFIED "
+          "(one line, no indentation); pretty-printing wastes your output "
+          "budget and risks truncation.\n"
         + SCENE_DIRECTION_SPEC
     )
 
@@ -381,30 +372,37 @@ def build_episode_prompt(
         tail = tail.replace(
             'Markup goes ONLY in "elevenlabs_text".',
             'Markup goes ONLY in "elevenlabs_text".\n'
-            'For the 2-5 segments that teach a VISUAL concept, ALSO include '
-            'the "scene" and "scene_assets" keys exactly as in the second '
-            'example below — the drawn-whiteboard video plays them (see '
-            'SCENE DIRECTION).',
+            'ALSO return ONE top-level "visual_plan" key beside "segments" — '
+            'the persistent-whiteboard plan, exactly as in the example below '
+            'and per VISUAL CONTINUITY. Do NOT attach visual keys to '
+            'individual segments.',
             1,
         ).replace(
-            '      "visual_action": "DRAW_CONTINUE",',
-            '''      "scene": {
-        "scene_type": "process",
-        "elements": [
-          {"id": "cell", "type": "illustration", "asset": "plant_cell", "at": [620, 380], "scale": 1.0},
-          {"id": "lbl1", "type": "text", "text": "Cell wall", "at": [90, 160], "role": "label"},
-          {"id": "ar1", "type": "arrow", "tail": {"el": "lbl1", "edge": "right"}, "head": [330, 250]}
-        ],
-        "actions": [
-          {"verb": "draw", "target": "cell", "layers": ["wall"], "at": {"phrase": "exact words copied from this segment's text"}},
-          {"verb": "draw", "target": "ar1"},
-          {"verb": "write", "target": "lbl1"},
-          {"verb": "zoom", "scale": 1.5, "at": {"phrase": "..."}},
-          {"verb": "camera_reset"}
-        ]
-      },
-      "scene_assets": {"plant_cell": "A plant cell in cross-section with a double wall, membrane and large vacuole. Name the layer groups exactly: wall, membrane, vacuole, nucleus"},
-      "visual_action": "DRAW_CONTINUE",''',
+            '''      "estimated_duration_seconds": 45
+    }
+  ]
+}''',
+            '''      "estimated_duration_seconds": 45
+    }
+  ],
+  "visual_plan": {"chapters": [
+    {"concept": "plant_cell_structure", "transition": "clear_and_redraw",
+     "assets": {"plant_cell": "A plant cell in cross-section with a double wall, membrane, nucleus and a large vacuole. Name the layer groups exactly: wall, membrane, nucleus, vacuole"},
+     "elements": [
+       {"id": "cell", "type": "illustration", "asset": "plant_cell", "at": [620, 380], "scale": 1.0},
+       {"id": "lbl_wall", "type": "text", "text": "Cell wall", "at": [80, 150], "role": "label"},
+       {"id": "ar_wall", "type": "arrow", "tail": {"el": "lbl_wall", "edge": "right"}, "head": [330, 250]}
+     ],
+     "steps": [
+       {"segment": 2, "decision": "NEW_VISUAL", "reason": "chapter opens the cell",
+        "actions": [{"verb": "draw", "target": "cell", "layers": ["wall"], "at": {"phrase": "words copied from segment 2's text"}}]},
+       {"segment": 3, "decision": "EXTEND", "reason": "membrane is PART_OF the cell",
+        "actions": [{"verb": "draw", "target": "cell", "layers": ["membrane"]}, {"verb": "draw", "target": "ar_wall"}, {"verb": "write", "target": "lbl_wall"}]},
+       {"segment": 4, "decision": "FOCUS", "reason": "board already shows it",
+        "actions": [{"verb": "zoom", "target": "cell", "scale": 1.4}, {"verb": "circle", "target": "lbl_wall"}]}
+     ]}
+  ]}
+}''',
             1,
         )
     parts = [header, _PERSONA[style], _MARKUP, _STRUCTURE[style], tail]

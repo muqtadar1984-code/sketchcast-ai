@@ -106,6 +106,11 @@ class EpisodeScript(BaseModel):
     generated_at: str
     narrator_persona: str = "Socratic"
     segments: List[ScriptSegment]
+    # Visual continuity (VIDEO_ENGINE=scene): the whole-lesson whiteboard plan
+    # as emitted by the model, plus the compiler's debug report and acceptance
+    # stats — inspectable after generation. Segments carry their COMPILED
+    # scenes individually; this is the plan-level record.
+    visual_plan: Optional[dict] = None
     total_estimated_duration_seconds: int
     question_hook_count: int
 

@@ -132,6 +132,11 @@ class IllustrationElement(_ElementBase):
     at: Point                        # world position of the asset center
     scale: float = Field(default=1.0, gt=0.0, le=8.0)
     layers: Optional[list[str]] = None
+    # Visual continuity (1.3): board state carried in from earlier segments.
+    # These layers render FULLY DRAWN at t=0 — the teacher already drew them
+    # in a previous narration segment and the board persists.
+    drawn_layers: Optional[list[str]] = None
+    drawn_frac: float = Field(default=0.0, ge=0.0, le=1.0)  # raster-tier carry
 
 
 class TextElement(_ElementBase):
@@ -233,6 +238,11 @@ class DrawAction(_ActionBase):
     shapes/arrows, trace-walk for raster assets. NEVER a rectangular sweep."""
     verb: Literal["draw"] = "draw"
     layers: Optional[list[str]] = None   # illustration: draw only these layers
+    # Visual continuity (1.3): explicit trace slice [lo, width] for raster
+    # assets drawn ACROSS segments — the compiler apportions the walk so
+    # segment 3 continues exactly where segment 2's pen stopped. Overrides the
+    # within-scene equal split when present.
+    slice: Optional[tuple[float, float]] = None
 
 
 class WriteAction(_ActionBase):
@@ -348,6 +358,10 @@ class Scene(BaseModel):
     elements: list[Element]
     actions: list[Action]
     min_hold: float = Field(default=0.8, ge=0.0, le=5.0)
+    # Visual continuity (1.3): where the camera IS when this segment begins —
+    # the previous segment may have ended zoomed on the nucleus, and a cut
+    # back to full view between concatenated MP4s reads as a broken camera.
+    camera_start: Optional[dict] = None  # {"cx": float, "cy": float, "scale": float}
 
     @model_validator(mode="after")
     def _integrity(self) -> "Scene":

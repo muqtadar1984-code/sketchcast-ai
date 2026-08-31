@@ -405,6 +405,42 @@ def generate_episode_script(
             "doubled streamed retry hit it too)"
         )
 
+    # Visual continuity (VIDEO_ENGINE=scene): the model plans ONE persistent
+    # whiteboard for the whole lesson; the deterministic compiler expands it
+    # into per-segment scenes that carry board state across boundaries. The
+    # scenes ride ON the segment objects, so later renumbering can't orphan
+    # them. Any failure here degrades to sceneless segments, never a lost
+    # script.
+    visual_plan_dump = None
+    raw_plan = data.get("visual_plan") if isinstance(data, dict) else None
+    if raw_plan is not None:
+        try:
+            from spike.scene_engine.continuity import (compile_plan,
+                                                       parse_visual_plan,
+                                                       plan_stats)
+            plan = parse_visual_plan(raw_plan)
+            if plan is not None:
+                narrations = {s.segment_id: s.text for s in segments}
+                # HOLD scenes for unplanned segments inside a chapter — the
+                # board persists instead of flashing to a slide and back.
+                # Interactive segments keep their native visuals.
+                skip = {s.segment_id for s in segments
+                        if s.type == SegmentType.question_hook
+                        or (s.slide_visual is not None
+                            and getattr(s.slide_visual, "kind", None) == "quiz")}
+                compiled, assets_by_seg, report = compile_plan(
+                    plan, narrations,
+                    all_segments=[s.segment_id for s in segments],
+                    skip_hold=skip)
+                for s in segments:
+                    if s.segment_id in compiled:
+                        s.scene = compiled[s.segment_id]
+                        s.scene_assets = assets_by_seg.get(s.segment_id)
+                visual_plan_dump = {"plan": plan.model_dump(), "report": report,
+                                    "stats": plan_stats(plan)}
+        except Exception:
+            logger.exception("visual plan compilation failed; sceneless fallback")
+
     # Post-process: enforce Scribe Director invariants + travel-time breaks
     segments = process_director_manifest(segments)
 
@@ -420,6 +456,7 @@ def generate_episode_script(
         generated_at=datetime.now().isoformat(),
         narrator_persona=style,
         segments=segments,
+        visual_plan=visual_plan_dump,
         total_estimated_duration_seconds=total_duration,
         question_hook_count=question_hook_count,
     )

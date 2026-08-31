@@ -56,19 +56,21 @@ class TestAgent3Wiring:
         from agent3_scripts.prompts import NARRATION_STYLES, build_episode_prompt
         monkeypatch.delenv("VIDEO_ENGINE", raising=False)
         off = build_episode_prompt("socratic", "Cells", "Middle School", "5.0", "ctx")
-        assert "SCENE DIRECTION" not in off
+        assert "VISUAL CONTINUITY" not in off
         monkeypatch.setenv("VIDEO_ENGINE", "scene")
         on = build_episode_prompt("socratic", "Cells", "Middle School", "5.0", "ctx")
-        assert "SCENE DIRECTION" in on
-        assert '"scene_assets"' in on and "VERBATIM" in on
+        assert "VISUAL CONTINUITY" in on
+        assert '"chapters"' in on and "VERBATIM" in on
         # the keys must appear in the OUTPUT FORMAT example itself — a
         # JSON-conforming model follows the example, not appended prose
         # (measured: spec-only wiring produced zero scenes on a real chapter)
         fmt = on[on.find("OUTPUT FORMAT"):]
-        assert '"scene": {' in fmt and '"scene_assets": {' in fmt
+        assert '"visual_plan": {' in fmt          # the plan lives IN the example
+        assert '"decision": "NEW_VISUAL"' in fmt
+        assert "VISUAL CONTINUITY" in on
         # all five narration styles share the identical block (schema contract)
         for st in NARRATION_STYLES:
-            assert "SCENE DIRECTION" in build_episode_prompt(st, "C", "M", "5.0", "x")
+            assert "VISUAL CONTINUITY" in build_episode_prompt(st, "C", "M", "5.0", "x")
 
     def _fake_client(self, seg_extra: dict):
         canned = {"segments": [{
