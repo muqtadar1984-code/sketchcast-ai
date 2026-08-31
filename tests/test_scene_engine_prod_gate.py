@@ -51,6 +51,63 @@ class TestCoverageHarvest:
         assert "a b c" in script_text(script)
 
 
+class TestAgent3Wiring:
+    def test_prompt_carries_scene_spec_only_when_flag_on(self, monkeypatch):
+        from agent3_scripts.prompts import NARRATION_STYLES, build_episode_prompt
+        monkeypatch.delenv("VIDEO_ENGINE", raising=False)
+        off = build_episode_prompt("socratic", "Cells", "Middle School", "5.0", "ctx")
+        assert "SCENE DIRECTION" not in off
+        monkeypatch.setenv("VIDEO_ENGINE", "scene")
+        on = build_episode_prompt("socratic", "Cells", "Middle School", "5.0", "ctx")
+        assert "SCENE DIRECTION" in on
+        assert '"scene_assets"' in on and "VERBATIM" in on
+        # the keys must appear in the OUTPUT FORMAT example itself — a
+        # JSON-conforming model follows the example, not appended prose
+        # (measured: spec-only wiring produced zero scenes on a real chapter)
+        fmt = on[on.find("OUTPUT FORMAT"):]
+        assert '"scene": {' in fmt and '"scene_assets": {' in fmt
+        # all five narration styles share the identical block (schema contract)
+        for st in NARRATION_STYLES:
+            assert "SCENE DIRECTION" in build_episode_prompt(st, "C", "M", "5.0", "x")
+
+    def _fake_client(self, seg_extra: dict):
+        canned = {"segments": [{
+            "type": "explore", "text": "the wall is drawn now",
+            "elevenlabs_text": "the wall is drawn now",
+            "slide_heading": "Walls", "slide_points": ["one point"],
+            "estimated_duration_seconds": 30, **seg_extra,
+        }]}
+
+        class Fake:
+            def analyze(self, prompt=None, system=None, max_tokens=0, **kw):
+                return {"data": canned}
+        return Fake()
+
+    def test_scene_and_assets_pass_through_to_segments(self):
+        from agent3_scripts.script_generator import generate_episode_script
+        client = self._fake_client({
+            "scene": {"id": "s", "elements": [{"id": "d", "type": "shape",
+                                               "shape": "path",
+                                               "points": [[0, 0], [9, 9]]}],
+                      "actions": [{"verb": "draw", "target": "d"}]},
+            "scene_assets": {"wall_diagram": "a wall"},
+        })
+        ep = generate_episode_script({"episode_num": 1}, {"chapter_title": "C"},
+                                     1, client)
+        seg = ep.segments[0]
+        assert seg.scene is not None and seg.scene["id"] == "s"
+        assert seg.scene_assets == {"wall_diagram": "a wall"}
+
+    def test_malformed_scene_shapes_dropped_not_fatal(self):
+        from agent3_scripts.script_generator import generate_episode_script
+        client = self._fake_client({"scene": "not-a-dict",
+                                    "scene_assets": ["not", "a", "map"]})
+        ep = generate_episode_script({"episode_num": 1}, {"chapter_title": "C"},
+                                     1, client)
+        assert ep.segments[0].scene is None
+        assert ep.segments[0].scene_assets is None
+
+
 class TestDispatch:
     def test_invalid_scene_returns_false_never_raises(self):
         seg = {"segment_id": "s001", "scene": {"garbage": True}}

@@ -5,6 +5,7 @@ Generates Socratic episode scripts from Agent 2 analysis output.
 
 import json
 import logging
+import os
 import re
 import uuid
 from datetime import datetime
@@ -313,7 +314,12 @@ def generate_episode_script(
         "on-screen slide content and the JSON schema exactly as instructed. "
         "Always return valid JSON only."
     )
-    result = client.analyze(prompt=prompt, system=system, max_tokens=16000)
+    # Scene direction (VIDEO_ENGINE=scene) makes replies materially longer —
+    # measured on a real 20-segment part: with scenes the reply truncated at
+    # 16k AND at the doubled streamed retry, parsing to zero segments. Budget
+    # up when the flag is on; the prompt-side scene caps keep it bounded.
+    max_out = 24000 if os.getenv("VIDEO_ENGINE", "").strip().lower() == "scene" else 16000
+    result = client.analyze(prompt=prompt, system=system, max_tokens=max_out)
 
     data = result.get("data", result)
     raw_segments = data.get("segments", []) if isinstance(data, dict) else []
@@ -362,6 +368,13 @@ def generate_episode_script(
         ]
         slide_visual = _parse_slide_visual(seg.get("slide_visual"))
 
+        # Scene-engine direction (VIDEO_ENGINE=scene): pass the dicts through
+        # shape-checked only — deep validation is the renderer's job
+        # (parse_scene_response clamps or falls back to the native slide), so a
+        # malformed scene degrades a segment's VIDEO, never the script.
+        raw_scene = seg.get("scene")
+        raw_scene_assets = seg.get("scene_assets")
+
         segments.append(ScriptSegment(
             segment_id=f"s{i + 1:03d}",
             type=seg_type,
@@ -373,6 +386,9 @@ def generate_episode_script(
             visual_request=visual_request,
             visual_action=visual_action,
             pause_for_question=bool(seg.get("pause_for_question", False)),
+            scene=raw_scene if isinstance(raw_scene, dict) else None,
+            scene_assets=({str(k): str(v) for k, v in raw_scene_assets.items()}
+                          if isinstance(raw_scene_assets, dict) else None),
             estimated_duration_seconds=int(seg.get("estimated_duration_seconds", 30)),
         ))
 

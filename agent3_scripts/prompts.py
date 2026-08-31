@@ -319,6 +319,40 @@ _CLOSING = {
 }
 
 
+def _scene_direction_block() -> str:
+    """The scene-engine direction spec, appended ONLY when VIDEO_ENGINE=scene
+    (the flag is read per call, matching the render-side gate). The spec text
+    lives with the engine so prompt and renderer can never drift apart; if the
+    engine package is absent the block is empty and the schema is unchanged."""
+    import os
+
+    if os.getenv("VIDEO_ENGINE", "").strip().lower() != "scene":
+        return ""
+    try:
+        from spike.scene_engine.director import SCENE_DIRECTION_SPEC
+    except ImportError:
+        return ""
+    return (
+        "=== SCENE DIRECTION (drawn whiteboard video) ===\n"
+        "The video renderer can DRAW. For AT MOST 4 segments — the BIGGEST "
+        "visual teaching moments (a structure, a process, a comparison, a "
+        "worked example; never hooks/recaps/previews) — add TWO extra keys to "
+        "that segment object:\n"
+        '  "scene": the scene object specified below. Its cue phrases are '
+        "copied VERBATIM from that same segment's `text`.\n"
+        '  "scene_assets": an object mapping each illustration asset key the '
+        "scene uses to a one-sentence description of the diagram to draw, "
+        'ending with: "Name the layer groups exactly: <the layer ids your '
+        'draw actions cue>".\n'
+        "Segments carrying a scene STILL include slide_heading/slide_points as "
+        "usual — the downloadable deck uses those; the video plays the scene.\n"
+        "A scene stays SMALL: at most 8 elements and 12 actions. Your reply is "
+        "long — return the whole JSON MINIFIED (one line, no indentation); "
+        "pretty-printing wastes your output budget and risks truncation.\n"
+        + SCENE_DIRECTION_SPEC
+    )
+
+
 def build_episode_prompt(
     style: str,
     chapter_title: str,
@@ -337,4 +371,44 @@ def build_episode_prompt(
         target_duration=target_duration,
         episode_context=episode_context,
     )
-    return "\n\n".join([header, _PERSONA[style], _MARKUP, _STRUCTURE[style], _SHARED_TAIL, _CLOSING[style]])
+    tail = _SHARED_TAIL
+    scene_block = _scene_direction_block()
+    if scene_block:
+        # A JSON-conforming model follows the OUTPUT FORMAT example, not prose
+        # appended after it — measured: the spec alone at 78% of the prompt
+        # yielded ZERO scenes on a real chapter. The keys must live in the
+        # example itself.
+        tail = tail.replace(
+            'Markup goes ONLY in "elevenlabs_text".',
+            'Markup goes ONLY in "elevenlabs_text".\n'
+            'For the 2-5 segments that teach a VISUAL concept, ALSO include '
+            'the "scene" and "scene_assets" keys exactly as in the second '
+            'example below — the drawn-whiteboard video plays them (see '
+            'SCENE DIRECTION).',
+            1,
+        ).replace(
+            '      "visual_action": "DRAW_CONTINUE",',
+            '''      "scene": {
+        "scene_type": "process",
+        "elements": [
+          {"id": "cell", "type": "illustration", "asset": "plant_cell", "at": [620, 380], "scale": 1.0},
+          {"id": "lbl1", "type": "text", "text": "Cell wall", "at": [90, 160], "role": "label"},
+          {"id": "ar1", "type": "arrow", "tail": {"el": "lbl1", "edge": "right"}, "head": [330, 250]}
+        ],
+        "actions": [
+          {"verb": "draw", "target": "cell", "layers": ["wall"], "at": {"phrase": "exact words copied from this segment's text"}},
+          {"verb": "draw", "target": "ar1"},
+          {"verb": "write", "target": "lbl1"},
+          {"verb": "zoom", "scale": 1.5, "at": {"phrase": "..."}},
+          {"verb": "camera_reset"}
+        ]
+      },
+      "scene_assets": {"plant_cell": "A plant cell in cross-section with a double wall, membrane and large vacuole. Name the layer groups exactly: wall, membrane, vacuole, nucleus"},
+      "visual_action": "DRAW_CONTINUE",''',
+            1,
+        )
+    parts = [header, _PERSONA[style], _MARKUP, _STRUCTURE[style], tail]
+    if scene_block:
+        parts.append(scene_block)
+    parts.append(_CLOSING[style])
+    return "\n\n".join(parts)
