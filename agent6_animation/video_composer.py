@@ -69,7 +69,8 @@ def _ffmpeg_exe() -> str:
 
 
 def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | None,
-                          audio_secs: float, out_mp4, direction: str) -> bool:
+                          audio_secs: float, out_mp4, direction: str,
+                          scene_dict: dict | None = None) -> bool:
     """One segment through the scene engine. Imports are lazy and everything is
     caught: with VIDEO_ENGINE unset this function never runs, and when it does,
     False (never an exception) hands the segment to the native renderer.
@@ -84,7 +85,7 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
         from spike.scene_engine.raster_assets import load_hand, make_resolver
         from spike.scene_engine.render import SceneRenderer
 
-        scene = parse_scene_response(script_seg.get("scene"), narration)
+        scene = parse_scene_response(scene_dict or script_seg.get("scene"), narration)
         if scene is None:
             return False
         if direction == "rtl":
@@ -220,16 +221,33 @@ def compose_episode_videos(
                 logger.error("TTS failed for %s: %s", seg_id, exc)
                 audio_path = None
 
-        # 2a. Scene engine (feature-gated): when VIDEO_ENGINE=scene and the
-        # director put a scene on this segment, render it; ANY failure falls
-        # through to the native slide renderer below with the narration intact
-        # — the fallback must never cost the student the audio.
+        # 2a. Scene engine (feature-gated): ONE visual language. A planned
+        # scene renders as directed; a segment WITHOUT one gets a
+        # whiteboard-NATIVE fallback (handwritten heading/points/quiz) — the
+        # engine simplifies within the style, it never switches styles. The
+        # legacy renderer below is a crash-guard only; its use is recorded on
+        # the manifest and fails visual-language validation.
         ok = False
-        if os.getenv("VIDEO_ENGINE", "").strip().lower() == "scene" and script_seg.get("scene"):
-            ok = _render_scene_segment(
-                script_seg, text, audio_path,
-                duration if audio_path else 0.0, out_mp4, direction,
-            )
+        renderer = "native"
+        if os.getenv("VIDEO_ENGINE", "").strip().lower() == "scene":
+            scene_dict = script_seg.get("scene")
+            attempt = "scene"
+            if not scene_dict:
+                try:
+                    from spike.scene_engine.whiteboard import build_whiteboard_scene
+                    scene_dict = build_whiteboard_scene(script_seg)
+                    attempt = "whiteboard"
+                except Exception:  # noqa: BLE001
+                    logger.exception("whiteboard fallback build failed for %s", seg_id)
+                    scene_dict = None
+            if scene_dict:
+                ok = _render_scene_segment(
+                    script_seg, text, audio_path,
+                    duration if audio_path else 0.0, out_mp4, direction,
+                    scene_dict=scene_dict,
+                )
+                if ok:
+                    renderer = attempt
 
         # 2b. Native object animation (paced to the narration) + audio → MP4
         if not ok:
@@ -255,6 +273,7 @@ def compose_episode_videos(
                 slide_image_path=slide_seg.get("slide_image_path"),
                 audio_duration_seconds=round(duration, 2),
                 visual_action=slide_seg.get("visual_action", "GHOST_ONLY"),
+                renderer=renderer,
             ),
         }
 

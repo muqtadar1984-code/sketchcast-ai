@@ -123,7 +123,8 @@ class TestCompiler:
         st = plan_stats(plan)
         assert st == {"segments_planned": 4, "visual_chapters": 2,
                       "root_visuals": 1, "extensions": 1,
-                      "focus_transform": 1, "full_redraws": 2}
+                      "focus_transform": 1, "full_redraws": 2,
+                      "human_teaching_moments": 0}
         _, _, report = compile_plan(plan, _NARR)
         assert len(report) == 4 and "CLEAR_AND_REDRAW" in report[3]
 
@@ -293,3 +294,72 @@ class TestHoldsAndDegradation:
                                    "actions": acts}, "narr")
         assert sc is not None and len(sc.elements) == 12
         assert [a.target for a in sc.actions] == ["lbl0"]  # no dangling refs
+
+
+    def test_verb_aliases_and_unknown_verbs(self):
+        # "clear" (model-invented) maps to erase; junk verbs drop alone —
+        # an unknown verb once cost a whole segment its scene (legacy leak)
+        p2 = parse_visual_plan({
+            "chapters": [{"concept": "c",
+                "elements": [{"id": "cell", "type": "illustration",
+                              "asset": "plant_cell", "at": [600, 380]}],
+                "steps": [{"segment": 1, "decision": "NEW_VISUAL",
+                           "actions": [
+                               {"verb": "draw", "target": "cell"},
+                               {"verb": "clear", "target": "cell"},
+                               {"verb": "sketchify", "target": "cell"},
+                           ]}]}]})
+        acts = p2.chapters[0].steps[0].actions
+        assert [a["verb"] for a in acts] == ["draw", "erase"]
+
+    def test_root_visual_is_the_most_drawn_one(self):
+        p2 = parse_visual_plan({
+            "chapters": [{"concept": "c",
+                "elements": [
+                    {"id": "intro_sketch", "type": "illustration",
+                     "asset": "membrane_section", "at": [600, 380]},
+                    {"id": "the_cell", "type": "illustration",
+                     "asset": "plant_cell", "at": [600, 380]},
+                ],
+                "steps": [
+                    {"segment": 1, "decision": "NEW_VISUAL",
+                     "actions": [{"verb": "draw", "target": "intro_sketch"}]},
+                    {"segment": 2, "decision": "EXTEND",
+                     "actions": [{"verb": "draw", "target": "the_cell",
+                                  "layers": ["wall"]}]},
+                    {"segment": 3, "decision": "EXTEND",
+                     "actions": [{"verb": "draw", "target": "the_cell",
+                                  "layers": ["nucleus"]}]},
+                ]}]})
+        scenes, _, report = compile_plan(p2, {"s001": "a", "s002": "b",
+                                              "s003": "c"})
+        # the_cell (2 draws) wins the root; intro_sketch (1 draw) drops
+        assert any("intro_sketch" in l and "DROPPED" in l for l in report)
+        assert any(e["id"] == "the_cell"
+                   for e in scenes["s002"]["elements"])
+
+
+    def test_element_values_clamped_like_actions(self):
+        # width 40 / color "black" / shape "oval" once killed five scenes
+        p2 = parse_visual_plan({
+            "chapters": [{"concept": "c",
+                "elements": [
+                    {"id": "cell", "type": "illustration",
+                     "asset": "plant_cell", "at": [600, 380]},
+                    {"id": "blob", "type": "shape", "shape": "oval",
+                     "center": [400, 300], "rx": 60, "ry": 40,
+                     "width": 40, "color": "black"},
+                    {"id": "junk", "type": "hologram", "at": [0, 0]},
+                ],
+                "steps": [{"segment": 1, "decision": "NEW_VISUAL",
+                           "actions": [{"verb": "draw", "target": "cell"},
+                                       {"verb": "draw", "target": "blob"},
+                                       {"verb": "draw", "target": "junk"}]}]}]})
+        els = {e["id"]: e for e in p2.chapters[0].elements}
+        assert "junk" not in els                     # unknown type dropped
+        assert els["blob"]["shape"] == "ellipse"     # oval -> ellipse
+        assert els["blob"]["width"] == 20.0          # clamped
+        assert els["blob"]["color"] == "ink"         # black -> role
+        scenes, _, report = compile_plan(p2, {"s001": "a"})
+        parse_scene(scenes["s001"])                  # schema-valid end to end
+        assert any("junk" in l and "DROPPED" in l for l in report)

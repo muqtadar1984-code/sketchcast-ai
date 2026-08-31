@@ -127,7 +127,9 @@ one visual per segment):
 
 RULES:
 - ONE ROOT VISUAL PER CHAPTER: a chapter has AT MOST ONE illustration
-  element. Build a complex diagram as ONE asset with NAMED LAYER GROUPS and
+  element. Needing a DIFFERENT root visual means the concept changed: END the
+  chapter and START A NEW ONE (its transition does the wipe) — never erase or
+  replace the root mid-chapter. Build a complex diagram as ONE asset with NAMED LAYER GROUPS and
   draw it layer by layer across steps ({"verb": "draw", "target": "cell",
   "layers": ["nucleus"]}) — NEVER as separate illustration elements per part:
   independently generated images DO NOT compose, they stack into a tangle.
@@ -147,6 +149,15 @@ RULES:
   per step. Segments not listed in any step simply keep the current board.
 - optimise for the MINIMUM number of visual changes that explains the lesson
   beautifully — never for one beautiful scene per segment.
+
+HUMAN TEACHING MOMENTS (optional, SELECTIVE): a step may add
+  "moment": {"role": "student", "text": "Why can't everything enter?"}
+A hand-drawn student or teacher appears beside the board, the hand draws a
+speech bubble and writes the SHORT line (a question, misconception, or key
+idea — max ~8 words, NEVER the narration copied), then they fade and the
+board takes focus again. Use for: a natural student question in the
+narration, a common misconception, or "role": "teacher" for THE key idea of
+a chapter. At most 2-3 per lesson; never to fill an empty screen.
 
 Elements and actions use the vocabulary below.
 """

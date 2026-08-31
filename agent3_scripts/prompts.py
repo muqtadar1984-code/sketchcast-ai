@@ -375,7 +375,10 @@ def build_episode_prompt(
             'ALSO return ONE top-level "visual_plan" key beside "segments" — '
             'the persistent-whiteboard plan, exactly as in the example below '
             'and per VISUAL CONTINUITY. Do NOT attach visual keys to '
-            'individual segments.',
+            'individual segments.\n'
+            'Return the ENTIRE reply as MINIFIED JSON — one single line, no '
+            'indentation, no spaces after separators. The reply is long and '
+            'pretty-printing WILL truncate it mid-array.',
             1,
         ).replace(
             '''      "estimated_duration_seconds": 45

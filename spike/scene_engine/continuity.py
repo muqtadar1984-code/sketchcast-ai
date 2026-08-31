@@ -57,6 +57,10 @@ class PlanStep(BaseModel):
     decision: Decision = "CONTINUE"
     reason: str = ""                   # planner's why — surfaces in the report
     actions: list[dict] = Field(default_factory=list)
+    # HUMAN_TEACHING_MOMENT (optional, selective): {"role": "student"|
+    # "teacher", "text": "<short spoken line>"} — expands into avatar +
+    # hand-drawn speech bubble choreography scoped to this segment only
+    moment: Optional[dict] = None
 
     @property
     def segment_id(self) -> str:
@@ -92,10 +96,23 @@ def _pt(v) -> list[float] | None:
     return None
 
 
+_VERB_ALIASES = {"clear": "erase", "remove": "erase", "delete": "erase",
+                 "add": "draw", "focus": "zoom", "point": "circle",
+                 "annotate": "write", "label": "write"}
+_KNOWN_VERBS = {"draw", "write", "reveal", "erase", "move", "highlight",
+                "circle", "underline", "pulse", "fade", "morph", "zoom",
+                "pan", "camera_reset"}
+
+
 def _clean_action(a) -> dict | None:
     if not isinstance(a, dict) or not isinstance(a.get("verb"), str):
         return None
-    verb = a["verb"]
+    verb = _VERB_ALIASES.get(a["verb"].strip().lower(), a["verb"].strip().lower())
+    if verb not in _KNOWN_VERBS:
+        # an invented verb ("sketch", "show") must cost ITSELF, not the scene
+        # — an unknown verb once reached schema validation and dropped a whole
+        # segment to the legacy renderer
+        return None
     out: dict = {"verb": verb}
     if isinstance(a.get("target"), str):
         out["target"] = a["target"]
@@ -145,6 +162,110 @@ def _clean_action(a) -> dict | None:
     return out
 
 
+_COLOR_ROLES = {"ink", "muted", "accent"}
+_COLOR_MAP = {"black": "ink", "dark": "ink", "navy": "ink", "blue": "accent",
+              "green": "accent", "teal": "accent", "red": "accent",
+              "orange": "accent", "gray": "muted", "grey": "muted",
+              "light": "muted"}
+_SHAPE_ALIASES = {"oval": "ellipse", "circle": "ellipse", "rect": "path",
+                  "rectangle": "path", "polygon": "path", "curve": "path"}
+
+
+def _role(c) -> str:
+    c = str(c or "ink").strip().lower()
+    return c if c in _COLOR_ROLES else _COLOR_MAP.get(c, "ink")
+
+
+def _clean_element(e) -> dict | None:
+    """Element values, clamped the way actions are — width 40, color 'black'
+    and shape 'oval' once killed five scenes to the legacy renderer because
+    elements skipped sanitization entirely."""
+    if not isinstance(e, dict) or not isinstance(e.get("id"), str):
+        return None
+    t = str(e.get("type") or "").strip().lower()
+    out = dict(e)
+    out["type"] = t
+
+    def clampf(key, lo, hi, default=None):
+        try:
+            out[key] = min(hi, max(lo, float(out[key])))
+        except (KeyError, TypeError, ValueError):
+            if default is not None:
+                out[key] = default
+            else:
+                out.pop(key, None)
+
+    if t == "illustration":
+        if not isinstance(out.get("asset"), str) or _pt(out.get("at")) is None:
+            return None
+        out["at"] = _pt(out["at"])
+        clampf("scale", 0.05, 8.0, 1.0)
+    elif t == "text":
+        if not isinstance(out.get("text"), str) or _pt(out.get("at")) is None:
+            return None
+        out["at"] = _pt(out["at"])
+        clampf("size", 10.0, 72.0, 26.0)
+        if "color" in out:
+            out["color"] = _role(out["color"])
+        if out.get("role") not in ("title", "label", "term", "caption"):
+            out.pop("role", None)
+        if out.get("anchor") not in ("lt", "mt", "rt", "lm", "mm", "rm"):
+            out.pop("anchor", None)
+    elif t == "arrow":
+        for k in ("tail", "head"):
+            v = out.get(k)
+            if isinstance(v, dict) and isinstance(v.get("el"), str):
+                continue
+            p = _pt(v)
+            if p is None:
+                return None
+            out[k] = p
+        clampf("width", 1.0, 10.0, 3.2)
+        clampf("curve", -200.0, 200.0, 0.0)
+        if "color" in out:
+            out["color"] = _role(out["color"])
+    elif t == "shape":
+        shp = str(out.get("shape") or "path").strip().lower()
+        out["shape"] = _SHAPE_ALIASES.get(shp, shp)
+        if out["shape"] not in ("path", "ellipse", "line"):
+            out["shape"] = "path"
+        clampf("width", 0.5, 20.0, 3.0)
+        if "color" in out:
+            out["color"] = _role(out["color"])
+        if out["shape"] == "ellipse":
+            c = _pt(out.get("center"))
+            if c is None:
+                return None
+            out["center"] = c
+            clampf("rx", 3.0, 640.0, 40.0)
+            clampf("ry", 3.0, 640.0, 40.0)
+        else:
+            pts = [_pt(p) for p in (out.get("points") or [])]
+            pts = [p for p in pts if p is not None]
+            if len(pts) < 2:
+                return None
+            out["points"] = pts
+    elif t == "particles":
+        pts = [_pt(p) for p in (out.get("spawn") or [])]
+        pts = [p for p in pts if p is not None]
+        if not pts:
+            return None
+        out["spawn"] = pts[:24]
+        clampf("radius", 2.0, 30.0, 7.0)
+        if "color" in out:
+            out["color"] = _role(out["color"])
+        if out.get("glyph") not in ("dot", "ring", "blob"):
+            out.pop("glyph", None)
+    elif t == "group":
+        kids = [c for c in (out.get("children") or []) if isinstance(c, str)]
+        if not kids:
+            return None
+        out["children"] = kids
+    else:
+        return None
+    return out
+
+
 def parse_visual_plan(raw) -> Optional[VisualPlan]:
     """Trust boundary for the model-emitted plan. Chapters validate and
     salvage INDIVIDUALLY (one bad chapter must not cost the lesson its plan),
@@ -170,6 +291,13 @@ def parse_visual_plan(raw) -> Optional[VisualPlan]:
                     st["decision"] = "CONTINUE"
                 if st.get("transition") is not None:
                     st.pop("transition", None)
+                m = st.get("moment")
+                if isinstance(m, dict) and isinstance(m.get("text"), str)                         and m["text"].strip():
+                    st["moment"] = {"role": m.get("role") if m.get("role")
+                                    in ("student", "teacher") else "student",
+                                    "text": m["text"].strip()[:60]}
+                else:
+                    st["moment"] = None
                 steps.append(st)
             craw["steps"] = steps
         if isinstance(craw, dict) and \
@@ -181,8 +309,8 @@ def parse_visual_plan(raw) -> Optional[VisualPlan]:
         except Exception as e:
             logger.warning("visual_plan chapter %d rejected (%s); salvaging rest", i, e)
             continue
-        ch.elements = [e for e in ch.elements
-                       if isinstance(e, dict) and isinstance(e.get("id"), str)]
+        ch.elements = [c for c in (_clean_element(e) for e in ch.elements)
+                       if c is not None]
         merged: dict[str, PlanStep] = {}
         order: list[str] = []
         for st in ch.steps:
@@ -280,6 +408,16 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
     # its first kept and the rest dropped (their actions degrade to holds via
     # the dangling-reference filter), never a stacked tangle on screen
     ills = [eid for eid, e in roster.items() if e.get("type") == "illustration"]
+    if len(ills) > 1:
+        # the ROOT is the illustration the plan DRAWS the most — a model that
+        # declares four visuals but lavishes 8 draw actions on one has told us
+        # which visual the chapter is actually about
+        draws = {eid: 0 for eid in ills}
+        for st_ in ch.steps:
+            for a_ in st_.actions:
+                if a_.get("verb") == "draw" and a_.get("target") in draws:
+                    draws[a_["target"]] += 1
+        ills.sort(key=lambda eid: -draws[eid])
     for extra in ills[1:]:
         del roster[extra]
         report.append(f"CHAPTER {ch.concept} | DROPPED illustration {extra!r} "
@@ -453,6 +591,18 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         for tid, c in step_done.items():
             draws_done[tid] = draws_done.get(tid, 0) + c
 
+        moment_note = ""
+        if st.moment:
+            from .whiteboard import human_moment
+            hm_els, hm_acts, hm_asset = human_moment(
+                st.moment["role"], st.moment["text"], uid=f"hm_{seg_id}")
+            elements.extend(hm_els)
+            step_actions = step_actions + hm_acts
+            seg_assets = {**seg_assets}
+            from .whiteboard import AVATAR_PROMPTS
+            seg_assets[hm_asset] = AVATAR_PROMPTS[hm_asset]
+            moment_note = f" | HUMAN_TEACHING_MOMENT ({st.moment['role']}: "                           f"{st.moment['text']!r})"
+
         scenes[seg_id] = {"id": f"vc_{seg_id}", "compiled": True, "scene_type": "process",
                           "narration": narrations.get(seg_id, ""),
                           "camera_start": dict(cam),
@@ -497,7 +647,8 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             f"SEGMENT {seg_id} | chapter: {ch.concept} | decision: "
             f"{'CLEAR_AND_REDRAW' if boundary else st.decision}"
             + (f" | reason: {st.reason}" if st.reason else "")
-            + f" | actions: {[a.get('verb') + '->' + str(a.get('target', '')) for a in step_actions]}")
+            + f" | actions: {[a.get('verb') + '->' + str(a.get('target', '')) for a in step_actions]}"
+            + moment_note)
         first = False
 
     return board_now(), cam
@@ -521,4 +672,6 @@ def plan_stats(plan: VisualPlan) -> dict:
         "focus_transform": sum(1 for d in decisions if d in ("FOCUS", "TRANSFORM", "CONTINUE")),
         "full_redraws": sum(1 for d in decisions if d == "CLEAR_AND_REDRAW")
                         + max(0, len(plan.chapters) - 1),
+        "human_teaching_moments": sum(1 for c in plan.chapters
+                                      for s in c.steps if s.moment),
     }

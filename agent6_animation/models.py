@@ -17,6 +17,10 @@ class VideoSegment(BaseModel):
     slide_image_path: Optional[str] = None   # Source slide PNG
     audio_duration_seconds: float = 0.0
     visual_action: Optional[str] = None      # DRAW_START, DRAW_CONTINUE, GHOST_ONLY
+    # which visual system produced this segment: "scene" (planned whiteboard),
+    # "whiteboard" (whiteboard-native fallback), or "native" (legacy slides —
+    # must be ZERO in a VIDEO_ENGINE=scene lesson, validated downstream)
+    renderer: str = "native"
 
 
 class VideoManifest(BaseModel):

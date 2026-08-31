@@ -318,7 +318,10 @@ def generate_episode_script(
     # measured on a real 20-segment part: with scenes the reply truncated at
     # 16k AND at the doubled streamed retry, parsing to zero segments. Budget
     # up when the flag is on; the prompt-side scene caps keep it bounded.
-    max_out = 24000 if os.getenv("VIDEO_ENGINE", "").strip().lower() == "scene" else 16000
+    # 30k (retry 60k) sits under Gemini's 65,536 output ceiling: a scene-
+    # planned 25-segment part measured over the 24k/48k pair when the model
+    # ignored minification and pretty-printed the reply
+    max_out = 30000 if os.getenv("VIDEO_ENGINE", "").strip().lower() == "scene" else 16000
     result = client.analyze(prompt=prompt, system=system, max_tokens=max_out)
 
     data = result.get("data", result)
