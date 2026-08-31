@@ -516,6 +516,13 @@ def script_text(script: dict) -> str:
             for item in visual.get("items") or []:
                 if isinstance(item, dict):
                     out.append(str(item.get("label") or ""))
+        # scene-engine direction (VIDEO_ENGINE=scene): its text elements are
+        # on-screen labels/terms — taught content the gate must credit
+        scene = seg.get("scene") or {}
+        if isinstance(scene, dict):
+            for el in scene.get("elements") or []:
+                if isinstance(el, dict) and el.get("type") == "text":
+                    out.append(str(el.get("text") or ""))
     return " ".join(p for p in out if p)
 
 

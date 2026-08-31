@@ -68,6 +68,42 @@ def _ffmpeg_exe() -> str:
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
+def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | None,
+                          audio_secs: float, out_mp4, direction: str) -> bool:
+    """One segment through the scene engine. Imports are lazy and everything is
+    caught: with VIDEO_ENGINE unset this function never runs, and when it does,
+    False (never an exception) hands the segment to the native renderer.
+
+    NOTE: the engine currently lives under spike/ per the prototype
+    convention; promotion to a top-level package is the planned cleanup once
+    the A/B against the native renderer settles.
+    """
+    try:
+        from spike.scene_engine.director import parse_scene_response
+        from spike.scene_engine.encode import FPS, encode_scene
+        from spike.scene_engine.raster_assets import load_hand, make_resolver
+        from spike.scene_engine.render import SceneRenderer
+
+        scene = parse_scene_response(script_seg.get("scene"), narration)
+        if scene is None:
+            return False
+        if direction == "rtl":
+            scene.direction = "rtl"
+        scene.style.pen_mode = "hand"
+        scene.style.hand_scale = 0.8
+        prompts = {str(k): str(v)
+                   for k, v in (script_seg.get("scene_assets") or {}).items()}
+        r = SceneRenderer(scene, asset_resolver=make_resolver(prompts),
+                          hand_loader=lambda k: load_hand(k))
+        r.compile(audio_secs)
+        return encode_scene(r.frames(audio_secs, FPS), r.total_secs(audio_secs),
+                            audio_path, Path(str(out_mp4)), FPS)
+    except Exception:  # noqa: BLE001 — scene failure must never kill a segment
+        logger.exception("scene engine failed for %s; native fallback",
+                         script_seg.get("segment_id"))
+        return False
+
+
 def _audio_duration(audio_path: str, ffmpeg: str) -> float:
     """Read an audio file's duration (seconds) by parsing ffmpeg output."""
     proc = subprocess.run([ffmpeg, "-i", audio_path], capture_output=True, text=True)
@@ -184,12 +220,24 @@ def compose_episode_videos(
                 logger.error("TTS failed for %s: %s", seg_id, exc)
                 audio_path = None
 
-        # 2. Native object animation (paced to the narration) + audio → MP4
-        ok = render_native_segment(
-            spec, audio_path, str(out_mp4), ffmpeg,
-            audio_secs=duration if audio_path else 0.0,
-            accent=_accent, logo_path=_logo,
-        )
+        # 2a. Scene engine (feature-gated): when VIDEO_ENGINE=scene and the
+        # director put a scene on this segment, render it; ANY failure falls
+        # through to the native slide renderer below with the narration intact
+        # — the fallback must never cost the student the audio.
+        ok = False
+        if os.getenv("VIDEO_ENGINE", "").strip().lower() == "scene" and script_seg.get("scene"):
+            ok = _render_scene_segment(
+                script_seg, text, audio_path,
+                duration if audio_path else 0.0, out_mp4, direction,
+            )
+
+        # 2b. Native object animation (paced to the narration) + audio → MP4
+        if not ok:
+            ok = render_native_segment(
+                spec, audio_path, str(out_mp4), ffmpeg,
+                audio_secs=duration if audio_path else 0.0,
+                accent=_accent, logo_path=_logo,
+            )
         if not ok:
             logger.error("native renderer failed to build segment %s", seg_id)
             return None

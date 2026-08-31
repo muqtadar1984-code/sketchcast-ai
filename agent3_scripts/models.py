@@ -3,7 +3,7 @@ Pydantic models for Agent 3: Script & Dialogue Generation.
 """
 
 from enum import Enum
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -85,6 +85,12 @@ class ScriptSegment(BaseModel):
     slide_visual: Optional[SlideVisual] = None  # composable diagram (animated natively)
     visual_request: Optional[VisualAssetRequest] = None  # Art Director image prompt
     visual_action: Optional[Literal["DRAW_START", "DRAW_CONTINUE", "GHOST_ONLY"]] = None
+    # Scene-engine visual direction (VIDEO_ENGINE=scene): a scene dict per
+    # spike/scene_engine/schema.py plus its asset prompts. Plain dicts on
+    # purpose — agent3 stays decoupled from the engine package, and the
+    # engine's own parse_scene_response is the trust boundary either way.
+    scene: Optional[dict] = None
+    scene_assets: Optional[Dict[str, str]] = None
     pause_for_question: bool = False
     estimated_duration_seconds: int
 
