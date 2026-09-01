@@ -745,6 +745,284 @@ class TestLabelSynthesis:
         assert not any("SYNTHESIZED lbl_auto_nucleus" in ln for ln in report)
 
 
+class TestColorAvatars:
+    def test_pale_interiors_stay_opaque_paper_is_cut(self):
+        """A brightness threshold made light hair/skin/shirts transparent —
+        the avatar read as a ghost. Only paper CONNECTED TO THE BORDER may
+        be cut."""
+        from spike.scene_engine.raster_assets import to_color_art
+        import numpy as np
+        im = Image.new("RGB", (120, 120), (255, 255, 255))
+        px = im.load()
+        for y in range(30, 100):
+            for x in range(35, 85):
+                px[x, y] = (250, 244, 238)      # pale, enclosed = artwork
+        for y in range(28, 102):
+            for x in (34, 85):
+                px[x, y] = (20, 20, 20)
+        for x in range(34, 86):
+            for y in (28, 101):
+                px[x, y] = (20, 20, 20)
+        out = to_color_art(im)
+        a = np.asarray(out.getchannel("A"))
+        assert a[a.shape[0] // 2, a.shape[1] // 2] > 240   # kept
+        assert a[2, 2] < 15                                # paper gone
+        # colour survives the round trip
+        rgb = out.convert("RGB").getpixel((out.width // 2, out.height // 2))
+        assert max(rgb) - min(rgb) >= 0 and rgb[0] > 200
+
+    def test_rate_limit_is_retried_not_swallowed(self):
+        from spike.scene_engine.raster_assets import _with_backoff
+        import requests as rq
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] < 2:
+                r = rq.Response()
+                r.status_code = 429
+                raise rq.HTTPError(response=r)
+            return {"ok": True}
+
+        import spike.scene_engine.raster_assets as ra
+        real_sleep = __import__("time").sleep
+        try:
+            __import__("time").sleep = lambda s: None
+            assert _with_backoff(flaky, "test") == {"ok": True}
+        finally:
+            __import__("time").sleep = real_sleep
+        assert calls["n"] == 2
+
+
+class TestHandwritingFont:
+    def test_smart_punctuation_never_breaks_the_hand_font(self):
+        from spike.scene_engine.render import _hand_font, ascii_punct
+        line = "Now, here's the really cool part: all things …"
+        assert _hand_font(False, 24, line) is None      # the old failure
+        assert _hand_font(False, 24, ascii_punct(line)) is not None
+        s = Scene.model_validate({
+            "id": "f", "narration": "x", "compiled": True,
+            "elements": [{"id": "t", "type": "text",
+                          "text": "here's a tree — and an ant…",
+                          "at": [400, 300]}],
+            "actions": [{"verb": "write", "target": "t"}],
+        })
+        r = SceneRenderer(s)
+        shown = r.bound["t"].text.display
+        assert "'" in shown and "..." in shown
+        assert not any(ord(c) > 0x2014 for c in shown)
+
+
+class TestAutoSketch:
+    def test_named_objects_are_sketched_when_the_board_is_empty(self):
+        from spike.scene_engine.whiteboard import build_whiteboard_scene
+        card = build_whiteboard_scene({
+            "segment_id": "s001", "type": "hook",
+            "slide_heading": "What are living things made of?",
+            "text": ("What makes a towering tree so different from a tiny "
+                     "ant? Both are alive.")})
+        sk = [e for e in card["elements"]
+              if str(e.get("id", "")).startswith("sk_")]
+        assert {e["asset"] for e in sk} == {"sk_tree", "sk_ant"}
+        assert set(card["scene_assets"]) == {"sk_tree", "sk_ant"}
+        # each is DRAWN, cued to its own words in the narration
+        for e in sk:
+            a = next(a for a in card["actions"]
+                     if a.get("target") == e["id"])
+            assert a["verb"] == "draw"
+            assert a["at"]["phrase"].lower() in card["narration"].lower()
+
+    def test_a_planned_diagram_is_never_overdrawn(self):
+        plan = parse_visual_plan(_plan_raw())
+        narr = {"s001": "A tree and an ant are both alive.",
+                "s002": "The nucleus controls the cell.", "s003": "Look."}
+        scenes, assets, report = compile_plan(
+            plan, narr, all_segments=["s001", "s002", "s003"],
+            skip_hold=set())
+        # every scene here carries the planned cell — nothing is overdrawn
+        assert not any("SKETCHED" in ln for ln in report)
+        for sc in scenes.values():
+            assert not any(str(e.get("id", "")).startswith("sk_")
+                           for e in sc["elements"])
+
+    def test_a_text_only_chapter_gets_sketches(self):
+        raw = {"chapters": [{
+            "concept": "intro", "transition": "clear_and_redraw",
+            "assets": {},
+            "elements": [{"id": "t1", "type": "text", "text": "Living things",
+                          "at": [400, 120], "role": "title"}],
+            "steps": [{"segment": 1, "decision": "NEW_VISUAL",
+                       "actions": [{"verb": "write", "target": "t1"}]}],
+        }]}
+        plan = parse_visual_plan(raw)
+        narr = {"s001": "A towering tree and a tiny ant are both alive."}
+        scenes, assets, report = compile_plan(plan, narr,
+                                              all_segments=["s001"],
+                                              skip_hold=set())
+        assert any("SKETCHED" in ln and "s001" in ln for ln in report)
+        assert "sk_tree" in assets["s001"] and "sk_ant" in assets["s001"]
+        Scene.model_validate(scenes["s001"])
+
+    def test_negations_and_unknown_words_draw_nothing(self):
+        from spike.scene_engine.sketchables import find_sketchables
+        assert find_sketchables("There is no tree in this diagram.") == []
+        assert find_sketchables("Mitosis produces two daughter nuclei.") == []
+        # longest phrase wins, and each concept appears once
+        got = find_sketchables("A blade of grass, more grass, and a whale.")
+        assert [g["key"] for g in got] == ["sk_grass", "sk_whale"]
+
+
+class TestLabelLayout:
+    def _scene(self, n_labels=4):
+        els = [{"id": "cell", "type": "illustration", "asset": "plant_cell",
+                "at": [640, 360], "scale": 1.0},
+               {"id": "__teach_av", "type": "illustration",
+                "asset": "avatar_teacher", "at": [1150, 556], "scale": 0.30}]
+        acts = [{"verb": "draw", "target": "cell"}]
+        # model scatters labels badly on purpose (all far right, overlapping)
+        parts = ["nucleus", "chloroplast", "chloroplast", "nucleus"][:n_labels]
+        for i in range(n_labels):
+            els.append({"id": f"lbl{i}", "type": "text",
+                        "text": f"Label number {i}", "at": [1150, 80],
+                        "anchor": "lt"})
+            els.append({"id": f"ar{i}", "type": "arrow",
+                        "tail": {"el": f"lbl{i}", "edge": "right"},
+                        "head": {"el": "cell", "layer": parts[i],
+                                 "edge": "center",
+                                 "instance": "first" if i < 2 else "largest"}})
+            acts += [{"verb": "write", "target": f"lbl{i}"},
+                     {"verb": "draw", "target": f"ar{i}"}]
+        return Scene.model_validate({"id": "lay", "narration": "x",
+                                     "compiled": True, "elements": els,
+                                     "actions": acts})
+
+    def test_labels_flow_in_columns_without_overlap(self):
+        r = SceneRenderer(self._scene(), asset_resolver=_resolver(_cell_asset()))
+        boxes = [r.bound[f"lbl{i}"].box for i in range(4)]
+        for i in range(4):
+            for j in range(i + 1, 4):
+                a, c = boxes[i], boxes[j]
+                assert not (a[0] < c[2] and a[2] > c[0] and
+                            a[1] < c[3] and a[3] > c[1]), (i, j, a, c)
+        # asset at (640,360) scale 1 -> box 540..740; nucleus box is on the
+        # RIGHT half, chloroplast instances on the LEFT half of the art
+        # (parts: nucleus, chloroplast, chloroplast, nucleus)
+        for i, side in enumerate(["right", "left", "left", "right"]):
+            x0 = boxes[i][0]
+            if side == "right":
+                assert 740 < x0 < 900, (i, boxes[i])   # hugging, not far edge
+            else:
+                assert boxes[i][2] < 540, (i, boxes[i])
+
+    def test_arrow_leaves_the_side_facing_its_target(self):
+        r = SceneRenderer(self._scene(), asset_resolver=_resolver(_cell_asset()))
+        # label 2 targets a LEFT-half chloroplast; its relayouted position is
+        # the left column, so the arrow must leave its RIGHT edge (toward the
+        # art), starting right of the label box
+        lb = r.bound["lbl2"].box
+        tail_x = r.bound["ar2"].head_pt  # ensure bound; then check strokes
+        strokes = r.bound["ar2"].layers[0].strokes
+        first_pt = strokes[0].pts[0]
+        assert first_pt[0] >= lb[2] - 1.0
+
+
+class TestAvatarKeepOut:
+    def test_labels_never_write_over_the_avatars(self):
+        s = Scene.model_validate({
+            "id": "koz", "narration": "labels and avatars",
+            "compiled": True,
+            "elements": [
+                {"id": "__teach_av", "type": "illustration",
+                 "asset": "avatar_teacher", "at": [1150, 556], "scale": 0.30},
+                {"id": "lbl_nucleus", "type": "text", "text": "Nucleus",
+                 "at": [1120, 540], "anchor": "lt"},
+                {"id": "lbl_vacuole", "type": "text", "text": "Sap Vacuole",
+                 "at": [1110, 600], "anchor": "lt"},
+                {"id": "lbl_top", "type": "text", "text": "Cell Wall",
+                 "at": [1100, 100], "anchor": "lt"},
+            ],
+            "actions": [{"verb": "write", "target": "lbl_nucleus"}],
+        })
+        r = SceneRenderer(s)
+        zone = (1150 - 118, 556 - 132, 1150 + 118, 556 + 155)
+        for lid in ("lbl_nucleus", "lbl_vacuole"):
+            x0, y0, x1, y1 = r.bound[lid].box
+            assert not (x0 < zone[2] and x1 > zone[0] and
+                        y0 < zone[3] and y1 > zone[1]), (lid, r.bound[lid].box)
+        # the two relocated labels do not land on each other
+        b1, b2 = r.bound["lbl_nucleus"].box, r.bound["lbl_vacuole"].box
+        assert not (b1[0] < b2[2] and b1[2] > b2[0] and
+                    b1[1] < b2[3] and b1[3] > b2[1])
+        # a label far from the zone stays where the model put it
+        assert abs(r.bound["lbl_top"].box[1] - 100) < 30
+        assert any(w.startswith("LABEL_MOVED_OFF_AVATAR")
+                   for w in r._audit_warnings)
+
+    def test_no_avatars_no_keepout(self):
+        s = Scene.model_validate({
+            "id": "koz2", "narration": "x", "compiled": True,
+            "elements": [{"id": "lbl", "type": "text", "text": "Nucleus",
+                          "at": [1120, 560], "anchor": "lt"}],
+            "actions": [{"verb": "write", "target": "lbl"}],
+        })
+        r = SceneRenderer(s)
+        assert abs(r.bound["lbl"].box[1] - 560) < 30
+
+
+class TestMassHandles:
+    def test_many_part_illustrations_with_no_labels_all_merge(self):
+        """Observed: 8 per-part illustrations, per-part assets, ZERO labels.
+        All must merge as handles; label synthesis then rebuilds labels from
+        the parts the narration names."""
+        raw = {"chapters": [{
+            "concept": "cell", "transition": "clear_and_redraw",
+            "assets": {"base": "A plant cell outline.",
+                       "w": "wall", "n": "nucleus", "v": "vacuole",
+                       "c": "chloroplasts"},
+            "elements": [
+                {"id": "cell_base", "type": "illustration", "asset": "base",
+                 "at": [640, 360]},
+                {"id": "cell_wall", "type": "illustration", "asset": "w",
+                 "at": [640, 360]},
+                {"id": "cell_nucleus", "type": "illustration", "asset": "n",
+                 "at": [640, 360]},
+                {"id": "cell_vacuole", "type": "illustration", "asset": "v",
+                 "at": [640, 360]},
+                {"id": "cell_chloroplasts", "type": "illustration",
+                 "asset": "c", "at": [640, 360]},
+            ],
+            "steps": [
+                {"segment": 1, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "cell_base"},
+                             {"verb": "draw", "target": "cell_wall"}]},
+                {"segment": 2, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "cell_nucleus"}]},
+                {"segment": 3, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "cell_vacuole"},
+                             {"verb": "draw", "target": "cell_chloroplasts"}]},
+            ],
+        }]}
+        plan = parse_visual_plan(raw)
+        narr = {"s001": "The cell wall keeps it strong.",
+                "s002": "The cell nucleus controls everything.",
+                "s003": "The cell vacuole stores sap and the cell "
+                        "chloroplasts make food."}
+        scenes, assets, report = compile_plan(
+            plan, narr, all_segments=["s001", "s002", "s003"],
+            skip_hold=set())
+        assert not any("DROPPED illustration" in ln for ln in report)
+        assert sum(1 for ln in report if "MERGED handle" in ln) == 4
+        assert any("ROOT ASSET rebuilt" in ln for ln in report)
+        # every segment kept a scene, draws retargeted to the root
+        for sid in ("s001", "s002", "s003"):
+            assert sid in scenes
+            assert any(a.get("verb") == "draw" and
+                       a.get("target") == "cell_base"
+                       for a in scenes[sid]["actions"])
+        # labels synthesized from the parts the narration names
+        assert any("SYNTHESIZED lbl_auto_cell_nucleus" in ln for ln in report)
+
+
 class TestSpeechBubbles:
     """Founder rules: bubble text is VERBATIM narration (a paraphrase is a
     disconnect), selection is by IMPORTANCE across the whole lesson, and
@@ -809,12 +1087,13 @@ class TestSpeechBubbles:
         scenes, _, report = compile_plan(
             plan, narr, all_segments=["s001", "s002", "s003"],
             skip_hold=set())
-        txts = [e["text"] for e in scenes["s002"]["elements"]
-                if str(e.get("id", "")).startswith("__kp_") and
-                e.get("type") == "text"]
-        assert txts and "".join(txts).startswith("The nucleus is the")
-        assert any("KEY_POINT ('The nucleus is the control centre" in ln
-                   for ln in report)
+        bolded = [e for e in scenes["s002"]["elements"]
+                  if str(e.get("id", "")).startswith("__nb_") and
+                  e.get("type") == "text" and e.get("role") == "term"]
+        assert bolded and "".join(e["text"] for e in bolded).startswith(
+            "The nucleus is the")
+        assert any("STREAM" in ln and "The nucleus is the control centre"
+                   in ln for ln in report if "s002" in ln)
 
     def test_auto_bubbles_cover_unplanned_important_segments(self):
         plan = parse_visual_plan(_plan_raw())    # no key_points planned
@@ -824,10 +1103,12 @@ class TestSpeechBubbles:
         scenes, _, report = compile_plan(
             plan, narr, all_segments=["s001", "s002", "s003"],
             skip_hold=set())
-        speaks = [ln for ln in report if "TEACHER SPEAKS (auto)" in ln]
-        assert any("s001" in ln for ln in speaks)
-        assert any("s002" in ln for ln in speaks)
-        assert not any("s003" in ln for ln in speaks)   # filler: no bubble
+        streams = [ln for ln in report if "| STREAM" in ln]
+        # EVERY segment streams its narration now; importance decides BOLD
+        assert any("s001" in ln and "bold: [" in ln for ln in streams)
+        assert any("s002" in ln and "bold: [" in ln for ln in streams)
+        s3 = next(ln for ln in streams if "s003" in ln)
+        assert "bold: [" not in s3                      # filler: nothing bold
 
     def test_whiteboard_cards_get_bubbles_but_quizzes_do_not(self):
         from spike.scene_engine.whiteboard import build_whiteboard_scene
@@ -835,14 +1116,14 @@ class TestSpeechBubbles:
             "segment_id": "s004", "type": "explore",
             "slide_heading": "Cells",
             "text": "A microscope makes tiny cells visible to us."})
-        assert any(str(e["id"]).startswith("__kp_") for e in card["elements"])
+        assert any(str(e["id"]).startswith("__nb_") for e in card["elements"])
         quiz = build_whiteboard_scene({
             "segment_id": "s005", "type": "explore",
             "slide_heading": "Check",
             "slide_visual": {"kind": "quiz", "caption": "Which part?",
                              "options": ["Wall", "Nucleus"]},
             "text": "The wall is the answer to this question."})
-        assert not any(str(e["id"]).startswith("__kp_")
+        assert not any(str(e["id"]).startswith("__nb_")
                        for e in quiz["elements"])
 
     def test_student_moment_bubble_is_not_drawn_either(self):

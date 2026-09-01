@@ -91,6 +91,11 @@ class ScriptSegment(BaseModel):
     # engine's own parse_scene_response is the trust boundary either way.
     scene: Optional[dict] = None
     scene_assets: Optional[Dict[str, str]] = None
+    # Conversational style only: the SAME narration as speaker-tagged lines
+    # [{"who": "teacher"|"student", "line": "..."}] — their concatenation IS
+    # `text`. Drives two-voice TTS and per-speaker speech bubbles; absent (or
+    # rejected by sanitization) the segment falls back to single-narrator.
+    dialogue: Optional[List[dict]] = None
     pause_for_question: bool = False
     estimated_duration_seconds: int
 
@@ -111,6 +116,10 @@ class EpisodeScript(BaseModel):
     # stats — inspectable after generation. Segments carry their COMPILED
     # scenes individually; this is the plan-level record.
     visual_plan: Optional[dict] = None
+    # Avatar casting for this lesson: {"teacher": <asset key>, "student":
+    # <asset key>} — teacher matches the narration voice, student matches the
+    # book's grade band (gender seeded per generation).
+    avatars: Optional[dict] = None
     total_estimated_duration_seconds: int
     question_hook_count: int
 

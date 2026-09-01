@@ -877,6 +877,23 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     tts_voice = default_voice_id_for(lesson_lang)
             allow_premium = _elevenlabs_enabled()
 
+            # Avatar casting: teacher matches the narration VOICE, student
+            # matches the book's GRADE band (auto-detected at upload,
+            # teacher-editable), gender seeded by generation id so retries
+            # render the identical character.
+            from shared.tts.registry import default_voice
+            from spike.scene_engine.whiteboard import (
+                student_avatar_for_grade, teacher_avatar_for_voice)
+            # cast against the voice that will actually SPEAK — with no
+            # explicit pick, that is the registry default (Aria, female),
+            # not "no voice" (which once cast a male teacher over her)
+            effective_voice = tts_voice or default_voice().voice_id
+            avatars = {
+                "teacher": teacher_avatar_for_voice(effective_voice),
+                "student": student_avatar_for_grade(book.get("grade"),
+                                                    seed=generation_id),
+            }
+
             episodes_plan = (analysis.get("episodes") or {}).get("episodes") or []
             n_parts = max(len(episodes_plan), 1)
             voice_report: dict = {}
@@ -929,7 +946,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     }
                 script = generate_episode_script(
                     episode, analysis, chapter_num, client, narration_style, part_info=part_info,
-                    language=lesson_lang,
+                    language=lesson_lang, avatars=avatars,
                 )
                 script_dict = script.model_dump()
 
@@ -960,7 +977,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     retry = generate_episode_script(
                         episode, analysis, chapter_num, client, narration_style,
                         part_info=part_info, language=lesson_lang,
-                        must_cover=first.get("missed") or [],
+                        must_cover=first.get("missed") or [], avatars=avatars,
                     )
                     retry_dict = retry.model_dump()
                     retry_report = _coverage_report(

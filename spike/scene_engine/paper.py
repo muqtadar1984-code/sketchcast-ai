@@ -18,6 +18,8 @@ PALETTE = {
     "muted": GRAPHITE,
     "marker": (255, 214, 74),  # highlighter yellow — the one non-theme color,
                                # because a teal highlighter reads as drawing
+    "paper": CANVAS,           # opaque fill matching the board — speech
+                               # bubbles use it to occlude what sits behind
 }
 
 _GRAIN_SEED = 7

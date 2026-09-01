@@ -207,6 +207,11 @@ def _clean_element(e) -> dict | None:
     elements skipped sanitization entirely."""
     if not isinstance(e, dict) or not isinstance(e.get("id"), str):
         return None
+    if e["id"].startswith("__"):
+        # double-underscore ids are the ENGINE's namespace (captions, the
+        # persistent avatars, moment overlays) — a model squatting one once
+        # produced duplicate element ids and killed the whole scene
+        return None
     t = str(e.get("type") or "").strip().lower()
     out = dict(e)
     out["type"] = t
@@ -454,6 +459,8 @@ def _chain_camera(cam: dict, actions: list[dict], elements: list[dict]) -> dict:
 def compile_plan(plan: VisualPlan, narrations: dict[str, str],
                  all_segments: list[str] | None = None,
                  skip_hold: set[str] | None = None,
+                 avatars: dict | None = None,
+                 style: str = "socratic",
                  ) -> tuple[dict[str, dict], dict[str, dict[str, str]], list[str]]:
     """VisualPlan -> (scene dict per segment_id, scene_assets per segment_id,
     debug report lines).
@@ -490,7 +497,8 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
         try:
             prev_board, cam = _compile_chapter(
                 ch, narrations, all_segments, skip_hold or set(),
-                prev_board, assets_seen, cam, scenes, assets_by_seg, report)
+                prev_board, assets_seen, cam, scenes, assets_by_seg, report,
+                avatars=avatars, style=style)
         except Exception:
             logger.exception("chapter %r failed to compile; skipping it", ch.concept)
             report.append(f"CHAPTER {ch.concept} | COMPILE FAILED — skipped, "
@@ -502,39 +510,79 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
     # never fades at a chapter boundary, never renames to prev__*, never
     # counts against the one-root rule. On the lesson's first segment the
     # hand draws them in; everywhere else they are simply present at t=0.
-    from .whiteboard import (AVATAR_PROMPTS, TEACHER_ID, key_point_choreo,
-                             select_key_sentence, teacher_element)
-    first_sid = (all_segments or sorted(scenes))[0] if (all_segments or scenes) \
-        else None
+    from .whiteboard import (AVATAR_PROMPTS, STUDENT_ID, TEACHER_ID,
+                             narration_stream, select_key_sentence,
+                             snap_to_narration, student_element,
+                             teacher_element)
+    teach_key = (avatars or {}).get("teacher", "avatar_teacher")
+    stud_key = (avatars or {}).get("student", "avatar_student")
+    # which sentences the stream should BOLD, per segment: the model's
+    # key_points and teacher-role moments, snapped to real narration; plus
+    # the importance scorer's pick where the model marked nothing
+    step_by_sid = {st.segment_id: st for c in plan.chapters for st in c.steps}
     for sid, sc in scenes.items():
         if not any(e.get("id") == TEACHER_ID for e in sc["elements"]):
-            sc["elements"].append(teacher_element())
-            if sid == first_sid:
-                sc["actions"] = ([{"verb": "draw", "target": TEACHER_ID,
-                                   "at": {"sec": 0.3}}] + sc["actions"])
+            sc["elements"].append(teacher_element(teach_key))
             assets_by_seg.setdefault(sid, {})
             assets_by_seg[sid] = {**assets_by_seg[sid],
-                                  "avatar_teacher":
-                                      AVATAR_PROMPTS["avatar_teacher"]}
-        # the teacher speaks THROUGHOUT the lesson, wherever the narration
-        # makes an important statement — including HOLD scenes and steps the
-        # model gave no key_point. Selection is by IMPORTANCE, never count;
-        # segments already carrying a bubble or a moment stay as planned.
-        if any(str(e.get("id", "")).startswith(("__kp_", "__hm_", "__tm_"))
+                                  teach_key: AVATAR_PROMPTS[teach_key]}
+        if style == "conversational":
+            # the student is a PERMANENT speaker too; the caption stream is
+            # injected at COMPOSE time, once per-line audio offsets exist
+            if not any(e.get("id") == STUDENT_ID for e in sc["elements"]):
+                sc["elements"].append(student_element(stud_key))
+                assets_by_seg[sid] = {**assets_by_seg.get(sid, {}),
+                                      stud_key: AVATAR_PROMPTS[stud_key]}
+            continue
+        narr = narrations.get(sid, "")
+        st = step_by_sid.get(sid)
+        bold: set[str] = set()
+        if st is not None and st.key_point:
+            b = snap_to_narration(st.key_point, narr)
+            if b:
+                bold.add(b)
+        if st is not None and st.moment and st.moment["role"] == "teacher":
+            b = snap_to_narration(st.moment["text"], narr)
+            if b:
+                bold.add(b)
+        if not bold:
+            b = select_key_sentence(narr)
+            if b:
+                bold.add(b)
+        nb_els, nb_acts = narration_stream(narr, uid=sid, bold=bold)
+        if nb_els:
+            sc["elements"].extend(nb_els)
+            sc["actions"] = sc["actions"] + nb_acts
+            report.append(f"SEGMENT {sid} | STREAM {len(nb_acts) // 2} "
+                          f"sentence(s), bold: {sorted(bold) if bold else '—'}")
+    _add_auto_sketches(scenes, narrations, assets_by_seg, report)
+    return scenes, assets_by_seg, report
+
+
+def _add_auto_sketches(scenes: dict, narrations: dict, assets_by_seg: dict,
+                       report: list) -> None:
+    """Segments whose board carries NO drawing get the concrete things their
+    narration names, sketched as they are spoken (founder: 'the hand draws
+    images of items wherever it can'). Planned diagrams are never touched."""
+    from .whiteboard import sketch_elements
+    for sid, sc in scenes.items():
+        if any(e.get("type") == "illustration" and
+               not str(e.get("id", "")).startswith("__")
                for e in sc["elements"]):
             continue
-        sent = select_key_sentence(narrations.get(sid, ""))
-        if sent:
-            kp_els, kp_acts = key_point_choreo(sent, uid=f"a_{sid}")
-            sc["elements"].extend(kp_els)
-            sc["actions"] = sc["actions"] + kp_acts
-            report.append(f"SEGMENT {sid} | TEACHER SPEAKS (auto): {sent!r}")
-    return scenes, assets_by_seg, report
+        els, acts, assets = sketch_elements(narrations.get(sid, ""), uid=sid)
+        if not els:
+            continue
+        sc["elements"].extend(els)
+        sc["actions"] = sc["actions"] + acts
+        assets_by_seg[sid] = {**assets_by_seg.get(sid, {}), **assets}
+        report.append(f"SEGMENT {sid} | SKETCHED "
+                      f"{[e['asset'] for e in els]}")
 
 
 def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                      prev_board, assets_seen, cam, scenes, assets_by_seg,
-                     report):
+                     report, avatars=None, style="socratic"):
     roster = {e["id"]: e for e in ch.elements}
     # ONE root visual per chapter, enforced: independently generated images do
     # not compose — a model that declares an illustration per organelle gets
@@ -575,16 +623,22 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                 return lp
         return None
 
+    # a chapter that declares MANY part-like illustrations and NO labels at
+    # all (observed: cell_nucleus/cell_vacuole/... with per-part assets) is
+    # the handle pattern with the naming stripped — treat every extra as a
+    # handle; label synthesis below then rebuilds the labels from the parts
+    # the narration actually names
+    mass_handles = len(ills) >= 4 and not label_parts
     for extra in ills[1:]:
         guess = _guess_part_name(extra)
         lbl_part = _label_part_for(guess)
         if str(roster[extra].get("asset") or "") == root_asset:
             alias_parts[extra] = lbl_part or guess
-        elif lbl_part is not None:
-            # a different asset but a name the chapter LABELS: still a
-            # per-part handle ('nucleus_obj' beside 'lbl_nucleus'), and the
-            # root image must be regenerated to actually contain the part
-            alias_parts[extra] = lbl_part
+        elif lbl_part is not None or (mass_handles and guess):
+            # a different asset but a name the chapter LABELS (or the
+            # mass-handle pattern): still a per-part handle, and the root
+            # image must be regenerated to actually contain the part
+            alias_parts[extra] = lbl_part or guess
             merged_foreign_asset = True
         else:
             report.append(f"CHAPTER {ch.concept} | DROPPED illustration "
@@ -1044,6 +1098,12 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         step_regs = list(step_regions.get(seg_id, []))
         for a in kept_actions:
             a = dict(a)
+            if a.get("verb") == "highlight" and a.get("target") == root_id:
+                # a marker swipe across a full illustration renders as a
+                # yellow bar over the art (founder review) — the root
+                # 'speaks' with a subtle pulse instead
+                a = {"verb": "pulse", "target": root_id, "times": 2,
+                     "duration": 1.2, **({"at": a["at"]} if a.get("at") else {})}
             if a.get("verb") == "draw" and a.get("target") in draw_counts:
                 tid = a["target"]
                 bf = base_frac.get(tid, 0.0)
@@ -1082,45 +1142,27 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
 
         narration_here = narrations.get(seg_id, "")
         moment_note = ""
-        if st.moment:
-            from .whiteboard import snap_to_narration
-            # a bubble must say what the narration is SAYING — snap the
-            # model's line to the actual sentence when one matches (invented
-            # student dialogue that matches nothing stays as written)
+        # STUDENT moments still appear as a set piece (left panel avatar +
+        # bubble) — except in conversational style, where the student is
+        # already a permanent speaker. Teacher-role moments and key_points
+        # are IMPORTANCE MARKERS now: the narration stream (added in
+        # compile_plan's final pass) bolds the matching sentence instead of
+        # spawning a competing bubble.
+        if st.moment and st.moment["role"] == "student" \
+                and style != "conversational":
+            from .whiteboard import (AVATAR_PROMPTS, human_moment,
+                                     snap_to_narration)
             m_text = snap_to_narration(st.moment["text"], narration_here) \
                 or st.moment["text"]
-            if st.moment["role"] == "teacher":
-                # the teacher is ALREADY on screen — a teacher moment speaks
-                # through the persistent one (a second avatar_teacher once
-                # rendered on top of it)
-                from .whiteboard import key_point_choreo
-                hm_els, hm_acts = key_point_choreo(m_text, uid=f"tm_{seg_id}")
-            else:
-                from .whiteboard import AVATAR_PROMPTS, human_moment
-                hm_els, hm_acts, hm_asset = human_moment(
-                    st.moment["role"], m_text, uid=f"hm_{seg_id}")
-                seg_assets = {**seg_assets}
-                seg_assets[hm_asset] = AVATAR_PROMPTS[hm_asset]
+            hm_asset = (avatars or {}).get("student", "avatar_student")
+            hm_els, hm_acts, _ = human_moment(
+                "student", m_text, uid=f"hm_{seg_id}", asset=hm_asset)
+            seg_assets = {**seg_assets}
+            seg_assets[hm_asset] = AVATAR_PROMPTS.get(
+                hm_asset, AVATAR_PROMPTS["avatar_student"])
             elements.extend(hm_els)
             step_actions = step_actions + hm_acts
-            moment_note = f" | HUMAN_TEACHING_MOMENT ({st.moment['role']}: "                           f"{m_text!r})"
-
-        if st.key_point:
-            # the persistent teacher speaks. The model's key_point is only an
-            # IMPORTANCE SIGNAL — the bubble text is the narration's own
-            # sentence (snapped; paraphrases that match nothing fall back to
-            # the segment's most important sentence, or no bubble at all).
-            from .whiteboard import (key_point_choreo, select_key_sentence,
-                                     snap_to_narration)
-            kp_text = snap_to_narration(st.key_point, narration_here) \
-                or select_key_sentence(narration_here)
-            if kp_text:
-                kp_els, kp_acts = key_point_choreo(kp_text, uid=seg_id)
-                elements.extend(kp_els)
-                step_actions = step_actions + kp_acts
-                moment_note += f" | KEY_POINT ({kp_text!r})"
-            else:
-                moment_note += " | KEY_POINT dropped (no narration match)"
+            moment_note = f" | HUMAN_TEACHING_MOMENT (student: {m_text!r})"
         scenes[seg_id] = {"id": f"vc_{seg_id}", "compiled": True, "scene_type": "process",
                           "narration": narrations.get(seg_id, ""),
                           "camera_start": dict(cam),

@@ -37,6 +37,14 @@ IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
 CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "storage" / "scene_assets"
 NOMINAL_WORLD_W = 700.0  # an illustration at element scale 1.0 spans ~700 world px
 
+_COLOR_SUFFIX = (
+    " Friendly flat-colour cartoon illustration with clean black outlines and "
+    "simple cel shading, warm natural skin tones, colourful clothing, pure "
+    "white background, waist-up, centred. ABSOLUTELY NO TEXT OF ANY KIND: no "
+    "letters, words, labels, numbers or captions. No background scenery, no "
+    "frame, no watermark."
+)
+
 _STYLE_SUFFIX = (
     " Black ink line drawing, hand-drawn whiteboard sketch style, clean confident "
     "strokes, pure white background. ABSOLUTELY NO TEXT OF ANY KIND anywhere in "
@@ -87,10 +95,13 @@ def _vertex_call(prompt: str) -> bytes | None:
                 else f"{region}-aiplatform.googleapis.com")
         url = (f"https://{host}/v1/projects/{project}/locations/{region}"
                f"/publishers/google/models/{IMAGE_MODEL}:generateContent")
-        res = requests.post(url, headers={"Authorization": f"Bearer {creds.token}"},
-                            json=_body(prompt), timeout=120)
-        res.raise_for_status()
-        return _image_from(res.json())
+        def _go():
+            res = requests.post(url,
+                                headers={"Authorization": f"Bearer {creds.token}"},
+                                json=_body(prompt), timeout=120)
+            res.raise_for_status()
+            return res.json()
+        return _image_from(_with_backoff(_go, "Vertex image"))
     except Exception as e:
         logger.warning("Vertex image call failed (%s); trying AI Studio", e)
         return None
@@ -103,13 +114,45 @@ def _aistudio_call(prompt: str) -> bytes | None:
     try:
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
                f"{IMAGE_MODEL}:generateContent")
-        res = requests.post(url, headers={"x-goog-api-key": key},
-                            json=_body(prompt), timeout=120)
-        res.raise_for_status()
-        return _image_from(res.json())
+        def _go():
+            res = requests.post(url, headers={"x-goog-api-key": key},
+                                json=_body(prompt), timeout=120)
+            res.raise_for_status()
+            return res.json()
+        return _image_from(_with_backoff(_go, "AI Studio image"))
     except Exception as e:
         logger.warning("AI Studio image call failed: %s", e)
         return None
+
+
+def _is_rate_limited(exc: Exception) -> bool:
+    r = getattr(exc, "response", None)
+    return getattr(r, "status_code", None) in (429, 503)
+
+
+def _with_backoff(fn, what: str, tries: int = 4):
+    """Retry a transport call through rate limits.
+
+    A 429 used to be swallowed as "no image" — the asset silently vanished
+    AND, when it was the vision annotator, the whole region schedule
+    degraded to uniform slices, so labels stopped matching the narration.
+    A burst limit is a wait, not a failure.
+    """
+    import random
+    import time as _t
+    delay = 6.0
+    for attempt in range(tries):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 — transport errors only
+            if not _is_rate_limited(exc) or attempt == tries - 1:
+                raise
+            wait = delay + random.uniform(0, 2.0)
+            logger.warning("%s rate-limited; retrying in %.0fs (%d/%d)",
+                           what, wait, attempt + 1, tries - 1)
+            _t.sleep(wait)
+            delay *= 2.4
+    return None
 
 
 def _body(prompt: str) -> dict:
@@ -137,9 +180,12 @@ def _vision_json(prompt: str, png_bytes: bytes) -> dict | None:
     vision_model = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
 
     def call(url, headers):
-        res = requests.post(url, headers=headers, json=body, timeout=120)
-        res.raise_for_status()
-        for cand in res.json().get("candidates", []):
+        def _go():
+            res = requests.post(url, headers=headers, json=body, timeout=120)
+            res.raise_for_status()
+            return res.json()
+        payload = _with_backoff(_go, "vision") or {}
+        for cand in payload.get("candidates", []):
             txt = "".join(p.get("text", "")
                           for p in cand.get("content", {}).get("parts", []))
             m = __import__("re").search(r"\{.*\}", txt, __import__("re").S)
@@ -356,6 +402,58 @@ def to_ink(raw: Image.Image) -> Image.Image:
     return img.crop((x0, y0, x1, y1))
 
 
+def to_color_art(raw: Image.Image) -> Image.Image:
+    """Keep the artwork's COLOUR and cut ONLY the surrounding paper.
+
+    Any luminance threshold is wrong here: a character's light hair, pale
+    skin and white shirt are as bright as the page, so a brightness cut
+    renders them ghostly (measured — the founder's screenshot showed white
+    hair and washed faces). The background is instead found by FLOODING
+    inward from the borders across near-white pixels: enclosed light areas
+    are artwork and stay fully opaque.
+    """
+    from collections import deque
+
+    rgb = raw.convert("RGB")
+    arr = np.asarray(rgb).astype(np.int32)
+    lum = (arr[..., 0] * 299 + arr[..., 1] * 587 + arr[..., 2] * 114) // 1000
+    pale = lum >= 232                      # candidate paper
+    h, w = pale.shape
+    bg = np.zeros_like(pale)
+    q = deque()
+    for x in range(w):
+        for y in (0, h - 1):
+            if pale[y, x] and not bg[y, x]:
+                bg[y, x] = True
+                q.append((y, x))
+    for y in range(h):
+        for x in (0, w - 1):
+            if pale[y, x] and not bg[y, x]:
+                bg[y, x] = True
+                q.append((y, x))
+    while q:
+        y, x = q.popleft()
+        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < h and 0 <= nx < w and pale[ny, nx] and not bg[ny, nx]:
+                bg[ny, nx] = True
+                q.append((ny, nx))
+    alpha = np.where(bg, 0, 255).astype(np.uint8)
+    # feather the cut by one pixel so edges do not alias against the board
+    a_img = Image.fromarray(alpha, "L").filter(
+        __import__("PIL.ImageFilter", fromlist=["ImageFilter"]).GaussianBlur(0.6))
+    img = Image.fromarray(
+        np.dstack([np.asarray(rgb), np.asarray(a_img)]), "RGBA")
+    a = np.asarray(img.getchannel("A"))
+    ys, xs = np.nonzero(a > 40)
+    if len(xs) == 0:
+        return img
+    pad = 12
+    x0, x1 = max(0, xs.min() - pad), min(img.width, xs.max() + pad)
+    y0, y1 = max(0, ys.min() - pad), min(img.height, ys.max() + pad)
+    return img.crop((x0, y0, x1, y1))
+
+
 def scrub_text(ink: Image.Image, text_boxes: list[list[float]],
                pad: float = 3.0) -> Image.Image:
     """Erase baked-in text deterministically: zero the alpha inside each
@@ -408,6 +506,9 @@ def get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
 
 def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
                       allow_generate: bool = True) -> RasterAsset | None:
+    # avatars are the one COLOUR tier: they are characters, not board ink,
+    # and they are revealed rather than drawn
+    is_color = key.startswith("avatar_")
     cache = (cache_dir or CACHE_DIR) / key
     png, meta = cache / "asset.png", cache / "meta.json"
     names = part_names_from_prompt(prompt)
@@ -471,21 +572,25 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
         import re as _re
         gen_prompt = _re.sub(r"\s*name the layer groups exactly:[^.]*\.?",
                              "", prompt, flags=_re.I)
-        raw_bytes = _vertex_call(gen_prompt + _STYLE_SUFFIX + extra) or \
-            _aistudio_call(gen_prompt + _STYLE_SUFFIX + extra)
+        suffix = _COLOR_SUFFIX if is_color else _STYLE_SUFFIX
+        raw_bytes = _vertex_call(gen_prompt + suffix + extra) or \
+            _aistudio_call(gen_prompt + suffix + extra)
         if raw_bytes is None:
             return None
         import io
         try:
-            candidate = to_ink(Image.open(io.BytesIO(raw_bytes)))
+            src = Image.open(io.BytesIO(raw_bytes))
+            candidate = to_color_art(src) if is_color else to_ink(src)
         except Exception:
             logger.exception("un-decodable image for %r", key)
             return None
         # sanity: line art is mostly white space. A photo, a gray render, or
-        # a solid fill turns almost entirely to "ink" — reject it.
+        # a solid fill turns almost entirely to "ink" — reject it. A COLOUR
+        # character is legitimately dense, so its ceiling is far higher.
         a = np.asarray(candidate.getchannel("A"))
         coverage = float((a > 128).mean())
-        if not (0.005 <= coverage <= 0.45):
+        hi = 0.92 if is_color else 0.45
+        if not (0.005 <= coverage <= hi):
             logger.warning("image for %r rejected: ink coverage %.0f%%", key,
                            coverage * 100)
             return None

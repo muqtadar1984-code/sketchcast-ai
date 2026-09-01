@@ -32,6 +32,16 @@ _VERB_MAX = {"draw": 7.0, "write": 4.5, "move": 6.0}
 _GAP = 0.12                # breath between auto-sequenced actions
 _COMPRESS_FLOOR = 0.35     # never compress below 35% of natural pace
 
+# narration-caption track: bubble elements whose ids carry this prefix are
+# SPEECH, not board marks — they ride the audio clock exactly and are exempt
+# from the teaching-order clamp and from timeline compression (squeezing a
+# caption desyncs it from the voice it captions)
+CAPTION_PREFIX = "__nb_"
+
+
+def _is_caption(action: Action) -> bool:
+    return bool(action.target) and str(action.target).startswith(CAPTION_PREFIX)
+
 
 @dataclass(frozen=True)
 class TimedAction:
@@ -134,6 +144,7 @@ def compile_timeline(scene: Scene, audio_secs: float,
     workloads = workloads or {}
     timeline: list[TimedAction] = []
     cursor = 0.15  # settle beat before the first mark
+    last_board_start = None
     for i, action in enumerate(scene.actions):
         dur = natural_duration(action, workloads.get(i, 0.0))
         start = None
@@ -142,24 +153,38 @@ def compile_timeline(scene: Scene, audio_secs: float,
         if start is None:
             start = cursor + (_GAP if timeline else 0.0)
         start = max(start, cursor - 1e-9) if action.at is None else max(start, 0.0)
+        if _is_caption(action):
+            # speech captions are a PARALLEL track: they neither obey the
+            # board's teaching order nor push it around
+            timeline.append(TimedAction(action=action, start=start, duration=dur))
+            continue
         # a cued action may overlap earlier ones (that is the point of cues) but
-        # never runs before the previous action *started* — order stays readable
-        if timeline and start < timeline[-1].start:
-            start = timeline[-1].start
+        # never runs before the previous BOARD action *started* — order stays
+        # readable
+        if last_board_start is not None and start < last_board_start:
+            start = last_board_start
         timeline.append(TimedAction(action=action, start=start, duration=dur))
+        last_board_start = start
         cursor = max(cursor, start + dur)
 
     if not timeline:
         return timeline
 
-    total = max(t.end for t in timeline)
+    board_ends = [t.end for t in timeline if not _is_caption(t.action)]
+    total = max(board_ends) if board_ends else 0.0
     if audio_secs > 0:
         budget = audio_secs - scene.min_hold
         if budget > 0.5 and total > budget:
             f = max(_COMPRESS_FLOOR, budget / total)
-            timeline = [TimedAction(t.action, t.start * f, t.duration * f) for t in timeline]
+            timeline = [t if _is_caption(t.action) else
+                        TimedAction(t.action, t.start * f, t.duration * f)
+                        for t in timeline]
     return timeline
 
 
 def animation_end(timeline: list[TimedAction]) -> float:
-    return max((t.end for t in timeline), default=0.0)
+    """BOARD animation end — captions are excluded: a terminal caption fade
+    slightly past the audio must not stretch every clip into a silent tail
+    (dead-air seams in the concatenated lesson)."""
+    return max((t.end for t in timeline if not _is_caption(t.action)),
+               default=0.0)

@@ -78,6 +78,13 @@ def _access_token() -> str:
     return creds.token
 
 
+# Gemini 2.5 Pro's real output ceiling. The truncation-retry guard used to
+# compare against 32000: a request AT 32000 therefore got NO retry at all,
+# and one at 30000 "doubled" to min(60000, 32000) — a 6% bump that truncated
+# again. Long lessons (conversational, multi-chapter visual plans) died on it.
+MAX_OUTPUT_TOKENS = 65536
+
+
 class GeminiClient:
     """Vertex Gemini wrapper — same contract as ClaudeClient."""
 
@@ -211,14 +218,15 @@ class GeminiClient:
 
         if (
             self._finish_reason(response) == "MAX_TOKENS"
-            and max_tokens < 32000
+            and max_tokens < MAX_OUTPUT_TOKENS
             and isinstance(parsed, dict) and set(parsed) == {"raw_text"}
         ):
             # Same contract as ClaudeClient: retry ONCE at double the budget
             # when the cap truncated the JSON badly enough that it won't parse.
             # Both attempts are billed and BOTH are reported, so caller
             # aggregates stay consistent with jobs.usage.
-            response = self._call(parts, system, min(max_tokens * 2, 32000), retries)
+            response = self._call(parts, system,
+                                  min(max_tokens * 2, MAX_OUTPUT_TOKENS), retries)
             usage = _merge_usage(usage, self.track_tokens(response))
             parsed = ClaudeClient._extract_json(self._text(response))
 

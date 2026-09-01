@@ -21,18 +21,22 @@ def synthesize(text: str, out_path: Path, ref_voice: str,
         raise ValueError("empty text for TTS")
 
     async def _go() -> list[dict]:
-        comm = edge_tts.Communicate(clean, ref_voice)
         words: list[dict] = []
         if boundaries_out is None:
-            await comm.save(str(out_path))
+            await edge_tts.Communicate(clean, ref_voice).save(str(out_path))
             return words
+        # edge-tts >= 7 defaults to SENTENCE boundaries — WordBoundary events
+        # never arrive unless asked for, and the capture below was silently
+        # empty (every cue fell back to char-midpoint timing)
+        comm = edge_tts.Communicate(clean, ref_voice, boundary="WordBoundary")
         with open(out_path, "wb") as f:
             async for chunk in comm.stream():
                 if chunk["type"] == "audio":
                     f.write(chunk["data"])
                 elif chunk["type"] == "WordBoundary":
-                    # offset arrives in 100-nanosecond ticks
+                    # offset/duration arrive in 100-nanosecond ticks
                     words.append({"t": chunk["offset"] / 1e7,
+                                  "d": chunk.get("duration", 0) / 1e7,
                                   "w": str(chunk.get("text", ""))})
         return words
 

@@ -70,7 +70,8 @@ def _ffmpeg_exe() -> str:
 
 def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | None,
                           audio_secs: float, out_mp4, direction: str,
-                          scene_dict: dict | None = None) -> bool:
+                          scene_dict: dict | None = None,
+                          avatars: dict | None = None) -> bool:
     """One segment through the scene engine. Imports are lazy and everything is
     caught: with VIDEO_ENGINE unset this function never runs, and when it does,
     False (never an exception) hands the segment to the native renderer.
@@ -85,7 +86,47 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
         from spike.scene_engine.raster_assets import load_hand, make_resolver
         from spike.scene_engine.render import SceneRenderer
 
-        scene = parse_scene_response(scene_dict or script_seg.get("scene"), narration)
+        scene_dict = scene_dict or script_seg.get("scene")
+        starts = script_seg.get("_dialogue_starts")
+        if scene_dict and script_seg.get("dialogue") and starts:
+            # conversational captions join HERE, once real per-line audio
+            # offsets exist — each line's bubble beside ITS speaker, at its
+            # measured second
+            from spike.scene_engine.whiteboard import (STUDENT_ID, TEACHER_ID,
+                                                       narration_stream,
+                                                       student_element,
+                                                       teacher_element)
+            scene_dict = {**scene_dict,
+                          "elements": list(scene_dict.get("elements") or []),
+                          "actions": list(scene_dict.get("actions") or [])}
+            ids = {e.get("id") for e in scene_dict["elements"]}
+            if TEACHER_ID not in ids:
+                scene_dict["elements"].append(teacher_element(
+                    (avatars or {}).get("teacher", "avatar_teacher")))
+            if STUDENT_ID not in ids:
+                scene_dict["elements"].append(student_element(
+                    (avatars or {}).get("student", "avatar_student")))
+            nb_els, nb_acts = narration_stream(
+                narration, uid=str(script_seg.get("segment_id", "seg")),
+                dialogue=script_seg["dialogue"], line_starts=starts,
+                total_secs=audio_secs)
+            scene_dict["elements"].extend(nb_els)
+            scene_dict["actions"] = scene_dict["actions"] + nb_acts
+        elif scene_dict and narration and audio_path and not any(
+                str(e.get("id", "")).startswith("__nb_")
+                for e in (scene_dict.get("elements") or [])):
+            # a conversational scene whose dialogue was rejected or whose
+            # two-voice TTS failed still gets the SINGLE-voice caption
+            # stream — the caption track must never silently vanish
+            from spike.scene_engine.whiteboard import narration_stream
+            scene_dict = {**scene_dict,
+                          "elements": list(scene_dict.get("elements") or []),
+                          "actions": list(scene_dict.get("actions") or [])}
+            nb_els, nb_acts = narration_stream(
+                narration, uid=str(script_seg.get("segment_id", "seg")))
+            scene_dict["elements"].extend(nb_els)
+            scene_dict["actions"] = scene_dict["actions"] + nb_acts
+        scene = parse_scene_response(scene_dict, narration)
         if scene is None:
             return False
         if direction == "rtl":
@@ -94,6 +135,10 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
         scene.style.hand_scale = 0.8
         prompts = {str(k): str(v)
                    for k, v in (script_seg.get("scene_assets") or {}).items()}
+        # a scene may carry its OWN asset prompts (auto-sketched objects the
+        # narration named) — they exist only on the scene dict
+        for k, v in ((scene_dict or {}).get("scene_assets") or {}).items():
+            prompts[str(k)] = str(v)
         # avatars resolve everywhere — whiteboard-fallback segments carry no
         # scene_assets map, but the persistent teacher appears on them too
         from spike.scene_engine.whiteboard import AVATAR_PROMPTS
@@ -121,6 +166,52 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
         logger.exception("scene engine failed for %s; native fallback",
                          script_seg.get("segment_id"))
         return False
+
+
+def _scene_flag() -> bool:
+    return os.getenv("VIDEO_ENGINE", "").strip().lower() == "scene"
+
+
+def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
+                    tts_voice, ffmpeg: str, avatars: dict | None = None) -> list:
+    """Per-line two-voice TTS -> one concatenated MP3 + measured line-start
+    offsets (seconds). Teacher lines use the lesson's Edge voice; student
+    lines an age-matched Edge voice (non-English falls back to the lesson
+    voice — age-matched voices are not guaranteed per locale)."""
+    from shared.tts.providers import edge as edge_tts
+    from shared.tts.registry import default_voice, get_voice
+    from spike.scene_engine.whiteboard import student_voice_for_avatar
+
+    v = get_voice(tts_voice) or default_voice()
+    if v.provider != "edge":
+        v = default_voice()          # dialogue is Edge-only (two voices)
+    teach_ref = v.ref
+    stud_ref = student_voice_for_avatar(
+        (avatars or {}).get("student", "avatar_student"),
+        getattr(v, "lang", "en") or "en") or teach_ref
+    starts, cursor, parts = [], 0.0, []
+    for i, d in enumerate(dialogue):
+        # belt to the sanitizer's braces: Edge reads SSML tags ALOUD
+        line = " ".join(strip_ssml(str(d.get("line") or "")).split())
+        if not line:
+            continue
+        f = vid_dir / f"{seg_id}_dl{i}.mp3"
+        edge_tts.synthesize(
+            line, f,
+            stud_ref if str(d.get("who")) == "student" else teach_ref)
+        starts.append(cursor)
+        cursor += _audio_duration(str(f), ffmpeg)
+        parts.append(f)
+    if not parts:
+        raise RuntimeError("dialogue had no speakable lines")
+    lst = vid_dir / f"{seg_id}_dl.txt"
+    lst.write_text("".join(f"file '{p.as_posix()}'\n" for p in parts),
+                   encoding="utf-8")
+    subprocess.run([ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i",
+                    str(lst), "-c", "copy", str(mp3)], capture_output=True)
+    if not Path(str(mp3)).exists() or Path(str(mp3)).stat().st_size == 0:
+        raise RuntimeError("dialogue concat produced no audio")
+    return starts
 
 
 def _audio_duration(audio_path: str, ffmpeg: str) -> float:
@@ -180,6 +271,13 @@ def compose_episode_videos(
     ])
 
     ffmpeg = _ffmpeg_exe()
+    # avatars live on the EpisodeScript — depending on the caller,
+    # script_data is either the episode dump itself or the chapter wrapper
+    # whose episodes[0] is (the worker path; reading only the top level once
+    # cast every prod lesson with the defaults)
+    _avatars = (script_data.get("avatars")
+                or ((script_data.get("episodes") or [{}])[0] or {}).get("avatars")
+                or {})
     manifest_segments: list[VideoSegment] = []
     total = len(slide_segments)
     _voices_used: set[str | None] = set()
@@ -224,15 +322,37 @@ def compose_episode_videos(
         used: str | None = None
         downgraded = False
 
-        # 1. TTS (provider-agnostic: free Edge default; premium ElevenLabs gated)
-        if text:
+        # 1. TTS (provider-agnostic: free Edge default; premium ElevenLabs
+        # gated). Conversational segments carry speaker-tagged DIALOGUE: each
+        # line is synthesized with its speaker's voice and the clips are
+        # concatenated — the measured per-line offsets drive the speech
+        # bubbles, so sync is exact by construction.
+        if text and _scene_flag() and script_seg.get("dialogue"):
+            try:
+                mp3 = vid_dir / f"{seg_id}_audio.mp3"
+                # vid_dir is reused across generations of the same chapter —
+                # a words.json from an earlier SINGLE-voice run would feed
+                # stale word timings to this dialogue's captions
+                mp3.with_suffix(".words.json").unlink(missing_ok=True)
+                starts = _synth_dialogue(script_seg["dialogue"], mp3, vid_dir,
+                                         seg_id, tts_voice, ffmpeg,
+                                         avatars=_avatars)
+                script_seg["_dialogue_starts"] = starts
+                used = "dialogue-edge"
+                audio_path = str(mp3)
+                duration = _audio_duration(audio_path, ffmpeg) or est
+            except Exception as exc:  # noqa: BLE001
+                logger.error("dialogue TTS failed for %s (%s); single-voice "
+                             "fallback", seg_id, exc)
+                script_seg["dialogue"] = None
+                audio_path = None
+        if text and audio_path is None:
             mp3 = vid_dir / f"{seg_id}_audio.mp3"
             ssml = script_seg.get("elevenlabs_text") or text
             try:
                 seg_report: dict = {}
                 # word boundaries feed frame-accurate cue timing (scene engine)
-                bnd = mp3.with_suffix(".words.json") if os.getenv(
-                    "VIDEO_ENGINE", "").strip().lower() == "scene" else None
+                bnd = mp3.with_suffix(".words.json") if _scene_flag() else None
                 synthesize(text, mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=ssml, report=seg_report, boundaries_out=bnd)
                 used = seg_report.get("used")
                 downgraded = bool(seg_report.get("downgraded"))
@@ -256,7 +376,7 @@ def compose_episode_videos(
             if not scene_dict:
                 try:
                     from spike.scene_engine.whiteboard import build_whiteboard_scene
-                    scene_dict = build_whiteboard_scene(script_seg)
+                    scene_dict = build_whiteboard_scene(script_seg, avatars=_avatars)
                     attempt = "whiteboard"
                 except Exception:  # noqa: BLE001
                     logger.exception("whiteboard fallback build failed for %s", seg_id)
@@ -265,7 +385,7 @@ def compose_episode_videos(
                 ok = _render_scene_segment(
                     script_seg, text, audio_path,
                     duration if audio_path else 0.0, out_mp4, direction,
-                    scene_dict=scene_dict,
+                    scene_dict=scene_dict, avatars=_avatars,
                 )
                 if not ok and attempt == "scene":
                     # a planned scene that fails (parse or render) must step
@@ -277,7 +397,9 @@ def compose_episode_videos(
                         ok = _render_scene_segment(
                             script_seg, text, audio_path,
                             duration if audio_path else 0.0, out_mp4,
-                            direction, scene_dict=build_whiteboard_scene(script_seg))
+                            direction,
+                            scene_dict=build_whiteboard_scene(script_seg, avatars=_avatars),
+                            avatars=_avatars)
                         attempt = "whiteboard"
                     except Exception:  # noqa: BLE001
                         logger.exception("whiteboard fallback failed for %s", seg_id)

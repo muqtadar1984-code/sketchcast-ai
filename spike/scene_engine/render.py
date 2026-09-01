@@ -46,6 +46,26 @@ _HAND_TTF = _Path(__file__).resolve().parent / "fonts" / "Caveat-Regular.ttf"
 _HAND_SIZE_COMP = 1.28  # Caveat's x-height runs small; compensate for parity
 
 
+# typographic punctuation the model emits freely (curly quotes, ellipsis,
+# dashes). Caveat has no glyphs for most of them, and the old guard dropped
+# the WHOLE line to the fallback sans font the moment one appeared — a
+# lesson's speech bubbles rendered in two different typefaces, line by line.
+_PUNCT_ASCII = {
+    "‘": "'", "’": "'", "‚": ",", "‛": "'",
+    "“": '"', "”": '"', "„": '"', "′": "'",
+    "″": '"', "…": "...", "–": "-", "—": "-",
+    "‒": "-", "―": "-", " ": " ", " ": " ",
+    " ": " ", "​": "",
+}
+
+
+def ascii_punct(s: str) -> str:
+    """Fold typographic punctuation to ASCII so handwriting stays handwriting."""
+    if not s:
+        return s
+    return "".join(_PUNCT_ASCII.get(c, c) for c in s)
+
+
 def _hand_font(bold: bool, size: int, sample: str):
     if not _HAND_TTF.exists() or any(ord(c) > 0x2014 for c in sample):
         return None
@@ -73,6 +93,12 @@ SS = 2  # supersample factor: PIL lines are not antialiased; 2x + LANCZOS is
 
 _INTRODUCERS = {"draw", "write", "reveal"}
 _PEN_VERBS = {"draw", "write", "erase", "circle", "underline", "highlight"}
+
+
+def _is_overlay(eid) -> bool:
+    """HUD/overlay ids (captions, avatars, moments) — never board content."""
+    return eid in ("__teach_av", "__stud_av") or \
+        str(eid).startswith(("__nb_", "__hm_", "__kp_", "__tm_"))
 
 
 def _region_ordered_trace(trace: list, regions: dict, order: list[str]
@@ -241,6 +267,17 @@ class SceneRenderer:
         self._audit_warnings: list[str] = []
         self._warned: set[str] = set()
         self._suppressed: set[str] = set()   # arrows with no locatable target
+        self._text_boxes: list[tuple] = []   # bound text boxes, for stacking
+        # keep-out zones around the persistent avatars: board labels must
+        # never write over the teacher or the student (founder screenshot:
+        # three organelle labels rendered across the teacher's face)
+        self._avatar_zones: list[tuple] = []
+        for e in scene.elements:
+            if getattr(e, "id", "") in ("__teach_av", "__stud_av") and \
+                    isinstance(e, IllustrationElement):
+                ax, ay = e.at
+                self._avatar_zones.append(
+                    (ax - 118.0, ay - 132.0, ax + 118.0, ay + 155.0))
         self._bind()
 
     def _warn(self, msg: str) -> None:
@@ -276,6 +313,14 @@ class SceneRenderer:
             self.bound[el.id] = b
             self._flat[el.id] = [st for layer in b.layers for st in layer.strokes]
 
+        # PASS 1.5: part-label LAYOUT. Model-placed label coordinates made
+        # leader lines cross and labels pile onto each other/the avatars —
+        # instead, labels flow around the root diagram: RIGHT column first,
+        # LEFT column for left-half targets and overflow, TOP row last, each
+        # column ordered by target height so leaders stay parallel, columns
+        # hugging the diagram (founder-specified sequence).
+        self._relayout_part_labels(deferred_arrows)
+
         # PASS 2: arrows, with anchor refs resolved against real bound
         # geometry. The tail (label side) resolves first so the head can pick
         # the nearest instance and land on the part's boundary facing it.
@@ -302,7 +347,21 @@ class SceneRenderer:
                     self._flat[el.id] = []
                     self._suppressed.add(el.id)
                     continue
-            tail = self._resolve_point(el.tail)
+            tail = None
+            if isinstance(el.tail, AnchorRef):
+                tb2 = self.bound.get(el.tail.el)
+                if tb2 is not None and tb2.text is not None:
+                    # the arrow leaves whichever SIDE of the label faces its
+                    # target — a relayouted label may sit on the opposite
+                    # side from where the compiler guessed
+                    head_est = self._resolve_point(el.head)
+                    bx0, by0, bx1, by1 = tb2.box
+                    if head_est[0] >= (bx0 + bx1) / 2:
+                        tail = (bx1 + 6.0, (by0 + by1) / 2)
+                    else:
+                        tail = (bx0 - 6.0, (by0 + by1) / 2)
+            if tail is None:
+                tail = self._resolve_point(el.tail)
             head = self._resolve_point(el.head, toward=tail)
             paths = arrow_paths(tail, head, curve=el.curve,
                                 seed=_seed(el.id),
@@ -470,7 +529,10 @@ class SceneRenderer:
     def _bind_text(self, el: TextElement, b: Bound, rtl_scene: bool) -> None:
         rtl = el.direction == "rtl" or rtl_scene or contains_arabic(el.text)
         shaped = contains_arabic(el.text)
-        disp = display_text(el.text, rtl_base=rtl) if shaped else el.text
+        # fold smart punctuation FIRST: a single curly apostrophe used to
+        # knock its line out of the handwriting font (mixed-typeface bubbles)
+        text = el.text if shaped else ascii_punct(el.text)
+        disp = display_text(text, rtl_base=rtl) if shaped else text
         bold = el.role in ("title", "term")
         f = self._font_for(bold, int(el.size), disp)
         try:
@@ -527,6 +589,23 @@ class SceneRenderer:
             x0 = SAFE_R - w
         x0 = max(SAFE_L, x0)
         y0 = min(max(SAFE_T, y0), SAFE_B - h)
+        if self._avatar_zones and not _is_overlay(el.id):
+            moved = False
+            for zx0, zy0, zx1, zy1 in self._avatar_zones:
+                if x0 < zx1 and x0 + w > zx0 and y0 < zy1 and y0 + h > zy0:
+                    y0 = zy0 - h - 8.0
+                    moved = True
+            if moved:
+                # stack upward past earlier labels instead of onto them
+                def _hits(y: float) -> bool:
+                    return any(x0 < bx1 and x0 + w > bx0 and
+                               y < by1 and y + h > by0
+                               for (bx0, by0, bx1, by1) in self._text_boxes)
+                while _hits(y0) and y0 > SAFE_T:
+                    y0 -= h + 10.0
+                y0 = max(SAFE_T, y0)
+                self._warn(f"LABEL_MOVED_OFF_AVATAR {el.id}")
+        self._text_boxes.append((x0, y0, x0 + w, y0 + h))
         b.box = (x0, y0, x0 + w, y0 + h)
 
     def _sub_box(self, b: Bound, sub: str) -> tuple[float, float, float, float] | None:
@@ -548,6 +627,70 @@ class SceneRenderer:
             return None
         x0, y0, x1, y1 = b.box
         return (x0 + pre, y0, x0 + end, y1)
+
+    def _relayout_part_labels(self, arrows: list) -> None:
+        """Founder-specified label layout around the ROOT illustration:
+        right column first, left column for left-half targets and overflow,
+        top row as the final spill. Rows follow target height so leader
+        lines run parallel instead of crossing; columns sit 26px off the
+        diagram instead of at the far canvas edge."""
+        root_b, best = None, 0.0
+        for eid, b in self.bound.items():
+            if isinstance(b.element, IllustrationElement) and \
+                    not _is_overlay(eid):
+                area = (b.box[2] - b.box[0]) * (b.box[3] - b.box[1])
+                if area > best:
+                    root_b, best = b, area
+        if root_b is None or best < 40000:
+            return
+        rx0, ry0, rx1, ry1 = root_b.box
+        rcx = (rx0 + rx1) / 2
+        entries: dict[str, tuple] = {}
+        for ar in arrows:
+            if isinstance(ar.tail, AnchorRef):
+                tb = self.bound.get(ar.tail.el)
+                if tb is not None and tb.text is not None \
+                        and ar.tail.el not in entries:
+                    entries[ar.tail.el] = self._resolve_point(ar.head)
+        if len(entries) < 2:
+            return
+        zone_top = min((z[1] for z in self._avatar_zones),
+                       default=WORLD_H)
+        y_top = max(40.0, ry0 + 4.0)
+        y_max = min(WORLD_H - 60.0, zone_top - 12.0)
+
+        def place_column(items: list, side: str) -> list:
+            items = sorted(items, key=lambda e: e[1][1])   # by target height
+            y, spill = y_top, []
+            for lid, tgt in items:
+                bb = self.bound[lid]
+                w = bb.box[2] - bb.box[0]
+                h = bb.box[3] - bb.box[1]
+                if y + h > y_max:
+                    spill.append((lid, tgt))
+                    continue
+                if side == "right":
+                    x0 = min(rx1 + 26.0, WORLD_W - 24.0 - w)
+                else:
+                    x0 = max(24.0, rx0 - 26.0 - w)
+                bb.box = (x0, y, x0 + w, y + h)
+                y += max(50.0, h + 16.0)
+            return spill
+
+        right = [(l, t) for l, t in entries.items() if t[0] >= rcx]
+        left = [(l, t) for l, t in entries.items() if t[0] < rcx]
+        spill = place_column(right, "right")
+        spill = place_column(left + spill, "left")
+        # final spill: a row above the diagram, ordered by target x
+        x = max(24.0, rx0 - 60.0)
+        for lid, tgt in sorted(spill, key=lambda e: e[1][0]):
+            bb = self.bound[lid]
+            w = bb.box[2] - bb.box[0]
+            h = bb.box[3] - bb.box[1]
+            y0t = max(16.0, ry0 - h - 26.0)
+            x = min(x, WORLD_W - 24.0 - w)
+            bb.box = (x, y0t, x + w, y0t + h)
+            x += w + 30.0
 
     def _match_region_names(self, spans: dict, names: list[str]) -> list[str]:
         from .vector_assets import match_layer_ids
@@ -654,9 +797,13 @@ class SceneRenderer:
             from .geometry import resample, roughen
             pts = roughen(resample(pts, 7.0), amplitude=1.0, wobble=2.2,
                           seed=_seed(el.id))
+        fill = None
+        if el.fill == "paper":
+            fill = "paper"
+        elif el.fill:
+            fill = "accent_mist"
         b.layers = [BLayer("shape", [
-            BStroke(pts, el.width, el.color, "accent_mist" if el.fill else None,
-                    path_length(pts))])]
+            BStroke(pts, el.width, el.color, fill, path_length(pts))])]
         b.box = bbox(pts)
 
     def _raster_slice(self, b: Bound, a) -> tuple[float, float] | None:
@@ -727,6 +874,30 @@ class SceneRenderer:
                 words: list | None = None) -> list[TimedAction]:
         self.timeline = compile_timeline(self.scene, audio_secs,
                                          self.workloads, words=words)
+        from .timing import CAPTION_PREFIX
+        if audio_secs <= 0:
+            # a silent scene has no speech to caption — cue-less captions
+            # once piled every bubble onto the panel in the first half-second
+            self.timeline = [t for t in self.timeline
+                             if not str(t.action.target or "").startswith(
+                                 CAPTION_PREFIX)]
+        else:
+            # a caption whose reveal cue failed resolves late; its fade (cued
+            # by the NEXT sentence) can then land first and the sentence
+            # never shows — the fade always waits for its own reveal
+            reveal_at: dict[str, float] = {}
+            for ta in self.timeline:
+                if ta.action.verb == "reveal" and \
+                        str(ta.action.target or "").startswith(CAPTION_PREFIX):
+                    reveal_at.setdefault(ta.action.target, ta.start)
+            self.timeline = [
+                TimedAction(ta.action, max(ta.start,
+                                           reveal_at.get(ta.action.target, 0.0)
+                                           + 0.3), ta.duration)
+                if ta.action.verb == "fade" and
+                str(ta.action.target or "").startswith(CAPTION_PREFIX)
+                else ta
+                for ta in self.timeline]
         if self._suppressed:
             # a suppressed arrow's draw must not hold ~2s of dead air with an
             # invisible pen — collapse it to an instant
@@ -1080,8 +1251,17 @@ class SceneRenderer:
         pen_erase = False
         pen_start = -1.0
 
-        def W2S(p: Point, off: Point = (0.0, 0.0)) -> Point:
-            sp = cam.to_screen((p[0] + off[0], p[1] + off[1]))
+        # the HUD layer — persistent avatars, speech captions and moment
+        # overlays — is SCREEN-fixed: a zoom focuses the board, never flings
+        # the teacher and their running caption off-canvas
+        cam_hud = CameraState(WORLD_W / 2, WORLD_H / 2, 1.0)
+
+        def _is_hud(eid) -> bool:
+            return eid in ("__teach_av", "__stud_av") or \
+                str(eid).startswith(("__nb_", "__hm_", "__kp_", "__tm_"))
+
+        def W2S(p: Point, off: Point = (0.0, 0.0), c=None) -> Point:
+            sp = (c if c is not None else cam).to_screen((p[0] + off[0], p[1] + off[1]))
             return (sp[0] * SS, sp[1] * SS)
 
         style = self.scene.style
@@ -1089,23 +1269,27 @@ class SceneRenderer:
             b, s = self.bound[el.id], st[el.id]
             if not s.visible or s.opacity <= 0.01 or s.erase >= 0.999:
                 continue
+            ecam = cam_hud if _is_hud(el.id) else cam
             alpha = s.opacity * (1.0 - s.erase)
             if b.raster is not None:
-                self._draw_raster(frame, b, s, cam, alpha)
+                self._draw_raster(frame, b, s, ecam, alpha)
             for li, stx in enumerate(self._flat[el.id]):
                 frac = s.reveal.get(li, 0.0)
                 if frac <= 0:
                     continue
                 pts = stx.pts if frac >= 1.0 else cut_at_fraction(stx.pts, frac)
-                spts = [W2S(p, s.offset) for p in pts]
+                spts = [W2S(p, s.offset, ecam) for p in pts]
                 col = role_color(stx.color, style.ink, style.accent) + (int(255 * alpha),)
                 if stx.fill and frac >= 1.0 and len(spts) > 2:
-                    d.polygon(spts, fill=PALETTE.get(stx.fill, PALETTE["accent_mist"]) + (int(90 * alpha),))
-                self._polyline(d, spts, max(1, round(stx.width * cam.scale * SS * s.pulse)), col)
+                    # paper fill is near-opaque (it exists to OCCLUDE the busy
+                    # board under a speech bubble); accent washes stay faint
+                    fa = 242 if stx.fill == "paper" else 90
+                    d.polygon(spts, fill=PALETTE.get(stx.fill, PALETTE["accent_mist"]) + (int(fa * alpha),))
+                self._polyline(d, spts, max(1, round(stx.width * ecam.scale * SS * s.pulse)), col)
             if b.text is not None and s.text_frac > 0:
-                self._draw_text(d, b, s, cam, alpha)
+                self._draw_text(d, b, s, ecam, alpha)
             if b.spawn:
-                self._draw_particles(d, b, s, cam, alpha, el)
+                self._draw_particles(d, b, s, ecam, alpha, el)
 
         # decorations (circle/underline/highlight) reveal like strokes
         marker = None

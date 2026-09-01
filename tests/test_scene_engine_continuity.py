@@ -130,7 +130,8 @@ class TestCompiler:
                       "human_teaching_moments": 0,
                       "teacher_key_points": 0}
         _, _, report = compile_plan(plan, _NARR)
-        assert len(report) == 4 and "CLEAR_AND_REDRAW" in report[3]
+        seg_lines = [ln for ln in report if "decision:" in ln]
+        assert len(seg_lines) == 4 and "CLEAR_AND_REDRAW" in seg_lines[3]
 
     def test_garbage_plan_rejected_not_fatal(self):
         assert parse_visual_plan("nope") is None
@@ -189,7 +190,10 @@ class TestHoldsAndDegradation:
             all_segments=["s001", "s002", "s003"])
         assert "s002" in scenes                       # the HOLD
         hold = scenes["s002"]
-        assert hold["actions"] == []
+        # a HOLD keeps the BOARD still — the narration caption stream may
+        # continue over it (speech is a parallel track)
+        assert not [a for a in hold["actions"]
+                    if not str(a.get("target", "")).startswith("__nb_")]
         cell = next(e for e in hold["elements"] if e["id"] == "cell")
         assert cell["drawn_layers"] == ["wall"]       # board exactly as left
         assert any("HOLD" in l for l in report)

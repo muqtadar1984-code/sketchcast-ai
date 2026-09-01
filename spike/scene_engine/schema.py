@@ -194,7 +194,9 @@ class ShapeElement(_ElementBase):
     width: float = Field(default=3.0, ge=0.5, le=20.0)
     color: Literal["ink", "muted", "accent"] = "ink"
     closed: bool = False
-    fill: bool = False
+    # False = outline only; True = translucent accent wash; "paper" = opaque
+    # board-colored fill (speech bubbles occlude the busy board behind them)
+    fill: Union[bool, Literal["paper"]] = False
 
     @model_validator(mode="after")
     def _geometry(self) -> "ShapeElement":

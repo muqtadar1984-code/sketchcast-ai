@@ -224,6 +224,7 @@ def generate_episode_script(
     part_info: dict | None = None,
     language: str = "en",
     must_cover: list[str] | None = None,
+    avatars: dict | None = None,
 ) -> EpisodeScript:
     """Generate a complete episode script via Claude in the chosen narration style.
 
@@ -321,7 +322,13 @@ def generate_episode_script(
     # 30k (retry 60k) sits under Gemini's 65,536 output ceiling: a scene-
     # planned 25-segment part measured over the 24k/48k pair when the model
     # ignored minification and pretty-printed the reply
-    max_out = 30000 if os.getenv("VIDEO_ENGINE", "").strip().lower() == "scene" else 16000
+    scene_on = os.getenv("VIDEO_ENGINE", "").strip().lower() == "scene"
+    # conversational replies carry per-segment dialogue arrays on top of the
+    # visual plan — a 30k budget truncated one to zero segments (audit fact
+    # 9's third confirmation). 32k doubles to 64k on the streamed retry,
+    # still under Gemini's 65,536 ceiling.
+    max_out = (32000 if style == "conversational" else 30000) if scene_on \
+        else 16000
     result = client.analyze(prompt=prompt, system=system, max_tokens=max_out)
 
     data = result.get("data", result)
@@ -378,11 +385,40 @@ def generate_episode_script(
         raw_scene = seg.get("scene")
         raw_scene_assets = seg.get("scene_assets")
 
+        # Conversational style: speaker-tagged dialogue is MODEL OUTPUT and
+        # therefore hostile — sanitize line by line. When it survives, the
+        # lines become the segment's spoken truth (text := their join), so
+        # audio, captions and the coverage gate all agree. A segment whose
+        # dialogue is rejected simply falls back to single-narrator.
+        dialogue = None
+        raw_dlg = seg.get("dialogue")
+        # style-gated: only the conversational prompt asks for dialogue, and
+        # a stray dialogue array on another style once double-injected the
+        # caption stream (duplicate ids -> scene rejected wholesale)
+        if style != "conversational":
+            raw_dlg = None
+        if isinstance(raw_dlg, list) and raw_dlg:
+            clean_dlg = []
+            for d in raw_dlg[:24]:
+                if not isinstance(d, dict):
+                    continue
+                who = str(d.get("who") or "").strip().lower()
+                # SSML in a dialogue line would be READ ALOUD by the
+                # per-line TTS and shown VERBATIM in the caption bubble
+                line = " ".join(strip_ssml(str(d.get("line") or "")).split())
+                if who in ("teacher", "student") and line:
+                    clean_dlg.append({"who": who, "line": line})
+            if len(clean_dlg) >= 2:
+                dialogue = clean_dlg
+                plain_text = " ".join(d["line"] for d in clean_dlg)
+                el_text = plain_text
+
         segments.append(ScriptSegment(
             segment_id=f"s{i + 1:03d}",
             type=seg_type,
             text=plain_text,
             elevenlabs_text=el_text,
+            dialogue=dialogue,
             slide_heading=(seg.get("slide_heading") or "").strip(),
             slide_points=slide_points,
             slide_visual=slide_visual,
@@ -443,7 +479,7 @@ def generate_episode_script(
                 compiled, assets_by_seg, report = compile_plan(
                     plan, narrations,
                     all_segments=[s.segment_id for s in segments],
-                    skip_hold=skip)
+                    skip_hold=skip, avatars=avatars, style=style)
                 for s in segments:
                     if s.segment_id in compiled:
                         s.scene = compiled[s.segment_id]
@@ -469,6 +505,7 @@ def generate_episode_script(
         narrator_persona=style,
         segments=segments,
         visual_plan=visual_plan_dump,
+        avatars=avatars,
         total_estimated_duration_seconds=total_duration,
         question_hook_count=question_hook_count,
     )

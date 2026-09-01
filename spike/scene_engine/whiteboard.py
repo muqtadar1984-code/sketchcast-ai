@@ -22,20 +22,25 @@ _MAX_POINT_CHARS = 64
 
 
 def _short(text: str, cap: int = _MAX_POINT_CHARS) -> str:
+    # ASCII ellipsis on purpose: the handwriting font has no U+2026 glyph and
+    # one such char used to drop the whole line to a fallback typeface
     t = " ".join(str(text).split())
-    return t if len(t) <= cap else t[:cap - 1].rstrip() + "…"
+    return t if len(t) <= cap else t[:cap - 3].rstrip() + "..."
 
 
-def build_whiteboard_scene(segment: dict) -> dict | None:
-    """A sceneless segment as a whiteboard moment. Returns None only when the
-    segment has literally nothing to show (then a silent board beats noise)."""
+def build_whiteboard_scene(segment: dict,
+                           avatars: dict | None = None) -> dict | None:
+    """A sceneless segment as a whiteboard moment. `avatars` casts the
+    persistent teacher (and, when the segment carries dialogue, the student).
+    Never returns None any more — the teacher + narration stream make even a
+    contentless segment a real card."""
     heading = _short(segment.get("slide_heading") or "", 60)
     visual = segment.get("slide_visual") or {}
     kind = visual.get("kind") if isinstance(visual, dict) else None
     seg_type = str(segment.get("type") or "explore")
 
     if kind == "quiz" and isinstance(visual, dict):
-        return _quiz_scene(segment, heading, visual)
+        return _quiz_scene(segment, heading, visual, avatars)
 
     points: list[str] = []
     if kind == "takeaways" and isinstance(visual, dict):
@@ -54,13 +59,15 @@ def build_whiteboard_scene(segment: dict) -> dict | None:
         # whole lesson's visual-language validation and blinking the teacher
         # out for one segment.
         elements, actions = [], []
-        _add_teacher(segment, elements, actions)
-        if seg_type not in ("question_hook", "quiz"):
-            _add_key_sentence_bubble(segment, elements, actions)
-        return {"id": f"wb_{segment.get('segment_id', 'seg')}",
-                "compiled": True, "scene_type": "generic",
-                "narration": segment.get("text") or "",
-                "elements": elements, "actions": actions}
+        _add_teacher(segment, elements, actions, avatars)
+        if seg_type != "question_hook":
+            _add_stream(segment, elements, actions)
+        scene = {"id": f"wb_{segment.get('segment_id', 'seg')}",
+                 "compiled": True, "scene_type": "generic",
+                 "narration": segment.get("text") or "",
+                 "elements": elements, "actions": actions}
+        _add_sketches(segment, scene, heading_taken=False)
+        return scene
 
     elements: list[dict] = []
     actions: list[dict] = []
@@ -89,40 +96,102 @@ def build_whiteboard_scene(segment: dict) -> dict | None:
                         "at": {"frac": min(0.85, 0.18 + 0.22 * i)}})
         actions.append({"verb": "write", "target": pid})
 
-    _add_teacher(segment, elements, actions)
-    if seg_type not in ("question_hook", "quiz"):
-        # the teacher speaks on card segments too — same importance rule,
-        # same verbatim-narration rule as everywhere else
-        _add_key_sentence_bubble(segment, elements, actions)
-    return {"id": f"wb_{segment.get('segment_id', 'seg')}", "compiled": True,
-            "scene_type": "generic",
-            "narration": segment.get("text") or "",
-            "elements": elements, "actions": actions}
+    _add_teacher(segment, elements, actions, avatars)
+    if seg_type != "question_hook":
+        # the narration streams on card segments too — every sentence, in
+        # the teacher's bubble, as it is spoken
+        _add_stream(segment, elements, actions)
+    scene = {"id": f"wb_{segment.get('segment_id', 'seg')}", "compiled": True,
+             "scene_type": "generic",
+             "narration": segment.get("text") or "",
+             "elements": elements, "actions": actions}
+    _add_sketches(segment, scene, heading_taken=bool(heading or points))
+    return scene
 
 
-def _add_key_sentence_bubble(segment: dict, elements: list[dict],
-                             actions: list[dict]) -> None:
-    sent = select_key_sentence(segment.get("text") or "")
-    if not sent:
+def _add_sketches(segment: dict, scene: dict, heading_taken: bool) -> None:
+    """A card with no drawing gets the things its narration names, sketched
+    as they are spoken — an empty board while the voice describes a tree and
+    an ant is the medium wasted."""
+    if any(e.get("type") == "illustration" and not _is_avatar(e.get("id"))
+           for e in scene["elements"]):
         return
+    els, acts, assets = sketch_elements(
+        segment.get("text") or "", uid=str(segment.get("segment_id", "seg")),
+        limit=2)
+    if not els:
+        return
+    if heading_taken:      # keep clear of the heading/points block
+        for e in els:
+            e["at"] = [e["at"][0], min(WORLD_H - 210.0, e["at"][1] + 70.0)]
+    scene["elements"].extend(els)
+    scene["actions"] = scene["actions"] + acts
+    scene["scene_assets"] = {**(scene.get("scene_assets") or {}), **assets}
+
+
+def _is_avatar(eid) -> bool:
+    return str(eid) in (TEACHER_ID, STUDENT_ID)
+
+
+# where auto-sketches sit: the open board left of the teacher's panel. One
+# sketch owns the middle; two share the space side by side.
+_SKETCH_SLOTS = {1: [(470.0, 360.0, 0.62)],
+                 2: [(330.0, 360.0, 0.5), (650.0, 360.0, 0.5)]}
+
+
+def sketch_elements(narration: str, uid: str, exclude: set[str] | None = None,
+                    limit: int = 2) -> tuple[list[dict], list[dict], dict]:
+    """Hand-drawn sketches of the concrete things this narration NAMES —
+    elements, draw actions cued to the words, and their asset prompts.
+    Empty when the narration names nothing sketchable."""
+    from .sketchables import find_sketchables
+
+    found = find_sketchables(narration, limit=limit, exclude=exclude)
+    if not found:
+        return [], [], {}
+    slots = _SKETCH_SLOTS[min(len(found), 2)]
+    els: list[dict] = []
+    acts: list[dict] = []
+    assets: dict[str, str] = {}
+    for i, f in enumerate(found[:len(slots)]):
+        x, y, scale = slots[i]
+        eid = f"sk_{uid}_{i}"
+        els.append({"id": eid, "type": "illustration", "asset": f["key"],
+                    "at": [x, y], "scale": scale})
+        acts.append({"verb": "draw", "target": eid,
+                     "at": {"phrase": f["cue"], "offset": -0.35}})
+        assets[f["key"]] = f["prompt"]
+    return els, acts, assets
+
+
+def _add_stream(segment: dict, elements: list[dict],
+                actions: list[dict]) -> None:
+    """The full narration streams on cards too — unless the segment carries
+    DIALOGUE, which the composer injects later with real audio offsets."""
+    if segment.get("dialogue"):
+        return
+    narr = segment.get("text") or ""
+    bold = {s for s in [select_key_sentence(narr)] if s}
     uid = f"c_{segment.get('segment_id', 'seg')}"
-    kp_els, kp_acts = key_point_choreo(sent, uid=uid)
-    elements.extend(kp_els)
-    actions.extend(kp_acts)
+    nb_els, nb_acts = narration_stream(narr, uid=uid, bold=bold)
+    elements.extend(nb_els)
+    actions.extend(nb_acts)
 
 
-def _add_teacher(segment: dict, elements: list[dict],
-                 actions: list[dict]) -> None:
-    """The persistent teacher joins every whiteboard card. On the LESSON'S
-    FIRST segment the hand draws them in (the founder's 'avatar at the
-    start'); everywhere else they are simply already there."""
-    elements.append(teacher_element())
-    if str(segment.get("segment_id") or "") == "s001":
-        actions.insert(0, {"verb": "draw", "target": TEACHER_ID,
-                           "at": {"sec": 0.3}})
+def _add_teacher(segment: dict, elements: list[dict], actions: list[dict],
+                 avatars: dict | None = None) -> None:
+    """The persistent teacher joins every whiteboard card — simply THERE
+    from the first frame (founder: no draw-in animation). Dialogue segments
+    seat the student too."""
+    elements.append(teacher_element(
+        (avatars or {}).get("teacher", "avatar_teacher")))
+    if segment.get("dialogue"):
+        elements.append(student_element(
+            (avatars or {}).get("student", "avatar_student")))
 
 
-def _quiz_scene(segment: dict, heading: str, visual: dict) -> dict:
+def _quiz_scene(segment: dict, heading: str, visual: dict,
+                avatars: dict | None = None) -> dict:
     """The quiz, handwritten: question + lettered options. No answer reveal —
     the player pauses here and the student thinks."""
     question = _short(str(visual.get("caption") or heading or
@@ -141,7 +210,7 @@ def _quiz_scene(segment: dict, heading: str, visual: dict) -> dict:
                          "at": [140, 220 + 92 * i], "anchor": "lt"})
         actions.append({"verb": "write", "target": oid,
                         "at": {"frac": min(0.9, 0.25 + 0.18 * i)}})
-    _add_teacher(segment, elements, actions)
+    _add_teacher(segment, elements, actions, avatars)
     return {"id": f"wb_{segment.get('segment_id', 'quiz')}", "compiled": True,
             "scene_type": "generic",
             "narration": segment.get("text") or "",
@@ -173,16 +242,19 @@ def split_sentences(text: str) -> list[str]:
 
 
 def sentence_importance(s: str) -> int:
-    """0 = not bubble-worthy. Questions belong to the student, meta lines to
-    nobody; definitions and causal statements are what a teacher repeats."""
+    """0 = not bubble-worthy. Meta lines belong to nobody; definitions,
+    causal statements AND the hook questions that open a lesson are what a
+    teacher voices (the founder wants the openings spoken too)."""
     words = s.split()
-    if not (4 <= len(words) <= 20) or s.endswith("?") or _META_PAT.search(s):
+    if not (4 <= len(words) <= 20) or _META_PAT.search(s):
         return 0
     score = 0
     if _DEF_PAT.search(s):
         score += 2
     if _EMPH_PAT.search(s):
         score += 1
+    if s.endswith("?"):
+        score += 1                     # a good hook question earns its bubble
     if 5 <= len(words) <= 14:
         score += 1
     return score
@@ -226,24 +298,30 @@ def snap_to_narration(candidate: str, narration: str) -> str | None:
 
 # ── speech bubbles (shared with avatar teaching moments) ─────────────────────
 
-_BUBBLE_CAP = 110              # two lines of Caveat at size 24
+_BUBBLE_CAP = 150              # three lines of Caveat at size 23
+_LINE_CHARS = 40               # a 40-char line fits every clamped panel
 
 
 def _bubble_lines(text: str) -> list[str]:
-    text = _short(text, _BUBBLE_CAP)
-    if len(text) <= 34:
-        return [text]
-    words = text.split()
+    """Greedy wrap at _LINE_CHARS, at most three lines — the remainder is
+    ellipsized, never dumped into one over-wide line (a 70-char third line
+    once rendered outside its bubble and tripped the safe-area clamp)."""
+    words = _short(text, _BUBBLE_CAP).split()
     lines, cur = [], ""
-    limit = max(28, (len(text) + 1) // 2)
-    for w in words:
-        if cur and len(cur) + 1 + len(w) > limit and len(lines) < 1:
+    for i, w in enumerate(words):
+        if cur and len(cur) + 1 + len(w) > _LINE_CHARS:
             lines.append(cur)
             cur = w
+            if len(lines) == 3:
+                break
         else:
             cur = f"{cur} {w}".strip()
-    lines.append(cur)
-    return lines[:2]
+    if len(lines) == 3:
+        lines[2] = _short(lines[2] + " ...", _LINE_CHARS + 4)
+        return lines
+    if cur:
+        lines.append(cur)
+    return lines
 
 
 def bubble_elements(bubble_id: str, text: str, at: tuple[float, float],
@@ -270,7 +348,7 @@ def bubble_elements(bubble_id: str, text: str, at: tuple[float, float],
     tail = [[tail_base_x - 14, y0 + h], list(tail_to), [tail_base_x + 16, y0 + h]]
     els = [
         {"id": bubble_id, "type": "shape", "shape": "path", "points": outline,
-         "closed": True, "width": 3.4},
+         "closed": True, "width": 3.4, "fill": "paper"},
         {"id": f"{bubble_id}_tail", "type": "shape", "shape": "path",
          "points": tail, "width": 3.4},
     ]
@@ -281,11 +359,19 @@ def bubble_elements(bubble_id: str, text: str, at: tuple[float, float],
     return els
 
 
-def bubble_cue_phrase(text: str) -> str:
-    """The first few words of the sentence — always an exact narration
-    substring, so the cue resolves even when the bubble shows a trimmed
-    version of a long line."""
-    return " ".join(text.split()[:5])
+def bubble_cue_phrase(text: str, narration: str | None = None) -> str:
+    """The shortest sentence prefix that is UNIQUE within the narration —
+    two sentences sharing an opening once collapsed both captions onto the
+    first occurrence (cues resolve to the first match)."""
+    words = text.split()
+    n = 5
+    phrase = " ".join(words[:n])
+    if narration:
+        hay = narration.lower()
+        while hay.count(phrase.lower()) > 1 and n < min(12, len(words)):
+            n += 1
+            phrase = " ".join(words[:n])
+    return phrase
 
 
 def speech_secs(text: str) -> float:
@@ -298,16 +384,114 @@ def speech_secs(text: str) -> float:
 # Hand-drawn characters matching the board's line language — generated once,
 # cached forever, reused across every lesson. The hardened no-text suffix in
 # raster_assets applies on top of these.
+#
+# The roster is a MATRIX, not a pair: the teacher matches the narration
+# VOICE (male/female), and the student matches the learner's GRADE BAND.
+# Bands beyond school (undergrad/grad/doctorate) are maintained for the
+# future even though they are out of scope today.
+_STYLE = ("friendly approachable cartoon character, waist-up, consistent "
+          "storybook character style")
 AVATAR_PROMPTS = {
-    "avatar_student": (
-        "A friendly school student character, waist-up, simple hand-drawn "
-        "cartoon in clean black ink line art, looking up curiously with one "
-        "hand slightly raised as if asking a question, cheerful expression."),
-    "avatar_teacher": (
-        "A friendly teacher character with glasses, waist-up, simple "
-        "hand-drawn cartoon in clean black ink line art, one hand raised in "
-        "an explaining gesture, warm confident expression."),
+    # teachers, by voice gender
+    "avatar_teacher": (          # legacy key == male teacher
+        "A friendly male teacher character with glasses, dark short hair, "
+        "waist-up, one hand raised in an explaining gesture, warm confident "
+        "expression."),
+    "avatar_teacher_female": (
+        f"A friendly female teacher character with shoulder-length hair and "
+        f"glasses, {_STYLE}, one hand raised in an explaining gesture, warm "
+        f"confident expression."),
+    # students: grade band x gender (the engine picks a gender per lesson,
+    # deterministically seeded so retries render identically)
+    "avatar_student": (          # legacy key == grades 5-7 boy
+        "A friendly schoolboy around 11 years old with short brown hair and "
+        "a backpack, waist-up, looking up curiously with one hand slightly "
+        "raised as if asking a question, cheerful expression."),
+    "avatar_student_5_7_f": (
+        f"A friendly schoolgirl around 11 years old with a ponytail and a "
+        f"backpack, {_STYLE}, looking up curiously with one hand slightly "
+        f"raised as if asking a question, cheerful expression."),
+    "avatar_student_8_10_m": (
+        f"A curious teenage schoolboy around 14 years old, {_STYLE}, casual "
+        f"shirt, one hand slightly raised as if asking a question, engaged "
+        f"expression."),
+    "avatar_student_8_10_f": (
+        f"A curious teenage schoolgirl around 14 years old with "
+        f"shoulder-length hair, {_STYLE}, casual shirt, one hand slightly "
+        f"raised as if asking a question, engaged expression."),
+    "avatar_student_11_12_m": (
+        f"A male senior high-school student around 17 years old, {_STYLE}, "
+        f"holding a notebook in one arm, other hand slightly raised as if "
+        f"asking a question, thoughtful expression."),
+    "avatar_student_11_12_f": (
+        f"A female senior high-school student around 17 years old, "
+        f"{_STYLE}, holding a notebook in one arm, other hand slightly "
+        f"raised as if asking a question, thoughtful expression."),
+    "avatar_student_undergrad_m": (
+        f"A male university undergraduate around 20 years old, {_STYLE}, "
+        f"casual hoodie, one hand slightly raised as if asking a question, "
+        f"curious expression."),
+    "avatar_student_undergrad_f": (
+        f"A female university undergraduate around 20 years old, {_STYLE}, "
+        f"casual cardigan, one hand slightly raised as if asking a "
+        f"question, curious expression."),
+    "avatar_student_grad_m": (
+        f"A male graduate student around 25 years old, {_STYLE}, "
+        f"smart-casual shirt, one hand slightly raised as if making a "
+        f"point, focused expression."),
+    "avatar_student_grad_f": (
+        f"A female graduate student around 25 years old, {_STYLE}, "
+        f"smart-casual blouse, one hand slightly raised as if making a "
+        f"point, focused expression."),
+    "avatar_student_doctorate_m": (
+        f"A male doctoral researcher around 28 years old wearing a lab "
+        f"coat, {_STYLE}, one hand slightly raised as if making a point, "
+        f"sharp attentive expression."),
+    "avatar_student_doctorate_f": (
+        f"A female doctoral researcher around 28 years old wearing a lab "
+        f"coat, {_STYLE}, one hand slightly raised as if making a point, "
+        f"sharp attentive expression."),
 }
+
+# Edge voice-name fragments that identify a FEMALE voice; anything else maps
+# to the male teacher. Extend as the product's voice registry grows.
+_FEMALE_VOICE_HINTS = ("aria", "jenny", "emma", "ana", "ava", "michelle",
+                       "sonia", "libby", "maisie", "natasha", "clara",
+                       "female", "neerja", "swara", "aisha", "salma")
+
+
+def teacher_avatar_for_voice(voice_id: str | None) -> str:
+    v = (voice_id or "").lower()
+    if any(h in v for h in _FEMALE_VOICE_HINTS):
+        return "avatar_teacher_female"
+    return "avatar_teacher"
+
+
+def student_avatar_for_grade(grade, seed: str = "") -> str:
+    """Grade band + a deterministic per-lesson gender pick -> student avatar
+    key. `seed` (e.g. the script/lesson id) decides male vs female so the
+    system varies between lessons but a RETRY of the same lesson renders the
+    identical character. Unknown grades keep the youngest — wrong-young is
+    friendlier than wrong-old."""
+    import zlib
+    sex = "f" if zlib.crc32(str(seed).encode("utf-8")) & 1 else "m"
+    try:
+        g = int(str(grade).strip().split()[-1])
+    except (ValueError, IndexError, TypeError):
+        g = 6
+    if g <= 7:
+        return "avatar_student" if sex == "m" else "avatar_student_5_7_f"
+    if g <= 10:
+        band = "8_10"
+    elif g <= 12:
+        band = "11_12"
+    elif g <= 16:
+        band = "undergrad"
+    elif g <= 18:
+        band = "grad"
+    else:
+        band = "doctorate"
+    return f"avatar_student_{band}_{sex}"
 
 _AV_AT = (178.0, 568.0)      # lower-LEFT: the persistent teacher owns the
 _AV_SCALE = 0.38             # lower-right corner now
@@ -320,19 +504,152 @@ _BUBBLE_TAIL_TO = (255.0, 462.0)
 # drawn beside them whenever a step carries a key_point; the bubble fades,
 # the teacher STAYS.
 TEACHER_ID = "__teach_av"
-# sized/placed so the FULL figure sits inside the safe area at the real
-# avatar aspect (~1.1 h/w) — the first placement cropped the lower third
-# under the player chrome
-TEACHER_AT = (1172.0, 582.0)
-TEACHER_SCALE = 0.22          # small enough to never crowd the board
-_TEACH_BUBBLE_AT = (975.0, 440.0)
-_TEACH_BUBBLE_TAIL = (1120.0, 528.0)
+# founder-approved size/placement from the stream preview: bigger presence,
+# bubble panel fully clear of the face
+TEACHER_AT = (1150.0, 556.0)
+TEACHER_SCALE = 0.30
+_TEACH_BUBBLE_AT = (970.0, 360.0)
+_TEACH_BUBBLE_TAIL = (1105.0, 462.0)
 
 
-def teacher_element() -> dict:
-    return {"id": TEACHER_ID, "type": "illustration",
-            "asset": "avatar_teacher", "at": list(TEACHER_AT),
-            "scale": TEACHER_SCALE}
+def teacher_element(asset: str = "avatar_teacher") -> dict:
+    return {"id": TEACHER_ID, "type": "illustration", "asset": asset,
+            "at": list(TEACHER_AT), "scale": TEACHER_SCALE}
+
+
+# panel geometry for the running narration stream (founder-approved preview):
+# a fixed-width bubble above each speaker; one sentence at a time, replaced
+# exactly when the voice moves on. Ids carry timing.CAPTION_PREFIX so the
+# renderer treats them as a parallel speech track (no teaching-order clamp,
+# no compression).
+_STREAM_W = 470.0
+_STREAM_PANEL = {
+    "teacher": {"cx": 970.0, "cy": 360.0, "tail": (1105.0, 462.0),
+                "ftail": 0.78},
+    "student": {"cx": 310.0, "cy": 360.0, "tail": (175.0, 462.0),
+                "ftail": 0.22},
+}
+STUDENT_ID = "__stud_av"
+STUDENT_AT = (130.0, 556.0)
+AVATAR_SCALE = 0.30
+
+
+def _stream_bubble(uid: str, who: str, text: str, key: bool) -> list[dict]:
+    g = _STREAM_PANEL["student" if who == "student" else "teacher"]
+    cx, cy = g["cx"], g["cy"]
+    lines = _bubble_lines(text)
+    longest = max(len(l) for l in lines)
+    w = max(390.0, min(560.0, 40 + longest * 11.8))
+    w = min(w, 2 * min(cx - 24.0, (WORLD_W - 24.0) - cx))
+    h = {1: 96.0, 2: 134.0}.get(len(lines), 172.0)
+    x0, y0 = cx - w / 2, cy - h / 2
+    outline = [[x0 + 18, y0], [x0 + w - 18, y0],
+               [x0 + w, y0 + 18], [x0 + w, y0 + h - 18],
+               [x0 + w - 18, y0 + h], [x0 + 40, y0 + h],
+               [x0 + 18, y0 + h], [x0, y0 + h - 18], [x0, y0 + 18],
+               [x0 + 18, y0]]
+    tx = x0 + w * g["ftail"]
+    tail = [[tx - 14, y0 + h], list(g["tail"]), [tx + 16, y0 + h]]
+    els = [{"id": uid, "type": "shape", "shape": "path", "points": outline,
+            "closed": True, "width": 3.4, "fill": "paper"},
+           {"id": f"{uid}_tail", "type": "shape", "shape": "path",
+            "points": tail, "width": 3.4}]
+    for i, line in enumerate(lines):
+        ly = cy + (i - (len(lines) - 1) / 2.0) * 42.0
+        els.append({"id": f"{uid}_t{i}", "type": "text", "text": line,
+                    "size": 23, "at": [cx, ly], "anchor": "mm",
+                    **({"role": "term", "color": "accent"} if key else {})})
+    els.append({"id": f"{uid}_grp", "type": "group",
+                "children": [e["id"] for e in els]})
+    return els
+
+
+def narration_stream(narration: str, uid: str,
+                     bold: set[str] | None = None,
+                     dialogue: list[dict] | None = None,
+                     line_starts: list[float] | None = None,
+                     total_secs: float | None = None
+                     ) -> tuple[list[dict], list[dict]]:
+    """The continuous speech-caption track for ONE segment.
+
+    Single narrator: every sentence of `narration` appears in the teacher's
+    bubble, cued by its own opening words (word-accurate at render when TTS
+    boundaries exist) and replaced when the next sentence starts. Sentences
+    in `bold` (verbatim) render bold + accent.
+
+    Dialogue mode: `dialogue` = [{"who", "line"}, ...] with `line_starts`
+    (measured seconds, from per-line TTS) — each line's bubble appears beside
+    ITS speaker at the exact offset. Bubble ids carry CAPTION_PREFIX."""
+    bold = bold or set()
+    if dialogue and line_starts and len(line_starts) == len(dialogue):
+        entries, cues = [], []
+        for i, d in enumerate(dialogue):
+            who = str(d.get("who") or "teacher")
+            line = " ".join(str(d.get("line") or "").split())
+            if not line:
+                continue
+            start = line_starts[i]
+            end = line_starts[i + 1] if i + 1 < len(line_starts)                 else (total_secs or start + 4.0)
+            sents = split_sentences(line) or [line]
+            span, pos = max(0.5, end - start), 0
+            for s in sents:
+                frac_off = pos / max(1, len(line))
+                entries.append((who, s))
+                cues.append({"sec": max(0.05, start + span * frac_off)})
+                pos += len(s) + 1
+    else:
+        sents = split_sentences(narration)
+        entries = [("teacher", s) for s in sents]
+        cues = [{"phrase": bubble_cue_phrase(s, narration), "offset": -0.05}
+                for s in sents]
+    elements: list[dict] = []
+    actions: list[dict] = []
+    norm_bold = {_norm_stream(b) for b in bold}
+    for i, (who, text) in enumerate(entries):
+        if not text:
+            continue
+        nt = _norm_stream(text)
+        key = bool(nt) and nt in norm_bold
+        bid = f"__nb_{uid}_{i}"
+        elements += _stream_bubble(bid, who, text, key)
+        actions.append({"verb": "reveal", "target": f"{bid}_grp",
+                        "duration": 0.22, "at": cues[i]})
+        if i + 1 < len(entries):
+            nxt = dict(cues[i + 1])
+            if "offset" in nxt:
+                nxt["offset"] = nxt["offset"] - 0.07
+            elif "sec" in nxt:
+                nxt["sec"] = max(0.1, nxt["sec"] - 0.07)
+            actions.append({"verb": "fade", "target": f"{bid}_grp",
+                            "to": 0.0, "duration": 0.16, "at": nxt})
+        else:
+            end = {"sec": max(0.5, (total_secs or 0.0) - 0.35)} \
+                if total_secs else {"frac": 0.985}
+            actions.append({"verb": "fade", "target": f"{bid}_grp",
+                            "to": 0.0, "duration": 0.4, "at": end})
+    return elements, actions
+
+
+def _norm_stream(s: str) -> str:
+    # unicode-aware: Arabic/Devanagari/CJK sentences must not collapse to ""
+    # (an empty norm once matched EVERY sentence and bolded the whole lesson)
+    return _re.sub(r"[^\w]+", " ", (s or "").lower(), flags=_re.UNICODE).strip()
+
+
+def student_element(asset: str = "avatar_student") -> dict:
+    return {"id": STUDENT_ID, "type": "illustration", "asset": asset,
+            "at": list(STUDENT_AT), "scale": AVATAR_SCALE}
+
+
+def student_voice_for_avatar(avatar_key: str, lang: str = "en") -> str:
+    """A student TTS voice matching the avatar's age band (English only —
+    other languages reuse the lesson voice, since age-matched voices are not
+    guaranteed per locale)."""
+    if lang != "en":
+        return ""
+    young = avatar_key in ("avatar_student", "avatar_student_5_7_f",
+                           "avatar_student_8_10_m", "avatar_student_8_10_f")
+    return "en-US-AnaNeural" if young else "en-US-EmmaNeural"
 
 
 def key_point_choreo(text: str, uid: str) -> tuple[list[dict], list[dict]]:
@@ -358,14 +675,15 @@ def key_point_choreo(text: str, uid: str) -> tuple[list[dict], list[dict]]:
     return elements, actions
 
 
-def human_moment(role: str, text: str, uid: str = "hm") -> tuple[list[dict], list[dict], str]:
+def human_moment(role: str, text: str, uid: str = "hm",
+                 asset: str | None = None) -> tuple[list[dict], list[dict], str]:
     """Elements + actions for one HUMAN_TEACHING_MOMENT, plus the avatar
     asset key. The avatar fades in, their bubble APPEARS with the line
     (speech is never hand-drawn), they pulse while 'speaking', then
     everything fades and the board takes the focus back. All scoped to ONE
     segment — moments never persist onto the board."""
     role = role if role in ("student", "teacher") else "student"
-    asset = f"avatar_{role}"
+    asset = asset or f"avatar_{role}"
     av_id = f"__{uid}_av"
     bub_id = f"__{uid}_bub"
     bgrp_id = f"__{uid}_bub_grp"

@@ -8,6 +8,7 @@ JSON schema are SHARED across every style — so all styles emit the identical
 Add a style = add a persona + structure entry (+ intro/closing). ``socratic`` is
 kept verbatim so the default reproduces prior behaviour exactly.
 """
+import re
 
 # Ordered; the first is the default. Descriptions double as the web picker copy.
 NARRATION_STYLES = ("socratic", "direct_explainer", "storytelling", "exam_focused", "conversational")
@@ -363,6 +364,39 @@ def build_episode_prompt(
         episode_context=episode_context,
     )
     tail = _SHARED_TAIL
+    if style == "conversational":
+        # Conversational = a REAL two-voice dialogue: every segment's text is
+        # speaker-tagged so the video renders a teacher AND a student avatar
+        # with their own voices and speech bubbles. The keys must live in the
+        # OUTPUT FORMAT example (the model follows the example, not prose).
+        tail = tail.replace(
+            'Markup goes ONLY in "elevenlabs_text".',
+            'Markup goes ONLY in "elevenlabs_text".\n'
+            'CONVERSATIONAL DIALOGUE: every segment MUST carry '
+            '"dialogue": [{"who": "teacher", "line": "..."}, {"who": '
+            '"student", "line": "..."}] — the narration as alternating '
+            'spoken turns. The student asks short natural questions; the '
+            'teacher answers. 2-8 turns per segment. When "dialogue" is '
+            'present, set "text" and "elevenlabs_text" to "" — the dialogue '
+            'IS the narration; never write it twice.',
+            1,
+        )
+        # the model COPIES the example: leaving text/elevenlabs_text filled
+        # there made it write every line twice (dialogue + SSML narration),
+        # which doubled the reply and truncated it at the token cap
+        tail = re.sub(r'"text": "[^"\n]{3,}"', '"text": ""', tail)
+        tail = re.sub(r'"elevenlabs_text": ".*?",\n', '"elevenlabs_text": "",\n',
+                      tail)
+        tail = tail.replace(
+            '''      "estimated_duration_seconds": 45''',
+            '''      "dialogue": [
+        {"who": "teacher", "line": "Every living thing is built from cells."},
+        {"who": "student", "line": "Even something as big as a whale?"},
+        {"who": "teacher", "line": "Even a whale — just many, many more of them."}
+      ],
+      "estimated_duration_seconds": 45''',
+            1,
+        )
     scene_block = _scene_direction_block()
     if scene_block:
         # A JSON-conforming model follows the OUTPUT FORMAT example, not prose
