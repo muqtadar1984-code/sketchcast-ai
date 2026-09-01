@@ -46,6 +46,20 @@ class TestContract:
         # and shows no coordinate literal anywhere
         assert not re.search(r'"(head|tail|at)":\s*\[\s*\d', p)
 
+    def test_no_quoted_value_is_followed_by_a_parenthetical(self):
+        """This model copies surface FORM, prose included. The prompt read
+        'Speakers: "teacher" (primary explanatory voice)' and a real reply
+        came back as {"who":("teacher"),...} — unparseable, lesson lost. Any
+        quoted token trailed by a bracket teaches that shape, so none may
+        appear anywhere in the prompt.
+        """
+        for style in NARRATION_STYLES:
+            p = build_semantic_prompt(
+                style, chapter_title="T", difficulty_level="Grade 7",
+                target_duration="6.0", episode_context="ctx")
+            bad = re.findall(r'"[a-z_]+"\s*\([^)]{0,60}\)', p)
+            assert not bad, f"{style}: quoted value then parenthetical: {bad}"
+
     def test_demands_minified_json(self):
         # pretty-printed replies truncate mid-array — the most common way a
         # lesson dies

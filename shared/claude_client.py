@@ -267,6 +267,12 @@ def _repair_json(text: str):
     #    because that is unambiguous about which half to drop.
     fixed = _re.sub(r'"(\w+)"\s*:\s*"\1"\s*:', r'"\1":', fixed)
     candidates.append(fixed)
+    # 2b. a value wrapped in brackets: {"who":("teacher")} -> {"who":"teacher"}
+    #     The prompt said 'Speakers: "teacher" (primary explanatory voice)'
+    #     and the model copied that FORM into the JSON. The prose has been
+    #     fixed, but a reply already in flight still has to survive.
+    fixed = _re.sub(r':\s*\(\s*("(?:[^"\\]|\\.)*")\s*\)', r": \1", fixed)
+    candidates.append(fixed)
     # 3. trailing commas
     decommaed = _re.sub(r",\s*([}\]])", r"\1", fixed)
     candidates.append(decommaed)

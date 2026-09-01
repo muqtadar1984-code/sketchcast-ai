@@ -76,7 +76,7 @@ Teaching goals, not timing requirements. Do NOT split the lesson into extra segm
 _DIALOGUE = """=== NARRATION ===
 Every segment MUST contain a "dialogue" array. Dialogue is the SINGLE SOURCE OF TRUTH for narration; the concatenated lines in order ARE the spoken lesson.
 Set "text": "" and "elevenlabs_text": "" — the dialogue is the narration and must never be written twice.
-Speakers: "teacher" (primary explanatory voice) and "student". A segment may be teacher-only; use the student only for a genuine question, a likely misconception, an observation, a challenge or an "aha" moment — never merely to alternate voices, and never in a style that does not call for it."""
+Speakers are "teacher" and "student". The teacher carries the explanation. A segment may be teacher-only; use the student only for a genuine question, a likely misconception, an observation, a challenge or an "aha" moment — never merely to alternate voices, and never in a style that does not call for it."""
 
 _TIMING = """=== TIMING ===
 The generated TTS audio is the timing authority. Do NOT output estimated durations, absolute timestamps, frame numbers or animation durations.
