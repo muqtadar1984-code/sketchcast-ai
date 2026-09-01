@@ -268,11 +268,6 @@ class SceneRenderer:
         self._warned: set[str] = set()
         self._suppressed: set[str] = set()   # arrows with no locatable target
         self._text_boxes: list[tuple] = []   # bound text boxes, for stacking
-        # (id, box) for the overlap audit. Two label writers each assumed the
-        # left column was theirs and wrote "Plant Cell" and "Cytoplasm" into
-        # each other; nothing measured text against text, so the frame scored
-        # clean. Placement is unchanged — this only makes it visible.
-        self._text_placed: list[tuple[str, tuple]] = []
         # keep-out zones around the persistent avatars: board labels must
         # never write over the teacher or the student (founder screenshot:
         # three organelle labels rendered across the teacher's face)
@@ -325,6 +320,7 @@ class SceneRenderer:
         # column ordered by target height so leaders stay parallel, columns
         # hugging the diagram (founder-specified sequence).
         self._relayout_part_labels(deferred_arrows)
+        self._audit_text_overlaps()
 
         # PASS 2: arrows, with anchor refs resolved against real bound
         # geometry. The tail (label side) resolves first so the head can pick
@@ -611,12 +607,6 @@ class SceneRenderer:
                 y0 = max(SAFE_T, y0)
                 self._warn(f"LABEL_MOVED_OFF_AVATAR {el.id}")
         self._text_boxes.append((x0, y0, x0 + w, y0 + h))
-        if not _is_overlay(el.id):
-            for oid, (bx0, by0, bx1, by1) in self._text_placed:
-                if x0 < bx1 and x0 + w > bx0 and y0 < by1 and y0 + h > by0:
-                    self._warn(f"TEXT_OVERLAP {el.id}+{oid}")
-                    break
-            self._text_placed.append((el.id, (x0, y0, x0 + w, y0 + h)))
         b.box = (x0, y0, x0 + w, y0 + h)
 
     def _sub_box(self, b: Bound, sub: str) -> tuple[float, float, float, float] | None:
@@ -638,6 +628,23 @@ class SceneRenderer:
             return None
         x0, y0, x1, y1 = b.box
         return (x0 + pre, y0, x0 + end, y1)
+
+    def _audit_text_overlaps(self) -> None:
+        """Report text written over text, on the FINAL boxes.
+
+        Nothing measured this before, so "1 label overwriting another" could
+        recur while the report said the lesson was clean. It must run AFTER
+        _relayout_part_labels: at bind time the labels still sit in their
+        starting column, and an earlier version of this check fired seven
+        times on a lesson whose rendered frames were correct — the relayout
+        had already separated them. A metric that cries wolf gets ignored.
+        """
+        boxes = [(eid, b.box) for eid, b in self.bound.items()
+                 if b.text is not None and b.box and not _is_overlay(eid)]
+        for i, (aid, a) in enumerate(boxes):
+            for bid, c in boxes[i + 1:]:
+                if a[0] < c[2] and a[2] > c[0] and a[1] < c[3] and a[3] > c[1]:
+                    self._warn(f"TEXT_OVERLAP {aid}+{bid}")
 
     def _relayout_part_labels(self, arrows: list) -> None:
         """Founder-specified label layout around the ROOT illustration:

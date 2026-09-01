@@ -53,6 +53,27 @@ _TITLE_AT = [640.0, 80.0]
 _LABEL_X = 95.0
 _LABEL_TOP = 140.0
 _LABEL_STEP = 78.0
+# The student avatar's keep-out zone starts here, and the renderer pushes any
+# label that reaches it UPWARD into the labels already above. With seven
+# organelle labels on a 78px pitch the column ran to y=608, the last three were
+# all shoved up a full column, ran out of room and clamped on top of each other
+# at the safe-area top — the founder's "1 label overwriting another", arriving
+# by a different route than the synthesis collision.
+_LABEL_FLOOR = 424.0
+_LABEL_H = 34.0
+_LABEL_STEP_MIN = 40.0
+# how many labels one column can hold before it reaches the avatar
+LABEL_COLUMN_CAPACITY = int(
+    (_LABEL_FLOOR - _LABEL_TOP - _LABEL_H) // _LABEL_STEP_MIN) + 1
+
+
+def _label_pitch(n: int) -> float:
+    """Spacing that keeps n labels clear of the avatar zone. Tightens before
+    it overflows, because a readable dense column beats a collision."""
+    if n < 2:
+        return _LABEL_STEP
+    room = (_LABEL_FLOOR - _LABEL_TOP - _LABEL_H) / (n - 1)
+    return max(_LABEL_STEP_MIN, min(_LABEL_STEP, room))
 
 
 class AdapterError(Exception):
@@ -194,6 +215,28 @@ def _elements(craw: dict, ctx: _Ctx, concept: str):
     by_id: dict[str, dict] = {}
     label_for_region: dict[str, str] = {}
     label_i = 0
+    # the pitch depends on HOW MANY labels there are, so count before placing
+    _n_labels = sum(
+        1 for e in (craw.get("elements") or [])
+        if isinstance(e, dict)
+        and str(e.get("type") or "").strip().lower() == "text"
+        and str(e.get("role") or "label").lower() != "title"
+        and str(e.get("text") or "").strip()
+        and isinstance(e.get("id"), str)
+        and not e["id"].startswith("__"))
+    _pitch = _label_pitch(_n_labels)
+    if _n_labels > LABEL_COLUMN_CAPACITY:
+        # Beyond this the starting column reaches the avatar and the renderer
+        # pushes the overflow back up into labels already placed, where it can
+        # run out of room and clamp two labels onto one spot (measured: both
+        # 'Chloroplasts' and 'Mitochondria' bound to (95, 22)).
+        # _relayout_part_labels normally rescues this by flowing labels
+        # right/left/top around the diagram, but it only handles labels that
+        # have ARROWS and only once the root illustration binds — so this
+        # column has to be survivable on its own.
+        ctx.note("LABEL_COLUMN_OVERFLOW",
+                 f"{concept}: {_n_labels} labels exceed the "
+                 f"{LABEL_COLUMN_CAPACITY} one column holds")
     for e in craw.get("elements") or []:
         if not isinstance(e, dict) or not isinstance(e.get("id"), str):
             ctx.note("MALFORMED_ELEMENT", f"{concept}: element without an id")
@@ -230,7 +273,7 @@ def _elements(craw: dict, ctx: _Ctx, concept: str):
             else:
                 el = {"id": eid, "type": "text", "text": text, "role": "label",
                       "size": 27, "anchor": "lt",
-                      "at": [_LABEL_X, _LABEL_TOP + _LABEL_STEP * label_i]}
+                      "at": [_LABEL_X, _LABEL_TOP + _pitch * label_i]}
                 label_i += 1
                 label_for_region.setdefault(_slug(text), eid)
                 label_for_region.setdefault(_slug(eid), eid)

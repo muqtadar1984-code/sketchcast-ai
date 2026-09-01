@@ -736,6 +736,35 @@ class TestLabelSynthesis:
                   if a["verb"] == "draw" and a["target"] == "cell")
         assert d2.get("region") == "nucleus"
 
+    def test_the_overlap_audit_measures_final_boxes_not_starting_ones(self):
+        """Ordering matters more than the check itself. An earlier version
+        ran at bind time and reported seven overlaps on a lesson whose
+        rendered frames were correct — _relayout_part_labels had already
+        flowed those labels around the diagram. A metric that cries wolf
+        gets ignored, which is worse than not having it."""
+        import inspect
+        from spike.scene_engine.render import SceneRenderer
+        src = inspect.getsource(SceneRenderer._bind)
+        assert src.index("_relayout_part_labels") < \
+            src.index("_audit_text_overlaps"), \
+            "the overlap audit must run AFTER the label relayout"
+
+    def test_the_overlap_audit_catches_a_real_collision(self):
+        from spike.scene_engine.render import SceneRenderer
+        from spike.scene_engine.schema import Scene
+
+        scene = {"id": "t", "narration": "Two labels, one spot.",
+                 "elements": [
+                     {"id": "a", "type": "text", "text": "Sap Vacuole",
+                      "at": [95, 200], "anchor": "lt", "role": "label"},
+                     {"id": "b", "type": "text", "text": "Chloroplasts",
+                      "at": [98, 204], "anchor": "lt", "role": "label"}],
+                 "actions": [{"verb": "write", "target": "a"},
+                             {"verb": "write", "target": "b"}]}
+        r = SceneRenderer(Scene.model_validate(scene))
+        hits = [w for w in r.audit()["warnings"] if "TEXT_OVERLAP" in w]
+        assert hits, "two labels on the same spot must be reported"
+
     def test_synthesized_labels_do_not_land_on_declared_ones(self):
         """A rendered frame showed "Plant Cell" and "Cytoplasm" printed into
         each other: synthesis started the left column at the top, and the

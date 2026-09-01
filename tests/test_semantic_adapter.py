@@ -173,6 +173,38 @@ class TestElements:
         # labels stack, they do not overlap at birth
         assert els["lbl_base"]["at"][1] > els["lbl_hyp"]["at"][1]
 
+    def test_a_full_label_column_clears_the_avatar_zone(self):
+        """Seven organelle labels on the old fixed 78px pitch ran to y=608.
+        The student avatar's keep-out starts at 424, so the renderer shoved
+        the last three up into a column that was already full and they
+        clamped on top of each other at the safe-area top — the founder's
+        "1 label overwriting another", reported by the new TEXT_OVERLAP
+        audit on a real render."""
+        from spike.scene_engine.semantic import (_LABEL_FLOOR, _LABEL_H,
+                                                 LABEL_COLUMN_CAPACITY)
+        p = _plan()
+        p["chapters"][0]["elements"] += [
+            {"id": f"lbl_{i}", "type": "text", "text": f"Part {i}",
+             "role": "label"} for i in range(5)]      # 5 + the plan's 2 = 7
+        plan, issues = adapt_semantic_plan(p, NARR)
+        ys = sorted(e["at"][1] for e in plan["chapters"][0]["elements"]
+                    if e.get("role") == "label")
+        assert len(ys) == LABEL_COLUMN_CAPACITY
+        assert ys[-1] + _LABEL_H <= _LABEL_FLOOR, \
+            f"the column still reaches the avatar: bottom {ys[-1] + _LABEL_H}"
+        assert all(b - a >= 40.0 for a, b in zip(ys, ys[1:])), \
+            f"labels packed too tightly to read: {ys}"
+        assert not [i for i in issues if i["code"] == "LABEL_COLUMN_OVERFLOW"]
+
+    def test_more_labels_than_fit_are_reported_not_silently_stacked(self):
+        p = _plan()
+        p["chapters"][0]["elements"] += [
+            {"id": f"lbl_{i}", "type": "text", "text": f"Part {i}",
+             "role": "label"} for i in range(10)]
+        _, issues = adapt_semantic_plan(p, NARR)
+        assert [i for i in issues if i["code"] == "LABEL_COLUMN_OVERFLOW"], \
+            "an overflowing label column must be named, not quietly overlapped"
+
     def test_renderer_owned_types_are_dropped_with_a_note(self):
         p = _plan()
         p["chapters"][0]["elements"] += [
