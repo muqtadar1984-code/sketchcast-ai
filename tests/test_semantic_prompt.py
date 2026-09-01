@@ -319,6 +319,38 @@ class TestJsonRepair:
         out = ClaudeClient._extract_json('{"who": "who", "line": "Hi"}')
         assert out == {"who": "who", "line": "Hi"}
 
+    def test_a_dropped_line_key_is_repaired(self):
+        """{"who": "teacher": "text"} — the "line" key omitted and its text
+        left hanging off the speaker. Fourth distinct malformation measured
+        on this path, and like the other three it corrupts the dialogue
+        object specifically."""
+        from shared.claude_client import _repair_json
+        out = _repair_json(
+            '{"dialogue": [{"who": "teacher": "And then the nucleus."}]}')
+        assert out["dialogue"][0] == {"who": "teacher",
+                                      "line": "And then the nucleus."}
+
+    def test_every_malformation_measured_so_far_is_covered(self):
+        """One place to see the whole set, so the next one joins a list
+        rather than being rediscovered from scratch."""
+        from shared.claude_client import _repair_json
+        cases = {
+            "unclosed chapters array":
+                '{"segments": [1], "visual_plan": {"chapters": [{"a": 1}}',
+            "duplicated key":
+                '{"segments": [1], "d": [{"who":"who":"teacher"}]}',
+            "bracketed value":
+                '{"segments": [1], "d": [{"who":("teacher")}]}',
+            "dropped line key":
+                '{"segments": [1], "d": [{"who": "teacher": "hi"}]}',
+            "ssml quotes":
+                '{"segments": [1], "d": "a <break time="0.3s"/> b"}',
+            "trailing comma":
+                '{"segments": [1], "d": [1,],}',
+        }
+        for name, text in cases.items():
+            assert _repair_json(text) is not None, f"no longer repaired: {name}"
+
     def test_genuine_garbage_still_fails(self):
         from shared.claude_client import _repair_json
         assert _repair_json("this is not json at all") is None

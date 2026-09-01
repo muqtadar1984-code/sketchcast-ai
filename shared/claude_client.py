@@ -273,6 +273,13 @@ def _repair_json(text: str):
     #     fixed, but a reply already in flight still has to survive.
     fixed = _re.sub(r':\s*\(\s*("(?:[^"\\]|\\.)*")\s*\)', r": \1", fixed)
     candidates.append(fixed)
+    # 2c. the "line" key dropped, its text left hanging off the speaker:
+    #     {"who": "teacher": "And then..."} -> {"who": "teacher", "line": "..."}
+    #     Every malformation measured on this path so far has corrupted this
+    #     one dialogue object, so it gets its own rule.
+    fixed = _re.sub(r'"who"\s*:\s*("(?:[^"\\]|\\.)*")\s*:\s*(?=")',
+                    r'"who": \1, "line": ', fixed)
+    candidates.append(fixed)
     # 3. trailing commas
     decommaed = _re.sub(r",\s*([}\]])", r"\1", fixed)
     candidates.append(decommaed)
