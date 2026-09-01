@@ -152,12 +152,15 @@ RULES:
 
 THE TEACHER IS ALWAYS ON SCREEN: a small hand-drawn teacher stands beside
 the board for the whole lesson (the engine adds them — never declare a
-teacher element). A step may add
+teacher element). Whenever a segment's narration makes an IMPORTANT
+statement, a speech bubble APPEARS beside the teacher showing that exact
+narration sentence while it is spoken, then fades (speech is never drawn
+by the hand). The engine detects these automatically; a step may add
   "key_point": "The cell wall gives the cell its shape"
-— a SHORT (≤8 words) VERBATIM quote of that segment's single most important
-sentence fragment. The hand draws a speech bubble beside the teacher and
-writes the line exactly when those words are spoken, then the bubble fades.
-Use 3-6 per lesson, on definitions and key ideas only — never on filler.
+to mark WHICH sentence matters most in its segment — copy it VERBATIM from
+that segment's "text" (paraphrases get snapped to the closest sentence).
+Mark the genuinely important sentences, however many there are — the
+criterion is importance, never position or count.
 
 HUMAN TEACHING MOMENTS (optional, SELECTIVE): a step may add
   "moment": {"role": "student", "text": "Why can't everything enter?"}

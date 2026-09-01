@@ -55,6 +55,8 @@ def build_whiteboard_scene(segment: dict) -> dict | None:
         # out for one segment.
         elements, actions = [], []
         _add_teacher(segment, elements, actions)
+        if seg_type not in ("question_hook", "quiz"):
+            _add_key_sentence_bubble(segment, elements, actions)
         return {"id": f"wb_{segment.get('segment_id', 'seg')}",
                 "compiled": True, "scene_type": "generic",
                 "narration": segment.get("text") or "",
@@ -88,10 +90,25 @@ def build_whiteboard_scene(segment: dict) -> dict | None:
         actions.append({"verb": "write", "target": pid})
 
     _add_teacher(segment, elements, actions)
+    if seg_type not in ("question_hook", "quiz"):
+        # the teacher speaks on card segments too — same importance rule,
+        # same verbatim-narration rule as everywhere else
+        _add_key_sentence_bubble(segment, elements, actions)
     return {"id": f"wb_{segment.get('segment_id', 'seg')}", "compiled": True,
             "scene_type": "generic",
             "narration": segment.get("text") or "",
             "elements": elements, "actions": actions}
+
+
+def _add_key_sentence_bubble(segment: dict, elements: list[dict],
+                             actions: list[dict]) -> None:
+    sent = select_key_sentence(segment.get("text") or "")
+    if not sent:
+        return
+    uid = f"c_{segment.get('segment_id', 'seg')}"
+    kp_els, kp_acts = key_point_choreo(sent, uid=uid)
+    elements.extend(kp_els)
+    actions.extend(kp_acts)
 
 
 def _add_teacher(segment: dict, elements: list[dict],
@@ -131,19 +148,118 @@ def _quiz_scene(segment: dict, heading: str, visual: dict) -> dict:
             "elements": elements, "actions": actions}
 
 
+# ── narration key statements ─────────────────────────────────────────────────
+# The founder's rule: a speech bubble must say WHAT THE NARRATION IS SAYING,
+# when it is being said — anything else is a disconnect. So bubble text is
+# always a VERBATIM narration sentence: model-planned key_points get snapped
+# to the closest actual sentence, and segments the model didn't plan get one
+# selected by IMPORTANCE (definition patterns, causal links), not by count.
+
+import re as _re
+
+_DEF_PAT = _re.compile(
+    r"\b(is|are|means|meaning|called|controls?|provides?|gives?|stores?|"
+    r"makes?|releases?|protects?|allows?|contains?|holds?|surrounds?|"
+    r"keeps?|lets?|acts?|works?|needs?)\b", _re.I)
+_EMPH_PAT = _re.compile(
+    r"\b(remember|notice|important|key|every|each|all|main|basic|"
+    r"because|so that|which means|this is why)\b", _re.I)
+_META_PAT = _re.compile(r"tap continue|anything you'd want|pause here", _re.I)
+
+
+def split_sentences(text: str) -> list[str]:
+    return [s.strip() for s in _re.split(r"(?<=[.!?])\s+", text or "")
+            if s.strip()]
+
+
+def sentence_importance(s: str) -> int:
+    """0 = not bubble-worthy. Questions belong to the student, meta lines to
+    nobody; definitions and causal statements are what a teacher repeats."""
+    words = s.split()
+    if not (4 <= len(words) <= 20) or s.endswith("?") or _META_PAT.search(s):
+        return 0
+    score = 0
+    if _DEF_PAT.search(s):
+        score += 2
+    if _EMPH_PAT.search(s):
+        score += 1
+    if 5 <= len(words) <= 14:
+        score += 1
+    return score
+
+
+def select_key_sentence(text: str, min_score: int = 3) -> str | None:
+    best, best_score = None, min_score - 1
+    for s in split_sentences(text):
+        sc = sentence_importance(s)
+        if sc > best_score:
+            best, best_score = s, sc
+    return best
+
+
+def snap_to_narration(candidate: str, narration: str) -> str | None:
+    """The narration sentence the candidate is (a paraphrase of): exact
+    substring first, then best token overlap. None when nothing is close —
+    the caller then either selects by importance or drops the bubble."""
+    if not candidate or not narration:
+        return None
+    cand = " ".join(candidate.split()).rstrip(".!…").lower()
+    if cand:
+        # a substring hit expands to the WHOLE containing sentence — the
+        # bubble should show the narration's statement, not a fragment of it
+        for s in split_sentences(narration):
+            if cand in s.lower():
+                return s
+    ct = set(_re.findall(r"[a-z']+", cand))
+    if not ct:
+        return None
+    best, best_j = None, 0.44          # below ~0.45 overlap it's a different claim
+    for s in split_sentences(narration):
+        stoks = set(_re.findall(r"[a-z']+", s.lower()))
+        if not stoks:
+            continue
+        j = len(ct & stoks) / len(ct | stoks)
+        if j > best_j:
+            best, best_j = s, j
+    return best
+
+
 # ── speech bubbles (shared with avatar teaching moments) ─────────────────────
+
+_BUBBLE_CAP = 110              # two lines of Caveat at size 24
+
+
+def _bubble_lines(text: str) -> list[str]:
+    text = _short(text, _BUBBLE_CAP)
+    if len(text) <= 34:
+        return [text]
+    words = text.split()
+    lines, cur = [], ""
+    limit = max(28, (len(text) + 1) // 2)
+    for w in words:
+        if cur and len(cur) + 1 + len(w) > limit and len(lines) < 1:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = f"{cur} {w}".strip()
+    lines.append(cur)
+    return lines[:2]
+
 
 def bubble_elements(bubble_id: str, text: str, at: tuple[float, float],
                     tail_to: tuple[float, float]) -> list[dict]:
-    """A hand-drawn speech bubble: an organic outline with a tail toward the
-    speaker, plus the SHORT handwritten line inside. Same primitives as
-    everything else on the board — the hand draws it, the hand writes it."""
-    text = _short(text, 60)
-    w = max(180.0, min(560.0, 26 + len(text) * 12.5))
-    h = 96.0
+    """A speech bubble that APPEARS (it is speech, not a drawing — the hand
+    never draws or letters it): rounded outline + tail toward the speaker +
+    up to two lines of the VERBATIM narration text."""
+    lines = _bubble_lines(text)
+    longest = max(len(l) for l in lines)
+    w = max(190.0, min(600.0, 30 + longest * 11.8))
     cx, cy = at
+    # never past the canvas edges — a wide line at the teacher-bubble
+    # position once touched the right border
+    w = min(w, 2 * min(cx - 24.0, (WORLD_W - 24.0) - cx))
+    h = 92.0 if len(lines) == 1 else 132.0
     x0, y0 = cx - w / 2, cy - h / 2
-    # bubble outline as a closed rounded path + a two-stroke tail
     outline = [
         [x0 + 18, y0], [x0 + w - 18, y0], [x0 + w, y0 + 18],
         [x0 + w, y0 + h - 18], [x0 + w - 18, y0 + h],
@@ -152,22 +268,29 @@ def bubble_elements(bubble_id: str, text: str, at: tuple[float, float],
     ]
     tail_base_x = x0 + w * (0.75 if tail_to[0] > cx else 0.25)
     tail = [[tail_base_x - 14, y0 + h], list(tail_to), [tail_base_x + 16, y0 + h]]
-    return [
+    els = [
         {"id": bubble_id, "type": "shape", "shape": "path", "points": outline,
          "closed": True, "width": 3.4},
         {"id": f"{bubble_id}_tail", "type": "shape", "shape": "path",
          "points": tail, "width": 3.4},
-        {"id": f"{bubble_id}_txt", "type": "text", "text": text, "size": 26,
-         "at": [cx, cy], "anchor": "mm"},
     ]
+    for i, line in enumerate(lines):
+        ly = cy if len(lines) == 1 else cy - 21 + 42 * i
+        els.append({"id": f"{bubble_id}_txt{i or ''}", "type": "text",
+                    "text": line, "size": 24, "at": [cx, ly], "anchor": "mm"})
+    return els
 
 
-def bubble_actions(bubble_id: str, start_frac: float = 0.12) -> list[dict]:
-    return [
-        {"verb": "draw", "target": bubble_id, "at": {"frac": start_frac}},
-        {"verb": "draw", "target": f"{bubble_id}_tail"},
-        {"verb": "write", "target": f"{bubble_id}_txt"},
-    ]
+def bubble_cue_phrase(text: str) -> str:
+    """The first few words of the sentence — always an exact narration
+    substring, so the cue resolves even when the bubble shows a trimmed
+    version of a long line."""
+    return " ".join(text.split()[:5])
+
+
+def speech_secs(text: str) -> float:
+    """Rough speaking time of the line, for scheduling the fade-out."""
+    return min(5.0, 0.42 * len(text.split()) + 1.4)
 
 
 # ── avatar teaching moments (§12-18) ─────────────────────────────────────────
@@ -213,51 +336,56 @@ def teacher_element() -> dict:
 
 
 def key_point_choreo(text: str, uid: str) -> tuple[list[dict], list[dict]]:
-    """Elements + actions for one teacher key point: the hand draws a bubble
-    beside the ever-present teacher, writes the SHORT verbatim line, the
-    teacher 'speaks' (pulse), then the bubble fades — the teacher remains.
-    The bubble draw is cued to the line's own words in the narration, so it
-    lands exactly when the statement is spoken."""
-    text = _short(text, 60)
+    """Elements + actions for one teacher line: the bubble APPEARS beside
+    the ever-present teacher exactly as the words are spoken (it is speech,
+    not a drawing — no pen, no lettering), the teacher pulses, and the
+    bubble fades on its own once the sentence has been said. `text` must be
+    a VERBATIM narration sentence — snapping happens at the call sites."""
     bub_id = f"__kp_{uid}"
     grp_id = f"__kp_{uid}_grp"
     elements = bubble_elements(bub_id, text, _TEACH_BUBBLE_AT,
                                _TEACH_BUBBLE_TAIL)
-    elements.append({"id": grp_id, "type": "group",
-                     "children": [bub_id, f"{bub_id}_tail", f"{bub_id}_txt"]})
+    kids = [e["id"] for e in elements]
+    elements.append({"id": grp_id, "type": "group", "children": kids})
+    cue = bubble_cue_phrase(text)
     actions = [
-        {"verb": "draw", "target": bub_id, "at": {"phrase": text,
-                                                  "offset": -0.8}},
-        {"verb": "draw", "target": f"{bub_id}_tail"},
-        {"verb": "write", "target": f"{bub_id}_txt"},
+        {"verb": "reveal", "target": grp_id, "duration": 0.35,
+         "at": {"phrase": cue, "offset": -0.15}},
         {"verb": "pulse", "target": TEACHER_ID, "times": 2, "duration": 1.2},
-        {"verb": "fade", "target": grp_id, "to": 0.0, "duration": 0.6,
-         "at": {"frac": 0.9}},
+        {"verb": "fade", "target": grp_id, "to": 0.0, "duration": 0.45,
+         "at": {"phrase": cue, "offset": speech_secs(text)}},
     ]
     return elements, actions
 
 
 def human_moment(role: str, text: str, uid: str = "hm") -> tuple[list[dict], list[dict], str]:
-    """Elements + actions for one HUMAN_TEACHING_MOMENT, plus the avatar asset
-    key. The choreography is the spec's: avatar appears -> hand draws the
-    bubble -> hand writes the SHORT line -> avatar 'speaks' (subtle pulse) ->
+    """Elements + actions for one HUMAN_TEACHING_MOMENT, plus the avatar
+    asset key. The avatar fades in, their bubble APPEARS with the line
+    (speech is never hand-drawn), they pulse while 'speaking', then
     everything fades and the board takes the focus back. All scoped to ONE
     segment — moments never persist onto the board."""
     role = role if role in ("student", "teacher") else "student"
     asset = f"avatar_{role}"
     av_id = f"__{uid}_av"
     bub_id = f"__{uid}_bub"
+    bgrp_id = f"__{uid}_bub_grp"
     grp_id = f"__{uid}_grp"
     elements = [{"id": av_id, "type": "illustration", "asset": asset,
                  "at": list(_AV_AT), "scale": _AV_SCALE}]
-    elements += bubble_elements(bub_id, text, _BUBBLE_AT, _BUBBLE_TAIL_TO)
+    bub_els = bubble_elements(bub_id, text, _BUBBLE_AT, _BUBBLE_TAIL_TO)
+    elements += bub_els
+    elements.append({"id": bgrp_id, "type": "group",
+                     "children": [e["id"] for e in bub_els]})
     elements.append({"id": grp_id, "type": "group",
-                     "children": [av_id, bub_id, f"{bub_id}_tail",
-                                  f"{bub_id}_txt"]})
-    actions = [{"verb": "reveal", "target": av_id, "at": {"frac": 0.06},
-                "duration": 0.5}]
-    actions += bubble_actions(bub_id, start_frac=0.16)
-    actions += [
+                     "children": [av_id] + [e["id"] for e in bub_els]})
+    cue = bubble_cue_phrase(text)
+    actions = [
+        {"verb": "reveal", "target": av_id, "at": {"frac": 0.06},
+         "duration": 0.5},
+        # the line appears when it is spoken (verbatim narration lines cue
+        # by phrase; invented dialogue falls back to just after the avatar)
+        {"verb": "reveal", "target": bgrp_id, "duration": 0.35,
+         "at": {"phrase": cue, "offset": -0.15}},
         {"verb": "pulse", "target": av_id, "times": 3, "duration": 1.6},
         {"verb": "fade", "target": grp_id, "to": 0.0, "duration": 0.6,
          "at": {"frac": 0.86}},

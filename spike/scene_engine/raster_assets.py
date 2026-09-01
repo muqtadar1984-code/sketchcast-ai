@@ -246,7 +246,90 @@ def annotate_regions(ink: Image.Image, part_names: list[str]) -> dict:
             if clean:
                 regions[str(name).strip().lower()] = clean
     out["regions"] = regions
+    missing = [n for n in part_names
+               if str(n).strip().lower() not in regions]
+    if missing and regions:
+        # focused re-ask for JUST the unboxed parts — the multiplexed
+        # N-part question reliably drops one or two (a run once lost 3 of 7,
+        # suppressing their arrows). A short list gets full attention.
+        data3 = _vision_json(
+            "This is an unlabeled educational line diagram. Return ONLY "
+            'JSON: {"regions": {"<part>": [[ymin,xmin,ymax,xmax], ...]}}. '
+            "Boxes normalized 0-1000. Give a box around EACH visible "
+            "instance of: " + ", ".join(missing) +
+            '. Use an empty list only for a part truly not shown.',
+            buf.getvalue())
+        if isinstance(data3, dict) and isinstance(data3.get("regions"), dict):
+            for name, boxes in data3["regions"].items():
+                key2 = str(name).strip().lower()
+                if key2 in regions or not isinstance(boxes, list):
+                    continue
+                if boxes and isinstance(boxes[0], (int, float)):
+                    boxes = [boxes]
+                clean = []
+                for b in boxes[:6]:
+                    try:
+                        ymin, xmin, ymax, xmax = [float(v) for v in b[:4]]
+                    except (TypeError, ValueError, IndexError):
+                        continue
+                    if ymax > ymin and xmax > xmin:
+                        clean.append([xmin / 1000 * w, ymin / 1000 * h,
+                                      xmax / 1000 * w, ymax / 1000 * h])
+                if clean:
+                    regions[key2] = clean
+    if not out["has_text"] and not out["text_boxes"]:
+        # second, single-purpose pass: the combined ask (text + N part
+        # boxes) diluted attention enough that a cell covered in baked
+        # gibberish labels came back has_text=false. A dedicated question
+        # catches what the multiplexed one misses.
+        out["text_boxes"] = scan_text(ink)
+        if out["text_boxes"]:
+            out["has_text"] = True
     return out
+
+
+def scan_text(ink: Image.Image) -> list[list[float]]:
+    """Dedicated text-only vision pass: pixel boxes around every readable
+    mark. One focused question catches captions the multiplexed annotation
+    call repeatedly missed."""
+    import io as _io
+    buf = _io.BytesIO()
+    on_white = Image.new("RGB", ink.size, (255, 255, 255))
+    on_white.paste(ink, (0, 0), ink)
+    on_white.save(buf, "PNG")
+    data = _vision_json(
+        "Look ONLY for text. Return ONLY JSON "
+        '{"text_boxes": [[ymin,xmin,ymax,xmax], ...]} — a tight box '
+        "around EVERY letter, word, number or label anywhere in this "
+        "image, however small, faint, partial or misspelled; [] only "
+        "if the image is truly wordless. Boxes normalized 0-1000.",
+        buf.getvalue())
+    w, h = ink.size
+    boxes: list[list[float]] = []
+    if isinstance(data, dict):
+        for b in (data.get("text_boxes") or [])[:24]:
+            try:
+                ymin, xmin, ymax, xmax = [float(v) for v in b[:4]]
+            except (TypeError, ValueError, IndexError):
+                continue
+            if ymax > ymin and xmax > xmin:
+                boxes.append([xmin / 1000 * w, ymin / 1000 * h,
+                              xmax / 1000 * w, ymax / 1000 * h])
+    return boxes
+
+
+def scrub_all_text(ink: Image.Image, boxes: list[list[float]],
+                   max_rounds: int = 3) -> tuple[Image.Image, list[list[float]]]:
+    """Scrub-and-rescan until the image is wordless (or rounds run out).
+    Vision under-reports boxes per call — a single-pass scrub once left
+    'sap vacuole' and two gibberish captions standing after removing five
+    other words. Returns (clean ink, boxes still found — [] on success)."""
+    rounds = 0
+    while boxes and rounds < max_rounds:
+        ink = scrub_text(ink, boxes)
+        boxes = scan_text(ink)
+        rounds += 1
+    return ink, boxes
 
 
 # ── post-processing ──────────────────────────────────────────────────────────
@@ -354,12 +437,12 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
                 if ann.get("text_boxes"):
                     logger.warning("cached asset %r has baked text — scrubbing "
                                    "%d box(es)", key, len(ann["text_boxes"]))
-                    ink = scrub_text(ink, ann["text_boxes"])
+                    ink, left = scrub_all_text(ink, ann["text_boxes"])
                     try:
                         ink.save(png)
                     except OSError:
                         pass
-                    md["baked_text"], fresh_baked = False, False
+                    md["baked_text"], fresh_baked = bool(left), bool(left)
                 try:
                     meta.write_text(json.dumps(md, indent=2), encoding="utf-8")
                 except OSError:
@@ -381,8 +464,15 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
         return None
 
     def generate(extra: str = "") -> Image.Image | None:
-        raw_bytes = _vertex_call(prompt + _STYLE_SUFFIX + extra) or \
-            _aistudio_call(prompt + _STYLE_SUFFIX + extra)
+        # the layer-groups tail addresses the VISION annotator, never the
+        # image model — left in, it reads as 'write these names' and the
+        # model bakes exactly those labels into the art (measured: a cell
+        # covered in 'membi'/'chloropsapts'/'mito!' gibberish)
+        import re as _re
+        gen_prompt = _re.sub(r"\s*name the layer groups exactly:[^.]*\.?",
+                             "", prompt, flags=_re.I)
+        raw_bytes = _vertex_call(gen_prompt + _STYLE_SUFFIX + extra) or \
+            _aistudio_call(gen_prompt + _STYLE_SUFFIX + extra)
         if raw_bytes is None:
             return None
         import io
@@ -411,16 +501,16 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
         return None
     ann = annotate_regions(ink, names)
     if ann.get("text_boxes"):
-        # scrub whenever boxes exist, whatever the has_text verdict said —
-        # 'leaf'/'magnified' captions once shipped because the verdict came
-        # back false while the words sat right there
         # baked labels duplicate and contradict the engine's own labels —
-        # scrubbing the reported boxes is deterministic where a regeneration
-        # is a coin flip (this model labelled the cell twice in a row)
-        logger.warning("asset %r has baked text — scrubbing %d box(es)", key,
-                       len(ann["text_boxes"]))
-        ink = scrub_text(ink, ann["text_boxes"])
-        ann["has_text"] = False
+        # scrub-and-RESCAN until wordless (vision under-reports per call: a
+        # single-pass scrub once removed five words and left three standing)
+        logger.warning("asset %r has baked text — scrubbing (%d box(es), "
+                       "round 1)", key, len(ann["text_boxes"]))
+        ink, left = scrub_all_text(ink, ann["text_boxes"])
+        ann["has_text"] = bool(left)
+        if left:
+            logger.warning("asset %r still shows text after scrubbing — "
+                           "flagged for validation", key)
     elif ann["has_text"]:
         # text seen but no boxes reported: ONE regeneration attempt with the
         # prohibition escalated, then a scrub attempt on the retry
@@ -430,8 +520,8 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
         if retry is not None:
             ann2 = annotate_regions(retry, names)
             if ann2["has_text"] and ann2.get("text_boxes"):
-                ink = scrub_text(retry, ann2["text_boxes"])
-                ann2["has_text"] = False
+                ink, left = scrub_all_text(retry, ann2["text_boxes"])
+                ann2["has_text"] = bool(left)
                 ann = ann2
             elif not ann2["has_text"]:
                 ink, ann = retry, ann2

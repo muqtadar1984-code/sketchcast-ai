@@ -502,19 +502,33 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
     # never fades at a chapter boundary, never renames to prev__*, never
     # counts against the one-root rule. On the lesson's first segment the
     # hand draws them in; everywhere else they are simply present at t=0.
-    from .whiteboard import AVATAR_PROMPTS, TEACHER_ID, teacher_element
+    from .whiteboard import (AVATAR_PROMPTS, TEACHER_ID, key_point_choreo,
+                             select_key_sentence, teacher_element)
     first_sid = (all_segments or sorted(scenes))[0] if (all_segments or scenes) \
         else None
     for sid, sc in scenes.items():
-        if any(e.get("id") == TEACHER_ID for e in sc["elements"]):
+        if not any(e.get("id") == TEACHER_ID for e in sc["elements"]):
+            sc["elements"].append(teacher_element())
+            if sid == first_sid:
+                sc["actions"] = ([{"verb": "draw", "target": TEACHER_ID,
+                                   "at": {"sec": 0.3}}] + sc["actions"])
+            assets_by_seg.setdefault(sid, {})
+            assets_by_seg[sid] = {**assets_by_seg[sid],
+                                  "avatar_teacher":
+                                      AVATAR_PROMPTS["avatar_teacher"]}
+        # the teacher speaks THROUGHOUT the lesson, wherever the narration
+        # makes an important statement — including HOLD scenes and steps the
+        # model gave no key_point. Selection is by IMPORTANCE, never count;
+        # segments already carrying a bubble or a moment stay as planned.
+        if any(str(e.get("id", "")).startswith(("__kp_", "__hm_", "__tm_"))
+               for e in sc["elements"]):
             continue
-        sc["elements"].append(teacher_element())
-        if sid == first_sid:
-            sc["actions"] = ([{"verb": "draw", "target": TEACHER_ID,
-                               "at": {"sec": 0.3}}] + sc["actions"])
-        assets_by_seg.setdefault(sid, {})
-        assets_by_seg[sid] = {**assets_by_seg[sid],
-                              "avatar_teacher": AVATAR_PROMPTS["avatar_teacher"]}
+        sent = select_key_sentence(narrations.get(sid, ""))
+        if sent:
+            kp_els, kp_acts = key_point_choreo(sent, uid=f"a_{sid}")
+            sc["elements"].extend(kp_els)
+            sc["actions"] = sc["actions"] + kp_acts
+            report.append(f"SEGMENT {sid} | TEACHER SPEAKS (auto): {sent!r}")
     return scenes, assets_by_seg, report
 
 
@@ -714,6 +728,35 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
     if root_id and part_names:
         root_at = _pt(roster[root_id].get("at")) or [640, 340]
         labels = {eid: e for eid, e in roster.items() if e.get("type") == "text"}
+
+        # parts the narration teaches but nobody labelled: one run declared
+        # a full plant cell with NO labels or arrows at all. Synthesize the
+        # label (left column, written in the step whose OWN narration first
+        # names the part) — the arrow-synthesis pass below then arms it.
+        covered = {p for lid in labels
+                   for p in [_match_part(_guess_part_name(lid))] if p}
+        stack = 0
+        for part in part_names:
+            if part in covered:
+                continue
+            target_step = next(
+                (s for s in ch.steps
+                 if _norm_name(part) in _norm_name(
+                     narrations.get(s.segment_id, ""))), None)
+            if target_step is None:
+                continue
+            lid = "lbl_auto_" + _norm_name(part).replace(" ", "_")
+            if lid in roster:
+                continue
+            roster[lid] = {"id": lid, "type": "text",
+                           "text": part.replace("_", " ").strip().title(),
+                           "at": [95.0, 140.0 + 78.0 * stack],
+                           "role": "label", "anchor": "lt"}
+            labels[lid] = roster[lid]
+            target_step.actions.append({"verb": "write", "target": lid})
+            stack += 1
+            report.append(f"CHAPTER {ch.concept} | SYNTHESIZED {lid} "
+                          f"(narration names {part!r})")
         for eid, e in list(roster.items()):
             if e.get("type") != "arrow":
                 continue
@@ -1037,35 +1080,47 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             first = False
             continue
 
+        narration_here = narrations.get(seg_id, "")
         moment_note = ""
         if st.moment:
+            from .whiteboard import snap_to_narration
+            # a bubble must say what the narration is SAYING — snap the
+            # model's line to the actual sentence when one matches (invented
+            # student dialogue that matches nothing stays as written)
+            m_text = snap_to_narration(st.moment["text"], narration_here) \
+                or st.moment["text"]
             if st.moment["role"] == "teacher":
                 # the teacher is ALREADY on screen — a teacher moment speaks
                 # through the persistent one (a second avatar_teacher once
                 # rendered on top of it)
                 from .whiteboard import key_point_choreo
-                hm_els, hm_acts = key_point_choreo(st.moment["text"],
-                                                   uid=f"tm_{seg_id}")
+                hm_els, hm_acts = key_point_choreo(m_text, uid=f"tm_{seg_id}")
             else:
                 from .whiteboard import AVATAR_PROMPTS, human_moment
                 hm_els, hm_acts, hm_asset = human_moment(
-                    st.moment["role"], st.moment["text"], uid=f"hm_{seg_id}")
+                    st.moment["role"], m_text, uid=f"hm_{seg_id}")
                 seg_assets = {**seg_assets}
                 seg_assets[hm_asset] = AVATAR_PROMPTS[hm_asset]
             elements.extend(hm_els)
             step_actions = step_actions + hm_acts
-            moment_note = f" | HUMAN_TEACHING_MOMENT ({st.moment['role']}: "                           f"{st.moment['text']!r})"
+            moment_note = f" | HUMAN_TEACHING_MOMENT ({st.moment['role']}: "                           f"{m_text!r})"
 
         if st.key_point:
-            # the persistent teacher speaks: bubble drawn beside them, cued
-            # to the quoted words; the bubble fades, the teacher stays (the
-            # teacher element itself joins every scene in compile_plan's
-            # final pass)
-            from .whiteboard import key_point_choreo
-            kp_els, kp_acts = key_point_choreo(st.key_point, uid=seg_id)
-            elements.extend(kp_els)
-            step_actions = step_actions + kp_acts
-            moment_note += f" | KEY_POINT ({st.key_point!r})"
+            # the persistent teacher speaks. The model's key_point is only an
+            # IMPORTANCE SIGNAL — the bubble text is the narration's own
+            # sentence (snapped; paraphrases that match nothing fall back to
+            # the segment's most important sentence, or no bubble at all).
+            from .whiteboard import (key_point_choreo, select_key_sentence,
+                                     snap_to_narration)
+            kp_text = snap_to_narration(st.key_point, narration_here) \
+                or select_key_sentence(narration_here)
+            if kp_text:
+                kp_els, kp_acts = key_point_choreo(kp_text, uid=seg_id)
+                elements.extend(kp_els)
+                step_actions = step_actions + kp_acts
+                moment_note += f" | KEY_POINT ({kp_text!r})"
+            else:
+                moment_note += " | KEY_POINT dropped (no narration match)"
         scenes[seg_id] = {"id": f"vc_{seg_id}", "compiled": True, "scene_type": "process",
                           "narration": narrations.get(seg_id, ""),
                           "camera_start": dict(cam),

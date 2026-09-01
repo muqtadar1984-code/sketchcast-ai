@@ -695,6 +695,165 @@ class TestBoundaryRenameAnchors:
         Scene.model_validate(s2)      # the boundary scene must stay valid
 
 
+class TestLabelSynthesis:
+    """Round-12 variance: a full cell declared with NO labels or arrows at
+    all. The narration still teaches the parts — so the compiler labels
+    them, and the arrow synthesis arms each label."""
+
+    def test_unlabelled_parts_get_labels_and_arrows(self):
+        raw = {"chapters": [{
+            "concept": "cell", "transition": "clear_and_redraw",
+            "assets": {"pc": ("A plant cell. Name the layer groups exactly: "
+                              "cell wall, nucleus")},
+            "elements": [{"id": "cell", "type": "illustration", "asset": "pc",
+                          "at": [640, 360]}],
+            "steps": [
+                {"segment": 1, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "cell"}]},
+                {"segment": 2, "decision": "EXTEND",
+                 "actions": [{"verb": "draw", "target": "cell"}]},
+            ],
+        }]}
+        plan = parse_visual_plan(raw)
+        narr = {"s001": "The cell wall keeps the cell strong.",
+                "s002": "Inside, the nucleus controls everything."}
+        scenes, _, report = compile_plan(plan, narr,
+                                         all_segments=["s001", "s002"],
+                                         skip_hold=set())
+        assert any("SYNTHESIZED lbl_auto_cell_wall" in ln for ln in report)
+        assert any("SYNTHESIZED lbl_auto_nucleus" in ln for ln in report)
+        assert any("SYNTHESIZED arr_auto_lbl_auto_nucleus" in ln
+                   for ln in report)
+        s2 = scenes["s002"]
+        lbl = next(e for e in s2["elements"] if e["id"] == "lbl_auto_nucleus")
+        assert lbl["text"] == "Nucleus"
+        assert any(a["verb"] == "write" and a["target"] == "lbl_auto_nucleus"
+                   for a in s2["actions"])
+        arrow = next(e for e in s2["elements"]
+                     if e["id"] == "arr_auto_lbl_auto_nucleus")
+        assert arrow["head"]["layer"] == "nucleus"
+        d2 = next(a for a in s2["actions"]
+                  if a["verb"] == "draw" and a["target"] == "cell")
+        assert d2.get("region") == "nucleus"
+
+    def test_declared_labels_suppress_synthesis(self):
+        plan = parse_visual_plan(_plan_raw())     # lbl_nucleus declared
+        narr = {"s001": "a", "s002": "the nucleus", "s003": "c"}
+        _, _, report = compile_plan(plan, narr,
+                                    all_segments=["s001", "s002", "s003"],
+                                    skip_hold=set())
+        assert not any("SYNTHESIZED lbl_auto_nucleus" in ln for ln in report)
+
+
+class TestSpeechBubbles:
+    """Founder rules: bubble text is VERBATIM narration (a paraphrase is a
+    disconnect), selection is by IMPORTANCE across the whole lesson, and
+    speech APPEARS/fades — the hand never draws or letters it."""
+
+    NARR = ("Look at this closely. The cell wall provides support and "
+            "protection for the plant cell. Pretty neat, right?")
+
+    def test_snap_replaces_a_paraphrase_with_the_real_sentence(self):
+        from spike.scene_engine.whiteboard import snap_to_narration
+        snapped = snap_to_narration("Cell wall provides support & protection",
+                                    self.NARR)
+        assert snapped == ("The cell wall provides support and protection "
+                           "for the plant cell.")
+
+    def test_snap_refuses_an_unrelated_claim(self):
+        from spike.scene_engine.whiteboard import snap_to_narration
+        assert snap_to_narration("Mitochondria release energy",
+                                 self.NARR) is None
+
+    def test_importance_selection_skips_filler_and_questions(self):
+        from spike.scene_engine.whiteboard import select_key_sentence
+        assert select_key_sentence(self.NARR) == (
+            "The cell wall provides support and protection for the plant "
+            "cell.")
+        assert select_key_sentence(
+            "Wow. Amazing stuff here. What could it be?") is None
+
+    def test_bubble_appears_and_fades_never_drawn(self):
+        from spike.scene_engine.whiteboard import key_point_choreo
+        els, acts = key_point_choreo(
+            "The cell wall provides support and protection for the plant "
+            "cell.", uid="s005")
+        bubble_ids = {e["id"] for e in els}
+        for a in acts:
+            if a.get("target") in bubble_ids:
+                assert a["verb"] in ("reveal", "fade"), a
+        reveal = next(a for a in acts if a["verb"] == "reveal")
+        fade = next(a for a in acts if a["verb"] == "fade")
+        # cued to the spoken words, gone shortly after they end
+        assert reveal["at"]["phrase"] == "The cell wall provides support"
+        assert fade["at"]["phrase"] == reveal["at"]["phrase"]
+        assert 1.4 < fade["at"]["offset"] <= 5.0
+
+    def test_long_sentence_wraps_to_two_lines(self):
+        from spike.scene_engine.whiteboard import bubble_elements
+        els = bubble_elements("b", "The cell wall provides support and "
+                              "protection for the plant cell.", (600, 300),
+                              (700, 400))
+        texts = [e for e in els if e["type"] == "text"]
+        assert len(texts) == 2
+
+    def test_planned_key_point_snaps_to_narration(self):
+        raw = _plan_raw()
+        raw["chapters"][0]["steps"][1]["key_point"] = \
+            "nucleus is the control centre"          # model paraphrase
+        plan = parse_visual_plan(raw)
+        narr = {"s001": "Here is the cell.",
+                "s002": "The nucleus is the control centre of the whole "
+                        "cell. It stores the instructions.",
+                "s003": "Look closer."}
+        scenes, _, report = compile_plan(
+            plan, narr, all_segments=["s001", "s002", "s003"],
+            skip_hold=set())
+        txts = [e["text"] for e in scenes["s002"]["elements"]
+                if str(e.get("id", "")).startswith("__kp_") and
+                e.get("type") == "text"]
+        assert txts and "".join(txts).startswith("The nucleus is the")
+        assert any("KEY_POINT ('The nucleus is the control centre" in ln
+                   for ln in report)
+
+    def test_auto_bubbles_cover_unplanned_important_segments(self):
+        plan = parse_visual_plan(_plan_raw())    # no key_points planned
+        narr = {"s001": "Every living thing is made of cells.",
+                "s002": "The nucleus is the control centre of the cell.",
+                "s003": "Now just look at it for a moment."}
+        scenes, _, report = compile_plan(
+            plan, narr, all_segments=["s001", "s002", "s003"],
+            skip_hold=set())
+        speaks = [ln for ln in report if "TEACHER SPEAKS (auto)" in ln]
+        assert any("s001" in ln for ln in speaks)
+        assert any("s002" in ln for ln in speaks)
+        assert not any("s003" in ln for ln in speaks)   # filler: no bubble
+
+    def test_whiteboard_cards_get_bubbles_but_quizzes_do_not(self):
+        from spike.scene_engine.whiteboard import build_whiteboard_scene
+        card = build_whiteboard_scene({
+            "segment_id": "s004", "type": "explore",
+            "slide_heading": "Cells",
+            "text": "A microscope makes tiny cells visible to us."})
+        assert any(str(e["id"]).startswith("__kp_") for e in card["elements"])
+        quiz = build_whiteboard_scene({
+            "segment_id": "s005", "type": "explore",
+            "slide_heading": "Check",
+            "slide_visual": {"kind": "quiz", "caption": "Which part?",
+                             "options": ["Wall", "Nucleus"]},
+            "text": "The wall is the answer to this question."})
+        assert not any(str(e["id"]).startswith("__kp_")
+                       for e in quiz["elements"])
+
+    def test_student_moment_bubble_is_not_drawn_either(self):
+        from spike.scene_engine.whiteboard import human_moment
+        els, acts, _ = human_moment("student", "Why does it wilt?", uid="m1")
+        bubble_ids = {e["id"] for e in els if "bub" in e["id"]}
+        for a in acts:
+            if a.get("target") in bubble_ids:
+                assert a["verb"] in ("reveal", "fade"), a
+
+
 class TestSeedMoment:
     def test_seeds_one_student_question_from_narration(self):
         plan = parse_visual_plan(_plan_raw())
