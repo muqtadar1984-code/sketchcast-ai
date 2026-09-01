@@ -259,15 +259,34 @@ class TestJsonRepair:
         assert _rebalance_json('{"segments": [{"type": "hook"},') is None
         assert _rebalance_json('{"segments": [{"type":') is None
 
-    def test_truncation_is_caught_by_the_token_count_not_the_parser(self):
+    def test_truncation_is_caught_by_the_finish_reason(self):
         """The compensating control for the relaxation above. A reply cut off
-        exactly at an element boundary parses fine, so only the measured
-        token count can tell — and only script_generator can see it."""
+        at an element boundary parses fine, so the parser cannot catch it —
+        the provider's finish reason can."""
         import inspect
         from agent3_scripts.script_generator import generate_episode_script
         src = inspect.getsource(generate_episode_script)
-        assert "_used >= max_out * 0.98" in src
-        assert "the reply was " in src and "cut off" in src
+        assert 'result.get("truncated")' in src
+
+    def test_truncation_is_never_inferred_from_usage(self):
+        """usage SUMS both attempts when a client retries at double the
+        budget, so a SUCCESSFUL retry reports ~2x the original cap. Deriving
+        truncation from that fails a lesson that actually worked."""
+        import inspect
+        from agent3_scripts.script_generator import generate_episode_script
+        src = inspect.getsource(generate_episode_script)
+        assert "max_out * 0.98" not in src, \
+            "truncation is being inferred from the token count again"
+
+    def test_both_clients_report_the_finish_reason(self):
+        """script_generator can only trust `truncated` if every client it can
+        be handed actually sets it."""
+        from shared.claude_client import ClaudeClient
+        from shared.gemini_client import GeminiClient
+        import inspect
+        for cls in (ClaudeClient, GeminiClient):
+            src = inspect.getsource(cls.analyze)
+            assert '"truncated"' in src, f"{cls.__name__} does not report it"
 
     def test_genuine_garbage_still_fails(self):
         from shared.claude_client import _repair_json

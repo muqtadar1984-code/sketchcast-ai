@@ -388,7 +388,11 @@ class ClaudeClient:
             text = _first_text(response)
             usage = _merge_usage(usage, self.track_tokens(response))
             parsed = self._extract_json(text)
-        return {"data": parsed, "usage": usage}
+        # See GeminiClient.analyze: usage SUMS both attempts, so it can never
+        # be used to infer truncation. This is the provider's verdict on the
+        # final response.
+        return {"data": parsed, "usage": usage,
+                "truncated": getattr(response, "stop_reason", "") == "max_tokens"}
 
     # ── image analysis ───────────────────────────────────────────────
 

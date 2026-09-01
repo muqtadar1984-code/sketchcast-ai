@@ -364,20 +364,20 @@ def generate_episode_script(
     result = client.analyze(prompt=prompt, system=system, max_tokens=max_out)
 
     data = result.get("data", result)
-    # Truncation is decided HERE, because this is the only place that can see
-    # both the reply and the cap it ran against. The JSON salvage in
-    # shared/claude_client deliberately cannot: a reply cut off exactly at an
-    # element boundary is structurally indistinguishable from a complete one,
-    # so if it were left to guess it would either fail every lesson over a
-    # stray bracket or quietly deliver a half-length one. A reply that used
-    # essentially the whole budget was cut off, whatever it parses to.
-    _used = (result.get("usage") or {}).get("output_tokens")
-    if isinstance(_used, int) and _used >= max_out * 0.98:
+    # Truncation is decided HERE, not in the JSON salvage: a reply cut off
+    # exactly at an element boundary is structurally indistinguishable from a
+    # complete one, so a parser left to guess would either fail every lesson
+    # over a stray bracket or quietly deliver a half-length one.
+    # The signal is the PROVIDER's finish reason for the final response, never
+    # the token count — `usage` sums both attempts when the client retries at
+    # double the budget, so a successful retry looks like a 2x overrun.
+    if result.get("truncated"):
+        _used = (result.get("usage") or {}).get("output_tokens")
         raise RuntimeError(
             f"Script generation for episode {episode.get('episode_num', 1)} "
-            f"used {_used} output tokens of a {max_out} cap — the reply was "
-            "cut off, so any script parsed from it is incomplete. Raise the "
-            "cap or shorten the plan; do not trust this reply."
+            f"was cut off at the output cap (max_tokens={max_out}, "
+            f"{_used} output tokens billed across attempts) — any script "
+            "parsed from it is incomplete. Raise the cap or shorten the plan."
         )
     raw_segments = data.get("segments", []) if isinstance(data, dict) else []
 
@@ -497,12 +497,12 @@ def generate_episode_script(
             where = f"; full reply saved to {dump}"
         except Exception:
             pass
-        cut = (isinstance(used, int) and used >= max_out * 0.98)
         raise RuntimeError(
             f"Script generation produced no segments for episode "
             f"{episode.get('episode_num', 1)}: {len(body)} chars, "
-            f"output_tokens={used} of a {max_out} cap "
-            f"({'AT THE CAP — truncation is likely' if cut else 'well under the cap, so this is NOT truncation'})"
+            f"output_tokens={used} billed across attempts (cap {max_out}), "
+            "provider did NOT report truncation — so this is malformed JSON, "
+            "not a cut-off reply"
             f". Reply began: {body[:220]!r} … ended: {body[-160:]!r}{where}"
         )
 

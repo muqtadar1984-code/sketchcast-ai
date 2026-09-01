@@ -230,7 +230,12 @@ class GeminiClient:
             usage = _merge_usage(usage, self.track_tokens(response))
             parsed = ClaudeClient._extract_json(self._text(response))
 
-        return {"data": parsed, "usage": usage}
+        # `truncated` is the provider's own verdict on THIS (final) response.
+        # Callers must not infer it from usage: usage is the SUM of both
+        # attempts, so a successful retry reports far more output tokens than
+        # the original cap and would read as a truncation that never happened.
+        return {"data": parsed, "usage": usage,
+                "truncated": self._finish_reason(response) == "MAX_TOKENS"}
 
     @staticmethod
     def _image_parts(image_paths: list[str | Path]) -> list[dict]:
