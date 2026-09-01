@@ -66,8 +66,10 @@ class TestCompiler:
 
     def test_raster_slices_apportioned_across_segments(self):
         scenes, _, _ = compile_plan(_plan(), _NARR)
-        d1 = next(a for a in scenes["s001"]["actions"] if a["verb"] == "draw")
-        d2 = next(a for a in scenes["s002"]["actions"] if a["verb"] == "draw")
+        d1 = next(a for a in scenes["s001"]["actions"]
+                  if a["verb"] == "draw" and a.get("target") == "cell")
+        d2 = next(a for a in scenes["s002"]["actions"]
+                  if a["verb"] == "draw" and a.get("target") == "cell")
         assert d1["slice"] == (0.0, 0.5) and d2["slice"] == (0.5, 0.5)
         cell_s2 = next(e for e in scenes["s002"]["elements"] if e["id"] == "cell")
         assert cell_s2["drawn_frac"] == 0.5
@@ -114,9 +116,10 @@ class TestCompiler:
 
     def test_assets_are_cumulative_so_carried_boards_resolve(self):
         _, assets, _ = compile_plan(_plan(), _NARR)
-        assert assets["s001"] == {"plant_cell": "a cell"}
+        # (the persistent teacher's avatar rides on every segment's map)
+        assert assets["s001"]["plant_cell"] == "a cell"
         # the boundary scene carries chapter 1's cell — its asset must resolve
-        assert assets["s004"] == {"plant_cell": "a cell"}
+        assert assets["s004"]["plant_cell"] == "a cell"
 
     def test_stats_and_report(self):
         plan = _plan()
@@ -124,7 +127,8 @@ class TestCompiler:
         assert st == {"segments_planned": 4, "visual_chapters": 2,
                       "root_visuals": 1, "extensions": 1,
                       "focus_transform": 1, "full_redraws": 2,
-                      "human_teaching_moments": 0}
+                      "human_teaching_moments": 0,
+                      "teacher_key_points": 0}
         _, _, report = compile_plan(plan, _NARR)
         assert len(report) == 4 and "CLEAR_AND_REDRAW" in report[3]
 

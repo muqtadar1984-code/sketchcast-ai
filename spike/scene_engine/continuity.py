@@ -61,6 +61,10 @@ class PlanStep(BaseModel):
     # "teacher", "text": "<short spoken line>"} — expands into avatar +
     # hand-drawn speech bubble choreography scoped to this segment only
     moment: Optional[dict] = None
+    # KEY POINT (optional): a short VERBATIM quote of this segment's most
+    # important sentence — the ever-present teacher speaks it in a drawn
+    # bubble, cued to the words in the narration
+    key_point: Optional[str] = None
 
     @property
     def segment_id(self) -> str:
@@ -319,6 +323,10 @@ def parse_visual_plan(raw) -> Optional[VisualPlan]:
                                     "text": m["text"].strip()[:60]}
                 else:
                     st["moment"] = None
+                kp = st.get("key_point")
+                st["key_point"] = (" ".join(kp.split())[:60]
+                                   if isinstance(kp, str) and kp.strip()
+                                   else None)
                 steps.append(st)
             craw["steps"] = steps
         if isinstance(craw, dict) and \
@@ -390,6 +398,39 @@ def seed_moment(plan: VisualPlan, narrations: dict[str, str]) -> str | None:
     return None
 
 
+def seed_key_points(plan: VisualPlan, narrations: dict[str, str],
+                    cap: int = 3) -> int:
+    """The persistent teacher should SPEAK at important statements. When the
+    model plans no key_points, seed up to `cap` from definition-like
+    sentences in the planned segments' own narration (verbatim, never
+    invented) — at most one per chapter, spread across the lesson."""
+    import re
+    if any(getattr(st, "key_point", None)
+           for ch in plan.chapters for st in ch.steps):
+        return 0
+    pat = re.compile(
+        r"([A-Z][^.!?]{2,70}?\b(?:is|are|means|called|controls?|makes?|"
+        r"protects?|stores?|contains?)\b[^.!?]{3,70}[.!])")
+    seeded = 0
+    for ch in plan.chapters:
+        if seeded >= cap:
+            break
+        for st in ch.steps:
+            text = narrations.get(st.segment_id, "")
+            m = pat.search(text)
+            if not m or st.moment:
+                continue
+            line = " ".join(m.group(1).split()).rstrip(".!")
+            if len(line) > 60:
+                line = line[:60].rsplit(" ", 1)[0]
+            if len(line.split()) < 4:
+                continue
+            st.key_point = line
+            seeded += 1
+            break               # one per chapter keeps it selective
+    return seeded
+
+
 def _chain_camera(cam: dict, actions: list[dict], elements: list[dict]) -> dict:
     pos = {e.get("id"): e.get("at") for e in elements if isinstance(e, dict)}
     for a in actions:
@@ -454,6 +495,26 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
             logger.exception("chapter %r failed to compile; skipping it", ch.concept)
             report.append(f"CHAPTER {ch.concept} | COMPILE FAILED — skipped, "
                           f"board carried unchanged")
+    # ── the persistent teacher ──────────────────────────────────────────────
+    # One teacher on every compiled scene, whole lesson (whiteboard-fallback
+    # segments add their own copy in build_whiteboard_scene). Injected OUTSIDE
+    # the chapter machinery on purpose: the teacher is not board content — it
+    # never fades at a chapter boundary, never renames to prev__*, never
+    # counts against the one-root rule. On the lesson's first segment the
+    # hand draws them in; everywhere else they are simply present at t=0.
+    from .whiteboard import AVATAR_PROMPTS, TEACHER_ID, teacher_element
+    first_sid = (all_segments or sorted(scenes))[0] if (all_segments or scenes) \
+        else None
+    for sid, sc in scenes.items():
+        if any(e.get("id") == TEACHER_ID for e in sc["elements"]):
+            continue
+        sc["elements"].append(teacher_element())
+        if sid == first_sid:
+            sc["actions"] = ([{"verb": "draw", "target": TEACHER_ID,
+                               "at": {"sec": 0.3}}] + sc["actions"])
+        assets_by_seg.setdefault(sid, {})
+        assets_by_seg[sid] = {**assets_by_seg[sid],
+                              "avatar_teacher": AVATAR_PROMPTS["avatar_teacher"]}
     return scenes, assets_by_seg, report
 
 
@@ -533,8 +594,9 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             ch.assets[new_key] = (
                 prompt0.rstrip().rstrip(".") +
                 ". The diagram MUST clearly contain all of: " +
-                ", ".join(names) + ". Name the layer groups exactly: " +
-                ", ".join(names) + ".")
+                ", ".join(names) + " — as DRAWINGS only; the image must not "
+                "contain any written words, captions or labels. "
+                "Name the layer groups exactly: " + ", ".join(names) + ".")
             roster[ills[0]] = dict(roster[ills[0]])
             roster[ills[0]]["asset"] = new_key
             report.append(f"CHAPTER {ch.concept} | ROOT ASSET rebuilt as "
@@ -551,6 +613,7 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
     introduced: set[str] = set()
     drawn_layers: dict[str, list[str]] = {}
     drawn_regions: dict[str, list[str]] = {}   # vision-region draw progress
+    region_reach: dict[str, float] = {}   # bare-draw progress on scheduled roots
     base_frac: dict[str, float] = {}      # raster progress carried from before
     draw_counts: dict[str, int] = {}
     draws_done: dict[str, int] = {}
@@ -575,8 +638,10 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             if e.get("drawn_layers"):
                 drawn_layers[eid] = list(e["drawn_layers"])
                 base_frac[eid] = float(e.get("drawn_frac", 0.0))
-            elif e.get("drawn_regions"):
+            elif e.get("drawn_regions") is not None:
                 drawn_regions[eid] = list(e["drawn_regions"])
+                if e.get("drawn_frac"):
+                    region_reach[eid] = float(e["drawn_frac"])
             else:
                 introduced.add(eid)
 
@@ -718,8 +783,6 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
     step_regions: dict[str, list[str]] = {}   # seg_id -> regions for its draws
     if root_id and part_names and draw_counts.get(root_id, 0) > 1:
         already = list(drawn_regions.get(root_id, []))   # from a carry chapter
-        root_fresh = root_id not in introduced and not already
-        first_draw_step = True
         written_labels = {a.get("target") for st in ch.steps
                           for a in st.actions if a.get("verb") == "write"}
         drawn_arrows = {a.get("target") for st in ch.steps
@@ -773,9 +836,11 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                                   f"write->{lid}"
                                   + (f" + draw->{arr}" if arr else "")
                                   + f" (narration names {p!r})")
-            if first_draw_step and root_fresh and len(parts) < n_draws:
-                parts = ["__base"] + parts   # the outline/backdrop comes first
-            first_draw_step = False
+            # NOTE: no "__base" scheduling — the renderer folds unassigned
+            # (outline/backdrop) points into the FIRST region's bucket, so
+            # the first part's draw includes the outline. A dedicated __base
+            # draw once painted scattered leftover specks first (the floaty
+            # opening the founder screenshotted).
             assigned = parts[:n_draws]
             step_regions[st.segment_id] = assigned
             region_sched.extend(p for p in assigned if p != "__base")
@@ -802,8 +867,12 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             if eid in drawn_regions:
                 # region carry is the sole record for a region-scheduled
                 # root — the uniform drawn_frac estimate would fight the
-                # renderer's real span-based pre_frac
+                # renderer's real span-based pre_frac. Bare-draw progress
+                # (region_reach) rides along as drawn_frac; the renderer
+                # takes the max of both.
                 el["drawn_regions"] = list(drawn_regions[eid])
+                if region_reach.get(eid):
+                    el["drawn_frac"] = region_reach[eid]
             elif eid in drawn_layers:
                 el["drawn_layers"] = list(drawn_layers[eid])
                 if draw_counts.get(eid) or base_frac.get(eid):
@@ -944,31 +1013,59 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                 # the uniform slice whenever the asset has vision regions
                 if tid == root_id and step_regs:
                     a["region"] = step_regs.pop(0)
+                elif tid == root_id and region_sched:
+                    # a bare draw on a region-scheduled root advances by its
+                    # uniform slice; the REACH (not "introduced") is what
+                    # carries — marking it introduced once fully revealed
+                    # every organelle from the chapter's very first stroke
+                    lo, w_ = a["slice"]
+                    region_reach[tid] = max(region_reach.get(tid, 0.0),
+                                            round(lo + w_, 4))
             step_actions.append(a)
         for tid, c in step_done.items():
             draws_done[tid] = draws_done.get(tid, 0) + c
-
-        moment_note = ""
-        if st.moment:
-            from .whiteboard import human_moment
-            hm_els, hm_acts, hm_asset = human_moment(
-                st.moment["role"], st.moment["text"], uid=f"hm_{seg_id}")
-            elements.extend(hm_els)
-            step_actions = step_actions + hm_acts
-            seg_assets = {**seg_assets}
-            from .whiteboard import AVATAR_PROMPTS
-            seg_assets[hm_asset] = AVATAR_PROMPTS[hm_asset]
-            moment_note = f" | HUMAN_TEACHING_MOMENT ({st.moment['role']}: "                           f"{st.moment['text']!r})"
 
         if not elements:
             # every declared visual of this step was dropped/converted away —
             # an empty scene fails schema validation downstream and once fell
             # all the way to the LEGACY renderer. No scene at all lets the
-            # segment take the whiteboard-native fallback instead.
+            # segment take the whiteboard-native fallback instead. Checked
+            # BEFORE moment/key_point overlays so a bubble can never prop up
+            # an otherwise-empty board.
             report.append(f"SEGMENT {seg_id} | chapter: {ch.concept} | "
                           f"SKIPPED empty scene (whiteboard fallback)")
             first = False
             continue
+
+        moment_note = ""
+        if st.moment:
+            if st.moment["role"] == "teacher":
+                # the teacher is ALREADY on screen — a teacher moment speaks
+                # through the persistent one (a second avatar_teacher once
+                # rendered on top of it)
+                from .whiteboard import key_point_choreo
+                hm_els, hm_acts = key_point_choreo(st.moment["text"],
+                                                   uid=f"tm_{seg_id}")
+            else:
+                from .whiteboard import AVATAR_PROMPTS, human_moment
+                hm_els, hm_acts, hm_asset = human_moment(
+                    st.moment["role"], st.moment["text"], uid=f"hm_{seg_id}")
+                seg_assets = {**seg_assets}
+                seg_assets[hm_asset] = AVATAR_PROMPTS[hm_asset]
+            elements.extend(hm_els)
+            step_actions = step_actions + hm_acts
+            moment_note = f" | HUMAN_TEACHING_MOMENT ({st.moment['role']}: "                           f"{st.moment['text']!r})"
+
+        if st.key_point:
+            # the persistent teacher speaks: bubble drawn beside them, cued
+            # to the quoted words; the bubble fades, the teacher stays (the
+            # teacher element itself joins every scene in compile_plan's
+            # final pass)
+            from .whiteboard import key_point_choreo
+            kp_els, kp_acts = key_point_choreo(st.key_point, uid=seg_id)
+            elements.extend(kp_els)
+            step_actions = step_actions + kp_acts
+            moment_note += f" | KEY_POINT ({st.key_point!r})"
         scenes[seg_id] = {"id": f"vc_{seg_id}", "compiled": True, "scene_type": "process",
                           "narration": narrations.get(seg_id, ""),
                           "camera_start": dict(cam),
@@ -992,6 +1089,10 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                     drawn_regions.setdefault(tgt, [])
                     if a["region"] not in drawn_regions[tgt]:
                         drawn_regions[tgt].append(a["region"])
+                elif v == "draw" and tgt == root_id and region_sched:
+                    # bare draw on a scheduled root: reach-carried, never
+                    # 'introduced' (see the slice loop above)
+                    drawn_regions.setdefault(tgt, [])
                 elif v == "draw" and roster[tgt].get("type") == "illustration" \
                         and a.get("layers"):
                     # layer draws NEVER complete the asset — marker-carry is
@@ -1011,12 +1112,14 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                     introduced.discard(t)
                     drawn_layers.pop(t, None)
                     drawn_regions.pop(t, None)
+                    region_reach.pop(t, None)
             elif v == "fade" and tgt and float(a.get("to", 0.0)) == 0.0:
                 for t in expand(tgt):
                     erased.add(t)
                     introduced.discard(t)
                     drawn_layers.pop(t, None)
                     drawn_regions.pop(t, None)
+                    region_reach.pop(t, None)
         if boundary:
             cam = dict(_DEFAULT_CAM)    # the inserted reset ran on screen
         cam = _chain_camera(cam, step_actions, ch.elements)
@@ -1052,4 +1155,6 @@ def plan_stats(plan: VisualPlan) -> dict:
                         + max(0, len(plan.chapters) - 1),
         "human_teaching_moments": sum(1 for c in plan.chapters
                                       for s in c.steps if s.moment),
+        "teacher_key_points": sum(1 for c in plan.chapters for s in c.steps
+                                  if getattr(s, "key_point", None)),
     }

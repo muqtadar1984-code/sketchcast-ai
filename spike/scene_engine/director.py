@@ -150,6 +150,15 @@ RULES:
 - optimise for the MINIMUM number of visual changes that explains the lesson
   beautifully — never for one beautiful scene per segment.
 
+THE TEACHER IS ALWAYS ON SCREEN: a small hand-drawn teacher stands beside
+the board for the whole lesson (the engine adds them — never declare a
+teacher element). A step may add
+  "key_point": "The cell wall gives the cell its shape"
+— a SHORT (≤8 words) VERBATIM quote of that segment's single most important
+sentence fragment. The hand draws a speech bubble beside the teacher and
+writes the line exactly when those words are spoken, then the bubble fades.
+Use 3-6 per lesson, on definitions and key ideas only — never on filler.
+
 HUMAN TEACHING MOMENTS (optional, SELECTIVE): a step may add
   "moment": {"role": "student", "text": "Why can't everything enter?"}
 A hand-drawn student or teacher appears beside the board, the hand draws a

@@ -104,6 +104,13 @@ def _region_ordered_trace(trace: list, regions: dict, order: list[str]
     base: list = []
     for p in trace:
         (buckets[b] if (b := bucket_of(p)) else base).append(p)
+    # base (outline + everything nobody narrates) rides INSIDE the first
+    # region's span: the first part's draw then starts with the outline. A
+    # separate base span once drew scattered leftover specks before anything
+    # recognizable existed — a floaty, broken-looking opening.
+    if ordered and base:
+        buckets[ordered[0]] = base + buckets[ordered[0]]
+        base = []
     new_trace: list = list(base)
     spans: dict[str, tuple[float, float]] = {}
     n = max(1, len(trace))
@@ -233,6 +240,7 @@ class SceneRenderer:
         self._fonts: dict[tuple[bool, int, str], object] = {}
         self._audit_warnings: list[str] = []
         self._warned: set[str] = set()
+        self._suppressed: set[str] = set()   # arrows with no locatable target
         self._bind()
 
     def _warn(self, msg: str) -> None:
@@ -273,6 +281,27 @@ class SceneRenderer:
         # the nearest instance and land on the part's boundary facing it.
         for el in deferred_arrows:
             b = self.bound[el.id]
+            if isinstance(el.head, AnchorRef) and el.head.layer:
+                tb = self.bound.get(el.head.el)
+                # suppress ONLY when the target IS annotated but this part is
+                # absent. An asset with no annotation at all (vision outage,
+                # legacy tier) keeps the element-edge fallback — scoping this
+                # wrong once deleted every leader line in the lesson.
+                annotated = tb is not None and (
+                    (tb.raster is not None and tb.raster.regions) or tb.layers)
+                if annotated and \
+                        not self._layer_instance_boxes(tb, el.head.layer):
+                    # the named part cannot be located in the art — a label
+                    # with NO arrow teaches better than a confident arrow to
+                    # the wrong structure (a 'Nucleus' arrow once pointed at
+                    # the cell wall)
+                    self._warn(f"ARROW_SUPPRESSED {el.id} "
+                               f"({el.head.el}.{el.head.layer})")
+                    p = self._resolve_point(el.tail)
+                    b.box = (p[0], p[1], p[0], p[1])
+                    self._flat[el.id] = []
+                    self._suppressed.add(el.id)
+                    continue
             tail = self._resolve_point(el.tail)
             head = self._resolve_point(el.head, toward=tail)
             paths = arrow_paths(tail, head, curve=el.curve,
@@ -467,7 +496,9 @@ class SceneRenderer:
         # SAFE CONTENT AREA: a label must never clip against the canvas edge.
         # Shift it in; if genuinely too wide, step the size down (never below
         # 20 — microscopic text is not a fix), then truncate with an ellipsis.
-        SAFE_L, SAFE_R, SAFE_T, SAFE_B = 24.0, WORLD_W - 24.0, 14.0, WORLD_H - 14.0
+        # bottom margin is generous: player chrome overlays the last ~30px,
+        # and a label parked there read as clipped in the founder's review
+        SAFE_L, SAFE_R, SAFE_T, SAFE_B = 24.0, WORLD_W - 24.0, 22.0, WORLD_H - 46.0
         max_w = SAFE_R - SAFE_L
         size = tx_size = el.size
         disp0 = disp
@@ -550,7 +581,9 @@ class SceneRenderer:
     @staticmethod
     def _toward_boundary(box: tuple, toward: Point) -> Point:
         """The point where the line from the box centre toward `toward` exits
-        the box — arrowheads should TOUCH the structure, not stab its middle."""
+        the box, nudged ~12% back inside — arrowheads should TOUCH the ink,
+        and vision boxes often carry a sliver of empty margin (a head parked
+        exactly on the box edge floated short of the art)."""
         x0, y0, x1, y1 = box
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
         dx, dy = toward[0] - cx, toward[1] - cy
@@ -558,7 +591,7 @@ class SceneRenderer:
             return (cx, cy)
         tx = abs(((x1 - x0) / 2) / dx) if abs(dx) > 1e-6 else float("inf")
         ty = abs(((y1 - y0) / 2) / dy) if abs(dy) > 1e-6 else float("inf")
-        t = min(tx, ty)
+        t = min(tx, ty) * 0.88
         return (cx + dx * t, cy + dy * t)
 
     def _resolve_point(self, spec, toward: Point | None = None) -> Point:
@@ -637,6 +670,12 @@ class SceneRenderer:
                 lo, hi = spans["__base"]
                 return (lo, max(0.0, hi - lo))
             matched = self._match_region_names(spans, [region])
+            exact = [m for m in matched if m.lower() == region.lower()]
+            if exact:
+                # an exact key never widens to fuzzy siblings — min/max over
+                # 'inner_membrane'+'inner_fold' once straddled (and revealed)
+                # the nucleus that sat between them
+                matched = exact
             if matched:
                 lo = min(spans[m][0] for m in matched)
                 hi = max(spans[m][1] for m in matched)
@@ -688,6 +727,13 @@ class SceneRenderer:
                 words: list | None = None) -> list[TimedAction]:
         self.timeline = compile_timeline(self.scene, audio_secs,
                                          self.workloads, words=words)
+        if self._suppressed:
+            # a suppressed arrow's draw must not hold ~2s of dead air with an
+            # invisible pen — collapse it to an instant
+            self.timeline = [
+                TimedAction(t.action, t.start, 0.05)
+                if t.action.verb == "draw" and t.action.target in self._suppressed
+                else t for t in self.timeline]
         self._enforce_dependencies()
         focus: dict[int, Point] = {}
         for i, ta in enumerate(self.timeline):
@@ -1198,10 +1244,14 @@ class SceneRenderer:
             a = ink.getchannel("A").point(lambda v: int(v * alpha))
             ink.putalpha(a)
         # inverse affine: output(screen,SS) -> input(asset px)
-        k_ws = ra.scale * cam.scale * SS
+        # pulse throbs the raster around its own centre — vector strokes and
+        # particles already pulse, but the AVATARS are rasters, and a pulse
+        # nobody can see made the teacher's 'speaking' beat silently absent
+        r_scale = ra.scale * s.pulse
+        k_ws = r_scale * cam.scale * SS
         # screen_ss = ((at + (p-c)*scale) - camC)*camS*SS + (W/2)*SS  (per axis)
-        offx = ((ra.at[0] - ra.ink.width / 2 * ra.scale) - cam.cx) * cam.scale * SS + WORLD_W / 2 * SS
-        offy = ((ra.at[1] - ra.ink.height / 2 * ra.scale) - cam.cy) * cam.scale * SS + WORLD_H / 2 * SS
+        offx = ((ra.at[0] - ra.ink.width / 2 * r_scale) - cam.cx) * cam.scale * SS + WORLD_W / 2 * SS
+        offy = ((ra.at[1] - ra.ink.height / 2 * r_scale) - cam.cy) * cam.scale * SS + WORLD_H / 2 * SS
         inv = (1.0 / k_ws, 0.0, -offx / k_ws, 0.0, 1.0 / k_ws, -offy / k_ws)
         out = ink.transform(frame.size, Image.AFFINE, inv, resample=Image.BILINEAR)
         frame.paste(out, (0, 0), out)

@@ -400,7 +400,8 @@ def build_episode_prompt(
        {"segment": 2, "decision": "NEW_VISUAL", "reason": "chapter opens the cell",
         "actions": [{"verb": "draw", "target": "cell", "layers": ["wall"], "at": {"phrase": "words copied from segment 2's text"}}]},
        {"segment": 3, "decision": "EXTEND", "reason": "membrane is PART_OF the cell",
-        "actions": [{"verb": "draw", "target": "cell", "layers": ["membrane"]}, {"verb": "draw", "target": "ar_wall"}, {"verb": "write", "target": "lbl_wall"}]},
+        "actions": [{"verb": "draw", "target": "cell", "layers": ["membrane"]}, {"verb": "draw", "target": "ar_wall"}, {"verb": "write", "target": "lbl_wall"}],
+        "key_point": "The cell wall gives the cell its shape"},
        {"segment": 4, "decision": "FOCUS", "reason": "board already shows it",
         "actions": [{"verb": "zoom", "target": "cell", "scale": 1.4}, {"verb": "circle", "target": "lbl_wall"}],
         "moment": {"role": "student", "text": "Why do plants need a wall?"}}

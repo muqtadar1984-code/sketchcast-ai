@@ -193,8 +193,6 @@ def annotate_regions(ink: Image.Image, part_names: list[str]) -> dict:
     verdict. Returns {"regions": {name: [[x0,y0,x1,y1] px, ...]}, "has_text":
     bool}; empty regions on any failure — callers degrade gracefully."""
     out = {"regions": {}, "has_text": False, "text_boxes": []}
-    if not part_names:
-        return out
     import io as _io
     buf = _io.BytesIO()
     ink_on_white = Image.new("RGB", ink.size, (255, 255, 255))
@@ -206,11 +204,14 @@ def annotate_regions(ink: Image.Image, part_names: list[str]) -> dict:
         'image>, "text_boxes": [[ymin,xmin,ymax,xmax], ...], '
         '"regions": {"<part>": [[ymin,xmin,ymax,xmax], ...]}}\n'
         "text_boxes: a tight box around EVERY piece of text (letters, words, "
-        "numbers, labels) in the image; empty list if there is none.\n"
-        "Boxes are normalized 0-1000. For each of these part names, give a "
-        "box around EACH visible instance of that part (a name may have "
-        "several boxes, e.g. three mitochondria): "
-        + ", ".join(part_names))
+        "numbers, labels) in the image — INCLUDING small, faint, partial or "
+        "lowercase caption words near or under the artwork; empty list only "
+        "if the image is truly wordless.\n"
+        "Boxes are normalized 0-1000. "
+        + ("For each of these part names, give a box around EACH visible "
+           "instance of that part (a name may have several boxes, e.g. "
+           "three mitochondria): " + ", ".join(part_names)
+           if part_names else 'Leave "regions" as an empty object.'))
     data = _vision_json(prompt, buf.getvalue())
     if not isinstance(data, dict):
         return out
@@ -342,7 +343,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
             # tail later — the compiler appends one when it merges per-part
             # handles into the root). annotated_for pins the set so a part
             # vision genuinely cannot find is not re-asked every load.
-            if names and (not md.get("regions")
+            if names and (md.get("annotated_for") is None
                           or sorted(md.get("annotated_for") or [])
                           != sorted(names)):
                 # lazy backfill: assets cached before region annotation
@@ -350,7 +351,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
                 md["annotated_for"] = list(names)
                 md["regions"], md["baked_text"] = ann["regions"], ann["has_text"]
                 fresh_baked = bool(ann["has_text"])
-                if fresh_baked and ann.get("text_boxes"):
+                if ann.get("text_boxes"):
                     logger.warning("cached asset %r has baked text — scrubbing "
                                    "%d box(es)", key, len(ann["text_boxes"]))
                     ink = scrub_text(ink, ann["text_boxes"])
@@ -409,7 +410,10 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
         logger.warning("no image credentials/output for %r — vector fallback", key)
         return None
     ann = annotate_regions(ink, names)
-    if ann["has_text"] and ann.get("text_boxes"):
+    if ann.get("text_boxes"):
+        # scrub whenever boxes exist, whatever the has_text verdict said —
+        # 'leaf'/'magnified' captions once shipped because the verdict came
+        # back false while the words sat right there
         # baked labels duplicate and contradict the engine's own labels —
         # scrubbing the reported boxes is deterministic where a regeneration
         # is a coin flip (this model labelled the cell twice in a row)

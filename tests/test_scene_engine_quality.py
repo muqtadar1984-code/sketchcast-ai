@@ -58,20 +58,22 @@ def _resolver(asset: RasterAsset):
 # ── region-ordered trace ─────────────────────────────────────────────────────
 
 class TestRegionTrace:
-    def test_buckets_base_first_then_named_regions_in_order(self):
+    def test_base_folds_into_first_region_then_named_regions_in_order(self):
         a = _cell_asset()
         new, spans = _region_ordered_trace(a.trace, a.regions,
                                            ["nucleus", "chloroplast"])
         assert len(new) == len(a.trace)          # nothing lost
-        b_lo, b_hi = spans["__base"]
+        # base (outline etc.) rides INSIDE the first region: no separate
+        # base span, so the first part draw starts with the outline instead
+        # of scattered leftover specks
+        assert spans["__base"] == (0.0, 0.0)
         n_lo, n_hi = spans["nucleus"]
         c_lo, c_hi = spans["chloroplast"]
-        assert b_lo == 0.0 and abs(b_hi - 0.5) < 0.01      # 40/80 points
-        assert abs(n_lo - b_hi) < 1e-9 and n_hi > n_lo
+        assert n_lo == 0.0 and abs(n_hi - 0.75) < 0.01     # 40 base + 20 nuc
         assert abs(c_lo - n_hi) < 1e-9 and abs(c_hi - 1.0) < 1e-9
-        # every nucleus-span point actually lies in the nucleus box
-        k0, k1 = int(n_lo * len(new)), int(n_hi * len(new))
-        for p in new[k0:k1]:
+        # the tail of the nucleus span is the actual nucleus points
+        k1 = int(n_hi * len(new))
+        for p in new[40:k1]:
             assert NUCLEUS[0] <= p[0] <= NUCLEUS[2]
             assert NUCLEUS[1] <= p[1] <= NUCLEUS[3]
 
@@ -108,12 +110,14 @@ class TestLayerAnchors:
         # ...and NOT the element centre (the converging-arrows defect)
         assert ((head[0] - 640) ** 2 + (head[1] - 360) ** 2) ** 0.5 > 40.0
 
-    def test_unresolved_layer_warns_and_falls_back(self):
+    def test_unresolved_layer_suppresses_the_arrow(self):
         r = SceneRenderer(_anchor_scene("ribosome"),
                           asset_resolver=_resolver(_cell_asset()))
-        assert any(w.startswith("UNRESOLVED_ANCHOR")
+        assert any(w.startswith("ARROW_SUPPRESSED")
                    for w in r.audit()["warnings"])
-        assert r.bound["ar"].head_pt is not None   # arrow still drew
+        # a label with no arrow beats a confident arrow to the wrong part
+        assert not r._flat["ar"]
+        assert "ar" not in r.audit()["arrow_heads"]
 
     def test_two_arrows_to_distinct_parts_do_not_converge(self):
         s = Scene.model_validate({
@@ -295,7 +299,8 @@ class TestContinuityQuality:
                   if a["verb"] == "draw" and a["target"] == "cell")
         d2 = next(a for a in scenes["s002"]["actions"]
                   if a["verb"] == "draw" and a["target"] == "cell")
-        assert d1.get("region") == "__base"       # outline before parts
+        assert d1.get("region") is None           # bare draw: uniform slice
+        assert d1.get("slice") == (0.0, 0.5)
         assert d2.get("region") == "nucleus"      # nucleus when narrated
         root = next(e for e in scenes["s002"]["elements"] if e["id"] == "cell")
         assert root.get("region_order") == ["nucleus"]
@@ -303,7 +308,9 @@ class TestContinuityQuality:
     def test_carried_board_remembers_drawn_regions(self):
         scenes, _, _ = self._compiled()
         cell3 = next(e for e in scenes["s003"]["elements"] if e["id"] == "cell")
-        assert set(cell3.get("drawn_regions") or []) == {"__base", "nucleus"}
+        assert set(cell3.get("drawn_regions") or []) == {"nucleus"}
+        # the bare s001 draw carries as reach (drawn_frac), never "introduced"
+        assert cell3.get("drawn_frac") == 0.5
 
     def test_compiled_scene_renders_with_annotated_asset(self):
         scenes, _, _ = self._compiled()
@@ -313,9 +320,12 @@ class TestContinuityQuality:
         assert r.timeline
         # the region slice really narrowed the draw to the nucleus span
         d_idx = next(i for i, a in enumerate(s.actions)
-                     if a.verb == "draw" and a.target == "cell")
+                     if a.verb == "draw" and a.target == "cell"
+                     and a.region == "nucleus")
         lo, w = r._raster_slice(r.bound["cell"], s.actions[d_idx])
-        assert 0.0 < lo < 1.0 and 0.0 < w < 0.5
+        # nucleus is the FIRST scheduled region, so base folds into it:
+        # the span starts at 0 and covers base + nucleus points
+        assert lo == 0.0 and 0.5 < w <= 1.0
 
 
 class TestPerPartHandles:
@@ -644,8 +654,8 @@ class TestRegionCarryBeatsLayers:
             plan, {"s001": "a", "s002": "b", "s003": "c"},
             all_segments=["s001", "s002", "s003"], skip_hold=set())
         cell3 = next(e for e in scenes["s003"]["elements"] if e["id"] == "cell")
-        assert set(cell3.get("drawn_regions") or []) == {"__base", "nucleus"}
-        assert cell3.get("drawn_frac") is None
+        assert set(cell3.get("drawn_regions") or []) == {"nucleus"}
+        assert cell3.get("drawn_frac") == 0.5     # bare-draw reach, not layers
         assert cell3.get("drawn_layers") is None
 
 

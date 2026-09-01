@@ -94,6 +94,11 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
         scene.style.hand_scale = 0.8
         prompts = {str(k): str(v)
                    for k, v in (script_seg.get("scene_assets") or {}).items()}
+        # avatars resolve everywhere — whiteboard-fallback segments carry no
+        # scene_assets map, but the persistent teacher appears on them too
+        from spike.scene_engine.whiteboard import AVATAR_PROMPTS
+        for k, v in AVATAR_PROMPTS.items():
+            prompts.setdefault(k, v)
         words = None
         if audio_path:
             wjson = Path(str(audio_path)).with_suffix(".words.json")

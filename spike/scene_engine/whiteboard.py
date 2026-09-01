@@ -48,16 +48,29 @@ def build_whiteboard_scene(segment: dict) -> dict | None:
             points = [_short(body, 90)]
 
     if not heading and not points:
-        return None
+        # nothing to write — but the board is never EMPTY any more: the
+        # persistent teacher still stands there. Returning None here once
+        # dropped a contentless segment to the legacy renderer, failing the
+        # whole lesson's visual-language validation and blinking the teacher
+        # out for one segment.
+        elements, actions = [], []
+        _add_teacher(segment, elements, actions)
+        return {"id": f"wb_{segment.get('segment_id', 'seg')}",
+                "compiled": True, "scene_type": "generic",
+                "narration": segment.get("text") or "",
+                "elements": elements, "actions": actions}
 
     elements: list[dict] = []
     actions: list[dict] = []
     big = seg_type in ("hook", "question_hook", "preview") and not points
     if heading:
+        # cards are sparse by design — a centred heading owns the space
+        # (the old top-left placement read as a lost caption on an empty
+        # board, per founder screenshot)
         elements.append({"id": "wb_h", "type": "text", "text": heading,
-                         "role": "title", "size": 46 if big else 40,
-                         "at": [WORLD_W / 2, 250] if big else [80, 64],
-                         "anchor": "mt" if big else "lt"})
+                         "role": "title", "size": 48 if big else 42,
+                         "at": [WORLD_W / 2, 250 if big else 90],
+                         "anchor": "mt"})
         actions.append({"verb": "write", "target": "wb_h"})
         actions.append({"verb": "underline", "target": "wb_h",
                         "at": {"frac": 0.28 if big else 0.9}})
@@ -66,18 +79,30 @@ def build_whiteboard_scene(segment: dict) -> dict | None:
         # a short hand-drawn dash bullets each point — drawn, not templated
         elements.append({"id": f"wb_d{i}", "type": "shape", "shape": "line",
                          "width": 4.0, "color": "accent",
-                         "points": [[96, 232 + 96 * i], [128, 226 + 96 * i]]})
+                         "points": [[186, 268 + 96 * i], [218, 262 + 96 * i]]})
         elements.append({"id": pid, "type": "text", "text": p, "size": 27,
-                         "role": "caption", "at": [150, 204 + 96 * i],
+                         "role": "caption", "at": [240, 240 + 96 * i],
                          "anchor": "lt"})
         actions.append({"verb": "draw", "target": f"wb_d{i}",
                         "at": {"frac": min(0.85, 0.18 + 0.22 * i)}})
         actions.append({"verb": "write", "target": pid})
 
+    _add_teacher(segment, elements, actions)
     return {"id": f"wb_{segment.get('segment_id', 'seg')}", "compiled": True,
             "scene_type": "generic",
             "narration": segment.get("text") or "",
             "elements": elements, "actions": actions}
+
+
+def _add_teacher(segment: dict, elements: list[dict],
+                 actions: list[dict]) -> None:
+    """The persistent teacher joins every whiteboard card. On the LESSON'S
+    FIRST segment the hand draws them in (the founder's 'avatar at the
+    start'); everywhere else they are simply already there."""
+    elements.append(teacher_element())
+    if str(segment.get("segment_id") or "") == "s001":
+        actions.insert(0, {"verb": "draw", "target": TEACHER_ID,
+                           "at": {"sec": 0.3}})
 
 
 def _quiz_scene(segment: dict, heading: str, visual: dict) -> dict:
@@ -99,6 +124,7 @@ def _quiz_scene(segment: dict, heading: str, visual: dict) -> dict:
                          "at": [140, 220 + 92 * i], "anchor": "lt"})
         actions.append({"verb": "write", "target": oid,
                         "at": {"frac": min(0.9, 0.25 + 0.18 * i)}})
+    _add_teacher(segment, elements, actions)
     return {"id": f"wb_{segment.get('segment_id', 'quiz')}", "compiled": True,
             "scene_type": "generic",
             "narration": segment.get("text") or "",
@@ -160,10 +186,55 @@ AVATAR_PROMPTS = {
         "an explaining gesture, warm confident expression."),
 }
 
-_AV_AT = (1105.0, 520.0)     # lower-right, off the main drawing area
-_AV_SCALE = 0.42             # ~300 world px wide at nominal asset width
-_BUBBLE_AT = (880.0, 200.0)
-_BUBBLE_TAIL_TO = (1040.0, 380.0)
+_AV_AT = (178.0, 568.0)      # lower-LEFT: the persistent teacher owns the
+_AV_SCALE = 0.38             # lower-right corner now
+_BUBBLE_AT = (445.0, 285.0)
+_BUBBLE_TAIL_TO = (255.0, 462.0)
+
+# ── the persistent teacher ───────────────────────────────────────────────────
+# One teacher, present from the first frame to the last, tucked into the
+# bottom-right corner where lesson content never reaches. Speech bubbles are
+# drawn beside them whenever a step carries a key_point; the bubble fades,
+# the teacher STAYS.
+TEACHER_ID = "__teach_av"
+# sized/placed so the FULL figure sits inside the safe area at the real
+# avatar aspect (~1.1 h/w) — the first placement cropped the lower third
+# under the player chrome
+TEACHER_AT = (1172.0, 582.0)
+TEACHER_SCALE = 0.22          # small enough to never crowd the board
+_TEACH_BUBBLE_AT = (975.0, 440.0)
+_TEACH_BUBBLE_TAIL = (1120.0, 528.0)
+
+
+def teacher_element() -> dict:
+    return {"id": TEACHER_ID, "type": "illustration",
+            "asset": "avatar_teacher", "at": list(TEACHER_AT),
+            "scale": TEACHER_SCALE}
+
+
+def key_point_choreo(text: str, uid: str) -> tuple[list[dict], list[dict]]:
+    """Elements + actions for one teacher key point: the hand draws a bubble
+    beside the ever-present teacher, writes the SHORT verbatim line, the
+    teacher 'speaks' (pulse), then the bubble fades — the teacher remains.
+    The bubble draw is cued to the line's own words in the narration, so it
+    lands exactly when the statement is spoken."""
+    text = _short(text, 60)
+    bub_id = f"__kp_{uid}"
+    grp_id = f"__kp_{uid}_grp"
+    elements = bubble_elements(bub_id, text, _TEACH_BUBBLE_AT,
+                               _TEACH_BUBBLE_TAIL)
+    elements.append({"id": grp_id, "type": "group",
+                     "children": [bub_id, f"{bub_id}_tail", f"{bub_id}_txt"]})
+    actions = [
+        {"verb": "draw", "target": bub_id, "at": {"phrase": text,
+                                                  "offset": -0.8}},
+        {"verb": "draw", "target": f"{bub_id}_tail"},
+        {"verb": "write", "target": f"{bub_id}_txt"},
+        {"verb": "pulse", "target": TEACHER_ID, "times": 2, "duration": 1.2},
+        {"verb": "fade", "target": grp_id, "to": 0.0, "duration": 0.6,
+         "at": {"frac": 0.9}},
+    ]
+    return elements, actions
 
 
 def human_moment(role: str, text: str, uid: str = "hm") -> tuple[list[dict], list[dict], str]:
