@@ -310,6 +310,39 @@ class TestChapterSplitOnRedraw:
                 assert tail not in prompt.lower(), \
                     f"{c['concept']} inherited another picture's region names"
 
+    def test_a_draw_addressed_BY_ASSET_still_splits(self):
+        """A real lesson drew its comparison table as {"asset": ...} rather
+        than {"element": ...}. An element-only reading missed the root change,
+        so the table was discarded and segment 12 narrated "how animal cells
+        differ from plant cells" over a redrawn cheek-cell prep diagram."""
+        p = self._multi_root()
+        p["chapters"][0]["steps"][1]["actions"][0]["target"] = {"asset": "animal"}
+        p["chapters"][0]["steps"][2]["actions"][0]["target"] = {"asset": "scope"}
+        narr = {f"s{i:03d}": "the hypotenuse is the longest side"
+                for i in (1, 2, 3)}
+        plan, _ = adapt_semantic_plan(p, narr)
+        roots = sorted(e["id"] for c in plan["chapters"] for e in c["elements"]
+                       if e.get("type") == "illustration")
+        assert roots == ["animal_img", "compare", "scope_img"], \
+            f"an asset-addressed visual was lost: {roots}"
+
+    def test_a_region_draw_on_the_same_picture_is_not_a_split(self):
+        """The counterpart: building ONE diagram region by region is the
+        desired pattern and must stay a single chapter."""
+        p = self._multi_root()
+        p["chapters"][0]["elements"] = [
+            e for e in p["chapters"][0]["elements"]
+            if e["id"] not in ("animal_img", "scope_img")]
+        for i, region in enumerate(("cheek", "slide", "coverslip")):
+            p["chapters"][0]["steps"][i]["actions"][0]["target"] = {
+                "asset": "tbl", "region": region}
+        narr = {f"s{i:03d}": "the hypotenuse is the longest side"
+                for i in (1, 2, 3)}
+        plan, issues = adapt_semantic_plan(p, narr)
+        assert len(plan["chapters"]) == 1
+        assert not [i for i in issues
+                    if i["code"] == "CHAPTER_SPLIT_ON_REDRAW"]
+
     def test_a_single_root_chapter_is_left_alone(self):
         plan, issues = adapt_semantic_plan(_plan(), NARR, strict=True)
         assert len(plan["chapters"]) == 1

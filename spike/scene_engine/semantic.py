@@ -150,15 +150,28 @@ def adapt_semantic_plan(raw: dict, narrations: dict[str, str] | None = None,
     return {"chapters": chapters}, ctx.issues
 
 
-def _draw_targets(step) -> list:
-    """Ids a step DRAWS, in order. Targets arrive as {"element": id},
-    {"asset": ..., "region": ...} or a bare id."""
+def _draw_targets(step, by_asset: dict | None = None) -> list:
+    """Ids a step DRAWS, in order.
+
+    Targets arrive as {"element": id}, {"asset": id, "region": r} or a bare
+    id, and the ASSET form is the one that matters here: a real lesson drew
+    its comparison table as {"asset": ...}, so an element-only reading missed
+    the root change and the table was discarded while the narration compared
+    animal and plant cells. `by_asset` maps an asset id to the element that
+    owns it, so a draw of a DIFFERENT picture is seen — while a region draw
+    on the SAME picture resolves to the same element and does not split.
+    """
     out = []
     for a in (step.get("actions") or []) if isinstance(step, dict) else []:
         if not isinstance(a, dict) or str(a.get("verb") or "").lower() != "draw":
             continue
         t = a.get("target")
-        tid = t.get("element") if isinstance(t, dict) else t
+        if isinstance(t, dict):
+            tid = t.get("element")
+            if not isinstance(tid, str) and isinstance(t.get("asset"), str):
+                tid = (by_asset or {}).get(t["asset"])
+        else:
+            tid = t
         if isinstance(tid, str) and tid:
             out.append(tid)
     return out
@@ -189,10 +202,13 @@ def _split_on_new_root(craw, ctx: _Ctx) -> list[dict]:
     if len(illus) < 2 or not steps:
         return [craw]
 
+    by_asset = {e["asset"]: e["id"] for e in elements
+                if isinstance(e.get("id"), str) and e["id"] in illus
+                and isinstance(e.get("asset"), str)}
     groups: list[tuple[str | None, list]] = []
     root, cur = None, []
     for s in steps:
-        drawn = [t for t in _draw_targets(s) if t in illus]
+        drawn = [t for t in _draw_targets(s, by_asset) if t in illus]
         nxt = next((t for t in drawn if t != root), None)
         if nxt and root is not None and nxt != root:
             groups.append((root, cur))
