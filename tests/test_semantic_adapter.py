@@ -232,6 +232,104 @@ class TestElements:
         assert t["anchor"] == "mt" and t["at"][1] < 200
 
 
+class TestChapterSplitOnRedraw:
+    """A real 41-segment lesson ("animal cell vs plant cell") declared TEN
+    teaching visuals and switched between them with CLEAR_AND_REDRAW at
+    eleven steps, all inside ONE chapter. One root per chapter is a hard rule
+    downstream, so the compiler discarded the animal-cell diagram, the
+    cheek-cell prep sequence, the microscope setup and the summary table —
+    while the narration went on talking about them."""
+
+    @staticmethod
+    def _multi_root():
+        return {"chapters": [{
+            "concept": "animal_vs_plant", "transition": "clear_and_redraw",
+            "assets": {"tbl": "a comparison table",
+                       "animal": "an animal cell",
+                       "scope": "a microscope"},
+            "semantic_regions": ["plant_col", "animal_col"],
+            "elements": [
+                {"id": "compare", "type": "illustration", "asset": "tbl",
+                 "role": "root_visual"},
+                {"id": "animal_img", "type": "illustration", "asset": "animal"},
+                {"id": "scope_img", "type": "illustration", "asset": "scope"},
+                {"id": "lbl_n", "type": "text", "text": "Nucleus",
+                 "role": "label"}],
+            "steps": [
+                {"segment": 1, "decision": "CLEAR_AND_REDRAW", "actions": [
+                    {"verb": "DRAW", "target": {"element": "compare"},
+                     "cue": "the hypotenuse"}]},
+                {"segment": 2, "decision": "CLEAR_AND_REDRAW", "actions": [
+                    {"verb": "DRAW", "target": {"element": "animal_img"},
+                     "cue": "the hypotenuse"}]},
+                {"segment": 3, "decision": "CLEAR_AND_REDRAW", "actions": [
+                    {"verb": "DRAW", "target": {"element": "scope_img"},
+                     "cue": "the hypotenuse"}]}]}]}
+
+    def test_every_declared_visual_survives(self):
+        narr = {f"s{i:03d}": "the hypotenuse is the longest side"
+                for i in (1, 2, 3)}
+        plan, issues = adapt_semantic_plan(self._multi_root(), narr)
+        roots = [e["id"] for c in plan["chapters"] for e in c["elements"]
+                 if e.get("type") == "illustration"]
+        assert sorted(roots) == ["animal_img", "compare", "scope_img"], \
+            f"a declared teaching visual was lost: {roots}"
+        assert len(plan["chapters"]) == 3
+        for c in plan["chapters"]:
+            n = sum(1 for e in c["elements"]
+                    if e.get("type") == "illustration")
+            assert n == 1, f"{c['concept']} still carries {n} root visuals"
+        assert any(i["code"] == "CHAPTER_SPLIT_ON_REDRAW" for i in issues), \
+            "the split must be reported, not silent"
+
+    def test_each_chapter_only_carries_the_asset_it_uses(self):
+        """Assets are generated per chapter, so handing every chapter the
+        full asset map would pay for images nothing draws."""
+        narr = {f"s{i:03d}": "the hypotenuse is the longest side"
+                for i in (1, 2, 3)}
+        plan, _ = adapt_semantic_plan(self._multi_root(), narr)
+        for c in plan["chapters"]:
+            used = {e.get("asset") for e in c["elements"]
+                    if e.get("type") == "illustration"}
+            assert set(c["assets"]) == used, \
+                f"{c['concept']} carries unused assets {set(c['assets']) - used}"
+
+    def test_region_names_do_not_travel_to_a_different_picture(self):
+        """semantic_regions describe the ORIGINAL root's asset. Handing them
+        to a sibling names parts of a different image and sends the vision
+        annotator hunting for regions that were never drawn."""
+        narr = {f"s{i:03d}": "the hypotenuse is the longest side"
+                for i in (1, 2, 3)}
+        plan, _ = adapt_semantic_plan(self._multi_root(), narr)
+        tail = "name the layer groups exactly"
+        for c in plan["chapters"]:
+            root = next(e for e in c["elements"]
+                        if e.get("type") == "illustration")
+            prompt = c["assets"].get(root["asset"], "")
+            if root["id"] != "compare":
+                assert tail not in prompt.lower(), \
+                    f"{c['concept']} inherited another picture's region names"
+
+    def test_a_single_root_chapter_is_left_alone(self):
+        plan, issues = adapt_semantic_plan(_plan(), NARR, strict=True)
+        assert len(plan["chapters"]) == 1
+        assert not [i for i in issues
+                    if i["code"] == "CHAPTER_SPLIT_ON_REDRAW"]
+
+    def test_redrawing_the_same_visual_is_not_a_split(self):
+        """Clearing and redrawing the SAME picture is a legitimate reset, not
+        a new chapter — splitting there would multiply chapters for nothing."""
+        p = self._multi_root()
+        for s in p["chapters"][0]["steps"]:
+            s["actions"][0]["target"] = {"element": "compare"}
+        plan, issues = adapt_semantic_plan(
+            p, {f"s{i:03d}": "the hypotenuse is the longest side"
+                for i in (1, 2, 3)})
+        assert len(plan["chapters"]) == 1
+        assert not [i for i in issues
+                    if i["code"] == "CHAPTER_SPLIT_ON_REDRAW"]
+
+
 class TestTransitionsAndRegions:
     def test_continue_maps_to_carry(self):
         plan, _ = adapt_semantic_plan(_plan(), NARR, strict=True)

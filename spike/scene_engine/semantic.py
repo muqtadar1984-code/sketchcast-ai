@@ -138,13 +138,105 @@ def adapt_semantic_plan(raw: dict, narrations: dict[str, str] | None = None,
         return {"chapters": []}, ctx.issues
 
     chapters = []
-    for ci, craw in enumerate(raw["chapters"]):
-        ch = _chapter(craw, ci, narrations, ctx)
-        if ch is not None:
-            chapters.append(ch)
+    ci = 0
+    for craw in raw["chapters"]:
+        for part in _split_on_new_root(craw, ctx):
+            ch = _chapter(part, ci, narrations, ctx)
+            ci += 1
+            if ch is not None:
+                chapters.append(ch)
     if strict and ctx.issues:
         raise AdapterError(ctx.issues)
     return {"chapters": chapters}, ctx.issues
+
+
+def _draw_targets(step) -> list:
+    """Ids a step DRAWS, in order. Targets arrive as {"element": id},
+    {"asset": ..., "region": ...} or a bare id."""
+    out = []
+    for a in (step.get("actions") or []) if isinstance(step, dict) else []:
+        if not isinstance(a, dict) or str(a.get("verb") or "").lower() != "draw":
+            continue
+        t = a.get("target")
+        tid = t.get("element") if isinstance(t, dict) else t
+        if isinstance(tid, str) and tid:
+            out.append(tid)
+    return out
+
+
+def _split_on_new_root(craw, ctx: _Ctx) -> list[dict]:
+    """One chapter per root visual, splitting where the director redrew.
+
+    Measured on a real 41-segment lesson ("animal cell vs plant cell"): the
+    director declared TEN teaching visuals and switched between them with
+    CLEAR_AND_REDRAW at eleven steps — but kept them all inside a single
+    chapter. One root visual per chapter is a hard rule downstream, so the
+    compiler discarded the animal-cell diagram, the cheek-cell prep sequence,
+    the microscope setup and the summary table. The narration still talked
+    about them while the board showed a comparison table.
+
+    The director's intent was never ambiguous — the redraw IS the chapter
+    boundary. So convert rather than drop, which is what the rest of this
+    compiler does with model anti-patterns.
+    """
+    if not isinstance(craw, dict):
+        return [craw]
+    elements = [e for e in (craw.get("elements") or []) if isinstance(e, dict)]
+    illus = {e["id"] for e in elements
+             if isinstance(e.get("id"), str)
+             and str(e.get("type") or "").lower() == "illustration"}
+    steps = [s for s in (craw.get("steps") or []) if isinstance(s, dict)]
+    if len(illus) < 2 or not steps:
+        return [craw]
+
+    groups: list[tuple[str | None, list]] = []
+    root, cur = None, []
+    for s in steps:
+        drawn = [t for t in _draw_targets(s) if t in illus]
+        nxt = next((t for t in drawn if t != root), None)
+        if nxt and root is not None and nxt != root:
+            groups.append((root, cur))
+            root, cur = nxt, []
+        elif nxt and root is None:
+            root = nxt
+        cur.append(s)
+    groups.append((root, cur))
+    if len(groups) < 2:
+        return [craw]
+
+    concept = str(craw.get("concept") or craw.get("id") or "chapter")
+    all_assets = craw.get("assets") or {}
+    # semantic_regions describe the ORIGINAL root's asset, so they travel with
+    # that root only — handing them to a sibling would name parts of a
+    # different picture and send the vision annotator hunting for them.
+    orig_root = next((e["id"] for e in elements
+                      if e.get("role") == "root_visual"
+                      and isinstance(e.get("id"), str)), None)
+    parts = []
+    for gi, (groot, gsteps) in enumerate(groups):
+        keep = [e for e in elements
+                if e.get("id") not in illus or e.get("id") == groot]
+        used = {e.get("asset") for e in keep if isinstance(e.get("asset"), str)}
+        parts.append({
+            **{k: v for k, v in craw.items()
+               if k not in ("elements", "steps", "assets",
+                            "semantic_regions", "concept", "transition")},
+            "concept": concept if gi == 0 else f"{concept}__{groot or gi}",
+            # every later part opens by clearing the board — that is what the
+            # director asked for with the redraw
+            "transition": craw.get("transition") if gi == 0
+                          else "clear_and_redraw",
+            "assets": {k: v for k, v in all_assets.items() if k in used},
+            "semantic_regions": (craw.get("semantic_regions") or [])
+                                if groot == orig_root else [],
+            "elements": keep,
+            "steps": gsteps,
+        })
+    ctx.note("CHAPTER_SPLIT_ON_REDRAW",
+             f"{concept}: {len(groups)} root visuals in one chapter -> "
+             f"{len(groups)} chapters (roots: "
+             f"{[g[0] for g in groups]})")
+    return parts
 
 
 def _chapter(craw, ci: int, narrations: dict, ctx: _Ctx) -> dict | None:
