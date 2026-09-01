@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -92,6 +93,19 @@ def _parse_slide_visual(data) -> Optional[SlideVisual]:
 
     return SlideVisual(kind=kind, nodes=nodes, groups=groups, items=items, caption=caption,
                        body=body, options=options, answer=answer)
+
+
+def _estimate_seconds(seg: dict, spoken: str) -> int:
+    """Planning-only estimate. The semantic contract forbids the director
+    estimating durations (the MEASURED TTS audio is the timing authority for
+    everything that matters), but a flat 30s default made the script's total
+    fiction — so when the field is absent, estimate from the words actually
+    spoken at ~2.6 words/second."""
+    given = seg.get("estimated_duration_seconds")
+    if isinstance(given, (int, float)) and given > 0:
+        return int(given)
+    words = len((spoken or "").split())
+    return max(5, min(180, round(words / 2.6))) if words else 30
 
 
 def process_director_manifest(segments: List[ScriptSegment]) -> List[ScriptSegment]:
@@ -225,6 +239,9 @@ def generate_episode_script(
     language: str = "en",
     must_cover: list[str] | None = None,
     avatars: dict | None = None,
+    subject: str | None = None,
+    curriculum: str | None = None,
+    learner_age: str | None = None,
 ) -> EpisodeScript:
     """Generate a complete episode script via Claude in the chosen narration style.
 
@@ -297,13 +314,28 @@ def generate_episode_script(
     # JSON and silently yielding zero segments.
     target_duration = min(12.0, float(episode.get("estimated_duration_minutes", 5) or 5))
 
-    prompt = build_episode_prompt(
-        style,
-        chapter_title=analysis.get("chapter_title", f"Chapter {chapter_num}"),
-        difficulty_level=analysis.get("difficulty_level_requested", "middle_school").replace("_", " ").title(),
-        target_duration=f"{target_duration:.1f}",
-        episode_context=episode_context,
-    )
+    _semantic = os.getenv("SEMANTIC_PLAN", "").strip() == "1"
+    _chapter_title = analysis.get("chapter_title", f"Chapter {chapter_num}")
+    _level = analysis.get("difficulty_level_requested",
+                          "middle_school").replace("_", " ").title()
+    if _semantic:
+        # The director emits SEMANTIC targets and cues, no geometry; the
+        # adapter (spike/scene_engine/semantic.py) resolves the rest. Same
+        # segment schema either way, so slides/video/coverage are unchanged.
+        from .semantic_prompt import build_semantic_prompt
+        prompt = build_semantic_prompt(
+            style, chapter_title=_chapter_title, difficulty_level=_level,
+            target_duration=f"{target_duration:.1f}",
+            episode_context=episode_context,
+            subject=subject, curriculum=curriculum, learner_age=learner_age)
+    else:
+        prompt = build_episode_prompt(
+            style,
+            chapter_title=_chapter_title,
+            difficulty_level=_level,
+            target_duration=f"{target_duration:.1f}",
+            episode_context=episode_context,
+        )
 
     system = (
         "You are a master Socratic educator and script writer for SketchCast AI. "
@@ -428,20 +460,35 @@ def generate_episode_script(
             scene=raw_scene if isinstance(raw_scene, dict) else None,
             scene_assets=({str(k): str(v) for k, v in raw_scene_assets.items()}
                           if isinstance(raw_scene_assets, dict) else None),
-            estimated_duration_seconds=int(seg.get("estimated_duration_seconds", 30)),
+            estimated_duration_seconds=_estimate_seconds(seg, plain_text),
         ))
 
     # Fail LOUDLY here rather than letting an empty script cascade into a
-    # cryptic "No valid video segments" failure four agents later. The most
-    # common cause is an unparseable (truncated) Claude reply.
+    # cryptic "No valid video segments" failure four agents later.
     if not segments:
-        snippet = str(data.get("raw_text", data) if isinstance(data, dict) else data)[:300]
+        # Report what was MEASURED, and keep the reply. This message used to
+        # assert the reply "was almost certainly cut off at the output-token
+        # cap"; that diagnosis was wrong twice — once the reply was 1,901
+        # output tokens against a 32,000 cap and ended cleanly, and the real
+        # fault was malformed JSON. A guess in an error message costs hours.
+        raw = data.get("raw_text") if isinstance(data, dict) else None
+        used = (result.get("usage") or {}).get("output_tokens")
+        body = raw if isinstance(raw, str) else json.dumps(data, default=str)
+        where = ""
+        try:
+            dump = Path(tempfile.gettempdir()) / (
+                f"sketchcast_reply_ep{episode.get('episode_num', 1)}.txt")
+            dump.write_text(body, encoding="utf-8")
+            where = f"; full reply saved to {dump}"
+        except Exception:
+            pass
+        cut = (isinstance(used, int) and used >= max_out * 0.98)
         raise RuntimeError(
             f"Script generation produced no segments for episode "
-            f"{episode.get('episode_num', 1)} — Claude reply began: {snippet!r} "
-            "(a reply that starts with valid segments JSON but parses to nothing "
-            "was almost certainly cut off at the output-token cap, and the "
-            "doubled streamed retry hit it too)"
+            f"{episode.get('episode_num', 1)}: {len(body)} chars, "
+            f"output_tokens={used} of a {max_out} cap "
+            f"({'AT THE CAP — truncation is likely' if cut else 'well under the cap, so this is NOT truncation'})"
+            f". Reply began: {body[:220]!r} … ended: {body[-160:]!r}{where}"
         )
 
     # Visual continuity (VIDEO_ENGINE=scene): the model plans ONE persistent

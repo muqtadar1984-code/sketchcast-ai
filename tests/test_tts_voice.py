@@ -16,10 +16,13 @@ from shared.tts import resolve_voice, synthesize
 def _stub_providers(monkeypatch):
     # Neither provider actually writes audio in the test — we only assert routing.
     import shared.tts.providers.edge as edge
-    monkeypatch.setattr(edge, "synthesize", lambda say, out, ref: out)
+    # **kw so the stub keeps up with optional provider arguments (the word
+    # -boundary sink, for one) instead of failing a routing test over a
+    # parameter routing does not care about.
+    monkeypatch.setattr(edge, "synthesize", lambda say, out, ref, **kw: out)
     # eleven is imported lazily inside synthesize(); patch its module too.
     import shared.tts.providers.eleven as eleven
-    monkeypatch.setattr(eleven, "synthesize", lambda say, out, ref: out)
+    monkeypatch.setattr(eleven, "synthesize", lambda say, out, ref, **kw: out)
     monkeypatch.setattr(tts.cost, "within_cap", lambda n: True)
     monkeypatch.setattr(tts.cost, "record", lambda n, provider: None)
 

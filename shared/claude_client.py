@@ -169,6 +169,122 @@ def _get_api_key() -> str:
     return key
 
 
+def _rebalance_json(text: str):
+    """Close structures the model MIS-NESTED, and only those.
+
+    Measured on a real reply: it ended `"actions": []}]}}` where the chapters
+    array still needed its `]`, so a `}` arrived while an array was open. The
+    text was complete — 2,735 output tokens against a 32,000 cap — just built
+    wrong.
+
+    A mismatched closer is the signature of that mistake, and it is what
+    separates this from truncation: a reply that merely RAN OUT of closers is
+    a cut-off reply, and completing it would fabricate a short lesson that
+    every downstream check would wave through. So closers are added only once
+    a genuine mismatch has been seen, and never when the text ends inside a
+    string. Returns the corrected source, or None to leave the failure loud.
+    """
+    out, stack = [], []
+    ins = esc = mended = False
+    for c in text:
+        if esc:
+            out.append(c)
+            esc = False
+            continue
+        if ins:
+            out.append(c)
+            if c == "\\":
+                esc = True
+            elif c == '"':
+                ins = False
+            continue
+        if c == '"':
+            ins = True
+            out.append(c)
+            continue
+        if c in "{[":
+            stack.append(c)
+        elif c in "}]":
+            want = "{" if c == "}" else "["
+            if want in stack:
+                while stack and stack[-1] != want:
+                    out.append("]" if stack[-1] == "[" else "}")
+                    stack.pop()
+                    mended = True
+                stack.pop()
+        out.append(c)
+    if ins or esc or not mended:
+        return None
+    while stack:
+        out.append("]" if stack.pop() == "[" else "}")
+    return "".join(out)
+
+
+def _repair_json(text: str):
+    """Salvage a reply that is COMPLETE but slightly malformed.
+
+    Measured failures, all of which reached callers as the misleading
+    "produced no segments ... almost certainly cut off at the output-token
+    cap" (the reply was neither cut off nor near the cap):
+      * a stray closing bracket on the tail: ...]}]}]}
+      * SSML attribute quotes inside a JSON string: <break time="0.3s"/>
+      * a trailing comma before } or ]
+    Returns the parsed object, or None if it is genuinely unparseable.
+    """
+    import re as _re
+    text = (text or "").strip()
+    if not text:
+        return None
+    # _extract_json strips fences before it gets here, but this is module
+    # -level and callable directly — a fenced reply returning None looks
+    # exactly like an unparseable one, which is a trap worth closing.
+    if text.startswith("```"):
+        text = _re.sub(r"^```[a-zA-Z]*\s*", "", text)
+        text = _re.sub(r"\s*```$", "", text).strip()
+    candidates = []
+    # 1. SSML quotes are the one nested-quote case this model emits
+    fixed = _re.sub(r'<break\s+time\s*=\s*"([^"]*)"\s*/?>',
+                    r"<break time='\1'/>", text)
+    candidates.append(fixed)
+    # 2. trailing commas
+    decommaed = _re.sub(r",\s*([}\]])", r"\1", fixed)
+    candidates.append(decommaed)
+    # 3. mis-nested closers (a `}` arriving while an array is still open)
+    for src in (fixed, decommaed):
+        mended = _rebalance_json(src)
+        if mended:
+            candidates.append(mended)
+    # 3. a stray closer sits at the very end of an otherwise good reply, so
+    #    walk the tail back — but ONLY over structural punctuation. Trimming
+    #    CONTENT would turn a genuinely truncated reply into a plausible,
+    #    silently incomplete lesson, which is worse than the loud failure it
+    #    replaces: a short script would sail past every downstream check.
+    #
+    #    Re-balancing the tail needs one closer put BACK (…"chapters": []}]}
+    #    is right once the stray ] goes and a } returns). Appending is the
+    #    risky direction, though — it is also what would complete a reply cut
+    #    off after a whole element — so it is refused once a severing comma
+    #    has been stripped, which is the tell that a sibling was lost.
+    for cand in list(candidates):
+        i, severed = len(cand), False
+        while i > 0 and cand[i - 1] in "}] \t\r\n,":
+            severed = severed or cand[i - 1] == ","
+            i -= 1
+            head = cand[:i]
+            candidates.append(head)
+            if not severed:
+                for closer in ("}", "]}", "}]}", "]}]}"):
+                    candidates.append(head + closer)
+    for cand in candidates:
+        try:
+            out = json.loads(cand)
+        except Exception:
+            continue
+        if isinstance(out, (dict, list)) and out:
+            return out
+    return None
+
+
 class ClaudeClient:
     """Reusable Claude API wrapper with retry, JSON parsing, and token logging."""
 
@@ -510,6 +626,10 @@ class ClaudeClient:
                         return json.loads(text[start:end + 1])
                     except json.JSONDecodeError:
                         continue
+            repaired = _repair_json(text)
+            if repaired is not None:
+                logger.warning("model JSON was malformed; repaired it")
+                return repaired
             return {"raw_text": text}
 
     @staticmethod

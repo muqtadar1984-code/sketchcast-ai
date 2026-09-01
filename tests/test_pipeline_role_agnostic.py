@@ -15,11 +15,27 @@ docs/PIPELINE_INVARIANTS.md (app repo).
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 _WORKER = Path(__file__).resolve().parent.parent / "worker"
 _PROCESS = (_WORKER / "process.py").read_text(encoding="utf-8")
 _RUN = (_WORKER / "run.py").read_text(encoding="utf-8")
+
+_ROLES = {"teacher", "parent", "principal", "coordinator", "school_admin",
+          "student"}
+
+
+def _branch_tests(source: str):
+    """Every expression the module uses to DECIDE something."""
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.If, ast.While, ast.IfExp)):
+            yield node.test
+        elif isinstance(node, ast.Compare):
+            yield node
+        elif isinstance(node, ast.match_case):
+            yield node.pattern
 
 
 def test_generation_pipeline_does_not_branch_on_role():
@@ -33,12 +49,34 @@ def test_generation_pipeline_does_not_branch_on_role():
         f"process.py reads a role ({hits}) — the generation/index pipeline must stay "
         "role-agnostic so a fix for one adult reaches ALL adults. See docs/PIPELINE_INVARIANTS.md."
     )
-    # Role-NAME string literals are the other tell of role-branching in this path.
-    for role in ('"teacher"', '"parent"', '"principal"', '"coordinator"', '"school_admin"'):
-        assert role not in _PROCESS, (
-            f"process.py hard-codes the role {role} — role-branching in the pipeline. "
-            "Keep it role-agnostic (see docs/PIPELINE_INVARIANTS.md)."
+    # A role NAME reaching a DECISION is the other tell. Checked against the
+    # parse tree rather than the raw text, because the avatar roster uses
+    # "teacher"/"student" as slot names — those name a character on the
+    # whiteboard, not the owner of the book, and branch nothing.
+    for test in _branch_tests(_PROCESS):
+        named = {n.value for n in ast.walk(test)
+                 if isinstance(n, ast.Constant) and n.value in _ROLES}
+        assert not named, (
+            f"process.py branches on the role name(s) {sorted(named)} at line "
+            f"{test.lineno} — role-branching in the pipeline. Keep it "
+            "role-agnostic (see docs/PIPELINE_INVARIANTS.md)."
         )
+
+
+def test_the_role_guard_still_bites():
+    """The check moved from raw text to the parse tree to stop a false
+    positive; prove it did not stop catching the real thing."""
+    branching = 'if book["owner"] == "teacher":\n    x = 1\n'
+    caught = [t for t in _branch_tests(branching)
+              if any(isinstance(n, ast.Constant) and n.value in _ROLES
+                     for n in ast.walk(t))]
+    assert caught, "the guard no longer detects a role comparison"
+
+    # ...and that the shape it now tolerates really is inert.
+    roster = 'a = {"teacher": pick(voice), "student": pick(grade)}\n'
+    assert not [t for t in _branch_tests(roster)
+                if any(isinstance(n, ast.Constant) and n.value in _ROLES
+                       for n in ast.walk(t))]
 
 
 def test_universal_chapter_fixes_stay_wired():

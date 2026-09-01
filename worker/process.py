@@ -947,6 +947,8 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 script = generate_episode_script(
                     episode, analysis, chapter_num, client, narration_style, part_info=part_info,
                     language=lesson_lang, avatars=avatars,
+                    subject=book.get("subject"), curriculum=book.get("curriculum"),
+                    learner_age=book.get("grade"),
                 )
                 script_dict = script.model_dump()
 
@@ -978,6 +980,8 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                         episode, analysis, chapter_num, client, narration_style,
                         part_info=part_info, language=lesson_lang,
                         must_cover=first.get("missed") or [], avatars=avatars,
+                        subject=book.get("subject"), curriculum=book.get("curriculum"),
+                        learner_age=book.get("grade"),
                     )
                     retry_dict = retry.model_dump()
                     retry_report = _coverage_report(
