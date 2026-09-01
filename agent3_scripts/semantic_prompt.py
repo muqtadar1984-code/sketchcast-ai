@@ -103,7 +103,8 @@ Extra root visuals in a chapter are DISCARDED, and every later label then lands 
 
 _ASSETS = """=== GENERATED VISUAL ASSETS ===
 When a generated asset is needed, describe it so that important structures are visually distinguishable and clear at video resolution. Avoid clutter and decorative detail. The image must contain NO labels, NO arrows, NO captions, NO embedded text of any kind (the engine adds labels separately).
-Do NOT ask the image generator for machine-readable layers. Instead list the semantic regions that should exist in "semantic_regions" — the engine's vision system finds their real geometry afterwards."""
+Do NOT ask the image generator for machine-readable layers. Instead list the semantic regions that should exist in "semantic_regions" — the engine's vision system finds their real geometry afterwards.
+Every asset and element id you reference MUST be one you declared here, never an id taken from the lesson input. A reply that shipped empty assets and elements and pointed its actions at a source id had its ENTIRE visual plan discarded and every segment rendered as a plain text card."""
 
 _TARGETS = """=== SEMANTIC TARGETS (NO PIXELS) ===
 Reference things semantically, never by position:

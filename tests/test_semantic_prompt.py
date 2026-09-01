@@ -359,3 +359,39 @@ class TestJsonRepair:
     def test_valid_json_never_goes_near_the_repairer(self):
         from shared.claude_client import ClaudeClient
         assert ClaudeClient._extract_json('{"ok": 1}') == {"ok": 1}
+
+
+class TestValidatorCatchesAnEmptyLesson:
+    """A 42-segment lesson whose visual plan was dropped rendered as 42 plain
+    cards — 0 scenes, 0 chapters, 0 arrows — and validation returned PASSED,
+    because `passed` only asked whether the LEGACY renderer had leaked in.
+    Every quality number was zero, which read as "nothing wrong" rather than
+    "nothing happened"."""
+
+    @staticmethod
+    def _manifest(renderer, n=6):
+        return {"segments": [{"segment_id": f"s{i:03d}", "renderer": renderer}
+                             for i in range(n)]}
+
+    def test_a_lesson_with_no_scenes_fails(self):
+        from spike.scene_engine.validate import (format_report,
+                                                 validate_visual_language)
+        r = validate_visual_language(self._manifest("whiteboard"), {})
+        assert r["scene_segments"] == 0 and r["legacy_renderer_usage"] == 0
+        assert r["no_scenes_produced"] is True
+        assert r["passed"] is False, \
+            "an all-fallback lesson must not pass"
+        assert "NO scenes" in format_report(r)
+
+    def test_a_normal_lesson_with_a_few_fallbacks_still_passes(self):
+        from spike.scene_engine.validate import validate_visual_language
+        m = self._manifest("scene", 5)
+        m["segments"].append({"segment_id": "s099", "renderer": "whiteboard"})
+        r = validate_visual_language(m, {})
+        assert r["passed"] is True and r["no_scenes_produced"] is False
+
+    def test_legacy_leakage_still_fails(self):
+        from spike.scene_engine.validate import validate_visual_language
+        m = self._manifest("scene", 5)
+        m["segments"].append({"segment_id": "s099", "renderer": "native"})
+        assert validate_visual_language(m, {})["passed"] is False

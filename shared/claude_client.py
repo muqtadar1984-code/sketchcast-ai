@@ -169,6 +169,44 @@ def _get_api_key() -> str:
     return key
 
 
+def _escape_inner_quotes(text: str) -> str:
+    """Escape double quotes the model left bare INSIDE a string.
+
+    Measured: '...often called the "powerhouses" of the cell...' inside a
+    dialogue line. A quote only ends a string when the next thing along is
+    structural — a comma, colon, closing brace or bracket, or the end of the
+    text. Anything else means the quote belongs to the prose.
+    """
+    out, i, n = [], 0, len(text)
+    in_str = esc = False
+    while i < n:
+        c = text[i]
+        if esc:
+            out.append(c)
+            esc = False
+        elif in_str:
+            if c == "\\":
+                out.append(c)
+                esc = True
+            elif c == '"':
+                j = i + 1
+                while j < n and text[j] in " \t\r\n":
+                    j += 1
+                if j >= n or text[j] in ",:}]":
+                    in_str = False
+                    out.append(c)
+                else:
+                    out.append('\\"')
+            else:
+                out.append(c)
+        else:
+            if c == '"':
+                in_str = True
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _rebalance_json(text: str):
     """Close structures the model MIS-NESTED, and only those.
 
@@ -280,6 +318,9 @@ def _repair_json(text: str):
     fixed = _re.sub(r'"who"\s*:\s*("(?:[^"\\]|\\.)*")\s*:\s*(?=")',
                     r'"who": \1, "line": ', fixed)
     candidates.append(fixed)
+    # 2d. bare quotes inside a string ('called the "powerhouses" of the cell')
+    fixed = _escape_inner_quotes(fixed)
+    candidates.append(fixed)
     # 3. trailing commas
     decommaed = _re.sub(r",\s*([}\]])", r"\1", fixed)
     candidates.append(decommaed)
@@ -309,14 +350,27 @@ def _repair_json(text: str):
             if not severed:
                 for closer in ("}", "]}", "}]}", "]}]}"):
                     candidates.append(head + closer)
+    # Take the RICHEST parse, not the first one.
+    #
+    # The tail-walk above produces truncated prefixes, and a prefix can
+    # happen to parse: one real reply came back with `segments` intact and a
+    # chapter that had lost its elements, so the adapter reported
+    # EMPTY_CHAPTER, the visual plan was dropped, and all 42 segments
+    # rendered as plain cards. Returning the first candidate that parsed is
+    # what chose that. Preferring the one carrying the most content makes a
+    # full repair beat a lucky prefix every time.
+    best, best_size = None, -1
     for cand in candidates:
         try:
             out = json.loads(cand)
         except Exception:
             continue
-        if isinstance(out, (dict, list)) and out:
-            return out
-    return None
+        if not isinstance(out, (dict, list)) or not out:
+            continue
+        size = len(json.dumps(out, default=str))
+        if size > best_size:
+            best, best_size = out, size
+    return best
 
 
 class ClaudeClient:

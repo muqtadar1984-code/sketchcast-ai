@@ -69,7 +69,16 @@ def validate_visual_language(video_manifest: dict,
                            for i in ((visual_plan or {}).get("adapter_issues")
                                      or [])],
     }
-    report["passed"] = report["legacy_renderer_usage"] == 0
+    # A lesson that produced NO scenes is a failure, however clean the rest
+    # of the numbers look. Measured: a 42-segment lesson whose visual plan
+    # was dropped rendered as 42 plain cards — 0 scenes, 0 chapters, 0
+    # arrows — and this function returned PASSED, because `passed` only ever
+    # asked whether the LEGACY renderer had leaked in. Every quality metric
+    # was zero, which read as "nothing wrong" instead of "nothing happened".
+    report["no_scenes_produced"] = (report["scene_segments"] == 0
+                                    and report["narration_segments"] > 0)
+    report["passed"] = (report["legacy_renderer_usage"] == 0
+                        and not report["no_scenes_produced"])
     return report
 
 
@@ -87,6 +96,11 @@ def format_report(report: dict) -> str:
         else:
             lines.append(f"{k.replace('_', ' ').title():34s} {v}")
     lines.append("=" * 34)
-    lines.append("PASSED" if report["passed"] else
-                 "FAILED — legacy renderer leaked into a scene-engine lesson")
+    if report["passed"]:
+        lines.append("PASSED")
+    elif report.get("no_scenes_produced"):
+        lines.append("FAILED — the lesson produced NO scenes; every segment "
+                     "fell back to a plain card, so the visual plan was lost")
+    else:
+        lines.append("FAILED — legacy renderer leaked into a scene-engine lesson")
     return "\n".join(lines)
