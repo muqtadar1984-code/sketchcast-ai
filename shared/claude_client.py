@@ -259,7 +259,15 @@ def _repair_json(text: str):
     fixed = _re.sub(r'<break\s+time\s*=\s*"([^"]*)"\s*/?>',
                     r"<break time='\1'/>", text)
     candidates.append(fixed)
-    # 2. trailing commas
+    # 2. a key emitted TWICE, its own name standing in as the value:
+    #    {"who":"who":"teacher"}  ->  {"who":"teacher"}
+    #    Measured on a real reply that failed a whole lesson. A string value
+    #    followed by a colon is never valid JSON, so there is nothing to lose;
+    #    the rule is held to the case where the stray value REPEATS its key,
+    #    because that is unambiguous about which half to drop.
+    fixed = _re.sub(r'"(\w+)"\s*:\s*"\1"\s*:', r'"\1":', fixed)
+    candidates.append(fixed)
+    # 3. trailing commas
     decommaed = _re.sub(r",\s*([}\]])", r"\1", fixed)
     candidates.append(decommaed)
     # 3. mis-nested closers (a `}` arriving while an array is still open)

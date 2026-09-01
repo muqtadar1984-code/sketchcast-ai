@@ -288,6 +288,23 @@ class TestJsonRepair:
             src = inspect.getsource(cls.analyze)
             assert '"truncated"' in src, f"{cls.__name__} does not report it"
 
+    def test_a_key_emitted_twice_is_repaired(self):
+        """Measured on a real reply that failed an entire lesson: the model
+        wrote {"who":"who":"teacher"} — the key repeated with its own name
+        standing in as the value. Brackets were fine, so the structural
+        rebalancer could not help."""
+        from shared.claude_client import _repair_json
+        out = _repair_json(
+            '{"dialogue": [{"who":"who":"teacher", "line": "Hi"}]}')
+        assert out["dialogue"][0]["who"] == "teacher"
+        assert out["dialogue"][0]["line"] == "Hi"
+
+    def test_the_duplicate_key_rule_leaves_honest_json_alone(self):
+        """It must not rewrite a value that merely equals its key."""
+        from shared.claude_client import ClaudeClient
+        out = ClaudeClient._extract_json('{"who": "who", "line": "Hi"}')
+        assert out == {"who": "who", "line": "Hi"}
+
     def test_genuine_garbage_still_fails(self):
         from shared.claude_client import _repair_json
         assert _repair_json("this is not json at all") is None
