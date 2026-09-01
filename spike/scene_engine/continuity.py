@@ -794,6 +794,16 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         # names the part) — the arrow-synthesis pass below then arms it.
         covered = {p for lid in labels
                    for p in [_match_part(_guess_part_name(lid))] if p}
+        # Start BELOW whatever already occupies the left column. The semantic
+        # adapter lays declared labels out on this same column and pitch, so
+        # starting at the top wrote synthesized labels exactly on top of them
+        # — a rendered frame showed "Plant Cell" and "Cytoplasm" printed into
+        # each other. Read the column off the board instead of assuming it is
+        # empty, which holds however the labels got there.
+        _used_y = [float(e["at"][1]) for e in labels.values()
+                   if isinstance(e.get("at"), (list, tuple)) and len(e["at"]) == 2
+                   and abs(float(e["at"][0]) - 95.0) < 60.0]
+        _top = (max(_used_y) + 78.0) if _used_y else 140.0
         stack = 0
         for part in part_names:
             if part in covered:
@@ -809,7 +819,7 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                 continue
             roster[lid] = {"id": lid, "type": "text",
                            "text": part.replace("_", " ").strip().title(),
-                           "at": [95.0, 140.0 + 78.0 * stack],
+                           "at": [95.0, _top + 78.0 * stack],
                            "role": "label", "anchor": "lt"}
             labels[lid] = roster[lid]
             target_step.actions.append({"verb": "write", "target": lid})

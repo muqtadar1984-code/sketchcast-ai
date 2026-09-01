@@ -736,6 +736,43 @@ class TestLabelSynthesis:
                   if a["verb"] == "draw" and a["target"] == "cell")
         assert d2.get("region") == "nucleus"
 
+    def test_synthesized_labels_do_not_land_on_declared_ones(self):
+        """A rendered frame showed "Plant Cell" and "Cytoplasm" printed into
+        each other: synthesis started the left column at the top, and the
+        semantic adapter had already filled that same column on the same
+        pitch. Every label must get its own row."""
+        raw = {"chapters": [{
+            "concept": "cell", "transition": "clear_and_redraw",
+            "assets": {"pc": ("A plant cell. Name the layer groups exactly: "
+                              "cell wall, nucleus")},
+            "elements": [
+                {"id": "cell", "type": "illustration", "asset": "pc",
+                 "at": [640, 360]},
+                # what the adapter lays down for a model-declared label
+                {"id": "lbl_declared", "type": "text", "text": "Plant Cell",
+                 "role": "label", "at": [95.0, 140.0]},
+            ],
+            "steps": [
+                {"segment": 1, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "cell"},
+                             {"verb": "write", "target": "lbl_declared"}]},
+                {"segment": 2, "decision": "EXTEND",
+                 "actions": [{"verb": "draw", "target": "cell"}]},
+            ],
+        }]}
+        plan = parse_visual_plan(raw)
+        narr = {"s001": "This is a plant cell with a cell wall.",
+                "s002": "Inside, the nucleus controls everything."}
+        scenes, _, _ = compile_plan(plan, narr,
+                                    all_segments=["s001", "s002"],
+                                    skip_hold=set())
+        rows = [tuple(e["at"]) for e in scenes["s002"]["elements"]
+                if e.get("role") == "label" and e.get("at")]
+        assert len(rows) == len(set(rows)), f"labels share a position: {rows}"
+        ys = sorted(y for _, y in rows)
+        assert all(b - a >= 60.0 for a, b in zip(ys, ys[1:])), \
+            f"labels are stacked too tightly to read: {ys}"
+
     def test_declared_labels_suppress_synthesis(self):
         plan = parse_visual_plan(_plan_raw())     # lbl_nucleus declared
         narr = {"s001": "a", "s002": "the nucleus", "s003": "c"}

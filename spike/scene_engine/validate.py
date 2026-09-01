@@ -56,6 +56,10 @@ def validate_visual_language(video_manifest: dict,
         "unresolved_anchors": _pick("UNRESOLVED_ANCHOR")
         + _pick("UNRESOLVED_REGION") + _pick("ARROW_SUPPRESSED"),
         "out_of_bounds_text": _pick("OUT_OF_BOUNDS_TEXT"),
+        # text written over other text — the founder reported this twice and
+        # both times the report said the lesson was clean, because nothing
+        # measured it
+        "overlapping_text": _pick("TEXT_OVERLAP"),
         "arrows_converging": _pick("ARROWS_CONVERGE"),
         "baked_text_warnings": _pick("BAKED_TEXT"),
         "action_timing_warnings": _pick("TIMING_SHIFT"),

@@ -177,12 +177,20 @@ def _rebalance_json(text: str):
     text was complete — 2,735 output tokens against a 32,000 cap — just built
     wrong.
 
-    A mismatched closer is the signature of that mistake, and it is what
-    separates this from truncation: a reply that merely RAN OUT of closers is
-    a cut-off reply, and completing it would fabricate a short lesson that
-    every downstream check would wave through. So closers are added only once
-    a genuine mismatch has been seen, and never when the text ends inside a
-    string. Returns the corrected source, or None to leave the failure loud.
+    Three consecutive live replies were malformed this way — 1,901, 2,735 and
+    3,998 output tokens, every one against a 32,000 cap — so refusing to
+    close them fails a whole lesson over a bracket. What must NOT be closed
+    is a reply that stopped mid-thought, because completing that fabricates a
+    short lesson every downstream check would wave through. The tell is how
+    the text ENDS: inside a string, or on a `,`/`:`, means a value was
+    severed. Ending on a complete value means every element present is whole
+    and only outer closers are missing.
+
+    Truncation proper is not this function's job — it cannot see the token
+    count. generate_episode_script compares output_tokens against the cap and
+    fails loudly there, which is the only place the measurement exists.
+
+    Returns the corrected source, or None to leave the failure loud.
     """
     out, stack = [], []
     ins = esc = mended = False
@@ -213,8 +221,13 @@ def _rebalance_json(text: str):
                     mended = True
                 stack.pop()
         out.append(c)
-    if ins or esc or not mended:
+    if ins or esc:
         return None
+    tail = "".join(out).rstrip()
+    if not tail or tail[-1] in ",:":
+        return None          # a value was severed — leave the failure loud
+    if not stack:
+        return "".join(out) if mended else None
     while stack:
         out.append("]" if stack.pop() == "[" else "}")
     return "".join(out)

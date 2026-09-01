@@ -364,6 +364,21 @@ def generate_episode_script(
     result = client.analyze(prompt=prompt, system=system, max_tokens=max_out)
 
     data = result.get("data", result)
+    # Truncation is decided HERE, because this is the only place that can see
+    # both the reply and the cap it ran against. The JSON salvage in
+    # shared/claude_client deliberately cannot: a reply cut off exactly at an
+    # element boundary is structurally indistinguishable from a complete one,
+    # so if it were left to guess it would either fail every lesson over a
+    # stray bracket or quietly deliver a half-length one. A reply that used
+    # essentially the whole budget was cut off, whatever it parses to.
+    _used = (result.get("usage") or {}).get("output_tokens")
+    if isinstance(_used, int) and _used >= max_out * 0.98:
+        raise RuntimeError(
+            f"Script generation for episode {episode.get('episode_num', 1)} "
+            f"used {_used} output tokens of a {max_out} cap — the reply was "
+            "cut off, so any script parsed from it is incomplete. Raise the "
+            "cap or shorten the plan; do not trust this reply."
+        )
     raw_segments = data.get("segments", []) if isinstance(data, dict) else []
 
     segments = []

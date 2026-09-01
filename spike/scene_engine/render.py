@@ -268,6 +268,11 @@ class SceneRenderer:
         self._warned: set[str] = set()
         self._suppressed: set[str] = set()   # arrows with no locatable target
         self._text_boxes: list[tuple] = []   # bound text boxes, for stacking
+        # (id, box) for the overlap audit. Two label writers each assumed the
+        # left column was theirs and wrote "Plant Cell" and "Cytoplasm" into
+        # each other; nothing measured text against text, so the frame scored
+        # clean. Placement is unchanged — this only makes it visible.
+        self._text_placed: list[tuple[str, tuple]] = []
         # keep-out zones around the persistent avatars: board labels must
         # never write over the teacher or the student (founder screenshot:
         # three organelle labels rendered across the teacher's face)
@@ -606,6 +611,12 @@ class SceneRenderer:
                 y0 = max(SAFE_T, y0)
                 self._warn(f"LABEL_MOVED_OFF_AVATAR {el.id}")
         self._text_boxes.append((x0, y0, x0 + w, y0 + h))
+        if not _is_overlay(el.id):
+            for oid, (bx0, by0, bx1, by1) in self._text_placed:
+                if x0 < bx1 and x0 + w > bx0 and y0 < by1 and y0 + h > by0:
+                    self._warn(f"TEXT_OVERLAP {el.id}+{oid}")
+                    break
+            self._text_placed.append((el.id, (x0, y0, x0 + w, y0 + h)))
         b.box = (x0, y0, x0 + w, y0 + h)
 
     def _sub_box(self, b: Bound, sub: str) -> tuple[float, float, float, float] | None:

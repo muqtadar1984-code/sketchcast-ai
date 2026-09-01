@@ -239,13 +239,35 @@ class TestJsonRepair:
         # would be worse than the failure it replaces
         assert out["visual_plan"]["chapters"][0]["steps"][0]["segment"] == 1
 
-    def test_rebalancing_refuses_a_merely_unfinished_reply(self):
-        """No mismatch, just missing closers = the reply was cut off. Adding
-        them would fabricate a valid short lesson out of a truncated one."""
+    def test_an_underclosed_but_complete_reply_is_closed(self):
+        """Three consecutive live replies were malformed, at 1,901 / 2,735 /
+        3,998 output tokens against a 32,000 cap. One was missing only the
+        outer brace. Refusing to close it fails a whole lesson over a
+        bracket, so a reply ending on a COMPLETE value gets closed."""
         from shared.claude_client import _rebalance_json
-        assert _rebalance_json('{"segments": [{"type": "hook"}') is None
-        # ...and one that ends mid-string is refused whatever else is wrong
+        out = _rebalance_json('{"segments": [{"type": "hook"}]}')
+        assert out is None                       # already valid, nothing to do
+        assert json.loads(_rebalance_json('{"segments": [{"type": "hook"}]')
+                          )["segments"][0]["type"] == "hook"
+
+    def test_rebalancing_refuses_a_severed_value(self):
+        """What must never be closed is a reply that stopped mid-thought:
+        completing it invents a short lesson nothing downstream would catch.
+        The tell is how the text ENDS."""
+        from shared.claude_client import _rebalance_json
         assert _rebalance_json('{"a": [1]}, "b": "half a sent') is None
+        assert _rebalance_json('{"segments": [{"type": "hook"},') is None
+        assert _rebalance_json('{"segments": [{"type":') is None
+
+    def test_truncation_is_caught_by_the_token_count_not_the_parser(self):
+        """The compensating control for the relaxation above. A reply cut off
+        exactly at an element boundary parses fine, so only the measured
+        token count can tell — and only script_generator can see it."""
+        import inspect
+        from agent3_scripts.script_generator import generate_episode_script
+        src = inspect.getsource(generate_episode_script)
+        assert "_used >= max_out * 0.98" in src
+        assert "the reply was " in src and "cut off" in src
 
     def test_genuine_garbage_still_fails(self):
         from shared.claude_client import _repair_json
