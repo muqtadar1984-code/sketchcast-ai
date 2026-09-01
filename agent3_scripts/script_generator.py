@@ -452,12 +452,29 @@ def generate_episode_script(
     # script.
     visual_plan_dump = None
     raw_plan = data.get("visual_plan") if isinstance(data, dict) else None
+    adapter_issues: list[dict] = []
     if raw_plan is not None:
         try:
             from spike.scene_engine.continuity import (compile_plan,
                                                        parse_visual_plan,
                                                        plan_stats, seed_moment,
                                                        seed_key_points)
+            # SEMANTIC PLAN (opt-in, SEMANTIC_PLAN=1): the director emits
+            # {element}/{asset,region} targets, cues and no coordinates; the
+            # adapter resolves geometry from this engine's own layout systems.
+            # Strict mode (SEMANTIC_PLAN_STRICT=1, for dev/CI) refuses to
+            # translate anything it cannot honour; production salvages and
+            # reports instead, because a hostile plan must never take a
+            # lesson down. Flag OFF = byte-identical to the current path.
+            if os.getenv("SEMANTIC_PLAN", "").strip() == "1":
+                from spike.scene_engine.semantic import adapt_semantic_plan
+                narrations_pre = {s.segment_id: s.text for s in segments}
+                raw_plan, adapter_issues = adapt_semantic_plan(
+                    raw_plan, narrations_pre,
+                    strict=os.getenv("SEMANTIC_PLAN_STRICT", "").strip() == "1")
+                if adapter_issues:
+                    logger.warning("semantic adapter: %d issue(s); first: %s",
+                                   len(adapter_issues), adapter_issues[0])
             plan = parse_visual_plan(raw_plan)
             if plan is not None:
                 narrations = {s.segment_id: s.text for s in segments}
@@ -486,6 +503,10 @@ def generate_episode_script(
                         s.scene_assets = assets_by_seg.get(s.segment_id)
                 visual_plan_dump = {"plan": plan.model_dump(), "report": report,
                                     "stats": plan_stats(plan)}
+                if adapter_issues:
+                    # surfaced in the validation report: a salvaged plan must
+                    # be visible, never quietly reduced
+                    visual_plan_dump["adapter_issues"] = adapter_issues
         except Exception:
             logger.exception("visual plan compilation failed; sceneless fallback")
 

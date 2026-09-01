@@ -59,6 +59,11 @@ def validate_visual_language(video_manifest: dict,
         "arrows_converging": _pick("ARROWS_CONVERGE"),
         "baked_text_warnings": _pick("BAKED_TEXT"),
         "action_timing_warnings": _pick("TIMING_SHIFT"),
+        # semantic-plan adapter (SEMANTIC_PLAN=1): anything it could not
+        # honour, so a salvaged translation is never invisible
+        "adapter_issues": [f"{i.get('code')}: {i.get('detail')}"
+                           for i in ((visual_plan or {}).get("adapter_issues")
+                                     or [])],
     }
     report["passed"] = report["legacy_renderer_usage"] == 0
     return report

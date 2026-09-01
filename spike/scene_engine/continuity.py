@@ -184,6 +184,11 @@ def _clean_action(a) -> dict | None:
     for k in ("duration", "easing", "pen", "padding", "times"):
         if k in a and isinstance(a[k], (int, float, str)):
             out[k] = a[k]
+    if verb == "draw" and isinstance(a.get("region"), str) and a["region"].strip():
+        # a semantic {asset, region} draw carries WHICH part is being drawn;
+        # dropping it here silently reverted narration-ordered drawing to a
+        # uniform slice (the adapter's whole point, lost at the boundary)
+        out["region"] = a["region"].strip()
     return out
 
 
