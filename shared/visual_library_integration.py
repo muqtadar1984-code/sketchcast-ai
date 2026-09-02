@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,35 @@ def _bootstrap_existing_cache(ra) -> None:
         logger.debug("existing visual cache bootstrap skipped: %s", exc)
 
 
+def _hydrate_local_library(key: str, prompt: str, cache: Path) -> bool:
+    """Copy a known local library asset into the renderer cache."""
+    try:
+        from shared.visual_library import find
+        hit = find(key, prompt, context())
+        source = Path(str(hit.get("local_cache_path") or "")) if hit else None
+        if not source or not source.exists():
+            return False
+        target = cache / __import__("spike.scene_engine.raster_assets", fromlist=["canonical_key"]).canonical_key(key) / "asset.png"
+        if target.exists():
+            return True
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        meta = source.parent / "meta.json"
+        if meta.exists():
+            try:
+                md = json.loads(meta.read_text(encoding="utf-8"))
+            except Exception:
+                md = {}
+            md.update({"provenance": "visual_library", "library_asset_id": hit.get("id")})
+            (target.parent / "meta.json").write_text(json.dumps(md, indent=2), encoding="utf-8")
+        logger.info("visual library local hit: %s <- %s (score %.2f)",
+                    key, hit.get("asset_key"), hit.get("match_score", 0))
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("local visual library lookup failed for %s: %s", key, exc)
+        return False
+
+
 def _patch() -> None:
     global _PATCHED
     if _PATCHED:
@@ -97,15 +127,15 @@ def _patch() -> None:
         png = asset_dir / "asset.png"
         existed_before = png.exists()
 
-        # Hydrate first. If the library has no confident approved match, the
-        # original resolver proceeds exactly as before and may call the image
-        # model. A failed library lookup is intentionally invisible to the
-        # rendering contract.
         if not existed_before:
-            try:
-                hydrate(key, prompt, cache, context())
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("visual library lookup failed for %s: %s", key, exc)
+            # First reuse a previously generated asset already present on the
+            # worker. Then try the durable Supabase library. Only after both
+            # fail does the original function get permission to call Gemini.
+            if not _hydrate_local_library(key, prompt, cache):
+                try:
+                    hydrate(key, prompt, cache, context())
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("visual library lookup failed for %s: %s", key, exc)
 
         result = original(key, prompt, cache, allow_generate)
 
