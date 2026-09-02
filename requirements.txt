@@ -8,7 +8,6 @@ python-multipart>=0.0.6
 python-dotenv>=1.0.0
 pytest>=7.0.0
 httpx>=0.25.0
-streamlit>=1.30.0
 anthropic[vertex]>=0.20.0   # [vertex] pulls google-auth for the Vertex AI backend (LLM_BACKEND=vertex)
 # UNDECLARED UNTIL NOW, and load-bearing: spike/scene_engine/raster_assets.py
 # and spike/scene_engine/trace.py import numpy, and VIDEO_ENGINE=scene is live.

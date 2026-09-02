@@ -2,11 +2,10 @@
 #
 # - aptPkgs adds ffmpeg, required by the video pipeline (agent6/agent8 shell out
 #   to it; imageio-ffmpeg's bundled binary is the fallback).
-# - The [start] cmd below launches the legacy Streamlit UI. The PRODUCTION
-#   worker service overrides its start command in the Railway dashboard to:
-#       python -m worker.run
-#   If no service still uses the Streamlit UI, switch this cmd to the worker
-#   command — check the Railway dashboard before changing it.
+# - The [start] cmd launches the worker. It used to launch a Streamlit UI that
+#   production overrode from the Railway dashboard, so the repo could not
+#   deploy itself and correctness depended on a setting invisible to git.
+#   The Streamlit bundle has been deleted.
 
 [phases.setup]
 # libraqm: Pillow loads it dynamically at runtime (8.2+) to enable HarfBuzz
@@ -15,4 +14,4 @@
 aptPkgs = ["ffmpeg", "libraqm0", "libfribidi0", "libharfbuzz0b"]
 
 [start]
-cmd = "streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --server.enableCORS false --server.enableXsrfProtection false"
+cmd = "python -m worker.run"

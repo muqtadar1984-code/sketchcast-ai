@@ -184,17 +184,17 @@ def log_external_usage(service: str, **fields) -> None:
 
 
 def _get_api_key() -> str:
-    """Read API key from Streamlit secrets first, then env var."""
-    try:
-        import streamlit as st
-        return st.secrets["ANTHROPIC_API_KEY"]
-    except Exception:
-        pass
+    """Read the API key from the environment.
+
+    This used to `import streamlit` first, to read a secrets file that does
+    not exist on the worker: 1.68 s of process start and a ~150 MB dependency
+    tree resident in the process that renders video frames, every time, to
+    fall through to the env var anyway. The Streamlit UI is gone.
+    """
     key = os.getenv("ANTHROPIC_API_KEY", "")
     if not key:
         raise RuntimeError(
-            "ANTHROPIC_API_KEY not found. Set it in .streamlit/secrets.toml "
-            "or as an environment variable."
+            "ANTHROPIC_API_KEY not found. Set it as an environment variable."
         )
     return key
 
