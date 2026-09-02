@@ -716,10 +716,23 @@ class SceneRenderer:
             entries[eid] = (rcx, (b.box[1] + b.box[3]) / 2)
         if len(entries) < 2:
             return
-        zone_top = min((z[1] for z in self._avatar_zones),
-                       default=WORLD_H)
         y_top = max(40.0, ry0 + 4.0)
-        y_max = min(WORLD_H - 60.0, zone_top - 12.0)
+
+        def _floor_for(x0: float, x1: float) -> float:
+            """How far down THIS column may run.
+
+            A keep-out is a RECTANGLE, not a full-width band. Taking the
+            global `min(z[1])` let the caption panel — which spans only
+            x714..1226 — cap the left column too. Measured on a 7-label cell:
+            it collapsed the usable column to 28px, everything spilled to the
+            top row, and the last two labels clamped onto each other. The
+            keep-out meant to stop overlap caused it: 0 overlapping pairs
+            before, 2 after. Only zones that actually overlap this column's x
+            range can limit it.
+            """
+            tops = [z[1] for z in self._avatar_zones
+                    if z[0] < x1 and z[2] > x0]
+            return min(WORLD_H - 60.0, (min(tops) - 12.0) if tops else WORLD_H)
 
         def place_column(items: list, side: str) -> list:
             items = sorted(items, key=lambda e: e[1][1])   # by target height
@@ -728,13 +741,13 @@ class SceneRenderer:
                 bb = self.bound[lid]
                 w = bb.box[2] - bb.box[0]
                 h = bb.box[3] - bb.box[1]
-                if y + h > y_max:
-                    spill.append((lid, tgt))
-                    continue
                 if side == "right":
                     x0 = min(rx1 + 26.0, WORLD_W - 24.0 - w)
                 else:
                     x0 = max(24.0, rx0 - 26.0 - w)
+                if y + h > _floor_for(x0, x0 + w):
+                    spill.append((lid, tgt))
+                    continue
                 bb.box = (x0, y, x0 + w, y + h)
                 y += max(50.0, h + 16.0)
             return spill
@@ -743,14 +756,21 @@ class SceneRenderer:
         left = [(l, t) for l, t in entries.items() if t[0] < rcx]
         spill = place_column(right, "right")
         spill = place_column(left + spill, "left")
-        # final spill: a row above the diagram, ordered by target x
+        # Final spill: rows above the diagram, ordered by target x. It WRAPS.
+        # A single row that clamped with `x = min(x, WORLD_W - 24 - w)` gave
+        # every label past the right edge the same x and the same y, i.e. it
+        # stacked them exactly on top of one another — the clamp turned an
+        # overflow into a collision.
         x = max(24.0, rx0 - 60.0)
+        rows = 0
         for lid, tgt in sorted(spill, key=lambda e: e[1][0]):
             bb = self.bound[lid]
             w = bb.box[2] - bb.box[0]
             h = bb.box[3] - bb.box[1]
-            y0t = max(16.0, ry0 - h - 26.0)
-            x = min(x, WORLD_W - 24.0 - w)
+            if x + w > WORLD_W - 24.0:          # wrap to the next row up
+                x = max(24.0, rx0 - 60.0)
+                rows += 1
+            y0t = max(16.0, ry0 - h - 26.0 - rows * (h + 10.0))
             bb.box = (x, y0t, x + w, y0t + h)
             x += w + 30.0
 

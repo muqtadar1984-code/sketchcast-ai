@@ -123,3 +123,77 @@ def test_acceptance_report_is_callable_without_a_scene_engine():
     'a validator bug must never destroy a lesson' net did not cover it."""
     from worker.process import _acceptance_report
     assert _acceptance_report({}, {"segments": []}) is None
+
+
+class TestAcceptanceGateIsCalibrated:
+    """Round two measured the first gate destroying three classes of good
+    lesson. The AUDIT and the GATE are now different predicates: the audit
+    still reports everything, the gate refuses only what makes the artifact
+    not worth delivering."""
+
+    @staticmethod
+    def _m(n, renderer="scene", audio=True, failed_assets=0):
+        return {"segments": [
+            {"segment_id": f"s{i:03d}", "renderer": renderer,
+             **({"audio_path": f"/t/{i}.mp3"} if audio else {}),
+             **({"scene_audit": ["ASSET_UNRESOLVED x (y)"]}
+                if i < failed_assets else {})}
+            for i in range(n)]}
+
+    def _accept(self, monkeypatch, manifest):
+        monkeypatch.setenv("VIDEO_ENGINE", "scene")
+        from worker.process import _acceptance_report
+        return _acceptance_report({}, manifest)
+
+    def test_an_all_whiteboard_lesson_still_ships(self, monkeypatch):
+        """video_composer calls the whiteboard tier a legitimate rung of the
+        same visual language; the first gate threw those lessons away."""
+        r = self._accept(monkeypatch, self._m(20, "whiteboard"))
+        assert r["ship"] is True
+
+    def test_one_failed_image_out_of_thirty_still_ships(self, monkeypatch):
+        """It cost a full render — script call, all TTS, every frame — to
+        discard a lesson over one blank board."""
+        r = self._accept(monkeypatch, self._m(30, failed_assets=1))
+        assert r["ship"] is True
+        assert "unresolved_assets=1" in r["summary"]
+
+    def test_a_third_of_the_boards_blank_does_not_ship(self, monkeypatch):
+        r = self._accept(monkeypatch, self._m(30, failed_assets=10))
+        assert r["ship"] is False and "BLOCKING" in r["summary"]
+
+    def test_a_silent_lesson_does_not_ship(self, monkeypatch):
+        r = self._accept(monkeypatch, self._m(20, audio=False))
+        assert r["ship"] is False and "mostly_silent" in r["summary"]
+
+    def test_the_worker_gates_on_ship_not_on_the_audit(self):
+        import inspect
+        from worker.process import process_generation
+        src = inspect.getsource(process_generation)
+        assert '_accept["ship"]' in src
+        assert '_accept["passed"]' not in src
+
+
+class TestAFailedSegmentReachesTheConcatGate:
+    def test_the_composer_records_the_gap(self):
+        """Skipping a failed segment removed it from the manifest, so the
+        'no lesson with holes' check could never see the hole."""
+        import inspect
+        from agent6_animation import video_composer
+        src = inspect.getsource(video_composer.compose_episode_videos)
+        assert 'renderer="failed"' in src
+        assert "recording the gap" in src
+
+    def test_agent8_refuses_a_manifest_with_a_recorded_gap(self, tmp_path):
+        from agent8_render.renderer import render_final_video
+        good = tmp_path / "s001.mp4"
+        good.write_bytes(b"x")
+        with pytest.raises(RuntimeError) as e:
+            render_final_video(video_manifest={
+                "book_id": "b", "chapter_num": 1, "episode_num": 1,
+                "segments": [
+                    {"segment_id": "s001", "video_path": str(good),
+                     "audio_duration_seconds": 1.0},
+                    {"segment_id": "s002", "video_path": None,
+                     "renderer": "failed"}]})
+        assert "s002" in str(e.value) and "holes" in str(e.value)

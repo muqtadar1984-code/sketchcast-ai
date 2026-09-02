@@ -112,11 +112,21 @@ def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
     imported only by tests. Every incident where "the report said PASSED" was
     a LOCAL driver script talking to itself; the worker never asked.
 
-    Returns {"passed", "summary", "report"} or None when the check is not
-    applicable (no scene engine) or itself failed. A validator bug must never
-    destroy a lesson that rendered fine, so anything unexpected degrades to
-    None and the lesson proceeds — but a validator VERDICT of False is
-    honoured by the caller.
+    THE AUDIT AND THE GATE ARE NOT THE SAME THING. `report["passed"]` is the
+    full quality audit: every line in it means "look at this". Promoting it
+    verbatim to a shipping gate — which is what the first version did —
+    destroyed lessons that were fine. Measured: an all-whiteboard lesson
+    failed, though video_composer calls that tier a legitimate rung of the
+    same visual language; and ONE image failing to generate out of ~30 threw
+    away the whole lesson AFTER the script call, all the TTS and every frame.
+
+    So the gate is a deliberately smaller predicate: refuse only what makes
+    the artifact not worth delivering, and let the rest ride in the report.
+
+    Returns {"passed", "ship", "summary", "report"} or None when the check is
+    not applicable (no scene engine) or itself failed. A validator bug must
+    never destroy a lesson that rendered fine, so anything unexpected
+    degrades to None; the caller honours `ship`, not `passed`.
     """
     if os.getenv("VIDEO_ENGINE", "").strip().lower() != "scene":
         return None
@@ -125,19 +135,40 @@ def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
                                                  validate_visual_language)
         plan = (script_data or {}).get("visual_plan")
         report = validate_visual_language(video_manifest, plan)
-        failed = [k for k in ("no_scenes_produced", "mostly_silent") if report.get(k)]
-        for k in ("legacy_renderer_usage",):
+        n = max(1, int(report.get("narration_segments") or 0))
+        tolerance = max(1, n // 4)
+
+        blocking = []
+        # Dead air is the one defect a viewer cannot work around.
+        if report.get("mostly_silent"):
+            blocking.append("mostly_silent")
+        # A lesson with NO pictures at all is not a lesson — but a whiteboard
+        # lesson IS one. The whiteboard tier exists precisely so the engine
+        # can simplify WITHIN its own visual language rather than fail.
+        if report.get("no_scenes_produced") and not report.get(
+                "whiteboard_fallback_segments"):
+            blocking.append("no_scenes_produced")
+        # Proportional: one blank board among thirty is a blemish worth
+        # reporting; a third of the lesson blank is a broken lesson.
+        for key in ("unresolved_assets", "legacy_renderer_usage"):
+            v = report.get(key)
+            count = len(v) if isinstance(v, list) else int(v or 0)
+            if count > tolerance:
+                blocking.append(f"{key}={count}/{n}")
+
+        noted = [k for k in ("no_scenes_produced", "mostly_silent")
+                 if report.get(k)]
+        for k in ("unresolved_assets", "silent_segments", "overlapping_text"):
             if report.get(k):
-                failed.append(k)
-        for k in ("unresolved_assets", "silent_segments"):
-            if report.get(k):
-                failed.append(f"{k}={len(report[k])}")
-        summary = (", ".join(failed) if failed else "clean")
-        logger.info("acceptance: %s\n%s",
+                noted.append(f"{k}={len(report[k])}")
+        summary = ("BLOCKING: " + ", ".join(blocking) if blocking
+                   else (", ".join(noted) if noted else "clean"))
+        logger.info("acceptance: audit=%s ship=%s\n%s",
                     "PASSED" if report.get("passed") else "FAILED",
+                    "yes" if not blocking else "NO",
                     format_report(report))
-        return {"passed": bool(report.get("passed")), "summary": summary,
-                "report": report}
+        return {"passed": bool(report.get("passed")), "ship": not blocking,
+                "summary": summary, "report": report}
     except Exception:  # noqa: BLE001 — never fail a rendered lesson on the checker
         logger.exception("acceptance check itself failed; lesson allowed through")
         return None
@@ -1099,7 +1130,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     db.set_stage(sb, job_id, {"phase": "video", "part": part_idx,
                                               "total": n_parts, "part_pct": 99,
                                               "acceptance": _accept["summary"]})
-                    if not _accept["passed"]:
+                    if not _accept["ship"]:
                         raise RuntimeError(
                             f"lesson failed acceptance: {_accept['summary']}")
 

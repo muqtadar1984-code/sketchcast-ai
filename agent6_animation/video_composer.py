@@ -467,8 +467,20 @@ def compose_episode_videos(
 
     # Aggregate in segment order — Agent 8's concat needs them ordered.
     total_duration = 0.0
-    for r in results:
+    for i, r in enumerate(results):
         if not r:
+            # RECORD the failure; do not erase it. Skipping the segment
+            # removed it from the manifest entirely, so Agent 8's
+            # "refuse a lesson with holes" check could never see the hole it
+            # was written for — the concat simply had fewer inputs and
+            # reported success. A failed segment now travels as a row with no
+            # video_path, which is exactly what that check looks for.
+            sid = slide_segments[i].get("segment_id", f"s{i + 1:03d}")
+            logger.error("segment %s produced no video; recording the gap", sid)
+            manifest_segments.append(VideoSegment(
+                segment_id=sid, video_path=None, audio_path=None,
+                audio_duration_seconds=0.0, renderer="failed",
+            ))
             continue
         total_duration += r["duration"]
         _voices_used.add(r["used"])

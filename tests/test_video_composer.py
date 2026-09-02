@@ -80,7 +80,14 @@ def test_a_failed_segment_is_skipped_not_fatal(monkeypatch, tmp_path):
     monkeypatch.setattr(vc, "render_native_segment", flaky_render)
     script, slides = _inputs(4)
     m = compose_episode_videos(script, slides).model_dump()
-    # 3 built, still in order, the failed one dropped (not a crash).
-    assert [s["segment_id"] for s in m["segments"]] == ["s0", "s2", "s3"]
+    # 3 built, still in order, and the failure is RECORDED rather than
+    # erased. Dropping it from the manifest is what blinded Agent 8's
+    # "refuse a lesson with holes" check: the concat simply received fewer
+    # inputs and reported success, so a lesson missing a segment shipped.
+    assert [s["segment_id"] for s in m["segments"]] == ["s0", "s1", "s2", "s3"]
+    failed = [s for s in m["segments"] if not s["video_path"]]
+    assert [s["segment_id"] for s in failed] == ["s1"]
+    assert failed[0]["renderer"] == "failed"
+    # the counts stay honest: three videos were actually built
     assert m["video_segments_count"] == 3
     assert m["total_segments"] == 4
