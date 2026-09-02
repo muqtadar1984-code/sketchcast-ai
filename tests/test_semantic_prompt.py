@@ -687,3 +687,62 @@ class TestP05Blockers:
         _, stub = self._run("conversational", monkeypatch)
         assert stub.max_tokens >= 30000, \
             f"semantic prompt on a {stub.max_tokens} cap will truncate"
+
+
+class TestP4SalvageBoundary:
+    """P4. The salvage layer grew five repair rules in one night. Both reviews
+    converged on the same boundary, so it is written down and enforced here
+    rather than left as a comment:
+
+        UNAMBIGUOUS SYNTAX REPAIR: yes.
+        GUESSING WHAT THE MODEL MEANT: no.
+
+    A repair may fix how the reply is PUNCTUATED. It may never invent content,
+    complete a thought, or choose between two readings of what was meant.
+    """
+
+    def test_repairs_never_invent_content(self):
+        from shared.claude_client import _repair_json
+        # cut mid-sentence: completing it would fabricate teaching
+        assert _repair_json('{"segments": [{"text": "the point of the les') is None
+        # cut after a whole element: re-closable, and still refused
+        assert _repair_json('{"segments": [{"type": "hook"},') is None
+
+    def test_repairs_never_choose_between_two_readings(self):
+        """The duplicate-key rule fires only when the stray value REPEATS its
+        key, which makes it unambiguous which half to drop. A genuinely
+        ambiguous pair must be left alone."""
+        from shared.claude_client import _repair_json
+        out = _repair_json('{"d": [{"who":"who":"teacher"}]}')
+        assert out["d"][0]["who"] == "teacher"          # unambiguous
+        assert _repair_json('{"d": [{"who":"alice":"bob"}]}') is None
+
+    def test_the_richest_parse_never_beats_a_complete_one(self):
+        """Candidate selection prefers the FULLEST parse, so a truncated
+        prefix that happens to parse can never win over the whole reply."""
+        from shared.claude_client import _repair_json
+        out = _repair_json(
+            '{"segments": [{"a": 1}, {"b": 2}, {"c": 3}], "visual_plan": '
+            '{"chapters": [{"id": "one"}]}}]')
+        assert len(out["segments"]) == 3
+        assert out["visual_plan"]["chapters"], "the plan was dropped"
+
+    def test_valid_json_is_returned_untouched(self):
+        """The cheapest statement of the boundary: if it already parses, the
+        salvage has nothing to say about it."""
+        from shared.claude_client import ClaudeClient
+        payload = {"segments": [{"type": "hook", "dialogue":
+                                 [{"who": "teacher", "line": "Hi."}]}],
+                   "visual_plan": {"chapters": [{"id": "c1"}]}}
+        assert ClaudeClient._extract_json(json.dumps(payload)) == payload
+
+    def test_repair_is_deterministic_and_idempotent(self):
+        """A repair that varies run to run, or that keeps rewriting its own
+        output, is interpreting rather than correcting."""
+        from shared.claude_client import _repair_json
+        broken = '{"d": [{"who":"teacher": "Hi."}], "x": [1,],}'
+        first = _repair_json(broken)
+        assert first is not None
+        assert _repair_json(broken) == first, "not deterministic"
+        assert _repair_json(json.dumps(first)) == first, \
+            "repairing an already-repaired reply changed it again"

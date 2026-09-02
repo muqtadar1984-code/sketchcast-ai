@@ -345,7 +345,12 @@ def _repair_json(text: str):
     #     {"who": "teacher": "And then..."} -> {"who": "teacher", "line": "..."}
     #     Every malformation measured on this path so far has corrupted this
     #     one dialogue object, so it gets its own rule.
-    fixed = _re.sub(r'"who"\s*:\s*("(?:[^"\\]|\\.)*")\s*:\s*(?=")',
+    #     Restricted to the two KNOWN speaker values. With a valid speaker the
+    #     repair is decidable from the schema — a dialogue entry has exactly
+    #     `who` and `line`, so a trailing string can only be the line. With an
+    #     arbitrary value it would be a GUESS about which key went missing,
+    #     and guessing intent is the one thing this layer must never do.
+    fixed = _re.sub(r'"who"\s*:\s*("(?:teacher|student)")\s*:\s*(?=")',
                     r'"who": \1, "line": ', fixed)
     candidates.append(fixed)
     # 2d. bare quotes inside a string ('called the "powerhouses" of the cell')
