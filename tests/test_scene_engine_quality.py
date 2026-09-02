@@ -1297,3 +1297,40 @@ class TestSketchNeverCoversTheCardsOwnWriting:
             "text": "A towering tree and a tiny ant are both alive."})
         assert any(str(e.get("id", "")).startswith("sk_")
                    for e in card["elements"]),             "the feature must still work where there is room for it"
+
+
+class TestP1LayoutConstraints:
+    """P1. Two constraints the layout engine could not previously express."""
+
+    def test_the_caption_panel_is_a_keep_out_region(self):
+        """It is on screen for essentially every segment and no placement
+        code could see it, so ~a third of every diagram was laid out into
+        space that was already occupied."""
+        from spike.scene_engine.render import (SceneRenderer, _CAPTION_HALF_H,
+                                               _CAPTION_HALF_W)
+        from spike.scene_engine.schema import Scene
+        scene = Scene.model_validate({
+            "id": "cap", "narration": "The nucleus controls the cell.",
+            "elements": [
+                {"id": "__nb_0", "type": "text", "text": "The nucleus",
+                 "at": [970, 360], "role": "caption"},
+                {"id": "lbl", "type": "text", "text": "Nucleus",
+                 "at": [95, 140], "role": "label"}],
+            "actions": [{"verb": "write", "target": "lbl"}]})
+        r = SceneRenderer(scene)
+        zones = r._avatar_zones
+        assert any(abs(z[0] - (970 - _CAPTION_HALF_W)) < 1
+                   and abs(z[2] - (970 + _CAPTION_HALF_W)) < 1
+                   for z in zones), \
+            f"the caption panel is not a keep-out region: {zones}"
+
+    def test_label_relayout_no_longer_requires_arrows(self):
+        """The prompt tells the director to prefer pointing over arrows; the
+        de-collision layout only ran WHEN arrows existed. We asked for no
+        arrows and then skipped the fix for the problem that causes."""
+        import inspect
+        from spike.scene_engine.render import SceneRenderer
+        src = inspect.getsource(SceneRenderer._relayout_part_labels)
+        head, _, tail = src.partition("if len(entries) < 2")
+        assert 'role", "") or "") != "label"' in head, \
+            "arrowless labels must be entered into the layout before the gate"

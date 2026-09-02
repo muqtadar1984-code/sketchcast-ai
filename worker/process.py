@@ -482,6 +482,16 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     from shared.llm import client_for
     from worker.branding import load_branding
 
+    # Label every model call made under this job so spend can be attributed
+    # to a lesson. Without this the token log carried only counts and a
+    # timestamp: "what did this generation cost" was unanswerable from our own
+    # data, and so was "is the semantic path cheaper than the legacy one".
+    from shared.claude_client import set_usage_context
+    set_usage_context(generation_id=generation_id,
+                      job_id=str(job.get("id") or ""),
+                      engine=os.getenv("VIDEO_ENGINE", "native"),
+                      semantic=os.getenv("SEMANTIC_PLAN", "") == "1")
+
     job_id = job["id"]
     db.set_generation_status(sb, generation_id, "processing")  # so the UI shows progress, not "queued"
     gen = db.get_generation(sb, generation_id)

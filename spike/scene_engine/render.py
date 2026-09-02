@@ -30,6 +30,12 @@ from typing import Callable, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
+# The narration caption panel: a fixed, always-on region the layout must treat
+# as occupied. Measured from whiteboard._STREAM_PANEL (width 470, ~3 lines of
+# 27px lettering plus padding) — half-extents, applied around the panel centre.
+_CAPTION_HALF_W = 256.0
+_CAPTION_HALF_H = 86.0
+
 from PIL import Image, ImageDraw
 
 from pathlib import Path as _Path
@@ -85,7 +91,8 @@ from .pen import PenSprite, resolve_mode
 from .schema import (WORLD_H, WORLD_W, AnchorRef, ArrowElement, GroupElement,
                      IllustrationElement, ParticleGroupElement, Scene,
                      ShapeElement, TextElement)
-from .timing import TimedAction, animation_end, compile_timeline
+from .timing import (CAPTION_PREFIX, TimedAction, animation_end,
+                     compile_timeline)
 from .vector_assets import VectorAsset, vector_asset
 from .geometry import arrow_paths
 
@@ -278,6 +285,22 @@ class SceneRenderer:
                 ax, ay = e.at
                 self._avatar_zones.append(
                     (ax - 118.0, ay - 132.0, ax + 118.0, ay + 155.0))
+        # ...and around the NARRATION CAPTION PANEL, which is on screen for
+        # essentially every segment and which no placement code could see.
+        # It occupies roughly the centre-right third of the board, so labels
+        # and the right-hand label column were being laid out into space that
+        # was already taken — about a third of every diagram was occluded,
+        # after all the existing collision logic had run. It is a fixed,
+        # always-occupied region, so it belongs in the same keep-out list the
+        # avatars already use.
+        for e in scene.elements:
+            eid = str(getattr(e, "id", ""))
+            if eid.startswith(CAPTION_PREFIX) and getattr(e, "at", None):
+                cx, cy = e.at
+                self._avatar_zones.append(
+                    (cx - _CAPTION_HALF_W, cy - _CAPTION_HALF_H,
+                     cx + _CAPTION_HALF_W, cy + _CAPTION_HALF_H))
+                break        # one panel per speaker position is enough
         self._bind()
 
     def _warn(self, msg: str) -> None:
@@ -676,6 +699,21 @@ class SceneRenderer:
                 if tb is not None and tb.text is not None \
                         and ar.tail.el not in entries:
                     entries[ar.tail.el] = self._resolve_point(ar.head)
+        # LABELS WITHOUT ARROWS COUNT TOO. This used to consider only labels
+        # that had a leader line, which created a closed loop with the
+        # director prompt: the prompt says to prefer pointing and
+        # highlighting OVER arrows, the model duly emits none, and then the
+        # de-collision layout — the very thing that stops labels landing on
+        # each other — never ran. We asked for no arrows and then skipped the
+        # fix for the problem that causes. An arrowless label has no known
+        # target part, so it keeps its authored height and simply takes its
+        # place in the column ordering.
+        for eid, b in self.bound.items():
+            if eid in entries or _is_overlay(eid) or b.text is None or not b.box:
+                continue
+            if str(getattr(b.element, "role", "") or "") != "label":
+                continue
+            entries[eid] = (rcx, (b.box[1] + b.box[3]) / 2)
         if len(entries) < 2:
             return
         zone_top = min((z[1] for z in self._avatar_zones),

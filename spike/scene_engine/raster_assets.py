@@ -22,6 +22,7 @@ import base64
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -101,6 +102,7 @@ def _vertex_call(prompt: str) -> bytes | None:
                                 json=_body(prompt), timeout=120)
             res.raise_for_status()
             return res.json()
+        _note_spend("image.vertex")
         return _image_from(_with_backoff(_go, "Vertex image"))
     except Exception as e:
         logger.warning("Vertex image call failed (%s); trying AI Studio", e)
@@ -119,6 +121,7 @@ def _aistudio_call(prompt: str) -> bytes | None:
                                 json=_body(prompt), timeout=120)
             res.raise_for_status()
             return res.json()
+        _note_spend("image.aistudio")
         return _image_from(_with_backoff(_go, "AI Studio image"))
     except Exception as e:
         logger.warning("AI Studio image call failed: %s", e)
@@ -153,6 +156,17 @@ def _with_backoff(fn, what: str, tries: int = 4):
             _t.sleep(wait)
             delay *= 2.4
     return None
+
+
+def _note_spend(service: str, **fields) -> None:
+    """Image and vision calls were never recorded anywhere, so the measured
+    cost per lesson counted only the TEXT calls — in a pipeline that
+    generates dozens of images per lesson."""
+    try:
+        from shared.claude_client import log_external_usage
+        log_external_usage(service, model=IMAGE_MODEL, **fields)
+    except Exception:  # noqa: BLE001 — accounting must never break a render
+        pass
 
 
 def _body(prompt: str) -> dict:
@@ -503,6 +517,35 @@ _ASSET_LOCKS: dict[str, "threading.Lock"] = {}
 _LOCKS_GUARD = None  # created lazily so the module stays import-light
 
 
+# Words that decorate a subject without changing which picture it is. The
+# cache key is a free-text string the DIRECTOR invents, so one chapter
+# produced ciliated_epithelium, ciliated_epithelium_cells and
+# ciliated_epithelium_diagram as three separately-paid generations of one
+# image — 71 cached assets and 32 MB from a single chapter, with a near-zero
+# hit rate across re-runs of the SAME chapter.
+#
+# Deliberately conservative: "outline" and "view" are NOT here, because
+# plant_cell_outline and plant_cell_diagram are different pictures and
+# merging them would serve the wrong art, which is worse than paying twice.
+_KEY_NOISE = {"diagram", "diagrams", "cell", "cells", "illustration",
+              "illustrations", "image", "images", "picture", "pictures",
+              "figure", "figures", "drawing", "drawings", "asset", "assets",
+              "visual", "visuals", "graphic", "graphics", "sketch", "art",
+              "of", "the", "a", "an", "and"}
+
+
+def canonical_key(key: str) -> str:
+    """The cache identity of an asset, independent of how the model named it.
+
+    Measured on a real cache: folds 71 directories into 62, saving 9 paid
+    image generations from one chapter, with no two distinct pictures
+    colliding.
+    """
+    toks = [t for t in re.split(r"[^a-z0-9]+", str(key).lower()) if t]
+    core = [t for t in toks if t not in _KEY_NOISE] or toks
+    return "_".join(sorted(set(core))) or "asset"
+
+
 def get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
                      allow_generate: bool = True) -> RasterAsset | None:
     """Per-key serialized: segments render in parallel threads, and a
@@ -523,7 +566,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
     # avatars are the one COLOUR tier: they are characters, not board ink,
     # and they are revealed rather than drawn
     is_color = key.startswith("avatar_")
-    cache = (cache_dir or CACHE_DIR) / key
+    cache = (cache_dir or CACHE_DIR) / canonical_key(key)
     png, meta = cache / "asset.png", cache / "meta.json"
     names = part_names_from_prompt(prompt)
     cached_fallback: RasterAsset | None = None   # baked-text cache, still usable
@@ -665,7 +708,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
 def load_hand(key: str = "hand_pen", cache_dir: Path | None = None,
               allow_generate: bool = True):
     """(hand RGBA, tip (x,y) in image px) for PenSprite, or None."""
-    cache = (cache_dir or CACHE_DIR) / key
+    cache = (cache_dir or CACHE_DIR) / canonical_key(key)
     png, meta = cache / "asset.png", cache / "meta.json"
     if not png.exists() and allow_generate:
         prompt = ("A single right hand holding a black marker pen, photographed from "

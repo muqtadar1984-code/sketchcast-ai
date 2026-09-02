@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import threading as _threading
 import logging
 import os
 import tempfile
@@ -151,6 +152,35 @@ def _merge_usage(a: dict, b: dict) -> dict:
     if "estimated_cost_usd" in merged:
         merged["estimated_cost_usd"] = round(merged["estimated_cost_usd"], 6)
     return merged
+
+
+# ── spend attribution ────────────────────────────────────────────────────────
+# Ambient labels for whatever job the current thread is working on. Set once by
+# the worker; every model call made underneath inherits them, so spend can be
+# attributed to a lesson without threading a context object through eight
+# agents. Thread-local because the worker runs jobs concurrently.
+_USAGE_CTX = _threading.local()
+_USAGE_LOCK = _threading.Lock()
+
+
+def set_usage_context(**labels) -> None:
+    """Label every model call on this thread (generation_id, book_id, kind,
+    engine, ...). Call with no arguments to clear."""
+    _USAGE_CTX.labels = {k: v for k, v in labels.items() if v is not None}
+
+
+def _usage_labels() -> dict:
+    return dict(getattr(_USAGE_CTX, "labels", {}) or {})
+
+
+def log_external_usage(service: str, **fields) -> None:
+    """Record a NON-text model call — image generation, vision annotation.
+
+    These were never logged at all: the measured cost per lesson counted only
+    the text calls, so image and vision spend was invisible in a pipeline that
+    generates dozens of images per lesson.
+    """
+    ClaudeClient._log_usage({"service": service, **fields})
 
 
 def _get_api_key() -> str:
@@ -726,16 +756,28 @@ class ClaudeClient:
 
     @staticmethod
     def _log_usage(usage: dict):
-        """Append usage entry to the token log file."""
-        entry = {**usage, "timestamp": datetime.now(timezone.utc).isoformat()}
+        """Append one usage entry to the token log.
+
+        Two properties this needs and did not have:
+
+        WHAT IT WAS FOR. Entries carried only token counts and a timestamp,
+        so no spend could ever be attributed to a lesson, a book or an
+        engine. "What did this generation cost?" and "is the semantic path
+        cheaper than legacy?" were unanswerable from our own data. The
+        ambient labels below are set by the worker for the duration of a job.
+
+        ONE WRITER AT A TIME. It read the whole file, appended and rewrote it
+        with no lock, under WORKER_CONCURRENCY job threads AND a RENDER_WORKERS
+        render pool — a guaranteed lost-update race, and O(n^2) rewriting of a
+        file that only grows. It is now line-delimited and appended under a
+        lock, so a concurrent write cannot destroy another's entry.
+        """
+        entry = {**usage, **_usage_labels(),
+                 "timestamp": datetime.now(timezone.utc).isoformat()}
         try:
-            if TOKEN_LOG_PATH.exists():
-                with open(TOKEN_LOG_PATH, "r") as f:
-                    log = json.load(f)
-            else:
-                log = []
-            log.append(entry)
-            with open(TOKEN_LOG_PATH, "w") as f:
-                json.dump(log, f, indent=2)
+            with _USAGE_LOCK:
+                with open(TOKEN_LOG_PATH.with_suffix(".jsonl"), "a",
+                          encoding="utf-8") as f:
+                    f.write(json.dumps(entry, default=str) + "\n")
         except Exception:
             pass  # Don't crash if logging fails

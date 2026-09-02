@@ -1,0 +1,12 @@
+{"input_tokens": 20, "output_tokens": 6939, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 6959, "estimated_cost_usd": 0.017354, "timestamp": "2026-09-02T10:11:20.947081+00:00"}
+{"input_tokens": 20, "output_tokens": 6939, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 6959, "estimated_cost_usd": 0.017354, "timestamp": "2026-09-02T10:11:21.077057+00:00"}
+{"input_tokens": 20, "output_tokens": 5022, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 5042, "estimated_cost_usd": 0.012561, "timestamp": "2026-09-02T10:11:21.078347+00:00"}
+{"input_tokens": 100, "output_tokens": 250, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 350, "estimated_cost_usd": 0.000655, "timestamp": "2026-09-02T10:11:21.196761+00:00"}
+{"input_tokens": 10, "output_tokens": 25, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 35, "estimated_cost_usd": 6.6e-05, "timestamp": "2026-09-02T10:11:21.197587+00:00"}
+{"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 2, "estimated_cost_usd": 3e-06, "timestamp": "2026-09-02T10:11:21.313219+00:00"}
+{"input_tokens": 1000000, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1000000, "estimated_cost_usd": 0.3, "timestamp": "2026-09-02T10:11:21.426391+00:00"}
+{"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 2, "estimated_cost_usd": 3e-06, "timestamp": "2026-09-02T10:11:22.141006+00:00"}
+{"input_tokens": 1000000, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1000000, "estimated_cost_usd": 1.0, "timestamp": "2026-09-02T10:13:21.284066+00:00"}
+{"input_tokens": 1000000, "output_tokens": 50000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1050000, "estimated_cost_usd": 1.25, "timestamp": "2026-09-02T10:13:22.014807+00:00"}
+{"input_tokens": 1000000, "output_tokens": 50000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1050000, "estimated_cost_usd": 1.25, "timestamp": "2026-09-02T10:13:22.017269+00:00"}
+{"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0.0, "timestamp": "2026-09-02T10:13:22.536970+00:00"}
