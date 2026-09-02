@@ -13,6 +13,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from anthropic import Anthropic, RateLimitError
+try:  # older SDKs may not expose every class
+    from anthropic import APIConnectionError, APIStatusError, InternalServerError
+except Exception:  # noqa: BLE001
+    APIConnectionError = APIStatusError = InternalServerError = ()
 
 TOKEN_LOG_PATH = Path(__file__).resolve().parent.parent / "token_log.json"
 
@@ -181,6 +185,41 @@ def log_external_usage(service: str, **fields) -> None:
     generates dozens of images per lesson.
     """
     ClaudeClient._log_usage({"service": service, **fields})
+
+
+# ── transient failure policy ─────────────────────────────────────────────────
+# Only RateLimitError was retried, so a 529 "overloaded" — the most common
+# transient failure, and the one that arrives precisely when several schools
+# generate at once — killed a whole lesson on its FIRST occurrence, along with
+# everything already spent on it.
+#
+# Deliberately NOT "retry all 5xx". A retry is only safe where the operation is
+# idempotent and cheap to repeat. This is the TEXT path: a repeated call costs
+# input tokens and returns a fresh completion, which is acceptable. Image
+# generation is NOT retried this way — it is the expensive, non-idempotent call
+# and has its own per-lesson budget instead.
+#
+# 400/401/403/404 and 422 are deterministic: the same request will fail the same
+# way, so retrying only burns money and delays the error the caller needs.
+_RETRY_STATUS = {408, 409, 429, 500, 502, 503, 504, 529}
+
+
+def _is_transient(exc: Exception) -> bool:
+    if isinstance(exc, RateLimitError):
+        return True
+    if APIConnectionError and isinstance(exc, APIConnectionError):
+        return True          # never reached the server; safe to repeat
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    return isinstance(status, int) and status in _RETRY_STATUS
+
+
+def _backoff_seconds(attempt: int) -> float:
+    """Exponential with jitter. Without jitter, every worker that hit the same
+    overload retries in lockstep and recreates it."""
+    import random
+    return min(60.0, 2.0 ** (attempt + 1)) + random.uniform(0.0, 1.5)
 
 
 def _get_api_key() -> str:
@@ -697,8 +736,13 @@ class ClaudeClient:
         for attempt in range(retries):
             try:
                 return self._create(system, messages, max_tokens)
-            except RateLimitError:
-                wait = 2 ** (attempt + 1)
+            except Exception as exc:  # noqa: BLE001 — classified below
+                if not _is_transient(exc):
+                    raise            # deterministic: retrying only burns money
+                wait = _backoff_seconds(attempt)
+                logger.warning("transient model failure (%s); retrying in "
+                               "%.1fs (%d/%d)", type(exc).__name__, wait,
+                               attempt + 1, retries)
                 time.sleep(wait)
         # Final attempt without catching
         return self._create(system, messages, max_tokens)
@@ -726,8 +770,10 @@ class ClaudeClient:
         for attempt in range(retries):
             try:
                 return self._create_stream(system, messages, max_tokens)
-            except RateLimitError:
-                time.sleep(2 ** (attempt + 1))
+            except Exception as exc:  # noqa: BLE001 — classified below
+                if not _is_transient(exc):
+                    raise
+                time.sleep(_backoff_seconds(attempt))
         return self._create_stream(system, messages, max_tokens)
 
     @staticmethod

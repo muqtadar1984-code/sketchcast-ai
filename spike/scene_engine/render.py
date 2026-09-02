@@ -457,7 +457,7 @@ class SceneRenderer:
             elif a.verb == "write" and tgt and tgt.text:
                 self.workloads[i] = float(len(tgt.text.display))
             elif a.verb == "circle" and tgt:
-                x0, y0, x1, y1 = tgt.box
+                x0, y0, x1, y1 = self._emphasis_box(tgt, a)
                 pts = ellipse_path((x0 + x1) / 2, (y0 + y1) / 2,
                                    (x1 - x0) / 2 + a.padding, (y1 - y0) / 2 + a.padding,
                                    seed=i, rough=3.0)
@@ -465,7 +465,7 @@ class SceneRenderer:
                 self.deco[i] = [st]
                 self.workloads[i] = st.length
             elif a.verb == "underline" and tgt:
-                x0, _, x1, y1 = tgt.box
+                x0, _, x1, y1 = self._emphasis_box(tgt, a)
                 pts = underline_path(x0 - 4, x1 + 4, y1 + 8, seed=i)
                 st = BStroke(pts, 4.0, "accent", None, path_length(pts))
                 self.deco[i] = [st]
@@ -476,8 +476,8 @@ class SceneRenderer:
                 else:
                     flat = self._flat.get(a.target) or []
                     pts = max(flat, key=lambda st: st.length).pts if flat else None
-                    if pts is None:
-                        x0, y0, x1, y1 = tgt.box
+                    if pts is None or getattr(a, "region", None):
+                        x0, y0, x1, y1 = self._emphasis_box(tgt, a)
                         pts = [(x0, (y0 + y1) / 2), (x1, (y0 + y1) / 2)]
                 st = BStroke(list(pts), 26.0, "marker", None, path_length(pts))
                 self.deco[i] = [st]
@@ -674,6 +674,24 @@ class SceneRenderer:
             for bid, c in boxes[i + 1:]:
                 if a[0] < c[2] and a[2] > c[0] and a[1] < c[3] and a[3] > c[1]:
                     self._warn(f"TEXT_OVERLAP {aid}+{bid}")
+
+    def _emphasis_box(self, tgt, a) -> tuple:
+        """The box an emphasis gesture is about.
+
+        An action carrying `region` names a PART of the illustration. Using
+        tgt.box regardless is what made every HIGHLIGHT/CIRCLE/UNDERLINE aimed
+        at a named part fire on the whole picture — the geometry to do better
+        already existed (it is what arrow heads use), it just was not consulted
+        here. Falls back to the whole element when the region is unknown, which
+        is the same degradation an unresolved arrow anchor takes.
+        """
+        region = getattr(a, "region", None)
+        if region and isinstance(tgt.element, IllustrationElement):
+            boxes = self._layer_instance_boxes(tgt, region)
+            if boxes:
+                return max(boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
+            self._warn(f"UNRESOLVED_REGION {a.target}.{region}")
+        return tgt.box
 
     def _relayout_part_labels(self, arrows: list) -> None:
         """Founder-specified label layout around the ROOT illustration:

@@ -591,7 +591,12 @@ def _steps(craw, narrations, ctx, concept, by_id, root_id, label_for_region,
                     ctx.note("MISSING_TARGET", f"{where}: {verb} needs a target")
                 continue
             act = _act(verb, el, cue)
-            if region and verb == "draw":
+            # Carried for DRAW (narration-ordered drawing) and for the
+            # emphasis verbs, which are exactly the gestures a director aims
+            # at a named part. Dropping it here is how "point at the
+            # hypotenuse" became "point at the whole triangle".
+            if region and verb in ("draw", "highlight", "circle",
+                                   "underline", "zoom"):
                 # narration-ordered drawing: this part is drawn when it is
                 # named, which is what the region schedule exists for
                 act["region"] = region

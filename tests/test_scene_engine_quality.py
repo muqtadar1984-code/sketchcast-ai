@@ -1383,3 +1383,82 @@ class TestP2RasterCropIsEquivalent:
         src = inspect.getsource(SceneRenderer._draw_raster)
         assert "entirely off-camera" in src
         assert "if bx1 <= bx0 or by1 <= by0" in src
+
+
+class TestP6AssetsFitTheBoard:
+    """P6. world_scale was NOMINAL_WORLD_W / ink.width — width alone — so a
+    portrait asset's height was whatever its aspect ratio made it. Measured
+    on the real cache: human_outline (267x813) rendered 700x2131 world px on
+    a 720-tall canvas, so most of the drawing was off-screen."""
+
+    def test_a_portrait_asset_fits_the_canvas(self):
+        from spike.scene_engine.raster_assets import fit_scale
+        from spike.scene_engine.schema import WORLD_H
+        w, h = 267, 813                       # the real human_outline
+        assert h * fit_scale(w, h) <= WORLD_H, "still taller than the canvas"
+
+    def test_landscape_art_is_unchanged(self):
+        """It was already width-bound and composed correctly; this fix must
+        not quietly restyle every existing lesson."""
+        from spike.scene_engine.raster_assets import (NOMINAL_WORLD_W,
+                                                      fit_scale)
+        for w, h in ((1024, 318), (957, 205), (868, 140), (460, 300)):
+            assert abs(fit_scale(w, h) - NOMINAL_WORLD_W / w) < 1e-9
+
+    def test_the_aspect_ratio_is_preserved(self):
+        from spike.scene_engine.raster_assets import fit_scale
+        for w, h in ((285, 746), (488, 729), (1024, 318)):
+            s = fit_scale(w, h)
+            assert abs((w * s) / (h * s) - w / h) < 1e-9
+
+    def test_degenerate_sizes_do_not_explode(self):
+        from spike.scene_engine.raster_assets import fit_scale
+        assert fit_scale(0, 10) == 1.0 and fit_scale(10, 0) == 1.0
+
+
+class TestP8ImageSpendGuard:
+    """P8. TTS has had a spend cap since it became metered; image generation
+    — the expensive call — had none. allow_generate defaults True at every
+    call site and no production caller passes False, so a plan naming 40
+    assets made 40 image calls plus 40+ vision calls, unbounded. One chapter
+    produced 71 paid images in a night."""
+
+    def test_the_budget_refuses_past_the_cap(self):
+        import spike.scene_engine.raster_assets as ra
+        ra.reset_image_budget()
+        allowed = sum(1 for _ in range(ra._IMAGE_BUDGET + 5)
+                      if ra._image_budget_ok())
+        assert allowed == ra._IMAGE_BUDGET
+        assert ra.image_budget_state()["blocked"] == 5
+
+    def test_it_resets_per_lesson(self):
+        """A global counter would refuse the hundredth honest generation."""
+        import spike.scene_engine.raster_assets as ra
+        ra.reset_image_budget()
+        for _ in range(ra._IMAGE_BUDGET):
+            ra._image_budget_ok()
+        assert ra._image_budget_ok() is False
+        ra.reset_image_budget()
+        assert ra._image_budget_ok() is True
+
+    def test_the_worker_resets_it_for_each_generation(self):
+        import inspect
+        from worker.process import process_generation
+        assert "reset_image_budget" in inspect.getsource(process_generation)
+
+    def test_both_transports_are_gated(self):
+        import inspect
+        import spike.scene_engine.raster_assets as ra
+        for fn in (ra._vertex_call, ra._aistudio_call):
+            assert "_image_budget_ok" in inspect.getsource(fn), fn.__name__
+
+    def test_exceeding_it_degrades_rather_than_raising(self):
+        """A lesson never dies because an asset did — the caller falls back
+        to the authored vector tier, as it does for any image failure."""
+        import spike.scene_engine.raster_assets as ra
+        ra.reset_image_budget()
+        for _ in range(ra._IMAGE_BUDGET):
+            ra._image_budget_ok()
+        assert ra._vertex_call("anything") is None
+        assert ra._aistudio_call("anything") is None
+        ra.reset_image_budget()

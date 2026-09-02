@@ -37,6 +37,22 @@ logger = logging.getLogger(__name__)
 IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
 CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "storage" / "scene_assets"
 NOMINAL_WORLD_W = 700.0  # an illustration at element scale 1.0 spans ~700 world px
+# ...and no more than this tall. Scaling by WIDTH ALONE let a portrait asset's
+# height be whatever its aspect ratio made it: measured on the real cache,
+# sk_person (285x746) rendered 916 world px tall on a 720 canvas, so a quarter
+# of the drawing was off-screen, and sk_plant (488x729) bound to 648 and
+# covered the card it was drawn beside. A picture the viewer cannot see all of
+# is worse than a smaller one. Landscape art is unaffected: it stays
+# width-bound, exactly as before.
+NOMINAL_WORLD_H = 520.0
+
+
+def fit_scale(w: float, h: float) -> float:
+    """asset px -> world px, fitting INSIDE the nominal box rather than
+    matching its width and letting the height fall where it may."""
+    if w <= 0 or h <= 0:
+        return 1.0
+    return min(NOMINAL_WORLD_W / w, NOMINAL_WORLD_H / h)
 
 _COLOR_SUFFIX = (
     " Friendly flat-colour cartoon illustration with clean black outlines and "
@@ -77,6 +93,8 @@ class RasterAsset:
 # ── transport ────────────────────────────────────────────────────────────────
 
 def _vertex_call(prompt: str) -> bytes | None:
+    if not _image_budget_ok():
+        return None
     project = os.getenv("VERTEX_PROJECT_ID", "").strip()
     if not project:
         return None
@@ -110,6 +128,8 @@ def _vertex_call(prompt: str) -> bytes | None:
 
 
 def _aistudio_call(prompt: str) -> bytes | None:
+    if not _image_budget_ok():
+        return None
     key = os.getenv("GOOGLE_AI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     if not key:
         return None
@@ -156,6 +176,44 @@ def _with_backoff(fn, what: str, tries: int = 4):
             _t.sleep(wait)
             delay *= 2.4
     return None
+
+
+# ── image spend guard ────────────────────────────────────────────────────────
+# TTS has had a cap since it became metered (shared/tts/cost.py `within_cap`);
+# image generation — the EXPENSIVE call — had none. `allow_generate` defaults
+# True at every call site and no production caller ever passes False, so a plan
+# naming 40 assets makes 40 image calls plus 40+ vision calls, unbounded. One
+# chapter produced 71 paid images in a night.
+#
+# Per-LESSON, not global: a global counter would refuse the hundredth honest
+# lesson. Reset by the worker at the start of each generation.
+_IMAGE_BUDGET = int(os.getenv("IMAGE_CALLS_PER_LESSON", "24"))
+_image_calls = {"n": 0, "blocked": 0}
+
+
+def reset_image_budget() -> None:
+    _image_calls["n"] = 0
+    _image_calls["blocked"] = 0
+
+
+def image_budget_state() -> dict:
+    return dict(_image_calls)
+
+
+def _image_budget_ok() -> bool:
+    """False once this lesson has spent its allowance. The caller degrades to
+    the authored vector tier, exactly as it does for any other image failure —
+    a lesson never dies because an asset did."""
+    if _image_calls["n"] >= _IMAGE_BUDGET:
+        _image_calls["blocked"] += 1
+        if _image_calls["blocked"] == 1:      # say it once, not forty times
+            logger.error("image budget spent (%d calls this lesson); further "
+                         "assets fall back to the vector tier. Raise "
+                         "IMAGE_CALLS_PER_LESSON if this is legitimate.",
+                         _IMAGE_BUDGET)
+        return False
+    _image_calls["n"] += 1
+    return True
 
 
 def _note_spend(service: str, **fields) -> None:
@@ -507,7 +565,7 @@ def _finish(key: str, ink: Image.Image, regions: dict | None = None,
     trace = drawing_order(alpha)
     return RasterAsset(key=key, ink=ink, trace=trace,
                        stamp_r=max(4.0, ink.width / 80.0),
-                       world_scale=NOMINAL_WORLD_W / ink.width,
+                       world_scale=fit_scale(ink.width, ink.height),
                        regions=regions or {}, baked_text=baked_text)
 
 

@@ -248,6 +248,12 @@ class _ActionBase(BaseModel):
     duration: Optional[float] = Field(default=None, gt=0.0, le=30.0)
     easing: Literal["linear", "ease_in", "ease_out", "ease_in_out"] = "ease_in_out"
     pen: Literal["auto", "pen", "hand", "none"] = "auto"
+    # WHICH PART of the target this action is about. Only DrawAction carried
+    # this, so a HIGHLIGHT/CIRCLE/UNDERLINE aimed at a named region fired on
+    # the whole illustration — the director correctly identified the part
+    # that mattered and the system ignored it, silently, including in the
+    # prompt's own worked example.
+    region: Optional[str] = None
 
 
 class DrawAction(_ActionBase):
@@ -263,8 +269,6 @@ class DrawAction(_ActionBase):
     # 1.4: draw exactly THIS named part of an annotated raster asset — the
     # nucleus draws while the narrator says "nucleus", not whichever pixels
     # the trace walk reaches next. Takes precedence over slice.
-    region: Optional[str] = None
-
 
 class WriteAction(_ActionBase):
     verb: Literal["write"] = "write"     # text writes on along its direction

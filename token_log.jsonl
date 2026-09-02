@@ -106,3 +106,21 @@
 {"input_tokens": 1000000, "output_tokens": 50000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1050000, "estimated_cost_usd": 1.25, "timestamp": "2026-09-02T12:01:19.843830+00:00"}
 {"input_tokens": 1000000, "output_tokens": 50000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1050000, "estimated_cost_usd": 1.25, "timestamp": "2026-09-02T12:01:19.846122+00:00"}
 {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0.0, "timestamp": "2026-09-02T12:01:20.322168+00:00"}
+{"input_tokens": 7201, "output_tokens": 6941, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 14142, "estimated_cost_usd": 0.019513, "timestamp": "2026-09-02T12:11:36.311219+00:00"}
+{"service": "image.vertex", "model": "gemini-2.5-flash-image", "timestamp": "2026-09-02T12:11:45.235501+00:00"}
+{"service": "image.vertex", "model": "gemini-2.5-flash-image", "timestamp": "2026-09-02T12:18:46.132690+00:00"}
+{"service": "image.vertex", "model": "gemini-2.5-flash-image", "timestamp": "2026-09-02T12:20:27.441065+00:00"}
+{"service": "image.vertex", "model": "gemini-2.5-flash-image", "timestamp": "2026-09-02T12:21:14.027175+00:00"}
+{"service": "image.vertex", "model": "gemini-2.5-flash-image", "timestamp": "2026-09-02T12:22:25.975910+00:00"}
+{"input_tokens": 20, "output_tokens": 6939, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 6959, "estimated_cost_usd": 0.017354, "timestamp": "2026-09-02T12:36:22.392289+00:00"}
+{"input_tokens": 20, "output_tokens": 6939, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 6959, "estimated_cost_usd": 0.017354, "timestamp": "2026-09-02T12:36:22.507907+00:00"}
+{"input_tokens": 20, "output_tokens": 5022, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 5042, "estimated_cost_usd": 0.012561, "timestamp": "2026-09-02T12:36:22.508973+00:00"}
+{"input_tokens": 100, "output_tokens": 250, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 350, "estimated_cost_usd": 0.000655, "timestamp": "2026-09-02T12:36:22.627378+00:00"}
+{"input_tokens": 10, "output_tokens": 25, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 35, "estimated_cost_usd": 6.6e-05, "timestamp": "2026-09-02T12:36:22.628324+00:00"}
+{"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 2, "estimated_cost_usd": 3e-06, "timestamp": "2026-09-02T12:36:22.743906+00:00"}
+{"input_tokens": 1000000, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1000000, "estimated_cost_usd": 0.3, "timestamp": "2026-09-02T12:36:22.863735+00:00"}
+{"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 2, "estimated_cost_usd": 3e-06, "timestamp": "2026-09-02T12:36:23.560972+00:00"}
+{"input_tokens": 1000000, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1000000, "estimated_cost_usd": 1.0, "timestamp": "2026-09-02T12:38:41.281164+00:00"}
+{"input_tokens": 1000000, "output_tokens": 50000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1050000, "estimated_cost_usd": 1.25, "timestamp": "2026-09-02T12:38:42.022271+00:00"}
+{"input_tokens": 1000000, "output_tokens": 50000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1050000, "estimated_cost_usd": 1.25, "timestamp": "2026-09-02T12:38:42.026511+00:00"}
+{"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0.0, "timestamp": "2026-09-02T12:38:42.664886+00:00"}

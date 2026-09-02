@@ -117,17 +117,18 @@ NEVER output a numeric coordinate array for a target (no two-number position arr
 
 _SCHEMAS = """=== SCHEMAS ===
 ELEMENT (persistent semantic object; NO geometry, NO sizes, NO timing):
-  {"id": "unique_id", "type": "illustration|text|arrow", "asset": "asset_id", "text": "short label text", "role": "root_visual|label|title"}
+  {"id": "unique_id", "type": "illustration|text", "asset": "asset_id", "text": "short label text", "role": "root_visual|label|title"}
   Include only the fields that apply. Avatars and speech bubbles are NOT elements — the engine casts and places them.
 
 ACTION:
-  {"verb": "DRAW|WRITE|POINT|HIGHLIGHT|CIRCLE|UNDERLINE|ZOOM|MOVE|ERASE|TRANSFORM|ARROW|CLEAR_AND_REDRAW|HUMAN_TEACHING_MOMENT", "target": {...}, "cue": "verbatim phrase"}
+  {"verb": "DRAW|WRITE|POINT|HIGHLIGHT|CIRCLE|UNDERLINE|ZOOM|ERASE|TRANSFORM|ARROW|CLEAR_AND_REDRAW|HUMAN_TEACHING_MOMENT", "target": {...}, "cue": "verbatim phrase"}
   A narration-linked action MUST carry a cue. Use the simplest action that teaches the idea.
-  ARROW: give the semantic region it points at; the engine routes it and picks the endpoint.
+  ARROW is an ACTION, never an element: give the semantic region it points at and the engine builds, routes and endpoints it.
   HUMAN_TEACHING_MOMENT: {"verb": "HUMAN_TEACHING_MOMENT", "role": "student|teacher", "line": "short spoken line", "cue": "..."} — state the pedagogical purpose; the engine decides which avatar appears, where, and how it enters and leaves.
 
 STEP:
   {"segment": 1, "decision": "CONTINUE|EXTEND|TRANSFORM|FOCUS|CLEAR_AND_REDRAW", "reason": "why this helps the teaching", "actions": []}
+  "segment" is the 1-BASED POSITION of the segment in the "segments" array above — the first segment is 1. It is the only link between the narration and the visuals, so an off-by-one detaches every picture from the words that explain it.
   "actions": [] IS VALID and preferred for purely verbal, transitional or reflective segments. Do NOT invent an action to fill the array.
 
 CHAPTER:

@@ -523,6 +523,14 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                       job_id=str(job.get("id") or ""),
                       engine=os.getenv("VIDEO_ENGINE", "native"),
                       semantic=os.getenv("SEMANTIC_PLAN", "") == "1")
+    # Image generation is the expensive call and had no cap at all, while TTS
+    # has had one since it became metered. Per LESSON, so a global counter
+    # cannot refuse the hundredth honest generation.
+    try:
+        from spike.scene_engine.raster_assets import reset_image_budget
+        reset_image_budget()
+    except Exception:  # noqa: BLE001 — the guard must not break the pipeline
+        pass
 
     job_id = job["id"]
     db.set_generation_status(sb, generation_id, "processing")  # so the UI shows progress, not "queued"
