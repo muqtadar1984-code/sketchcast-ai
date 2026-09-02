@@ -8,6 +8,7 @@ final deck (.pptx) + video (.mp4) are uploaded to the `artifacts` bucket under
 from __future__ import annotations
 
 import logging
+import os
 import re
 import tempfile
 import uuid
