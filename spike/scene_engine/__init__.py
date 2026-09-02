@@ -35,3 +35,12 @@ SCHEMA_VERSION = "1.4"  # 1.1: +hand_scale, +arrow width. 1.2: +AnchorRef points
 # vision-annotated raster regions), +DrawAction.region and
 # +IllustrationElement.region_order/drawn_regions (narration-ordered drawing
 # of generated art). All additive.
+
+# Import last: this installs a thin wrapper around the existing raster cache so
+# the scene engine can reuse/publish assets without changing renderer call
+# sites. The integration is deliberately optional and fails open when Supabase
+# is not configured.
+try:  # pragma: no cover - exercised through raster asset resolution
+    from shared import visual_library_integration as _visual_library_integration
+except Exception:  # noqa: BLE001
+    _visual_library_integration = None
