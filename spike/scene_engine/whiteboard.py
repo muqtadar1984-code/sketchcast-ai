@@ -151,18 +151,69 @@ def _is_avatar(eid) -> bool:
 _SKETCH_SLOTS = {1: [(470.0, 360.0, 0.62)],
                  2: [(330.0, 360.0, 0.5), (650.0, 360.0, 0.5)]}
 
+# Slots for a board that ALREADY holds a diagram. The centre is spoken for, so
+# these tuck into the two top corners, the only regions free on every chapter
+# of the measured lesson. Derived, not eyeballed: raster_assets.fit_scale
+# bounds an illustration to 700x520 world px, so a sketch at scale s occupies
+# +/- (350s, 260s) about its point. Against that:
+#   root visual  at (600, 380) scale 1.0 -> x 250..950,  y 120..640
+#   caption panel  teacher cx 970 / student cx 310, cy 360, half 223x62
+#                              -> x 755..1185 / 95..525, y 298..422
+#   avatars      at y 556
+# top-right (1114, 142, 0.40) -> x 974..1254, y 38..246
+# top-left  (136,  142, 0.32) -> x  24..248,  y 59..225
+# Both clear every caption panel and avatar vertically by more than 50px.
+#
+# Top-right is tried FIRST because continuity._RECAP_AT parks a carried-over
+# picture in the top-left one. That is a preference, not an assumption: the
+# slot is chosen by MEASURING against the diagrams actually on the board, so a
+# recap sitting in the left corner simply fails the overlap test.
+_MARGIN_SLOTS = [(1114.0, 142.0, 0.40), (136.0, 142.0, 0.32)]
+
+# An illustration occupies +/- (350*scale, 260*scale) about its point, because
+# raster_assets.fit_scale bounds every asset into 700x520 world px whatever
+# its aspect ratio.
+_ILL_HALF_W, _ILL_HALF_H = 350.0, 260.0
+
+
+def illustration_box(at, scale: float = 1.0) -> tuple:
+    return (at[0] - _ILL_HALF_W * scale, at[1] - _ILL_HALF_H * scale,
+            at[0] + _ILL_HALF_W * scale, at[1] + _ILL_HALF_H * scale)
+
+
+def _overlaps(a: tuple, b: tuple) -> bool:
+    return not (a[2] <= b[0] or a[0] >= b[2] or a[3] <= b[1] or a[1] >= b[3])
+
+
+def free_margin_slots(occupied: list) -> list:
+    """The margin slots that clear every box in `occupied`.
+
+    Deriving the slot from a constant root position was wrong: the semantic
+    path always places at (600, 380), but a hand-authored plan puts its
+    diagram wherever it likes, and a caller measuring against the assumed
+    position put a sketch 16px into a real one. Measure the board.
+    """
+    return [s for s in _MARGIN_SLOTS
+            if not any(_overlaps(illustration_box((s[0], s[1]), s[2]), b)
+                       for b in occupied)]
+
 
 def sketch_elements(narration: str, uid: str, exclude: set[str] | None = None,
-                    limit: int = 2) -> tuple[list[dict], list[dict], dict]:
+                    limit: int = 2,
+                    slots: list | None = None) -> tuple[list[dict], list[dict], dict]:
     """Hand-drawn sketches of the concrete things this narration NAMES —
     elements, draw actions cued to the words, and their asset prompts.
-    Empty when the narration names nothing sketchable."""
+    Empty when the narration names nothing sketchable.
+
+    `slots` overrides the placement: pass _MARGIN_SLOTS for a board that
+    already carries a diagram, so the sketch tucks into a corner instead of
+    landing on the picture the lesson is about."""
     from .sketchables import find_sketchables
 
     found = find_sketchables(narration, limit=limit, exclude=exclude)
     if not found:
         return [], [], {}
-    slots = _SKETCH_SLOTS[min(len(found), 2)]
+    slots = slots or _SKETCH_SLOTS[min(len(found), 2)]
     els: list[dict] = []
     acts: list[dict] = []
     assets: dict[str, str] = {}
@@ -311,8 +362,22 @@ def snap_to_narration(candidate: str, narration: str) -> str | None:
 
 # ── speech bubbles (shared with avatar teaching moments) ─────────────────────
 
-_BUBBLE_CAP = 150              # three lines of Caveat at size 23
-_LINE_CHARS = 40               # a 40-char line fits every clamped panel
+# Bubble footprint. The founder's report: bubbles "take up a lot of space on
+# the whiteboard and in some instances hide the image being drawn underneath".
+# A bubble is speech — it must be readable, but it is not the lesson. The
+# previous 24px text on a 600px-wide, 132px-tall panel could cover a third of
+# the board; the drawing underneath is the thing the child came for.
+#
+# Reduced together, because these four numbers are one decision: shrinking the
+# font without narrowing the wrap just makes a wide box of small text, and
+# narrowing the wrap without capping lines makes a tall one.
+BUBBLE_SIZE = 19               # was 24
+_BUBBLE_CAP = 120              # was 150
+_LINE_CHARS = 34               # was 40
+_BUBBLE_MAX_W = 430.0          # was 600
+_BUBBLE_LINE_H = 32            # was 42
+_BUBBLE_H1 = 74.0              # was 92
+_BUBBLE_H = 112.0              # was 132
 
 
 def _bubble_lines(text: str) -> list[str]:
@@ -344,12 +409,13 @@ def bubble_elements(bubble_id: str, text: str, at: tuple[float, float],
     up to two lines of the VERBATIM narration text."""
     lines = _bubble_lines(text)
     longest = max(len(l) for l in lines)
-    w = max(190.0, min(600.0, 30 + longest * 11.8))
+    # 9.4 px/char tracks Caveat at BUBBLE_SIZE the way 11.8 tracked it at 24
+    w = max(170.0, min(_BUBBLE_MAX_W, 26 + longest * 9.4))
     cx, cy = at
     # never past the canvas edges — a wide line at the teacher-bubble
     # position once touched the right border
     w = min(w, 2 * min(cx - 24.0, (WORLD_W - 24.0) - cx))
-    h = 92.0 if len(lines) == 1 else 132.0
+    h = _BUBBLE_H1 if len(lines) == 1 else _BUBBLE_H
     x0, y0 = cx - w / 2, cy - h / 2
     outline = [
         [x0 + 18, y0], [x0 + w - 18, y0], [x0 + w, y0 + 18],
@@ -366,9 +432,12 @@ def bubble_elements(bubble_id: str, text: str, at: tuple[float, float],
          "points": tail, "width": 3.4},
     ]
     for i, line in enumerate(lines):
-        ly = cy if len(lines) == 1 else cy - 21 + 42 * i
+        # centred on cy: the old fixed offsets put a third line at cy+63 in a
+        # box half-height 66, i.e. hard against the outline
+        ly = cy + (i - (len(lines) - 1) / 2.0) * _BUBBLE_LINE_H
         els.append({"id": f"{bubble_id}_txt{i or ''}", "type": "text",
-                    "text": line, "size": 24, "at": [cx, ly], "anchor": "mm"})
+                    "text": line, "size": BUBBLE_SIZE, "at": [cx, ly],
+                    "anchor": "mm"})
     return els
 
 

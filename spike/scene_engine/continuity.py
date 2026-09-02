@@ -47,6 +47,15 @@ _INTRODUCERS = {"draw", "write", "reveal"}
 _CAMERA = {"zoom", "pan", "camera_reset"}
 _DEFAULT_CAM = {"cx": WORLD_W / 2, "cy": WORLD_H / 2, "scale": 1.0}
 
+# Where the outgoing picture goes when a chapter carries the board but brings
+# its own diagram. Top-left, small enough to clear the stage: an illustration
+# occupies +/- (350*scale, 260*scale), so at 0.32 the box is x 24..248,
+# y 59..225 — 2px clear of the root visual's left edge (x 250) and well above
+# the caption panels (y 298). whiteboard._MARGIN_SLOTS deliberately leaves
+# this corner alone and puts auto-sketches in the top-RIGHT one.
+_RECAP_AT = (136.0, 142.0)
+_RECAP_SCALE = 0.32
+
 
 class PlanStep(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -92,8 +101,14 @@ class VisualPlan(BaseModel):
 # ── action sanitization (the model's dicts, value by value) ──────────────────
 
 def _guess_part_name(eid: str) -> str:
-    """'lbl_cell_membrane' / 'arr_nucleus' / 'nucleus_obj' -> the part name
-    the id is talking about."""
+    """'lbl_cell_membrane' / 'arr_nucleus' / 'nucleus_obj' / 'brain_label'
+    -> the part name the id is talking about.
+
+    Only PREFIXES were stripped for the naming convention the prompt's own
+    example uses. A director that names labels by SUFFIX instead — measured
+    on a live lesson: brain_label, heart_label, lungs_label — yielded
+    'brain label', which matches no part, so every one of those labels lost
+    its leader line silently. The suffix list mirrors the prefix list."""
     s = str(eid).lower()
     for p in ("arr_auto_", "arr_", "arrow_", "ar_", "lbl_", "label_", "lb_",
               "txt_"):
@@ -101,8 +116,10 @@ def _guess_part_name(eid: str) -> str:
             s = s[len(p):]
             break
     words = s.replace("_", " ").split()
-    while words and words[-1] in ("obj", "objs", "object", "item", "el",
-                                  "elem", "img", "image", "shape", "part"):
+    while len(words) > 1 and words[-1] in (
+            "obj", "objs", "object", "item", "el", "elem", "img", "image",
+            "shape", "part", "label", "labels", "lbl", "text", "txt",
+            "name", "tag", "caption"):
         words.pop()
     return " ".join(words).strip()
 
@@ -566,23 +583,58 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
 
 def _add_auto_sketches(scenes: dict, narrations: dict, assets_by_seg: dict,
                        report: list) -> None:
-    """Segments whose board carries NO drawing get the concrete things their
-    narration names, sketched as they are spoken (founder: 'the hand draws
-    images of items wherever it can'). Planned diagrams are never touched."""
-    from .whiteboard import sketch_elements
-    for sid, sc in scenes.items():
-        if any(e.get("type") == "illustration" and
-               not str(e.get("id", "")).startswith("__")
-               for e in sc["elements"]):
-            continue
-        els, acts, assets = sketch_elements(narrations.get(sid, ""), uid=sid)
+    """The concrete things a narration NAMES, sketched as they are spoken
+    (founder: 'the hand draws images of items wherever it can').
+
+    This used to skip any board that already carried a drawing, which on the
+    semantic path meant EVERY board — a measured lesson produced zero sketches
+    because all twelve of its chapters had a root diagram. So an occupied
+    board now gets its sketches in the top-corner margin slots instead of
+    being skipped. The centre slots are still used on an empty board.
+
+    Two bounds, because each new sketch key costs one image generation the
+    first time it is ever seen (and nothing thereafter — the cache is shared
+    across lessons and schools):
+      - a per-lesson cap, so sketches cannot crowd out the planned diagrams
+        inside IMAGE_CALLS_PER_LESSON
+      - lesson-wide dedupe, so a narration that says 'cell' in nine segments
+        draws it once rather than nine times
+    """
+    import os
+
+    from .whiteboard import free_margin_slots, illustration_box, sketch_elements
+    cap = max(0, int(os.getenv("SKETCHES_PER_LESSON", "6")))
+    drawn: set[str] = set()
+    for sid in sorted(scenes):
+        if len(drawn) >= cap:
+            break
+        sc = scenes[sid]
+        boxes = [illustration_box(e["at"], float(e.get("scale", 1.0)))
+                 for e in sc["elements"]
+                 if e.get("type") == "illustration"
+                 and not str(e.get("id", "")).startswith("__")
+                 and e.get("at")]
+        occupied = bool(boxes)
+        slots = free_margin_slots(boxes) if occupied else None
+        if occupied and not slots:
+            continue      # the board is genuinely full; a sketch would cover it
+        els, acts, assets = sketch_elements(
+            narrations.get(sid, ""), uid=sid, exclude=drawn,
+            limit=1 if occupied else 2, slots=slots)
         if not els:
             continue
+        els = els[:max(0, cap - len(drawn))]
+        if not els:
+            break
+        keep = {e["id"] for e in els}
+        acts = [a for a in acts if a.get("target") in keep]
+        assets = {e["asset"]: assets[e["asset"]] for e in els}
         sc["elements"].extend(els)
         sc["actions"] = sc["actions"] + acts
         assets_by_seg[sid] = {**assets_by_seg.get(sid, {}), **assets}
-        report.append(f"SEGMENT {sid} | SKETCHED "
-                      f"{[e['asset'] for e in els]}")
+        drawn.update(e["asset"] for e in els)
+        report.append(f"SEGMENT {sid} | SKETCHED {[e['asset'] for e in els]}"
+                      f"{' (margin)' if occupied else ''}")
 
 
 def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
@@ -698,12 +750,36 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
     # a carry chapter continues on the same board: previous elements join the
     # roster with their state imported, so EVERY step keeps them
     if prev_board and ch.transition == "carry":
+        # Does the incoming chapter bring a picture of ITS OWN? If so the
+        # stage is taken, and the outgoing picture has to move or the two
+        # coincide exactly — every illustration is placed at the same world
+        # point (semantic._ROOT_AT) at scale 1.0, so a naive carry stacks two
+        # 700x520 rasters on top of each other and nothing measures it.
+        incoming_ill = any(e.get("type") == "illustration" and
+                           not str(e.get("id", "")).startswith("__")
+                           for e in ch.elements)
+        recapped = False
         for e in prev_board:
             eid = e["id"]
             if eid in roster:
                 continue        # chapter redeclares the id — its version wins
+            if incoming_ill and e.get("type") != "illustration":
+                # Labels and leader lines are positioned FOR the picture they
+                # annotate. Carried at full size onto a new diagram they would
+                # sit over it, naming parts no longer on screen — worse than
+                # the wipe this replaces. The recap is the picture alone.
+                continue
+            if incoming_ill and e.get("type") == "illustration":
+                if recapped:
+                    continue     # one recap only; older ones have had their turn
+                recapped = True
             clean = {k: v for k, v in e.items()
                      if k not in ("drawn_layers", "drawn_frac")}
+            if incoming_ill and e.get("type") == "illustration":
+                clean["at"] = list(_RECAP_AT)
+                clean["scale"] = _RECAP_SCALE
+                report.append(f"CHAPTER {ch.concept} | RECAP {eid} kept at "
+                              f"{_RECAP_SCALE:g}x in the corner")
             # drawn_regions state lives in the tracker; region_order stays on
             # the element (bucket layout must be identical across chapters)
             clean.pop("drawn_regions", None)

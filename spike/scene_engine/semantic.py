@@ -291,6 +291,33 @@ def _split_on_new_root(craw, ctx: _Ctx) -> list[dict]:
                  f"segment; dropped {sorted(orphaned)} rather than place them "
                  f"on another visual")
 
+    def _part_transition(gsteps: list) -> str:
+        """How a split part OPENS, taken from the director rather than assumed.
+
+        This used to be the constant "clear_and_redraw", on the reasoning that
+        a new root visual is what the director asked for with a redraw. It is
+        not: the split is OUR response to several roots arriving in one
+        chapter, and the director's own opening decision for each group is
+        sitting right here. Measured on a live lesson, all 8 split parts
+        opened with EXTEND and every one was turned into a full board wipe —
+        14 wipes across 15 steps, so nothing was ever built upon.
+
+        Only an explicit CLEAR_AND_REDRAW still wipes. Anything else carries,
+        and the compiler demotes the outgoing picture to a recap corner rather
+        than stacking two diagrams on one point.
+        """
+        for s in gsteps:
+            if not isinstance(s, dict):
+                continue
+            if str(s.get("decision") or "").upper() == "CLEAR_AND_REDRAW":
+                return "clear_and_redraw"
+            for a in (s.get("actions") or []):
+                if isinstance(a, dict) and str(
+                        a.get("verb") or "").lower() == "clear_and_redraw":
+                    return "clear_and_redraw"
+            return "continue"
+        return "clear_and_redraw"      # no readable step: keep old behaviour
+
     parts = []
     for gi, (groot, gsteps) in enumerate(groups):
         keep = [e for e in elements
@@ -306,10 +333,8 @@ def _split_on_new_root(craw, ctx: _Ctx) -> list[dict]:
                if k not in ("elements", "steps", "assets",
                             "semantic_regions", "concept", "transition")},
             "concept": concept if gi == 0 else f"{concept}__{groot or gi}",
-            # every later part opens by clearing the board — that is what the
-            # director asked for with the redraw
             "transition": craw.get("transition") if gi == 0
-                          else "clear_and_redraw",
+                          else _part_transition(gsteps),
             "assets": {k: v for k, v in all_assets.items() if k in used},
             "semantic_regions": (craw.get("semantic_regions") or [])
                                 if groot == orig_root else [],

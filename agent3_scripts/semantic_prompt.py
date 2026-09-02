@@ -139,13 +139,13 @@ Never reference an object before it exists: DRAW the object, then WRITE its labe
 
 _LABELS_CAMERA = """=== LABELS, ARROWS, CAMERA ===
 Labels are short, readable and educationally useful — not sentences, and not on every object.
-Prefer pointing, circling, highlighting or zooming over arrows; use an arrow when it genuinely adds clarity, and give it a semantic region.
+A label written onto a picture is unfinished without a leader line: whenever you WRITE a label onto a visual, add an ARROW in the SAME step from that label to the semantic region it names. Use POINT, CIRCLE, HIGHLIGHT or ZOOM to emphasise something the board already shows.
 Use camera movement only when it improves comprehension, with a semantic target — never to create motion."""
 
 _CAPS = """=== HARD LIMITS (the reply is long; exceeding these truncates it) ===
 At most 5 visual chapters. At most 12 elements and 10 steps per chapter. At most 6 actions per step.
 A chapter must EARN its board: at least three segments of CONTINUE/EXTEND/FOCUS before any CLEAR_AND_REDRAW. A lesson that wipes the board every segment is a slideshow.
-Optimise for THE MINIMUM VISUAL CHANGE THAT PRODUCES THE MAXIMUM TEACHING CLARITY — not for maximum animation, assets, arrows, segments or transitions."""
+Optimise for THE MINIMUM VISUAL CHANGE THAT PRODUCES THE MAXIMUM TEACHING CLARITY — not for maximum animation, assets, segments or transitions."""
 
 # A FILLED example — the model imitates this, not the prose. Geography on
 # purpose: the legacy example was a plant cell and biased every subject toward
@@ -241,7 +241,8 @@ Return the ENTIRE reply as MINIFIED JSON — one line, no indentation. Pretty-pr
         "assets": {"oxbow_stages": "Three stages of one river bend tightening until cut off, side by side, from above"},
         "semantic_regions": ["stage_one", "cut_off_loop"],
         "elements": [
-          {"id": "stages", "type": "illustration", "asset": "oxbow_stages", "role": "root_visual"}
+          {"id": "stages", "type": "illustration", "asset": "oxbow_stages", "role": "root_visual"},
+          {"id": "lbl_cutoff", "type": "text", "text": "Cut off loop", "role": "label"}
         ],
         "steps": [
           {
@@ -250,6 +251,8 @@ Return the ENTIRE reply as MINIFIED JSON — one line, no indentation. Pretty-pr
             "reason": "One bend cannot show a sequence over time; a different main visual means a new chapter.",
             "actions": [
               {"verb": "DRAW", "target": {"element": "stages"}, "cue": "the bend tightens"},
+              {"verb": "WRITE", "target": {"element": "lbl_cutoff"}, "cue": "the loop is cut off"},
+              {"verb": "ARROW", "target": {"asset": "oxbow_stages", "region": "cut_off_loop"}, "cue": "the loop is cut off"},
               {"verb": "HIGHLIGHT", "target": {"asset": "oxbow_stages", "region": "cut_off_loop"}, "cue": "the loop is cut off"}
             ]
           }

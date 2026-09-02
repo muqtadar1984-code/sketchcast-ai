@@ -901,17 +901,45 @@ class TestAutoSketch:
             assert a["at"]["phrase"].lower() in card["narration"].lower()
 
     def test_a_planned_diagram_is_never_overdrawn(self):
+        """A board carrying a planned diagram MAY still sketch what the
+        narration names — the founder asked for exactly that — but the sketch
+        must not land on the diagram.
+
+        This test used to assert no sketch appeared at all, which enforced the
+        letter of its name and not the meaning: it passed trivially because
+        auto-sketch was skipped on every board with a picture, which on the
+        semantic path is every board. The invariant is NON-OVERLAP.
+        """
         plan = parse_visual_plan(_plan_raw())
         narr = {"s001": "A tree and an ant are both alive.",
                 "s002": "The nucleus controls the cell.", "s003": "Look."}
         scenes, assets, report = compile_plan(
             plan, narr, all_segments=["s001", "s002", "s003"],
             skip_hold=set())
-        # every scene here carries the planned cell — nothing is overdrawn
-        assert not any("SKETCHED" in ln for ln in report)
+
+        def box(at, scale):
+            # raster_assets.fit_scale bounds an illustration to 700x520 world
+            # px, so this is the worst case regardless of the actual art
+            return (at[0] - 350 * scale, at[1] - 260 * scale,
+                    at[0] + 350 * scale, at[1] + 260 * scale)
+
+        found = 0
         for sc in scenes.values():
-            assert not any(str(e.get("id", "")).startswith("sk_")
-                           for e in sc["elements"])
+            planned = [box(e["at"], e.get("scale", 1.0))
+                       for e in sc["elements"]
+                       if e.get("type") == "illustration"
+                       and not str(e.get("id", "")).startswith("sk_")]
+            for e in sc["elements"]:
+                if not str(e.get("id", "")).startswith("sk_"):
+                    continue
+                found += 1
+                s = box(e["at"], e.get("scale", 1.0))
+                for p in planned:
+                    assert (s[2] <= p[0] or s[0] >= p[2]
+                            or s[3] <= p[1] or s[1] >= p[3]), (
+                        f"sketch {e['id']} at {s} overlaps planned {p}")
+        assert found, ("the narration names a tree and an ant and the board "
+                       "drew neither — the sketch pass is dead again")
 
     def test_a_text_only_chapter_gets_sketches(self):
         raw = {"chapters": [{
@@ -1572,3 +1600,255 @@ class TestP17RescanConverges:
         worth paying for. Convergence, not the cap, is what saves the calls."""
         import spike.scene_engine.raster_assets as ra
         assert ra.scrub_all_text.__defaults__[0] == 3
+
+
+class TestBoardSurvivesAChapterCarry:
+    """Measured on a live lesson: the model emitted 3 CLEAR_AND_REDRAW across
+    15 steps, and the board was wiped 14 times. The extra wipes were
+    manufactured by the adapter, which stamped a constant clear_and_redraw on
+    every part it split out of an overloaded chapter, discarding the
+    director's own EXTEND."""
+
+    def _split_raw(self, decision):
+        """One chapter declaring two successive pictures — the shape that
+        forces _split_on_new_root to act."""
+        return {"chapters": [{
+            "id": "c1", "concept": "levels", "transition": "clear_and_redraw",
+            "assets": {"cells": "Cells side by side",
+                       "tissue": "Cells forming a tissue"},
+            "elements": [
+                {"id": "cells_pic", "type": "illustration", "asset": "cells",
+                 "role": "root_visual"},
+                {"id": "tissue_pic", "type": "illustration", "asset": "tissue",
+                 "role": "root_visual"},
+            ],
+            "steps": [
+                {"segment": 1, "decision": "NEW_VISUAL", "reason": "start",
+                 "actions": [{"verb": "DRAW",
+                              "target": {"element": "cells_pic"},
+                              "cue": "cells"}]},
+                {"segment": 2, "decision": decision, "reason": "build on it",
+                 "actions": [{"verb": "DRAW",
+                              "target": {"element": "tissue_pic"},
+                              "cue": "a tissue"}]},
+            ],
+        }]}
+
+    def _adapt(self, decision):
+        from spike.scene_engine.semantic import adapt_semantic_plan
+        plan, _ = adapt_semantic_plan(self._split_raw(decision))
+        return plan
+
+    def test_extend_carries_instead_of_wiping(self):
+        parts = self._adapt("EXTEND")["chapters"]
+        assert len(parts) == 2, "the split itself must still happen"
+        # the adapter normalises "continue" to the compiler's word, "carry"
+        assert parts[1]["transition"] == "carry", (
+            "the director said EXTEND; a wipe is not what it asked for")
+
+    def test_an_explicit_redraw_still_wipes(self):
+        """The escape hatch must survive — otherwise a lesson that genuinely
+        changes subject piles unrelated pictures onto one board."""
+        parts = self._adapt("CLEAR_AND_REDRAW")["chapters"]
+        assert parts[1]["transition"] == "clear_and_redraw"
+
+    def test_the_previous_picture_is_demoted_not_stacked(self):
+        """Carrying without moving the old picture would put two 700x520
+        rasters on one point — every illustration is placed at the same world
+        position. That would be a worse regression than the churn."""
+        from spike.scene_engine.continuity import (_RECAP_SCALE, compile_plan,
+                                                   parse_visual_plan)
+        from spike.scene_engine.whiteboard import illustration_box
+        plan = parse_visual_plan(self._adapt("EXTEND"))
+        scenes, _, report = compile_plan(
+            plan, {"s001": "cells", "s002": "a tissue"},
+            all_segments=["s001", "s002"], skip_hold=set())
+        sc = scenes["s002"]
+        ills = [e for e in sc["elements"] if e.get("type") == "illustration"
+                and not str(e.get("id", "")).startswith("__")]
+        assert len(ills) == 2, "the earlier picture should still be on screen"
+        boxes = [illustration_box(e["at"], float(e.get("scale", 1.0)))
+                 for e in ills]
+        a, b = boxes
+        assert (a[2] <= b[0] or a[0] >= b[2] or a[3] <= b[1] or a[1] >= b[3]), \
+            f"the two pictures overlap: {a} vs {b}"
+        assert any(abs(float(e.get("scale", 1.0)) - _RECAP_SCALE) < 1e-6
+                   for e in ills), "one of them must be the small recap"
+        assert any("RECAP" in ln for ln in report)
+
+    def test_old_labels_do_not_ride_along_onto_the_new_picture(self):
+        """A label is positioned FOR the picture it annotates. Carried at full
+        size onto a different diagram it names parts no longer on screen."""
+        from spike.scene_engine.continuity import compile_plan, parse_visual_plan
+        from spike.scene_engine.semantic import adapt_semantic_plan
+        raw = self._split_raw("EXTEND")
+        raw["chapters"][0]["elements"].append(
+            {"id": "lbl_old", "type": "text", "text": "Cell wall",
+             "role": "label"})
+        raw["chapters"][0]["steps"][0]["actions"].append(
+            {"verb": "WRITE", "target": {"element": "lbl_old"},
+             "cue": "cells"})
+        plan, _ = adapt_semantic_plan(raw)
+        scenes, _, _ = compile_plan(
+            parse_visual_plan(plan), {"s001": "cells", "s002": "a tissue"},
+            all_segments=["s001", "s002"], skip_hold=set())
+        assert not any(e.get("id") == "lbl_old"
+                       for e in scenes["s002"]["elements"]), \
+            "the old picture's label followed it onto the new board"
+
+
+class TestLabelsGetLeaderLines:
+    """arrow_count was 0 on a live lesson. Two independent causes."""
+
+    def test_a_suffix_named_label_resolves_to_its_part(self):
+        """The prompt's example names labels by PREFIX (lbl_brain), so only
+        prefixes were stripped. A director that used a SUFFIX instead —
+        measured: brain_label, heart_label, lungs_label — produced
+        'brain label', which matches no part, and the leader line was dropped
+        silently."""
+        from spike.scene_engine.continuity import _guess_part_name
+        assert _guess_part_name("brain_label") == "brain"
+        assert _guess_part_name("lungs_label") == "lungs"
+        assert _guess_part_name("lbl_nucleus") == "nucleus"      # unchanged
+        assert _guess_part_name("cell_membrane") == "cell membrane"
+
+    def test_the_guesser_never_strips_a_name_to_nothing(self):
+        from spike.scene_engine.continuity import _guess_part_name
+        for eid in ("label", "text", "part", "obj"):
+            assert _guess_part_name(eid), f"{eid} collapsed to empty"
+
+    def test_the_prompt_no_longer_argues_against_arrows(self):
+        """The model emitted highlight 8 times and arrow 0 times. It was
+        obeying: the prose told it to prefer highlighting OVER arrows, and
+        listed arrows among the things not to maximise."""
+        from agent3_scripts.semantic_prompt import _CAPS, _LABELS_CAMERA
+        assert ("Prefer pointing, circling, highlighting or zooming over "
+                "arrows") not in _LABELS_CAMERA
+        assert "maximum animation, assets, arrows" not in _CAPS
+        # and the replacement actually asks for the leader line
+        assert "ARROW" in _LABELS_CAMERA
+
+    def test_the_example_pairs_a_label_with_an_arrow(self):
+        """This repo has confirmed 6+ times that the model imitates the OUTPUT
+        FORMAT EXAMPLE over the instructions. A rule about leader lines the
+        example never demonstrates is not enforcement."""
+        from agent3_scripts.semantic_prompt import _EXAMPLE
+        assert '"verb": "ARROW"' in _EXAMPLE, "the example must SHOW an arrow"
+        # and paired with its label in the SAME step, which is the actual rule
+        step = _EXAMPLE[_EXAMPLE.index('"lbl_cutoff"'):]
+        step = step[:step.index("]", step.index('"actions"'))]
+        assert '"verb": "WRITE"' in step and '"verb": "ARROW"' in step, \
+            "no step demonstrates a label and its leader line together"
+
+
+class TestBubbleFootprint:
+    """Founder: bubbles 'take up a lot of space on the whiteboard and in some
+    instances hide the image being drawn underneath'."""
+
+    LONG = ("A group of similar cells, which all work together to carry out "
+            "a particular function, is called a tissue in every living thing.")
+
+    def _area(self, text):
+        from spike.scene_engine.whiteboard import bubble_elements
+        els = bubble_elements("b", text, (640.0, 360.0), (640.0, 500.0))
+        outline = next(e for e in els if e["id"] == "b")
+        xs = [p[0] for p in outline["points"]]
+        ys = [p[1] for p in outline["points"]]
+        return (max(xs) - min(xs)) * (max(ys) - min(ys))
+
+    def test_the_worst_case_bubble_shrank_substantially(self):
+        # the old geometry could reach 600 x 132 = 79,200 world px^2
+        assert self._area(self.LONG) <= 0.65 * 79200
+
+    def test_text_is_smaller_than_it_was(self):
+        from spike.scene_engine.whiteboard import bubble_elements
+        els = bubble_elements("b", self.LONG, (640.0, 360.0), (640.0, 500.0))
+        sizes = {e["size"] for e in els if e.get("type") == "text"}
+        assert sizes and max(sizes) < 24, "the founder asked for smaller text"
+
+    def test_it_is_still_readable(self):
+        """The opposite failure. Shrinking with no floor is how a bubble stops
+        being speech and becomes decoration."""
+        from spike.scene_engine.whiteboard import bubble_elements
+        els = bubble_elements("b", self.LONG, (640.0, 360.0), (640.0, 500.0))
+        sizes = {e["size"] for e in els if e.get("type") == "text"}
+        assert min(sizes) >= 16
+
+    def test_every_line_stays_inside_the_outline(self):
+        """A 70-char third line once rendered outside its bubble."""
+        from spike.scene_engine.whiteboard import bubble_elements
+        for text in (self.LONG, "Yes.", "What makes a tree different?",
+                     " ".join(["word"] * 60)):
+            els = bubble_elements("b", text, (640.0, 360.0), (640.0, 500.0))
+            outline = next(e for e in els if e["id"] == "b")
+            ys = [p[1] for p in outline["points"]]
+            top, bot = min(ys), max(ys)
+            for e in els:
+                if e.get("type") != "text":
+                    continue
+                assert top < e["at"][1] < bot, (
+                    f"line {e['text']!r} sits outside its bubble")
+
+
+class TestNarrationObjectsAreDrawn:
+    """Founder: draw the common objects the narration names (hammer, tree).
+    Measured: a live lesson produced ZERO sketches, because the pass skipped
+    any board already carrying a picture — which on the semantic path is
+    every board."""
+
+    def test_the_founders_example_word_is_drawable(self):
+        from spike.scene_engine.sketchables import find_sketchables
+        got = find_sketchables("You hit the nail with a hammer.", limit=2)
+        assert "sk_hammer" in {g["key"] for g in got}
+
+    def test_a_sketch_lands_on_a_board_that_already_has_a_diagram(self):
+        from spike.scene_engine.continuity import compile_plan, parse_visual_plan
+        plan = parse_visual_plan({"chapters": [{
+            "concept": "forces", "transition": "clear_and_redraw",
+            "assets": {"lever": "A lever on a fulcrum"},
+            "elements": [{"id": "pic", "type": "illustration",
+                          "asset": "lever", "at": [600, 380], "scale": 1.0}],
+            "steps": [{"segment": 1, "decision": "NEW_VISUAL",
+                       "actions": [{"verb": "draw", "target": "pic"}]}],
+        }]})
+        scenes, assets, report = compile_plan(
+            plan, {"s001": "Think of hitting it with a hammer."},
+            all_segments=["s001"], skip_hold=set())
+        assert "sk_hammer" in assets.get("s001", {}), \
+            "the board had a diagram, so the sketch pass skipped it again"
+        assert any("SKETCHED" in ln and "margin" in ln for ln in report)
+
+    def test_the_slot_is_measured_against_the_real_board_not_assumed(self):
+        """The semantic path always places at (600, 380); a hand-authored plan
+        does not. Choosing the corner from the assumed position put a sketch
+        16px inside a real diagram."""
+        from spike.scene_engine.whiteboard import (free_margin_slots,
+                                                   illustration_box)
+        wide = illustration_box((640.0, 360.0), 1.0)     # x 290..990
+        slots = free_margin_slots([wide])
+        assert slots, "a wide diagram still leaves a usable corner"
+        for s in slots:
+            b = illustration_box((s[0], s[1]), s[2])
+            assert (b[2] <= wide[0] or b[0] >= wide[2]
+                    or b[3] <= wide[1] or b[1] >= wide[3])
+
+    def test_a_full_board_is_left_alone(self):
+        from spike.scene_engine.whiteboard import free_margin_slots
+        assert free_margin_slots([(0.0, 0.0, 1280.0, 720.0)]) == []
+
+    def test_one_object_is_not_drawn_over_and_over(self):
+        """A narration that says 'tree' in five segments draws it once."""
+        from spike.scene_engine.continuity import compile_plan, parse_visual_plan
+        plan = parse_visual_plan({"chapters": [{
+            "concept": "t", "transition": "clear_and_redraw", "assets": {},
+            "elements": [{"id": "t1", "type": "text", "text": "Trees",
+                          "at": [400, 120], "role": "title"}],
+            "steps": [{"segment": 1, "decision": "NEW_VISUAL",
+                       "actions": [{"verb": "write", "target": "t1"}]}],
+        }]})
+        segs = [f"s{i:03d}" for i in range(1, 6)]
+        scenes, assets, _ = compile_plan(
+            plan, {s: "Look at the tree." for s in segs},
+            all_segments=segs, skip_hold=set())
+        drew = sum(1 for s in segs if "sk_tree" in assets.get(s, {}))
+        assert drew == 1, f"sk_tree drawn on {drew} boards"

@@ -31,10 +31,16 @@ from typing import Callable, Iterator, Optional
 logger = logging.getLogger(__name__)
 
 # The narration caption panel: a fixed, always-on region the layout must treat
-# as occupied. Measured from whiteboard._STREAM_PANEL (width 470, ~3 lines of
-# 27px lettering plus padding) — half-extents, applied around the panel centre.
-_CAPTION_HALF_W = 256.0
-_CAPTION_HALF_H = 86.0
+# as occupied — half-extents, applied around the panel centre.
+#
+# Kept in step with whiteboard.bubble_elements by hand rather than imported,
+# because render must not depend on whiteboard at module scope. The widest
+# bubble that function can now build is _BUBBLE_MAX_W (430) by _BUBBLE_H
+# (112); the half-extents below are that box plus a small margin. They were
+# 256x86 when a bubble could be 600x132 — shrinking the bubble without
+# shrinking this would leave the board reserving space nothing occupies.
+_CAPTION_HALF_W = 223.0
+_CAPTION_HALF_H = 62.0
 
 from PIL import Image, ImageDraw
 
