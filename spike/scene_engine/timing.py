@@ -14,6 +14,8 @@ animation + hold and the encoder pads accordingly.
 
 from __future__ import annotations
 
+import logging
+
 from dataclasses import dataclass
 
 from .schema import Action, Cue, Scene
@@ -131,6 +133,21 @@ def natural_duration(action: Action, workload: float) -> float:
     return min(hi, max(lo, d))
 
 
+logger = logging.getLogger(__name__)
+
+# Cues that could not be matched to the narration on the most recent compile.
+# A lost cue is a visual placed at a time nobody chose; the renderer reads this
+# so it reaches the audit and the acceptance report instead of a log line.
+_CUE_LOSSES: list[str] = []
+
+
+def take_cue_losses() -> list[str]:
+    """Drain the losses recorded since the last call."""
+    out = list(_CUE_LOSSES)
+    _CUE_LOSSES.clear()
+    return out
+
+
 def compile_timeline(scene: Scene, audio_secs: float,
                      workloads: dict[int, float] | None = None,
                      words: list[dict] | None = None) -> list[TimedAction]:
@@ -148,8 +165,22 @@ def compile_timeline(scene: Scene, audio_secs: float,
     for i, action in enumerate(scene.actions):
         dur = natural_duration(action, workloads.get(i, 0.0))
         start = None
+        cue_lost = False
         if action.at is not None:
             start = resolve_cue(action.at, scene.narration, audio_secs, words)
+            if start is None:
+                # An action that ASKED to be spoken-to and could not be
+                # matched must not quietly become "whenever the previous
+                # animation happens to finish" — that is a visual invented at
+                # a time nobody chose, and it is invisible in the artifact.
+                cue_lost = True
+                phrase = getattr(action.at, "phrase", None)
+                logger.warning("CUE_UNRESOLVED %s %r -> falling back to "
+                               "sequence order", getattr(action, "verb", "?"),
+                               phrase)
+                _CUE_LOSSES.append(
+                    f"{getattr(action, 'verb', '?')}"
+                    f"->{getattr(action, 'target', '')}: {phrase!r}")
         if start is None:
             start = cursor + (_GAP if timeline else 0.0)
         start = max(start, cursor - 1e-9) if action.at is None else max(start, 0.0)
@@ -176,10 +207,41 @@ def compile_timeline(scene: Scene, audio_secs: float,
         budget = audio_secs - scene.min_hold
         if budget > 0.5 and total > budget:
             f = max(_COMPRESS_FLOOR, budget / total)
-            timeline = [t if _is_caption(t.action) else
-                        TimedAction(t.action, t.start * f, t.duration * f)
-                        for t in timeline]
+            timeline = _compress(timeline, f)
     return timeline
+
+
+def _compress(timeline: list[TimedAction], f: float) -> list[TimedAction]:
+    """Make the board animation fit WITHOUT moving a cue.
+
+    This used to be `TimedAction(t.action, t.start * f, t.duration * f)` for
+    every non-caption action. A cue resolved from a real TTS word boundary —
+    say 12.4s for "the nucleus" — became 8.9s at f=0.72, so the visual fired
+    three and a half seconds before the word that explains it. The pipeline
+    goes to the trouble of obtaining word-accurate timing and the last step
+    threw the precision away.
+
+    A CUE IS AN ANCHOR AND DOES NOT MOVE. What compresses is the work: each
+    action's duration, and the free-running (uncued) actions that chain
+    between anchors. An uncued action is still pulled back toward the
+    preceding anchor rather than scaled from zero, so a late chain tightens
+    against the cue it follows instead of drifting to the front of the scene.
+    """
+    out: list[TimedAction] = []
+    anchor = 0.0                     # the most recent immutable cue time
+    for t in timeline:
+        if _is_caption(t.action):
+            out.append(t)            # parallel speech track: never touched
+            continue
+        cued = getattr(t.action, "at", None) is not None
+        if cued:
+            anchor = t.start
+            out.append(TimedAction(t.action, t.start, t.duration * f))
+        else:
+            # squeeze only the gap since the anchor, never the anchor itself
+            start = anchor + (t.start - anchor) * f
+            out.append(TimedAction(t.action, start, t.duration * f))
+    return out
 
 
 def animation_end(timeline: list[TimedAction]) -> float:

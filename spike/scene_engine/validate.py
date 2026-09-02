@@ -67,6 +67,9 @@ def validate_visual_language(video_manifest: dict,
         # that way once and this report said PASSED, because nothing asked
         "unresolved_assets": _pick("ASSET_UNRESOLVED"),
         "action_timing_warnings": _pick("TIMING_SHIFT"),
+        # a narration-linked visual whose cue could not be matched: it played
+        # at whatever time the previous animation happened to finish
+        "unresolved_cues": _pick("CUE_UNRESOLVED"),
         # semantic-plan adapter (SEMANTIC_PLAN=1): anything it could not
         # honour, so a salvaged translation is never invisible
         "adapter_issues": [f"{i.get('code')}: {i.get('detail')}"

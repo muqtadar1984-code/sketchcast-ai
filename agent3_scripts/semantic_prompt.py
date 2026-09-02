@@ -98,13 +98,12 @@ CLEAR_AND_REDRAW — it genuinely cannot explain the new concept.
 Prefer CONTINUE, EXTEND and FOCUS. Do NOT create a new visual because the segment changed, or because a visual has been on screen a while.
 
 ROOT VISUAL: exactly ONE root visual per chapter — illustration, diagram, map, graph, timeline, construction, model, process, comparison, scene or experiment as the content requires. NEVER create separate root visuals for individual components of one object or system: those are semantic_regions of the root visual.
-A chapter is defined BY its root visual: a genuinely different main visual is a NEW CHAPTER, never a second root visual in the current one. CLEAR_AND_REDRAW opens that chapter, and the new visual is its root.
-Extra root visuals in a chapter are DISCARDED, and every later label then lands on the wrong picture."""
+A chapter is defined BY its root visual: a different main visual is a NEW CHAPTER, opened by CLEAR_AND_REDRAW. Extra root visuals in one chapter are DISCARDED and their labels land on the wrong picture."""
 
 _ASSETS = """=== GENERATED VISUAL ASSETS ===
 When a generated asset is needed, describe it so that important structures are visually distinguishable and clear at video resolution. Avoid clutter and decorative detail. The image must contain NO labels, NO arrows, NO captions, NO embedded text of any kind (the engine adds labels separately).
 Do NOT ask the image generator for machine-readable layers. Instead list the semantic regions that should exist in "semantic_regions" — the engine's vision system finds their real geometry afterwards.
-Every asset and element id you reference MUST be one you declared here, never an id taken from the lesson input. A reply that shipped empty assets and elements and pointed its actions at a source id had its ENTIRE visual plan discarded and every segment rendered as a plain text card."""
+Every asset and element id you reference MUST be one you declared here, never an id from the lesson input — a plan referencing a source id is discarded entirely."""
 
 _TARGETS = """=== SEMANTIC TARGETS (NO PIXELS) ===
 Reference things semantically, never by position:
@@ -113,7 +112,7 @@ Reference things semantically, never by position:
   {"element": "river", "region": "outer_bank"}          both
 Region names come from the actual lesson (a triangle has "hypotenuse"; a map has "france"; a graph has "equilibrium_point").
 NEVER output a numeric coordinate array for a target (no two-number position arrays, no widths, no heights), and never estimate where something is. The engine resolves target geometry, arrow endpoints, arrow routing, label placement, collision avoidance and hand paths.
-(Stated in words rather than shown: this model imitates any JSON it is shown, including examples of what NOT to do.)"""
+(Stated in words, not shown: this model imitates any JSON it is given.)"""
 
 _SCHEMAS = """=== SCHEMAS ===
 ELEMENT (persistent semantic object; NO geometry, NO sizes, NO timing):
@@ -145,6 +144,7 @@ Use camera movement only when it improves comprehension, with a semantic target 
 
 _CAPS = """=== HARD LIMITS (the reply is long; exceeding these truncates it) ===
 At most 5 visual chapters. At most 12 elements and 10 steps per chapter. At most 6 actions per step.
+A chapter must EARN its board: at least three segments of CONTINUE/EXTEND/FOCUS before any CLEAR_AND_REDRAW. A lesson that wipes the board every segment is a slideshow.
 Optimise for THE MINIMUM VISUAL CHANGE THAT PRODUCES THE MAXIMUM TEACHING CLARITY — not for maximum animation, assets, arrows, segments or transitions."""
 
 # A FILLED example — the model imitates this, not the prose. Geography on
@@ -152,8 +152,7 @@ Optimise for THE MINIMUM VISUAL CHANGE THAT PRODUCES THE MAXIMUM TEACHING CLARIT
 # labelled biology diagrams.
 _EXAMPLE = """=== OUTPUT FORMAT (follow this EXACTLY) ===
 Return ONLY valid JSON. No markdown, no code fences, no commentary.
-Return the ENTIRE reply as MINIFIED JSON — one single line, no indentation, no spaces after separators. The reply is long and pretty-printing WILL truncate it mid-array.
-Shown indented here for readability only:
+Return the ENTIRE reply as MINIFIED JSON — one line, no indentation. Pretty-printing WILL truncate it mid-array. Shown indented here for readability only:
 {
   "segments": [
     {
@@ -177,6 +176,14 @@ Shown indented here for readability only:
       "pause_for_question": false
     },
     {
+      "type": "explore",
+      "text": "",
+      "elevenlabs_text": "",
+      "dialogue": [{"who": "teacher", "line": "So the bend grows wider on one side and shallower on the other."}],
+      "slide_heading": "The bend grows",
+      "pause_for_question": false
+    },
+    {
       "type": "synthesis",
       "text": "",
       "elevenlabs_text": "",
@@ -195,7 +202,8 @@ Shown indented here for readability only:
         "semantic_regions": ["outer_bank", "inner_bank"],
         "elements": [
           {"id": "river", "type": "illustration", "asset": "river_valley", "role": "root_visual"},
-          {"id": "lbl_outer", "type": "text", "text": "Outer bank", "role": "label"}
+          {"id": "lbl_outer", "type": "text", "text": "Outer bank", "role": "label"},
+          {"id": "lbl_inner", "type": "text", "text": "Inner bank", "role": "label"}
         ],
         "steps": [
           {
@@ -211,8 +219,17 @@ Shown indented here for readability only:
           },
           {
             "segment": 2,
-            "decision": "CONTINUE",
-            "reason": "The drawn bend already explains this; the narration does the work.",
+            "decision": "EXTEND",
+            "reason": "The inner bank is the other half of the SAME picture, so it is added to it rather than replacing it.",
+            "actions": [
+              {"verb": "WRITE", "target": {"element": "lbl_inner"}, "cue": "the inner bank"},
+              {"verb": "HIGHLIGHT", "target": {"asset": "river_valley", "region": "inner_bank"}, "cue": "drops its sand"}
+            ]
+          },
+          {
+            "segment": 3,
+            "decision": "FOCUS",
+            "reason": "Everything needed is already on the board; the narration does the work.",
             "actions": []
           }
         ]
@@ -228,7 +245,7 @@ Shown indented here for readability only:
         ],
         "steps": [
           {
-            "segment": 3,
+            "segment": 4,
             "decision": "CLEAR_AND_REDRAW",
             "reason": "One bend cannot show a sequence over time; a different main visual means a new chapter.",
             "actions": [
@@ -244,7 +261,7 @@ Shown indented here for readability only:
 
 _FINAL = """=== BEFORE RETURNING, VERIFY ===
 Language and depth match the learner. The narration style is followed consistently. Dialogue is the narration and text/elevenlabs_text are empty. No durations, timestamps, frame numbers or coordinates anywhere. Every narration-linked action has a cue copied VERBATIM from its own segment's dialogue. Every target exists or is created before use. Existing visuals are reused where possible. Generated assets contain no text, labels or arrows. Visual representations suit the actual subject. The reply is minified JSON.
-Close every bracket in order: the reply ends `]}]}}` — steps, chapter, chapters ARRAY, visual_plan, root. Replies that end `]}}` never close the chapters array and are unparseable."""
+Close every bracket in order: the reply ends `]}]}}` — steps, chapter, chapters ARRAY, visual_plan, root."""
 
 
 def build_semantic_prompt(style: str, chapter_title: str, difficulty_level: str,

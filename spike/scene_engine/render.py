@@ -92,7 +92,7 @@ from .schema import (WORLD_H, WORLD_W, AnchorRef, ArrowElement, GroupElement,
                      IllustrationElement, ParticleGroupElement, Scene,
                      ShapeElement, TextElement)
 from .timing import (CAPTION_PREFIX, TimedAction, animation_end,
-                     compile_timeline)
+                     compile_timeline, take_cue_losses)
 from .vector_assets import VectorAsset, vector_asset
 from .geometry import arrow_paths
 
@@ -974,6 +974,11 @@ class SceneRenderer:
                 words: list | None = None) -> list[TimedAction]:
         self.timeline = compile_timeline(self.scene, audio_secs,
                                          self.workloads, words=words)
+        # A cue that could not be matched placed its visual at whatever time
+        # the previous animation happened to finish — a time nobody chose.
+        # That must reach the report, not just a log line.
+        for _loss in take_cue_losses():
+            self._warn(f"CUE_UNRESOLVED {_loss}")
         from .timing import CAPTION_PREFIX
         if audio_secs <= 0:
             # a silent scene has no speech to caption — cue-less captions

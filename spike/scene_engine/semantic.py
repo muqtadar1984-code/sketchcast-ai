@@ -145,6 +145,19 @@ def adapt_semantic_plan(raw: dict, narrations: dict[str, str] | None = None,
             ci += 1
             if ch is not None:
                 chapters.append(ch)
+    # Board churn, measured rather than felt. A lesson that wipes the board
+    # almost every segment reads as a slideshow however well each picture is
+    # drawn — one measured run redrew on all ten of its ten segments, against
+    # 0.07 redraws/segment on the legacy path. Reported, never "fixed" by
+    # dropping visuals: losing a picture is worse than redrawing one.
+    _steps = sum(len(c.get("steps") or []) for c in chapters)
+    _redraws = max(0, len(chapters) - 1) + sum(
+        1 for c in chapters for s in (c.get("steps") or [])
+        if str(s.get("decision") or "").upper() == "CLEAR_AND_REDRAW")
+    if _steps >= 4 and _redraws > _steps * 0.5:
+        ctx.note("REDRAW_CHURN",
+                 f"{_redraws} board wipes across {_steps} steps — the board "
+                 "is replaced faster than it is built on")
     if strict and ctx.issues:
         raise AdapterError(ctx.issues)
     return {"chapters": chapters}, ctx.issues

@@ -168,6 +168,15 @@ class TestNoRegressions:
         the wrong picture. This model copies the example, so the example has
         to show the boundary. ~1,100 extra input tokens per generation.
 
+        Raised again to 1.45 (P16) for a FOURTH example segment, so chapter 1
+        can be shown being built across three segments before anything is
+        wiped. Measured cause: the semantic path redrew the board 0.31 times
+        per segment against 0.07 on legacy, and 1.00 on one real lesson —
+        while the example itself modelled a redraw every 1.5 segments. It was
+        teaching the churn it was meant to discourage, and prose does not
+        correct this model, the example does. ~210 chars of prose the example
+        now demonstrates were cut back out in the same change.
+
         This is a creep guard, not a physical limit. Raise it again only to
         buy something equally concrete, and say what.
         """
@@ -175,7 +184,7 @@ class TestNoRegressions:
             "conversational", chapter_title="Rivers and Erosion",
             difficulty_level="Grade 7", target_duration="6.0",
             episode_context="<sections>")
-        assert len(_p()) < len(legacy) * 1.4
+        assert len(_p()) < len(legacy) * 1.45
 
 
 class TestFlagWiring:

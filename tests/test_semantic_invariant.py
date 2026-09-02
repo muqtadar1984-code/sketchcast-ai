@@ -240,3 +240,172 @@ class TestP14TransientFailurePolicy:
         import inspect
         import spike.scene_engine.raster_assets as ra
         assert "_image_budget_ok" in inspect.getsource(ra._vertex_call)
+
+
+class TestP15TimingIntegrity:
+    """TEMPORAL intent, the counterpart to the spatial canary above.
+
+    The pipeline obtains word-accurate TTS boundaries and then the last step
+    multiplied every board action's START by a compression factor. A cue
+    resolved to 12.4s became 8.9s at f=0.72 — the visual fired three and a
+    half seconds before the word that explains it. The precision was obtained
+    and then thrown away.
+
+    A CUE IS AN ANCHOR. Compression squeezes the WORK, never the anchors.
+    """
+
+    @staticmethod
+    def _overrunning_scene():
+        from spike.scene_engine.schema import Scene
+        acts = [
+            {"verb": "draw", "target": "a", "at": {"phrase": "the nucleus"},
+             "duration": 8.0},
+            {"verb": "circle", "target": "b", "duration": 8.0},
+            {"verb": "highlight", "target": "c",
+             "at": {"phrase": "the cell wall"}, "duration": 8.0},
+        ]
+        els = [{"id": i, "type": "text", "text": i, "at": [100, 100]}
+               for i in ("a", "b", "c")]
+        return Scene.model_validate({
+            "id": "s",
+            "narration": "First the nucleus, then later the cell wall matters.",
+            "elements": els, "actions": acts})
+
+    @staticmethod
+    def _both_ways(sc, audio):
+        """Same audio length, compression OFF then ON.
+
+        Holding `audio` fixed is essential: a phrase cue with no TTS word
+        boundaries falls back to a CHARACTER MIDPOINT, which is proportional
+        to audio length — so comparing two different audio lengths moves the
+        cue legitimately and proves nothing. A first version of this test made
+        exactly that mistake.
+        """
+        from spike.scene_engine import timing as T
+        from spike.scene_engine.timing import compile_timeline
+        floor = T._COMPRESS_FLOOR
+        T._COMPRESS_FLOOR = 1.0                 # f = max(1.0, ...) => no shrink
+        loose = compile_timeline(sc, audio)
+        T._COMPRESS_FLOOR = floor
+        tight = compile_timeline(sc, audio)
+        return loose, tight
+
+    def test_compression_never_moves_a_cue(self):
+        sc = self._overrunning_scene()
+        loose, tight = self._both_ways(sc, 12.0)
+        assert max(t.end for t in tight) < max(t.end for t in loose),             "compression did not fire; the test proves nothing"
+        for a, b in zip(loose, tight):
+            if getattr(a.action, "at", None) is not None:
+                assert abs(a.start - b.start) < 1e-6, (
+                    f"a cue moved {a.start:.2f} -> {b.start:.2f} under "
+                    "compression — word-accurate timing was discarded")
+
+    def test_compression_still_makes_the_animation_fit(self):
+        """The anchors are sacred, but the work must still shrink."""
+        loose, tight = self._both_ways(self._overrunning_scene(), 12.0)
+        assert max(t.end for t in tight) < max(t.end for t in loose)
+        assert all(t.duration < 8.0 for t in tight), "nothing was compressed"
+
+    def test_an_uncued_action_tightens_toward_its_anchor(self):
+        """Free-running actions squeeze against the cue they follow rather
+        than being scaled from zero, which would drag them to the front."""
+        _, tight = self._both_ways(self._overrunning_scene(), 12.0)
+        assert tight[1].start >= tight[0].start,             "an uncued action was pulled in front of the cue it follows"
+
+    def test_a_lost_cue_is_reported_not_silently_resequenced(self):
+        """CUE FOUND -> exact timestamp. CUE NOT FOUND -> say so. Never
+        'invent a visual time and stay quiet about it'."""
+        from spike.scene_engine.schema import Scene
+        from spike.scene_engine.timing import compile_timeline, take_cue_losses
+        take_cue_losses()
+        sc = Scene.model_validate({
+            "id": "s", "narration": "Nothing here matches.",
+            "elements": [{"id": "a", "type": "text", "text": "a",
+                          "at": [10, 10]}],
+            "actions": [{"verb": "draw", "target": "a",
+                         "at": {"phrase": "a phrase that is absent"}}]})
+        compile_timeline(sc, 10.0)
+        losses = take_cue_losses()
+        assert losses and "absent" in losses[0], \
+            "a cue vanished without a trace"
+
+    def test_captions_remain_exempt(self):
+        """The speech track rides the audio clock exactly; squeezing it
+        desyncs it from the voice it captions."""
+        from spike.scene_engine.schema import Scene
+        from spike.scene_engine.timing import CAPTION_PREFIX
+        cid = f"{CAPTION_PREFIX}0"
+        sc = Scene.model_validate({
+            "id": "s", "narration": "the nucleus is here",
+            "elements": [{"id": cid, "type": "text", "text": "x",
+                          "at": [10, 10]},
+                         {"id": "b", "type": "text", "text": "b",
+                          "at": [10, 10]}],
+            "actions": [{"verb": "write", "target": cid,
+                         "at": {"phrase": "the nucleus"}, "duration": 9.0},
+                        {"verb": "draw", "target": "b", "duration": 9.0}]})
+        loose, tight = self._both_ways(sc, 8.0)
+        cap_l = next(t for t in loose if str(t.action.target).startswith(CAPTION_PREFIX))
+        cap_t = next(t for t in tight if str(t.action.target).startswith(CAPTION_PREFIX))
+        assert abs(cap_l.start - cap_t.start) < 1e-6
+        assert abs(cap_l.duration - cap_t.duration) < 1e-6
+
+
+class TestP16BoardContinuity:
+    """P16. Measured across every saved plan: the legacy path wipes the board
+    0.07 times per segment, the semantic path 0.31 median and 1.00 at worst.
+    A lesson that replaces the board every segment reads as a slideshow
+    however well each picture is drawn."""
+
+    def test_the_example_demonstrates_building_not_wiping(self):
+        """Prose does not hold with this model; the EXAMPLE is what it copies.
+        The example previously showed a redraw every 1.5 segments — it was
+        teaching the churn it was meant to discourage."""
+        import json
+        from agent3_scripts.semantic_prompt import build_semantic_prompt
+        p = build_semantic_prompt("conversational", chapter_title="T",
+                                  difficulty_level="G7", target_duration="6.0",
+                                  episode_context="ctx")
+        s = p.index('{\n  "segments"')
+        e = p.index("\n}", p.index('"visual_plan"')) + 2
+        ex = json.loads(p[s:e])
+        decs = [st["decision"] for c in ex["visual_plan"]["chapters"]
+                for st in c["steps"]]
+        redraws = decs.count("CLEAR_AND_REDRAW")
+        assert redraws / len(decs) <= 0.25, \
+            f"the example still models churn: {decs}"
+        # ...and it shows a chapter being BUILT ON across several segments
+        first = ex["visual_plan"]["chapters"][0]["steps"]
+        assert len(first) >= 3, "chapter 1 does not earn its board"
+        assert {"EXTEND", "CONTINUE", "FOCUS"} & {s["decision"] for s in first}
+
+    def test_churn_is_measured_not_merely_disliked(self):
+        from spike.scene_engine.semantic import adapt_semantic_plan
+
+        def plan(n):
+            return {"chapters": [{
+                "concept": f"c{i}", "transition": "clear_and_redraw",
+                "assets": {f"a{i}": "x"}, "semantic_regions": [],
+                "elements": [{"id": f"e{i}", "type": "illustration",
+                              "asset": f"a{i}", "role": "root_visual"}],
+                "steps": [{"segment": i + 1, "decision": "CLEAR_AND_REDRAW",
+                           "reason": "r",
+                           "actions": [{"verb": "DRAW",
+                                        "target": {"element": f"e{i}"},
+                                        "cue": "the cell"}]}]} for i in range(n)]}
+
+        narr = {f"s{i:03d}": "look at the cell here" for i in range(1, 12)}
+        _, calm = adapt_semantic_plan(plan(2), narr)
+        _, churny = adapt_semantic_plan(plan(6), narr)
+        assert not [i for i in calm if i["code"] == "REDRAW_CHURN"]
+        assert [i for i in churny if i["code"] == "REDRAW_CHURN"]
+
+    def test_churn_is_reported_never_fixed_by_dropping_visuals(self):
+        """Losing a picture is worse than redrawing one. The metric must not
+        become a reason to discard content — that regression has happened."""
+        import inspect
+        from spike.scene_engine import semantic
+        src = inspect.getsource(semantic.adapt_semantic_plan)
+        i = src.index("REDRAW_CHURN")
+        assert "ctx.note" in src[max(0, i - 200):i + 50]
+        assert "del " not in src[i - 200:i + 200]
