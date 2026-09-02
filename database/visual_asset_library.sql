@@ -1,21 +1,22 @@
 -- SketchCast Visual Knowledge Library
 --
 -- Binary artwork belongs in Supabase Storage, not Postgres. This table stores
--- the searchable identity, curriculum alignment, provenance and validation
--- metadata. The worker uses the service-role client server-side.
---
--- Apply once to the production Supabase project. The application remains
--- functional without this migration: local caching and normal AI generation
--- are the fallback.
+-- searchable identity, curriculum alignment, provenance and validation metadata.
+-- Visuals and avatars deliberately share the same library and storage bucket;
+-- asset_type/role keeps the two retrieval domains separate.
 
 create table if not exists public.visual_assets (
   id uuid primary key default gen_random_uuid(),
   asset_key text not null,
   canonical_key text not null,
+  asset_type text not null default 'visual'
+    check (asset_type in ('visual', 'avatar')),
+  role text,
   description text not null default '',
   curriculum text not null default 'generic',
   subject text not null default 'general',
   grade text not null default 'k12',
+  age_band text,
   topic text not null default '',
   concepts jsonb not null default '[]'::jsonb,
   status text not null default 'candidate'
@@ -31,6 +32,15 @@ create table if not exists public.visual_assets (
   updated_at timestamptz not null default now()
 );
 
+-- Idempotent migration for installations where the table already existed.
+alter table public.visual_assets add column if not exists asset_type text not null default 'visual';
+alter table public.visual_assets add column if not exists role text;
+alter table public.visual_assets add column if not exists age_band text;
+
+create index if not exists visual_assets_type_idx
+  on public.visual_assets (asset_type);
+create index if not exists visual_assets_role_idx
+  on public.visual_assets (asset_type, role);
 create index if not exists visual_assets_canonical_idx
   on public.visual_assets (canonical_key);
 create index if not exists visual_assets_subject_grade_idx
@@ -43,13 +53,8 @@ create unique index if not exists visual_assets_hash_idx
   on public.visual_assets (content_hash)
   where content_hash is not null;
 
--- The worker is the only writer in this first implementation, using the
--- service-role key. Client-side RLS is therefore deliberately deny-by-default.
 alter table public.visual_assets enable row level security;
 
--- Supabase Storage bucket. Keep it private: artwork is an internal generation
--- asset, not a user-uploaded public file. The worker downloads it with the
--- service-role client.
 insert into storage.buckets (id, name, public)
 values ('visual-assets', 'visual-assets', false)
 on conflict (id) do nothing;
@@ -62,12 +67,18 @@ create index if not exists visual_assets_search_idx
       coalesce(topic,'') || ' ' ||
       coalesce(subject,'') || ' ' ||
       coalesce(curriculum,'') || ' ' ||
-      coalesce(grade,''))
+      coalesce(grade,'') || ' ' ||
+      coalesce(role,'') || ' ' ||
+      coalesce(age_band,''))
   );
 
 comment on table public.visual_assets is
-  'Reusable SketchCast K-12 visual assets; binaries live in Supabase Storage.';
-comment on column public.visual_assets.status is
-  'approved assets are eligible for automatic reuse; candidates are retained for review/analytics.';
+  'Reusable SketchCast visuals and avatars; binaries live in private Supabase Storage.';
+comment on column public.visual_assets.asset_type is
+  'visual = educational artwork; avatar = persistent teacher/student character asset.';
+comment on column public.visual_assets.role is
+  'Avatar role such as teacher or student; null for ordinary educational visuals.';
+comment on column public.visual_assets.age_band is
+  'Learner/character age band used for avatar matching; null for ordinary visuals.';
 comment on column public.visual_assets.content_hash is
-  'SHA-256 of the normalized asset; prevents duplicate storage when the same generated image is encountered again.';
+  'SHA-256 of the asset; prevents duplicate storage when the same generated image is encountered again.';
