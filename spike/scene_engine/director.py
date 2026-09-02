@@ -222,34 +222,3 @@ def parse_scene_response(raw: dict | str, narration: str) -> Scene | None:
     for w in scene_warnings(scene):
         logger.info("scene lint: %s", w)
     return scene
-
-
-def segment_to_legacy_scene(segment: dict) -> Scene | None:
-    """Bottom fallback rung ABOVE the old renderer: an ordinary segment
-    (slide_heading + slide_points) as a minimal write-on scene. Produces a
-    visual strictly better than nothing when a directed scene failed but the
-    scene engine is on; returns None when there is nothing to show (caller
-    drops to the native slide renderer)."""
-    heading = (segment.get("slide_heading") or "").strip()
-    points = [p for p in (segment.get("slide_points") or []) if p and p.strip()]
-    narration = segment.get("text") or ""
-    if not heading and not points:
-        return None
-    elements: list[dict] = []
-    actions: list[dict] = []
-    if heading:
-        elements.append({"id": "h", "type": "text", "text": heading[:80],
-                         "role": "title", "size": 40, "at": (76, 64),
-                         "anchor": "lt"})
-        actions.append({"verb": "write", "target": "h"})
-    for i, p in enumerate(points[:4]):
-        elements.append({"id": f"p{i}", "type": "text", "text": p[:80],
-                         "role": "caption", "size": 27,
-                         "at": (110, 190 + 92 * i), "anchor": "lt"})
-        actions.append({"verb": "write", "target": f"p{i}"})
-    try:
-        return parse_scene({"id": segment.get("segment_id", "legacy"),
-                            "narration": narration, "elements": elements,
-                            "actions": actions})
-    except Exception:
-        return None

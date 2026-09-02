@@ -746,3 +746,63 @@ class TestP4SalvageBoundary:
         assert _repair_json(broken) == first, "not deterministic"
         assert _repair_json(json.dumps(first)) == first, \
             "repairing an already-repaired reply changed it again"
+
+
+class TestP5DependenciesAreDeclared:
+    """P5. Dead-code cleanup is last, and only safe once the dependency graph
+    is honest. numpy was imported by two PRODUCTION modules and declared
+    nowhere — it existed only because streamlit drags in pandas/pydeck, so
+    removing the unreachable streamlit bundle would have stopped the video
+    renderer. The trap sat directly in front of the obvious next action."""
+
+    def test_numpy_is_declared(self):
+        req = (Path(__file__).resolve().parents[1] / "requirements.txt"
+               ).read_text(encoding="utf-8")
+        assert "numpy" in req, (
+            "numpy is imported by spike/scene_engine/raster_assets.py and "
+            "trace.py; without it declared, deleting streamlit breaks prod")
+
+    def test_every_production_third_party_import_is_declared(self):
+        """Catch the next one of these before it becomes a trap."""
+        import re
+        root = Path(__file__).resolve().parents[1]
+        req = (root / "requirements.txt").read_text(encoding="utf-8").lower()
+        # module -> distribution, where the names differ
+        alias = {"PIL": "pillow", "fitz": "pymupdf", "dotenv": "python-dotenv",
+                 "google": "anthropic", "pptx": "python-pptx",
+                 "docx": "python-docx", "yaml": "pyyaml", "jwt": "pyjwt",
+                 "dateutil": "python-dateutil", "bidi": "python-bidi",
+                 "arabic_reshaper": "arabic-reshaper", "cv2": "opencv",
+                 "imageio_ffmpeg": "imageio-ffmpeg", "edge_tts": "edge-tts"}
+        # first-party = anything that exists at the repo root, discovered
+        # rather than listed, so a new local package cannot fail this test
+        local = {p.stem for p in root.iterdir()
+                 if p.is_dir() or p.suffix == ".py"}
+        stdlib_ish = set(sys.stdlib_module_names) | local
+        # Parsed, not regexed: a regex matched `from generations g, ...`
+        # inside a SQL string and reported it as an undeclared package.
+        import ast
+        missing = set()
+        for d in ("shared", "worker", "spike/scene_engine", "agent3_scripts",
+                  "agent6_animation", "agent8_render"):
+            for f in (root / d).rglob("*.py"):
+                try:
+                    tree = ast.parse(f.read_text(encoding="utf-8",
+                                                 errors="replace"))
+                except SyntaxError:
+                    continue
+                mods = set()
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        mods |= {a.name.split(".")[0] for a in node.names}
+                    elif isinstance(node, ast.ImportFrom):
+                        if node.level == 0 and node.module:
+                            mods.add(node.module.split(".")[0])
+                for mod in mods:
+                    if mod in stdlib_ish or mod.startswith("_"):
+                        continue
+                    if mod.startswith(("agent", "streamlit")):
+                        continue
+                    if alias.get(mod, mod).lower() not in req:
+                        missing.add(mod)
+        assert not missing, f"imported in production but undeclared: {sorted(missing)}"

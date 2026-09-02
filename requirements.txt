@@ -10,6 +10,12 @@ pytest>=7.0.0
 httpx>=0.25.0
 streamlit>=1.30.0
 anthropic[vertex]>=0.20.0   # [vertex] pulls google-auth for the Vertex AI backend (LLM_BACKEND=vertex)
+# UNDECLARED UNTIL NOW, and load-bearing: spike/scene_engine/raster_assets.py
+# and spike/scene_engine/trace.py import numpy, and VIDEO_ENGINE=scene is live.
+# It was present only because streamlit drags in pandas/pydeck, so removing the
+# unreachable streamlit bundle -- the obvious cleanup -- would have stopped the
+# video renderer in production. Declared explicitly so that deletion is safe.
+numpy>=1.24
 requests>=2.31.0            # Gemini-on-Vertex client (shared/gemini_client.py)
 pillow>=10.0.0
 elevenlabs>=1.0.0
