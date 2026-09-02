@@ -366,7 +366,14 @@ def generate_episode_script(
     # visual plan — a 30k budget truncated one to zero segments (audit fact
     # 9's third confirmation). 32k doubles to 64k on the streamed retry,
     # still under Gemini's 65,536 ceiling.
-    max_out = (32000 if style == "conversational" else 30000) if scene_on \
+    # The SEMANTIC prompt demands segments PLUS a full multi-chapter visual
+    # plan, so it needs the same budget whether or not VIDEO_ENGINE is set.
+    # Keying this to scene_on alone meant SEMANTIC_PLAN=1 on its own selected
+    # the long prompt and a 16k cap: every real lesson truncated, and it
+    # surfaced as "produced no segments", which sends the investigator after
+    # malformed JSON instead of a flag that was never set.
+    _long_reply = scene_on or _semantic
+    max_out = (32000 if style == "conversational" else 30000) if _long_reply \
         else 16000
     result = client.analyze(prompt=prompt, system=system, max_tokens=max_out)
 
@@ -446,10 +453,18 @@ def generate_episode_script(
         # dialogue is rejected simply falls back to single-narrator.
         dialogue = None
         raw_dlg = seg.get("dialogue")
-        # style-gated: only the conversational prompt asks for dialogue, and
-        # a stray dialogue array on another style once double-injected the
-        # caption stream (duplicate ids -> scene rejected wholesale)
-        if style != "conversational":
+        # Style-gated ONLY on the legacy path: there, just the conversational
+        # prompt asks for dialogue, and a stray dialogue array on another
+        # style once double-injected the caption stream (duplicate ids ->
+        # scene rejected wholesale).
+        #
+        # The SEMANTIC prompt asks EVERY style for dialogue and tells it to
+        # leave `text` empty. Gating those four styles out therefore left
+        # every segment with no text and no dialogue — a guaranteed silent
+        # lesson, hard-failing after a full paid model call. 4 of the 5
+        # user-selectable styles, including the default, were unusable on
+        # this path for exactly this reason.
+        if style != "conversational" and not _semantic:
             raw_dlg = None
         if isinstance(raw_dlg, list) and raw_dlg:
             clean_dlg = []
@@ -472,10 +487,14 @@ def generate_episode_script(
                 # segments completely silent.
                 plain_text = " ".join(d["line"] for d in clean_dlg)
                 el_text = plain_text
-            if len(clean_dlg) >= 2:
+            if len(clean_dlg) >= 2 and style == "conversational":
                 # ...but TWO-VOICE playback still needs an actual exchange:
                 # per-line voices and per-speaker bubbles. One line stays
                 # single-narrator, which is a downgrade, not a silence.
+                # Conversational is also the only style that WANTS two
+                # voices — a direct explainer read by two people is a
+                # different product — so the other styles keep the words
+                # and narrate them singly.
                 dialogue = clean_dlg
 
         segments.append(ScriptSegment(

@@ -602,3 +602,88 @@ class TestP0StrictModeIsStrict:
         assert i_strict < i_broad, \
             "AdapterError must be caught BEFORE the broad handler"
         assert "raise" in src[i_strict:i_broad]
+
+
+class TestP05Blockers:
+    """P0.5. Two faults that made the semantic path unusable regardless of
+    how good the visuals were."""
+
+    @staticmethod
+    def _seg(lines):
+        return {"type": "explore", "text": "", "elevenlabs_text": "",
+                "dialogue": [{"who": "teacher", "line": l} for l in lines],
+                "slide_heading": "H"}
+
+    def _run(self, style, monkeypatch, semantic=True):
+        from agent3_scripts.script_generator import generate_episode_script
+        if semantic:
+            monkeypatch.setenv("SEMANTIC_PLAN", "1")
+        else:
+            monkeypatch.delenv("SEMANTIC_PLAN", raising=False)
+        raw = [self._seg(["Cells form tissues.", "Tissues form organs."]),
+               self._seg(["Organs form systems."]),
+               self._seg(["Systems form an organism."])]
+
+        class _Stub:
+            def analyze(self, **kw):
+                self.max_tokens = kw.get("max_tokens")
+                return {"data": {"segments": raw}, "usage": {},
+                        "truncated": False}
+
+        stub = _Stub()
+        out = generate_episode_script(
+            {"episode_num": 1, "title": "T", "sections": []},
+            {"chapter_title": "T"}, 1, stub, narration_style=style)
+        return out, stub
+
+    @pytest.mark.parametrize("style", ["socratic", "direct_explainer",
+                                       "storytelling", "exam_focused"])
+    def test_every_style_produces_narration_on_the_semantic_path(
+            self, style, monkeypatch):
+        """These four hard-failed: the prompt told the model to leave `text`
+        empty and the parser then discarded their dialogue."""
+        out, _ = self._run(style, monkeypatch)
+        for s in out.segments:
+            assert s.text.strip(), f"{style}/{s.segment_id} came out silent"
+
+    def test_conversational_still_gets_two_voices(self, monkeypatch):
+        out, _ = self._run("conversational", monkeypatch)
+        assert out.segments[0].dialogue is not None
+
+    def test_other_styles_get_the_words_but_not_two_voices(self, monkeypatch):
+        """A direct explainer read by two people is a different product."""
+        out, _ = self._run("direct_explainer", monkeypatch)
+        assert out.segments[0].text.strip()
+        assert out.segments[0].dialogue is None
+
+    def test_legacy_path_still_ignores_stray_dialogue(self, monkeypatch):
+        """The original guard: on the legacy path a stray dialogue array once
+        double-injected the caption stream. The legacy prompt fills `text`,
+        so the narration comes from there and the stray array is dropped."""
+        from agent3_scripts.script_generator import generate_episode_script
+        monkeypatch.delenv("SEMANTIC_PLAN", raising=False)
+        raw = [{"type": "explore", "text": f"Legacy narration {i}.",
+                "elevenlabs_text": f"Legacy narration {i}.",
+                "dialogue": [{"who": "teacher", "line": "stray one"},
+                             {"who": "student", "line": "stray two"}],
+                "slide_heading": "H"} for i in range(3)]
+
+        class _Stub:
+            def analyze(self, **kw):
+                return {"data": {"segments": raw}, "usage": {},
+                        "truncated": False}
+
+        out = generate_episode_script(
+            {"episode_num": 1, "title": "T", "sections": []},
+            {"chapter_title": "T"}, 1, _Stub(), narration_style="socratic")
+        assert out.segments[0].dialogue is None, "stray dialogue leaked"
+        assert out.segments[0].text == "Legacy narration 0.", \
+            "the legacy narration must come from `text`, untouched"
+
+    def test_semantic_alone_gets_the_long_output_budget(self, monkeypatch):
+        """SEMANTIC_PLAN=1 without VIDEO_ENGINE=scene used to select the long
+        prompt and a 16k cap, truncating every real lesson."""
+        monkeypatch.delenv("VIDEO_ENGINE", raising=False)
+        _, stub = self._run("conversational", monkeypatch)
+        assert stub.max_tokens >= 30000, \
+            f"semantic prompt on a {stub.max_tokens} cap will truncate"
