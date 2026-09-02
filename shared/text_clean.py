@@ -25,6 +25,31 @@ _SSML_TAG_RE = re.compile(
 )
 
 
+# Fill-in-the-blank rules copied out of the textbook: "called a ____ .".
+# Edge reads every underscore ALOUD ("underscore underscore underscore"), which
+# is how a lesson shipped narrating punctuation. Two or more underscores, or a
+# run of dots/dashes doing the same job, is a blank.
+_BLANK_RE = re.compile(r"[ \t]*(?:_{2,}|\.{4,}|…{2,}|-{4,})[ \t]*")
+
+
+def speakable(s) -> str:
+    """Text prepared for TTS specifically — never for the deck.
+
+    A worksheet blank must not be SPOKEN, but it is legitimate PRINTED on a
+    slide or in speaker notes, so this is deliberately separate from
+    strip_ssml: only the audio path calls it. The blank becomes the word a
+    teacher actually says, which keeps the sentence grammatical — dropping it
+    outright leaves "called a ." and reads as a stumble.
+    """
+    out = strip_ssml(s)
+    if not out:
+        return ""
+    out = _BLANK_RE.sub(" blank ", out)
+    out = re.sub(r"\s+([,.;:!?])", r"\1", out)     # no space before punctuation
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    return out.strip()
+
+
 def strip_ssml(s) -> str:
     """Return `s` with SSML tags removed and horizontal whitespace re-collapsed.
 

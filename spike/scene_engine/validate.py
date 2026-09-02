@@ -77,8 +77,19 @@ def validate_visual_language(video_manifest: dict,
     # was zero, which read as "nothing wrong" instead of "nothing happened".
     report["no_scenes_produced"] = (report["scene_segments"] == 0
                                     and report["narration_segments"] > 0)
+    # ...and a lesson nobody speaks is not a lesson either. A 4-minute video
+    # shipped with 25 of 26 segments silent and this report said PASSED,
+    # because it counted segments and never asked whether any of them had
+    # audio.
+    report["silent_segments"] = [
+        s.get("segment_id", "?") for s in segs
+        if not str(s.get("audio_path") or "").strip()]
+    report["mostly_silent"] = (
+        len(report["silent_segments"]) > max(1, len(segs) // 4)
+        if segs else False)
     report["passed"] = (report["legacy_renderer_usage"] == 0
-                        and not report["no_scenes_produced"])
+                        and not report["no_scenes_produced"]
+                        and not report["mostly_silent"])
     return report
 
 
@@ -98,6 +109,10 @@ def format_report(report: dict) -> str:
     lines.append("=" * 34)
     if report["passed"]:
         lines.append("PASSED")
+    elif report.get("mostly_silent"):
+        lines.append(f"FAILED — {len(report['silent_segments'])} of "
+                     f"{report['narration_segments']} segments have NO audio; "
+                     "the lesson is largely silent")
     elif report.get("no_scenes_produced"):
         lines.append("FAILED — the lesson produced NO scenes; every segment "
                      "fell back to a plain card, so the visual plan was lost")

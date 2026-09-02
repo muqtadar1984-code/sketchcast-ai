@@ -1232,3 +1232,38 @@ class TestSeedMoment:
                    and str(e.get("asset", "")).startswith("avatar_")
                    for e in els)
         assert any(k.startswith("avatar_") for k in assets["s002"])
+
+
+class TestVisionBoxShapes:
+    """The vision model answers with either [ymin,xmin,ymax,xmax] or
+    {"ymin":..,"xmin":..}. Slicing a dict raises KeyError, which was not in
+    the caught tuple — so one dict-shaped reply killed the asset outright and
+    that segment fell back to the LEGACY renderer mid-lesson."""
+
+    def _scan(self, monkeypatch, payload):
+        from PIL import Image
+        import spike.scene_engine.raster_assets as ra
+        monkeypatch.setattr(ra, "_vision_json", lambda *a, **k: payload)
+        return ra.scan_text(Image.new("RGBA", (1000, 1000), (0, 0, 0, 0)))
+
+    def test_list_shaped_boxes(self, monkeypatch):
+        got = self._scan(monkeypatch,
+                         {"text_boxes": [[100, 200, 300, 400]]})
+        assert got == [[200.0, 100.0, 400.0, 300.0]]
+
+    def test_dict_shaped_boxes_are_understood_not_dropped(self, monkeypatch):
+        got = self._scan(monkeypatch, {"text_boxes": [
+            {"ymin": 100, "xmin": 200, "ymax": 300, "xmax": 400}]})
+        assert got == [[200.0, 100.0, 400.0, 300.0]], \
+            "a dict-shaped box must be read, not skipped — otherwise the "
+        "baked text stays in the artwork"
+
+    def test_underscored_keys_also_work(self, monkeypatch):
+        got = self._scan(monkeypatch, {"text_boxes": [
+            {"y_min": 100, "x_min": 200, "y_max": 300, "x_max": 400}]})
+        assert got == [[200.0, 100.0, 400.0, 300.0]]
+
+    def test_junk_boxes_are_skipped_without_raising(self, monkeypatch):
+        got = self._scan(monkeypatch, {"text_boxes": [
+            {"nope": 1}, "banana", [1, 2], None, [10, 20, 30, 40]]})
+        assert got == [[20.0, 10.0, 40.0, 30.0]]

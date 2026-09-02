@@ -370,7 +370,10 @@ class TestValidatorCatchesAnEmptyLesson:
 
     @staticmethod
     def _manifest(renderer, n=6):
-        return {"segments": [{"segment_id": f"s{i:03d}", "renderer": renderer}
+        # audio_path present so these exercise the SCENES check specifically;
+        # the silence check is covered separately in TestSilentLessonGuards.
+        return {"segments": [{"segment_id": f"s{i:03d}", "renderer": renderer,
+                              "audio_path": f"/tmp/s{i}.mp3"}
                              for i in range(n)]}
 
     def test_a_lesson_with_no_scenes_fails(self):
@@ -417,3 +420,41 @@ class TestShortScriptGuard:
         from agent3_scripts.script_generator import generate_episode_script
         src = inspect.getsource(generate_episode_script)
         assert "3 if target_duration >= 3.0 else 1" in src
+
+
+class TestSilentLessonGuards:
+    """A 4-minute video shipped with 25 of 26 segments carrying no narration
+    at all — the director obeyed "set text to empty" and never wrote the
+    dialogue meant to replace it. Nothing objected, and the report said
+    PASSED."""
+
+    def test_script_generation_refuses_a_mostly_silent_script(self):
+        import inspect
+        from agent3_scripts.script_generator import generate_episode_script
+        src = inspect.getsource(generate_episode_script)
+        assert "_silent" in src and "NO narration" in src
+
+    def test_validation_fails_a_lesson_with_no_audio(self):
+        from spike.scene_engine.validate import (format_report,
+                                                 validate_visual_language)
+        segs = [{"segment_id": f"s{i:03d}", "renderer": "scene"}
+                for i in range(8)]
+        r = validate_visual_language({"segments": segs}, {})
+        assert r["mostly_silent"] is True
+        assert r["passed"] is False
+        assert "silent" in format_report(r)
+
+    def test_a_lesson_with_audio_passes(self):
+        from spike.scene_engine.validate import validate_visual_language
+        segs = [{"segment_id": f"s{i:03d}", "renderer": "scene",
+                 "audio_path": f"/tmp/s{i}.mp3"} for i in range(8)]
+        r = validate_visual_language({"segments": segs}, {})
+        assert r["mostly_silent"] is False and r["passed"] is True
+
+    def test_one_quiet_segment_is_tolerated(self):
+        from spike.scene_engine.validate import validate_visual_language
+        segs = [{"segment_id": f"s{i:03d}", "renderer": "scene",
+                 "audio_path": f"/tmp/s{i}.mp3"} for i in range(8)]
+        segs[0].pop("audio_path")
+        r = validate_visual_language({"segments": segs}, {})
+        assert r["passed"] is True

@@ -168,3 +168,40 @@ def test_travel_break_is_still_inserted_when_the_model_omitted_it():
     }])
     assert script.segments[0].elevenlabs_text == \
         '<break time="0.3s"/> Watch the pen trace the leaf.'
+
+
+class TestSpeakableBlanks:
+    """A shipped lesson read worksheet blanks aloud as "underscore underscore
+    underscore". The blanks come from fill-in-the-blank exercises copied out
+    of the textbook — legitimate PRINTED on a slide, never SPOKEN."""
+
+    def test_underscore_blanks_are_not_spoken(self):
+        from shared.text_clean import speakable
+        out = speakable("A group of similar cells is called a ____ .")
+        assert "_" not in out
+        assert out == "A group of similar cells is called a blank."
+
+    def test_the_printed_form_keeps_its_blanks(self):
+        """strip_ssml still feeds the deck and the on-frame fallback, where a
+        blank is the whole point of the exercise."""
+        from shared.text_clean import strip_ssml
+        assert "____" in strip_ssml("called a ____ .")
+
+    def test_dot_and_dash_leaders_count_as_blanks(self):
+        from shared.text_clean import speakable
+        assert "blank" in speakable("The answer is ...... here")
+        assert "blank" in speakable("The answer is ----- here")
+
+    def test_ssml_is_still_stripped(self):
+        from shared.text_clean import speakable
+        assert speakable('Hi <break time="0.3s"/> there') == "Hi there"
+
+    def test_ordinary_prose_is_untouched(self):
+        from shared.text_clean import speakable
+        s = "Cells group into tissues, tissues into organs."
+        assert speakable(s) == s
+
+    def test_a_single_underscore_is_not_a_blank(self):
+        """snake_case in a term should not become "blank"."""
+        from shared.text_clean import speakable
+        assert speakable("the cell_wall layer") == "the cell_wall layer"

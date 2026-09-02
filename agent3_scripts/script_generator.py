@@ -515,6 +515,21 @@ def generate_episode_script(
     # Scoped to the semantic path: that is where it was measured, and the
     # legacy path has years of small-but-valid replies (and test fixtures)
     # that a blanket floor would start rejecting.
+    # A lesson nobody speaks is not a lesson. Measured: a rendered 4-minute
+    # video in which 25 of 26 segments had `dialogue: None` AND `text: ""` —
+    # the director had obeyed "set text to empty" and then simply not written
+    # the dialogue that was supposed to replace it. Every downstream stage
+    # accepted it and the validation report said PASSED.
+    _silent = [s.segment_id for s in segments
+               if not (s.text or "").strip() and not (s.dialogue or [])]
+    if _silent and len(_silent) > max(1, len(segments) // 4):
+        raise RuntimeError(
+            f"Script generation for episode {episode.get('episode_num', 1)}: "
+            f"{len(_silent)} of {len(segments)} segments have NO narration "
+            f"(no text and no dialogue) — e.g. {_silent[:5]}. That renders as "
+            "a silent video, so it is a failed generation, not a short one."
+        )
+
     _min_segments = 3 if target_duration >= 3.0 else 1
     if _semantic and len(segments) < _min_segments:
         raise RuntimeError(

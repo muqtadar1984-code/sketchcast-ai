@@ -33,7 +33,7 @@ from typing import Callable, Optional
 
 from .models import VideoManifest, VideoSegment
 from .native_render import render_native_segment
-from shared.text_clean import strip_ssml
+from shared.text_clean import speakable, strip_ssml
 from shared.tts import synthesize
 
 from agent5_slides.theme import concepts_for_slides
@@ -191,8 +191,9 @@ def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
         getattr(v, "lang", "en") or "en") or teach_ref
     starts, cursor, parts = [], 0.0, []
     for i, d in enumerate(dialogue):
-        # belt to the sanitizer's braces: Edge reads SSML tags ALOUD
-        line = " ".join(strip_ssml(str(d.get("line") or "")).split())
+        # belt to the sanitizer's braces: Edge reads SSML tags ALOUD, and it
+        # reads worksheet blanks aloud too ("underscore underscore ...")
+        line = " ".join(speakable(str(d.get("line") or "")).split())
         if not line:
             continue
         f = vid_dir / f"{seg_id}_dl{i}.mp3"
@@ -353,7 +354,9 @@ def compose_episode_videos(
                 seg_report: dict = {}
                 # word boundaries feed frame-accurate cue timing (scene engine)
                 bnd = mp3.with_suffix(".words.json") if _scene_flag() else None
-                synthesize(text, mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=ssml, report=seg_report, boundaries_out=bnd)
+                # `text` still feeds the deck and the on-frame fallback, where
+                # a printed blank is fine; only the SPOKEN copy drops it.
+                synthesize(speakable(text), mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=speakable(ssml), report=seg_report, boundaries_out=bnd)
                 used = seg_report.get("used")
                 downgraded = bool(seg_report.get("downgraded"))
                 audio_path = str(mp3)

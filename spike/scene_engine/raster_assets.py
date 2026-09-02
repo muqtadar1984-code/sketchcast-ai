@@ -354,9 +354,23 @@ def scan_text(ink: Image.Image) -> list[list[float]]:
     boxes: list[list[float]] = []
     if isinstance(data, dict):
         for b in (data.get("text_boxes") or [])[:24]:
+            # The vision model answers with either [ymin,xmin,ymax,xmax] or
+            # {"ymin":..,"xmin":..,..} — it has done both. Slicing a dict
+            # raises KeyError, which was NOT caught below, so one dict-shaped
+            # reply killed the whole asset and the segment fell back to the
+            # legacy renderer mid-lesson. Skipping it silently would be no
+            # better: the baked text then ships inside the artwork.
             try:
-                ymin, xmin, ymax, xmax = [float(v) for v in b[:4]]
-            except (TypeError, ValueError, IndexError):
+                if isinstance(b, dict):
+                    low = {str(k).lower().replace("_", ""): v
+                           for k, v in b.items()}
+                    ymin, xmin, ymax, xmax = (float(low["ymin"]),
+                                              float(low["xmin"]),
+                                              float(low["ymax"]),
+                                              float(low["xmax"]))
+                else:
+                    ymin, xmin, ymax, xmax = [float(v) for v in b[:4]]
+            except (TypeError, ValueError, IndexError, KeyError):
                 continue
             if ymax > ymin and xmax > xmin:
                 boxes.append([xmin / 1000 * w, ymin / 1000 * h,
