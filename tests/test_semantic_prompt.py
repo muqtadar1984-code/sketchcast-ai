@@ -339,6 +339,37 @@ class TestJsonRepair:
         assert out["dialogue"][0] == {"who": "teacher",
                                       "line": "And then the nucleus."}
 
+    def test_a_transposed_line_key_is_repaired(self):
+        """The same slip the other way round, measured on episode 3: the key
+        is not omitted, it is sitting in its own value slot with the real text
+        left bare behind it. Killed a whole 24-segment lesson.
+
+        The dropped-key rule alone made this WORSE — it consumed the same
+        prefix and produced {"line": "line", "A group..."}, still invalid.
+        Hence the ordering in _repair_json."""
+        from shared.claude_client import _repair_json
+        out = _repair_json('{"dialogue": [{"who": "teacher": "line", '
+                           '"A group of similar cells is called a ____ ."}]}')
+        assert out["dialogue"][0] == {
+            "who": "teacher",
+            "line": "A group of similar cells is called a ____ ."}
+
+    def test_the_real_episode_3_reply_survives(self):
+        """Not a reduction — the actual 24,494-char reply that failed, if it
+        is still on disk. A shrunk repro can drift from what the model does."""
+        import json
+        from pathlib import Path
+        from shared.claude_client import _repair_json
+        real = Path(r"C:/Users/Arieb/AppData/Local/Temp/"
+                    r"sketchcast_reply_ep3.txt")
+        if not real.exists():
+            import pytest
+            pytest.skip("measured reply not on this machine")
+        out = _repair_json(real.read_text(encoding="utf-8"))
+        assert out and len(out["segments"]) == 24
+        assert "visual_plan" in out, "the plan must survive with the segments"
+        json.dumps(out)          # the salvage must produce re-serialisable data
+
     def test_every_malformation_measured_so_far_is_covered(self):
         """One place to see the whole set, so the next one joins a list
         rather than being rediscovered from scratch."""
@@ -352,6 +383,8 @@ class TestJsonRepair:
                 '{"segments": [1], "d": [{"who":("teacher")}]}',
             "dropped line key":
                 '{"segments": [1], "d": [{"who": "teacher": "hi"}]}',
+            "transposed line key":
+                '{"segments": [1], "d": [{"who": "teacher": "line", "hi"}]}',
             "ssml quotes":
                 '{"segments": [1], "d": "a <break time="0.3s"/> b"}',
             "trailing comma":

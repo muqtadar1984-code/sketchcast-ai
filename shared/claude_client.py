@@ -389,6 +389,19 @@ def _repair_json(text: str):
     #     `who` and `line`, so a trailing string can only be the line. With an
     #     arbitrary value it would be a GUESS about which key went missing,
     #     and guessing intent is the one thing this layer must never do.
+    #     A SECOND form of the same slip, measured on episode 3: the key is not
+    #     dropped, it is transposed into the value slot with the real text left
+    #     bare behind it:
+    #       {"who": "teacher": "line", "A group of similar cells..."}
+    #     This has to run BEFORE the dropped-key rule, which would otherwise
+    #     consume the same prefix and yield {"line": "line", "..."} — still
+    #     invalid, and now harder to read. Decidable on the same grounds: a
+    #     known speaker, the literal key name sitting where its value belongs,
+    #     and a dialogue schema with exactly two fields.
+    fixed = _re.sub(
+        r'"who"\s*:\s*("(?:teacher|student)")\s*:\s*"line"\s*,\s*(?=")',
+        r'"who": \1, "line": ', fixed)
+    candidates.append(fixed)
     fixed = _re.sub(r'"who"\s*:\s*("(?:teacher|student)")\s*:\s*(?=")',
                     r'"who": \1, "line": ', fixed)
     candidates.append(fixed)
