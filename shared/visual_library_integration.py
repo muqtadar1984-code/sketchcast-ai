@@ -41,6 +41,44 @@ def context() -> dict[str, Any]:
     return dict(_CONTEXT)
 
 
+def _bootstrap_existing_cache(ra) -> None:
+    """Index existing generated scene assets without spending another AI call.
+
+    This is deliberately local-only. A separate one-shot migration script can
+    publish these assets to Supabase. Indexing them here immediately makes the
+    current worker cache searchable for subsequent renders on the same host.
+    """
+    try:
+        from shared.visual_library import register_local
+        root = Path(ra.CACHE_DIR)
+        for meta_path in root.glob("*/meta.json"):
+            png = meta_path.parent / "asset.png"
+            if not png.exists():
+                continue
+            try:
+                md = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if md.get("provenance") != "generated" or md.get("baked_text"):
+                continue
+            key = str(md.get("key") or meta_path.parent.name)
+            register_local({
+                "asset_key": key,
+                "canonical_key": ra.canonical_key(key),
+                "description": str(md.get("prompt") or key),
+                "curriculum": "generic",
+                "subject": "general",
+                "grade": "k12",
+                "topic": key,
+                "concepts": [],
+                "status": "approved",
+                "provenance": "generated",
+                "local_cache_path": str(png),
+            })
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("existing visual cache bootstrap skipped: %s", exc)
+
+
 def _patch() -> None:
     global _PATCHED
     if _PATCHED:
@@ -48,6 +86,7 @@ def _patch() -> None:
     from spike.scene_engine import raster_assets as ra
     from shared.visual_library import hydrate, publish_generated
 
+    _bootstrap_existing_cache(ra)
     original = ra.get_raster_asset
 
     def wrapped_get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
