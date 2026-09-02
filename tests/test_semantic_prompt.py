@@ -395,3 +395,25 @@ class TestValidatorCatchesAnEmptyLesson:
         m = self._manifest("scene", 5)
         m["segments"].append({"segment_id": "s099", "renderer": "native"})
         assert validate_visual_language(m, {})["passed"] is False
+
+
+class TestShortScriptGuard:
+    """One run returned a SINGLE segment for 13.8 minutes of source material,
+    in 9 seconds, and everything downstream accepted it. Zero segments was
+    already caught; one is the more dangerous shape, because it looks like
+    output — a one-card video would ship and a credit would be spent."""
+
+    def test_the_guard_is_wired(self):
+        import inspect
+        from agent3_scripts.script_generator import generate_episode_script
+        src = inspect.getsource(generate_episode_script)
+        assert "_min_segments" in src
+        assert "too short to be a real" in src
+
+    def test_a_short_lesson_may_legitimately_be_one_segment(self):
+        """The floor must scale with the lesson, not punish genuinely tiny
+        ones."""
+        import inspect
+        from agent3_scripts.script_generator import generate_episode_script
+        src = inspect.getsource(generate_episode_script)
+        assert "3 if target_duration >= 3.0 else 1" in src

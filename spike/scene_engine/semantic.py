@@ -228,10 +228,38 @@ def _split_on_new_root(craw, ctx: _Ctx) -> list[dict]:
     orig_root = next((e["id"] for e in elements
                       if e.get("role") == "root_visual"
                       and isinstance(e.get("id"), str)), None)
+    # Which group each non-illustration element belongs to. Handing every
+    # part the WHOLE element list was the first version of this, and it put
+    # all twelve labels on all eight chapters: every column overflowed, and
+    # the leaf diagram's labels sat on the human-body chapter. A label
+    # belongs to the chapter whose steps actually name it.
+    referenced: list[set] = []
+    for _, gsteps in groups:
+        refs: set[str] = set()
+        for s in gsteps:
+            for a in (s.get("actions") or []):
+                if not isinstance(a, dict):
+                    continue
+                t = a.get("target")
+                tid = t.get("element") if isinstance(t, dict) else t
+                if isinstance(tid, str):
+                    refs.add(tid)
+                if isinstance(t, dict) and isinstance(t.get("asset"), str):
+                    owner = by_asset.get(t["asset"])
+                    if owner:
+                        refs.add(owner)
+        referenced.append(refs)
+    claimed = set().union(*referenced) if referenced else set()
+
     parts = []
     for gi, (groot, gsteps) in enumerate(groups):
         keep = [e for e in elements
-                if e.get("id") not in illus or e.get("id") == groot]
+                if e.get("id") == groot
+                or (e.get("id") not in illus
+                    # its own group's, plus anything no group claimed at all,
+                    # which stays with the first part rather than vanishing
+                    and (e.get("id") in referenced[gi]
+                         or (gi == 0 and e.get("id") not in claimed)))]
         used = {e.get("asset") for e in keep if isinstance(e.get("asset"), str)}
         parts.append({
             **{k: v for k, v in craw.items()

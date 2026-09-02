@@ -343,6 +343,49 @@ class TestChapterSplitOnRedraw:
         assert not [i for i in issues
                     if i["code"] == "CHAPTER_SPLIT_ON_REDRAW"]
 
+    def test_labels_follow_their_own_picture(self):
+        """The first version of the split handed every part the whole element
+        list: a real lesson put all 12 labels on all 8 chapters, overflowing
+        every label column and sitting the leaf diagram's labels on the
+        human-body chapter."""
+        p = self._multi_root()
+        ch = p["chapters"][0]
+        ch["elements"] += [
+            {"id": "lbl_animal", "type": "text", "text": "Animal",
+             "role": "label"},
+            {"id": "lbl_scope", "type": "text", "text": "Eyepiece",
+             "role": "label"}]
+        ch["steps"][1]["actions"].append(
+            {"verb": "WRITE", "target": {"element": "lbl_animal"},
+             "cue": "the hypotenuse"})
+        ch["steps"][2]["actions"].append(
+            {"verb": "WRITE", "target": {"element": "lbl_scope"},
+             "cue": "the hypotenuse"})
+        narr = {f"s{i:03d}": "the hypotenuse is the longest side"
+                for i in (1, 2, 3)}
+        plan, _ = adapt_semantic_plan(p, narr)
+        by_root = {}
+        for c in plan["chapters"]:
+            root = next(e["id"] for e in c["elements"]
+                        if e.get("type") == "illustration")
+            by_root[root] = {e["id"] for e in c["elements"]
+                             if e.get("role") == "label"}
+        assert "lbl_animal" in by_root["animal_img"]
+        assert "lbl_animal" not in by_root["scope_img"], \
+            "a label leaked onto a different picture's chapter"
+        assert "lbl_scope" in by_root["scope_img"]
+        assert "lbl_scope" not in by_root["animal_img"]
+
+    def test_an_unclaimed_label_is_not_lost(self):
+        """A label no step names must still reach the lesson — the compiler
+        injects those into the step whose narration mentions the part."""
+        p = self._multi_root()
+        narr = {f"s{i:03d}": "the hypotenuse is the longest side"
+                for i in (1, 2, 3)}
+        plan, _ = adapt_semantic_plan(p, narr)
+        kept = {e["id"] for c in plan["chapters"] for e in c["elements"]}
+        assert "lbl_n" in kept, "an unreferenced label vanished in the split"
+
     def test_a_single_root_chapter_is_left_alone(self):
         plan, issues = adapt_semantic_plan(_plan(), NARR, strict=True)
         assert len(plan["chapters"]) == 1

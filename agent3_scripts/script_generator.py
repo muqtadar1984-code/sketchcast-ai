@@ -506,6 +506,25 @@ def generate_episode_script(
             f". Reply began: {body[:220]!r} … ended: {body[-160:]!r}{where}"
         )
 
+    # A script far too short for the lesson it claims to be is a failed
+    # generation, not a short lesson. Measured: one run came back with a
+    # SINGLE segment for 13.8 minutes of source material in 9 seconds, and
+    # everything downstream accepted it — a one-card video would have been
+    # delivered and a credit spent. Zero segments was already caught; one was
+    # not, which is the more dangerous shape because it looks like output.
+    # Scoped to the semantic path: that is where it was measured, and the
+    # legacy path has years of small-but-valid replies (and test fixtures)
+    # that a blanket floor would start rejecting.
+    _min_segments = 3 if target_duration >= 3.0 else 1
+    if _semantic and len(segments) < _min_segments:
+        raise RuntimeError(
+            f"Script generation for episode {episode.get('episode_num', 1)} "
+            f"returned only {len(segments)} segment(s) for a "
+            f"{target_duration:.1f}-minute lesson — too short to be a real "
+            "script. Treating it as a failed generation rather than "
+            "delivering a near-empty video."
+        )
+
     # Visual continuity (VIDEO_ENGINE=scene): the model plans ONE persistent
     # whiteboard for the whole lesson; the deterministic compiler expands it
     # into per-segment scenes that carry board state across boundaries. The
