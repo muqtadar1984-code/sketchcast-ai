@@ -1334,3 +1334,52 @@ class TestP1LayoutConstraints:
         head, _, tail = src.partition("if len(entries) < 2")
         assert 'role", "") or "") != "label"' in head, \
             "arrowless labels must be entered into the layout before the gate"
+
+
+class TestP2RasterCropIsEquivalent:
+    """P2. The raster transform rendered into the FULL 2560x1440 canvas for
+    every raster on every frame, including two static avatar sprites that
+    occupy a corner — the single largest item in the render phase. It now
+    transforms only the destination rectangle."""
+
+    def test_cropped_transform_matches_the_full_frame_one(self):
+        from PIL import Image
+        from spike.scene_engine.render import SS
+        from spike.scene_engine.schema import WORLD_H, WORLD_W
+
+        fw, fh = int(WORLD_W * SS), int(WORLD_H * SS)
+        ink = Image.new("RGBA", (120, 180), (0, 0, 0, 0))
+        for x in range(20, 100):
+            for y in range(30, 150):
+                ink.putpixel((x, y), (0, 0, 0, 255))
+        k_ws, offx, offy = 1.7, 900.0, 400.0
+
+        full = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+        inv = (1 / k_ws, 0.0, -offx / k_ws, 0.0, 1 / k_ws, -offy / k_ws)
+        o = ink.transform((fw, fh), Image.AFFINE, inv, resample=Image.BILINEAR)
+        full.paste(o, (0, 0), o)
+
+        crop = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+        bx0, by0 = max(0, int(offx)), max(0, int(offy))
+        bx1 = min(fw, int(offx + ink.width * k_ws) + 1)
+        by1 = min(fh, int(offy + ink.height * k_ws) + 1)
+        inv2 = (1 / k_ws, 0.0, (bx0 - offx) / k_ws,
+                0.0, 1 / k_ws, (by0 - offy) / k_ws)
+        o2 = ink.transform((bx1 - bx0, by1 - by0), Image.AFFINE, inv2,
+                           resample=Image.BILINEAR)
+        crop.paste(o2, (bx0, by0), o2)
+
+        import numpy as np
+        d = np.abs(np.asarray(full).astype(int) - np.asarray(crop).astype(int))
+        # bilinear rounding at the crop boundary only: a handful of pixels at
+        # +-2/255. A SHIFT or a dropped region would blow both of these.
+        assert d.max() <= 3, f"max channel difference {d.max()} — not rounding"
+        differing = int((d.sum(axis=2) > 0).sum())
+        assert differing < 0.001 * fw * fh, f"{differing} pixels differ"
+
+    def test_an_offscreen_raster_is_skipped(self):
+        import inspect
+        from spike.scene_engine.render import SceneRenderer
+        src = inspect.getsource(SceneRenderer._draw_raster)
+        assert "entirely off-camera" in src
+        assert "if bx1 <= bx0 or by1 <= by0" in src

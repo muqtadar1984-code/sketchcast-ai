@@ -1498,6 +1498,25 @@ class SceneRenderer:
         # screen_ss = ((at + (p-c)*scale) - camC)*camS*SS + (W/2)*SS  (per axis)
         offx = ((ra.at[0] - ra.ink.width / 2 * r_scale) - cam.cx) * cam.scale * SS + WORLD_W / 2 * SS
         offy = ((ra.at[1] - ra.ink.height / 2 * r_scale) - cam.cy) * cam.scale * SS + WORLD_H / 2 * SS
-        inv = (1.0 / k_ws, 0.0, -offx / k_ws, 0.0, 1.0 / k_ws, -offy / k_ws)
-        out = ink.transform(frame.size, Image.AFFINE, inv, resample=Image.BILINEAR)
-        frame.paste(out, (0, 0), out)
+        # Transform ONLY the rectangle the asset actually lands in.
+        #
+        # This used to render into the whole supersampled canvas — 2560x1440
+        # RGBA — for every raster on every frame, including the two avatar
+        # sprites, which never change and occupy a small corner. Measured on a
+        # 9-minute lesson that is ~13,000 frames x 2 static sprites, and the
+        # single largest item in the render phase. The output is identical;
+        # only the area worked on changes.
+        fw, fh = frame.size
+        dx0 = int(offx)
+        dy0 = int(offy)
+        dx1 = int(offx + ra.ink.width * k_ws) + 1
+        dy1 = int(offy + ra.ink.height * k_ws) + 1
+        bx0, by0 = max(0, dx0), max(0, dy0)
+        bx1, by1 = min(fw, dx1), min(fh, dy1)
+        if bx1 <= bx0 or by1 <= by0:
+            return                      # entirely off-camera this frame
+        inv = (1.0 / k_ws, 0.0, (bx0 - offx) / k_ws,
+               0.0, 1.0 / k_ws, (by0 - offy) / k_ws)
+        out = ink.transform((bx1 - bx0, by1 - by0), Image.AFFINE, inv,
+                            resample=Image.BILINEAR)
+        frame.paste(out, (bx0, by0), out)
