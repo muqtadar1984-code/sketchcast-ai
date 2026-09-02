@@ -85,7 +85,7 @@ Valid:   dialogue "It is the longest side of the triangle."  ->  "cue": "the lon
 Invalid: "cue": "when we discuss the hypotenuse"  (paraphrase — will be rejected)"""
 
 _PLAN_TRUTH = """=== VISUAL PLAN IS THE SOURCE OF PLANNED VISUALS ===
-"visual_plan" is the only place you describe video visuals. Do NOT put visual instructions in dialogue, text, elevenlabs_text, slide_visual, slide_points, or any scene/visual_request/visual_action field.
+"visual_plan" is the only place you describe video visuals. Do NOT put visual instructions in dialogue, text, elevenlabs_text, or any scene/visual_request/visual_action field.
 (The engine may ADD derived visuals of its own — sketches of objects your narration names, labels, emphasis. Your plan is authoritative for what you plan; it is not required to be exhaustive.)"""
 
 _CONTINUITY = """=== VISUAL CONTINUITY ===
@@ -146,11 +146,6 @@ _CAPS = """=== HARD LIMITS (the reply is long; exceeding these truncates it) ===
 At most 5 visual chapters. At most 12 elements and 10 steps per chapter. At most 6 actions per step.
 Optimise for THE MINIMUM VISUAL CHANGE THAT PRODUCES THE MAXIMUM TEACHING CLARITY — not for maximum animation, assets, arrows, segments or transitions."""
 
-_STUDY_NOTES = """=== STUDY NOTES (separate from the video) ===
-Each segment carries "slide_heading" plus EITHER "slide_visual" OR "slide_points" — never both.
-"slide_visual" kinds: flow | cycle | hierarchy | compare | icons | definition | quiz | takeaways.
-Do NOT force the video to reproduce the study-note slide."""
-
 # A FILLED example — the model imitates this, not the prose. Geography on
 # purpose: the legacy example was a plant cell and biased every subject toward
 # labelled biology diagrams.
@@ -170,7 +165,6 @@ Shown indented here for readability only:
         {"who": "teacher", "line": "Exactly. That fast water cuts into the outer bank, and we call that erosion."}
       ],
       "slide_heading": "Why rivers bend",
-      "slide_visual": {"kind": "flow", "nodes": ["Water speeds up on the outer bend", "Bank is cut away", "The bend grows"]},
       "pause_for_question": false
     },
     {
@@ -179,7 +173,6 @@ Shown indented here for readability only:
       "elevenlabs_text": "",
       "dialogue": [{"who": "teacher", "line": "The inner bank is the opposite: slow water, so it drops its sand."}],
       "slide_heading": "The inside of the bend",
-      "slide_points": ["Slow water drops sediment"],
       "pause_for_question": false
     },
     {
@@ -188,7 +181,6 @@ Shown indented here for readability only:
       "elevenlabs_text": "",
       "dialogue": [{"who": "teacher", "line": "So over many years the bend tightens, until the loop is cut off."}],
       "slide_heading": "From bend to oxbow lake",
-      "slide_visual": {"kind": "cycle", "nodes": ["Bend grows", "Loop cut off", "Oxbow lake"]},
       "pause_for_question": false
     }
   ],
@@ -250,7 +242,7 @@ Shown indented here for readability only:
 }"""
 
 _FINAL = """=== BEFORE RETURNING, VERIFY ===
-Language and depth match the learner. The narration style is followed consistently. Dialogue is the narration and text/elevenlabs_text are empty. No durations, timestamps, frame numbers or coordinates anywhere. Every narration-linked action has a cue copied VERBATIM from its own segment's dialogue. Every target exists or is created before use. Existing visuals are reused where possible. Generated assets contain no text, labels or arrows. Visual representations suit the actual subject. Each segment has slide_visual OR slide_points, never both. The reply is minified JSON.
+Language and depth match the learner. The narration style is followed consistently. Dialogue is the narration and text/elevenlabs_text are empty. No durations, timestamps, frame numbers or coordinates anywhere. Every narration-linked action has a cue copied VERBATIM from its own segment's dialogue. Every target exists or is created before use. Existing visuals are reused where possible. Generated assets contain no text, labels or arrows. Visual representations suit the actual subject. The reply is minified JSON.
 Close every bracket in order: the reply ends `]}]}}` — steps, chapter, chapters ARRAY, visual_plan, root. Replies that end `]}}` never close the chapters array and are unparseable."""
 
 
@@ -275,7 +267,7 @@ def build_semantic_prompt(style: str, chapter_title: str, difficulty_level: str,
                       episode_context=episode_context),
         _LEARNER, _STYLE_SYSTEM, _PHILOSOPHY, _SUBJECT_AGNOSTIC, _STRUCTURE,
         _DIALOGUE, _TIMING, _PLAN_TRUTH, _CONTINUITY, _ASSETS, _TARGETS,
-        _SCHEMAS, _DEPENDENCIES, _LABELS_CAMERA, _CAPS, _STUDY_NOTES,
+        _SCHEMAS, _DEPENDENCIES, _LABELS_CAMERA, _CAPS,
         _EXAMPLE, _FINAL,
     ]
     return "\n\n".join(parts)

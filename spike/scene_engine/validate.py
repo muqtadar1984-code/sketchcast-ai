@@ -62,6 +62,10 @@ def validate_visual_language(video_manifest: dict,
         "overlapping_text": _pick("TEXT_OVERLAP"),
         "arrows_converging": _pick("ARROWS_CONVERGE"),
         "baked_text_warnings": _pick("BAKED_TEXT"),
+        # a planned illustration whose asset had no prompt is a BLANK BOARD
+        # under a narration describing a diagram — 13 of 15 segments shipped
+        # that way once and this report said PASSED, because nothing asked
+        "unresolved_assets": _pick("ASSET_UNRESOLVED"),
         "action_timing_warnings": _pick("TIMING_SHIFT"),
         # semantic-plan adapter (SEMANTIC_PLAN=1): anything it could not
         # honour, so a salvaged translation is never invisible
@@ -89,7 +93,8 @@ def validate_visual_language(video_manifest: dict,
         if segs else False)
     report["passed"] = (report["legacy_renderer_usage"] == 0
                         and not report["no_scenes_produced"]
-                        and not report["mostly_silent"])
+                        and not report["mostly_silent"]
+                        and not report["unresolved_assets"])
     return report
 
 
@@ -113,6 +118,10 @@ def format_report(report: dict) -> str:
         lines.append(f"FAILED — {len(report['silent_segments'])} of "
                      f"{report['narration_segments']} segments have NO audio; "
                      "the lesson is largely silent")
+    elif report.get("unresolved_assets"):
+        lines.append(f"FAILED — {len(report['unresolved_assets'])} planned "
+                     "illustration(s) had no asset prompt and were dropped; "
+                     "those boards are blank")
     elif report.get("no_scenes_produced"):
         lines.append("FAILED — the lesson produced NO scenes; every segment "
                      "fell back to a plain card, so the visual plan was lost")

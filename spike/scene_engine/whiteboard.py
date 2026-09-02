@@ -15,7 +15,7 @@ avatar teaching moments.
 
 from __future__ import annotations
 
-from .schema import WORLD_H, WORLD_W
+from .schema import WORLD_W
 
 _MAX_POINTS = 3
 _MAX_POINT_CHARS = 64
@@ -110,9 +110,25 @@ def build_whiteboard_scene(segment: dict,
 
 
 def _add_sketches(segment: dict, scene: dict, heading_taken: bool) -> None:
-    """A card with no drawing gets the things its narration names, sketched
-    as they are spoken — an empty board while the voice describes a tree and
-    an ant is the medium wasted."""
+    """A board with NOTHING written on it gets the things its narration names,
+    sketched as they are spoken — an empty board while the voice describes a
+    tree and an ant is the medium wasted.
+
+    An EMPTY board only. A card that has already written a heading or points
+    has no room left, and a sketch cannot be made to fit one: an auto-sketch is
+    sized by WIDTH ALONE (raster_assets sets world_scale = NOMINAL_WORLD_W /
+    ink.width), so its rendered HEIGHT is whatever the asset's aspect ratio
+    makes it — and that is unknowable here, because this runs per segment just
+    before render and the asset may not be generated yet. Measured: sk_plant
+    (488x729 ink) at the one-slot scale 0.62 binds to 434x648, and sk_person
+    (285x746) at 0.5 binds to 350x916 — taller than the whole 720 canvas. Both
+    landed straight over the card's own bullets. The old `heading_taken` nudge
+    moved the CENTRE down 70px, which can never clear a 648px-tall drawing off
+    text starting at y=240 — and nothing reported it, because the overlap
+    audit measures TEXT against TEXT.
+    """
+    if heading_taken:
+        return
     if any(e.get("type") == "illustration" and not _is_avatar(e.get("id"))
            for e in scene["elements"]):
         return
@@ -121,9 +137,6 @@ def _add_sketches(segment: dict, scene: dict, heading_taken: bool) -> None:
         limit=2)
     if not els:
         return
-    if heading_taken:      # keep clear of the heading/points block
-        for e in els:
-            e["at"] = [e["at"][0], min(WORLD_H - 210.0, e["at"][1] + 70.0)]
     scene["elements"].extend(els)
     scene["actions"] = scene["actions"] + acts
     scene["scene_assets"] = {**(scene.get("scene_assets") or {}), **assets}

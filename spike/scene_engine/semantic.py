@@ -234,22 +234,49 @@ def _split_on_new_root(craw, ctx: _Ctx) -> list[dict]:
     # the leaf diagram's labels sat on the human-body chapter. A label
     # belongs to the chapter whose steps actually name it.
     referenced: list[set] = []
-    for _, gsteps in groups:
+    orphaned: set[str] = set()
+    for groot, gsteps in groups:
         refs: set[str] = set()
         for s in gsteps:
+            # A step that draws a SECOND picture teaches two visuals in one
+            # segment. The split's atom is the step, so that picture cannot get
+            # a chapter of its own — but its labels must not be pinned onto
+            # THIS chapter's root either: that is how four leaf labels came to
+            # sit on a human-body outline while the narration described a leaf.
+            foreign = False
             for a in (s.get("actions") or []):
                 if not isinstance(a, dict):
                     continue
                 t = a.get("target")
                 tid = t.get("element") if isinstance(t, dict) else t
+                asset = t.get("asset") if isinstance(t, dict) else None
+                if str(a.get("verb") or "").lower() == "draw" and not foreign:
+                    drew = tid if isinstance(tid, str) else None
+                    if drew is None and isinstance(asset, str):
+                        drew = by_asset.get(asset)
+                        if drew is None:
+                            foreign = True      # a picture never declared
+                    if drew in illus and drew != groot:
+                        foreign = True          # a declared sibling picture
+                if foreign:
+                    if isinstance(tid, str):
+                        orphaned.add(tid)
+                    continue
                 if isinstance(tid, str):
                     refs.add(tid)
-                if isinstance(t, dict) and isinstance(t.get("asset"), str):
-                    owner = by_asset.get(t["asset"])
+                if isinstance(asset, str):
+                    owner = by_asset.get(asset)
                     if owner:
                         refs.add(owner)
         referenced.append(refs)
     claimed = set().union(*referenced) if referenced else set()
+    orphaned -= claimed
+    if orphaned:
+        claimed |= orphaned          # never fall through to the gi == 0 bucket
+        ctx.note("SECOND_ROOT_IN_STEP",
+                 f"{concept}: a step teaches a second picture in the same "
+                 f"segment; dropped {sorted(orphaned)} rather than place them "
+                 f"on another visual")
 
     parts = []
     for gi, (groot, gsteps) in enumerate(groups):
@@ -300,6 +327,34 @@ def _chapter(craw, ci: int, narrations: dict, ctx: _Ctx) -> dict | None:
 
     assets = {str(k): str(v) for k, v in (craw.get("assets") or {}).items()
               if isinstance(v, str)}
+    # An illustration whose asset id was never DECLARED in `assets` reaches the
+    # renderer with no prompt. make_resolver gates the whole raster tier behind
+    # `key in prompts`, so a missing key skips even the ON-DISK CACHE, and
+    # _bind_illustration drops the element — a blank board under a narration
+    # that describes the diagram. Measured on a real lesson: 6 of 8 asset ids
+    # undeclared, 18 dropped elements across 12 of 15 scene segments, and three
+    # of those images were ALREADY generated and cached. The art existed; only
+    # the prompt string was missing from the map that gates the lookup.
+    # Convert rather than amputate, as the rest of this compiler does.
+    # NOTE: this must run BEFORE the semantic_regions tail below — that picks a
+    # root via _root_asset_key, which falls back to the first key in `assets`,
+    # so a half-populated map would hang one picture's region names on another.
+    for _e in craw.get("elements") or []:
+        if not isinstance(_e, dict):
+            continue
+        if str(_e.get("type") or "").strip().lower() != "illustration":
+            continue
+        _ak = _e.get("asset")
+        if not isinstance(_ak, str) or not _ak or _ak in assets:
+            continue
+        ctx.note("ASSET_NOT_DECLARED",
+                 f"{concept}: element {_e.get('id')!r} uses asset {_ak!r}, "
+                 f"which the plan never declared — prompt synthesized")
+        assets[_ak] = (
+            f"An educational diagram of {_ak.replace('_', ' ')}, "
+            f"illustrating {concept.replace('_', ' ')}. Clear and uncluttered, "
+            f"with the important structures visually distinguishable at video "
+            f"resolution")
     # The director declares WHICH regions matter; the vision annotator needs
     # exactly that list to find their geometry. This is the one place the two
     # halves of the contract meet — v2 forbids asking the IMAGE model for
@@ -321,8 +376,12 @@ def _chapter(craw, ci: int, narrations: dict, ctx: _Ctx) -> dict | None:
 
     root_id = next((e["id"] for e in elements
                     if e.get("type") == "illustration"), None)
+    by_asset = {e["asset"]: e["id"] for e in elements
+                if e.get("type") == "illustration"
+                and isinstance(e.get("asset"), str)}
     steps, extra_elements = _steps(craw, narrations, ctx, concept, by_id,
-                                   root_id, label_for_region, len(elements))
+                                   root_id, label_for_region, len(elements),
+                                   by_asset)
     elements.extend(extra_elements)
     return {"concept": concept, "transition": transition, "assets": assets,
             "elements": elements, "steps": steps}
@@ -422,7 +481,7 @@ def _elements(craw: dict, ctx: _Ctx, concept: str):
     return out, by_id, label_for_region
 
 
-def _target(t, ctx: _Ctx, where: str, root_id: str | None):
+def _target(t, ctx: _Ctx, where: str, root_id: str | None, by_asset=None):
     """Semantic target -> (element_id, region). Accepts {"element"},
     {"asset","region"}, {"element","region"} and a bare string id."""
     if isinstance(t, str):
@@ -437,12 +496,16 @@ def _target(t, ctx: _Ctx, where: str, root_id: str | None):
     el = t.get("element")
     region = t.get("region")
     if el is None and t.get("asset") is not None:
-        # an {asset, region} target names the ROOT visual by its asset; the
-        # engine anchors by element id + layer
-        el = root_id
+        # an {asset, region} target names a visual BY ITS ASSET, so resolve it
+        # to the element that OWNS that asset. Falling straight through to
+        # root_id sent a DRAW of a leaf cross-section onto the human-body
+        # outline and left the leaf's four labels stranded on the body — and
+        # because the redirect always "worked", the loss was invisible.
+        el = (by_asset or {}).get(str(t["asset"]))
         if el is None:
-            ctx.note("UNRESOLVED_TARGET",
-                     f"{where}: asset target with no illustration on the board")
+            ctx.note("FOREIGN_ASSET_TARGET",
+                     f"{where}: asset {t['asset']!r} is not on this chapter's "
+                     f"board")
             return None, None
     if el is None:
         ctx.note("UNRESOLVED_TARGET", f"{where}: target names neither element nor asset")
@@ -451,7 +514,7 @@ def _target(t, ctx: _Ctx, where: str, root_id: str | None):
 
 
 def _steps(craw, narrations, ctx, concept, by_id, root_id, label_for_region,
-           n_elements):
+           n_elements, by_asset=None):
     steps: list[dict] = []
     extra: list[dict] = []
     made_arrows: set[str] = set()
@@ -487,18 +550,18 @@ def _steps(craw, narrations, ctx, concept, by_id, root_id, label_for_region,
             if verb_raw == "transform":
                 into = a.get("into")
                 if isinstance(into, str):
-                    el, _ = _target(a.get("target"), ctx, where, root_id)
+                    el, _ = _target(a.get("target"), ctx, where, root_id, by_asset)
                     if el:
                         actions.append(_act("morph", el, cue, into=into))
                         continue
-                el, _ = _target(a.get("target"), ctx, where, root_id)
+                el, _ = _target(a.get("target"), ctx, where, root_id, by_asset)
                 if el:
                     ctx.note("TRANSFORM_WITHOUT_TARGET_FORM",
                              f"{where}: no 'into' — emphasising instead")
                     actions.append(_act("pulse", el, cue))
                 continue
             if verb_raw == "arrow":
-                el, region = _target(a.get("target"), ctx, where, root_id)
+                el, region = _target(a.get("target"), ctx, where, root_id, by_asset)
                 if not el:
                     continue
                 if not region:
@@ -522,7 +585,7 @@ def _steps(craw, narrations, ctx, concept, by_id, root_id, label_for_region,
             if verb is None:
                 ctx.note("UNSUPPORTED_VERB", f"{where}: {verb_raw!r}")
                 continue
-            el, region = _target(a.get("target"), ctx, where, root_id)
+            el, region = _target(a.get("target"), ctx, where, root_id, by_asset)
             if el is None and verb not in ("camera_reset",):
                 if a.get("target") is None:
                     ctx.note("MISSING_TARGET", f"{where}: {verb} needs a target")

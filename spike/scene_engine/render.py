@@ -476,6 +476,12 @@ class SceneRenderer:
             # (labels, arrows, highlights) still teaches
             logger.warning("asset %r unresolvable — dropping element %r, scene continues",
                            el.asset, el.id)
+            # ...but it must not be INVISIBLE. Every other quality problem here
+            # goes through _warn, which is what reaches the manifest and the
+            # acceptance report; this one was a bare log line, so a lesson that
+            # dropped 18 illustrations across 12 of 15 segments still reported
+            # PASSED over what were effectively blank boards.
+            self._warn(f"ASSET_UNRESOLVED {el.id} ({el.asset})")
             b.box = (el.at[0], el.at[1], el.at[0], el.at[1])
             return
         kind, asset = resolved

@@ -882,9 +882,11 @@ class TestHandwritingFont:
 class TestAutoSketch:
     def test_named_objects_are_sketched_when_the_board_is_empty(self):
         from spike.scene_engine.whiteboard import build_whiteboard_scene
+        # no heading: the board really IS empty, which is what this test
+        # claims to cover. It used to pass a heading, i.e. it encoded the bug
+        # where a sketch was drawn over the card's own writing.
         card = build_whiteboard_scene({
             "segment_id": "s001", "type": "hook",
-            "slide_heading": "What are living things made of?",
             "text": ("What makes a towering tree so different from a tiny "
                      "ant? Both are alive.")})
         sk = [e for e in card["elements"]
@@ -1267,3 +1269,31 @@ class TestVisionBoxShapes:
         got = self._scan(monkeypatch, {"text_boxes": [
             {"nope": 1}, "banana", [1, 2], None, [10, 20, 30, 40]]})
         assert got == [[20.0, 10.0, 40.0, 30.0]]
+
+
+class TestSketchNeverCoversTheCardsOwnWriting:
+    """At 1:14 of a rendered lesson a potted plant was drawn straight over the
+    bullets of the "Specialised Cells" card. An auto-sketch is sized by WIDTH
+    alone, so its height follows the asset's aspect ratio: sk_plant binds to
+    434x648 on a 720-tall canvas. The old code nudged the centre down 70px,
+    which cannot clear text starting at y=240."""
+
+    def test_a_card_that_wrote_text_is_never_sketched_over(self):
+        from spike.scene_engine.whiteboard import build_whiteboard_scene
+        card = build_whiteboard_scene({
+            "segment_id": "s003", "type": "explore",
+            "slide_heading": "Specialised Cells",
+            "slide_points": ["Cells have specific roles",
+                             "Analogy: team roles"],
+            "text": "Many cells in your body are like a plant in a pot."})
+        assert not any(str(e.get("id", "")).startswith("sk_")
+                       for e in card["elements"])
+        assert not (card.get("scene_assets") or {})
+
+    def test_an_empty_board_still_gets_its_sketches(self):
+        from spike.scene_engine.whiteboard import build_whiteboard_scene
+        card = build_whiteboard_scene({
+            "segment_id": "s001", "type": "hook",
+            "text": "A towering tree and a tiny ant are both alive."})
+        assert any(str(e.get("id", "")).startswith("sk_")
+                   for e in card["elements"]),             "the feature must still work where there is room for it"

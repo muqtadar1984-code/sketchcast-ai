@@ -506,3 +506,37 @@ class TestSingleLineDialogueIsNotSilence:
                          self._seg(["Z.", "W."])])
         assert out.segments[0].dialogue is None
         assert out.segments[0].text == "Only one."
+
+
+class TestStudyNotesAreGone:
+    """The deck and the video are being separated: they will be generated
+    independently, so the video call no longer carries study-note fields.
+    Founder decision, 2026-09-02."""
+
+    def test_the_prompt_never_asks_for_study_notes(self):
+        for style in NARRATION_STYLES:
+            p = build_semantic_prompt(
+                style, chapter_title="T", difficulty_level="Grade 7",
+                target_duration="6.0", episode_context="ctx")
+            assert "slide_points" not in p, style
+            assert "slide_visual" not in p, style
+            assert "STUDY NOTES" not in p, style
+
+    def test_the_example_carries_no_study_note_fields(self):
+        ex = _example(_p())
+        for seg in ex["segments"]:
+            assert "slide_points" not in seg
+            assert "slide_visual" not in seg
+
+    def test_slide_heading_survives_because_the_VIDEO_uses_it(self):
+        """Not a study-note field: video_composer renders it as the heading on
+        a whiteboard fallback card."""
+        ex = _example(_p())
+        assert all(s.get("slide_heading") for s in ex["segments"])
+
+    def test_the_legacy_prompt_is_untouched(self):
+        """The legacy path is what production runs; it still builds the deck."""
+        legacy = build_episode_prompt(
+            "conversational", chapter_title="T", difficulty_level="Grade 7",
+            target_duration="6.0", episode_context="ctx")
+        assert "slide_points" in legacy and "slide_visual" in legacy
