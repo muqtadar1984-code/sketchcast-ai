@@ -540,3 +540,65 @@ class TestStudyNotesAreGone:
             "conversational", chapter_title="T", difficulty_level="Grade 7",
             target_duration="6.0", episode_context="ctx")
         assert "slide_points" in legacy and "slide_visual" in legacy
+
+
+class TestP0AcceptanceIsWired:
+    """P0. The acceptance layer existed and production never called it: every
+    "the report said PASSED" was a local driver talking to itself."""
+
+    def test_the_worker_runs_the_acceptance_check(self):
+        import inspect
+        from worker import process
+        src = inspect.getsource(process)
+        assert "_acceptance_report" in src
+        assert "validate_visual_language" in src, \
+            "the validator must be reachable from the production worker"
+        run = inspect.getsource(process._acceptance_report)
+        assert "VIDEO_ENGINE" in run, "only applicable to the scene engine"
+
+    def test_a_failed_acceptance_stops_the_lesson(self):
+        import inspect
+        from worker.process import process_generation
+        src = inspect.getsource(process_generation)
+        assert "failed acceptance" in src
+        assert src.index("_acceptance_report") < src.index('"video_mp4"'), \
+            "acceptance must run BEFORE the video is recorded as an artifact"
+
+    def test_the_checker_never_destroys_a_good_lesson(self):
+        """A validator bug must not fail a lesson that rendered fine."""
+        import inspect
+        from worker.process import _acceptance_report
+        src = inspect.getsource(_acceptance_report)
+        assert "except Exception" in src and "return None" in src
+
+
+class TestP0NoLessonWithHoles:
+    def test_a_missing_segment_stops_the_concat(self, tmp_path):
+        from agent8_render.renderer import render_final_video
+        good = tmp_path / "s001.mp4"
+        good.write_bytes(b"x")
+        manifest = {"book_id": "b", "chapter_num": 1, "episode_num": 1,
+                    "segments": [
+                        {"segment_id": "s001", "video_path": str(good),
+                         "audio_duration_seconds": 1.0},
+                        {"segment_id": "s002", "video_path": None},
+                        {"segment_id": "s003",
+                         "video_path": str(tmp_path / "nope.mp4")}]}
+        with pytest.raises(RuntimeError) as e:
+            render_final_video(video_manifest=manifest)
+        msg = str(e.value)
+        assert "2 of 3" in msg and "s002" in msg
+        assert "holes" in msg
+
+
+class TestP0StrictModeIsStrict:
+    def test_adapter_error_is_re_raised_not_swallowed(self):
+        import inspect
+        from agent3_scripts.script_generator import generate_episode_script
+        src = inspect.getsource(generate_episode_script)
+        i_strict = src.index("except AdapterError")
+        i_broad = src.index("except Exception:\n            logger.exception"
+                            "(\"visual plan compilation failed")
+        assert i_strict < i_broad, \
+            "AdapterError must be caught BEFORE the broad handler"
+        assert "raise" in src[i_strict:i_broad]

@@ -75,6 +75,7 @@ def render_final_video(
 
     # Collect existing segment video paths and sum their durations.
     valid_paths: list[Path] = []
+    missing: list[str] = []
     total_duration = 0.0
     for i, seg in enumerate(segments):
         seg_id = seg.get("segment_id", f"s{i + 1:03d}")
@@ -88,9 +89,21 @@ def render_final_video(
             total_duration += float(seg.get("audio_duration_seconds", 0) or 0)
         else:
             logger.warning("No video file for segment %s", seg_id)
+            missing.append(seg_id)
 
     if not valid_paths:
         raise RuntimeError("No valid video segments found to concatenate")
+
+    # A lesson missing part of itself is not a successful lesson. This used to
+    # concatenate whatever happened to exist and report success: 27 of 29
+    # segments shipped as a finished video, with the two gaps visible only as
+    # a log line nobody read. The narration jumps, and the student is simply
+    # not taught the missing part.
+    if missing:
+        raise RuntimeError(
+            f"{len(missing)} of {total} segments never rendered "
+            f"({', '.join(missing[:8])}{'...' if len(missing) > 8 else ''}) — "
+            "refusing to ship a lesson with holes in it")
 
     output_path = final_dir / f"episode_{episode_num}_final.mp4"
 

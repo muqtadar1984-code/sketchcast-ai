@@ -27,6 +27,13 @@ from .models import (
 )
 from .prompts import build_episode_prompt, normalize_style
 
+try:  # the adapter lives under spike/; absent installs fall back cleanly
+    from spike.scene_engine.semantic import AdapterError
+except Exception:  # noqa: BLE001
+    class AdapterError(Exception):
+        """Placeholder so the strict-mode re-raise below still parses."""
+
+
 logger = logging.getLogger(__name__)
 
 STORAGE_DIR = Path(__file__).parent.parent / "storage" / "scripts"
@@ -614,6 +621,14 @@ def generate_episode_script(
                     # surfaced in the validation report: a salvaged plan must
                     # be visible, never quietly reduced
                     visual_plan_dump["adapter_issues"] = adapter_issues
+        except AdapterError:
+            # STRICT MODE MUST ACTUALLY BE STRICT. This block used to catch
+            # everything, so SEMANTIC_PLAN_STRICT=1 raised AdapterError and
+            # had it swallowed one line later — the run then degraded to a
+            # SCENELESS lesson instead of stopping. Strict mode was therefore
+            # worse than no strict mode: it gave CI false assurance while
+            # quietly producing a worse lesson than production would.
+            raise
         except Exception:
             logger.exception("visual plan compilation failed; sceneless fallback")
 

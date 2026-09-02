@@ -104,6 +104,44 @@ def _record_coverage(sb: Client, generation_id: str, reports: list[dict]) -> Non
     db.merge_generation_params(sb, generation_id, patch)
 
 
+def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
+    """Run the visual-language acceptance check on a finished lesson.
+
+    This exists because the check itself did not run in production — it was
+    imported only by tests. Every incident where "the report said PASSED" was
+    a LOCAL driver script talking to itself; the worker never asked.
+
+    Returns {"passed", "summary", "report"} or None when the check is not
+    applicable (no scene engine) or itself failed. A validator bug must never
+    destroy a lesson that rendered fine, so anything unexpected degrades to
+    None and the lesson proceeds — but a validator VERDICT of False is
+    honoured by the caller.
+    """
+    if os.getenv("VIDEO_ENGINE", "").strip().lower() != "scene":
+        return None
+    try:
+        from spike.scene_engine.validate import (format_report,
+                                                 validate_visual_language)
+        plan = (script_data or {}).get("visual_plan")
+        report = validate_visual_language(video_manifest, plan)
+        failed = [k for k in ("no_scenes_produced", "mostly_silent") if report.get(k)]
+        for k in ("legacy_renderer_usage",):
+            if report.get(k):
+                failed.append(k)
+        for k in ("unresolved_assets", "silent_segments"):
+            if report.get(k):
+                failed.append(f"{k}={len(report[k])}")
+        summary = (", ".join(failed) if failed else "clean")
+        logger.info("acceptance: %s\n%s",
+                    "PASSED" if report.get("passed") else "FAILED",
+                    format_report(report))
+        return {"passed": bool(report.get("passed")), "summary": summary,
+                "report": report}
+    except Exception:  # noqa: BLE001 — never fail a rendered lesson on the checker
+        logger.exception("acceptance check itself failed; lesson allowed through")
+        return None
+
+
 def _elevenlabs_enabled() -> bool:
     """Worker-side gate for premium (ElevenLabs) TTS — defense in depth. Premium
     voices run ONLY when the deployment enables the flag AND the key is present,
@@ -1037,6 +1075,22 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 ).model_dump()
 
                 final = render_final_video(video_manifest=video).model_dump()
+
+                # ACCEPTANCE. Until now this ran only in tests: the engine
+                # computed a full per-lesson quality audit on every render and
+                # nothing in production ever read it, so blank boards, silent
+                # lessons and text written over text all shipped while the
+                # report said PASSED — to a local driver script nobody ran.
+                # This is the one place that knows the lesson is finished and
+                # can still refuse it.
+                _accept = _acceptance_report(part_scripts, video)
+                if _accept is not None:
+                    db.set_stage(sb, job_id, {"phase": "video", "part": part_idx,
+                                              "total": n_parts, "part_pct": 99,
+                                              "acceptance": _accept["summary"]})
+                    if not _accept["passed"]:
+                        raise RuntimeError(
+                            f"lesson failed acceptance: {_accept['summary']}")
 
                 suffix = "" if part_idx == 1 else f"_part{part_idx}"
                 deck_path = slides.get("deck_path")
