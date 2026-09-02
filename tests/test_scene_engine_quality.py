@@ -1462,3 +1462,113 @@ class TestP8ImageSpendGuard:
         assert ra._vertex_call("anything") is None
         assert ra._aistudio_call("anything") is None
         ra.reset_image_budget()
+
+
+class TestP17ModelCallBurst:
+    """RENDER_WORKERS sized the frame renderer AND, by accident, how many paid
+    model calls went out at once. Four measured renders: two clean, one with
+    8 x 429 across BOTH transports — bursts, not a ceiling (0 project quotas
+    above 90% usage). The two knobs are now separate."""
+
+    def test_concurrency_is_its_own_knob(self, monkeypatch):
+        import spike.scene_engine.raster_assets as ra
+        monkeypatch.setenv("MODEL_CALL_CONCURRENCY", "2")
+        monkeypatch.setenv("RENDER_WORKERS", "9")
+        assert ra.model_call_concurrency() == 2, "render width != call width"
+
+    def test_never_more_than_n_calls_in_flight(self, monkeypatch):
+        """The property that matters: whatever the caller's thread count."""
+        import threading
+        import spike.scene_engine.raster_assets as ra
+        monkeypatch.setenv("MODEL_CALL_CONCURRENCY", "3")
+        monkeypatch.setattr(ra, "_MODEL_GATE", None)   # rebuild at this bound
+
+        live, peak, lock = 0, 0, threading.Lock()
+        start = threading.Barrier(12)
+
+        def call():
+            nonlocal live, peak
+            with lock:
+                live += 1
+                peak = max(peak, live)
+            threading.Event().wait(0.02)   # hold the slot long enough to overlap
+            with lock:
+                live -= 1
+            return "ok"
+
+        def worker():
+            start.wait()
+            ra._with_backoff(call, "test")
+
+        threads = [threading.Thread(target=worker) for _ in range(12)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert peak <= 3, f"{peak} concurrent model calls, cap is 3"
+        assert peak > 1, "a cap of 3 that never reaches 2 is not being exercised"
+
+    def test_backoff_sleep_does_not_hold_a_slot(self):
+        """A rate-limited caller waiting 6-35s must not block the callers that
+        would have succeeded — that turns one 429 into a stalled render."""
+        import inspect
+        import spike.scene_engine.raster_assets as ra
+        src = inspect.getsource(ra._with_backoff)
+        gate_line = next(i for i, l in enumerate(src.splitlines())
+                         if "with gate:" in l)
+        sleep_line = next(i for i, l in enumerate(src.splitlines())
+                          if "_t.sleep(" in l)
+        # the sleep lives in the except handler, outside the with-block
+        assert sleep_line > gate_line
+        assert "with gate" not in src.splitlines()[sleep_line]
+        indent = lambda i: len(src.splitlines()[i]) - len(src.splitlines()[i].lstrip())
+        assert indent(sleep_line) <= indent(gate_line), \
+            "sleeping inside the gate would serialise every waiter"
+
+    def test_every_paid_transport_goes_through_the_gate(self):
+        """Image (both transports) and vision (both transports) all funnel
+        through _with_backoff — so gating it there covers all four."""
+        import inspect
+        import spike.scene_engine.raster_assets as ra
+        for fn in (ra._vertex_call, ra._aistudio_call, ra._vision_json):
+            assert "_with_backoff(" in inspect.getsource(fn), fn.__name__
+
+
+class TestP17RescanConverges:
+    """Vision dominated the traffic: up to 45 vision calls against 9 images in
+    one lesson, because every scrub round paid for a fresh full-image scan."""
+
+    def test_a_round_that_finds_no_fewer_boxes_stops(self, monkeypatch):
+        from PIL import Image
+        import spike.scene_engine.raster_assets as ra
+        calls = []
+
+        def stuck_scan(ink):
+            calls.append(1)
+            return [[0.0, 0.0, 10.0, 10.0]]      # never shrinks
+
+        monkeypatch.setattr(ra, "scan_text", stuck_scan)
+        monkeypatch.setattr(ra, "scrub_text", lambda ink, boxes: ink)
+        ink = Image.new("RGBA", (40, 40))
+        _, boxes = ra.scrub_all_text(ink, [[0.0, 0.0, 10.0, 10.0]])
+        assert len(calls) == 1, (
+            f"{len(calls)} paid scans chasing text that is not going away")
+        assert boxes, "unscrubbed text is still reported to the caller"
+
+    def test_it_keeps_going_while_it_is_working(self, monkeypatch):
+        """Converging is the point — stop early ONLY when progress stops."""
+        from PIL import Image
+        import spike.scene_engine.raster_assets as ra
+        shrinking = [[[0.0, 0.0, 1.0, 1.0]] * 2, [[0.0, 0.0, 1.0, 1.0]], []]
+
+        monkeypatch.setattr(ra, "scan_text", lambda ink: shrinking.pop(0))
+        monkeypatch.setattr(ra, "scrub_text", lambda ink, boxes: ink)
+        ink = Image.new("RGBA", (40, 40))
+        _, boxes = ra.scrub_all_text(ink, [[0.0, 0.0, 1.0, 1.0]] * 3)
+        assert boxes == [], "a converging scrub must be allowed to finish"
+
+    def test_the_cap_did_not_move(self):
+        """Lowering it would have cut the converging scrubs too — the ones
+        worth paying for. Convergence, not the cap, is what saves the calls."""
+        import spike.scene_engine.raster_assets as ra
+        assert ra.scrub_all_text.__defaults__[0] == 3

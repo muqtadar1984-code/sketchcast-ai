@@ -148,6 +148,39 @@ def _aistudio_call(prompt: str) -> bytes | None:
         return None
 
 
+# ── model-call concurrency ───────────────────────────────────────────────────
+# RENDER_WORKERS sizes the FRAME renderer, which is CPU-bound PIL work. It was
+# also, accidentally, governing how hard we hit a rate-limited API: with 7
+# workers, seven segments reach for images and vision at once. Measured across
+# four renders — two completely clean, one with 8 x 429 across BOTH Vertex and
+# the AI Studio fallback — the failures are bursts, not a sustained ceiling
+# (the project dashboard shows 0 quotas above 90% usage).
+#
+# So the two are separated: render as wide as the CPU allows, but keep only a
+# few model calls in flight. This is a burst limiter, not a thread pool — the
+# work still happens on the render threads, they just queue here.
+_MODEL_GATE = None
+_GATE_LOCK = None
+
+
+def model_call_concurrency() -> int:
+    return max(1, int(os.getenv("MODEL_CALL_CONCURRENCY", "3") or 3))
+
+
+def _model_gate():
+    """Built on first use, from the environment at that moment — so a caller
+    (or a test) can set the bound without re-importing the module, which would
+    hand every other holder of this module a different RasterAsset class."""
+    global _MODEL_GATE, _GATE_LOCK
+    import threading
+    if _GATE_LOCK is None:
+        _GATE_LOCK = threading.Lock()
+    with _GATE_LOCK:
+        if _MODEL_GATE is None:
+            _MODEL_GATE = threading.Semaphore(model_call_concurrency())
+    return _MODEL_GATE
+
+
 def _is_rate_limited(exc: Exception) -> bool:
     r = getattr(exc, "response", None)
     return getattr(r, "status_code", None) in (429, 503)
@@ -164,9 +197,11 @@ def _with_backoff(fn, what: str, tries: int = 4):
     import random
     import time as _t
     delay = 6.0
+    gate = _model_gate()
     for attempt in range(tries):
         try:
-            return fn()
+            with gate:                 # at most N paid calls in flight
+                return fn()
         except Exception as exc:  # noqa: BLE001 — transport errors only
             if not _is_rate_limited(exc) or attempt == tries - 1:
                 raise
@@ -458,9 +493,21 @@ def scrub_all_text(ink: Image.Image, boxes: list[list[float]],
     other words. Returns (clean ink, boxes still found — [] on success)."""
     rounds = 0
     while boxes and rounds < max_rounds:
+        before = len(boxes)
         ink = scrub_text(ink, boxes)
         boxes = scan_text(ink)
         rounds += 1
+        # Each rescan is a paid vision call, and they dominate the API traffic:
+        # up to 45 vision calls against 9 images in one measured lesson, which
+        # is what trips the burst limit. A round that finds no FEWER boxes than
+        # the last is not converging, so further rounds just spend money and
+        # rate-limit headroom to no effect.
+        if len(boxes) >= before:
+            # `max_rounds` stays a backstop, not the lever: cutting it would
+            # also truncate the scrubs that ARE converging, which is the one
+            # case where the call is worth paying for. The saving comes from
+            # here — a stuck asset now costs 1 rescan instead of 3.
+            break
     return ink, boxes
 
 

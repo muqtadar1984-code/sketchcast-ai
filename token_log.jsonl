@@ -163,3 +163,15 @@
 {"input_tokens": 1000000, "output_tokens": 50000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1050000, "estimated_cost_usd": 1.25, "timestamp": "2026-09-02T13:43:47.568126+00:00"}
 {"input_tokens": 1000000, "output_tokens": 50000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1050000, "estimated_cost_usd": 1.25, "timestamp": "2026-09-02T13:43:47.570888+00:00"}
 {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0.0, "timestamp": "2026-09-02T13:43:48.197396+00:00"}
+{"input_tokens": 20, "output_tokens": 6939, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 6959, "estimated_cost_usd": 0.017354, "timestamp": "2026-09-02T14:47:55.268865+00:00"}
+{"input_tokens": 20, "output_tokens": 6939, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 6959, "estimated_cost_usd": 0.017354, "timestamp": "2026-09-02T14:47:55.399809+00:00"}
+{"input_tokens": 20, "output_tokens": 5022, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 5042, "estimated_cost_usd": 0.012561, "timestamp": "2026-09-02T14:47:55.400968+00:00"}
+{"input_tokens": 100, "output_tokens": 250, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 350, "estimated_cost_usd": 0.000655, "timestamp": "2026-09-02T14:47:55.529337+00:00"}
+{"input_tokens": 10, "output_tokens": 25, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 35, "estimated_cost_usd": 6.6e-05, "timestamp": "2026-09-02T14:47:55.530882+00:00"}
+{"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 2, "estimated_cost_usd": 3e-06, "timestamp": "2026-09-02T14:47:55.645514+00:00"}
+{"input_tokens": 1000000, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1000000, "estimated_cost_usd": 0.3, "timestamp": "2026-09-02T14:47:55.762736+00:00"}
+{"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 2, "estimated_cost_usd": 3e-06, "timestamp": "2026-09-02T14:47:56.502131+00:00"}
+{"input_tokens": 1000000, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1000000, "estimated_cost_usd": 1.0, "timestamp": "2026-09-02T14:50:17.587862+00:00"}
+{"input_tokens": 1000000, "output_tokens": 50000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1050000, "estimated_cost_usd": 1.25, "timestamp": "2026-09-02T14:50:18.786685+00:00"}
+{"input_tokens": 1000000, "output_tokens": 50000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 1050000, "estimated_cost_usd": 1.25, "timestamp": "2026-09-02T14:50:18.791045+00:00"}
+{"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0.0, "timestamp": "2026-09-02T14:50:19.484821+00:00"}
