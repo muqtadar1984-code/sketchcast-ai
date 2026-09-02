@@ -1339,8 +1339,16 @@ def plan_stats(plan: VisualPlan) -> dict:
         "root_visuals": sum(1 for d in decisions if d == "NEW_VISUAL"),
         "extensions": sum(1 for d in decisions if d == "EXTEND"),
         "focus_transform": sum(1 for d in decisions if d in ("FOCUS", "TRANSFORM", "CONTINUE")),
+        # Wipes that ACTUALLY happen. Every chapter boundary used to count as
+        # one, which was true only while every boundary wiped. Now that a
+        # chapter can open with "carry" — keeping the previous picture as a
+        # corner recap — counting boundaries reports churn that is not
+        # occurring: a measured lesson with 8 chapters and 1 real wipe scored
+        # 7. A number that overstates the defect it exists to detect is as
+        # useless as one that hides it.
         "full_redraws": sum(1 for d in decisions if d == "CLEAR_AND_REDRAW")
-                        + max(0, len(plan.chapters) - 1),
+                        + sum(1 for i, c in enumerate(plan.chapters)
+                              if i > 0 and c.transition == "clear_and_redraw"),
         "human_teaching_moments": sum(1 for c in plan.chapters
                                       for s in c.steps if s.moment),
         "teacher_key_points": sum(1 for c in plan.chapters for s in c.steps

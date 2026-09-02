@@ -1852,3 +1852,39 @@ class TestNarrationObjectsAreDrawn:
             all_segments=segs, skip_hold=set())
         drew = sum(1 for s in segs if "sk_tree" in assets.get(s, {}))
         assert drew == 1, f"sk_tree drawn on {drew} boards"
+
+
+class TestRedrawStatCountsRealWipes:
+    """The stat added every chapter boundary to the wipe count, which was
+    true only while every boundary wiped. A measured lesson with 8 chapters
+    and 1 real wipe scored 7 — the metric would have reported churn that the
+    fix had already removed."""
+
+    def _plan(self, transitions):
+        # NB the compiler's vocabulary is "carry"; the director writes
+        # "continue" and the adapter maps it. parse_visual_plan drops anything
+        # it does not recognise and falls back to a wipe.
+        from spike.scene_engine.continuity import parse_visual_plan
+        return parse_visual_plan({"chapters": [
+            {"concept": f"c{i}", "transition": tr, "assets": {},
+             "elements": [{"id": f"t{i}", "type": "text", "text": "x",
+                           "at": [400, 120], "role": "title"}],
+             "steps": [{"segment": i + 1, "decision": "EXTEND",
+                        "actions": [{"verb": "write", "target": f"t{i}"}]}]}
+            for i, tr in enumerate(transitions)]})
+
+    def test_carrying_chapters_are_not_counted_as_wipes(self):
+        from spike.scene_engine.continuity import plan_stats
+        p = self._plan(["clear_and_redraw"] + ["carry"] * 7)
+        assert plan_stats(p)["visual_chapters"] == 8
+        assert plan_stats(p)["full_redraws"] == 0, "no boundary here wipes"
+
+    def test_a_real_wipe_is_still_counted(self):
+        from spike.scene_engine.continuity import plan_stats
+        p = self._plan(["clear_and_redraw", "carry", "clear_and_redraw"])
+        assert plan_stats(p)["full_redraws"] == 1
+
+    def test_the_opening_chapter_is_never_a_wipe(self):
+        """There is no board to clear before the first one."""
+        from spike.scene_engine.continuity import plan_stats
+        assert plan_stats(self._plan(["clear_and_redraw"]))["full_redraws"] == 0
