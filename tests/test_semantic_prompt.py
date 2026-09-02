@@ -458,3 +458,51 @@ class TestSilentLessonGuards:
         segs[0].pop("audio_path")
         r = validate_visual_language({"segments": segs}, {})
         assert r["passed"] is True
+
+
+class TestSingleLineDialogueIsNotSilence:
+    """The cause of the silent lesson. Dialogue was only harvested when a
+    segment carried TWO OR MORE lines, but the prompt tells the model to
+    leave `text` empty AND permits a teacher-only segment — so every
+    one-line segment ended up with no text and no dialogue. 28 of 29
+    segments in a real render were silent."""
+
+    @staticmethod
+    def _seg(lines):
+        return {"type": "explore", "text": "", "elevenlabs_text": "",
+                "dialogue": [{"who": "teacher", "line": l} for l in lines],
+                "slide_heading": "H", "slide_points": []}
+
+    def _run(self, raw_segments):
+        from agent3_scripts.script_generator import generate_episode_script
+
+        class _Stub:
+            def analyze(self, **kw):
+                return {"data": {"segments": raw_segments}, "usage": {},
+                        "truncated": False}
+
+        return generate_episode_script(
+            {"episode_num": 1, "title": "T", "sections": []},
+            {"chapter_title": "T"}, 1, _Stub(),
+            narration_style="conversational")
+
+    def test_a_one_line_segment_still_speaks(self):
+        out = self._run([self._seg(["Cells group into tissues."]),
+                         self._seg(["Tissues group into organs."]),
+                         self._seg(["Organs form systems."])])
+        for s in out.segments:
+            assert s.text.strip(), f"{s.segment_id} came out silent"
+        assert out.segments[0].text == "Cells group into tissues."
+
+    def test_two_lines_still_drive_two_voice_dialogue(self):
+        out = self._run([self._seg(["A.", "B."]), self._seg(["C.", "D."]),
+                         self._seg(["E.", "F."])])
+        assert out.segments[0].dialogue is not None
+        assert len(out.segments[0].dialogue) == 2
+        assert out.segments[0].text == "A. B."
+
+    def test_one_line_does_not_claim_a_two_voice_exchange(self):
+        out = self._run([self._seg(["Only one."]), self._seg(["X.", "Y."]),
+                         self._seg(["Z.", "W."])])
+        assert out.segments[0].dialogue is None
+        assert out.segments[0].text == "Only one."

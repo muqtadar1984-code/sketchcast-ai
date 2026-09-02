@@ -455,10 +455,21 @@ def generate_episode_script(
                 line = " ".join(strip_ssml(str(d.get("line") or "")).split())
                 if who in ("teacher", "student") and line:
                     clean_dlg.append({"who": who, "line": line})
-            if len(clean_dlg) >= 2:
-                dialogue = clean_dlg
+            if clean_dlg:
+                # The WORDS are harvested from any number of lines. This gate
+                # used to be `>= 2`, which threw away a single-line segment
+                # entirely — and the semantic prompt both tells the model to
+                # leave `text` empty AND allows a teacher-only segment, so a
+                # one-line segment ended up with no text and no dialogue.
+                # That is how a rendered lesson came out with 28 of its 29
+                # segments completely silent.
                 plain_text = " ".join(d["line"] for d in clean_dlg)
                 el_text = plain_text
+            if len(clean_dlg) >= 2:
+                # ...but TWO-VOICE playback still needs an actual exchange:
+                # per-line voices and per-speaker bubbles. One line stays
+                # single-narrator, which is a downgrade, not a silence.
+                dialogue = clean_dlg
 
         segments.append(ScriptSegment(
             segment_id=f"s{i + 1:03d}",
