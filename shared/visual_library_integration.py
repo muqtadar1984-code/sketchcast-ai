@@ -50,7 +50,7 @@ def _bootstrap_existing_cache(ra) -> None:
     current worker cache searchable for subsequent renders on the same host.
     """
     try:
-        from shared.visual_library import register_local
+        from shared.visual_library import avatar_fields, register_local
         root = Path(ra.CACHE_DIR)
         for meta_path in root.glob("*/meta.json"):
             png = meta_path.parent / "asset.png"
@@ -75,6 +75,11 @@ def _bootstrap_existing_cache(ra) -> None:
                 "status": "approved",
                 "provenance": "generated",
                 "local_cache_path": str(png),
+                # This bootstrap re-indexes the WHOLE cache on every worker
+                # start, avatars included. find() would filter them by key
+                # anyway, but an index row that says what it is beats one that
+                # relies on a downstream guard.
+                **avatar_fields(key),
             })
     except Exception as exc:  # noqa: BLE001
         logger.debug("existing visual cache bootstrap skipped: %s", exc)
