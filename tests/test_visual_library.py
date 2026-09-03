@@ -350,3 +350,119 @@ class TestHydrateCachesWhereTheCallerLooks:
                    "A cross-section of a volcano showing the magma chamber",
                    cache)
         assert (cache / vl.canonical_key("volcano_cross_section") / "asset.png").exists()
+
+
+class TestBestMatchExposesNearMisses:
+    """find() returns None below the threshold, which is correct behaviour and
+    useless evidence: 'is 0.58 right?' cannot be answered from data that only
+    records the matches we already accepted."""
+
+    def _one_row(self, monkeypatch, tmp_path, desc):
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "idx")
+        monkeypatch.setattr(vl, "_sb", lambda: None)
+        vl.register_local({
+            "asset_key": "plant_cell_diagram",
+            "canonical_key": "cell_diagram_plant",
+            "description": desc, "subject": "biology", "grade": "k12",
+            "curriculum": "generic", "topic": "plant cell", "concepts": [],
+            "status": "approved", "asset_type": "visual",
+            "local_cache_path": str(tmp_path / "p.png")})
+        return vl
+
+    def test_a_near_miss_still_reports_its_score(self, tmp_path, monkeypatch):
+        vl = self._one_row(monkeypatch, tmp_path,
+                           "A plant cell with a cell wall and chloroplasts")
+        row, score, source = vl.best_match("volcano_cross_section",
+                                           "A volcano showing the magma chamber")
+        assert vl.find("volcano_cross_section",
+                       "A volcano showing the magma chamber") is None
+        assert score < vl.threshold_now(), "this must be a miss"
+        assert source in ("local", "none")
+        assert isinstance(score, float), "the score must survive the miss"
+
+    def test_a_hit_agrees_with_find(self, tmp_path, monkeypatch):
+        vl = self._one_row(monkeypatch, tmp_path,
+                           "A plant cell with a cell wall and chloroplasts")
+        row, score, _ = vl.best_match(
+            "plant_cell_diagram", "A plant cell with a cell wall and chloroplasts")
+        hit = vl.find("plant_cell_diagram",
+                      "A plant cell with a cell wall and chloroplasts")
+        assert hit is not None and score >= vl.threshold_now()
+        assert hit["asset_key"] == row["asset_key"]
+        assert abs(hit["match_score"] - round(score, 4)) < 1e-9
+
+    def test_splitting_the_threshold_out_did_not_change_find(
+            self, tmp_path, monkeypatch):
+        """The refactor must be behaviour-preserving: the threshold still
+        decides, and it still comes from the environment."""
+        vl = self._one_row(monkeypatch, tmp_path,
+                           "A plant cell with a cell wall and chloroplasts")
+        q = ("plant_cell_diagram", "A plant cell with a cell wall and chloroplasts")
+        assert vl.find(*q) is not None
+        monkeypatch.setenv("VISUAL_LIBRARY_MIN_SCORE", "99")
+        assert vl.threshold_now() == 99.0
+        assert vl.find(*q) is None, "a high threshold must disable reuse"
+
+
+class TestDecisionLog:
+    def test_it_records_what_the_threshold_argument_needs(self, tmp_path, monkeypatch):
+        import json
+        import shared.visual_library as vl
+        log = tmp_path / "decisions.jsonl"
+        monkeypatch.setattr(vl, "DECISION_LOG", log)
+        vl.log_decision({"requested_key": "plant_cell", "match_score": 0.61,
+                         "library_hit": True, "ai_generated": False,
+                         "matched_key": "cell_diagram", "threshold": 0.58})
+        rows = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
+        assert len(rows) == 1
+        r = rows[0]
+        for field in ("requested_key", "matched_key", "match_score",
+                      "library_hit", "ai_generated", "threshold", "timestamp"):
+            assert field in r, f"{field} missing — the report cannot be built"
+
+    def test_logging_never_breaks_a_render(self, tmp_path, monkeypatch):
+        """Instrumentation that can fail a lesson is worse than none."""
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "DECISION_LOG",
+                            tmp_path / "no" / "such" / "dir" / "x.jsonl")
+
+        class Boom:
+            def __repr__(self):
+                raise RuntimeError("unserialisable")
+
+        vl.log_decision({"requested_key": Boom()})      # must not raise
+
+    def test_appends_rather_than_rewrites(self, tmp_path, monkeypatch):
+        """The token log lost entries to a read-modify-write race under the
+        render pool; this one is line-delimited and appended under a lock."""
+        import shared.visual_library as vl
+        log = tmp_path / "d.jsonl"
+        monkeypatch.setattr(vl, "DECISION_LOG", log)
+        for i in range(5):
+            vl.log_decision({"requested_key": f"k{i}"})
+        assert len(log.read_text(encoding="utf-8").strip().splitlines()) == 5
+
+
+class TestReportReadsBothSinks:
+    def test_it_parses_raw_log_lines_as_well_as_jsonl(self, tmp_path):
+        """Railway's filesystem does not survive a redeploy, so the same
+        records go to the log stream; the report must read those too."""
+        import subprocess
+        import sys
+        from pathlib import Path
+        log = tmp_path / "mixed.log"
+        log.write_text(
+            '{"requested_key":"a","match_score":0.9,"library_hit":true,'
+            '"ai_generated":false,"threshold":0.58,"outcome":"library_hit"}\n'
+            '2026-09-03T01:00:00Z INFO VISUAL_LIBRARY_DECISION '
+            '{"requested_key":"b","match_score":0.61,"library_hit":true,'
+            '"ai_generated":false,"threshold":0.58,"outcome":"library_hit"}\n'
+            'some unrelated worker log line\n',
+            encoding="utf-8")
+        script = (Path(__file__).resolve().parents[1] / "scripts"
+                  / "visual_library_report.py")
+        out = subprocess.run([sys.executable, str(script), "--log", str(log)],
+                             capture_output=True, text=True).stdout
+        assert "2 visual requests" in out
+        assert "BORDERLINE HITS (reused at 0.58-0.70): 1" in out

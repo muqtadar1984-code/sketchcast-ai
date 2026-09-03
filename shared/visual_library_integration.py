@@ -119,7 +119,8 @@ def _patch() -> None:
     if _PATCHED:
         return
     from spike.scene_engine import raster_assets as ra
-    from shared.visual_library import hydrate, publish_generated
+    from shared.visual_library import (best_match, hydrate, log_decision,
+                                       publish_generated, threshold_now)
 
     _bootstrap_existing_cache(ra)
     original = ra.get_raster_asset
@@ -132,6 +133,16 @@ def _patch() -> None:
         png = asset_dir / "asset.png"
         existed_before = png.exists()
 
+        # Scored BEFORE any lookup mutates the cache, and recorded whether or
+        # not it clears the threshold — a near miss is the evidence that says
+        # whether the threshold is set right.
+        match, score, source = (None, 0.0, "none")
+        if not existed_before:
+            try:
+                match, score, source = best_match(key, prompt, context())
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("visual library scoring failed for %s: %s", key, exc)
+
         if not existed_before:
             # First reuse a previously generated asset already present on the
             # worker. Then try the durable Supabase library. Only after both
@@ -142,6 +153,8 @@ def _patch() -> None:
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("visual library lookup failed for %s: %s", key, exc)
 
+        served_by_library = (not existed_before) and png.exists()
+        published = False
         result = original(key, prompt, cache, allow_generate)
 
         # A newly generated, validated asset is promoted into the reusable
@@ -155,8 +168,42 @@ def _patch() -> None:
             if md.get("provenance") == "generated" and not md.get("baked_text"):
                 try:
                     publish_generated(key, prompt, png, md, context())
+                    published = True
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("visual library publish failed for %s: %s", key, exc)
+
+        # One row per visual request. `ai_generated` is derived from the
+        # provenance raster_assets itself wrote, not guessed from timing: a
+        # file it produced says "generated", one the library supplied says
+        # "visual_library". That keeps the log honest without reaching into
+        # the generation path to instrument it.
+        final = {}
+        if png.exists():
+            try:
+                final = json.loads((asset_dir / "meta.json").read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                final = {}
+        provenance = str(final.get("provenance") or ("absent" if not png.exists() else "unknown"))
+        log_decision({
+            "requested_key": key,
+            "canonical_key": ra.canonical_key(key),
+            "requested_prompt": prompt[:300],
+            "outcome": ("local_cache" if existed_before
+                        else "library_hit" if served_by_library
+                        else "generated" if provenance == "generated"
+                        else "failed" if not png.exists() else provenance),
+            "library_hit": bool(served_by_library),
+            "matched_key": (match or {}).get("asset_key"),
+            "matched_id": (match or {}).get("id"),
+            "match_score": round(score, 4),
+            "match_source": source,
+            "threshold": threshold_now(),
+            "cleared_threshold": bool(match is not None and score >= threshold_now()),
+            "ai_generated": provenance == "generated" and not existed_before,
+            "published": published,
+            "asset_used": str(png) if png.exists() else None,
+            "asset_provenance": provenance,
+        })
         return result
 
     ra.get_raster_asset = wrapped_get_raster_asset
