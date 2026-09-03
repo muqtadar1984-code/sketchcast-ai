@@ -1189,8 +1189,37 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             # downgrade (ElevenLabs not enabled/keyed on the worker, spend cap, or
             # an API failure) is visible in the app — not discovered by listening.
             if voice_report:
+                _used_list = list(voice_report.get("used") or [])
+                _stats = dict(voice_report.get("stats") or {})
+                # Durable, per-user, per-month ledger — the app's own
+                # (migration 0027), recorded after the fact for each paid
+                # provider that rendered. A refused reservation is recorded,
+                # not enforced, in this phase.
+                _over_cap = False
+                try:
+                    from shared.tts.registry import get_voice as _gv
+                    _paid = {(_gv(v).provider if _gv(v) else None) for v in _used_list}
+                    _paid.discard(None); _paid.discard("edge")
+                    if _paid and _stats.get("chars"):
+                        import datetime as _dt
+                        _ok = sb.rpc("tutor_tts_reserve", {
+                            "p_user": owner_id,
+                            "p_period": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m"),
+                            "p_provider": sorted(_paid)[0],
+                            "p_chars": int(_stats["chars"]),
+                            "p_cap": int(os.getenv("TTS_MONTHLY_CHAR_CAP_PER_USER", "2000000")),
+                        }).execute().data
+                        _over_cap = _ok is False
+                except Exception as exc:  # noqa: BLE001 — accounting never fails a lesson
+                    logger.warning("tts ledger not recorded for %s: %s", generation_id, exc)
                 db.merge_generation_params(sb, generation_id, {
-                    "tts_voice_used": (voice_report.get("used") or [None])[0],
+                    "tts_voice_used": (_used_list or [None])[0],
+                    # the FULL list: a lesson that mixed voices was recorded
+                    # as its alphabetically-first voice, hiding the mix
+                    "tts_voices_used": _used_list,
+                    "tts_stats": _stats,
+                    "tts_preflight_downgrade": bool(voice_report.get("preflight_downgrade")),
+                    "tts_over_cap": _over_cap,
                     "tts_voice_downgraded": bool(voice_report.get("downgraded")),
                     # The gate's inputs, so a downgrade can be explained from
                     # the row alone: what the app sent, what tier the account

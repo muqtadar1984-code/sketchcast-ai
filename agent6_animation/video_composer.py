@@ -174,7 +174,8 @@ def _scene_flag() -> bool:
 
 def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
                     tts_voice, ffmpeg: str, avatars: dict | None = None,
-                    lang: str | None = None) -> list:
+                    lang: str | None = None, allow_premium: bool = False,
+                    report: dict | None = None) -> list:
     """Per-line two-voice TTS -> one concatenated MP3 + measured line-start
     offsets (seconds). Teacher lines use the lesson's Edge voice; student
     lines an age-matched Edge voice (non-English falls back to the lesson
@@ -184,19 +185,24 @@ def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
     provider). Until then a non-Edge pick falls to the free voice for the
     LESSON LANGUAGE — it used to fall to English Aria, so an Arabic teacher
     who picked a premium voice got an English conversation."""
+    from shared.tts import resolve_voice
     from shared.tts.providers import edge as edge_tts
     from shared.tts.registry import default_voice, default_voice_id_for, get_voice
     from spike.scene_engine.whiteboard import student_voice_for_avatar
 
     free = get_voice(default_voice_id_for(lang)) or default_voice()
-    v = get_voice(tts_voice) or free
-    if v.provider != "edge":
-        v = free                     # dialogue is Edge-only (two voices)
-    teach_ref = v.ref
+    # The TEACHER's lines go through synthesize() — gate, cap, report, and the
+    # premium provider when the account has one. Conversational is the app's
+    # default from grade 10, so leaving dialogue Edge-only would have made
+    # premium meaningless for every secondary-school lesson. The STUDENT's
+    # lines stay on the free age-matched Edge voice: no provider offers an
+    # age-banded child voice, and the student is a foil, not the narrator.
+    teacher = resolve_voice(tts_voice, allow_premium, lang=lang)
     stud_ref = student_voice_for_avatar(
         (avatars or {}).get("student", "avatar_student"),
-        getattr(v, "lang", "en") or "en") or teach_ref
+        getattr(free, "lang", "en") or "en") or free.ref
     starts, cursor, parts = [], 0.0, []
+    used_voice, downgraded = teacher.voice_id, False
     for i, d in enumerate(dialogue):
         # belt to the sanitizer's braces: Edge reads SSML tags ALOUD, and it
         # reads worksheet blanks aloud too ("underscore underscore ...")
@@ -204,9 +210,19 @@ def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
         if not line:
             continue
         f = vid_dir / f"{seg_id}_dl{i}.mp3"
-        edge_tts.synthesize(
-            line, f,
-            stud_ref if str(d.get("who")) == "student" else teach_ref)
+        if str(d.get("who")) == "student":
+            edge_tts.synthesize(line, f, stud_ref)
+        else:
+            r: dict = {}
+            synthesize(line, f, voice_id=teacher.voice_id, allow_premium=allow_premium,
+                       report=r, lang=lang)
+            used_voice = r.get("used") or used_voice
+            downgraded = downgraded or bool(r.get("downgraded"))
+            if report is not None:
+                for k, v in (r.get("stats") or {}).items():
+                    if isinstance(v, (int, float)):
+                        report[k] = report.get(k, 0) + v
+                report["chars"] = report.get("chars", 0) + int(r.get("chars") or 0)
         starts.append(cursor)
         cursor += _audio_duration(str(f), ffmpeg)
         parts.append(f)
@@ -219,6 +235,8 @@ def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
                     str(lst), "-c", "copy", str(mp3)], capture_output=True)
     if not Path(str(mp3)).exists() or Path(str(mp3)).stat().st_size == 0:
         raise RuntimeError("dialogue concat produced no audio")
+    if report is not None:
+        report.update({"used": used_voice, "downgraded": downgraded})
     return starts
 
 
@@ -294,6 +312,34 @@ def compose_episode_videos(
     total = len(slide_segments)
     _voices_used: set[str | None] = set()
     _any_downgrade = False
+    _stats: dict = {}
+    _preflight_downgrade = False
+
+    # PREMIUM PRE-FLIGHT. Segments are synthesized on a thread pool, and each
+    # falls back to the free voice on its own — so a provider outage on
+    # segment 6 of 12 used to produce a lesson that alternates a premium
+    # voice with the free one, and with per-language voices that means an
+    # Arabic teacher giving way to English Aria mid-lesson. One short probe
+    # before the pool decides for the WHOLE lesson: if premium cannot be
+    # rendered now, every segment is free, consistently, and the row says
+    # why. Costs one sentence.
+    if allow_premium and tts_voice:
+        from shared.tts import resolve_voice
+        _probe_voice = resolve_voice(tts_voice, allow_premium, lang=lang)
+        if _probe_voice.tier == "premium":
+            _r: dict = {}
+            try:
+                synthesize("Let us begin.", vid_dir / "_preflight.mp3",
+                           voice_id=tts_voice, allow_premium=allow_premium,
+                           report=_r, lang=lang)
+            except Exception as exc:  # noqa: BLE001
+                _r = {"downgraded": True, "error": str(exc)}
+            if _r.get("downgraded"):
+                logger.warning("premium pre-flight failed for %r (%s) — the whole "
+                               "lesson renders on the free voice", tts_voice,
+                               _r.get("error") or "provider downgrade")
+                allow_premium = False
+                _preflight_downgrade = True
 
     def _render_one(i: int, slide_seg: dict) -> Optional[dict]:
         """Build ONE segment (TTS + native animation → MP4). Returns its result
@@ -333,6 +379,7 @@ def compose_episode_videos(
         duration = est
         used: str | None = None
         downgraded = False
+        seg_stats: dict = {}
 
         # 1. TTS (provider-agnostic: free Edge default; premium ElevenLabs
         # gated). Conversational segments carry speaker-tagged DIALOGUE: each
@@ -346,11 +393,15 @@ def compose_episode_videos(
                 # a words.json from an earlier SINGLE-voice run would feed
                 # stale word timings to this dialogue's captions
                 mp3.with_suffix(".words.json").unlink(missing_ok=True)
+                dlg_report: dict = {}
                 starts = _synth_dialogue(script_seg["dialogue"], mp3, vid_dir,
                                          seg_id, tts_voice, ffmpeg,
-                                         avatars=_avatars, lang=lang)
+                                         avatars=_avatars, lang=lang,
+                                         allow_premium=allow_premium, report=dlg_report)
                 script_seg["_dialogue_starts"] = starts
-                used = "dialogue-edge"
+                used = dlg_report.get("used") or "dialogue-edge"
+                downgraded = bool(dlg_report.get("downgraded"))
+                seg_stats = {k: v for k, v in dlg_report.items() if isinstance(v, (int, float))}
                 audio_path = str(mp3)
                 duration = _audio_duration(audio_path, ffmpeg) or est
             except Exception as exc:  # noqa: BLE001
@@ -376,6 +427,9 @@ def compose_episode_videos(
                 synthesize(speakable(text), mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=speakable_ssml(ssml), report=seg_report, boundaries_out=bnd, lang=lang)
                 used = seg_report.get("used")
                 downgraded = bool(seg_report.get("downgraded"))
+                seg_stats = {**{k: v for k, v in (seg_report.get("stats") or {}).items()
+                                if isinstance(v, (int, float))},
+                             "chars": int(seg_report.get("chars") or 0)}
                 audio_path = str(mp3)
                 duration = _audio_duration(audio_path, ffmpeg) or est
             except Exception as exc:  # noqa: BLE001 — a TTS hiccup must not kill the video
@@ -441,6 +495,7 @@ def compose_episode_videos(
             "index": i,
             "used": used,
             "downgraded": downgraded,
+            "stats": seg_stats,
             "duration": duration,
             "segment": VideoSegment(
                 segment_id=seg_id,
@@ -503,6 +558,8 @@ def compose_episode_videos(
         _voices_used.add(r["used"])
         if r["downgraded"]:
             _any_downgrade = True
+        for k, v in (r.get("stats") or {}).items():
+            _stats[k] = _stats.get(k, 0) + v
         manifest_segments.append(r["segment"])
 
     if progress_callback:
@@ -513,7 +570,10 @@ def compose_episode_videos(
     # premium→free downgrade (whole video may have degraded, or only some segments).
     if voice_report is not None:
         used = sorted(v for v in _voices_used if v)
-        voice_report.update({"requested": tts_voice, "used": used, "downgraded": _any_downgrade})
+        voice_report.update({"requested": tts_voice, "used": used,
+                             "downgraded": _any_downgrade or _preflight_downgrade,
+                             "preflight_downgrade": _preflight_downgrade,
+                             "stats": _stats})
 
     manifest = VideoManifest(
         manifest_id=str(uuid.uuid4()),

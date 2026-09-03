@@ -95,7 +95,34 @@ VOICES: list[TTSVoice] = [
     # configured model is multilingual (eleven_turbo_v2_5 as of 2026-09-03).
     TTSVoice("el-rachel",   "Rachel — natural (premium)",    "elevenlabs", "premium", _EL_DEFAULT_REF,       ("warm", "natural"), "*"),
     TTSVoice("el-adam",     "Adam — deep (premium)",         "elevenlabs", "premium", "pNInz6obpgDQGcFmaJgB", ("deep", "male"),    "*", gender="m"),
-    # Premium — Google Cloud TTS: entries arrive with the provider (Phase 1b).
+    # Premium — Google Cloud TTS. Voice names were read from the live
+    # voices.list on 2026-09-03 (not typed from memory): Chirp 3 HD ships an
+    # Achernar (female) and Achird (male) in every locale we teach except
+    # Malay, which has no Chirp at all and gets WaveNet. Chirp ignores
+    # <mark>, so its word timing comes from per-sentence synthesis (see
+    # shared/tts/chunks.py); WaveNet gets exact per-word marks.
+    TTSVoice("g-en-f",    "Achernar — natural (premium)",        "google", "premium", "en-US-Chirp3-HD-Achernar", ("natural", "warm")),
+    TTSVoice("g-en-m",    "Achird — natural (premium)",          "google", "premium", "en-US-Chirp3-HD-Achird",   ("natural", "male"), gender="m"),
+    TTSVoice("g-en-gb-f", "Achernar — British (premium)",        "google", "premium", "en-GB-Chirp3-HD-Achernar", ("british",)),
+    TTSVoice("g-en-gb-m", "Achird — British (premium)",          "google", "premium", "en-GB-Chirp3-HD-Achird",   ("british", "male"), gender="m"),
+    TTSVoice("g-en-in-f", "Achernar — Indian English (premium)", "google", "premium", "en-IN-Chirp3-HD-Achernar", ("indian",)),
+    TTSVoice("g-en-in-m", "Achird — Indian English (premium)",   "google", "premium", "en-IN-Chirp3-HD-Achird",   ("indian", "male"), gender="m"),
+    TTSVoice("g-ms-f",    "WaveNet A — Bahasa Melayu (premium)", "google", "premium", "ms-MY-Wavenet-A",          ("warm",), "ms"),
+    TTSVoice("g-ms-m",    "WaveNet B — Bahasa Melayu (premium)", "google", "premium", "ms-MY-Wavenet-B",          ("male",), "ms", gender="m"),
+    TTSVoice("g-ar-f",    "Achernar — العربية (premium)",         "google", "premium", "ar-XA-Chirp3-HD-Achernar", ("warm",), "ar"),
+    TTSVoice("g-ar-m",    "Achird — العربية (premium)",           "google", "premium", "ar-XA-Chirp3-HD-Achird",   ("male",), "ar", gender="m"),
+    TTSVoice("g-fr-f",    "Achernar — Français (premium)",       "google", "premium", "fr-FR-Chirp3-HD-Achernar", ("warm",), "fr"),
+    TTSVoice("g-fr-m",    "Achird — Français (premium)",         "google", "premium", "fr-FR-Chirp3-HD-Achird",   ("male",), "fr", gender="m"),
+    TTSVoice("g-es-f",    "Achernar — Español (premium)",        "google", "premium", "es-ES-Chirp3-HD-Achernar", ("warm",), "es"),
+    TTSVoice("g-es-m",    "Achird — Español (premium)",          "google", "premium", "es-ES-Chirp3-HD-Achird",   ("male",), "es", gender="m"),
+    TTSVoice("g-pt-f",    "Achernar — Português (premium)",      "google", "premium", "pt-BR-Chirp3-HD-Achernar", ("warm",), "pt"),
+    TTSVoice("g-pt-m",    "Achird — Português (premium)",        "google", "premium", "pt-BR-Chirp3-HD-Achird",   ("male",), "pt", gender="m"),
+    TTSVoice("g-te-f",    "Achernar — తెలుగు (premium)",          "google", "premium", "te-IN-Chirp3-HD-Achernar", ("warm",), "te"),
+    TTSVoice("g-te-m",    "Achird — తెలుగు (premium)",            "google", "premium", "te-IN-Chirp3-HD-Achird",   ("male",), "te", gender="m"),
+    TTSVoice("g-mr-f",    "Achernar — मराठी (premium)",           "google", "premium", "mr-IN-Chirp3-HD-Achernar", ("warm",), "mr"),
+    TTSVoice("g-mr-m",    "Achird — मराठी (premium)",             "google", "premium", "mr-IN-Chirp3-HD-Achird",   ("male",), "mr", gender="m"),
+    TTSVoice("g-hi-f",    "Achernar — हिन्दी (premium)",           "google", "premium", "hi-IN-Chirp3-HD-Achernar", ("warm",), "hi"),
+    TTSVoice("g-hi-m",    "Achird — हिन्दी (premium)",             "google", "premium", "hi-IN-Chirp3-HD-Achird",   ("male",), "hi", gender="m"),
 ]
 
 DEFAULT_VOICE_ID = "edge-aria"  # the free English default — reproduces today's behaviour
@@ -139,21 +166,31 @@ def default_premium_voice_id_for(lang: str | None, gender: str = "f") -> str | N
     return None
 
 
-def equivalent_voice_id(voice_id: str | None, provider: str) -> str | None:
+def equivalent_voice_id(voice_id: str | None, provider: str,
+                        lang: str | None = None) -> str | None:
     """The same voice, as near as the registry can say, in another PREMIUM
     family: same gender, same language (a multilingual entry matches any).
 
-    This is what makes rollback honest. A generation created while Google was
-    the default stores a `g-*` id, and "New version" copies params forward; when
-    the provider is switched back, that id must land on its ElevenLabs
-    counterpart (or the free voice), never on a disabled provider and never on
-    English Aria for an Arabic lesson."""
+    This is what makes a provider switch honest in BOTH directions. A
+    generation created while Google was the default stores a `g-*` id, and
+    "New version" copies params forward; after a switch back that id must land
+    on its ElevenLabs counterpart (or the free voice), never on a disabled
+    provider and never on English Aria for an Arabic lesson. Going forward, a
+    stored `el-*` is multilingual and says nothing about the lesson, so the
+    LESSON language decides which Google entry it becomes — without it every
+    `el-adam` on a Hindi lesson became en-US Achird, an English reader for
+    Hindi text."""
     v = get_voice(voice_id)
     if v is None or v.tier != "premium":
         return None
-    pool = [x for x in VOICES if x.provider == provider and x.tier == "premium"]
+    want = v.lang if v.lang != "*" else _spoken_lang(lang)
+    pool = [x for x in VOICES
+            if x.provider == provider and x.tier == "premium" and x.gender == v.gender]
     for x in pool:
-        if x.gender == v.gender and (x.lang == v.lang or x.lang == "*" or v.lang == "*"):
+        if x.lang == want:
+            return x.voice_id
+    for x in pool:
+        if x.lang == "*":
             return x.voice_id
     return None
 

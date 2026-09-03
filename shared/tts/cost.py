@@ -1,9 +1,20 @@
-"""Per-call character + cost logging and a local spend cap for paid TTS.
+"""Per-call character + cost logging and a local per-process runaway cap for
+paid TTS, keyed by provider.
 
-Edge is free ($0) and uncapped. ElevenLabs is metered: every call logs its
-character count + estimated cost, and a running character total is persisted so
-a runaway generation can't burn the budget — once the cap is hit, paid synthesis
-is refused and the caller falls back to the free voice.
+Edge is free ($0) and uncapped. Paid providers (ElevenLabs, Google) are
+metered: every call logs its character count and estimated cost, and a
+running per-provider total is kept so one runaway generation cannot burn a
+budget in a loop. Once a provider's cap is hit, paid synthesis is refused and
+the caller falls back to the free voice.
+
+WHAT THIS CAP IS AND IS NOT. The total lives in a local JSON file. On Railway
+that file is per process and resets on every deploy, and the render pool's
+threads race on it — so it bounds a single process's spend between restarts,
+which is exactly the runaway case, and nothing more. It is not a monthly
+ledger and never was; the durable, atomic, per-user ledger is the app's
+tts_usage table (migration 0027, tutor_tts_reserve), which the worker
+records into after each lesson. Google's own free allowance is tracked by
+Google; a GCP budget alert is the belt for it.
 """
 
 from __future__ import annotations
@@ -11,54 +22,87 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 
 logger = logging.getLogger("shared.tts.cost")
 
-# Rough ElevenLabs price (USD per 1000 chars). Override via env to match your plan.
-_USD_PER_1K = float(os.getenv("ELEVENLABS_USD_PER_1K_CHARS", "0.30"))
-# Local safety cap on total ElevenLabs characters (across runs). Generous but bounded.
-_CHAR_CAP = int(os.getenv("ELEVENLABS_CHAR_CAP", "500000"))
+# USD per 1,000 characters, by provider (and family for Google, whose
+# families bill differently). Overridable per env.
+#   ElevenLabs: the code shipped with $0.30/1K, a placeholder 3.5x the real
+#   rate — turbo bills 0.5 credit/char and the Pro plan is ~$85/1M. Left as an
+#   env override so an account on a different plan can correct it.
+#   Google (pricing page, 2026-09-03): Standard/WaveNet $4/1M, Neural2 $16/1M,
+#   Chirp 3 HD $30/1M, after the monthly free allowance.
+_USD_PER_1K = {
+    "elevenlabs": float(os.getenv("ELEVENLABS_USD_PER_1K_CHARS", "0.085")),
+    "google:chirp": float(os.getenv("GOOGLE_TTS_USD_PER_1K_CHIRP", "0.030")),
+    "google:classic": float(os.getenv("GOOGLE_TTS_USD_PER_1K_CLASSIC", "0.004")),
+    "google": float(os.getenv("GOOGLE_TTS_USD_PER_1K_CHARS", "0.030")),
+}
+
+# Per-provider, per-process runaway caps (characters). ElevenLabs keeps its
+# historical env name; Google's default is ~100 lessons of Chirp.
+_CHAR_CAP = {
+    "elevenlabs": int(os.getenv("ELEVENLABS_CHAR_CAP", "500000")),
+    "google": int(os.getenv("GOOGLE_TTS_CHAR_CAP", "1000000")),
+}
 
 _SPEND_FILE = Path(__file__).resolve().parents[2] / "storage" / "tts_spend.json"
+_LOCK = threading.Lock()
+
+PAID_PROVIDERS = frozenset(_CHAR_CAP)
 
 
-def estimate_cost_usd(chars: int, provider: str) -> float:
-    if provider != "elevenlabs":
+def estimate_cost_usd(chars: int, provider: str, family: str | None = None) -> float:
+    if provider not in PAID_PROVIDERS:
         return 0.0
-    return round(chars / 1000.0 * _USD_PER_1K, 4)
+    key = f"{provider}:{family}" if family and f"{provider}:{family}" in _USD_PER_1K else provider
+    return round(chars / 1000.0 * _USD_PER_1K.get(key, 0.0), 4)
 
 
-def _read_total() -> int:
+def _read_totals() -> dict:
     try:
-        return int(json.loads(_SPEND_FILE.read_text()).get("elevenlabs_chars", 0))
+        data = json.loads(_SPEND_FILE.read_text())
     except Exception:  # noqa: BLE001
-        return 0
+        return {}
+    # legacy single-provider shape: {"elevenlabs_chars": N}
+    totals = {k[:-6]: int(v) for k, v in data.items() if k.endswith("_chars")}
+    return totals
 
 
-def _write_total(total: int) -> None:
+def _write_totals(totals: dict) -> None:
     try:
         _SPEND_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _SPEND_FILE.write_text(json.dumps({"elevenlabs_chars": total, "updated_at": time.time()}))
+        payload = {f"{k}_chars": int(v) for k, v in totals.items()}
+        payload["updated_at"] = time.time()
+        _SPEND_FILE.write_text(json.dumps(payload))
     except Exception as exc:  # noqa: BLE001
         logger.warning("could not persist TTS spend: %s", exc)
 
 
-def within_cap(chars: int) -> bool:
-    """True if `chars` more ElevenLabs characters stay within the local cap."""
-    return _read_total() + max(0, chars) <= _CHAR_CAP
+def within_cap(chars: int, provider: str = "elevenlabs") -> bool:
+    """True if `chars` more characters on `provider` stay within its cap.
+    Free providers are never capped."""
+    if provider not in PAID_PROVIDERS:
+        return True
+    with _LOCK:
+        return _read_totals().get(provider, 0) + max(0, chars) <= _CHAR_CAP[provider]
 
 
-def record(chars: int, provider: str) -> None:
+def record(chars: int, provider: str, family: str | None = None) -> None:
     """Log the call and, for paid providers, add to the persisted running total."""
-    cost = estimate_cost_usd(chars, provider)
-    if provider == "elevenlabs":
-        total = _read_total() + max(0, chars)
-        _write_total(total)
+    cost = estimate_cost_usd(chars, provider, family)
+    if provider in PAID_PROVIDERS:
+        with _LOCK:
+            totals = _read_totals()
+            totals[provider] = totals.get(provider, 0) + max(0, chars)
+            _write_totals(totals)
+            total = totals[provider]
         logger.info(
-            "TTS spend: provider=%s chars=%d est=$%.4f  (cumulative %d/%d chars)",
-            provider, chars, cost, total, _CHAR_CAP,
+            "TTS spend: provider=%s%s chars=%d est=$%.4f  (process total %d/%d chars)",
+            provider, f"/{family}" if family else "", chars, cost, total, _CHAR_CAP[provider],
         )
     else:
         logger.info("TTS usage: provider=%s chars=%d est=$0 (free)", provider, chars)

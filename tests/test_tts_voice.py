@@ -23,8 +23,9 @@ def _stub_providers(monkeypatch):
     # eleven is imported lazily inside synthesize(); patch its module too.
     import shared.tts.providers.eleven as eleven
     monkeypatch.setattr(eleven, "synthesize", lambda say, out, ref, **kw: out)
-    monkeypatch.setattr(tts.cost, "within_cap", lambda n: True)
-    monkeypatch.setattr(tts.cost, "record", lambda n, provider: None)
+    # cost is provider-keyed now (Google joined ElevenLabs as a paid provider)
+    monkeypatch.setattr(tts.cost, "within_cap", lambda n, provider="elevenlabs": True)
+    monkeypatch.setattr(tts.cost, "record", lambda n, provider, family=None: None)
 
 
 def test_premium_without_permission_resolves_to_free_default():

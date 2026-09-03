@@ -19,7 +19,11 @@ from shared.tts import registry as R
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    for k in ("TTS_PREMIUM_PROVIDER", "ELEVENLABS_ENABLED", "ELEVENLABS_API_KEY"):
+    # worker/run.py loads .env into the process, so a developer machine with
+    # ADC configured has Google "enabled" in every test unless cleared here.
+    for k in ("TTS_PREMIUM_PROVIDER", "ELEVENLABS_ENABLED", "ELEVENLABS_API_KEY",
+              "GOOGLE_TTS_ENABLED", "GOOGLE_APPLICATION_CREDENTIALS",
+              "GOOGLE_APPLICATION_CREDENTIALS_JSON", "VERTEX_PROJECT_ID"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -29,8 +33,9 @@ def _el_on(monkeypatch):
 
 
 def _with_google_entry(monkeypatch, voice_id="g-ar-f", lang="ar", gender="f"):
-    """A premium Google entry does not exist until Phase 1b; the rollback
-    rules must be testable before it does."""
+    """Written before Phase 1b added the real Google entries; kept so the
+    rollback rules here do not depend on the live table's order. The id
+    shadows the real `g-ar-f`, which has the same reference voice."""
     v = R.TTSVoice(voice_id, "Google Arabic (premium)", "google", "premium",
                    "ar-XA-Chirp3-HD-Achernar", ("test",), lang, gender=gender)
     monkeypatch.setattr(R, "VOICES", R.VOICES + [v])
@@ -72,15 +77,19 @@ class TestRegistry:
         assert R.default_premium_voice_id_for("ar") == "el-rachel"
         assert R.default_premium_voice_id_for("ar", gender="m") == "el-adam"
 
-    def test_google_default_is_none_until_entries_exist(self, monkeypatch):
+    def test_google_default_is_the_language_voice(self, monkeypatch):
         monkeypatch.setenv("TTS_PREMIUM_PROVIDER", "google")
-        assert R.default_premium_voice_id_for("en") is None
+        assert R.default_premium_voice_id_for("en") == "g-en-f"
+        assert R.default_premium_voice_id_for("ar", gender="m") == "g-ar-m"
+        assert R.default_premium_voice_id_for("ms-arab") == "g-ms-f"      # Jawi is spoken Malay
+        assert R.default_premium_voice_id_for("zh") is None               # no entry → caller uses free
 
-    def test_equivalence_crosses_families_by_gender_and_language(self, monkeypatch):
-        _with_google_entry(monkeypatch)
-        assert R.equivalent_voice_id("g-ar-f", "elevenlabs") == "el-rachel"   # multilingual match
-        assert R.equivalent_voice_id("el-adam", "google") is None             # no male Google entry yet
-        assert R.equivalent_voice_id("edge-aria", "elevenlabs") is None       # free ids have none
+    def test_equivalence_crosses_families_by_gender_and_language(self):
+        assert R.equivalent_voice_id("g-ar-f", "elevenlabs") == "el-rachel"      # multilingual match
+        assert R.equivalent_voice_id("el-adam", "google", lang="hi") == "g-hi-m"  # lesson language decides
+        assert R.equivalent_voice_id("el-adam", "google") == "g-en-m"            # no language → English
+        assert R.equivalent_voice_id("el-adam", "google", lang="zh") is None     # nothing suitable
+        assert R.equivalent_voice_id("edge-aria", "elevenlabs") is None          # free ids have none
         assert R.equivalent_voice_id("nope", "elevenlabs") is None
 
     def test_paid_tiers_are_an_explicit_allow_list(self):
