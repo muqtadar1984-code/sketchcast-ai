@@ -673,26 +673,43 @@ _TRANSFER_BACKOFF_SECONDS = (2.0, 5.0)
 
 
 def _is_transient_transfer_error(exc: BaseException) -> bool:
-    """A transport-level failure worth one more try: the connection or stream
-    died (httpx.TransportError covers reset, timeout, disconnect, refused) or
-    the storage edge answered 5xx. A 4xx (missing object, forbidden) is not
-    transient and must surface at once."""
+    """A failure worth one more try: the connection or stream died
+    (httpx.TransportError — reset, disconnect, refused, timeout) or the storage
+    edge answered 5xx. A 4xx (missing object, forbidden) is not transient and
+    must surface at once.
+
+    Classified on what storage3 ACTUALLY raises (2.31.0, file_api._request):
+      * a JSON error body → StorageApiError(message, code, status) — ONE string
+        arg, the status only on ``.status`` (str or int);
+      * a non-JSON 5xx body (an edge HTML page, an empty 504) → the
+        json.JSONDecodeError escapes, chained to the httpx.HTTPStatusError;
+      * a JSON body without storage-api keys (a gateway's {"message": …}) →
+        a KeyError, then an AttributeError from ``resp.text`` — chained twice.
+    So the chain (__cause__ / __context__) is walked, and the verdict comes from
+    the first link that names a transport failure, a 5xx response, or a 5xx
+    ``.status``. A first cut matched ``'statusCode': '503'`` in the message —
+    which that message never contains — and was dead code (adversarial review,
+    2026-09-03)."""
     try:
         import httpx
-
-        if isinstance(exc, httpx.TransportError):
-            return True
     except Exception:  # noqa: BLE001 — httpx is a supabase dependency; be safe anyway
-        pass
-    text = str(exc)
-    # storage3 raises StorageException(dict) — the dict carries statusCode.
-    for arg in getattr(exc, "args", ()):
-        if isinstance(arg, dict):
-            code = str(arg.get("statusCode") or arg.get("status") or "")
-            if code.startswith("5"):
+        httpx = None  # type: ignore[assignment]
+    seen: set[int] = set()
+    e: Optional[BaseException] = exc
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        if httpx is not None:
+            if isinstance(e, httpx.TransportError):
                 return True
-    return any(f"'statusCode': '{c}'" in text or f'"statusCode":{c}' in text
-               for c in ("500", "502", "503", "504"))
+            if isinstance(e, httpx.HTTPStatusError):
+                resp = getattr(e, "response", None)
+                if resp is not None and int(getattr(resp, "status_code", 0) or 0) >= 500:
+                    return True
+        status = getattr(e, "status", None)  # storage3 StorageApiError
+        if status is not None and str(status).startswith("5"):
+            return True
+        e = e.__cause__ or e.__context__
+    return False
 
 
 def _transfer_with_retry(what: str, op):

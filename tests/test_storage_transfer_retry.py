@@ -19,17 +19,37 @@ TRANSPORT failure (httpx.TransportError — reset, timeout, disconnect) or a
 storage 5xx, three attempts with backoff, and still fails at once on anything
 that a retry cannot fix (a missing object, a forbidden bucket, a bug).
 
-These are behavioural tests against a fake Supabase client; `time.sleep` is
-captured so the backoff is asserted, not waited for.
+Two kinds of test here, deliberately:
+
+  * FAKE-CLIENT tests drive download_book / upload_artifact with a bucket that
+    raises whatever we hand it — they pin the retry LOOP (attempt counts,
+    backoff schedule, what is written when).
+  * REAL-LIBRARY tests push the exception through storage3 2.31.0's own
+    SyncBucketProxy._request over an httpx.MockTransport — they pin the
+    CLASSIFIER against the shapes the library actually raises. The first cut of
+    this fix matched "'statusCode': '503'" inside the exception text; the
+    library's message is "{'statusCode': 503, …}" (unquoted, one string arg,
+    the status on .status), a non-JSON 5xx body escapes as JSONDecodeError, and
+    a gateway's {"message": …} body dies in a KeyError→AttributeError chain.
+    Nine fake-shaped tests were green while every real 5xx got one attempt
+    (adversarial review, 2026-09-03). Never again: the 5xx tests below
+    construct nothing by hand — the library raises, the classifier decides.
+
+`time.sleep` is captured so the backoff is asserted, not waited for.
 """
 
 from __future__ import annotations
 
 import httpx
 import pytest
-from storage3.utils import StorageException
+from storage3._sync.file_api import SyncBucketProxy
+from storage3.exceptions import StorageApiError
+from yarl import URL
 
 from worker import client as db
+
+
+# ── fakes ───────────────────────────────────────────────────────────────
 
 
 class _Bucket:
@@ -66,6 +86,26 @@ class _SB:
         self.storage = _Storage(bucket)
 
 
+def _real_bucket(responses):
+    """storage3's REAL SyncBucketProxy over an httpx.MockTransport that answers
+    each request with the next canned response. The exceptions that reach
+    download_book are exactly the library's own."""
+    queue = list(responses)
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return queue.pop(0)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    proxy = SyncBucketProxy("uploads", URL("https://x.supabase.co/storage/v1"), {"apikey": "k"}, client)
+    return proxy, calls
+
+
+def _ok_pdf():
+    return httpx.Response(200, content=b"%PDF-1.4 real")
+
+
 @pytest.fixture
 def no_sleep(monkeypatch):
     slept = []
@@ -77,7 +117,7 @@ def _reset():
     return httpx.RemoteProtocolError("<StreamReset stream_id:1, error_code:2, remote_reset:True>")
 
 
-# ── download ────────────────────────────────────────────────────────────
+# ── the retry loop (fake client) ────────────────────────────────────────
 
 
 def test_a_reset_download_is_retried_and_the_book_lands(tmp_path, no_sleep):
@@ -106,32 +146,11 @@ def test_three_resets_gives_up_with_the_transport_error(tmp_path, no_sleep):
     assert not (tmp_path / "book.pdf").exists(), "nothing is written on failure"
 
 
-def test_a_missing_object_is_not_retried(tmp_path, no_sleep):
-    """A 404 is an answer, not a blip: retrying it would only delay the same
-    failure by seven seconds and hide that the upload never reached storage
-    (Sara's 2026-07 incident)."""
-    bucket = _Bucket([StorageException({"statusCode": "404", "error": "not_found",
-                                        "message": "Object not found"})])
-    with pytest.raises(StorageException):
-        db.download_book(_SB(bucket), "owner/missing.pdf", tmp_path / "book.pdf")
-    assert bucket.download_calls == 1 and no_sleep == []
-
-
-def test_a_storage_5xx_is_retried(tmp_path, no_sleep):
-    bucket = _Bucket([StorageException({"statusCode": "502", "error": "Bad Gateway",
-                                        "message": "upstream"})])
-    db.download_book(_SB(bucket), "owner/book.pdf", tmp_path / "book.pdf")
-    assert bucket.download_calls == 2
-
-
 def test_a_bug_is_not_retried(tmp_path, no_sleep):
     bucket = _Bucket([TypeError("not a transport problem")])
     with pytest.raises(TypeError):
         db.download_book(_SB(bucket), "owner/book.pdf", tmp_path / "book.pdf")
     assert bucket.download_calls == 1 and no_sleep == []
-
-
-# ── upload ──────────────────────────────────────────────────────────────
 
 
 def test_a_reset_upload_is_retried_with_upsert(tmp_path, no_sleep):
@@ -151,6 +170,132 @@ def test_a_reset_upload_is_retried_with_upsert(tmp_path, no_sleep):
     assert no_sleep == [2.0]
 
 
+# ── the classifier, against what storage3 REALLY raises ─────────────────
+
+
+def _download_via_real_lib(responses, tmp_path):
+    proxy, calls = _real_bucket(responses)
+    sb = _SB(proxy)
+    dest = tmp_path / "book.pdf"
+    return db.download_book(sb, "owner/book.pdf", dest), calls, dest
+
+
+@pytest.mark.parametrize(
+    "label,first",
+    [
+        ("503 storage-api JSON, statusCode as string",
+         httpx.Response(503, json={"statusCode": "503", "error": "ServiceUnavailable", "message": "upstream"})),
+        ("500 storage-api JSON, statusCode as int",
+         httpx.Response(500, json={"statusCode": 500, "error": "InternalError", "message": "boom"})),
+        ("502 edge HTML body (JSONDecodeError escapes storage3)",
+         httpx.Response(502, text="<html><body>502 Bad Gateway</body></html>", headers={"content-type": "text/html"})),
+        ("503 gateway JSON without storage keys (KeyError→AttributeError chain)",
+         httpx.Response(503, json={"message": "name resolution failed"})),
+        ("504 empty body",
+         httpx.Response(504)),
+    ],
+)
+def test_a_real_storage_5xx_is_retried(label, first, tmp_path, no_sleep):
+    data, calls, dest = _download_via_real_lib([first, _ok_pdf()], tmp_path)
+    assert dest.read_bytes() == b"%PDF-1.4 real", label
+    assert len(calls) == 2, f"{label}: expected one retry"
+    assert no_sleep == [2.0], label
+
+
+@pytest.mark.parametrize(
+    "label,first",
+    [
+        ("404 Object not found",
+         httpx.Response(404, json={"statusCode": "404", "error": "not_found", "message": "Object not found"})),
+        ("400 InvalidRequest",
+         httpx.Response(400, json={"statusCode": "400", "error": "InvalidRequest", "message": "bad"})),
+        ("409 Duplicate",
+         httpx.Response(409, json={"statusCode": "409", "error": "Duplicate", "message": "exists"})),
+        ("403 non-JSON body",
+         httpx.Response(403, text="forbidden", headers={"content-type": "text/plain"})),
+    ],
+)
+def test_a_real_storage_4xx_is_not_retried(label, first, tmp_path, no_sleep):
+    """A 4xx is an answer, not a blip: retrying it would only delay the same
+    failure by seven seconds and hide that the upload never reached storage
+    (Sara's 2026-07 incident). Whatever storage3 raises for it — its own
+    StorageApiError or an escaped parse error — must surface on attempt 1."""
+    with pytest.raises(Exception):
+        _download_via_real_lib([first, _ok_pdf()], tmp_path)
+    assert no_sleep == [], label
+
+
+def test_a_real_mid_body_h2_reset_is_retried(tmp_path, no_sleep):
+    """The incident's exact shape, through storage3's real download(): a
+    response whose body raises httpcore.RemoteProtocolError(StreamReset) while
+    httpx reads it. The library must surface httpx.RemoteProtocolError (not a
+    partial bytes object), and the worker must retry it."""
+    import h2.events
+    import httpcore
+
+    attempts = {"n": 0}
+
+    class _ResetBody:
+        def __iter__(self):
+            yield b"%PDF-1.4 partial "
+            raise httpcore.RemoteProtocolError(
+                h2.events.StreamReset(stream_id=1, error_code=2, remote_reset=True))
+
+        def close(self):
+            pass
+
+    class _GoodBody:
+        def __iter__(self):
+            yield b"%PDF-1.4 real"
+
+        def close(self):
+            pass
+
+    class _Pool:
+        def handle_request(self, request):
+            attempts["n"] += 1
+            body = _ResetBody() if attempts["n"] == 1 else _GoodBody()
+            return httpcore.Response(200, headers=[(b"content-length", b"13")], content=body)
+
+    transport = httpx.HTTPTransport()
+    transport._pool = _Pool()
+    proxy = SyncBucketProxy("uploads", URL("https://x.supabase.co/storage/v1"), {"apikey": "k"},
+                            httpx.Client(transport=transport))
+    dest = tmp_path / "book.pdf"
+    db.download_book(_SB(proxy), "owner/book.pdf", dest)
+    assert dest.read_bytes() == b"%PDF-1.4 real", "the retry's bytes, never the partial ones"
+    assert attempts["n"] == 2 and no_sleep == [2.0]
+
+
+def test_the_classifier_on_the_library_objects_themselves():
+    ok = db._is_transient_transfer_error
+    # Transport failures, all httpx.TransportError subclasses.
+    assert ok(httpx.RemoteProtocolError("reset"))
+    assert ok(httpx.ConnectError("refused"))
+    assert ok(httpx.ReadError("eof"))
+    assert ok(httpx.WriteTimeout("slow"))
+    # storage3's own error object: the status lives on .status, str or int.
+    assert ok(StorageApiError("upstream", "ServiceUnavailable", "503"))
+    assert ok(StorageApiError("boom", "InternalError", 500))
+    assert not ok(StorageApiError("Object not found", "not_found", "404"))
+    assert not ok(StorageApiError("exists", "Duplicate", 409))
+    # A 5xx HTTPStatusError reached through an exception CHAIN (the escaped
+    # JSONDecodeError / AttributeError cases) is transient; a 4xx one is not.
+    req = httpx.Request("GET", "https://x/o")
+    for code, expect in ((502, True), (504, True), (404, False), (403, False)):
+        try:
+            try:
+                raise httpx.HTTPStatusError("s", request=req, response=httpx.Response(code, request=req))
+            except httpx.HTTPStatusError:
+                raise ValueError("Expecting value: line 1 column 1 (char 0)")
+        except ValueError as chained:
+            assert ok(chained) is expect, code
+    # Not transient, no chain.
+    assert not ok(ValueError("nope"))
+    assert not ok(KeyError("storage_path"))
+    assert not ok(httpx.HTTPStatusError("400", request=req, response=httpx.Response(400, request=req)))
+
+
 def test_the_module_imports_what_the_backoff_calls():
     """The backoff calls time.sleep at module scope. The first cut of this fix
     was written into a working tree where ANOTHER session's uncommitted block
@@ -165,17 +310,3 @@ def test_the_module_imports_what_the_backoff_calls():
     src = Path(db.__file__).read_text(encoding="utf-8")
     assert re.search(r"^import time$", src, re.M), "worker/client.py must import time itself"
     assert hasattr(db, "time") and callable(db.time.sleep)
-
-
-def test_the_classifier_names_exactly_the_transient_shapes():
-    ok = db._is_transient_transfer_error
-    assert ok(httpx.RemoteProtocolError("reset"))
-    assert ok(httpx.ConnectError("refused"))
-    assert ok(httpx.ReadError("eof"))
-    assert ok(httpx.WriteTimeout("slow"))
-    assert ok(StorageException({"statusCode": "503", "message": "unavailable"}))
-    assert ok(StorageException({"statusCode": 500, "message": "boom"}))
-    assert not ok(StorageException({"statusCode": "403", "message": "forbidden"}))
-    assert not ok(httpx.HTTPStatusError("400", request=None, response=None))
-    assert not ok(ValueError("nope"))
-    assert not ok(KeyError("storage_path"))
