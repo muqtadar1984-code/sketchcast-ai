@@ -50,13 +50,20 @@ def retry_transient(sb, gen: dict) -> str:
     r = sb.table("generation_shares").select("id").eq("generation_id", gen["id"]).limit(1).execute()
     if getattr(r, "data", None):
         return "assigned_blocked"
-    r = sb.table("jobs").select("id").eq("generation_id", gen["id"]).execute()
+    kind = str(gen.get("kind") or "presentation")
+    # Attempts = the BUILDER jobs for this generation: the one the DB trigger
+    # queued plus every retry, all of type = the generation's kind. The agent's
+    # own support_diagnose rows carry the same generation_id and used to be
+    # counted too, so with MAX_TRANSIENT_RETRIES = 2 the cap closed after ONE
+    # real retry (builder + diagnosis = 2 rows on the first failure; four on
+    # the second). Found in adversarial review, 2026-09-03.
+    r = sb.table("jobs").select("id").eq("generation_id", gen["id"]).eq("type", kind).execute()
     attempts = len(getattr(r, "data", None) or [])
     if attempts > MAX_TRANSIENT_RETRIES:
         return "retry_cap_reached"
     sb.table("generations").update({"status": "queued"}).eq("id", gen["id"]).execute()
     sb.table("jobs").insert(
-        {"generation_id": gen["id"], "type": str(gen.get("kind") or "presentation"), "status": "queued"}
+        {"generation_id": gen["id"], "type": kind, "status": "queued"}
     ).execute()
     return "requeued"
 

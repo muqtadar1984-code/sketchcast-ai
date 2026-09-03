@@ -294,6 +294,81 @@ def test_retry_transient_requeues_with_kind_type():
     assert job_rows and job_rows[0]["type"] == "presentation"
 
 
+class _TypedJobsSB(FakeSB):
+    """A FakeSB whose jobs rows carry a `type` and whose `.eq("type", …)` is
+    HONOURED, so a test can tell whether the cap counted the diagnosis rows.
+    The plain FakeSB ignores every filter, which is exactly how the original
+    over-count stayed green."""
+
+    def table(self, name):
+        q = _Q(self, name)
+        if name != "jobs":
+            return q
+        q._type = None
+
+        def eq(col, val, _q=q):
+            if col == "type":
+                _q._type = val
+            return _q
+
+        def execute(_q=q):
+            if hasattr(_q, "_insert_row"):
+                row = dict(_q._insert_row)
+                row.setdefault("id", "new-jobs")
+                return SimpleNamespace(data=[row])
+            rows = list(self.tables.get("jobs") or [])
+            if _q._type is not None:
+                rows = [r for r in rows if r.get("type") == _q._type]
+            return SimpleNamespace(data=rows)
+
+        q.eq = eq  # type: ignore[method-assign]
+        q.execute = execute  # type: ignore[method-assign]
+        return q
+
+
+def _builder(i):
+    return {"id": f"b{i}", "type": "presentation", "generation_id": _GEN["id"]}
+
+
+def _diagnosis(i):
+    return {"id": f"d{i}", "type": "support_diagnose", "generation_id": _GEN["id"]}
+
+
+def test_retry_cap_ignores_the_agents_own_diagnosis_rows():
+    """The prod shape after ONE failure with the support agent on: the builder
+    job plus its diagnosis job (and, on a manual report, a second one). Those
+    rows share the generation_id but they are not attempts; counting them
+    closed the cap after a single real retry."""
+    sb = _TypedJobsSB({"jobs": [_builder(1), _diagnosis(1), _diagnosis(2)], "generation_shares": []})
+    assert actions.retry_transient(sb, _GEN) == "requeued"
+    assert [row for t, row in sb.inserts if t == "jobs"], "a retry must have been queued"
+
+
+def test_retry_cap_allows_two_real_retries_then_stops():
+    """MAX_TRANSIENT_RETRIES = 2 means two retries AFTER the original build:
+    1 builder row → retry; 2 builder rows → retry; 3 → cap. Diagnosis rows
+    interleaved everywhere must not move that line."""
+    two = [_builder(1), _diagnosis(1), _builder(2), _diagnosis(2)]
+    sb = _TypedJobsSB({"jobs": two, "generation_shares": []})
+    assert actions.retry_transient(sb, _GEN) == "requeued"
+
+    three = two + [_builder(3), _diagnosis(3)]
+    sb = _TypedJobsSB({"jobs": three, "generation_shares": []})
+    assert actions.retry_transient(sb, _GEN) == "retry_cap_reached"
+    assert not sb.inserts
+
+
+def test_retry_counts_only_this_generations_own_kind():
+    """The filter is type = the generation's kind, so a worksheet's builder
+    rows never count against a presentation's cap (and vice versa) even if a
+    row somehow carried the other type."""
+    sb = _TypedJobsSB({"jobs": [_builder(1), dict(_builder(2), type="worksheet"),
+                                dict(_builder(3), type="worksheet")], "generation_shares": []})
+    assert actions.retry_transient(sb, _GEN) == "requeued"
+    queued = [row for t, row in sb.inserts if t == "jobs"]
+    assert queued and queued[0]["type"] == "presentation"
+
+
 # ── usage merge ───────────────────────────────────────────────────────────────
 def test_set_job_usage_merges_additively():
     from worker import client as wc
