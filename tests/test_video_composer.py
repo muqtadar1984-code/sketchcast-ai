@@ -91,3 +91,43 @@ def test_a_failed_segment_is_skipped_not_fatal(monkeypatch, tmp_path):
     # the counts stay honest: three videos were actually built
     assert m["video_segments_count"] == 3
     assert m["total_segments"] == 4
+
+
+def test_breaks_reach_the_provider_boundary(monkeypatch, tmp_path):
+    """PIPELINE-level, not unit-level: the regression lived at the composer's
+    call site, where speakable() was applied to the markup copy. A unit test
+    of text_clean would have passed throughout. This drives the real
+    compose loop and inspects exactly what synthesize() is handed.
+
+    Also guards the opposite mistake: the PLAIN copy must still carry no
+    tag, because Edge reads them aloud."""
+    _stub(monkeypatch, tmp_path)
+    seen = []
+
+    def recording_synthesize(text, out, *, voice_id=None, allow_premium=False,
+                             ssml_text=None, report=None, **kw):
+        seen.append({"text": text, "ssml": ssml_text})
+        if report is not None:
+            report.update({"used": "el-rachel", "downgraded": False})
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_bytes(b"mp3")
+        return Path(out)
+
+    monkeypatch.setattr(vc, "synthesize", recording_synthesize)
+    script, slides = _inputs(1)
+    seg = script["episodes"][0]["segments"][0]
+    seg["text"] = "It is called a ____ . Now trace how a price gets set."
+    seg["elevenlabs_text"] = ('It is called a ____ . <break time="0.3s"/> Now trace '
+                              '<break time="2s"/> how a price gets set.')
+
+    compose_episode_videos(script, slides)
+
+    assert seen, "synthesize() was never reached — the test proves nothing"
+    call = seen[0]
+    assert '<break time="0.3s"/>' in call["ssml"], (
+        "the markup copy lost its pauses before the provider saw it")
+    assert '<break time="2s"/>' in call["ssml"]
+    assert "____" not in call["ssml"] and "blank" in call["ssml"], (
+        "restoring breaks must not bring worksheet blanks back into speech")
+    assert "<break" not in call["text"], "the plain copy is for Edge — no tags"
+    assert "blank" in call["text"]

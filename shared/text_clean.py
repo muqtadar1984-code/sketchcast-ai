@@ -32,8 +32,16 @@ _SSML_TAG_RE = re.compile(
 _BLANK_RE = re.compile(r"[ \t]*(?:_{2,}|\.{4,}|…{2,}|-{4,})[ \t]*")
 
 
+def _speakable_prose(span: str) -> str:
+    """The blank and punctuation rules, applied to a run of PROSE only. Does
+    not strip tags and does not trim the ends — callers decide both."""
+    out = _BLANK_RE.sub(" blank ", span)
+    out = re.sub(r"\s+([,.;:!?])", r"\1", out)     # no space before punctuation
+    return re.sub(r"[ \t]{2,}", " ", out)
+
+
 def speakable(s) -> str:
-    """Text prepared for TTS specifically — never for the deck.
+    """Plain text prepared for a provider that reads tags ALOUD (Edge).
 
     A worksheet blank must not be SPOKEN, but it is legitimate PRINTED on a
     slide or in speaker notes, so this is deliberately separate from
@@ -44,9 +52,37 @@ def speakable(s) -> str:
     out = strip_ssml(s)
     if not out:
         return ""
-    out = _BLANK_RE.sub(" blank ", out)
-    out = re.sub(r"\s+([,.;:!?])", r"\1", out)     # no space before punctuation
-    out = re.sub(r"[ \t]{2,}", " ", out)
+    return _speakable_prose(out).strip()
+
+
+def speakable_ssml(s) -> str:
+    """The MARKUP copy prepared for a provider that honours it (ElevenLabs
+    today, Google next): blanks become the spoken word, prose is tidied, and
+    every allow-listed tag survives byte for byte.
+
+    This is the function the composer should have been given for the
+    ``ssml_text`` argument. It was given ``speakable()`` instead, which begins
+    with ``strip_ssml`` — so from commit e898f49 (2026-09-02) every
+    ``<break time="…"/>`` the script generator writes, including the travel
+    pause it injects at the top of each segment, was deleted before ANY
+    provider saw it. ElevenLabs received plain prose; the "premium pauses"
+    the prompt is built around never reached the voice. Measured: a real
+    lesson carries 146 breaks (~90 s of intended silence), all dropped.
+
+    The prose between tags is cleaned span by span, so a blank rule can never
+    reach inside a tag, and a tag can never be mistaken for a blank.
+    """
+    if not s:
+        return ""
+    text = str(s)
+    parts: list[str] = []
+    last = 0
+    for m in _SSML_TAG_RE.finditer(text):
+        parts.append(_speakable_prose(text[last:m.start()]))
+        parts.append(m.group(0))
+        last = m.end()
+    parts.append(_speakable_prose(text[last:]))
+    out = re.sub(r"[ \t]{2,}", " ", "".join(parts))
     return out.strip()
 
 

@@ -33,7 +33,7 @@ from typing import Callable, Optional
 
 from .models import VideoManifest, VideoSegment
 from .native_render import render_native_segment
-from shared.text_clean import speakable, strip_ssml
+from shared.text_clean import speakable, speakable_ssml, strip_ssml
 from shared.tts import synthesize
 
 from agent5_slides.theme import concepts_for_slides
@@ -356,7 +356,13 @@ def compose_episode_videos(
                 bnd = mp3.with_suffix(".words.json") if _scene_flag() else None
                 # `text` still feeds the deck and the on-frame fallback, where
                 # a printed blank is fine; only the SPOKEN copy drops it.
-                synthesize(speakable(text), mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=speakable(ssml), report=seg_report, boundaries_out=bnd)
+                # The two spoken copies are NOT the same function: the plain
+                # one is for a provider that reads tags aloud (Edge), the
+                # markup one for a provider that honours them. Passing
+                # speakable() for both deleted every <break> before any
+                # provider saw it (e898f49, 2026-09-02) — premium pauses were
+                # silently lost for a day. speakable_ssml() keeps the tags.
+                synthesize(speakable(text), mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=speakable_ssml(ssml), report=seg_report, boundaries_out=bnd)
                 used = seg_report.get("used")
                 downgraded = bool(seg_report.get("downgraded"))
                 audio_path = str(mp3)
