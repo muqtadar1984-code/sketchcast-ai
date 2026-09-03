@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -29,6 +30,30 @@ def admin() -> Client:
 
 
 # ── jobs / generations ───────────────────────────────────────────────
+
+# Jobs that REPORT ON a generation without building it. Their generation_id
+# names the generation under investigation — a support_diagnose job is filed
+# against a failed generation (auto) or a healthy, assigned one (a teacher's
+# report) — so mirroring THEIR lifecycle onto that row relabels someone else's
+# work. Measured in prod 2026-09-03: the worker marked a worksheet 'error' at
+# 11:50:12 (storage stream reset; credit refunded), the auto-filed diagnosis job
+# was claimed at 11:50:14 and flipped the same row back to 'processing', and
+# nothing ever wrote a terminal state again. The Library showed a spinner that
+# never ended, the ✕ was inert, and the book could not be deleted. Only the job
+# that BUILDS a generation may write its status.
+OBSERVER_JOB_TYPES = frozenset({"support_diagnose"})
+
+
+def generation_to_mirror(job: Optional[dict]) -> Optional[str]:
+    """The generation whose status THIS job's lifecycle may write, or None.
+
+    A builder job (presentation, worksheet, …) owns its generation row. An
+    observer job (support_diagnose) carries a generation_id it must never
+    relabel. index_book carries none, so it is a no-op either way."""
+    if not job or job.get("type") in OBSERVER_JOB_TYPES:
+        return None
+    return job.get("generation_id")
+
 
 def mirror_generation_status(sb: Client, generation_id, status: str) -> None:
     """Mirror a job's lifecycle onto its generation row. Best-effort, never raises.
@@ -86,8 +111,10 @@ def claim_next_job(sb: Client, job_type=None) -> Optional[dict]:
     claimed = upd.data[0]
     # The generation is being BUILT now, and the Library must say so: it is what
     # turns on the progress ring and the ETA, and what makes the ✕ stop offering
-    # a cancel that would cost the teacher a credit for nothing.
-    mirror_generation_status(sb, claimed.get("generation_id"), "processing")
+    # a cancel that would cost the teacher a credit for nothing. Only a BUILDER
+    # job says so — an observer job (support_diagnose) names a generation it is
+    # investigating, and claiming one must not relabel that row.
+    mirror_generation_status(sb, generation_to_mirror(claimed), "processing")
     return claimed
 
 
@@ -128,6 +155,12 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
             if exclude_ids and j["id"] in exclude_ids:
                 continue
             att = int(j.get("attempts") or 0)
+            # The generation this job may relabel — None for an observer job
+            # (support_diagnose), whose generation_id is the row it REPORTS ON.
+            # Auto-failing a stuck diagnosis must not mark a healthy, assigned
+            # lesson 'error' (and void its credit); requeuing one must not flip
+            # that lesson to 'queued'.
+            owned_gen = generation_to_mirror(j)
             # The .eq("status","processing") guard means a job another actor already
             # moved is skipped (returns no rows) — safe under any race.
             if att >= max_attempts:
@@ -139,7 +172,7 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
                 # poison-pill row sat in the Library forever AND kept its credit:
                 # credit_ledger_sync only voids on generations.status = 'error',
                 # which nothing here ever wrote.
-                mirror_generation_status(sb, j.get("generation_id"), "error")
+                mirror_generation_status(sb, owned_gen, "error")
                 if j.get("type") == "index_book" and j.get("book_id"):
                     try:  # stop the UI's "Finding chapters…" spinner
                         sb.table("books").update({"status": "error"}).eq("id", j["book_id"]).execute()
@@ -153,7 +186,7 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
                 if upd.data:
                     # Back in the queue, so the row must not stay "being built" —
                     # a stuck 'processing' would leave the ✕ inert forever.
-                    mirror_generation_status(sb, j.get("generation_id"), "queued")
+                    mirror_generation_status(sb, owned_gen, "queued")
                     requeued += 1
         if failed:
             logging.getLogger("worker").error(
@@ -627,10 +660,64 @@ def insert_tutor_seed_qa(
 
 # ── storage ──────────────────────────────────────────────────────────
 
+# Storage transfers cross Railway → Supabase's edge over HTTP/2 and carry the
+# largest payloads the worker moves: a whole textbook down, a rendered lesson
+# up. Either can be cut by the peer mid-body. Measured in prod 2026-09-03: six
+# threads fetched the same 30 MB PDF at once and the edge reset one stream
+# (`<StreamReset stream_id:1, error_code:2, remote_reset:True>`), which failed
+# that worksheet at progress 0 — a credit's worth of work lost to a two-second
+# blip, with nothing to retry it. Both transfers are idempotent (a download has
+# no side effect; uploads are upsert), so a second attempt is always safe.
+_TRANSFER_ATTEMPTS = 3
+_TRANSFER_BACKOFF_SECONDS = (2.0, 5.0)
+
+
+def _is_transient_transfer_error(exc: BaseException) -> bool:
+    """A transport-level failure worth one more try: the connection or stream
+    died (httpx.TransportError covers reset, timeout, disconnect, refused) or
+    the storage edge answered 5xx. A 4xx (missing object, forbidden) is not
+    transient and must surface at once."""
+    try:
+        import httpx
+
+        if isinstance(exc, httpx.TransportError):
+            return True
+    except Exception:  # noqa: BLE001 — httpx is a supabase dependency; be safe anyway
+        pass
+    text = str(exc)
+    # storage3 raises StorageException(dict) — the dict carries statusCode.
+    for arg in getattr(exc, "args", ()):
+        if isinstance(arg, dict):
+            code = str(arg.get("statusCode") or arg.get("status") or "")
+            if code.startswith("5"):
+                return True
+    return any(f"'statusCode': '{c}'" in text or f'"statusCode":{c}' in text
+               for c in ("500", "502", "503", "504"))
+
+
+def _transfer_with_retry(what: str, op):
+    """Run a storage transfer, retrying a transient transport failure
+    ``_TRANSFER_ATTEMPTS`` times with backoff. Anything else re-raises at once."""
+    log_ = logging.getLogger("worker")
+    for attempt in range(1, _TRANSFER_ATTEMPTS + 1):
+        try:
+            return op()
+        except Exception as exc:  # noqa: BLE001
+            if attempt >= _TRANSFER_ATTEMPTS or not _is_transient_transfer_error(exc):
+                raise
+            delay = _TRANSFER_BACKOFF_SECONDS[min(attempt, len(_TRANSFER_BACKOFF_SECONDS)) - 1]
+            log_.warning("%s failed on attempt %d/%d (%s: %s); retrying in %.0fs",
+                         what, attempt, _TRANSFER_ATTEMPTS, type(exc).__name__, exc, delay)
+            time.sleep(delay)
+
+
 def download_book(sb: Client, storage_path: str, dest: str | Path) -> Path:
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    data = sb.storage.from_("uploads").download(storage_path)
+    data = _transfer_with_retry(
+        f"download of {storage_path}",
+        lambda: sb.storage.from_("uploads").download(storage_path),
+    )
     dest.write_bytes(data)
     return dest
 
@@ -648,10 +735,15 @@ def upload_artifact(sb: Client, local_path: str | Path, dest_path: str) -> str:
     """Upload a local file to the `artifacts` bucket; return its storage path."""
     local_path = Path(local_path)
     ctype = _CONTENT_TYPES.get(local_path.suffix.lower(), "application/octet-stream")
-    sb.storage.from_("artifacts").upload(
-        dest_path,
-        local_path.read_bytes(),
-        {"content-type": ctype, "upsert": "true"},
+    payload = local_path.read_bytes()
+    # upsert: a retried upload overwrites its own partial predecessor.
+    _transfer_with_retry(
+        f"upload of {dest_path}",
+        lambda: sb.storage.from_("artifacts").upload(
+            dest_path,
+            payload,
+            {"content-type": ctype, "upsert": "true"},
+        ),
     )
     return dest_path
 
