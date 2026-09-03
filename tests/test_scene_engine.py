@@ -276,12 +276,23 @@ class TestAssets:
 
     def test_resolver_falls_back_to_vector_without_credentials(self, tmp_path,
                                                                monkeypatch):
-        for var in ("GOOGLE_AI_API_KEY", "GEMINI_API_KEY", "VERTEX_PROJECT_ID"):
+        """§20: AI failure never fails the lesson.
+
+        The visual library is now a SECOND source of rasters, independent of
+        the image credentials — on a developer machine its local index holds
+        the whole scene-asset cache, so this test began passing a raster back
+        and failing. That is the library working, not a fallback bug. Isolate
+        it, so what is under test is still the credential path.
+        """
+        import shared.visual_library as vl
+        for var in ("GOOGLE_AI_API_KEY", "GEMINI_API_KEY", "VERTEX_PROJECT_ID",
+                    "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"):
             monkeypatch.delenv(var, raising=False)
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "empty_library")
         resolve = make_resolver({"plant_cell": "a cell"}, prefer_ai=True,
                                 cache_dir=tmp_path)
         kind, asset = resolve("plant_cell")
-        assert kind == "vector"          # §20: AI failure never fails the lesson
+        assert kind == "vector"
 
     def test_resolver_unknown_key_is_none(self, tmp_path):
         resolve = make_resolver({}, prefer_ai=False, cache_dir=tmp_path)

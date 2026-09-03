@@ -236,6 +236,30 @@ def find(key: str, prompt: str, context: dict[str, Any] | None = None,
     """Find an approved reusable asset without invoking an AI model."""
     ctx = infer_context(key, prompt, context)
     threshold = float(os.getenv("VISUAL_LIBRARY_MIN_SCORE", "0.58")) if min_score is None else min_score
+    best, best_score, source = best_match(key, prompt, context, _ctx=ctx)
+    if best is None or best_score < threshold:
+        return None
+    return {**best, "match_score": round(best_score, 4),
+            "match_source": source, "context": ctx.__dict__}
+
+
+def threshold_now() -> float:
+    return float(os.getenv("VISUAL_LIBRARY_MIN_SCORE", "0.58"))
+
+
+def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
+               *, _ctx: LibraryContext | None = None):
+    """The best candidate and its score, WITHOUT applying the threshold.
+
+    Split out of find() so a near-miss is observable. find() returns None
+    below the cut, which is correct behaviour and useless evidence: the
+    question "is 0.58 the right threshold" cannot be answered from data that
+    only records the matches we already accepted. The decision log records
+    this score whether or not it cleared the bar.
+
+    Returns (row | None, score, source) where source is 'local' or 'remote'.
+    """
+    ctx = _ctx or infer_context(key, prompt, context)
 
     # Educational retrieval NEVER sees avatars. Filtered on both sides: the
     # remote query narrows in Postgres (cheap, and keeps the 250-row window for
@@ -245,6 +269,7 @@ def find(key: str, prompt: str, context: dict[str, Any] | None = None,
     rows = [r for r in _local_candidates() if not is_avatar_row(r)]
     best = max(rows, key=lambda r: _score(r, key, prompt, ctx), default=None)
     best_score = _score(best, key, prompt, ctx) if best else 0.0
+    source = "local" if best is not None else "none"
 
     sb = _sb()
     if sb is not None:
@@ -257,13 +282,46 @@ def find(key: str, prompt: str, context: dict[str, Any] | None = None,
             remote_best = max(remote, key=lambda r: _score(r, key, prompt, ctx), default=None)
             remote_score = _score(remote_best, key, prompt, ctx) if remote_best else 0.0
             if remote_score > best_score:
-                best, best_score = remote_best, remote_score
+                best, best_score, source = remote_best, remote_score, "remote"
         except Exception as exc:  # noqa: BLE001
             logger.debug("visual library remote search skipped: %s", exc)
 
-    if best is None or best_score < threshold:
-        return None
-    return {**best, "match_score": round(best_score, 4), "context": ctx.__dict__}
+    return best, best_score, source
+
+
+# ── decision log ─────────────────────────────────────────────────────────────
+# One line per visual request, so the threshold can be judged on evidence
+# rather than on taste. A false MISS costs an image call; a false HIT teaches
+# the wrong thing while looking confident, which is not the same kind of
+# mistake. The borderline band is what this exists to expose.
+#
+# Two sinks, no new infrastructure: a JSONL file for local analysis, and one
+# structured line on the normal logger so the same record is searchable in
+# Railway's log stream, where the worker's filesystem does not survive a
+# redeploy.
+DECISION_LOG = Path(os.getenv(
+    "VISUAL_LIBRARY_DECISION_LOG",
+    str(LIBRARY_DIR / "decisions.jsonl")))
+_DECISION_LOCK = __import__("threading").Lock()
+DECISION_PREFIX = "VISUAL_LIBRARY_DECISION"
+
+
+def log_decision(record: dict[str, Any]) -> None:
+    """Append one retrieval decision. Never raises: instrumentation that can
+    break a render is worse than no instrumentation."""
+    from datetime import datetime, timezone
+    entry = {**record, "timestamp": datetime.now(timezone.utc).isoformat()}
+    try:
+        logger.info("%s %s", DECISION_PREFIX, json.dumps(entry, default=str))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        with _DECISION_LOCK:
+            DECISION_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with open(DECISION_LOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, default=str) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def hydrate(key: str, prompt: str, cache_dir: Path,
