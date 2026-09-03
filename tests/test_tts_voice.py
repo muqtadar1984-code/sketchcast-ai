@@ -33,7 +33,16 @@ def test_premium_without_permission_resolves_to_free_default():
     assert v.tier == "free"
 
 
-def test_premium_with_permission_stays_premium():
+def _el_enabled(monkeypatch):
+    # The gate now has TWO inputs: a paid tier (allow_premium) AND a provider
+    # that is actually enabled + keyed on this worker. Yesterday the second was
+    # folded into the first by the caller; now resolve_voice checks it.
+    monkeypatch.setenv("ELEVENLABS_ENABLED", "true")
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
+
+
+def test_premium_with_permission_stays_premium(monkeypatch):
+    _el_enabled(monkeypatch)
     v = resolve_voice("el-adam", allow_premium=True)
     assert v.voice_id == "el-adam"
     assert v.provider == "elevenlabs"
@@ -51,6 +60,7 @@ def test_report_flags_a_silent_downgrade(monkeypatch, tmp_path):
 
 def test_report_clean_when_premium_allowed(monkeypatch, tmp_path):
     _stub_providers(monkeypatch)
+    _el_enabled(monkeypatch)
     report: dict = {}
     synthesize("hi", tmp_path / "b.mp3", voice_id="el-adam", allow_premium=True, ssml_text="hi", report=report)
     assert report["used"] == "el-adam"

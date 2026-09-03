@@ -173,18 +173,25 @@ def _scene_flag() -> bool:
 
 
 def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
-                    tts_voice, ffmpeg: str, avatars: dict | None = None) -> list:
+                    tts_voice, ffmpeg: str, avatars: dict | None = None,
+                    lang: str | None = None) -> list:
     """Per-line two-voice TTS -> one concatenated MP3 + measured line-start
     offsets (seconds). Teacher lines use the lesson's Edge voice; student
     lines an age-matched Edge voice (non-English falls back to the lesson
-    voice — age-matched voices are not guaranteed per locale)."""
+    voice — age-matched voices are not guaranteed per locale).
+
+    Dialogue is still Edge-only (Phase 1b routes it through the premium
+    provider). Until then a non-Edge pick falls to the free voice for the
+    LESSON LANGUAGE — it used to fall to English Aria, so an Arabic teacher
+    who picked a premium voice got an English conversation."""
     from shared.tts.providers import edge as edge_tts
-    from shared.tts.registry import default_voice, get_voice
+    from shared.tts.registry import default_voice, default_voice_id_for, get_voice
     from spike.scene_engine.whiteboard import student_voice_for_avatar
 
-    v = get_voice(tts_voice) or default_voice()
+    free = get_voice(default_voice_id_for(lang)) or default_voice()
+    v = get_voice(tts_voice) or free
     if v.provider != "edge":
-        v = default_voice()          # dialogue is Edge-only (two voices)
+        v = free                     # dialogue is Edge-only (two voices)
     teach_ref = v.ref
     stud_ref = student_voice_for_avatar(
         (avatars or {}).get("student", "avatar_student"),
@@ -234,8 +241,12 @@ def compose_episode_videos(
     allow_premium: bool = False,
     voice_report: Optional[dict] = None,
     direction: str = "ltr",
+    lang: Optional[str] = None,
 ) -> VideoManifest:
     """Generate a narrated, object-animated MP4 per segment.
+
+    ``lang`` is the lesson language; every TTS fallback (gate, cap, provider
+    failure) lands on that language's free voice rather than English Aria.
 
     ``branding`` = {accent_rgb, logo_path} applies the school's colour/logo to the
     animated slide (must match what Agent 5 baked into the deck). Any field may be
@@ -337,7 +348,7 @@ def compose_episode_videos(
                 mp3.with_suffix(".words.json").unlink(missing_ok=True)
                 starts = _synth_dialogue(script_seg["dialogue"], mp3, vid_dir,
                                          seg_id, tts_voice, ffmpeg,
-                                         avatars=_avatars)
+                                         avatars=_avatars, lang=lang)
                 script_seg["_dialogue_starts"] = starts
                 used = "dialogue-edge"
                 audio_path = str(mp3)
@@ -362,7 +373,7 @@ def compose_episode_videos(
                 # speakable() for both deleted every <break> before any
                 # provider saw it (e898f49, 2026-09-02) — premium pauses were
                 # silently lost for a day. speakable_ssml() keeps the tags.
-                synthesize(speakable(text), mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=speakable_ssml(ssml), report=seg_report, boundaries_out=bnd)
+                synthesize(speakable(text), mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=speakable_ssml(ssml), report=seg_report, boundaries_out=bnd, lang=lang)
                 used = seg_report.get("used")
                 downgraded = bool(seg_report.get("downgraded"))
                 audio_path = str(mp3)

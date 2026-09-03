@@ -169,13 +169,47 @@ def run_once(sb) -> bool:
             db.finish_job(sb, job["id"])
         else:
             process_generation(sb, job, gen_id)
+    except db.TransientTierError as exc:
+        # The account's plan could not be read right now, though the RPC is
+        # known good. Rendering FREE would hand a paying customer the wrong
+        # voice over a timeout, so the job goes back to the queue instead —
+        # under the same attempt cap the reaper uses for poison pills.
+        att = int(job.get("attempts") or 0)
+        if att >= 3:
+            log.error("Job %s: plan tier unresolvable after %d attempts: %r", job["id"], att, exc)
+            try:
+                db.finish_job(sb, job["id"], gen_id, error=f"plan tier unresolvable: {exc!r}"[:500])
+            except Exception:  # noqa: BLE001
+                pass
+            # Same hook the generic failure path gets: a tier outage that
+            # exhausts its retries is a console issue, not a quiet log line.
+            if _support_agent_enabled():
+                _auto_file_support_issue(sb, job, f"plan tier unresolvable: {exc!r}")
+        else:
+            log.warning("Job %s requeued (attempt %d): %r", job["id"], att + 1, exc)
+            try:
+                # The status guard is the reaper's: if the console or the
+                # reaper moved this row while we ran, we must not overwrite it.
+                upd = (sb.table("jobs")
+                       .update({"status": "queued", "progress": 0, "attempts": att + 1})
+                       .eq("id", job["id"]).eq("status", "processing").execute())
+                if upd.data:
+                    # Only a BUILDER job may relabel its generation (the
+                    # observer-job rule in db.generation_to_mirror). Only
+                    # process_generation raises TransientTierError today, so
+                    # this is always a builder — routed through the rule so
+                    # that stays true if an observer job ever reaches it.
+                    db.mirror_generation_status(sb, db.generation_to_mirror(job), "queued")
+            except Exception as exc2:  # noqa: BLE001
+                log.error("Job %s requeue failed: %s", job["id"], exc2)
     except Exception as exc:  # noqa: BLE001
         log.error("Job %s failed: %s", job["id"], exc)
         log.error(traceback.format_exc())
         try:
             # A support job's generation_id is the REPORTED (possibly healthy,
             # assigned) generation — an agent crash must never flip it to error.
-            mirror_gen = None if job_type == "support_diagnose" else gen_id
+            # One rule for every writer: db.generation_to_mirror decides.
+            mirror_gen = db.generation_to_mirror(job)
             db.finish_job(sb, job["id"], mirror_gen, error=str(exc)[:500])
         except Exception:  # noqa: BLE001
             pass
@@ -226,6 +260,11 @@ def main() -> None:
             )
     except Exception as exc:  # noqa: BLE001
         log.error("KEY CHECK errored: %s", exc)
+
+    # The premium-voice gate depends on plan_tier(). If this key cannot execute
+    # it, every job would quietly resolve to FREE — which looks like a slow
+    # day, not an outage. Say so once, loudly, at boot.
+    db.probe_plan_tier(sb)
 
     once = "--once" in sys.argv
     if once:

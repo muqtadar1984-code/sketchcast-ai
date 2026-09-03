@@ -543,8 +543,23 @@ _FEMALE_VOICE_HINTS = ("aria", "jenny", "emma", "ana", "ava", "michelle",
 
 
 def teacher_avatar_for_voice(voice_id: str | None) -> str:
-    v = (voice_id or "").lower()
-    if any(h in v for h in _FEMALE_VOICE_HINTS):
+    """The teacher avatar matching a voice. The registry's `gender` field is
+    the source of truth; the name-fragment list below is only a fallback for
+    ids the registry does not know (raw provider refs in dev scripts).
+
+    Measured before the field existed: eight female voices — every non-English
+    default and Rachel — were absent from the fragment list and cast the male
+    teacher. Pass the RESOLVED voice (after the tier gate), not the requested
+    one, or a downgraded premium pick casts the wrong avatar over Aria."""
+    try:
+        from shared.tts.registry import get_voice
+        v = get_voice(voice_id)
+        if v is not None:
+            return "avatar_teacher_female" if v.gender == "f" else "avatar_teacher"
+    except Exception:  # noqa: BLE001 — casting must never fail a render
+        pass
+    s = (voice_id or "").lower()
+    if any(h in s for h in _FEMALE_VOICE_HINTS):
         return "avatar_teacher_female"
     return "avatar_teacher"
 
