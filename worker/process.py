@@ -174,16 +174,6 @@ def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
         return None
 
 
-def _elevenlabs_enabled() -> bool:
-    """Worker-side gate for premium (ElevenLabs) TTS — defense in depth. Premium
-    voices run ONLY when the deployment enables the flag AND the key is present,
-    no matter what voice the request asked for."""
-    import os
-
-    on = os.getenv("ELEVENLABS_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
-    return on and bool(os.getenv("ELEVENLABS_API_KEY"))
-
-
 def _chapter_heal_enabled() -> bool:
     """Generation-time chapter self-heal (persisted per-chapter overrides). Turn on
     ONLY after applying app migration 0040 (the heal_* columns) — otherwise every
@@ -544,6 +534,29 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     owner_id = gen["owner_id"]
     book_id = book["id"]
     kind = gen.get("kind") or "presentation"
+
+    # PER-USER premium-voice gate, resolved HERE — before the download and the
+    # analysis — so that a transient failure requeues a job that has cost
+    # nothing yet, rather than re-buying a Sonnet analysis three times. And
+    # only consulted when the answer can change the render: a premium provider
+    # must be enabled on this worker, and either the account's `auto` could
+    # become premium (provider is not `legacy`) or the request names a premium
+    # id. Under today's production state (legacy, ElevenLabs effectively off)
+    # no lookup happens at all, so the dark ship adds no new way to fail.
+    tier_info: dict = {"tier": "skipped", "override": None, "paid": False, "error": None}
+    allow_premium = False
+    if kind == "presentation":
+        from shared.tts import enabled_providers
+        from shared.tts.registry import get_voice, premium_provider
+        _req_voice = get_voice((gen.get("params") or {}).get("tts_voice"))
+        premium_available = bool(enabled_providers() - {"edge"})
+        if premium_available and (premium_provider() != "legacy"
+                                  or (_req_voice is not None and _req_voice.tier == "premium")):
+            tier_info = db.resolve_tier(sb, owner_id)   # may raise TransientTierError → requeue
+            allow_premium = bool(tier_info["paid"])
+            if tier_info.get("error"):
+                logger.error("generation %s: plan tier unresolved (%s) — rendering FREE",
+                             generation_id, tier_info["error"])
     # Idempotent re-run: if the reaper requeued this generation after the worker
     # died mid-run, drop any artifact rows it already produced so the re-run can't
     # leave duplicates (deterministic storage paths are overwritten on re-upload).
@@ -943,39 +956,33 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
 
             params = gen.get("params") or {}
             narration_style = params.get("narration_style") or "socratic"
-            tts_voice = params.get("tts_voice")  # voice-registry id; None → free Edge default
-            if lesson_lang != "en":
-                from shared.tts.registry import default_voice_id_for, get_voice
+            tts_voice_requested = params.get("tts_voice")  # registry id, "auto", or None
 
-                _v = get_voice(tts_voice)
-                if not tts_voice:
-                    # No explicit pick: the matching free Edge voice — an
-                    # English voice reading Malay/Arabic is wrong.
-                    tts_voice = default_voice_id_for(lesson_lang)
-                elif (
-                    _v is not None
-                    and _v.provider == "edge"
-                    and _v.lang != lesson_lang
-                    and not (gen.get("params") or {}).get("language")
-                ):
-                    # Stale pre-language params (e.g. edge-aria pinned before
-                    # the book's language was detected) being REGENERATED under
-                    # the book-language fallback: remap to the matching voice.
-                    # An EXPLICIT params.language choice always keeps its voice.
-                    tts_voice = default_voice_id_for(lesson_lang)
-            allow_premium = _elevenlabs_enabled()
+            # The premium gate (`allow_premium`, `tier_info`) was resolved at
+            # the top of process_generation, before any expensive work. This
+            # used to be `_elevenlabs_enabled()`, a deployment flag: everyone
+            # or no one, never the account's plan. Now the account that
+            # GENERATES decides (paying teacher or school → premium; anyone
+            # else → free; students receive whatever their teacher produced).
+            from shared.tts import enabled_providers, pick_voice_id, resolve_voice
+
+            # The concrete voice this generation renders with. `auto` (or no
+            # pick) is the only route to a premium DEFAULT; an explicit id is
+            # honoured as sent and gated below. The stale-params remap for
+            # non-English books is unchanged.
+            tts_voice = pick_voice_id(
+                tts_voice_requested, lang=lesson_lang, allow_premium=allow_premium,
+                explicit_language=bool(params.get("language")))
 
             # Avatar casting: teacher matches the narration VOICE, student
             # matches the book's GRADE band (auto-detected at upload,
             # teacher-editable), gender seeded by generation id so retries
-            # render the identical character.
-            from shared.tts.registry import default_voice
+            # render the identical character. Cast from the RESOLVED voice —
+            # after the gate — so a downgraded premium pick casts the avatar
+            # of the voice that will actually speak.
             from spike.scene_engine.whiteboard import (
                 student_avatar_for_grade, teacher_avatar_for_voice)
-            # cast against the voice that will actually SPEAK — with no
-            # explicit pick, that is the registry default (Aria, female),
-            # not "no voice" (which once cast a male teacher over her)
-            effective_voice = tts_voice or default_voice().voice_id
+            effective_voice = resolve_voice(tts_voice, allow_premium, lang=lesson_lang).voice_id
             avatars = {
                 "teacher": teacher_avatar_for_voice(effective_voice),
                 "student": student_avatar_for_grade(book.get("grade"),
@@ -1121,7 +1128,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 video = compose_episode_videos(
                     script_data=part_scripts, slide_manifest=slides, branding=branding,
                     tts_voice=tts_voice, allow_premium=allow_premium, voice_report=voice_report,
-                    direction=lesson_dir,
+                    direction=lesson_dir, lang=lesson_lang,
                 ).model_dump()
 
                 final = render_final_video(video_manifest=video).model_dump()
@@ -1185,12 +1192,24 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 db.merge_generation_params(sb, generation_id, {
                     "tts_voice_used": (voice_report.get("used") or [None])[0],
                     "tts_voice_downgraded": bool(voice_report.get("downgraded")),
+                    # The gate's inputs, so a downgrade can be explained from
+                    # the row alone: what the app sent, what tier the account
+                    # resolved to (or "error"), and whether premium was allowed.
+                    "tts_voice_requested": tts_voice_requested,
+                    "tts_voice_resolved": tts_voice,
+                    # 'override' when the console comp decided it (the founder's
+                    # account: plan_tier says trial, the override says premium);
+                    # the error string when a read failed; else the plan tier.
+                    "tts_tier_resolved": ("override" if tier_info.get("override")
+                                          else tier_info.get("error") or tier_info.get("tier") or "unknown"),
+                    "tts_premium_allowed": bool(allow_premium),
                 })
                 if voice_report.get("downgraded"):
                     logger.warning(
                         "generation %s: requested premium voice %r but rendered %s — "
-                        "set ELEVENLABS_ENABLED=true + ELEVENLABS_API_KEY on the worker.",
+                        "tier=%s paid=%s providers=%s.",
                         generation_id, tts_voice, voice_report.get("used"),
+                        tier_info.get("tier"), tier_info.get("paid"), sorted(enabled_providers()),
                     )
             if part_ref is not None:
                 # The chapter name and the part's position always travel

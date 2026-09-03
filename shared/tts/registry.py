@@ -1,13 +1,24 @@
 """Voice registry — the single source of selectable narration voices.
 
-Adding a new voice (Edge or ElevenLabs) = adding one entry here. No code
-changes anywhere else. The web voice-picker and the worker both read this list,
-so they can never drift.
+Adding a new voice = adding one entry here. The worker reads this list; the
+app keeps its OWN copy in sketchcast-app/src/utils/narration.ts (and the
+tutor a third in utils/tutor/models.ts), so an entry added here must be
+mirrored there or the picker cannot offer it. A `/api/voices` that serves this
+list is the ticketed follow-up.
 
-Gating rule (enforced server-side in ``shared.tts.synthesize``): entries with
-``tier='premium'`` (all ElevenLabs voices) are selectable ONLY when the paid/
-enabled flag is on. The free tier sees and gets only ``tier='free'`` voices, and
-the free Edge voice is always the default.
+Gating rule (enforced server-side in ``shared.tts.resolve_voice``): entries
+with ``tier='premium'`` render only for a PAID account AND only when their
+provider is enabled on the worker. The free tier gets ``tier='free'`` voices,
+and the free voice for the lesson's language is always the default.
+
+The premium PROVIDER is one variable, ``TTS_PREMIUM_PROVIDER``:
+
+    legacy      today's behaviour — no premium default; premium only on an
+                explicit pick. The documented rollback target, because it is
+                the only state that has ever run in production.
+    google      Google Cloud TTS is the premium default (entries land in 1b).
+    elevenlabs  ElevenLabs is the premium default — a state that has never
+                run; it needs a durable cap first.
 """
 
 from __future__ import annotations
@@ -15,16 +26,40 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+# The app sends this for a FORM DEFAULT (teacher did not touch the picker);
+# a literal id means an explicit pick. The worker resolves it per account tier
+# and lesson language. Until the app sends it, None/"" mean the same thing.
+AUTO_VOICE_ID = "auto"
+
+# Tiers that unlock premium voices. An explicit allow-list: `promo` (the
+# expired launch trial, branch still live in plan_tier) and any unknown string
+# are FREE. Mirrors the app's plan vocabulary in migration 0086.
+PAID_TIERS = frozenset({"pro", "pro_plus", "family", "homeschool", "school"})
+
+_PROVIDERS = ("legacy", "google", "elevenlabs")
+
+
+def premium_provider() -> str:
+    """Which family a PAID account's `auto` resolves to. Unknown values fall
+    back to `legacy` (no premium default) — the safe direction."""
+    v = (os.getenv("TTS_PREMIUM_PROVIDER") or "legacy").strip().lower()
+    return v if v in _PROVIDERS else "legacy"
+
 
 @dataclass(frozen=True)
 class TTSVoice:
     voice_id: str          # our STABLE id (stored in generation params) — never the raw provider id
     label: str             # human label for the picker
-    provider: str          # "edge" (free) | "elevenlabs" (premium)
+    provider: str          # "edge" (free) | "elevenlabs" | "google" (premium)
     tier: str              # "free" | "premium"
-    ref: str               # provider-specific id: Edge voice name, or ElevenLabs voice_id
+    ref: str               # provider-specific id: Edge voice name, ElevenLabs voice_id, Google voice name
     style_tags: tuple[str, ...] = field(default_factory=tuple)
-    lang: str = "en"       # ISO 639-1 — pairs the voice with a lesson language
+    lang: str = "en"       # ISO 639-1 — pairs the voice with a lesson language; "*" = multilingual
+    # Explicit, not inferred. Avatar casting used to substring-match voice
+    # names against a list of female first names; eight female voices (every
+    # non-English default, and Rachel) were missing from it and cast the male
+    # teacher. A field cannot be forgotten the way a list entry can.
+    gender: str = "f"      # "f" | "m"
 
 
 # ── The registry ────────────────────────────────────────────────────────────
@@ -35,48 +70,92 @@ _EL_DEFAULT_REF = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # Ra
 VOICES: list[TTSVoice] = [
     # Free — Microsoft Edge (no key, $0). The first entry is the global default.
     TTSVoice("edge-aria",   "Aria — neutral (free)",         "edge", "free", "en-US-AriaNeural",   ("neutral", "clear")),
-    TTSVoice("edge-guy",    "Guy — warm (free)",             "edge", "free", "en-US-GuyNeural",    ("warm", "male")),
+    TTSVoice("edge-guy",    "Guy — warm (free)",             "edge", "free", "en-US-GuyNeural",    ("warm", "male"), gender="m"),
     TTSVoice("edge-neerja", "Neerja — Indian English (free)","edge", "free", "en-IN-NeerjaNeural", ("indian", "warm")),
     TTSVoice("edge-sonia",  "Sonia — British (free)",        "edge", "free", "en-GB-SoniaNeural",  ("british", "calm")),
     # Free — per-language Edge voices (auto-picked when a lesson's language
     # matches; see shared/languages.py). Female default + one male option each.
     TTSVoice("edge-yasmin",    "Yasmin — Bahasa Melayu (free)",   "edge", "free", "ms-MY-YasminNeural",    ("warm",), "ms"),
-    TTSVoice("edge-osman",     "Osman — Bahasa Melayu (free)",    "edge", "free", "ms-MY-OsmanNeural",     ("male",), "ms"),
+    TTSVoice("edge-osman",     "Osman — Bahasa Melayu (free)",    "edge", "free", "ms-MY-OsmanNeural",     ("male",), "ms", gender="m"),
     TTSVoice("edge-zariyah",   "Zariyah — العربية (free)",         "edge", "free", "ar-SA-ZariyahNeural",   ("warm",), "ar"),
-    TTSVoice("edge-hamed",     "Hamed — العربية (free)",           "edge", "free", "ar-SA-HamedNeural",     ("male",), "ar"),
+    TTSVoice("edge-hamed",     "Hamed — العربية (free)",           "edge", "free", "ar-SA-HamedNeural",     ("male",), "ar", gender="m"),
     TTSVoice("edge-denise",    "Denise — Français (free)",        "edge", "free", "fr-FR-DeniseNeural",    ("warm",), "fr"),
-    TTSVoice("edge-henri",     "Henri — Français (free)",         "edge", "free", "fr-FR-HenriNeural",     ("male",), "fr"),
+    TTSVoice("edge-henri",     "Henri — Français (free)",         "edge", "free", "fr-FR-HenriNeural",     ("male",), "fr", gender="m"),
     TTSVoice("edge-elvira",    "Elvira — Español (free)",         "edge", "free", "es-ES-ElviraNeural",    ("warm",), "es"),
-    TTSVoice("edge-alvaro",    "Álvaro — Español (free)",         "edge", "free", "es-ES-AlvaroNeural",    ("male",), "es"),
+    TTSVoice("edge-alvaro",    "Álvaro — Español (free)",         "edge", "free", "es-ES-AlvaroNeural",    ("male",), "es", gender="m"),
     TTSVoice("edge-francisca", "Francisca — Português (free)",    "edge", "free", "pt-BR-FranciscaNeural", ("warm",), "pt"),
-    TTSVoice("edge-antonio",   "Antônio — Português (free)",      "edge", "free", "pt-BR-AntonioNeural",   ("male",), "pt"),
+    TTSVoice("edge-antonio",   "Antônio — Português (free)",      "edge", "free", "pt-BR-AntonioNeural",   ("male",), "pt", gender="m"),
     TTSVoice("edge-shruti",    "Shruti — తెలుగు (free)",           "edge", "free", "te-IN-ShrutiNeural",    ("warm",), "te"),
-    TTSVoice("edge-mohan",     "Mohan — తెలుగు (free)",            "edge", "free", "te-IN-MohanNeural",     ("male",), "te"),
+    TTSVoice("edge-mohan",     "Mohan — తెలుగు (free)",            "edge", "free", "te-IN-MohanNeural",     ("male",), "te", gender="m"),
     TTSVoice("edge-aarohi",    "Aarohi — मराठी (free)",            "edge", "free", "mr-IN-AarohiNeural",    ("warm",), "mr"),
-    TTSVoice("edge-manohar",   "Manohar — मराठी (free)",           "edge", "free", "mr-IN-ManoharNeural",   ("male",), "mr"),
+    TTSVoice("edge-manohar",   "Manohar — मराठी (free)",           "edge", "free", "mr-IN-ManoharNeural",   ("male",), "mr", gender="m"),
     TTSVoice("edge-swara",     "Swara — हिन्दी (free)",             "edge", "free", "hi-IN-SwaraNeural",     ("warm",), "hi"),
-    TTSVoice("edge-madhur",    "Madhur — हिन्दी (free)",            "edge", "free", "hi-IN-MadhurNeural",    ("male",), "hi"),
-    # Premium — ElevenLabs (key + enabled flag required; voices are multilingual).
-    TTSVoice("el-rachel",   "Rachel — natural (premium)",    "elevenlabs", "premium", _EL_DEFAULT_REF,       ("warm", "natural")),
-    TTSVoice("el-adam",     "Adam — deep (premium)",         "elevenlabs", "premium", "pNInz6obpgDQGcFmaJgB", ("deep", "male")),
+    TTSVoice("edge-madhur",    "Madhur — हिन्दी (free)",            "edge", "free", "hi-IN-MadhurNeural",    ("male",), "hi", gender="m"),
+    # Premium — ElevenLabs (key + enabled flag required). lang="*": the
+    # configured model is multilingual (eleven_turbo_v2_5 as of 2026-09-03).
+    TTSVoice("el-rachel",   "Rachel — natural (premium)",    "elevenlabs", "premium", _EL_DEFAULT_REF,       ("warm", "natural"), "*"),
+    TTSVoice("el-adam",     "Adam — deep (premium)",         "elevenlabs", "premium", "pNInz6obpgDQGcFmaJgB", ("deep", "male"),    "*", gender="m"),
+    # Premium — Google Cloud TTS: entries arrive with the provider (Phase 1b).
 ]
 
-DEFAULT_VOICE_ID = "edge-aria"  # the free default — reproduces today's behaviour
+DEFAULT_VOICE_ID = "edge-aria"  # the free English default — reproduces today's behaviour
 
 _BY_ID = {v.voice_id: v for v in VOICES}
 
 
-def default_voice_id_for(lang: str | None) -> str:
-    """The free default voice for a lesson language (English → global default).
+def _spoken_lang(lang: str | None) -> str:
+    """Jawi (ms-arab) is written Malay in the Arabic script — SPOKEN it's Malay."""
+    return "ms" if lang == "ms-arab" else (lang or "en")
 
-    Jawi (ms-arab) is written Malay in the Arabic script — SPOKEN it's Malay, so
-    its narration uses the Malay voice.
-    """
-    want = "ms" if lang == "ms-arab" else (lang or "en")
+
+def default_voice_id_for(lang: str | None) -> str:
+    """The free default voice for a lesson language (English → global default)."""
+    want = _spoken_lang(lang)
     for v in VOICES:
         if v.tier == "free" and v.lang == want:
             return v.voice_id
     return DEFAULT_VOICE_ID
+
+
+def default_premium_voice_id_for(lang: str | None, gender: str = "f") -> str | None:
+    """The premium voice a PAID account's `auto` resolves to for a language,
+    from the ACTIVE premium provider — or None when there is none (the
+    `legacy` setting, or a family with no entry for the language). The caller
+    then uses the free default. Enablement (key present, flag on) is checked
+    by shared.tts, not here."""
+    provider = premium_provider()
+    if provider == "legacy":
+        return None
+    want = _spoken_lang(lang)
+    pool = [v for v in VOICES if v.provider == provider and v.tier == "premium"]
+    for exact_lang in (True, False):
+        for v in pool:
+            if (v.lang == want if exact_lang else v.lang == "*") and v.gender == gender:
+                return v.voice_id
+    for exact_lang in (True, False):        # any gender rather than nothing
+        for v in pool:
+            if v.lang == want if exact_lang else v.lang == "*":
+                return v.voice_id
+    return None
+
+
+def equivalent_voice_id(voice_id: str | None, provider: str) -> str | None:
+    """The same voice, as near as the registry can say, in another PREMIUM
+    family: same gender, same language (a multilingual entry matches any).
+
+    This is what makes rollback honest. A generation created while Google was
+    the default stores a `g-*` id, and "New version" copies params forward; when
+    the provider is switched back, that id must land on its ElevenLabs
+    counterpart (or the free voice), never on a disabled provider and never on
+    English Aria for an Arabic lesson."""
+    v = get_voice(voice_id)
+    if v is None or v.tier != "premium":
+        return None
+    pool = [x for x in VOICES if x.provider == provider and x.tier == "premium"]
+    for x in pool:
+        if x.gender == v.gender and (x.lang == v.lang or x.lang == "*" or v.lang == "*"):
+            return x.voice_id
+    return None
 
 
 def get_voice(voice_id: str | None) -> TTSVoice | None:
