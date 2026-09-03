@@ -205,3 +205,56 @@ class TestSpeakableBlanks:
         """snake_case in a term should not become "blank"."""
         from shared.text_clean import speakable
         assert speakable("the cell_wall layer") == "the cell_wall layer"
+
+
+class TestSpeakableSsmlKeepsBreaks:
+    """speakable() begins with strip_ssml. Handing it the MARKUP copy of the
+    narration deleted every <break> the script generator writes, before any
+    provider saw it — so ElevenLabs received plain prose from e898f49
+    (2026-09-02) onward and the pauses the prompt is built around never
+    reached the voice. speakable_ssml() is the copy a markup-honouring
+    provider must be given."""
+
+    def test_a_break_survives(self):
+        from shared.text_clean import speakable_ssml
+        s = 'Now trace <break time="0.3s"/> how a price <break time="2s"/> gets set.'
+        assert speakable_ssml(s) == s
+
+    def test_blanks_are_still_spoken_as_words(self):
+        """The fix must not undo what e898f49 fixed."""
+        from shared.text_clean import speakable_ssml
+        out = speakable_ssml('It is called a ____ . <break time="1s"/> Say it.')
+        assert "____" not in out
+        assert "blank" in out
+        assert '<break time="1s"/>' in out
+
+    def test_a_blank_rule_can_never_reach_inside_a_tag(self):
+        """Prose is cleaned span by span; the dots in a time value or a
+        long attribute must never be read as a fill-in-the-blank leader."""
+        from shared.text_clean import speakable_ssml
+        tag = '<break time="0.3s"/>'
+        assert tag in speakable_ssml(f"one {tag} two")
+        assert speakable_ssml(tag) == tag
+
+    def test_punctuation_tidy_stays_within_a_span(self):
+        from shared.text_clean import speakable_ssml
+        out = speakable_ssml('Cells , <break time="0.5s"/> tissues .')
+        assert out.startswith("Cells,")
+        assert out.endswith("tissues.")
+
+    def test_every_allowlisted_tag_is_preserved_not_only_break(self):
+        from shared.text_clean import _SSML_TAG_RE, speakable_ssml
+        s = '<speak>A <prosody rate="slow">slow</prosody> word <break time="1s"/></speak>'
+        assert speakable_ssml(s) == s
+        assert len(_SSML_TAG_RE.findall(speakable_ssml(s))) == 5
+
+    def test_falsy_input_is_empty(self):
+        from shared.text_clean import speakable_ssml
+        assert speakable_ssml(None) == ""
+        assert speakable_ssml("") == ""
+
+    def test_the_plain_copy_still_strips(self):
+        """speakable() is unchanged in behaviour: the split into a shared
+        prose helper must not have altered the Edge path."""
+        from shared.text_clean import speakable
+        assert speakable('Hi <break time="0.3s"/> there ____ .') == "Hi there blank."
