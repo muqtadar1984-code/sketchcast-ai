@@ -77,6 +77,61 @@ def canonical_key(value: str) -> str:
     return "_".join(sorted(set(core))) or "asset"
 
 
+# ── avatars are not educational visuals ──────────────────────────────────────
+# The schema has always had asset_type/role/age_band, but publish_generated
+# never set them, so every avatar was stored as asset_type='visual' (the column
+# default). Measured on the real library: 9 avatars, all typed 'visual'.
+#
+# That is not a cosmetic mislabel. `find()` is the reuse path for EDUCATIONAL
+# artwork, and it filtered on status alone — so a lesson asking for a picture
+# of a person could be handed the teacher avatar, and a persistent character
+# would appear mid-diagram. The two retrieval domains share one table by
+# design; asset_type is the only thing keeping them apart.
+
+_AVATAR_ROLES = ("teacher", "student")
+_AGE_BAND_RE = re.compile(r"(\d{1,2}_\d{1,2})")
+
+
+def is_avatar_key(key: str) -> bool:
+    """Avatar identity from the asset key alone.
+
+    Keys are the durable signal here: the roster is named avatar_* by the
+    renderer (spike/scene_engine/whiteboard.py), and a key is available
+    everywhere, including for rows written before asset_type was populated.
+    """
+    return str(key or "").strip().lower().startswith("avatar")
+
+
+def avatar_fields(key: str) -> dict[str, Any]:
+    """asset_type/role/age_band for an asset key.
+
+    Returns the ordinary-visual shape for anything that is not an avatar, so
+    callers can merge it unconditionally.
+    """
+    k = str(key or "").strip().lower()
+    if not is_avatar_key(k):
+        return {"asset_type": "visual", "role": None, "age_band": None}
+    role = next((r for r in _AVATAR_ROLES if r in k), None)
+    m = _AGE_BAND_RE.search(k)
+    return {"asset_type": "avatar", "role": role,
+            "age_band": m.group(1) if m else None}
+
+
+def is_avatar_row(row: dict[str, Any] | None) -> bool:
+    """Whether a stored row is an avatar, by type OR by key.
+
+    Deliberately belt-and-braces. A missing asset_type reads as a VISUAL (that
+    is the column default and what every pre-fix row carries), so the key check
+    is what keeps an already-published avatar out of educational retrieval
+    without a backfill.
+    """
+    if not row:
+        return False
+    if str(row.get("asset_type") or "").lower() == "avatar":
+        return True
+    return is_avatar_key(str(row.get("asset_key") or row.get("canonical_key") or ""))
+
+
 def _tokens(*values: str) -> set[str]:
     text = " ".join(str(v or "") for v in values).lower()
     return {t for t in re.split(r"[^a-z0-9]+", text) if t and t not in _STOP}
@@ -182,7 +237,12 @@ def find(key: str, prompt: str, context: dict[str, Any] | None = None,
     ctx = infer_context(key, prompt, context)
     threshold = float(os.getenv("VISUAL_LIBRARY_MIN_SCORE", "0.58")) if min_score is None else min_score
 
-    rows = _local_candidates()
+    # Educational retrieval NEVER sees avatars. Filtered on both sides: the
+    # remote query narrows in Postgres (cheap, and keeps the 250-row window for
+    # real visuals rather than spending it on avatars), and both result sets
+    # are filtered again in Python by is_avatar_row(), which also catches rows
+    # published before asset_type was set.
+    rows = [r for r in _local_candidates() if not is_avatar_row(r)]
     best = max(rows, key=lambda r: _score(r, key, prompt, ctx), default=None)
     best_score = _score(best, key, prompt, ctx) if best else 0.0
 
@@ -190,7 +250,10 @@ def find(key: str, prompt: str, context: dict[str, Any] | None = None,
     if sb is not None:
         try:
             remote = (sb.table("visual_assets").select("*")
-                      .eq("status", "approved").limit(250).execute().data or [])
+                      .eq("status", "approved")
+                      .neq("asset_type", "avatar")
+                      .limit(250).execute().data or [])
+            remote = [r for r in remote if not is_avatar_row(r)]
             remote_best = max(remote, key=lambda r: _score(r, key, prompt, ctx), default=None)
             remote_score = _score(remote_best, key, prompt, ctx) if remote_best else 0.0
             if remote_score > best_score:
@@ -258,6 +321,9 @@ def publish_generated(asset_key: str, prompt: str, png_path: Path,
         "provenance": "generated",
         "content_hash": digest,
         "quality": (metadata or {}).get("quality", "renderer_validated"),
+        # Without this the column default ('visual') applied to everything, and
+        # the whole avatar roster entered the educational library.
+        **avatar_fields(asset_key),
     }
     register_local(row)
 
