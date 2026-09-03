@@ -172,9 +172,44 @@ def _scene_flag() -> bool:
     return os.getenv("VIDEO_ENGINE", "").strip().lower() == "scene"
 
 
+_PAID_PROVIDERS = ("elevenlabs", "google")
+
+
+def _fold_stats(into: dict, r: dict) -> None:
+    """Sum one synthesize() report into a stats dict.
+
+    `chars` counts ONLY what a PAID provider billed: a segment that fell back
+    to Edge is free, and its characters must not be booked to the paid
+    provider's ledger (they were — every fallback in a mixed lesson was
+    billed as premium). Free characters are kept apart as `free_chars`. The
+    provider's own `chars` inside `stats` is the same figure as the report's
+    and is skipped — that duplicate was the double count on the dialogue
+    path. Booleans are ints in Python and are not summed."""
+    for k, v in (r.get("stats") or {}).items():
+        if k == "chars" or isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        into[k] = into.get(k, 0) + v
+    billed = int(r.get("chars") or 0)
+    key = "chars" if r.get("provider") in _PAID_PROVIDERS else "free_chars"
+    into[key] = into.get(key, 0) + billed
+
+
+def _same_prose(markup_copy: str, plain_copy: str) -> bool:
+    """Do the two spoken copies carry the same words? The markup copy is what
+    a premium provider speaks — and what words.json is timed from — while
+    the captions and cue phrases are built from the plain copy. If the model
+    paraphrased between them, timing words the captions never show cues
+    nothing, so the caller speaks the plain copy instead."""
+    from shared.tts.chunks import words_of
+    a = [w.lower() for w in words_of(speakable(strip_ssml(markup_copy or "")))]
+    b = [w.lower() for w in words_of(speakable(plain_copy or ""))]
+    return a == b
+
+
 def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
                     tts_voice, ffmpeg: str, avatars: dict | None = None,
-                    lang: str | None = None) -> list:
+                    lang: str | None = None, allow_premium: bool = False,
+                    report: dict | None = None) -> list:
     """Per-line two-voice TTS -> one concatenated MP3 + measured line-start
     offsets (seconds). Teacher lines use the lesson's Edge voice; student
     lines an age-matched Edge voice (non-English falls back to the lesson
@@ -184,19 +219,25 @@ def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
     provider). Until then a non-Edge pick falls to the free voice for the
     LESSON LANGUAGE — it used to fall to English Aria, so an Arabic teacher
     who picked a premium voice got an English conversation."""
+    from shared.tts import resolve_voice
     from shared.tts.providers import edge as edge_tts
     from shared.tts.registry import default_voice, default_voice_id_for, get_voice
     from spike.scene_engine.whiteboard import student_voice_for_avatar
 
     free = get_voice(default_voice_id_for(lang)) or default_voice()
-    v = get_voice(tts_voice) or free
-    if v.provider != "edge":
-        v = free                     # dialogue is Edge-only (two voices)
-    teach_ref = v.ref
+    # The TEACHER's lines go through synthesize() — gate, cap, report, and the
+    # premium provider when the account has one. Conversational is the app's
+    # default from grade 10, so leaving dialogue Edge-only would have made
+    # premium meaningless for every secondary-school lesson. The STUDENT's
+    # lines stay on the free age-matched Edge voice: no provider offers an
+    # age-banded child voice, and the student is a foil, not the narrator.
+    teacher = resolve_voice(tts_voice, allow_premium, lang=lang)
     stud_ref = student_voice_for_avatar(
         (avatars or {}).get("student", "avatar_student"),
-        getattr(v, "lang", "en") or "en") or teach_ref
+        getattr(free, "lang", "en") or "en") or free.ref
     starts, cursor, parts = [], 0.0, []
+    used_voice, downgraded = teacher.voice_id, False
+    reasons: set[str] = set()
     for i, d in enumerate(dialogue):
         # belt to the sanitizer's braces: Edge reads SSML tags ALOUD, and it
         # reads worksheet blanks aloud too ("underscore underscore ...")
@@ -204,9 +245,21 @@ def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
         if not line:
             continue
         f = vid_dir / f"{seg_id}_dl{i}.mp3"
-        edge_tts.synthesize(
-            line, f,
-            stud_ref if str(d.get("who")) == "student" else teach_ref)
+        if str(d.get("who")) == "student":
+            edge_tts.synthesize(line, f, stud_ref)
+        else:
+            r: dict = {}
+            # The REQUESTED id goes in, not the resolved one: resolving here
+            # first made a gate downgrade look like a free pick, so the row
+            # never said the lesson was downgraded.
+            synthesize(line, f, voice_id=tts_voice or teacher.voice_id, allow_premium=allow_premium,
+                       report=r, lang=lang)
+            used_voice = r.get("used") or used_voice
+            downgraded = downgraded or bool(r.get("downgraded"))
+            if r.get("reason"):
+                reasons.add(str(r["reason"]))
+            if report is not None:
+                _fold_stats(report, r)
         starts.append(cursor)
         cursor += _audio_duration(str(f), ffmpeg)
         parts.append(f)
@@ -219,6 +272,9 @@ def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
                     str(lst), "-c", "copy", str(mp3)], capture_output=True)
     if not Path(str(mp3)).exists() or Path(str(mp3)).stat().st_size == 0:
         raise RuntimeError("dialogue concat produced no audio")
+    if report is not None:
+        report.update({"used": used_voice, "downgraded": downgraded,
+                       "reasons": sorted(reasons)})
     return starts
 
 
@@ -294,6 +350,42 @@ def compose_episode_videos(
     total = len(slide_segments)
     _voices_used: set[str | None] = set()
     _any_downgrade = False
+    _stats: dict = {}
+    _preflight_downgrade = False
+    _reasons: set[str] = set()
+
+    # PREMIUM PRE-FLIGHT. Segments are synthesized on a thread pool, and each
+    # falls back to the free voice on its own — so a provider outage on
+    # segment 6 of 12 used to produce a lesson that alternates a premium
+    # voice with the free one, and with per-language voices that means an
+    # Arabic teacher giving way to English Aria mid-lesson. One short probe
+    # before the pool decides for the WHOLE lesson: if premium cannot be
+    # rendered now, every segment is free, consistently, and the row says
+    # why. Costs one sentence.
+    if allow_premium and tts_voice:
+        from shared.tts import resolve_voice
+        _probe_voice = resolve_voice(tts_voice, allow_premium, lang=lang)
+        if _probe_voice.tier == "premium":
+            _r: dict = {}
+            _probe = vid_dir / "_preflight.mp3"
+            try:
+                synthesize("Let us begin.", _probe,
+                           voice_id=tts_voice, allow_premium=allow_premium,
+                           report=_r, lang=lang)
+            except Exception as exc:  # noqa: BLE001
+                _r = {"downgraded": True, "error": str(exc), "reason": "provider_error"}
+            finally:
+                try:
+                    _probe.unlink(missing_ok=True)  # one sentence, not an orphan per lesson
+                except OSError:
+                    pass
+            if _r.get("downgraded"):
+                logger.warning("premium pre-flight failed for %r (%s) — the whole "
+                               "lesson renders on the free voice", tts_voice,
+                               _r.get("error") or "provider downgrade")
+                allow_premium = False
+                _preflight_downgrade = True
+                _reasons.add(f"preflight:{_r.get('reason') or 'downgrade'}")
 
     def _render_one(i: int, slide_seg: dict) -> Optional[dict]:
         """Build ONE segment (TTS + native animation → MP4). Returns its result
@@ -333,6 +425,8 @@ def compose_episode_videos(
         duration = est
         used: str | None = None
         downgraded = False
+        seg_stats: dict = {}
+        reasons: list[str] = []
 
         # 1. TTS (provider-agnostic: free Edge default; premium ElevenLabs
         # gated). Conversational segments carry speaker-tagged DIALOGUE: each
@@ -346,11 +440,17 @@ def compose_episode_videos(
                 # a words.json from an earlier SINGLE-voice run would feed
                 # stale word timings to this dialogue's captions
                 mp3.with_suffix(".words.json").unlink(missing_ok=True)
+                dlg_report: dict = {}
                 starts = _synth_dialogue(script_seg["dialogue"], mp3, vid_dir,
                                          seg_id, tts_voice, ffmpeg,
-                                         avatars=_avatars, lang=lang)
+                                         avatars=_avatars, lang=lang,
+                                         allow_premium=allow_premium, report=dlg_report)
                 script_seg["_dialogue_starts"] = starts
-                used = "dialogue-edge"
+                used = dlg_report.get("used") or "dialogue-edge"
+                downgraded = bool(dlg_report.get("downgraded"))
+                seg_stats = {k: v for k, v in dlg_report.items()
+                             if isinstance(v, (int, float)) and not isinstance(v, bool)}
+                reasons = list(dlg_report.get("reasons") or [])
                 audio_path = str(mp3)
                 duration = _audio_duration(audio_path, ffmpeg) or est
             except Exception as exc:  # noqa: BLE001
@@ -361,6 +461,11 @@ def compose_episode_videos(
         if text and audio_path is None:
             mp3 = vid_dir / f"{seg_id}_audio.mp3"
             ssml = script_seg.get("elevenlabs_text") or text
+            if ssml is not text and not _same_prose(ssml, text):
+                logger.warning("segment %s: the markup copy paraphrases the caption "
+                               "text; speaking the caption copy so words.json matches "
+                               "the captions", seg_id)
+                ssml = text
             try:
                 seg_report: dict = {}
                 # word boundaries feed frame-accurate cue timing (scene engine)
@@ -376,6 +481,10 @@ def compose_episode_videos(
                 synthesize(speakable(text), mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=speakable_ssml(ssml), report=seg_report, boundaries_out=bnd, lang=lang)
                 used = seg_report.get("used")
                 downgraded = bool(seg_report.get("downgraded"))
+                seg_stats = {}
+                _fold_stats(seg_stats, seg_report)
+                if seg_report.get("reason"):
+                    reasons = [str(seg_report["reason"])]
                 audio_path = str(mp3)
                 duration = _audio_duration(audio_path, ffmpeg) or est
             except Exception as exc:  # noqa: BLE001 — a TTS hiccup must not kill the video
@@ -441,6 +550,8 @@ def compose_episode_videos(
             "index": i,
             "used": used,
             "downgraded": downgraded,
+            "stats": seg_stats,
+            "reasons": reasons,
             "duration": duration,
             "segment": VideoSegment(
                 segment_id=seg_id,
@@ -503,6 +614,9 @@ def compose_episode_videos(
         _voices_used.add(r["used"])
         if r["downgraded"]:
             _any_downgrade = True
+        for k, v in (r.get("stats") or {}).items():
+            _stats[k] = _stats.get(k, 0) + v
+        _reasons.update(r.get("reasons") or [])
         manifest_segments.append(r["segment"])
 
     if progress_callback:
@@ -512,8 +626,21 @@ def compose_episode_videos(
     # Report which voice(s) actually rendered, so the caller can persist a silent
     # premium→free downgrade (whole video may have degraded, or only some segments).
     if voice_report is not None:
-        used = sorted(v for v in _voices_used if v)
-        voice_report.update({"requested": tts_voice, "used": used, "downgraded": _any_downgrade})
+        # MERGE, never replace: a multi-part chapter calls this once per part
+        # with ONE report dict, and the worker bills and records it after the
+        # loop — replacing it recorded only the last part's voice and chars.
+        used = sorted({v for v in _voices_used if v} | set(voice_report.get("used") or []))
+        merged = dict(voice_report.get("stats") or {})
+        for k, v in _stats.items():
+            merged[k] = merged.get(k, 0) + v
+        voice_report.update({
+            "requested": tts_voice, "used": used,
+            "downgraded": bool(voice_report.get("downgraded")) or _any_downgrade or _preflight_downgrade,
+            "preflight_downgrade": bool(voice_report.get("preflight_downgrade")) or _preflight_downgrade,
+            "reasons": sorted(set(voice_report.get("reasons") or []) | _reasons),
+            "stats": merged,
+            "parts": int(voice_report.get("parts") or 0) + 1,
+        })
 
     manifest = VideoManifest(
         manifest_id=str(uuid.uuid4()),

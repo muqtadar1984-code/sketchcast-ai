@@ -37,13 +37,47 @@ def _flag(name: str) -> bool:
     return (os.getenv(name) or "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def google_tts_enabled() -> bool:
+    """Google is OPT-IN: GOOGLE_TTS_ENABLED must be on AND the worker's
+    Application Default Credentials (the chain Vertex uses; no key of its
+    own) must exist.
+
+    Credentials alone are not enough. Production already carries
+    VERTEX_PROJECT_ID for Gemini-on-Vertex, so inferring 'enabled' from it —
+    the first shape — would have switched Google on the day this deployed:
+    every stored el-* pick on a paid account remapped to Chirp and billing
+    started, while TTS_PREMIUM_PROVIDER, the variable meant to control the
+    rollout, stayed unset. Ships dark means dark."""
+    creds = any(os.getenv(k) for k in ("GOOGLE_APPLICATION_CREDENTIALS",
+                                       "GOOGLE_APPLICATION_CREDENTIALS_JSON",
+                                       "VERTEX_PROJECT_ID"))
+    return _flag("GOOGLE_TTS_ENABLED") and bool(creds)
+
+
+def canary_provider_for(owner_id: str | None) -> str | None:
+    """The premium provider a CANARY account gets while everyone else stays
+    on TTS_PREMIUM_PROVIDER. TTS_PREMIUM_CANARY_OWNERS is a comma-separated
+    list of owner ids; TTS_PREMIUM_CANARY_PROVIDER names the family (default
+    google). None = not a canary. The global switch flips every paid account
+    at once; a canary lets one founder-owned account listen first."""
+    if not owner_id:
+        return None
+    owners = {o.strip() for o in (os.getenv("TTS_PREMIUM_CANARY_OWNERS") or "").split(",") if o.strip()}
+    if owner_id not in owners:
+        return None
+    fam = (os.getenv("TTS_PREMIUM_CANARY_PROVIDER") or "google").strip().lower()
+    return fam if fam in ("google", "elevenlabs") else "google"
+
+
 def enabled_providers() -> frozenset[str]:
     """Providers this worker can actually call. Edge needs nothing. ElevenLabs
     needs its flag AND its key — the same two facts the old deployment-wide
-    gate folded into one bool. Google joins here in Phase 1b."""
+    gate folded into one bool. Google needs its flag AND ADC credentials."""
     on = {"edge"}
     if _flag("ELEVENLABS_ENABLED") and os.getenv("ELEVENLABS_API_KEY"):
         on.add("elevenlabs")
+    if google_tts_enabled():
+        on.add("google")
     return frozenset(on)
 
 
@@ -69,6 +103,9 @@ def resolve_voice(voice_id: str | None, allow_premium: bool = False, *,
         return free
     if v.tier != "premium":
         return v
+    # every downgrade below keeps the requested voice's GENDER — the avatar
+    # was cast from it
+    free = get_voice(default_voice_id_for(lang, gender=v.gender)) or free
     if not allow_premium:
         logger.warning("premium voice %r requested without a paid tier → %s", voice_id, free.voice_id)
         return free
@@ -83,7 +120,7 @@ def resolve_voice(voice_id: str | None, allow_premium: bool = False, *,
     active = premium_provider()
     candidates = [p for p in (active, "elevenlabs", "google") if p in enabled and p != "edge"]
     for fam in dict.fromkeys(candidates):
-        alt = equivalent_voice_id(v.voice_id, fam)
+        alt = equivalent_voice_id(v.voice_id, fam, lang=lang)
         if alt:
             logger.warning("premium voice %r (%s not enabled) → %r on %s",
                            voice_id, v.provider, alt, fam)
@@ -95,7 +132,8 @@ def resolve_voice(voice_id: str | None, allow_premium: bool = False, *,
 
 def pick_voice_id(requested: str | None, *, lang: str | None, allow_premium: bool,
                   explicit_language: bool = False,
-                  enabled: frozenset[str] | None = None) -> str:
+                  enabled: frozenset[str] | None = None,
+                  provider: str | None = None) -> str:
     """The concrete registry id a generation renders with, from what the app
     sent. Pure; the worker calls it once per generation.
 
@@ -109,12 +147,15 @@ def pick_voice_id(requested: str | None, *, lang: str | None, allow_premium: boo
       an explicit language → the free default for the language (stale
       pre-language params being regenerated; unchanged behaviour).
       anything else       → returned as-is; resolve_voice applies the gate.
+
+    `provider` (a canary account's family) overrides TTS_PREMIUM_PROVIDER for
+    this one pick; None means the global setting.
     """
     enabled = enabled_providers() if enabled is None else enabled
     req = (requested or "").strip()
     if not req or req == AUTO_VOICE_ID:
         if allow_premium:
-            prem = default_premium_voice_id_for(lang)
+            prem = default_premium_voice_id_for(lang, provider=provider)
             pv = get_voice(prem) if prem else None
             if pv is not None and pv.provider in enabled:
                 return pv.voice_id
@@ -159,35 +200,66 @@ def synthesize(
     requested = get_voice(voice_id)
     requested_premium = bool(requested and requested.tier == "premium")
     voice = resolve_voice(voice_id, allow_premium=allow_premium, lang=lang)
-    free = get_voice(default_voice_id_for(lang)) or default_voice()
+    free = get_voice(default_voice_id_for(lang, gender=(requested.gender if requested else None))) or default_voice()
     bnd = Path(boundaries_out) if boundaries_out else None
 
     say = text
-    if voice.provider == "elevenlabs":
+    stats: dict = {}
+    # Why a premium request did not render premium — the row records it, so
+    # a gate decision can be told apart from a cap trip or an outage.
+    reason: str | None = None
+    if requested_premium and voice.tier != "premium":
+        reason = "gate" if not allow_premium else "provider_disabled"
+    reserved = 0
+    if voice.provider in cost.PAID_PROVIDERS:
+        # Paid providers honour <break>; they get the markup copy. The cap is
+        # RESERVED (check-and-add under one lock), not merely checked: every
+        # pool thread used to pass the same check and overshoot it together.
         say = ssml_text or text
-        if not cost.within_cap(len((say or "").strip())):
-            logger.warning("ElevenLabs spend cap reached → free voice for this call")
-            voice, say = free, text
+        reserved = len((say or "").strip())
+        if not cost.reserve(reserved, voice.provider):
+            logger.warning("%s spend cap reached → free voice for this call", voice.provider)
+            voice, say, reserved, reason = free, text, 0, "cap"
+
+    def _fallback(exc: Exception, who: str) -> None:
+        nonlocal voice, say, reserved, reason
+        logger.error("%s failed (%s) → falling back to free Edge", who, exc)
+        from .providers import edge
+        if reserved:
+            cost.release(reserved, voice.provider)
+            reserved = 0
+        reason = "provider_error"
+        # Edge reads SSML tags ALOUD — it only ever gets plain text. The
+        # boundaries sink is forwarded, so a provider outage does not also
+        # lose word timing.
+        voice, say = free, strip_ssml(text)
+        edge.synthesize(say, out_path, voice.ref, boundaries_out=bnd)
 
     if voice.provider == "elevenlabs":
         from .providers import eleven
-
         try:
             eleven.synthesize(say, out_path, voice.ref)
         except Exception as exc:  # noqa: BLE001 — never fail a generation over TTS
-            logger.error("ElevenLabs failed (%s) → falling back to free Edge", exc)
-            from .providers import edge
-
-            # Edge reads SSML tags ALOUD — it only ever gets plain text.
-            voice, say = free, strip_ssml(text)
-            edge.synthesize(say, out_path, voice.ref, boundaries_out=bnd)
+            _fallback(exc, "ElevenLabs")
+    elif voice.provider == "google":
+        from .providers import google
+        try:
+            stats = google.synthesize(say, out_path, voice.ref, boundaries_out=bnd) or {}
+        except Exception as exc:  # noqa: BLE001 — never fail a generation over TTS
+            _fallback(exc, "Google TTS")
     else:
         from .providers import edge
-
         say = strip_ssml(say)  # Edge reads SSML tags aloud — plain text only
         edge.synthesize(say, out_path, voice.ref, boundaries_out=bnd)
 
-    cost.record(len((say or "").strip()), voice.provider)
+    # Google reports its own billable count (SSML minus the unbilled marks);
+    # everything else bills what was sent. A paid render settles its
+    # reservation to the real figure; a free one only logs.
+    billed = int(stats.get("chars") or len((say or "").strip()))
+    if voice.provider in cost.PAID_PROVIDERS:
+        cost.settle(reserved, billed, voice.provider, stats.get("family"))
+    else:
+        cost.record(billed, voice.provider)
     downgraded = requested_premium and voice.tier != "premium"
     if downgraded:
         logger.warning(
@@ -198,7 +270,9 @@ def synthesize(
         )
     if report is not None:
         report.update(
-            {"requested": voice_id, "used": voice.voice_id, "provider": voice.provider, "downgraded": downgraded}
+            {"requested": voice_id, "used": voice.voice_id, "provider": voice.provider,
+             "downgraded": downgraded, "reason": reason if downgraded else None,
+             "chars": billed, "stats": stats}
         )
     logger.info("TTS ok: voice=%s provider=%s -> %s", voice.voice_id, voice.provider, out_path.name)
     return out_path

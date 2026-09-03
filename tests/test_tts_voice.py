@@ -23,13 +23,16 @@ def _stub_providers(monkeypatch):
     # eleven is imported lazily inside synthesize(); patch its module too.
     import shared.tts.providers.eleven as eleven
     monkeypatch.setattr(eleven, "synthesize", lambda say, out, ref, **kw: out)
-    monkeypatch.setattr(tts.cost, "within_cap", lambda n: True)
-    monkeypatch.setattr(tts.cost, "record", lambda n, provider: None)
+    # cost is provider-keyed now (Google joined ElevenLabs as a paid provider)
+    monkeypatch.setattr(tts.cost, "within_cap", lambda n, provider="elevenlabs": True)
+    monkeypatch.setattr(tts.cost, "record", lambda n, provider, family=None: None)
 
 
 def test_premium_without_permission_resolves_to_free_default():
     v = resolve_voice("el-adam", allow_premium=False)
-    assert v.voice_id == "edge-aria"
+    # the fallback keeps the requested voice's gender (Adam → Guy) so the
+    # avatar cast from the pick still matches; it used to be Aria regardless
+    assert v.voice_id == "edge-guy"
     assert v.tier == "free"
 
 
@@ -53,7 +56,7 @@ def test_report_flags_a_silent_downgrade(monkeypatch, tmp_path):
     report: dict = {}
     synthesize("hello", tmp_path / "a.mp3", voice_id="el-adam", allow_premium=False, report=report)
     assert report["requested"] == "el-adam"
-    assert report["used"] == "edge-aria"
+    assert report["used"] == "edge-guy"  # gender-aware fallback (Adam → Guy)
     assert report["provider"] == "edge"
     assert report["downgraded"] is True
 
