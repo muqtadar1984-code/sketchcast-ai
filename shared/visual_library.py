@@ -268,12 +268,24 @@ def find(key: str, prompt: str, context: dict[str, Any] | None = None,
 
 def hydrate(key: str, prompt: str, cache_dir: Path,
             context: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Download a remote approved asset into the renderer's existing cache."""
+    """Download a remote approved asset into the renderer's existing cache.
+
+    Cached under the REQUESTED key, not the matched one. The caller looks for
+    ``cache_dir/canonical_key(key)/asset.png`` — that is the only path it will
+    ever check — so filing the download under the match's key left the file
+    somewhere nobody looks.
+
+    Measured end-to-end: a reworded request for a volcano cross-section
+    matched the stored asset at score 1.00 and the renderer generated a second
+    image anyway, adding a duplicate row for a concept the library already
+    had. Semantic matching that cannot deliver its match is just an expensive
+    way to agree with itself.
+    """
     hit = find(key, prompt, context)
     if not hit:
         return None
-    png = _local_png_path(cache_dir, str(hit.get("asset_key") or key))
-    meta = _local_meta_path(cache_dir, str(hit.get("asset_key") or key))
+    png = _local_png_path(cache_dir, key)
+    meta = _local_meta_path(cache_dir, key)
     if png.exists():
         return hit
     path = str(hit.get("storage_path") or "")

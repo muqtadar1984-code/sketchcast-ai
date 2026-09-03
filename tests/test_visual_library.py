@@ -251,3 +251,102 @@ class TestPublishTypesAvatarsCorrectly:
             assert f["asset_type"] == "avatar", key
             assert f["role"] == role, key
             assert f["age_band"] == band, key
+
+
+class TestHydrateCachesWhereTheCallerLooks:
+    """A semantic match is worthless if the file lands somewhere nobody reads.
+
+    hydrate() filed the download under the MATCHED asset's key, but the caller
+    (visual_library_integration.wrapped_get_raster_asset) only ever checks
+    cache_dir/canonical_key(REQUESTED key)/asset.png. Measured end-to-end: a
+    reworded request for a volcano cross-section matched the stored asset at
+    score 1.00 and the renderer generated a second image anyway, adding a
+    duplicate row for a concept the library already had.
+    """
+
+    def _library_of_one(self, monkeypatch, tmp_path):
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "index")
+
+        class Storage:
+            def from_(self, _bucket):
+                return self
+
+            def download(self, _path):
+                return b"\x89PNG\r\n\x1a\n" + b"volcano-bytes"
+
+        class Table:
+            def select(self, *_a, **_k):
+                return self
+
+            def eq(self, *_a):
+                return self
+
+            def neq(self, *_a):
+                return self
+
+            def limit(self, _n):
+                return self
+
+            def execute(self):
+                return type("R", (), {"data": [{
+                    "id": "abc-123",
+                    "asset_key": "volcano_cross_section",
+                    "canonical_key": "cross_section_volcano",
+                    "description": "A cross-section of a volcano showing the "
+                                   "magma chamber, the central vent and the cone",
+                    "subject": "geography", "grade": "k12",
+                    "curriculum": "generic", "topic": "volcano cross section",
+                    "concepts": [], "status": "approved",
+                    "asset_type": "visual",
+                    "storage_path": "generated/cross_section_volcano/aa.png",
+                }]})()
+
+        class SB:
+            storage = Storage()
+
+            def table(self, _name):
+                return Table()
+
+        monkeypatch.setattr(vl, "_sb", lambda: SB())
+        return vl
+
+    def test_it_caches_under_the_requested_key_not_the_matched_one(
+            self, tmp_path, monkeypatch):
+        vl = self._library_of_one(monkeypatch, tmp_path)
+        cache = tmp_path / "cache"
+        requested = "erupting_volcano_diagram"
+        hit = vl.hydrate(
+            requested,
+            "A volcano cut in half showing the magma chamber, central vent and cone",
+            cache)
+        assert hit is not None, "the library matched but returned nothing"
+        # The one path the renderer will look in:
+        landed = cache / vl.canonical_key(requested) / "asset.png"
+        assert landed.exists(), (
+            f"hydrated to {[str(p) for p in cache.rglob('asset.png')]}, "
+            f"but the caller only reads {landed}")
+        assert landed.read_bytes().startswith(b"\x89PNG")
+
+    def test_the_cached_copy_is_marked_as_a_library_hit(self, tmp_path, monkeypatch):
+        """provenance must NOT be 'generated', or the integration layer will
+        re-publish a hydrated file and duplicate the row it just reused."""
+        import json
+        vl = self._library_of_one(monkeypatch, tmp_path)
+        cache = tmp_path / "cache"
+        requested = "erupting_volcano_diagram"
+        vl.hydrate(requested, "A volcano cut in half showing the magma chamber",
+                   cache)
+        meta = json.loads(
+            (cache / vl.canonical_key(requested) / "meta.json").read_text(encoding="utf-8"))
+        assert meta["provenance"] == "visual_library"
+        assert meta["library_asset_id"] == "abc-123"
+
+    def test_an_exact_key_request_still_works(self, tmp_path, monkeypatch):
+        """The common case must be unaffected by the rename."""
+        vl = self._library_of_one(monkeypatch, tmp_path)
+        cache = tmp_path / "cache"
+        vl.hydrate("volcano_cross_section",
+                   "A cross-section of a volcano showing the magma chamber",
+                   cache)
+        assert (cache / vl.canonical_key("volcano_cross_section") / "asset.png").exists()
