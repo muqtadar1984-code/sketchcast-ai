@@ -9,12 +9,19 @@ the caller falls back to the free voice.
 
 WHAT THIS CAP IS AND IS NOT. The total lives in a local JSON file. On Railway
 that file is per process and resets on every deploy, and the render pool's
-threads race on it — so it bounds a single process's spend between restarts,
+threads share it — so it bounds a single process's spend between restarts,
 which is exactly the runaway case, and nothing more. It is not a monthly
 ledger and never was; the durable, atomic, per-user ledger is the app's
 tts_usage table (migration 0027, tutor_tts_reserve), which the worker
 records into after each lesson. Google's own free allowance is tracked by
 Google; a GCP budget alert is the belt for it.
+
+RESERVE, THEN SETTLE. The check and the add used to be two separately locked
+steps with a network call between them, so every render thread in flight
+passed the same check and the cap was overshot by (threads − 1) segments.
+``reserve()`` now checks and adds under ONE lock before the call; ``settle()``
+replaces the reservation with what the provider actually billed; ``release()``
+returns it when the call failed and the segment fell back to Edge.
 """
 
 from __future__ import annotations
@@ -50,7 +57,8 @@ _CHAR_CAP = {
 }
 
 _SPEND_FILE = Path(__file__).resolve().parents[2] / "storage" / "tts_spend.json"
-_LOCK = threading.Lock()
+# Re-entrant: reserve() holds it while it calls within_cap(), which takes it too.
+_LOCK = threading.RLock()
 
 PAID_PROVIDERS = frozenset(_CHAR_CAP)
 
@@ -82,27 +90,62 @@ def _write_totals(totals: dict) -> None:
         logger.warning("could not persist TTS spend: %s", exc)
 
 
+def _bump(provider: str, delta: int) -> int:
+    """Add `delta` (may be negative) to a paid provider's running total, floored
+    at zero. Returns the new total. Caller holds the lock or does not care."""
+    with _LOCK:
+        totals = _read_totals()
+        totals[provider] = max(0, totals.get(provider, 0) + int(delta))
+        _write_totals(totals)
+        return totals[provider]
+
+
 def within_cap(chars: int, provider: str = "elevenlabs") -> bool:
     """True if `chars` more characters on `provider` stay within its cap.
-    Free providers are never capped."""
+    Free providers are never capped. Read-only — see reserve() for the
+    check-and-add a concurrent caller needs."""
     if provider not in PAID_PROVIDERS:
         return True
     with _LOCK:
         return _read_totals().get(provider, 0) + max(0, chars) <= _CHAR_CAP[provider]
 
 
+def reserve(chars: int, provider: str) -> bool:
+    """Atomically check the cap AND count `chars` against it. True = go ahead
+    (the reservation is booked); False = refused, nothing changed. Free
+    providers are always True and never booked. Pair with settle() after the
+    provider answers, or release() when the call failed."""
+    if provider not in PAID_PROVIDERS:
+        return True
+    with _LOCK:
+        if not within_cap(chars, provider):
+            return False
+        _bump(provider, max(0, chars))
+        return True
+
+
+def release(chars: int, provider: str) -> None:
+    """Give a reservation back (the call failed; the segment went to Edge)."""
+    if provider in PAID_PROVIDERS and chars > 0:
+        _bump(provider, -int(chars))
+
+
 def record(chars: int, provider: str, family: str | None = None) -> None:
     """Log the call and, for paid providers, add to the persisted running total."""
     cost = estimate_cost_usd(chars, provider, family)
     if provider in PAID_PROVIDERS:
-        with _LOCK:
-            totals = _read_totals()
-            totals[provider] = totals.get(provider, 0) + max(0, chars)
-            _write_totals(totals)
-            total = totals[provider]
+        total = _bump(provider, max(0, chars))
         logger.info(
             "TTS spend: provider=%s%s chars=%d est=$%.4f  (process total %d/%d chars)",
             provider, f"/{family}" if family else "", chars, cost, total, _CHAR_CAP[provider],
         )
     else:
         logger.info("TTS usage: provider=%s chars=%d est=$0 (free)", provider, chars)
+
+
+def settle(reserved: int, billed: int, provider: str, family: str | None = None) -> None:
+    """Replace a reservation with what the provider actually billed: the
+    reserved amount comes back off the total and the billed amount goes on
+    through record(), so the log line shows the real figure."""
+    release(reserved, provider)
+    record(billed, provider, family)

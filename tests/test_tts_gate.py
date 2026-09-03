@@ -113,16 +113,21 @@ class TestResolveVoice:
         assert resolve_voice("el-rachel", False, lang="ar").voice_id == "edge-zariyah"
         assert resolve_voice("el-rachel", False).voice_id == "edge-aria"      # English unchanged
 
-    def test_premium_with_a_paid_tier_but_no_key_downgrades_in_language(self):
+    def test_premium_with_a_paid_tier_but_no_key_downgrades_in_language_and_gender(self):
         assert "elevenlabs" not in enabled_providers()
-        assert resolve_voice("el-adam", True, lang="hi").voice_id == "edge-swara"
+        # Adam is male; the avatar was cast from him, so the free voice is Madhur, not Swara
+        assert resolve_voice("el-adam", True, lang="hi").voice_id == "edge-madhur"
+        assert resolve_voice("el-rachel", True, lang="hi").voice_id == "edge-swara"
 
     def test_premium_with_a_paid_tier_and_a_key_stays_premium(self, monkeypatch):
         _el_on(monkeypatch)
         assert resolve_voice("el-adam", True, lang="hi").voice_id == "el-adam"
 
     def test_the_two_original_tests_still_hold(self, monkeypatch):
-        assert resolve_voice("el-adam", allow_premium=False).voice_id == "edge-aria"
+        # originally "→ Aria"; the fallback now keeps the requested voice's gender
+        # (Adam → Guy) so the avatar cast from the pick still matches the voice
+        assert resolve_voice("el-adam", allow_premium=False).voice_id == "edge-guy"
+        assert resolve_voice("el-rachel", allow_premium=False).voice_id == "edge-aria"
         _el_on(monkeypatch)
         assert resolve_voice("el-adam", allow_premium=True).provider == "elevenlabs"
 

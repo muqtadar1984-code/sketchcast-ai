@@ -30,7 +30,9 @@ def _stub_providers(monkeypatch):
 
 def test_premium_without_permission_resolves_to_free_default():
     v = resolve_voice("el-adam", allow_premium=False)
-    assert v.voice_id == "edge-aria"
+    # the fallback keeps the requested voice's gender (Adam → Guy) so the
+    # avatar cast from the pick still matches; it used to be Aria regardless
+    assert v.voice_id == "edge-guy"
     assert v.tier == "free"
 
 
@@ -54,7 +56,7 @@ def test_report_flags_a_silent_downgrade(monkeypatch, tmp_path):
     report: dict = {}
     synthesize("hello", tmp_path / "a.mp3", voice_id="el-adam", allow_premium=False, report=report)
     assert report["requested"] == "el-adam"
-    assert report["used"] == "edge-aria"
+    assert report["used"] == "edge-guy"  # gender-aware fallback (Adam → Guy)
     assert report["provider"] == "edge"
     assert report["downgraded"] is True
 

@@ -135,22 +135,32 @@ def _spoken_lang(lang: str | None) -> str:
     return "ms" if lang == "ms-arab" else (lang or "en")
 
 
-def default_voice_id_for(lang: str | None) -> str:
-    """The free default voice for a lesson language (English → global default)."""
+def default_voice_id_for(lang: str | None, gender: str | None = None) -> str:
+    """The free default voice for a lesson language (English → global default).
+
+    With `gender`, the free voice of that gender for the language when one
+    exists. Every downgrade of a premium voice lands here, and the teacher
+    avatar was cast from the REQUESTED voice before the lesson rendered — a
+    male premium pick that fell back to the language's first (female) free
+    entry put a male avatar on a female voice for the whole lesson."""
     want = _spoken_lang(lang)
-    for v in VOICES:
-        if v.tier == "free" and v.lang == want:
-            return v.voice_id
-    return DEFAULT_VOICE_ID
+    pool = [v for v in VOICES if v.tier == "free" and v.lang == want]
+    if gender:
+        for v in pool:
+            if v.gender == gender:
+                return v.voice_id
+    return pool[0].voice_id if pool else DEFAULT_VOICE_ID
 
 
-def default_premium_voice_id_for(lang: str | None, gender: str = "f") -> str | None:
+def default_premium_voice_id_for(lang: str | None, gender: str = "f",
+                                 provider: str | None = None) -> str | None:
     """The premium voice a PAID account's `auto` resolves to for a language,
     from the ACTIVE premium provider — or None when there is none (the
     `legacy` setting, or a family with no entry for the language). The caller
     then uses the free default. Enablement (key present, flag on) is checked
-    by shared.tts, not here."""
-    provider = premium_provider()
+    by shared.tts, not here. `provider` overrides the global setting for one
+    generation — the per-account canary (TTS_PREMIUM_CANARY_OWNERS)."""
+    provider = provider or premium_provider()
     if provider == "legacy":
         return None
     want = _spoken_lang(lang)

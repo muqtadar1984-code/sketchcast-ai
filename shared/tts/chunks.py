@@ -12,12 +12,20 @@ every sentence is then exact, and words inside a sentence are placed by
 character proportion. That is what the caption track needs — it cues each
 caption on its sentence's opening phrase — and it needs no new dependency,
 where forced alignment would have meant torch on Railway.
+
+WORDS ARE WHITESPACE TOKENS, NOT ``\\w`` RUNS. Python's ``\\w`` excludes
+combining marks (Unicode Mn/Mc), so a ``[\\w']+`` word regex cut Hindi,
+Marathi and Telugu at every matra and Arabic at every diacritic — words.json
+named consonant fragments and the proportion timing ignored the vowels. A word
+is now a whitespace-delimited token with leading/trailing punctuation removed,
+which is also how the caption track splits words.
 """
 
 from __future__ import annotations
 
 import html
 import re
+import unicodedata
 
 from ..text_clean import _SSML_TAG_RE
 
@@ -25,17 +33,86 @@ from ..text_clean import _SSML_TAG_RE
 # headroom for the <speak> wrapper and any per-word marks.
 MAX_REQUEST_BYTES = 4_500
 
+# The mark-name offset the PACKER sizes chunks with. The provider renumbers
+# marks from a running offset, so "w12" in a sized chunk may go out as "w1012";
+# sizing with a five-digit offset (no lesson has 10,000 words in one segment)
+# guarantees that what fits here fits on the wire.
+_SIZING_MARK_OFFSET = 10_000
+
 # A sentence ends at . ! ? (Latin) or their Arabic / Devanagari counterparts,
 # followed by whitespace. Kept deliberately simple: it only has to split where
 # a caption would start, and the caption track uses the same split.
 _SENT_RE = re.compile(r"(?<=[.!?؟।])\s+")
-_WORD_RE = re.compile(r"[\w']+", re.UNICODE)
+# Where an oversize sentence may be cut: after clause punctuation.
+_CLAUSE_RE = re.compile(r"(?<=[,;:،؛—–])\s+")
+_TOKEN_RE = re.compile(r"\S+")
+_BREAK_RE = re.compile(r"<break\b[^>]*>", re.IGNORECASE)
+_TIME_RE = re.compile(r"time\s*=\s*\"?\s*([\d.]+)\s*(ms|s)\b", re.IGNORECASE)
+_STRENGTH_RE = re.compile(r"strength\s*=\s*\"?\s*([a-z-]+)", re.IGNORECASE)
+_STRENGTH_SECS = {"none": 0.0, "x-weak": 0.1, "weak": 0.25, "medium": 0.5,
+                  "strong": 0.75, "x-strong": 1.0}
+_MARK_RE = re.compile(r'<mark name="w\d+"/>')
+
+
+def _strip_punct(token: str) -> str:
+    """Leading/trailing punctuation and symbols removed; anything interior
+    (it's, ٱلْكِتَاب, कोशिका।-less) kept, combining marks kept."""
+    i, j = 0, len(token)
+    while i < j and unicodedata.category(token[i])[0] in "PS":
+        i += 1
+    while j > i and unicodedata.category(token[j - 1])[0] in "PS":
+        j -= 1
+    return token[i:j]
+
+
+def _word_spans(span: str) -> list[tuple[int, int, str]]:
+    """(start, end, word) for every spoken word in a prose span."""
+    out: list[tuple[int, int, str]] = []
+    for m in _TOKEN_RE.finditer(span):
+        w = _strip_punct(m.group(0))
+        if w:
+            out.append((m.start(), m.end(), w))
+    return out
+
+
+def words_of(text: str) -> list[str]:
+    """The spoken words of a sentence, tags removed — what words.json names."""
+    plain = _SSML_TAG_RE.sub(" ", text or "")
+    return [w for _, _, w in _word_spans(plain)]
+
+
+def break_seconds(tag: str) -> float:
+    """Seconds of silence a <break> tag asks for. time= wins over strength=;
+    a bare <break/> is SSML's 'medium'."""
+    m = _TIME_RE.search(tag)
+    if m:
+        n = float(m.group(1))
+        return n / 1000.0 if m.group(2).lower() == "ms" else n
+    m = _STRENGTH_RE.search(tag)
+    if m:
+        return _STRENGTH_SECS.get(m.group(1).lower(), 0.5)
+    return 0.5
 
 
 def sentences(text: str) -> list[str]:
-    """Sentences in order, whitespace-normalised, tags left in place."""
+    """Sentences in order, whitespace-normalised, tags left in place. A piece
+    with no spoken words (a trailing <break> after the full stop) is folded
+    into its neighbour rather than becoming a word-less request of its own."""
     t = " ".join((text or "").split())
-    return [s for s in _SENT_RE.split(t) if s.strip()] if t else []
+    if not t:
+        return []
+    raw = [s for s in _SENT_RE.split(t) if s.strip()]
+    out: list[str] = []
+    for s in raw:
+        if not words_of(s) and out:
+            out[-1] = f"{out[-1]} {s}"
+        else:
+            out.append(s)
+    # a word-less piece at the very start attaches to the sentence after it
+    if len(out) >= 2 and not words_of(out[0]):
+        out[1] = f"{out[0]} {out[1]}"
+        del out[0]
+    return out
 
 
 def family(ref_voice: str) -> str:
@@ -67,12 +144,6 @@ def _prose_spans(text: str) -> list[tuple[str, str]]:
     return out
 
 
-def words_of(text: str) -> list[str]:
-    """The spoken words of a sentence, tags removed — what words.json names."""
-    plain = _SSML_TAG_RE.sub(" ", text or "")
-    return _WORD_RE.findall(plain)
-
-
 def ssml_for(text: str, *, marks: bool, mark_offset: int = 0) -> tuple[str, int]:
     """Google SSML for one chunk: prose XML-escaped, ``<break>`` re-emitted,
     and — when ``marks`` — ``<mark name="wN"/>`` before every word, numbering
@@ -87,54 +158,116 @@ def ssml_for(text: str, *, marks: bool, mark_offset: int = 0) -> tuple[str, int]
             parts.append(html.escape(span, quote=False))
             continue
         pos = 0
-        for m in _WORD_RE.finditer(span):
-            parts.append(html.escape(span[pos:m.start()], quote=False))
+        for start, end, _w in _word_spans(span):
+            parts.append(html.escape(span[pos:start], quote=False))
             parts.append(f'<mark name="w{mark_offset + n}"/>')
-            parts.append(html.escape(m.group(0), quote=False))
+            parts.append(html.escape(span[start:end], quote=False))
             n += 1
-            pos = m.end()
+            pos = end
         parts.append(html.escape(span[pos:], quote=False))
     parts.append("</speak>")
     return "".join(parts), (n if marks else len(words_of(text)))
 
 
-def chunks(text: str, *, one_sentence_each: bool, marks: bool) -> list[str]:
-    """Split narration into request-sized chunks that never cut a sentence.
+def billable_chars(ssml: str) -> int:
+    """What Google bills for one request: the SSML minus <mark> tags, which
+    the pricing page exempts."""
+    return len(_MARK_RE.sub("", ssml or ""))
 
-    Chirp: one sentence per chunk (its timing comes from measuring clips).
-    Classic: pack whole sentences up to MAX_REQUEST_BYTES of SSML — fewer
-    requests, and the marks give exact times anyway. A single sentence longer
-    than the cap is sent alone and truncated by the API's own error, which is
-    better than silently splitting it mid-thought."""
-    sents = sentences(text)
-    if one_sentence_each or not sents:
-        return sents
+
+def _bytes(text: str, *, marks: bool) -> int:
+    return len(ssml_for(text, marks=marks, mark_offset=_SIZING_MARK_OFFSET)[0].encode("utf-8"))
+
+
+def _pack(parts: list[str], *, marks: bool) -> list[str]:
+    """Greedily join parts under the byte cap without reordering."""
     out: list[str] = []
     cur: list[str] = []
-    for s in sents:
-        trial = " ".join(cur + [s])
-        if cur and len(ssml_for(trial, marks=marks)[0].encode("utf-8")) > MAX_REQUEST_BYTES:
+    for p in parts:
+        trial = " ".join(cur + [p])
+        if cur and _bytes(trial, marks=marks) > MAX_REQUEST_BYTES:
             out.append(" ".join(cur))
-            cur = [s]
+            cur = [p]
         else:
-            cur.append(s)
+            cur.append(p)
     if cur:
         out.append(" ".join(cur))
     return out
 
 
+def _split_oversize(sentence: str, *, marks: bool) -> list[str]:
+    """A sentence that alone exceeds the request cap is cut at clause
+    punctuation, and failing that between words — Google does not truncate an
+    oversize request, it rejects it with 400, which used to drop the WHOLE
+    segment (every other sentence included) to the free voice. Three-byte
+    scripts (Devanagari, Telugu, Arabic) reach the cap at ~1,400 characters."""
+    if _bytes(sentence, marks=marks) <= MAX_REQUEST_BYTES:
+        return [sentence]
+    clauses = [c for c in _CLAUSE_RE.split(sentence) if c.strip()]
+    pieces: list[str] = []
+    for c in _pack(clauses, marks=marks) if len(clauses) > 1 else [sentence]:
+        if _bytes(c, marks=marks) <= MAX_REQUEST_BYTES:
+            pieces.append(c)
+            continue
+        pieces.extend(_pack(c.split(), marks=marks))
+    return pieces
+
+
+def chunks(text: str, *, one_sentence_each: bool, marks: bool) -> list[str]:
+    """Split narration into request-sized chunks that never cut a sentence
+    unless the sentence alone is over the cap.
+
+    Chirp: one sentence per chunk (its timing comes from measuring clips).
+    Classic: pack whole sentences up to MAX_REQUEST_BYTES of SSML — fewer
+    requests, and the marks give exact times anyway."""
+    sents = sentences(text)
+    if not sents:
+        return []
+    split: list[str] = []
+    for s in sents:
+        split.extend(_split_oversize(s, marks=marks))
+    if one_sentence_each:
+        return split
+    return _pack(split, marks=marks)
+
+
+def _timing_tokens(sentence: str) -> list[tuple[str, object]]:
+    """In order: ('w', word) for spoken words, ('b', seconds) for <break>s."""
+    out: list[tuple[str, object]] = []
+    for kind, span in _prose_spans(sentence):
+        if kind == "tag":
+            out.append(("b", break_seconds(span)))
+        else:
+            out.extend(("w", w) for _, _, w in _word_spans(span))
+    return out
+
+
 def interpolate_words(sentence: str, start: float, duration: float) -> list[dict]:
-    """words.json entries for one measured clip: the first word at ``start``,
-    the rest spread by character proportion. Monotonic by construction."""
-    ws = words_of(sentence)
+    """words.json entries for one measured clip: the first word at ``start``
+    (after any opening pause), the rest spread by character proportion.
+    Monotonic by construction.
+
+    A ``<break>`` contributes silence to the clip but no characters, so its
+    seconds are taken OUT of the span the words share and every word after it
+    is shifted by it. Without that, a sentence that opened with a 0.5 s pause
+    stamped its first word — the one the caption cues on — inside the
+    silence."""
+    tokens = _timing_tokens(sentence)
+    ws = [t[1] for t in tokens if t[0] == "w"]
     if not ws:
         return []
+    duration = max(0.0, float(duration))
+    pause = min(sum(float(t[1]) for t in tokens if t[0] == "b"), duration)
+    speech = max(0.0, duration - pause)
     total = sum(len(w) for w in ws) + max(0, len(ws) - 1)
-    out, offset = [], 0
-    for w in ws:
-        frac = offset / total if total else 0.0
-        out.append({"t": round(start + frac * duration, 4), "w": w})
-        offset += len(w) + 1
+    out: list[dict] = []
+    cursor = float(start)
+    for kind, val in tokens:
+        if kind == "b":
+            cursor += float(val)
+            continue
+        out.append({"t": round(cursor, 4), "w": val})
+        cursor += (speech * (len(val) + 1) / total) if total else 0.0
     return out
 
 
@@ -144,13 +277,16 @@ def words_from_marks(chunk_text: str, timepoints: list[dict], *, chunk_start: fl
     returned. Google warns that marks in rapid succession may not all emit
     (measured 78/78 on real segments, but the guard is cheap): a missing word
     is placed midway between its neighbours; a run of missing words at either
-    end is spread by proportion inside the clip. Returns (entries, missing)."""
+    end is spread by proportion inside the clip. The clip duration is never
+    allowed below the last known timepoint (a failed duration probe reads 0),
+    so a tail fill can never run backwards. Returns (entries, missing)."""
     ws = words_of(chunk_text)
     got = {tp.get("markName"): float(tp.get("timeSeconds", 0.0)) for tp in (timepoints or [])}
     times: list[float | None] = [got.get(f"w{mark_offset + i}") for i in range(len(ws))]
     missing = sum(1 for t in times if t is None)
-    # fill gaps: linear between known neighbours, else proportional
     known = [i for i, t in enumerate(times) if t is not None]
+    chunk_duration = max(float(chunk_duration or 0.0),
+                         max((times[k] for k in known), default=0.0))
     for i, t in enumerate(times):
         if t is not None:
             continue
@@ -165,5 +301,8 @@ def words_from_marks(chunk_text: str, timepoints: list[dict], *, chunk_start: fl
             times[i] = times[right] * i / max(1, right)
         else:
             times[i] = chunk_duration * i / max(1, len(ws))
+    for i in range(1, len(times)):  # belt: monotonic whatever the timepoints said
+        if times[i] < times[i - 1]:
+            times[i] = times[i - 1]
     out = [{"t": round(chunk_start + float(t), 4), "w": w} for t, w in zip(times, ws)]
     return out, missing

@@ -25,23 +25,44 @@ def _clean_env(monkeypatch, tmp_path):
 
 
 def _google_on(monkeypatch):
+    # opt-in: the flag AND credentials (credentials alone must never enable it)
+    monkeypatch.setenv("GOOGLE_TTS_ENABLED", "1")
     monkeypatch.setenv("VERTEX_PROJECT_ID", "sketchcast")
 
 
 # ── registry ─────────────────────────────────────────────────────────────────
 
 class TestGoogleEntries:
-    # Names as returned by voices.list on 2026-09-03 — the registry must not
-    # drift from what the API actually offers.
+    # Every ref and gender checked against the live voices.list on 2026-09-04
+    # (22/22 present, ssmlGender matches) — the registry must not drift from
+    # what the API actually offers.
     VERIFIED = {
         "g-en-f": ("en-US-Chirp3-HD-Achernar", "f", "en"),
         "g-en-m": ("en-US-Chirp3-HD-Achird", "m", "en"),
+        "g-en-gb-f": ("en-GB-Chirp3-HD-Achernar", "f", "en"),
+        "g-en-gb-m": ("en-GB-Chirp3-HD-Achird", "m", "en"),
+        "g-en-in-f": ("en-IN-Chirp3-HD-Achernar", "f", "en"),
+        "g-en-in-m": ("en-IN-Chirp3-HD-Achird", "m", "en"),
         "g-ms-f": ("ms-MY-Wavenet-A", "f", "ms"),
         "g-ms-m": ("ms-MY-Wavenet-B", "m", "ms"),
         "g-ar-f": ("ar-XA-Chirp3-HD-Achernar", "f", "ar"),
+        "g-ar-m": ("ar-XA-Chirp3-HD-Achird", "m", "ar"),
+        "g-fr-f": ("fr-FR-Chirp3-HD-Achernar", "f", "fr"),
+        "g-fr-m": ("fr-FR-Chirp3-HD-Achird", "m", "fr"),
+        "g-es-f": ("es-ES-Chirp3-HD-Achernar", "f", "es"),
+        "g-es-m": ("es-ES-Chirp3-HD-Achird", "m", "es"),
+        "g-pt-f": ("pt-BR-Chirp3-HD-Achernar", "f", "pt"),
+        "g-pt-m": ("pt-BR-Chirp3-HD-Achird", "m", "pt"),
+        "g-te-f": ("te-IN-Chirp3-HD-Achernar", "f", "te"),
         "g-te-m": ("te-IN-Chirp3-HD-Achird", "m", "te"),
+        "g-mr-f": ("mr-IN-Chirp3-HD-Achernar", "f", "mr"),
+        "g-mr-m": ("mr-IN-Chirp3-HD-Achird", "m", "mr"),
         "g-hi-f": ("hi-IN-Chirp3-HD-Achernar", "f", "hi"),
+        "g-hi-m": ("hi-IN-Chirp3-HD-Achird", "m", "hi"),
     }
+
+    def test_every_google_entry_is_pinned(self):
+        assert {v.voice_id for v in R.VOICES if v.provider == "google"} == set(self.VERIFIED)
 
     def test_verified_names_and_genders(self):
         for vid, (ref, gender, lang) in self.VERIFIED.items():
@@ -91,15 +112,24 @@ class TestGoogleEntries:
 
 
 class TestEnabledProviders:
-    def test_google_needs_credentials_only(self, monkeypatch):
+    def test_google_is_opt_in_credentials_alone_never_enable_it(self, monkeypatch):
+        """Production already carries VERTEX_PROJECT_ID for Gemini. Inferring
+        'enabled' from it would have switched Google on the day this
+        deployed — stored el-* picks remapped to Chirp, billing started — with
+        the variable meant to control the rollout still unset."""
         assert "google" not in tts.enabled_providers()
-        _google_on(monkeypatch)
+        monkeypatch.setenv("VERTEX_PROJECT_ID", "sketchcast")
+        assert "google" not in tts.enabled_providers(), "ships dark means dark"
+        monkeypatch.setenv("GOOGLE_TTS_ENABLED", "1")
         assert "google" in tts.enabled_providers()
-
-    def test_google_can_be_switched_off(self, monkeypatch):
-        _google_on(monkeypatch)
         monkeypatch.setenv("GOOGLE_TTS_ENABLED", "0")
         assert "google" not in tts.enabled_providers()
+
+    def test_the_flag_without_credentials_is_not_enough_either(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_TTS_ENABLED", "1")
+        assert "google" not in tts.enabled_providers()
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/srv/creds.json")
+        assert "google" in tts.enabled_providers()
 
 
 # ── synthesize() google branch ───────────────────────────────────────────────
@@ -145,7 +175,9 @@ class TestSynthesizeGoogle:
         _google_on(monkeypatch)
         seen = _stub_google(monkeypatch, fail=True)
         r: dict = {}
-        tts.synthesize("plain", tmp_path / "b.mp3", voice_id="g-ar-f", allow_premium=True,
+        # the plain copy carries a stray tag on purpose: the fallback must strip it
+        tts.synthesize('plain <break time="1s"/> copy', tmp_path / "b.mp3", voice_id="g-ar-f",
+                       allow_premium=True,
                        ssml_text='x <break time="1s"/> y', report=r,
                        boundaries_out=tmp_path / "b.words.json", lang="ar")
         assert r["used"] == "edge-zariyah" and r["downgraded"] is True
@@ -272,8 +304,8 @@ class TestPreflight:
             Path(out).parent.mkdir(parents=True, exist_ok=True)
             Path(out).write_bytes(b"mp3")
             if report is not None:
-                report.update({"used": voice_id, "downgraded": False, "chars": 10,
-                               "stats": {"requests": 1, "chars": 10}})
+                report.update({"used": voice_id, "provider": "google", "downgraded": False,
+                               "chars": 10, "stats": {"requests": 1, "chars": 10}})
             return Path(out)
 
         monkeypatch.setattr(vc, "synthesize", fake_synth)

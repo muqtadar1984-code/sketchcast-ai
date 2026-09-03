@@ -8,6 +8,8 @@ import json
 
 import pytest
 
+import threading
+
 from shared.tts import chunks as C
 
 
@@ -36,7 +38,8 @@ class TestSsml:
 
     def test_only_break_is_let_through(self):
         ssml, _ = C.ssml_for('x <prosody rate="slow">y</prosody> z', marks=False)
-        assert "prosody" not in ssml and "x  y  z".split() == ["x", "y", "z"]
+        assert "prosody" not in ssml
+        assert all(w in ssml for w in ("x", "y", "z")), "the prose around a dropped tag survives"
 
     def test_marks_number_every_word_from_the_offset(self):
         ssml, n = C.ssml_for("one two three", marks=True, mark_offset=10)
@@ -65,8 +68,12 @@ class TestChunks:
 
     def test_a_chunk_never_exceeds_the_cap_when_it_can_avoid_it(self):
         text = " ".join(f"Sentence number {i} is here." for i in range(300))
+        first = 0
         for piece in C.chunks(text, one_sentence_each=False, marks=True):
-            assert len(C.ssml_for(piece, marks=True)[0].encode()) <= C.MAX_REQUEST_BYTES
+            # sized as the provider SENDS it: marks renumbered from a running offset
+            ssml, n = C.ssml_for(piece, marks=True, mark_offset=first)
+            assert len(ssml.encode()) <= C.MAX_REQUEST_BYTES
+            first += n
 
 
 class TestWordTiming:
@@ -107,10 +114,12 @@ class TestWordTiming:
 def _stub(monkeypatch, tmp_path, *, tps_per_chunk=None, durations=None):
     from shared.tts.providers import google as G
     calls = []
+    lock = threading.Lock()
 
     def fake_post(body):
-        calls.append(body)
-        n = len(calls)
+        with lock:  # the pool runs chunks in parallel; the marker must not race
+            calls.append(body)
+            n = len(calls)
         tps = []
         if body.get("enableTimePointing") and tps_per_chunk is not None:
             tps = tps_per_chunk(body["input"]["ssml"])
@@ -194,11 +203,10 @@ class TestGoogleProvider:
         attempts = []
 
         class R:
+            headers: dict = {}
+            text = ""
             def __init__(self, code):
                 self.status_code = code
-            def raise_for_status(self):
-                if self.status_code >= 400:
-                    raise RuntimeError(self.status_code)
             def json(self):
                 import base64
                 return {"audioContent": base64.b64encode(b"ok").decode()}

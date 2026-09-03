@@ -545,12 +545,16 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     # no lookup happens at all, so the dark ship adds no new way to fail.
     tier_info: dict = {"tier": "skipped", "override": None, "paid": False, "error": None}
     allow_premium = False
+    canary_provider: str | None = None
     if kind == "presentation":
-        from shared.tts import enabled_providers
+        from shared.tts import canary_provider_for, enabled_providers
         from shared.tts.registry import get_voice, premium_provider
         _req_voice = get_voice((gen.get("params") or {}).get("tts_voice"))
         premium_available = bool(enabled_providers() - {"edge"})
-        if premium_available and (premium_provider() != "legacy"
+        # A canary account (TTS_PREMIUM_CANARY_OWNERS) gets its own premium
+        # family while the global setting stays legacy for everyone else.
+        canary_provider = canary_provider_for(owner_id)
+        if premium_available and (premium_provider() != "legacy" or canary_provider is not None
                                   or (_req_voice is not None and _req_voice.tier == "premium")):
             tier_info = db.resolve_tier(sb, owner_id)   # may raise TransientTierError → requeue
             allow_premium = bool(tier_info["paid"])
@@ -972,7 +976,8 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             # non-English books is unchanged.
             tts_voice = pick_voice_id(
                 tts_voice_requested, lang=lesson_lang, allow_premium=allow_premium,
-                explicit_language=bool(params.get("language")))
+                explicit_language=bool(params.get("language")),
+                provider=canary_provider)
 
             # Avatar casting: teacher matches the narration VOICE, student
             # matches the book's GRADE band (auto-detected at upload,
@@ -1192,26 +1197,9 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 _used_list = list(voice_report.get("used") or [])
                 _stats = dict(voice_report.get("stats") or {})
                 # Durable, per-user, per-month ledger — the app's own
-                # (migration 0027), recorded after the fact for each paid
-                # provider that rendered. A refused reservation is recorded,
-                # not enforced, in this phase.
-                _over_cap = False
-                try:
-                    from shared.tts.registry import get_voice as _gv
-                    _paid = {(_gv(v).provider if _gv(v) else None) for v in _used_list}
-                    _paid.discard(None); _paid.discard("edge")
-                    if _paid and _stats.get("chars"):
-                        import datetime as _dt
-                        _ok = sb.rpc("tutor_tts_reserve", {
-                            "p_user": owner_id,
-                            "p_period": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m"),
-                            "p_provider": sorted(_paid)[0],
-                            "p_chars": int(_stats["chars"]),
-                            "p_cap": int(os.getenv("TTS_MONTHLY_CHAR_CAP_PER_USER", "2000000")),
-                        }).execute().data
-                        _over_cap = _ok is False
-                except Exception as exc:  # noqa: BLE001 — accounting never fails a lesson
-                    logger.warning("tts ledger not recorded for %s: %s", generation_id, exc)
+                # (migration 0027). _record_tts_ledger explains the two traps
+                # the first shape fell into.
+                _over_cap, _ledger_key = _record_tts_ledger(sb, owner_id, voice_report, generation_id)
                 db.merge_generation_params(sb, generation_id, {
                     "tts_voice_used": (_used_list or [None])[0],
                     # the FULL list: a lesson that mixed voices was recorded
@@ -1220,6 +1208,8 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     "tts_stats": _stats,
                     "tts_preflight_downgrade": bool(voice_report.get("preflight_downgrade")),
                     "tts_over_cap": _over_cap,
+                    "tts_ledger_key": _ledger_key,
+                    "tts_downgrade_reasons": sorted(voice_report.get("reasons") or []),
                     "tts_voice_downgraded": bool(voice_report.get("downgraded")),
                     # The gate's inputs, so a downgrade can be explained from
                     # the row alone: what the app sent, what tier the account
@@ -1868,3 +1858,52 @@ def index_book(sb: Client, job: dict) -> None:
         book_id, len(chapters), len(structured.get("apparatus") or []),
         grade, subject, bool(cover_dest), relocated_nums, changed,
     )
+
+
+def _record_tts_ledger(sb: Client, owner_id: str | None, voice_report: dict,
+                       generation_id: str) -> tuple[bool, str | None]:
+    """Book a lesson's PAID characters into the app's durable per-user ledger
+    (tts_usage, migration 0027) and say whether the account is now past its
+    monthly allowance. Never raises — accounting must not fail a finished
+    lesson. Returns (over_allowance, ledger_key).
+
+    Two things review found in the first shape. (1) tutor_tts_reserve is a
+    RESERVATION: over the cap it writes nothing and returns false, so
+    recording after the fact with the real cap silently dropped exactly the
+    lessons worth knowing about. The reserve is now made with an effectively
+    unlimited cap and the allowance is checked by reading the row back.
+    (2) The key was the bare provider — the same (user, period, provider) row
+    Ask Coach reserves against with its own 200,000-char cap — so a dozen
+    premium lessons would have exhausted the tutor's monthly voice budget.
+    Lessons book under `lesson:<provider>`.
+    """
+    from shared.tts.registry import get_voice as _gv
+    used = list(voice_report.get("used") or [])
+    stats = dict(voice_report.get("stats") or {})
+    paid = {(_gv(v).provider if _gv(v) else None) for v in used}
+    paid.discard(None)
+    paid.discard("edge")
+    chars = int(stats.get("chars") or 0)
+    if not paid or chars <= 0 or not owner_id:
+        return False, None
+    key = f"lesson:{sorted(paid)[0]}"
+    import datetime as _dt
+    period = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m")
+    cap = int(os.getenv("TTS_MONTHLY_CHAR_CAP_PER_USER", "2000000"))
+    try:
+        sb.rpc("tutor_tts_reserve", {
+            "p_user": owner_id, "p_period": period, "p_provider": key,
+            "p_chars": chars, "p_cap": 2_147_483_647,
+        }).execute()
+        rows = (sb.table("tts_usage").select("chars")
+                .eq("user_id", owner_id).eq("period", period).eq("provider", key)
+                .limit(1).execute().data) or []
+        total = int((rows[0] if rows else {}).get("chars") or 0)
+        over = total > cap
+        if over:
+            logger.warning("generation %s: account %s has rendered %d premium chars this "
+                           "month (allowance %d)", generation_id, owner_id, total, cap)
+        return over, key
+    except Exception as exc:  # noqa: BLE001 — accounting never fails a lesson
+        logger.warning("tts ledger not recorded for %s: %s", generation_id, exc)
+        return False, key
