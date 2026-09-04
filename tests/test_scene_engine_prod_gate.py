@@ -156,3 +156,59 @@ class TestDispatch:
         _render_scene_segment({"segment_id": "s", "scene": dict(_SCENE)},
                               "n", None, 0.0, "x.mp4", "rtl")
         assert seen["scene"].direction == "rtl"
+
+
+class TestAcceptanceReadsTheEpisodePlan:
+    """The acceptance report read `script_data["visual_plan"]`, a key
+    `part_scripts` never carried — the dump lives under episodes[0]. So every
+    production lesson reported Visual Chapters 0 / Arrow Count 0 / Human
+    Teaching Moments 0 whatever the compiler did, and the founder's Cells
+    Part 2 (17 scene segments, one seeded moment, one seeded key point)
+    printed zeros for all of them."""
+
+    _MANIFEST = {"segments": [{"segment_id": "s001", "renderer": "scene",
+                               "audio_path": "a.mp3", "scene_audit": []}]}
+    _PLAN = {
+        "plan": {"chapters": [{"concept": "cell", "elements": [
+            {"id": "arr_nucleus", "type": "arrow"}]}]},
+        "stats": {"visual_chapters": 3, "human_teaching_moments": 1,
+                  "teacher_key_points": 1},
+        "report": ["CHAPTER cell | SYNTHESIZED lbl_auto_nucleus"],
+    }
+
+    @staticmethod
+    def _accept(script_data, monkeypatch):
+        from worker import process
+        monkeypatch.setenv("VIDEO_ENGINE", "scene")
+        return process._acceptance_report(
+            script_data, TestAcceptanceReadsTheEpisodePlan._MANIFEST)
+
+    def test_plan_under_episodes_reaches_the_report(self, monkeypatch):
+        out = self._accept({"episodes": [{"visual_plan": self._PLAN}]},
+                           monkeypatch)
+        assert out is not None
+        assert out["report"]["visual_chapters"] == 3
+        assert out["report"]["human_teaching_moments"] == 1
+        assert out["report"]["teacher_key_points"] == 1
+        # one declared arrow + one SYNTHESIZED report line
+        assert out["report"]["arrow_count"] == 2
+        assert out["plan_report"] == self._PLAN["report"]
+
+    def test_the_direct_key_still_works(self, monkeypatch):
+        out = self._accept({"visual_plan": self._PLAN}, monkeypatch)
+        assert out is not None and out["report"]["visual_chapters"] == 3
+
+    def test_no_plan_at_all_is_still_a_clean_zero(self, monkeypatch):
+        out = self._accept({"episodes": [{}]}, monkeypatch)
+        assert out is not None
+        assert out["report"]["visual_chapters"] == 0
+        assert out["plan_report"] == []
+
+    def test_part_scripts_carries_the_plan_key(self):
+        """The dict `process` builds must actually contain what the report
+        now reads — a source check, because building it needs the whole
+        pipeline."""
+        import inspect
+        from worker import process
+        src = inspect.getsource(process.process_generation)
+        assert '"visual_plan": script_dict.get("visual_plan")' in src
