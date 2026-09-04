@@ -46,8 +46,21 @@ it onto the exported board is dropped, not re-anchored to whatever the NEW
 chapter happens to call the same thing — the compiler seals exported boards
 so this stays a last line of defence.
 
+ONE PASS, RUN TO A FIXED POINT. ``sanitize_scene`` is the whole guard, and
+every road that produces a scene calls it immediately before validation: the
+compiler's per-segment emission, the exported/HOLD board (``board_now``), and
+``director.parse_scene_response``. It used to be a scatter of per-call-site
+guards, and each one could create the dangling reference the next would have
+had to catch — four review rounds found four of those in turn: an arrow to an
+unknown element, a group naming a dropped arrow, a text chained behind a
+dropped group, an arrow anchored to a group the guard itself emptied. So the
+pass SWEEPS UNTIL A SWEEP REMOVES NOTHING, and its contract is a whole-scene
+one: when it returns, no element, action, anchor, group child, ``after`` chain
+or morph ``into`` names something the scene does not contain.
+
 Every conversion is reported the way ANCHORED / SYNTHESIZED lines are, so
-validate.py's arrow accounting stays truthful. The pydantic validator keeps
+validate.py's arrow accounting stays truthful — the vocabulary is a ``Words``
+tuple per call site, not a second implementation. The pydantic validator keeps
 its check as the last line of defence — it is simply no longer reachable for
 this class of plan.
 """
@@ -55,7 +68,7 @@ this class of plan.
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import Callable, NamedTuple, Optional
 
 # naming suffixes a director bolts onto an id that name the KIND of thing,
 # not the thing: plant_cell_box == plant_cell_diagram == plant_cell
@@ -228,8 +241,35 @@ def _single_root(elements: dict[str, dict]) -> Optional[str]:
     return roots[0] if len(roots) == 1 else None
 
 
+# ── the report vocabulary ────────────────────────────────────────────────
+# ONE pass serves three call sites, and each says WHERE a reference went in
+# its own words. The chapter roster and a scene about to be validated say a
+# ref "names no element"; an exported board says it "is not on the board";
+# a carry-out board says LEFT BEHIND instead of DROPPED on purpose, so
+# validate.py's arrow accounting can tell a boundary from a loss. The
+# wording is data, not a second implementation.
+
+class Words(NamedTuple):
+    drop_word: str = "DROPPED"                       # DROPPED | LEFT BEHIND
+    missing: str = "names no element"                # an arrow end's ref
+    group_gone: str = "every child was dropped"
+    after_gone: str = "names no earlier element"     # a text chain's ref
+    flattened: str = "not on the board"              # the `place` fallback
+
+
+WORDS_PLAN = Words()
+# the compiler's per-segment emission: a ref to a roster element this board
+# has not drawn YET flattens to its planned point and rides on
+WORDS_SEGMENT = Words(flattened="not on the board yet")
+# board_now(): the board as exported, where "gone" means "not on it"
+WORDS_BOARD = Words(missing="is not on the board",
+                    group_gone="every child left the board",
+                    after_gone="is not on the board")
+
+
 def _rechain_text(eid: str, e: dict, roster: dict[str, dict],
-                  pos: dict[str, int], notes: list[str]) -> None:
+                  pos: dict[str, int], notes: list[str], *,
+                  resolve: bool = True, words: Words = WORDS_PLAN) -> None:
     """Re-resolve — or cut — ONE text's dangling ``after``, in place.
 
     A chain runs BEHIND an earlier element (schema rule), so the candidates
@@ -242,7 +282,7 @@ def _rechain_text(eid: str, e: dict, roster: dict[str, dict],
     ref = e["after"].get("el")
     fixed = dict(e)
     new_el = how = None
-    if not is_carried_id(eid):
+    if resolve and not is_carried_id(eid):
         here = pos.get(eid, len(pos))
         texts = {k: v for k, v in roster.items()
                  if pos.get(k, len(pos)) < here and isinstance(v, dict)
@@ -253,32 +293,34 @@ def _rechain_text(eid: str, e: dict, roster: dict[str, dict],
         notes.append(f"REANCHORED {eid}.after {ref!r} -> {new_el} ({how})")
     else:
         fixed.pop("after", None)   # it still has its own `at`
-        notes.append(f"UNCHAINED text {eid} (after {ref!r} names no "
-                     f"earlier element)")
+        # a ref that is HERE but later is a different sentence from one that
+        # is not here at all — an exported board says "is not on the board"
+        # only about the second
+        why = (words.after_gone
+               if not isinstance(ref, str) or ref not in roster
+               else WORDS_PLAN.after_gone)
+        notes.append(f"UNCHAINED text {eid} (after {ref!r} {why})")
     roster[eid] = fixed
 
 
-def resolve_roster_anchors(roster: dict[str, dict], root_id: Optional[str],
-                           *, part_names=None,
-                           aliases: Optional[dict[str, str]] = None,
-                           ) -> tuple[list[str], list[str]]:
-    """Fix or drop dangling anchors IN PLACE. Returns (notes, dropped_ids).
+def _sweep(roster: dict[str, dict], root_id: Optional[str], part_names,
+           aliases: Optional[dict[str, str]], resolve: bool,
+           place: Optional[Callable], words: Words,
+           notes: list[str]) -> list[str]:
+    """ONE sweep of the roster. Returns the ids removed by THIS sweep.
 
-    Notes are report fragments ("REANCHORED arrow_plant.head 'plant_cell_box'
-    -> plant_cell_diagram (root visual)"); the caller prefixes the chapter or
-    segment. Actions that targeted a dropped arrow are the caller's to drop —
-    the compiler's dangling-reference filter already does that.
+    A sweep is not enough on its own — removing a group orphans the texts
+    chained behind it and the arrows anchored to it, removing an arrow
+    empties the groups that held it — which is why the only caller runs
+    sweeps to a fixed point.
     """
-    notes: list[str] = []
-    dropped: list[str] = []
-    if root_id is None:
-        root_id = _single_root(roster)
+    removed: list[str] = []
     pos = {k: i for i, k in enumerate(roster)}
-    for eid, e in list(roster.items()):
+    for eid in list(roster):
+        e = roster.get(eid)
         if not isinstance(e, dict):
             continue
         t = e.get("type")
-        carried = is_carried_id(eid)
         if t == "arrow":
             fixed = dict(e)
             changed = kill = False
@@ -290,19 +332,33 @@ def resolve_roster_anchors(roster: dict[str, dict], root_id: Optional[str],
                 if tgt in roster and tgt != eid \
                         and roster[tgt].get("type") != "arrow":
                     continue
-                if carried:
+                # 1. the caller may know where the missing thing WOULD be
+                #    (its planned point): a flattened end keeps the arrow
+                pt = place(eid, end, ref) if place is not None else None
+                if pt is not None:
+                    fixed[end] = pt
+                    changed = True
+                    notes.append(f"FLATTENED {eid}.{end} {tgt!r} -> {pt} "
+                                 f"({words.flattened})")
+                    continue
+                if is_carried_id(eid):
                     # the previous chapter's arrow: whatever it pointed at is
                     # gone with that board; the NEW chapter's elements are
                     # never what it meant, however alike their names
-                    notes.append(f"DROPPED arrow {eid} ({end} anchor {tgt!r} "
-                                 f"stayed behind in the previous chapter)")
+                    notes.append(f"{words.drop_word} arrow {eid} ({end} anchor "
+                                 f"{tgt!r} stayed behind in the previous "
+                                 f"chapter)")
                     kill = True
                     break
-                new_el, layer, how = resolve_anchor(
-                    tgt, roster, root_id, part_names, aliases, end=end)
+                # 2. re-anchor to what the ref must have meant
+                new_el = layer = how = None
+                if resolve:
+                    new_el, layer, how = resolve_anchor(
+                        tgt, roster, root_id, part_names, aliases, end=end)
+                # 3. nothing resolves: THIS arrow goes, never the board
                 if new_el is None or new_el == eid:
-                    notes.append(f"DROPPED arrow {eid} ({end} anchor {tgt!r} "
-                                 f"names no element)")
+                    notes.append(f"{words.drop_word} arrow {eid} ({end} anchor "
+                                 f"{tgt!r} {words.missing})")
                     kill = True
                     break
                 nref = {**ref, "el": new_el}
@@ -324,12 +380,12 @@ def resolve_roster_anchors(roster: dict[str, dict], root_id: Optional[str],
                     # an invisible one nobody can see is wrong.
                     _w = str(_t["el"]) + (f".{_t['layer']}" if _t.get("layer")
                                           else "")
-                    notes.append(f"DROPPED arrow {eid} (both ends resolve to "
-                                 f"{_w}; it would draw nothing)")
+                    notes.append(f"{words.drop_word} arrow {eid} (both ends "
+                                 f"resolve to {_w}; it would draw nothing)")
                     kill = True
             if kill:
                 del roster[eid]
-                dropped.append(eid)
+                removed.append(eid)
             elif changed:
                 roster[eid] = fixed
         elif t == "text" and isinstance(e.get("after"), dict):
@@ -342,51 +398,94 @@ def resolve_roster_anchors(roster: dict[str, dict], root_id: Optional[str],
             if (isinstance(ref, str) and ref != eid and ref in roster
                     and pos.get(ref, len(pos)) < pos.get(eid, len(pos))):
                 continue
-            _rechain_text(eid, e, roster, pos, notes)
-    if dropped:
-        # a group naming a dropped arrow would fail the schema ("group
-        # references unknown") — the guard must never make the failure it
-        # exists to prevent. Prune the child; a group left empty goes too,
-        # and a group whose only child was THAT group goes with it.
-        gone = set(dropped)
-        again = True
-        while again:
-            again = False
-            for gid, g in list(roster.items()):
-                if not isinstance(g, dict) or g.get("type") != "group":
-                    continue
-                kids = [c for c in (g.get("children") or []) if c not in gone]
-                if len(kids) == len(g.get("children") or []):
-                    continue
-                if kids:
-                    roster[gid] = {**g, "children": kids}
-                    continue
-                del roster[gid]
-                gone.add(gid)
-                dropped.append(gid)
-                notes.append(f"DROPPED group {gid} (every child was dropped)")
-                again = True
-        # ...and a TEXT chained after something this pass removed is the same
-        # self-inflicted loss one rung down: "text chains after unknown
-        # element" costs the board whether the id was an arrow dropped
-        # further along the roster or a group emptied only now that `gone` is
-        # final. The main loop saw neither — both happened after it looked.
-        for tid, te in list(roster.items()):
-            if not isinstance(te, dict) or te.get("type") != "text":
+            _rechain_text(eid, e, roster, pos, notes,
+                          resolve=resolve, words=words)
+        elif t == "group":
+            # a group naming something the scene does not contain fails the
+            # schema ("group references unknown") — the guard must never make
+            # the failure it exists to prevent. Prune the child; a group left
+            # empty goes too, and the sweep after this one takes the group
+            # whose only child was THAT group.
+            kids = [c for c in (e.get("children") or [])
+                    if isinstance(c, str) and c in roster and c != eid]
+            if len(kids) == len(e.get("children") or []):
                 continue
-            aft = te.get("after")
-            if (isinstance(aft, dict)
-                    and isinstance(aft.get("el"), str)
-                    and aft["el"] in gone):
-                _rechain_text(tid, te, roster, pos, notes)
+            if kids:
+                roster[eid] = {**e, "children": kids}
+                continue
+            del roster[eid]
+            removed.append(eid)
+            notes.append(f"{words.drop_word} group {eid} ({words.group_gone})")
+    return removed
+
+
+def _sanitize_roster(roster: dict[str, dict], root_id: Optional[str], *,
+                     part_names=None, aliases: Optional[dict[str, str]] = None,
+                     resolve: bool = True, place: Optional[Callable] = None,
+                     words: Words = WORDS_PLAN,
+                     ) -> tuple[list[str], list[str]]:
+    """Sweep the roster to a FIXED POINT. Returns (notes, dropped_ids).
+
+    Each removal can orphan another reference — a dropped arrow empties the
+    group that held it, an emptied group orphans the arrows anchored to it
+    and the texts chained behind it — so one sweep can hand the schema the
+    dangling reference the next sweep would have caught. Three review passes
+    each fixed one such path and found the next; this loop closes the family
+    instead: sweep until a sweep removes nothing.
+    """
+    notes: list[str] = []
+    dropped: list[str] = []
+    if resolve and root_id is None:
+        root_id = _single_root(roster)
+    for _ in range(len(roster) + 2):     # each sweep removes >= 1 or stops
+        gone = _sweep(roster, root_id, part_names, aliases, resolve, place,
+                      words, notes)
+        dropped.extend(gone)
+        if not gone:
+            break
     return notes, dropped
 
 
-def resolve_scene_anchors(scene: dict, root_id: Optional[str] = None,
-                          part_names=None) -> list[str]:
-    """The per-scene form of the same guard, for a scene dict about to be
-    validated: elements list + actions list. Dropped arrows take their
-    actions with them (camera verbs never target). Returns report notes."""
+def resolve_roster_anchors(roster: dict[str, dict], root_id: Optional[str],
+                           *, part_names=None,
+                           aliases: Optional[dict[str, str]] = None,
+                           ) -> tuple[list[str], list[str]]:
+    """The chapter roster's form of the one pass: fix or drop dangling
+    anchors IN PLACE (the caller hands it a COPY — see continuity.py —
+    because an exception mid-pass would otherwise leave a half-sanitised
+    roster behind a report line claiming nothing changed).
+    Returns (notes, dropped_ids).
+
+    Notes are report fragments ("REANCHORED arrow_plant.head 'plant_cell_box'
+    -> plant_cell_diagram (root visual)"); the caller prefixes the chapter or
+    segment. Actions that targeted a dropped arrow are the caller's to drop —
+    the compiler's dangling-reference filter already does that.
+    """
+    return _sanitize_roster(roster, root_id, part_names=part_names,
+                            aliases=aliases)
+
+
+def sanitize_scene(scene: dict, root_id: Optional[str] = None, *,
+                   part_names=None, aliases: Optional[dict[str, str]] = None,
+                   resolve: bool = True, place: Optional[Callable] = None,
+                   words: Words = WORDS_PLAN) -> list[str]:
+    """THE sanitisation pass — run it immediately before a scene dict is
+    validated, on every road that produces one.
+
+    Contract: when it returns, nothing in ``scene`` names something the
+    scene does not contain — no arrow anchor, no text ``after``, no group
+    child, and no action target or morph ``into`` that this pass removed.
+    (An action naming an element that was never there is left for the schema:
+    the guard fixes what IT and the plan broke; it does not paper over a
+    director that targeted a ghost.)
+
+    ``place(el_id, end, ref) -> point | None`` lets a caller keep an arrow
+    whose anchor is merely not on THIS board by flattening that end to the
+    element's planned point; ``resolve=False`` turns off re-anchoring for a
+    board where "not here" means "not drawn yet", not "misnamed". Nothing is
+    written back to ``scene`` until the pass has finished, so a guard that
+    raises leaves the scene exactly as it was.
+    """
     els = scene.get("elements")
     if not isinstance(els, list):
         return []
@@ -397,18 +496,18 @@ def resolve_scene_anchors(scene: dict, root_id: Optional[str] = None,
                 and e["id"] not in roster:
             roster[e["id"]] = e
             original[e["id"]] = e
-    notes, dropped = resolve_roster_anchors(roster, root_id,
-                                            part_names=part_names)
+    notes, dropped = _sanitize_roster(
+        roster, root_id, part_names=part_names, aliases=aliases,
+        resolve=resolve, place=place, words=words)
     if not notes:
         return []
     # rebuild from the ORIGINAL list: a fixed element replaces the entry it
     # was made from, everything else passes through untouched — a duplicate
     # id or an id-less entry still reaches the schema to be rejected there,
-    # exactly as it would without a dangling anchor beside it. The roster
-    # pass prunes the GROUPS that named a dropped arrow in place, so a pruned
-    # group comes back through `roster` and one left empty through `dropped`
-    # — and an id-less group can never enter the set and take every
-    # target-less camera action down with it.
+    # exactly as it would without a dangling anchor beside it. The pass
+    # prunes GROUPS in place, so a pruned group comes back through `roster`
+    # and one left empty through `dropped` — and an id-less group can never
+    # enter the roster and take every target-less camera action down with it.
     gone = {d for d in dropped if isinstance(d, str)}
     rebuilt = []
     for e in els:
@@ -419,10 +518,10 @@ def resolve_scene_anchors(scene: dict, root_id: Optional[str] = None,
             rebuilt.append(roster[eid])
         else:
             rebuilt.append(e)
-    scene["elements"] = rebuilt
-    if gone and isinstance(scene.get("actions"), list):
+    actions = scene.get("actions")
+    if gone and isinstance(actions, list):
         kept = []
-        for a in scene["actions"]:
+        for a in actions:
             if not isinstance(a, dict):
                 kept.append(a)
                 continue
@@ -438,5 +537,15 @@ def resolve_scene_anchors(scene: dict, root_id: Optional[str] = None,
                              f"(that element was dropped)")
                 continue
             kept.append(a)
-        scene["actions"] = kept
+        actions = kept
+    scene["elements"] = rebuilt
+    if isinstance(actions, list):
+        scene["actions"] = actions
     return notes
+
+
+def resolve_scene_anchors(scene: dict, root_id: Optional[str] = None,
+                          part_names=None) -> list[str]:
+    """The scene-shaped name the director calls the one pass by:
+    ``sanitize_scene`` with the planning vocabulary."""
+    return sanitize_scene(scene, root_id, part_names=part_names)
