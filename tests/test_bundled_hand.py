@@ -106,6 +106,25 @@ class TestModelCallPacing:
         assert ra._limiter("vision").per_minute == 90
         assert ra._limiter("image") is ra._limiter("image")  # built once
 
+    def test_an_unknown_kind_fails_fast(self, monkeypatch):
+        import pytest
+        monkeypatch.setattr(ra, "_LIMITERS", {})
+        with pytest.raises(KeyError):
+            ra._limiter("bogus")
+
+    def test_the_gate_lock_exists_at_import(self):
+        import threading
+        assert isinstance(ra._GATE_LOCK, type(threading.Lock()))
+        import inspect
+        src = inspect.getsource(ra)
+        assert "if _GATE_LOCK is None" not in src, "the lock is created once, at import"
+
+    def test_per_lesson_image_cap_parses_defensively(self):
+        import inspect
+        src = inspect.getsource(ra)
+        assert 'int(os.getenv("IMAGE_CALLS_PER_LESSON"' not in src
+        assert '_env_int("IMAGE_CALLS_PER_LESSON", 24)' in src
+
     def test_a_429_with_retry_after_waits_the_server_s_number(self, monkeypatch):
         import requests
         slept = []

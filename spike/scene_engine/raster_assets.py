@@ -164,8 +164,10 @@ def _aistudio_call(prompt: str) -> bytes | None:
 # So the two are separated: render as wide as the CPU allows, but keep only a
 # few model calls in flight. This is a burst limiter, not a thread pool — the
 # work still happens on the render threads, they just queue here.
+import threading as _threading  # noqa: E402
+
 _MODEL_GATE = None
-_GATE_LOCK = None
+_GATE_LOCK = _threading.Lock()
 
 
 def model_call_concurrency() -> int:
@@ -176,13 +178,10 @@ def _model_gate():
     """Built on first use, from the environment at that moment — so a caller
     (or a test) can set the bound without re-importing the module, which would
     hand every other holder of this module a different RasterAsset class."""
-    global _MODEL_GATE, _GATE_LOCK
-    import threading
-    if _GATE_LOCK is None:
-        _GATE_LOCK = threading.Lock()
+    global _MODEL_GATE
     with _GATE_LOCK:
         if _MODEL_GATE is None:
-            _MODEL_GATE = threading.Semaphore(model_call_concurrency())
+            _MODEL_GATE = _threading.Semaphore(model_call_concurrency())
     return _MODEL_GATE
 
 
@@ -226,15 +225,11 @@ def _env_int(name: str, default: int) -> int:
 def _limiter(kind: str):
     """Per-kind sliding window, built once under the gate lock (three gate
     holders can reach here together)."""
-    global _GATE_LOCK
-    import threading
-    if _GATE_LOCK is None:
-        _GATE_LOCK = threading.Lock()
     with _GATE_LOCK:
         lim = _LIMITERS.get(kind)
         if lim is None:
             from shared.ratelimit import RateLimiter
-            env, default = _LIMITER_DEFAULTS.get(kind, _LIMITER_DEFAULTS["image"])
+            env, default = _LIMITER_DEFAULTS[kind]   # unknown kind = programming error
             lim = _LIMITERS[kind] = RateLimiter(_env_int(env, default))
         return lim
 
@@ -287,7 +282,7 @@ def _with_backoff(fn, what: str, tries: int = 4, kind: str = "image"):
 #
 # Per-LESSON, not global: a global counter would refuse the hundredth honest
 # lesson. Reset by the worker at the start of each generation.
-_IMAGE_BUDGET = int(os.getenv("IMAGE_CALLS_PER_LESSON", "24"))
+_IMAGE_BUDGET = _env_int("IMAGE_CALLS_PER_LESSON", 24)
 _image_calls = {"n": 0, "blocked": 0}
 
 
