@@ -265,14 +265,29 @@ def list_avatar_roster() -> list[dict[str, Any]]:
     return [r for r in rows if is_avatar_row(r)]
 
 
+def _pick_rank(seed: str, row: dict[str, Any]) -> tuple:
+    """A row's rank in the draw for `seed`: the sha256 of seed and ROW ID,
+    so it depends on nothing but the row itself."""
+    digest = hashlib.sha256(f"{seed}:{row.get('id') or ''}".encode("utf-8")).hexdigest()
+    return (digest, str(row.get("created_at") or ""), str(row.get("id") or ""))
+
+
 def _stable_pick(rows: list[dict[str, Any]], seed: str) -> dict[str, Any]:
     """A random-but-reproducible member: the same seed (a generation id) picks
     the same face on every part, every retry and every worker; a different
-    generation may pick another. Ordered by (created_at, id) first so the
-    roster's row order in the query cannot change the draw."""
-    import random
-    ordered = sorted(rows, key=lambda r: (str(r.get("created_at") or ""), str(r.get("id") or "")))
-    return random.Random(f"avatar:{seed}").choice(ordered)
+    generation may pick another.
+
+    INSERTION-STABLE (rendezvous hashing): the winner is the candidate with
+    the smallest sha256(f"{seed}:{row_id}"), a rank each row owns on its
+    own. So the draw is independent of the roster's row order AND of which
+    OTHER rows are present: a row approved between a lesson's first run and
+    its retry cannot shift the pick from one existing face to another. Only
+    two events change the face of a given generation — the chosen row is
+    removed (demoted/deleted; the next-ranked face takes over), or a NEW row
+    ranks below the chosen one for this seed (then the new face is cast, and
+    stays cast from that moment). `random.choice` over the current list, by
+    contrast, reshuffled every seed's draw on every insertion."""
+    return min(rows, key=lambda r: _pick_rank(seed, r))
 
 
 def pick_avatar(role: str, gender: str | None, seed: str, *,
@@ -571,7 +586,14 @@ def hydrate(key: str, prompt: str, cache_dir: Path,
     try:
         data = sb.storage.from_(BUCKET).download(path)
         png.parent.mkdir(parents=True, exist_ok=True)
-        png.write_bytes(data)
+        # Written beside and renamed in: asset.png either does not exist or
+        # is complete. A concurrent reader (segments render on parallel
+        # threads) must never open a half-written file, take it for a
+        # corrupt cache and generate a DIFFERENT image mid-lesson. The
+        # per-key asset lock in the renderer wrapper serializes the
+        # threads; this makes the file itself safe for any reader that
+        # is not holding it.
+        _write_atomic(png, data)
         metadata = {**hit, "provenance": "visual_library", "library_asset_id": hit.get("id")}
         meta.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         logger.info("visual library hit: %s <- %s (score %.2f)", key, hit.get("asset_key"), hit.get("match_score", 0))
@@ -621,6 +643,17 @@ def find_avatar(key: str) -> dict[str, Any] | None:
     return faces[0] if faces else None
 
 
+def _write_atomic(png: Path, data: bytes) -> None:
+    """Write `data` to a sibling and rename it into place, so `png` is never
+    observable half-written (os.replace is atomic on POSIX and NTFS)."""
+    part = png.with_name(png.name + ".part")
+    try:
+        part.write_bytes(data)
+        os.replace(part, png)
+    finally:
+        part.unlink(missing_ok=True)
+
+
 def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
     """Put the library's avatar for `key` where the renderer looks
     (cache_dir/canonical_key(key)/asset.png), or return None so the caller
@@ -639,7 +672,14 @@ def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
     try:
         data = sb.storage.from_(BUCKET).download(path)
         png.parent.mkdir(parents=True, exist_ok=True)
-        png.write_bytes(data)
+        # Written beside and renamed in: asset.png either does not exist or
+        # is complete. A concurrent reader (segments render on parallel
+        # threads) must never open a half-written file, take it for a
+        # corrupt cache and generate a DIFFERENT image mid-lesson. The
+        # per-key asset lock in the renderer wrapper serializes the
+        # threads; this makes the file itself safe for any reader that
+        # is not holding it.
+        _write_atomic(png, data)
         metadata = {**hit, "provenance": "visual_library", "library_asset_id": hit.get("id")}
         meta.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         logger.info("visual library avatar: %s <- %s", key, hit.get("id"))

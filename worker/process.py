@@ -1064,10 +1064,14 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             # after the gate — so a downgraded premium pick casts the avatar
             # of the voice that will actually speak. Cast ONCE, here, before
             # the parts loop: the keys travel on every part's script.
-            from spike.scene_engine.whiteboard import cast_avatars
+            from spike.scene_engine.whiteboard import cast_avatars, two_voice_dialogue
             effective_voice = resolve_voice(tts_voice, allow_premium, lang=lesson_lang).voice_id
+            # `dialogue` is the SAME predicate the script generator will run
+            # with for this style: the student face follows the second voice
+            # exactly when that voice will read the student's lines.
             avatars = cast_avatars(effective_voice, book.get("grade"), generation_id,
-                                   lang=lesson_lang, style=narration_style)
+                                   lang=lesson_lang, style=narration_style,
+                                   dialogue=two_voice_dialogue(narration_style))
             logger.info("avatars cast for %s: %s (voice %s)", generation_id, avatars, effective_voice)
 
             episodes_plan = (analysis.get("episodes") or {}).get("episodes") or []

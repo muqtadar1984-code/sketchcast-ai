@@ -543,3 +543,315 @@ class TestEngineWiring:
         cast = re.search(r"avatars = cast_avatars\(\s*effective_voice,[\s\S]{0,200}?generation_id", src)
         loop = re.search(r"for part_idx, episode in enumerate\(episodes_plan", src)
         assert cast and loop and cast.start() < loop.start()
+
+
+# ── 8. second adversarial pass ──────────────────────────────────────────────
+
+class TestTheFaceFollowsTheDialogueNotTheLabel:
+    """The student face must match the second voice exactly when a second
+    voice READS the student's lines — a property of the script, decided by
+    script_generator, not of a style label re-tested at the cast site."""
+
+    @staticmethod
+    def _script(style: str):
+        from agent3_scripts.script_generator import generate_episode_script
+
+        def seg():
+            # `text` is filled so the LEGACY path (which drops the dialogue
+            # array for the four single-narrator styles) is not silent
+            return {"type": "explore", "text": "What is a cell? The smallest unit of life?",
+                    "elevenlabs_text": "",
+                    "dialogue": [{"who": "teacher", "line": "What is a cell?"},
+                                 {"who": "student", "line": "The smallest unit of life?"}],
+                    "slide_heading": "H", "slide_points": []}
+
+        class _Stub:
+            def analyze(self, **kw):
+                return {"data": {"segments": [seg(), seg(), seg()]}, "usage": {},
+                        "truncated": False}
+        return generate_episode_script({"episode_num": 1, "title": "T", "sections": []},
+                                       {"chapter_title": "T"}, 1, _Stub(),
+                                       narration_style=style)
+
+    def test_an_explicit_dialogue_flag_beats_the_style_label(self):
+        # a socratic lesson that DOES carry two-voice dialogue: the student
+        # is the voice's gender (Ana/Emma, female, in English) on every seed
+        for seed in ("a", "b", "c", "d", "e"):
+            key = cast_avatars("edge-guy", "Grade 9", seed, lang="en", style="socratic",
+                               dialogue=True, roster=ROSTER)["student"]
+            assert vl.avatar_gender(key) == "f", seed
+        # a conversational label WITHOUT dialogue keeps the seeded pick
+        genders = {vl.avatar_gender(cast_avatars("edge-guy", "Grade 9", f"s{i}", lang="en",
+                                                 style="conversational", dialogue=False,
+                                                 roster=ROSTER)["student"]) for i in range(20)}
+        assert genders == {"f", "m"}
+
+    @pytest.mark.parametrize("semantic", ["", "1"])
+    def test_the_default_is_the_script_generators_own_decision(self, monkeypatch, semantic):
+        """Behavioural, on BOTH script paths: for every style, the script is
+        generated from a reply whose every segment carries a two-line
+        dialogue; the face is constrained to the second voice's gender iff
+        the generator turned that dialogue into two-voice playback. On the
+        SEMANTIC path the prompt asks every style for dialogue, and the
+        generator still narrates four of them singly — so their student
+        face stays free, and a socratic lesson never casts a girl for a
+        voice that never speaks."""
+        from agent3_scripts.prompts import NARRATION_STYLES
+        from spike.scene_engine.whiteboard import two_voice_dialogue
+        monkeypatch.setenv("SEMANTIC_PLAN", semantic)
+        two_voice_styles = set()
+        for style in NARRATION_STYLES:
+            script = self._script(style)
+            two_voice = any(s.dialogue for s in script.segments)
+            assert two_voice_dialogue(style) is two_voice, (style, semantic)
+            genders = {vl.avatar_gender(cast_avatars("edge-guy", "Grade 9", f"g{i}", lang="en",
+                                                     style=style, roster=ROSTER)["student"])
+                       for i in range(20)}
+            if two_voice:
+                two_voice_styles.add(style)
+                assert genders == {"f"}, (style, semantic)
+            else:
+                assert genders == {"f", "m"}, (style, semantic)
+        assert two_voice_styles == {"conversational"}, "the only two-voice style today"
+
+    def test_the_board_seats_the_student_by_the_same_predicate(self):
+        from spike.scene_engine.continuity import compile_plan, parse_visual_plan
+        from spike.scene_engine.whiteboard import STUDENT_ID
+        plan = parse_visual_plan({"chapters": [
+            {"concept": "c", "assets": {"cell": "a cell"},
+             "elements": [{"id": "cell", "type": "illustration", "asset": "cell",
+                           "at": [600, 380], "scale": 0.9}],
+             "steps": [{"segment": 1, "decision": "NEW_VISUAL",
+                        "actions": [{"verb": "draw", "target": "cell"}]}]}]})
+        narr = {"s001": "A cell has a nucleus."}
+        seated = {}
+        for style in ("socratic", "conversational"):
+            avatars = cast_avatars("edge-aria", "9", "gen-b", lang="en", style=style, roster=ROSTER)
+            scenes, _, _ = compile_plan(plan, narr, all_segments=list(narr),
+                                        avatars=avatars, style=style)
+            seated[style] = any(e.get("id") == STUDENT_ID for e in scenes["s001"]["elements"])
+        assert seated == {"socratic": False, "conversational": True}
+
+    def test_the_worker_passes_the_decision_explicitly(self):
+        src = (REPO / "worker" / "process.py").read_text(encoding="utf-8")
+        assert re.search(r"cast_avatars\([\s\S]{0,300}?dialogue=two_voice_dialogue\(narration_style\)", src)
+
+
+class TestFacesWarmOnceBeforeThePool:
+    def _compose(self, tmp_path, monkeypatch, avatars: dict, events: list):
+        import agent6_animation.video_composer as vc
+        from spike.scene_engine import raster_assets as ra
+
+        def fake_make_resolver(prompts, *a, **k):
+            events.append(("resolver", dict(prompts)))
+            return lambda key: events.append(("warm", key)) or object()
+        monkeypatch.setattr(ra, "make_resolver", fake_make_resolver)
+        monkeypatch.setattr(ra, "load_hand", lambda *a, **k: events.append(("hand", None)) or None)
+        monkeypatch.setenv("VIDEO_ENGINE", "scene")
+        monkeypatch.setattr(vc, "VIDEO_DIR", tmp_path)
+        monkeypatch.setattr(vc, "_MAX_RENDER_WORKERS", 2)
+        monkeypatch.setattr(vc, "_ffmpeg_exe", lambda: "ffmpeg")
+        monkeypatch.setattr(vc, "_audio_duration", lambda p, f: 2.0)
+        monkeypatch.setattr(vc, "concepts_for_slides", lambda hs: ["c"] * len(hs))
+
+        def render(seg, narration, audio, secs, out, direction, scene_dict=None, avatars=None):
+            events.append(("segment", seg["segment_id"]))
+            Path(out).write_bytes(b"mp4")
+            return True
+        monkeypatch.setattr(vc, "_render_scene_segment", render)
+        monkeypatch.setattr(vc, "render_native_segment", lambda *a, **k: True)
+        monkeypatch.setattr("spike.scene_engine.whiteboard.build_whiteboard_scene",
+                            lambda seg, avatars=None: {"stub": True})
+
+        def fake_synth(text, out, *, report=None, **kw):
+            Path(out).parent.mkdir(parents=True, exist_ok=True)
+            Path(out).write_bytes(b"mp3")
+            if report is not None:
+                report.update({"used": "edge-aria", "provider": "edge", "downgraded": False,
+                               "reason": None, "chars": 1, "stats": {}})
+            return Path(out)
+        monkeypatch.setattr(vc, "synthesize", fake_synth)
+        segs = [{"segment_id": f"s{i}", "text": f"Narration {i}.", "slide_heading": "H",
+                 "slide_points": ["p"], "estimated_duration_seconds": 3} for i in range(3)]
+        script = {"episodes": [{"book_id": "bk", "chapter_num": 1, "episode_num": 1,
+                                "episode_title": "Ep", "segments": segs, "avatars": avatars}]}
+        vc.compose_episode_videos(script, {"segments": [{"segment_id": s["segment_id"]} for s in segs]},
+                                  tts_voice="edge-aria", allow_premium=False, lang="en")
+
+    def test_the_lesson_warms_both_cast_faces_once_before_any_segment(self, tmp_path, monkeypatch):
+        avatars = cast_avatars("edge-aria", "9", "gen-warm", lang="en",
+                               style="conversational", roster=ROSTER)
+        assert vl.face_id_of(avatars["teacher"]) and vl.face_id_of(avatars["student"])
+        events: list = []
+        self._compose(tmp_path, monkeypatch, avatars, events)
+        kinds = [k for k, _ in events]
+        assert kinds.count("resolver") == 1, "one resolver, built once for the lesson"
+        first_segment = kinds.index("segment")
+        assert kinds.index("resolver") < first_segment and kinds.index("hand") < first_segment
+        warmed = [v for k, v in events[:first_segment] if k == "warm"]
+        assert sorted(warmed) == sorted(avatars.values()), "both faces, each once, before the pool"
+        prompts = next(v for k, v in events if k == "resolver")
+        assert prompts == {avatars["teacher"]: AVATAR_PROMPTS["avatar_teacher_female"],
+                           avatars["student"]: AVATAR_PROMPTS[vl.base_avatar_key(avatars["student"])]}
+
+    def test_a_lesson_without_a_cast_warms_no_face(self, tmp_path, monkeypatch):
+        events: list = []
+        self._compose(tmp_path, monkeypatch, {}, events)
+        assert not [e for e in events if e[0] in ("resolver", "warm")]
+        assert [k for k, _ in events].count("segment") == 3
+
+
+class TestHydrationHoldsThePerKeyLock:
+    """Two segment threads, one cast face, an empty cache: the second thread
+    must wait for the first's hydration to finish rather than open the file
+    it is still writing."""
+
+    @staticmethod
+    def _blocking_sb(started, release, calls):
+        sb = _fake_sb(ROSTER, calls)
+
+        class Storage:
+            def from_(self, _b):
+                return self
+
+            def download(self, path):
+                calls.setdefault("download", []).append(path)
+                started.set()
+                assert release.wait(10), "test released the download"
+                return _png_bytes()
+        sb.storage = Storage()
+        return sb
+
+    def test_a_second_thread_waits_for_the_first_hydration(self, tmp_path, monkeypatch):
+        import threading
+
+        import shared.visual_library_integration  # noqa: F401 — installs the wrapper
+        from spike.scene_engine import raster_assets as ra
+
+        started, release, calls = threading.Event(), threading.Event(), {}
+        monkeypatch.setattr(vl, "_sb", lambda: self._blocking_sb(started, release, calls))
+        monkeypatch.setattr(vl, "DECISION_LOG", tmp_path / "decisions.log")
+        key = cast_avatars("edge-aria", "9", "gen-race", roster=ROSTER)["teacher"]
+        assert vl.face_id_of(key)
+        cache = tmp_path / "cache"
+        png = cache / renderer_canonical_key(key) / "asset.png"
+        seen: list = []
+
+        def inner(k, prompt, cache_dir=None, allow_generate=True):
+            # inside the lock: record what the cache holds at that moment
+            complete = png.exists() and Image.open(png).size == (64, 64)
+            seen.append((threading.current_thread().name, complete))
+            return None
+        monkeypatch.setattr(ra, "_get_raster_asset", inner)
+
+        def run():
+            ra.get_raster_asset(key, avatar_prompt(key), cache)
+        a = threading.Thread(target=run, name="A")
+        b = threading.Thread(target=run, name="B")
+        a.start()
+        assert started.wait(10), "thread A reached the download"
+        # A is inside the download, holding the key's lock: the lock is
+        # NOT available, and B cannot get past it
+        assert ra.asset_lock(key).acquire(blocking=False) is False, \
+            "hydration must run under the per-key lock"
+        b.start()
+        b.join(0.5)
+        assert b.is_alive() and seen == [] and len(calls["download"]) == 1
+        release.set()
+        a.join(10)
+        b.join(10)
+        assert not a.is_alive() and not b.is_alive()
+        assert seen == [("A", True), ("B", True)], "both saw a COMPLETE face, in lock order"
+        assert len(calls["download"]) == 1, "B found A's file; it never hydrated again"
+        assert not list(png.parent.glob("*.part"))
+
+    def test_the_lock_is_re_entrant_for_the_wrapper(self):
+        from spike.scene_engine import raster_assets as ra
+        lock = ra.asset_lock("avatar_teacher__face_test")
+        assert lock is ra.asset_lock("avatar_teacher__face_test")
+        assert lock.acquire(blocking=False) and lock.acquire(blocking=False)
+        lock.release()
+        lock.release()
+
+    def test_a_failed_write_leaves_no_half_face_behind(self, tmp_path, monkeypatch, caplog):
+        import os
+        calls: dict = {}
+        monkeypatch.setattr(vl, "_sb", lambda: _fake_sb(ROSTER, calls))
+        key = vl.face_key("avatar_teacher_female", FEMALE_TEACHERS[1]["id"])
+        cache = tmp_path / "cache"
+
+        def boom(src, dst):
+            raise OSError("disk full")
+        monkeypatch.setattr(os, "replace", boom)
+        with caplog.at_level(logging.WARNING, logger="shared.visual_library"):
+            assert vl.hydrate_avatar(key, cache) is None
+        d = cache / renderer_canonical_key(key)
+        assert not (d / "asset.png").exists() and not list(d.glob("*.part"))
+        assert any("hydration failed" in r.getMessage() for r in caplog.records)
+        monkeypatch.undo()
+        monkeypatch.setattr(vl, "_sb", lambda: _fake_sb(ROSTER, calls))
+        assert vl.hydrate_avatar(key, cache) and (d / "asset.png").exists()
+        assert not list(d.glob("*.part"))
+
+
+class TestTheDrawIsInsertionStable:
+    """The draw is rendezvous hashing: each row's rank for a seed is
+    sha256(f"{seed}:{row_id}"), the smallest wins. A roster row approved
+    between a lesson's first run and its retry therefore cannot move the
+    draw from one existing face to another."""
+
+    SEEDS = [f"gen-{i}" for i in range(300)]
+
+    def test_the_rank_is_the_documented_hash(self):
+        import hashlib
+        for seed in self.SEEDS[:50]:
+            want = min(FEMALE_TEACHERS,
+                       key=lambda r: hashlib.sha256(f"{seed}:{r['id']}".encode()).hexdigest())
+            assert vl._stable_pick(FEMALE_TEACHERS, seed)["id"] == want["id"]
+
+    def test_a_row_approved_later_never_shifts_a_draw_between_existing_faces(self):
+        new = _row("0badcafe-0000-4000-8000-00000000cafe", "avatar_teacher_female", "teacher",
+                   "2026-12-01T00:00:00Z")
+        moved_to_new, unchanged = 0, 0
+        for seed in self.SEEDS:
+            before = vl._stable_pick(FEMALE_TEACHERS, seed)["id"]
+            after = vl._stable_pick(FEMALE_TEACHERS + [new], seed)["id"]
+            if after == before:
+                unchanged += 1
+            else:
+                assert after == new["id"], (seed, before, after)
+                moved_to_new += 1
+        # ~1/6 of seeds may now draw the NEW face (it is a fair candidate);
+        # the rest keep theirs. random.choice reshuffled nearly all of them.
+        assert unchanged >= 200 and moved_to_new > 0
+        # and the same holds end to end, through the cast and its face key
+        for seed in self.SEEDS[:60]:
+            before = cast_avatars("edge-aria", "9", seed, roster=ROSTER)["teacher"]
+            after = cast_avatars("edge-aria", "9", seed, roster=ROSTER + [new])["teacher"]
+            assert after == before or vl.face_id_of(after) == "0badcafe", seed
+
+    def test_removing_an_unchosen_row_never_changes_the_draw(self):
+        for seed in self.SEEDS[:100]:
+            chosen = vl._stable_pick(FEMALE_TEACHERS, seed)["id"]
+            for r in FEMALE_TEACHERS:
+                rest = [x for x in FEMALE_TEACHERS if x["id"] != r["id"]]
+                if r["id"] == chosen:
+                    # only the chosen row's removal changes the face — to the
+                    # next-ranked one, deterministically
+                    assert vl._stable_pick(rest, seed)["id"] != chosen
+                else:
+                    assert vl._stable_pick(rest, seed)["id"] == chosen, (seed, r["id"])
+
+    def test_the_draw_ignores_row_order_and_created_at(self):
+        import random
+        for seed in self.SEEDS[:30]:
+            want = vl._stable_pick(FEMALE_TEACHERS, seed)["id"]
+            rows = list(FEMALE_TEACHERS)
+            random.Random(seed).shuffle(rows)
+            assert vl._stable_pick(rows, seed)["id"] == want
+            redated = [{**r, "created_at": "2030-01-01T00:00:00Z"} for r in FEMALE_TEACHERS]
+            assert vl._stable_pick(redated, seed)["id"] == want
+
+    def test_a_draw_still_spreads_across_the_roster(self):
+        picks = {vl._stable_pick(FEMALE_TEACHERS, s)["id"] for s in self.SEEDS}
+        assert picks == {r["id"] for r in FEMALE_TEACHERS}

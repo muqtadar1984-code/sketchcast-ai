@@ -535,7 +535,7 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
     from .whiteboard import (STUDENT_ID, TEACHER_ID, avatar_prompt,
                              narration_stream, select_key_sentence,
                              snap_to_narration, student_element,
-                             teacher_element)
+                             teacher_element, two_voice_dialogue)
     teach_key = (avatars or {}).get("teacher", "avatar_teacher")
     stud_key = (avatars or {}).get("student", "avatar_student")
     # which sentences the stream should BOLD, per segment: the model's
@@ -548,7 +548,7 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
             assets_by_seg.setdefault(sid, {})
             assets_by_seg[sid] = {**assets_by_seg[sid],
                                   teach_key: avatar_prompt(teach_key)}
-        if style == "conversational":
+        if two_voice_dialogue(style):
             # the student is a PERMANENT speaker too; the caption stream is
             # injected at COMPOSE time, once per-line audio offsets exist
             if not any(e.get("id") == STUDENT_ID for e in sc["elements"]):

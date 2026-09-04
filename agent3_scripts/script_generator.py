@@ -395,6 +395,8 @@ def generate_episode_script(
         )
     raw_segments = data.get("segments", []) if isinstance(data, dict) else []
 
+    # the ONE predicate for two-voice dialogue, shared with the avatar cast
+    from spike.scene_engine.whiteboard import two_voice_dialogue
     segments = []
     for i, seg in enumerate(raw_segments):
         # Parse segment type
@@ -487,14 +489,17 @@ def generate_episode_script(
                 # segments completely silent.
                 plain_text = " ".join(d["line"] for d in clean_dlg)
                 el_text = plain_text
-            if len(clean_dlg) >= 2 and style == "conversational":
+            if len(clean_dlg) >= 2 and two_voice_dialogue(style):
                 # ...but TWO-VOICE playback still needs an actual exchange:
                 # per-line voices and per-speaker bubbles. One line stays
                 # single-narrator, which is a downgrade, not a silence.
                 # Conversational is also the only style that WANTS two
                 # voices — a direct explainer read by two people is a
                 # different product — so the other styles keep the words
-                # and narrate them singly.
+                # and narrate them singly. The predicate is SHARED with the
+                # avatar cast (whiteboard.two_voice_dialogue): the student
+                # face follows the second voice exactly when this branch
+                # gives that voice lines to read.
                 dialogue = clean_dlg
 
         segments.append(ScriptSegment(

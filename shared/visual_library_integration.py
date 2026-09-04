@@ -128,6 +128,18 @@ def _patch() -> None:
 
     def wrapped_get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
                                  allow_generate: bool = True):
+        # The whole lookup-hydrate-generate-publish sequence runs under the
+        # renderer's per-key lock (re-entrant: the wrapped call takes it
+        # again). Hydration used to happen OUTSIDE it, so two segment threads
+        # asking for the same cast face raced: one wrote asset.png while the
+        # other found it "existing", opened the half-written file inside the
+        # lock, logged "corrupt cached asset; regenerating" and paid for a
+        # second, different face — mid-lesson.
+        with ra.asset_lock(key):
+            return _serve_raster_asset(key, prompt, cache_dir, allow_generate)
+
+    def _serve_raster_asset(key: str, prompt: str, cache_dir: Path | None,
+                            allow_generate: bool):
         cache = cache_dir or ra.CACHE_DIR
         cache.mkdir(parents=True, exist_ok=True)
         asset_dir = cache / ra.canonical_key(key)

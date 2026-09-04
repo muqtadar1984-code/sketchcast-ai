@@ -643,8 +643,32 @@ def avatar_prompt(key: str) -> str:
     return AVATAR_PROMPTS["avatar_student" if "student" in base else "avatar_teacher"]
 
 
+def two_voice_dialogue(style: str | None) -> bool:
+    """Does a lesson of this narration style carry TWO-VOICE dialogue — a
+    second (student) voice reading the student's lines?
+
+    The ONE predicate for that question. Its answer decides, in
+    script_generator, whether a segment's dialogue array becomes
+    `ScriptSegment.dialogue` (per-line two-voice TTS); in continuity,
+    whether the student is a permanent on-board speaker; and here, in
+    cast_avatars, whether the student FACE must match the second voice's
+    gender. Three sites once each tested the style label on their own,
+    which is how the face could drift from the audio.
+
+    Today only `conversational` is two-voice, on BOTH script paths: the
+    SEMANTIC prompt (SEMANTIC_PLAN=1) asks every style for a dialogue
+    array, but script_generator harvests the WORDS from it for the other
+    four styles and narrates them singly — a direct explainer read by two
+    people is a different product. So SEMANTIC_PLAN is deliberately NOT
+    part of this predicate: with it, a socratic lesson on the live path
+    would cast a face for a student voice that never speaks. Should the
+    other styles ever go two-voice, change it HERE and the face follows."""
+    return str(style or "").strip().lower() == "conversational"
+
+
 def cast_avatars(effective_voice: str | None, grade, seed: str, *,
                  lang: str | None = "en", style: str = "socratic",
+                 dialogue: bool | None = None,
                  roster: list | None = None) -> dict:
     """The two avatar KEYS one generation renders with — founder decision,
     2026-09-04: a random approved roster face, restricted only by the
@@ -656,10 +680,15 @@ def cast_avatars(effective_voice: str | None, grade, seed: str, *,
                  drawn with `seed` (the generation id) so retries and later
                  parts agree and a regeneration may differ.
       student  — age band from the book grade; gender from the SECOND voice
-                 when the lesson is a dialogue (the voice that will read the
-                 student's lines — Ana/Emma in English, the language's free
-                 default elsewhere), else the seeded per-lesson pick as
-                 before.
+                 when the lesson carries two-voice dialogue (the voice that
+                 will read the student's lines — Ana/Emma in English, the
+                 language's free default elsewhere), else the seeded
+                 per-lesson pick as before. `dialogue` says whether it does;
+                 callers that know (the worker, which owns the style the
+                 script generator will run with) pass it explicitly, and an
+                 unstated one falls back to two_voice_dialogue(style) — the
+                 SAME predicate script_generator decides with, so the face
+                 and the audio can only ever disagree by editing one place.
 
     Fallbacks live in shared.visual_library.pick_avatar: no face of that
     gender → any face of the role (logged); no roster face of the role, or
@@ -674,7 +703,9 @@ def cast_avatars(effective_voice: str | None, grade, seed: str, *,
     t_gender = voice_gender(effective_voice)
     t_default = teacher_avatar_for_voice(effective_voice)
     band = student_band_for_grade(grade)
-    if style == "conversational":
+    if dialogue is None:
+        dialogue = two_voice_dialogue(style)
+    if dialogue:
         s_gender = voice_gender(student_voice_for_band(band, lang or "en")
                                 or _free_voice_ref(lang))
     else:

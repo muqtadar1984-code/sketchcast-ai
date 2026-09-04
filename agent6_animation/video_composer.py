@@ -708,6 +708,26 @@ def compose_episode_videos(
                 logger.warning("hand sprite unavailable for this lesson; every segment draws with the vector pen")
         except Exception as exc:  # noqa: BLE001
             logger.warning("hand sprite warm-up failed: %s", exc)
+        # The cast faces are ONE teacher and ONE student for the whole
+        # lesson: warm them here too, before the pool, on this thread. Every
+        # segment binds the same two keys; left to the segments, the first
+        # few threads hydrated (or generated) the same face concurrently,
+        # and a thread that saw another's half-written asset.png regenerated
+        # a DIFFERENT face for its segment. Warm once, then every segment
+        # finds the file. Best-effort: a failure here is the same failure a
+        # segment would have hit, and the segment path still resolves.
+        _face_keys = sorted({str(k) for k in (_avatars or {}).values()
+                             if str(k).startswith("avatar")})
+        if _face_keys:
+            try:
+                from spike.scene_engine.raster_assets import make_resolver as _warm_faces
+                from spike.scene_engine.whiteboard import avatar_prompt as _face_prompt
+                _resolve_face = _warm_faces({k: _face_prompt(k) for k in _face_keys})
+                for _k in _face_keys:
+                    if _resolve_face(_k) is None:
+                        logger.warning("cast face %s unavailable at warm-up; segments will retry", _k)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("cast face warm-up failed: %s", exc)
 
     # with a process pool the thread count must not cap the pool: a thread
     # blocks on its child's future, so simultaneous renders = min(threads,

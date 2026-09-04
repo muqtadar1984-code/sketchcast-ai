@@ -678,8 +678,22 @@ def _finish(key: str, ink: Image.Image, regions: dict | None = None,
 
 # ── cache + public API ───────────────────────────────────────────────────────
 
-_ASSET_LOCKS: dict[str, "threading.Lock"] = {}
+_ASSET_LOCKS: dict[str, "threading.RLock"] = {}
 _LOCKS_GUARD = None  # created lazily so the module stays import-light
+
+
+def asset_lock(key: str) -> "threading.RLock":
+    """The per-key lock every reader and writer of `key`'s cache directory
+    holds. Re-entrant so the visual-library wrapper can hold it across its
+    hydration AND the wrapped get_raster_asset call, which takes it again:
+    hydration used to run outside it, and a parallel segment could open a
+    half-written face, call it corrupt and generate another (2026-09-04)."""
+    global _LOCKS_GUARD
+    import threading
+    if _LOCKS_GUARD is None:
+        _LOCKS_GUARD = threading.Lock()
+    with _LOCKS_GUARD:
+        return _ASSET_LOCKS.setdefault(key, threading.RLock())
 
 
 # Words that decorate a subject without changing which picture it is. The
@@ -716,13 +730,7 @@ def get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
     """Per-key serialized: segments render in parallel threads, and a
     baked-text regeneration once raced the readers — two segments bound the
     flagged ink mid-rewrite."""
-    global _LOCKS_GUARD
-    import threading
-    if _LOCKS_GUARD is None:
-        _LOCKS_GUARD = threading.Lock()
-    with _LOCKS_GUARD:
-        lock = _ASSET_LOCKS.setdefault(key, threading.Lock())
-    with lock:
+    with asset_lock(key):
         return _get_raster_asset(key, prompt, cache_dir, allow_generate)
 
 
