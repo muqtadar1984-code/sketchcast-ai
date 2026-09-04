@@ -213,6 +213,11 @@ def assemble_bundle(sb, issue: dict) -> dict:
             art = next((a for a in arts if a["kind"] == "docx"), None) or next(
                 (a for a in arts if a["kind"] == "deck_pptx"), None
             )
+            if art is None and gen.get("kind") == "presentation":
+                # Since the deck became a generation of its own (DECK_IN_PRESENTATION=0),
+                # a lesson carries no deck_pptx row; its text lives on the sibling
+                # 'deck' generation of the same unit.
+                art = _sibling_deck_artifact(sb, gen)
             if art:
                 from worker import client as db
 
@@ -235,3 +240,28 @@ def assemble_bundle(sb, issue: dict) -> dict:
             bundle["artifact_text"] = ""
 
     return bundle
+
+
+def _unit_of(gen: dict) -> tuple:
+    """(book, chapter, part) — the unit a kit's generations share."""
+    params = gen.get("params") if isinstance(gen.get("params"), dict) else {}
+    return (gen.get("book_id"), gen.get("chapter_ref"), str(params.get("part") or ""))
+
+
+def _sibling_deck_artifact(sb, gen: dict) -> dict | None:
+    """The deck_pptx row of the finished 'deck' generation for the same unit as
+    a presentation, newest first. Best-effort: None when there is none or the
+    lookup fails (the bundle then has no artifact text, as before)."""
+    try:
+        r = (sb.table("generations").select("id, book_id, chapter_ref, params, created_at")
+             .eq("owner_id", gen.get("owner_id")).eq("kind", "deck").eq("status", "done").execute())
+        rows = [row for row in (getattr(r, "data", None) or []) if _unit_of(row) == _unit_of(gen)]
+        rows.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+        for row in rows:
+            a = sb.table("artifacts").select("kind, storage_path").eq("generation_id", row["id"]).execute()
+            art = next((x for x in (getattr(a, "data", None) or []) if x.get("kind") == "deck_pptx"), None)
+            if art:
+                return art
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("sibling deck lookup failed: %s", exc)
+    return None

@@ -42,8 +42,9 @@ WORKER_CONCURRENCY = max(1, int(os.getenv("WORKER_CONCURRENCY", "1")))
 # Documents (papers / plans / activities / case studies / exams) are fast — one
 # model call + a .docx — so they jump AHEAD of long video renders, the same
 # "fast lane" idea already used for tutor sketches and support diagnoses. Keeps
-# a teacher's test paper from sitting behind a 15-minute lesson render.
-DOC_JOB_TYPES = ["lesson_plan", "activity", "worksheet", "exam_paper", "case_study", "exam"]
+# a teacher's test paper from sitting behind a 15-minute lesson render. The
+# slide deck ('deck', 2026-09) is the same shape: one authoring call + a .pptx.
+DOC_JOB_TYPES = ["lesson_plan", "activity", "worksheet", "exam_paper", "case_study", "exam", "deck"]
 
 # Job ids this process is ACTIVELY running. The crash-reaper must never requeue
 # these — with concurrency, a live 'processing' row is not an orphan. (Sketches
