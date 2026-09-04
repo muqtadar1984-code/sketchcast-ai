@@ -10,7 +10,9 @@ at under 10 requests per minute with at most 3 in flight.
 So: one queue for the lesson, in first-use order, under the same concurrency
 bound the transports already use; a refused key goes to the back with the
 server's own retry time; a wall-clock budget ends the pass; what is still
-pending is abandoned once, loudly, instead of rediscovered thirty times.
+pending is DEFERRED once, loudly, instead of rediscovered thirty times —
+deferred and not abandoned, because fa8c0d7d's ciliated cell generated three
+minutes into the burst, at or after this pass's own deadline.
 
 Every provider here is a fake. Nothing in this file may make a network call.
 """
@@ -196,7 +198,10 @@ class TestTheWarmPass:
                                  fetch=fetch, workers=1, clock=t.now,
                                  sleep=t.sleep, budget_secs=600)
         assert asked == ["a", "b", "c", "b"], "b is retried LAST, not immediately"
-        assert t.slept == [12.0], "and only after the time the server named"
+        # the full twelve seconds the server named, but taken in slices: ONE
+        # three-minute sleep at the head of compose is a frozen progress ring
+        assert sum(t.slept) == 12.0, "the time the server named is served out"
+        assert max(t.slept) <= 5.0, "…in naps short enough to report progress"
         assert sorted(res["ready"]) == ["a", "b", "c"]
         assert res["pending"] == []
 
@@ -227,7 +232,7 @@ class TestTheWarmPass:
         assert res["pending"], "the budget ended the pass with work left"
         assert len(asked) < 20, "it did not spin"
 
-    def test_what_is_still_pending_is_abandoned_not_rediscovered(self):
+    def _timed_out_pass(self, budget=50.0):
         t = _Clock()
 
         def fetch(_key, _prompt):
@@ -236,9 +241,80 @@ class TestTheWarmPass:
         ra.reset_deferrals()
         res = warm_lesson_assets([("ciliated_cell", "p")], fetch=fetch,
                                  workers=1, clock=t.now, sleep=t.sleep,
-                                 budget_secs=50.0)
+                                 budget_secs=budget)
         assert res["pending"] == ["ciliated_cell"]
-        assert ra.asset_abandoned("ciliated_cell") is True
+        return res
+
+    def test_what_is_still_pending_is_deferred_not_rediscovered(self):
+        """It must not be re-attempted by all eight render threads at once."""
+        self._timed_out_pass()
+        assert ra.asset_deferred("ciliated_cell") is not None
+
+    def test_a_key_the_budget_ran_out_on_is_never_abandoned(self):
+        """The pass's own deadline is three minutes. fa8c0d7d's ciliated cell
+        generated at 17:55:09 — about three minutes into the burst, i.e. AT or
+        AFTER that deadline. Abandoning at the deadline would guarantee, by
+        design, the blank board the incident got by accident."""
+        self._timed_out_pass()
+        assert ra.asset_abandoned("ciliated_cell") is False, \
+            "a rate limit expires; abandon is for a failure that will not"
+
+    def test_exactly_one_later_segment_picks_the_key_back_up(self, monkeypatch):
+        """The deferral is the retry: it expires, the next resolver call
+        through it tries once, and the rest keep skipping."""
+        self._timed_out_pass()
+        left = ra.asset_deferred("ciliated_cell")
+        assert 0 < left <= 120.0, "capped: a lesson cannot wait an hour"
+        monkeypatch.setattr(ra, "_now", lambda: ra.time.monotonic() + left + 1)
+        assert ra.asset_deferred("ciliated_cell") is None, \
+            "a later segment may try again — which is what would have worked"
+
+    def test_the_retry_delay_comes_from_the_environment_defensively(
+            self, monkeypatch):
+        from spike.scene_engine.asset_warm import warm_abandon_retry_secs
+        assert warm_abandon_retry_secs() == 120.0
+        monkeypatch.setenv("IMAGE_WARM_RETRY_SECS", "45")
+        assert warm_abandon_retry_secs() == 45.0
+        monkeypatch.setenv("IMAGE_WARM_RETRY_SECS", "banana")
+        assert warm_abandon_retry_secs() == 120.0
+
+    def test_the_pass_reports_progress_every_round_and_every_nap(self):
+        """Up to three minutes of serial wall clock at the head of compose,
+        with no progress, is a frozen ring during exactly the incident this
+        was built for."""
+        t = _Clock()
+        seen = []
+        state = {"b": 0}
+
+        def fetch(key, _prompt):
+            if key == "b":
+                state["b"] += 1
+                if state["b"] == 1:
+                    return False, 12.0
+            return True, None
+        warm_lesson_assets([("a", "p"), ("b", "p")], fetch=fetch, workers=1,
+                           clock=t.now, sleep=t.sleep, budget_secs=600,
+                           on_progress=lambda d, n: seen.append((d, n)))
+        assert len(t.slept) >= 2, "the wait really was taken in slices"
+        assert len(seen) >= len(t.slept) + 1, \
+            "every nap moves the ring, not just every round"
+        assert seen[-1] == (2, 2)
+        assert all(d <= n for d, n in seen), "a ring never exceeds its total"
+
+    def test_a_progress_callback_that_raises_never_fails_the_lesson(self):
+        def boom(_d, _n):
+            raise RuntimeError("the UI is not the lesson")
+        res = warm_lesson_assets([("a", "p")], fetch=lambda *_: (True, None),
+                                 workers=1, on_progress=boom)
+        assert res["ready"] == ["a"]
+
+    def test_the_composer_labels_the_warm_pass_as_its_own_stage(self):
+        import inspect
+        from agent6_animation import video_composer as vc
+        src = inspect.getsource(vc.compose_episode_videos)
+        assert 'progress_callback(done, total, "images")' in src, \
+            "a distinct stage label, so the ring is not mistaken for segments"
+        assert "on_progress=_warm_progress" in src
 
     def test_a_fetch_that_raises_never_stops_the_pass(self):
         def fetch(key, _prompt):

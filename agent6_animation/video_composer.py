@@ -727,7 +727,11 @@ def compose_episode_videos(
                         return True, None
                     # a rate limit earns another turn; anything else does not
                     return False, asset_deferred(key)
-                _warm = warm_lesson_assets(_entries, fetch=_warm_fetch)
+                def _warm_progress(done: int, total: int) -> None:
+                    if progress_callback:
+                        progress_callback(done, total, "images")
+                _warm = warm_lesson_assets(_entries, fetch=_warm_fetch,
+                                           on_progress=_warm_progress)
                 _pending_keys = _warm["pending"]
                 logger.info("lesson image warm pass: %d/%d ready, %d pending "
                             "after %.0fs (%d rounds)", len(_warm["ready"]),

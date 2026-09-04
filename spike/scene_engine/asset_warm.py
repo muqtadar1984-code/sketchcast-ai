@@ -27,7 +27,7 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
-from .raster_assets import (abandon_asset, canonical_key,
+from .raster_assets import (bind_generation, canonical_key, defer_asset,
                             model_call_concurrency)
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,29 @@ logger = logging.getLogger(__name__)
 # default is deliberately smaller than a compose: a lesson that cannot get its
 # pictures in three minutes is not going to get them.
 DEFAULT_WARM_BUDGET_SECS = 180.0
+# What is still pending when the budget runs out is DEFERRED, not abandoned.
+# fa8c0d7d composed in 281 s and its ciliated cell generated at 17:55:09,
+# about three minutes into the burst -- at or after this pass's deadline. A
+# permanent abandonment would guarantee the blank board that the incident got
+# by accident; one later retry, from whichever segment reaches it first, is
+# exactly what would have filled it.
+DEFAULT_WARM_RETRY_SECS = 120.0
+# The pass may wait out a server's Retry-After. Doing that in ONE sleep meant
+# up to three minutes with no progress callback and a frozen ring in the UI,
+# during exactly the incident this was built for. Nap in slices instead.
+NAP_CAP_SECS = 5.0
+
+
+def warm_abandon_retry_secs() -> float:
+    import os
+    try:
+        v = float(str(os.getenv("IMAGE_WARM_RETRY_SECS", "") or "").strip()
+                  or DEFAULT_WARM_RETRY_SECS)
+    except (TypeError, ValueError):
+        logger.warning("IMAGE_WARM_RETRY_SECS is not a number; using %.0f",
+                       DEFAULT_WARM_RETRY_SECS)
+        return DEFAULT_WARM_RETRY_SECS
+    return v if v > 0 else DEFAULT_WARM_RETRY_SECS
 
 
 def warm_budget_secs() -> float:
@@ -117,7 +140,8 @@ def order_segments_by_pending(per_segment, pending_keys) -> list[int]:
 
 
 def warm_lesson_assets(entries, *, fetch, budget_secs=None, clock=None,
-                       sleep=None, workers=None) -> dict:
+                       sleep=None, workers=None, on_progress=None,
+                       nap_cap=NAP_CAP_SECS) -> dict:
     """Fetch each entry once, deferring rather than hammering.
 
     ``fetch(key, prompt)`` returns ``(ok, retry_after)``: ok=True when the
@@ -129,8 +153,11 @@ def warm_lesson_assets(entries, *, fetch, budget_secs=None, clock=None,
     transports already enforce, so the warm pass cannot widen the burst that
     caused the incident. Submission is in first-use order.
 
+    `on_progress(ready, total)` is called after every round and every nap, so
+    a pass that spends three minutes waiting out a 429 still moves the UI.
+
     Returns {"ready", "attempted", "pending", "rounds", "seconds"}. Keys still
-    pending at the deadline are abandoned for the rest of the lesson.
+    pending at the deadline are DEFERRED (one later retry), never abandoned.
     """
     clock = clock or time.monotonic
     sleep = sleep or time.sleep
@@ -154,12 +181,14 @@ def warm_lesson_assets(entries, *, fetch, budget_secs=None, clock=None,
         queue.extendleft(reversed(waiting))     # order preserved
         if not batch:
             # everything left is serving out a retry time
-            nap = min(max(min(i[2] for i in queue) - now, 0.0), left)
+            nap = min(max(min(i[2] for i in queue) - now, 0.0), left,
+                      float(nap_cap))
             if nap <= 0:
                 break
             logger.info("image warm pass waiting %.0fs for %d rate-limited "
                         "key(s)", nap, len(queue))
             sleep(nap)
+            _tell(on_progress, len(ready), len(queue) + len(ready))
             continue
         rounds += 1
         for (key, prompt, _), (ok, retry_after) in zip(
@@ -169,12 +198,25 @@ def warm_lesson_assets(entries, *, fetch, budget_secs=None, clock=None,
                 ready.append(key)
             elif retry_after is not None:
                 queue.append((key, prompt, clock() + float(retry_after)))
+        _tell(on_progress, len(ready), len(queue) + len(ready))
 
     pending = [item[0] for item in queue]
+    retry_in = warm_abandon_retry_secs()
     for key in pending:
-        abandon_asset(key)
+        # a deferral, NOT abandon_asset: every key still in this queue is here
+        # because a provider REFUSED it, and a refusal expires
+        defer_asset(key, retry_in)
     return {"ready": ready, "attempted": attempted, "pending": pending,
             "rounds": rounds, "seconds": round(clock() - start, 3)}
+
+
+def _tell(on_progress, done: int, total: int) -> None:
+    if not on_progress:
+        return
+    try:
+        on_progress(done, max(total, done))
+    except Exception as exc:  # noqa: BLE001 - a progress ping never fails a lesson
+        logger.debug("warm-pass progress callback raised: %s", exc)
 
 
 def _run(batch, fetch, workers):
@@ -190,5 +232,8 @@ def _run(batch, fetch, workers):
 
     if workers <= 1 or len(batch) == 1:
         return [one(i) for i in batch]
+    # a pool worker starts with an EMPTY context, so without this the fetch
+    # would charge its image call to the process-default lesson rather than
+    # this one (raster_assets.bind_generation)
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        return list(ex.map(one, batch))
+        return list(ex.map(bind_generation(one), batch))
