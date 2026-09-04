@@ -137,3 +137,37 @@ def test_thinking_is_disabled_in_the_request_body(client, monkeypatch):
     client.analyze("hello")
 
     assert captured["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 0
+
+
+def _capture_body(client, monkeypatch) -> dict:
+    captured = {}
+
+    class _Res:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return usage_response(prompt=1, answer=1)
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured.update(json)
+        return _Res()
+
+    monkeypatch.setattr("shared.gemini_client.requests.post", fake_post)
+    monkeypatch.setattr("shared.gemini_client._access_token", lambda: "tok")
+    client.analyze("hello")
+    return captured
+
+
+def test_structured_json_output_is_requested_by_default(client, monkeypatch):
+    """Two of the founder's lessons failed on 2026-09-04 with COMPLETE replies
+    whose JSON was malformed (a wrong bracket; quotes in prose). Every caller
+    of this client parses JSON, so the model is asked to emit only that."""
+    monkeypatch.delenv("GEMINI_JSON_MODE", raising=False)
+    body = _capture_body(client, monkeypatch)
+    assert body["generationConfig"]["responseMimeType"] == "application/json"
+
+
+def test_structured_output_has_a_kill_switch(client, monkeypatch):
+    monkeypatch.setenv("GEMINI_JSON_MODE", "0")
+    body = _capture_body(client, monkeypatch)
+    assert "responseMimeType" not in body["generationConfig"]
+    assert body["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 0, "the rest of the config is untouched"

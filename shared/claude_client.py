@@ -454,6 +454,62 @@ def _rebalance_json(text: str):
     return "".join(out)
 
 
+def _substitute_closers(text: str):
+    """The OTHER reading of a mis-nested closer: the model wrote the wrong
+    bracket CHARACTER for the structure it was closing — `]` for `}`.
+
+    Measured 2026-09-04 (gen f0e65c2f, char 4,698 of 39,132):
+        "layers": ["nucleus"] ] ],  "key_point": …
+    the action object closed with `]`. _rebalance_json reads every mismatch
+    as an omission and closes level after level down to the next array, which
+    drags the step's key_point out of its object and the reply still fails.
+    Read as a substitution it is one character. Both readings are offered as
+    candidates and the richest parse wins.
+
+    Each mismatched closer is swapped for the one the open structure needs and
+    closes exactly one level; a closer with nothing open is dropped. Same
+    severed-tail refusal as _rebalance_json. Returns the corrected source, or
+    None when nothing was swapped or the text was truncated."""
+    out, stack = [], []
+    ins = esc = swapped = False
+    for c in text:
+        if esc:
+            out.append(c)
+            esc = False
+            continue
+        if ins:
+            out.append(c)
+            if c == "\\":
+                esc = True
+            elif c == '"':
+                ins = False
+            continue
+        if c == '"':
+            ins = True
+            out.append(c)
+            continue
+        if c in "{[":
+            stack.append(c)
+        elif c in "}]":
+            if not stack:
+                swapped = True      # a closer with nothing open: drop it
+                continue
+            need = "}" if stack[-1] == "{" else "]"
+            if c != need:
+                c = need
+                swapped = True
+            stack.pop()
+        out.append(c)
+    if ins or esc or not swapped:
+        return None
+    tail = "".join(out).rstrip()
+    if not tail or tail[-1] in ",:":
+        return None          # a value was severed — leave the failure loud
+    while stack:
+        out.append("]" if stack.pop() == "[" else "}")
+    return "".join(out)
+
+
 def _repair_json(text: str):
     """Salvage a reply that is COMPLETE but slightly malformed.
 
@@ -538,11 +594,20 @@ def _repair_json(text: str):
     # 3. trailing commas
     decommaed = _re.sub(r",\s*([}\]])", r"\1", fixed)
     candidates.append(decommaed)
-    # 3. mis-nested closers (a `}` arriving while an array is still open)
+    # 3. mis-nested closers — TWO readings, both offered, richest parse wins:
+    #    the model FORGOT a closer (_rebalance_json inserts the missing ones),
+    #    or it wrote the WRONG closer character (_substitute_closers swaps it).
+    #    Measured 2026-09-04 (gen f0e65c2f): `"layers": ["nucleus"] ] ],` — an
+    #    object closed with `]`. Read as an omission that `]` closes every level
+    #    down to the next array and drags the step's key_point out of its
+    #    object; read as a substitution it is one character, and the reply parses.
     for src in (fixed, decommaed):
         mended = _rebalance_json(src)
         if mended:
             candidates.append(mended)
+        swapped = _substitute_closers(src)
+        if swapped:
+            candidates.append(swapped)
     # 3. a stray closer sits at the very end of an otherwise good reply, so
     #    walk the tail back — but ONLY over structural punctuation. Trimming
     #    CONTENT would turn a genuinely truncated reply into a plausible,
