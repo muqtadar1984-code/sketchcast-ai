@@ -765,6 +765,26 @@ class TestPartNamesFromDescription:
             "and carpel on a white background.") == \
             ["petals", "sepals", "stamen", "carpel"]
 
+    @pytest.mark.parametrize("prompt,expect", [
+        ("A plant cell with a nucleus, cytoplasm on white.",
+         ["nucleus", "cytoplasm"]),
+        ("A flower with petals, sepals and a stamen in profile.",
+         ["petals", "sepals", "stamen"]),
+        ("A leaf with a midrib, veins and a blade in section.",
+         ["midrib", "veins", "blade"]),
+    ])
+    def test_a_short_name_plus_clause_is_trimmed_too(self, prompt, expect):
+        # each of these chunks is THREE words or fewer, so the old length
+        # gate never let the trim look at it
+        """The trim ran only ABOVE three words — the length at which a clause
+        makes a chunk fail the 1..3 length check anyway. So a chunk that was
+        name-plus-clause and still short passed straight through: 'cytoplasm
+        on white' shipped as a part name, went into the image prompt's layer
+        tail, and the vision annotator was paid to find a region by that
+        name."""
+        from spike.scene_engine.raster_assets import part_names_from_description
+        assert part_names_from_description(prompt) == expect
+
     def test_a_chunk_that_is_only_a_clause_names_nothing_and_is_not_reported(self):
         from spike.scene_engine.raster_assets import part_names_from_description
         skipped = []

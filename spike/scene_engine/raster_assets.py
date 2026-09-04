@@ -485,17 +485,22 @@ def part_names_from_description(prompt: str,
                 words.pop(0)
             while words and words[-1] in _ITEM_STOPWORDS:
                 words.pop()
-            if len(words) > 3:
-                # the last item wears the sentence's trailing clause: keep the
-                # head that NAMES the part, drop the clause that places it
-                cl = _TRAILING_CLAUSE.search(" ".join(words))
-                if cl is not None:
-                    # a chunk that IS the clause ("drawn in black ink on
-                    # white paper") names no part at all: it is not a part
-                    # this pass lost, so it is not worth a report line either
-                    words = " ".join(words)[:cl.start()].split()
-                    while words and words[-1] in _ITEM_STOPWORDS:
-                        words.pop()
+            # the last item wears the sentence's trailing clause: keep the
+            # head that NAMES the part, drop the clause that places it. This
+            # ran only above three words, which is the length at which a
+            # clause makes a chunk fail the check below — so a chunk that was
+            # name-plus-clause and still SHORT ("cytoplasm on white", "stamen
+            # in profile") passed straight through and shipped as a part
+            # name, and the annotator was asked to find a region called
+            # 'cytoplasm on white'.
+            cl = _TRAILING_CLAUSE.search(" ".join(words))
+            if cl is not None:
+                # a chunk that IS the clause ("drawn in black ink on white
+                # paper") names no part at all: it is not a part this pass
+                # lost, so it is not worth a report line either
+                words = " ".join(words)[:cl.start()].split()
+                while words and words[-1] in _ITEM_STOPWORDS:
+                    words.pop()
             if not (1 <= len(words) <= 3):
                 if words and skipped is not None:
                     skipped.append(" ".join(words))
