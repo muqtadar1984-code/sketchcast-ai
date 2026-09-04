@@ -271,10 +271,10 @@ def _escape_inner_quotes(text: str) -> str:
             return True
         c = text[j]
         top = stack[-1] if stack else None
-        if c == "}":
-            return top in ("{", None)
-        if c == "]":
-            return top in ("[", None)
+        if c in "}]":
+            # a closer never follows a prose quote; a MIS-NESTED closer is
+            # _rebalance_json's job and must reach it as structure
+            return True
         if c == ":":
             if is_key:
                 return True
@@ -294,15 +294,15 @@ def _escape_inner_quotes(text: str) -> str:
                     or any(text.startswith(lit, k) for lit in ("true", "false", "null")))
         if c != ",":
             return False
-        if top == "{":
-            return key_shape.match(text, j + 1) is not None
         k = j + 1
         while k < n and text[k] in " \t\r\n":
             k += 1
-        if k >= n:
-            return True
+        if k >= n or text[k] in "]}":
+            return True      # a trailing comma; a later rule strips it
+        if top == "{":
+            return key_shape.match(text, j + 1) is not None
         d = text[k]
-        return (d in starters or d in "]}"
+        return (d in starters
                 or any(text.startswith(lit, k) for lit in ("true", "false", "null")))
 
     while i < n:
@@ -486,7 +486,11 @@ def _repair_json(text: str):
     #    Anchored on the tag NAMES: a bare `<[^<>]*>` matched from a `<` in one
     #    string to a `>` in a later one (a maths lesson's "3 < 5" … "7 > 2")
     #    and rewrote the structural quotes between them (review, 2026-09-04).
-    fixed = _re.sub(r"</?(?:break|prosody|emphasis|say-as|phoneme|speak|sub|voice|lang|mark|audio|p|s|w)\b[^<>]*>",
+    #    No single-letter names (`<p`, `<s`, `<w` fire on terse maths like
+    #    "0<p and … p>1"), and the tag body may not contain a structural
+    #    `"` `,`/`:` `"` — so a match can never span two JSON strings.
+    fixed = _re.sub(r'</?(?:break|prosody|emphasis|say-as|phoneme|speak|sub|voice|lang|mark|audio)\b'
+                    r'(?:(?!"\s*[,:]\s*")[^<>])*>',
                     lambda m: m.group(0).replace('\\"', '"').replace('"', "'"), fixed)
     candidates.append(fixed)
     # 2. a key emitted TWICE, its own name standing in as the value:

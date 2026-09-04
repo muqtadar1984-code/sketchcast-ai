@@ -97,6 +97,30 @@ class TestProseQuotes:
         out = X(raw)
         assert ok(out) and out["segments"][0]["slide_points"] == ["3 < 5", "7 > 2"], "two points, not one"
 
+    def test_terse_maths_letters_after_an_angle_bracket_are_not_tags(self):
+        """Second review pass: `<p`, `<s`, `<w` matched single-letter SSML
+        names and a tag spanned two strings again."""
+        raw = doc(seg("Since 0<p and", "p>1 holds."),
+                  '{"type": "hook", "text": "t", "elevenlabs_text": "t", "slide_heading": "H", "slide_points": ["a",]}')
+        out = X(raw)
+        assert ok(out)
+        assert out["segments"][0]["text"] == "Since 0<p and"
+        assert out["segments"][0]["elevenlabs_text"] == "p>1 holds."
+
+    def test_trailing_comma_after_a_string_value_is_still_repairable(self):
+        """Second review pass: the object branch accepted a comma only before a
+        key, so the model's favourite slip — a trailing comma after the last
+        dialogue line — swallowed the rest of the reply."""
+        raw = ('{"segments": [{"type": "hook", "text": "x", "dialogue": '
+               '[{"who": "teacher", "line": "Hi.",\n}]}], "visual_plan": {"chapters": []}}')
+        out = X(raw)
+        assert ok(out) and out["segments"][0]["dialogue"][0]["line"] == "Hi."
+
+    def test_a_mis_nested_closer_after_a_string_still_reaches_rebalance(self):
+        raw = '{"segments": [{"type": "hook", "text": "Hi."], "visual_plan": {"chapters": []}}'
+        out = X(raw)
+        assert ok(out) and out["segments"][0]["text"] == "Hi."
+
 
 class TestControlCharsAndEscapes:
     def test_raw_newline_and_tab_inside_a_string(self):
