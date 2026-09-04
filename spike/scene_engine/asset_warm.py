@@ -13,8 +13,10 @@ will need them, before any segment renders. A key the provider is refusing
 goes to the BACK of the queue with the server's own retry time rather than
 being hammered; a wall-clock budget ends the pass so a dead provider cannot
 hold a lesson hostage; and whatever is still pending when the budget runs out
-is abandoned explicitly, so the segment path skips it instantly instead of
-discovering it thirty more times.
+is DEFERRED explicitly, so the segment path skips it instantly instead of
+discovering it thirty more times — deferred and not abandoned, because that
+budget expires at about the moment fa8c0d7d's ciliated cell finally
+generated, and one later segment coming back is exactly what was missing.
 
 Everything here is pure queue mechanics with an injected `fetch`, clock and
 sleep — no provider, no network, no import of the renderer.
