@@ -218,7 +218,17 @@ def parse_scene_response(raw: dict | str, narration: str) -> Scene | None:
     # A dangling anchor is CONVERTED, never the reason a scene falls to a
     # slide: the compiler resolves these first (and reports them); this is the
     # same guard for scenes that reach the director by any other road.
-    for note in resolve_scene_anchors(data):
+    # ...and the guard may never be the thing that costs the board: a bug
+    # inside it (a KeyError on a stale roster snapshot) threw the exception
+    # straight past this function, which is the very loss it exists to
+    # prevent. An unfixed scene still gets its chance at the schema.
+    try:
+        _anchor_notes = resolve_scene_anchors(data)
+    except Exception as e:
+        logger.warning("anchor guard failed on scene %s (%s); scene left "
+                       "unchanged", data.get("id"), e)
+        _anchor_notes = []
+    for note in _anchor_notes:
         logger.warning("scene %s: %s", data.get("id"), note)
     try:
         scene = parse_scene(data)

@@ -25,9 +25,15 @@ validation:
      illustration (its id, asset key or a part name) or is a generic "the
      diagram" reference, binds to the scene's single root illustration;
   3. else THAT arrow is dropped and the scene proceeds — with the actions
-     that TARGET it, the morph actions whose ``into`` names it, and the
-     groups that listed it (a group left empty goes too, or the schema
-     rejects the very board this guard exists to save).
+     that TARGET it, the morph actions whose ``into`` names it, the groups
+     that listed it (a group left empty goes too), and the text chains that
+     ran behind any of them, or the schema rejects the very board this guard
+     exists to save.
+
+A text ``after`` is held to the same rule the schema states: it must name an
+element that is on the board AND earlier than the text. Anything else — a
+name that is gone, a name further down the board — is re-chained to an
+earlier text or cut loose (the text still carries its own ``at``).
 
 An arrow whose two ends resolve to ONE element is dropped as well: it renders
 as nothing and the label it came from loses its leader line. A HEAD tries the
@@ -222,6 +228,36 @@ def _single_root(elements: dict[str, dict]) -> Optional[str]:
     return roots[0] if len(roots) == 1 else None
 
 
+def _rechain_text(eid: str, e: dict, roster: dict[str, dict],
+                  pos: dict[str, int], notes: list[str]) -> None:
+    """Re-resolve — or cut — ONE text's dangling ``after``, in place.
+
+    A chain runs BEHIND an earlier element (schema rule), so the candidates
+    are the texts ahead of this one in the roster AND still on it. Reading
+    them out of a pre-drop snapshot instead raised ``KeyError`` for any
+    arrow dropped earlier in the same pass, and the exception escaped the
+    guard to kill the whole chapter compile: zero scenes, the exact loss
+    this module exists to prevent.
+    """
+    ref = e["after"].get("el")
+    fixed = dict(e)
+    new_el = how = None
+    if not is_carried_id(eid):
+        here = pos.get(eid, len(pos))
+        texts = {k: v for k, v in roster.items()
+                 if pos.get(k, len(pos)) < here and isinstance(v, dict)
+                 and v.get("type") == "text"}
+        new_el, _, how = resolve_anchor(str(ref), texts, None, end="after")
+    if new_el is not None:
+        fixed["after"] = {**e["after"], "el": new_el}
+        notes.append(f"REANCHORED {eid}.after {ref!r} -> {new_el} ({how})")
+    else:
+        fixed.pop("after", None)   # it still has its own `at`
+        notes.append(f"UNCHAINED text {eid} (after {ref!r} names no "
+                     f"earlier element)")
+    roster[eid] = fixed
+
+
 def resolve_roster_anchors(roster: dict[str, dict], root_id: Optional[str],
                            *, part_names=None,
                            aliases: Optional[dict[str, str]] = None,
@@ -237,7 +273,7 @@ def resolve_roster_anchors(roster: dict[str, dict], root_id: Optional[str],
     dropped: list[str] = []
     if root_id is None:
         root_id = _single_root(roster)
-    order = list(roster)
+    pos = {k: i for i, k in enumerate(roster)}
     for eid, e in list(roster.items()):
         if not isinstance(e, dict):
             continue
@@ -298,28 +334,15 @@ def resolve_roster_anchors(roster: dict[str, dict], root_id: Optional[str],
                 roster[eid] = fixed
         elif t == "text" and isinstance(e.get("after"), dict):
             ref = e["after"].get("el")
-            if isinstance(ref, str) and ref in roster and ref != eid:
+            # sound already? the schema asks a chain to name an element that
+            # is BOTH on the board and EARLIER than this one. A ref to a
+            # LATER element passed this test and was then thrown out by the
+            # validator ("must chain after an EARLIER element") — a whole
+            # board lost for a chain the guard could simply have cut.
+            if (isinstance(ref, str) and ref != eid and ref in roster
+                    and pos.get(ref, len(pos)) < pos.get(eid, len(pos))):
                 continue
-            fixed = dict(e)
-            new_el = None
-            if not carried:
-                # a chain runs BEHIND an earlier element (schema rule); a
-                # match further down the roster is not a predecessor
-                earlier = order[:order.index(eid)]
-                texts = {k: roster[k] for k in earlier
-                         if isinstance(roster[k], dict)
-                         and roster[k].get("type") == "text"}
-                new_el, _, how = resolve_anchor(str(ref), texts, None,
-                                                end="after")
-            if new_el is not None:
-                fixed["after"] = {**e["after"], "el": new_el}
-                notes.append(f"REANCHORED {eid}.after {ref!r} -> {new_el} "
-                             f"({how})")
-            else:
-                fixed.pop("after", None)   # it still has its own `at`
-                notes.append(f"UNCHAINED text {eid} (after {ref!r} names no "
-                             f"earlier element)")
-            roster[eid] = fixed
+            _rechain_text(eid, e, roster, pos, notes)
     if dropped:
         # a group naming a dropped arrow would fail the schema ("group
         # references unknown") — the guard must never make the failure it
@@ -343,6 +366,19 @@ def resolve_roster_anchors(roster: dict[str, dict], root_id: Optional[str],
                 dropped.append(gid)
                 notes.append(f"DROPPED group {gid} (every child was dropped)")
                 again = True
+        # ...and a TEXT chained after something this pass removed is the same
+        # self-inflicted loss one rung down: "text chains after unknown
+        # element" costs the board whether the id was an arrow dropped
+        # further along the roster or a group emptied only now that `gone` is
+        # final. The main loop saw neither — both happened after it looked.
+        for tid, te in list(roster.items()):
+            if not isinstance(te, dict) or te.get("type") != "text":
+                continue
+            aft = te.get("after")
+            if (isinstance(aft, dict)
+                    and isinstance(aft.get("el"), str)
+                    and aft["el"] in gone):
+                _rechain_text(tid, te, roster, pos, notes)
     return notes, dropped
 
 

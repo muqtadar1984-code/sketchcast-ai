@@ -1102,3 +1102,169 @@ class TestThirdReviewFindings:
                        for a in scenes["s004"]["actions"])
         for sid in ("s003", "s004"):
             assert parse_scene_response(scenes[sid], _NARR[sid]) is not None, sid
+
+
+class TestFourthReviewFindings:
+    """Fourth adversarial pass: four more ways the guard cost the very board
+    it exists to save, or reported half of what it did. Numbered as the
+    review numbered them."""
+
+    _CELL = {"id": "cell", "type": "illustration", "asset": "plant_cell",
+             "at": [640, 360]}
+
+    @staticmethod
+    def _manifest():
+        return {"segments": [{"segment_id": s, "renderer": "scene",
+                              "audio_path": "a.mp3"} for s in _NARR]}
+
+    # -- 1: a dropped arrow must not poison the text pass -----------------
+    def test_1_a_text_after_a_dropped_arrow_no_longer_raises(self):
+        """The text branch read `earlier` out of a roster SNAPSHOT taken
+        before the loop, then indexed the LIVE roster with it: any arrow
+        dropped ahead of a text whose chain dangles raised KeyError, the
+        exception escaped compile_plan, and the chapter produced no scenes
+        at all -- the exact loss this module exists to prevent."""
+        roster = {
+            "cell": dict(self._CELL),
+            "lbl_a": {"id": "lbl_a", "type": "text", "text": "A",
+                      "at": [95, 140]},
+            "lbl_b": {"id": "lbl_b", "type": "text", "text": "B",
+                      "at": [95, 220]},
+            "arr": {"id": "arr", "type": "arrow", "tail": {"el": "lbl_ghost"},
+                    "head": {"el": "cell"}},
+            "cap": {"id": "cap", "type": "text", "text": "Caption",
+                    "at": [95, 300], "after": {"el": "A", "gap": 8}},
+        }
+        notes, dropped = resolve_roster_anchors(roster, "cell")
+        assert dropped == ["arr"]
+        assert "REANCHORED cap.after 'A' -> lbl_a (text match)" in notes
+        assert roster["cap"]["after"] == {"el": "lbl_a", "gap": 8}
+
+    def test_1_a_raising_guard_never_costs_the_director_its_scene(
+            self, monkeypatch, caplog):
+        import spike.scene_engine.director as _d
+
+        def _boom(*a, **k):
+            raise KeyError("arr")
+
+        monkeypatch.setattr(_d, "resolve_scene_anchors", _boom)
+        raw = {"id": "vc_s003", "elements": [dict(self._CELL)],
+               "actions": [{"verb": "draw", "target": "cell"}]}
+        with caplog.at_level(logging.WARNING,
+                             logger="spike.scene_engine.director"):
+            scene = parse_scene_response(raw, "n")
+        assert scene is not None and [e.id for e in scene.elements] == ["cell"]
+        assert "anchor guard failed on scene vc_s003" in caplog.text
+
+    def test_1_a_raising_guard_never_costs_the_compiler_its_chapter(
+            self, monkeypatch):
+        import spike.scene_engine.continuity as _c
+
+        def _boom(*a, **k):
+            raise KeyError("arr")
+
+        monkeypatch.setattr(_c, "resolve_roster_anchors", _boom)
+        raw = {"chapters": [{
+            "concept": "cell", "assets": {"plant_cell": "a cell"},
+            "elements": [dict(self._CELL)],
+            "steps": [{"segment": 3, "decision": "NEW_VISUAL",
+                       "actions": [{"verb": "draw", "target": "cell"}]}]}]}
+        scenes, _, report = _compile(raw)
+        assert any("CHAPTER cell | ANCHOR GUARD FAILED" in ln
+                   for ln in report), report
+        assert parse_scene_response(scenes["s003"], _NARR["s003"]) is not None
+
+    # -- 2: a chain onto a group the guard itself emptied -----------------
+    def test_2_a_text_chained_after_a_dropped_group_is_cut_loose(self):
+        """The group prune runs AFTER the element loop, so a text chained
+        behind a group the guard empties keeps a dangling `after` and the
+        schema throws away the whole board -- group children were rescued by
+        the previous pass, the texts behind them were not."""
+        roster = {
+            "cell": dict(self._CELL),
+            "lbl_a": {"id": "lbl_a", "type": "text", "text": "A",
+                      "at": [95, 140]},
+            "arr": {"id": "arr", "type": "arrow", "tail": {"el": "lbl_ghost"},
+                    "head": {"el": "cell"}},
+            "g": {"id": "g", "type": "group", "children": ["arr"]},
+            "cap": {"id": "cap", "type": "text", "text": "Caption",
+                    "at": [95, 300], "after": {"el": "g", "gap": 8}},
+        }
+        notes, dropped = resolve_roster_anchors(roster, "cell")
+        assert dropped == ["arr", "g"]
+        assert ("UNCHAINED text cap (after 'g' names no earlier element)"
+                in notes)
+        assert "after" not in roster["cap"]
+
+    def test_2_the_board_survives_a_chain_onto_an_emptied_group(self, caplog):
+        """End to end, ONE pass of the guard — the way a real board gets it.
+        The scene reached the schema as "text 'cap' chains after unknown
+        element 'g'" and fell to a slide: the guard emptied that group
+        itself."""
+        scene = {"id": "vc_s003", "elements": [
+            dict(self._CELL),
+            {"id": "lbl_a", "type": "text", "text": "A", "at": [95, 140]},
+            {"id": "arr", "type": "arrow", "tail": {"el": "lbl_ghost"},
+             "head": {"el": "cell"}},
+            {"id": "g", "type": "group", "children": ["arr"]},
+            {"id": "cap", "type": "text", "text": "Caption", "at": [95, 300],
+             "after": {"el": "g", "gap": 8}}],
+            "actions": [{"verb": "draw", "target": "cell"},
+                        {"verb": "write", "target": "cap"}]}
+        with caplog.at_level(logging.WARNING,
+                             logger="spike.scene_engine.director"):
+            scene_obj = parse_scene_response(scene, "n")
+        assert "DROPPED group g (every child was dropped)" in caplog.text
+        assert "UNCHAINED text cap" in caplog.text
+        assert scene_obj is not None
+        assert [e.id for e in scene_obj.elements] == ["cell", "lbl_a", "cap"]
+        assert next(e for e in scene_obj.elements
+                    if e.id == "cap").after is None
+
+    # -- 3: a chain onto a LATER element is a dangling chain too ----------
+    def test_3_a_chain_onto_a_later_element_is_re_resolved(self):
+        """`after` naming an element that EXISTS but comes later passed the
+        guard untouched and was thrown out by the schema ("must chain after
+        an EARLIER element") -- a whole board for one out-of-order chain."""
+        roster = {
+            "cell": dict(self._CELL),
+            "t_intro": {"id": "t_intro", "type": "text", "text": "Intro",
+                        "at": [95, 140]},
+            "cap": {"id": "cap", "type": "text", "text": "Caption",
+                    "at": [95, 300], "after": {"el": "intro_label", "gap": 8}},
+            "intro_label": {"id": "intro_label", "type": "text",
+                            "text": "Later", "at": [95, 380]},
+        }
+        notes, dropped = resolve_roster_anchors(roster, "cell")
+        assert dropped == []
+        assert ("REANCHORED cap.after 'intro_label' -> t_intro (text match)"
+                in notes)
+        assert roster["cap"]["after"] == {"el": "t_intro", "gap": 8}
+
+    def test_3_a_chain_onto_a_later_element_with_no_predecessor_is_cut(self):
+        scene = {"id": "vc_s004", "elements": [
+            dict(self._CELL),
+            {"id": "cap", "type": "text", "text": "Caption", "at": [95, 300],
+             "after": {"el": "lbl_b", "gap": 8}},
+            {"id": "lbl_a", "type": "text", "text": "A", "at": [95, 140]},
+            {"id": "lbl_b", "type": "text", "text": "B", "at": [95, 220]}],
+            "actions": [{"verb": "draw", "target": "cell"},
+                        {"verb": "write", "target": "cap"}]}
+        notes = resolve_scene_anchors(scene)
+        assert ("UNCHAINED text cap (after 'lbl_b' names no earlier element)"
+                in notes)
+        obj = parse_scene_response(scene, "n")
+        assert obj is not None
+        assert [e.id for e in obj.elements] == ["cell", "cap", "lbl_a", "lbl_b"]
+
+    def test_3_a_sound_earlier_chain_is_still_left_alone(self):
+        roster = {
+            "cell": dict(self._CELL),
+            "lbl_a": {"id": "lbl_a", "type": "text", "text": "A",
+                      "at": [95, 140]},
+            "cap": {"id": "cap", "type": "text", "text": "Caption",
+                    "at": [95, 300], "after": {"el": "lbl_a", "gap": 8}},
+        }
+        notes, dropped = resolve_roster_anchors(roster, "cell")
+        assert (notes, dropped) == ([], [])
+        assert roster["cap"]["after"] == {"el": "lbl_a", "gap": 8}

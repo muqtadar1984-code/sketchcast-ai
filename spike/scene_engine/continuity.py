@@ -858,8 +858,16 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
     # dropped arrow would fail the schema ("group references unknown") in
     # every scene the group rode into — the resolver prunes the child out of
     # the roster and reports a group left empty as dropped in its own right.
-    _notes, _dropped_ch = resolve_roster_anchors(
-        roster, root_id, part_names=part_names, aliases=alias_parts)
+    # The guard is a last line of defence, so it never gets to be the
+    # failure: an exception raised inside it once escaped compile_plan and
+    # took the WHOLE chapter with it — zero scenes, the loss it exists to
+    # prevent. Report it and carry on with the roster as it stands.
+    try:
+        _notes, _dropped_ch = resolve_roster_anchors(
+            roster, root_id, part_names=part_names, aliases=alias_parts)
+    except Exception as _e:
+        _notes, _dropped_ch = [f"ANCHOR GUARD FAILED ({_e}); roster "
+                               f"left as planned"], []
     for _n in _notes:
         report.append(f"CHAPTER {ch.concept} | {_n}")
 
@@ -1343,8 +1351,13 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             if _fx is not None:
                 elements[_i] = _fx
         _guard = {"elements": elements, "actions": step_actions}
-        for _n in resolve_scene_anchors(_guard, root_id if root_id in _on_scene
-                                        else None, part_names=part_names):
+        try:
+            _gnotes = resolve_scene_anchors(
+                _guard, root_id if root_id in _on_scene else None,
+                part_names=part_names)
+        except Exception as _e:
+            _gnotes = [f"ANCHOR GUARD FAILED ({_e}); scene left unchanged"]
+        for _n in _gnotes:
             report.append(f"SEGMENT {seg_id} | {_n}")
         elements, step_actions = _guard["elements"], _guard["actions"]
 
