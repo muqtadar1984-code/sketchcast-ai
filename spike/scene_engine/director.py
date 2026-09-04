@@ -80,6 +80,8 @@ Canvas is 1280x720. RULES:
 - cue phrases are copied VERBATIM from your narration text; the action fires
   as those words are spoken.
 - the visual explains; text only labels. Never restate narration as text.
+- a text element longer than 5 words is DISCARDED by the engine: a statement
+  belongs in the narration, not on the board (mark it with key_point).
 - draw the structure BEFORE the label that names it.
 - at most 2 zooms; always camera_reset before the segment ends.
 - asset keys name the CONCEPT ("plant_cell", "heart_cross_section",

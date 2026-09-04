@@ -138,7 +138,7 @@ Build visuals in the order the teaching happens: draw A, then draw B, then relat
 Never reference an object before it exists: DRAW the object, then WRITE its label, then POINT/HIGHLIGHT it. Every action must be logically possible where it occurs."""
 
 _LABELS_CAMERA = """=== LABELS, ARROWS, CAMERA ===
-Labels are short, readable and educationally useful — not sentences, and not on every object.
+Labels are short NAMES, not on every object: text longer than 5 words is DISCARDED — mark an important sentence with key_point.
 A label written onto a picture is unfinished without a leader line: whenever you WRITE a label onto a visual, add an ARROW in the SAME step from that label to the semantic region it names. Use POINT, CIRCLE, HIGHLIGHT or ZOOM to emphasise something the board already shows.
 Use camera movement only when it improves comprehension, with a semantic target — never to create motion."""
 

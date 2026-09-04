@@ -1851,6 +1851,124 @@ class TestLabelsGetLeaderLines:
             "no step demonstrates a label and its leader line together"
 
 
+class TestTextClassification:
+    """The founder's Cells Part 2 wrote 'Compare your model cell with the
+    models made by other groups.' — a verbatim textbook activity line — across
+    the plant cell for nine segments. Nothing between the model and the pixels
+    refused a sentence as a label."""
+
+    @staticmethod
+    def _chapter(text, narr, role=None, eid="compare_table"):
+        el = {"id": eid, "type": "text", "text": text, "at": [700, 230]}
+        if role:
+            el["role"] = role
+        raw = {"chapters": [{
+            "concept": "cells", "transition": "clear_and_redraw",
+            "assets": {"pc": "A plant cell."},
+            "elements": [
+                {"id": "cell", "type": "illustration", "asset": "pc",
+                 "at": [600, 380], "scale": 1.0},
+                el,
+            ],
+            "steps": [
+                {"segment": 1, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "cell"}]},
+                {"segment": 2, "decision": "EXTEND",
+                 "actions": [{"verb": "write", "target": eid,
+                              "at": {"phrase": text[:20]}}]},
+            ],
+        }]}
+        plan = parse_visual_plan(raw)
+        scenes, _, report = compile_plan(plan, narr,
+                                         all_segments=["s001", "s002"],
+                                         skip_hold=set())
+        return plan, scenes, report
+
+    def test_short_labels_are_untouched(self):
+        from spike.scene_engine.continuity import _classify_text
+        for t in ("Cell wall", "Outer bank", "Cut off loop", "Mitochondria",
+                  "Nucleus"):
+            assert _classify_text({"text": t}) == "label", t
+        assert _classify_text({"text": "Photosynthesis",
+                               "role": "title"}) == "title"
+
+    def test_a_sentence_is_a_sentence(self):
+        from spike.scene_engine.continuity import _classify_text
+        assert _classify_text({
+            "text": "Compare your model cell with the models made by other "
+                    "groups."}) == "sentence"
+        # an instruction verb gives it away even when it is short
+        assert _classify_text({"text": "Compare the two"}) == "sentence"
+        # ...and so does terminal punctuation
+        assert _classify_text({"text": "It is small."}) == "sentence"
+
+    def test_an_instruction_is_dropped_with_a_report(self):
+        text = ("Compare your model cell with the models made by other "
+                "groups.")
+        _, scenes, report = self._chapter(
+            text, {"s001": "Here is a plant cell.",
+                   "s002": "The nucleus is the control centre."})
+        assert any("DROPPED text->compare_table" in ln and "sentence, not a "
+                   "label" in ln for ln in report)
+        for sc in scenes.values():
+            assert not any(e["id"] == "compare_table"
+                           for e in sc["elements"])
+        # its write went with it, so there is no lost cue either
+        for sc in scenes.values():
+            assert not any(a.get("target") == "compare_table"
+                           for a in sc["actions"])
+
+    def test_a_spoken_sentence_becomes_a_key_point(self):
+        text = "The nucleus controls everything the cell does."
+        plan, scenes, report = self._chapter(
+            text, {"s001": "Here is a plant cell.",
+                   "s002": "The nucleus controls everything the cell does. "
+                           "It is the control centre."})
+        step = plan.chapters[0].steps[1]
+        assert step.key_point == text
+        assert any("KEY POINT from text->compare_table" in ln
+                   for ln in report)
+        assert not any(e["id"] == "compare_table"
+                       for e in scenes["s002"]["elements"])
+        # ...and the narration stream bolds it, which is where a statement
+        # belongs: spoken by the teacher, not lettered onto the diagram
+        assert any("STREAM" in ln and text in ln for ln in report)
+
+    def test_an_arrow_anchored_to_a_dropped_sentence_goes_too(self):
+        """An arrow whose tail names a missing element fails scene validation
+        outright — the segment would lose its picture, not just its label."""
+        text = ("Compare your model cell with the models made by other "
+                "groups.")
+        raw = {"chapters": [{
+            "concept": "cells", "transition": "clear_and_redraw",
+            "assets": {"pc": "A plant cell."},
+            "elements": [
+                {"id": "cell", "type": "illustration", "asset": "pc",
+                 "at": [600, 380], "scale": 1.0},
+                {"id": "sent", "type": "text", "text": text, "at": [700, 230]},
+                {"id": "arr", "type": "arrow",
+                 "tail": {"el": "sent", "edge": "right"},
+                 "head": [600, 380]},
+            ],
+            "steps": [{"segment": 1, "decision": "NEW_VISUAL",
+                       "actions": [{"verb": "draw", "target": "cell"},
+                                   {"verb": "write", "target": "sent"},
+                                   {"verb": "draw", "target": "arr"}]}],
+        }]}
+        plan = parse_visual_plan(raw)
+        scenes, _, report = compile_plan(plan, {"s001": "a plant cell"},
+                                         all_segments=["s001"],
+                                         skip_hold=set())
+        assert any("DROPPED arrow 'arr'" in ln for ln in report)
+        Scene.model_validate(scenes["s001"])       # would have raised before
+
+    def test_the_prompts_say_a_long_text_is_discarded(self):
+        from spike.scene_engine.director import SCENE_DIRECTION_SPEC
+        from agent3_scripts.semantic_prompt import _LABELS_CAMERA
+        for src in (SCENE_DIRECTION_SPEC, _LABELS_CAMERA):
+            assert "longer than 5 words is DISCARDED" in src
+
+
 class TestBubbleFootprint:
     """Founder: bubbles 'take up a lot of space on the whiteboard and in some
     instances hide the image being drawn underneath'."""

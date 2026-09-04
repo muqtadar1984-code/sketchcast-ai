@@ -129,6 +129,44 @@ def _norm_name(s: str) -> str:
     return _re.sub(r"[^a-z0-9]+", " ", str(s).lower()).strip()
 
 
+# A board text element that opens with one of these is an INSTRUCTION to the
+# reader, not a name for a part. The founder's Cells Part 2 wrote "Compare your
+# model cell with the models made by other groups." across the diagram for nine
+# segments — a verbatim textbook activity line the director used as a label.
+_INSTRUCTION_VERBS = {"compare", "discuss", "write", "draw", "look", "think",
+                      "tap", "answer", "explain", "describe", "list",
+                      "measure", "record", "complete"}
+# a label is a NAME: short, no terminal punctuation, no verb of instruction
+_LABEL_MAX_WORDS = 5
+_LABEL_MAX_CHARS = 32
+_CAPTION_MAX_CHARS = 60
+
+
+def _classify_text(e: dict) -> str:
+    """title | label | caption | sentence.
+
+    Nothing between the model and the pixels refused a sentence as a label:
+    TextElement clamps at 80 chars and defaults role='label', _clean_element
+    only checked role membership, and the prompts' '<= 6 words' is prose with
+    no enforcement. So a 62-character activity instruction became a size-27
+    'label', overran the safe area and was clamped straight across the art.
+    """
+    import re as _re
+    role = str(e.get("role") or "label").strip().lower()
+    if role == "title":
+        return "title"
+    text = " ".join(str(e.get("text") or "").split())
+    words = text.split()
+    first = _re.sub(r"[^a-z]", "", words[0].lower()) if words else ""
+    if (len(words) <= _LABEL_MAX_WORDS and len(text) <= _LABEL_MAX_CHARS
+            and not text.endswith((".", "!", "?"))
+            and first not in _INSTRUCTION_VERBS):
+        return "caption" if role == "caption" else "label"
+    if role == "caption" and len(text) <= _CAPTION_MAX_CHARS:
+        return "caption"
+    return "sentence"
+
+
 def _pt(v) -> list[float] | None:
     try:
         if isinstance(v, (list, tuple)) and len(v) == 2:
@@ -263,6 +301,12 @@ def _clean_element(e) -> dict | None:
             out.pop("role", None)
         if out.get("anchor") not in ("lt", "mt", "rt", "lm", "mm", "rm"):
             out.pop("anchor", None)
+        # a statement is not a label. The compiler drops the sentence class
+        # outright (a sentence belongs in the narration or a key point); the
+        # caption class survives with the role that gives it a slot UNDER the
+        # picture instead of a place in the label columns.
+        if _classify_text(out) == "caption" and out.get("role") != "title":
+            out["role"] = "caption"
     elif t == "arrow":
         for k in ("tail", "head"):
             v = out.get(k)
@@ -637,10 +681,69 @@ def _add_auto_sketches(scenes: dict, narrations: dict, assets_by_seg: dict,
                       f"{' (margin)' if occupied else ''}")
 
 
+def _drop_sentence_text(ch: VisualChapter, roster: dict, narrations: dict,
+                        report: list) -> None:
+    """Board text that is a STATEMENT, not a name, never reaches the board.
+
+    The design has a home for an important sentence — the teacher speaks it
+    and the narration stream bolds it (key_point) — and a home for detail (the
+    deck). What it does not have is a place to letter a 62-character textbook
+    instruction, so `_bind_text` measured it at ~694px, clamped it to the
+    right safe edge and drew it across the diagram for nine segments.
+
+    A sentence that is actually SPOKEN in the step that writes it becomes that
+    step's key_point; one nobody says is dropped with a report line. Arrows
+    left anchored to it go too — an arrow to a missing element fails scene
+    validation and would cost the whole segment its picture.
+    """
+    from .whiteboard import snap_to_narration
+    dropped: set[str] = set()
+    for eid, e in list(roster.items()):
+        if e.get("type") != "text":
+            continue
+        kind = _classify_text(e)
+        if kind != "sentence":
+            if kind == "caption" and str(e.get("role") or "") != "caption":
+                roster[eid] = {**e, "role": "caption"}
+            continue
+        text = " ".join(str(e.get("text") or "").split())
+        step = next((st for st in ch.steps
+                     for a in st.actions
+                     if a.get("verb") in _INTRODUCERS
+                     and a.get("target") == eid), None)
+        snapped = snap_to_narration(
+            text, narrations.get(step.segment_id, "")) if step else None
+        if snapped and not getattr(step, "key_point", None):
+            step.key_point = snapped
+            report.append(
+                f"CHAPTER {ch.concept} | KEY POINT from text->{eid} "
+                f"(a sentence is spoken, not lettered onto the board): "
+                f"{snapped!r}")
+        else:
+            report.append(
+                f"CHAPTER {ch.concept} | DROPPED text->{eid} (sentence, not a "
+                f"label; the deck carries detail): {text[:60]!r}")
+        del roster[eid]
+        dropped.add(eid)
+    if not dropped:
+        return
+    for aid, ae in list(roster.items()):
+        if ae.get("type") != "arrow":
+            continue
+        if any(isinstance(ae.get(k), dict) and ae[k].get("el") in dropped
+               for k in ("tail", "head")):
+            del roster[aid]
+            report.append(f"CHAPTER {ch.concept} | DROPPED arrow {aid!r} "
+                          f"(its label was a sentence)")
+
+
 def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                      prev_board, assets_seen, cam, scenes, assets_by_seg,
                      report, avatars=None, style="socratic"):
     roster = {e["id"]: e for e in ch.elements}
+    # BEFORE anything reads the roster: a sentence masquerading as a label is
+    # neither a label nor a part name, and it must not seed either.
+    _drop_sentence_text(ch, roster, narrations, report)
     # ONE root visual per chapter, enforced: independently generated images do
     # not compose — a model that declares an illustration per organelle gets
     # its first kept and the rest dropped (their actions degrade to holds via
