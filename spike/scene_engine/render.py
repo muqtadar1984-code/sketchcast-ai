@@ -1371,6 +1371,13 @@ class SceneRenderer:
             return eid in ("__teach_av", "__stud_av") or \
                 str(eid).startswith(("__nb_", "__hm_", "__kp_", "__tm_"))
 
+        # An element may also DECLARE itself screen-fixed (`hud: true`): the
+        # corner sketches and the carried-over recap picture. They live in the
+        # margins the zoom is meant to leave alone, and in world space a zoom
+        # flung them off the canvas.
+        hud_ids = {e.id for e in self.scene.elements
+                   if _is_hud(e.id) or bool(getattr(e, "hud", False))}
+
         def W2S(p: Point, off: Point = (0.0, 0.0), c=None) -> Point:
             sp = (c if c is not None else cam).to_screen((p[0] + off[0], p[1] + off[1]))
             return (sp[0] * SS, sp[1] * SS)
@@ -1380,7 +1387,7 @@ class SceneRenderer:
             b, s = self.bound[el.id], st[el.id]
             if not s.visible or s.opacity <= 0.01 or s.erase >= 0.999:
                 continue
-            ecam = cam_hud if _is_hud(el.id) else cam
+            ecam = cam_hud if el.id in hud_ids else cam
             alpha = s.opacity * (1.0 - s.erase)
             if b.raster is not None:
                 self._draw_raster(frame, b, s, ecam, alpha)
@@ -1432,7 +1439,9 @@ class SceneRenderer:
                 continue
             fp = self._frontier(i, ta, t)
             if fp is not None:
-                pen_pos, pen_start = W2S(fp), ta.start
+                # the hand follows a screen-fixed element through the HUD camera
+                pen_cam = cam_hud if getattr(a, "target", None) in hud_ids else cam
+                pen_pos, pen_start = W2S(fp, c=pen_cam), ta.start
                 pen_mode = resolve_mode(a.pen, self.scene.style.pen_mode)
                 pen_erase = a.verb == "erase"
         if pen_pos is not None:

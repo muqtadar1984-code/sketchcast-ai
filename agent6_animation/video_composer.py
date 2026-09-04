@@ -152,8 +152,13 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
                     words = json.loads(wjson.read_text(encoding="utf-8"))
                 except Exception:  # noqa: BLE001 — timing falls back gracefully
                     words = None
+        # allow_generate=False: the hand sprite is warmed ONCE per lesson
+        # before the segment pool (compose_episode_videos). Each segment used
+        # to generate it on its own thread on a fresh container, so under an
+        # image-model 429 the first segment drew with the plain vector pen and
+        # the rest with the hand — one lesson, two pens (founder, 2026-09-04).
         r = SceneRenderer(scene, asset_resolver=make_resolver(prompts),
-                          hand_loader=lambda k: load_hand(k))
+                          hand_loader=lambda k: load_hand(k, allow_generate=False))
         r.compile(audio_secs, words=words)
         ok = encode_scene(r.frames(audio_secs, FPS), r.total_secs(audio_secs),
                           audio_path, Path(str(out_mp4)), FPS)
@@ -570,6 +575,17 @@ def compose_episode_videos(
     # in parallel — TTS is network I/O and the renderer shells out to ffmpeg, so
     # threads overlap well and the wall-clock drops from sum-of-segments toward
     # slowest-segment. Capped by RENDER_WORKERS (default 4; 1 = old sequential).
+    # The drawing hand is one sprite for the whole lesson: warm it here, once,
+    # before any segment renders, so every renderer reads the same cached file
+    # (or none — consistently). Per-segment loaders never generate.
+    if _scene_flag():
+        try:
+            from spike.scene_engine.raster_assets import load_hand as _warm_hand
+            if _warm_hand() is None:
+                logger.warning("hand sprite unavailable for this lesson; every segment draws with the vector pen")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("hand sprite warm-up failed: %s", exc)
+
     workers = max(1, min(os.cpu_count() or 2, _MAX_RENDER_WORKERS))
     results: list[Optional[dict]] = [None] * total
     if workers > 1 and total > 1:

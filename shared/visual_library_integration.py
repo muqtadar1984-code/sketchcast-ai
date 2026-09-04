@@ -119,7 +119,8 @@ def _patch() -> None:
     if _PATCHED:
         return
     from spike.scene_engine import raster_assets as ra
-    from shared.visual_library import (best_match, hydrate, log_decision,
+    from shared.visual_library import (best_match, hydrate, hydrate_avatar,
+                                       is_avatar_key, log_decision,
                                        publish_generated, threshold_now)
 
     _bootstrap_existing_cache(ra)
@@ -132,22 +133,34 @@ def _patch() -> None:
         asset_dir = cache / ra.canonical_key(key)
         png = asset_dir / "asset.png"
         existed_before = png.exists()
+        avatar = is_avatar_key(key)
 
         # Scored BEFORE any lookup mutates the cache, and recorded whether or
         # not it clears the threshold — a near miss is the evidence that says
-        # whether the threshold is set right.
+        # whether the threshold is set right. Avatars are not scored: they are
+        # an identity, not a meaning, and the nearest educational visual (an
+        # onion epidermis, measured) is noise in the decision log.
         match, score, source = (None, 0.0, "none")
-        if not existed_before:
+        if not existed_before and not avatar:
             try:
                 match, score, source = best_match(key, prompt, context())
             except Exception as exc:  # noqa: BLE001
                 logger.debug("visual library scoring failed for %s: %s", key, exc)
 
         if not existed_before:
+            if avatar:
+                # The roster: the approved avatar for this key, by key. Every
+                # fresh container used to generate a new teacher because the
+                # semantic lookups below are avatar-blind by design.
+                try:
+                    if hydrate_avatar(key, cache):
+                        source = "avatar"
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("visual library avatar lookup failed for %s: %s", key, exc)
             # First reuse a previously generated asset already present on the
             # worker. Then try the durable Supabase library. Only after both
             # fail does the original function get permission to call Gemini.
-            if not _hydrate_local_library(key, prompt, cache):
+            elif not _hydrate_local_library(key, prompt, cache):
                 try:
                     hydrate(key, prompt, cache, context())
                 except Exception as exc:  # noqa: BLE001

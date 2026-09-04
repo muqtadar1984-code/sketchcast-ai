@@ -363,6 +363,61 @@ def hydrate(key: str, prompt: str, cache_dir: Path,
         return None
 
 
+def find_avatar(key: str) -> dict[str, Any] | None:
+    """The approved library row for an AVATAR key — by exact canonical key,
+    never by meaning.
+
+    Educational retrieval (find / best_match / hydrate) is avatar-blind on
+    purpose: a teacher's face must never be served as a diagram. But nothing
+    ever looked avatars up the other way, so on every fresh container the
+    renderer generated a NEW teacher and publish_generated() added a NEW
+    approved row — five copies of avatar_female_teacher by 2026-09-04, and a
+    different face in every lesson. The oldest approved row wins so the face
+    the founder has already seen stays the face."""
+    sb = _sb()
+    if sb is None:
+        return None
+    ck = canonical_key(key)
+    try:
+        rows = (sb.table("visual_assets").select("*")
+                .eq("status", "approved").eq("asset_type", "avatar")
+                .eq("canonical_key", ck)
+                .order("created_at").limit(1).execute().data or [])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("visual library avatar lookup failed for %s: %s", key, exc)
+        return None
+    row = rows[0] if rows else None
+    return row if row and is_avatar_row(row) else None
+
+
+def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
+    """Put the library's avatar for `key` where the renderer looks
+    (cache_dir/canonical_key(key)/asset.png), or return None so the caller
+    may generate. Cached files are left alone."""
+    hit = find_avatar(key)
+    if not hit:
+        return None
+    png = _local_png_path(cache_dir, key)
+    meta = _local_meta_path(cache_dir, key)
+    if png.exists():
+        return hit
+    path = str(hit.get("storage_path") or "")
+    sb = _sb()
+    if not path or sb is None:
+        return None
+    try:
+        data = sb.storage.from_(BUCKET).download(path)
+        png.parent.mkdir(parents=True, exist_ok=True)
+        png.write_bytes(data)
+        metadata = {**hit, "provenance": "visual_library", "library_asset_id": hit.get("id")}
+        meta.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        logger.info("visual library avatar: %s <- %s", key, hit.get("id"))
+        return hit
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("visual library avatar hydration failed for %s: %s", key, exc)
+        return None
+
+
 def publish_generated(asset_key: str, prompt: str, png_path: Path,
                       metadata: dict[str, Any] | None = None,
                       context: dict[str, Any] | None = None) -> bool:
@@ -399,6 +454,13 @@ def publish_generated(asset_key: str, prompt: str, png_path: Path,
 
     sb = _sb()
     if sb is None:
+        return True
+    # One approved avatar per canonical key. A second face for the same
+    # teacher is not a new asset, it is a different teacher; the roster is
+    # looked up by key (find_avatar), so a duplicate would never be served
+    # and would only keep the library growing by one row per deploy.
+    if is_avatar_key(asset_key) and find_avatar(asset_key) is not None:
+        logger.info("visual library: avatar %s already published; not adding another", asset_key)
         return True
     try:
         storage_path = f"generated/{canonical_key(asset_key)}/{digest[:16]}.png"
