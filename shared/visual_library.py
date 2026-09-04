@@ -240,7 +240,12 @@ def key_guard_ok(query_key: str, row: dict[str, Any] | None) -> bool:
     r = guard_tokens(ak) | guard_tokens(ck)
     undistinguished = (all_noise(query_key)
                        or all(all_noise(k) for k in (ak, ck) if k))
-    if q and r and not undistinguished and (q & r):
+    # The shared token has to be one that NARROWS. `guard_tokens` keeps
+    # numerals (they are what separates `stage_2` from `stage_3` in the
+    # cache), so without this `stage_3` and `phase_3` share "3" and each
+    # becomes a candidate for the other's picture -- the same collapse the
+    # canonical key was just taught to avoid, arriving through the guard.
+    if q and r and not undistinguished and any(distinguishes(t) for t in q & r):
         return True
     # A key made ENTIRELY of noise ("cell_diagram", "cells") keeps its noise
     # words through core_tokens' fallback, while every candidate row has had

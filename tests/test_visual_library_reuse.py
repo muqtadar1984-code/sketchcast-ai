@@ -367,6 +367,16 @@ class TestABareNumberNamesNothing:
         assert distinguishes("cell"), "folded for the cache, but it DOES narrow"
         assert distinguishes("ciliated")
 
+    def test_a_shared_numeral_is_not_a_match_on_the_strict_path_either(self):
+        """`guard_tokens` keeps numerals — they are what separates `stage_2`
+        from `stage_3` in the cache — so two keys that DO name subjects could
+        still be paired by nothing but the number they carry."""
+        row = {"asset_key": "phase_3", "canonical_key": "3_phase"}
+        assert vl.guard_tokens("stage_3") & vl.guard_tokens("phase_3") == {"3"}
+        assert vl.key_guard_ok("stage_3", row) is False
+        assert vl.key_guard_ok("stage_3", {"asset_key": "stage_3_diagram",
+                                           "canonical_key": "3_stage"}) is True
+
     def test_the_renderer_and_the_library_still_agree(self):
         for key in ("figure_3", "diagram_3", "stage_3", "figure_3_2"):
             assert vl.canonical_key(key) == renderer_key(key) == \
