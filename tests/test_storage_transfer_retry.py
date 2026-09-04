@@ -319,14 +319,21 @@ def test_jitter_adds_up_to_half_the_base_and_never_less_than_the_base(monkeypatc
     assert db._transfer_delay(3) == 6.25 and db._transfer_delay(9) == 6.25
 
 
-def test_the_retry_loop_sleeps_the_jittered_figure(tmp_path, monkeypatch):
+def test_the_retry_loop_sleeps_the_jittered_figure(tmp_path, monkeypatch, caplog):
     slept = []
     monkeypatch.setattr(db.time, "sleep", lambda s: slept.append(s))
     draws = iter([0.25, 1.0])
     monkeypatch.setattr(db.random, "random", lambda: next(draws))
     bucket = _Bucket([_reset(), _reset()])
-    db.download_book(_SB(bucket), "owner/book.pdf", tmp_path / "book.pdf")
+    with caplog.at_level("WARNING", logger="worker"):
+        db.download_book(_SB(bucket), "owner/book.pdf", tmp_path / "book.pdf")
     assert slept == [2.25, 7.5]
+    # The warning names the real wait. A broken format spec would not raise —
+    # logging swallows it and prints to stderr — so the message is asserted.
+    messages = [r.getMessage() for r in caplog.records if "retrying in" in r.getMessage()]
+    assert len(messages) == 2, messages
+    assert "retrying in 2.2s" in messages[0] and "attempt 1/3" in messages[0], messages[0]
+    assert "retrying in 7.5s" in messages[1] and "attempt 2/3" in messages[1], messages[1]
 
 
 def test_six_threads_do_not_retry_in_lock_step(tmp_path, monkeypatch):
