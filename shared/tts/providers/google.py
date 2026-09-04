@@ -28,7 +28,6 @@ through the pre-flight. A process-wide sliding-window limiter
 
 from __future__ import annotations
 
-import collections
 import concurrent.futures
 import json
 import logging

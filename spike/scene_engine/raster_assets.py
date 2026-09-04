@@ -203,22 +203,47 @@ def _retry_after(exc: Exception) -> float | None:
 
 
 # Bursts, not ceilings, are what tripped the quota on both Vertex and AI
-# Studio: every concurrent segment reaching for images and vision at once.
-# The gate bounds calls IN FLIGHT; this bounds calls PER MINUTE, process-wide,
-# the same way GOOGLE_TTS_RPM paces narration. Default well under the smallest
-# published quota; raise it once the project's own limit is known.
-_IMAGE_LIMITER = None
+# Studio: every concurrent segment reaching for images at once. The gate bounds
+# calls IN FLIGHT; these bound calls PER MINUTE, process-wide (the quota is per
+# project, so every job in the process shares one window), the same way
+# GOOGLE_TTS_RPM paces narration. Image GENERATION is the scarce, slow call and
+# gets its own budget; vision (a flash text+image request) is cheap and plentiful
+# and must not queue behind it.
+_LIMITER_DEFAULTS = {"image": ("IMAGE_CALLS_PER_MINUTE", 15),
+                     "vision": ("VISION_CALLS_PER_MINUTE", 60)}
+_LIMITERS: dict = {}
 
 
-def _image_limiter():
-    global _IMAGE_LIMITER
-    if _IMAGE_LIMITER is None:
-        from shared.ratelimit import RateLimiter
-        _IMAGE_LIMITER = RateLimiter(int(os.getenv("IMAGE_CALLS_PER_MINUTE", "12") or 12))
-    return _IMAGE_LIMITER
+def _env_int(name: str, default: int) -> int:
+    try:
+        v = int(str(os.getenv(name, "") or "").strip() or default)
+        return v if v > 0 else default
+    except (TypeError, ValueError):
+        logger.warning("%s is not a number; using %d", name, default)
+        return default
 
 
-def _with_backoff(fn, what: str, tries: int = 4):
+def _limiter(kind: str):
+    """Per-kind sliding window, built once under the gate lock (three gate
+    holders can reach here together)."""
+    global _GATE_LOCK
+    import threading
+    if _GATE_LOCK is None:
+        _GATE_LOCK = threading.Lock()
+    with _GATE_LOCK:
+        lim = _LIMITERS.get(kind)
+        if lim is None:
+            from shared.ratelimit import RateLimiter
+            env, default = _LIMITER_DEFAULTS.get(kind, _LIMITER_DEFAULTS["image"])
+            lim = _LIMITERS[kind] = RateLimiter(_env_int(env, default))
+        return lim
+
+
+# a server may name an hour; nobody waits an hour holding a per-key lock
+_RETRY_AFTER_CAP = 60.0
+
+
+def _with_backoff(fn, what: str, tries: int = 4, kind: str = "image"):
     """Retry a transport call through rate limits.
 
     A 429 used to be swallowed as "no image" — the asset silently vanished
@@ -231,17 +256,21 @@ def _with_backoff(fn, what: str, tries: int = 4):
     delay = 6.0
     gate = _model_gate()
     for attempt in range(tries):
+        # the per-minute token is taken BEFORE the gate: a paced caller sleeps
+        # holding nothing, so the callers that may go now are not queued
+        # behind its wait (same invariant as the 429 sleep below)
+        waited = _limiter(kind).acquire()
+        if waited > 0.5:
+            logger.info("%s paced %.1fs by %s", what, waited, _LIMITER_DEFAULTS[kind][0])
         try:
             with gate:                 # at most N paid calls in flight
-                waited = _image_limiter().acquire()   # ...and N per minute
-                if waited > 0.5:
-                    logger.info("%s paced %.1fs by IMAGE_CALLS_PER_MINUTE", what, waited)
                 return fn()
         except Exception as exc:  # noqa: BLE001 — transport errors only
             if not _is_rate_limited(exc) or attempt == tries - 1:
                 raise
             server = _retry_after(exc)
-            wait = (max(server, 1.0) if server is not None else delay) + random.uniform(0, 2.0)
+            wait = ((min(max(server, 1.0), _RETRY_AFTER_CAP) if server is not None else delay)
+                    + random.uniform(0, 2.0))
             logger.warning("%s rate-limited; retrying in %.0fs (%d/%d)",
                            what, wait, attempt + 1, tries - 1)
             _t.sleep(wait)
@@ -327,7 +356,7 @@ def _vision_json(prompt: str, png_bytes: bytes) -> dict | None:
             res = requests.post(url, headers=headers, json=body, timeout=120)
             res.raise_for_status()
             return res.json()
-        payload = _with_backoff(_go, "vision") or {}
+        payload = _with_backoff(_go, "vision", kind="vision") or {}
         for cand in payload.get("candidates", []):
             txt = "".join(p.get("text", "")
                           for p in cand.get("content", {}).get("parts", []))

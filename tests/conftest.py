@@ -67,3 +67,17 @@ def sample_pdf_path():
         from tests.generate_test_pdf import create_test_pdf
         create_test_pdf(str(pdf_path))
     return pdf_path
+
+
+@pytest.fixture(autouse=True)
+def _fresh_model_call_limiters(monkeypatch):
+    """The image/vision per-minute windows are process-wide; without a reset a
+    test that spends tokens makes a later test sleep for real (54 s seen).
+    Tests of the pacing itself install their own windows."""
+    import sys
+    ra = sys.modules.get("spike.scene_engine.raster_assets")
+    if ra is not None:
+        from shared.ratelimit import RateLimiter
+        monkeypatch.setattr(ra, "_LIMITERS",
+                            {"image": RateLimiter(10**6), "vision": RateLimiter(10**6)})
+    yield

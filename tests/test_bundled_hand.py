@@ -1,4 +1,4 @@
-"""The drawing hand ships with the code; image calls are paced per minute.
+"""The drawing hand ships with the code; paid model calls are paced per minute.
 
 Founder, 2026-09-04: "can we store the hand sprite as part of the repository
 so we don't have to call it from AI every time? we need to ensure we don't hit
@@ -12,6 +12,7 @@ import time
 import numpy as np
 from PIL import Image
 
+from shared.ratelimit import RateLimiter
 from spike.scene_engine import raster_assets as ra
 
 
@@ -49,36 +50,64 @@ class TestBundledHand:
         assert ra.load_hand("hand_left", cache_dir=tmp_path, allow_generate=False) is None
 
 
-class TestImagePacing:
-    def test_calls_beyond_the_per_minute_budget_wait_for_the_window(self):
-        from shared.ratelimit import RateLimiter
-        now = [0.0]
-        slept = []
+def _fake_clock():
+    now = [0.0]
+    slept = []
 
-        def sleep(s):
-            slept.append(s)
-            now[0] += s
+    def sleep(s):
+        slept.append(s)
+        now[0] += s
+    return now, slept, sleep
+
+
+class TestModelCallPacing:
+    def test_calls_beyond_the_per_minute_budget_wait_for_the_window(self):
+        now, slept, sleep = _fake_clock()
         lim = RateLimiter(3, clock=lambda: now[0], sleep=sleep)
         assert [lim.acquire() for _ in range(3)] == [0.0, 0.0, 0.0]
         waited = lim.acquire()          # 4th inside the same minute
         assert waited >= 60.0 and slept and now[0] >= 60.0
 
-    def test_with_backoff_paces_through_the_shared_limiter(self, monkeypatch):
-        from shared.ratelimit import RateLimiter
+    def test_with_backoff_paces_through_the_kind_s_own_window(self, monkeypatch):
         acquired = []
 
         class Spy(RateLimiter):
+            def __init__(self, name):
+                super().__init__(100)
+                self.name = name
+
             def acquire(self):
-                acquired.append(1)
+                acquired.append(self.name)
                 return 0.0
-        monkeypatch.setattr(ra, "_IMAGE_LIMITER", Spy(100))
+        monkeypatch.setattr(ra, "_LIMITERS", {"image": Spy("image"), "vision": Spy("vision")})
         assert ra._with_backoff(lambda: "ok", "test") == "ok"
-        assert acquired == [1]
+        assert ra._with_backoff(lambda: "ok", "test", kind="vision") == "ok"
+        assert acquired == ["image", "vision"], "vision must not queue behind image generation"
+
+    def test_the_vision_call_site_declares_its_kind(self):
+        import inspect
+        src = inspect.getsource(ra)
+        assert '_with_backoff(_go, "vision", kind="vision")' in src
+
+    def test_a_paced_caller_holds_no_gate_slot(self):
+        """The pacing sleep happens before `with gate:` — the invariant the
+        429 sleep already keeps."""
+        import inspect
+        lines = inspect.getsource(ra._with_backoff).splitlines()
+        pace = next(i for i, l in enumerate(lines) if ".acquire()" in l)
+        gate = next(i for i, l in enumerate(lines) if "with gate:" in l)
+        assert pace < gate
+
+    def test_limiters_are_built_from_the_environment_defensively(self, monkeypatch):
+        monkeypatch.setattr(ra, "_LIMITERS", {})
+        monkeypatch.setenv("IMAGE_CALLS_PER_MINUTE", "banana")
+        monkeypatch.setenv("VISION_CALLS_PER_MINUTE", "90")
+        assert ra._limiter("image").per_minute == 15      # default, not a crash
+        assert ra._limiter("vision").per_minute == 90
+        assert ra._limiter("image") is ra._limiter("image")  # built once
 
     def test_a_429_with_retry_after_waits_the_server_s_number(self, monkeypatch):
         import requests
-        from shared.ratelimit import RateLimiter
-        monkeypatch.setattr(ra, "_IMAGE_LIMITER", RateLimiter(100))
         slept = []
         monkeypatch.setattr(time, "sleep", lambda s: slept.append(s))
         resp = requests.Response()
@@ -95,7 +124,24 @@ class TestImagePacing:
         assert ra._with_backoff(fn, "test") == "ok"
         assert slept and 7.0 <= slept[0] <= 9.0, slept
 
+    def test_an_hour_long_retry_after_is_capped_at_a_minute(self, monkeypatch):
+        import requests
+        slept = []
+        monkeypatch.setattr(time, "sleep", lambda s: slept.append(s))
+        resp = requests.Response()
+        resp.status_code = 429
+        resp.headers["retry-after"] = "3600"
+        err = requests.HTTPError(response=resp)
+        n = {"i": 0}
+
+        def fn():
+            n["i"] += 1
+            if n["i"] == 1:
+                raise err
+            return "ok"
+        assert ra._with_backoff(fn, "test") == "ok"
+        assert slept and 60.0 <= slept[0] <= 62.0, slept
+
     def test_the_tts_provider_shares_the_class(self):
-        from shared.ratelimit import RateLimiter
         from shared.tts.providers import google
         assert google._RateLimiter is RateLimiter

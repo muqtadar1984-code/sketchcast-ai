@@ -108,6 +108,9 @@ class TestOnePenPerLesson:
         from spike.scene_engine import raster_assets as ra
         monkeypatch.setattr(ra, "_vertex_call", lambda p: (_ for _ in ()).throw(AssertionError("generated")))
         monkeypatch.setattr(ra, "_aistudio_call", lambda p: (_ for _ in ()).throw(AssertionError("generated")))
+        # the production key is served from the bundle with zero model calls...
+        assert ra.load_hand("hand_pen", tmp_path, allow_generate=False) is not None
+        # ...and a key that is not shipped stays None rather than generating
         assert ra.load_hand("hand_left", tmp_path, allow_generate=False) is None
 
     def test_the_lesson_warms_the_hand_once_before_the_pool(self, tmp_path, monkeypatch):
