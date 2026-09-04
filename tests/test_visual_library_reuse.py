@@ -25,6 +25,7 @@ from __future__ import annotations
 import pytest
 
 import shared.visual_library as vl
+from shared.asset_keys import all_noise
 from shared.asset_keys import canonical_key as shared_key
 from spike.scene_engine.raster_assets import canonical_key as renderer_key
 
@@ -330,3 +331,43 @@ class TestAConnectiveIsNotASubject:
         directory — two different pictures in one file."""
         assert vl.canonical_key("cells_to_tissue") != vl.canonical_key("tissue")
         assert "to" in vl.canonical_key("cells_to_tissue").split("_")
+
+
+class TestABareNumberNamesNothing:
+    """`figure_3` and `diagram_3` both reduced to the single core token "3",
+    so they shared a canonical key — one cache directory, and one row in the
+    SHARED cross-book library. That is one book's figure 3 being served for
+    another book's, which is the wrong-picture class this whole file exists to
+    close, arriving through the cache rather than through the score."""
+
+    def test_two_books_figure_three_are_two_pictures(self):
+        assert vl.canonical_key("figure_3") != vl.canonical_key("diagram_3")
+        assert vl.canonical_key("figure_3") != vl.canonical_key("3")
+        assert vl.canonical_key("figure_1") != vl.canonical_key("figure_2")
+
+    def test_the_number_is_kept_not_dropped(self):
+        """Dropping it would be the same collapse from the other side:
+        `figure_3` and `figure_4` would become one directory."""
+        assert "3" in vl.canonical_key("figure_3").split("_")
+        assert "figure" in vl.canonical_key("figure_3").split("_")
+
+    def test_a_numbered_subject_is_unchanged(self):
+        """`stage_3` names a subject, so the fold is exactly as it was: the
+        numeral stays and separates it from `stage_2`."""
+        assert vl.canonical_key("stage_3") != vl.canonical_key("stage_2")
+        assert set(vl.canonical_key("stage_3").split("_")) == {"stage", "3"}
+        assert set(vl.canonical_key("avatar_student_11_12_f").split("_")) == \
+            {"avatar", "student", "11", "12", "f"}
+
+    def test_a_number_says_nothing_about_which_picture(self):
+        from shared.asset_keys import distinguishes
+        assert all_noise("figure_3"), "a medium word and an index: nothing"
+        assert not distinguishes("3")
+        assert not distinguishes("diagram")
+        assert distinguishes("cell"), "folded for the cache, but it DOES narrow"
+        assert distinguishes("ciliated")
+
+    def test_the_renderer_and_the_library_still_agree(self):
+        for key in ("figure_3", "diagram_3", "stage_3", "figure_3_2"):
+            assert vl.canonical_key(key) == renderer_key(key) == \
+                shared_key(key), key
