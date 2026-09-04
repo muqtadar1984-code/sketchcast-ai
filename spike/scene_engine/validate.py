@@ -17,6 +17,21 @@ from collections import Counter
 # arrow. A SEGMENT-prefixed drop is one scene's, and a CARRY-OUT line uses
 # another word on purpose (LEFT BEHIND) so it never counts here.
 _CHAPTER_DROP = re.compile(r"^CHAPTER (.+?) \| DROPPED arrow (\S+)")
+# the other four things the anchor guard does to an arrow, none of which the
+# report used to show at all: a re-anchored end, an end flattened to a point,
+# an arrow left behind at a chapter boundary, a text chain cut.
+_REANCHORED = re.compile(
+    r"^(CHAPTER .+?|SEGMENT \S+) \| REANCHORED (\S+)\.(tail|head|after) ")
+_FLATTENED = re.compile(r"^(.+?) \| FLATTENED (\S+)\.(tail|head) ")
+_LEFT_BEHIND = re.compile(r"^(.+?) \| LEFT BEHIND arrow (\S+)")
+_UNCHAINED = re.compile(r"^(.+?) \| UNCHAINED text (\S+)")
+
+
+def _scope(label: str) -> str:
+    """One arrow re-anchored (or flattened) in five segments is ONE arrow,
+    not five: every SEGMENT line shares a bucket. A CHAPTER line is per
+    chapter, because the same id in two chapters is two arrows."""
+    return "SEGMENT" if label.startswith("SEGMENT ") else label
 
 
 def validate_visual_language(video_manifest: dict,
@@ -56,7 +71,33 @@ def validate_visual_language(video_manifest: dict,
             chapter_drops.setdefault((m.group(1), m.group(2)), ln)
         elif ln.startswith("SEGMENT ") and "| DROPPED arrow " in ln:
             scene_drops.append(ln)
-    reanchored = [ln for ln in plan_report if "| REANCHORED" in ln]
+    # ...and the same honesty for the rest of the accounting. "arrows
+    # reanchored" counted LINES: an arrow re-anchored once per scene it rode
+    # into inflated the number segment by segment, and a text `after`
+    # re-chain — not an arrow at all — was counted among them.
+    reanchored: dict[tuple, str] = {}
+    rechained: dict[tuple, str] = {}
+    flattened: dict[tuple, str] = {}
+    left_behind: dict[tuple, str] = {}
+    unchained: dict[tuple, str] = {}
+    for ln in plan_report:
+        m = _REANCHORED.match(ln)
+        if m:
+            bucket = rechained if m.group(3) == "after" else reanchored
+            bucket.setdefault((_scope(m.group(1)), m.group(2)), ln)
+            continue
+        m = _FLATTENED.match(ln)
+        if m:
+            flattened.setdefault(
+                (_scope(m.group(1)), m.group(2), m.group(3)), ln)
+            continue
+        m = _LEFT_BEHIND.match(ln)
+        if m:
+            left_behind.setdefault((_scope(m.group(1)), m.group(2)), ln)
+            continue
+        m = _UNCHAINED.match(ln)
+        if m:
+            unchained.setdefault((_scope(m.group(1)), m.group(2)), ln)
     dropped_arrows = list(chapter_drops.values())
     arrow_total = max(0, len(arrows) + sum(1 for ln in plan_report
                                            if "| SYNTHESIZED" in ln)
@@ -77,6 +118,14 @@ def validate_visual_language(video_manifest: dict,
         "arrow_count": arrow_total,
         "arrows_layer_anchored": len(anchored),
         "arrows_reanchored": len(reanchored),
+        # an arrow drawn ahead of its anchor rides on with that end pinned to
+        # a point, and one whose target never made the exported board stays
+        # behind at the boundary: both used to be invisible here
+        "arrows_flattened": list(flattened.values()),
+        "arrows_left_behind": list(left_behind.values()),
+        # a text `after` chain is not an arrow: counted on its own line
+        "texts_rechained": len(rechained),
+        "texts_unchained": list(unchained.values()),
         "arrows_dropped": dropped_arrows,
         # an arrow absent from ONE scene (its anchor erased under it) is
         # still an arrow of the lesson — listed, never subtracted

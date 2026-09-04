@@ -854,7 +854,11 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
     # match, a merged handle (root + its part), a part name used as an id
     # (root + layer), else the single root visual; only an unresolvable
     # LABEL reference costs the arrow itself, never the scene.
-    _notes, _ = resolve_roster_anchors(
+    # The dropped ids matter as much as the notes: a GROUP that listed a
+    # dropped arrow would fail the schema ("group references unknown") in
+    # every scene the group rode into — the resolver prunes the child out of
+    # the roster and reports a group left empty as dropped in its own right.
+    _notes, _dropped_ch = resolve_roster_anchors(
         roster, root_id, part_names=part_names, aliases=alias_parts)
     for _n in _notes:
         report.append(f"CHAPTER {ch.concept} | {_n}")
@@ -1236,12 +1240,25 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                          or eid in drawn_regions)}
         valid = on_board | intro_targets
         kept_actions: list[dict] = []
+
+        def _reachable(t, _valid=valid) -> bool:
+            return bool(t is None or t in _valid
+                        or (t in roster and roster[t].get("type") == "group"
+                            and set(_group_children(roster, t)) & _valid))
+
         for a in st.actions:
             tgt = a.get("target")
-            if a["verb"] in _CAMERA or tgt is None or tgt in valid \
-                    or (tgt in roster and roster[tgt].get("type") == "group"
-                        and set(_group_children(roster, tgt)) & valid):
+            # a morph names its destination in `into`, not `target`. Dropping
+            # only the targeting actions left "morph into unknown element" on
+            # a scene whose arrow the guard had just dropped, so the board
+            # was lost anyway — the thing the guard exists to prevent.
+            into = a.get("into") if a.get("verb") == "morph" else None
+            if a["verb"] in _CAMERA or (_reachable(tgt) and _reachable(into)):
                 kept_actions.append(a)
+            elif into is not None and not _reachable(into) and _reachable(tgt):
+                report.append(f"SEGMENT {seg_id} | DROPPED {a['verb']} into "
+                              f"{into} (not on the board, not introduced this "
+                              f"step)")
             else:
                 report.append(f"SEGMENT {seg_id} | DROPPED {a['verb']}->{tgt} "
                               f"(not on the board, not introduced this step)")

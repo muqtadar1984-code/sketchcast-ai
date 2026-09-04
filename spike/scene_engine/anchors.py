@@ -24,7 +24,15 @@ validation:
      that does not read like text and either shares a word with the root
      illustration (its id, asset key or a part name) or is a generic "the
      diagram" reference, binds to the scene's single root illustration;
-  3. else THAT arrow is dropped (with its actions) and the scene proceeds.
+  3. else THAT arrow is dropped and the scene proceeds — with the actions
+     that TARGET it, the morph actions whose ``into`` names it, and the
+     groups that listed it (a group left empty goes too, or the schema
+     rejects the very board this guard exists to save).
+
+An arrow whose two ends resolve to ONE element is dropped as well: it renders
+as nothing and the label it came from loses its leader line. A HEAD tries the
+picture's PARTS before the label that carries the same words, so an arrow from
+"Nucleus" to the nucleus does not collapse onto its own tail.
 
 A ref is never re-bound across a chapter boundary: an element carried from the
 previous chapter (``prev__*``) whose anchor names something that never made
@@ -78,6 +86,27 @@ def _tokens(s) -> list[str]:
     return re.sub(r"[^a-z0-9]+", " ", str(s or "").lower()).split()
 
 
+def _token_run(a: str, b: str) -> bool:
+    """Do two anchor keys match on TOKEN boundaries?
+
+    One key's tokens must appear as a CONTIGUOUS RUN inside the other's, and
+    where BOTH end in a numeral it must be the SAME number. Raw substring
+    containment bound an unknown ref to any same-kind element whose key
+    merely contained it: 'label 1' matched 'label 10', 'ion' matched
+    'region', and the arrow landed on a neighbour of the thing it named. A
+    bare name still finds its numbered element ('title' -> 'title 1'): that
+    is one name, not two numbers disagreeing.
+    """
+    ta, tb = a.split(), b.split()
+    if not ta or not tb:
+        return False
+    if len(ta) > len(tb):
+        ta, tb = tb, ta
+    if not any(tb[i:i + len(ta)] == ta for i in range(len(tb) - len(ta) + 1)):
+        return False
+    return not (ta[-1].isdigit() and tb[-1].isdigit()) or ta[-1] == tb[-1]
+
+
 def anchor_key(s) -> str:
     """'Plant_Cell_Box' / 'plant-cell diagram' / 'plant_cell' -> 'plant cell'."""
     words = _tokens(s)
@@ -128,34 +157,48 @@ def resolve_anchor(ref: str, elements: dict[str, dict],
                     and anchor_key(e.get("asset")) == key]
         if len(by_asset) == 1:
             return by_asset[0], None, "asset match"
-        by_text = [eid for eid, e in cands.items()
-                   if e.get("type") == "text"
-                   and anchor_key(e.get("text")) == key]
-        if len(by_text) == 1:
-            return by_text[0], None, "text match"
-        kind = "text" if _looks_like_text(ref) else "illustration"
-        loose = []
-        for eid, e in cands.items():
-            if e.get("type") != kind:
-                continue
-            k = anchor_key(eid)
-            if k and (key in k or k in key):
-                loose.append(eid)
-        if len(loose) == 1:
-            return loose[0], None, "kind match"
-        if root_id and part_names and len(key) >= 3 \
-                and not _looks_like_text(ref):
+
+        def _part_rung():
             # THE layer matcher (vector_assets.match_layer_ids): exact wins,
             # else containment — so 'chloroplast' finds 'chloroplasts' and
             # 'wall' finds 'cell_wall' here exactly as it does when the draw
             # distribution looks the same name up. Ambiguity binds nothing,
             # and a ref that reads like a LABEL is never a part of the picture.
+            if not (root_id and part_names and len(key) >= 3
+                    and not _looks_like_text(ref)):
+                return None
             from .vector_assets import match_layer_ids
             hits = list(dict.fromkeys(match_layer_ids(
                 [str(p) for p in part_names],
                 [ref.lower(), key, key.replace(" ", "_")])))
             if len(hits) == 1:
                 return root_id, str(hits[0]), "part name"
+            return None
+
+        # An arrow HEAD points AT the picture, so the picture's own PARTS are
+        # tried before the label that happens to carry the same words. The
+        # other order bound a head named 'nucleus' to the label 'Nucleus'
+        # its own TAIL was already on: one element, both ends, an arrow that
+        # draws nothing under a label with no leader line.
+        if end == "head":
+            hit = _part_rung()
+            if hit:
+                return hit
+        by_text = [eid for eid, e in cands.items()
+                   if e.get("type") == "text"
+                   and anchor_key(e.get("text")) == key]
+        if len(by_text) == 1:
+            return by_text[0], None, "text match"
+        kind = "text" if _looks_like_text(ref) else "illustration"
+        loose = [eid for eid, e in cands.items()
+                 if e.get("type") == kind and anchor_key(eid)
+                 and _token_run(key, anchor_key(eid))]
+        if len(loose) == 1:
+            return loose[0], None, "kind match"
+        if end != "head":
+            hit = _part_rung()
+            if hit:
+                return hit
     if (end == "head" and root_id and root_id in cands
             and not _looks_like_text(ref)):
         # arrows point AT pictures: a head that names the picture by one of
@@ -233,6 +276,21 @@ def resolve_roster_anchors(roster: dict[str, dict], root_id: Optional[str],
                 changed = True
                 notes.append(f"REANCHORED {eid}.{end} {tgt!r} -> {new_el}"
                              + (f".{layer}" if layer else "") + f" ({how})")
+            if not kill and changed:
+                _t, _h = fixed.get("tail"), fixed.get("head")
+                if isinstance(_t, dict) and isinstance(_h, dict) \
+                        and isinstance(_t.get("el"), str) \
+                        and _t.get("el") == _h.get("el") \
+                        and _t.get("layer") == _h.get("layer"):
+                    # both ends on one element (a label pointing at itself,
+                    # root to root): it renders as nothing AND the label it
+                    # came from loses its leader line. Better no arrow than
+                    # an invisible one nobody can see is wrong.
+                    _w = str(_t["el"]) + (f".{_t['layer']}" if _t.get("layer")
+                                          else "")
+                    notes.append(f"DROPPED arrow {eid} (both ends resolve to "
+                                 f"{_w}; it would draw nothing)")
+                    kill = True
             if kill:
                 del roster[eid]
                 dropped.append(eid)
@@ -262,6 +320,29 @@ def resolve_roster_anchors(roster: dict[str, dict], root_id: Optional[str],
                 notes.append(f"UNCHAINED text {eid} (after {ref!r} names no "
                              f"earlier element)")
             roster[eid] = fixed
+    if dropped:
+        # a group naming a dropped arrow would fail the schema ("group
+        # references unknown") — the guard must never make the failure it
+        # exists to prevent. Prune the child; a group left empty goes too,
+        # and a group whose only child was THAT group goes with it.
+        gone = set(dropped)
+        again = True
+        while again:
+            again = False
+            for gid, g in list(roster.items()):
+                if not isinstance(g, dict) or g.get("type") != "group":
+                    continue
+                kids = [c for c in (g.get("children") or []) if c not in gone]
+                if len(kids) == len(g.get("children") or []):
+                    continue
+                if kids:
+                    roster[gid] = {**g, "children": kids}
+                    continue
+                del roster[gid]
+                gone.add(gid)
+                dropped.append(gid)
+                notes.append(f"DROPPED group {gid} (every child was dropped)")
+                again = True
     return notes, dropped
 
 
@@ -287,42 +368,38 @@ def resolve_scene_anchors(scene: dict, root_id: Optional[str] = None,
     # rebuild from the ORIGINAL list: a fixed element replaces the entry it
     # was made from, everything else passes through untouched — a duplicate
     # id or an id-less entry still reaches the schema to be rejected there,
-    # exactly as it would without a dangling anchor beside it
-    gone = set(dropped)
+    # exactly as it would without a dangling anchor beside it. The roster
+    # pass prunes the GROUPS that named a dropped arrow in place, so a pruned
+    # group comes back through `roster` and one left empty through `dropped`
+    # — and an id-less group can never enter the set and take every
+    # target-less camera action down with it.
+    gone = {d for d in dropped if isinstance(d, str)}
     rebuilt = []
     for e in els:
         eid = e.get("id") if isinstance(e, dict) else None
-        if eid in gone:
+        if isinstance(eid, str) and eid in gone:
             continue
         if eid in roster and original.get(eid) is e:
             rebuilt.append(roster[eid])
         else:
             rebuilt.append(e)
-    if gone:
-        # a group that listed a dropped arrow would fail the schema ("group
-        # references unknown") — the guard must not make the failure it
-        # exists to prevent. Prune the child; a group left empty goes too.
-        pruned = []
-        for e in rebuilt:
-            if isinstance(e, dict) and e.get("type") == "group" \
-                    and isinstance(e.get("children"), list):
-                kids = [c for c in e["children"] if c not in gone]
-                if not kids:
-                    gone.add(e.get("id"))
-                    notes.append(f"DROPPED group {e.get('id')} (every child "
-                                 f"was dropped)")
-                    continue
-                if len(kids) != len(e["children"]):
-                    e = {**e, "children": kids}
-            pruned.append(e)
-        rebuilt = pruned
     scene["elements"] = rebuilt
     if gone and isinstance(scene.get("actions"), list):
         kept = []
         for a in scene["actions"]:
-            if isinstance(a, dict) and a.get("target") in gone:
+            if not isinstance(a, dict):
+                kept.append(a)
+                continue
+            if a.get("target") in gone:
                 notes.append(f"DROPPED {a.get('verb')}->{a.get('target')} "
                              f"(its arrow was dropped)")
+                continue
+            if a.get("into") in gone:
+                # a morph names its destination in `into`, not `target`:
+                # dropping only the targeting actions left "morph into
+                # unknown element" and cost the whole scene anyway
+                notes.append(f"DROPPED {a.get('verb')} into {a.get('into')} "
+                             f"(that element was dropped)")
                 continue
             kept.append(a)
         scene["actions"] = kept
