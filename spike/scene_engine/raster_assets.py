@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -378,6 +379,7 @@ def reset_image_budget() -> None:
         _image_calls["refunded"] = 0
         _image_calls["aistudio_off_logged"] = False
         _image_calls["ceiling_logged"] = False
+    reset_deferrals()
 
 
 def image_budget_state() -> dict:
@@ -446,6 +448,76 @@ def _take_rate_limited() -> tuple[bool, float | None]:
     _rate_limit_note.hit = False
     _rate_limit_note.retry_after = None
     return hit, after
+
+
+# ── per-lesson deferral (the negative cache) ─────────────────────────────────
+# A 429'd key used to cost EVERY render thread its own two-minute retry ladder
+# for the same picture, and then be given up on for good — while in fa8c0d7d
+# that very key (ciliated_cell) generated successfully 14 seconds after the
+# segment that needed it had stopped waiting. Pacing harder does not help: the
+# incident 429s came at under 10 requests/minute with at most 3 in flight, so
+# the thing being exceeded was not our rate. The answer is to come back LATER,
+# once, rather than to retry harder, eight times over.
+#
+# Both maps are per LESSON (cleared by reset_image_budget) and keyed by
+# CANONICAL key, because that is what identifies the picture.
+_deferred: dict[str, float] = {}
+_abandoned: set[str] = set()
+_DEFER_LOCK = _threading.Lock()
+# a server may name an hour; a lesson cannot wait one
+_DEFER_CAP = 120.0
+
+
+def _now() -> float:
+    """Monotonic clock, indirected so a test can drive time."""
+    return time.monotonic()
+
+
+def reset_deferrals() -> None:
+    with _DEFER_LOCK:
+        _deferred.clear()
+        _abandoned.clear()
+
+
+def defer_asset(key: str, retry_after: float | None = None) -> float:
+    """Do not attempt this key again for a while. Returns the seconds."""
+    wait = float(retry_after) if retry_after else float(
+        _env_int("IMAGE_DEFER_SECONDS", 45))
+    wait = min(max(wait, 1.0), _DEFER_CAP)
+    with _DEFER_LOCK:
+        _deferred[canonical_key(key)] = _now() + wait
+    return wait
+
+
+def asset_deferred(key: str) -> float | None:
+    """Seconds still to wait for this key, or None if it may be tried now."""
+    ck = canonical_key(key)
+    with _DEFER_LOCK:
+        until = _deferred.get(ck)
+        if until is None:
+            return None
+        left = until - _now()
+        if left <= 0:
+            _deferred.pop(ck, None)
+            return None
+        return left
+
+
+def abandon_asset(key: str) -> None:
+    """Give up on this key for the rest of the lesson (the warm pass ran out
+    of budget). Every later caller skips it instantly."""
+    with _DEFER_LOCK:
+        _abandoned.add(canonical_key(key))
+
+
+def asset_abandoned(key: str) -> bool:
+    with _DEFER_LOCK:
+        return canonical_key(key) in _abandoned
+
+
+def deferral_state() -> dict:
+    with _DEFER_LOCK:
+        return {"deferred": dict(_deferred), "abandoned": set(_abandoned)}
 
 
 def _note_spend(service: str, **fields) -> None:
@@ -935,12 +1007,25 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
     if not allow_generate:
         return None
 
+    # Eight render threads asking for one 429'd key used to run eight
+    # independent two-minute ladders. The first caller pays; the rest are told
+    # immediately. `cached_fallback` (a baked-text cache) still beats nothing.
+    if asset_abandoned(key):
+        logger.info("asset %r was abandoned earlier this lesson; not retrying", key)
+        return cached_fallback
+    waiting = asset_deferred(key)
+    if waiting is not None:
+        logger.info("asset %r is deferred for %.0fs more (rate limit); "
+                    "returning without a retry ladder", key, waiting)
+        return cached_fallback
+
     def generate(extra: str = "") -> Image.Image | None:
         # the layer-groups tail addresses the VISION annotator, never the
         # image model — left in, it reads as 'write these names' and the
         # model bakes exactly those labels into the art (measured: a cell
         # covered in 'membi'/'chloropsapts'/'mito!' gibberish)
         import re as _re
+        _take_rate_limited()          # a stale 429 must not survive into this try
         gen_prompt = _re.sub(r"\s*name the layer groups exactly:[^.]*\.?",
                              "", prompt, flags=_re.I)
         suffix = _COLOR_SUFFIX if is_color else _STYLE_SUFFIX
@@ -969,6 +1054,12 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
 
     ink = generate()
     if ink is None:
+        limited, after = _take_rate_limited()
+        if limited:
+            waited = defer_asset(key, after)
+            logger.warning("asset %r was rate-limited; deferring it for %.0fs "
+                           "instead of retrying it on every render thread",
+                           key, waited)
         if cached_fallback is not None:
             logger.warning("regeneration of %r failed — keeping the "
                            "baked-text cache, flagged for validation", key)
@@ -1100,6 +1191,10 @@ def make_resolver(prompts: dict[str, str], prefer_ai: bool = True,
                 # the child-process path: it may only read the cache, so a
                 # miss here means the parent's warm-up did not land the file
                 reason = "cache_only_miss"
+            elif asset_abandoned(key) or asset_deferred(key) is not None:
+                # the honest cause: a rate limit we chose to wait out, not a
+                # director who forgot a prompt
+                reason = "rate_limited"
             else:
                 reason = "generation_failed"
         va = vector_asset(key)

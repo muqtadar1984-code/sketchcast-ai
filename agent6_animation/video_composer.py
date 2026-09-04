@@ -702,14 +702,63 @@ def compose_episode_videos(
         except Exception as exc:  # noqa: BLE001
             logger.warning("hand sprite warm-up failed: %s", exc)
 
+    # ONE image queue for the lesson, before any segment renders. Eight render
+    # threads used to discover the same missing picture eight times and each
+    # run its own two-minute retry ladder; a key that 429'd was then dropped
+    # for good, even though ciliated_cell generated successfully fourteen
+    # seconds after the segment that needed it stopped waiting.
+    _per_segment: list[list[tuple[str, str]]] = [[] for _ in slide_segments]
+    _pending_keys: list[str] = []
+    if _scene_flag():
+        try:
+            from spike.scene_engine.asset_warm import (collect_lesson_assets,
+                                                       segment_asset_keys,
+                                                       warm_lesson_assets)
+            from spike.scene_engine.raster_assets import (asset_deferred,
+                                                         get_raster_asset)
+            from spike.scene_engine.whiteboard import AVATAR_PROMPTS
+            _per_segment = segment_asset_keys(slide_segments, script_segments,
+                                              AVATAR_PROMPTS)
+            _entries = collect_lesson_assets(_per_segment)
+            if _entries:
+                def _warm_fetch(key: str, prompt: str):
+                    got = get_raster_asset(key, prompt)
+                    if got is not None:
+                        return True, None
+                    # a rate limit earns another turn; anything else does not
+                    return False, asset_deferred(key)
+                _warm = warm_lesson_assets(_entries, fetch=_warm_fetch)
+                _pending_keys = _warm["pending"]
+                logger.info("lesson image warm pass: %d/%d ready, %d pending "
+                            "after %.0fs (%d rounds)", len(_warm["ready"]),
+                            len(_entries), len(_pending_keys),
+                            _warm["seconds"], _warm["rounds"])
+                if _pending_keys:
+                    logger.warning("still unresolved after the warm budget: %s",
+                                   ", ".join(sorted(_pending_keys)[:12]))
+        except Exception as exc:  # noqa: BLE001 — a warm-up never fails a lesson
+            logger.warning("lesson image warm pass skipped: %s", exc)
+
     # with a process pool the thread count must not cap the pool: a thread
     # blocks on its child's future, so simultaneous renders = min(threads,
     # processes)
     workers = max(1, min(_cpus(), max(_MAX_RENDER_WORKERS, _RENDER_PROCESSES)))
     results: list[Optional[dict]] = [None] * total
+    # Segments whose pictures all resolved go first. Free, and on its own it
+    # would have filled s017's ciliated cell.
+    try:
+        from spike.scene_engine.asset_warm import order_segments_by_pending
+        _order = order_segments_by_pending(_per_segment, _pending_keys)
+    except Exception:  # noqa: BLE001
+        _order = list(range(total))
+    if sorted(_order) != list(range(total)):
+        # a reordering that loses or duplicates a segment would silently drop
+        # it from the lesson; natural order is always correct
+        logger.warning("segment ordering was inconsistent; rendering in order")
+        _order = list(range(total))
     if workers > 1 and total > 1:
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = [ex.submit(_render_one, i, ss) for i, ss in enumerate(slide_segments)]
+            futures = [ex.submit(_render_one, i, slide_segments[i]) for i in _order]
             done = 0
             for fut in as_completed(futures):
                 done += 1
