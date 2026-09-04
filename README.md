@@ -72,6 +72,27 @@ The UI provides:
 pytest tests/ -v
 ```
 
+## Worker render tuning
+
+The scene engine renders one MP4 per narration segment. Two variables control
+how much of the box a lesson uses (see `worker/.env.example`):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `RENDER_WORKERS` | 4 | Segment threads per lesson (TTS + encode overlap). 1 = sequential. |
+| `RENDER_PROCESSES` | 0 | Size of the rasterization process pool. 0 = render in-process (the rollback). |
+
+With `RENDER_PROCESSES > 0` each segment thread does its TTS, then submits the
+frame rasterization + ffmpeg encode to a module-global `ProcessPoolExecutor`
+(explicit `spawn`; the child never calls an image model — the parent warms
+the asset cache first) and blocks on the result. Simultaneous renders are
+`min(RENDER_WORKERS, RENDER_PROCESSES)`, so set both. One pool per worker
+process is shared by every `WORKER_CONCURRENCY` job. A broken pool
+(OOM-killed child) is recreated and the affected segment finishes in-process.
+`compose_episode_videos` logs `compose: N segments, M rendered, S s wall
+(workers=W, processes=P)` per lesson. Railway: `RENDER_PROCESSES=8`,
+`RENDER_WORKERS=8` on the 24 vCPU box (~200 MB per child).
+
 ## Project Structure
 
 ```

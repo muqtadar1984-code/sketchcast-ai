@@ -421,6 +421,7 @@ def compose_episode_videos(
 
     vid_dir = VIDEO_DIR / book_id / f"chapter_{chapter_num}"
     vid_dir.mkdir(parents=True, exist_ok=True)
+    _t_compose = time.perf_counter()
 
     slide_segments = slide_manifest.get("segments", [])
     script_segments = {seg["segment_id"]: seg for seg in episode.get("segments", [])}
@@ -731,6 +732,9 @@ def compose_episode_videos(
         progress_callback(total, total, "done")
 
     vid_count = sum(1 for s in manifest_segments if s.video_path)
+    logger.info("compose: %d segments, %d rendered, %.1f s wall (workers=%d, processes=%d)",
+                total, vid_count, time.perf_counter() - _t_compose, workers,
+                _RENDER_PROCESSES)
     # Report which voice(s) actually rendered, so the caller can persist a silent
     # premium→free downgrade (whole video may have degraded, or only some segments).
     if voice_report is not None:

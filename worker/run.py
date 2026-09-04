@@ -37,6 +37,10 @@ POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "5"))
 # How many jobs to run at once in this single process. 1 = the old serial
 # behaviour. Size the Railway instance's vCPU/RAM for the number of concurrent
 # VIDEO renders you set (docs are light; videos are the heavy ones).
+# Video rasterization may run in a process pool (RENDER_PROCESSES, see
+# agent6_animation/video_composer.py): ONE pool per worker process, shared by
+# every job thread here, so total render CPU is bounded by the pool size and
+# concurrent lessons queue behind each other on it.
 WORKER_CONCURRENCY = max(1, int(os.getenv("WORKER_CONCURRENCY", "1")))
 
 # Documents (papers / plans / activities / case studies / exams) are fast — one
