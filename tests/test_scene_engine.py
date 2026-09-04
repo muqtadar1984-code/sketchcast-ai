@@ -673,3 +673,325 @@ class TestEncodeContract:
         args = encode_args(5.0, None, tmp_path / "o.mp4")
         assert any("anullsrc" in a for a in args)
         assert "-map" in args                # audio still mapped in
+
+
+# ── render speed: exact caches (2026-09-04) ─────────────────────────────────
+
+class TestHandSpriteCache:
+    """The hand is a uniform scale of ONE image; resizing it on every pen
+    frame cost 11-16 ms. The per-(w, h) cache must be pixel-identical to the
+    resize it replaces, and must resize exactly once per size."""
+
+    def _hand(self):
+        from spike.scene_engine.raster_assets import load_hand
+        loaded = load_hand("hand_pen", allow_generate=False)
+        assert loaded is not None, "bundled hand missing"
+        return loaded
+
+    def test_cached_stamp_is_pixel_identical_to_a_fresh_sprite(self):
+        from PIL import Image
+        from spike.scene_engine.pen import PenSprite
+        loaded = self._hand()
+        loader = lambda k: loaded  # noqa: E731
+        cached = PenSprite(loader)
+        stamps = [(300.0, 400.0), (900.0, 650.0)]
+        for x, y in stamps:
+            fresh_sprite = PenSprite(loader)
+            a = Image.new("RGB", (1280, 720), (250, 250, 248))
+            b = Image.new("RGB", (1280, 720), (250, 250, 248))
+            fresh_sprite.stamp(a, "hand", x, y, 2, scale=0.8)
+            cached.stamp(b, "hand", x, y, 2, scale=0.8)
+            assert list(a.getdata()) == list(b.getdata())
+        assert len(cached._scaled) == 1
+
+    def test_the_resize_runs_once_per_size(self, monkeypatch):
+        from PIL import Image
+        from spike.scene_engine.pen import PenSprite
+        loaded = self._hand()
+        calls = []
+        real = Image.Image.resize
+        depth = [0]
+
+        def counting(self, *a, **k):
+            # Pillow's resize re-enters itself (a second call carrying a
+            # `box`); count only the outermost call, i.e. OUR resize
+            if depth[0] == 0:
+                calls.append(a[0] if a else k.get("size"))
+            depth[0] += 1
+            try:
+                return real(self, *a, **k)
+            finally:
+                depth[0] -= 1
+        monkeypatch.setattr(Image.Image, "resize", counting)
+        sp = PenSprite(lambda k: loaded)
+        frame = Image.new("RGB", (1280, 720), (250, 250, 248))
+        for i in range(5):
+            sp.stamp(frame, "hand", 200.0 + 40 * i, 300.0, 2, scale=0.8)
+        assert len(calls) == 1
+        sp.stamp(frame, "hand", 200.0, 300.0, 2, scale=1.0)   # a new size
+        assert len(calls) == 2
+        sp.stamp(frame, "hand", 250.0, 300.0, 2, scale=1.0)
+        assert len(calls) == 2
+
+
+class TestIdenticalFrameReuse:
+    """Between timeline events nothing on the board changes, so frames() hands
+    the previous Image back instead of re-rendering it. The invariant that
+    keeps this exact: a reused frame equals a fresh _frame(t) — pinned here so
+    a future verb that reads t outside [start, end] cannot ship stale frames
+    silently."""
+
+    def _hold_scene(self):
+        return _mini_scene(actions=[{"verb": "draw", "target": "box", "duration": 1.0}],
+                           elements=[{"id": "box", "type": "shape", "shape": "path",
+                                      "points": [(100, 100), (300, 100), (300, 300)]}])
+
+    def test_held_frames_are_the_same_object_and_equal_a_fresh_render(self):
+        from PIL import Image as PILImage
+        from spike.scene_engine.paper import make_background
+        from spike.scene_engine.render import SS
+        from spike.scene_engine.schema import WORLD_H, WORLD_W
+        from spike.scene_engine.timing import animation_end
+        s = self._hold_scene()
+        r = SceneRenderer(s)
+        tl = r.compile(6.0)
+        end = animation_end(tl) + 0.08
+        fps = 24
+        frames = list(r.frames(6.0, fps))
+        assert len(frames) == round(r.total_secs(6.0, fps) * fps)
+        held = [f for f in range(len(frames)) if f / fps > end + 1 / fps]
+        assert len(held) > 60                       # a real hold, not an edge
+        first = frames[held[0]]
+        assert all(frames[f] is first for f in held), "held frames must be reused"
+        # ...and while the pen is drawing every frame is its own render
+        moving = [f for f in range(len(frames))
+                  if any(ta.start <= f / fps < ta.end for ta in tl)]
+        assert len(moving) > 20
+        assert len({id(frames[f]) for f in moving}) == len(moving)
+        # invariant: a reused frame IS the frame a fresh renderer draws at t
+        r2 = SceneRenderer(s)
+        r2.compile(6.0)
+        w, h = WORLD_W * SS, WORLD_H * SS
+        bg = make_background(w, h, s.style.background)
+        for f in (held[0], held[len(held) // 2], held[-1]):
+            fresh = r2._frame(f / fps, bg, w, h)
+            assert frames[f].tobytes() == fresh.tobytes(), f
+        assert isinstance(first, PILImage.Image) and first.size == (1280, 720)
+
+    def test_a_caption_running_past_animation_end_is_not_reused(self):
+        from spike.scene_engine.timing import animation_end
+        from spike.scene_engine.whiteboard import narration_stream
+        narr = ("First the wall is drawn on the board. Then we look at the nucleus "
+                "inside. Chloroplasts capture the light. The vacuole holds the water. "
+                "That is the whole cell.")
+        els, acts = narration_stream(narr, uid="t")
+        s = Scene.model_validate({
+            "id": "t", "narration": narr,
+            "elements": [{"id": "box", "type": "shape", "shape": "path",
+                          "points": [(100, 100), (300, 100), (300, 300)]}] + els,
+            "actions": [{"verb": "draw", "target": "box", "duration": 0.8}] + acts})
+        r = SceneRenderer(s)
+        tl = r.compile(10.0)
+        ae = animation_end(tl)
+        fps = 24
+        n = round(r.total_secs(10.0, fps) * fps)
+        # captions are timeline actions past animation_end: while one reveals
+        # or fades the key is None, so the frame is rendered, not reused
+        in_flight = [f for f in range(n)
+                     if f / fps > ae + 0.08 and any(
+                         ta.duration > 1e-9 and ta.start <= f / fps < ta.end for ta in tl)]
+        assert len(in_flight) > 10
+        assert all(r._frame_key(f / fps) is None for f in in_flight)
+        frames = list(r.frames(10.0, fps))
+        for f in in_flight:
+            assert frames[f] is not frames[f - 1], f
+        # ...and the caption's hold BETWEEN sentences is reused: every frame
+        # whose key equals its predecessor's is the predecessor
+        held = [f for f in range(1, n) if f / fps > ae + 0.08
+                and r._frame_key(f / fps) is not None
+                and r._frame_key(f / fps) == r._frame_key((f - 1) / fps)]
+        assert len(held) > 100
+        assert all(frames[f] is frames[f - 1] for f in held)
+
+    def test_two_passes_on_one_renderer_reuse_identically(self):
+        s = self._hold_scene()
+        r = SceneRenderer(s)
+        r.compile(4.0)
+        a = [img.tobytes() for img in r.frames(4.0)]
+        b = [img.tobytes() for img in r.frames(4.0)]
+        assert a == b
+
+    def _particle_scene(self, duration: float, stagger: float = 0.0):
+        return Scene.model_validate({
+            "id": "p", "narration": "ions cross the membrane",
+            "elements": [{"id": "p", "type": "particles",
+                          "spawn": [(200.0, 200.0), (220.0, 240.0), (260.0, 210.0)]}],
+            "actions": [{"verb": "move", "target": "p", "duration": duration,
+                         "stagger": stagger, "path": [(200.0, 200.0), (900.0, 500.0)]}]})
+
+    @pytest.mark.parametrize("duration,stagger", [(0.1, 0.0), (0.1, 2.0), (0.3, 0.0)])
+    def test_a_particle_move_under_the_travel_floor_is_not_reused_while_it_travels(
+            self, duration, stagger):
+        """_apply_move floors a particle group's travel at 0.15 s, so a move
+        authored shorter than that keeps moving PAST TimedAction.end. The key
+        must stay None until the last particle rests — or the first post-end
+        frame is reused for the rest of the scene with the particles frozen
+        mid-flight. Pinned as the invariant: every frame frames() yields is
+        byte-identical to a fresh _frame(t)."""
+        from spike.scene_engine.paper import make_background
+        from spike.scene_engine.render import SS
+        from spike.scene_engine.schema import WORLD_H, WORLD_W
+        s = self._particle_scene(duration, stagger)
+        r = SceneRenderer(s)
+        tl = r.compile(3.0)
+        ta = next(x for x in tl if x.action.verb == "move")
+        fps = 24
+        frames = list(r.frames(3.0, fps))
+        r2 = SceneRenderer(s)
+        r2.compile(3.0)
+        w, h = WORLD_W * SS, WORLD_H * SS
+        bg = make_background(w, h, s.style.background)
+        for f, img in enumerate(frames):
+            assert img.tobytes() == r2._frame(f / fps, bg, w, h).tobytes(), f
+        rest = r._motion_end(ta)
+        if duration < 0.15:
+            # the motion genuinely outlasts the action: those frames render
+            assert rest > ta.end + 0.04
+            tail = [f for f in range(len(frames)) if ta.end <= f / fps < rest]
+            assert tail, "no frame falls between end and rest"
+            assert all(r._frame_key(f / fps) is None for f in tail)
+            assert (r._state_at(ta.end + 0.001)["p"].particle_off
+                    != r._state_at(rest + 0.001)["p"].particle_off)
+        else:
+            assert rest == pytest.approx(ta.end)
+        # ...and once everything rests the hold IS reused, so the fix did not
+        # simply switch reuse off
+        held = [f for f in range(len(frames)) if f / fps > rest + 2 / fps]
+        assert len(held) > 30
+        assert all(frames[f] is frames[held[0]] for f in held)
+
+
+class TestMarkerLayerCrop:
+    """The highlighter layer is drawn into its strokes' bounding box, not a
+    full 2560x1440 RGBA per frame. Pinned two ways: marker ink lands only
+    inside that box, and the frame is byte-identical to the full-canvas
+    blend it replaced."""
+
+    def _scene(self):
+        return _mini_scene(
+            elements=[{"id": "lbl", "type": "text", "text": "Membrane", "at": (500, 300)},
+                      {"id": "box", "type": "shape", "shape": "path",
+                       "points": [(100, 100), (300, 100), (300, 300)]}],
+            actions=[{"verb": "write", "target": "lbl", "duration": 0.5},
+                     {"verb": "highlight", "target": "lbl", "duration": 0.8},
+                     {"verb": "draw", "target": "box", "duration": 0.5}])
+
+    def test_marker_ink_only_inside_the_stroke_bbox(self):
+        import numpy as np
+        from spike.scene_engine.render import SS
+        s = self._scene()
+        r = SceneRenderer(s)
+        r.compile(4.0)
+        last = None
+        for last in r.frames(4.0):
+            pass
+        hi = next(i for i, ta in enumerate(r.timeline) if ta.action.verb == "highlight")
+        stx = r.deco[hi][0]
+        cam = r.cam.state_at(3.9)
+        spts = [cam.to_screen(p) for p in stx.pts]        # screen px (unsupersampled)
+        pad = (stx.width * cam.scale * SS) / 2 / SS + 3
+        x0 = min(p[0] for p in spts) - pad
+        x1 = max(p[0] for p in spts) + pad
+        y0 = min(p[1] for p in spts) - pad
+        y1 = max(p[1] for p in spts) + pad
+        a = np.asarray(last).astype(int)
+        yellow = (a[:, :, 0] - a[:, :, 2] > 40) & (a[:, :, 1] - a[:, :, 2] > 30)
+        ys, xs = np.nonzero(yellow)
+        assert len(xs) > 200, "the highlight must be visible"
+        assert xs.min() >= x0 - 1 and xs.max() <= x1 + 1
+        assert ys.min() >= y0 - 1 and ys.max() <= y1 + 1
+
+    def test_cropped_marker_equals_the_full_canvas_blend(self, monkeypatch):
+        from PIL import Image as PILImage, ImageDraw as PILDraw
+        from spike.scene_engine.paper import PALETTE
+        s = self._scene()
+        r = SceneRenderer(s)
+        r.compile(4.0)
+        cropped = [img.tobytes() for img in r.frames(4.0)]
+
+        def full_canvas(self, frame, strokes, w, h):
+            marker = PILImage.new("RGBA", (w, h), (0, 0, 0, 0))
+            md = PILDraw.Draw(marker)
+            for spts, width in strokes:
+                self._polyline(md, spts, width, PALETTE["marker"] + (110,))
+            frame.paste(marker, (0, 0), marker)
+        monkeypatch.setattr(SceneRenderer, "_paste_marker", full_canvas)
+        r2 = SceneRenderer(s)
+        r2.compile(4.0)
+        full = [img.tobytes() for img in r2.frames(4.0)]
+        assert cropped == full
+
+
+class TestStaticRasterCache:
+    """_draw_raster keeps its last composite+affine result on the Bound and
+    pastes it back while (k, alpha, pulse, camera) are unchanged — the two
+    persistent avatars hit this on essentially every frame. Pinned against a
+    render with the cache defeated on every frame."""
+
+    def _scene(self):
+        return _mini_scene(
+            elements=[{"id": "av", "type": "illustration", "asset": "avatar",
+                       "at": (1120, 560), "scale": 0.5, "hud": True},
+                      {"id": "im", "type": "illustration", "asset": "disc",
+                       "at": (640, 360)},
+                      {"id": "lbl", "type": "text", "text": "Cell", "at": (400, 120)}],
+            actions=[{"verb": "draw", "target": "im", "duration": 0.6},
+                     {"verb": "pulse", "target": "av", "duration": 0.5},
+                     {"verb": "fade", "target": "lbl", "to": 0.3, "duration": 0.4},
+                     {"verb": "zoom", "target": "im", "scale": 1.4, "duration": 0.5}])
+
+    def _assets(self):
+        import numpy as np
+        from PIL import Image as PILImage, ImageDraw as PILDraw
+        from spike.scene_engine.raster_assets import RasterAsset
+        from spike.scene_engine.trace import drawing_order
+        out = {}
+        for key, size, col in (("avatar", (300, 400), (60, 120, 180, 255)),
+                               ("disc", (200, 150), (20, 20, 20, 255))):
+            ink = PILImage.new("RGBA", size, (0, 0, 0, 0))
+            d = PILDraw.Draw(ink)
+            d.ellipse([30, 30, size[0] - 30, size[1] - 30], outline=col, width=6)
+            d.rectangle([60, 60, size[0] - 60, size[1] - 60], fill=col)
+            trace = drawing_order(np.asarray(ink.getchannel("A")))
+            out[key] = RasterAsset(key, ink, trace, 4.0, 2.0)
+        return out
+
+    def test_cached_rasters_equal_a_per_frame_render(self, monkeypatch):
+        assets = self._assets()
+        s = self._scene()
+        r = SceneRenderer(s, asset_resolver=lambda k: ("raster", assets[k]))
+        r.compile(2.0)
+        import itertools
+        cached = [img.tobytes() for img in itertools.islice(r.frames(2.0), 0, 48)]
+        hits = sum(1 for b in r.bound.values() if b._raster_cache is not None)
+        assert hits == 2
+
+        real = SceneRenderer._draw_raster
+
+        def never_hit(self, frame, b, s_, cam, alpha):
+            b._raster_cache = None
+            return real(self, frame, b, s_, cam, alpha)
+        monkeypatch.setattr(SceneRenderer, "_draw_raster", never_hit)
+        r2 = SceneRenderer(s, asset_resolver=lambda k: ("raster", assets[k]))
+        r2.compile(2.0)
+        fresh = [img.tobytes() for img in itertools.islice(r2.frames(2.0), 0, 48)]
+        assert cached == fresh
+
+    def test_the_cache_resets_between_passes(self):
+        assets = self._assets()
+        s = self._scene()
+        r = SceneRenderer(s, asset_resolver=lambda k: ("raster", assets[k]))
+        r.compile(2.0)
+        a = [img.tobytes() for img in r.frames(2.0)]
+        b = [img.tobytes() for img in r.frames(2.0)]
+        assert a == b

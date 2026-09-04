@@ -102,7 +102,7 @@ from .timing import (CAPTION_PREFIX, TimedAction, animation_end,
 from .vector_assets import VectorAsset, vector_asset
 from .geometry import arrow_paths
 
-SS = 2  # supersample factor: PIL lines are not antialiased; 2x + LANCZOS is
+SS = 2  # supersample factor: PIL lines are not antialiased; 2x + box reduce is
 
 _INTRODUCERS = {"draw", "write", "reveal"}
 _PEN_VERBS = {"draw", "write", "erase", "circle", "underline", "highlight"}
@@ -244,6 +244,8 @@ class Bound:
     spawn: list[Point] = field(default_factory=list)   # particles
     box: tuple[float, float, float, float] = (0, 0, 0, 0)
     introduced: bool = False  # True => starts hidden until its intro action
+    # last _draw_raster result: ((k, alpha, pulse, cam), (out, bx0, by0) | None)
+    _raster_cache: Optional[tuple] = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -1345,10 +1347,7 @@ class SceneRenderer:
             # duration — the stagger tail may not spill past TimedAction.end,
             # or animation_end undercounts and the clip can cut mid-motion
             n = len(b.spawn)
-            stag = a.stagger
-            if n > 1 and ta.duration > 1e-9:
-                stag = min(stag, max(0.0, ta.duration - 0.15) / (n - 1))
-            travel = max(0.15, ta.duration - stag * (n - 1))
+            stag, travel = self._particle_motion(ta, n)
             offs = []
             for k in range(n):
                 pk = min(1.0, max(0.0, (t - ta.start - k * stag) / travel))
@@ -1357,6 +1356,36 @@ class SceneRenderer:
             s.visible = True
         else:
             s.offset = pos_at(p)
+
+    @staticmethod
+    def _particle_motion(ta: TimedAction, n: int) -> tuple[float, float]:
+        """(stagger, travel) of a move on an n-particle group. The stagger is
+        capped inside the action's duration; the travel is floored at 0.15 s,
+        so a move authored (or compressed) shorter than that keeps travelling
+        PAST TimedAction.end. One definition, shared by _apply_move (which
+        moves the pixels) and _motion_end (which tells the frame key when
+        they stop) — the two must never disagree."""
+        stag = ta.action.stagger
+        if n > 1 and ta.duration > 1e-9:
+            stag = min(stag, max(0.0, ta.duration - 0.15) / (n - 1))
+        travel = max(0.15, ta.duration - stag * (n - 1))
+        return stag, travel
+
+    def _motion_end(self, ta: TimedAction) -> float:
+        """When the last pixel this action moves comes to rest. Every verb
+        clamps its progress to [start, end] except a move on a particle
+        group, whose last particle rests at start + stagger*(n-1) + travel
+        — later than `end` when the duration is under the travel floor (and
+        a zero-duration move steps at `start` yet still travels 0.15 s)."""
+        end = ta.end
+        if ta.action.verb == "move":
+            for nm in self._expand(ta.action.target):
+                b = self.bound.get(nm)
+                if b is not None and b.spawn:
+                    n = len(b.spawn)
+                    stag, travel = self._particle_motion(ta, n)
+                    end = max(end, ta.start + stag * (n - 1) + travel)
+        return end
 
     # ── frame drawing ───────────────────────────────────────────────────────
 
@@ -1368,13 +1397,53 @@ class SceneRenderer:
             if b.raster is not None:
                 b.raster.mask = Image.new("L", b.raster.ink.size, 0)
                 b.raster._stamped = 0
+                b._raster_cache = None
         total = self.total_secs(audio_secs, fps)
         n = max(1, round(total * fps))
         w, h = WORLD_W * SS, WORLD_H * SS
         bg = make_background(w, h, self.scene.style.background)
+        # identical-frame reuse: between timeline events nothing on the
+        # board changes, so the previous Image is yielded again (the encoder
+        # only reads img.tobytes(); nobody mutates a yielded frame). Reset
+        # per pass beside the mask reset — determinism across passes.
+        prev_key = None
+        prev: Optional[Image.Image] = None
         for f in range(n):
             t = f / fps
-            yield self._frame(t, bg, w, h)
+            key = self._frame_key(t)
+            if key is not None and key == prev_key:
+                yield prev
+                continue
+            img = self._frame(t, bg, w, h)
+            prev, prev_key = img, key
+            yield img
+
+    def _frame_key(self, t: float):
+        """Identity of the frame at t between timeline events, or None while
+        anything is animating.
+
+        Exact by construction: _frame depends on t only through
+        cam.state_at(t) (keyed at action start/end; CameraState is a frozen
+        dataclass, equal by value), _state_at(t) (progress clamps to [0, 1];
+        zero-duration actions are steps at `start`; pulse is a function of
+        p), the decorations' eased progress, and the pen window
+        `start <= t < end + 0.08`. Every one of those is constant between the
+        events this key enumerates. The one verb whose pixels keep moving
+        after `end` is a move on a particle group (travel floor 0.15 s, see
+        _particle_motion), so the animating window runs to _motion_end, not
+        to `end`. Captions are TimedActions in the timeline too
+        (animation_end merely excludes them from the clip length), so a
+        caption fade past animation_end correctly yields None here. No wall
+        clock or unseeded RNG feeds a frame (module contract)."""
+        tl = self.timeline
+        for ta in tl:
+            end = self._motion_end(ta)
+            if end - ta.start > 1e-9 and ta.start <= t < end:
+                return None                      # something is animating
+        return (tuple(t >= ta.start for ta in tl),
+                tuple(ta.start <= t < ta.end + 0.08
+                      for ta in tl if ta.action.verb in _PEN_VERBS),
+                self.cam.state_at(t))
 
     def _frame(self, t: float, bg: Image.Image, w: int, h: int) -> Image.Image:
         cam = self.cam.state_at(t)
@@ -1435,7 +1504,7 @@ class SceneRenderer:
         # decorations (circle/underline/highlight) reveal like strokes — through
         # the camera of the element they decorate, so a circle around a
         # screen-fixed sketch does not fly off with the zoom while the sketch stays
-        marker = None
+        marker_strokes: list[tuple[list[Point], int]] = []
         for i, ta in enumerate(self.timeline):
             if i not in self.deco or t < ta.start:
                 continue
@@ -1445,16 +1514,13 @@ class SceneRenderer:
                 pts = stx.pts if p >= 1.0 else cut_at_fraction(stx.pts, p)
                 spts = [W2S(q, c=dcam) for q in pts]
                 if stx.color == "marker":
-                    if marker is None:
-                        marker = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-                    md = ImageDraw.Draw(marker)
-                    self._polyline(md, spts, max(1, round(stx.width * dcam.scale * SS)),
-                                   PALETTE["marker"] + (110,))
+                    marker_strokes.append(
+                        (spts, max(1, round(stx.width * dcam.scale * SS))))
                 else:
                     col = role_color(stx.color, style.ink, style.accent) + (255,)
                     self._polyline(d, spts, max(1, round(stx.width * dcam.scale * SS)), col)
-        if marker is not None:
-            frame.paste(marker, (0, 0), marker)
+        if marker_strokes:
+            self._paste_marker(frame, marker_strokes, w, h)
 
         # pen at the frontier of the most recent active pen action
         for i, ta in enumerate(self.timeline):
@@ -1474,7 +1540,41 @@ class SceneRenderer:
             self.pen.stamp(frame, pen_mode, pen_pos[0], pen_pos[1], SS,
                            erasing=pen_erase, scale=self.scene.style.hand_scale)
 
-        return frame.resize((WORLD_W, WORLD_H), Image.LANCZOS)
+        # Integer-factor box reduce, not LANCZOS: SS is exactly 2, so
+        # reduce(SS) lands on WORLD_W x WORLD_H precisely and costs ~5 ms
+        # against ~60 ms for the LANCZOS resize it replaces (the single
+        # largest per-frame cost). Not byte-identical to LANCZOS — PSNR 44 dB,
+        # founder-approved as visually neutral (2026-09-04). SS must stay an
+        # integer that divides the canvas, or reduce() would round the size.
+        return frame.reduce(SS)
+
+    def _paste_marker(self, frame: Image.Image,
+                      strokes: list[tuple[list[Point], int]], w: int, h: int) -> None:
+        """The translucent highlighter layer, alpha-blended over the frame.
+
+        Drawn into an RGBA the size of the strokes' bounding box (padded by
+        half the widest stroke plus a margin for caps and joints), then pasted
+        at that offset. This used to allocate and blend a full 2560x1440 RGBA
+        (14.7 MB) on EVERY frame once any highlight had started, for the rest
+        of the scene. The per-pixel blend is identical — an integer offset of
+        the stroke points is an exact translation — and only the fully
+        transparent area is skipped."""
+        pts = [p for spts, _ in strokes for p in spts]
+        if not pts:
+            return
+        pad = max(width for _, width in strokes) // 2 + 2
+        x0 = max(0, int(math.floor(min(p[0] for p in pts))) - pad)
+        y0 = max(0, int(math.floor(min(p[1] for p in pts))) - pad)
+        x1 = min(w, int(math.ceil(max(p[0] for p in pts))) + pad + 1)
+        y1 = min(h, int(math.ceil(max(p[1] for p in pts))) + pad + 1)
+        if x1 <= x0 or y1 <= y0:
+            return                              # entirely off-canvas
+        marker = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
+        md = ImageDraw.Draw(marker)
+        for spts, width in strokes:
+            self._polyline(md, [(px - x0, py - y0) for px, py in spts], width,
+                           PALETTE["marker"] + (110,))
+        frame.paste(marker, (x0, y0), marker)
 
     # frontier of an in-flight action, world coords
     def _frontier(self, i: int, ta: TimedAction, t: float) -> Optional[Point]:
@@ -1569,6 +1669,19 @@ class SceneRenderer:
         ra.reveal_to(k)
         if k <= 0:
             return
+        # The composite + alpha + cropped affine below depend only on
+        # (k, alpha, pulse, camera) — all constant for a static raster, and
+        # the two persistent avatars are static on essentially every frame.
+        # Keep the last result on the Bound and paste it straight back on a
+        # hit (exact: same inputs, same bytes). Keyed on the exact floats, not
+        # rounded ones, so a hit can only ever be a bit-identical repeat.
+        ckey = (k, alpha, s.pulse, cam)
+        hit = b._raster_cache
+        if hit is not None and hit[0] == ckey:
+            if hit[1] is not None:
+                out, bx0, by0 = hit[1]
+                frame.paste(out, (bx0, by0), out)
+            return
         ink = Image.composite(ra.ink, Image.new("RGBA", ra.ink.size, (0, 0, 0, 0)), ra.mask)
         if alpha < 0.999:
             a = ink.getchannel("A").point(lambda v: int(v * alpha))
@@ -1598,9 +1711,11 @@ class SceneRenderer:
         bx0, by0 = max(0, dx0), max(0, dy0)
         bx1, by1 = min(fw, dx1), min(fh, dy1)
         if bx1 <= bx0 or by1 <= by0:
+            b._raster_cache = (ckey, None)
             return                      # entirely off-camera this frame
         inv = (1.0 / k_ws, 0.0, (bx0 - offx) / k_ws,
                0.0, 1.0 / k_ws, (by0 - offy) / k_ws)
         out = ink.transform((bx1 - bx0, by1 - by0), Image.AFFINE, inv,
                             resample=Image.BILINEAR)
+        b._raster_cache = (ckey, (out, bx0, by0))
         frame.paste(out, (bx0, by0), out)

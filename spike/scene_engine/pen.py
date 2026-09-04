@@ -53,6 +53,13 @@ class PenSprite:
     def __init__(self, hand_loader=None):
         self._hand: Image.Image | None = None
         self._tip: Point = (0.0, 0.0)
+        # the hand at each (w, h) it has been stamped at, with its scaled tip
+        # offset. The sprite is a uniform scale of ONE source image, so the
+        # same LANCZOS call on the same input reproduces the same bytes — a
+        # cache hit is pixel-identical to the resize it replaces, and the
+        # resize was 11-16 ms on every pen frame (about half of all frames).
+        # One PenSprite per SceneRenderer per segment thread: no lock needed.
+        self._scaled: dict[tuple[int, int], tuple[Image.Image, float, float]] = {}
         if hand_loader is not None:
             try:
                 loaded = hand_loader(_HAND_KEY)
@@ -71,10 +78,12 @@ class PenSprite:
             return
         if mode == "hand" and self._hand is not None:
             h = int(_HAND_HEIGHT * scale * ss)
-            scale = h / self._hand.height
-            w = max(1, int(self._hand.width * scale))
-            hand = self._hand.resize((w, h), Image.LANCZOS)
-            tx, ty = self._tip[0] * scale, self._tip[1] * scale
-            frame.paste(hand, (int(x - tx), int(y - ty)), hand)
+            k = h / self._hand.height
+            w = max(1, int(self._hand.width * k))
+            entry = self._scaled.get((w, h))
+            if entry is None:
+                hand = self._hand.resize((w, h), Image.LANCZOS)
+                entry = self._scaled[(w, h)] = (hand, self._tip[0] * k, self._tip[1] * k)
+            frame.paste(entry[0], (int(x - entry[1]), int(y - entry[2])), entry[0])
             return
         draw_vector_pen(d, x, y, ss)
