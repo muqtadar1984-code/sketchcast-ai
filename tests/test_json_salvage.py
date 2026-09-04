@@ -12,7 +12,7 @@ import logging
 
 import pytest
 
-from shared.claude_client import (ClaudeClient, _closes_string, _fix_bad_escapes,
+from shared.claude_client import (ClaudeClient, _escape_inner_quotes, _fix_bad_escapes,
                                   _repair_json, json_fault)
 
 X = ClaudeClient._extract_json
@@ -63,17 +63,39 @@ class TestProseQuotes:
 
     def test_real_closers_still_close(self):
         # keys, string array elements, and a string before a closer all end
-        # exactly where they always did
-        raw = '{"a": "x", "b": ["p", "q"], "c": {"d": "e"}, "f": "g"}'
+        # exactly where they always did — valid JSON is a no-op for the walk
+        raw = ('{"a": "x", "b": ["p", "q", 3, true, null, {"n": "m"}], "c": {"d": "e", "f": [["g"]]},'
+               ' "h": "", "i": "ends with \\\\", "j": "quote \\" inside", "k": -1.5, "l": false}')
+        assert _escape_inner_quotes(raw) == raw
         assert json.loads(raw) == X(raw)
-        # the index points at the punctuation AFTER the candidate quote
-        assert _closes_string(', "x"', 0) is True          # `,` then a string
-        assert _closes_string(': "v"', 0) is True          # `:` then a value
-        assert _closes_string(': true', 0) is True
-        assert _closes_string(', then', 0) is False        # prose
-        assert _closes_string(': because', 0) is False     # prose
-        assert _closes_string('}', 0) is True
-        assert _closes_string('', 0) is True
+
+    def test_enumerations_in_prose(self):
+        """The review's gap: '"cell", "tissue" and "organ"' — a quoted word
+        followed by a comma and ANOTHER quoted word is not a key that follows."""
+        out = X(doc(seg('Remember the words "cell", "tissue" and "organ" today.')))
+        assert ok(out) and out["segments"][0]["text"] == 'Remember the words "cell", "tissue" and "organ" today.'
+        # a quoted word, a colon, then something that could be a JSON value
+        # ('"photosynthesis": 6CO2') is indistinguishable from a mangled
+        # object ('"who":"alice":"bob"'); the layer refuses rather than guess
+        # (see test_semantic_prompt: repairs never choose between readings)
+        out = X(doc(seg('Recall "photosynthesis": 6CO2 + 6H2O makes sugar.')))
+        assert not ok(out), "ambiguous — must stay a loud failure, not a guessed lesson"
+        out = X(doc(seg('called "organelles", 2 of which matter.')))
+        assert ok(out) and '"organelles", 2 of' in out["segments"][0]["text"]
+
+    def test_maths_angle_brackets_across_strings_do_not_corrupt_structure(self):
+        """The review's regression: a `<` in one string and a `>` in a later
+        one must never be read as one tag — the structural quotes between
+        them were being rewritten, dropping a key or merging two points."""
+        raw = doc(seg('Since 3 < 5, three is smaller.', 'and 7 > 2 is also true.'),
+                  '{"type": "hook", "text": "t", "elevenlabs_text": "t", "slide_heading": "H", "slide_points": ["a",]}')
+        out = X(raw)
+        assert ok(out)
+        assert out["segments"][0]["elevenlabs_text"] == "and 7 > 2 is also true.", "the key survives"
+        raw = doc('{"type": "hook", "text": "x <break time="0.3s"/> y", "elevenlabs_text": "x", '
+                  '"slide_heading": "H", "slide_points": ["3 < 5", "7 > 2"]}')
+        out = X(raw)
+        assert ok(out) and out["segments"][0]["slide_points"] == ["3 < 5", "7 > 2"], "two points, not one"
 
 
 class TestControlCharsAndEscapes:
@@ -86,9 +108,15 @@ class TestControlCharsAndEscapes:
         assert ok(out) and "H\\(_2\\)O" in out["segments"][0]["text"]
 
     def test_valid_escapes_are_left_alone(self):
-        s = '{"a": "tab\\tnew\\nquote\\"slash\\\\ uni\\u00e9"}'
+        s = '{"a": "tab\\tnew\\nquote\\"slash\\\\ uni\\u00e9 pair-then-quote\\\\\\" end\\\\"}'
         assert _fix_bad_escapes(s) == s
         assert json.loads(s) == X(s)
+
+    def test_over_escaped_apostrophe_and_bare_unicode_escape(self):
+        out = X(doc(seg("It\\'s the cell\\'s job.")))
+        assert ok(out) and out["segments"][0]["text"] == "It's the cell's job."
+        out = X(doc(seg("Write \\underline{x} here.")))
+        assert ok(out) and "\\underline{x}" in out["segments"][0]["text"]
 
 
 class TestSsmlTags:
@@ -131,6 +159,10 @@ class TestFaultWindow:
         assert json_fault('{"a": 1}') is None
         assert json_fault('{"a": "raw\nnewline"}') is None, "strict=False, like the salvage"
 
-    def test_windows_never_carry_raw_newlines(self):
-        f = json_fault('{"a": "x\n\n\n", "b": }')
-        assert f and "\n" not in f
+    def test_windows_never_carry_raw_control_characters(self):
+        f = json_fault('{"a": "x\n\n\t\x0c\x00", "b": }')
+        assert f and not any(ch in f for ch in "\n\t\x0c\x00")
+
+    def test_bytes_do_not_raise(self):
+        f = json_fault(b'{"a": }')
+        assert isinstance(f, str) and "char" in f
