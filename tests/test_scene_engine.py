@@ -732,3 +732,91 @@ class TestHandSpriteCache:
         assert len(calls) == 2
         sp.stamp(frame, "hand", 250.0, 300.0, 2, scale=1.0)
         assert len(calls) == 2
+
+
+class TestIdenticalFrameReuse:
+    """Between timeline events nothing on the board changes, so frames() hands
+    the previous Image back instead of re-rendering it. The invariant that
+    keeps this exact: a reused frame equals a fresh _frame(t) — pinned here so
+    a future verb that reads t outside [start, end] cannot ship stale frames
+    silently."""
+
+    def _hold_scene(self):
+        return _mini_scene(actions=[{"verb": "draw", "target": "box", "duration": 1.0}],
+                           elements=[{"id": "box", "type": "shape", "shape": "path",
+                                      "points": [(100, 100), (300, 100), (300, 300)]}])
+
+    def test_held_frames_are_the_same_object_and_equal_a_fresh_render(self):
+        from PIL import Image as PILImage
+        from spike.scene_engine.paper import make_background
+        from spike.scene_engine.render import SS
+        from spike.scene_engine.schema import WORLD_H, WORLD_W
+        from spike.scene_engine.timing import animation_end
+        s = self._hold_scene()
+        r = SceneRenderer(s)
+        tl = r.compile(6.0)
+        end = animation_end(tl) + 0.08
+        fps = 24
+        frames = list(r.frames(6.0, fps))
+        assert len(frames) == round(r.total_secs(6.0, fps) * fps)
+        held = [f for f in range(len(frames)) if f / fps > end + 1 / fps]
+        assert len(held) > 60                       # a real hold, not an edge
+        first = frames[held[0]]
+        assert all(frames[f] is first for f in held), "held frames must be reused"
+        # ...and while the pen is drawing every frame is its own render
+        moving = [f for f in range(len(frames))
+                  if any(ta.start <= f / fps < ta.end for ta in tl)]
+        assert len(moving) > 20
+        assert len({id(frames[f]) for f in moving}) == len(moving)
+        # invariant: a reused frame IS the frame a fresh renderer draws at t
+        r2 = SceneRenderer(s)
+        r2.compile(6.0)
+        w, h = WORLD_W * SS, WORLD_H * SS
+        bg = make_background(w, h, s.style.background)
+        for f in (held[0], held[len(held) // 2], held[-1]):
+            fresh = r2._frame(f / fps, bg, w, h)
+            assert frames[f].tobytes() == fresh.tobytes(), f
+        assert isinstance(first, PILImage.Image) and first.size == (1280, 720)
+
+    def test_a_caption_running_past_animation_end_is_not_reused(self):
+        from spike.scene_engine.timing import animation_end
+        from spike.scene_engine.whiteboard import narration_stream
+        narr = ("First the wall is drawn on the board. Then we look at the nucleus "
+                "inside. Chloroplasts capture the light. The vacuole holds the water. "
+                "That is the whole cell.")
+        els, acts = narration_stream(narr, uid="t")
+        s = Scene.model_validate({
+            "id": "t", "narration": narr,
+            "elements": [{"id": "box", "type": "shape", "shape": "path",
+                          "points": [(100, 100), (300, 100), (300, 300)]}] + els,
+            "actions": [{"verb": "draw", "target": "box", "duration": 0.8}] + acts})
+        r = SceneRenderer(s)
+        tl = r.compile(10.0)
+        ae = animation_end(tl)
+        fps = 24
+        n = round(r.total_secs(10.0, fps) * fps)
+        # captions are timeline actions past animation_end: while one reveals
+        # or fades the key is None, so the frame is rendered, not reused
+        in_flight = [f for f in range(n)
+                     if f / fps > ae + 0.08 and any(
+                         ta.duration > 1e-9 and ta.start <= f / fps < ta.end for ta in tl)]
+        assert len(in_flight) > 10
+        assert all(r._frame_key(f / fps) is None for f in in_flight)
+        frames = list(r.frames(10.0, fps))
+        for f in in_flight:
+            assert frames[f] is not frames[f - 1], f
+        # ...and the caption's hold BETWEEN sentences is reused: every frame
+        # whose key equals its predecessor's is the predecessor
+        held = [f for f in range(1, n) if f / fps > ae + 0.08
+                and r._frame_key(f / fps) is not None
+                and r._frame_key(f / fps) == r._frame_key((f - 1) / fps)]
+        assert len(held) > 100
+        assert all(frames[f] is frames[f - 1] for f in held)
+
+    def test_two_passes_on_one_renderer_reuse_identically(self):
+        s = self._hold_scene()
+        r = SceneRenderer(s)
+        r.compile(4.0)
+        a = [img.tobytes() for img in r.frames(4.0)]
+        b = [img.tobytes() for img in r.frames(4.0)]
+        assert a == b

@@ -1372,9 +1372,45 @@ class SceneRenderer:
         n = max(1, round(total * fps))
         w, h = WORLD_W * SS, WORLD_H * SS
         bg = make_background(w, h, self.scene.style.background)
+        # identical-frame reuse: between timeline events nothing on the
+        # board changes, so the previous Image is yielded again (the encoder
+        # only reads img.tobytes(); nobody mutates a yielded frame). Reset
+        # per pass beside the mask reset — determinism across passes.
+        prev_key = None
+        prev: Optional[Image.Image] = None
         for f in range(n):
             t = f / fps
-            yield self._frame(t, bg, w, h)
+            key = self._frame_key(t)
+            if key is not None and key == prev_key:
+                yield prev
+                continue
+            img = self._frame(t, bg, w, h)
+            prev, prev_key = img, key
+            yield img
+
+    def _frame_key(self, t: float):
+        """Identity of the frame at t between timeline events, or None while
+        anything is animating.
+
+        Exact by construction: _frame depends on t only through
+        cam.state_at(t) (keyed at action start/end; CameraState is a frozen
+        dataclass, equal by value), _state_at(t) (progress clamps to [0, 1];
+        zero-duration actions are steps at `start`; pulse is a function of
+        p; a move's particle stagger is capped inside the action's duration),
+        the decorations' eased progress, and the pen window
+        `start <= t < end + 0.08`. Every one of those is constant between the
+        events this key enumerates. Captions are TimedActions in the timeline
+        too (animation_end merely excludes them from the clip length), so a
+        caption fade past animation_end correctly yields None here. No wall
+        clock or unseeded RNG feeds a frame (module contract)."""
+        tl = self.timeline
+        for ta in tl:
+            if ta.duration > 1e-9 and ta.start <= t < ta.end:
+                return None                      # something is animating
+        return (tuple(t >= ta.start for ta in tl),
+                tuple(ta.start <= t < ta.end + 0.08
+                      for ta in tl if ta.action.verb in _PEN_VERBS),
+                self.cam.state_at(t))
 
     def _frame(self, t: float, bg: Image.Image, w: int, h: int) -> Image.Image:
         cam = self.cam.state_at(t)
