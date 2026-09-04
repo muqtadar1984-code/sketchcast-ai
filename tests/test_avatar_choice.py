@@ -667,6 +667,7 @@ class TestFacesWarmOnceBeforeThePool:
 
         def fake_make_resolver(prompts, *a, **k):
             events.append(("resolver", dict(prompts)))
+            events.append(("resolver_kwargs", {"positional": a, **k}))
             return lambda key: events.append(("warm", key)) or object()
         monkeypatch.setattr(ra, "make_resolver", fake_make_resolver)
         monkeypatch.setattr(ra, "load_hand", lambda *a, **k: events.append(("hand", None)) or None)
@@ -722,6 +723,80 @@ class TestFacesWarmOnceBeforeThePool:
         self._compose(tmp_path, monkeypatch, {}, events)
         assert not [e for e in events if e[0] in ("resolver", "warm")]
         assert [k for k, _ in events].count("segment") == 3
+
+    def test_the_warm_up_hydrates_but_never_pays_to_generate(self, tmp_path, monkeypatch):
+        """The warm-up resolves with allow_generate=False.
+
+        The cast names a student face for EVERY lesson, but only a lesson
+        whose script gives a segment two-voice dialogue ever seats the
+        student on the board. Warming with allow_generate=True therefore made
+        every socratic/narrative lesson pay for — and block the whole render
+        on — an image it would never draw. The flag stops the generation and
+        nothing else: hydration runs before it is consulted (pinned below).
+        """
+        avatars = cast_avatars("edge-aria", "9", "gen-warm", lang="en",
+                               style="conversational", roster=ROSTER)
+        events: list = []
+        self._compose(tmp_path, monkeypatch, avatars, events)
+        kwargs = next(v for k, v in events if k == "resolver_kwargs")
+        assert kwargs.get("allow_generate") is False, kwargs
+
+    def test_a_library_face_still_lands_on_disk_before_the_pool(self, tmp_path, monkeypatch):
+        """allow_generate=False must not cost the warm-up its point. The
+        visual-library wrapper hydrates the roster face BEFORE it calls the
+        renderer, and the renderer consults the flag only after the cache
+        misses — so a face the library already holds is on disk before the
+        first segment either way, which is what the warm-up is for."""
+        import shared.visual_library_integration  # noqa: F401 — installs the wrapper
+        from spike.scene_engine import raster_assets as ra
+        calls: dict = {}
+        monkeypatch.setattr(vl, "_sb", lambda: _fake_sb(ROSTER, calls))
+        monkeypatch.setattr(vl, "DECISION_LOG", tmp_path / "decisions.log")
+        generated: list = []
+        monkeypatch.setattr(ra, "_vertex_call",
+                            lambda *a, **k: generated.append("vertex") or None)
+        monkeypatch.setattr(ra, "_aistudio_call",
+                            lambda *a, **k: generated.append("aistudio") or None)
+        key = cast_avatars("edge-aria", "9", "gen-warm2", lang="en", roster=ROSTER)["teacher"]
+        cache = tmp_path / "cache"
+        png = cache / renderer_canonical_key(key) / "asset.png"
+        assert not png.exists()
+        resolve = ra.make_resolver({key: avatar_prompt(key)}, cache_dir=cache,
+                                   allow_generate=False)
+        resolve(key)
+        assert png.exists(), "hydration is not gated on allow_generate"
+        assert calls.get("download"), "and the face came from the library"
+        assert generated == [], "nothing was generated at warm-up"
+
+    def test_a_face_the_lesson_really_draws_is_still_generated_by_its_segment(self):
+        """The other half of allow_generate=False: the warm-up refuses to pay,
+        so the SEGMENT has to. Both segment paths reach generation through a
+        resolver over `prompts` (which carries the cast face keys), and the
+        process path pre-warms every `illustration` element on the segment's
+        own thread before handing the child a cache-only resolver — so this
+        only holds because a seated avatar IS an illustration element."""
+        from spike.scene_engine.whiteboard import (STUDENT_ID, TEACHER_ID,
+                                                   build_whiteboard_scene)
+        avatars = cast_avatars("edge-aria", "9", "gen-draw", lang="en",
+                               style="conversational", roster=ROSTER)
+        scene = build_whiteboard_scene(
+            {"segment_id": "s1", "slide_heading": "H", "slide_points": ["p"],
+             "dialogue": [{"who": "teacher", "line": "What is a cell?"},
+                          {"who": "student", "line": "The smallest unit."}]},
+            avatars=avatars)
+        seated = [e for e in scene["elements"]
+                  if e.get("id") in (TEACHER_ID, STUDENT_ID)]
+        assert {e["id"] for e in seated} == {TEACHER_ID, STUDENT_ID}
+        assert all(e.get("type") == "illustration" for e in seated), seated
+        assert {e.get("asset") for e in seated} == set(avatars.values())
+
+        src = (REPO / "agent6_animation" / "video_composer.py").read_text(encoding="utf-8")
+        seg = src[:src.index("def compose_episode_videos")]
+        # the process path's per-segment warm, and the in-process resolver:
+        # neither may be gated, or a drawn face would never be generated
+        assert "warm = make_resolver(prompts)" in seg
+        assert 'e.get("type") == "illustration"' in seg
+        assert "asset_resolver=make_resolver(prompts)," in seg
 
 
 class TestHydrationHoldsThePerKeyLock:
