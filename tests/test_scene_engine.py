@@ -673,3 +673,62 @@ class TestEncodeContract:
         args = encode_args(5.0, None, tmp_path / "o.mp4")
         assert any("anullsrc" in a for a in args)
         assert "-map" in args                # audio still mapped in
+
+
+# ── render speed: exact caches (2026-09-04) ─────────────────────────────────
+
+class TestHandSpriteCache:
+    """The hand is a uniform scale of ONE image; resizing it on every pen
+    frame cost 11-16 ms. The per-(w, h) cache must be pixel-identical to the
+    resize it replaces, and must resize exactly once per size."""
+
+    def _hand(self):
+        from spike.scene_engine.raster_assets import load_hand
+        loaded = load_hand("hand_pen", allow_generate=False)
+        assert loaded is not None, "bundled hand missing"
+        return loaded
+
+    def test_cached_stamp_is_pixel_identical_to_a_fresh_sprite(self):
+        from PIL import Image
+        from spike.scene_engine.pen import PenSprite
+        loaded = self._hand()
+        loader = lambda k: loaded  # noqa: E731
+        cached = PenSprite(loader)
+        stamps = [(300.0, 400.0), (900.0, 650.0)]
+        for x, y in stamps:
+            fresh_sprite = PenSprite(loader)
+            a = Image.new("RGB", (1280, 720), (250, 250, 248))
+            b = Image.new("RGB", (1280, 720), (250, 250, 248))
+            fresh_sprite.stamp(a, "hand", x, y, 2, scale=0.8)
+            cached.stamp(b, "hand", x, y, 2, scale=0.8)
+            assert list(a.getdata()) == list(b.getdata())
+        assert len(cached._scaled) == 1
+
+    def test_the_resize_runs_once_per_size(self, monkeypatch):
+        from PIL import Image
+        from spike.scene_engine.pen import PenSprite
+        loaded = self._hand()
+        calls = []
+        real = Image.Image.resize
+        depth = [0]
+
+        def counting(self, *a, **k):
+            # Pillow's resize re-enters itself (a second call carrying a
+            # `box`); count only the outermost call, i.e. OUR resize
+            if depth[0] == 0:
+                calls.append(a[0] if a else k.get("size"))
+            depth[0] += 1
+            try:
+                return real(self, *a, **k)
+            finally:
+                depth[0] -= 1
+        monkeypatch.setattr(Image.Image, "resize", counting)
+        sp = PenSprite(lambda k: loaded)
+        frame = Image.new("RGB", (1280, 720), (250, 250, 248))
+        for i in range(5):
+            sp.stamp(frame, "hand", 200.0 + 40 * i, 300.0, 2, scale=0.8)
+        assert len(calls) == 1
+        sp.stamp(frame, "hand", 200.0, 300.0, 2, scale=1.0)   # a new size
+        assert len(calls) == 2
+        sp.stamp(frame, "hand", 250.0, 300.0, 2, scale=1.0)
+        assert len(calls) == 2
