@@ -108,8 +108,12 @@ def _ok_pdf():
 
 @pytest.fixture
 def no_sleep(monkeypatch):
+    """Capture the waits instead of sleeping, and pin the jitter draw to 0 so
+    the loop tests assert the schedule's BASE figures. The jitter itself is
+    tested separately with the draw pinned to other values."""
     slept = []
     monkeypatch.setattr(db.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(db.random, "random", lambda: 0.0)
     return slept
 
 
@@ -296,6 +300,49 @@ def test_the_classifier_on_the_library_objects_themselves():
     assert not ok(httpx.HTTPStatusError("400", request=req, response=httpx.Response(400, request=req)))
 
 
+# ── jitter ──────────────────────────────────────────────────────────────
+#
+# The incident was six threads reset by the same edge in the same second. On
+# a fixed 2 s / 5 s schedule all six re-hit it in lock-step, the shape most
+# likely to be reset again. Each wait is now the base plus a random share of
+# up to half of it: the base stays the MINIMUM spacing, the retries spread.
+
+
+def test_jitter_adds_up_to_half_the_base_and_never_less_than_the_base(monkeypatch):
+    monkeypatch.setattr(db.random, "random", lambda: 0.0)
+    assert db._transfer_delay(1) == 2.0 and db._transfer_delay(2) == 5.0
+    monkeypatch.setattr(db.random, "random", lambda: 1.0)
+    assert db._transfer_delay(1) == 3.0 and db._transfer_delay(2) == 7.5
+    monkeypatch.setattr(db.random, "random", lambda: 0.5)
+    assert db._transfer_delay(1) == 2.5 and db._transfer_delay(2) == 6.25
+    # Attempts beyond the schedule reuse its last figure, as before.
+    assert db._transfer_delay(3) == 6.25 and db._transfer_delay(9) == 6.25
+
+
+def test_the_retry_loop_sleeps_the_jittered_figure(tmp_path, monkeypatch):
+    slept = []
+    monkeypatch.setattr(db.time, "sleep", lambda s: slept.append(s))
+    draws = iter([0.25, 1.0])
+    monkeypatch.setattr(db.random, "random", lambda: next(draws))
+    bucket = _Bucket([_reset(), _reset()])
+    db.download_book(_SB(bucket), "owner/book.pdf", tmp_path / "book.pdf")
+    assert slept == [2.25, 7.5]
+
+
+def test_six_threads_do_not_retry_in_lock_step(tmp_path, monkeypatch):
+    """The real draw, many times: every wait lands in [base, 1.5 × base] and
+    the six are not all the same figure. (The chance that six real draws
+    coincide to the millisecond is nil; a fixed schedule would give six 2.0s.)"""
+    slept = []
+    monkeypatch.setattr(db.time, "sleep", lambda s: slept.append(s))
+    for _ in range(6):
+        bucket = _Bucket([_reset()])
+        db.download_book(_SB(bucket), "owner/book.pdf", tmp_path / "book.pdf")
+    assert len(slept) == 6
+    assert all(2.0 <= s <= 3.0 for s in slept), slept
+    assert len({round(s, 6) for s in slept}) > 1, f"no spread: {slept}"
+
+
 def test_the_module_imports_what_the_backoff_calls():
     """The backoff calls time.sleep at module scope. The first cut of this fix
     was written into a working tree where ANOTHER session's uncommitted block
@@ -309,4 +356,6 @@ def test_the_module_imports_what_the_backoff_calls():
 
     src = Path(db.__file__).read_text(encoding="utf-8")
     assert re.search(r"^import time$", src, re.M), "worker/client.py must import time itself"
+    assert re.search(r"^import random$", src, re.M), "worker/client.py must import random itself"
     assert hasattr(db, "time") and callable(db.time.sleep)
+    assert hasattr(db, "random") and callable(db.random.random)
