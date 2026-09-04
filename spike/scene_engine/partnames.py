@@ -16,12 +16,17 @@ founder's killed Cells Part 2 attempt logged 'layer anchor
 plant_cell_diagram.chloroplasts unresolved' five times against an image whose
 own prompt had named 'chloroplasts'.
 
-Deliberately a LAST-RESORT tier: exact and substring keep their current
-meaning and run first, so nothing that matched before matches differently now.
-The last tier matches on shared WORDS, never on spelling: a character-ratio
-tier was measured binding nucleolus->nucleus, neutron->neuron and
-meiosis->mitosis, and a confident arrow to the wrong structure teaches worse
-than no arrow.
+Three tiers, and deliberately no fourth. Exact and substring keep their
+current meaning, so nothing that matched before matches differently; between
+them sits the inflection tier this module exists for. There is NO
+"nearest by name" tier, and there will not be one: a name is not evidence of
+anatomy. Two were tried and both bound distinct structures to each other —
+spelling similarity gave nucleolus->nucleus, neutron->neuron and
+meiosis->mitosis, and shared-token overlap gave any two three-word names that
+happened to agree on two words. A part the engine cannot name confidently
+gets a leader line to the edge (render.py's designed fallback), which reads
+as an unlabelled part; a guess reads as a labelled one, and a confident
+label on the wrong structure teaches a child something false.
 """
 
 from __future__ import annotations
@@ -74,16 +79,13 @@ def _forms(name: str) -> set[str]:
     return out
 
 
-def _tokens(name: str) -> set[str]:
-    return {t for t in norm_part(name).split() if t}
-
-
 def resolve_part(want: str, available: list[str]) -> tuple[str | None, str | None]:
     """The key in `available` that names the same part as `want`.
 
-    Returns (key, how) with `how` in {exact, plural, substring, nearest}, or
+    Returns (key, how) with `how` in {exact, plural, substring}, or
     (None, None). Tiers are tried in order and never blend: the first tier
-    that produces a candidate decides.
+    that produces a candidate decides. Nothing beyond them guesses — see the
+    module docstring on why there is no nearest-by-name tier.
     """
     w = norm_part(want)
     if not w or not available:
@@ -109,29 +111,8 @@ def resolve_part(want: str, available: list[str]) -> tuple[str | None, str | Non
     if contained:
         return min(contained, key=lambda a: (len(norm_part(a)), a)), "substring"
 
-    # 4. WORD ORDER only: 'wall cell' is 'cell wall'. Evidence is shared
-    #    TOKENS, never spelling — a character-similarity tier was measured
-    #    binding real, distinct structures to each other at ratios it called
-    #    confident: nucleolus->nucleus 0.875, neutron->neuron 0.923,
-    #    meiosis->mitosis 0.857, chromoplast->chloroplast 0.818,
-    #    proton->photon, stalactite->stalagmite, radius->radium,
-    #    carpal->carpel. Every one of those draws a barbed arrow into the
-    #    wrong region with no warning, and this module exists on the
-    #    principle that a confident arrow to the wrong structure teaches
-    #    worse than no arrow. So spelling is out; only a multi-word name
-    #    whose words are the SAME words qualifies.
-    wt = _tokens(want)
-    if len(wt) > 1:
-        best, best_score = None, 0.0
-        for an, a in by_norm.items():
-            at = _tokens(a)
-            if not at:
-                continue
-            jacc = len(wt & at) / len(wt | at)
-            if jacc >= 0.5 and jacc > best_score:
-                best, best_score = a, jacc
-        if best is not None:
-            return best, "nearest"
+    # and that is the end of it. An unresolved name is reported unresolved so
+    # the renderer can draw its designed edge leader.
     return None, None
 
 

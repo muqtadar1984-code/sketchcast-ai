@@ -10,6 +10,13 @@ the shipped matcher before this module existed:
 
 Each of those left a label with no leader line, and (when the asset carried
 regions at all) suppressed its arrow outright.
+
+What this module must NOT do is guess. Two "nearest by name" tiers were built
+and both were measured binding distinct structures together — spelling
+similarity bound nucleolus->nucleus and meiosis->mitosis; shared-token overlap
+bound any two three-word names agreeing on two words. Both are gone, and the
+tests below hold the door shut: an unresolvable name resolves to nothing, and
+render.py draws its designed edge leader.
 """
 
 from __future__ import annotations
@@ -85,8 +92,9 @@ class TestNoFalsePositives:
 
     # Every pair below was MEASURED binding under the removed character-
     # similarity tier: same initial letter, SequenceMatcher ratio >= 0.80, so
-    # the tier returned a confident ('nearest') match and the renderer drew a
-    # full barbed arrow into the wrong structure with no warning at all.
+    # the tier returned a confident match and the renderer drew a full barbed
+    # arrow into the wrong structure with no warning at all. They are real,
+    # distinct structures a child is taught to tell apart.
     @pytest.mark.parametrize("want,other,ratio", [
         ("nucleolus", "nucleus", 0.875),
         ("chromoplast", "chloroplast", 0.818),
@@ -138,20 +146,41 @@ class TestMatchLayerIdsStaysCompatible:
         assert match_layer_ids(["nucleus", "cell wall"], ["ribosome"]) == []
 
 
-class TestTheLastTierIsWordOrder:
-    """What the tier is FOR: a model that types the words of a compound name
-    in the other order. Not spelling — see TestNoFalsePositives."""
+class TestThereIsNoGuessingTier:
+    """The two tiers that were tried and removed, kept shut.
 
-    def test_the_same_words_in_another_order_are_the_same_part(self):
-        assert resolve_part("wall cell", ["cell wall", "nucleus"]) == \
-            ("cell wall", "nearest")
+    A confidently wrong label is worse for a teacher than an unlabelled part:
+    the unlabelled one gets a leader line to the edge and reads as a part
+    nobody named, while the wrong one reads as a part somebody DID name.
+    """
 
-    def test_one_shared_word_is_not_enough(self):
+    def test_shared_words_in_another_order_are_not_a_match(self):
+        # the shared-TOKEN tier's own showcase case. It is also the case that
+        # let three-word names bind each other, so it goes with them.
+        assert resolve_part("wall cell", ["cell wall", "nucleus"]) ==             (None, None)
+
+    @pytest.mark.parametrize("want,other", [
+        # two of three words shared — the class of collision the token tier
+        # created, which NEITHER the shipped matcher nor its predecessor had
+        ("left anterior descending", "left posterior descending"),
+        ("upper left ventricle", "upper right ventricle"),
+        ("outer cell membrane", "inner cell membrane"),
+    ])
+    def test_two_shared_words_out_of_three_are_not_a_match(self, want, other):
+        wt, ot = set(want.split()), set(other.split())
+        # the overlap really is 2/3 — the token tier called this 0.5 Jaccard
+        # and returned it as confident
+        assert len(wt & ot) == 2 and len(wt | ot) == 4
+        assert resolve_part(want, [other]) == (None, None)
+
+    def test_one_shared_word_is_not_enough_either(self):
         assert resolve_part("cell membrane", ["cell wall"]) == (None, None)
         assert resolve_part("left atrium", ["right atrium"]) == (None, None)
 
-    def test_a_single_word_never_reaches_it(self):
-        # a one-word name has no word ORDER to be wrong about, so the tier
-        # cannot fire at all — which is what keeps nucleolus off nucleus
-        assert resolve_part("nucleolus", ["nucleus"]) == (None, None)
-        assert resolve_part("golgi", ["nucleus", "cytoplasm"]) == (None, None)
+    def test_resolve_part_never_reports_a_fourth_tier(self):
+        # nothing in the codebase may start trusting a 'nearest' verdict:
+        # the only verdicts that exist are the three tiers above
+        for want in ("cell_wall", "mitochondria", "vacuole", "wall cell",
+                     "nucleolus", "ribosome"):
+            _key, how = resolve_part(want, CELL)
+            assert how in (None, "exact", "plural", "substring"), how
