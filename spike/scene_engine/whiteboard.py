@@ -81,8 +81,6 @@ def build_whiteboard_scene(segment: dict,
                          "at": [WORLD_W / 2, 250 if big else 90],
                          "anchor": "mt"})
         actions.append({"verb": "write", "target": "wb_h"})
-        actions.append({"verb": "underline", "target": "wb_h",
-                        "at": {"frac": 0.28 if big else 0.9}})
     for i, p in enumerate(points):
         pid = f"wb_p{i}"
         # a short hand-drawn dash bullets each point — drawn, not templated
@@ -106,6 +104,23 @@ def build_whiteboard_scene(segment: dict,
              "narration": segment.get("text") or "",
              "elements": elements, "actions": actions}
     _add_sketches(segment, scene, heading_taken=bool(heading or points))
+    if heading:
+        # The underline is appended LAST, and on a card with points it is
+        # NOT cued: it simply follows the last bullet. It used to be cued at
+        # 90% of the audio and appended BEFORE the bullets — and the timeline
+        # never starts a cued action before the previous board action
+        # started, so every bullet cue (18% / 40% / 62%) was dragged to 90%:
+        # the card sat idle while the narration ran, then everything landed
+        # at once past the end of the audio. Measured on the founder's first
+        # Google-voiced lesson (2026-09-04): "narration ahead of the
+        # animation" on every card segment, planned scenes in sync. Uncued,
+        # it also compresses with the board on a short card instead of
+        # anchoring a silent tail after the audio. A big card (no points)
+        # keeps its early cue — nothing precedes it but the heading.
+        underline = {"verb": "underline", "target": "wb_h"}
+        if big:
+            underline["at"] = {"frac": 0.28}
+        scene["actions"].append(underline)
     return scene
 
 
@@ -220,8 +235,13 @@ def sketch_elements(narration: str, uid: str, exclude: set[str] | None = None,
     for i, f in enumerate(found[:len(slots)]):
         x, y, scale = slots[i]
         eid = f"sk_{uid}_{i}"
+        # hud: a corner sketch is SCREEN-fixed like the avatars and captions.
+        # Placed in world space it was carried off-canvas by every planned
+        # zoom — a potted plant drawn with its leaves past the top-left edge
+        # (founder, 2026-09-04) sat inside the canvas in world coordinates and
+        # only the camera cut it.
         els.append({"id": eid, "type": "illustration", "asset": f["key"],
-                    "at": [x, y], "scale": scale})
+                    "at": [x, y], "scale": scale, "hud": True})
         acts.append({"verb": "draw", "target": eid,
                      "at": {"phrase": f["cue"], "offset": -0.35}})
         assets[f["key"]] = f["prompt"]

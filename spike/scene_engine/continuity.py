@@ -778,6 +778,7 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             if incoming_ill and e.get("type") == "illustration":
                 clean["at"] = list(_RECAP_AT)
                 clean["scale"] = _RECAP_SCALE
+                clean["hud"] = True     # screen-fixed corner, immune to the next zoom
                 report.append(f"CHAPTER {ch.concept} | RECAP {eid} kept at "
                               f"{_RECAP_SCALE:g}x in the corner")
             # drawn_regions state lives in the tracker; region_order stays on
