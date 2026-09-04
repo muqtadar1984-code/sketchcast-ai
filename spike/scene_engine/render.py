@@ -1018,11 +1018,15 @@ class SceneRenderer:
                 else t for t in self.timeline]
         self._enforce_dependencies()
         focus: dict[int, Point] = {}
+        hud = self._hud_element_ids()
         for i, ta in enumerate(self.timeline):
             a = ta.action
             if a.verb != "zoom" or a.center is not None:
                 continue
-            if a.target in self.bound:
+            # a screen-fixed element (a corner sketch, the recap) is never a
+            # zoom target: its world slot is an empty corner. Such a zoom
+            # follows the next board action instead.
+            if a.target in self.bound and a.target not in hud:
                 x0, y0, x1, y1 = self.bound[a.target].box
                 focus[i] = ((x0 + x1) / 2, (y0 + y1) / 2)
             elif getattr(a, "follow", True):

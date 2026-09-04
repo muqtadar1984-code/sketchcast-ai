@@ -270,6 +270,31 @@ class TestCornerSketchSurvivesZoom:
         assert abs(cam.cx - 1114) > 150 or abs(cam.cy - 142) > 100, \
             f"the camera followed the sketch's world slot: {cam}"
 
+    def test_an_explicit_zoom_onto_a_hud_sketch_does_not_frame_its_empty_slot(self):
+        """Second review pass: `zoom target=<hud sketch>` framed the sketch's
+        WORLD slot — an empty corner — while the sketch stayed on screen."""
+        from spike.scene_engine.render import SceneRenderer
+        from spike.scene_engine.schema import Scene
+        asset = _disc_asset()
+        scene = Scene.model_validate({
+            "id": "t", "narration": "look at the cell now",
+            "elements": [
+                {"id": "root", "type": "text", "text": "Cells", "size": 40, "at": [600, 380]},
+                {"id": "sk_s001_0", "type": "illustration", "asset": "disc",
+                 "at": [1114, 142], "scale": 0.40, "hud": True},
+            ],
+            "actions": [
+                {"verb": "draw", "target": "sk_s001_0", "duration": 1.0},
+                {"verb": "zoom", "target": "sk_s001_0", "scale": 1.6, "duration": 0.8},
+                {"verb": "write", "target": "root", "duration": 0.8},
+            ],
+        })
+        r = SceneRenderer(scene, asset_resolver=lambda k: ("raster", asset))
+        r.compile(6.0)
+        cam = r.cam.state_at(5.9)
+        assert abs(cam.cx - 1114) > 150 or abs(cam.cy - 142) > 100, \
+            f"the camera framed the sketch's empty world slot: {cam}"
+
     def test_the_whiteboard_and_the_recap_declare_hud(self):
         from spike.scene_engine.whiteboard import sketch_elements
         els, acts, assets = sketch_elements("Look at the potted plant on the desk.", uid="s1",
