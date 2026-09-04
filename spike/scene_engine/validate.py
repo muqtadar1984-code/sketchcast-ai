@@ -80,10 +80,11 @@ def validate_visual_language(video_manifest: dict,
         # a planned illustration that resolved to nothing is a BLANK BOARD
         # under a narration describing a diagram — 13 of 15 segments shipped
         # that way once and this report said PASSED, because nothing asked.
-        # Each line carries reason=<why>: no_prompt, generation_failed,
-        # cache_only_miss or no_vector. This report used to assert "no asset
-        # prompt" for all of them; in fa8c0d7d both blank boards HAD prompts
-        # and had been abandoned after a rate-limit ladder.
+        # Each line carries reason=<why>: no_prompt, rate_limited,
+        # budget_exhausted, generation_failed, cache_only_miss or no_vector.
+        # This report used to assert "no asset prompt" for all of them; in
+        # fa8c0d7d both blank boards HAD prompts and had been abandoned after
+        # a rate-limit ladder.
         # A placeholder frame is a board without its picture: counted here
         # so the n//4 acceptance gate behaves exactly as it did when the
         # element was silently dropped.
@@ -154,8 +155,8 @@ def format_report(report: dict) -> str:
                   + ")") if why else ""
         lines.append(f"FAILED — {len(report['unresolved_assets'])} planned "
                      f"illustration(s) could not be resolved{detail} — no "
-                     "prompt, or image generation failed after retries; those "
-                     "boards are blank")
+                     "prompt, this lesson's image budget spent, or generation "
+                     "failed after retries; those boards are blank")
     elif report.get("no_scenes_produced"):
         lines.append("FAILED — the lesson produced NO scenes; every segment "
                      "fell back to a plain card, so the visual plan was lost")

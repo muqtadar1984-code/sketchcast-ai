@@ -493,3 +493,90 @@ class TestThePlaceholderAnswersALayerRequest:
         r = self._renderer(tmp_path)
         boxes = r._layer_instance_boxes(r.bound["pic"], "nucleus")
         assert boxes, "the frame answers"
+
+
+class TestOurOwnCeilingIsNotTheProvidersFault:
+    """A board the LESSON's accounting refused was reported as
+    `generation_failed` — the reason that means "the provider tried and could
+    not". They are different incidents with different fixes (raise
+    IMAGE_CALLS_PER_LESSON, or go and look at the provider), and the attempt
+    ceiling sitting at 2x the budget rather than 3x makes the misattribution
+    more reachable, not less."""
+
+    def _resolve(self, tmp_path):
+        return make_resolver({"ciliated_cell": "a ciliated cell"},
+                             cache_dir=tmp_path)
+
+    def test_the_spent_budget_has_its_own_reason(self, tmp_path, monkeypatch):
+        import spike.scene_engine.raster_assets as ra
+        monkeypatch.setattr(ra, "_IMAGE_BUDGET", 1)
+        ra.reset_image_budget()
+        assert ra._image_budget_ok() is True       # the lesson's one call
+        assert ra.image_budget_exhausted() is True
+        resolve = self._resolve(tmp_path)
+        assert _is_placeholder(resolve("ciliated_cell"))
+        assert resolve.last_reason["ciliated_cell"] == "budget_exhausted"
+
+    def test_the_attempt_ceiling_has_it_too(self, tmp_path, monkeypatch):
+        """The ceiling binds while the BUDGET still looks untouched — every
+        attempt 429'd and was refunded — so it is the clearer of the two."""
+        import spike.scene_engine.raster_assets as ra
+        monkeypatch.setattr(ra, "_IMAGE_BUDGET", 2)
+        ra.reset_image_budget()
+        for _ in range(ra.image_attempt_ceiling()):
+            ra._note_image_attempt()
+        assert ra.image_budget_state()["n"] == 0, "the budget looks untouched…"
+        assert ra.image_budget_exhausted() is True
+        resolve = self._resolve(tmp_path)
+        assert _is_placeholder(resolve("ciliated_cell"))
+        assert resolve.last_reason["ciliated_cell"] == "budget_exhausted"
+
+    def test_asking_does_not_spend_a_unit(self, tmp_path):
+        """`_image_budget_ok` answers the same question and CHARGES for it; a
+        caller asking only to explain itself must not move the counter."""
+        import spike.scene_engine.raster_assets as ra
+        ra.reset_image_budget()
+        for _ in range(3):
+            assert ra.image_budget_exhausted() is False
+        assert ra.image_budget_state()["n"] == 0
+        assert ra.image_budget_state()["attempts"] == 0
+
+    def test_a_rate_limit_still_outranks_it(self, tmp_path, monkeypatch):
+        """A 429 that also drained the budget is still a 429 — the provider is
+        the thing to go and look at."""
+        import spike.scene_engine.raster_assets as ra
+        monkeypatch.setattr(ra, "_IMAGE_BUDGET", 1)
+        ra.reset_image_budget()
+        ra._image_budget_ok()
+        ra.defer_asset("ciliated_cell", 30.0)
+        resolve = self._resolve(tmp_path)
+        assert _is_placeholder(resolve("ciliated_cell"))
+        assert resolve.last_reason["ciliated_cell"] == "rate_limited"
+
+    def test_a_lesson_with_budget_left_still_says_generation_failed(
+            self, tmp_path, monkeypatch):
+        """The reason it was taken from: not every empty board is a ceiling."""
+        import spike.scene_engine.raster_assets as ra
+        ra.reset_image_budget()
+        monkeypatch.setattr(ra, "_vertex_call", lambda *a, **k: None)
+        monkeypatch.setattr(ra, "_aistudio_call", lambda *a, **k: None)
+        resolve = self._resolve(tmp_path)
+        assert _is_placeholder(resolve("ciliated_cell"))
+        assert resolve.last_reason["ciliated_cell"] == "generation_failed"
+
+    def test_the_breakdown_counts_it(self):
+        report = validate_visual_language(
+            _manifest(["budget_exhausted", "budget_exhausted", "no_prompt"]))
+        assert report["unresolved_asset_reasons"] == {
+            "budget_exhausted": 2, "no_prompt": 1}
+        text = format_report(report)
+        assert "budget_exhausted=2" in text
+        assert "image budget spent" in text
+
+    def test_the_acceptance_summary_names_it(self, monkeypatch):
+        monkeypatch.setenv("VIDEO_ENGINE", "scene")
+        from worker.process import _acceptance_report
+        r = _acceptance_report({}, _manifest(["budget_exhausted"]))
+        assert "budget_exhausted=1" in r["summary"]
+        r = _acceptance_report({}, _manifest(["budget_exhausted"] * 10))
+        assert r["ship"] is False and "budget_exhausted=10" in r["summary"]

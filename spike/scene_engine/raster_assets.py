@@ -479,6 +479,26 @@ def image_attempt_ceiling() -> int:
     return max(1, _IMAGE_BUDGET * _IMAGE_ATTEMPT_FACTOR)
 
 
+def image_budget_exhausted() -> bool:
+    """True when THIS lesson may make no further image calls.
+
+    Read-only: `_image_budget_ok` is the same question but it SPENDS a unit
+    when the answer is yes, so a caller asking merely to explain itself must
+    not use it.
+
+    Exists because a board the lesson's own accounting refused was reported as
+    `generation_failed` -- the reason that means "the provider tried and could
+    not". Those are different incidents with different fixes (raise
+    IMAGE_CALLS_PER_LESSON, or go and look at the provider), and the attempt
+    ceiling at 2x the budget rather than 3x makes the misattribution more
+    reachable, not less.
+    """
+    with _IMAGE_BUDGET_LOCK:
+        c = _bucket()["calls"]
+        return (c["attempts"] >= image_attempt_ceiling()
+                or c["n"] >= _IMAGE_BUDGET)
+
+
 def _image_budget_ok() -> bool:
     """False once this lesson has spent its allowance. The caller degrades to
     the authored vector tier, exactly as it does for any other image failure —
@@ -1288,6 +1308,11 @@ def make_resolver(prompts: dict[str, str], prefer_ai: bool = True,
                 # the honest cause: a rate limit we chose to wait out, not a
                 # director who forgot a prompt
                 reason = "rate_limited"
+            elif image_budget_exhausted():
+                # OUR ceiling refused it, not the provider. Checked after the
+                # rate limit because a 429 that also drained the budget is
+                # still a 429 -- the provider is the thing to look at.
+                reason = "budget_exhausted"
             else:
                 reason = "generation_failed"
         va = vector_asset(key)
