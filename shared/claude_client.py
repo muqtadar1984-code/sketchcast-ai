@@ -238,13 +238,44 @@ def _get_api_key() -> str:
     return key
 
 
+def _closes_string(text: str, j: int) -> bool:
+    """Would a quote followed (after whitespace) by text[j] plausibly END a
+    JSON string? Structural punctuation alone is not enough: prose says
+    'called "organelles", tiny structures' and 'ask "why?": because…', and
+    reading those quotes as closers turned a whole lesson's reply into
+    "produced no segments". So the char AFTER the punctuation has to start
+    something JSON can continue with — a key or string, a container, a
+    number, a literal, or a closer. 'then' and 'because' cannot."""
+    n = len(text)
+    if j >= n:
+        return True
+    c = text[j]
+    if c in "}]":
+        return True
+    if c not in ",:":
+        return False
+    k = j + 1
+    while k < n and text[k] in " \t\r\n":
+        k += 1
+    if k >= n:
+        return True
+    d = text[k]
+    if d in '"{[' or d in "-0123456789":
+        return True
+    if c == "," and d in "}]":
+        return True          # a trailing comma; a later rule strips it
+    return any(text.startswith(lit, k) for lit in ("true", "false", "null"))
+
+
 def _escape_inner_quotes(text: str) -> str:
     """Escape double quotes the model left bare INSIDE a string.
 
     Measured: '...often called the "powerhouses" of the cell...' inside a
-    dialogue line. A quote only ends a string when the next thing along is
-    structural — a comma, colon, closing brace or bracket, or the end of the
-    text. Anything else means the quote belongs to the prose.
+    dialogue line. A quote ends a string only when what follows is
+    structural AND what follows THAT is something JSON can continue with
+    (see _closes_string) — a comma or colon alone is how English prose
+    quotes a word, and treating it as a closer lost a 54,000-character
+    reply on 2026-09-04.
     """
     out, i, n = [], 0, len(text)
     in_str = esc = False
@@ -261,7 +292,7 @@ def _escape_inner_quotes(text: str) -> str:
                 j = i + 1
                 while j < n and text[j] in " \t\r\n":
                     j += 1
-                if j >= n or text[j] in ",:}]":
+                if _closes_string(text, j):
                     in_str = False
                     out.append(c)
                 else:
@@ -274,6 +305,34 @@ def _escape_inner_quotes(text: str) -> str:
             out.append(c)
         i += 1
     return "".join(out)
+
+
+def _fix_bad_escapes(text: str) -> str:
+    """A backslash that does not start a JSON escape (LaTeX '\\(', a stray
+    Windows path, '\\%') is an "Invalid \\escape" for json.loads; doubling it
+    keeps the character the model meant."""
+    import re as _re
+    # An escaped backslash pair is consumed whole (first alternative) so its
+    # second half is never mistaken for a lone backslash.
+    return _re.sub(r'\\\\|\\(?!["\\/bfnrtu])',
+                   lambda m: m.group(0) if m.group(0) == "\\\\" else "\\\\", text)
+
+
+def json_fault(text: str, radius: int = 120) -> str | None:
+    """Where and why json.loads rejects `text`, with a window of the text
+    around the spot — or None when it parses. For an error message: the raw
+    reply used to be dumped to /tmp on the container, which is gone by the
+    time anyone reads the job error, so the fault itself has to travel."""
+    try:
+        json.loads(text, strict=False)
+        return None
+    except json.JSONDecodeError as exc:
+        lo, hi = max(0, exc.pos - radius), min(len(text), exc.pos + radius)
+        window = text[lo:hi].replace("\n", "\\n").replace("\r", "")
+        return (f"{exc.msg} at line {exc.lineno} col {exc.colno} (char {exc.pos} of {len(text)}): "
+                f"…{window}…")
+    except Exception as exc:  # noqa: BLE001
+        return f"{type(exc).__name__}: {exc}"
 
 
 def _rebalance_json(text: str):
@@ -362,9 +421,15 @@ def _repair_json(text: str):
         text = _re.sub(r"^```[a-zA-Z]*\s*", "", text)
         text = _re.sub(r"\s*```$", "", text).strip()
     candidates = []
-    # 1. SSML quotes are the one nested-quote case this model emits
-    fixed = _re.sub(r'<break\s+time\s*=\s*"([^"]*)"\s*/?>',
-                    r"<break time='\1'/>", text)
+    # 0. a backslash that is not an escape (LaTeX, a percent sign, a path)
+    fixed = _fix_bad_escapes(text)
+    candidates.append(fixed)
+    # 1. SSML attribute quotes inside a JSON string. The first shape measured
+    #    was <break time="0.3s"/>; the rule now covers EVERY tag — prosody,
+    #    emphasis, say-as, break strength — since a tag never legitimately sits
+    #    outside a string in this schema, and single quotes are valid SSML.
+    fixed = _re.sub(r"<[^<>]*>",
+                    lambda m: m.group(0).replace('\\"', '"').replace('"', "'"), fixed)
     candidates.append(fixed)
     # 2. a key emitted TWICE, its own name standing in as the value:
     #    {"who":"who":"teacher"}  ->  {"who":"teacher"}
@@ -449,7 +514,10 @@ def _repair_json(text: str):
     best, best_size = None, -1
     for cand in candidates:
         try:
-            out = json.loads(cand)
+            # strict=False: a raw newline or tab INSIDE a string is a
+            # control character json.loads rejects by default; the model
+            # emits them in long narration and they are harmless.
+            out = json.loads(cand, strict=False)
         except Exception:
             continue
         if not isinstance(out, (dict, list)) or not out:
@@ -816,6 +884,9 @@ class ClaudeClient:
             if repaired is not None:
                 logger.warning("model JSON was malformed; repaired it")
                 return repaired
+            # Say WHERE it broke. The reply itself does not survive the
+            # container, so this line is what a later reader has.
+            logger.error("model JSON unparseable and unrepairable — %s", json_fault(text))
             return {"raw_text": text}
 
     @staticmethod
