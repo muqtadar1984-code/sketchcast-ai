@@ -925,7 +925,8 @@ class SceneRenderer:
                 lo, hi = spans["__base"]
                 return (lo, max(0.0, hi - lo))
             matched = self._match_region_names(spans, [region])
-            exact = [m for m in matched if m.lower() == region.lower()]
+            from .partnames import norm_part
+            exact = [m for m in matched if norm_part(m) == norm_part(region)]
             if exact:
                 # an exact key never widens to fuzzy siblings — min/max over
                 # 'inner_membrane'+'inner_fold' once straddled (and revealed)

@@ -28,6 +28,8 @@ from pathlib import Path
 
 import numpy as np
 import requests
+
+from .partnames import norm_part
 from PIL import Image
 
 from .trace import drawing_order
@@ -529,10 +531,13 @@ def annotate_regions(ink: Image.Image, part_names: list[str]) -> dict:
                 clean.append([xmin / 1000 * w, ymin / 1000 * h,
                               xmax / 1000 * w, ymax / 1000 * h])
             if clean:
-                regions[str(name).strip().lower()] = clean
+                # normalized on the way IN: the vision model writes back
+                # whatever separator style it likes ('Cell Wall', 'cell_wall'),
+                # and a key that differs from the requested name only by a
+                # space cost the part its leader line
+                regions[norm_part(name) or str(name).strip().lower()] = clean
     out["regions"] = regions
-    missing = [n for n in part_names
-               if str(n).strip().lower() not in regions]
+    missing = [n for n in part_names if norm_part(n) not in regions]
     if missing and regions:
         # focused re-ask for JUST the unboxed parts — the multiplexed
         # N-part question reliably drops one or two (a run once lost 3 of 7,
@@ -546,7 +551,7 @@ def annotate_regions(ink: Image.Image, part_names: list[str]) -> dict:
             buf.getvalue())
         if isinstance(data3, dict) and isinstance(data3.get("regions"), dict):
             for name, boxes in data3["regions"].items():
-                key2 = str(name).strip().lower()
+                key2 = norm_part(name) or str(name).strip().lower()
                 if key2 in regions or not isinstance(boxes, list):
                     continue
                 if boxes and isinstance(boxes[0], (int, float)):

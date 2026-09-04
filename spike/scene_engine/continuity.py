@@ -902,14 +902,13 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         if m:
             return m[0]
         # 'cell wall' (from an element id) must find 'cell_wall' (a prompt's
-        # layer-group name) — separator style is model whim, never semantics
-        import re as _re
-
-        def norm(s: str) -> str:
-            return _re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
-
-        by_norm = {norm(p): p for p in part_names}
-        return by_norm.get(norm(name))
+        # layer-group name) — separator style is model whim, never semantics —
+        # and 'mitochondria' must find 'mitochondrion'. One matcher for both,
+        # so an arrow head carries the part name the ANNOTATOR will be asked
+        # for, not the one the model happened to type.
+        from .partnames import resolve_part
+        key, _how = resolve_part(name, list(part_names))
+        return key
 
     if root_id and part_names:
         root_at = _pt(roster[root_id].get("at")) or [640, 340]
