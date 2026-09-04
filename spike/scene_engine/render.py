@@ -365,27 +365,30 @@ class SceneRenderer:
         # the nearest instance and land on the part's boundary facing it.
         for el in deferred_arrows:
             b = self.bound[el.id]
+            leader_only = False
+            head_owner = None
             if isinstance(el.head, AnchorRef) and el.head.layer:
                 tb = self.bound.get(el.head.el)
-                # suppress ONLY when the target IS annotated but this part is
-                # absent. An asset with no annotation at all (vision outage,
-                # legacy tier) keeps the element-edge fallback — scoping this
-                # wrong once deleted every leader line in the lesson.
-                annotated = tb is not None and (
-                    (tb.raster is not None and tb.raster.regions) or tb.layers)
-                if annotated and \
+                if tb is not None and \
                         not self._layer_instance_boxes(tb, el.head.layer):
-                    # the named part cannot be located in the art — a label
-                    # with NO arrow teaches better than a confident arrow to
-                    # the wrong structure (a 'Nucleus' arrow once pointed at
-                    # the cell wall)
-                    self._warn(f"ARROW_SUPPRESSED {el.id} "
-                               f"({el.head.el}.{el.head.layer})")
-                    p = self._resolve_point(el.tail)
-                    b.box = (p[0], p[1], p[0], p[1])
-                    self._flat[el.id] = []
-                    self._suppressed.add(el.id)
-                    continue
+                    # The named part cannot be located in the art. The old
+                    # behaviour was to SUPPRESS the arrow whenever the asset
+                    # was annotated — the reason being that a confident
+                    # 'Nucleus' arrow once pointed at the cell wall. But a
+                    # label alone, floating in a margin column beside a
+                    # picture, does not say WHICH picture it names; the
+                    # founder saw exactly that.
+                    #
+                    # A leader keeps the honest half and drops the false one:
+                    # it ends OUTSIDE the picture's boundary on the ray from
+                    # the picture toward its own label, and carries no
+                    # arrowhead, so it asserts association without asserting
+                    # structure. UNRESOLVED_ANCHOR still fires from
+                    # _resolve_point; ANCHOR_EDGE_FALLBACK says what was done.
+                    leader_only = True
+                    head_owner = tb
+                    self._warn(f"ANCHOR_EDGE_FALLBACK "
+                               f"{el.head.el}.{el.head.layer}")
             tail = None
             if isinstance(el.tail, AnchorRef):
                 tb2 = self.bound.get(el.tail.el)
@@ -402,9 +405,12 @@ class SceneRenderer:
             if tail is None:
                 tail = self._resolve_point(el.tail)
             head = self._resolve_point(el.head, toward=tail)
+            if leader_only and head_owner is not None:
+                head = self._outside_boundary(head_owner.box, tail)
             paths = arrow_paths(tail, head, curve=el.curve,
                                 seed=_seed(el.id),
-                                head_len=max(16.0, el.width * 4.5))
+                                head_len=0.0 if leader_only
+                                else max(16.0, el.width * 4.5))
             b.layers = [BLayer("arrow", [
                 BStroke(p, el.width, el.color, None, path_length(p)) for p in paths])]
             b.box = bbox([q for p in paths for q in p])
@@ -898,7 +904,18 @@ class SceneRenderer:
                 tb = self.bound.get(ar.tail.el)
                 if tb is not None and tb.text is not None \
                         and ar.tail.el not in entries:
-                    entries[ar.tail.el] = self._resolve_point(ar.head)
+                    # resolve TOWARD the label's own current position. With
+                    # no `toward` an unresolved layer returns the element
+                    # CENTRE, so every label whose part vision could not find
+                    # got the identical target height and they piled into one
+                    # row; and a resolved multi-instance part picked instance
+                    # 'first' here but the nearest instance in PASS 2, so the
+                    # column ordering disagreed with the leader it was laid
+                    # out for.
+                    lc = ((tb.box[0] + tb.box[2]) / 2,
+                          (tb.box[1] + tb.box[3]) / 2)
+                    entries[ar.tail.el] = self._resolve_point(ar.head,
+                                                              toward=lc)
         # LABELS WITHOUT ARROWS COUNT TOO. This used to consider only labels
         # that had a leader line, which created a closed loop with the
         # director prompt: the prompt says to prefer pointing and
@@ -1011,6 +1028,23 @@ class SceneRenderer:
         ty = abs(((y1 - y0) / 2) / dy) if abs(dy) > 1e-6 else float("inf")
         t = min(tx, ty) * 0.88
         return (cx + dx * t, cy + dy * t)
+
+    @staticmethod
+    def _outside_boundary(box: tuple, toward: Point, pad: float = 14.0) -> Point:
+        """Where the ray from the box centre toward `toward` leaves the box,
+        plus a small gap — a leader that STOPS at the picture instead of
+        stabbing into it."""
+        x0, y0, x1, y1 = box
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        dx, dy = toward[0] - cx, toward[1] - cy
+        n = math.hypot(dx, dy)
+        if n < 1e-6:
+            return (cx, cy)
+        ux, uy = dx / n, dy / n
+        tx = abs(((x1 - x0) / 2) / ux) if abs(ux) > 1e-6 else float("inf")
+        ty = abs(((y1 - y0) / 2) / uy) if abs(uy) > 1e-6 else float("inf")
+        t = min(tx, ty) + pad
+        return (cx + ux * t, cy + uy * t)
 
     def _resolve_point(self, spec, toward: Point | None = None) -> Point:
         """A PointSpec -> world point. Tuples pass through; AnchorRefs resolve

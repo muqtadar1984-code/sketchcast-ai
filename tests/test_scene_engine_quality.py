@@ -111,14 +111,87 @@ class TestLayerAnchors:
         # ...and NOT the element centre (the converging-arrows defect)
         assert ((head[0] - 640) ** 2 + (head[1] - 360) ** 2) ** 0.5 > 40.0
 
-    def test_unresolved_layer_suppresses_the_arrow(self):
+    def test_unresolved_layer_gets_an_edge_leader(self):
+        """The part cannot be located in the art. Suppressing the arrow
+        outright (the old behaviour) left the label floating in a margin
+        column beside a picture, saying nothing about WHICH picture it names
+        — the founder saw exactly that. A leader keeps the honest half: it
+        stops OUTSIDE the picture on the ray toward its own label, and it
+        carries no arrowhead, so it asserts association without asserting a
+        structure that may not be there."""
         r = SceneRenderer(_anchor_scene("ribosome"),
                           asset_resolver=_resolver(_cell_asset()))
-        assert any(w.startswith("ARROW_SUPPRESSED")
-                   for w in r.audit()["warnings"])
-        # a label with no arrow beats a confident arrow to the wrong part
-        assert not r._flat["ar"]
-        assert "ar" not in r.audit()["arrow_heads"]
+        warns = r.audit()["warnings"]
+        assert any(w.startswith("ANCHOR_EDGE_FALLBACK") for w in warns)
+        assert any(w.startswith("UNRESOLVED_ANCHOR") for w in warns)
+        head = r.audit()["arrow_heads"]["ar"]
+        art = r.bound["cell"].box
+        # outside the art, not stabbing its middle
+        assert not (art[0] <= head[0] <= art[2] and art[1] <= head[1] <= art[3]),             (head, art)
+        cx, cy = (art[0] + art[2]) / 2, (art[1] + art[3]) / 2
+        assert ((head[0] - cx) ** 2 + (head[1] - cy) ** 2) ** 0.5 > 40.0
+        # a leader tick: one polyline, no barbs
+        assert len(r.bound["ar"].layers[0].strokes) == 1
+
+    def test_two_unresolved_labels_get_distinct_edge_points(self):
+        s = Scene.model_validate({
+            "id": "two_missing", "narration": "ribosomes and golgi",
+            "compiled": True,
+            "elements": [
+                {"id": "cell", "type": "illustration", "asset": "plant_cell",
+                 "at": [640, 360], "scale": 1.0},
+                {"id": "l1", "type": "text", "text": "Ribosome",
+                 "at": [80, 80], "role": "label"},
+                {"id": "l2", "type": "text", "text": "Golgi",
+                 "at": [80, 600], "role": "label"},
+                {"id": "a1", "type": "arrow",
+                 "tail": {"el": "l1", "edge": "right"},
+                 "head": {"el": "cell", "layer": "ribosome", "edge": "center"}},
+                {"id": "a2", "type": "arrow",
+                 "tail": {"el": "l2", "edge": "right"},
+                 "head": {"el": "cell", "layer": "golgi", "edge": "center"}},
+            ],
+            "actions": [{"verb": "draw", "target": "cell"},
+                        {"verb": "write", "target": "l1"},
+                        {"verb": "write", "target": "l2"},
+                        {"verb": "draw", "target": "a1"},
+                        {"verb": "draw", "target": "a2"}]})
+        r = SceneRenderer(s, asset_resolver=_resolver(_cell_asset()))
+        audit = r.audit()
+        h1, h2 = audit["arrow_heads"]["a1"], audit["arrow_heads"]["a2"]
+        # each leader leaves the picture on the ray toward ITS OWN label, so
+        # the two ends are separated by the labels' own column pitch — they
+        # used to be the identical element-box centre. 30px is the bar the
+        # ARROWS_CONVERGE audit itself uses.
+        assert ((h1[0] - h2[0]) ** 2 + (h1[1] - h2[1]) ** 2) ** 0.5 > 30.0
+        assert not any(w.startswith("ARROWS_CONVERGE")
+                       for w in audit["warnings"])
+
+    def test_relayout_orders_unresolved_labels_by_their_own_height(self):
+        """The relayout pre-pass resolved the head with no `toward`, so every
+        unresolved label got the element CENTRE as its target height and they
+        all sorted equal — a pile in one row."""
+        s = Scene.model_validate({
+            "id": "order", "narration": "x", "compiled": True,
+            "elements": [
+                {"id": "cell", "type": "illustration", "asset": "plant_cell",
+                 "at": [640, 360], "scale": 1.0},
+                {"id": "l1", "type": "text", "text": "Alpha", "at": [80, 60],
+                 "role": "label"},
+                {"id": "l2", "type": "text", "text": "Beta", "at": [80, 300],
+                 "role": "label"},
+                {"id": "l3", "type": "text", "text": "Gamma", "at": [80, 560],
+                 "role": "label"},
+            ] + [{"id": f"a{i}", "type": "arrow",
+                  "tail": {"el": f"l{i}", "edge": "right"},
+                  "head": {"el": "cell", "layer": "ribosome",
+                           "edge": "center"}} for i in (1, 2, 3)],
+            "actions": [{"verb": "draw", "target": "cell"}]
+            + [{"verb": "write", "target": f"l{i}"} for i in (1, 2, 3)]
+            + [{"verb": "draw", "target": f"a{i}"} for i in (1, 2, 3)]})
+        r = SceneRenderer(s, asset_resolver=_resolver(_cell_asset()))
+        ys = [r.bound[f"l{i}"].box[1] for i in (1, 2, 3)]
+        assert ys[0] < ys[1] < ys[2], ys
 
     def test_two_arrows_to_distinct_parts_do_not_converge(self):
         s = Scene.model_validate({
