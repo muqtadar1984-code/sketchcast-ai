@@ -1235,10 +1235,21 @@ def load_hand(key: str = "hand_pen", cache_dir: Path | None = None,
 
 def make_resolver(prompts: dict[str, str], prefer_ai: bool = True,
                   cache_dir: Path | None = None, allow_generate: bool = True,
-                  prefer_svg: bool | None = None):
+                  prefer_svg: bool | None = None,
+                  rate_limited_keys=None):
     """Asset resolver for SceneRenderer implementing the §20 fallback ladder:
-    AI svg (true layered vectors) -> AI raster -> authored vector -> None."""
-    from .vector_assets import vector_asset
+    AI svg (true layered vectors) -> AI raster -> authored vector ->
+    placeholder frame (only for a key that HAD a prompt) -> None.
+
+    `rate_limited_keys` is for the CACHE-ONLY child (segment_worker): it cannot
+    see the deferral map, which lives in the parent process, so without this
+    every 429'd picture is reported as `cache_only_miss` -- and with
+    RENDER_PROCESSES=8, which is how fa8c0d7d ran, that is EVERY unresolved
+    asset in the acceptance summary. The parent hands over what it knows.
+    """
+    from .vector_assets import placeholder_asset, vector_asset
+
+    _rate_limited = {canonical_key(k) for k in (rate_limited_keys or ())}
 
     # SVG art is behind a flag until its visual quality matches the raster
     # tier (its drawing MECHANICS are already better: true strokes, layers)
@@ -1270,7 +1281,9 @@ def make_resolver(prompts: dict[str, str], prefer_ai: bool = True,
             if not allow_generate:
                 # the child-process path: it may only read the cache, so a
                 # miss here means the parent's warm-up did not land the file
-                reason = "cache_only_miss"
+                # -- unless the parent already told us the provider refused it
+                reason = ("rate_limited" if canonical_key(key) in _rate_limited
+                          else "cache_only_miss")
             elif asset_abandoned(key) or asset_deferred(key) is not None:
                 # the honest cause: a rate limit we chose to wait out, not a
                 # director who forgot a prompt
@@ -1282,6 +1295,14 @@ def make_resolver(prompts: dict[str, str], prefer_ai: bool = True,
             last_reason.pop(key, None)
             return ("vector", va)
         last_reason[key] = reason or "no_vector"
+        if key in prompts:
+            # The picture was PLANNED and we could not get it. A frame where it
+            # should be keeps the labels and leaders anchored to a real box
+            # instead of collapsing them onto one point; the renderer reports
+            # ASSET_PLACEHOLDER and the acceptance gate counts it exactly as it
+            # counted the blank board. A key with no prompt still resolves to
+            # None -- an unknown key is not a missing picture.
+            return ("vector", placeholder_asset(key))
         return None
 
     resolve.last_reason = last_reason

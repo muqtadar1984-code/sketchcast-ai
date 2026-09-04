@@ -234,10 +234,18 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
             for e in scene_dict.get("elements") or []:
                 if isinstance(e, dict) and e.get("type") == "illustration" and e.get("asset"):
                     warm(str(e["asset"]))
+            # The child cannot see the deferral map (it lives in this
+            # process), so tell it which pictures a provider refused. Without
+            # this every 429'd asset is reported as `cache_only_miss` -- and
+            # with RENDER_PROCESSES=8, which is how fa8c0d7d ran, that is
+            # every unresolved asset in the acceptance summary.
+            from spike.scene_engine import raster_assets as _ra
+            _rl = [k for k in prompts
+                   if _ra.asset_deferred(k) is not None or _ra.asset_abandoned(k)]
             payload = {"scene": scene_dict, "narration": narration, "prompts": prompts,
                        "words": words, "audio_path": str(audio_path) if audio_path else None,
                        "audio_secs": float(audio_secs), "out_mp4": str(out_mp4),
-                       "direction": direction}
+                       "direction": direction, "rate_limited": _rl}
             from spike.scene_engine.segment_worker import render_segment_in_child
             ex: Optional[ProcessPoolExecutor] = None
             try:

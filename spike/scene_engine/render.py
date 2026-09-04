@@ -532,6 +532,11 @@ class SceneRenderer:
             b.box = (el.at[0], el.at[1], el.at[0], el.at[1])
             return
         kind, asset = resolved
+        if kind == "vector" and getattr(asset, "placeholder", False):
+            # a frame, not the diagram: the board is still unresolved and must
+            # count as such (validate._pick collects this prefix too)
+            self._warn(f"ASSET_PLACEHOLDER {el.id} ({el.asset}) "
+                       f"reason={self._unresolved_reason(el.asset)}")
         if kind == "raster":
             trace = asset.trace
             regions = dict(getattr(asset, "regions", {}) or {})

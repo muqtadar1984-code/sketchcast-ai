@@ -144,7 +144,10 @@ class TestDeferralReplacesTheLadder:
         monkeypatch.setattr(ra, "_aistudio_call", lambda *a, **k: None)
         resolve = ra.make_resolver({"ciliated_cell": "a ciliated cell"},
                                    cache_dir=tmp_path)
-        assert resolve("ciliated_cell") is None
+        # a placeholder frame now stands where the picture should be, but the
+        # RECORDED CAUSE is the point of this test and has not changed
+        kind, asset = resolve("ciliated_cell")
+        assert (kind, asset.placeholder) == ("vector", True)
         assert resolve.last_reason["ciliated_cell"] == "rate_limited"
 
 

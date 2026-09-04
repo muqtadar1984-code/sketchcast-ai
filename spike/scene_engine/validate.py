@@ -84,7 +84,11 @@ def validate_visual_language(video_manifest: dict,
         # cache_only_miss or no_vector. This report used to assert "no asset
         # prompt" for all of them; in fa8c0d7d both blank boards HAD prompts
         # and had been abandoned after a rate-limit ladder.
-        "unresolved_assets": _pick("ASSET_UNRESOLVED"),
+        # A placeholder frame is a board without its picture: counted here
+        # so the n//4 acceptance gate behaves exactly as it did when the
+        # element was silently dropped.
+        "unresolved_assets": (_pick("ASSET_UNRESOLVED")
+                              + _pick("ASSET_PLACEHOLDER")),
         "action_timing_warnings": _pick("TIMING_SHIFT"),
         # a narration-linked visual whose cue could not be matched: it played
         # at whatever time the previous animation happened to finish
