@@ -233,7 +233,7 @@ def test_reporting_a_healthy_lesson_keeps_it_done():
 
 
 @pytest.mark.parametrize("kind", ["presentation", "lesson_plan", "worksheet", "exam_paper",
-                                  "case_study", "activity", "exam"])
+                                  "case_study", "activity", "exam", "deck"])
 def test_every_builder_kind_still_announces_the_build(kind):
     sb = _fresh("queued", jobs=[_builder(kind=kind)])
     db.claim_next_job(sb)
