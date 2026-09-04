@@ -244,10 +244,14 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
                 ex = _pool()
                 try:
                     fut = ex.submit(render_segment_in_child, payload)
-                except RuntimeError:
+                except RuntimeError as exc:
                     # "cannot schedule new futures after shutdown": another
                     # thread retired this executor between _pool() and
-                    # submit(); take the replacement it left behind
+                    # submit() — or the pool is already broken (a child died
+                    # while idle; BrokenProcessPool is a RuntimeError). Say so:
+                    # an OOM-killed child must leave a trace in the logs.
+                    logger.warning("render pool executor retired at submit (%s); rebuilding for %s",
+                                   exc, script_seg.get("segment_id"))
                     _reset_pool(ex)
                     ex = _pool()
                     fut = ex.submit(render_segment_in_child, payload)
