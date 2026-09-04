@@ -9,7 +9,14 @@ styles never ship silently.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
+
+# "CHAPTER plant_cell | DROPPED arrow arrow_plant (tail anchor 'lbl_ghost'
+# names no element)" — the compiler's once-per-chapter drop of a declared
+# arrow. A SEGMENT-prefixed drop is one scene's, and a CARRY-OUT line uses
+# another word on purpose (LEFT BEHIND) so it never counts here.
+_CHAPTER_DROP = re.compile(r"^CHAPTER (.+?) \| DROPPED arrow (\S+)")
 
 
 def validate_visual_language(video_manifest: dict,
@@ -37,12 +44,23 @@ def validate_visual_language(video_manifest: dict,
     anchored = [ln for ln in plan_report
                 if "| ANCHORED" in ln or "| SYNTHESIZED" in ln]
     # anchor tolerance (anchors.py): a re-anchored arrow is still an arrow; a
-    # dropped one is not, however the plan dump counts it
+    # dropped one is not, however the plan dump counts it. Only a CHAPTER
+    # line drops an arrow for good, once per (chapter, arrow) — a SEGMENT
+    # line drops it from ONE scene (its target erased under it), and one
+    # such arrow used to count once per scene until the total went negative
+    chapter_drops: dict[tuple[str, str], str] = {}
+    scene_drops: list[str] = []
+    for ln in plan_report:
+        m = _CHAPTER_DROP.match(ln)
+        if m:
+            chapter_drops.setdefault((m.group(1), m.group(2)), ln)
+        elif ln.startswith("SEGMENT ") and "| DROPPED arrow " in ln:
+            scene_drops.append(ln)
     reanchored = [ln for ln in plan_report if "| REANCHORED" in ln]
-    dropped_arrows = [ln for ln in plan_report if "| DROPPED arrow " in ln]
-    arrow_total = (len(arrows) + sum(1 for ln in plan_report
-                                     if "| SYNTHESIZED" in ln)
-                   - len(dropped_arrows))
+    dropped_arrows = list(chapter_drops.values())
+    arrow_total = max(0, len(arrows) + sum(1 for ln in plan_report
+                                           if "| SYNTHESIZED" in ln)
+                      - len(dropped_arrows))
 
     report = {
         "narration_segments": len(segs),
@@ -60,6 +78,9 @@ def validate_visual_language(video_manifest: dict,
         "arrows_layer_anchored": len(anchored),
         "arrows_reanchored": len(reanchored),
         "arrows_dropped": dropped_arrows,
+        # an arrow absent from ONE scene (its anchor erased under it) is
+        # still an arrow of the lesson — listed, never subtracted
+        "arrow_scene_drops": scene_drops,
         "unresolved_anchors": _pick("UNRESOLVED_ANCHOR")
         + _pick("UNRESOLVED_REGION") + _pick("ARROW_SUPPRESSED"),
         "out_of_bounds_text": _pick("OUT_OF_BOUNDS_TEXT"),

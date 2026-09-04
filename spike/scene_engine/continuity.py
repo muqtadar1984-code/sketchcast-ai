@@ -1087,11 +1087,70 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                         bf + (done / n) * (1.0 - bf) if n else bf, 4)
         return el
 
-    def board_now() -> list[dict]:
-        return [carry(eid, e) for eid, e in roster.items()
-                if eid not in erased
-                and (eid in introduced or eid in drawn_layers
-                     or eid in drawn_regions)]
+    def board_now(label: str, drop_word: str = "DROPPED") -> list[dict]:
+        """The board as it stands — SEALED: no element on it refers to one
+        that is not. An arrow drawn before its label was written carried
+        the label's id off the board into HOLD scenes (the director dropped
+        it there: visible, gone, back) and into the next chapter's fade-out
+        (where the resolver re-bound it to whatever the NEW chapter called
+        something alike). A ref to an off-board roster element flattens to
+        its planned point, as the stepped scenes already do; one nothing
+        can place is dropped, and every case is reported under ``label``."""
+        board = [carry(eid, e) for eid, e in roster.items()
+                 if eid not in erased
+                 and (eid in introduced or eid in drawn_layers
+                      or eid in drawn_regions)]
+        on = {e["id"] for e in board}
+        sealed: list[dict] = []
+        for e in board:
+            if e.get("type") == "arrow":
+                fx = None
+                lost = False
+                for end in ("tail", "head"):
+                    ref = e.get(end)
+                    if not (isinstance(ref, dict) and isinstance(ref.get("el"), str)) \
+                            or ref["el"] in on:
+                        continue
+                    tgt = ref["el"]
+                    at = _pt(roster[tgt].get("at")) if tgt in roster else None
+                    if at is None:
+                        report.append(f"{label} | {drop_word} arrow {e['id']} "
+                                      f"({end} anchor {tgt!r} is not on the "
+                                      f"board)")
+                        lost = True
+                        break
+                    fx = dict(fx or e)
+                    fx[end] = [round(at[0] + float(ref.get("dx", 0.0)), 2),
+                               round(at[1] + float(ref.get("dy", 0.0)), 2)]
+                    report.append(f"{label} | FLATTENED {e['id']}.{end} "
+                                  f"{tgt!r} -> {fx[end]} (not on the board)")
+                if lost:
+                    continue
+                sealed.append(fx or e)
+            elif e.get("type") == "text" and isinstance(e.get("after"), dict) \
+                    and e["after"].get("el") not in on:
+                fx = dict(e)
+                fx.pop("after", None)      # it still has its own `at`
+                report.append(f"{label} | UNCHAINED text {e['id']} (after "
+                              f"{e['after'].get('el')!r} is not on the board)")
+                sealed.append(fx)
+            else:
+                sealed.append(e)
+        kept = {e["id"] for e in sealed}
+        if len(kept) != len(on):
+            # a group naming a dropped child would fail the schema
+            pruned: list[dict] = []
+            for e in sealed:
+                if e.get("type") == "group":
+                    kids = [c for c in e.get("children") or [] if c in kept]
+                    if not kids:
+                        report.append(f"{label} | {drop_word} group {e['id']} "
+                                      f"(every child left the board)")
+                        continue
+                    e = {**e, "children": kids}
+                pruned.append(e)
+            sealed = pruned
+        return sealed
 
     # work order: plan steps + HOLD entries for unplanned span segments
     step_by_id = {st.segment_id: st for st in ch.steps}
@@ -1111,7 +1170,7 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
     first = True
     for seg_id, st in work:
         if st is None:
-            held = board_now()
+            held = board_now(f"SEGMENT {seg_id}")
             if held:
                 scenes[seg_id] = {"id": f"vc_{seg_id}", "compiled": True, "scene_type": "process",
                                   "narration": narrations.get(seg_id, ""),
@@ -1237,10 +1296,13 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
 
         # last guard before validation: an arrow whose anchor names a roster
         # element that is NOT on this board (a label written two steps
-        # later) — or a boundary rename nothing else caught — must not fail
-        # the scene. A known-but-absent element flattens to its planned
-        # point (nothing is revealed early); anything else takes the roster
-        # resolver, which re-anchors or drops that one arrow with a report.
+        # later, a picture drawn one step after its leader line) — or a
+        # boundary rename nothing else caught — must not fail the scene. A
+        # known-but-not-yet-drawn element flattens to its planned point
+        # (a point reveals nothing early, and the draw action survives so
+        # the arrow rides into the steps where its anchor IS there); an
+        # ERASED target and anything else take the roster resolver, which
+        # re-anchors or drops that one arrow for this scene with a report.
         _on_scene = {e["id"] for e in elements if isinstance(e.get("id"), str)}
         for _i, _e in enumerate(elements):
             if _e.get("type") != "arrow":
@@ -1251,10 +1313,10 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                 if not (isinstance(_ref, dict) and isinstance(_ref.get("el"), str)):
                     continue
                 _tgt = _ref["el"]
-                if _tgt in _on_scene or _tgt not in roster:
+                if _tgt in _on_scene or _tgt not in roster or _tgt in erased:
                     continue
                 _at = _pt(roster[_tgt].get("at"))
-                if _at is None or roster[_tgt].get("type") == "illustration":
+                if _at is None:
                     continue
                 _fx = dict(_fx or _e)
                 _fx[_end] = [round(_at[0] + float(_ref.get("dx", 0.0)), 2),
@@ -1370,7 +1432,10 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             + moment_note)
         first = False
 
-    return board_now(), cam
+    # the exported board is what the next chapter fades out (clear_and_redraw)
+    # or keeps (carry) — sealed, so no ref ever crosses the boundary dangling
+    return board_now(f"CHAPTER {ch.concept} | CARRY-OUT",
+                     drop_word="LEFT BEHIND"), cam
 
 
 def _group_children(roster: dict, tgt) -> list[str]:

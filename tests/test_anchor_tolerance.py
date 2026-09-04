@@ -116,10 +116,18 @@ class TestResolveAnchor:
         assert (el, layer, how) == ("plant_cell_diagram", "chloroplasts",
                                     "part name")
 
-    def test_anything_unlabel_like_falls_to_the_single_root(self):
-        el, layer, how = resolve_anchor("mystery_thing", self.ROSTER,
+    def test_a_generic_picture_ref_falls_to_the_single_root(self):
+        el, layer, how = resolve_anchor("the_diagram", self.ROSTER,
                                         "plant_cell_diagram")
         assert (el, how) == ("plant_cell_diagram", "root visual")
+        # ...as does one that names the picture by one of its own words
+        el, _, how = resolve_anchor("cell_thing", self.ROSTER,
+                                    "plant_cell_diagram")
+        assert (el, how) == ("plant_cell_diagram", "root visual")
+        # but a name sharing nothing with it is a guess, not a binding
+        el, _, how = resolve_anchor("mystery_thing", self.ROSTER,
+                                    "plant_cell_diagram")
+        assert el is None and how == "no candidate"
 
     def test_an_unknown_label_ref_has_no_candidate(self):
         # two labels, neither matches: guessing would point at the WRONG one
@@ -403,3 +411,390 @@ class TestSceneGuardShape:
         assert dropped == []
         assert roster["ar"]["head"]["el"] == "cell"
         assert notes == ["REANCHORED ar.head 'cell_box' -> cell (id match)"]
+
+
+class TestReviewFindings:
+    """Adversarial review of the guard (a780f88): eight ways it still lost an
+    arrow, bound the wrong thing, or mis-counted. Each pinned here, numbered
+    as the review numbered them."""
+
+    _CELL = {"id": "cell", "type": "illustration", "asset": "plant_cell",
+             "at": [640, 360]}
+    _LBL = {"id": "lbl_wall", "type": "text", "text": "Cell wall",
+            "at": [95, 140]}
+    _ARR = {"id": "arr_wall", "type": "arrow",
+            "tail": {"el": "lbl_wall", "edge": "right", "dx": 6},
+            "head": {"el": "cell", "edge": "center"}}
+
+    @staticmethod
+    def _manifest():
+        return {"segments": [{"segment_id": s, "renderer": "scene",
+                              "audio_path": "a.mp3"} for s in _NARR]}
+
+    def _chapter(self, steps, **extra):
+        return {"concept": "cell", "assets": {"plant_cell": "a cell"},
+                "elements": [dict(self._CELL), dict(self._LBL), dict(self._ARR)],
+                "steps": steps, **extra}
+
+    # ── 1: validate.py accounting ───────────────────────────────────────
+    def test_1_a_scene_level_drop_is_listed_not_subtracted(self):
+        """The root erased under its arrow: s005 and s006 each drop the arrow
+        from THEIR scene. One arrow, two lines — it used to be counted twice
+        and the total went to -1."""
+        raw = {"chapters": [self._chapter([
+            {"segment": 3, "decision": "NEW_VISUAL",
+             "actions": [{"verb": "draw", "target": "cell"},
+                         {"verb": "write", "target": "lbl_wall"},
+                         {"verb": "draw", "target": "arr_wall"}]},
+            {"segment": 4, "decision": "EXTEND",
+             "actions": [{"verb": "erase", "target": "cell"}]},
+            {"segment": 5, "decision": "CONTINUE",
+             "actions": [{"verb": "circle", "target": "lbl_wall"}]},
+            {"segment": 6, "decision": "CONTINUE",
+             "actions": [{"verb": "pulse", "target": "lbl_wall"}]}])]}
+        plan = parse_visual_plan(raw)
+        scenes, _, report = compile_plan(plan, _NARR, all_segments=list(_NARR),
+                                         skip_hold=set())
+        seg_drops = [ln for ln in report if ln.startswith("SEGMENT")
+                     and "| DROPPED arrow arr_wall" in ln]
+        assert len(seg_drops) == 2, report
+        for sid in ("s003", "s004", "s005", "s006"):
+            assert parse_scene_response(scenes[sid], _NARR[sid]) is not None
+        r = validate_visual_language(
+            self._manifest(), {"plan": plan.model_dump(), "report": report})
+        synthesized = sum(1 for ln in report if "| SYNTHESIZED" in ln)
+        assert r["arrows_dropped"] == []
+        assert r["arrow_scene_drops"] == seg_drops
+        assert r["arrow_count"] == 1 + synthesized   # drawn in s003 and s004
+        assert r["arrow_count"] >= 0
+
+    def test_1_chapter_drops_count_distinct_arrows_and_never_go_negative(self):
+        plan = {"chapters": [{"elements": [{"id": "a1", "type": "arrow"}]}]}
+        line = "CHAPTER c | DROPPED arrow a1 (tail anchor 'x' names no element)"
+        r = validate_visual_language(self._manifest(), {
+            "plan": plan,
+            "report": [line, line, line,
+                       "SEGMENT s003 | DROPPED arrow a1 (head anchor 'y' "
+                       "names no element)"]})
+        assert r["arrows_dropped"] == [line]
+        assert r["arrow_count"] == 0
+        assert len(r["arrow_scene_drops"]) == 1
+        # the same id dropped in TWO chapters is two arrows gone
+        plan2 = {"chapters": [{"elements": [{"id": "a1", "type": "arrow"}]},
+                              {"elements": [{"id": "a1", "type": "arrow"}]}]}
+        r2 = validate_visual_language(self._manifest(), {
+            "plan": plan2,
+            "report": ["CHAPTER c1 | DROPPED arrow a1 (tail anchor 'x' names "
+                       "no element)",
+                       "CHAPTER c2 | DROPPED arrow a1 (tail anchor 'x' names "
+                       "no element)"]})
+        assert len(r2["arrows_dropped"]) == 2 and r2["arrow_count"] == 0
+        # a carry-out line is neither: the arrow had its scenes
+        r3 = validate_visual_language(self._manifest(), {
+            "plan": plan,
+            "report": ["CHAPTER c | CARRY-OUT | LEFT BEHIND arrow a1 (head "
+                       "anchor 'y' is not on the board)"]})
+        assert r3["arrows_dropped"] == [] and r3["arrow_count"] == 1
+        assert r3["arrow_scene_drops"] == []
+
+    # ── 2: no cross-chapter re-binding ──────────────────────────────────
+    def test_2_a_carried_arrow_never_binds_to_the_new_chapters_label(self):
+        """Chapter 1's arrow was drawn before its label; chapter 2 has a label
+        with a similar name. The fading old arrow once re-anchored to the
+        NEW label being written in that very scene ('kind match')."""
+        raw = {"chapters": [
+            self._chapter([{"segment": 2, "decision": "NEW_VISUAL",
+                            "actions": [{"verb": "draw", "target": "cell"},
+                                        {"verb": "draw", "target": "arr_wall"}]}],
+                          transition="clear_and_redraw"),
+            {"concept": "leaf", "transition": "clear_and_redraw",
+             "assets": {"leaf": "a leaf"},
+             "elements": [{"id": "leaf", "type": "illustration",
+                           "asset": "leaf", "at": [640, 360]},
+                          {"id": "lbl_wall_leaf", "type": "text",
+                           "text": "Leaf wall", "at": [95, 140]}],
+             "steps": [{"segment": 4, "decision": "NEW_VISUAL",
+                        "actions": [{"verb": "draw", "target": "leaf"},
+                                    {"verb": "write", "target": "lbl_wall_leaf"}]}]}]}
+        scenes, _, report = _compile(raw)
+        prev = next(e for e in scenes["s004"]["elements"]
+                    if e["id"] == "prev__arr_wall")
+        assert prev["tail"] == [101.0, 140.0]           # sealed at carry-out
+        assert prev["head"]["el"] == "prev__cell"
+        assert not any("REANCHORED prev__" in ln for ln in report), report
+        assert any(ln.startswith("CHAPTER cell | CARRY-OUT | FLATTENED "
+                                 "arr_wall.tail 'lbl_wall'") for ln in report), report
+        assert parse_scene_response(scenes["s004"], _NARR["s004"]) is not None
+
+    def test_2_the_resolver_itself_refuses_to_rebind_a_carried_ref(self):
+        from spike.scene_engine.anchors import is_carried_id
+        assert is_carried_id("prev__x") and is_carried_id("_prev__x")
+        assert not is_carried_id("preview") and not is_carried_id("__hud")
+        roster = {
+            "leaf": {"id": "leaf", "type": "illustration", "asset": "leaf"},
+            "lbl_wall_leaf": {"id": "lbl_wall_leaf", "type": "text",
+                              "text": "Leaf wall"},
+            "prev__cell": {"id": "prev__cell", "type": "illustration",
+                           "asset": "plant_cell"},
+            "prev__arr_wall": {"id": "prev__arr_wall", "type": "arrow",
+                               "tail": {"el": "lbl_wall"},
+                               "head": {"el": "prev__cell"}},
+        }
+        notes, dropped = resolve_roster_anchors(roster, "leaf")
+        assert dropped == ["prev__arr_wall"]
+        assert "prev__arr_wall" not in roster
+        assert notes == ["DROPPED arrow prev__arr_wall (tail anchor 'lbl_wall' "
+                         "stayed behind in the previous chapter)"]
+
+    # ── 3: the root-visual rung ─────────────────────────────────────────
+    def test_3_a_tail_never_falls_to_the_root_visual(self):
+        roster = TestResolveAnchor.ROSTER
+        for ref in ("mystery_thing", "cell_thing", "the_diagram"):
+            el, _, how = resolve_anchor(ref, roster, "plant_cell_diagram",
+                                        end="tail")
+            assert (el, how) == (None, "no candidate"), ref
+
+    def test_3_a_text_like_ref_never_falls_to_the_root_visual(self):
+        roster = {
+            "plant_cell_diagram": {"id": "plant_cell_diagram",
+                                   "type": "illustration", "asset": "plant_cell"},
+            "title_1": {"id": "title_1", "type": "text", "text": "The plant cell"},
+            "lbl_wall": {"id": "lbl_wall", "type": "text", "text": "Cell wall"},
+        }
+        parts = ["cell_wall", "nucleus"]
+        for ref in ("title", "title_text", "heading", "eq1", "formula_2",
+                    "step_2", "caption_a", "nucleus_label", "cell_caption",
+                    "lbl_nucleus_label"):
+            el, layer, how = resolve_anchor(ref, roster, "plant_cell_diagram",
+                                            part_names=parts)
+            assert el != "plant_cell_diagram", (ref, el, layer, how)
+        # 'title' still finds the one title on the board — by kind, as text
+        assert resolve_anchor("title", roster, "plant_cell_diagram")[0] == "title_1"
+
+    def test_3_a_head_needs_a_shared_word_or_a_generic_picture_ref(self):
+        roster = TestResolveAnchor.ROSTER
+        ok = ("the_diagram", "diagram", "main_visual", "cell_thing",
+              "plant_thing")
+        for ref in ok:
+            assert resolve_anchor(ref, roster, "plant_cell_diagram") == \
+                ("plant_cell_diagram", None, "root visual"), ref
+        for ref in ("mystery_thing", "organelle", "wall_box"):
+            el, _, _ = resolve_anchor(ref, roster, "plant_cell_diagram")
+            assert el is None, ref
+        # a part name counts as one of the picture's own words
+        el, layer, how = resolve_anchor("wall_thing", roster,
+                                        "plant_cell_diagram",
+                                        part_names=["cell_wall"])
+        assert (el, how) == ("plant_cell_diagram", "root visual")
+
+    def test_3_the_director_never_makes_a_root_to_root_arrow(self):
+        raw = {"id": "vc_s004", "compiled": True, "elements": [
+            {"id": "plant_cell_diagram", "type": "illustration",
+             "asset": "plant_cell", "at": [640, 360]},
+            {"id": "title_1", "type": "text", "text": "The plant cell",
+             "at": [640, 60]},
+            {"id": "arrow_plant", "type": "arrow",
+             "tail": {"el": "title", "edge": "bottom"},
+             "head": {"el": "plant_cell_diagram", "edge": "center"}}],
+            "actions": [{"verb": "draw", "target": "plant_cell_diagram"},
+                        {"verb": "write", "target": "title_1"},
+                        {"verb": "draw", "target": "arrow_plant"}]}
+        scene = parse_scene_response(raw, "n")
+        assert scene is not None
+        arrow = next(e for e in scene.elements if e.id == "arrow_plant")
+        assert arrow.tail.el == "title_1"
+        assert arrow.tail.el != arrow.head.el
+        # with NO text to mean, the arrow goes — its tail never lands on the
+        # picture it points at
+        raw2 = {"id": "vc_s004", "compiled": True,
+                "elements": [raw["elements"][0], raw["elements"][2]],
+                "actions": [raw["actions"][0], raw["actions"][2]]}
+        scene2 = parse_scene_response(raw2, "n")
+        assert scene2 is not None
+        assert [e.id for e in scene2.elements] == ["plant_cell_diagram"]
+
+    # ── 4: HOLD scenes ──────────────────────────────────────────────────
+    def test_4_a_hold_scene_flattens_instead_of_dropping(self, caplog):
+        """Arrow drawn in s003 before its label, s004 unplanned (HOLD), label
+        written in s005. The arrow used to be visible, gone, back."""
+        raw = {"chapters": [self._chapter([
+            {"segment": 3, "decision": "NEW_VISUAL",
+             "actions": [{"verb": "draw", "target": "cell"},
+                         {"verb": "draw", "target": "arr_wall"}]},
+            {"segment": 5, "decision": "EXTEND",
+             "actions": [{"verb": "write", "target": "lbl_wall"}]}])]}
+        scenes, _, report = _compile(raw)
+        assert any("SEGMENT s004 | chapter: cell | decision: HOLD" in ln
+                   for ln in report), report
+        tails = {sid: next(e for e in scenes[sid]["elements"]
+                           if e["id"] == "arr_wall")["tail"]
+                 for sid in ("s003", "s004", "s005")}
+        assert tails["s003"] == [101.0, 140.0]
+        assert tails["s004"] == [101.0, 140.0]
+        assert tails["s005"] == {"el": "lbl_wall", "edge": "right", "dx": 6}
+        assert not any("DROPPED arrow" in ln for ln in report), report
+        assert any(ln.startswith("SEGMENT s004 | FLATTENED arr_wall.tail "
+                                 "'lbl_wall'") for ln in report), report
+        with caplog.at_level(logging.WARNING, logger="spike.scene_engine.director"):
+            for sid in ("s003", "s004", "s005"):
+                assert parse_scene_response(scenes[sid], _NARR[sid]) is not None
+        assert "DROPPED" not in caplog.text
+
+    # ── 5: the part-name rung ───────────────────────────────────────────
+    def test_5_the_part_rung_uses_the_layer_matcher(self):
+        roster = TestResolveAnchor.ROSTER
+        parts = ["cell_wall", "chloroplasts", "nucleus"]
+        for ref, layer in (("chloroplast", "chloroplasts"),
+                           ("wall_box", "cell_wall"),
+                           ("nucleus_membrane", "nucleus"),
+                           ("Nucleus", "nucleus")):
+            assert resolve_anchor(ref, roster, "plant_cell_diagram",
+                                  part_names=parts) == \
+                ("plant_cell_diagram", layer, "part name"), ref
+
+    def test_5_an_ambiguous_part_match_binds_no_layer(self):
+        roster = {"diagram_root": {"id": "diagram_root", "type": "illustration",
+                                   "asset": "plant_cell"}}
+        el, layer, how = resolve_anchor("cell", roster, "diagram_root",
+                                        part_names=["cell_wall", "cell_membrane"])
+        assert (el, layer, how) == ("diagram_root", None, "root visual")
+
+    # ── 6: the director guard is consistent ─────────────────────────────
+    def test_6_a_duplicate_id_is_rejected_even_beside_a_dangling_anchor(self):
+        dup = [{"id": "cell", "type": "illustration", "asset": "a", "at": [1, 2]},
+               {"id": "cell", "type": "illustration", "asset": "b", "at": [5, 5]}]
+        with_anchor = {"id": "x", "elements": dup + [
+            {"id": "ar", "type": "arrow", "tail": [0, 0],
+             "head": {"el": "cell_box"}}],
+            "actions": [{"verb": "draw", "target": "cell"},
+                        {"verb": "draw", "target": "ar"}]}
+        without = {"id": "x", "elements": list(dup),
+                   "actions": [{"verb": "draw", "target": "cell"}]}
+        assert parse_scene_response(without, "n") is None
+        assert parse_scene_response(with_anchor, "n") is None
+        # the guard itself keeps both entries for the schema to see
+        scene = {"elements": dup + [{"id": "ar", "type": "arrow",
+                                     "tail": [0, 0], "head": {"el": "cell_box"}}],
+                 "actions": []}
+        notes = resolve_scene_anchors(scene)
+        assert notes == ["REANCHORED ar.head 'cell_box' -> cell (id match)"]
+        assert [e["id"] for e in scene["elements"]] == ["cell", "cell", "ar"]
+        assert scene["elements"][1]["asset"] == "b"       # not the first's copy
+
+    def test_6_an_id_less_element_still_reaches_the_schema(self):
+        scene = {"elements": [
+            {"id": "cell", "type": "illustration", "asset": "a", "at": [1, 2]},
+            {"type": "text", "text": "orphan", "at": [3, 4]},
+            {"id": "ar", "type": "arrow", "tail": [0, 0],
+             "head": {"el": "cell_box"}}], "actions": []}
+        resolve_scene_anchors(scene)
+        assert len(scene["elements"]) == 3
+        assert scene["elements"][1] == {"type": "text", "text": "orphan",
+                                        "at": [3, 4]}
+
+    # ── 7: after-chains ─────────────────────────────────────────────────
+    def test_7_an_after_naming_a_later_text_is_unchained_not_rejected(self):
+        raw = {"id": "t", "elements": [
+            {"id": "b", "type": "text", "text": "5x", "at": [200, 200],
+             "after": {"el": "eq_a_text", "gap": 2}},
+            {"id": "eq_a", "type": "text", "text": "x2 +", "at": [100, 200]}],
+            "actions": [{"verb": "write", "target": "b"},
+                        {"verb": "write", "target": "eq_a"}]}
+        scene = parse_scene_response(raw, "n")
+        assert scene is not None
+        b = next(e for e in scene.elements if e.id == "b")
+        assert b.after is None and list(b.at) == [200, 200]
+        # the same ref with the match EARLIER is re-anchored, not unchained
+        raw2 = {"id": "t", "elements": list(reversed(raw["elements"])),
+                "actions": list(reversed(raw["actions"]))}
+        scene2 = parse_scene_response(raw2, "n")
+        assert scene2 is not None
+        b2 = next(e for e in scene2.elements if e.id == "b")
+        assert b2.after is not None and b2.after.el == "eq_a"
+
+    # ── 8: an arrow ahead of its picture ────────────────────────────────
+    def test_8_an_arrow_to_a_picture_drawn_next_step_flattens_and_rides_on(self):
+        raw = {"chapters": [self._chapter([
+            {"segment": 3, "decision": "NEW_VISUAL",
+             "actions": [{"verb": "write", "target": "lbl_wall"},
+                         {"verb": "draw", "target": "arr_wall"}]},
+            {"segment": 4, "decision": "EXTEND",
+             "actions": [{"verb": "draw", "target": "cell"}]}])]}
+        scenes, _, report = _compile(raw)
+        s3 = next(e for e in scenes["s003"]["elements"] if e["id"] == "arr_wall")
+        assert s3["head"] == [640.0, 360.0]
+        assert s3["tail"]["el"] == "lbl_wall"
+        assert not any(e["id"] == "cell" for e in scenes["s003"]["elements"])
+        s4 = next(e for e in scenes["s004"]["elements"] if e["id"] == "arr_wall")
+        assert s4["head"] == {"el": "cell", "edge": "center"}
+        assert not any("DROPPED" in ln for ln in report), report
+        assert any(ln.startswith("SEGMENT s003 | FLATTENED arr_wall.head 'cell'")
+                   for ln in report)
+        for sid in ("s003", "s004"):
+            assert parse_scene_response(scenes[sid], _NARR[sid]) is not None
+
+    # ── found while fixing 2/4: a group must not outlive a dropped child ──
+    def test_a_group_naming_a_dropped_arrow_is_pruned_not_left_dangling(self):
+        base = [{"id": "cell", "type": "illustration", "asset": "a", "at": [1, 2]},
+                {"id": "lbl_a", "type": "text", "text": "A", "at": [3, 4]},
+                {"id": "lbl_b", "type": "text", "text": "B", "at": [3, 8]},
+                {"id": "ar", "type": "arrow", "tail": {"el": "lbl_ghost"},
+                 "head": {"el": "cell"}}]
+        # (i) the group loses only that child
+        scene = {"id": "g1", "elements": base + [
+            {"id": "g", "type": "group", "children": ["ar", "cell"]}],
+            "actions": [{"verb": "draw", "target": "g"}]}
+        notes = resolve_scene_anchors(scene)
+        assert "DROPPED arrow ar (tail anchor 'lbl_ghost' names no element)" in notes
+        g = next(e for e in scene["elements"] if e["id"] == "g")
+        assert g["children"] == ["cell"]
+        assert scene["actions"] == [{"verb": "draw", "target": "g"}]
+        assert parse_scene_response(scene, "n") is not None
+        # (ii) a group left empty goes, with the actions that addressed it
+        scene = {"id": "g2", "elements": base + [
+            {"id": "g", "type": "group", "children": ["ar"]}],
+            "actions": [{"verb": "draw", "target": "cell"},
+                        {"verb": "draw", "target": "g"},
+                        {"verb": "circle", "target": "g"}]}
+        notes = resolve_scene_anchors(scene)
+        assert "DROPPED group g (every child was dropped)" in notes
+        assert [e["id"] for e in scene["elements"]] == ["cell", "lbl_a", "lbl_b"]
+        assert scene["actions"] == [{"verb": "draw", "target": "cell"}]
+        assert parse_scene_response(scene, "n") is not None
+
+    def test_a_hold_scene_prunes_a_group_whose_arrow_lost_its_target(self):
+        """An arrow to a SHAPE (no planned point to flatten to), grouped;
+        the shape is erased, then an unplanned segment holds the board. The
+        held scene once carried the arrow (dangling) inside its group: the
+        director dropped the arrow, the group then named a ghost, and the
+        schema threw the whole board away."""
+        raw = {"chapters": [{
+            "concept": "cell", "assets": {"plant_cell": "a cell"},
+            "elements": [
+                dict(self._CELL),
+                {"id": "ring", "type": "shape", "shape": "ellipse",
+                 "center": [640, 360], "rx": 40, "ry": 40},
+                {"id": "arr", "type": "arrow", "tail": [100, 100],
+                 "head": {"el": "ring", "edge": "center"}},
+                {"id": "g", "type": "group", "children": ["arr"]}],
+            "steps": [
+                {"segment": 3, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "cell"},
+                             {"verb": "draw", "target": "ring"},
+                             {"verb": "draw", "target": "g"}]},
+                {"segment": 4, "decision": "EXTEND",
+                 "actions": [{"verb": "erase", "target": "ring"}]},
+                {"segment": 6, "decision": "CONTINUE",
+                 "actions": [{"verb": "circle", "target": "cell"}]}]}]}
+        scenes, _, report = _compile(raw)
+        assert any("SEGMENT s005 | chapter: cell | decision: HOLD" in ln
+                   for ln in report), report
+        ids = [e["id"] for e in scenes["s005"]["elements"]
+               if not e["id"].startswith("__")]
+        assert ids == ["cell"], ids
+        assert "SEGMENT s005 | DROPPED arrow arr (head anchor 'ring' is not " \
+               "on the board)" in report
+        assert "SEGMENT s005 | DROPPED group g (every child left the board)" \
+            in report
+        for sid in ("s003", "s004", "s005", "s006"):
+            assert parse_scene_response(scenes[sid], _NARR[sid]) is not None, sid
