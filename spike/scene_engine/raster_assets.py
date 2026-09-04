@@ -1074,19 +1074,40 @@ def make_resolver(prompts: dict[str, str], prefer_ai: bool = True,
     if prefer_svg is None:
         prefer_svg = os.getenv("SCENE_SVG_ASSETS", "").strip() == "1"
 
+    # WHY a key resolved to nothing. validate.py hard-coded "had no asset
+    # prompt" for every unresolved illustration; in fa8c0d7d both of the two
+    # blank boards HAD prompts and had been abandoned after a 429 ladder, so
+    # the acceptance report named the wrong cause and the real one — a rate
+    # limit — was invisible. Keyed by the asset key the renderer asked for.
+    last_reason: dict[str, str] = {}
+
     def resolve(key: str):
-        if prefer_ai and key in prompts:
+        reason = None
+        if key not in prompts:
+            reason = "no_prompt"
+        elif prefer_ai:
             if prefer_svg:
                 from .svg_assets import get_svg_asset
                 sa = get_svg_asset(key, prompts[key], cache_dir, allow_generate)
                 if sa is not None:
+                    last_reason.pop(key, None)
                     return ("vector", sa)  # renders exactly like authored vectors
             ra = get_raster_asset(key, prompts[key], cache_dir, allow_generate)
             if ra is not None and ra.trace:
+                last_reason.pop(key, None)
                 return ("raster", ra)
+            if not allow_generate:
+                # the child-process path: it may only read the cache, so a
+                # miss here means the parent's warm-up did not land the file
+                reason = "cache_only_miss"
+            else:
+                reason = "generation_failed"
         va = vector_asset(key)
         if va is not None:
+            last_reason.pop(key, None)
             return ("vector", va)
+        last_reason[key] = reason or "no_vector"
         return None
 
+    resolve.last_reason = last_reason
     return resolve

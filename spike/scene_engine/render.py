@@ -499,20 +499,36 @@ class SceneRenderer:
         else:
             fn(b)
 
+    def _unresolved_reason(self, asset: str) -> str:
+        """Why the resolver returned nothing for `asset`.
+
+        make_resolver records it; a hand-written resolver (tests, the demo)
+        does not, and says so rather than inventing a cause — which is the
+        bug this exists to fix.
+        """
+        try:
+            return str((getattr(self._resolve, "last_reason", None)
+                        or {}).get(asset) or "unknown")
+        except Exception:  # noqa: BLE001 — a diagnostic must never fail a bind
+            return "unknown"
+
     def _bind_illustration(self, el: IllustrationElement, b: Bound) -> None:
         resolved = self._resolve(el.asset)
         if resolved is None:
             # §20: a missing asset never fails the scene — the element simply
             # doesn't exist (actions on it no-op), and the rest of the scene
             # (labels, arrows, highlights) still teaches
-            logger.warning("asset %r unresolvable — dropping element %r, scene continues",
-                           el.asset, el.id)
+            reason = self._unresolved_reason(el.asset)
+            logger.warning("asset %r unresolvable (%s) — dropping element %r, "
+                           "scene continues", el.asset, reason, el.id)
             # ...but it must not be INVISIBLE. Every other quality problem here
             # goes through _warn, which is what reaches the manifest and the
             # acceptance report; this one was a bare log line, so a lesson that
             # dropped 18 illustrations across 12 of 15 segments still reported
             # PASSED over what were effectively blank boards.
-            self._warn(f"ASSET_UNRESOLVED {el.id} ({el.asset})")
+            # The prefix is load-bearing: validate._pick("ASSET_UNRESOLVED")
+            # and the acceptance gate match on it. The reason rides after it.
+            self._warn(f"ASSET_UNRESOLVED {el.id} ({el.asset}) reason={reason}")
             b.box = (el.at[0], el.at[1], el.at[0], el.at[1])
             return
         kind, asset = resolved

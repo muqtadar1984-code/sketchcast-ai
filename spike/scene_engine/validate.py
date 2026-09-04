@@ -9,7 +9,22 @@ styles never ship silently.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
+
+_REASON_RE = re.compile(r"reason=([a-z_]+)")
+
+
+def unresolved_reasons(report: dict) -> dict[str, int]:
+    """How many blank boards for each cause, from the ASSET_UNRESOLVED lines.
+
+    The renderer tags each one reason=<why>; a line written before that tag
+    existed counts as 'unknown' rather than being silently attributed."""
+    counts: Counter = Counter()
+    for line in report.get("unresolved_assets") or []:
+        m = _REASON_RE.search(str(line))
+        counts[m.group(1) if m else "unknown"] += 1
+    return dict(counts)
 
 
 def validate_visual_language(video_manifest: dict,
@@ -62,9 +77,13 @@ def validate_visual_language(video_manifest: dict,
         "overlapping_text": _pick("TEXT_OVERLAP"),
         "arrows_converging": _pick("ARROWS_CONVERGE"),
         "baked_text_warnings": _pick("BAKED_TEXT"),
-        # a planned illustration whose asset had no prompt is a BLANK BOARD
+        # a planned illustration that resolved to nothing is a BLANK BOARD
         # under a narration describing a diagram — 13 of 15 segments shipped
-        # that way once and this report said PASSED, because nothing asked
+        # that way once and this report said PASSED, because nothing asked.
+        # Each line carries reason=<why>: no_prompt, generation_failed,
+        # cache_only_miss or no_vector. This report used to assert "no asset
+        # prompt" for all of them; in fa8c0d7d both blank boards HAD prompts
+        # and had been abandoned after a rate-limit ladder.
         "unresolved_assets": _pick("ASSET_UNRESOLVED"),
         "action_timing_warnings": _pick("TIMING_SHIFT"),
         # a narration-linked visual whose cue could not be matched: it played
@@ -76,6 +95,10 @@ def validate_visual_language(video_manifest: dict,
                            for i in ((visual_plan or {}).get("adapter_issues")
                                      or [])],
     }
+    # The CAUSE, counted — so "two blank boards" is answerable without
+    # reading thirty log lines, and a rate-limit incident is not filed under
+    # "the director forgot a prompt".
+    report["unresolved_asset_reasons"] = unresolved_reasons(report)
     # A lesson that produced NO scenes is a failure, however clean the rest
     # of the numbers look. Measured: a 42-segment lesson whose visual plan
     # was dropped rendered as 42 plain cards — 0 scenes, 0 chapters, 0
@@ -122,9 +145,13 @@ def format_report(report: dict) -> str:
                      f"{report['narration_segments']} segments have NO audio; "
                      "the lesson is largely silent")
     elif report.get("unresolved_assets"):
+        why = unresolved_reasons(report)
+        detail = (" (" + ", ".join(f"{k}={v}" for k, v in sorted(why.items()))
+                  + ")") if why else ""
         lines.append(f"FAILED — {len(report['unresolved_assets'])} planned "
-                     "illustration(s) had no asset prompt and were dropped; "
-                     "those boards are blank")
+                     f"illustration(s) could not be resolved{detail} — no "
+                     "prompt, or image generation failed after retries; those "
+                     "boards are blank")
     elif report.get("no_scenes_produced"):
         lines.append("FAILED — the lesson produced NO scenes; every segment "
                      "fell back to a plain card, so the visual plan was lost")

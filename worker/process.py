@@ -156,13 +156,28 @@ def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
             v = report.get(key)
             count = len(v) if isinstance(v, list) else int(v or 0)
             if count > tolerance:
-                blocking.append(f"{key}={count}/{n}")
+                reasons = (report.get("unresolved_asset_reasons") or {}
+                           if key == "unresolved_assets" else {})
+                tail = ("(" + ",".join(f"{r}={c}" for r, c
+                                       in sorted(reasons.items())) + ")"
+                        if reasons else "")
+                blocking.append(f"{key}={count}/{n}{tail}")
 
         noted = [k for k in ("no_scenes_produced", "mostly_silent")
                  if report.get(k)]
         for k in ("unresolved_assets", "silent_segments", "overlapping_text"):
             if report.get(k):
-                noted.append(f"{k}={len(report[k])}")
+                why = ""
+                if k == "unresolved_assets":
+                    # WHY the boards are blank, not just how many. The summary
+                    # is what a human reads first, and it used to assert a
+                    # cause ("no asset prompt") that was wrong for the only
+                    # two real cases we have.
+                    reasons = report.get("unresolved_asset_reasons") or {}
+                    if reasons:
+                        why = "(" + ",".join(f"{r}={n}" for r, n
+                                             in sorted(reasons.items())) + ")"
+                noted.append(f"{k}={len(report[k])}{why}")
         summary = ("BLOCKING: " + ", ".join(blocking) if blocking
                    else (", ".join(noted) if noted else "clean"))
         logger.info("acceptance: audit=%s ship=%s\n%s",
