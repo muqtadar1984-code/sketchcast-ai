@@ -89,7 +89,11 @@ def canonical_key(value: str) -> str:
 # design; asset_type is the only thing keeping them apart.
 
 _AVATAR_ROLES = ("teacher", "student")
-_AGE_BAND_RE = re.compile(r"(\d{1,2}_\d{1,2})")
+# The band token of a student key: a school band (`5_7`, `8_10`, `11_12`) or
+# a post-school one (`undergrad`, `grad`, `doctorate` — AVATAR_PROMPTS keeps
+# faces for them, and a grade-13+ book asks for them). Token-bounded so
+# `undergrad` is never read as `grad`. A band the key does not carry is None.
+_AGE_BAND_RE = re.compile(r"(?:^|_)(\d{1,2}_\d{1,2}|undergrad|grad|doctorate)(?:_|$)")
 
 
 def is_avatar_key(key: str) -> bool:
@@ -237,6 +241,15 @@ def avatar_age_band(row_or_key) -> str | None:
     return band
 
 
+# One page size for BOTH roster queries. The listing (every avatar, which
+# picks the face) and the family lookup (one canonical key, which serves it)
+# must reach equally far: a family is a subset of the roster, so any face the
+# listing can pick, the lookup with the same limit can find. Two different
+# limits here once meant a picked face past the lookup's page was "gone" and
+# silently replaced by the oldest.
+ROSTER_LIMIT = 200
+
+
 def list_avatar_roster() -> list[dict[str, Any]]:
     """Every approved avatar row, oldest first. Empty offline or on error."""
     sb = _sb()
@@ -245,7 +258,7 @@ def list_avatar_roster() -> list[dict[str, Any]]:
     try:
         rows = (sb.table("visual_assets").select("*")
                 .eq("status", "approved").like("asset_key", "avatar%")
-                .order("created_at").limit(200).execute().data or [])
+                .order("created_at").limit(ROSTER_LIMIT).execute().data or [])
     except Exception as exc:  # noqa: BLE001
         logger.warning("visual library avatar roster listing failed: %s", exc)
         return []
@@ -269,10 +282,17 @@ def pick_avatar(role: str, gender: str | None, seed: str, *,
     gender matches the voice's, seeded by the generation so one lesson keeps
     one face.
 
-    Fallbacks, each logged: no face of that gender (or, for students, of that
-    age band) → any face of that role; no face of that role at all → None,
-    which sends the caller down the generate path exactly as before the
-    roster existed. A lesson is never failed over an avatar.
+    Fallbacks, each logged: no face of that gender → any face of that role
+    (and band); no face of that role at all → None, which sends the caller
+    down the generate path exactly as before the roster existed. A lesson is
+    never failed over an avatar.
+
+    The student's AGE BAND is not relaxed. The roster holds school bands only
+    (5_7 / 8_10 / 11_12 on 2026-09-04), so a university or graduate book
+    (grade 13+) has no face in its band — and a schoolchild must not stand
+    in for an undergraduate. Returning None hands the caller its age-matched
+    roster key, and the generate-then-publish path draws that face and seeds
+    the roster with it; from then on the band has a face to pick.
     """
     rows = list_avatar_roster() if roster is None else list(roster)
     pool = [r for r in rows if avatar_role(r) == role]
@@ -282,11 +302,11 @@ def pick_avatar(role: str, gender: str | None, seed: str, *,
     cands = pool
     if age_band:
         in_band = [r for r in cands if avatar_age_band(r) == age_band]
-        if in_band:
-            cands = in_band
-        else:
-            logger.info("avatar roster: no %s face in age band %s; using any band",
-                        role, age_band)
+        if not in_band:
+            logger.info("avatar roster: no %s face in age band %s; generating "
+                        "the age-matched face as before", role, age_band)
+            return None
+        cands = in_band
     if gender:
         of_gender = [r for r in cands if avatar_gender(r) == gender]
         if of_gender:
@@ -584,7 +604,7 @@ def find_avatar(key: str) -> dict[str, Any] | None:
         # that has always been there.
         rows = (sb.table("visual_assets").select("*")
                 .eq("status", "approved").eq("canonical_key", ck)
-                .order("created_at").limit(20).execute().data or [])
+                .order("created_at").limit(ROSTER_LIMIT).execute().data or [])
     except Exception as exc:  # noqa: BLE001
         logger.warning("visual library avatar lookup failed for %s: %s", key, exc)
         return None

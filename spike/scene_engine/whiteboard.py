@@ -662,8 +662,10 @@ def cast_avatars(effective_voice: str | None, grade, seed: str, *,
                  before.
 
     Fallbacks live in shared.visual_library.pick_avatar: no face of that
-    gender → any face of the role (logged); no roster face → the roster key
-    itself, which is today's generate path. Never raises."""
+    gender → any face of the role (logged); no roster face of the role, or
+    no student face in the book's AGE BAND (a grade-13+ book against a
+    school-only roster) → the roster key itself, which is today's generate
+    path and seeds the roster with the age-matched face. Never raises."""
     seed = str(seed or "")
     try:
         from shared.visual_library import cast_avatar_key

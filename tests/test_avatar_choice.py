@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -18,8 +19,11 @@ from PIL import Image, ImageDraw
 import shared.visual_library as vl
 from spike.scene_engine.raster_assets import canonical_key as renderer_canonical_key
 from spike.scene_engine.whiteboard import (AVATAR_PROMPTS, avatar_prompt,
-                                           cast_avatars, student_voice_for_avatar,
+                                           cast_avatars, student_avatar_key,
+                                           student_voice_for_avatar,
                                            teacher_avatar_for_voice, voice_gender)
+
+REPO = Path(__file__).resolve().parents[1]
 
 
 def _row(id_: str, key: str, role: str, created: str, band: str | None = None,
@@ -81,7 +85,8 @@ def _fake_sb(rows: list[dict], calls: dict):
             self.f["order"] = col
             return self
 
-        def limit(self, _n):
+        def limit(self, n):
+            self.f["limit"] = int(n)
             return self
 
         def insert(self, row):
@@ -104,6 +109,8 @@ def _fake_sb(rows: list[dict], calls: dict):
                 out = [r for r in out if r.get("asset_type") != "avatar"]
             if self.f.get("order") == "created_at":
                 out = sorted(out, key=lambda r: str(r.get("created_at") or ""))
+            if "limit" in self.f:
+                out = out[:self.f["limit"]]
             return type("R", (), {"data": out})()
 
     class Storage:
@@ -151,6 +158,19 @@ class TestGenderFromTheRoster:
         assert vl.avatar_gender(row) == gender
         assert vl.avatar_role(row) == role
         assert vl.avatar_age_band(row) == band
+
+    @pytest.mark.parametrize("key,band", [
+        ("avatar_student_undergrad_f", "undergrad"), ("avatar_student_grad_m", "grad"),
+        ("avatar_student_doctorate_f", "doctorate"), ("avatar_student_11_12_m", "11_12"),
+        ("avatar_teacher_female", None), ("avatar_student", "5_7"),
+    ])
+    def test_post_school_bands_read_off_the_key_like_school_bands(self, key, band):
+        """AVATAR_PROMPTS keeps undergrad/grad/doctorate faces and a grade-13+
+        book asks for them; a band the key parser could not read was a face
+        the roster could publish but never pick (age_band NULL, no match)."""
+        assert vl.avatar_age_band(key) == band
+        assert vl.avatar_age_band(vl.face_key(key, "0123abcd-ffff")) == band
+        assert vl.avatar_fields(key)["age_band"] == (None if key == "avatar_student" else band)
 
     def test_description_is_the_fallback_when_the_key_says_nothing(self):
         assert vl.avatar_gender({"asset_key": "avatar_tutor", "description": "A friendly woman with a scarf"}) == "f"
@@ -225,10 +245,41 @@ class TestFallbacks:
         assert vl.avatar_gender(key) == "f" and vl.face_id_of(key), "a face beats no face"
         assert any("no approved teacher face of gender 'm'" in r.getMessage() for r in caplog.records)
 
-    def test_no_student_in_the_band_falls_back_to_any_student_of_that_gender(self):
-        key = cast_avatars("edge-aria", "Grade 14", "gen-u", roster=ROSTER)["student"]
-        assert vl.avatar_role(key) == "student" and vl.face_id_of(key)
-        assert vl.avatar_age_band(key) != "undergrad"
+    def test_no_student_in_the_band_is_the_generate_path_for_that_band(self, caplog):
+        """The roster holds school bands only; a university book must not
+        cast a schoolchild. The cast is the age-matched ROSTER key (no face
+        suffix), which the wrapper generates and publishes — seeding the
+        band — exactly as before the roster existed."""
+        with caplog.at_level(logging.INFO, logger="shared.visual_library"):
+            key = cast_avatars("edge-aria", "Grade 14", "gen-u", roster=ROSTER)["student"]
+        assert key.startswith("avatar_student_undergrad_") and key in AVATAR_PROMPTS
+        assert vl.face_id_of(key) is None and vl.avatar_age_band(key) == "undergrad"
+        assert vl.hydrate_avatar(key, Path("unused")) is None      # nothing to serve: generate
+        assert any("no student face in age band undergrad" in r.getMessage() for r in caplog.records)
+        # the same holds for a school band the roster happens to lack
+        no_8_10 = [r for r in ROSTER if r.get("age_band") != "8_10"]
+        key = cast_avatars("edge-aria", "Grade 9", "gen-u", lang="en",
+                           style="conversational", roster=no_8_10)["student"]
+        assert key == student_avatar_key("8_10", "f") and vl.face_id_of(key) is None
+        # while a band the roster holds still casts a roster face of that band
+        key = cast_avatars("edge-aria", "Grade 9", "gen-u", roster=ROSTER)["student"]
+        assert vl.face_id_of(key) and vl.avatar_age_band(key) == "8_10"
+
+    @pytest.mark.parametrize("grade,band", [("Grade 14", "undergrad"), ("17", "grad"), ("Grade 20", "doctorate")])
+    def test_every_post_school_band_names_its_own_generate_key(self, grade, band):
+        for seed in ("a", "b", "c"):
+            key = cast_avatars("edge-guy", grade, seed, roster=ROSTER)["student"]
+            assert vl.avatar_age_band(key) == band and vl.face_id_of(key) is None
+            assert avatar_prompt(key) == AVATAR_PROMPTS[key]
+
+    def test_pick_avatar_relaxes_gender_but_never_the_band(self):
+        assert vl.pick_avatar("student", "m", "s", age_band="undergrad", roster=ROSTER) is None
+        # only female 5_7 faces exist once the legacy boy is gone; a male 5_7
+        # ask still gets a 5_7 face, never one from another band
+        girls_only = [r for r in ROSTER if r["asset_key"] != "avatar_student"]
+        for seed in ("a", "b", "c", "d"):
+            row = vl.pick_avatar("student", "m", seed, age_band="5_7", roster=girls_only)
+            assert row and vl.avatar_age_band(row) == "5_7"
 
     def test_an_empty_roster_is_todays_generate_path(self):
         cast = cast_avatars("edge-aria", "Grade 9", "gen-e", roster=[])
@@ -328,6 +379,25 @@ class TestFaceLookup:
         assert calls["download"] == [FEMALE_TEACHERS[0]["storage_path"], FEMALE_TEACHERS[1]["storage_path"]]
         assert json.loads((da / "meta.json").read_text(encoding="utf-8"))["library_asset_id"] == FEMALE_TEACHERS[0]["id"]
 
+    def test_every_face_the_listing_can_pick_the_lookup_can_serve(self, caplog):
+        """The listing that PICKS a face and the family query that SERVES it
+        page by the same limit, so a picked face is never past the lookup's
+        reach and quietly swapped for the oldest. Once the family lookup
+        stopped at 20 while the listing read 200."""
+        big = [_row(f"{i:08x}-0000-4000-8000-000000000000", "avatar_teacher_female", "teacher",
+                    f"2026-10-{1 + i // 24:02d}T{i % 24:02d}:00:00Z") for i in range(30)]
+        assert len(big) > 20
+        calls: dict = {}
+        vl._sb = lambda: _fake_sb(big + STUDENTS, calls)
+        picked = {vl.cast_avatar_key("teacher", "f", f"gen-{i}", "avatar_teacher_female") for i in range(200)}
+        assert len(picked) == 30, "every face in the family is reachable by some generation"
+        with caplog.at_level(logging.WARNING, logger="shared.visual_library"):
+            for key in picked:
+                assert vl.find_avatar(key)["id"].replace("-", "")[:8] == vl.face_id_of(key)
+        assert not any("is gone" in r.getMessage() for r in caplog.records)
+        limits = {q.get("limit") for q in calls["queries"]}
+        assert limits == {vl.ROSTER_LIMIT}, "one page size for the listing and the lookup"
+
     def test_the_roster_listing_is_approved_avatars_only(self):
         calls: dict = {}
         stray = {**MALE_TEACHER, "id": "stray", "asset_key": "plant_cell", "canonical_key": "cell_plant",
@@ -351,6 +421,24 @@ class TestPublishCoherence:
         key = vl.face_key("avatar_teacher_female", FEMALE_TEACHERS[0]["id"])
         assert vl.publish_generated(key, AVATAR_PROMPTS["avatar_teacher_female"], png) is True
         assert "upload" not in calls and "insert" not in calls
+
+    def test_a_generated_post_school_face_seeds_its_band_for_the_next_pick(self, tmp_path):
+        """The generate path for a grade-13+ book publishes the age-matched
+        face with its band on the row, and the next lesson in that band
+        picks it from the roster instead of generating again."""
+        calls: dict = {}
+        vl._sb = lambda: _fake_sb(ROSTER, calls)
+        key = cast_avatars("edge-aria", "Grade 15", "gen-p", roster=ROSTER)["student"]
+        assert key == student_avatar_key("undergrad", vl.avatar_gender(key))
+        png = tmp_path / "face.png"
+        png.write_bytes(_png_bytes())
+        assert vl.publish_generated(key, AVATAR_PROMPTS[key], png) is True
+        row = calls["insert"][0]
+        assert row["asset_key"] == key and row["role"] == "student" and row["age_band"] == "undergrad"
+        seeded = ROSTER + [_row("0badf00d-0000-4000-8000-000000000000", key, "student",
+                                "2026-10-01T00:00:00Z", "undergrad")]
+        again = cast_avatars("edge-aria", "Grade 15", "gen-q", roster=seeded)["student"]
+        assert vl.face_id_of(again) == "0badf00d" and vl.avatar_age_band(again) == "undergrad"
 
     def test_a_family_the_roster_lacks_publishes_under_the_roster_key(self, tmp_path):
         calls: dict = {}
@@ -403,15 +491,55 @@ class TestEngineWiring:
             assert assets[sid][avatars["teacher"]] == AVATAR_PROMPTS["avatar_teacher_female"]
             assert assets[sid][avatars["student"]] == avatar_prompt(avatars["student"])
 
-    def test_the_composer_maps_a_face_key_to_its_family_prompt(self):
-        src = Path("agent6_animation/video_composer.py").read_text(encoding="utf-8")
-        assert "prompts[str(k)] = avatar_prompt(str(k))" in src
-        assert "for k, v in AVATAR_PROMPTS.items():" in src
+    def test_the_composer_warms_the_cast_faces_and_hands_the_child_their_family_prompts(
+            self, tmp_path, monkeypatch):
+        """Observed at the child-process seam, not in source: the parent
+        warms every illustration — the face-keyed teacher and student
+        included — before dispatch, and the payload's prompt map carries
+        each FACE key (the child's cache-only resolver binds by key) with
+        the family's prompt. A whiteboard-fallback segment carries no
+        scene_assets, so this is the only place those prompts can come from."""
+        from concurrent.futures import ThreadPoolExecutor
 
-    def test_the_worker_casts_once_from_the_effective_voice_with_the_generation_id(self):
-        src = Path("worker/process.py").read_text(encoding="utf-8")
-        i = src.index("avatars = cast_avatars(effective_voice, book.get(\"grade\"), generation_id,")
-        assert "style=narration_style" in src[i:i + 300]
-        assert i < src.index("for part_idx, episode in enumerate(episodes_plan, start=1):"), \
-            "cast before the parts loop: every part shares the face"
-        assert "resolve_voice(tts_voice, allow_premium, lang=lesson_lang).voice_id" in src[i - 400:i]
+        import agent6_animation.video_composer as vc
+        import spike.scene_engine.raster_assets as ra
+        import spike.scene_engine.segment_worker as sw
+        from spike.scene_engine.whiteboard import student_element, teacher_element
+
+        avatars = cast_avatars("edge-aria", "9", "gen-w", lang="en",
+                               style="conversational", roster=ROSTER)
+        assert vl.face_id_of(avatars["teacher"]) and vl.face_id_of(avatars["student"])
+        warmed: list[str] = []
+        monkeypatch.setattr(ra, "make_resolver", lambda prompts: lambda key: warmed.append(key))
+        monkeypatch.setattr(vc, "_RENDER_PROCESSES", 2)
+
+        class Pool:
+            def submit(self, f, *a, **k):
+                return ThreadPoolExecutor(max_workers=1).submit(f, *a, **k)
+        monkeypatch.setattr(vc, "_pool", lambda: Pool())
+        got: dict = {}
+
+        def child(payload):
+            got.update(payload)
+            return True, []
+        monkeypatch.setattr(sw, "render_segment_in_child", child)
+        scene = {"id": "s", "narration": "x",
+                 "elements": [teacher_element(avatars["teacher"]), student_element(avatars["student"])],
+                 "actions": [{"verb": "draw", "target": "__teach_av"},
+                             {"verb": "draw", "target": "__stud_av"}]}
+        seg = {"segment_id": "s001", "scene": scene}          # no scene_assets on purpose
+        assert vc._render_scene_segment(seg, "some narration", None, 0.0,
+                                        tmp_path / "o.mp4", "ltr", avatars=avatars) is True
+        prompts = got["prompts"]
+        assert prompts[avatars["teacher"]] == AVATAR_PROMPTS["avatar_teacher_female"]
+        assert prompts[avatars["student"]] == AVATAR_PROMPTS[vl.base_avatar_key(avatars["student"])]
+        assert set(AVATAR_PROMPTS) <= set(prompts)             # the roster keys ride along
+        assert sorted(warmed) == sorted([avatars["teacher"], avatars["student"]])
+
+    def test_the_worker_casts_once_before_the_parts_loop(self):
+        """The one source check kept: the seed is the generation id and the
+        cast happens ABOVE the parts loop, so every part shares the face."""
+        src = (REPO / "worker" / "process.py").read_text(encoding="utf-8")
+        cast = re.search(r"avatars = cast_avatars\(\s*effective_voice,[\s\S]{0,200}?generation_id", src)
+        loop = re.search(r"for part_idx, episode in enumerate\(episodes_plan", src)
+        assert cast and loop and cast.start() < loop.start()
