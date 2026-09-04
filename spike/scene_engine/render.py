@@ -1347,10 +1347,7 @@ class SceneRenderer:
             # duration — the stagger tail may not spill past TimedAction.end,
             # or animation_end undercounts and the clip can cut mid-motion
             n = len(b.spawn)
-            stag = a.stagger
-            if n > 1 and ta.duration > 1e-9:
-                stag = min(stag, max(0.0, ta.duration - 0.15) / (n - 1))
-            travel = max(0.15, ta.duration - stag * (n - 1))
+            stag, travel = self._particle_motion(ta, n)
             offs = []
             for k in range(n):
                 pk = min(1.0, max(0.0, (t - ta.start - k * stag) / travel))
@@ -1359,6 +1356,36 @@ class SceneRenderer:
             s.visible = True
         else:
             s.offset = pos_at(p)
+
+    @staticmethod
+    def _particle_motion(ta: TimedAction, n: int) -> tuple[float, float]:
+        """(stagger, travel) of a move on an n-particle group. The stagger is
+        capped inside the action's duration; the travel is floored at 0.15 s,
+        so a move authored (or compressed) shorter than that keeps travelling
+        PAST TimedAction.end. One definition, shared by _apply_move (which
+        moves the pixels) and _motion_end (which tells the frame key when
+        they stop) — the two must never disagree."""
+        stag = ta.action.stagger
+        if n > 1 and ta.duration > 1e-9:
+            stag = min(stag, max(0.0, ta.duration - 0.15) / (n - 1))
+        travel = max(0.15, ta.duration - stag * (n - 1))
+        return stag, travel
+
+    def _motion_end(self, ta: TimedAction) -> float:
+        """When the last pixel this action moves comes to rest. Every verb
+        clamps its progress to [start, end] except a move on a particle
+        group, whose last particle rests at start + stagger*(n-1) + travel
+        — later than `end` when the duration is under the travel floor (and
+        a zero-duration move steps at `start` yet still travels 0.15 s)."""
+        end = ta.end
+        if ta.action.verb == "move":
+            for nm in self._expand(ta.action.target):
+                b = self.bound.get(nm)
+                if b is not None and b.spawn:
+                    n = len(b.spawn)
+                    stag, travel = self._particle_motion(ta, n)
+                    end = max(end, ta.start + stag * (n - 1) + travel)
+        return end
 
     # ── frame drawing ───────────────────────────────────────────────────────
 
@@ -1399,16 +1426,19 @@ class SceneRenderer:
         cam.state_at(t) (keyed at action start/end; CameraState is a frozen
         dataclass, equal by value), _state_at(t) (progress clamps to [0, 1];
         zero-duration actions are steps at `start`; pulse is a function of
-        p; a move's particle stagger is capped inside the action's duration),
-        the decorations' eased progress, and the pen window
+        p), the decorations' eased progress, and the pen window
         `start <= t < end + 0.08`. Every one of those is constant between the
-        events this key enumerates. Captions are TimedActions in the timeline
-        too (animation_end merely excludes them from the clip length), so a
+        events this key enumerates. The one verb whose pixels keep moving
+        after `end` is a move on a particle group (travel floor 0.15 s, see
+        _particle_motion), so the animating window runs to _motion_end, not
+        to `end`. Captions are TimedActions in the timeline too
+        (animation_end merely excludes them from the clip length), so a
         caption fade past animation_end correctly yields None here. No wall
         clock or unseeded RNG feeds a frame (module contract)."""
         tl = self.timeline
         for ta in tl:
-            if ta.duration > 1e-9 and ta.start <= t < ta.end:
+            end = self._motion_end(ta)
+            if end - ta.start > 1e-9 and ta.start <= t < end:
                 return None                      # something is animating
         return (tuple(t >= ta.start for ta in tl),
                 tuple(ta.start <= t < ta.end + 0.08

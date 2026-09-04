@@ -29,7 +29,8 @@ import subprocess
 import threading
 import time
 import uuid
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import (CancelledError, ProcessPoolExecutor, ThreadPoolExecutor,
+                                as_completed)
 from concurrent.futures.process import BrokenProcessPool
 from datetime import datetime, timezone
 from pathlib import Path
@@ -100,17 +101,26 @@ def _pool() -> ProcessPoolExecutor:
         return _POOL
 
 
-def _reset_pool() -> None:
-    """Drop a broken pool (an OOM-killed child poisons every pending future
-    and the executor is unusable afterwards); the next render recreates it."""
+def _reset_pool(broken: object) -> None:
+    """Retire THE executor that broke (an OOM-killed child poisons every
+    pending future and the executor is unusable afterwards); the next render
+    recreates one. Bound to the instance on purpose: a dead child fails every
+    segment thread waiting on that pool, and each of them calls this — the
+    first one drops the pool and a later thread's `_pool()` has already built
+    a healthy replacement. A reset that cleared *whatever is current* would
+    shut that replacement down (cancelling its futures) and fail a segment
+    that had nothing wrong with it. Shutting `broken` down again after
+    another thread already did is a no-op."""
     global _POOL
+    if broken is None:
+        return
     with _POOL_LOCK:
-        old, _POOL = _POOL, None
-    if old is not None:
-        try:
-            old.shutdown(wait=False, cancel_futures=True)
-        except Exception:  # noqa: BLE001 — a broken executor may refuse
-            pass
+        if _POOL is broken:
+            _POOL = None
+    try:
+        broken.shutdown(wait=False, cancel_futures=True)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 — a broken executor may refuse
+        pass
 
 STORAGE_DIR = Path(__file__).resolve().parent.parent / "storage"
 VIDEO_DIR = STORAGE_DIR / "video_segments"
@@ -229,14 +239,26 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
                        "audio_secs": float(audio_secs), "out_mp4": str(out_mp4),
                        "direction": direction}
             from spike.scene_engine.segment_worker import render_segment_in_child
+            ex: Optional[ProcessPoolExecutor] = None
             try:
-                ok, warnings = _pool().submit(render_segment_in_child, payload).result()
-            except BrokenProcessPool:
-                # an OOM-killed child breaks the whole pool: recreate it on
-                # the next render and finish THIS segment in-process below
+                ex = _pool()
+                try:
+                    fut = ex.submit(render_segment_in_child, payload)
+                except RuntimeError:
+                    # "cannot schedule new futures after shutdown": another
+                    # thread retired this executor between _pool() and
+                    # submit(); take the replacement it left behind
+                    _reset_pool(ex)
+                    ex = _pool()
+                    fut = ex.submit(render_segment_in_child, payload)
+                ok, warnings = fut.result()
+            except (BrokenProcessPool, CancelledError):
+                # an OOM-killed child breaks the whole pool (every pending
+                # future fails; a future a reset cancelled is CancelledError):
+                # retire THAT executor and finish THIS segment in-process below
                 logger.exception("render pool broken; rendering %s in-process",
                                  script_seg.get("segment_id"))
-                _reset_pool()
+                _reset_pool(ex)
             else:
                 if ok and warnings:
                     script_seg["scene_audit"] = warnings

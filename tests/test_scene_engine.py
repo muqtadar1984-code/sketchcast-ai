@@ -821,6 +821,55 @@ class TestIdenticalFrameReuse:
         b = [img.tobytes() for img in r.frames(4.0)]
         assert a == b
 
+    def _particle_scene(self, duration: float, stagger: float = 0.0):
+        return Scene.model_validate({
+            "id": "p", "narration": "ions cross the membrane",
+            "elements": [{"id": "p", "type": "particles",
+                          "spawn": [(200.0, 200.0), (220.0, 240.0), (260.0, 210.0)]}],
+            "actions": [{"verb": "move", "target": "p", "duration": duration,
+                         "stagger": stagger, "path": [(200.0, 200.0), (900.0, 500.0)]}]})
+
+    @pytest.mark.parametrize("duration,stagger", [(0.1, 0.0), (0.1, 2.0), (0.3, 0.0)])
+    def test_a_particle_move_under_the_travel_floor_is_not_reused_while_it_travels(
+            self, duration, stagger):
+        """_apply_move floors a particle group's travel at 0.15 s, so a move
+        authored shorter than that keeps moving PAST TimedAction.end. The key
+        must stay None until the last particle rests — or the first post-end
+        frame is reused for the rest of the scene with the particles frozen
+        mid-flight. Pinned as the invariant: every frame frames() yields is
+        byte-identical to a fresh _frame(t)."""
+        from spike.scene_engine.paper import make_background
+        from spike.scene_engine.render import SS
+        from spike.scene_engine.schema import WORLD_H, WORLD_W
+        s = self._particle_scene(duration, stagger)
+        r = SceneRenderer(s)
+        tl = r.compile(3.0)
+        ta = next(x for x in tl if x.action.verb == "move")
+        fps = 24
+        frames = list(r.frames(3.0, fps))
+        r2 = SceneRenderer(s)
+        r2.compile(3.0)
+        w, h = WORLD_W * SS, WORLD_H * SS
+        bg = make_background(w, h, s.style.background)
+        for f, img in enumerate(frames):
+            assert img.tobytes() == r2._frame(f / fps, bg, w, h).tobytes(), f
+        rest = r._motion_end(ta)
+        if duration < 0.15:
+            # the motion genuinely outlasts the action: those frames render
+            assert rest > ta.end + 0.04
+            tail = [f for f in range(len(frames)) if ta.end <= f / fps < rest]
+            assert tail, "no frame falls between end and rest"
+            assert all(r._frame_key(f / fps) is None for f in tail)
+            assert (r._state_at(ta.end + 0.001)["p"].particle_off
+                    != r._state_at(rest + 0.001)["p"].particle_off)
+        else:
+            assert rest == pytest.approx(ta.end)
+        # ...and once everything rests the hold IS reused, so the fix did not
+        # simply switch reuse off
+        held = [f for f in range(len(frames)) if f / fps > rest + 2 / fps]
+        assert len(held) > 30
+        assert all(frames[f] is frames[held[0]] for f in held)
+
 
 class TestMarkerLayerCrop:
     """The highlighter layer is drawn into its strokes' bounding box, not a

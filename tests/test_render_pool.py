@@ -112,6 +112,38 @@ class _StubPool:
         return fut
 
 
+class _FakeExec:
+    """An executor whose result() (or submit(), with at_submit) raises `exc`
+    — an exception instance, or a callable that raises — and that records
+    whether it was shut down."""
+
+    def __init__(self, exc, at_submit: bool = False):
+        self._exc = exc
+        self._at_submit = at_submit
+        self.down = False
+
+    def _raise(self):
+        if self._exc is None:
+            return
+        if callable(self._exc):
+            return self._exc()
+        raise self._exc
+
+    def submit(self, f, *a, **k):
+        if self._at_submit:
+            self._raise()
+        outer = self
+
+        class F:
+            def result(self_):
+                outer._raise()
+                return True, []
+        return F()
+
+    def shutdown(self, wait=True, cancel_futures=False):
+        self.down = True
+
+
 class TestComposerDispatch:
     def _stub_encode(self, monkeypatch, calls):
         import spike.scene_engine.encode as enc
@@ -171,32 +203,89 @@ class TestComposerDispatch:
 
     def test_broken_pool_falls_back_in_process_and_resets(self, tmp_path, monkeypatch):
         """(d) BrokenProcessPool from result(): the segment finishes on the
-        in-process path (encode seam observed) and the pool is dropped."""
+        in-process path (encode seam observed) and THE executor that raised
+        is the one dropped and shut down."""
         calls = []
         self._stub_encode(monkeypatch, calls)
         monkeypatch.setattr(vc, "_RENDER_PROCESSES", 2)
-
-        class Broken:
-            def submit(self, f, *a, **k):
-                class F:
-                    def result(self_):
-                        raise BrokenProcessPool("child died")
-                return F()
-
-        class OldPool:
-            down = False
-
-            def shutdown(self, wait=True, cancel_futures=False):
-                self.down = True
-        old = OldPool()
-        monkeypatch.setattr(vc, "_POOL", old)
-        monkeypatch.setattr(vc, "_pool", lambda: Broken())
+        broken = _FakeExec(BrokenProcessPool("child died"))
+        monkeypatch.setattr(vc, "_POOL", broken)
+        monkeypatch.setattr(vc, "_pool", lambda: broken)
         seg = {"segment_id": "s001", "scene": dict(_SCENE)}
         ok = vc._render_scene_segment(seg, "some narration", None, 0.0,
                                       tmp_path / "o.mp4", "ltr")
         assert ok is True
         assert len(calls) == 1                       # rendered in-process
-        assert vc._POOL is None and old.down
+        assert vc._POOL is None and broken.down
+
+    def test_a_late_reset_leaves_another_threads_replacement_pool_alone(self, tmp_path, monkeypatch):
+        """A dead child fails EVERY segment thread waiting on the pool, and
+        each of them resets. By the time a late one gets there, another
+        thread's _pool() has built a healthy replacement with work on it: the
+        late reset must retire only the executor it was using, never the
+        replacement (cancelling its futures would fail a healthy segment)."""
+        calls = []
+        self._stub_encode(monkeypatch, calls)
+        monkeypatch.setattr(vc, "_RENDER_PROCESSES", 2)
+        replacement = _FakeExec(None)
+
+        def swap_then_break():
+            # "another thread" already replaced the pool while we blocked
+            vc._POOL = replacement
+            raise BrokenProcessPool("child died")
+        broken = _FakeExec(swap_then_break)
+        monkeypatch.setattr(vc, "_POOL", broken)
+        monkeypatch.setattr(vc, "_pool", lambda: broken)
+        seg = {"segment_id": "s001", "scene": dict(_SCENE)}
+        ok = vc._render_scene_segment(seg, "some narration", None, 0.0,
+                                      tmp_path / "o.mp4", "ltr")
+        assert ok is True and len(calls) == 1
+        assert vc._POOL is replacement
+        assert broken.down and not replacement.down
+
+    def test_a_cancelled_future_falls_back_in_process(self, tmp_path, monkeypatch):
+        """A future another thread's reset cancelled raises CancelledError,
+        not BrokenProcessPool: still the in-process path, never a silent
+        downgrade to the whiteboard/native renderer."""
+        from concurrent.futures import CancelledError
+        calls = []
+        self._stub_encode(monkeypatch, calls)
+        monkeypatch.setattr(vc, "_RENDER_PROCESSES", 2)
+        cancelled = _FakeExec(CancelledError())
+        monkeypatch.setattr(vc, "_POOL", cancelled)
+        monkeypatch.setattr(vc, "_pool", lambda: cancelled)
+        seg = {"segment_id": "s001", "scene": dict(_SCENE)}
+        ok = vc._render_scene_segment(seg, "some narration", None, 0.0,
+                                      tmp_path / "o.mp4", "ltr")
+        assert ok is True and len(calls) == 1
+        assert vc._POOL is None and cancelled.down
+
+    def test_an_executor_shut_down_before_submit_is_replaced(self, tmp_path, monkeypatch):
+        """_pool() handed back an executor another thread retired a moment
+        later: submit() raises RuntimeError. The segment takes the
+        replacement and renders through the child once — no in-process
+        render, no False."""
+        calls = []
+        self._stub_encode(monkeypatch, calls)
+        monkeypatch.setattr(vc, "_RENDER_PROCESSES", 2)
+        retired = _FakeExec(RuntimeError("cannot schedule new futures after shutdown"),
+                            at_submit=True)
+        child_calls = []
+
+        def run(f, *a, **k):
+            child_calls.append(f)
+            return f(*a, **k)
+        fresh = _StubPool(run)
+        pools = iter([retired, fresh])
+        monkeypatch.setattr(vc, "_POOL", retired)
+        monkeypatch.setattr(vc, "_pool", lambda: next(pools))
+        monkeypatch.setattr(sw, "render_segment_in_child", lambda payload: (True, ["w"]))
+        seg = {"segment_id": "s001", "scene": dict(_SCENE)}
+        ok = vc._render_scene_segment(seg, "some narration", None, 0.0,
+                                      tmp_path / "o.mp4", "ltr")
+        assert ok is True and seg["scene_audit"] == ["w"]
+        assert len(child_calls) == 1 and calls == []
+        assert retired.down and vc._POOL is None   # retired was current: dropped
 
     def test_a_child_exception_is_false_not_a_crash(self, tmp_path, monkeypatch):
         calls = []
@@ -246,8 +335,18 @@ class TestPoolConstruction:
         assert made["ctx"].get_start_method() == "spawn"
         assert made["recycle"] == 32
         assert vc._pool() is p1                          # one pool per process
-        vc._reset_pool()
+        vc._reset_pool(p1)
         assert vc._POOL is None
+
+    def test_reset_is_bound_to_the_executor_that_broke(self, monkeypatch):
+        first, second = _FakeExec(None), _FakeExec(None)
+        monkeypatch.setattr(vc, "_POOL", second)          # already replaced
+        vc._reset_pool(first)                             # the late reset
+        assert vc._POOL is second and first.down and not second.down
+        vc._reset_pool(None)                              # nothing to retire
+        assert vc._POOL is second and not second.down
+        vc._reset_pool(second)
+        assert vc._POOL is None and second.down
 
 
 @pytest.mark.slow
