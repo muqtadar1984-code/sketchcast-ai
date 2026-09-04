@@ -28,7 +28,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from shared.asset_keys import all_noise, canonical_key, core_tokens
+from shared.asset_keys import (all_noise, canonical_key, core_tokens,
+                               distinguishes)
 from shared.asset_keys import tokens as _tokens_of
 
 logger = logging.getLogger(__name__)
@@ -234,6 +235,13 @@ def key_guard_ok(query_key: str, row: dict[str, Any] | None) -> bool:
     if not row:
         return False
     ak, ck = row.get("asset_key") or "", row.get("canonical_key") or ""
+    # Same cache identity, same picture — by definition, everywhere else in
+    # this system. Checked first so a key with nothing distinguishing in it
+    # ("figure_3") can still be answered by ITSELF, which the abstention rule
+    # below would otherwise refuse.
+    qc = canonical_key(query_key)
+    if qc and qc in {canonical_key(k) for k in (ak, ck) if k}:
+        return True
     q = guard_tokens(query_key)
     r = guard_tokens(ak) | guard_tokens(ck)
     undistinguished = (all_noise(query_key)
@@ -250,14 +258,29 @@ def key_guard_ok(query_key: str, row: dict[str, Any] | None) -> bool:
     if not q or not r or undistinguished:
         qf, rf = _fallback_tokens(query_key), (_fallback_tokens(ak)
                                                | _fallback_tokens(ck))
-        ok = bool(qf and rf and (qf & rf))
+        shared = qf & rf
+        # …but the abstention still has to REST on something. Raw-token
+        # overlap alone let `cell_diagram` be a candidate for
+        # `volcano_diagram` on the word "diagram", and `the_picture` for
+        # anything at all: every key in the library carries a medium word, so
+        # an all-noise request became eligible for the whole catalogue with
+        # only the threshold left in the way. At least one shared token must
+        # name something — not a medium word, not a bare numeral.
+        carriers = {t for t in shared if distinguishes(t)}
+        ok = bool(carriers)
         # Logged, because this is the one path where the guard abstains: the
         # threshold is the only thing standing between the request and a wrong
         # picture, and "why did cells match X" has to be answerable.
         logger.debug("key guard abstained for %r vs %r/%r (nothing "
-                     "distinguishing on %s); raw-token overlap=%s",
+                     "distinguishing on %s); shared=%s carrying=%s",
                      query_key, ak, ck,
-                     "the request" if all_noise(query_key) else "the row", ok)
+                     "the request" if all_noise(query_key) else "the row",
+                     sorted(shared), sorted(carriers))
+        if shared and not ok:
+            logger.info("visual library: refused %s <- %s/%s — the only "
+                        "tokens they share (%s) name a medium or an index, "
+                        "not a subject", query_key, ak, ck,
+                        ", ".join(sorted(shared)))
         return ok
     return False
 

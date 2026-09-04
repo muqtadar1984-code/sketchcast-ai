@@ -371,3 +371,76 @@ class TestABareNumberNamesNothing:
         for key in ("figure_3", "diagram_3", "stage_3", "figure_3_2"):
             assert vl.canonical_key(key) == renderer_key(key) == \
                 shared_key(key), key
+
+
+class TestTheAbstentionMustRestOnSomething:
+    """The abstention path exists so `cell_diagram` can still be answered by
+    `animal_cell_diagram`. It compared RAW tokens, and every key in the library
+    carries a medium word — so an all-noise request was eligible for the whole
+    catalogue on the strength of "diagram", with only the threshold left in the
+    way. At least one shared token must name something."""
+
+    _VOLCANO = {
+        "asset_key": "volcano_diagram", "canonical_key": "volcano",
+        "description": ("An educational diagram of a volcano showing the "
+                        "magma chamber, the vent and the crater."),
+        "subject": "geography", "grade": "k12", "curriculum": "generic",
+        "topic": "volcano", "concepts": ["volcano"], "status": "approved",
+        "asset_type": "visual", "local_cache_path": "/tmp/v.png",
+    }
+    _ANIMAL_CELL = {
+        "asset_key": "animal_cell_diagram", "canonical_key": "animal",
+        "description": ("An educational diagram of an animal cell showing the "
+                        "nucleus, cytoplasm and cell membrane."),
+        "subject": "biology", "grade": "k12", "curriculum": "generic",
+        "topic": "animal cell", "concepts": ["cell"], "status": "approved",
+        "asset_type": "visual", "local_cache_path": "/tmp/ac.png",
+    }
+
+    def test_a_shared_medium_word_is_not_a_match(self):
+        """The noise-only request that must NOT match."""
+        assert all_noise("cell_diagram")
+        assert vl.key_guard_ok("cell_diagram", self._VOLCANO) is False
+
+    def test_nor_is_a_shared_article(self):
+        for key in ("the_diagram", "a_picture_of_the", "an_illustration"):
+            assert all_noise(key), key
+            assert vl.key_guard_ok(key, self._VOLCANO) is False, key
+            assert vl.key_guard_ok(key, self._ANIMAL_CELL) is False, key
+
+    def test_nor_is_a_shared_index_number(self):
+        row = {"asset_key": "diagram_3", "canonical_key": "3_diagram"}
+        assert vl.key_guard_ok("figure_3", row) is False
+
+    def test_the_volcano_is_not_served_for_a_cell_diagram(
+            self, tmp_path, monkeypatch):
+        _library(monkeypatch, tmp_path, self._VOLCANO)
+        assert vl.find("cell_diagram",
+                       "An educational diagram of a volcano showing the magma "
+                       "chamber, the vent and the crater",
+                       min_score=0.0) is None
+
+    def test_the_match_the_abstention_exists_for_still_passes(self):
+        """"cell" is folded for the cache, but it narrows the subject: it is
+        allowed to carry the abstention where "diagram" alone is not."""
+        assert vl.key_guard_ok("cell_diagram", self._ANIMAL_CELL) is True
+
+    def test_and_the_library_still_serves_it(self, tmp_path, monkeypatch):
+        _library(monkeypatch, tmp_path, self._ANIMAL_CELL)
+        assert vl.find("cell_diagram",
+                       "An educational diagram of an animal cell showing the "
+                       "nucleus, cytoplasm and cell membrane") is not None
+
+    def test_a_key_with_nothing_distinguishing_still_matches_itself(self):
+        """`figure_3` shares only a medium word and an index with anything —
+        including its own row. Same canonical key is the same picture."""
+        for key in ("figure_3", "cell_diagram", "the_diagram"):
+            assert vl.key_guard_ok(key, {
+                "asset_key": key, "canonical_key": vl.canonical_key(key)}), key
+
+    def test_the_refusal_is_logged(self, caplog):
+        import logging
+        with caplog.at_level(logging.INFO, logger="shared.visual_library"):
+            assert vl.key_guard_ok("cell_diagram", self._VOLCANO) is False
+        assert any("name a medium or an index" in r.getMessage()
+                   for r in caplog.records), caplog.text
