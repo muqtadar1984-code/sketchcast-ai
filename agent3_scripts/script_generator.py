@@ -534,13 +534,22 @@ def generate_episode_script(
             where = f"; full reply saved to {dump}"
         except Exception:
             pass
+        # The fault itself, with a window of text around it: the /tmp dump
+        # above dies with the container, and the 2026-09-04 failure left
+        # nothing to diagnose but a 220-char head and a 160-char tail.
+        try:
+            from shared.claude_client import json_fault
+            fault = json_fault(body) if isinstance(raw, str) else None
+        except Exception:  # noqa: BLE001
+            fault = None
         raise RuntimeError(
             f"Script generation produced no segments for episode "
             f"{episode.get('episode_num', 1)}: {len(body)} chars, "
             f"output_tokens={used} billed across attempts (cap {max_out}), "
             "provider did NOT report truncation — so this is malformed JSON, "
             "not a cut-off reply"
-            f". Reply began: {body[:220]!r} … ended: {body[-160:]!r}{where}"
+            + (f". JSON fault: {fault}" if fault else "")
+            + f". Reply began: {body[:220]!r} … ended: {body[-160:]!r}{where}"
         )
 
     # A script far too short for the lesson it claims to be is a failed

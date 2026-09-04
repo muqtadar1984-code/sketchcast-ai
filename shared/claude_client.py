@@ -242,12 +242,69 @@ def _escape_inner_quotes(text: str) -> str:
     """Escape double quotes the model left bare INSIDE a string.
 
     Measured: '...often called the "powerhouses" of the cell...' inside a
-    dialogue line. A quote only ends a string when the next thing along is
-    structural — a comma, colon, closing brace or bracket, or the end of the
-    text. Anything else means the quote belongs to the prose.
+    dialogue line; then 'called "organelles", tiny structures' and 'ask
+    "why?": because…' — a quoted word before a comma or colon is how English
+    prose quotes a word, and the first rule ("a quote before structural
+    punctuation closes the string") turned a complete 54,000-character reply
+    into "produced no segments" on 2026-09-04.
+
+    So the walk tracks the containers it is inside and closes a string only
+    where JSON could actually continue:
+      inside an OBJECT — a `,` closes only if a KEY follows ("name":); a `:`
+        closes only if this string IS the key; `}` closes.
+      inside an ARRAY — a `,` closes if an element follows (a string, a
+        container, a number, a literal); `]` closes.
+    Enumerations inside an array element ('"cell", "tissue"') stay ambiguous
+    and are left as they were; five of the six schema strings are object
+    values, where the rule is decidable. Valid JSON is a no-op.
     """
+    import re as _re
+    key_shape = _re.compile(r'\s*"(?:[^"\\]|\\.)*"\s*:')
+    starters = set('"{[-0123456789')
     out, i, n = [], 0, len(text)
-    in_str = esc = False
+    stack: list[str] = []          # containers we are inside: "{" or "["
+    expect_key: list[bool] = []    # per container: is the next string a key?
+    in_str = esc = is_key = False
+
+    def closes(j: int) -> bool:
+        if j >= n:
+            return True
+        c = text[j]
+        top = stack[-1] if stack else None
+        if c in "}]":
+            # a closer never follows a prose quote; a MIS-NESTED closer is
+            # _rebalance_json's job and must reach it as structure
+            return True
+        if c == ":":
+            if is_key:
+                return True
+            # A colon after a VALUE string is never valid JSON, so this is
+            # either prose ('ask "why?": because') or a mangled object
+            # ('"who":"alice":"bob"'). If a JSON value follows the colon the
+            # two readings are indistinguishable, and this layer must never
+            # choose between readings — it stays a closer and the reply fails
+            # loudly unless a schema-aware rule (dialogue speakers) owns it.
+            k = j + 1
+            while k < n and text[k] in " \t\r\n":
+                k += 1
+            if k >= n:
+                return True
+            d = text[k]
+            return (d in starters
+                    or any(text.startswith(lit, k) for lit in ("true", "false", "null")))
+        if c != ",":
+            return False
+        k = j + 1
+        while k < n and text[k] in " \t\r\n":
+            k += 1
+        if k >= n or text[k] in "]}":
+            return True      # a trailing comma; a later rule strips it
+        if top == "{":
+            return key_shape.match(text, j + 1) is not None
+        d = text[k]
+        return (d in starters
+                or any(text.startswith(lit, k) for lit in ("true", "false", "null")))
+
     while i < n:
         c = text[i]
         if esc:
@@ -261,7 +318,7 @@ def _escape_inner_quotes(text: str) -> str:
                 j = i + 1
                 while j < n and text[j] in " \t\r\n":
                     j += 1
-                if j >= n or text[j] in ",:}]":
+                if closes(j):
                     in_str = False
                     out.append(c)
                 else:
@@ -271,9 +328,66 @@ def _escape_inner_quotes(text: str) -> str:
         else:
             if c == '"':
                 in_str = True
+                is_key = bool(stack) and stack[-1] == "{" and expect_key[-1]
+            elif c == "{":
+                stack.append("{")
+                expect_key.append(True)
+            elif c == "[":
+                stack.append("[")
+                expect_key.append(False)
+            elif c in "}]":
+                if stack:
+                    stack.pop()
+                    expect_key.pop()
+            elif c == ":" and stack and stack[-1] == "{":
+                expect_key[-1] = False
+            elif c == "," and stack and stack[-1] == "{":
+                expect_key[-1] = True
             out.append(c)
         i += 1
     return "".join(out)
+
+
+def _fix_bad_escapes(text: str) -> str:
+    """A backslash that does not start a JSON escape (LaTeX '\\(', '5\\%', a
+    stray path, '\\u' not followed by four hex digits) is an "Invalid
+    \\escape" for json.loads; doubling it keeps the character the model
+    meant. '\\'' is the one exception — an apostrophe the model over-escaped
+    — and becomes a plain apostrophe. An escaped backslash pair is consumed
+    whole so its second half is never mistaken for a lone backslash.
+
+    Known ambiguity, left alone: '\\frac' and '\\times' begin with the VALID
+    escapes \\f and \\t, so LaTeX in narration still reaches the text as a
+    form feed / tab plus the rest of the word; the alternative — guessing
+    which valid escapes are really LaTeX — is worse."""
+    import re as _re
+    text = _re.sub(r"(?<!\\)\\'", "'", text)
+    return _re.sub(r'\\\\|\\u(?![0-9a-fA-F]{4})|\\(?!["\\/bfnrtu])',
+                   lambda m: "\\\\" if m.group(0) == "\\\\" else "\\\\" + m.group(0)[1:],
+                   text)
+
+
+def json_fault(text, radius: int = 120) -> str | None:
+    """Where and why json.loads rejects `text`, with a window of the text
+    around the spot — or None when it parses. For an error message: the raw
+    reply used to be dumped to /tmp on the container, which is gone by the
+    time anyone reads the job error, so the fault itself has to travel. The
+    window is repr-escaped, so control characters cannot mangle a log line
+    or a DB column."""
+    try:
+        if isinstance(text, (bytes, bytearray)):
+            text = bytes(text).decode("utf-8", "replace")
+        text = str(text)
+        try:
+            json.loads(text, strict=False)
+            return None
+        except json.JSONDecodeError as exc:
+            lo, hi = max(0, exc.pos - radius), min(len(text), exc.pos + radius)
+            window = repr(text[lo:hi])[1:-1]
+            return (f"{exc.msg} at line {exc.lineno} col {exc.colno} "
+                    f"(char {exc.pos} of {len(text)}): …{window}…")
+    except Exception as exc:  # noqa: BLE001
+        return f"{type(exc).__name__}: {exc}"
 
 
 def _rebalance_json(text: str):
@@ -362,9 +476,22 @@ def _repair_json(text: str):
         text = _re.sub(r"^```[a-zA-Z]*\s*", "", text)
         text = _re.sub(r"\s*```$", "", text).strip()
     candidates = []
-    # 1. SSML quotes are the one nested-quote case this model emits
-    fixed = _re.sub(r'<break\s+time\s*=\s*"([^"]*)"\s*/?>',
-                    r"<break time='\1'/>", text)
+    # 0. a backslash that is not an escape (LaTeX, a percent sign, a path)
+    fixed = _fix_bad_escapes(text)
+    candidates.append(fixed)
+    # 1. SSML attribute quotes inside a JSON string. The first shape measured
+    #    was <break time="0.3s"/>; the rule covers every SSML tag — prosody,
+    #    emphasis, say-as, break strength — since a tag never legitimately sits
+    #    outside a string in this schema, and single quotes are valid SSML.
+    #    Anchored on the tag NAMES: a bare `<[^<>]*>` matched from a `<` in one
+    #    string to a `>` in a later one (a maths lesson's "3 < 5" … "7 > 2")
+    #    and rewrote the structural quotes between them (review, 2026-09-04).
+    #    No single-letter names (`<p`, `<s`, `<w` fire on terse maths like
+    #    "0<p and … p>1"), and the tag body may not contain a structural
+    #    `"` `,`/`:` `"` — so a match can never span two JSON strings.
+    fixed = _re.sub(r'</?(?:break|prosody|emphasis|say-as|phoneme|speak|sub|voice|lang|mark|audio)\b'
+                    r'(?:(?!"\s*[,:]\s*")[^<>])*>',
+                    lambda m: m.group(0).replace('\\"', '"').replace('"', "'"), fixed)
     candidates.append(fixed)
     # 2. a key emitted TWICE, its own name standing in as the value:
     #    {"who":"who":"teacher"}  ->  {"who":"teacher"}
@@ -449,7 +576,10 @@ def _repair_json(text: str):
     best, best_size = None, -1
     for cand in candidates:
         try:
-            out = json.loads(cand)
+            # strict=False: a raw newline or tab INSIDE a string is a
+            # control character json.loads rejects by default; the model
+            # emits them in long narration and they are harmless.
+            out = json.loads(cand, strict=False)
         except Exception:
             continue
         if not isinstance(out, (dict, list)) or not out:
@@ -816,6 +946,10 @@ class ClaudeClient:
             if repaired is not None:
                 logger.warning("model JSON was malformed; repaired it")
                 return repaired
+            # Say WHERE it broke. The reply itself does not survive the
+            # container, so this line is what a later reader has.
+            logger.error("model JSON unparseable and unrepairable — %s",
+                         json_fault(text) or "it parsed, but carried no usable object")
             return {"raw_text": text}
 
     @staticmethod
