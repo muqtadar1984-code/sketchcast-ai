@@ -757,8 +757,16 @@ def compose_episode_videos(
         logger.warning("segment ordering was inconsistent; rendering in order")
         _order = list(range(total))
     if workers > 1 and total > 1:
+        # Render threads start with an EMPTY contextvars context, so bind them
+        # to THIS lesson: with WORKER_CONCURRENCY>1 an unbound thread would
+        # read another book's image budget and deferral map.
+        try:
+            from spike.scene_engine.raster_assets import bind_generation
+            _render_bound = bind_generation(_render_one)
+        except Exception:  # noqa: BLE001
+            _render_bound = _render_one
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = [ex.submit(_render_one, i, slide_segments[i]) for i in _order]
+            futures = [ex.submit(_render_bound, i, slide_segments[i]) for i in _order]
             done = 0
             for fut in as_completed(futures):
                 done += 1

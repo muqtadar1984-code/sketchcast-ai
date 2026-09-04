@@ -188,7 +188,9 @@ class TestFailuresDoNotSpendTheLessonAllowance:
         state = ra.image_budget_state()
         assert state["n"] == 0, "a 429 produced no image; it spent no credit"
         assert state["refunded"] == 1
-        assert state["attempts"] == 1, "the ATTEMPT is never refunded"
+        # four HTTP requests really went out (the four-try ladder), and the
+        # ceiling counts REQUESTS, not transport entries
+        assert state["attempts"] == 4, "the ATTEMPT is never refunded"
 
     def test_a_successful_call_keeps_its_unit(self, monkeypatch):
         monkeypatch.setenv("AISTUDIO_IMAGE_FALLBACK", "1")
@@ -224,10 +226,11 @@ class TestTheAttemptCeiling:
     def test_a_dead_provider_cannot_loop_forever(self):
         ra.reset_image_budget()
         ceiling = ra.image_attempt_ceiling()
-        assert ceiling == ra._IMAGE_BUDGET * 3
+        assert ceiling == ra._IMAGE_BUDGET * 2
         for i in range(ceiling):
             assert ra._image_budget_ok() is True, i
-            ra._refund_image_call()          # every call 429s
+            ra._note_image_attempt()         # one request went out…
+            ra._refund_image_call()          # …and 429'd
         assert ra.image_budget_state()["n"] == 0, "the budget looks untouched…"
         assert ra._image_budget_ok() is False, "…but the ceiling has stopped it"
 
@@ -235,6 +238,7 @@ class TestTheAttemptCeiling:
         ra.reset_image_budget()
         for _ in range(ra.image_attempt_ceiling()):
             ra._image_budget_ok()
+            ra._note_image_attempt()
             ra._refund_image_call()
         assert ra._image_budget_ok() is False
         ra.reset_image_budget()
@@ -287,3 +291,172 @@ class TestOnePerKeyLockForTheWholeDecision:
         # the decision — existed_before, hydrate, generate, publish, log — must
         # be inside it, not merely the generator call
         assert "existed_before" in src
+
+
+class TestTheCeilingCountsRequestsNotEntries:
+    """One transport ENTRY runs a four-try ladder inside _with_backoff. A
+    ceiling counted per entry therefore permitted 3 x 24 x 4 = 288 requests
+    into the burst it exists to stop, while the log line said "72 attempts"."""
+
+    def test_every_http_try_is_counted(self, monkeypatch):
+        monkeypatch.setenv("AISTUDIO_IMAGE_FALLBACK", "1")
+        monkeypatch.setenv("GOOGLE_AI_API_KEY", "not-a-real-key")
+        posts = []
+        monkeypatch.setattr(
+            ra.requests, "post",
+            lambda *a, **k: posts.append(1) or _response(429, _QUOTA_BODY))
+        ra.reset_image_budget()
+        assert ra._aistudio_call("a diagram of a cell") is None
+        assert len(posts) == 4, "the ladder really fired four requests"
+        assert ra.image_budget_state()["attempts"] == len(posts)
+
+    def test_the_ceiling_is_a_request_count_an_operator_can_read(self):
+        assert ra.image_attempt_ceiling() == ra._IMAGE_BUDGET * 2
+
+    def test_vision_requests_do_not_spend_the_image_ceiling(self, monkeypatch):
+        """flash vision was never throttled in any measured lesson; it must
+        not consume the image provider's hard stop."""
+        ra.reset_image_budget()
+        calls = {"n": 0}
+
+        def boom():
+            calls["n"] += 1
+            raise RuntimeError("no vision here")
+        try:
+            ra._with_backoff(boom, "vision", tries=2, kind="vision")
+        except RuntimeError:
+            pass
+        assert calls["n"] == 1
+        assert ra.image_budget_state()["attempts"] == 0
+
+
+class TestJitterBreaksTheLockstep:
+    """MODEL_CALL_CONCURRENCY=3 gate slots that 429 together used to retry on
+    an identical cadence and re-collide every round."""
+
+    def _waits(self, monkeypatch, headers=None, samples=200):
+        waits = []
+
+        def sleeper(s):
+            waits.append(float(s))
+        monkeypatch.setattr(time, "sleep", sleeper)
+
+        def flaky():
+            r = requests.Response()
+            r.status_code = 429
+            for k, v in (headers or {}).items():
+                r.headers[k] = v
+            raise requests.HTTPError(response=r)
+        for _ in range(samples):
+            try:
+                ra._with_backoff(flaky, "test", tries=2)
+            except requests.HTTPError:
+                pass
+        return waits
+
+    def test_our_own_ladder_spreads_across_half_the_wait(self, monkeypatch):
+        waits = self._waits(monkeypatch)
+        assert min(waits) >= 6.0, "never shorter than the ladder's own step"
+        assert max(waits) <= 9.0, "…and never more than base + half of it"
+        assert max(waits) > 7.5, ("a 25% cap could not exceed 7.5s: three "
+                                  "slots would re-collide inside 1.5s")
+
+    def test_a_server_named_retry_after_is_still_honoured(self, monkeypatch):
+        waits = self._waits(monkeypatch, headers={"Retry-After": "7"},
+                            samples=50)
+        assert min(waits) >= 7.0 and max(waits) <= 9.0
+
+
+class TestLessonsDoNotShareState:
+    """WORKER_CONCURRENCY>1 runs several lessons in ONE process (worker/run.py).
+    Measured before this fix, with no network at all: lesson A deferring
+    ciliated_cell and abandoning red_blood_cell made lesson B — a different
+    book — skip both pictures with zero attempts; and lesson B's reset wiped
+    lesson A's protection mid-flight, so A's render threads resumed hammering
+    the 429'd key and the never-refunded ceiling stopped binding."""
+
+    def _in_lesson(self, gen_id, fn):
+        """Run fn on its own thread, as a second job thread would."""
+        out = {}
+
+        def body():
+            ra.reset_image_budget(gen_id)
+            out["v"] = fn()
+        t = threading.Thread(target=body)
+        t.start()
+        t.join()
+        return out.get("v")
+
+    def test_one_lessons_deferral_does_not_blank_anothers_board(self):
+        ra.reset_image_budget("lesson-a")
+        ra.defer_asset("ciliated_cell", 45)
+        ra.abandon_asset("red_blood_cell")
+
+        def lesson_b():
+            return (ra.asset_deferred("ciliated cells diagram"),
+                    ra.asset_abandoned("red_blood_cell"))
+        deferred, abandoned = self._in_lesson("lesson-b", lesson_b)
+        assert deferred is None, "lesson B never saw a 429; it must try"
+        assert abandoned is False
+
+    def test_another_lessons_reset_does_not_wipe_this_ones_protection(self):
+        ra.reset_image_budget("lesson-a")
+        ra.defer_asset("ciliated_cell", 45)
+        self._in_lesson("lesson-b", lambda: None)   # B starts, and resets
+        assert ra.asset_deferred("ciliated_cell") is not None, \
+            "lesson A's render threads would resume hammering the 429'd key"
+
+    def test_the_attempt_ceiling_cannot_be_reset_away_by_a_neighbour(self):
+        ra.reset_image_budget("lesson-a")
+        for _ in range(ra.image_attempt_ceiling()):
+            ra._image_budget_ok()
+            ra._note_image_attempt()
+            ra._refund_image_call()
+        assert ra._image_budget_ok() is False
+        self._in_lesson("lesson-b", lambda: ra._image_budget_ok())
+        assert ra._image_budget_ok() is False, \
+            "a hard stop a concurrent lesson can lift is not a hard stop"
+
+    def test_the_budget_is_charged_to_the_lesson_that_spent_it(self):
+        ra.reset_image_budget("lesson-a")
+        for _ in range(3):
+            ra._image_budget_ok()
+        b_state = self._in_lesson("lesson-b", ra.image_budget_state)
+        assert b_state["n"] == 0
+        assert ra.image_budget_state()["n"] == 3
+
+    def test_a_render_thread_is_bound_to_its_own_lesson(self):
+        """The pools do not inherit a context; bind_generation carries it."""
+        ra.reset_image_budget("lesson-a")
+        ra.defer_asset("ciliated_cell", 45)
+        seen = {}
+
+        def on_a_render_thread():
+            seen["deferred"] = ra.asset_deferred("ciliated_cell")
+        t = threading.Thread(target=ra.bind_generation(on_a_render_thread))
+        t.start()
+        t.join()
+        assert seen["deferred"] is not None
+
+        seen.clear()
+        t = threading.Thread(target=on_a_render_thread)   # unbound
+        t.start()
+        t.join()
+        assert seen["deferred"] is None, "the leak this proves is fixed"
+
+    def test_the_composer_binds_its_render_threads(self):
+        import agent6_animation.video_composer as vc
+        src = inspect.getsource(vc.compose_episode_videos)
+        assert "bind_generation" in src
+
+    def test_the_worker_names_the_generation(self):
+        from worker.process import process_generation
+        assert "reset_image_budget(generation_id)" in \
+            inspect.getsource(process_generation)
+
+    def test_a_finished_lessons_state_is_eventually_dropped(self, monkeypatch):
+        ra.reset_image_budget("old-lesson")
+        ra.defer_asset("k", 45)
+        monkeypatch.setattr(ra, "_STATE_TTL_SECS", -1.0)
+        ra.reset_image_budget("new-lesson")
+        assert "old-lesson" not in ra._STATE

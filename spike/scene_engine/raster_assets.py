@@ -19,6 +19,8 @@ vector tier — a lesson never fails because an asset did (§20).
 from __future__ import annotations
 
 import base64
+import contextvars
+import functools
 import json
 import logging
 import os
@@ -163,8 +165,9 @@ def aistudio_image_fallback_enabled() -> bool:
 
 def _aistudio_call(prompt: str) -> bytes | None:
     if not aistudio_image_fallback_enabled():
-        if not _image_calls["aistudio_off_logged"]:
-            _image_calls["aistudio_off_logged"] = True
+        _calls = _lesson_calls()
+        if not _calls["aistudio_off_logged"]:
+            _calls["aistudio_off_logged"] = True
             logger.info("AI Studio image fallback is off (set "
                         "AISTUDIO_IMAGE_FALLBACK=1 once that key's project "
                         "has billing); Vertex is the only image provider")
@@ -325,6 +328,9 @@ def _with_backoff(fn, what: str, tries: int = 4, kind: str = "image"):
         waited = _limiter(kind).acquire()
         if waited > 0.5:
             logger.info("%s paced %.1fs by %s", what, waited, _LIMITER_DEFAULTS[kind][0])
+        if kind == "image":
+            # one request, about to go out -- the ceiling counts REQUESTS
+            _note_image_attempt()
         try:
             with gate:                 # at most N paid calls in flight
                 return fn()
@@ -342,11 +348,16 @@ def _with_backoff(fn, what: str, tries: int = 4, kind: str = "image"):
             server = _retry_after(exc)
             base = (min(max(server, 1.0), _RETRY_AFTER_CAP)
                     if server is not None else delay)
-            # Jitter that GROWS with the attempt: three gate slots that 429
-            # together retried on the identical 7/15/36 cadence and re-collided
-            # every round. Capped against the wait itself so a server-named
-            # Retry-After is still honoured to the second it asked for.
-            wait = base + random.uniform(0, min(2.0 + 2.0 * attempt, base * 0.25))
+            # Three gate slots that 429 together retried on the identical
+            # 7/15/36 cadence and re-collided every round. When the SERVER
+            # named the second, honour it: jitter stays inside 25% of the wait
+            # it asked for. When the wait is our OWN ladder there is no such
+            # promise, so spread across half of it -- at 25% three slots
+            # released 36 s later still land inside 6 s of each other, which is
+            # the lockstep this exists to break.
+            span = (min(2.0 + 2.0 * attempt, base * 0.25) if server is not None
+                    else base * 0.5)
+            wait = base + random.uniform(0, span)
             logger.warning("%s rate-limited; retrying in %.0fs (%d/%d)",
                            what, wait, attempt + 1, tries - 1)
             _t.sleep(wait)
@@ -365,27 +376,103 @@ def _with_backoff(fn, what: str, tries: int = 4, kind: str = "image"):
 # lesson. Reset by the worker at the start of each generation.
 _IMAGE_BUDGET = _env_int("IMAGE_CALLS_PER_LESSON", 24)
 # The refund below removes the cap that FAILURES used to provide, so a dead
-# provider could otherwise be hammered for the whole lesson. Attempts are
-# counted separately and never refunded: this is the hard stop.
-_IMAGE_ATTEMPT_FACTOR = 3
-_image_calls = {"n": 0, "blocked": 0, "attempts": 0, "refunded": 0,
-                "aistudio_off_logged": False, "ceiling_logged": False}
-_IMAGE_BUDGET_LOCK = _threading.Lock()
+# provider could otherwise be hammered for the whole lesson. HTTP attempts are
+# counted separately, inside _with_backoff where they actually happen, and are
+# never refunded: this is the hard stop. x2, so the number an operator reads in
+# the log means what they assume it means -- "48 requests", not "48 entries,
+# each of which may fire four".
+_IMAGE_ATTEMPT_FACTOR = 2
 
 
-def reset_image_budget() -> None:
+# -- per-generation state ----------------------------------------------------
+# WORKER_CONCURRENCY>1 runs several LESSONS in one process (worker/run.py), so
+# a module-level counter is shared by unrelated books. Measured in-process:
+# lesson A deferring ciliated_cell and abandoning red_blood_cell made lesson B
+# -- a different book -- skip both pictures with ZERO attempts and ship blank
+# boards though it never saw a 429; and lesson B's reset_image_budget() wiped
+# lesson A's protection mid-flight, so A's eight render threads resumed
+# hammering the 429'd key and the never-refunded ceiling stopped binding.
+#
+# So every counter and both maps hang off the generation the caller belongs
+# to. The id travels in a ContextVar; a thread does NOT inherit its parent's
+# context, so the two places that fan a lesson out onto threads (the composer's
+# render pool, the warm pass) submit through `bind_generation` below.
+_GENERATION_VAR: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "scene_image_generation", default="")
+# A finished lesson's bucket is dead weight; drop it an hour after its last
+# touch so a long-lived worker process does not grow one dict per generation.
+_STATE_TTL_SECS = 3600.0
+_STATE: dict[str, dict] = {}
+# One RE-ENTRANT lock for the whole map: `_bucket()` takes it and callers hold
+# it across a read-modify-write.
+_IMAGE_BUDGET_LOCK = _threading.RLock()
+
+
+def current_generation() -> str:
+    """The generation this thread's image calls belong to ("" = the process
+    default, which is what tests and single-lesson runs use)."""
+    return _GENERATION_VAR.get()
+
+
+def bind_generation(fn, generation_id: str | None = None):
+    """Wrap `fn` so a worker thread runs inside THIS lesson's state.
+
+    contextvars are per THREAD: a ThreadPoolExecutor worker starts with an
+    empty context, so without this a render thread would read the process
+    default bucket and mix its lesson with whatever else is running. Each
+    invocation sets and resets its own thread's var, so one wrapper is safe to
+    submit many times and from many threads at once.
+    """
+    gid = current_generation() if generation_id is None else str(generation_id)
+
+    @functools.wraps(fn)
+    def _run(*a, **kw):
+        token = _GENERATION_VAR.set(gid)
+        try:
+            return fn(*a, **kw)
+        finally:
+            _GENERATION_VAR.reset(token)
+    return _run
+
+
+def _new_bucket() -> dict:
+    return {"calls": {"n": 0, "blocked": 0, "attempts": 0, "refunded": 0,
+                      "aistudio_off_logged": False, "ceiling_logged": False},
+            "deferred": {}, "abandoned": set(), "touched": time.monotonic()}
+
+
+def _bucket() -> dict:
+    """This generation's state, created on first use."""
+    gid = current_generation()
     with _IMAGE_BUDGET_LOCK:
-        _image_calls["n"] = 0
-        _image_calls["blocked"] = 0
-        _image_calls["attempts"] = 0
-        _image_calls["refunded"] = 0
-        _image_calls["aistudio_off_logged"] = False
-        _image_calls["ceiling_logged"] = False
-    reset_deferrals()
+        b = _STATE.get(gid)
+        if b is None:
+            b = _STATE[gid] = _new_bucket()
+        b["touched"] = time.monotonic()
+        return b
+
+
+def _lesson_calls() -> dict:
+    with _IMAGE_BUDGET_LOCK:
+        return _bucket()["calls"]
+
+
+def reset_image_budget(generation_id: str | None = None) -> None:
+    """Start a lesson's image accounting. Pass the generation id when several
+    lessons may share this process -- without it they share one bucket."""
+    if generation_id is not None:
+        _GENERATION_VAR.set(str(generation_id))
+    gid = current_generation()
+    now = time.monotonic()
+    with _IMAGE_BUDGET_LOCK:
+        _STATE[gid] = _new_bucket()
+        for stale in [k for k, v in _STATE.items()
+                      if k != gid and now - v["touched"] > _STATE_TTL_SECS]:
+            _STATE.pop(stale, None)
 
 
 def image_budget_state() -> dict:
-    return dict(_image_calls)
+    return dict(_lesson_calls())
 
 
 def image_attempt_ceiling() -> int:
@@ -397,6 +484,7 @@ def _image_budget_ok() -> bool:
     the authored vector tier, exactly as it does for any other image failure —
     a lesson never dies because an asset did."""
     with _IMAGE_BUDGET_LOCK:
+        _image_calls = _bucket()["calls"]
         if _image_calls["attempts"] >= image_attempt_ceiling():
             if not _image_calls["ceiling_logged"]:
                 _image_calls["ceiling_logged"] = True
@@ -414,8 +502,17 @@ def _image_budget_ok() -> bool:
                              _IMAGE_BUDGET)
             return False
         _image_calls["n"] += 1
-        _image_calls["attempts"] += 1
         return True
+
+
+def _note_image_attempt() -> None:
+    """One HTTP request to an image provider was just made.
+
+    Counted HERE, not once per transport ENTRY: one entry runs a four-try
+    ladder inside _with_backoff, so a ceiling counted per entry allowed four
+    times as many requests into the very burst it exists to stop."""
+    with _IMAGE_BUDGET_LOCK:
+        _bucket()["calls"]["attempts"] += 1
 
 
 def _refund_image_call() -> None:
@@ -425,6 +522,7 @@ def _refund_image_call() -> None:
     producing an image: in fa8c0d7d the failures consumed the budget the
     successes needed. The ATTEMPT counter is deliberately not refunded."""
     with _IMAGE_BUDGET_LOCK:
+        _image_calls = _bucket()["calls"]
         if _image_calls["n"] > 0:
             _image_calls["n"] -= 1
             _image_calls["refunded"] += 1
@@ -461,13 +559,10 @@ def _take_rate_limited() -> tuple[bool, float | None]:
 # the thing being exceeded was not our rate. The answer is to come back LATER,
 # once, rather than to retry harder, eight times over.
 #
-# Both maps are per LESSON (cleared by reset_image_budget) and keyed by
-# CANONICAL key, because that is what identifies the picture.
-_deferred: dict[str, float] = {}
-_abandoned: set[str] = set()
-_DEFER_LOCK = _threading.Lock()
-# a server may name an hour; a lesson cannot wait one
-_DEFER_CAP = 120.0
+# Both maps are per GENERATION (see _STATE above) and keyed by CANONICAL key,
+# because that is what identifies the picture. Per generation, not per process:
+# one lesson's 429 must never blank another lesson's board.
+_DEFER_CAP = 120.0     # a server may name an hour; a lesson cannot wait one
 
 
 def _now() -> float:
@@ -476,9 +571,10 @@ def _now() -> float:
 
 
 def reset_deferrals() -> None:
-    with _DEFER_LOCK:
-        _deferred.clear()
-        _abandoned.clear()
+    with _IMAGE_BUDGET_LOCK:
+        b = _bucket()
+        b["deferred"].clear()
+        b["abandoned"].clear()
 
 
 def defer_asset(key: str, retry_after: float | None = None) -> float:
@@ -486,40 +582,44 @@ def defer_asset(key: str, retry_after: float | None = None) -> float:
     wait = float(retry_after) if retry_after else float(
         _env_int("IMAGE_DEFER_SECONDS", 45))
     wait = min(max(wait, 1.0), _DEFER_CAP)
-    with _DEFER_LOCK:
-        _deferred[canonical_key(key)] = _now() + wait
+    with _IMAGE_BUDGET_LOCK:
+        _bucket()["deferred"][canonical_key(key)] = _now() + wait
     return wait
 
 
 def asset_deferred(key: str) -> float | None:
     """Seconds still to wait for this key, or None if it may be tried now."""
     ck = canonical_key(key)
-    with _DEFER_LOCK:
-        until = _deferred.get(ck)
+    with _IMAGE_BUDGET_LOCK:
+        deferred = _bucket()["deferred"]
+        until = deferred.get(ck)
         if until is None:
             return None
         left = until - _now()
         if left <= 0:
-            _deferred.pop(ck, None)
+            deferred.pop(ck, None)
             return None
         return left
 
 
 def abandon_asset(key: str) -> None:
-    """Give up on this key for the rest of the lesson (the warm pass ran out
-    of budget). Every later caller skips it instantly."""
-    with _DEFER_LOCK:
-        _abandoned.add(canonical_key(key))
+    """Give up on this key for the rest of the lesson. Reserved for a failure
+    another attempt would NOT fix -- a rate limit is a deferral, never this:
+    the burst that cost fa8c0d7d its ciliated cell cleared 14 seconds later."""
+    with _IMAGE_BUDGET_LOCK:
+        _bucket()["abandoned"].add(canonical_key(key))
 
 
 def asset_abandoned(key: str) -> bool:
-    with _DEFER_LOCK:
-        return canonical_key(key) in _abandoned
+    with _IMAGE_BUDGET_LOCK:
+        return canonical_key(key) in _bucket()["abandoned"]
 
 
 def deferral_state() -> dict:
-    with _DEFER_LOCK:
-        return {"deferred": dict(_deferred), "abandoned": set(_abandoned)}
+    with _IMAGE_BUDGET_LOCK:
+        b = _bucket()
+        return {"deferred": dict(b["deferred"]),
+                "abandoned": set(b["abandoned"])}
 
 
 def _note_spend(service: str, **fields) -> None:

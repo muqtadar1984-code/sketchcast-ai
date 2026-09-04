@@ -600,9 +600,12 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     # Image generation is the expensive call and had no cap at all, while TTS
     # has had one since it became metered. Per LESSON, so a global counter
     # cannot refuse the hundredth honest generation.
+    # Keyed by GENERATION, because WORKER_CONCURRENCY>1 runs several lessons
+    # in this one process: a shared counter let one book's 429 blank another
+    # book's boards, and one book's reset wipe the other's protection.
     try:
         from spike.scene_engine.raster_assets import reset_image_budget
-        reset_image_budget()
+        reset_image_budget(generation_id)
     except Exception:  # noqa: BLE001 — the guard must not break the pipeline
         pass
 
