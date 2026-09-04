@@ -137,9 +137,7 @@ def _fake_sb(rows: list[dict], calls: dict):
 def _isolated_library(tmp_path, monkeypatch):
     monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "index")
     monkeypatch.setattr(vl, "_sb", lambda: None)          # offline unless a test says otherwise
-    vl._CAST_CACHE.clear()
     yield
-    vl._CAST_CACHE.clear()
 
 
 # ── 1. gender: read from the row, restricted by the voice ───────────────────
@@ -222,17 +220,42 @@ class TestOneLessonOneFace:
         assert len(faces) > 1, "five approved female faces; forty lessons should not all pick one"
         assert faces <= {vl.face_key("avatar_teacher_female", r["id"]) for r in FEMALE_TEACHERS}
 
-    def test_the_run_cache_answers_repeat_casts_without_a_second_query(self, monkeypatch):
+    def test_a_face_demoted_between_two_casts_is_replaced_not_re_served(self, monkeypatch):
+        """The documented guarantee — "the chosen row is removed (demoted/
+        deleted; the next-ranked face takes over)" — has to hold in a RUNNING
+        worker, not only across a restart. A per-process memo on
+        (seed, role, gender, band) made it false for the life of the process:
+        the demoted face was answered from the memo and the console's demotion
+        was ignored until the worker was restarted. So every cast reads the
+        roster, and the seed alone keeps repeats stable."""
+        roster = list(FEMALE_TEACHERS)
         calls: list[int] = []
 
         def listing():
             calls.append(1)
-            return list(ROSTER)
+            return list(roster)
         monkeypatch.setattr(vl, "list_avatar_roster", listing)
-        a = vl.cast_avatar_key("teacher", "f", "gen-1", "avatar_teacher_female")
-        b = vl.cast_avatar_key("teacher", "f", "gen-1", "avatar_teacher_female")
-        assert a == b and len(calls) == 1
-        assert vl.cast_avatar_key("teacher", "f", "gen-2", "avatar_teacher_female") and len(calls) == 2
+
+        first = vl.cast_avatar_key("teacher", "f", "gen-1", "avatar_teacher_female")
+        # same seed, unchanged roster: the same face, no memo needed
+        assert vl.cast_avatar_key("teacher", "f", "gen-1", "avatar_teacher_female") == first
+
+        chosen = next(r for r in roster if vl.face_key(r["asset_key"], r["id"]) == first)
+        roster.remove(chosen)                      # demoted in the console mid-run
+        after = vl.cast_avatar_key("teacher", "f", "gen-1", "avatar_teacher_female")
+        assert after != first, "a demoted face must never be cast again"
+        assert after == vl.face_key("avatar_teacher_female",
+                                    vl._stable_pick(roster, "teacher:gen-1")["id"]),             "and the replacement is the next-ranked face, not an arbitrary one"
+        assert len(calls) == 3, "the roster is read on every cast; nothing is memoised"
+
+        # an APPROVAL lands the same way: a new row that outranks the current
+        # pick for this seed is cast at once, not after a restart
+        standing = vl._pick_rank("teacher:gen-1", vl._stable_pick(roster, "teacher:gen-1"))
+        winner = next(r for r in (_row(f"{i:08x}-0000-4000-8000-000000000000", "avatar_teacher_female",
+                                       "teacher", "2026-12-01T00:00:00Z") for i in range(200))
+                      if vl._pick_rank("teacher:gen-1", r) < standing)
+        roster.append(winner)
+        assert vl.cast_avatar_key("teacher", "f", "gen-1", "avatar_teacher_female") ==             vl.face_key("avatar_teacher_female", winner["id"])
 
 
 # ── 3. fallbacks: any gender, then the generate path; never a failed lesson ─

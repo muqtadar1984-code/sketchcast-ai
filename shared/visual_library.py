@@ -335,33 +335,29 @@ def pick_avatar(role: str, gender: str | None, seed: str, *,
     return _stable_pick(cands, f"{role}:{seed}")
 
 
-# One choice per (generation, role) for the life of the process: the cast is
-# made once and passed down as keys, but a caller that asks again mid-run
-# (another part, a retry) must get the same answer without a second query.
-_CAST_CACHE: dict[tuple, str] = {}
-_CAST_CACHE_MAX = 512
-
-
 def cast_avatar_key(role: str, gender: str | None, seed: str, default_key: str, *,
                     age_band: str | None = None,
                     roster: list[dict[str, Any]] | None = None) -> str:
     """The asset KEY a lesson renders `role` with: a face-bearing roster key,
     or `default_key` (today's generate path) when the roster has no face for
-    the role. Cached per (seed, role) for the run."""
-    ck = (str(seed), role, gender, age_band)
-    if roster is None and ck in _CAST_CACHE:
-        return _CAST_CACHE[ck]
+    the role.
+
+    Every call READS THE ROSTER, deliberately. There is no per-process memo:
+    a memo would answer from a roster snapshot taken minutes or days earlier,
+    so a face demoted in the console would keep being cast until the worker
+    restarted — and `pick_avatar`'s guarantee that a removed row hands the
+    lesson its next-ranked face would be false in a running worker. The cast
+    is made ONCE per generation anyway (worker/process.py, before the parts
+    loop) and travels with the script, so the memo was buying one Supabase
+    select per repeat cast against a whole lesson's work. Determinism comes
+    from the seed, not from caching: the same seed over the same roster picks
+    the same face every time, in any process."""
     row = pick_avatar(role, gender, str(seed), age_band=age_band, roster=roster)
     if row is None or not row.get("id"):
-        key = default_key
-    else:
-        key = face_key(str(row.get("asset_key") or default_key), str(row["id"]))
-        logger.info("avatar cast: %s -> %s (gender %s, band %s, seed %s)",
-                    role, key, avatar_gender(row), avatar_age_band(row), seed)
-    if roster is None:
-        if len(_CAST_CACHE) >= _CAST_CACHE_MAX:
-            _CAST_CACHE.clear()
-        _CAST_CACHE[ck] = key
+        return default_key
+    key = face_key(str(row.get("asset_key") or default_key), str(row["id"]))
+    logger.info("avatar cast: %s -> %s (gender %s, band %s, seed %s)",
+                role, key, avatar_gender(row), avatar_age_band(row), seed)
     return key
 
 
