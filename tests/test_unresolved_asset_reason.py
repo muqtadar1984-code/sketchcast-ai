@@ -216,6 +216,38 @@ class TestAPlannedPictureLeavesAFrame:
         assert unresolved_reasons(report) == {"cache_only_miss": 1}
         assert report["passed"] is False
 
+    def test_both_outcomes_are_recorded_under_one_predicate(self, tmp_path):
+        """`_unresolved_ills` is the seam for whatever has to react to a missing
+        picture — the labels and leaders that pointed at it. It must answer the
+        same for a dropped element and for a placeholder frame, because since
+        the placeholder tier "the box is zero-size" is a different question."""
+        from spike.scene_engine.render import SceneRenderer
+        from spike.scene_engine.schema import Scene
+        scene = {"id": "s1", "narration": "n", "compiled": True, "actions": [],
+                 "elements": [{"id": "pic", "type": "illustration",
+                               "asset": "ciliated_cell", "at": [640, 360],
+                               "scale": 1.0}]}
+        for prompts in ({}, {"ciliated_cell": "a ciliated cell"}):
+            r = SceneRenderer(Scene.model_validate(scene),
+                              asset_resolver=make_resolver(
+                                  prompts, cache_dir=tmp_path,
+                                  allow_generate=False))
+            r.compile(4.0)
+            assert r._unresolved_ills == {"pic"}, prompts
+
+    def test_a_picture_that_DID_arrive_is_not_in_it(self, tmp_path):
+        from spike.scene_engine.render import SceneRenderer
+        from spike.scene_engine.schema import Scene
+        scene = {"id": "s1", "narration": "n", "compiled": True, "actions": [],
+                 "elements": [{"id": "pic", "type": "illustration",
+                               "asset": "plant_cell", "at": [640, 360],
+                               "scale": 1.0}]}
+        r = SceneRenderer(Scene.model_validate(scene),
+                          asset_resolver=make_resolver({}, prefer_ai=False,
+                                                       cache_dir=tmp_path))
+        r.compile(4.0)
+        assert r._unresolved_ills == set()
+
     def test_the_labels_have_a_real_box_to_point_at(self, tmp_path):
         """A fan of arrows converging on one pixel reads as a rendering bug;
         this is the half of that fix that lives here."""

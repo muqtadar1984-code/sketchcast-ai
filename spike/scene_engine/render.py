@@ -282,6 +282,12 @@ class SceneRenderer:
         self._audit_warnings: list[str] = []
         self._warned: set[str] = set()
         self._suppressed: set[str] = set()   # arrows with no locatable target
+        # illustrations whose asset never arrived (image model 429, budget
+        # exhausted, cache miss in a child process) and the labels/arrows that
+        # went with them. Membership is by INTENT, not geometry: since the
+        # placeholder tier a missing picture still has a real box, so "the box
+        # collapsed to a point" is no longer the same question.
+        self._unresolved_ills: set[str] = set()
         self._text_boxes: list[tuple] = []   # bound text boxes, for stacking
         # keep-out zones around the persistent avatars: board labels must
         # never write over the teacher or the student (founder screenshot:
@@ -529,6 +535,7 @@ class SceneRenderer:
             # The prefix is load-bearing: validate._pick("ASSET_UNRESOLVED")
             # and the acceptance gate match on it. The reason rides after it.
             self._warn(f"ASSET_UNRESOLVED {el.id} ({el.asset}) reason={reason}")
+            self._unresolved_ills.add(el.id)
             b.box = (el.at[0], el.at[1], el.at[0], el.at[1])
             return
         kind, asset = resolved
@@ -537,6 +544,7 @@ class SceneRenderer:
             # count as such (validate._pick collects this prefix too)
             self._warn(f"ASSET_PLACEHOLDER {el.id} ({el.asset}) "
                        f"reason={self._unresolved_reason(el.asset)}")
+            self._unresolved_ills.add(el.id)
         if kind == "raster":
             trace = asset.trace
             regions = dict(getattr(asset, "regions", {}) or {})
