@@ -347,12 +347,28 @@ def _score(row: dict[str, Any], query_key: str, prompt: str, ctx: LibraryContext
     return score
 
 
-def _local_meta_path(cache_dir: Path, key: str) -> Path:
-    return cache_dir / canonical_key(key) / "meta.json"
+def _asset_dir(cache_dir: Path, key: str, fmt: str = DEFAULT_FORMAT) -> Path:
+    """The renderer's cache directory for `key` in `fmt`.
+
+    The SVG layout is asked of the module that OWNS it rather than reproduced
+    here. Two copies of a path fold is the exact bug that made every *_cell
+    library hit land where nobody reads and be paid for again; there is no
+    reason to reintroduce it one format later.
+    """
+    if normalize_format(fmt) == "svg":
+        from spike.scene_engine.svg_assets import svg_cache_dir
+        return svg_cache_dir(cache_dir, key)
+    return cache_dir / canonical_key(key)
 
 
-def _local_png_path(cache_dir: Path, key: str) -> Path:
-    return cache_dir / canonical_key(key) / "asset.png"
+def _local_meta_path(cache_dir: Path, key: str,
+                     fmt: str = DEFAULT_FORMAT) -> Path:
+    return _asset_dir(cache_dir, key, fmt) / "meta.json"
+
+
+def _local_asset_path(cache_dir: Path, key: str,
+                      fmt: str = DEFAULT_FORMAT) -> Path:
+    return _asset_dir(cache_dir, key, fmt) / f"asset.{normalize_format(fmt)}"
 
 
 def _sb():
@@ -396,17 +412,28 @@ def register_local(row: dict[str, Any]) -> None:
 
 
 def find(key: str, prompt: str, context: dict[str, Any] | None = None,
-         *, min_score: float | None = None) -> dict[str, Any] | None:
-    """Find an approved reusable asset without invoking an AI model."""
+         *, min_score: float | None = None,
+         asset_format: str | None = None) -> dict[str, Any] | None:
+    """Find an approved reusable asset without invoking an AI model.
+
+    `asset_format` restricts the candidates to one format. The two tiers ask
+    for what they can actually USE: the SVG tier wants markup it can parse
+    into layers, the raster tier wants pixels. Serving either the other's
+    bytes would be a cache miss dressed as a hit — a file written where the
+    caller does not look, which is a mistake this module has already made
+    once.
+    """
     ctx = infer_context(key, prompt, context)
     threshold = float(os.getenv("VISUAL_LIBRARY_MIN_SCORE", "0.58")) if min_score is None else min_score
     # `guarded`: only rows whose OWN key shares a core token with the request
     # may be served. best_match() without it still sees everything, so the
     # near-miss evidence the threshold argument runs on keeps flowing.
     best, best_score, source = best_match(key, prompt, context, _ctx=ctx,
-                                          guarded=True)
+                                          guarded=True,
+                                          asset_format=asset_format)
     if best is None or best_score < threshold:
-        near, near_score, _ = best_match(key, prompt, context, _ctx=ctx)
+        near, near_score, _ = best_match(key, prompt, context, _ctx=ctx,
+                                         asset_format=asset_format)
         if near is not None and near_score >= threshold and not key_guard_ok(key, near):
             logger.info("visual library: refused %s <- %s (score %.2f) — the "
                         "keys share no concept token", key,
@@ -421,7 +448,8 @@ def threshold_now() -> float:
 
 
 def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
-               *, _ctx: LibraryContext | None = None, guarded: bool = False):
+               *, _ctx: LibraryContext | None = None, guarded: bool = False,
+               asset_format: str | None = None):
     """The best candidate and its score, WITHOUT applying the threshold.
 
     Split out of find() so a near-miss is observable. find() returns None
@@ -434,11 +462,20 @@ def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
     own key shares a core token with the request, so the best SERVEABLE row is
     chosen rather than the best-scoring one being chosen and then refused.
 
+    `asset_format` restricts them to one format. It is applied in PYTHON, not
+    in the remote query: the column does not exist on an un-migrated database,
+    and a filter that errors there would take the whole remote search down
+    with it rather than one row.
+
     Returns (row | None, score, source) where source is 'local' or 'remote'.
     """
     ctx = _ctx or infer_context(key, prompt, context)
+    want_format = normalize_format(asset_format) if asset_format else None
 
     def _eligible(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if want_format is not None:
+            candidates = [r for r in candidates
+                          if row_format(r) == want_format]
         return [r for r in candidates if key_guard_ok(key, r)] if guarded \
             else candidates
 
@@ -506,11 +543,12 @@ def log_decision(record: dict[str, Any]) -> None:
 
 
 def hydrate(key: str, prompt: str, cache_dir: Path,
-            context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+            context: dict[str, Any] | None = None,
+            *, asset_format: str | None = None) -> dict[str, Any] | None:
     """Download a remote approved asset into the renderer's existing cache.
 
     Cached under the REQUESTED key, not the matched one. The caller looks for
-    ``cache_dir/canonical_key(key)/asset.png`` — that is the only path it will
+    the path built from ``canonical_key(key)`` — that is the only path it will
     ever check — so filing the download under the match's key left the file
     somewhere nobody looks.
 
@@ -518,14 +556,20 @@ def hydrate(key: str, prompt: str, cache_dir: Path,
     matched the stored asset at score 1.00 and the renderer generated a second
     image anyway, adding a duplicate row for a concept the library already
     had. Semantic matching that cannot deliver its match is just an expensive
-    way to agree with itself.
+    way to agree with itself. That holds for SVG exactly as it does for PNG —
+    the format decides the FILENAME, never the identity.
+
+    `asset_format` says which tier is asking. The bytes are written unchanged:
+    an SVG is stored and served as markup, never rasterised to fit the older
+    path.
     """
-    hit = find(key, prompt, context)
+    hit = find(key, prompt, context, asset_format=asset_format)
     if not hit:
         return None
-    png = _local_png_path(cache_dir, key)
-    meta = _local_meta_path(cache_dir, key)
-    if png.exists():
+    fmt = row_format(hit)
+    target = _local_asset_path(cache_dir, key, fmt)
+    meta = _local_meta_path(cache_dir, key, fmt)
+    if target.exists():
         return hit
     path = str(hit.get("storage_path") or "")
     sb = _sb()
@@ -533,11 +577,15 @@ def hydrate(key: str, prompt: str, cache_dir: Path,
         return None
     try:
         data = sb.storage.from_(BUCKET).download(path)
-        png.parent.mkdir(parents=True, exist_ok=True)
-        png.write_bytes(data)
-        metadata = {**hit, "provenance": "visual_library", "library_asset_id": hit.get("id")}
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        metadata = {**hit, "provenance": "visual_library",
+                    "library_asset_id": hit.get("id"), "asset_format": fmt,
+                    "group_ids": list(hit.get("group_ids") or []),
+                    "group_count": int(hit.get("group_count") or 0)}
         meta.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-        logger.info("visual library hit: %s <- %s (score %.2f)", key, hit.get("asset_key"), hit.get("match_score", 0))
+        logger.info("visual library hit: %s <- %s (%s, score %.2f)", key,
+                    hit.get("asset_key"), fmt, hit.get("match_score", 0))
         return hit
     except Exception as exc:  # noqa: BLE001
         logger.warning("visual library hydration failed for %s: %s", key, exc)
@@ -583,8 +631,9 @@ def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
     hit = find_avatar(key)
     if not hit:
         return None
-    png = _local_png_path(cache_dir, key)
-    meta = _local_meta_path(cache_dir, key)
+    fmt = row_format(hit)
+    png = _local_asset_path(cache_dir, key, fmt)
+    meta = _local_meta_path(cache_dir, key, fmt)
     if png.exists():
         return hit
     path = str(hit.get("storage_path") or "")
@@ -595,7 +644,8 @@ def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
         data = sb.storage.from_(BUCKET).download(path)
         png.parent.mkdir(parents=True, exist_ok=True)
         png.write_bytes(data)
-        metadata = {**hit, "provenance": "visual_library", "library_asset_id": hit.get("id")}
+        metadata = {**hit, "provenance": "visual_library",
+                    "library_asset_id": hit.get("id"), "asset_format": fmt}
         meta.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         logger.info("visual library avatar: %s <- %s", key, hit.get("id"))
         return hit
@@ -604,21 +654,50 @@ def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
         return None
 
 
-def publish_generated(asset_key: str, prompt: str, png_path: Path,
+def publish_generated(asset_key: str, prompt: str, asset_path: Path,
                       metadata: dict[str, Any] | None = None,
-                      context: dict[str, Any] | None = None) -> bool:
-    """Publish a newly generated, already-validated image as a reusable asset.
+                      context: dict[str, Any] | None = None,
+                      *, asset_format: str | None = None) -> bool:
+    """Publish a newly generated, already-validated asset as a reusable one.
 
-    The binary goes to Supabase Storage; metadata goes to Postgres. A matching
+    The bytes go to Supabase Storage; metadata goes to Postgres. A matching
     canonical key is never silently overwritten. The asset is inserted as
     ``approved`` because it has already passed the renderer's deterministic
-    image validation (coverage/baked-text checks). A later human-review field
-    can demote it without deleting history.
+    validation. A later human-review field can demote it without deleting
+    history.
+
+    Format-agnostic: it takes a PATH and a FORMAT, not a PNG. The format is
+    inferred from the file when the caller does not say, so every existing
+    call site keeps publishing exactly what it published before.
+
+    This is also where the STRICT gate lives, and it lives here on purpose —
+    every publisher goes through this function, including the one-shot
+    migration script, so an SVG that breaks the asset contract cannot enter
+    the library by another door. Refusal returns False; the render that
+    produced it is untouched and still draws.
     """
-    if not png_path.exists():
+    asset_path = Path(asset_path)
+    if not asset_path.exists():
         return False
+    fmt = normalize_format(asset_format
+                           or (metadata or {}).get("asset_format")
+                           or asset_path.suffix)
+    data = asset_path.read_bytes()
+    group_ids: list[str] = []
+    if fmt == "svg":
+        from spike.scene_engine.svg_validate import validate_svg_document
+        verdict = validate_svg_document(data.decode("utf-8", "replace"))
+        if not verdict.ok:
+            logger.warning("visual library: refusing to publish %s — the SVG "
+                           "breaks the asset contract (%s)",
+                           asset_key, verdict.reason)
+            return False
+        # EXACT ids, in drawing order. They are the labelling contract, so the
+        # library can answer whether an asset contains the part a lesson wants
+        # to label without downloading it.
+        group_ids = list(verdict.group_ids)
     ctx = infer_context(asset_key, prompt, context)
-    digest = hashlib.sha256(png_path.read_bytes()).hexdigest()
+    digest = hashlib.sha256(data).hexdigest()
     row = {
         "asset_key": str(asset_key),
         "canonical_key": canonical_key(asset_key),
@@ -632,6 +711,9 @@ def publish_generated(asset_key: str, prompt: str, png_path: Path,
         "provenance": "generated",
         "content_hash": digest,
         "quality": (metadata or {}).get("quality", "renderer_validated"),
+        "asset_format": fmt,
+        "group_ids": group_ids,
+        "group_count": len(group_ids),
         # Without this the column default ('visual') applied to everything, and
         # the whole avatar roster entered the educational library.
         **avatar_fields(asset_key),
@@ -649,11 +731,14 @@ def publish_generated(asset_key: str, prompt: str, png_path: Path,
         logger.info("visual library: avatar %s already published; not adding another", asset_key)
         return True
     try:
-        storage_path = f"generated/{canonical_key(asset_key)}/{digest[:16]}.png"
-        with png_path.open("rb") as fh:
+        # One bucket, one layout, the extension carried by the format:
+        # generated/<canonical>/<hash>.<ext>. There is no parallel SVG store.
+        storage_path = f"generated/{canonical_key(asset_key)}/{digest[:16]}.{fmt}"
+        with asset_path.open("rb") as fh:
             sb.storage.from_(BUCKET).upload(
                 storage_path, fh,
-                {"content-type": "image/png", "cache-control": "31536000", "upsert": "false"},
+                {"content-type": CONTENT_TYPES[fmt],
+                 "cache-control": "31536000", "upsert": "false"},
             )
         row["storage_path"] = storage_path
         # Idempotency is by content hash, while canonical_key remains searchable.
