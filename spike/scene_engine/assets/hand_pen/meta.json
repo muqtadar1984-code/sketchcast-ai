@@ -1,0 +1,8 @@
+{
+ "tip": [
+  13,
+  524
+ ],
+ "model": "gemini-2.5-flash-image",
+ "note": "bundled 2026-09-04; generated once with load_hand() and committed so no lesson ever calls an image model for the pen"
+}
