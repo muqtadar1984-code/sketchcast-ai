@@ -414,3 +414,82 @@ class TestTheAvatarsAreNotBoards:
             assert (x1 - x0, y1 - y0) == (0.0, 0.0), aid
             assert not r.bound[aid].layers and r.bound[aid].raster is None, aid
         assert r.bound["pic"].box[2] - r.bound["pic"].box[0] > 100
+
+
+class TestThePlaceholderAnswersALayerRequest:
+    """A draw that names layers is the COMMON case for a detailed diagram —
+    which is the kind most likely to be the one that failed. The placeholder's
+    single layer is called "frame", and `match_layer_ids` found no "nucleus"
+    in it, so `_layer_strokes` returned nothing and the frame that exists to
+    show the board is missing drew NOTHING: invisible exactly where it was
+    needed. It has no parts to tell apart, so it answers to any of them."""
+
+    _SCENE = {
+        "id": "s1", "narration": "The nucleus sits at the centre of the cell.",
+        "compiled": True,
+        "elements": [{"id": "pic", "type": "illustration",
+                      "asset": "ciliated_cell", "at": [640, 360],
+                      "scale": 1.0}],
+        "actions": [{"verb": "draw", "target": "pic",
+                     "layers": ["nucleus", "cilia"], "duration": 2.0}],
+    }
+
+    def _renderer(self, tmp_path):
+        from spike.scene_engine.render import SceneRenderer
+        from spike.scene_engine.schema import Scene
+        r = SceneRenderer(Scene.model_validate(self._SCENE),
+                          asset_resolver=make_resolver(
+                              {"ciliated_cell": "a ciliated cell"},
+                              cache_dir=tmp_path, allow_generate=False))
+        r.compile(4.0)
+        return r
+
+    def test_the_asset_subsets_to_itself(self, tmp_path):
+        from spike.scene_engine.vector_assets import placeholder_asset
+        va = placeholder_asset("ciliated_cell")
+        assert va.subset(["nucleus"]) == va.layers
+        assert va.ink_length(["nucleus"]) == va.ink_length(None) > 0
+
+    def test_a_named_layer_draw_still_finds_strokes(self, tmp_path):
+        r = self._renderer(tmp_path)
+        b = r.bound["pic"]
+        assert b.placeholder is True
+        assert r._layer_strokes(b, ["nucleus", "cilia"]) == \
+            r._layer_strokes(b, None), "all of it, for any part of it"
+        assert r._layer_strokes(b, ["nucleus"]), "and never nothing"
+
+    def test_the_frame_is_actually_revealed_by_the_end(self, tmp_path):
+        r = self._renderer(tmp_path)
+        n = len(r._flat["pic"])
+        assert n > 0
+        end = r._state_at(r.total_secs(4.0))["pic"]
+        assert end.visible is True
+        assert len(end.reveal) == n and min(end.reveal.values()) == 1.0, \
+            "every stroke of the frame drawn, not zero of them"
+
+    def test_a_real_asset_still_draws_only_the_named_part(self, tmp_path):
+        """The escape is for the placeholder ALONE: plant_cell has real parts
+        and a draw naming "wall" must not reveal the whole cell."""
+        from spike.scene_engine.render import SceneRenderer
+        from spike.scene_engine.schema import Scene
+        scene = {**self._SCENE,
+                 "elements": [{"id": "pic", "type": "illustration",
+                               "asset": "plant_cell", "at": [640, 360],
+                               "scale": 1.0}],
+                 "actions": [{"verb": "draw", "target": "pic",
+                              "layers": ["wall"], "duration": 2.0}]}
+        r = SceneRenderer(Scene.model_validate(scene),
+                          asset_resolver=make_resolver({}, prefer_ai=False,
+                                                       cache_dir=tmp_path))
+        r.compile(4.0)
+        assert r.bound["pic"].placeholder is False
+        part = r._layer_strokes(r.bound["pic"], ["wall"])
+        whole = r._layer_strokes(r.bound["pic"], None)
+        assert 0 < len(part) < len(whole)
+
+    def test_an_anchor_into_the_missing_part_lands_on_the_frame(self, tmp_path):
+        """A label pointing at "the nucleus" of a board we could not draw gets
+        the frame rather than an UNRESOLVED_ANCHOR and the element box."""
+        r = self._renderer(tmp_path)
+        boxes = r._layer_instance_boxes(r.bound["pic"], "nucleus")
+        assert boxes, "the frame answers"

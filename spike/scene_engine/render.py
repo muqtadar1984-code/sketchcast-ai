@@ -244,6 +244,9 @@ class Bound:
     spawn: list[Point] = field(default_factory=list)   # particles
     box: tuple[float, float, float, float] = (0, 0, 0, 0)
     introduced: bool = False  # True => starts hidden until its intro action
+    # a stand-in frame, not the picture: it has one layer and no parts, so
+    # every layer-named request resolves to the whole of it
+    placeholder: bool = False
     # last _draw_raster result: ((k, alpha, pulse, cam), (out, bx0, by0) | None)
     _raster_cache: Optional[tuple] = field(default=None, repr=False, compare=False)
 
@@ -545,6 +548,11 @@ class SceneRenderer:
             self._warn(f"ASSET_PLACEHOLDER {el.id} ({el.asset}) "
                        f"reason={self._unresolved_reason(el.asset)}")
             self._unresolved_ills.add(el.id)
+            # ...and every layer request against it means "the frame": see
+            # `_matched_layers`. Without this a draw naming "nucleus" matched
+            # no layer of a one-layer asset called "frame" and drew NOTHING —
+            # the placeholder was invisible exactly where it was needed most.
+            b.placeholder = True
         if kind == "raster":
             trace = asset.trace
             regions = dict(getattr(asset, "regions", {}) or {})
@@ -837,6 +845,22 @@ class SceneRenderer:
             out.extend(match_layer_ids(keys, [n]))
         return out
 
+    @staticmethod
+    def _matched_layers(b: Bound, layer_ids: list[str]) -> set[str]:
+        """The bound layers `layer_ids` names, via THE shared matcher.
+
+        A PLACEHOLDER answers every request with all of itself. Its single
+        layer is called "frame", which matches no part name a director ever
+        writes, so a draw naming "nucleus" against a stand-in frame drew
+        nothing at all -- the frame was invisible on precisely the scenes it
+        exists for. It has no parts to tell apart; the whole of it is the
+        honest answer to any of them.
+        """
+        from .vector_assets import match_layer_ids
+        if getattr(b, "placeholder", False):
+            return {l.id for l in b.layers}
+        return set(match_layer_ids([l.id for l in b.layers], layer_ids))
+
     def _layer_instance_boxes(self, b: Bound, layer: str) -> list[tuple]:
         """Candidate boxes for a named PART of an illustration: raster ->
         vision-annotated region boxes (world coords); vector -> the bbox of
@@ -851,7 +875,7 @@ class SceneRenderer:
                     p1 = b.raster.to_world((x1, y1))
                     boxes.append((p0[0], p0[1], p1[0], p1[1]))
         elif b.layers:
-            matched = set(match_layer_ids([l.id for l in b.layers], [layer]))
+            matched = self._matched_layers(b, [layer])
             for l in b.layers:
                 if l.id in matched:
                     for st in l.strokes:
@@ -974,8 +998,7 @@ class SceneRenderer:
 
     def _layer_flat_indices(self, b: Bound, layer_ids: list[str]) -> list[int]:
         """Flat-stroke indices for the named layers, via THE shared matcher."""
-        from .vector_assets import match_layer_ids
-        matched = set(match_layer_ids([l.id for l in b.layers], layer_ids))
+        matched = self._matched_layers(b, layer_ids)
         out: list[int] = []
         i = 0
         for layer in b.layers:
@@ -988,8 +1011,7 @@ class SceneRenderer:
     def _layer_strokes(self, b: Bound, layer_ids: Optional[list[str]]) -> list[BStroke]:
         if not layer_ids:
             return [st for l in b.layers for st in l.strokes]
-        from .vector_assets import match_layer_ids
-        matched = set(match_layer_ids([l.id for l in b.layers], layer_ids))
+        matched = self._matched_layers(b, layer_ids)
         return [st for l in b.layers if l.id in matched for st in l.strokes]
 
     def _font_for(self, bold: bool, size: int, sample: str):

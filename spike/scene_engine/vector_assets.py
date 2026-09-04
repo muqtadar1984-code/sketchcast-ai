@@ -56,7 +56,14 @@ class VectorAsset:
         """Layers matching `ids` — via the ONE shared matcher every consumer
         uses (draw distribution, carried-state reveal, workloads). Divergent
         matchers once made a draw reveal nothing while the carry showed it."""
-        if not ids:
+        if not ids or self.placeholder:
+            # A placeholder has ONE layer, named "frame", which is not the
+            # nucleus or the cilia the scene asked to draw. Matched normally
+            # it answers nothing, so the frame that exists to show the board
+            # is missing was itself invisible on every scene whose draw names
+            # layers -- and the director writes those for exactly the detailed
+            # diagrams most likely to be the ones that failed. It has no parts
+            # to distinguish, so it answers to all of them.
             return self.layers
         matched = set(match_layer_ids([l.id for l in self.layers], ids))
         return tuple(l for l in self.layers if l.id in matched)
