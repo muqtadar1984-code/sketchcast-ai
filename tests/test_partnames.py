@@ -83,6 +83,28 @@ class TestNoFalsePositives:
         # 'nucleus' vs 'nutrient': same initial, ratio well under 0.80
         assert resolve_part("nutrient", ["nucleus"]) == (None, None)
 
+    # Every pair below was MEASURED binding under the removed character-
+    # similarity tier: same initial letter, SequenceMatcher ratio >= 0.80, so
+    # the tier returned a confident ('nearest') match and the renderer drew a
+    # full barbed arrow into the wrong structure with no warning at all.
+    @pytest.mark.parametrize("want,other,ratio", [
+        ("nucleolus", "nucleus", 0.875),
+        ("chromoplast", "chloroplast", 0.818),
+        ("neutron", "neuron", 0.923),
+        ("meiosis", "mitosis", 0.857),
+        ("proton", "photon", 0.833),
+        ("stalactite", "stalagmite", 0.800),
+        ("radius", "radium", 0.833),
+        ("carpal", "carpel", 0.833),
+    ])
+    def test_a_near_spelling_is_never_the_same_structure(self, want, other,
+                                                         ratio):
+        import difflib
+        # the pair really is that similar — this is not a straw man
+        assert difflib.SequenceMatcher(None, want, other).ratio() >= ratio
+        assert resolve_part(want, [other]) == (None, None)
+        assert match_layer_ids([other], [want]) == []
+
     def test_an_unknown_region_from_another_subject_is_refused(self):
         assert resolve_part("golgi_body", CELL) == (None, None)
 
@@ -114,3 +136,22 @@ class TestMatchLayerIdsStaysCompatible:
 
     def test_an_unmatchable_name_still_returns_nothing(self):
         assert match_layer_ids(["nucleus", "cell wall"], ["ribosome"]) == []
+
+
+class TestTheLastTierIsWordOrder:
+    """What the tier is FOR: a model that types the words of a compound name
+    in the other order. Not spelling — see TestNoFalsePositives."""
+
+    def test_the_same_words_in_another_order_are_the_same_part(self):
+        assert resolve_part("wall cell", ["cell wall", "nucleus"]) == \
+            ("cell wall", "nearest")
+
+    def test_one_shared_word_is_not_enough(self):
+        assert resolve_part("cell membrane", ["cell wall"]) == (None, None)
+        assert resolve_part("left atrium", ["right atrium"]) == (None, None)
+
+    def test_a_single_word_never_reaches_it(self):
+        # a one-word name has no word ORDER to be wrong about, so the tier
+        # cannot fire at all — which is what keeps nucleolus off nucleus
+        assert resolve_part("nucleolus", ["nucleus"]) == (None, None)
+        assert resolve_part("golgi", ["nucleus", "cytoplasm"]) == (None, None)

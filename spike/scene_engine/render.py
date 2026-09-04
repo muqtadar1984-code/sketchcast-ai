@@ -114,6 +114,14 @@ def _is_overlay(eid) -> bool:
         str(eid).startswith(("__nb_", "__hm_", "__kp_", "__tm_"))
 
 
+def _is_title(b) -> bool:
+    """A chapter title. Its slot is a design decision — top-centre, above the
+    picture — not a collision to be resolved: the keep-off-art pass measured
+    the title against the illustration's transparent canvas margin and moved
+    every scene-engine lesson's title into the top-left corner."""
+    return str(getattr(getattr(b, "element", None), "role", "") or "") == "title"
+
+
 def _region_ordered_trace(trace: list, regions: dict, order: list[str]
                           ) -> tuple[list, dict]:
     """Re-bucket a drawing-order trace: unassigned points (the outline and
@@ -288,6 +296,7 @@ class SceneRenderer:
         self._unresolved_ills: set[str] = set()
         self._dropped: set[str] = set()
         self._text_boxes: list[tuple] = []   # bound text boxes, for stacking
+        self._ink_bbox: dict[int, tuple | None] = {}   # id(ink) -> alpha bbox
         # keep-out zones around the persistent avatars: board labels must
         # never write over the teacher or the student (founder screenshot:
         # three organelle labels rendered across the teacher's face)
@@ -790,7 +799,12 @@ class SceneRenderer:
     def _root_art_box(self) -> tuple | None:
         """The largest non-overlay illustration — the picture the board is
         about. Same definition the label relayout uses, including its 40000px²
-        floor, so the two passes agree on what 'the diagram' is."""
+        floor, so the two passes agree on what 'the diagram' is.
+
+        The box returned is the INK's extent, not the canvas's: see _ink_box.
+        The 40000px² floor still reads the canvas, so WHICH element counts as
+        'the diagram' is decided exactly as before.
+        """
         best_b, best = None, 0.0
         for eid, b in self.bound.items():
             if isinstance(b.element, IllustrationElement) and \
@@ -798,7 +812,38 @@ class SceneRenderer:
                 area = (b.box[2] - b.box[0]) * (b.box[3] - b.box[1])
                 if area > best:
                     best_b, best = b, area
-        return best_b.box if (best_b is not None and best >= 40000) else None
+        if best_b is None or best < 40000:
+            return None
+        return self._ink_box(best_b) or best_b.box
+
+    def _ink_box(self, b: "Bound") -> tuple | None:
+        """A raster illustration's INK extent in world coordinates, or None.
+
+        A generated illustration arrives on a square canvas with a wide
+        transparent margin, and `b.box` is that whole canvas. Measuring board
+        text against the canvas counts the empty air around the drawing as part
+        of the drawing: on the production root geometry (a 1024px asset fitted
+        to the board at [600,380]) the chapter title clipped that margin by 40%
+        of its own height, so the keep-off-art pass yanked it out of the
+        top-centre slot the design gives it and parked it in the corner.
+        """
+        r = getattr(b, "raster", None)
+        ink = getattr(r, "ink", None)
+        if r is None or ink is None or not b.box:
+            return None
+        key = id(ink)
+        if key not in self._ink_bbox:
+            try:
+                self._ink_bbox[key] = (ink.getchannel("A").getbbox()
+                                       if ink.mode == "RGBA" else ink.getbbox())
+            except Exception:  # noqa: BLE001 — degrade to the canvas box
+                self._ink_bbox[key] = None
+        bb = self._ink_bbox[key]
+        if not bb:
+            return None
+        sc = r.scale
+        return (b.box[0] + bb[0] * sc, b.box[1] + bb[1] * sc,
+                b.box[0] + bb[2] * sc, b.box[1] + bb[3] * sc)
 
     @staticmethod
     def _overlap_frac(box: tuple, other: tuple) -> float:
@@ -836,7 +881,12 @@ class SceneRenderer:
 
         def below() -> Iterator[tuple]:
             x0 = min(max(SAFE_L, (rx0 + rx1) / 2 - w / 2), SAFE_R - w)
-            y = ry1 + 12.0
+            # a picture that reaches the bottom safe edge still owes its
+            # caption ONE row: start at the last row that fits rather than at
+            # a y this loop would refuse outright, and let the caller's own
+            # overlap test decide. Without it a full-height root pushed the
+            # caption into the right column, beside the picture it describes.
+            y = min(ry1 + 12.0, SAFE_B - h)
             while y + h <= SAFE_B:
                 yield (x0, y, x0 + w, y + h)
                 y += h + 10.0
@@ -873,7 +923,8 @@ class SceneRenderer:
         if art is None:
             return
         texts = sorted(((eid, b) for eid, b in self.bound.items()
-                        if b.text is not None and b.box and not _is_overlay(eid)),
+                        if b.text is not None and b.box and not _is_overlay(eid)
+                        and not _is_title(b)),
                        key=lambda t: (t[1].box[1], t[1].box[0], t[0]))
         occupied = list(self._avatar_zones)
         pending: list[tuple] = []
@@ -933,7 +984,7 @@ class SceneRenderer:
         if art is None:
             return
         for eid, b in self.bound.items():
-            if b.text is None or not b.box or _is_overlay(eid):
+            if b.text is None or not b.box or _is_overlay(eid) or _is_title(b):
                 continue
             if self._overlap_frac(b.box, art) > 0.15:
                 self._warn(f"TEXT_OVER_ART {eid}")
@@ -1312,7 +1363,12 @@ class SceneRenderer:
             # a screen-fixed element (a corner sketch, the recap) is never a
             # zoom target: its world slot is an empty corner. Such a zoom
             # follows the next board action instead.
-            if a.target in self.bound and a.target not in hud:
+            # ...and neither is an element the missing-picture rule dropped:
+            # _drop_element zeroes its box, so focusing it framed the empty
+            # top-left corner of the board instead of the lesson. Falling
+            # through to the follow rule frames the next board action.
+            if (a.target in self.bound and a.target not in hud
+                    and a.target not in self._dropped):
                 x0, y0, x1, y1 = self.bound[a.target].box
                 focus[i] = ((x0 + x1) / 2, (y0 + y1) / 2)
             elif getattr(a, "follow", True):
@@ -1418,6 +1474,11 @@ class SceneRenderer:
         for j in range(i + 1, len(self.timeline)):
             a = self.timeline[j].action
             if a.target in hud:
+                continue
+            if a.target in self._dropped:
+                # the missing-picture rule zeroed this element's box; there
+                # is no ink here to frame, and (0,0) clamps to the empty
+                # top-left corner of the board
                 continue
             b = self.bound.get(a.target) if a.target else None
             if b is None:

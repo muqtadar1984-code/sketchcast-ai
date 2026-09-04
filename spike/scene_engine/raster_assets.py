@@ -418,9 +418,19 @@ _ITEM_STOPWORDS = {"a", "an", "the", "its", "their", "one", "two", "three",
                    "several", "many", "some", "large", "small", "single",
                    "double", "clear", "simple", "visible", "all", "of",
                    "following", "each", "both"}
+# The LAST item of an enumeration carries the sentence's trailing clause with
+# it ("... stamen and carpel on a white background"), which made the chunk too
+# long and threw a real part away whole. The clause starts at one of these.
+_TRAILING_CLAUSE = re.compile(
+    r"\b(?:on|in|at|against|over|under|around|beside|inside|outside|onto|"
+    r"drawn|seen|shown|showing|viewed|placed|rendered|labelled|labeled|"
+    r"arranged|surrounded|filled|floating|sitting|resting)\b", re.IGNORECASE)
+# what makes a trigger's tail an ENUMERATION rather than a single noun
+_LIST_SEPARATOR = re.compile(r",|\band\b|\bor\b|;|/", re.IGNORECASE)
 
 
-def part_names_from_description(prompt: str) -> list[str]:
+def part_names_from_description(prompt: str,
+                                skipped: list[str] | None = None) -> list[str]:
     """The parts an asset prompt ENUMERATES, when it never named layer groups.
 
     Measured on the founder's Cells Part 2: the root prompt read "A plant cell
@@ -433,6 +443,11 @@ def part_names_from_description(prompt: str) -> list[str]:
     Second tier only: a prompt that carries the explicit tail is authoritative
     and this returns []. Negated clauses are dropped whole, because a prompt
     that says what NOT to draw is naming the one part the picture lacks.
+
+    Chunks discarded for length are appended to `skipped` when a list is
+    given, so a partly-extracted enumeration is VISIBLE in the acceptance
+    report instead of shipping as three labelled heart chambers and one bare
+    one, which reads on screen as a mistake rather than as restraint.
     """
     if not prompt:
         return []
@@ -448,21 +463,42 @@ def part_names_from_description(prompt: str) -> list[str]:
         neg = _NEGATION.search(sentence)
         if neg is not None:
             sentence = sentence[:neg.start()]
-        m = _LIST_TRIGGER.search(sentence)
-        if m is None:
+        # the LAST trigger whose tail is actually a list wins. Taking the
+        # first made "A diagram showing the human heart with the left atrium,
+        # right atrium, left ventricle and right ventricle." enumerate from
+        # 'showing', so the opening chunk was the six-word "the human heart
+        # with the left atrium" and the left atrium — a real chamber — was
+        # dropped for length while its three siblings got labels.
+        ms = list(_LIST_TRIGGER.finditer(sentence))
+        if not ms:
             continue
+        m = next((x for x in reversed(ms)
+                  if _LIST_SEPARATOR.search(sentence[x.end():])), ms[0])
         tail = sentence[m.end():]
         tail = re.sub(r"^\s*(?:all of|the following|these)\b", "", tail,
                       flags=re.IGNORECASE)
         tail = tail.strip().lstrip(":").strip()
-        for chunk in re.split(r",|\band\b|\bor\b|;|/", tail):
+        for chunk in _LIST_SEPARATOR.split(tail):
             item = re.sub(r"[^A-Za-z0-9 \-]+", " ", chunk).strip().lower()
             words = [w for w in item.split() if w]
             while words and words[0] in _ITEM_STOPWORDS:
                 words.pop(0)
             while words and words[-1] in _ITEM_STOPWORDS:
                 words.pop()
+            if len(words) > 3:
+                # the last item wears the sentence's trailing clause: keep the
+                # head that NAMES the part, drop the clause that places it
+                cl = _TRAILING_CLAUSE.search(" ".join(words))
+                if cl is not None:
+                    # a chunk that IS the clause ("drawn in black ink on
+                    # white paper") names no part at all: it is not a part
+                    # this pass lost, so it is not worth a report line either
+                    words = " ".join(words)[:cl.start()].split()
+                    while words and words[-1] in _ITEM_STOPWORDS:
+                        words.pop()
             if not (1 <= len(words) <= 3):
+                if words and skipped is not None:
+                    skipped.append(" ".join(words))
                 continue
             name = " ".join(words)
             if len(name.replace(" ", "")) < 3 or name in seen:

@@ -129,6 +129,42 @@ def _norm_name(s: str) -> str:
     return _re.sub(r"[^a-z0-9]+", " ", str(s).lower()).strip()
 
 
+def _narration_ngrams(text: str) -> list[str]:
+    """The narration read as candidate part NAMES: its words, plus its two-
+    and three-word runs (part names are rarely longer)."""
+    w = _norm_name(text).split()
+    return (list(w)
+            + [" ".join(w[i:i + 2]) for i in range(len(w) - 1)]
+            + [" ".join(w[i:i + 3]) for i in range(len(w) - 2)])
+
+
+def _narration_names(name: str, narration: str) -> bool:
+    """Does this narration NAME this part?
+
+    The rule until now was a raw normalized-substring test, which is blind to
+    exactly the inflections partnames.py exists to cure: "Each chloroplast
+    traps light." does not contain 'chloroplasts', and "Inside the nuclei sit
+    chromosomes." does not contain 'nucleus'. Measured on the founder's Cells
+    Part 2 prompt with that narration, the report read PART NAMES from
+    description: ['cell wall','cell membrane','cytoplasm'] and only three
+    labels were synthesized — the nucleus and the chloroplasts, the two
+    organelles the lesson is about, shipped unlabelled and the acceptance
+    report never said why.
+
+    The substring test is KEPT as the first arm, so every pair that matched
+    before still matches; the second arm only adds the plural tiers (never
+    the fuzzy one, which would let 'us' in "let us look" name a nucleus).
+    """
+    n = _norm_name(name)
+    if not n:
+        return False
+    if n in _norm_name(narration):
+        return True
+    from .partnames import resolve_part
+    _key, how = resolve_part(name, _narration_ngrams(narration))
+    return how in ("exact", "plural")
+
+
 # A board text element that opens with one of these is an INSTRUCTION to the
 # reader, not a name for a part. The founder's Cells Part 2 wrote "Compare your
 # model cell with the models made by other groups." across the diagram for nine
@@ -140,6 +176,10 @@ _INSTRUCTION_VERBS = {"compare", "discuss", "write", "draw", "look", "think",
 _LABEL_MAX_WORDS = 5
 _LABEL_MAX_CHARS = 32
 _CAPTION_MAX_CHARS = 60
+# a statement this short is a line of board text somebody meant; it belongs
+# under the picture as a caption, not in the bin. Only a genuinely long
+# unspoken instruction is worth deleting.
+_SHORT_SENTENCE_CHARS = 40
 
 
 def _classify_text(e: dict) -> str:
@@ -158,9 +198,21 @@ def _classify_text(e: dict) -> str:
     text = " ".join(str(e.get("text") or "").split())
     words = text.split()
     first = _re.sub(r"[^a-z]", "", words[0].lower()) if words else ""
+    # A full stop is a statement's mark — but a ONE-word text that carries one
+    # is an abbreviation or a numbered tag ('Nucleus.', '1.'), and a question
+    # or exclamation mark on a short text is a socratic prompt ('Why?', 'What
+    # is a cell?'), which is exactly the kind of board text this lesson wants.
+    # Refusing all three deleted them outright: the element is removed from
+    # the roster, not demoted, so a one-word label the model happened to
+    # punctuate disappeared from the lesson.
+    statement_stop = text.endswith(".") and len(words) > 1
+    # An instruction needs an OBJECT. 'Record' alone is a noun, and so is the
+    # 'List' of 'List of organs'; only 'Compare the two' is telling anybody
+    # to do anything.
+    instructing = (first in _INSTRUCTION_VERBS and len(words) >= 2
+                   and _re.sub(r"[^a-z]", "", words[1].lower()) != "of")
     if (len(words) <= _LABEL_MAX_WORDS and len(text) <= _LABEL_MAX_CHARS
-            and not text.endswith((".", "!", "?"))
-            and first not in _INSTRUCTION_VERBS):
+            and not statement_stop and not instructing):
         return "caption" if role == "caption" else "label"
     if role == "caption" and len(text) <= _CAPTION_MAX_CHARS:
         return "caption"
@@ -732,6 +784,16 @@ def _drop_sentence_text(ch: VisualChapter, roster: dict, narrations: dict,
                 f"CHAPTER {ch.concept} | KEY POINT from text->{eid} "
                 f"(a sentence is spoken, not lettered onto the board): "
                 f"{snapped!r}")
+        elif len(text) <= _SHORT_SENTENCE_CHARS:
+            # short enough to sit under the picture: demote rather than
+            # delete. 'Osmosis: water moves across a membrane' is board text
+            # somebody meant, and _keep_text_off_art already parks a caption
+            # below the root.
+            roster[eid] = {**e, "role": "caption"}
+            report.append(
+                f"CHAPTER {ch.concept} | CAPTIONED text->{eid} (a short "
+                f"statement sits under the picture): {text!r}")
+            continue
         else:
             report.append(
                 f"CHAPTER {ch.concept} | DROPPED text->{eid} (sentence, not a "
@@ -953,9 +1015,9 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             paid per name and a junk name costs a wrong region as well as a
             call; the label/arrow synthesis below already requires a
             narration mention, so an unspoken name could never be used."""
-            narr = " ".join(_norm_name(narrations.get(s.segment_id, ""))
+            narr = " ".join(str(narrations.get(s.segment_id, ""))
                             for s in ch.steps)
-            return [n for n in names if _norm_name(n) and _norm_name(n) in narr]
+            return [n for n in names if _narration_names(n, narr)]
 
         # (ii) the TEXT of the chapter's own short labels — 'Nucleus' on an
         # element called lbl1 says what the picture must contain even though
@@ -991,7 +1053,14 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         cand_desc: list[str] = []
         try:
             from .raster_assets import part_names_from_description
-            cand_desc = _narrated(part_names_from_description(prompt0))
+            _skipped: list[str] = []
+            cand_desc = _narrated(
+                part_names_from_description(prompt0, _skipped))
+            for _sk in _skipped:
+                # partial extraction must be VISIBLE: three labelled heart
+                # chambers and one bare one reads as a mistake, not restraint
+                report.append(f"CHAPTER {ch.concept} | PART NAME SKIPPED "
+                              f"{_sk!r} (too long to be a part name)")
         except Exception:  # noqa: BLE001 — best-effort, like the tail parse
             cand_desc = []
 
@@ -1052,8 +1121,8 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                 continue
             target_step = next(
                 (s for s in ch.steps
-                 if _norm_name(part) in _norm_name(
-                     narrations.get(s.segment_id, ""))), None)
+                 if _narration_names(part, narrations.get(s.segment_id, ""))),
+                None)
             if target_step is None:
                 continue
             lid = "lbl_auto_" + _norm_name(part).replace(" ", "_")
@@ -1162,7 +1231,7 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                 # whole run once drew the root seven times and wrote nothing)
                 # — the step's own narration says which part it teaches, so
                 # the declared label and its anchored arrow join this step
-                narr = _norm_name(narrations.get(st.segment_id, ""))
+                narr = str(narrations.get(st.segment_id, ""))
                 for lid, le in roster.items():
                     if len(parts) >= n_draws:
                         break
@@ -1172,7 +1241,7 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                     if not p or p in region_sched or p in parts \
                             or p in already:
                         continue
-                    if _norm_name(p) not in narr:
+                    if not _narration_names(p, narr):
                         continue
                     st.actions.append({"verb": "write", "target": lid})
                     written_labels.add(lid)

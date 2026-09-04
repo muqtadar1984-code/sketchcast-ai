@@ -18,13 +18,14 @@ own prompt had named 'chloroplasts'.
 
 Deliberately a LAST-RESORT tier: exact and substring keep their current
 meaning and run first, so nothing that matched before matches differently now.
-The fuzzy tier is guarded (same initial letter, single best, 0.80 ratio)
-because a confident arrow to the wrong structure teaches worse than no arrow.
+The last tier matches on shared WORDS, never on spelling: a character-ratio
+tier was measured binding nucleolus->nucleus, neutron->neuron and
+meiosis->mitosis, and a confident arrow to the wrong structure teaches worse
+than no arrow.
 """
 
 from __future__ import annotations
 
-import difflib
 import re
 
 __all__ = ["norm_part", "resolve_part", "same_part"]
@@ -108,23 +109,29 @@ def resolve_part(want: str, available: list[str]) -> tuple[str | None, str | Non
     if contained:
         return min(contained, key=lambda a: (len(norm_part(a)), a)), "substring"
 
-    # 4. nearest by name. Guarded hard: a wrong leader line is worse than
-    #    none, so the candidate must start with the same letter and clear a
-    #    high similarity bar, and only a SINGLE best survives.
-    best, best_score = None, 0.0
+    # 4. WORD ORDER only: 'wall cell' is 'cell wall'. Evidence is shared
+    #    TOKENS, never spelling — a character-similarity tier was measured
+    #    binding real, distinct structures to each other at ratios it called
+    #    confident: nucleolus->nucleus 0.875, neutron->neuron 0.923,
+    #    meiosis->mitosis 0.857, chromoplast->chloroplast 0.818,
+    #    proton->photon, stalactite->stalagmite, radius->radium,
+    #    carpal->carpel. Every one of those draws a barbed arrow into the
+    #    wrong region with no warning, and this module exists on the
+    #    principle that a confident arrow to the wrong structure teaches
+    #    worse than no arrow. So spelling is out; only a multi-word name
+    #    whose words are the SAME words qualifies.
     wt = _tokens(want)
-    for an, a in by_norm.items():
-        if not an or an[0] != w[0]:
-            continue
-        ratio = difflib.SequenceMatcher(None, w, an).ratio()
-        at = _tokens(a)
-        jacc = len(wt & at) / len(wt | at) if (wt | at) else 0.0
-        score = max(ratio if ratio >= 0.80 else 0.0,
-                    jacc if jacc >= 0.5 else 0.0)
-        if score > best_score:
-            best, best_score = a, score
-    if best is not None:
-        return best, "nearest"
+    if len(wt) > 1:
+        best, best_score = None, 0.0
+        for an, a in by_norm.items():
+            at = _tokens(a)
+            if not at:
+                continue
+            jacc = len(wt & at) / len(wt | at)
+            if jacc >= 0.5 and jacc > best_score:
+                best, best_score = a, jacc
+        if best is not None:
+            return best, "nearest"
     return None, None
 
 
