@@ -351,7 +351,14 @@ class SceneRenderer:
         # column ordered by target height so leaders stay parallel, columns
         # hugging the diagram (founder-specified sequence).
         self._relayout_part_labels(deferred_arrows)
+        # PASS 1.6: the invariant the relayout cannot provide. It needs >= 2
+        # column entries and only ever considers labels; the founder's stray
+        # sentence was ONE non-label text and sailed straight through, then
+        # rendered across the diagram for nine segments. This runs on every
+        # non-overlay text, whatever its role and however many there are.
+        self._keep_text_off_art()
         self._audit_text_overlaps()
+        self._audit_text_over_art()
 
         # PASS 2: arrows, with anchor refs resolved against real bound
         # geometry. The tail (label side) resolves first so the head can pick
@@ -683,6 +690,173 @@ class SceneRenderer:
                 if a[0] < c[2] and a[2] > c[0] and a[1] < c[3] and a[3] > c[1]:
                     self._warn(f"TEXT_OVERLAP {aid}+{bid}")
 
+    # ── text must never be drawn over the art ────────────────────────────
+
+    def _floor_for(self, x0: float, x1: float) -> float:
+        """How far down a column at this x-range may run.
+
+        A keep-out is a RECTANGLE, not a full-width band. Taking the global
+        `min(z[1])` let the caption panel — which spans only x714..1226 — cap
+        the left column too. Measured on a 7-label cell: it collapsed the
+        usable column to 28px, everything spilled to the top row, and the last
+        two labels clamped onto each other. The keep-out meant to stop overlap
+        caused it: 0 overlapping pairs before, 2 after. Only zones that
+        actually overlap this column's x range can limit it.
+        """
+        tops = [z[1] for z in self._avatar_zones if z[0] < x1 and z[2] > x0]
+        return min(WORLD_H - 60.0, (min(tops) - 12.0) if tops else WORLD_H)
+
+    def _root_art_box(self) -> tuple | None:
+        """The largest non-overlay illustration — the picture the board is
+        about. Same definition the label relayout uses, including its 40000px²
+        floor, so the two passes agree on what 'the diagram' is."""
+        best_b, best = None, 0.0
+        for eid, b in self.bound.items():
+            if isinstance(b.element, IllustrationElement) and \
+                    not _is_overlay(eid) and b.box:
+                area = (b.box[2] - b.box[0]) * (b.box[3] - b.box[1])
+                if area > best:
+                    best_b, best = b, area
+        return best_b.box if (best_b is not None and best >= 40000) else None
+
+    @staticmethod
+    def _overlap_frac(box: tuple, other: tuple) -> float:
+        """How much of `box` sits inside `other`, as a fraction of its OWN
+        area — a long label clipping the corner of a diagram is not the same
+        defect as one written across its middle."""
+        ow = min(box[2], other[2]) - max(box[0], other[0])
+        oh = min(box[3], other[3]) - max(box[1], other[1])
+        if ow <= 0 or oh <= 0:
+            return 0.0
+        own = max(1e-6, (box[2] - box[0]) * (box[3] - box[1]))
+        return (ow * oh) / own
+
+    @staticmethod
+    def _hits(box: tuple, boxes: list) -> bool:
+        return any(box[0] < c[2] and box[2] > c[0]
+                   and box[1] < c[3] and box[3] > c[1] for c in boxes)
+
+    def _text_slots(self, w: float, h: float, art: tuple,
+                    caption: bool) -> Iterator[tuple]:
+        """Candidate positions, in the founder-specified order: right column,
+        left column, top row (wrapping upward), then below the picture. A
+        caption is a statement ABOUT the picture, so it takes the below-root
+        slot first — that is where a caption belongs on a whiteboard."""
+        SAFE_L, SAFE_R, SAFE_T, SAFE_B = 24.0, WORLD_W - 24.0, 22.0, WORLD_H - 46.0
+        rx0, ry0, rx1, ry1 = art
+        pitch = max(50.0, h + 16.0)
+
+        def column(x0: float) -> Iterator[tuple]:
+            y = max(SAFE_T, ry0)
+            floor = min(SAFE_B, self._floor_for(x0, x0 + w))
+            while y + h <= floor:
+                yield (x0, y, x0 + w, y + h)
+                y += pitch
+
+        def below() -> Iterator[tuple]:
+            x0 = min(max(SAFE_L, (rx0 + rx1) / 2 - w / 2), SAFE_R - w)
+            y = ry1 + 12.0
+            while y + h <= SAFE_B:
+                yield (x0, y, x0 + w, y + h)
+                y += h + 10.0
+
+        def top() -> Iterator[tuple]:
+            y = ry0 - h - 26.0
+            while y >= SAFE_T:
+                x = SAFE_L
+                while x + w <= SAFE_R:
+                    yield (x, y, x + w, y + h)
+                    x += 40.0
+                y -= h + 10.0
+
+        gens = [below, lambda: column(min(rx1 + 26.0, SAFE_R - w)),
+                lambda: column(max(SAFE_L, rx0 - 26.0 - w)), top] \
+            if caption else \
+            [lambda: column(min(rx1 + 26.0, SAFE_R - w)),
+             lambda: column(max(SAFE_L, rx0 - 26.0 - w)), top, below]
+        for g in gens:
+            for box in g():
+                yield box
+
+    def _keep_text_off_art(self) -> None:
+        """No board text is drawn over the picture. Path-independent.
+
+        `_relayout_part_labels` cannot be this: it returns early below two
+        entries, only considers role=='label', and has no width check at all
+        — a label wider than the margin is still placed at the margin's x, i.e.
+        across the diagram. In the founder's Cells Part 2 a single 694px
+        sentence therefore kept the position `_bind_text` had clamped it to,
+        over the cell's right half, for nine segments.
+        """
+        art = self._root_art_box()
+        if art is None:
+            return
+        texts = sorted(((eid, b) for eid, b in self.bound.items()
+                        if b.text is not None and b.box and not _is_overlay(eid)),
+                       key=lambda t: (t[1].box[1], t[1].box[0], t[0]))
+        occupied = list(self._avatar_zones)
+        pending: list[tuple] = []
+        for eid, b in texts:
+            if self._overlap_frac(b.box, art) <= 0.15:
+                occupied.append(b.box)      # already clear; it holds its place
+            else:
+                pending.append((eid, b))
+        for eid, b in pending:
+            caption = str(getattr(b.element, "role", "") or "") == "caption"
+            placed = False
+            # try the text at its own size first, then progressively smaller —
+            # a shrink buys height as well as width, and 20px is the floor the
+            # safe-area pass already treats as the smallest readable label
+            size = float(b.text.size)
+            while True:
+                w = b.box[2] - b.box[0]
+                h = b.box[3] - b.box[1]
+                for box in self._text_slots(w, h, art, caption):
+                    if self._overlap_frac(box, art) > 0.0 or \
+                            self._hits(box, occupied):
+                        continue
+                    b.box = box
+                    occupied.append(box)
+                    self._warn(f"TEXT_MOVED_OFF_ART {eid}")
+                    placed = True
+                    break
+                if placed or size <= 20.0:
+                    break
+                size = max(20.0, size * 0.85)
+                self._resize_text(b, size)
+            if not placed:
+                # nothing fits even shrunk: say so rather than pretending.
+                # _audit_text_over_art reports it; validate.py surfaces it.
+                self._warn(f"TEXT_OVER_ART {eid}")
+
+    def _resize_text(self, b: Bound, size: float) -> None:
+        """Re-measure a bound text at a new size, keeping its top-left."""
+        tx = b.text
+        f = self._font_for(tx.bold, int(size), tx.display)
+        try:
+            w = f.getlength(tx.display)
+            asc, desc = f.getmetrics()
+            h = asc + desc
+        except Exception:  # noqa: BLE001 — degrade to the old metrics
+            return
+        b.text = BText(tx.display, tx.at, size, tx.color, tx.bold, tx.rtl,
+                       tx.shaped, tx.anchor, w, h)
+        b.box = (b.box[0], b.box[1], b.box[0] + w, b.box[1] + h)
+
+    def _audit_text_over_art(self) -> None:
+        """Text left sitting on the picture. Nothing measured this before —
+        `_audit_text_overlaps` is text-vs-text only — so the founder's stray
+        sentence rode nine segments while the report said the lesson was
+        clean."""
+        art = self._root_art_box()
+        if art is None:
+            return
+        for eid, b in self.bound.items():
+            if b.text is None or not b.box or _is_overlay(eid):
+                continue
+            if self._overlap_frac(b.box, art) > 0.15:
+                self._warn(f"TEXT_OVER_ART {eid}")
+
     def _emphasis_box(self, tgt, a) -> tuple:
         """The box an emphasis gesture is about.
 
@@ -743,22 +917,12 @@ class SceneRenderer:
         if len(entries) < 2:
             return
         y_top = max(40.0, ry0 + 4.0)
-
-        def _floor_for(x0: float, x1: float) -> float:
-            """How far down THIS column may run.
-
-            A keep-out is a RECTANGLE, not a full-width band. Taking the
-            global `min(z[1])` let the caption panel — which spans only
-            x714..1226 — cap the left column too. Measured on a 7-label cell:
-            it collapsed the usable column to 28px, everything spilled to the
-            top row, and the last two labels clamped onto each other. The
-            keep-out meant to stop overlap caused it: 0 overlapping pairs
-            before, 2 after. Only zones that actually overlap this column's x
-            range can limit it.
-            """
-            tops = [z[1] for z in self._avatar_zones
-                    if z[0] < x1 and z[2] > x0]
-            return min(WORLD_H - 60.0, (min(tops) - 12.0) if tops else WORLD_H)
+        # per-side width budgets: the margin a column actually has. Without
+        # this a label wider than its margin was still placed AT the margin's
+        # x, i.e. straight across the diagram — the layout that exists to stop
+        # collisions was itself putting text on the art.
+        bw_right = (WORLD_W - 24.0) - (rx1 + 26.0)
+        bw_left = (rx0 - 26.0) - 24.0
 
         def place_column(items: list, side: str) -> list:
             items = sorted(items, key=lambda e: e[1][1])   # by target height
@@ -767,11 +931,14 @@ class SceneRenderer:
                 bb = self.bound[lid]
                 w = bb.box[2] - bb.box[0]
                 h = bb.box[3] - bb.box[1]
+                if w > (bw_right if side == "right" else bw_left):
+                    spill.append((lid, tgt))
+                    continue
                 if side == "right":
                     x0 = min(rx1 + 26.0, WORLD_W - 24.0 - w)
                 else:
                     x0 = max(24.0, rx0 - 26.0 - w)
-                if y + h > _floor_for(x0, x0 + w):
+                if y + h > self._floor_for(x0, x0 + w):
                     spill.append((lid, tgt))
                     continue
                 bb.box = (x0, y, x0 + w, y + h)

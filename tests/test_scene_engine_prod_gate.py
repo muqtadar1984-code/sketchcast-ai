@@ -212,3 +212,67 @@ class TestAcceptanceReadsTheEpisodePlan:
         from worker import process
         src = inspect.getsource(process.process_generation)
         assert '"visual_plan": script_dict.get("visual_plan")' in src
+
+
+class TestVisualLanguageReportNotesTheLabelDefects:
+    """The report is what a fix is measured against. None of these lines
+    existed, so the founder's Cells Part 2 — a bare plant cell with a
+    sentence written across it — reported 'PASSED, clean'."""
+
+    @staticmethod
+    def _report(warnings, plan=None):
+        from spike.scene_engine.validate import validate_visual_language
+        manifest = {"segments": [{"segment_id": "s001", "renderer": "scene",
+                                  "audio_path": "a.mp3",
+                                  "scene_audit": list(warnings)}]}
+        return validate_visual_language(manifest, plan)
+
+    def test_text_over_art_is_reported(self):
+        r = self._report(["TEXT_OVER_ART compare_table"])
+        assert r["text_over_art"] == ["s001: TEXT_OVER_ART compare_table"]
+
+    def test_moved_text_is_reported_separately(self):
+        r = self._report(["TEXT_MOVED_OFF_ART lbl1"])
+        assert r["text_moved_off_art"] and not r["text_over_art"]
+
+    def test_anchor_edge_fallbacks_are_counted(self):
+        r = self._report(["ANCHOR_EDGE_FALLBACK cell.ribosome"])
+        assert r["anchor_edge_fallbacks"] == \
+            ["s001: ANCHOR_EDGE_FALLBACK cell.ribosome"]
+
+    def test_orphans_of_an_unresolved_asset_are_counted(self):
+        r = self._report(["ORPHANED_BY_UNRESOLVED_ASSET lbl_cilia (cilia)"])
+        assert r["orphaned_by_unresolved_asset"]
+
+    def test_an_unlabelled_root_chapter_is_noted(self):
+        plan = {"plan": {"chapters": [{
+            "concept": "plant_cell",
+            "elements": [{"id": "cell", "type": "illustration",
+                          "asset": "pc"}],
+            "steps": [{"actions": [{"verb": "draw", "target": "cell"}]},
+                      {"actions": [{"verb": "draw", "target": "cell"}]},
+                      {"actions": [{"verb": "draw", "target": "cell"}]}],
+        }]}}
+        r = self._report([], plan)
+        assert r["unlabelled_root_chapters"] == \
+            ["plant_cell: root drawn 3x, never labelled"]
+        # NOTED, never blocking — an unlabelled diagram is a quality defect,
+        # not a reason to throw away a rendered lesson
+        assert r["passed"] is True
+
+    def test_a_labelled_chapter_is_not_noted(self):
+        plan = {"plan": {"chapters": [{
+            "concept": "plant_cell",
+            "elements": [{"id": "cell", "type": "illustration",
+                          "asset": "pc"}],
+            "steps": [{"actions": [{"verb": "draw", "target": "cell"},
+                                   {"verb": "write", "target": "lbl"}]},
+                      {"actions": [{"verb": "draw", "target": "cell"}]},
+                      {"actions": [{"verb": "draw", "target": "cell"}]}],
+        }]}}
+        assert self._report([], plan)["unlabelled_root_chapters"] == []
+
+    def test_the_report_still_formats(self):
+        from spike.scene_engine.validate import format_report
+        text = format_report(self._report(["TEXT_OVER_ART t"]))
+        assert "Text Over Art" in text
