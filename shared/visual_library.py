@@ -108,7 +108,7 @@ def avatar_fields(key: str) -> dict[str, Any]:
     Returns the ordinary-visual shape for anything that is not an avatar, so
     callers can merge it unconditionally.
     """
-    k = str(key or "").strip().lower()
+    k = base_avatar_key(str(key or "").strip().lower())
     if not is_avatar_key(k):
         return {"asset_type": "visual", "role": None, "age_band": None}
     role = next((r for r in _AVATAR_ROLES if r in k), None)
@@ -130,6 +130,204 @@ def is_avatar_row(row: dict[str, Any] | None) -> bool:
     if str(row.get("asset_type") or "").lower() == "avatar":
         return True
     return is_avatar_key(str(row.get("asset_key") or row.get("canonical_key") or ""))
+
+
+# ── one lesson, one face ─────────────────────────────────────────────────────
+# Founder decision (2026-09-04): the avatar is chosen AT RANDOM among the
+# roster's approved faces, restricted only by the narration voice's gender.
+# The roster holds several faces per key (five approved avatar_female_teacher
+# rows by 2026-09-04, each a different drawing), so "which face" is no longer
+# implied by the key. It has to travel WITH the key: the renderer's raster
+# cache is per key and shared by every lesson on a container, and the child
+# render process resolves assets by key alone. A face-bearing key is
+#
+#     avatar_teacher_female__face_f3c6fcb3
+#
+# — the roster key plus the first 8 hex chars of the chosen row's id. Every
+# consumer that needs the ROSTER key (the prompt, the student voice's age
+# band, publish) strips the suffix with base_avatar_key(); everything keyed
+# on cache identity (canonical_key, the asset dir) keeps it, so two faces of
+# one teacher never share a cache directory.
+FACE_SEP = "__face_"
+_FACE_ID_LEN = 8
+
+
+def face_key(base_key: str, row_id: str) -> str:
+    """The asset key for one specific roster face."""
+    fid = re.sub(r"[^a-z0-9]", "", str(row_id or "").lower())[:_FACE_ID_LEN]
+    base = base_avatar_key(base_key)
+    return f"{base}{FACE_SEP}{fid}" if fid else base
+
+
+def base_avatar_key(key: str) -> str:
+    """The roster key under a face-bearing key (identity for non-face keys)."""
+    k = str(key or "")
+    i = k.find(FACE_SEP)
+    return k[:i] if i > 0 else k
+
+
+def face_id_of(key: str) -> str | None:
+    """The row-id prefix a face-bearing key names, else None."""
+    k = str(key or "")
+    i = k.find(FACE_SEP)
+    if i < 0:
+        return None
+    fid = k[i + len(FACE_SEP):].strip().lower()
+    return fid or None
+
+
+# Gender is NOT a column on visual_assets and the rows carry no metadata JSON,
+# so it is read from the KEY the renderer named the face with — the roster is
+# generated from AVATAR_PROMPTS, whose keys encode it (`_female`, `_f`, `_m`;
+# the two legacy keys `avatar_teacher` / `avatar_student` are male by their
+# prompt text). The description is the fallback for a row named some other
+# way. Measured on the live roster (13 rows, 2026-09-04): every row resolves
+# from its key.
+_DESC_FEMALE = re.compile(r"\b(female|woman|girl|schoolgirl|lady|she)\b", re.I)
+_DESC_MALE = re.compile(r"\b(male|man|boy|schoolboy|he)\b", re.I)
+_LEGACY_MALE_KEYS = {"avatar_teacher", "avatar_student"}
+
+
+def avatar_gender(row_or_key) -> str | None:
+    """'f' | 'm' for a roster row (or a bare key), None when unknowable."""
+    if isinstance(row_or_key, dict):
+        key = str(row_or_key.get("asset_key") or row_or_key.get("canonical_key") or "")
+        desc = str(row_or_key.get("description") or "")
+    else:
+        key, desc = str(row_or_key or ""), ""
+    k = base_avatar_key(key).strip().lower()
+    toks = [t for t in re.split(r"[^a-z0-9]+", k) if t]
+    if "female" in toks or (toks and toks[-1] == "f"):
+        return "f"
+    if "male" in toks or (toks and toks[-1] == "m"):
+        return "m"
+    if k in _LEGACY_MALE_KEYS:
+        return "m"
+    if _DESC_FEMALE.search(desc):
+        return "f"
+    if _DESC_MALE.search(desc):
+        return "m"
+    return None
+
+
+def avatar_role(row_or_key) -> str | None:
+    if isinstance(row_or_key, dict):
+        r = str(row_or_key.get("role") or "").strip().lower()
+        if r in _AVATAR_ROLES:
+            return r
+        key = str(row_or_key.get("asset_key") or row_or_key.get("canonical_key") or "")
+    else:
+        key = str(row_or_key or "")
+    return avatar_fields(key)["role"]
+
+
+def avatar_age_band(row_or_key) -> str | None:
+    """'5_7' | '8_10' | ... for a student face; the legacy avatar_student
+    (an 11-year-old by its prompt) is the 5_7 band."""
+    if isinstance(row_or_key, dict):
+        b = str(row_or_key.get("age_band") or "").strip()
+        if b:
+            return b
+        key = str(row_or_key.get("asset_key") or row_or_key.get("canonical_key") or "")
+    else:
+        key = str(row_or_key or "")
+    band = avatar_fields(key)["age_band"]
+    if band is None and base_avatar_key(key).strip().lower() == "avatar_student":
+        return "5_7"
+    return band
+
+
+def list_avatar_roster() -> list[dict[str, Any]]:
+    """Every approved avatar row, oldest first. Empty offline or on error."""
+    sb = _sb()
+    if sb is None:
+        return []
+    try:
+        rows = (sb.table("visual_assets").select("*")
+                .eq("status", "approved").like("asset_key", "avatar%")
+                .order("created_at").limit(200).execute().data or [])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("visual library avatar roster listing failed: %s", exc)
+        return []
+    return [r for r in rows if is_avatar_row(r)]
+
+
+def _stable_pick(rows: list[dict[str, Any]], seed: str) -> dict[str, Any]:
+    """A random-but-reproducible member: the same seed (a generation id) picks
+    the same face on every part, every retry and every worker; a different
+    generation may pick another. Ordered by (created_at, id) first so the
+    roster's row order in the query cannot change the draw."""
+    import random
+    ordered = sorted(rows, key=lambda r: (str(r.get("created_at") or ""), str(r.get("id") or "")))
+    return random.Random(f"avatar:{seed}").choice(ordered)
+
+
+def pick_avatar(role: str, gender: str | None, seed: str, *,
+                age_band: str | None = None,
+                roster: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
+    """The roster face for a lesson: a random approved face of `role` whose
+    gender matches the voice's, seeded by the generation so one lesson keeps
+    one face.
+
+    Fallbacks, each logged: no face of that gender (or, for students, of that
+    age band) → any face of that role; no face of that role at all → None,
+    which sends the caller down the generate path exactly as before the
+    roster existed. A lesson is never failed over an avatar.
+    """
+    rows = list_avatar_roster() if roster is None else list(roster)
+    pool = [r for r in rows if avatar_role(r) == role]
+    if not pool:
+        logger.info("avatar roster: no approved %s face; generating as before", role)
+        return None
+    cands = pool
+    if age_band:
+        in_band = [r for r in cands if avatar_age_band(r) == age_band]
+        if in_band:
+            cands = in_band
+        else:
+            logger.info("avatar roster: no %s face in age band %s; using any band",
+                        role, age_band)
+    if gender:
+        of_gender = [r for r in cands if avatar_gender(r) == gender]
+        if of_gender:
+            cands = of_gender
+        else:
+            # the gender is the voice's; without a match the lesson still has
+            # a face, and the log says the roster is short one drawing
+            logger.warning("avatar roster: no approved %s face of gender %r "
+                           "(band %s); falling back to any %s face",
+                           role, gender, age_band, role)
+    return _stable_pick(cands, f"{role}:{seed}")
+
+
+# One choice per (generation, role) for the life of the process: the cast is
+# made once and passed down as keys, but a caller that asks again mid-run
+# (another part, a retry) must get the same answer without a second query.
+_CAST_CACHE: dict[tuple, str] = {}
+_CAST_CACHE_MAX = 512
+
+
+def cast_avatar_key(role: str, gender: str | None, seed: str, default_key: str, *,
+                    age_band: str | None = None,
+                    roster: list[dict[str, Any]] | None = None) -> str:
+    """The asset KEY a lesson renders `role` with: a face-bearing roster key,
+    or `default_key` (today's generate path) when the roster has no face for
+    the role. Cached per (seed, role) for the run."""
+    ck = (str(seed), role, gender, age_band)
+    if roster is None and ck in _CAST_CACHE:
+        return _CAST_CACHE[ck]
+    row = pick_avatar(role, gender, str(seed), age_band=age_band, roster=roster)
+    if row is None or not row.get("id"):
+        key = default_key
+    else:
+        key = face_key(str(row.get("asset_key") or default_key), str(row["id"]))
+        logger.info("avatar cast: %s -> %s (gender %s, band %s, seed %s)",
+                    role, key, avatar_gender(row), avatar_age_band(row), seed)
+    if roster is None:
+        if len(_CAST_CACHE) >= _CAST_CACHE_MAX:
+            _CAST_CACHE.clear()
+        _CAST_CACHE[ck] = key
+    return key
 
 
 def _tokens(*values: str) -> set[str]:
@@ -377,7 +575,8 @@ def find_avatar(key: str) -> dict[str, Any] | None:
     sb = _sb()
     if sb is None:
         return None
-    ck = canonical_key(key)
+    fid = face_id_of(key)
+    ck = canonical_key(base_avatar_key(key))
     try:
         # Filtered by KEY in SQL and by is_avatar_row in Python — not by
         # asset_type in SQL: a row published before asset_type existed
@@ -389,10 +588,17 @@ def find_avatar(key: str) -> dict[str, Any] | None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("visual library avatar lookup failed for %s: %s", key, exc)
         return None
-    for row in rows:
-        if is_avatar_row(row):
-            return row
-    return None
+    faces = [row for row in rows if is_avatar_row(row)]
+    if fid:
+        # a face-bearing key names ONE row (see face_key); a face that has
+        # since been demoted or deleted falls back to the oldest, and says so
+        for row in faces:
+            if str(row.get("id") or "").lower().replace("-", "").startswith(fid):
+                return row
+        if faces:
+            logger.warning("visual library: face %s of %s is gone; serving the oldest face",
+                           fid, ck)
+    return faces[0] if faces else None
 
 
 def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
@@ -436,6 +642,10 @@ def publish_generated(asset_key: str, prompt: str, png_path: Path,
     """
     if not png_path.exists():
         return False
+    # A face-bearing key (one roster face, see face_key) is a cache identity,
+    # not a roster identity: what gets published — when it gets published at
+    # all — is the roster key, so the duplicate check below sees the family.
+    asset_key = base_avatar_key(str(asset_key))
     ctx = infer_context(asset_key, prompt, context)
     digest = hashlib.sha256(png_path.read_bytes()).hexdigest()
     row = {
