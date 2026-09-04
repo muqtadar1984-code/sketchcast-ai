@@ -25,6 +25,12 @@ _REANCHORED = re.compile(
 _FLATTENED = re.compile(r"^(.+?) \| FLATTENED (\S+)\.(tail|head) ")
 _LEFT_BEHIND = re.compile(r"^(.+?) \| LEFT BEHIND arrow (\S+)")
 _UNCHAINED = re.compile(r"^(.+?) \| UNCHAINED text (\S+)")
+# a GROUP the guard emptied — every child dropped at the chapter, or every
+# child off the exported board at a boundary. The arrow accounting showed
+# nothing for these, so a board that quietly lost a whole grouped set of
+# visuals read as a clean lesson. Both wordings count (a carry-out says
+# LEFT BEHIND on purpose); "arrow" lines can never match.
+_GROUP_DROP = re.compile(r"^(.+?) \| (?:DROPPED|LEFT BEHIND) group (\S+)")
 
 
 def _scope(label: str) -> str:
@@ -80,6 +86,7 @@ def validate_visual_language(video_manifest: dict,
     flattened: dict[tuple, str] = {}
     left_behind: dict[tuple, str] = {}
     unchained: dict[tuple, str] = {}
+    groups_dropped: dict[tuple, str] = {}
     for ln in plan_report:
         m = _REANCHORED.match(ln)
         if m:
@@ -94,6 +101,10 @@ def validate_visual_language(video_manifest: dict,
         m = _LEFT_BEHIND.match(ln)
         if m:
             left_behind.setdefault((_scope(m.group(1)), m.group(2)), ln)
+            continue
+        m = _GROUP_DROP.match(ln)
+        if m:
+            groups_dropped.setdefault((_scope(m.group(1)), m.group(2)), ln)
             continue
         m = _UNCHAINED.match(ln)
         if m:
@@ -127,6 +138,9 @@ def validate_visual_language(video_manifest: dict,
         "texts_rechained": len(rechained),
         "texts_unchained": list(unchained.values()),
         "arrows_dropped": dropped_arrows,
+        # a group emptied by those drops takes every visual it held off the
+        # board with it: invisible in the accounting until now
+        "groups_dropped": list(groups_dropped.values()),
         # an arrow absent from ONE scene (its anchor erased under it) is
         # still an arrow of the lesson — listed, never subtracted
         "arrow_scene_drops": scene_drops,

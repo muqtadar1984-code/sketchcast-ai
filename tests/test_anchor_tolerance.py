@@ -22,7 +22,8 @@ from spike.scene_engine.anchors import (anchor_key, resolve_anchor,
 from spike.scene_engine.continuity import compile_plan, parse_visual_plan
 from spike.scene_engine.director import parse_scene_response
 from spike.scene_engine.schema import Scene
-from spike.scene_engine.validate import validate_visual_language
+from spike.scene_engine.validate import (format_report,
+                                        validate_visual_language)
 
 _NARR = {"s001": "hook", "s002": "intro", "s003": "Here is a plant cell.",
          "s004": "The cell wall protects it.",
@@ -1268,3 +1269,51 @@ class TestFourthReviewFindings:
         notes, dropped = resolve_roster_anchors(roster, "cell")
         assert (notes, dropped) == ([], [])
         assert roster["cap"]["after"] == {"el": "lbl_a", "gap": 8}
+
+    # -- 4: a group the guard emptied is in the accounting ----------------
+    def test_4_the_report_counts_dropped_groups(self):
+        plan = {"chapters": [{"elements": [
+            {"id": "arr1", "type": "arrow"}]}]}
+        report = [
+            "CHAPTER cell | DROPPED arrow arr1 (tail anchor 'x' names no "
+            "element)",
+            "CHAPTER cell | DROPPED group g (every child was dropped)",
+            "SEGMENT s003 | DROPPED group g2 (every child left the board)",
+            "SEGMENT s004 | DROPPED group g2 (every child left the board)",
+            "CHAPTER cell | CARRY-OUT | LEFT BEHIND group g3 (every child "
+            "left the board)",
+        ]
+        r = validate_visual_language(self._manifest(),
+                                     {"plan": plan, "report": report})
+        # g once per chapter, g2 once however many boards it rode into, and
+        # a carry-out's LEFT BEHIND wording counts the same as a drop
+        assert r["groups_dropped"] == [report[1], report[2], report[4]]
+        # ...and a group line never eats an arrow line
+        assert r["arrows_dropped"] == [report[0]]
+        assert r["arrow_count"] == 0
+
+    def test_4_a_real_compile_shows_the_group_it_emptied(self):
+        raw = {"chapters": [{
+            "concept": "cell", "assets": {"plant_cell": "a cell"},
+            "elements": [
+                dict(self._CELL),
+                {"id": "lbl_a", "type": "text", "text": "A", "at": [95, 140]},
+                {"id": "lbl_b", "type": "text", "text": "B", "at": [95, 220]},
+                {"id": "arr", "type": "arrow", "tail": {"el": "lbl_ghost"},
+                 "head": {"el": "cell", "edge": "center"}},
+                {"id": "g", "type": "group", "children": ["arr"]}],
+            "steps": [
+                {"segment": 3, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "cell"}]},
+                {"segment": 4, "decision": "EXTEND",
+                 "actions": [{"verb": "draw", "target": "g"},
+                             {"verb": "write", "target": "lbl_a"}]}]}]}
+        plan = parse_visual_plan(raw)
+        _, _, report = compile_plan(plan, _NARR, all_segments=list(_NARR),
+                                    skip_hold=set())
+        r = validate_visual_language(self._manifest(),
+                                     {"plan": plan.model_dump(),
+                                      "report": report})
+        assert r["groups_dropped"] == [
+            "CHAPTER cell | DROPPED group g (every child was dropped)"]
+        assert "Groups Dropped" in format_report(r)
