@@ -490,3 +490,45 @@ def test_notify_staff_posts_console_link(monkeypatch):
     assert sent["json"]["to"] == ["team@example.com"]
     assert "https://app.sketchcast.app/console/issues/iss-3" in sent["json"]["text"]
     assert "agent crashed: boom" in sent["json"]["text"]
+
+
+# ── the deck lives on a sibling generation now ───────────────────────────────
+def _lesson(part="1"):
+    return {"id": "pres-1", "kind": "presentation", "owner_id": "u1", "book_id": "b1",
+            "chapter_ref": "3", "params": {"part": part}}
+
+
+def test_sibling_deck_is_found_for_the_same_unit_newest_first():
+    from support_agent.bundle import _sibling_deck_artifact
+    sb = FakeSB({
+        "generations": [
+            {"id": "deck-old", "book_id": "b1", "chapter_ref": "3", "params": {"part": "1"},
+             "created_at": "2026-09-04T09:00:00Z"},
+            {"id": "deck-new", "book_id": "b1", "chapter_ref": "3", "params": {"part": 1},
+             "created_at": "2026-09-04T10:00:00Z"},
+        ],
+        "artifacts": [{"kind": "deck_pptx", "storage_path": "u1/deck-new/deck.pptx"}],
+    })
+    art = _sibling_deck_artifact(sb, _lesson("1"))
+    assert art == {"kind": "deck_pptx", "storage_path": "u1/deck-new/deck.pptx"}
+
+
+def test_sibling_deck_of_another_part_or_chapter_is_not_borrowed():
+    from support_agent.bundle import _sibling_deck_artifact
+    sb = FakeSB({
+        "generations": [
+            {"id": "deck-p2", "book_id": "b1", "chapter_ref": "3", "params": {"part": 2}},
+            {"id": "deck-c4", "book_id": "b1", "chapter_ref": "4", "params": {"part": 1}},
+        ],
+        "artifacts": [{"kind": "deck_pptx", "storage_path": "u1/deck-p2/deck.pptx"}],
+    })
+    assert _sibling_deck_artifact(sb, _lesson("1")) is None
+
+
+def test_sibling_deck_lookup_failure_is_best_effort():
+    from support_agent.bundle import _sibling_deck_artifact
+
+    class Broken:
+        def table(self, name):
+            raise RuntimeError("db down")
+    assert _sibling_deck_artifact(Broken(), _lesson()) is None
