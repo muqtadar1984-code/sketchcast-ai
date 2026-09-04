@@ -128,6 +128,16 @@ def _patch() -> None:
 
     def wrapped_get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
                                  allow_generate: bool = True):
+        # The whole decision — did it exist, hydrate, generate, publish, log —
+        # runs under the SAME per-key lock the generator uses (re-entrant, so
+        # `original` may take it again). It used to be taken inside `original`
+        # only, so two render threads could both read existed_before=False for
+        # one key and both log generated+published for a single image.
+        with ra.asset_lock(key):
+            return _decide(key, prompt, cache_dir, allow_generate)
+
+    def _decide(key: str, prompt: str, cache_dir: Path | None,
+                allow_generate: bool):
         cache = cache_dir or ra.CACHE_DIR
         cache.mkdir(parents=True, exist_ok=True)
         asset_dir = cache / ra.canonical_key(key)

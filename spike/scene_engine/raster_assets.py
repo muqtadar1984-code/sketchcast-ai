@@ -128,11 +128,44 @@ def _vertex_call(prompt: str) -> bytes | None:
         _note_spend("image.vertex")
         return _image_from(_with_backoff(_go, "Vertex image"))
     except Exception as e:
-        logger.warning("Vertex image call failed (%s); trying AI Studio", e)
+        if _is_rate_limited(e):
+            # A 429 produced no image; it must not spend the lesson's
+            # allowance, or a burst of failures starves the successes.
+            _refund_image_call()
+            _note_rate_limited(e)
+            logger.warning("Vertex image call rate-limited (%s): %s",
+                           e, _error_body(e))
+        else:
+            # Not a rate limit: this is the path that goes dark if the SA key
+            # expires or the project locks. Say so loudly — with the AI Studio
+            # image fallback off by default there is no second provider.
+            logger.error("Vertex image call failed for a NON-rate-limit "
+                         "reason (%s): %s", e, _error_body(e))
         return None
 
 
+def aistudio_image_fallback_enabled() -> bool:
+    """The AI Studio IMAGE fallback, off unless explicitly switched on.
+
+    Measured 2026-09-04: the GOOGLE_AI_API_KEY project is on the FREE tier and
+    gemini-2.5-flash-image has NO free-tier allowance — the 429 body names
+    three quotas with limit 0. Every fallback therefore burned 4 attempts,
+    ~58 s of a render thread and one unit of the per-lesson image budget to
+    produce, reliably, nothing. The VISION path is untouched: flash vision
+    still has real free-tier quota and is not affected by this switch.
+    """
+    return str(os.getenv("AISTUDIO_IMAGE_FALLBACK", "")).strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 def _aistudio_call(prompt: str) -> bytes | None:
+    if not aistudio_image_fallback_enabled():
+        if not _image_calls["aistudio_off_logged"]:
+            _image_calls["aistudio_off_logged"] = True
+            logger.info("AI Studio image fallback is off (set "
+                        "AISTUDIO_IMAGE_FALLBACK=1 once that key's project "
+                        "has billing); Vertex is the only image provider")
+        return None
     if not _image_budget_ok():
         return None
     key = os.getenv("GOOGLE_AI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
@@ -149,7 +182,10 @@ def _aistudio_call(prompt: str) -> bytes | None:
         _note_spend("image.aistudio")
         return _image_from(_with_backoff(_go, "AI Studio image"))
     except Exception as e:
-        logger.warning("AI Studio image call failed: %s", e)
+        if _is_rate_limited(e):
+            _refund_image_call()
+            _note_rate_limited(e)
+        logger.warning("AI Studio image call failed: %s: %s", e, _error_body(e))
         return None
 
 
@@ -188,6 +224,35 @@ def _model_gate():
 def _is_rate_limited(exc: Exception) -> bool:
     r = getattr(exc, "response", None)
     return getattr(r, "status_code", None) in (429, 503)
+
+
+# A 429 was logged as its STATUS LINE and nothing else ("429 Client Error"),
+# which is the one fact that was never in doubt. The body is what decides the
+# next incident: a Vertex QUOTA 429 names quotaMetric/quotaId (there is a
+# number to raise), a CAPACITY 429 says only "Resource exhausted, please try
+# again later" (there is not, and the fix is deferral). AI Studio's body names
+# the free-tier quota ids and their limits.
+#
+# Response body ONLY, capped: request headers carry the bearer token and the
+# request body carries the prompt. Neither is ever logged.
+_ERROR_BODY_CHARS = 500
+
+
+def _error_body(exc: Exception) -> str:
+    """First 500 chars of the server's response body, or '' — never headers."""
+    r = getattr(exc, "response", None)
+    if r is None:
+        return ""
+    try:
+        text = r.text
+    except Exception:  # noqa: BLE001 — diagnostics must never raise
+        return ""
+    return str(text or "")[:_ERROR_BODY_CHARS].replace("\n", " ").strip()
+
+
+def _status_of(exc: Exception) -> str:
+    r = getattr(exc, "response", None)
+    return str(getattr(r, "status_code", "?"))
 
 
 def _retry_after(exc: Exception) -> float | None:
@@ -261,11 +326,24 @@ def _with_backoff(fn, what: str, tries: int = 4, kind: str = "image"):
             with gate:                 # at most N paid calls in flight
                 return fn()
         except Exception as exc:  # noqa: BLE001 — transport errors only
-            if not _is_rate_limited(exc) or attempt == tries - 1:
+            limited = _is_rate_limited(exc)
+            if limited:
+                # EVERY attempt, the final one included — the body is the only
+                # evidence that separates a raisable quota from capacity.
+                logger.warning("%s rate-limited HTTP %s (attempt %d/%d) "
+                               "retry_after=%s body=%s", what, _status_of(exc),
+                               attempt + 1, tries, _retry_after(exc),
+                               _error_body(exc))
+            if not limited or attempt == tries - 1:
                 raise
             server = _retry_after(exc)
-            wait = ((min(max(server, 1.0), _RETRY_AFTER_CAP) if server is not None else delay)
-                    + random.uniform(0, 2.0))
+            base = (min(max(server, 1.0), _RETRY_AFTER_CAP)
+                    if server is not None else delay)
+            # Jitter that GROWS with the attempt: three gate slots that 429
+            # together retried on the identical 7/15/36 cadence and re-collided
+            # every round. Capped against the wait itself so a server-named
+            # Retry-After is still honoured to the second it asked for.
+            wait = base + random.uniform(0, min(2.0 + 2.0 * attempt, base * 0.25))
             logger.warning("%s rate-limited; retrying in %.0fs (%d/%d)",
                            what, wait, attempt + 1, tries - 1)
             _t.sleep(wait)
@@ -283,32 +361,91 @@ def _with_backoff(fn, what: str, tries: int = 4, kind: str = "image"):
 # Per-LESSON, not global: a global counter would refuse the hundredth honest
 # lesson. Reset by the worker at the start of each generation.
 _IMAGE_BUDGET = _env_int("IMAGE_CALLS_PER_LESSON", 24)
-_image_calls = {"n": 0, "blocked": 0}
+# The refund below removes the cap that FAILURES used to provide, so a dead
+# provider could otherwise be hammered for the whole lesson. Attempts are
+# counted separately and never refunded: this is the hard stop.
+_IMAGE_ATTEMPT_FACTOR = 3
+_image_calls = {"n": 0, "blocked": 0, "attempts": 0, "refunded": 0,
+                "aistudio_off_logged": False, "ceiling_logged": False}
+_IMAGE_BUDGET_LOCK = _threading.Lock()
 
 
 def reset_image_budget() -> None:
-    _image_calls["n"] = 0
-    _image_calls["blocked"] = 0
+    with _IMAGE_BUDGET_LOCK:
+        _image_calls["n"] = 0
+        _image_calls["blocked"] = 0
+        _image_calls["attempts"] = 0
+        _image_calls["refunded"] = 0
+        _image_calls["aistudio_off_logged"] = False
+        _image_calls["ceiling_logged"] = False
 
 
 def image_budget_state() -> dict:
     return dict(_image_calls)
 
 
+def image_attempt_ceiling() -> int:
+    return max(1, _IMAGE_BUDGET * _IMAGE_ATTEMPT_FACTOR)
+
+
 def _image_budget_ok() -> bool:
     """False once this lesson has spent its allowance. The caller degrades to
     the authored vector tier, exactly as it does for any other image failure —
     a lesson never dies because an asset did."""
-    if _image_calls["n"] >= _IMAGE_BUDGET:
-        _image_calls["blocked"] += 1
-        if _image_calls["blocked"] == 1:      # say it once, not forty times
-            logger.error("image budget spent (%d calls this lesson); further "
-                         "assets fall back to the vector tier. Raise "
-                         "IMAGE_CALLS_PER_LESSON if this is legitimate.",
-                         _IMAGE_BUDGET)
-        return False
-    _image_calls["n"] += 1
-    return True
+    with _IMAGE_BUDGET_LOCK:
+        if _image_calls["attempts"] >= image_attempt_ceiling():
+            if not _image_calls["ceiling_logged"]:
+                _image_calls["ceiling_logged"] = True
+                logger.error("image ATTEMPT ceiling reached (%d attempts this "
+                             "lesson, budget %d); no further image calls will "
+                             "be made. A provider is failing, not busy.",
+                             image_attempt_ceiling(), _IMAGE_BUDGET)
+            return False
+        if _image_calls["n"] >= _IMAGE_BUDGET:
+            _image_calls["blocked"] += 1
+            if _image_calls["blocked"] == 1:  # say it once, not forty times
+                logger.error("image budget spent (%d calls this lesson); further "
+                             "assets fall back to the vector tier. Raise "
+                             "IMAGE_CALLS_PER_LESSON if this is legitimate.",
+                             _IMAGE_BUDGET)
+            return False
+        _image_calls["n"] += 1
+        _image_calls["attempts"] += 1
+        return True
+
+
+def _refund_image_call() -> None:
+    """Give the lesson its unit back when the call was refused, not spent.
+
+    Charging on ENTRY meant a 429 storm spent the whole allowance without
+    producing an image: in fa8c0d7d the failures consumed the budget the
+    successes needed. The ATTEMPT counter is deliberately not refunded."""
+    with _IMAGE_BUDGET_LOCK:
+        if _image_calls["n"] > 0:
+            _image_calls["n"] -= 1
+            _image_calls["refunded"] += 1
+
+
+# The transports swallow their exception and return None, so the caller cannot
+# see WHY an image is missing. This carries the one fact that changes what the
+# caller should do — "the provider is rate-limited, come back later" — without
+# changing any signature. Thread-local: eight render threads generate at once.
+_rate_limit_note = _threading.local()
+
+
+def _note_rate_limited(exc: Exception) -> None:
+    _rate_limit_note.hit = True
+    _rate_limit_note.retry_after = _retry_after(exc)
+
+
+def _take_rate_limited() -> tuple[bool, float | None]:
+    """(was the last generation attempt rate-limited, server Retry-After) —
+    and clears it, so a later success cannot inherit an old 429."""
+    hit = bool(getattr(_rate_limit_note, "hit", False))
+    after = getattr(_rate_limit_note, "retry_after", None)
+    _rate_limit_note.hit = False
+    _rate_limit_note.retry_after = None
+    return hit, after
 
 
 def _note_spend(service: str, **fields) -> None:
@@ -678,7 +815,7 @@ def _finish(key: str, ink: Image.Image, regions: dict | None = None,
 
 # ── cache + public API ───────────────────────────────────────────────────────
 
-_ASSET_LOCKS: dict[str, "threading.Lock"] = {}
+_ASSET_LOCKS: dict[str, "threading.RLock"] = {}
 _LOCKS_GUARD = None  # created lazily so the module stays import-light
 
 
@@ -711,18 +848,30 @@ def canonical_key(key: str) -> str:
     return "_".join(sorted(set(core))) or "asset"
 
 
-def get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
-                     allow_generate: bool = True) -> RasterAsset | None:
-    """Per-key serialized: segments render in parallel threads, and a
-    baked-text regeneration once raced the readers — two segments bound the
-    flagged ink mid-rewrite."""
+def asset_lock(key: str):
+    """The per-asset lock, keyed by CACHE identity (two spellings of one
+    picture share a directory, so they must share a lock).
+
+    Public and RE-ENTRANT so the visual-library wrapper can hold it across its
+    whole decision — look, hydrate, generate, publish, log. It used to sit
+    inside this function only, so two render threads could both observe "not
+    cached", both generate, and both log generated+published for one key
+    (ciliated_cell, 17:55:09 in fa8c0d7d).
+    """
     global _LOCKS_GUARD
     import threading
     if _LOCKS_GUARD is None:
         _LOCKS_GUARD = threading.Lock()
     with _LOCKS_GUARD:
-        lock = _ASSET_LOCKS.setdefault(key, threading.Lock())
-    with lock:
+        return _ASSET_LOCKS.setdefault(canonical_key(key), threading.RLock())
+
+
+def get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
+                     allow_generate: bool = True) -> RasterAsset | None:
+    """Per-key serialized: segments render in parallel threads, and a
+    baked-text regeneration once raced the readers — two segments bound the
+    flagged ink mid-rewrite."""
+    with asset_lock(key):
         return _get_raster_asset(key, prompt, cache_dir, allow_generate)
 
 
