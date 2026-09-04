@@ -28,7 +28,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from shared.asset_keys import canonical_key, core_tokens
+from shared.asset_keys import all_noise, canonical_key, core_tokens
+from shared.asset_keys import tokens as _tokens_of
 
 logger = logging.getLogger(__name__)
 
@@ -201,11 +202,27 @@ def strip_layer_tail(text: str) -> str:
 # fa8c0d7d is an ant. Removed, sk_person still answers a request for a person.
 _KEY_NAMESPACE_TOKENS = frozenset({"sk"})
 
+# Connectives never say WHICH picture an asset is. Left in, `cells_to_tissue`
+# and `tissues_to_organ_diagram` shared exactly one guard token -- "to" -- and
+# scored 0.771 against each other, over the 0.58 default, so the whole
+# levels-of-organisation family could still serve one another's diagrams.
+#
+# Subtracted HERE and not added to KEY_NOISE on purpose: KEY_NOISE decides the
+# cache directory, and folding "to" away would make `cells_to_tissue` and a
+# plain `tissue` one cache entry -- two different pictures in one file.
+_CONNECTIVES = frozenset({"to", "for", "in", "on", "with", "from", "into",
+                          "by", "at", "vs", "versus"})
+
 
 def guard_tokens(value: str) -> set[str]:
     """The tokens a key must share with another key to be about the same
-    thing: its core tokens, minus the namespace prefix."""
-    return core_tokens(value) - _KEY_NAMESPACE_TOKENS
+    thing: its core tokens, minus the namespace prefix and the connectives."""
+    return core_tokens(value) - _KEY_NAMESPACE_TOKENS - _CONNECTIVES
+
+
+def _fallback_tokens(value: str) -> set[str]:
+    """Every token of a key, for a key that has no distinguishing one."""
+    return set(_tokens_of(value)) - _KEY_NAMESPACE_TOKENS - _CONNECTIVES
 
 
 def key_guard_ok(query_key: str, row: dict[str, Any] | None) -> bool:
@@ -216,10 +233,33 @@ def key_guard_ok(query_key: str, row: dict[str, Any] | None) -> bool:
     """
     if not row:
         return False
+    ak, ck = row.get("asset_key") or "", row.get("canonical_key") or ""
     q = guard_tokens(query_key)
-    r = (guard_tokens(row.get("asset_key") or "")
-         | guard_tokens(row.get("canonical_key") or ""))
-    return bool(q and r and (q & r))
+    r = guard_tokens(ak) | guard_tokens(ck)
+    undistinguished = (all_noise(query_key)
+                       or all(all_noise(k) for k in (ak, ck) if k))
+    if q and r and not undistinguished and (q & r):
+        return True
+    # A key made ENTIRELY of noise ("cell_diagram", "cells") keeps its noise
+    # words through core_tokens' fallback, while every candidate row has had
+    # them stripped -- so the guard could never be satisfied and a request the
+    # library answers correctly today (cell_diagram -> animal_cell_diagram,
+    # score 1.40) became a paid regeneration and fresh 429 exposure. When
+    # either side carries nothing distinguishing, the guard has nothing to
+    # assert: compare the raw tokens and let the score decide.
+    if not q or not r or undistinguished:
+        qf, rf = _fallback_tokens(query_key), (_fallback_tokens(ak)
+                                               | _fallback_tokens(ck))
+        ok = bool(qf and rf and (qf & rf))
+        # Logged, because this is the one path where the guard abstains: the
+        # threshold is the only thing standing between the request and a wrong
+        # picture, and "why did cells match X" has to be answerable.
+        logger.debug("key guard abstained for %r vs %r/%r (nothing "
+                     "distinguishing on %s); raw-token overlap=%s",
+                     query_key, ak, ck,
+                     "the request" if all_noise(query_key) else "the row", ok)
+        return ok
+    return False
 
 
 def _score(row: dict[str, Any], query_key: str, prompt: str, ctx: LibraryContext) -> float:

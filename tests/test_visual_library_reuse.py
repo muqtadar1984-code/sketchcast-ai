@@ -224,3 +224,109 @@ class TestGenuineReuseStillWorks:
     def test_the_guard_needs_a_row_with_a_key(self):
         assert vl.key_guard_ok("plant_cell", None) is False
         assert vl.key_guard_ok("plant_cell", {"description": "a plant"}) is False
+
+
+class TestAnAllNoiseKeyIsNotAutomaticallyRefused:
+    """`core_tokens` falls back to keeping the noise words for a key that has
+    nothing else ("cell_diagram", "cells"), so the query kept "cell"/"diagram"
+    while EVERY candidate row had them stripped. The intersection was therefore
+    empty by construction and the guard refused matches the library serves
+    correctly today — turning a hit into a paid regeneration and fresh 429
+    exposure, which is the opposite of what the guard is for."""
+
+    _ANIMAL_CELL = {
+        "asset_key": "animal_cell_diagram", "canonical_key": "animal",
+        "description": ("An educational diagram of an animal cell showing the "
+                        "nucleus, cytoplasm and cell membrane."),
+        "subject": "biology", "grade": "k12", "curriculum": "generic",
+        "topic": "animal cell", "concepts": ["cell"], "status": "approved",
+        "asset_type": "visual", "local_cache_path": "/tmp/ac.png",
+    }
+
+    def test_the_query_that_could_never_be_satisfied(self):
+        from shared.asset_keys import all_noise, core_tokens
+        assert all_noise("cell_diagram"), "nothing here says WHICH picture"
+        assert core_tokens("cell_diagram") == {"cell", "diagram"}
+        assert vl.guard_tokens("animal_cell_diagram") == {"animal"}
+        assert core_tokens("cell_diagram") & vl.guard_tokens(
+            "animal_cell_diagram") == set(), \
+            "empty by construction: the guard could NEVER pass"
+
+    def test_the_guard_abstains_instead_of_refusing(self):
+        assert vl.key_guard_ok("cell_diagram", self._ANIMAL_CELL) is True
+
+    def test_and_the_library_serves_it_again(self, tmp_path, monkeypatch):
+        _library(monkeypatch, tmp_path, self._ANIMAL_CELL)
+        assert vl.find("cell_diagram",
+                       "An educational diagram of an animal cell showing the "
+                       "nucleus, cytoplasm and cell membrane") is not None
+
+    def test_an_all_noise_ROW_is_abstained_on_too(self):
+        """The fallback is symmetric: a row filed under a key that says
+        nothing has nothing to assert about the request either — and it is the
+        ROW that kept the noise words this time."""
+        row = {"asset_key": "cell_diagram", "canonical_key": "cell_diagram"}
+        assert vl.guard_tokens("plant_cell") & vl.guard_tokens(
+            "cell_diagram") == set(), "the same empty-by-construction refusal"
+        assert vl.key_guard_ok("plant_cell", row) is True
+
+    def test_abstaining_is_not_matching_everything(self):
+        """It hands the decision to the score; it does not answer yes."""
+        assert vl.key_guard_ok("cell_diagram", _SK_ANT) is False
+        assert vl.key_guard_ok("cell_diagram",
+                               {"asset_key": "", "canonical_key": ""}) is False
+
+    def test_a_distinguished_key_is_still_guarded_hard(self):
+        """The abstention must not leak into the case the guard exists for."""
+        assert vl.key_guard_ok("ciliated_cell", _RED_BLOOD_CELL) is False
+        assert vl.key_guard_ok("neurone", _RED_BLOOD_CELL) is False
+        assert vl.key_guard_ok("sk_boat", _SK_ANT) is False
+
+
+class TestAConnectiveIsNotASubject:
+    """`cells_to_tissue` and `tissues_to_organs_diagram` shared exactly one
+    guard token — "to" — so the whole levels-of-organisation family could serve
+    one another's diagrams, which is the wrong-picture class the guard exists
+    to close."""
+
+    _CELLS_TO_TISSUE = {
+        "asset_key": "cells_to_tissue", "canonical_key": "tissue_to",
+        "description": ("An educational diagram showing how many similar cells "
+                        "group together to form a tissue."),
+        "subject": "biology", "grade": "k12", "curriculum": "generic",
+        "topic": "levels of organisation", "concepts": ["tissue"],
+        "status": "approved", "asset_type": "visual",
+        "local_cache_path": "/tmp/ctt.png",
+    }
+
+    def test_a_bare_connective_cannot_satisfy_the_guard(self):
+        assert vl.key_guard_ok("tissues_to_organs_diagram",
+                               self._CELLS_TO_TISSUE) is False
+
+    def test_the_connective_is_gone_from_the_guard_tokens(self):
+        assert vl.guard_tokens("cells_to_tissue") == {"tissue"}
+        assert vl.guard_tokens("tissues_to_organs_diagram") == {"tissues",
+                                                               "organs"}
+        for word in ("to", "for", "in", "on", "with", "from", "into", "by",
+                     "at"):
+            assert vl.guard_tokens(f"alpha_{word}_beta") == {"alpha", "beta"}, \
+                word
+
+    def test_the_wrong_diagram_is_not_served(self, tmp_path, monkeypatch):
+        _library(monkeypatch, tmp_path, self._CELLS_TO_TISSUE)
+        assert vl.find("tissues_to_organs_diagram",
+                       "An educational diagram showing how tissues group "
+                       "together to form an organ", min_score=0.0) is None
+
+    def test_the_right_one_still_is(self, tmp_path, monkeypatch):
+        _library(monkeypatch, tmp_path, self._CELLS_TO_TISSUE)
+        assert vl.find("cells_to_tissue",
+                       "An educational diagram showing how many similar cells "
+                       "group together to form a tissue") is not None
+
+    def test_the_connective_still_separates_two_CACHE_entries(self):
+        """Subtracted in the guard, NOT added to KEY_NOISE: folding "to" away
+        would file `cells_to_tissue` and a plain `tissue` in one cache
+        directory — two different pictures in one file."""
+        assert vl.canonical_key("cells_to_tissue") != vl.canonical_key("tissue")
+        assert "to" in vl.canonical_key("cells_to_tissue").split("_")

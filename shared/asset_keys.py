@@ -55,6 +55,21 @@ def core_tokens(value: str) -> set[str]:
     return set([t for t in toks if t not in KEY_NOISE] or toks)
 
 
+def all_noise(value: str) -> bool:
+    """True when a key carries no token saying WHICH picture it is.
+
+    `core_tokens` keeps the noise words for such a key so it stays comparable
+    at all, which means callers cannot tell "cell_diagram" (nothing to go on)
+    from "ciliated_cell" (a real subject) by looking at the result. They have
+    to ask. The visual library's key guard does: a request with no
+    distinguishing token has nothing to assert about a candidate, and refusing
+    every row on that basis turned matches the library serves correctly today
+    into paid regenerations.
+    """
+    toks = tokens(value)
+    return bool(toks) and all(t in KEY_NOISE for t in toks)
+
+
 def canonical_key(value: str) -> str:
     """The cache identity of an asset, independent of how it was named.
 
