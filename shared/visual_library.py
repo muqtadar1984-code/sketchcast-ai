@@ -593,7 +593,7 @@ def hydrate(key: str, prompt: str, cache_dir: Path,
         # is not holding it.
         _write_atomic(png, data)
         metadata = {**hit, "provenance": "visual_library", "library_asset_id": hit.get("id")}
-        meta.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        _write_json_atomic(meta, metadata)
         logger.info("visual library hit: %s <- %s (score %.2f)", key, hit.get("asset_key"), hit.get("match_score", 0))
         return hit
     except Exception as exc:  # noqa: BLE001
@@ -677,8 +677,8 @@ def _sweep_scratch(directory: Path, *, ttl_s: float = _SCRATCH_TTL_S) -> None:
             continue
 
 
-def _write_atomic(png: Path, data: bytes) -> None:
-    """Write `data` to a PRIVATE sibling and rename it into place, so `png` is
+def _write_atomic(path: Path, data: bytes) -> None:
+    """Write `data` to a PRIVATE sibling and rename it into place, so `path` is
     never observable half-written (os.replace is atomic on POSIX and NTFS).
 
     The scratch name carries this writer's pid and a fresh uuid4 because the
@@ -693,14 +693,26 @@ def _write_atomic(png: Path, data: bytes) -> None:
     name no longer exists, and an unconditional ``finally`` unlink of a SHARED
     name could only ever delete some other writer's file out from under it.
     """
-    _sweep_scratch(png.parent)
-    part = png.with_name(f"{png.name}.{os.getpid()}.{uuid.uuid4().hex}.part")
+    _sweep_scratch(path.parent)
+    part = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.part")
     try:
         part.write_bytes(data)
-        os.replace(part, png)
+        os.replace(part, path)
     except BaseException:
         part.unlink(missing_ok=True)
         raise
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    """meta.json goes in the same way asset.png does.
+
+    Making only the PNG atomic moved the torn read one file over rather than
+    closing it: meta.json was still a truncating write_text, and a reader that
+    catches it mid-write parses nothing, falls back to ``md = {}``, finds no
+    ``annotated_for`` and re-runs annotate_regions — a PAID vision call, for a
+    file that was perfectly good a moment earlier and is again a moment later.
+    """
+    _write_atomic(path, json.dumps(payload, indent=2).encode("utf-8"))
 
 
 def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
@@ -730,7 +742,7 @@ def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
         # is not holding it.
         _write_atomic(png, data)
         metadata = {**hit, "provenance": "visual_library", "library_asset_id": hit.get("id")}
-        meta.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        _write_json_atomic(meta, metadata)
         logger.info("visual library avatar: %s <- %s", key, hit.get("id"))
         return hit
     except Exception as exc:  # noqa: BLE001

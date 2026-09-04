@@ -1031,6 +1031,80 @@ class TestTheScratchFileIsPrivateToItsWriter:
         assert png.read_bytes() == b"newer"
 
 
+class TestMetaJsonGoesInTheSameWayTheAssetDoes:
+    """Making asset.png atomic moved the torn read one file over: meta.json
+    was still a truncating write_text. A reader (another process — the
+    per-key lock is in-process only) that catches it mid-write parses
+    nothing, falls back to `md = {}`, finds no `annotated_for` and re-runs
+    annotate_regions. That is a PAID vision call for a file that was good a
+    moment before and is good again a moment after."""
+
+    def test_both_files_are_renamed_in_from_a_private_scratch(self, tmp_path, monkeypatch):
+        import os
+        calls: dict = {}
+        monkeypatch.setattr(vl, "_sb", lambda: _fake_sb(ROSTER, calls))
+        key = vl.face_key("avatar_teacher_female", FEMALE_TEACHERS[1]["id"])
+        cache = tmp_path / "cache"
+        renamed: list[tuple[str, str]] = []
+        real_replace = os.replace
+
+        def spy(src, dst, **kw):
+            renamed.append((str(src), str(dst)))
+            return real_replace(src, dst, **kw)
+        monkeypatch.setattr(os, "replace", spy)
+
+        assert vl.hydrate_avatar(key, cache)
+        d = cache / renderer_canonical_key(key)
+        md = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+        assert md["provenance"] == "visual_library"
+        assert {Path(dst).name for _, dst in renamed} == {"asset.png", "meta.json"}, renamed
+        for src, dst in renamed:
+            assert Path(src).name.startswith(Path(dst).name + "."), (src, dst)
+            assert src.endswith(".part") and f".{os.getpid()}." in src, src
+        assert not list(d.glob("*.part"))
+
+    def test_the_educational_path_writes_its_meta_the_same_way(self, tmp_path, monkeypatch):
+        import os
+        calls: dict = {}
+        monkeypatch.setattr(vl, "_sb", lambda: _fake_sb(ROSTER, calls))
+        monkeypatch.setattr(vl, "find", lambda *a, **k: dict(MALE_TEACHER, match_score=1.0))
+        renamed: list[str] = []
+        real_replace = os.replace
+
+        def spy(src, dst, **kw):
+            renamed.append(Path(dst).name)
+            return real_replace(src, dst, **kw)
+        monkeypatch.setattr(os, "replace", spy)
+
+        assert vl.hydrate("water_cycle", "the water cycle", tmp_path / "cache")
+        assert sorted(renamed) == ["asset.png", "meta.json"], renamed
+
+    def test_a_reader_mid_write_gets_the_previous_meta_whole(self, tmp_path, monkeypatch):
+        """The consequence, stated as a reader sees it. The scratch write is
+        the one instant a concurrent reader can be scheduled into, so that is
+        where the reader looks: it must get the OLD document, complete and
+        parseable — never a truncated one."""
+        meta = tmp_path / "meta.json"
+        before = {"provenance": "generated", "annotated_for": ["stem", "leaf"]}
+        meta.write_text(json.dumps(before), encoding="utf-8")
+        seen: list[dict] = []
+        real_write = Path.write_bytes
+
+        def spy(self, data):
+            out = real_write(self, data)
+            seen.append(json.loads(meta.read_text(encoding="utf-8")))
+            return out
+        monkeypatch.setattr(Path, "write_bytes", spy)
+
+        vl._write_json_atomic(meta, {"provenance": "visual_library", "library_asset_id": "x"})
+
+        assert seen == [before], (
+            "meta.json must be written to a scratch sibling and renamed in; a "
+            "truncating write_text never reaches this spy and leaves a window "
+            "in which a reader parses nothing")
+        assert json.loads(meta.read_text(encoding="utf-8"))["provenance"] == "visual_library"
+
+
 class TestThisModuleStaysReadable:
     """A wrapped assert whose backslash continuation is lost still passes: the
     message glues onto the end of the expression behind a run of spaces, the
