@@ -47,14 +47,13 @@ class TestCardTiming:
         assert T.animation_end(tl) <= audio + 1e-6, \
             "the board must finish inside the audio, not pile up after it"
 
-    def test_a_corner_sketch_on_a_card_is_not_held_until_the_underline(self):
-        """The clamp that dragged the bullets would drag a word-cued sketch the
-        same way if the late underline sat before it in action order."""
+    def test_a_sketch_on_a_contentless_card_is_cued_to_its_word(self):
+        """A card with a heading never carries sketches (heading_taken), so the
+        sketches live on contentless cards — where nothing late may hold them."""
         from spike.scene_engine import timing as T
         from spike.scene_engine.director import parse_scene_response
         from spike.scene_engine.whiteboard import build_whiteboard_scene
-        seg = {"segment_id": "s002", "type": "explore", "slide_heading": "Tools",
-               "slide_points": ["A hammer drives nails", "A tree grows rings"],
+        seg = {"segment_id": "s002", "type": "explore",
                "text": "Think of a hammer driving a nail. Now think of a tree adding a ring each year. "
                        "Both take time. Both leave a record."}
         card = build_whiteboard_scene(seg)
@@ -65,18 +64,41 @@ class TestCardTiming:
         audio = 20.0
         tl = [t for t in T.compile_timeline(scene, audio) if not T._is_caption(t.action)]
         sk = [t for t in tl if str(t.action.target).startswith("sk_")]
-        assert sk and min(t.start for t in sk) < 0.7 * audio, \
-            "a sketch cued to its word must not wait for the 90% underline"
-        assert max(t.start for t in tl if t.action.verb == "underline") >= 0.85 * audio
+        assert sk and min(t.start for t in sk) < 0.7 * audio
 
-    def test_the_underline_is_the_last_board_action_and_still_late(self):
+    def test_the_underline_follows_the_last_bullet_and_a_short_card_does_not_overshoot(self):
         from spike.scene_engine import timing as T
-        scene = self._card(2)
-        tl = [t for t in T.compile_timeline(scene, 20.0) if not T._is_caption(t.action)]
-        board = [t for t in tl if str(t.action.target).startswith("wb_")]
-        last = max(board, key=lambda t: t.start)
-        assert (last.action.verb, last.action.target) == ("underline", "wb_h")
-        assert last.start >= 0.85 * 20.0, "the underline keeps its late cue"
+        scene = self._card(3)
+        for audio in (20.0, 6.0):
+            tl = [t for t in T.compile_timeline(scene, audio) if not T._is_caption(t.action)]
+            board = [t for t in tl if str(t.action.target).startswith("wb_")]
+            last = max(board, key=lambda t: t.start)
+            assert (last.action.verb, last.action.target) == ("underline", "wb_h")
+            bullets = [t for t in board if t.action.verb == "write" and t.action.target != "wb_h"]
+            assert last.start >= max(t.start for t in bullets), "the underline comes after the last bullet"
+            end = T.animation_end(tl)
+            # the underline adds at most a breath after the last bullet — it no
+            # longer anchors a tail of its own
+            assert end - max(t.end for t in bullets) <= 1.0
+            if audio >= 20:
+                assert end <= audio, f"{audio}s card ends at {end:.1f}s"
+            else:
+                # KNOWN LIMIT: the bullet dashes are fraction-cued anchors and the
+                # compressor cannot pull anchors, so a 6 s three-bullet card still
+                # overruns (7.9 s here; 8.4 s before this change). Pinned so the
+                # number cannot silently grow.
+                assert end < 8.0, f"{audio}s card ends at {end:.1f}s"
+
+    def test_a_big_card_keeps_its_early_underline(self):
+        from spike.scene_engine import timing as T
+        from spike.scene_engine.director import parse_scene_response
+        from spike.scene_engine.whiteboard import build_whiteboard_scene
+        seg = {"segment_id": "s003", "type": "hook", "slide_heading": "Beyond Plant Cells",
+               "text": "Have you ever wondered what your own cells look like? Let us find out."}
+        scene = parse_scene_response(build_whiteboard_scene(seg), seg["text"])
+        tl = [t for t in T.compile_timeline(scene, 10.0) if not T._is_caption(t.action)]
+        ul = next(t for t in tl if t.action.verb == "underline")
+        assert 1.5 <= ul.start <= 4.5, "cued at 28% of a 10 s hook"
 
 
 # ── 2. one pen per lesson ────────────────────────────────────────────────────
@@ -186,6 +208,68 @@ class TestCornerSketchSurvivesZoom:
         assert (g[:, :18] < 110).sum() == 0 and (g[:48, :] < 110).sum() == 0, \
             "nothing is cut by the left or top edge"
 
+    def test_a_decoration_on_a_hud_sketch_stays_with_it_through_the_zoom(self):
+        """Review pass: circle/underline/highlight strokes were still projected
+        through the world camera, so a circle around a screen-fixed sketch
+        flew off-canvas while the sketch stayed."""
+        from spike.scene_engine.render import SceneRenderer
+        from spike.scene_engine.schema import Scene
+        asset = _disc_asset()
+
+        def render(with_circle: bool):
+            actions = [
+                {"verb": "write", "target": "root", "duration": 0.8},
+                {"verb": "zoom", "target": "root", "scale": 1.6, "duration": 0.8},
+                {"verb": "draw", "target": "sk_s001_0", "duration": 1.0},
+            ]
+            if with_circle:
+                actions.append({"verb": "circle", "target": "sk_s001_0", "duration": 0.8})
+            scene = Scene.model_validate({
+                "id": "c", "narration": "look at the cell now",
+                "elements": [
+                    {"id": "root", "type": "text", "text": "Cells", "size": 40, "at": [600, 380]},
+                    {"id": "sk_s001_0", "type": "illustration", "asset": "disc",
+                     "at": [136, 142], "scale": 0.32, "hud": True},
+                ],
+                "actions": actions,
+            })
+            r = SceneRenderer(scene, asset_resolver=lambda k: ("raster", asset))
+            r.compile(6.0)
+            last = None
+            for last in r.frames(6.0):
+                pass
+            return last
+
+        plain, circled = render(False), render(True)
+        region = (0, 0, 320, 300)
+        assert _corner_ink(circled, region) > _corner_ink(plain, region) + 50, \
+            "the circle is drawn around the sketch on screen, not off-canvas"
+
+    def test_a_follow_zoom_never_aims_at_a_hud_sketch(self):
+        """Review pass: a zoom with no centre follows the next draw's WORLD
+        position; a screen-fixed sketch's world slot is an empty corner."""
+        from spike.scene_engine.render import SceneRenderer
+        from spike.scene_engine.schema import Scene
+        asset = _disc_asset()
+        scene = Scene.model_validate({
+            "id": "f", "narration": "look at the cell now",
+            "elements": [
+                {"id": "root", "type": "text", "text": "Cells", "size": 40, "at": [600, 380]},
+                {"id": "sk_s001_0", "type": "illustration", "asset": "disc",
+                 "at": [1114, 142], "scale": 0.40, "hud": True},
+            ],
+            "actions": [
+                {"verb": "write", "target": "root", "duration": 0.8},
+                {"verb": "zoom", "scale": 1.6, "duration": 0.8},
+                {"verb": "draw", "target": "sk_s001_0", "duration": 1.0},
+            ],
+        })
+        r = SceneRenderer(scene, asset_resolver=lambda k: ("raster", asset))
+        r.compile(6.0)
+        cam = r.cam.state_at(5.9)
+        assert abs(cam.cx - 1114) > 150 or abs(cam.cy - 142) > 100, \
+            f"the camera followed the sketch's world slot: {cam}"
+
     def test_the_whiteboard_and_the_recap_declare_hud(self):
         from spike.scene_engine.whiteboard import sketch_elements
         els, acts, assets = sketch_elements("Look at the potted plant on the desk.", uid="s1",
@@ -237,9 +321,11 @@ def _fake_sb(rows: list[dict], calls: dict):
             calls.setdefault("queries", []).append(dict(self.f))
             if "eq:content_hash" in self.f:
                 return type("R", (), {"data": []})()
-            if self.f.get("eq:asset_type") == "avatar":
-                return type("R", (), {"data": rows})()
-            return type("R", (), {"data": [r for r in rows if r.get("asset_type") != "avatar"]})()
+            if "eq:canonical_key" in self.f:      # the roster lookup: by key, any type
+                return type("R", (), {"data": [r for r in rows if r.get("canonical_key") == self.f["eq:canonical_key"]]})()
+            if self.f.get("neq:asset_type") == "avatar":   # educational retrieval
+                return type("R", (), {"data": [r for r in rows if r.get("asset_type") != "avatar"]})()
+            return type("R", (), {"data": rows})()
 
     class Storage:
         def from_(self, _b):
@@ -276,8 +362,24 @@ class TestAvatarRoster:
         hit = vl.find_avatar("avatar_teacher_female")
         assert hit and hit["id"] == "row-1"
         q = calls["queries"][0]
-        assert q["eq:asset_type"] == "avatar" and q["eq:status"] == "approved"
+        assert q["eq:status"] == "approved"
         assert q["eq:canonical_key"] == "avatar_female_teacher" and q["order"] == "created_at"
+        assert "eq:asset_type" not in q, "typed in Python (is_avatar_row), not in SQL"
+
+    def test_a_row_typed_before_asset_type_existed_is_still_the_face(self, tmp_path, monkeypatch):
+        """Rows published before the asset_type column carry the default
+        'visual'; the key says avatar, and the key is what the lookup trusts."""
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "index")
+        legacy = {**AVATAR_ROW, "id": "legacy", "asset_type": "visual", "created_at": "2026-08-30T00:00:00Z"}
+        newer = {**AVATAR_ROW, "id": "newer", "created_at": "2026-09-04T00:00:00Z"}
+        monkeypatch.setattr(vl, "_sb", lambda: _fake_sb([legacy, newer], {}))
+        assert vl.find_avatar("avatar_teacher_female")["id"] == "legacy", "oldest face wins, whatever its typing"
+        # a same-key row that is NOT an avatar by type or key is never served as one
+        stray = {**AVATAR_ROW, "id": "stray", "asset_key": "cell_diagram", "canonical_key": "avatar_female_teacher",
+                 "asset_type": "visual", "created_at": "2026-08-01T00:00:00Z"}
+        monkeypatch.setattr(vl, "_sb", lambda: _fake_sb([stray, newer], {}))
+        assert vl.find_avatar("avatar_teacher_female")["id"] == "newer"
 
     def test_hydrate_avatar_puts_the_file_where_the_renderer_looks(self, tmp_path, monkeypatch):
         import shared.visual_library as vl

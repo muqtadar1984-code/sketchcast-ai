@@ -105,17 +105,22 @@ def build_whiteboard_scene(segment: dict,
              "elements": elements, "actions": actions}
     _add_sketches(segment, scene, heading_taken=bool(heading or points))
     if heading:
-        # The underline is cued LATE (90% of the audio) and is appended LAST:
-        # the timeline never starts a cued action before the previous board
-        # action started, so an underline appended before the bullets dragged
-        # every bullet cue (18% / 40% / 62%) up to 90% — the card sat idle
-        # while the narration ran, then everything landed at once past the
-        # end of the audio. Measured on the founder's first Google-voiced
-        # lesson (2026-09-04): "narration ahead of the animation" on every
-        # card segment, planned scenes in sync. It goes after the sketches
-        # too, or the same clamp would hold their word-cued draws until 90%.
-        scene["actions"].append({"verb": "underline", "target": "wb_h",
-                                 "at": {"frac": 0.28 if big else 0.9}})
+        # The underline is appended LAST, and on a card with points it is
+        # NOT cued: it simply follows the last bullet. It used to be cued at
+        # 90% of the audio and appended BEFORE the bullets — and the timeline
+        # never starts a cued action before the previous board action
+        # started, so every bullet cue (18% / 40% / 62%) was dragged to 90%:
+        # the card sat idle while the narration ran, then everything landed
+        # at once past the end of the audio. Measured on the founder's first
+        # Google-voiced lesson (2026-09-04): "narration ahead of the
+        # animation" on every card segment, planned scenes in sync. Uncued,
+        # it also compresses with the board on a short card instead of
+        # anchoring a silent tail after the audio. A big card (no points)
+        # keeps its early cue — nothing precedes it but the heading.
+        underline = {"verb": "underline", "target": "wb_h"}
+        if big:
+            underline["at"] = {"frac": 0.28}
+        scene["actions"].append(underline)
     return scene
 
 

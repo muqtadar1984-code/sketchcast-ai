@@ -1102,13 +1102,33 @@ class SceneRenderer:
                 + [f"BAKED_TEXT {e}" for e in baked],
                 "arrow_heads": heads}
 
+    def _hud_element_ids(self) -> set:
+        """Elements drawn through the SCREEN-fixed camera: the persistent
+        avatars, captions and moment overlays (by id), and anything that
+        declares `hud: true` — the corner sketches and the carried-over
+        recap picture. A zoom focuses the board and leaves them where they
+        are."""
+        out = set()
+        for e in self.scene.elements:
+            eid = str(e.id)
+            if (eid in ("__teach_av", "__stud_av")
+                    or eid.startswith(("__nb_", "__hm_", "__kp_", "__tm_"))
+                    or bool(getattr(e, "hud", False))):
+                out.add(e.id)
+        return out
+
     def _next_action_focus(self, i: int) -> Point | None:
         """Where the next draw/write after timeline index i will put ink —
         the zoom target that stays correct on EVERY asset tier. A hardcoded
         zoom center once sent the camera into empty canvas because generated
-        art placed its nucleus elsewhere; the pen's destination cannot lie."""
+        art placed its nucleus elsewhere; the pen's destination cannot lie.
+        A screen-fixed element is never a focus: its world slot is not where
+        it appears, and a zoom toward it would frame an empty board."""
+        hud = self._hud_element_ids()
         for j in range(i + 1, len(self.timeline)):
             a = self.timeline[j].action
+            if a.target in hud:
+                continue
             b = self.bound.get(a.target) if a.target else None
             if b is None:
                 continue
@@ -1375,8 +1395,7 @@ class SceneRenderer:
         # corner sketches and the carried-over recap picture. They live in the
         # margins the zoom is meant to leave alone, and in world space a zoom
         # flung them off the canvas.
-        hud_ids = {e.id for e in self.scene.elements
-                   if _is_hud(e.id) or bool(getattr(e, "hud", False))}
+        hud_ids = self._hud_element_ids()
 
         def W2S(p: Point, off: Point = (0.0, 0.0), c=None) -> Point:
             sp = (c if c is not None else cam).to_screen((p[0] + off[0], p[1] + off[1]))
@@ -1409,24 +1428,27 @@ class SceneRenderer:
             if b.spawn:
                 self._draw_particles(d, b, s, ecam, alpha, el)
 
-        # decorations (circle/underline/highlight) reveal like strokes
+        # decorations (circle/underline/highlight) reveal like strokes — through
+        # the camera of the element they decorate, so a circle around a
+        # screen-fixed sketch does not fly off with the zoom while the sketch stays
         marker = None
         for i, ta in enumerate(self.timeline):
             if i not in self.deco or t < ta.start:
                 continue
             p = ease(ta.action.easing, min(1.0, (t - ta.start) / max(1e-9, ta.duration)))
+            dcam = cam_hud if getattr(ta.action, "target", None) in hud_ids else cam
             for stx in self.deco[i]:
                 pts = stx.pts if p >= 1.0 else cut_at_fraction(stx.pts, p)
-                spts = [W2S(q) for q in pts]
+                spts = [W2S(q, c=dcam) for q in pts]
                 if stx.color == "marker":
                     if marker is None:
                         marker = Image.new("RGBA", (w, h), (0, 0, 0, 0))
                     md = ImageDraw.Draw(marker)
-                    self._polyline(md, spts, max(1, round(stx.width * cam.scale * SS)),
+                    self._polyline(md, spts, max(1, round(stx.width * dcam.scale * SS)),
                                    PALETTE["marker"] + (110,))
                 else:
                     col = role_color(stx.color, style.ink, style.accent) + (255,)
-                    self._polyline(d, spts, max(1, round(stx.width * cam.scale * SS)), col)
+                    self._polyline(d, spts, max(1, round(stx.width * dcam.scale * SS)), col)
         if marker is not None:
             frame.paste(marker, (0, 0), marker)
 

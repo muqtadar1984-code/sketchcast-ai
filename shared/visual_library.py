@@ -379,15 +379,20 @@ def find_avatar(key: str) -> dict[str, Any] | None:
         return None
     ck = canonical_key(key)
     try:
+        # Filtered by KEY in SQL and by is_avatar_row in Python — not by
+        # asset_type in SQL: a row published before asset_type existed
+        # carries the column default 'visual', and the key is the signal
+        # that has always been there.
         rows = (sb.table("visual_assets").select("*")
-                .eq("status", "approved").eq("asset_type", "avatar")
-                .eq("canonical_key", ck)
-                .order("created_at").limit(1).execute().data or [])
+                .eq("status", "approved").eq("canonical_key", ck)
+                .order("created_at").limit(20).execute().data or [])
     except Exception as exc:  # noqa: BLE001
         logger.warning("visual library avatar lookup failed for %s: %s", key, exc)
         return None
-    row = rows[0] if rows else None
-    return row if row and is_avatar_row(row) else None
+    for row in rows:
+        if is_avatar_row(row):
+            return row
+    return None
 
 
 def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
