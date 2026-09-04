@@ -37,6 +37,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .anchors import resolve_roster_anchors, resolve_scene_anchors
 from .schema import WORLD_H, WORLD_W
 
 logger = logging.getLogger(__name__)
@@ -844,6 +845,20 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             report.append(f"CHAPTER {ch.concept} | PART NAMES from labels: "
                           f"{cand}")
 
+    # ── anchor tolerance ────────────────────────────────────────────────
+    # An anchor whose `el` names no roster element (the founder's "Cells":
+    # root declared as plant_cell_diagram, arrows pointing at plant_cell_box)
+    # used to ride into every scene the arrow appeared in and fail each one
+    # at schema validation — four boards lost to one arrow head. Convert it
+    # here, before the anchoring pass reads the refs: a normalised id/asset
+    # match, a merged handle (root + its part), a part name used as an id
+    # (root + layer), else the single root visual; only an unresolvable
+    # LABEL reference costs the arrow itself, never the scene.
+    _notes, _ = resolve_roster_anchors(
+        roster, root_id, part_names=part_names, aliases=alias_parts)
+    for _n in _notes:
+        report.append(f"CHAPTER {ch.concept} | {_n}")
+
     def _match_part(name: str) -> str | None:
         if not name or not part_names:
             return None
@@ -1219,6 +1234,40 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             step_actions.append(a)
         for tid, c in step_done.items():
             draws_done[tid] = draws_done.get(tid, 0) + c
+
+        # last guard before validation: an arrow whose anchor names a roster
+        # element that is NOT on this board (a label written two steps
+        # later) — or a boundary rename nothing else caught — must not fail
+        # the scene. A known-but-absent element flattens to its planned
+        # point (nothing is revealed early); anything else takes the roster
+        # resolver, which re-anchors or drops that one arrow with a report.
+        _on_scene = {e["id"] for e in elements if isinstance(e.get("id"), str)}
+        for _i, _e in enumerate(elements):
+            if _e.get("type") != "arrow":
+                continue
+            _fx = None
+            for _end in ("tail", "head"):
+                _ref = _e.get(_end)
+                if not (isinstance(_ref, dict) and isinstance(_ref.get("el"), str)):
+                    continue
+                _tgt = _ref["el"]
+                if _tgt in _on_scene or _tgt not in roster:
+                    continue
+                _at = _pt(roster[_tgt].get("at"))
+                if _at is None or roster[_tgt].get("type") == "illustration":
+                    continue
+                _fx = dict(_fx or _e)
+                _fx[_end] = [round(_at[0] + float(_ref.get("dx", 0.0)), 2),
+                             round(_at[1] + float(_ref.get("dy", 0.0)), 2)]
+                report.append(f"SEGMENT {seg_id} | FLATTENED {_e['id']}.{_end} "
+                              f"{_tgt!r} -> {_fx[_end]} (not on the board yet)")
+            if _fx is not None:
+                elements[_i] = _fx
+        _guard = {"elements": elements, "actions": step_actions}
+        for _n in resolve_scene_anchors(_guard, root_id if root_id in _on_scene
+                                        else None, part_names=part_names):
+            report.append(f"SEGMENT {seg_id} | {_n}")
+        elements, step_actions = _guard["elements"], _guard["actions"]
 
         if not elements:
             # every declared visual of this step was dropped/converted away —

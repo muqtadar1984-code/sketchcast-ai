@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 
+from .anchors import resolve_scene_anchors
 from .schema import Scene, parse_scene, scene_warnings
 
 logger = logging.getLogger(__name__)
@@ -214,6 +215,11 @@ def parse_scene_response(raw: dict | str, narration: str) -> Scene | None:
                     or a.get("target") in kept_ids]
         if isinstance(data.get("actions"), list):
             data["actions"] = data["actions"][:_MAX_ACTIONS]
+    # A dangling anchor is CONVERTED, never the reason a scene falls to a
+    # slide: the compiler resolves these first (and reports them); this is the
+    # same guard for scenes that reach the director by any other road.
+    for note in resolve_scene_anchors(data):
+        logger.warning("scene %s: %s", data.get("id"), note)
     try:
         scene = parse_scene(data)
     except Exception as e:

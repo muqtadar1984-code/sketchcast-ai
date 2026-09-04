@@ -36,8 +36,13 @@ def validate_visual_language(video_manifest: dict,
     # never shows it — the report lines are the record of what really bound
     anchored = [ln for ln in plan_report
                 if "| ANCHORED" in ln or "| SYNTHESIZED" in ln]
-    arrow_total = len(arrows) + sum(1 for ln in plan_report
-                                    if "| SYNTHESIZED" in ln)
+    # anchor tolerance (anchors.py): a re-anchored arrow is still an arrow; a
+    # dropped one is not, however the plan dump counts it
+    reanchored = [ln for ln in plan_report if "| REANCHORED" in ln]
+    dropped_arrows = [ln for ln in plan_report if "| DROPPED arrow " in ln]
+    arrow_total = (len(arrows) + sum(1 for ln in plan_report
+                                     if "| SYNTHESIZED" in ln)
+                   - len(dropped_arrows))
 
     report = {
         "narration_segments": len(segs),
@@ -53,6 +58,8 @@ def validate_visual_language(video_manifest: dict,
         "teacher_key_points": stats.get("teacher_key_points", 0),
         "arrow_count": arrow_total,
         "arrows_layer_anchored": len(anchored),
+        "arrows_reanchored": len(reanchored),
+        "arrows_dropped": dropped_arrows,
         "unresolved_anchors": _pick("UNRESOLVED_ANCHOR")
         + _pick("UNRESOLVED_REGION") + _pick("ARROW_SUPPRESSED"),
         "out_of_bounds_text": _pick("OUT_OF_BOUNDS_TEXT"),
