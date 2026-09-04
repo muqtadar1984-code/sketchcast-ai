@@ -20,6 +20,8 @@ FakeSB the observer-guard tests use, and the upload is monkeypatched.
 from __future__ import annotations
 
 import inspect
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -191,6 +193,20 @@ class TestAuthorDeckSlides:
         with pytest.raises(RuntimeError, match="deck authoring returned 0 slides"):
             author_deck_slides(BOOK, CHAPTER, ANALYSIS, _StubClient(data), {}, "en")
 
+    def test_a_visual_that_names_its_format_under_another_key_is_discarded(self):
+        """Why the prompt must spell out the "kind" key (review 2026-09-04):
+        the validator is strict on it, so a reply shaped {"type": "flow"} or
+        {"flow": {...}} silently ships a heading-only slide — no error,
+        MIN_SURVIVING not tripped."""
+        reply = {"title": "t", "slides": [
+            {"heading": "A", "points": [], "notes": "n", "visual": {"type": "flow", "nodes": ["x", "y"]}},
+            {"heading": "B", "points": [], "notes": "n", "visual": {"flow": {"nodes": ["x", "y"]}}},
+            {"heading": "C", "points": [], "notes": "n", "visual": {"kind": "flow", "nodes": ["x", "y"]}},
+        ]}
+        segs = author_deck_slides(BOOK, CHAPTER, ANALYSIS, _StubClient(reply), {}, "en")
+        assert [s["slide_visual"] is None for s in segs] == [True, True, False]
+        assert segs[0]["slide_points"] == [] and segs[1]["slide_points"] == []
+
 
 class TestDeckPrompt:
     def test_asks_for_a_deck_with_the_legacy_catalogue(self):
@@ -202,6 +218,39 @@ class TestDeckPrompt:
         assert "ANTI-MONOTONY RULE" in p and "caption" in p
         assert "{n}" not in p
         assert "LANGUAGE" not in p, "English carries no directive"
+
+    def test_the_visual_shape_names_the_kind_key_the_validator_requires(self):
+        """Review 2026-09-04 (HIGH): the catalogue listed the format names but
+        never said which KEY carries them; _parse_slide_visual reads "kind" and
+        drops anything else. The prompt must state the key and enumerate every
+        valid value in it."""
+        from agent3_scripts.script_generator import _VALID_VISUAL_KINDS
+        p = build_deck_prompt(10, "en")
+        assert '"kind"' in p and '"kind": "flow"' in p
+        m = re.search(r'\{"kind": "<([a-z|]+)>"', p)
+        assert m, 'the catalogue header must show {"kind": "<flow|cycle|...>"}'
+        assert set(m.group(1).split("|")) == _VALID_VISUAL_KINDS
+        assert "yours has exactly 10 slides" in p
+
+    def test_the_output_example_is_valid_json_the_validator_accepts(self):
+        """The abbreviated example is the shape the model copies: it must parse,
+        every visual in it must survive _parse_slide_visual with its kind
+        intact, and the four families (diagram / definition / quiz / closer)
+        must all be shown, so no format is demonstrated only by prose."""
+        from agent3_scripts.script_generator import _parse_slide_visual
+        p = deck_notes.PROMPT.replace("{n}", "10")
+        example = json.loads(p[p.index('{"title": "...", "slides": ['):].strip())
+        assert set(example) == {"title", "slides"} and len(example["slides"]) == 5
+        kinds = []
+        for s in example["slides"]:
+            assert set(s) == {"heading", "points", "visual", "notes"}
+            if s["visual"] is None:
+                continue
+            parsed = _parse_slide_visual(s["visual"])
+            assert parsed is not None and parsed.kind == s["visual"]["kind"]
+            kinds.append(parsed.kind)
+        assert kinds == ["flow", "definition", "quiz", "takeaways"]
+        assert example["slides"][0]["visual"] is None, "a plain-points slide shows visual: null"
 
     def test_the_language_directive_is_appended_like_docgen(self):
         from shared.languages import prompt_directive
@@ -264,6 +313,28 @@ class TestGenerateEpisodeSlidesForADeck:
         sig = inspect.signature(generate_episode_slides)
         assert sig.parameters["build_deck"].default is True
         assert sig.parameters["out_dir"].default is None
+        assert sig.parameters["deck_required"].default is False, \
+            "the presentation's embedded deck stays a bonus"
+
+    def test_a_deck_build_error_is_swallowed_by_default_but_raised_when_required(self, monkeypatch, tmp_path):
+        """Review 2026-09-04 (LOW): the presentation logs a failed deck and
+        carries on (bonus semantics, unchanged); a deck JOB gets the ORIGINAL
+        error re-raised, so support triage sees the python-pptx/template cause
+        rather than the generic 'produced no file'."""
+        from agent5_slides import slide_generator as sg
+
+        def _boom(*a, **k):
+            raise ValueError("template has no Title Slide layout")
+
+        monkeypatch.setattr(sg, "build_episode_deck", _boom)
+        bonus = sg.generate_episode_slides(script_data=_deck_script(_segments(3)),
+                                           out_dir=tmp_path / "bonus").model_dump()
+        assert bonus["deck_path"] is None and len(list((tmp_path / "bonus").glob("*_slide.png"))) == 3
+
+        with pytest.raises(RuntimeError, match="deck build failed: template has no Title Slide layout") as ei:
+            sg.generate_episode_slides(script_data=_deck_script(_segments(3)),
+                                       out_dir=tmp_path / "job", deck_required=True)
+        assert isinstance(ei.value.__cause__, ValueError)
 
 
 # ── (d) the worker helper ───────────────────────────────────────────────
@@ -326,6 +397,25 @@ class TestGenerateDeckHelper:
                 {}, "en", "ltr", tmp_path, "u1/gen-1", "Cells",
             )
         assert uploads == [] and sb.tables.get("artifacts", []) == []
+
+    def test_the_builders_own_error_reaches_the_job_error(self, monkeypatch, tmp_path):
+        """_generate_deck passes deck_required=True: a build_episode_deck
+        exception surfaces with its message (→ jobs.error via finish_job),
+        not as the generic 'deck build produced no file'."""
+        sb, uploads, process = _worker_env(monkeypatch)
+        from agent5_slides import slide_generator as sg
+
+        def _boom(*a, **k):
+            raise ValueError("bad branding template: no notes placeholder")
+
+        monkeypatch.setattr(sg, "build_episode_deck", _boom)
+        with pytest.raises(RuntimeError, match="deck build failed: bad branding template: no notes placeholder"):
+            process._generate_deck(
+                sb, "job-1", "gen-1", BOOK, CHAPTER, ANALYSIS, _StubClient(_reply()), {},
+                {}, "en", "ltr", tmp_path, "u1/gen-1", "Cells",
+            )
+        assert uploads == [] and sb.tables.get("artifacts", []) == []
+        assert "deck_required=True" in inspect.getsource(process._generate_deck)
 
     def test_a_thin_authoring_reply_fails_before_anything_is_uploaded(self, monkeypatch, tmp_path):
         sb, uploads, process = _worker_env(monkeypatch)

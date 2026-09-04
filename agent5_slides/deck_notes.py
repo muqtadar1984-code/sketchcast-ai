@@ -60,8 +60,12 @@ Rules:
 === ON-SCREEN FORMAT (visual) — CHOOSE THE BEST ONE PER SLIDE ===
 Plain bullet points are the LAST resort, not the default. For each teaching slide, pick the
 on-screen FORMAT that best fits the idea and put it in the "visual" object INSTEAD of points
-(you may still give a short heading). Keep every label SHORT (2-5 words). At most one visual
-per slide.
+(you may still give a short heading). The format's name goes in the object's "kind" key — a
+"visual" object is ALWAYS shaped
+  {"kind": "<flow|cycle|hierarchy|compare|icons|definition|quiz|takeaways>", ...the fields listed below...}
+A visual without a "kind" key (or that names its format under any other key, e.g. "type") is
+DISCARDED and the slide ships with no visual at all. Keep every label SHORT (2-5 words). At
+most one visual per slide.
 
 ** ANTI-MONOTONY RULE (important): NEVER put plain points on more than TWO slides in a row.
 A deck that is all bullet lists has failed. Vary the rhythm — e.g. a diagram, then a
@@ -95,8 +99,26 @@ Optional "caption": one short line under a structural diagram.
 Only fall back to plain "points" when NONE of the above fits — and never twice in a row.
 
 === OUTPUT FORMAT ===
-Return ONLY valid JSON — no preamble, no markdown fences, no explanation:
-{"title": "...", "slides": [{"heading": "...", "points": ["..."], "visual": {...}|null, "notes": "60-120 words a teacher says while this slide is up"}]}
+Return ONLY valid JSON — no preamble, no markdown fences, no explanation. The shape, as an
+abbreviated 5-slide example (yours has exactly {n} slides; "visual" is null on a plain-points
+slide, and every visual carries its "kind"):
+{"title": "...", "slides": [
+  {"heading": "Why do prices change?", "points": ["Prices move when demand and supply shift"],
+   "visual": null,
+   "notes": "60-120 words a teacher says while this slide is up."},
+  {"heading": "How markets set prices", "points": [],
+   "visual": {"kind": "flow", "nodes": ["Demand rises", "Scarcity grows", "Price goes up", "Supply responds"], "caption": "Supply and demand meet at a price"},
+   "notes": "..."},
+  {"heading": "Equilibrium", "points": [],
+   "visual": {"kind": "definition", "body": "The price where the amount buyers want exactly matches the amount sellers offer."},
+   "notes": "..."},
+  {"heading": "If demand rises but supply stays the same, the price...", "points": [],
+   "visual": {"kind": "quiz", "options": ["Falls", "Rises", "Stays the same"], "answer": 1},
+   "notes": "..."},
+  {"heading": "What to remember", "points": [],
+   "visual": {"kind": "takeaways", "nodes": ["Price is set where supply meets demand", "More demand pushes price up", "Sellers respond by supplying more"]},
+   "notes": "..."}
+]}
 """
 
 # Jawi deck — same two-script rule the video uses (agent3_scripts/

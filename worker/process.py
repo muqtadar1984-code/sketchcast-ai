@@ -530,9 +530,12 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
     }
     # out_dir = the job's own temp dir: the presentation job of the same
     # chapter may be rendering into the shared storage/slides dir right now.
+    # deck_required: a build_episode_deck failure (template, font, RTL pass)
+    # reaches jobs.error with its own message instead of being swallowed
+    # into the generic "produced no file" below.
     manifest = generate_episode_slides(
         script_data=deck_script, branding=branding, direction=lesson_dir,
-        out_dir=Path(tmp) / "deck",
+        out_dir=Path(tmp) / "deck", deck_required=True,
     ).model_dump()
     deck_path = manifest.get("deck_path")
     if not deck_path or not Path(deck_path).exists():

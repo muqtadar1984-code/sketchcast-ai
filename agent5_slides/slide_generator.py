@@ -67,6 +67,7 @@ def generate_episode_slides(
     direction: str = "ltr",
     out_dir: Path | None = None,
     build_deck: bool = True,
+    deck_required: bool = False,
 ) -> SlideManifest:
     """Render one chapter-content slide PNG per segment + a combined editable deck.
 
@@ -81,6 +82,12 @@ def generate_episode_slides(
     own temp dir. ``build_deck=False`` renders the PNGs only (``deck_path``
     stays None): the presentation job stops embedding a deck once the deck is
     its own generation kind (worker DECK_IN_PRESENTATION flag).
+    ``deck_required=True`` (the deck JOB) re-raises a deck build failure as
+    ``RuntimeError("deck build failed: <original>")`` instead of logging it:
+    there the .pptx IS the artifact, and support triage needs the
+    python-pptx/PIL/template error in the job's error column, not only in a
+    Railway log line. The presentation keeps the default — its deck is a
+    bonus and a failure must never fail the slide step.
     """
     _b = branding or {}
     _accent = _b.get("accent_rgb")
@@ -173,7 +180,10 @@ def generate_episode_slides(
             deck_path = str(deck_file)
             for s in manifest_segments:
                 s.slide_path = deck_path
-        except Exception as exc:  # deck is a bonus; never fail the slide step on it
+        except Exception as exc:
+            if deck_required:
+                raise RuntimeError(f"deck build failed: {exc}") from exc
+            # deck is a bonus; never fail the slide step on it
             logger.warning("Deck build failed: %s", exc)
 
     if progress_callback:
