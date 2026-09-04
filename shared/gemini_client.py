@@ -61,6 +61,13 @@ def gemini_model(kind: str | None = None) -> str:
     return os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 
+def _json_mode() -> bool:
+    """Ask Gemini for structured JSON output (responseMimeType). ON unless
+    GEMINI_JSON_MODE is 0/false/no/off — every caller of this client parses
+    the reply as JSON, so there is no free-text caller to break."""
+    return (os.getenv("GEMINI_JSON_MODE") or "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 def _access_token() -> str:
     """OAuth token from Application Default Credentials.
 
@@ -121,6 +128,13 @@ class GeminiClient:
                 # See module docstring: thinking bills as output, +38% measured,
                 # and this workload gains nothing from it.
                 "thinkingConfig": {"thinkingBudget": 0},
+                # Structured output: the model is CONSTRAINED to emit valid
+                # JSON, which is what every caller of this client parses. Two of
+                # the founder's lessons failed on 2026-09-04 with complete replies
+                # whose JSON was malformed (a wrong bracket; quotes in prose) —
+                # the salvage in claude_client is the belt, this is the braces.
+                # GEMINI_JSON_MODE=0 switches it off without a deploy.
+                **({"responseMimeType": "application/json"} if _json_mode() else {}),
             },
         }
         res = requests.post(

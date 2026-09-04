@@ -190,3 +190,61 @@ class TestFaultWindow:
     def test_bytes_do_not_raise(self):
         f = json_fault(b'{"a": }')
         assert isinstance(f, str) and "char" in f
+
+
+class TestWrongCloser:
+    """gen f0e65c2f (2026-09-04, the founder's retry): the action object was
+    closed with `]` instead of `}` — `"layers": ["nucleus"] ] ],`. The
+    omission reading over-closed and the reply still failed."""
+
+    BAD = '''{
+  "segments": [
+    {
+      "type": "hook", "text": "Cells.", "elevenlabs_text": "Cells.", "slide_heading": "H", "slide_points": ["a"],
+      "scene": {
+        "steps": [
+          {
+            "actions": [
+              {
+                "target": "cell_drawing",
+                "layers": [
+                  "nucleus"
+                ]
+              ]
+            ],
+            "key_point": "The nucleus is the control center, directing the cell."
+          },
+          {
+            "actions": [ { "target": "x", "layers": ["y"] } ],
+            "key_point": "Second step."
+          }
+        ]
+      }
+    }
+  ],
+  "visual_plan": {"chapters": [{"title": "c", "elements": ["particles"]}]}
+}'''
+
+    def test_the_measured_shape_parses_with_the_structure_intact(self):
+        from shared.claude_client import _substitute_closers
+        out = X(self.BAD)
+        assert ok(out)
+        steps = out["segments"][0]["scene"]["steps"]
+        assert len(steps) == 2
+        assert steps[0]["key_point"].startswith("The nucleus"), "key_point stays inside ITS step"
+        assert steps[0]["actions"] == [{"target": "cell_drawing", "layers": ["nucleus"]}]
+        assert out["visual_plan"]["chapters"][0]["title"] == "c"
+        assert _substitute_closers(self.BAD) is not None
+
+    def test_valid_json_and_truncated_replies_are_left_alone(self):
+        from shared.claude_client import _substitute_closers
+        assert _substitute_closers('{"a": [1, 2], "b": {"c": "d"}}') is None, "nothing to swap"
+        assert _substitute_closers('{"a": [1, 2], "b": {"c": "d"') is None, "no swap, only missing closers"
+        assert _substitute_closers('{"a": [1, 2}, "b": ') is None, "severed tail stays loud"
+
+    def test_the_omission_reading_still_wins_where_it_is_right(self):
+        # a } arriving while an array is open, with nothing wrong-typed —
+        # the rebalancer's original case
+        raw = '{"segments": [{"type": "hook", "text": "x", "slide_points": ["a"}], "visual_plan": {"chapters": []}}'
+        out = X(raw)
+        assert ok(out) and out["segments"][0]["slide_points"] == ["a"]
