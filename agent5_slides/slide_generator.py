@@ -65,11 +65,22 @@ def generate_episode_slides(
     progress_callback: Optional[Callable] = None,
     branding: Optional[dict] = None,
     direction: str = "ltr",
+    out_dir: Path | None = None,
+    build_deck: bool = True,
 ) -> SlideManifest:
     """Render one chapter-content slide PNG per segment + a combined editable deck.
 
     ``branding`` = {pptx_template, accent_rgb, logo_path} applies the school's
     theme/colour/logo to the deck + video slides (any field may be None).
+
+    ``out_dir`` overrides the shared ``storage/slides/{book}/chapter_{n}`` dir.
+    The deck job and the same chapter's presentation job can run CONCURRENTLY
+    (a kit inserts both at once, the deck rides the fast lane) and both would
+    otherwise write ``s001_slide.png`` / ``episode_1_deck.pptx`` into the same
+    directory — the deck would embed the other job's PNGs. A job passes its
+    own temp dir. ``build_deck=False`` renders the PNGs only (``deck_path``
+    stays None): the presentation job stops embedding a deck once the deck is
+    its own generation kind (worker DECK_IN_PRESENTATION flag).
     """
     _b = branding or {}
     _accent = _b.get("accent_rgb")
@@ -85,7 +96,7 @@ def generate_episode_slides(
     episode_title = episode.get("episode_title") or "SketchCast AI"
 
     segments = episode.get("segments", [])
-    slide_dir = SLIDES_DIR / book_id / f"chapter_{chapter_num}"
+    slide_dir = Path(out_dir) if out_dir else SLIDES_DIR / book_id / f"chapter_{chapter_num}"
     slide_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_segments: list[SlideSegment] = []
@@ -154,15 +165,16 @@ def generate_episode_slides(
 
     # Combined editable deck (heading + bullets on slide, Socratic notes in notes)
     deck_path: Optional[str] = None
-    try:
-        deck_file = slide_dir / f"episode_{episode_num}_deck.pptx"
-        build_episode_deck(deck_slides, deck_file, episode_title=episode_title,
-                           template=_pptx_template, accent=_accent, direction=direction)
-        deck_path = str(deck_file)
-        for s in manifest_segments:
-            s.slide_path = deck_path
-    except Exception as exc:  # deck is a bonus; never fail the slide step on it
-        logger.warning("Deck build failed: %s", exc)
+    if build_deck:
+        try:
+            deck_file = slide_dir / f"episode_{episode_num}_deck.pptx"
+            build_episode_deck(deck_slides, deck_file, episode_title=episode_title,
+                               template=_pptx_template, accent=_accent, direction=direction)
+            deck_path = str(deck_file)
+            for s in manifest_segments:
+                s.slide_path = deck_path
+        except Exception as exc:  # deck is a bonus; never fail the slide step on it
+            logger.warning("Deck build failed: %s", exc)
 
     if progress_callback:
         progress_callback(total, total, "done")
