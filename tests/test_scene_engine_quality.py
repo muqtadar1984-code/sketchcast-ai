@@ -1538,7 +1538,10 @@ class TestP17ModelCallBurst:
 
     def test_backoff_sleep_does_not_hold_a_slot(self):
         """A rate-limited caller waiting 6-35s must not block the callers that
-        would have succeeded — that turns one 429 into a stalled render."""
+        would have succeeded — that turns one 429 into a stalled render.
+        The per-minute pacing window (`_limiter(kind).acquire()`) follows the
+        same rule: it is taken BEFORE `with gate:`, so a paced caller sleeps
+        holding no slot."""
         import inspect
         import spike.scene_engine.raster_assets as ra
         src = inspect.getsource(ra._with_backoff)
@@ -1546,6 +1549,9 @@ class TestP17ModelCallBurst:
                          if "with gate:" in l)
         sleep_line = next(i for i, l in enumerate(src.splitlines())
                           if "_t.sleep(" in l)
+        pace_line = next(i for i, l in enumerate(src.splitlines())
+                         if ".acquire()" in l)
+        assert pace_line < gate_line, "the pacing wait must happen before the gate"
         # the sleep lives in the except handler, outside the with-block
         assert sleep_line > gate_line
         assert "with gate" not in src.splitlines()[sleep_line]

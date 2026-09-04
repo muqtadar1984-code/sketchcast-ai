@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 
 IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
 CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "storage" / "scene_assets"
+# Assets committed with the code. Checked before the cache and before any
+# model call: the drawing hand lives here, so no lesson ever spends an image
+# call (or waits through a 429) for the pen. Same layout as the cache:
+# <canonical_key>/asset.png + meta.json.
+BUNDLED_DIR = Path(__file__).resolve().parent / "assets"
 NOMINAL_WORLD_W = 700.0  # an illustration at element scale 1.0 spans ~700 world px
 # ...and no more than this tall. Scaling by WIDTH ALONE let a portrait asset's
 # height be whatever its aspect ratio made it: measured on the real cache,
@@ -159,8 +164,10 @@ def _aistudio_call(prompt: str) -> bytes | None:
 # So the two are separated: render as wide as the CPU allows, but keep only a
 # few model calls in flight. This is a burst limiter, not a thread pool — the
 # work still happens on the render threads, they just queue here.
+import threading as _threading  # noqa: E402
+
 _MODEL_GATE = None
-_GATE_LOCK = None
+_GATE_LOCK = _threading.Lock()
 
 
 def model_call_concurrency() -> int:
@@ -171,13 +178,10 @@ def _model_gate():
     """Built on first use, from the environment at that moment — so a caller
     (or a test) can set the bound without re-importing the module, which would
     hand every other holder of this module a different RasterAsset class."""
-    global _MODEL_GATE, _GATE_LOCK
-    import threading
-    if _GATE_LOCK is None:
-        _GATE_LOCK = threading.Lock()
+    global _MODEL_GATE
     with _GATE_LOCK:
         if _MODEL_GATE is None:
-            _MODEL_GATE = threading.Semaphore(model_call_concurrency())
+            _MODEL_GATE = _threading.Semaphore(model_call_concurrency())
     return _MODEL_GATE
 
 
@@ -186,7 +190,55 @@ def _is_rate_limited(exc: Exception) -> bool:
     return getattr(r, "status_code", None) in (429, 503)
 
 
-def _with_backoff(fn, what: str, tries: int = 4):
+def _retry_after(exc: Exception) -> float | None:
+    """The server's own wait, when it names one (seconds form only)."""
+    r = getattr(exc, "response", None)
+    hdrs = getattr(r, "headers", None) or {}
+    try:
+        v = hdrs.get("Retry-After") if hasattr(hdrs, "get") else None
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+# Bursts, not ceilings, are what tripped the quota on both Vertex and AI
+# Studio: every concurrent segment reaching for images at once. The gate bounds
+# calls IN FLIGHT; these bound calls PER MINUTE, process-wide (the quota is per
+# project, so every job in the process shares one window), the same way
+# GOOGLE_TTS_RPM paces narration. Image GENERATION is the scarce, slow call and
+# gets its own budget; vision (a flash text+image request) is cheap and plentiful
+# and must not queue behind it.
+_LIMITER_DEFAULTS = {"image": ("IMAGE_CALLS_PER_MINUTE", 15),
+                     "vision": ("VISION_CALLS_PER_MINUTE", 60)}
+_LIMITERS: dict = {}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        v = int(str(os.getenv(name, "") or "").strip() or default)
+        return v if v > 0 else default
+    except (TypeError, ValueError):
+        logger.warning("%s is not a number; using %d", name, default)
+        return default
+
+
+def _limiter(kind: str):
+    """Per-kind sliding window, built once under the gate lock (three gate
+    holders can reach here together)."""
+    with _GATE_LOCK:
+        lim = _LIMITERS.get(kind)
+        if lim is None:
+            from shared.ratelimit import RateLimiter
+            env, default = _LIMITER_DEFAULTS[kind]   # unknown kind = programming error
+            lim = _LIMITERS[kind] = RateLimiter(_env_int(env, default))
+        return lim
+
+
+# a server may name an hour; nobody waits an hour holding a per-key lock
+_RETRY_AFTER_CAP = 60.0
+
+
+def _with_backoff(fn, what: str, tries: int = 4, kind: str = "image"):
     """Retry a transport call through rate limits.
 
     A 429 used to be swallowed as "no image" — the asset silently vanished
@@ -199,13 +251,21 @@ def _with_backoff(fn, what: str, tries: int = 4):
     delay = 6.0
     gate = _model_gate()
     for attempt in range(tries):
+        # the per-minute token is taken BEFORE the gate: a paced caller sleeps
+        # holding nothing, so the callers that may go now are not queued
+        # behind its wait (same invariant as the 429 sleep below)
+        waited = _limiter(kind).acquire()
+        if waited > 0.5:
+            logger.info("%s paced %.1fs by %s", what, waited, _LIMITER_DEFAULTS[kind][0])
         try:
             with gate:                 # at most N paid calls in flight
                 return fn()
         except Exception as exc:  # noqa: BLE001 — transport errors only
             if not _is_rate_limited(exc) or attempt == tries - 1:
                 raise
-            wait = delay + random.uniform(0, 2.0)
+            server = _retry_after(exc)
+            wait = ((min(max(server, 1.0), _RETRY_AFTER_CAP) if server is not None else delay)
+                    + random.uniform(0, 2.0))
             logger.warning("%s rate-limited; retrying in %.0fs (%d/%d)",
                            what, wait, attempt + 1, tries - 1)
             _t.sleep(wait)
@@ -222,7 +282,7 @@ def _with_backoff(fn, what: str, tries: int = 4):
 #
 # Per-LESSON, not global: a global counter would refuse the hundredth honest
 # lesson. Reset by the worker at the start of each generation.
-_IMAGE_BUDGET = int(os.getenv("IMAGE_CALLS_PER_LESSON", "24"))
+_IMAGE_BUDGET = _env_int("IMAGE_CALLS_PER_LESSON", 24)
 _image_calls = {"n": 0, "blocked": 0}
 
 
@@ -291,7 +351,7 @@ def _vision_json(prompt: str, png_bytes: bytes) -> dict | None:
             res = requests.post(url, headers=headers, json=body, timeout=120)
             res.raise_for_status()
             return res.json()
-        payload = _with_backoff(_go, "vision") or {}
+        payload = _with_backoff(_go, "vision", kind="vision") or {}
         for cand in payload.get("candidates", []):
             txt = "".join(p.get("text", "")
                           for p in cand.get("content", {}).get("parts", []))
@@ -812,8 +872,16 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
 
 def load_hand(key: str = "hand_pen", cache_dir: Path | None = None,
               allow_generate: bool = True):
-    """(hand RGBA, tip (x,y) in image px) for PenSprite, or None."""
-    cache = (cache_dir or CACHE_DIR) / canonical_key(key)
+    """(hand RGBA, tip (x,y) in image px) for PenSprite, or None.
+
+    Tiers: bundled with the code -> per-deploy cache -> generate (only when
+    allowed). The bundled tier is the normal case; the others exist for a key
+    that is not shipped."""
+    bundled = BUNDLED_DIR / canonical_key(key)
+    if (bundled / "asset.png").exists() and (bundled / "meta.json").exists():
+        cache = bundled
+    else:
+        cache = (cache_dir or CACHE_DIR) / canonical_key(key)
     png, meta = cache / "asset.png", cache / "meta.json"
     if not png.exists() and allow_generate:
         prompt = ("A single right hand holding a black marker pen, photographed from "

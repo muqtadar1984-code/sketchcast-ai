@@ -28,7 +28,6 @@ through the pre-flight. A process-wide sliding-window limiter
 
 from __future__ import annotations
 
-import collections
 import concurrent.futures
 import json
 import logging
@@ -73,32 +72,7 @@ class GoogleTTSError(RuntimeError):
         self.retryable = retryable
 
 
-class _RateLimiter:
-    """Sliding one-minute window shared by every thread in the process. A
-    caller that would exceed the rate sleeps until the oldest request in the
-    window is a minute old. Injectable clock/sleep for tests."""
-
-    def __init__(self, per_minute: int, clock=time.monotonic, sleep=time.sleep):
-        self.per_minute = max(1, int(per_minute))
-        self._clock = clock
-        self._sleep = sleep
-        self._lock = threading.Lock()
-        self._times: collections.deque[float] = collections.deque()
-
-    def acquire(self) -> float:
-        """Block until a request may go out; returns the seconds waited."""
-        waited = 0.0
-        while True:
-            with self._lock:
-                now = self._clock()
-                while self._times and now - self._times[0] >= 60.0:
-                    self._times.popleft()
-                if len(self._times) < self.per_minute:
-                    self._times.append(now)
-                    return waited
-                wait = 60.0 - (now - self._times[0]) + 0.01
-            self._sleep(wait)
-            waited += wait
+from shared.ratelimit import RateLimiter as _RateLimiter  # noqa: E402 — shared with the image path
 
 
 _limiter = _RateLimiter(int(os.getenv("GOOGLE_TTS_RPM", "600")))
