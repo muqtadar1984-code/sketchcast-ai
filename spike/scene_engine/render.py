@@ -102,7 +102,7 @@ from .timing import (CAPTION_PREFIX, TimedAction, animation_end,
 from .vector_assets import VectorAsset, vector_asset
 from .geometry import arrow_paths
 
-SS = 2  # supersample factor: PIL lines are not antialiased; 2x + LANCZOS is
+SS = 2  # supersample factor: PIL lines are not antialiased; 2x + box reduce is
 
 _INTRODUCERS = {"draw", "write", "reveal"}
 _PEN_VERBS = {"draw", "write", "erase", "circle", "underline", "highlight"}
@@ -1474,7 +1474,13 @@ class SceneRenderer:
             self.pen.stamp(frame, pen_mode, pen_pos[0], pen_pos[1], SS,
                            erasing=pen_erase, scale=self.scene.style.hand_scale)
 
-        return frame.resize((WORLD_W, WORLD_H), Image.LANCZOS)
+        # Integer-factor box reduce, not LANCZOS: SS is exactly 2, so
+        # reduce(SS) lands on WORLD_W x WORLD_H precisely and costs ~5 ms
+        # against ~60 ms for the LANCZOS resize it replaces (the single
+        # largest per-frame cost). Not byte-identical to LANCZOS — PSNR 44 dB,
+        # founder-approved as visually neutral (2026-09-04). SS must stay an
+        # integer that divides the canvas, or reduce() would round the size.
+        return frame.reduce(SS)
 
     # frontier of an in-flight action, world coords
     def _frontier(self, i: int, ta: TimedAction, t: float) -> Optional[Point]:
