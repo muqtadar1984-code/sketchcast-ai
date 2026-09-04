@@ -11,6 +11,12 @@ shipped a no-op, because the second copy was the one being called.
 This pins uniqueness with `ast`, so a duplicate fails a test rather than
 waiting to be noticed. Kept module-wide rather than per-symbol so a future
 duplicate of any name is caught, not just the ones we already know about.
+
+Scope: every module the worker process imports at runtime — worker/,
+support_agent/, shared/ (recursively, so the TTS providers are in), and the
+compose/render stages. It looks at MODULE-BODY statements only: a definition
+nested in an `if` / `try` at module level is a deliberate conditional, not a
+paste error, and is left alone.
 """
 
 from __future__ import annotations
@@ -24,8 +30,14 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 
 MODULES = sorted(
-    [*ROOT.glob("worker/*.py"), *ROOT.glob("support_agent/*.py"), *ROOT.glob("shared/tts/*.py"),
-     ROOT / "agent6_animation" / "video_composer.py", ROOT / "shared" / "claude_client.py"]
+    p for p in [
+        *ROOT.glob("worker/*.py"),
+        *ROOT.glob("support_agent/*.py"),
+        *ROOT.rglob("shared/**/*.py"),
+        *ROOT.glob("agent6_animation/*.py"),
+        *ROOT.glob("agent8_render/*.py"),
+    ]
+    if p.name != "__init__.py" or p.stat().st_size > 0
 )
 
 
@@ -56,3 +68,11 @@ def test_the_checker_sees_a_duplicate():
     """The guard must itself be proven to fire, or a green run means nothing."""
     tree = ast.parse("X = 1\ndef f():\n    pass\nX = 2\ndef f():\n    pass\n")
     assert {k: v for k, v in _top_level_names(tree).items() if v > 1} == {"X": 2, "f": 2}
+
+
+def test_the_scope_reaches_the_tts_providers():
+    """The providers live one directory deeper than shared/tts; a non-recursive
+    glob missed them (adversarial review, 2026-09-04)."""
+    names = {str(p.relative_to(ROOT)).replace("\\", "/") for p in MODULES}
+    assert "worker/client.py" in names
+    assert any(n.startswith("shared/tts/providers/") for n in names), sorted(names)
