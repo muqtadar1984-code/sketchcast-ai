@@ -37,7 +37,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .anchors import resolve_roster_anchors, resolve_scene_anchors
+from .anchors import (WORDS_BOARD, WORDS_SEGMENT, resolve_roster_anchors,
+                      sanitize_scene)
 from .schema import WORLD_H, WORLD_W
 
 logger = logging.getLogger(__name__)
@@ -861,13 +862,22 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
     # The guard is a last line of defence, so it never gets to be the
     # failure: an exception raised inside it once escaped compile_plan and
     # took the WHOLE chapter with it — zero scenes, the loss it exists to
-    # prevent. Report it and carry on with the roster as it stands.
+    # prevent. Report it and carry on with the roster AS PLANNED — which
+    # means a COPY: the pass mutates in place, so catching halfway through
+    # it and saying "left as planned" was a claim about a roster that had
+    # already lost some arrows and kept others' re-anchored ends. The swap
+    # happens only when the pass finished, and `roster` keeps its identity
+    # (everything downstream holds this dict).
+    _work = dict(roster)
     try:
         _notes, _dropped_ch = resolve_roster_anchors(
-            roster, root_id, part_names=part_names, aliases=alias_parts)
+            _work, root_id, part_names=part_names, aliases=alias_parts)
     except Exception as _e:
         _notes, _dropped_ch = [f"ANCHOR GUARD FAILED ({_e}); roster "
                                f"left as planned"], []
+    else:
+        roster.clear()
+        roster.update(_work)
     for _n in _notes:
         report.append(f"CHAPTER {ch.concept} | {_n}")
 
@@ -1107,62 +1117,41 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         (where the resolver re-bound it to whatever the NEW chapter called
         something alike). A ref to an off-board roster element flattens to
         its planned point, as the stepped scenes already do; one nothing
-        can place is dropped, and every case is reported under ``label``."""
+        can place is dropped, and every case is reported under ``label``.
+
+        The sealing is THE sanitisation pass (anchors.py), run to a fixed
+        point with this board's vocabulary — a HOLD board is a scene like
+        any other and never reached it before, so its own seal could leave
+        a text chained behind an arrow it had just dropped, or an arrow
+        anchored to a group it had just emptied, and the schema threw the
+        whole held board away. No re-anchoring here: on an exported board a
+        name that is not present means "not drawn", not "misnamed", and the
+        chapter pass already re-anchored this roster."""
         board = [carry(eid, e) for eid, e in roster.items()
                  if eid not in erased
                  and (eid in introduced or eid in drawn_layers
                       or eid in drawn_regions)]
-        on = {e["id"] for e in board}
-        sealed: list[dict] = []
-        for e in board:
-            if e.get("type") == "arrow":
-                fx = None
-                lost = False
-                for end in ("tail", "head"):
-                    ref = e.get(end)
-                    if not (isinstance(ref, dict) and isinstance(ref.get("el"), str)) \
-                            or ref["el"] in on:
-                        continue
-                    tgt = ref["el"]
-                    at = _pt(roster[tgt].get("at")) if tgt in roster else None
-                    if at is None:
-                        report.append(f"{label} | {drop_word} arrow {e['id']} "
-                                      f"({end} anchor {tgt!r} is not on the "
-                                      f"board)")
-                        lost = True
-                        break
-                    fx = dict(fx or e)
-                    fx[end] = [round(at[0] + float(ref.get("dx", 0.0)), 2),
-                               round(at[1] + float(ref.get("dy", 0.0)), 2)]
-                    report.append(f"{label} | FLATTENED {e['id']}.{end} "
-                                  f"{tgt!r} -> {fx[end]} (not on the board)")
-                if lost:
-                    continue
-                sealed.append(fx or e)
-            elif e.get("type") == "text" and isinstance(e.get("after"), dict) \
-                    and e["after"].get("el") not in on:
-                fx = dict(e)
-                fx.pop("after", None)      # it still has its own `at`
-                report.append(f"{label} | UNCHAINED text {e['id']} (after "
-                              f"{e['after'].get('el')!r} is not on the board)")
-                sealed.append(fx)
-            else:
-                sealed.append(e)
-        kept = {e["id"] for e in sealed}
-        if len(kept) != len(on):
-            # a group naming a dropped child would fail the schema
-            pruned: list[dict] = []
-            for e in sealed:
-                if e.get("type") == "group":
-                    kids = [c for c in e.get("children") or [] if c in kept]
-                    if not kids:
-                        report.append(f"{label} | {drop_word} group {e['id']} "
-                                      f"(every child left the board)")
-                        continue
-                    e = {**e, "children": kids}
-                pruned.append(e)
-            sealed = pruned
-        return sealed
+
+        def _place(_eid, _end, ref):
+            tgt = ref["el"]
+            at = _pt(roster[tgt].get("at")) if tgt in roster else None
+            if at is None:
+                return None
+            return [round(at[0] + float(ref.get("dx", 0.0)), 2),
+                    round(at[1] + float(ref.get("dy", 0.0)), 2)]
+
+        held = {"elements": board, "actions": []}
+        try:
+            notes = sanitize_scene(held, None, resolve=False, place=_place,
+                                   words=WORDS_BOARD._replace(
+                                       drop_word=drop_word))
+        except Exception as _e:   # the guard may never be the loss
+            report.append(f"{label} | ANCHOR GUARD FAILED ({_e}); board "
+                          f"exported unsealed")
+            return board
+        for n in notes:
+            report.append(f"{label} | {n}")
+        return held["elements"]
 
     # work order: plan steps + HOLD entries for unplanned span segments
     step_by_id = {st.segment_id: st for st in ch.steps}
@@ -1319,42 +1308,37 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         for tid, c in step_done.items():
             draws_done[tid] = draws_done.get(tid, 0) + c
 
-        # last guard before validation: an arrow whose anchor names a roster
-        # element that is NOT on this board (a label written two steps
-        # later, a picture drawn one step after its leader line) — or a
-        # boundary rename nothing else caught — must not fail the scene. A
-        # known-but-not-yet-drawn element flattens to its planned point
-        # (a point reveals nothing early, and the draw action survives so
-        # the arrow rides into the steps where its anchor IS there); an
-        # ERASED target and anything else take the roster resolver, which
-        # re-anchors or drops that one arrow for this scene with a report.
+        # last guard before validation: THE sanitisation pass (anchors.py),
+        # run to a fixed point so nothing this scene names is missing from
+        # it. An arrow whose anchor names a roster element that is NOT on
+        # this board (a label written two steps later, a picture drawn one
+        # step after its leader line) — or a boundary rename nothing else
+        # caught — must not fail the scene: `_place` flattens that end to
+        # the element's planned point (a point reveals nothing early, and
+        # the draw action survives so the arrow rides into the steps where
+        # its anchor IS there). An ERASED target and anything else take the
+        # pass's own rungs, which re-anchor or drop that one arrow for this
+        # scene with a report.
         _on_scene = {e["id"] for e in elements if isinstance(e.get("id"), str)}
-        for _i, _e in enumerate(elements):
-            if _e.get("type") != "arrow":
-                continue
-            _fx = None
-            for _end in ("tail", "head"):
-                _ref = _e.get(_end)
-                if not (isinstance(_ref, dict) and isinstance(_ref.get("el"), str)):
-                    continue
-                _tgt = _ref["el"]
-                if _tgt in _on_scene or _tgt not in roster or _tgt in erased:
-                    continue
-                _at = _pt(roster[_tgt].get("at"))
-                if _at is None:
-                    continue
-                _fx = dict(_fx or _e)
-                _fx[_end] = [round(_at[0] + float(_ref.get("dx", 0.0)), 2),
-                             round(_at[1] + float(_ref.get("dy", 0.0)), 2)]
-                report.append(f"SEGMENT {seg_id} | FLATTENED {_e['id']}.{_end} "
-                              f"{_tgt!r} -> {_fx[_end]} (not on the board yet)")
-            if _fx is not None:
-                elements[_i] = _fx
+
+        def _place(_eid, _end, _ref, _on=_on_scene):
+            _tgt = _ref["el"]
+            # ...only for something this board never had: an id that IS on
+            # the scene but was removed by the pass itself is not "not drawn
+            # yet" — it is gone, and it takes the re-anchor/drop rungs.
+            if _tgt in _on or _tgt not in roster or _tgt in erased:
+                return None
+            _at = _pt(roster[_tgt].get("at"))
+            if _at is None:
+                return None
+            return [round(_at[0] + float(_ref.get("dx", 0.0)), 2),
+                    round(_at[1] + float(_ref.get("dy", 0.0)), 2)]
+
         _guard = {"elements": elements, "actions": step_actions}
         try:
-            _gnotes = resolve_scene_anchors(
+            _gnotes = sanitize_scene(
                 _guard, root_id if root_id in _on_scene else None,
-                part_names=part_names)
+                part_names=part_names, place=_place, words=WORDS_SEGMENT)
         except Exception as _e:
             _gnotes = [f"ANCHOR GUARD FAILED ({_e}); scene left unchanged"]
         for _n in _gnotes:
