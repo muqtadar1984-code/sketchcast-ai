@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from shared.asset_keys import canonical_key, core_tokens
+
 logger = logging.getLogger(__name__)
 
 BUCKET = os.getenv("VISUAL_LIBRARY_BUCKET", "visual-assets")
@@ -70,11 +72,15 @@ class LibraryContext:
         )
 
 
-def canonical_key(value: str) -> str:
-    """Stable concept identity; order/noise changes do not create new assets."""
-    tokens = [t for t in re.split(r"[^a-z0-9]+", str(value).lower()) if t]
-    core = [t for t in tokens if t not in _STOP] or tokens
-    return "_".join(sorted(set(core))) or "asset"
+# canonical_key is imported from shared.asset_keys, NOT defined here. This
+# module had its own copy whose stop-list kept "cell"/"figure", so for every
+# *_cell key in the biology curriculum it disagreed with the renderer's fold:
+# hydrate() filed a downloaded picture under cache/cell_ciliated/ while the
+# renderer only ever reads cache/ciliated/. Every cell-key library hit landed
+# where nobody looks and the picture was generated again.
+#
+# _STOP stays, but only for scoring PROSE (descriptions, prompts), where words
+# like "showing" and "whiteboard" are genuinely noise.
 
 
 # ── avatars are not educational visuals ──────────────────────────────────────
@@ -164,12 +170,65 @@ def infer_context(key: str, prompt: str, context: dict[str, Any] | None = None) 
     return LibraryContext(base.curriculum, subject, base.grade, topic, base.concepts)
 
 
+# The "Name the layer groups exactly: a, b, c." tail addresses the VISION
+# annotator, not the reader, and it is the same shape on every asset prompt in
+# the library. Scored, it is a bag of shared tokens that lifts every
+# comparison — part of how "ciliated_cell" reached 1.23 against a red blood
+# cell. Stripped from both sides, exactly as raster_assets strips it before
+# generating.
+_LAYER_TAIL = re.compile(r"\s*name the layer groups exactly:[^.]*\.?", re.I)
+
+
+def strip_layer_tail(text: str) -> str:
+    return _LAYER_TAIL.sub("", str(text or ""))
+
+
+# ── a match must be ABOUT the thing that was asked for ───────────────────────
+# Scoring is a bag of tokens over key + description, so "ciliated_cell" scored
+# 1.23 against red_blood_cell (shared: cell, blood-vessel prose, the boilerplate
+# tail, plus +0.40 of subject/curriculum/grade bonuses) — over the 0.58
+# threshold. It was accepted, hydrated, and the neurone board in fa8c0d7d shows
+# a red blood cell. A wrong picture is not a smaller version of a missing one:
+# it teaches something false while looking confident, and no report catches it.
+#
+# So before any score can clear the bar, the REQUESTED key and the candidate's
+# own key must share at least one core token. Prose alone can never carry a
+# match.
+
+# "sk" is the auto-sketch NAMESPACE, not part of what the picture is of.
+# Left in, every sketch key overlapped every other sketch key on that one
+# token — which is how sk_boat matched sk_ant at 0.90 and the "boat" in
+# fa8c0d7d is an ant. Removed, sk_person still answers a request for a person.
+_KEY_NAMESPACE_TOKENS = frozenset({"sk"})
+
+
+def guard_tokens(value: str) -> set[str]:
+    """The tokens a key must share with another key to be about the same
+    thing: its core tokens, minus the namespace prefix."""
+    return core_tokens(value) - _KEY_NAMESPACE_TOKENS
+
+
+def key_guard_ok(query_key: str, row: dict[str, Any] | None) -> bool:
+    """Whether `row` is even a candidate for `query_key`.
+
+    A necessary condition, not a sufficient one — the score still has to clear
+    the threshold. What it forbids is a match carried entirely by PROSE.
+    """
+    if not row:
+        return False
+    q = guard_tokens(query_key)
+    r = (guard_tokens(row.get("asset_key") or "")
+         | guard_tokens(row.get("canonical_key") or ""))
+    return bool(q and r and (q & r))
+
+
 def _score(row: dict[str, Any], query_key: str, prompt: str, ctx: LibraryContext) -> float:
     key = str(row.get("canonical_key") or row.get("asset_key") or "")
-    desc = str(row.get("description") or "")
+    desc = strip_layer_tail(row.get("description") or "")
     concepts = row.get("concepts") or []
     row_tokens = _tokens(key, desc, " ".join(map(str, concepts)))
-    query_tokens = _tokens(query_key, prompt, ctx.topic, " ".join(ctx.concepts))
+    query_tokens = _tokens(query_key, strip_layer_tail(prompt), ctx.topic,
+                           " ".join(ctx.concepts))
     if not query_tokens or not row_tokens:
         return 0.0
     overlap = len(query_tokens & row_tokens) / max(1, len(query_tokens))
@@ -236,8 +295,17 @@ def find(key: str, prompt: str, context: dict[str, Any] | None = None,
     """Find an approved reusable asset without invoking an AI model."""
     ctx = infer_context(key, prompt, context)
     threshold = float(os.getenv("VISUAL_LIBRARY_MIN_SCORE", "0.58")) if min_score is None else min_score
-    best, best_score, source = best_match(key, prompt, context, _ctx=ctx)
+    # `guarded`: only rows whose OWN key shares a core token with the request
+    # may be served. best_match() without it still sees everything, so the
+    # near-miss evidence the threshold argument runs on keeps flowing.
+    best, best_score, source = best_match(key, prompt, context, _ctx=ctx,
+                                          guarded=True)
     if best is None or best_score < threshold:
+        near, near_score, _ = best_match(key, prompt, context, _ctx=ctx)
+        if near is not None and near_score >= threshold and not key_guard_ok(key, near):
+            logger.info("visual library: refused %s <- %s (score %.2f) — the "
+                        "keys share no concept token", key,
+                        near.get("asset_key"), near_score)
         return None
     return {**best, "match_score": round(best_score, 4),
             "match_source": source, "context": ctx.__dict__}
@@ -248,7 +316,7 @@ def threshold_now() -> float:
 
 
 def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
-               *, _ctx: LibraryContext | None = None):
+               *, _ctx: LibraryContext | None = None, guarded: bool = False):
     """The best candidate and its score, WITHOUT applying the threshold.
 
     Split out of find() so a near-miss is observable. find() returns None
@@ -257,16 +325,24 @@ def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
     only records the matches we already accepted. The decision log records
     this score whether or not it cleared the bar.
 
+    `guarded=True` (what find() uses) restricts the candidates to rows whose
+    own key shares a core token with the request, so the best SERVEABLE row is
+    chosen rather than the best-scoring one being chosen and then refused.
+
     Returns (row | None, score, source) where source is 'local' or 'remote'.
     """
     ctx = _ctx or infer_context(key, prompt, context)
+
+    def _eligible(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [r for r in candidates if key_guard_ok(key, r)] if guarded \
+            else candidates
 
     # Educational retrieval NEVER sees avatars. Filtered on both sides: the
     # remote query narrows in Postgres (cheap, and keeps the 250-row window for
     # real visuals rather than spending it on avatars), and both result sets
     # are filtered again in Python by is_avatar_row(), which also catches rows
     # published before asset_type was set.
-    rows = [r for r in _local_candidates() if not is_avatar_row(r)]
+    rows = _eligible([r for r in _local_candidates() if not is_avatar_row(r)])
     best = max(rows, key=lambda r: _score(r, key, prompt, ctx), default=None)
     best_score = _score(best, key, prompt, ctx) if best else 0.0
     source = "local" if best is not None else "none"
@@ -278,7 +354,7 @@ def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
                       .eq("status", "approved")
                       .neq("asset_type", "avatar")
                       .limit(250).execute().data or [])
-            remote = [r for r in remote if not is_avatar_row(r)]
+            remote = _eligible([r for r in remote if not is_avatar_row(r)])
             remote_best = max(remote, key=lambda r: _score(r, key, prompt, ctx), default=None)
             remote_score = _score(remote_best, key, prompt, ctx) if remote_best else 0.0
             if remote_score > best_score:

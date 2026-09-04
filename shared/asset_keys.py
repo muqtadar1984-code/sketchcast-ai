@@ -1,0 +1,65 @@
+"""The ONE canonical identity of a visual asset.
+
+There were two. ``spike/scene_engine/raster_assets.canonical_key`` folded away
+"cell", "figure" and friends; ``shared/visual_library.canonical_key`` did not.
+They therefore disagreed about every *_cell key in the biology curriculum, and
+the disagreement was silent and expensive:
+
+    visual_library.hydrate() downloaded a library hit and filed it under
+    cache/cell_ciliated/, while the renderer only ever reads
+    cache/ciliated/. Every cell-key library hit landed where nobody looks and
+    the picture was generated again — red_blood_cell was HIT at 17:52:10,
+    GENERATED at 17:52:22 and rejected as a duplicate on publish, adding paid
+    calls to the very 429 burst that then cost the lesson two blank boards.
+
+One function, imported by both, so a fold can never drift again. Stored
+``canonical_key`` values on existing rows keep working: they are read only for
+the avatar exact match (avatar keys fold identically under both old
+functions) and for search, while publish idempotency is by content hash.
+"""
+
+from __future__ import annotations
+
+import re
+
+# Words that decorate a subject without changing which picture it is. The key
+# is free text a MODEL invented, so one chapter produced ciliated_epithelium,
+# ciliated_epithelium_cells and ciliated_epithelium_diagram as three
+# separately-paid generations of one image.
+#
+# Deliberately conservative: "outline" and "view" are NOT here, because
+# plant_cell_outline and plant_cell_diagram are different pictures and merging
+# them would serve the wrong art — which is worse than paying twice.
+KEY_NOISE = frozenset({
+    "diagram", "diagrams", "cell", "cells", "illustration", "illustrations",
+    "image", "images", "picture", "pictures", "figure", "figures", "drawing",
+    "drawings", "asset", "assets", "visual", "visuals", "graphic", "graphics",
+    "sketch", "art", "of", "the", "a", "an", "and",
+})
+
+_SPLIT = re.compile(r"[^a-z0-9]+")
+
+
+def tokens(value: str) -> list[str]:
+    return [t for t in _SPLIT.split(str(value).lower()) if t]
+
+
+def core_tokens(value: str) -> set[str]:
+    """The tokens that say WHICH picture this is.
+
+    Falls back to every token when a key is made entirely of noise
+    ("cell_diagram"), because a key with no distinguishing token still has to
+    be comparable to another one.
+    """
+    toks = tokens(value)
+    return set([t for t in toks if t not in KEY_NOISE] or toks)
+
+
+def canonical_key(value: str) -> str:
+    """The cache identity of an asset, independent of how it was named.
+
+    Measured on a real cache: folds 71 directories into 62, saving 9 paid
+    image generations from one chapter, with no two distinct pictures
+    colliding.
+    """
+    return "_".join(sorted(core_tokens(value))) or "asset"

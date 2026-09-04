@@ -31,6 +31,8 @@ import numpy as np
 import requests
 from PIL import Image
 
+from shared.asset_keys import KEY_NOISE, canonical_key
+
 from .trace import drawing_order
 
 logger = logging.getLogger(__name__)
@@ -891,33 +893,11 @@ _ASSET_LOCKS: dict[str, "threading.RLock"] = {}
 _LOCKS_GUARD = None  # created lazily so the module stays import-light
 
 
-# Words that decorate a subject without changing which picture it is. The
-# cache key is a free-text string the DIRECTOR invents, so one chapter
-# produced ciliated_epithelium, ciliated_epithelium_cells and
-# ciliated_epithelium_diagram as three separately-paid generations of one
-# image — 71 cached assets and 32 MB from a single chapter, with a near-zero
-# hit rate across re-runs of the SAME chapter.
-#
-# Deliberately conservative: "outline" and "view" are NOT here, because
-# plant_cell_outline and plant_cell_diagram are different pictures and
-# merging them would serve the wrong art, which is worse than paying twice.
-_KEY_NOISE = {"diagram", "diagrams", "cell", "cells", "illustration",
-              "illustrations", "image", "images", "picture", "pictures",
-              "figure", "figures", "drawing", "drawings", "asset", "assets",
-              "visual", "visuals", "graphic", "graphics", "sketch", "art",
-              "of", "the", "a", "an", "and"}
-
-
-def canonical_key(key: str) -> str:
-    """The cache identity of an asset, independent of how the model named it.
-
-    Measured on a real cache: folds 71 directories into 62, saving 9 paid
-    image generations from one chapter, with no two distinct pictures
-    colliding.
-    """
-    toks = [t for t in re.split(r"[^a-z0-9]+", str(key).lower()) if t]
-    core = [t for t in toks if t not in _KEY_NOISE] or toks
-    return "_".join(sorted(set(core))) or "asset"
+# The fold lives in shared/asset_keys.py because the visual library needs the
+# SAME answer: it had its own copy that kept "cell", so hydrate() filed every
+# downloaded *_cell picture at a path this module never reads, and the picture
+# was generated again. `_KEY_NOISE` is re-exported for callers that read it.
+_KEY_NOISE = KEY_NOISE
 
 
 def asset_lock(key: str):

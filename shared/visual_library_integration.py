@@ -120,8 +120,9 @@ def _patch() -> None:
         return
     from spike.scene_engine import raster_assets as ra
     from shared.visual_library import (best_match, hydrate, hydrate_avatar,
-                                       is_avatar_key, log_decision,
-                                       publish_generated, threshold_now)
+                                       is_avatar_key, key_guard_ok,
+                                       log_decision, publish_generated,
+                                       threshold_now)
 
     _bootstrap_existing_cache(ra)
     original = ra.get_raster_asset
@@ -222,6 +223,11 @@ def _patch() -> None:
             "match_source": source,
             "threshold": threshold_now(),
             "cleared_threshold": bool(match is not None and score >= threshold_now()),
+            # Whether the best-scoring row was even ABOUT the requested key.
+            # cleared_threshold=true with library_hit=false used to mean a
+            # canonical-key path mismatch; now it can also mean this guard
+            # refused a confident wrong picture, and the log says which.
+            "key_guard_passed": bool(match is not None and key_guard_ok(key, match)),
             "ai_generated": provenance == "generated" and not existed_before,
             "published": published,
             "asset_used": str(png) if png.exists() else None,
