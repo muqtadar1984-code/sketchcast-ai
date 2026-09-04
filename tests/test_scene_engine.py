@@ -820,3 +820,64 @@ class TestIdenticalFrameReuse:
         a = [img.tobytes() for img in r.frames(4.0)]
         b = [img.tobytes() for img in r.frames(4.0)]
         assert a == b
+
+
+class TestMarkerLayerCrop:
+    """The highlighter layer is drawn into its strokes' bounding box, not a
+    full 2560x1440 RGBA per frame. Pinned two ways: marker ink lands only
+    inside that box, and the frame is byte-identical to the full-canvas
+    blend it replaced."""
+
+    def _scene(self):
+        return _mini_scene(
+            elements=[{"id": "lbl", "type": "text", "text": "Membrane", "at": (500, 300)},
+                      {"id": "box", "type": "shape", "shape": "path",
+                       "points": [(100, 100), (300, 100), (300, 300)]}],
+            actions=[{"verb": "write", "target": "lbl", "duration": 0.5},
+                     {"verb": "highlight", "target": "lbl", "duration": 0.8},
+                     {"verb": "draw", "target": "box", "duration": 0.5}])
+
+    def test_marker_ink_only_inside_the_stroke_bbox(self):
+        import numpy as np
+        from spike.scene_engine.render import SS
+        s = self._scene()
+        r = SceneRenderer(s)
+        r.compile(4.0)
+        last = None
+        for last in r.frames(4.0):
+            pass
+        hi = next(i for i, ta in enumerate(r.timeline) if ta.action.verb == "highlight")
+        stx = r.deco[hi][0]
+        cam = r.cam.state_at(3.9)
+        spts = [cam.to_screen(p) for p in stx.pts]        # screen px (unsupersampled)
+        pad = (stx.width * cam.scale * SS) / 2 / SS + 3
+        x0 = min(p[0] for p in spts) - pad
+        x1 = max(p[0] for p in spts) + pad
+        y0 = min(p[1] for p in spts) - pad
+        y1 = max(p[1] for p in spts) + pad
+        a = np.asarray(last).astype(int)
+        yellow = (a[:, :, 0] - a[:, :, 2] > 40) & (a[:, :, 1] - a[:, :, 2] > 30)
+        ys, xs = np.nonzero(yellow)
+        assert len(xs) > 200, "the highlight must be visible"
+        assert xs.min() >= x0 - 1 and xs.max() <= x1 + 1
+        assert ys.min() >= y0 - 1 and ys.max() <= y1 + 1
+
+    def test_cropped_marker_equals_the_full_canvas_blend(self, monkeypatch):
+        from PIL import Image as PILImage, ImageDraw as PILDraw
+        from spike.scene_engine.paper import PALETTE
+        s = self._scene()
+        r = SceneRenderer(s)
+        r.compile(4.0)
+        cropped = [img.tobytes() for img in r.frames(4.0)]
+
+        def full_canvas(self, frame, strokes, w, h):
+            marker = PILImage.new("RGBA", (w, h), (0, 0, 0, 0))
+            md = PILDraw.Draw(marker)
+            for spts, width in strokes:
+                self._polyline(md, spts, width, PALETTE["marker"] + (110,))
+            frame.paste(marker, (0, 0), marker)
+        monkeypatch.setattr(SceneRenderer, "_paste_marker", full_canvas)
+        r2 = SceneRenderer(s)
+        r2.compile(4.0)
+        full = [img.tobytes() for img in r2.frames(4.0)]
+        assert cropped == full

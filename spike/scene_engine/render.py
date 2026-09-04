@@ -1471,7 +1471,7 @@ class SceneRenderer:
         # decorations (circle/underline/highlight) reveal like strokes — through
         # the camera of the element they decorate, so a circle around a
         # screen-fixed sketch does not fly off with the zoom while the sketch stays
-        marker = None
+        marker_strokes: list[tuple[list[Point], int]] = []
         for i, ta in enumerate(self.timeline):
             if i not in self.deco or t < ta.start:
                 continue
@@ -1481,16 +1481,13 @@ class SceneRenderer:
                 pts = stx.pts if p >= 1.0 else cut_at_fraction(stx.pts, p)
                 spts = [W2S(q, c=dcam) for q in pts]
                 if stx.color == "marker":
-                    if marker is None:
-                        marker = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-                    md = ImageDraw.Draw(marker)
-                    self._polyline(md, spts, max(1, round(stx.width * dcam.scale * SS)),
-                                   PALETTE["marker"] + (110,))
+                    marker_strokes.append(
+                        (spts, max(1, round(stx.width * dcam.scale * SS))))
                 else:
                     col = role_color(stx.color, style.ink, style.accent) + (255,)
                     self._polyline(d, spts, max(1, round(stx.width * dcam.scale * SS)), col)
-        if marker is not None:
-            frame.paste(marker, (0, 0), marker)
+        if marker_strokes:
+            self._paste_marker(frame, marker_strokes, w, h)
 
         # pen at the frontier of the most recent active pen action
         for i, ta in enumerate(self.timeline):
@@ -1517,6 +1514,34 @@ class SceneRenderer:
         # founder-approved as visually neutral (2026-09-04). SS must stay an
         # integer that divides the canvas, or reduce() would round the size.
         return frame.reduce(SS)
+
+    def _paste_marker(self, frame: Image.Image,
+                      strokes: list[tuple[list[Point], int]], w: int, h: int) -> None:
+        """The translucent highlighter layer, alpha-blended over the frame.
+
+        Drawn into an RGBA the size of the strokes' bounding box (padded by
+        half the widest stroke plus a margin for caps and joints), then pasted
+        at that offset. This used to allocate and blend a full 2560x1440 RGBA
+        (14.7 MB) on EVERY frame once any highlight had started, for the rest
+        of the scene. The per-pixel blend is identical — an integer offset of
+        the stroke points is an exact translation — and only the fully
+        transparent area is skipped."""
+        pts = [p for spts, _ in strokes for p in spts]
+        if not pts:
+            return
+        pad = max(width for _, width in strokes) // 2 + 2
+        x0 = max(0, int(math.floor(min(p[0] for p in pts))) - pad)
+        y0 = max(0, int(math.floor(min(p[1] for p in pts))) - pad)
+        x1 = min(w, int(math.ceil(max(p[0] for p in pts))) + pad + 1)
+        y1 = min(h, int(math.ceil(max(p[1] for p in pts))) + pad + 1)
+        if x1 <= x0 or y1 <= y0:
+            return                              # entirely off-canvas
+        marker = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
+        md = ImageDraw.Draw(marker)
+        for spts, width in strokes:
+            self._polyline(md, [(px - x0, py - y0) for px, py in spts], width,
+                           PALETTE["marker"] + (110,))
+        frame.paste(marker, (x0, y0), marker)
 
     # frontier of an in-flight action, world coords
     def _frontier(self, i: int, ta: TimedAction, t: float) -> Optional[Point]:
