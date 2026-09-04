@@ -1,0 +1,1565 @@
+[
+  {
+    "key": "balanced_forces_on_a_box",
+    "prompt": "A simple unlabelled line diagram of a rectangular box resting on a flat ground line, with one straight arrow of equal length pushing it from the left and one equal straight arrow pushing it from the right, and one arrow pointing down from the box and one equal arrow pointing up from the ground. Plain single-line arrows with open heads, no shading. Name the layer groups exactly: box, ground line, left push arrow, right push arrow, downward weight arrow, upward support arrow.",
+    "parts": [
+      "box",
+      "ground line",
+      "left push arrow",
+      "right push arrow",
+      "downward weight arrow",
+      "upward support arrow"
+    ],
+    "subject": "physics",
+    "topic": "forces and motion",
+    "grade_band": "11-16",
+    "why": "shown whenever a lesson introduces balanced forces and why an object stays still or keeps constant speed"
+  },
+  {
+    "key": "unbalanced_forces_on_a_box",
+    "prompt": "A simple unlabelled line diagram of a rectangular box on a flat ground line with a long straight arrow pushing it to the right and a much shorter straight arrow pushing it to the left, and a short curved motion streak behind the box showing it moving right. Plain single-line arrows with open heads, no shading. Name the layer groups exactly: box, ground line, long push arrow, short opposing arrow, motion streak.",
+    "parts": [
+      "box",
+      "ground line",
+      "long push arrow",
+      "short opposing arrow",
+      "motion streak"
+    ],
+    "subject": "physics",
+    "topic": "forces and motion",
+    "grade_band": "11-16",
+    "why": "the paired picture to balanced forces, used whenever resultant force and acceleration are introduced"
+  },
+  {
+    "key": "free_body_diagram_block_on_ground",
+    "prompt": "A simple unlabelled free body force diagram: a plain rectangular block sitting on a horizontal ground line, with four straight single-line arrows drawn from the centre of the block pointing up, down, left and right. Arrows are clearly separated and of different lengths. No shading. Name the layer groups exactly: block, ground line, weight arrow, normal contact arrow, applied force arrow, friction arrow.",
+    "parts": [
+      "block",
+      "ground line",
+      "weight arrow",
+      "normal contact arrow",
+      "applied force arrow",
+      "friction arrow"
+    ],
+    "subject": "physics",
+    "topic": "free-body diagrams",
+    "grade_band": "14-16",
+    "why": "the standard four-arrow free body diagram every forces question is built on"
+  },
+  {
+    "key": "free_body_diagram_falling_object",
+    "prompt": "A simple unlabelled line diagram of a round ball falling through the air, with one long straight arrow pointing down from the ball and one shorter straight arrow pointing up from the ball, plus a few short speed streaks above it. No ground, no shading. Name the layer groups exactly: falling ball, downward weight arrow, upward air resistance arrow, speed streaks.",
+    "parts": [
+      "falling ball",
+      "downward weight arrow",
+      "upward air resistance arrow",
+      "speed streaks"
+    ],
+    "subject": "physics",
+    "topic": "free-body diagrams",
+    "grade_band": "11-16",
+    "why": "used for falling objects, air resistance and the build-up to terminal velocity"
+  },
+  {
+    "key": "free_body_diagram_block_on_a_slope",
+    "prompt": "A simple unlabelled line diagram of a right-angled triangular ramp with a plain rectangular block resting on its sloping surface. One straight arrow points vertically down from the block, one straight arrow points away from the slope at right angles to it, and one straight arrow points up along the slope surface. No shading. Name the layer groups exactly: ramp, block, weight arrow, normal contact arrow, friction arrow.",
+    "parts": [
+      "ramp",
+      "block",
+      "weight arrow",
+      "normal contact arrow",
+      "friction arrow"
+    ],
+    "subject": "physics",
+    "topic": "free-body diagrams",
+    "grade_band": "14-16",
+    "why": "the slope free body diagram used for ramps, friction and resolving forces"
+  },
+  {
+    "key": "friction_between_two_surfaces",
+    "prompt": "A simple unlabelled line diagram of a block sliding on a surface, with a circular magnified inset showing the two touching surfaces enormously enlarged as jagged interlocking bumps. A straight arrow shows the block's motion and an opposing straight arrow points backwards at the contact point. No shading. Name the layer groups exactly: sliding block, flat surface, magnifier circle, rough surface bumps, motion arrow, friction arrow.",
+    "parts": [
+      "sliding block",
+      "flat surface",
+      "magnifier circle",
+      "rough surface bumps",
+      "motion arrow",
+      "friction arrow"
+    ],
+    "subject": "physics",
+    "topic": "forces and motion",
+    "grade_band": "11-16",
+    "why": "explains why friction exists at all, reused in forces, energy and machines chapters"
+  },
+  {
+    "key": "distance_time_graph",
+    "prompt": "A simple unlabelled line graph: two plain axes meeting at the origin, with three separate straight or curved lines drawn on them - one flat horizontal line, one straight sloping line, and one upward-bending curve. No numbers, no tick labels, no words anywhere. Clean thin lines. Name the layer groups exactly: horizontal axis, vertical axis, flat line, straight sloping line, upward curve.",
+    "parts": [
+      "horizontal axis",
+      "vertical axis",
+      "flat line",
+      "straight sloping line",
+      "upward curve"
+    ],
+    "subject": "physics",
+    "topic": "forces and motion",
+    "grade_band": "11-16",
+    "why": "the graph a teacher draws for stationary, steady speed and accelerating motion"
+  },
+  {
+    "key": "velocity_time_graph",
+    "prompt": "A simple unlabelled line graph: two plain axes meeting at the origin, with a straight line rising from the origin, then a flat horizontal section, then a straight line falling back to the axis, and the area beneath the shape marked out with light hatching. No numbers, no tick labels, no words. Clean thin lines. Name the layer groups exactly: horizontal axis, vertical axis, rising line, flat line, falling line, area under the graph.",
+    "parts": [
+      "horizontal axis",
+      "vertical axis",
+      "rising line",
+      "flat line",
+      "falling line",
+      "area under the graph"
+    ],
+    "subject": "physics",
+    "topic": "forces and motion",
+    "grade_band": "14-16",
+    "why": "used for acceleration from gradient and distance from the area under the line"
+  },
+  {
+    "key": "terminal_velocity_of_a_skydiver",
+    "prompt": "A simple unlabelled line diagram showing the same falling skydiver figure drawn three times down the page: first with a long down arrow and a tiny up arrow, then with arrows closer in length, then with an open parachute above the figure and a long up arrow and short down arrow. Plain outline figure, no shading. Name the layer groups exactly: skydiver figure, open parachute, downward weight arrow, upward air resistance arrow.",
+    "parts": [
+      "skydiver figure",
+      "open parachute",
+      "downward weight arrow",
+      "upward air resistance arrow"
+    ],
+    "subject": "physics",
+    "topic": "forces and motion",
+    "grade_band": "14-16",
+    "why": "the picture for terminal velocity, drag and how a parachute changes the force balance"
+  },
+  {
+    "key": "newtons_third_law_skaters",
+    "prompt": "A simple unlabelled line diagram of two simple standing figures facing each other with their palms touching, each with a straight arrow pointing away from the other showing them pushing apart, and short motion streaks behind each figure. Plain outline figures, no shading. Name the layer groups exactly: left figure, right figure, left push arrow, right push arrow, motion streaks.",
+    "parts": [
+      "left figure",
+      "right figure",
+      "left push arrow",
+      "right push arrow",
+      "motion streaks"
+    ],
+    "subject": "physics",
+    "topic": "forces and motion",
+    "grade_band": "11-16",
+    "why": "the everyday picture for action and reaction force pairs"
+  },
+  {
+    "key": "stopping_distance_of_a_car",
+    "prompt": "A simple unlabelled line diagram of a car in side view on a straight road line, with two separate bracket spans drawn beneath the road: a short one immediately behind the car's start position and a longer one following it, joined end to end. No shading, no numbers. Name the layer groups exactly: car, road line, thinking distance span, braking distance span, total stopping bracket.",
+    "parts": [
+      "car",
+      "road line",
+      "thinking distance span",
+      "braking distance span",
+      "total stopping bracket"
+    ],
+    "subject": "physics",
+    "topic": "forces and motion",
+    "grade_band": "14-16",
+    "why": "the road safety diagram used for reaction time, braking and stopping distance"
+  },
+  {
+    "key": "spring_extension_with_hanging_masses",
+    "prompt": "A simple unlabelled line diagram of a clamp stand holding three identical coiled springs side by side: the first hanging free, the second stretched longer with one slotted mass hanging from it, the third stretched longer still with two slotted masses. A vertical ruler stands beside them with plain unnumbered tick marks. No shading. Name the layer groups exactly: clamp stand, unstretched spring, stretched spring, slotted masses, ruler, extension gap.",
+    "parts": [
+      "clamp stand",
+      "unstretched spring",
+      "stretched spring",
+      "slotted masses",
+      "ruler",
+      "extension gap"
+    ],
+    "subject": "physics",
+    "topic": "forces and motion",
+    "grade_band": "14-16",
+    "why": "the Hooke's law required practical, reused for elastic behaviour and force-extension graphs"
+  },
+  {
+    "key": "moments_on_a_balanced_beam",
+    "prompt": "A simple unlabelled line diagram of a straight horizontal beam resting on a triangular pivot placed under its centre, with a small square weight hanging near the left end and a larger square weight hanging closer to the pivot on the right. A horizontal distance arrow runs from the pivot to each weight. No shading. Name the layer groups exactly: beam, pivot, left weight, right weight, left distance arrow, right distance arrow.",
+    "parts": [
+      "beam",
+      "pivot",
+      "left weight",
+      "right weight",
+      "left distance arrow",
+      "right distance arrow"
+    ],
+    "subject": "physics",
+    "topic": "moments and levers",
+    "grade_band": "11-16",
+    "why": "the see-saw picture behind every moments, turning effect and balance calculation"
+  },
+  {
+    "key": "three_classes_of_lever",
+    "prompt": "A simple unlabelled line diagram showing three straight bars stacked one above the other, each resting on a small triangular pivot: in the top bar the pivot is in the middle, in the middle bar the pivot is at one end with a load near the middle, in the bottom bar the pivot is at one end with an effort arrow near the middle. Each bar has one downward arrow for effort and one downward arrow for load. No shading. Name the layer groups exactly: first class lever, second class lever, third class lever, pivot, effort arrow, load arrow.",
+    "parts": [
+      "first class lever",
+      "second class lever",
+      "third class lever",
+      "pivot",
+      "effort arrow",
+      "load arrow"
+    ],
+    "subject": "physics",
+    "topic": "moments and levers",
+    "grade_band": "14-16",
+    "why": "the one picture that carries a whole lesson on lever classes and mechanical advantage"
+  },
+  {
+    "key": "wheelbarrow_as_a_lever",
+    "prompt": "A simple unlabelled line diagram of a wheelbarrow in side view: a single wheel at the front, a shallow tray holding a rounded heap of load, and two long handles at the back. A downward arrow sits on the load and an upward arrow sits at the handle ends. No shading. Name the layer groups exactly: wheel, tray, load, handles, effort arrow, load arrow.",
+    "parts": [
+      "wheel",
+      "tray",
+      "load",
+      "handles",
+      "effort arrow",
+      "load arrow"
+    ],
+    "subject": "physics",
+    "topic": "moments and levers",
+    "grade_band": "11-13",
+    "why": "the everyday second class lever used to make moments feel real"
+  },
+  {
+    "key": "block_and_tackle_pulley_system",
+    "prompt": "A simple unlabelled line diagram of a pulley system: one grooved pulley wheel fixed to an overhead beam, a second grooved pulley wheel hanging below it carrying a rectangular load, and a single rope threaded around both with its free end pulled downwards by an arrow. No shading. Name the layer groups exactly: overhead beam, fixed pulley, movable pulley, rope, load, effort arrow.",
+    "parts": [
+      "overhead beam",
+      "fixed pulley",
+      "movable pulley",
+      "rope",
+      "load",
+      "effort arrow"
+    ],
+    "subject": "physics",
+    "topic": "moments and levers",
+    "grade_band": "14-16",
+    "why": "shown whenever pulleys, mechanical advantage or lifting machines come up"
+  },
+  {
+    "key": "inclined_plane_ramp",
+    "prompt": "A simple unlabelled line diagram of a right-angled triangular ramp with a rectangular crate part way up the sloping face, an arrow pushing the crate up along the slope, a vertical arrow marking the ramp's height and a horizontal arrow marking its base length. No shading. Name the layer groups exactly: ramp, crate, push arrow, height arrow, base length arrow.",
+    "parts": [
+      "ramp",
+      "crate",
+      "push arrow",
+      "height arrow",
+      "base length arrow"
+    ],
+    "subject": "physics",
+    "topic": "moments and levers",
+    "grade_band": "11-13",
+    "why": "the simplest machine, used for ramps, work done and force multiplication"
+  },
+  {
+    "key": "pressure_depends_on_contact_area",
+    "prompt": "A simple unlabelled line diagram of two identical rectangular blocks resting on a bed of soft sand: the left block lies on its wide flat face and makes a shallow dip, the right block stands on its narrow edge and sinks into a deep narrow dip. A downward arrow of equal length sits above each block. No shading. Name the layer groups exactly: wide face block, narrow edge block, sand surface, shallow dip, deep dip, weight arrows.",
+    "parts": [
+      "wide face block",
+      "narrow edge block",
+      "sand surface",
+      "shallow dip",
+      "deep dip",
+      "weight arrows"
+    ],
+    "subject": "physics",
+    "topic": "pressure",
+    "grade_band": "11-16",
+    "why": "the picture for pressure equals force over area, reused for snowshoes, knives and foundations"
+  },
+  {
+    "key": "liquid_pressure_increases_with_depth",
+    "prompt": "A simple unlabelled line diagram of a tall container of water with three small holes down one side, one near the top, one in the middle and one near the bottom, with a curved jet of water arcing out of each hole - shortest from the top hole and longest from the bottom hole. No shading. Name the layer groups exactly: container, water surface, top jet, middle jet, bottom jet, depth arrow.",
+    "parts": [
+      "container",
+      "water surface",
+      "top jet",
+      "middle jet",
+      "bottom jet",
+      "depth arrow"
+    ],
+    "subject": "physics",
+    "topic": "pressure",
+    "grade_band": "11-16",
+    "why": "the classic demonstration that pressure in a liquid grows with depth"
+  },
+  {
+    "key": "floating_and_sinking_objects",
+    "prompt": "A simple unlabelled line diagram of a rectangular tank of water with a horizontal water surface line: one block floats with part of it above the surface, one block sits exactly level with the surface, and one block lies on the bottom of the tank. No shading. Name the layer groups exactly: tank, water surface, floating block, suspended block, sunken block.",
+    "parts": [
+      "tank",
+      "water surface",
+      "floating block",
+      "suspended block",
+      "sunken block"
+    ],
+    "subject": "physics",
+    "topic": "density and floating",
+    "grade_band": "11-13",
+    "why": "used whenever density, floating and sinking are compared"
+  },
+  {
+    "key": "upthrust_and_weight_on_a_floating_block",
+    "prompt": "A simple unlabelled line diagram of a rectangular block floating in water with part of it above the surface, one straight arrow pointing down from the centre of the block and one equal straight arrow pointing up from underneath it, and a dashed outline showing the submerged part. No shading. Name the layer groups exactly: floating block, water surface, submerged part, downward weight arrow, upward upthrust arrow.",
+    "parts": [
+      "floating block",
+      "water surface",
+      "submerged part",
+      "downward weight arrow",
+      "upward upthrust arrow"
+    ],
+    "subject": "physics",
+    "topic": "density and floating",
+    "grade_band": "14-16",
+    "why": "the force picture behind flotation, upthrust and Archimedes' principle"
+  },
+  {
+    "key": "displacement_can_for_volume",
+    "prompt": "A simple unlabelled line diagram of a cylindrical can with a short spout near its rim, full of water to the spout, with an irregular stone being lowered into it on a thread and water running out of the spout into a narrow measuring cylinder standing beside it. Plain unnumbered tick marks on the cylinder. No shading. Name the layer groups exactly: displacement can, spout, water, stone, measuring cylinder.",
+    "parts": [
+      "displacement can",
+      "spout",
+      "water",
+      "stone",
+      "measuring cylinder"
+    ],
+    "subject": "physics",
+    "topic": "density and floating",
+    "grade_band": "11-16",
+    "why": "the standard method for finding the volume of an irregular object when measuring density"
+  },
+  {
+    "key": "hydraulic_press",
+    "prompt": "A simple unlabelled line diagram of a sealed hydraulic system: a narrow cylinder with a small piston on the left joined by a horizontal pipe to a wide cylinder with a large piston on the right, both cylinders filled with liquid shown as plain horizontal lines. A short downward arrow sits on the small piston and a long upward arrow on the large piston. No shading. Name the layer groups exactly: narrow cylinder, small piston, connecting pipe, liquid, wide cylinder, large piston, effort arrow, load arrow.",
+    "parts": [
+      "narrow cylinder",
+      "small piston",
+      "connecting pipe",
+      "liquid",
+      "wide cylinder",
+      "large piston",
+      "effort arrow",
+      "load arrow"
+    ],
+    "subject": "physics",
+    "topic": "pressure",
+    "grade_band": "14-16",
+    "why": "shown for hydraulics, brakes and pressure transmitted through liquids"
+  },
+  {
+    "key": "mercury_barometer",
+    "prompt": "A simple unlabelled line diagram of a long vertical glass tube standing upside down with its open end below the surface of liquid in a shallow open dish, the tube part filled with liquid, an empty gap at the sealed top, and a vertical height arrow beside the tube from the dish surface to the top of the liquid column. Downward arrows press on the dish surface. No shading. Name the layer groups exactly: glass tube, liquid column, vacuum gap, dish of liquid, height arrow, air pressure arrows.",
+    "parts": [
+      "glass tube",
+      "liquid column",
+      "vacuum gap",
+      "dish of liquid",
+      "height arrow",
+      "air pressure arrows"
+    ],
+    "subject": "physics",
+    "topic": "pressure",
+    "grade_band": "14-16",
+    "why": "the instrument diagram for atmospheric pressure and how it is measured"
+  },
+  {
+    "key": "energy_transfer_boxes_and_arrows",
+    "prompt": "A simple unlabelled line diagram of three plain empty rectangular boxes: one on the left, one in the middle and one on the right, joined left to right by two thick straight arrows, with a third arrow branching downwards from the middle box to a fourth empty box below. Boxes are completely empty. No shading. Name the layer groups exactly: input store box, device box, useful output box, wasted output box, transfer arrows.",
+    "parts": [
+      "input store box",
+      "device box",
+      "useful output box",
+      "wasted output box",
+      "transfer arrows"
+    ],
+    "subject": "physics",
+    "topic": "energy",
+    "grade_band": "11-16",
+    "why": "the reusable skeleton for any energy transfer chain the lesson needs to fill in"
+  },
+  {
+    "key": "sankey_diagram_of_a_lamp",
+    "prompt": "A simple unlabelled line diagram of a Sankey arrow: one wide horizontal band entering from the left, splitting into a narrow band that continues straight to the right and a much wider band that bends downwards, each band drawn as a plain outline with straight edges and an arrowhead at its end. No shading, no numbers. Name the layer groups exactly: input band, useful output band, wasted output band, branch point.",
+    "parts": [
+      "input band",
+      "useful output band",
+      "wasted output band",
+      "branch point"
+    ],
+    "subject": "physics",
+    "topic": "energy",
+    "grade_band": "14-16",
+    "why": "the standard efficiency picture, reused for lamps, motors and power stations"
+  },
+  {
+    "key": "pendulum_energy_transfer",
+    "prompt": "A simple unlabelled line diagram of a pendulum: a fixed pivot at the top with a string hanging from it and a round bob, drawn three times - swung high to the left, hanging straight down at the bottom, and swung high to the right - with a dashed arc showing the path and a horizontal dashed line at the lowest point. No shading. Name the layer groups exactly: pivot, string, bob at the left, bob at the lowest point, bob at the right, swing arc.",
+    "parts": [
+      "pivot",
+      "string",
+      "bob at the left",
+      "bob at the lowest point",
+      "bob at the right",
+      "swing arc"
+    ],
+    "subject": "physics",
+    "topic": "energy",
+    "grade_band": "11-16",
+    "why": "the picture for kinetic and gravitational potential store swapping back and forth"
+  },
+  {
+    "key": "roller_coaster_energy_changes",
+    "prompt": "A simple unlabelled line drawing of a roller coaster track in side view: a tall first hill, a deep dip, a lower second hill and a final dip, with a small cart drawn on the top of the first hill and a dashed height line from the track up to each hilltop. No shading. Name the layer groups exactly: track, tall first hill, lowest dip, lower second hill, cart, height lines.",
+    "parts": [
+      "track",
+      "tall first hill",
+      "lowest dip",
+      "lower second hill",
+      "cart",
+      "height lines"
+    ],
+    "subject": "physics",
+    "topic": "energy",
+    "grade_band": "11-16",
+    "why": "the favourite context for energy conservation and height against speed"
+  },
+  {
+    "key": "work_done_lifting_a_box",
+    "prompt": "A simple unlabelled line diagram of a simple standing figure lifting a rectangular box from the ground to above their head, with a dashed outline of the box at ground level, a vertical arrow showing how far it moved, and a straight upward arrow on the box showing the lifting force. No shading. Name the layer groups exactly: figure, box, starting position outline, height arrow, lifting force arrow, ground line.",
+    "parts": [
+      "figure",
+      "box",
+      "starting position outline",
+      "height arrow",
+      "lifting force arrow",
+      "ground line"
+    ],
+    "subject": "physics",
+    "topic": "work and power",
+    "grade_band": "11-16",
+    "why": "the picture for work done equals force times distance, and for power when time is added"
+  },
+  {
+    "key": "power_station_energy_chain",
+    "prompt": "A simple unlabelled line diagram of a thermal power station in cross-section, drawn left to right: a furnace with a flame, a boiler with pipes above it, a bladed turbine wheel, a round generator drum joined to the turbine by a shaft, and a transformer box with a cable leaving to a pylon. Arrows connect each stage. No shading. Name the layer groups exactly: furnace, boiler, turbine, generator, transformer, pylon.",
+    "parts": [
+      "furnace",
+      "boiler",
+      "turbine",
+      "generator",
+      "transformer",
+      "pylon"
+    ],
+    "subject": "physics",
+    "topic": "energy",
+    "grade_band": "14-16",
+    "why": "used in energy resources, electricity generation and the national grid"
+  },
+  {
+    "key": "renewable_energy_sources",
+    "prompt": "A simple unlabelled line diagram showing four separate energy devices side by side on a ground line: a three-bladed wind turbine on a tower, a flat rectangular solar panel tilted on a stand, a curved dam wall holding back water with an outlet at its base, and a sun with straight rays above them all. No shading. Name the layer groups exactly: wind turbine, solar panel, hydroelectric dam, sun, ground line.",
+    "parts": [
+      "wind turbine",
+      "solar panel",
+      "hydroelectric dam",
+      "sun",
+      "ground line"
+    ],
+    "subject": "physics",
+    "topic": "energy",
+    "grade_band": "11-16",
+    "why": "one picture that carries the whole renewable resources comparison lesson"
+  },
+  {
+    "key": "bouncing_ball_energy_loss",
+    "prompt": "A simple unlabelled line diagram of a round ball dropped from a hand, with a dashed curved path showing it bouncing three times off a horizontal ground line, each bounce rising to a lower height than the last, and a dashed horizontal height line at the top of each bounce. No shading. Name the layer groups exactly: ball, ground line, first bounce, second bounce, third bounce, height lines.",
+    "parts": [
+      "ball",
+      "ground line",
+      "first bounce",
+      "second bounce",
+      "third bounce",
+      "height lines"
+    ],
+    "subject": "physics",
+    "topic": "energy",
+    "grade_band": "11-13",
+    "why": "shows energy dissipated to the surroundings without needing any equations"
+  },
+  {
+    "key": "transverse_wave_parts",
+    "prompt": "A simple unlabelled line diagram of a smooth continuous wavy curve with two full waves, drawn about a straight horizontal dashed centre line, with a vertical arrow from the centre line up to a peak, a horizontal arrow spanning from one peak to the next, and small dots marking the highest and lowest points. No shading, no numbers. Name the layer groups exactly: crest, trough, rest line, amplitude arrow, wavelength arrow.",
+    "parts": [
+      "crest",
+      "trough",
+      "rest line",
+      "amplitude arrow",
+      "wavelength arrow"
+    ],
+    "subject": "physics",
+    "topic": "waves",
+    "grade_band": "11-16",
+    "why": "the wave every waves chapter starts from: crest, trough, amplitude and wavelength"
+  },
+  {
+    "key": "longitudinal_wave_compressions",
+    "prompt": "A simple unlabelled line diagram of a long horizontal coiled spring drawn as a row of vertical lines, with the lines bunched tightly together in two places and spread widely apart between them, a hand pushing the left end, and a horizontal arrow showing the direction the wave travels. No shading. Name the layer groups exactly: coiled spring, compression, rarefaction, hand, wave direction arrow.",
+    "parts": [
+      "coiled spring",
+      "compression",
+      "rarefaction",
+      "hand",
+      "wave direction arrow"
+    ],
+    "subject": "physics",
+    "topic": "waves",
+    "grade_band": "11-16",
+    "why": "the slinky picture for longitudinal waves and for how sound travels"
+  },
+  {
+    "key": "ripple_tank_apparatus",
+    "prompt": "A simple unlabelled line diagram of a ripple tank in three-quarter view: a shallow rectangular tray of water on legs, a straight bar dipper suspended just touching the water surface, a lamp above the tray, straight parallel wave lines across the water, and a plain screen below the tray. No shading. Name the layer groups exactly: water tray, straight dipper, lamp, wave fronts, screen.",
+    "parts": [
+      "water tray",
+      "straight dipper",
+      "lamp",
+      "wave fronts",
+      "screen"
+    ],
+    "subject": "physics",
+    "topic": "waves",
+    "grade_band": "14-16",
+    "why": "the apparatus every wave behaviour demonstration is set up in"
+  },
+  {
+    "key": "wave_diffraction_through_a_gap",
+    "prompt": "A simple unlabelled line diagram seen from above: a straight barrier across the picture with a narrow gap in the middle, straight parallel wave lines approaching the barrier from the left, and curved semicircular wave lines spreading out from the gap on the right. No shading. Name the layer groups exactly: barrier, gap, straight wave fronts, curved wave fronts, direction arrow.",
+    "parts": [
+      "barrier",
+      "gap",
+      "straight wave fronts",
+      "curved wave fronts",
+      "direction arrow"
+    ],
+    "subject": "physics",
+    "topic": "waves",
+    "grade_band": "14-16",
+    "why": "the standard diffraction picture, reused for water, sound and radio waves"
+  },
+  {
+    "key": "wave_amplitude_and_frequency_comparison",
+    "prompt": "A simple unlabelled line diagram of four separate wavy curves stacked one above the other in a column, each drawn about its own straight horizontal dashed centre line: a tall wave with few waves, a short wave with few waves, a tall wave with many closely spaced waves, and a short wave with many closely spaced waves. No shading, no numbers. Name the layer groups exactly: large amplitude wave, small amplitude wave, high frequency wave, low frequency wave, rest lines.",
+    "parts": [
+      "large amplitude wave",
+      "small amplitude wave",
+      "high frequency wave",
+      "low frequency wave",
+      "rest lines"
+    ],
+    "subject": "physics",
+    "topic": "waves",
+    "grade_band": "11-16",
+    "why": "the comparison used for loud and quiet, high and low pitch, and bright and dim"
+  },
+  {
+    "key": "electromagnetic_spectrum_bands",
+    "prompt": "A simple unlabelled line diagram of one long horizontal rectangular strip divided by vertical lines into seven equal sections in a row, with a wavy line running along beneath the strip whose waves are very long and stretched at the left end and become very short and tightly packed towards the right end, and a long horizontal arrow beneath. No shading, no numbers. Name the layer groups exactly: radio band, microwave band, infrared band, visible band, ultraviolet band, x-ray band, gamma band, wavelength wave.",
+    "parts": [
+      "radio band",
+      "microwave band",
+      "infrared band",
+      "visible band",
+      "ultraviolet band",
+      "x-ray band",
+      "gamma band",
+      "wavelength wave"
+    ],
+    "subject": "physics",
+    "topic": "waves",
+    "grade_band": "14-16",
+    "why": "the spine of every electromagnetic waves lesson, reused for uses and dangers"
+  },
+  {
+    "key": "sound_wave_from_a_loudspeaker",
+    "prompt": "A simple unlabelled line diagram of a cone loudspeaker in side view on the left facing right, with vertical lines in the air in front of it that are bunched closely together in two bands and widely spaced between them, and a simple outline of an ear on the right. A horizontal arrow shows the direction of travel. No shading. Name the layer groups exactly: loudspeaker cone, compression, rarefaction, ear, direction arrow.",
+    "parts": [
+      "loudspeaker cone",
+      "compression",
+      "rarefaction",
+      "ear",
+      "direction arrow"
+    ],
+    "subject": "physics",
+    "topic": "sound",
+    "grade_band": "11-16",
+    "why": "connects vibration, longitudinal wave and hearing in one picture"
+  },
+  {
+    "key": "oscilloscope_traces_of_sound",
+    "prompt": "A simple unlabelled line diagram of two identical rectangular oscilloscope screens side by side, each ruled with a faint square grid: the left screen shows a wavy trace with tall widely spaced waves, the right screen shows a wavy trace with short closely spaced waves. Plain screen outlines with control knobs omitted. No shading, no numbers. Name the layer groups exactly: left screen, right screen, grid, tall slow trace, short fast trace.",
+    "parts": [
+      "left screen",
+      "right screen",
+      "grid",
+      "tall slow trace",
+      "short fast trace"
+    ],
+    "subject": "physics",
+    "topic": "sound",
+    "grade_band": "14-16",
+    "why": "how loudness and pitch are read off a trace, used in sound and waves practicals"
+  },
+  {
+    "key": "echo_from_a_cliff",
+    "prompt": "A simple unlabelled line diagram of a simple standing figure on the left facing a tall vertical cliff face on the right, with curved wave arcs travelling from the figure's mouth towards the cliff and a second set of curved wave arcs travelling back from the cliff towards the figure, and straight arrows on each set showing direction. No shading. Name the layer groups exactly: figure, cliff face, outgoing sound waves, reflected sound waves, ground line.",
+    "parts": [
+      "figure",
+      "cliff face",
+      "outgoing sound waves",
+      "reflected sound waves",
+      "ground line"
+    ],
+    "subject": "physics",
+    "topic": "sound",
+    "grade_band": "11-13",
+    "why": "the picture for echoes, reflection of sound and speed of sound calculations"
+  },
+  {
+    "key": "structure_of_the_human_ear",
+    "prompt": "A simple unlabelled cross-section line drawing of a human ear: the outer flap, a tube leading inwards, a taut membrane across the end of the tube, three small linked bones beyond it, a spiral coiled chamber, and a nerve leaving the spiral. Clean outlines with clearly separated parts, no shading. Name the layer groups exactly: outer ear, ear canal, eardrum, small bones, cochlea, auditory nerve.",
+    "parts": [
+      "outer ear",
+      "ear canal",
+      "eardrum",
+      "small bones",
+      "cochlea",
+      "auditory nerve"
+    ],
+    "subject": "physics",
+    "topic": "sound",
+    "grade_band": "11-16",
+    "why": "used for hearing, hearing range and hearing damage in both physics and biology"
+  },
+  {
+    "key": "electric_bell_in_a_vacuum_jar",
+    "prompt": "A simple unlabelled line diagram of a glass bell jar standing on a flat base plate, with an electric bell hanging inside it on thin threads, wires passing through the base to a cell outside, and a short pipe from the base plate leading to a vacuum pump. No shading. Name the layer groups exactly: bell jar, electric bell, base plate, wires, cell, vacuum pump.",
+    "parts": [
+      "bell jar",
+      "electric bell",
+      "base plate",
+      "wires",
+      "cell",
+      "vacuum pump"
+    ],
+    "subject": "physics",
+    "topic": "sound",
+    "grade_band": "11-16",
+    "why": "the demonstration that sound needs a medium, drawn in every sound chapter"
+  },
+  {
+    "key": "reflection_in_a_plane_mirror",
+    "prompt": "A simple unlabelled line diagram of a straight horizontal mirror line with short hatching lines along its back, a dashed line standing at right angles to the mirror at one point, one straight ray arriving at that point from the upper left with an arrowhead, and one straight ray leaving the same point to the upper right with an arrowhead, with a small arc marking the angle on each side of the dashed line. No shading. Name the layer groups exactly: mirror, normal, incident ray, reflected ray, angle of incidence, angle of reflection.",
+    "parts": [
+      "mirror",
+      "normal",
+      "incident ray",
+      "reflected ray",
+      "angle of incidence",
+      "angle of reflection"
+    ],
+    "subject": "physics",
+    "topic": "light and optics",
+    "grade_band": "11-16",
+    "why": "the law of reflection diagram, used in mirrors, periscopes and every ray practical"
+  },
+  {
+    "key": "image_formed_by_a_plane_mirror",
+    "prompt": "A simple unlabelled line diagram of a vertical mirror line with hatching on its back, an upright arrow object standing to the left of it, a mirrored upright arrow drawn in dashed line the same distance behind the mirror, two solid rays going from the object to the mirror and reflecting to an eye, and dashed lines continuing behind the mirror to the dashed arrow. No shading. Name the layer groups exactly: mirror, object arrow, virtual image arrow, reflected rays, construction lines, eye.",
+    "parts": [
+      "mirror",
+      "object arrow",
+      "virtual image arrow",
+      "reflected rays",
+      "construction lines",
+      "eye"
+    ],
+    "subject": "physics",
+    "topic": "light and optics",
+    "grade_band": "14-16",
+    "why": "shows why a mirror image is virtual, upright and as far behind as the object is in front"
+  },
+  {
+    "key": "refraction_through_a_glass_block",
+    "prompt": "A simple unlabelled line diagram of a rectangular glass block drawn as a plain outline, with a straight ray arriving at its top surface from the upper left, bending as it crosses into the block, travelling as a straight line inside, then bending again as it leaves the bottom surface and continuing away parallel to the first ray. Dashed lines stand at right angles to the surface at each crossing point. Arrowheads on each ray, no shading. Name the layer groups exactly: glass block, incident ray, refracted ray, emergent ray, normals.",
+    "parts": [
+      "glass block",
+      "incident ray",
+      "refracted ray",
+      "emergent ray",
+      "normals"
+    ],
+    "subject": "physics",
+    "topic": "light and optics",
+    "grade_band": "11-16",
+    "why": "the core refraction diagram, reused for bending of light, angles and refractive index"
+  },
+  {
+    "key": "total_internal_reflection_at_a_boundary",
+    "prompt": "A simple unlabelled line diagram of a semicircular glass block drawn as a plain outline with its flat side uppermost, three straight rays entering through the curved edge and meeting the same point on the flat surface at different angles: one passing out bending away, one skimming along the flat surface, and one reflecting back down inside the block. A dashed line stands at right angles to the flat surface. No shading. Name the layer groups exactly: glass block, flat boundary, normal, refracted ray, grazing ray, totally reflected ray.",
+    "parts": [
+      "glass block",
+      "flat boundary",
+      "normal",
+      "refracted ray",
+      "grazing ray",
+      "totally reflected ray"
+    ],
+    "subject": "physics",
+    "topic": "light and optics",
+    "grade_band": "14-16",
+    "why": "the picture for the critical angle and total internal reflection"
+  },
+  {
+    "key": "optical_fibre_light_path",
+    "prompt": "A simple unlabelled line diagram of a long gently curving fibre drawn as two parallel outlines with a thin outer sleeve line on each side, and a straight ray entering one end and zig-zagging along inside by bouncing off the inner walls several times before leaving the far end. Arrowheads on the ray, no shading. Name the layer groups exactly: fibre core, cladding, light ray, reflection points.",
+    "parts": [
+      "fibre core",
+      "cladding",
+      "light ray",
+      "reflection points"
+    ],
+    "subject": "physics",
+    "topic": "light and optics",
+    "grade_band": "14-16",
+    "why": "the application diagram for total internal reflection, endoscopes and communications"
+  },
+  {
+    "key": "converging_lens_ray_diagram",
+    "prompt": "A simple unlabelled line diagram of a convex lens drawn as a tall thin oval standing on a straight horizontal dashed axis, with an upright arrow object to the left of it, small crosses marked on the axis on each side of the lens, two straight rays leaving the top of the object and passing through the lens to meet at a point on the right, and an inverted arrow drawn where they meet. Arrowheads on each ray, no shading. Name the layer groups exactly: converging lens, principal axis, object arrow, focal points, rays, image arrow.",
+    "parts": [
+      "converging lens",
+      "principal axis",
+      "object arrow",
+      "focal points",
+      "rays",
+      "image arrow"
+    ],
+    "subject": "physics",
+    "topic": "light and optics",
+    "grade_band": "14-16",
+    "why": "the ray construction every lens, camera and eye question depends on"
+  },
+  {
+    "key": "diverging_lens_ray_diagram",
+    "prompt": "A simple unlabelled line diagram of a concave lens drawn as a tall shape with two inward-curving sides standing on a straight horizontal dashed axis, with an upright arrow object to the left, two straight rays leaving the top of the object and spreading apart after the lens, and dashed lines traced back from the spreading rays meeting at a point where a smaller upright arrow is drawn. No shading. Name the layer groups exactly: diverging lens, principal axis, object arrow, spreading rays, construction lines, virtual image arrow.",
+    "parts": [
+      "diverging lens",
+      "principal axis",
+      "object arrow",
+      "spreading rays",
+      "construction lines",
+      "virtual image arrow"
+    ],
+    "subject": "physics",
+    "topic": "light and optics",
+    "grade_band": "14-16",
+    "why": "the counterpart to the converging lens, needed for short sight correction"
+  },
+  {
+    "key": "concave_mirror_ray_diagram",
+    "prompt": "A simple unlabelled line diagram of a curved mirror drawn as an arc opening to the left with short hatching lines on its back, a straight horizontal dashed axis through its centre, an upright arrow object on the axis, a cross marked on the axis in front of the mirror, two straight rays from the top of the object striking the mirror and reflecting to cross at a point, and an inverted arrow drawn there. No shading. Name the layer groups exactly: concave mirror, principal axis, object arrow, focal point, reflected rays, image arrow.",
+    "parts": [
+      "concave mirror",
+      "principal axis",
+      "object arrow",
+      "focal point",
+      "reflected rays",
+      "image arrow"
+    ],
+    "subject": "physics",
+    "topic": "light and optics",
+    "grade_band": "14-16",
+    "why": "curved mirror construction, used for headlamps, dishes and telescope mirrors"
+  },
+  {
+    "key": "dispersion_of_white_light_by_a_prism",
+    "prompt": "A simple unlabelled line diagram of a triangular glass prism drawn as a plain outline, with a single narrow straight ray entering one sloping face from the left and a fan of several straight rays spreading out from the opposite face at slightly different angles and landing on a plain vertical screen on the right as a band of narrow parallel strips. No shading, no colour. Name the layer groups exactly: prism, white light ray, spreading rays, screen, spectrum band.",
+    "parts": [
+      "prism",
+      "white light ray",
+      "spreading rays",
+      "screen",
+      "spectrum band"
+    ],
+    "subject": "physics",
+    "topic": "light and optics",
+    "grade_band": "11-16",
+    "why": "the picture for dispersion, the visible spectrum and how a rainbow forms"
+  },
+  {
+    "key": "cross_section_of_the_human_eye",
+    "prompt": "A simple unlabelled cross-section line drawing of a human eyeball: a round outer wall, a clear bulge at the front, a ring with a round opening at its centre, a lens shape just behind the opening, a curved inner lining across the back, and a thick nerve leaving the back of the eye. Clean separated outlines, no shading. Name the layer groups exactly: cornea, iris, pupil, lens, retina, optic nerve.",
+    "parts": [
+      "cornea",
+      "iris",
+      "pupil",
+      "lens",
+      "retina",
+      "optic nerve"
+    ],
+    "subject": "physics",
+    "topic": "light and optics",
+    "grade_band": "11-16",
+    "why": "shared between light, lenses and biology; drawn in every eye and vision lesson"
+  },
+  {
+    "key": "short_sight_corrected_by_a_concave_lens",
+    "prompt": "A simple unlabelled line diagram of two eyeball cross-sections one above the other: in the top one two parallel rays enter and cross at a point clearly in front of the curved back wall; in the bottom one the same rays first pass through a lens with two inward-curving sides placed in front of the eye and then cross exactly on the back wall. No shading. Name the layer groups exactly: eyeball, retina, light rays, focus point, concave correcting lens.",
+    "parts": [
+      "eyeball",
+      "retina",
+      "light rays",
+      "focus point",
+      "concave correcting lens"
+    ],
+    "subject": "physics",
+    "topic": "light and optics",
+    "grade_band": "14-16",
+    "why": "the standard sight defect and correction diagram, paired with long sight"
+  },
+  {
+    "key": "pinhole_camera",
+    "prompt": "A simple unlabelled line diagram of a closed rectangular box in cross-section with a tiny hole in the middle of its left wall and a plain screen forming its right wall, an upright candle standing outside to the left, and two straight rays from the top and bottom of the candle crossing at the hole and landing on the screen to form a small upside-down candle shape. No shading. Name the layer groups exactly: box, pinhole, candle, light rays, screen, inverted image.",
+    "parts": [
+      "box",
+      "pinhole",
+      "candle",
+      "light rays",
+      "screen",
+      "inverted image"
+    ],
+    "subject": "physics",
+    "topic": "light and optics",
+    "grade_band": "11-13",
+    "why": "shows light travelling in straight lines and how a real inverted image forms"
+  },
+  {
+    "key": "shadow_formation_umbra_and_penumbra",
+    "prompt": "A simple unlabelled line diagram of a broad lamp on the left, a solid rectangular object standing in the middle, and a plain vertical screen on the right, with straight rays drawn from the top and bottom of the lamp past both edges of the object to the screen, producing a dark central band on the screen with a lighter band above and below it. No shading beyond plain outlines. Name the layer groups exactly: lamp, object, light rays, screen, full shadow, partial shadow.",
+    "parts": [
+      "lamp",
+      "object",
+      "light rays",
+      "screen",
+      "full shadow",
+      "partial shadow"
+    ],
+    "subject": "physics",
+    "topic": "light and optics",
+    "grade_band": "11-13",
+    "why": "used for straight-line propagation, shadows and as the lead-in to eclipses"
+  },
+  {
+    "key": "simple_series_circuit",
+    "prompt": "A simple unlabelled circuit diagram drawn with straight lines and right-angled corners forming one closed rectangular loop, containing a cell drawn as one long thin line beside one short thick line, a lamp drawn as a plain circle with a cross inside it, and a switch drawn as a short line hinged away from a gap. Standard circuit symbols only, no letters inside any symbol. Name the layer groups exactly: cell, lamp, switch, connecting wires.",
+    "parts": [
+      "cell",
+      "lamp",
+      "switch",
+      "connecting wires"
+    ],
+    "subject": "physics",
+    "topic": "electricity",
+    "grade_band": "11-16",
+    "why": "the first circuit any electricity chapter draws, reused constantly as a base"
+  },
+  {
+    "key": "parallel_circuit_with_two_lamps",
+    "prompt": "A simple unlabelled circuit diagram drawn with straight lines and right-angled corners: one closed loop containing a cell drawn as one long thin line beside one short thick line, with the wire splitting at two junction dots into two side-by-side branches, each branch containing a lamp drawn as a plain circle with a cross inside it, before rejoining. Standard circuit symbols only, no letters inside any symbol. Name the layer groups exactly: cell, first lamp, second lamp, junctions, connecting wires.",
+    "parts": [
+      "cell",
+      "first lamp",
+      "second lamp",
+      "junctions",
+      "connecting wires"
+    ],
+    "subject": "physics",
+    "topic": "electricity",
+    "grade_band": "11-16",
+    "why": "the parallel arrangement compared against series in every circuits lesson"
+  },
+  {
+    "key": "circuit_symbols_chart",
+    "prompt": "A simple unlabelled chart of standard electrical circuit symbols arranged in a neat grid of separate boxes, each box holding one symbol drawn in plain straight lines with a short wire stub on each side: a cell as one long thin line beside one short thick line, a battery as two cells joined, a lamp as a circle with a cross, a switch as a hinged line with a gap, a resistor as a plain rectangle, a plain empty circle for a meter, a second plain empty circle for another meter, and a resistor rectangle with a diagonal arrow across it. Every symbol must be completely empty of letters and numbers. Name the layer groups exactly: cell symbol, battery symbol, lamp symbol, switch symbol, resistor symbol, ammeter symbol, voltmeter symbol, variable resistor symbol.",
+    "parts": [
+      "cell symbol",
+      "battery symbol",
+      "lamp symbol",
+      "switch symbol",
+      "resistor symbol",
+      "ammeter symbol",
+      "voltmeter symbol",
+      "variable resistor symbol"
+    ],
+    "subject": "physics",
+    "topic": "electricity",
+    "grade_band": "11-16",
+    "why": "the reference sheet a teacher puts on the board before any circuit-drawing task"
+  },
+  {
+    "key": "ammeter_and_voltmeter_placement",
+    "prompt": "A simple unlabelled circuit diagram drawn with straight lines and right-angled corners: a closed loop containing a cell drawn as one long thin line beside one short thick line, a lamp drawn as a circle with a cross, and a plain empty circle in the loop itself, plus a second plain empty circle connected by two wires across the two sides of the lamp only. Every circle must be completely empty of letters and numbers. Name the layer groups exactly: cell, lamp, ammeter in series, voltmeter in parallel, connecting wires.",
+    "parts": [
+      "cell",
+      "lamp",
+      "ammeter in series",
+      "voltmeter in parallel",
+      "connecting wires"
+    ],
+    "subject": "physics",
+    "topic": "electricity",
+    "grade_band": "14-16",
+    "why": "settles the perennial confusion about where each meter goes"
+  },
+  {
+    "key": "circuit_for_measuring_resistance",
+    "prompt": "A simple unlabelled circuit diagram drawn with straight lines and right-angled corners: a closed loop containing a cell drawn as one long thin line beside one short thick line, a rectangle with a diagonal arrow across it, a plain rectangle, and a plain empty circle in the loop, with a second plain empty circle joined by two wires across the plain rectangle only. Every circle must be completely empty of letters and numbers. Name the layer groups exactly: cell, variable resistor, test resistor, ammeter, voltmeter.",
+    "parts": [
+      "cell",
+      "variable resistor",
+      "test resistor",
+      "ammeter",
+      "voltmeter"
+    ],
+    "subject": "physics",
+    "topic": "electricity",
+    "grade_band": "14-16",
+    "why": "the required practical circuit for resistance and current-voltage characteristics"
+  },
+  {
+    "key": "current_voltage_graphs",
+    "prompt": "A simple unlabelled line graph with two plain axes crossing at a centre origin so all four quadrants are visible, carrying three separate lines through the origin: one perfectly straight sloping line, one S-shaped curve that flattens away from the origin at both ends, and one line that stays flat along the axis to the left and then rises steeply upward to the right. No numbers, no tick labels, no words. Clean thin lines. Name the layer groups exactly: horizontal axis, vertical axis, straight line, s shaped curve, diode curve, origin.",
+    "parts": [
+      "horizontal axis",
+      "vertical axis",
+      "straight line",
+      "s shaped curve",
+      "diode curve",
+      "origin"
+    ],
+    "subject": "physics",
+    "topic": "electricity",
+    "grade_band": "14-16",
+    "why": "the three characteristic graphs for a resistor, a filament lamp and a diode"
+  },
+  {
+    "key": "three_pin_plug_wiring",
+    "prompt": "A simple unlabelled line diagram of a rectangular mains plug with its cover removed, showing three metal pins fixed in the casing, three separate wires running from a cable entering at the bottom to the base of each pin, a clamp holding the cable where it enters, and a small cylinder fitted in line with the wire to the top right pin. No shading. Name the layer groups exactly: plug casing, live pin, neutral pin, earth pin, fuse, cable grip, cable.",
+    "parts": [
+      "plug casing",
+      "live pin",
+      "neutral pin",
+      "earth pin",
+      "fuse",
+      "cable grip",
+      "cable"
+    ],
+    "subject": "physics",
+    "topic": "electricity",
+    "grade_band": "14-16",
+    "why": "the mains safety diagram every electricity chapter and every safety question uses"
+  },
+  {
+    "key": "earthing_a_metal_appliance",
+    "prompt": "A simple unlabelled line diagram of a rectangular metal appliance case in cross-section with three wires entering it: one wire going to a small cylinder then on to the internal parts, one wire returning, and a third wire attached directly to the metal case and continuing down to a horizontal line with three short parallel lines beneath it decreasing in width. A hand touches the outside of the case. No shading. Name the layer groups exactly: metal case, live wire, neutral wire, earth wire, fuse, earth symbol, hand.",
+    "parts": [
+      "metal case",
+      "live wire",
+      "neutral wire",
+      "earth wire",
+      "fuse",
+      "earth symbol",
+      "hand"
+    ],
+    "subject": "physics",
+    "topic": "electricity",
+    "grade_band": "14-16",
+    "why": "explains why the earth wire and fuse together make an appliance safe to touch"
+  },
+  {
+    "key": "charging_a_rod_by_friction",
+    "prompt": "A simple unlabelled line diagram of a straight rod held in one hand while a folded cloth is rubbed along it with the other hand, with a row of small plain circles drawn along the surface of the rod and a row of small plain circles drawn on the cloth, and a short arrow between the two showing transfer. No shading, no plus or minus signs, no letters. Name the layer groups exactly: rod, cloth, hand, charges on the rod, charges on the cloth, transfer arrow.",
+    "parts": [
+      "rod",
+      "cloth",
+      "hand",
+      "charges on the rod",
+      "charges on the cloth",
+      "transfer arrow"
+    ],
+    "subject": "physics",
+    "topic": "static electricity",
+    "grade_band": "11-16",
+    "why": "the first demonstration in static electricity: charging by transferring electrons"
+  },
+  {
+    "key": "charged_spheres_attract_and_repel",
+    "prompt": "A simple unlabelled line diagram showing two pairs of small balls hanging on threads from a horizontal support bar: in the left pair the two threads hang apart with the balls swung away from each other, in the right pair the threads lean inward with the balls swung close together. Curved field lines are drawn between the balls in each pair. No shading, no plus or minus signs. Name the layer groups exactly: support bar, threads, repelling balls, attracting balls, field lines.",
+    "parts": [
+      "support bar",
+      "threads",
+      "repelling balls",
+      "attracting balls",
+      "field lines"
+    ],
+    "subject": "physics",
+    "topic": "static electricity",
+    "grade_band": "11-16",
+    "why": "the like-repels, unlike-attracts picture used in static and in field lessons"
+  },
+  {
+    "key": "resistors_in_series_and_in_parallel",
+    "prompt": "A simple unlabelled circuit diagram with two separate closed loops drawn one above the other using straight lines and right-angled corners: the upper loop contains a cell drawn as one long thin line beside one short thick line and two plain rectangles placed one after the other in the same wire; the lower loop contains an identical cell and two plain rectangles sitting side by side on separate branches between two junction dots. No letters inside any symbol. Name the layer groups exactly: series loop, parallel loop, cell, resistors, junctions.",
+    "parts": [
+      "series loop",
+      "parallel loop",
+      "cell",
+      "resistors",
+      "junctions"
+    ],
+    "subject": "physics",
+    "topic": "electricity",
+    "grade_band": "14-16",
+    "why": "the pair of circuits behind every combined resistance calculation"
+  },
+  {
+    "key": "national_grid_transmission",
+    "prompt": "A simple unlabelled line diagram running left to right along a ground line: a factory building with a tall chimney, a small rectangular box on legs, three lattice pylons carrying drooping cables between them, a second small rectangular box on legs, and a house with a pitched roof. Cables link every stage. No shading. Name the layer groups exactly: power station, step up transformer, pylons, cables, step down transformer, house.",
+    "parts": [
+      "power station",
+      "step up transformer",
+      "pylons",
+      "cables",
+      "step down transformer",
+      "house"
+    ],
+    "subject": "physics",
+    "topic": "electricity",
+    "grade_band": "14-16",
+    "why": "how electricity gets from generator to socket, and why the voltage is stepped up"
+  },
+  {
+    "key": "bar_magnet_field_lines",
+    "prompt": "A simple unlabelled line diagram of a plain rectangular bar magnet lying horizontally, with smooth curved lines looping out of one end, arcing above and below the magnet, and back into the other end, each curve carrying a small arrowhead pointing away from the right-hand end. The two ends of the magnet are separated by a line across the bar. No shading. Name the layer groups exactly: bar magnet, north end, south end, field lines, field arrows.",
+    "parts": [
+      "bar magnet",
+      "north end",
+      "south end",
+      "field lines",
+      "field arrows"
+    ],
+    "subject": "physics",
+    "topic": "magnetism",
+    "grade_band": "11-16",
+    "why": "the magnetic field picture drawn at the start of every magnetism chapter"
+  },
+  {
+    "key": "like_and_unlike_magnetic_poles",
+    "prompt": "A simple unlabelled line diagram of two pairs of rectangular bar magnets lying end to end: the upper pair with curved field lines that bend away from the gap and push outward, with arrows pointing apart; the lower pair with curved field lines running straight across the gap from one magnet to the other, with arrows pointing together. Each magnet has a line across it dividing its two ends. No shading. Name the layer groups exactly: repelling magnets, attracting magnets, repulsion field lines, attraction field lines, gap.",
+    "parts": [
+      "repelling magnets",
+      "attracting magnets",
+      "repulsion field lines",
+      "attraction field lines",
+      "gap"
+    ],
+    "subject": "physics",
+    "topic": "magnetism",
+    "grade_band": "11-16",
+    "why": "the attraction and repulsion rule shown through the field, not just arrows"
+  },
+  {
+    "key": "magnetic_field_around_a_current_carrying_wire",
+    "prompt": "A simple unlabelled line diagram of a straight vertical wire passing through a hole in a flat horizontal card seen in three-quarter view, with several concentric circles drawn on the card around the wire, each carrying a small arrowhead, and a straight arrow on the wire showing the current direction. A few small compass shapes sit on the circles. No shading. Name the layer groups exactly: straight wire, card, circular field lines, field arrows, current arrow, plotting compasses.",
+    "parts": [
+      "straight wire",
+      "card",
+      "circular field lines",
+      "field arrows",
+      "current arrow",
+      "plotting compasses"
+    ],
+    "subject": "physics",
+    "topic": "electromagnetism",
+    "grade_band": "14-16",
+    "why": "the first electromagnetism diagram: a current makes a circular magnetic field"
+  },
+  {
+    "key": "magnetic_field_of_a_solenoid",
+    "prompt": "A simple unlabelled line diagram of a long coil of wire drawn as a row of evenly spaced loops around a horizontal axis, with the wire ends leading away to a cell drawn as one long thin line beside one short thick line, straight field lines running along the inside of the coil and looping out of one end, around the outside and back into the other end, each carrying an arrowhead. No shading. Name the layer groups exactly: solenoid coil, wire ends, cell, internal field lines, external field lines.",
+    "parts": [
+      "solenoid coil",
+      "wire ends",
+      "cell",
+      "internal field lines",
+      "external field lines"
+    ],
+    "subject": "physics",
+    "topic": "electromagnetism",
+    "grade_band": "14-16",
+    "why": "shows why a coil behaves like a bar magnet, the bridge to electromagnets"
+  },
+  {
+    "key": "electromagnet_lifting_paper_clips",
+    "prompt": "A simple unlabelled line diagram of a straight iron bar with insulated wire wound tightly around it in a neat coil, the two wire ends leading to a switch and a cell drawn as one long thin line beside one short thick line, and a small cluster of paper clips hanging from the lower end of the bar. No shading. Name the layer groups exactly: iron core, coil of wire, switch, cell, paper clips.",
+    "parts": [
+      "iron core",
+      "coil of wire",
+      "switch",
+      "cell",
+      "paper clips"
+    ],
+    "subject": "physics",
+    "topic": "electromagnetism",
+    "grade_band": "11-16",
+    "why": "the electromagnet, used for strength investigations, relays, cranes and bells"
+  },
+  {
+    "key": "flemings_left_hand_rule",
+    "prompt": "A simple unlabelled line drawing of a left hand seen from the back with the thumb, first finger and second finger held out at right angles to each other in three different directions, and the remaining two fingers curled into the palm. Clean outline only, no shading, no arrows, no letters. Name the layer groups exactly: thumb, first finger, second finger, palm.",
+    "parts": [
+      "thumb",
+      "first finger",
+      "second finger",
+      "palm"
+    ],
+    "subject": "physics",
+    "topic": "electromagnetism",
+    "grade_band": "14-16",
+    "why": "the memory rule for the motor effect, drawn every time force on a conductor comes up"
+  },
+  {
+    "key": "dc_electric_motor",
+    "prompt": "A simple unlabelled line diagram of a simple direct current motor: a rectangular wire coil mounted on a horizontal axle between two flat magnet blocks facing each other, with the coil ends joined to a split metal ring on the axle, two spring contacts pressing on the ring from below, and wires from the contacts leading to a cell drawn as one long thin line beside one short thick line. A curved arrow shows rotation. No shading. Name the layer groups exactly: coil, magnets, split ring commutator, brushes, axle, cell.",
+    "parts": [
+      "coil",
+      "magnets",
+      "split ring commutator",
+      "brushes",
+      "axle",
+      "cell"
+    ],
+    "subject": "physics",
+    "topic": "electromagnetism",
+    "grade_band": "14-16",
+    "why": "the motor diagram, reused for the motor effect, commutators and turning coils"
+  },
+  {
+    "key": "simple_ac_generator",
+    "prompt": "A simple unlabelled line diagram of a simple generator: a rectangular wire coil mounted on a horizontal axle between two flat magnet blocks facing each other, with the coil ends joined to two separate complete metal rings on the axle, a spring contact pressing on each ring, and wires from the contacts leading to a plain empty circle. A curved arrow shows the coil being turned. No shading, no letters inside the circle. Name the layer groups exactly: coil, magnets, slip rings, brushes, axle, meter.",
+    "parts": [
+      "coil",
+      "magnets",
+      "slip rings",
+      "brushes",
+      "axle",
+      "meter"
+    ],
+    "subject": "physics",
+    "topic": "electromagnetism",
+    "grade_band": "14-16",
+    "why": "generating electricity by turning a coil, and the contrast with the motor"
+  },
+  {
+    "key": "transformer_with_two_coils",
+    "prompt": "A simple unlabelled line diagram of a transformer: a rectangular iron core drawn as a closed frame with layered lines, a coil of few turns wound around the left arm of the frame with its ends leading away to a pair of terminals, and a coil of many more turns wound around the right arm with its ends leading away to another pair of terminals. No shading, no numbers. Name the layer groups exactly: iron core, primary coil, secondary coil, input terminals, output terminals.",
+    "parts": [
+      "iron core",
+      "primary coil",
+      "secondary coil",
+      "input terminals",
+      "output terminals"
+    ],
+    "subject": "physics",
+    "topic": "electromagnetism",
+    "grade_band": "14-16",
+    "why": "the step-up and step-down diagram behind the national grid and turns ratio"
+  },
+  {
+    "key": "electromagnetic_induction_moving_magnet",
+    "prompt": "A simple unlabelled line diagram of a coil of wire drawn as several loops, with its two ends joined by wires to a plain empty circle with a pointer needle inside it, and a rectangular bar magnet held just outside one end of the coil with a straight arrow showing it being pushed into the coil. No shading, no letters inside the circle. Name the layer groups exactly: bar magnet, coil, meter, pointer needle, motion arrow.",
+    "parts": [
+      "bar magnet",
+      "coil",
+      "meter",
+      "pointer needle",
+      "motion arrow"
+    ],
+    "subject": "physics",
+    "topic": "electromagnetism",
+    "grade_band": "14-16",
+    "why": "the induction demonstration: move a magnet in a coil and a current appears"
+  },
+  {
+    "key": "conduction_along_a_metal_rod",
+    "prompt": "A simple unlabelled line diagram of a long horizontal metal rod clamped at one end, with a flame burning under that end and four drawing pins stuck along the underside of the rod by small blobs, the blob nearest the flame melting so its pin is falling and the furthest pin still firmly attached. Wavy heat lines rise from the flame and a straight arrow runs along the rod. No shading. Name the layer groups exactly: metal rod, flame, wax blobs, drawing pins, falling pin, heat flow arrow.",
+    "parts": [
+      "metal rod",
+      "flame",
+      "wax blobs",
+      "drawing pins",
+      "falling pin",
+      "heat flow arrow"
+    ],
+    "subject": "physics",
+    "topic": "thermal physics",
+    "grade_band": "11-16",
+    "why": "the conduction demonstration, reused for conductors, insulators and particle vibration"
+  },
+  {
+    "key": "convection_current_in_water",
+    "prompt": "A simple unlabelled line diagram of a glass beaker of water in cross-section standing on a tripod over a burner flame placed under one corner of the base, with a large closed loop of curved arrows inside the water rising above the flame, moving across the top surface, falling down the far side and returning along the bottom. A small crystal sits on the base under the flame. No shading. Name the layer groups exactly: beaker, water, flame, rising current, falling current, crystal.",
+    "parts": [
+      "beaker",
+      "water",
+      "flame",
+      "rising current",
+      "falling current",
+      "crystal"
+    ],
+    "subject": "physics",
+    "topic": "thermal physics",
+    "grade_band": "11-16",
+    "why": "the convection current loop, reused for heating a room, sea breezes and the mantle"
+  },
+  {
+    "key": "leslie_cube_radiation",
+    "prompt": "A simple unlabelled line diagram of a hollow metal cube standing on a bench with steam rising from an opening in its top, each vertical face drawn with a different surface texture - one dark hatched, one blank, one densely stippled, one with a smooth reflective sheen line - and a small detector on a stand facing one face at a fixed distance, with short straight rays travelling from the face to the detector. No shading beyond the surface textures. Name the layer groups exactly: metal cube, matt black face, shiny face, detector, radiation rays, steam.",
+    "parts": [
+      "metal cube",
+      "matt black face",
+      "shiny face",
+      "detector",
+      "radiation rays",
+      "steam"
+    ],
+    "subject": "physics",
+    "topic": "thermal physics",
+    "grade_band": "14-16",
+    "why": "the infrared emission practical, used for absorbers, emitters and radiation"
+  },
+  {
+    "key": "vacuum_flask_cross_section",
+    "prompt": "A simple unlabelled cross-section line drawing of a vacuum flask: an outer casing, an inner double-walled glass container drawn as two closely spaced outlines with a clearly empty gap between them, short hatching marks on the facing surfaces of that gap, hot liquid filling the inner space, a stopper closing the top, and a small support ring at the base. No shading. Name the layer groups exactly: outer case, double glass wall, vacuum gap, silvered surfaces, stopper, liquid.",
+    "parts": [
+      "outer case",
+      "double glass wall",
+      "vacuum gap",
+      "silvered surfaces",
+      "stopper",
+      "liquid"
+    ],
+    "subject": "physics",
+    "topic": "thermal physics",
+    "grade_band": "14-16",
+    "why": "one object that shows conduction, convection and radiation all being blocked at once"
+  },
+  {
+    "key": "bimetallic_strip",
+    "prompt": "A simple unlabelled line diagram of two long thin metal strips riveted together face to face along their whole length, drawn twice: once lying perfectly straight, and once curving smoothly to one side with a flame beneath it. The two strips are distinguished by different hatching. No shading. Name the layer groups exactly: upper strip, lower strip, rivets, straight strip, curved strip, flame.",
+    "parts": [
+      "upper strip",
+      "lower strip",
+      "rivets",
+      "straight strip",
+      "curved strip",
+      "flame"
+    ],
+    "subject": "physics",
+    "topic": "thermal physics",
+    "grade_band": "11-16",
+    "why": "thermal expansion made visible, used for thermostats, fire alarms and expansion gaps"
+  },
+  {
+    "key": "heating_curve_of_water",
+    "prompt": "A simple unlabelled line graph with two plain axes meeting at the origin, carrying one continuous line that rises steeply, then runs perfectly flat, then rises steeply again, then runs perfectly flat a second time at a higher level, then rises steeply once more. Thin dashed lines drop from the start and end of each flat section to the horizontal axis. No numbers, no tick labels, no words. Name the layer groups exactly: horizontal axis, vertical axis, solid heating section, melting plateau, liquid heating section, boiling plateau, gas heating section.",
+    "parts": [
+      "horizontal axis",
+      "vertical axis",
+      "solid heating section",
+      "melting plateau",
+      "liquid heating section",
+      "boiling plateau",
+      "gas heating section"
+    ],
+    "subject": "physics",
+    "topic": "thermal physics",
+    "grade_band": "14-16",
+    "why": "the graph for changes of state, latent heat and why temperature stalls while melting"
+  },
+  {
+    "key": "particles_in_solid_liquid_and_gas",
+    "prompt": "A simple unlabelled line diagram of three identical open-topped square containers side by side, each filled with small plain circles: the left container packed with circles in a neat regular grid touching each other, the middle container full of circles touching but arranged irregularly and filling only the lower part, the right container with a few widely scattered circles spread throughout and short motion streaks beside them. No shading. Name the layer groups exactly: solid container, liquid container, gas container, particles, motion streaks.",
+    "parts": [
+      "solid container",
+      "liquid container",
+      "gas container",
+      "particles",
+      "motion streaks"
+    ],
+    "subject": "physics",
+    "topic": "particles and states",
+    "grade_band": "11-16",
+    "why": "the particle model picture used in states of matter, density, pressure and heating"
+  },
+  {
+    "key": "changes_of_state_arrows",
+    "prompt": "A simple unlabelled line diagram of three plain empty rectangular boxes arranged in a row, joined by curved arrows: two arrows between the left and middle boxes pointing in opposite directions, and two arrows between the middle and right boxes pointing in opposite directions. Boxes are completely empty. No shading. Name the layer groups exactly: solid box, liquid box, gas box, melting arrow, freezing arrow, evaporating arrow, condensing arrow.",
+    "parts": [
+      "solid box",
+      "liquid box",
+      "gas box",
+      "melting arrow",
+      "freezing arrow",
+      "evaporating arrow",
+      "condensing arrow"
+    ],
+    "subject": "physics",
+    "topic": "particles and states",
+    "grade_band": "11-16",
+    "why": "the skeleton for naming every change of state in one picture"
+  },
+  {
+    "key": "brownian_motion_in_a_smoke_cell",
+    "prompt": "A simple unlabelled line diagram of a small square glass chamber viewed through a microscope eyepiece circle, containing one larger plain circle with a jagged zig-zag dotted path trailing behind it, surrounded by many much smaller plain circles with short straight motion streaks. No shading. Name the layer groups exactly: viewing circle, smoke particle, zig-zag path, air molecules, motion streaks.",
+    "parts": [
+      "viewing circle",
+      "smoke particle",
+      "zig-zag path",
+      "air molecules",
+      "motion streaks"
+    ],
+    "subject": "physics",
+    "topic": "particles and states",
+    "grade_band": "14-16",
+    "why": "the evidence diagram for random particle motion and the kinetic theory"
+  },
+  {
+    "key": "gas_particles_causing_pressure",
+    "prompt": "A simple unlabelled line diagram of a closed rectangular container in cross-section with a movable piston forming one wall, containing many small plain circles scattered inside, each with a short straight streak showing its direction of travel, several of them shown striking the walls with short outward arrows at the contact points. No shading. Name the layer groups exactly: container walls, piston, gas particles, particle paths, collision arrows.",
+    "parts": [
+      "container walls",
+      "piston",
+      "gas particles",
+      "particle paths",
+      "collision arrows"
+    ],
+    "subject": "physics",
+    "topic": "particles and states",
+    "grade_band": "14-16",
+    "why": "explains gas pressure from collisions, the base for the gas laws"
+  },
+  {
+    "key": "structure_of_an_atom",
+    "prompt": "A simple unlabelled line diagram of an atom: a small tight cluster of plain circles at the centre, two of the cluster circles drawn plain and two drawn with a dot inside, surrounded by two concentric thin circular rings with a few small solid dots sitting on each ring. No shading, no plus or minus signs, no letters. Name the layer groups exactly: nucleus, protons, neutrons, electron shells, electrons.",
+    "parts": [
+      "nucleus",
+      "protons",
+      "neutrons",
+      "electron shells",
+      "electrons"
+    ],
+    "subject": "physics",
+    "topic": "atomic structure",
+    "grade_band": "11-16",
+    "why": "the atom picture underneath atomic structure, isotopes, ions and radioactivity"
+  },
+  {
+    "key": "rutherford_gold_foil_experiment",
+    "prompt": "A simple unlabelled line diagram seen from above: a thick block on the left with a narrow channel through it aimed to the right, a very thin vertical foil strip in the middle, a large circular arc of detecting screen curving around the whole scene, and several straight paths from the channel to the foil - most passing straight through, one bending slightly, and one bouncing back the way it came. Arrowheads on each path. No shading. Name the layer groups exactly: source in lead block, gold foil, detector screen, undeflected paths, deflected path, reflected path.",
+    "parts": [
+      "source in lead block",
+      "gold foil",
+      "detector screen",
+      "undeflected paths",
+      "deflected path",
+      "reflected path"
+    ],
+    "subject": "physics",
+    "topic": "atomic structure",
+    "grade_band": "14-16",
+    "why": "the experiment that produced the nuclear model, drawn in every atomic history lesson"
+  },
+  {
+    "key": "penetrating_power_of_radiation",
+    "prompt": "A simple unlabelled line diagram with three separate horizontal paths one above the other, each starting at a small source box on the left and passing to the right through three upright barriers in a row: a thin sheet, a thicker plate, and a very thick block. The top path stops at the thin sheet, the middle path stops at the thicker plate, and the bottom path passes through all three and continues, weakening. No shading. Name the layer groups exactly: sources, paper sheet, aluminium plate, lead block, alpha path, beta path, gamma path.",
+    "parts": [
+      "sources",
+      "paper sheet",
+      "aluminium plate",
+      "lead block",
+      "alpha path",
+      "beta path",
+      "gamma path"
+    ],
+    "subject": "physics",
+    "topic": "radioactivity",
+    "grade_band": "14-16",
+    "why": "the single most reused radioactivity diagram: what stops alpha, beta and gamma"
+  },
+  {
+    "key": "half_life_decay_curve",
+    "prompt": "A simple unlabelled line graph with two plain axes meeting at the origin, carrying one smooth curve that starts high on the vertical axis and falls steeply then ever more gently, flattening towards the horizontal axis without touching it, with thin dashed lines drawn from the vertical axis across to the curve and down to the horizontal axis at three successive halvings. No numbers, no tick labels, no words. Name the layer groups exactly: horizontal axis, vertical axis, decay curve, halving lines, origin.",
+    "parts": [
+      "horizontal axis",
+      "vertical axis",
+      "decay curve",
+      "halving lines",
+      "origin"
+    ],
+    "subject": "physics",
+    "topic": "radioactivity",
+    "grade_band": "14-16",
+    "why": "the half-life graph read off in every decay and dating question"
+  },
+  {
+    "key": "nuclear_fission_chain_reaction",
+    "prompt": "A simple unlabelled line diagram spreading left to right: a small dot travelling towards a large plain circle, that circle splitting into two medium circles with three small dots flying outward, and each of those small dots striking a further large circle which in turn splits into two medium circles with more small dots leaving. Straight arrows link every stage. No shading. Name the layer groups exactly: neutron, large nucleus, daughter nuclei, released neutrons, second generation nuclei.",
+    "parts": [
+      "neutron",
+      "large nucleus",
+      "daughter nuclei",
+      "released neutrons",
+      "second generation nuclei"
+    ],
+    "subject": "physics",
+    "topic": "radioactivity",
+    "grade_band": "14-16",
+    "why": "the branching picture for fission, chain reactions and reactor control"
+  },
+  {
+    "key": "geiger_muller_tube_and_counter",
+    "prompt": "A simple unlabelled line diagram of a long cylindrical tube lying horizontally with a thin flat window sealing its left end and a thin wire running along its axis inside, a cable from its right end leading to a plain rectangular counter box with a blank display panel, and a small source block on a stand facing the window with a straight dashed path between them. No shading, no numbers on the display. Name the layer groups exactly: tube, thin window, central wire, cable, counter box, source.",
+    "parts": [
+      "tube",
+      "thin window",
+      "central wire",
+      "cable",
+      "counter box",
+      "source"
+    ],
+    "subject": "physics",
+    "topic": "radioactivity",
+    "grade_band": "14-16",
+    "why": "the detector diagram for measuring count rate, background radiation and half-life"
+  },
+  {
+    "key": "solar_system_planets_in_order",
+    "prompt": "A simple unlabelled line diagram of the solar system seen from above: a large circle with short rays at the left edge, then eight plain circles of clearly different sizes arranged in order of increasing distance to the right, each sitting on its own thin elliptical orbit line curving around the large circle, with a scattered band of tiny dots forming a ring between the fourth and fifth circles, and one of the outer circles drawn with a flat ring around it. No shading. Name the layer groups exactly: sun, inner planets, asteroid belt, outer planets, ringed planet, orbit lines.",
+    "parts": [
+      "sun",
+      "inner planets",
+      "asteroid belt",
+      "outer planets",
+      "ringed planet",
+      "orbit lines"
+    ],
+    "subject": "physics",
+    "topic": "space",
+    "grade_band": "11-16",
+    "why": "the map of the solar system every space chapter opens with"
+  },
+  {
+    "key": "day_and_night_on_earth",
+    "prompt": "A simple unlabelled line diagram of a large circle for the Earth with a tilted straight axis line through it and a curved arrow around the axis showing spin, with straight parallel rays arriving from a smaller circle with short rays at the left, the half of the Earth facing the rays left plain and the half turned away covered in fine hatching, and a small figure standing on the boundary. No shading beyond the hatching. Name the layer groups exactly: sun, earth, axis, spin arrow, daylight side, night side, sun rays.",
+    "parts": [
+      "sun",
+      "earth",
+      "axis",
+      "spin arrow",
+      "daylight side",
+      "night side",
+      "sun rays"
+    ],
+    "subject": "physics",
+    "topic": "space",
+    "grade_band": "11-13",
+    "why": "the picture that explains day, night and why the sun appears to move"
+  },
+  {
+    "key": "seasons_and_earths_tilt",
+    "prompt": "A simple unlabelled line diagram of a circle with short rays at the centre of the picture and a thin elliptical orbit line around it, with the Earth drawn as a circle at four positions on the orbit - left, top, right and bottom - each with a straight tilted axis line through it pointing in exactly the same direction as the others, and straight rays from the centre reaching each position. No shading. Name the layer groups exactly: sun, orbit path, earth in june, earth in december, tilted axis, sun rays.",
+    "parts": [
+      "sun",
+      "orbit path",
+      "earth in june",
+      "earth in december",
+      "tilted axis",
+      "sun rays"
+    ],
+    "subject": "physics",
+    "topic": "space",
+    "grade_band": "11-16",
+    "why": "why seasons happen, the diagram that separates tilt from distance"
+  },
+  {
+    "key": "phases_of_the_moon",
+    "prompt": "A simple unlabelled line diagram of a circle for the Earth at the centre with a thin circular orbit line around it, eight small plain circles spaced evenly on the orbit, each with the half facing the left of the picture left plain and the half facing away covered in fine hatching, and straight parallel rays arriving from the left edge of the picture. No shading beyond the hatching. Name the layer groups exactly: earth, moon orbit, moon positions, lit halves, shadowed halves, sun rays.",
+    "parts": [
+      "earth",
+      "moon orbit",
+      "moon positions",
+      "lit halves",
+      "shadowed halves",
+      "sun rays"
+    ],
+    "subject": "physics",
+    "topic": "space",
+    "grade_band": "11-16",
+    "why": "the eight-position picture that makes the moon's phases click"
+  },
+  {
+    "key": "solar_and_lunar_eclipses",
+    "prompt": "A simple unlabelled line diagram with two separate rows one above the other, each showing three circles in a straight line with straight rays leaving the largest circle on the left: in the top row a small circle sits between the large left circle and a medium circle on the right, casting a narrow tapering shadow cone onto the medium circle; in the bottom row the medium circle sits in the middle and casts a wide tapering shadow cone onto the small circle at the right. No shading beyond the plain shadow cones. Name the layer groups exactly: sun, moon, earth, solar eclipse shadow, lunar eclipse shadow, light rays.",
+    "parts": [
+      "sun",
+      "moon",
+      "earth",
+      "solar eclipse shadow",
+      "lunar eclipse shadow",
+      "light rays"
+    ],
+    "subject": "physics",
+    "topic": "space",
+    "grade_band": "11-16",
+    "why": "both eclipses in one picture, the payoff to shadow and straight-line light"
+  },
+  {
+    "key": "life_cycle_of_a_star",
+    "prompt": "A simple unlabelled flow diagram of shapes joined left to right by straight arrows, branching into two paths partway: a large ragged cloud shape, then a plain circle, then the path splitting - the upper branch going to a larger circle then a small circle, the lower branch going to a very large circle then a ragged burst shape then a very small circle and finally a small solid black disc. No shading beyond the black disc. Name the layer groups exactly: nebula, main sequence star, red giant, white dwarf, supergiant, supernova, neutron star, black hole.",
+    "parts": [
+      "nebula",
+      "main sequence star",
+      "red giant",
+      "white dwarf",
+      "supergiant",
+      "supernova",
+      "neutron star",
+      "black hole"
+    ],
+    "subject": "physics",
+    "topic": "space",
+    "grade_band": "14-16",
+    "why": "the star life cycle chart, drawn whenever stellar evolution is taught"
+  }
+]

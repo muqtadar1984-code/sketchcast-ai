@@ -1,0 +1,1572 @@
+[
+  {
+    "key": "states_of_matter_particle_arrangement",
+    "prompt": "Three separate square boxes side by side showing how particles are arranged in a solid, in a liquid and in a gas: the first box packed with touching circles in a neat regular grid, the second box with circles touching but jumbled and irregular, the third box with only a few circles far apart and scattered. Draw the circles as plain empty outlines and do not label the boxes. Name the layer groups exactly: solid box, liquid box, gas box, solid particles, liquid particles, gas particles.",
+    "parts": [
+      "solid box",
+      "liquid box",
+      "gas box",
+      "solid particles",
+      "liquid particles",
+      "gas particles"
+    ],
+    "subject": "chemistry",
+    "topic": "particle model and states",
+    "grade_band": "11-16",
+    "why": "opens every states of matter, kinetic theory or change of state chapter"
+  },
+  {
+    "key": "changes_of_state_arrows",
+    "prompt": "Three boxes of particles arranged in a triangle, a solid box of packed circles at the lower left, a liquid box of jumbled circles at the lower right and a gas box of scattered circles at the top, with curved arrows running both ways between solid and liquid, both ways between liquid and gas, and both ways directly between solid and gas. Show arrows only, with no words. Name the layer groups exactly: solid box, liquid box, gas box, melting arrow, freezing arrow, evaporating arrow, condensing arrow, sublimation arrow.",
+    "parts": [
+      "solid box",
+      "liquid box",
+      "gas box",
+      "melting arrow",
+      "freezing arrow",
+      "evaporating arrow",
+      "condensing arrow",
+      "sublimation arrow"
+    ],
+    "subject": "chemistry",
+    "topic": "particle model and states",
+    "grade_band": "11-16",
+    "why": "naming melting, freezing, evaporating, condensing and sublimation in one picture"
+  },
+  {
+    "key": "heating_curve_of_ice_to_steam",
+    "prompt": "A blank pair of axes with a single rising line that climbs steeply, then runs flat, then climbs again, then runs flat a second time, then climbs to the end, giving two horizontal plateaus. Draw the axes as plain lines with short tick marks and put no numbers or words anywhere. Name the layer groups exactly: vertical axis, horizontal axis, solid heating section, melting plateau, liquid heating section, boiling plateau, gas heating section.",
+    "parts": [
+      "vertical axis",
+      "horizontal axis",
+      "solid heating section",
+      "melting plateau",
+      "liquid heating section",
+      "boiling plateau",
+      "gas heating section"
+    ],
+    "subject": "chemistry",
+    "topic": "particle model and states",
+    "grade_band": "14-16",
+    "why": "explaining why temperature stays constant while a substance changes state"
+  },
+  {
+    "key": "diffusion_of_bromine_gas_jars",
+    "prompt": "Two identical glass gas jars stacked mouth to mouth with a thin glass cover slid between them, the lower jar drawn full of dense stippled dots to show a heavy coloured gas and the upper jar drawn empty, with a second pair beside it where the dots have spread evenly through both jars. Use dots for the gas and add no words. Name the layer groups exactly: lower gas jar, upper gas jar, glass cover plate, dense gas dots, spread out gas dots.",
+    "parts": [
+      "lower gas jar",
+      "upper gas jar",
+      "glass cover plate",
+      "dense gas dots",
+      "spread out gas dots"
+    ],
+    "subject": "chemistry",
+    "topic": "particle model and states",
+    "grade_band": "11-16",
+    "why": "demonstrating diffusion of a gas and the random motion of particles"
+  },
+  {
+    "key": "diffusion_ammonia_and_hydrogen_chloride_tube",
+    "prompt": "A long horizontal glass tube held level in two clamps on a stand, with a small plug of cotton wool pushed into each end and a narrow ring of white smoke forming inside the tube nearer to the right hand end than the left. Draw the ring as a simple band across the tube and add no words. Name the layer groups exactly: glass tube, left cotton wool plug, right cotton wool plug, white smoke ring, clamp stand.",
+    "parts": [
+      "glass tube",
+      "left cotton wool plug",
+      "right cotton wool plug",
+      "white smoke ring",
+      "clamp stand"
+    ],
+    "subject": "chemistry",
+    "topic": "particle model and states",
+    "grade_band": "14-16",
+    "why": "linking rate of diffusion to particle mass in the cotton wool tube demonstration"
+  },
+  {
+    "key": "dissolving_particle_diagram",
+    "prompt": "A beaker of liquid drawn in two stages side by side: on the left a solid lump made of tightly packed circles sits at the bottom surrounded by loose solvent circles, on the right the lump has gone and its circles are spread evenly among the solvent circles. Draw solute circles as plain outlines and solvent circles as smaller outlines, with no words. Name the layer groups exactly: beaker, solute lump, solvent particles, spread out solute particles, liquid level.",
+    "parts": [
+      "beaker",
+      "solute lump",
+      "solvent particles",
+      "spread out solute particles",
+      "liquid level"
+    ],
+    "subject": "chemistry",
+    "topic": "particle model and states",
+    "grade_band": "11-16",
+    "why": "explaining dissolving, solute and solvent at particle level"
+  },
+  {
+    "key": "atom_with_electron_shells",
+    "prompt": "A single atom drawn as a small circle at the centre for the nucleus with three evenly spaced concentric circles around it for the electron shells, and small solid dots sitting on the shell circles for electrons. Do not write any numbers or symbols. Name the layer groups exactly: nucleus, first shell, second shell, third shell, electrons.",
+    "parts": [
+      "nucleus",
+      "first shell",
+      "second shell",
+      "third shell",
+      "electrons"
+    ],
+    "subject": "chemistry",
+    "topic": "atomic structure",
+    "grade_band": "11-16",
+    "why": "the base picture for any atom, electronic structure or bonding lesson"
+  },
+  {
+    "key": "nucleus_protons_and_neutrons",
+    "prompt": "An atom with one electron shell drawn around it and a magnified circular close up of its nucleus off to one side, the close up packed with two kinds of small circles, one kind drawn with a plus sign inside and the other left plain. Show the plus signs only, with no other letters or numbers. Name the layer groups exactly: atom outline, electron shell, electron, magnified nucleus, proton, neutron.",
+    "parts": [
+      "atom outline",
+      "electron shell",
+      "electron",
+      "magnified nucleus",
+      "proton",
+      "neutron"
+    ],
+    "subject": "chemistry",
+    "topic": "atomic structure",
+    "grade_band": "11-16",
+    "why": "distinguishing protons, neutrons and electrons when defining atomic number"
+  },
+  {
+    "key": "electron_shell_filling_rules",
+    "prompt": "Three atoms in a row, each drawn as a central nucleus circle with concentric shell circles and dots for electrons: the first atom has one filled inner shell, the second has a filled inner shell and a filled second shell, the third has a filled inner shell, a filled second shell and a single dot on a third shell. Do not write any numbers. Name the layer groups exactly: first atom, second atom, third atom, inner shell electrons, second shell electrons, outer shell electron.",
+    "parts": [
+      "first atom",
+      "second atom",
+      "third atom",
+      "inner shell electrons",
+      "second shell electrons",
+      "outer shell electron"
+    ],
+    "subject": "chemistry",
+    "topic": "atomic structure",
+    "grade_band": "14-16",
+    "why": "teaching how electrons fill the first three shells"
+  },
+  {
+    "key": "isotopes_of_an_element",
+    "prompt": "Three atoms of the same element side by side, each with one electron shell carrying one dot, and each nucleus drawn as a cluster of small circles: the first nucleus holds a single plus marked circle, the second holds a plus marked circle and one plain circle, the third holds a plus marked circle and two plain circles. Add no words or numbers. Name the layer groups exactly: first isotope, second isotope, third isotope, proton, neutron, electron.",
+    "parts": [
+      "first isotope",
+      "second isotope",
+      "third isotope",
+      "proton",
+      "neutron",
+      "electron"
+    ],
+    "subject": "chemistry",
+    "topic": "atomic structure",
+    "grade_band": "14-16",
+    "why": "explaining isotopes and relative atomic mass"
+  },
+  {
+    "key": "rutherford_gold_foil_experiment",
+    "prompt": "A block with a narrow channel holding a small radioactive source aimed at a thin vertical strip of foil, with a curved detector screen wrapped around the foil, and three particle paths drawn as arrows: most passing straight through, one bending as it passes near the foil and one bouncing straight back. Add no words. Name the layer groups exactly: source in lead block, thin gold foil, curved detector screen, straight through path, deflected path, reflected path.",
+    "parts": [
+      "source in lead block",
+      "thin gold foil",
+      "curved detector screen",
+      "straight through path",
+      "deflected path",
+      "reflected path"
+    ],
+    "subject": "chemistry",
+    "topic": "atomic structure",
+    "grade_band": "14-16",
+    "why": "telling the story of how the nuclear atom replaced the plum pudding model"
+  },
+  {
+    "key": "formation_of_ions_by_electron_transfer",
+    "prompt": "A metal atom on the left with a single electron dot on its outer shell, an arrow carrying that dot across to a non metal atom on the right whose outer shell has one gap, and below them the two resulting ions drawn in square brackets with full outer shells. Do not write any charges or letters. Name the layer groups exactly: metal atom, outer electron, transfer arrow, non metal atom, positive ion, negative ion.",
+    "parts": [
+      "metal atom",
+      "outer electron",
+      "transfer arrow",
+      "non metal atom",
+      "positive ion",
+      "negative ion"
+    ],
+    "subject": "chemistry",
+    "topic": "atomic structure",
+    "grade_band": "14-16",
+    "why": "the step between atomic structure and ionic bonding"
+  },
+  {
+    "key": "atoms_molecules_compounds_and_mixtures",
+    "prompt": "Four boxes in a row containing circles: the first holds separate identical plain circles, the second holds pairs of identical circles joined by a short line, the third holds pairs of a large and a small circle joined by a short line, the fourth holds a jumble of single circles, joined pairs and unlike pairs together. Add no words. Name the layer groups exactly: element atoms box, element molecules box, compound molecules box, mixture box.",
+    "parts": [
+      "element atoms box",
+      "element molecules box",
+      "compound molecules box",
+      "mixture box"
+    ],
+    "subject": "chemistry",
+    "topic": "atomic structure",
+    "grade_band": "11-16",
+    "why": "sorting elements, compounds and mixtures before writing formulae"
+  },
+  {
+    "key": "periodic_table_blank_outline",
+    "prompt": "The outline of the periodic table drawn as an empty grid of small blank squares in the correct stepped shape, with the two tall left hand columns, the wide central block, the right hand block and a separate detached pair of rows below. Leave every square completely empty with no symbols or numbers. Name the layer groups exactly: group one column, group two column, central block, right hand block, far right column, detached bottom rows.",
+    "parts": [
+      "group one column",
+      "group two column",
+      "central block",
+      "right hand block",
+      "far right column",
+      "detached bottom rows"
+    ],
+    "subject": "chemistry",
+    "topic": "periodic table and groups",
+    "grade_band": "11-16",
+    "why": "any lesson that points at a position, group or period on the table"
+  },
+  {
+    "key": "metals_and_non_metals_on_the_periodic_table",
+    "prompt": "The empty outline grid of the periodic table with a bold stepped staircase line drawn down the right hand side, the large region to the left of the line filled with fine diagonal hatching and the smaller region to the right left plain white. Use hatching rather than solid fill and add no words. Name the layer groups exactly: periodic table outline, staircase line, metals region, non metals region.",
+    "parts": [
+      "periodic table outline",
+      "staircase line",
+      "metals region",
+      "non metals region"
+    ],
+    "subject": "chemistry",
+    "topic": "periodic table and groups",
+    "grade_band": "11-16",
+    "why": "showing where metals and non metals sit and what the staircase line means"
+  },
+  {
+    "key": "group_1_metal_reacting_with_water",
+    "prompt": "A wide glass trough of water seen from the side with a small piece of metal floating on the surface, a trail of small bubbles rising from underneath it, a ripple where it moves across the water and a small flame above it. Draw the water surface as a single line and add no words. Name the layer groups exactly: glass trough, water, metal piece, gas bubbles, flame.",
+    "parts": [
+      "glass trough",
+      "water",
+      "metal piece",
+      "gas bubbles",
+      "flame"
+    ],
+    "subject": "chemistry",
+    "topic": "periodic table and groups",
+    "grade_band": "11-16",
+    "why": "the group 1 demonstration in any alkali metals or reactivity chapter"
+  },
+  {
+    "key": "group_7_halogen_displacement_test_tubes",
+    "prompt": "A wooden test tube rack holding three test tubes of the same size, each about half full of liquid with a clear meniscus line, the liquid in the first tube drawn plain, the second lightly stippled and the third heavily stippled. Add no words or numbers. Name the layer groups exactly: test tube rack, first test tube, second test tube, third test tube, liquid level.",
+    "parts": [
+      "test tube rack",
+      "first test tube",
+      "second test tube",
+      "third test tube",
+      "liquid level"
+    ],
+    "subject": "chemistry",
+    "topic": "periodic table and groups",
+    "grade_band": "14-16",
+    "why": "setting up halogen displacement reactions and their colour changes"
+  },
+  {
+    "key": "group_0_noble_gas_electron_shells",
+    "prompt": "Three atoms side by side drawn as concentric shell circles around a nucleus circle with dots for electrons: the first has one shell holding two dots, the second has an inner shell of two dots and an outer shell of eight dots, the third has an inner shell of two dots and two further shells of eight dots. Every outermost shell is completely full and no numbers are written. Name the layer groups exactly: first atom, second atom, third atom, full outer shells, nucleus.",
+    "parts": [
+      "first atom",
+      "second atom",
+      "third atom",
+      "full outer shells",
+      "nucleus"
+    ],
+    "subject": "chemistry",
+    "topic": "periodic table and groups",
+    "grade_band": "14-16",
+    "why": "explaining why the noble gases are unreactive"
+  },
+  {
+    "key": "atomic_radius_trend_down_a_group",
+    "prompt": "Three atoms in a row growing steadily larger from left to right, each drawn as a small nucleus circle surrounded by concentric shell circles, the first with two shells, the second with three and the third with four, with a long arrow beneath pointing from the smallest to the largest. Add no words. Name the layer groups exactly: smallest atom, middle atom, largest atom, nucleus, electron shells, trend arrow.",
+    "parts": [
+      "smallest atom",
+      "middle atom",
+      "largest atom",
+      "nucleus",
+      "electron shells",
+      "trend arrow"
+    ],
+    "subject": "chemistry",
+    "topic": "periodic table and groups",
+    "grade_band": "14-16",
+    "why": "explaining group trends in reactivity from atom size and shielding"
+  },
+  {
+    "key": "ionic_bonding_dot_and_cross_sodium_chloride",
+    "prompt": "A dot and cross diagram of a metal atom losing its single outer electron to a non metal atom: on the left an atom with shell circles carrying dots, on the right an atom with shell circles carrying crosses and one gap in its outer shell, a curved arrow moving one dot across, and below them the two resulting ions each drawn in square brackets with a full outer shell. Do not write any letters, symbols or charges. Name the layer groups exactly: metal atom, non metal atom, transferred electron, curved arrow, positive ion, negative ion.",
+    "parts": [
+      "metal atom",
+      "non metal atom",
+      "transferred electron",
+      "curved arrow",
+      "positive ion",
+      "negative ion"
+    ],
+    "subject": "chemistry",
+    "topic": "bonding and structure",
+    "grade_band": "14-16",
+    "why": "the standard dot and cross picture for any ionic compound"
+  },
+  {
+    "key": "ionic_lattice_structure",
+    "prompt": "A giant ionic lattice drawn as a cube of alternating large and small spheres in a regular three dimensional grid, joined by short straight lines, with one small cube of eight spheres pulled slightly out to the side to show the repeating unit. Do not label or write charges. Name the layer groups exactly: lattice cube, large ions, small ions, bonds between ions, repeating unit.",
+    "parts": [
+      "lattice cube",
+      "large ions",
+      "small ions",
+      "bonds between ions",
+      "repeating unit"
+    ],
+    "subject": "chemistry",
+    "topic": "bonding and structure",
+    "grade_band": "14-16",
+    "why": "explaining high melting points and brittleness of ionic compounds"
+  },
+  {
+    "key": "covalent_bonding_dot_and_cross_hydrogen",
+    "prompt": "A dot and cross diagram of two hydrogen atoms bonded together, drawn as two overlapping circles with a shared pair of electrons in the overlap, one shown as a dot and the other as a cross. Do not write any letters. Name the layer groups exactly: first atom circle, second atom circle, overlap region, shared electron pair.",
+    "parts": [
+      "first atom circle",
+      "second atom circle",
+      "overlap region",
+      "shared electron pair"
+    ],
+    "subject": "chemistry",
+    "topic": "bonding and structure",
+    "grade_band": "14-16",
+    "why": "the simplest covalent bond, taught before water and methane"
+  },
+  {
+    "key": "covalent_bonding_dot_and_cross_water",
+    "prompt": "A dot and cross diagram of a water molecule: a large central atom circle with two smaller atom circles overlapping it on either side, each overlap holding a shared pair made of one dot and one cross, and two unshared pairs of dots on the far side of the large circle. Do not write any letters or symbols. Name the layer groups exactly: central atom, first outer atom, second outer atom, shared pairs, lone pairs.",
+    "parts": [
+      "central atom",
+      "first outer atom",
+      "second outer atom",
+      "shared pairs",
+      "lone pairs"
+    ],
+    "subject": "chemistry",
+    "topic": "bonding and structure",
+    "grade_band": "14-16",
+    "why": "the worked example every covalent bonding lesson draws"
+  },
+  {
+    "key": "covalent_bonding_dot_and_cross_methane",
+    "prompt": "A dot and cross diagram of a methane molecule: a large central atom circle with four small atom circles overlapping it above, below, left and right, each overlap holding a shared pair made of one dot and one cross. Do not write any letters. Name the layer groups exactly: central atom, outer atoms, shared pairs, overlap regions.",
+    "parts": [
+      "central atom",
+      "outer atoms",
+      "shared pairs",
+      "overlap regions"
+    ],
+    "subject": "chemistry",
+    "topic": "bonding and structure",
+    "grade_band": "14-16",
+    "why": "showing four single covalent bonds around one carbon atom"
+  },
+  {
+    "key": "covalent_bonding_dot_and_cross_carbon_dioxide",
+    "prompt": "A dot and cross diagram of a carbon dioxide molecule: one central atom circle with a larger atom circle overlapping it on each side, each overlap holding two shared pairs to show a double bond, and each outer atom carrying two unshared pairs on its far side. Do not write any letters. Name the layer groups exactly: central atom, left outer atom, right outer atom, first double bond, second double bond, lone pairs.",
+    "parts": [
+      "central atom",
+      "left outer atom",
+      "right outer atom",
+      "first double bond",
+      "second double bond",
+      "lone pairs"
+    ],
+    "subject": "chemistry",
+    "topic": "bonding and structure",
+    "grade_band": "14-16",
+    "why": "introducing double bonds after the single bond examples"
+  },
+  {
+    "key": "metallic_bonding_sea_of_electrons",
+    "prompt": "A regular grid of identical circles each carrying a plus sign, packed in neat rows, with many tiny loose dots drifting in the spaces between them and a few short motion lines on the loose dots. Show only the plus signs, with no other letters or numbers. Name the layer groups exactly: metal ions, regular rows, delocalised electrons, spaces between ions.",
+    "parts": [
+      "metal ions",
+      "regular rows",
+      "delocalised electrons",
+      "spaces between ions"
+    ],
+    "subject": "chemistry",
+    "topic": "bonding and structure",
+    "grade_band": "14-16",
+    "why": "explaining conduction, malleability and high melting point in metals"
+  },
+  {
+    "key": "diamond_giant_covalent_structure",
+    "prompt": "A giant covalent structure drawn as identical circles each joined by four straight lines to four neighbours in a rigid three dimensional tetrahedral network filling the frame. Draw every bond as a plain straight line and add no words. Name the layer groups exactly: carbon atoms, covalent bonds, tetrahedral arrangement, rigid network.",
+    "parts": [
+      "carbon atoms",
+      "covalent bonds",
+      "tetrahedral arrangement",
+      "rigid network"
+    ],
+    "subject": "chemistry",
+    "topic": "bonding and structure",
+    "grade_band": "14-16",
+    "why": "comparing diamond with graphite for hardness and conductivity"
+  },
+  {
+    "key": "graphite_layered_structure",
+    "prompt": "Three flat sheets stacked one above another with a clear gap between them, each sheet made of joined hexagons of circles, with each circle joined to only three neighbours, short dashed lines drawn in the gaps between the sheets and a few loose dots between the layers. Add no words. Name the layer groups exactly: top layer, middle layer, bottom layer, hexagonal rings, weak forces between layers, delocalised electrons.",
+    "parts": [
+      "top layer",
+      "middle layer",
+      "bottom layer",
+      "hexagonal rings",
+      "weak forces between layers",
+      "delocalised electrons"
+    ],
+    "subject": "chemistry",
+    "topic": "bonding and structure",
+    "grade_band": "14-16",
+    "why": "explaining why graphite is slippery and conducts electricity"
+  },
+  {
+    "key": "simple_molecular_versus_giant_structure",
+    "prompt": "A comparison in two halves separated by a vertical line: on the left a few small separate molecules of two joined circles each, floating apart with short dashed lines between them, on the right a single continuous network of circles joined by solid lines filling the whole half. Add no words. Name the layer groups exactly: separate molecules, weak forces between molecules, giant network, strong bonds.",
+    "parts": [
+      "separate molecules",
+      "weak forces between molecules",
+      "giant network",
+      "strong bonds"
+    ],
+    "subject": "chemistry",
+    "topic": "bonding and structure",
+    "grade_band": "14-16",
+    "why": "explaining why some substances melt easily and others do not"
+  },
+  {
+    "key": "shapes_of_common_molecules",
+    "prompt": "Four ball and stick molecules in a row: a bent three atom molecule, a pyramid shaped four atom molecule, a tetrahedral five atom molecule and a straight line three atom molecule with double sticks between the balls. Draw the balls as plain circles of two sizes and add no letters. Name the layer groups exactly: bent molecule, pyramid molecule, tetrahedral molecule, linear molecule.",
+    "parts": [
+      "bent molecule",
+      "pyramid molecule",
+      "tetrahedral molecule",
+      "linear molecule"
+    ],
+    "subject": "chemistry",
+    "topic": "bonding and structure",
+    "grade_band": "14-16",
+    "why": "moving from flat dot and cross diagrams to real three dimensional shapes"
+  },
+  {
+    "key": "bunsen_burner_parts",
+    "prompt": "A Bunsen burner drawn from the side in cross section, showing the heavy round base, the gas hose stub entering the base, the upright barrel, the rotating collar around the bottom of the barrel and the open air hole cut in the barrel behind the collar. Do not label the parts. Name the layer groups exactly: base, gas hose stub, barrel, collar, air hole.",
+    "parts": [
+      "base",
+      "gas hose stub",
+      "barrel",
+      "collar",
+      "air hole"
+    ],
+    "subject": "chemistry",
+    "topic": "laboratory apparatus",
+    "grade_band": "11-13",
+    "why": "the first practical lesson and every safety reminder afterwards"
+  },
+  {
+    "key": "bunsen_burner_flame_types",
+    "prompt": "Two Bunsen burners side by side seen from the side: the left one has its air hole closed and a tall wavy flame, the right one has its air hole open and a shorter pointed flame with a small inner cone drawn inside it. Add no words. Name the layer groups exactly: closed air hole burner, wavy safety flame, open air hole burner, roaring flame, inner cone.",
+    "parts": [
+      "closed air hole burner",
+      "wavy safety flame",
+      "open air hole burner",
+      "roaring flame",
+      "inner cone"
+    ],
+    "subject": "chemistry",
+    "topic": "laboratory apparatus",
+    "grade_band": "11-13",
+    "why": "teaching the safety flame and the roaring flame"
+  },
+  {
+    "key": "filtration_apparatus",
+    "prompt": "A filter funnel held in a clamp stand with a cone of folded filter paper inside it, a mixture being poured in from above leaving a layer of solid grains sitting in the paper, and clear liquid dripping from the funnel stem into a beaker below. Do not label the parts. Name the layer groups exactly: filter funnel, folded filter paper, residue, funnel stem, beaker, filtrate.",
+    "parts": [
+      "filter funnel",
+      "folded filter paper",
+      "residue",
+      "funnel stem",
+      "beaker",
+      "filtrate"
+    ],
+    "subject": "chemistry",
+    "topic": "separating mixtures",
+    "grade_band": "11-16",
+    "why": "separating an insoluble solid from a liquid in any mixtures chapter"
+  },
+  {
+    "key": "simple_distillation_apparatus",
+    "prompt": "A distillation set up drawn from the side: a round bottomed flask of liquid over a Bunsen burner on a tripod, a thermometer through the bung with its bulb level with the side arm, a sloping condenser with an outer water jacket and two side tubes, and a conical flask collecting drips at the low end. Do not label the parts. Name the layer groups exactly: round bottomed flask, thermometer, condenser, water inlet, water outlet, collecting flask, heat source.",
+    "parts": [
+      "round bottomed flask",
+      "thermometer",
+      "condenser",
+      "water inlet",
+      "water outlet",
+      "collecting flask",
+      "heat source"
+    ],
+    "subject": "chemistry",
+    "topic": "separating mixtures",
+    "grade_band": "14-16",
+    "why": "separating a solvent from a solution and purifying water"
+  },
+  {
+    "key": "fractional_distillation_laboratory_apparatus",
+    "prompt": "A fractional distillation set up drawn from the side: a flask of liquid on a heat source, a tall vertical column packed with glass beads rising from the flask neck, a thermometer at the top of the column with its bulb at the side arm, a sloping water jacketed condenser and a small receiving flask. Do not label the parts. Name the layer groups exactly: flask, fractionating column, glass beads, thermometer, condenser, receiving flask.",
+    "parts": [
+      "flask",
+      "fractionating column",
+      "glass beads",
+      "thermometer",
+      "condenser",
+      "receiving flask"
+    ],
+    "subject": "chemistry",
+    "topic": "separating mixtures",
+    "grade_band": "14-16",
+    "why": "separating miscible liquids such as ethanol and water"
+  },
+  {
+    "key": "paper_chromatography_setup",
+    "prompt": "A beaker with a shallow layer of solvent in the bottom and a rectangular strip of paper hanging into it from a rod across the top, a straight base line drawn across the paper just above the solvent with three small spots on it, and a watch glass resting on the beaker as a lid. Add no words. Name the layer groups exactly: beaker, solvent, paper strip, base line, spots, watch glass lid.",
+    "parts": [
+      "beaker",
+      "solvent",
+      "paper strip",
+      "base line",
+      "spots",
+      "watch glass lid"
+    ],
+    "subject": "chemistry",
+    "topic": "separating mixtures",
+    "grade_band": "11-16",
+    "why": "separating inks and dyes in any mixtures or analysis chapter"
+  },
+  {
+    "key": "chromatogram_rf_measurement",
+    "prompt": "A finished chromatogram drawn as a tall rectangle of paper with a straight base line near the bottom, a straight solvent front line near the top, a single spot part way up, and two vertical measuring arrows beside the paper, a short one from the base line to the spot and a long one from the base line to the solvent front. Add no words or numbers. Name the layer groups exactly: paper, base line, solvent front, spot, distance moved by spot, distance moved by solvent.",
+    "parts": [
+      "paper",
+      "base line",
+      "solvent front",
+      "spot",
+      "distance moved by spot",
+      "distance moved by solvent"
+    ],
+    "subject": "chemistry",
+    "topic": "separating mixtures",
+    "grade_band": "14-16",
+    "why": "calculating Rf values from a finished chromatogram"
+  },
+  {
+    "key": "titration_apparatus",
+    "prompt": "A titration set up seen from the side: a long thin burette held upright in a clamp on a heavy stand with a tap near its lower tip, a conical flask of liquid standing directly under the tip and a square white tile under the flask, with a pipette lying on the bench beside the stand. Do not label the parts and write no scale numbers on the burette. Name the layer groups exactly: burette, tap, clamp stand, conical flask, white tile, pipette.",
+    "parts": [
+      "burette",
+      "tap",
+      "clamp stand",
+      "conical flask",
+      "white tile",
+      "pipette"
+    ],
+    "subject": "chemistry",
+    "topic": "laboratory apparatus",
+    "grade_band": "14-16",
+    "why": "any acid alkali titration or concentration calculation practical"
+  },
+  {
+    "key": "evaporation_and_crystallisation",
+    "prompt": "An evaporating basin of solution resting on a wire gauze on a tripod above a Bunsen burner, with wisps of steam rising from the basin, drawn beside a second basin holding a scatter of angular crystals and no liquid. Add no words. Name the layer groups exactly: evaporating basin, solution, wire gauze, tripod, bunsen burner, steam, crystals.",
+    "parts": [
+      "evaporating basin",
+      "solution",
+      "wire gauze",
+      "tripod",
+      "bunsen burner",
+      "steam",
+      "crystals"
+    ],
+    "subject": "chemistry",
+    "topic": "separating mixtures",
+    "grade_band": "11-16",
+    "why": "recovering a dissolved salt from its solution"
+  },
+  {
+    "key": "separating_funnel_for_immiscible_liquids",
+    "prompt": "A pear shaped separating funnel held upright in a clamp stand with a stopper in the top, the liquid inside split by a clear horizontal boundary into an upper layer drawn plain and a lower layer drawn stippled, a tap at the bottom of the stem and a beaker underneath. Add no words. Name the layer groups exactly: separating funnel, stopper, upper layer, lower layer, boundary, tap, beaker.",
+    "parts": [
+      "separating funnel",
+      "stopper",
+      "upper layer",
+      "lower layer",
+      "boundary",
+      "tap",
+      "beaker"
+    ],
+    "subject": "chemistry",
+    "topic": "separating mixtures",
+    "grade_band": "14-16",
+    "why": "separating oil and water or any two immiscible liquids"
+  },
+  {
+    "key": "collecting_gas_over_water",
+    "prompt": "A conical flask with a bung and a bent delivery tube leading into a trough of water, the tube ending under an upturned gas jar that stands on a perforated shelf and is half filled with gas above the water line, with bubbles rising from the tube mouth. Add no words. Name the layer groups exactly: conical flask, bung, delivery tube, trough of water, upturned gas jar, collected gas, bubbles.",
+    "parts": [
+      "conical flask",
+      "bung",
+      "delivery tube",
+      "trough of water",
+      "upturned gas jar",
+      "collected gas",
+      "bubbles"
+    ],
+    "subject": "chemistry",
+    "topic": "laboratory apparatus",
+    "grade_band": "11-16",
+    "why": "collecting a gas produced in a reaction in any gases practical"
+  },
+  {
+    "key": "gas_syringe_apparatus",
+    "prompt": "A conical flask holding a liquid with a few chips at the bottom, sealed with a bung and a short delivery tube running sideways into the nozzle of a horizontal gas syringe held in a clamp stand, the plunger pushed part way out along the barrel. Do not write any scale numbers. Name the layer groups exactly: conical flask, bung, delivery tube, gas syringe barrel, plunger, clamp stand.",
+    "parts": [
+      "conical flask",
+      "bung",
+      "delivery tube",
+      "gas syringe barrel",
+      "plunger",
+      "clamp stand"
+    ],
+    "subject": "chemistry",
+    "topic": "laboratory apparatus",
+    "grade_band": "14-16",
+    "why": "measuring the volume of gas made in a rate of reaction experiment"
+  },
+  {
+    "key": "reading_a_measuring_cylinder_meniscus",
+    "prompt": "A tall narrow measuring cylinder about two thirds full of liquid drawn large, with unlabelled scale marks up its side, the liquid surface curving down in the middle to form a meniscus, and a simple eye at the side of the cylinder level with the bottom of the curve with a dashed sight line running to it. Write no numbers on the scale. Name the layer groups exactly: measuring cylinder, scale marks, liquid, meniscus, eye, sight line.",
+    "parts": [
+      "measuring cylinder",
+      "scale marks",
+      "liquid",
+      "meniscus",
+      "eye",
+      "sight line"
+    ],
+    "subject": "chemistry",
+    "topic": "laboratory apparatus",
+    "grade_band": "11-13",
+    "why": "teaching accurate measurement before any quantitative practical"
+  },
+  {
+    "key": "sk_tripod_and_gauze",
+    "prompt": "A three legged laboratory tripod seen from the side with a square wire gauze mat resting flat on its top ring. Draw it plainly with no other apparatus. Name the layer groups exactly: tripod legs, top ring, wire gauze.",
+    "parts": [
+      "tripod legs",
+      "top ring",
+      "wire gauze"
+    ],
+    "subject": "chemistry",
+    "topic": "laboratory apparatus",
+    "grade_band": "11-16",
+    "why": "any heating practical that needs the stand sketched on its own"
+  },
+  {
+    "key": "conservation_of_mass_sealed_flask",
+    "prompt": "Two identical top pan balances side by side, each with a stoppered conical flask standing on the pan and a blank rectangular display window on the front: the left flask holds a liquid and a separate small solid, the right flask holds the same liquid now fizzing with bubbles. Leave the display windows completely empty with no digits. Name the layer groups exactly: left balance, right balance, stoppered flask, reactants, products, empty display window.",
+    "parts": [
+      "left balance",
+      "right balance",
+      "stoppered flask",
+      "reactants",
+      "products",
+      "empty display window"
+    ],
+    "subject": "chemistry",
+    "topic": "chemical reactions and equations",
+    "grade_band": "11-16",
+    "why": "proving mass is conserved before balancing equations"
+  },
+  {
+    "key": "magnesium_ribbon_reacting_with_acid",
+    "prompt": "A test tube held upright in a clamp, about half full of liquid, with a short curled strip of metal near the bottom and a dense stream of small bubbles rising from the strip to the surface. Add no words. Name the layer groups exactly: test tube, acid, metal ribbon, bubbles, clamp.",
+    "parts": [
+      "test tube",
+      "acid",
+      "metal ribbon",
+      "bubbles",
+      "clamp"
+    ],
+    "subject": "chemistry",
+    "topic": "chemical reactions and equations",
+    "grade_band": "11-16",
+    "why": "the standard metal plus acid reaction in reactivity and rates chapters"
+  },
+  {
+    "key": "test_for_hydrogen_lit_splint",
+    "prompt": "A hand holding a burning wooden splint at the open mouth of an upright test tube, the flame just inside the tube mouth and a small burst of short radiating lines drawn at the flame to suggest a pop. Add no words. Name the layer groups exactly: test tube, hand, lit splint, flame, pop burst.",
+    "parts": [
+      "test tube",
+      "hand",
+      "lit splint",
+      "flame",
+      "pop burst"
+    ],
+    "subject": "chemistry",
+    "topic": "chemical reactions and equations",
+    "grade_band": "11-16",
+    "why": "the squeaky pop test whenever hydrogen is made"
+  },
+  {
+    "key": "test_for_carbon_dioxide_limewater",
+    "prompt": "A boiling tube of fizzing liquid sealed with a bung and a bent delivery tube that dips into a second test tube of clear liquid, with bubbles rising through the second tube and its liquid drawn stippled to show it has turned cloudy. Add no words. Name the layer groups exactly: boiling tube, bung, delivery tube, limewater tube, bubbles, cloudy liquid.",
+    "parts": [
+      "boiling tube",
+      "bung",
+      "delivery tube",
+      "limewater tube",
+      "bubbles",
+      "cloudy liquid"
+    ],
+    "subject": "chemistry",
+    "topic": "chemical reactions and equations",
+    "grade_band": "11-16",
+    "why": "the limewater test whenever carbon dioxide is produced"
+  },
+  {
+    "key": "test_for_oxygen_glowing_splint",
+    "prompt": "A hand lowering a wooden splint with a glowing tip into the mouth of an upright test tube, the tip bursting into a small flame with short radiating lines around it. Add no words. Name the layer groups exactly: test tube, hand, splint, glowing tip, relit flame.",
+    "parts": [
+      "test tube",
+      "hand",
+      "splint",
+      "glowing tip",
+      "relit flame"
+    ],
+    "subject": "chemistry",
+    "topic": "chemical reactions and equations",
+    "grade_band": "11-16",
+    "why": "the glowing splint test whenever oxygen is collected"
+  },
+  {
+    "key": "precipitation_reaction_in_a_beaker",
+    "prompt": "Three beakers in a row: the first holding a clear liquid, the second holding a clear liquid, and the third holding liquid with a thick cloud of fine specks suspended in it and a settled layer of specks on the bottom, with an arrow pointing from each of the first two beakers into the third. Add no words. Name the layer groups exactly: first solution, second solution, mixing arrows, third beaker, precipitate cloud, settled solid.",
+    "parts": [
+      "first solution",
+      "second solution",
+      "mixing arrows",
+      "third beaker",
+      "precipitate cloud",
+      "settled solid"
+    ],
+    "subject": "chemistry",
+    "topic": "chemical reactions and equations",
+    "grade_band": "14-16",
+    "why": "explaining insoluble products and ionic equations"
+  },
+  {
+    "key": "thermal_decomposition_in_a_test_tube",
+    "prompt": "A test tube clamped at a slight downward angle with a small heap of powder in its closed end and a Bunsen burner flame beneath it, a bung and bent delivery tube leading from the open end into a second test tube of clear liquid where bubbles are rising. Add no words. Name the layer groups exactly: test tube, powder, bunsen burner, bung, delivery tube, limewater tube, bubbles.",
+    "parts": [
+      "test tube",
+      "powder",
+      "bunsen burner",
+      "bung",
+      "delivery tube",
+      "limewater tube",
+      "bubbles"
+    ],
+    "subject": "chemistry",
+    "topic": "chemical reactions and equations",
+    "grade_band": "14-16",
+    "why": "heating a carbonate and testing the gas given off"
+  },
+  {
+    "key": "flame_test_for_metal_ions",
+    "prompt": "A hand holding a thin wire with a small loop at its end in the edge of a Bunsen burner flame, with a small watch glass of powder on the bench below and the flame drawn with an extra outlined tongue where the loop sits. Add no words. Name the layer groups exactly: hand, wire loop, bunsen burner, flame, watch glass of sample.",
+    "parts": [
+      "hand",
+      "wire loop",
+      "bunsen burner",
+      "flame",
+      "watch glass of sample"
+    ],
+    "subject": "chemistry",
+    "topic": "chemical reactions and equations",
+    "grade_band": "14-16",
+    "why": "identifying metal ions in a qualitative analysis lesson"
+  },
+  {
+    "key": "ph_scale_number_line",
+    "prompt": "A long horizontal bar divided into fifteen equal segments by short vertical ticks, with a taller mark at the middle segment, an arrow beneath the bar pointing to the left end and another arrow beneath pointing to the right end. Leave every segment empty with no numbers or words. Name the layer groups exactly: scale bar, acidic end, neutral middle, alkaline end, left arrow, right arrow.",
+    "parts": [
+      "scale bar",
+      "acidic end",
+      "neutral middle",
+      "alkaline end",
+      "left arrow",
+      "right arrow"
+    ],
+    "subject": "chemistry",
+    "topic": "acids bases and salts",
+    "grade_band": "11-16",
+    "why": "placing any substance on the pH scale"
+  },
+  {
+    "key": "litmus_paper_test",
+    "prompt": "Two small beakers of liquid side by side, each with a pair of tweezers dipping a small rectangular strip of paper into it, the strip going into the left beaker drawn plain and the strip going into the right beaker drawn with fine hatching, and two spare strips lying on the bench. Add no words. Name the layer groups exactly: left beaker, right beaker, tweezers, plain paper strip, hatched paper strip, spare strips.",
+    "parts": [
+      "left beaker",
+      "right beaker",
+      "tweezers",
+      "plain paper strip",
+      "hatched paper strip",
+      "spare strips"
+    ],
+    "subject": "chemistry",
+    "topic": "acids bases and salts",
+    "grade_band": "11-13",
+    "why": "the first indicator lesson in any acids chapter"
+  },
+  {
+    "key": "neutralisation_ion_diagram",
+    "prompt": "A particle diagram with a small circle marked with a plus sign on the left, a larger circle marked with a minus sign on the right, an arrow bringing them together, and on the far right a single molecule of one large circle joined to two small circles. Show only the plus and minus signs and no other letters. Name the layer groups exactly: hydrogen ion, hydroxide ion, arrow, water molecule.",
+    "parts": [
+      "hydrogen ion",
+      "hydroxide ion",
+      "arrow",
+      "water molecule"
+    ],
+    "subject": "chemistry",
+    "topic": "acids bases and salts",
+    "grade_band": "14-16",
+    "why": "showing what neutralisation means at particle level"
+  },
+  {
+    "key": "making_a_soluble_salt_steps",
+    "prompt": "Four small pieces of apparatus in a row joined by arrows: a beaker of liquid with powder being tipped in from a spatula, a funnel with filter paper dripping into a beaker, an evaporating basin on a tripod over a burner, and a basin holding angular crystals. Add no words. Name the layer groups exactly: adding excess solid, filtering, evaporating, crystals, arrows.",
+    "parts": [
+      "adding excess solid",
+      "filtering",
+      "evaporating",
+      "crystals",
+      "arrows"
+    ],
+    "subject": "chemistry",
+    "topic": "acids bases and salts",
+    "grade_band": "14-16",
+    "why": "the salt preparation practical from acid to dry crystals"
+  },
+  {
+    "key": "acid_reacting_with_a_carbonate",
+    "prompt": "A conical flask of liquid with a heap of irregular chips at the bottom giving off bubbles, sealed with a bung and a bent delivery tube dipping into a test tube of clear liquid that has turned cloudy and stippled. Add no words. Name the layer groups exactly: conical flask, acid, carbonate chips, bubbles, delivery tube, limewater tube.",
+    "parts": [
+      "conical flask",
+      "acid",
+      "carbonate chips",
+      "bubbles",
+      "delivery tube",
+      "limewater tube"
+    ],
+    "subject": "chemistry",
+    "topic": "acids bases and salts",
+    "grade_band": "11-16",
+    "why": "the acid plus carbonate reaction and the gas test that follows it"
+  },
+  {
+    "key": "strong_and_weak_acid_particles",
+    "prompt": "Two identical beakers side by side drawn with their contents magnified: the left beaker full of separated small circles marked with plus signs and larger plain circles, the right beaker with only a few separated pairs and many circles still joined together. Show only the plus signs and no other letters. Name the layer groups exactly: strong acid beaker, separated ions, weak acid beaker, joined molecules, few separated ions.",
+    "parts": [
+      "strong acid beaker",
+      "separated ions",
+      "weak acid beaker",
+      "joined molecules",
+      "few separated ions"
+    ],
+    "subject": "chemistry",
+    "topic": "acids bases and salts",
+    "grade_band": "14-16",
+    "why": "distinguishing strong from weak and concentrated from dilute"
+  },
+  {
+    "key": "rate_of_reaction_graph_curves",
+    "prompt": "A blank pair of axes carrying three curves that all start at the origin and all flatten out at the same height, one rising very steeply, one less steeply and one slowly, with short tick marks on both axes. Write no numbers or words. Name the layer groups exactly: vertical axis, horizontal axis, steep curve, middle curve, shallow curve, final level.",
+    "parts": [
+      "vertical axis",
+      "horizontal axis",
+      "steep curve",
+      "middle curve",
+      "shallow curve",
+      "final level"
+    ],
+    "subject": "chemistry",
+    "topic": "rates of reaction",
+    "grade_band": "14-16",
+    "why": "comparing fast and slow reactions from experimental results"
+  },
+  {
+    "key": "collision_theory_particle_collisions",
+    "prompt": "Two pairs of circles drawn one above the other: in the top pair two circles rush together along long arrows, meet with a small burst of short radiating lines, and become a joined product on the right, in the bottom pair two circles meet along short arrows and bounce apart again along curved arrows without joining. Add no words. Name the layer groups exactly: approaching particles, successful collision, product, bouncing particles, unsuccessful collision.",
+    "parts": [
+      "approaching particles",
+      "successful collision",
+      "product",
+      "bouncing particles",
+      "unsuccessful collision"
+    ],
+    "subject": "chemistry",
+    "topic": "rates of reaction",
+    "grade_band": "14-16",
+    "why": "explaining why only some collisions cause a reaction"
+  },
+  {
+    "key": "surface_area_effect_on_rate",
+    "prompt": "Two beakers of liquid side by side, the left holding one large solid block with a few bubbles rising from its outer faces, the right holding the same amount of solid broken into many small grains spread across the bottom with bubbles rising from all of them. Add no words. Name the layer groups exactly: large lump, few bubbles, powdered solid, many bubbles, beakers.",
+    "parts": [
+      "large lump",
+      "few bubbles",
+      "powdered solid",
+      "many bubbles",
+      "beakers"
+    ],
+    "subject": "chemistry",
+    "topic": "rates of reaction",
+    "grade_band": "14-16",
+    "why": "explaining why powders react faster than lumps"
+  },
+  {
+    "key": "temperature_effect_on_particle_movement",
+    "prompt": "Two identical square boxes of scattered circles side by side, the left with short single motion lines trailing each circle and the right with long multiple motion lines trailing each circle, and a small thermometer drawn beside each box with a low level on the left and a high level on the right. Add no numbers. Name the layer groups exactly: cool box, slow particles, warm box, fast particles, thermometers.",
+    "parts": [
+      "cool box",
+      "slow particles",
+      "warm box",
+      "fast particles",
+      "thermometers"
+    ],
+    "subject": "chemistry",
+    "topic": "rates of reaction",
+    "grade_band": "14-16",
+    "why": "linking temperature to particle energy and collision frequency"
+  },
+  {
+    "key": "concentration_effect_on_rate",
+    "prompt": "Two identical beakers side by side drawn with their contents magnified, the left containing a few scattered small circles among many plain solvent circles, the right containing many more of the same small circles in the same space. Add no words. Name the layer groups exactly: dilute beaker, few reactant particles, concentrated beaker, many reactant particles.",
+    "parts": [
+      "dilute beaker",
+      "few reactant particles",
+      "concentrated beaker",
+      "many reactant particles"
+    ],
+    "subject": "chemistry",
+    "topic": "rates of reaction",
+    "grade_band": "14-16",
+    "why": "explaining why concentrated solutions react faster"
+  },
+  {
+    "key": "catalyst_energy_profile",
+    "prompt": "A blank pair of axes with a flat line on the left for the starting level, a lower flat line on the right for the finishing level, and two curved humps joining them, a tall solid hump and a lower dashed hump, with a vertical arrow measuring the height of each hump from the starting level. Write no numbers or words. Name the layer groups exactly: vertical axis, horizontal axis, reactants level, products level, uncatalysed hump, catalysed hump, activation energy arrows.",
+    "parts": [
+      "vertical axis",
+      "horizontal axis",
+      "reactants level",
+      "products level",
+      "uncatalysed hump",
+      "catalysed hump",
+      "activation energy arrows"
+    ],
+    "subject": "chemistry",
+    "topic": "rates of reaction",
+    "grade_band": "14-16",
+    "why": "showing that a catalyst lowers the activation energy"
+  },
+  {
+    "key": "disappearing_cross_experiment",
+    "prompt": "A conical flask of liquid standing on a square of paper marked with a large bold cross, drawn twice side by side: on the left the cross is clearly visible through the liquid, on the right the liquid is stippled cloudy and the cross is hidden, with a stopwatch lying beside them. Draw a plain blank face on the stopwatch with no numbers. Name the layer groups exactly: conical flask, paper cross, clear liquid, cloudy liquid, hidden cross, stopwatch.",
+    "parts": [
+      "conical flask",
+      "paper cross",
+      "clear liquid",
+      "cloudy liquid",
+      "hidden cross",
+      "stopwatch"
+    ],
+    "subject": "chemistry",
+    "topic": "rates of reaction",
+    "grade_band": "14-16",
+    "why": "the classic turbidity method for measuring rate"
+  },
+  {
+    "key": "exothermic_energy_profile",
+    "prompt": "A blank pair of axes with a flat line on the left at a high level, a flat line on the right at a lower level, a curved hump rising from the left line and falling to the right line, a vertical arrow from the left line to the top of the hump and a second vertical arrow from the left line down to the right line. Write no numbers or words. Name the layer groups exactly: vertical axis, horizontal axis, reactants level, products level, activation energy arrow, energy released arrow.",
+    "parts": [
+      "vertical axis",
+      "horizontal axis",
+      "reactants level",
+      "products level",
+      "activation energy arrow",
+      "energy released arrow"
+    ],
+    "subject": "chemistry",
+    "topic": "energy changes",
+    "grade_band": "14-16",
+    "why": "drawing the energy level diagram for an exothermic reaction"
+  },
+  {
+    "key": "endothermic_energy_profile",
+    "prompt": "A blank pair of axes with a flat line on the left at a low level, a flat line on the right at a higher level, a curved hump rising from the left line and settling on the right line, a vertical arrow from the left line to the top of the hump and a second vertical arrow from the left line up to the right line. Write no numbers or words. Name the layer groups exactly: vertical axis, horizontal axis, reactants level, products level, activation energy arrow, energy absorbed arrow.",
+    "parts": [
+      "vertical axis",
+      "horizontal axis",
+      "reactants level",
+      "products level",
+      "activation energy arrow",
+      "energy absorbed arrow"
+    ],
+    "subject": "chemistry",
+    "topic": "energy changes",
+    "grade_band": "14-16",
+    "why": "drawing the energy level diagram for an endothermic reaction"
+  },
+  {
+    "key": "bond_breaking_and_bond_making",
+    "prompt": "Two stages side by side separated by an arrow: on the left a pair of joined circles with the joining line being pulled apart and an arrow pointing inwards at the join, on the right two separate circles coming together to form a new join with an arrow pointing outwards from the join. Add no words. Name the layer groups exactly: joined molecule, bond breaking, energy in arrow, separate atoms, bond making, energy out arrow.",
+    "parts": [
+      "joined molecule",
+      "bond breaking",
+      "energy in arrow",
+      "separate atoms",
+      "bond making",
+      "energy out arrow"
+    ],
+    "subject": "chemistry",
+    "topic": "energy changes",
+    "grade_band": "14-16",
+    "why": "explaining energy change as bonds broken minus bonds made"
+  },
+  {
+    "key": "temperature_change_in_a_polystyrene_cup",
+    "prompt": "A thick walled polystyrene cup of liquid standing inside a glass beaker for support, with a lid on the cup and a thermometer pushed through a hole in the lid so its bulb sits in the liquid. Write no numbers on the thermometer. Name the layer groups exactly: polystyrene cup, lid, thermometer, reaction mixture, outer beaker.",
+    "parts": [
+      "polystyrene cup",
+      "lid",
+      "thermometer",
+      "reaction mixture",
+      "outer beaker"
+    ],
+    "subject": "chemistry",
+    "topic": "energy changes",
+    "grade_band": "14-16",
+    "why": "the standard practical for measuring an energy change"
+  },
+  {
+    "key": "burning_fuel_calorimetry",
+    "prompt": "A small spirit burner with a wick and a flame standing under a metal can that hangs from a clamp stand, the can holding water with a thermometer dipping into it from above, and a plain draught shield standing to one side. Write no numbers on the thermometer. Name the layer groups exactly: spirit burner, wick and flame, metal can, water, thermometer, clamp stand, draught shield.",
+    "parts": [
+      "spirit burner",
+      "wick and flame",
+      "metal can",
+      "water",
+      "thermometer",
+      "clamp stand",
+      "draught shield"
+    ],
+    "subject": "chemistry",
+    "topic": "energy changes",
+    "grade_band": "14-16",
+    "why": "comparing the energy released by different fuels"
+  },
+  {
+    "key": "electrolysis_of_a_molten_compound",
+    "prompt": "An electrolysis set up drawn from the side: a crucible of molten liquid resting on a pipe clay triangle over a tripod and burner, two upright rods dipping into the liquid, each rod joined by a wire to a rectangular power supply box with two terminals, and bubbles rising from one rod. Draw a blank front panel on the power supply with no numbers. Name the layer groups exactly: crucible, molten electrolyte, left electrode, right electrode, power supply, connecting wires, bubbles, tripod and burner.",
+    "parts": [
+      "crucible",
+      "molten electrolyte",
+      "left electrode",
+      "right electrode",
+      "power supply",
+      "connecting wires",
+      "bubbles",
+      "tripod and burner"
+    ],
+    "subject": "chemistry",
+    "topic": "electrolysis",
+    "grade_band": "14-16",
+    "why": "the basic electrolysis set up before any half equation work"
+  },
+  {
+    "key": "electrolysis_of_water_with_gas_collection",
+    "prompt": "An electrolysis set up in a beaker of solution with two upright rods, each rod capped by an inverted test tube standing over it and part filled with collected gas, bubbles rising from both rods into the tubes, and wires running from the rods to a rectangular power supply box, with more gas collected on one side than the other. Leave the power supply panel blank. Name the layer groups exactly: beaker of solution, left electrode, right electrode, left collecting tube, right collecting tube, bubbles, power supply.",
+    "parts": [
+      "beaker of solution",
+      "left electrode",
+      "right electrode",
+      "left collecting tube",
+      "right collecting tube",
+      "bubbles",
+      "power supply"
+    ],
+    "subject": "chemistry",
+    "topic": "electrolysis",
+    "grade_band": "14-16",
+    "why": "collecting and comparing the gases made at each electrode"
+  },
+  {
+    "key": "ion_movement_towards_electrodes",
+    "prompt": "A rectangular tank of liquid with an upright rod at each end, the rod on the left marked with a plus sign and the rod on the right marked with a minus sign, small circles marked with plus signs drifting to the right along arrows and larger circles marked with minus signs drifting to the left along arrows. Show only plus and minus signs and no other letters. Name the layer groups exactly: tank of electrolyte, positive electrode, negative electrode, positive ions, negative ions, movement arrows.",
+    "parts": [
+      "tank of electrolyte",
+      "positive electrode",
+      "negative electrode",
+      "positive ions",
+      "negative ions",
+      "movement arrows"
+    ],
+    "subject": "chemistry",
+    "topic": "electrolysis",
+    "grade_band": "14-16",
+    "why": "explaining why ions move and where each one goes"
+  },
+  {
+    "key": "electroplating_apparatus",
+    "prompt": "A beaker of solution with a spoon hanging in it on a wire from one terminal of a rectangular power supply and a flat metal strip hanging in it from the other terminal, with a thin even coating drawn along the surface of the spoon. Leave the power supply panel blank. Name the layer groups exactly: beaker of solution, spoon, metal strip, coating on spoon, power supply, connecting wires.",
+    "parts": [
+      "beaker of solution",
+      "spoon",
+      "metal strip",
+      "coating on spoon",
+      "power supply",
+      "connecting wires"
+    ],
+    "subject": "chemistry",
+    "topic": "electrolysis",
+    "grade_band": "14-16",
+    "why": "showing a useful everyday application of electrolysis"
+  },
+  {
+    "key": "purifying_copper_by_electrolysis",
+    "prompt": "A tank of solution with a thick lumpy slab hanging on the left, a thin smooth plate hanging on the right which has grown thicker at its lower edge, wires from both to a rectangular power supply, and a small heap of sludge settled on the tank floor beneath the left slab. Leave the power supply panel blank. Name the layer groups exactly: tank of solution, impure slab, pure plate, new metal layer, sludge, power supply.",
+    "parts": [
+      "tank of solution",
+      "impure slab",
+      "pure plate",
+      "new metal layer",
+      "sludge",
+      "power supply"
+    ],
+    "subject": "chemistry",
+    "topic": "electrolysis",
+    "grade_band": "14-16",
+    "why": "the industrial purification example in metals and electrolysis chapters"
+  },
+  {
+    "key": "extraction_of_aluminium",
+    "prompt": "A cross section of a large industrial tank with a thick lining, several thick blocks hanging into the molten contents from above, a layer of dense molten metal collecting along the bottom, a tap hole at the side draining that layer, and a hood over the top with an arrow for escaping gas. Add no words. Name the layer groups exactly: steel case, carbon lining, hanging blocks, molten mixture, molten metal layer, tap hole, escaping gas.",
+    "parts": [
+      "steel case",
+      "carbon lining",
+      "hanging blocks",
+      "molten mixture",
+      "molten metal layer",
+      "tap hole",
+      "escaping gas"
+    ],
+    "subject": "chemistry",
+    "topic": "electrolysis",
+    "grade_band": "14-16",
+    "why": "the industrial electrolysis tank in metal extraction chapters"
+  },
+  {
+    "key": "reactivity_series_ladder",
+    "prompt": "A tall vertical ladder of ten empty horizontal rungs drawn as blank boxes stacked one above another, with a long arrow beside it pointing from the top box downwards and two of the boxes drawn with dashed outlines instead of solid ones. Leave every box completely empty with no words or numbers. Name the layer groups exactly: ladder of boxes, top box, bottom box, dashed boxes, trend arrow.",
+    "parts": [
+      "ladder of boxes",
+      "top box",
+      "bottom box",
+      "dashed boxes",
+      "trend arrow"
+    ],
+    "subject": "chemistry",
+    "topic": "metals and reactivity",
+    "grade_band": "11-16",
+    "why": "the reference ladder for displacement, extraction and acid reactions"
+  },
+  {
+    "key": "displacement_reaction_iron_nail_in_copper_sulfate",
+    "prompt": "A test tube in a stand holding a liquid with a single iron nail resting in it, drawn twice side by side: on the left the nail is clean and the liquid is drawn stippled, on the right the nail is covered in a rough furry coating and the liquid is drawn plain. Add no words. Name the layer groups exactly: test tube, iron nail, solution before, coated nail, solution after, stand.",
+    "parts": [
+      "test tube",
+      "iron nail",
+      "solution before",
+      "coated nail",
+      "solution after",
+      "stand"
+    ],
+    "subject": "chemistry",
+    "topic": "metals and reactivity",
+    "grade_band": "11-16",
+    "why": "showing a more reactive metal displacing a less reactive one"
+  },
+  {
+    "key": "blast_furnace_cross_section",
+    "prompt": "A cross section of a tall blast furnace with a hopper and double cone at the top for the charge, a thick refractory lining, two pipes entering low down on each side with arrows for hot air, a waste gas pipe leaving near the top, and two tap holes near the base, the upper one on one side and the lower one on the other. Add no words. Name the layer groups exactly: charge hopper, refractory lining, hot air pipes, waste gas outlet, slag tap hole, molten iron tap hole.",
+    "parts": [
+      "charge hopper",
+      "refractory lining",
+      "hot air pipes",
+      "waste gas outlet",
+      "slag tap hole",
+      "molten iron tap hole"
+    ],
+    "subject": "chemistry",
+    "topic": "metals and reactivity",
+    "grade_band": "14-16",
+    "why": "extracting iron from its ore in the metals chapter"
+  },
+  {
+    "key": "rusting_experiment_three_test_tubes",
+    "prompt": "Three corked test tubes standing in a rack, each holding one iron nail: the first tube holds water covering half the nail with air above, the second is completely full of water with a layer of oil floating on top, the third holds a nail in dry air above a small heap of granules. Add no words. Name the layer groups exactly: first test tube, second test tube, third test tube, iron nails, water, oil layer, drying granules.",
+    "parts": [
+      "first test tube",
+      "second test tube",
+      "third test tube",
+      "iron nails",
+      "water",
+      "oil layer",
+      "drying granules"
+    ],
+    "subject": "chemistry",
+    "topic": "metals and reactivity",
+    "grade_band": "11-16",
+    "why": "proving that rusting needs both air and water"
+  },
+  {
+    "key": "rust_prevention_methods",
+    "prompt": "Four identical iron bars in a row, the first with a thick even coating drawn over its whole surface, the second with a brush leaving a coating along it, the third with a dotted coating over its surface, and the fourth with a separate block bolted onto its side and being eaten away. Add no words. Name the layer groups exactly: coated bar, painted bar, brush, plated bar, bar with attached block, sacrificial block.",
+    "parts": [
+      "coated bar",
+      "painted bar",
+      "brush",
+      "plated bar",
+      "bar with attached block",
+      "sacrificial block"
+    ],
+    "subject": "chemistry",
+    "topic": "metals and reactivity",
+    "grade_band": "14-16",
+    "why": "comparing barrier methods with sacrificial protection"
+  },
+  {
+    "key": "alloy_structure_compared_with_pure_metal",
+    "prompt": "Two boxes side by side: the left packed with identical circles in perfectly regular rows with a straight arrow sliding one row across the next, the right packed with circles of two different sizes so the rows are buckled and the sliding arrow is blocked. Add no words. Name the layer groups exactly: pure metal box, regular rows, sliding arrow, alloy box, larger atoms, distorted rows.",
+    "parts": [
+      "pure metal box",
+      "regular rows",
+      "sliding arrow",
+      "alloy box",
+      "larger atoms",
+      "distorted rows"
+    ],
+    "subject": "chemistry",
+    "topic": "metals and reactivity",
+    "grade_band": "14-16",
+    "why": "explaining why alloys are harder than pure metals"
+  },
+  {
+    "key": "composition_of_air_pie_chart",
+    "prompt": "A single large circle divided into sectors by straight radius lines, one sector taking up nearly four fifths of the circle, a second taking up most of the rest, and two very thin slivers making up the remainder. Leave every sector empty with no words, numbers or shading. Name the layer groups exactly: circle outline, largest sector, second sector, thin slivers, dividing lines.",
+    "parts": [
+      "circle outline",
+      "largest sector",
+      "second sector",
+      "thin slivers",
+      "dividing lines"
+    ],
+    "subject": "chemistry",
+    "topic": "air and water",
+    "grade_band": "11-16",
+    "why": "introducing the gases in the atmosphere"
+  },
+  {
+    "key": "water_treatment_works_stages",
+    "prompt": "A row of five linked stages drawn in cross section and joined left to right by pipes with arrows: a channel with an upright grid of bars across it, a wide settling tank with a sloping floor and a layer of sludge, a tank of graded gravel and sand layers, a small closed dosing tank with a pipe entering its top, and a tall storage tank with a tap. Add no words. Name the layer groups exactly: screening bars, settling tank, sludge layer, filter bed, dosing tank, storage tank, connecting pipes.",
+    "parts": [
+      "screening bars",
+      "settling tank",
+      "sludge layer",
+      "filter bed",
+      "dosing tank",
+      "storage tank",
+      "connecting pipes"
+    ],
+    "subject": "chemistry",
+    "topic": "air and water",
+    "grade_band": "11-16",
+    "why": "following water from river to tap in an air and water chapter"
+  },
+  {
+    "key": "percentage_of_oxygen_in_air_experiment",
+    "prompt": "Two horizontal gas syringes facing each other and joined by a hard glass tube packed with turnings, with a Bunsen burner flame under the middle of the tube, one plunger pushed almost fully in and the other pulled part way out. Write no scale numbers on the syringes. Name the layer groups exactly: left gas syringe, right gas syringe, glass tube, copper turnings, bunsen burner, plungers.",
+    "parts": [
+      "left gas syringe",
+      "right gas syringe",
+      "glass tube",
+      "copper turnings",
+      "bunsen burner",
+      "plungers"
+    ],
+    "subject": "chemistry",
+    "topic": "air and water",
+    "grade_band": "14-16",
+    "why": "measuring the fraction of oxygen in air experimentally"
+  },
+  {
+    "key": "hard_water_soap_lather_test",
+    "prompt": "Two stoppered test tubes side by side being shaken, each half full of liquid with a dropper above it: the left tube has a thick head of round bubbles at the top, the right tube has no bubbles but a layer of grey specks floating on the surface. Add no words. Name the layer groups exactly: left test tube, lather bubbles, right test tube, scum layer, dropper.",
+    "parts": [
+      "left test tube",
+      "lather bubbles",
+      "right test tube",
+      "scum layer",
+      "dropper"
+    ],
+    "subject": "chemistry",
+    "topic": "air and water",
+    "grade_band": "14-16",
+    "why": "comparing hard and soft water in a water chapter"
+  },
+  {
+    "key": "crude_oil_fractionating_column",
+    "prompt": "A tall industrial column drawn in cross section with horizontal trays across it at intervals, a furnace at the lower left feeding a pipe of vapour into its base, six side pipes leaving the column at different heights with arrows pointing outwards, and a thick pipe leaving the very bottom. Add no words. Name the layer groups exactly: column, trays, furnace, vapour inlet, upper outlets, middle outlets, lower outlets, bottom outlet.",
+    "parts": [
+      "column",
+      "trays",
+      "furnace",
+      "vapour inlet",
+      "upper outlets",
+      "middle outlets",
+      "lower outlets",
+      "bottom outlet"
+    ],
+    "subject": "chemistry",
+    "topic": "organic chemistry",
+    "grade_band": "14-16",
+    "why": "separating crude oil into fractions in any organic chapter"
+  },
+  {
+    "key": "first_four_alkanes_displayed_formulae",
+    "prompt": "Four displayed structures in a row built only from plain circles joined by straight lines: the first has one central circle with four circles around it, the second has two central circles joined in a line with six circles around them, the third has three central circles in a line with eight around them, the fourth has four central circles in a line with ten around them. Do not write any letters or numbers. Name the layer groups exactly: first molecule, second molecule, third molecule, fourth molecule, carbon chain, single bonds.",
+    "parts": [
+      "first molecule",
+      "second molecule",
+      "third molecule",
+      "fourth molecule",
+      "carbon chain",
+      "single bonds"
+    ],
+    "subject": "chemistry",
+    "topic": "organic chemistry",
+    "grade_band": "14-16",
+    "why": "introducing a homologous series and displayed formulae"
+  },
+  {
+    "key": "alkane_and_alkene_structures",
+    "prompt": "Two displayed structures side by side built from plain circles joined by straight lines: on the left two central circles joined by a single line with three circles attached to each, on the right two central circles joined by a double line with two circles attached to each. Do not write any letters. Name the layer groups exactly: saturated molecule, single bond, unsaturated molecule, double bond, attached atoms.",
+    "parts": [
+      "saturated molecule",
+      "single bond",
+      "unsaturated molecule",
+      "double bond",
+      "attached atoms"
+    ],
+    "subject": "chemistry",
+    "topic": "organic chemistry",
+    "grade_band": "14-16",
+    "why": "contrasting saturated and unsaturated hydrocarbons"
+  },
+  {
+    "key": "bromine_water_test_for_an_alkene",
+    "prompt": "Two stoppered test tubes side by side, each holding a liquid with a layer of a second liquid above it: the left tube has both layers drawn stippled, the right tube has an upper layer drawn stippled and a lower layer drawn completely plain and clear. Add no words. Name the layer groups exactly: left test tube, right test tube, upper layer, coloured lower layer, decolourised lower layer.",
+    "parts": [
+      "left test tube",
+      "right test tube",
+      "upper layer",
+      "coloured lower layer",
+      "decolourised lower layer"
+    ],
+    "subject": "chemistry",
+    "topic": "organic chemistry",
+    "grade_band": "14-16",
+    "why": "testing for unsaturation whenever alkenes are taught"
+  },
+  {
+    "key": "addition_polymerisation_of_ethene",
+    "prompt": "Three identical small molecules on the left, each two circles joined by a double line with two circles attached to each, a long arrow pointing right, and on the right a continuous chain where the same units are joined end to end by single lines with the chain continuing past both edges. Do not write any letters or brackets. Name the layer groups exactly: monomers, double bonds, reaction arrow, polymer chain, repeat unit, continuing chain ends.",
+    "parts": [
+      "monomers",
+      "double bonds",
+      "reaction arrow",
+      "polymer chain",
+      "repeat unit",
+      "continuing chain ends"
+    ],
+    "subject": "chemistry",
+    "topic": "organic chemistry",
+    "grade_band": "14-16",
+    "why": "showing how monomers join to form a polymer chain"
+  },
+  {
+    "key": "cracking_hydrocarbons_apparatus",
+    "prompt": "A boiling tube clamped horizontally with a plug of mineral wool at its closed end and a heap of broken pot part way along, two Bunsen burners beneath it, and a delivery tube from its open end bending down under an upturned test tube standing in a trough of water with bubbles rising into it. Add no words. Name the layer groups exactly: boiling tube, soaked mineral wool, catalyst chips, bunsen burners, delivery tube, trough of water, collecting tube.",
+    "parts": [
+      "boiling tube",
+      "soaked mineral wool",
+      "catalyst chips",
+      "bunsen burners",
+      "delivery tube",
+      "trough of water",
+      "collecting tube"
+    ],
+    "subject": "chemistry",
+    "topic": "organic chemistry",
+    "grade_band": "14-16",
+    "why": "the cracking practical in the crude oil chapter"
+  },
+  {
+    "key": "complete_combustion_of_a_hydrocarbon",
+    "prompt": "A burning candle under a funnel connected by tubing to a cooled u shaped tube standing in a beaker of iced water where droplets have formed, and on to a second test tube of liquid drawn cloudy and stippled, with an arrow for the flow of gases. Add no words. Name the layer groups exactly: burning candle, funnel, cooled u tube, condensed droplets, iced water beaker, limewater tube.",
+    "parts": [
+      "burning candle",
+      "funnel",
+      "cooled u tube",
+      "condensed droplets",
+      "iced water beaker",
+      "limewater tube"
+    ],
+    "subject": "chemistry",
+    "topic": "organic chemistry",
+    "grade_band": "14-16",
+    "why": "writing combustion equations and testing the products"
+  },
+  {
+    "key": "alcohol_and_carboxylic_acid_functional_groups",
+    "prompt": "Two displayed structures side by side built from plain circles joined by straight lines: on the left a short chain of two circles ending in a circle joined to one further small circle, on the right a short chain of two circles ending in a circle that carries a double bonded circle above it and a single bonded pair to the side, with a dashed ring drawn around the end group of each structure. Do not write any letters. Name the layer groups exactly: alcohol chain, alcohol functional group, acid chain, acid functional group, dashed rings.",
+    "parts": [
+      "alcohol chain",
+      "alcohol functional group",
+      "acid chain",
+      "acid functional group",
+      "dashed rings"
+    ],
+    "subject": "chemistry",
+    "topic": "organic chemistry",
+    "grade_band": "14-16",
+    "why": "introducing functional groups beyond the hydrocarbons"
+  },
+  {
+    "key": "thermosoftening_and_thermosetting_polymers",
+    "prompt": "Two boxes side by side: the left filled with long separate tangled strands lying loosely over one another with small gaps between them, the right filled with the same strands but joined to each other at many points by short straight rungs forming one rigid net. Add no words. Name the layer groups exactly: tangled chains box, separate chains, cross linked box, cross links, rigid network.",
+    "parts": [
+      "tangled chains box",
+      "separate chains",
+      "cross linked box",
+      "cross links",
+      "rigid network"
+    ],
+    "subject": "chemistry",
+    "topic": "organic chemistry",
+    "grade_band": "14-16",
+    "why": "explaining why some plastics melt and others do not"
+  },
+  {
+    "key": "greenhouse_effect",
+    "prompt": "A curved ground line at the bottom with a sun in the top corner, straight arrows coming down from the sun to the ground, wavy arrows leaving the ground upwards, a broken band of small circles drawn as a layer across the sky, some wavy arrows passing through the band and others bouncing back down off it. Add no words. Name the layer groups exactly: sun, incoming rays, ground, outgoing rays, gas layer, reflected rays.",
+    "parts": [
+      "sun",
+      "incoming rays",
+      "ground",
+      "outgoing rays",
+      "gas layer",
+      "reflected rays"
+    ],
+    "subject": "chemistry",
+    "topic": "environmental chemistry",
+    "grade_band": "11-16",
+    "why": "explaining global warming in the atmosphere chapter"
+  },
+  {
+    "key": "carbon_cycle",
+    "prompt": "A cycle diagram with a cloud shape at the top for the air and curved arrows running to and from it: down to a tree, down to an animal, down to a chimney on a small factory, down to dead matter lying on the ground and on to a shaded underground layer, and back up from the tree, the animal and the chimney. Add no words. Name the layer groups exactly: air, tree, animal, factory chimney, dead matter, underground fuel layer, cycle arrows.",
+    "parts": [
+      "air",
+      "tree",
+      "animal",
+      "factory chimney",
+      "dead matter",
+      "underground fuel layer",
+      "cycle arrows"
+    ],
+    "subject": "chemistry",
+    "topic": "environmental chemistry",
+    "grade_band": "11-16",
+    "why": "following carbon between the air, living things and fuels"
+  },
+  {
+    "key": "acid_rain_formation",
+    "prompt": "A landscape with a tall factory chimney on the left releasing a plume that drifts right into a cloud, rain falling from the cloud onto a group of bare leafless trees and into a lake, and a stone statue standing on the shore with a pitted worn surface. Add no words. Name the layer groups exactly: factory chimney, smoke plume, cloud, falling rain, bare trees, lake, worn statue.",
+    "parts": [
+      "factory chimney",
+      "smoke plume",
+      "cloud",
+      "falling rain",
+      "bare trees",
+      "lake",
+      "worn statue"
+    ],
+    "subject": "chemistry",
+    "topic": "environmental chemistry",
+    "grade_band": "11-16",
+    "why": "explaining pollution from burning fossil fuels"
+  },
+  {
+    "key": "incomplete_combustion_and_soot",
+    "prompt": "Two burners side by side each with a metal dish held above the flame: the left has a short pointed flame with an inner cone and its dish stays clean, the right has a tall wavy smoky flame with wisps rising and its dish carries a thick black deposit underneath. Add no words. Name the layer groups exactly: left burner, clean flame, clean dish, right burner, smoky flame, soot deposit.",
+    "parts": [
+      "left burner",
+      "clean flame",
+      "clean dish",
+      "right burner",
+      "smoky flame",
+      "soot deposit"
+    ],
+    "subject": "chemistry",
+    "topic": "environmental chemistry",
+    "grade_band": "14-16",
+    "why": "comparing complete and incomplete combustion of a fuel"
+  },
+  {
+    "key": "catalytic_converter_cross_section",
+    "prompt": "A cross section of an oval metal casing fitted into an exhaust pipe, filled with a fine honeycomb of small channels running from end to end, with three arrows entering at one end and three arrows leaving at the other end. Add no words. Name the layer groups exactly: metal casing, exhaust pipe, honeycomb, channels, gases in, gases out.",
+    "parts": [
+      "metal casing",
+      "exhaust pipe",
+      "honeycomb",
+      "channels",
+      "gases in",
+      "gases out"
+    ],
+    "subject": "chemistry",
+    "topic": "environmental chemistry",
+    "grade_band": "14-16",
+    "why": "showing how car exhaust gases are cleaned"
+  }
+]

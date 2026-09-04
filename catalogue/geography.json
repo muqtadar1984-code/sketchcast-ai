@@ -1,0 +1,1536 @@
+[
+  {
+    "key": "drainage_basin_system",
+    "prompt": "A drainage basin seen from above: a ridge of high ground ringing the basin, a stream beginning high up, two smaller streams joining the main river, and the river widening out to the sea. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: watershed, source, tributary, confluence, main channel, mouth.",
+    "parts": [
+      "watershed",
+      "source",
+      "tributary",
+      "confluence",
+      "main channel",
+      "mouth"
+    ],
+    "subject": "geography",
+    "topic": "rivers",
+    "grade_band": "11-16",
+    "why": "opening diagram whenever a chapter defines a river basin and its parts"
+  },
+  {
+    "key": "river_long_profile",
+    "prompt": "The long profile of a river drawn as one smooth curve from left to right, steep at the top and almost flat at the bottom, with the land surface beneath it and the sea at the right-hand end. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: source, upper course, middle course, lower course, mouth, sea level.",
+    "parts": [
+      "source",
+      "upper course",
+      "middle course",
+      "lower course",
+      "mouth",
+      "sea level"
+    ],
+    "subject": "geography",
+    "topic": "rivers",
+    "grade_band": "11-16",
+    "why": "used every time a lesson splits a river into upper, middle and lower course"
+  },
+  {
+    "key": "river_cross_profile_stages",
+    "prompt": "Three separate cross-section frames side by side showing how a river valley changes downstream: a narrow steep-sided notch, a wider valley with a flat strip beside the channel, and a very wide flat valley with a small channel in the middle. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: upper course profile, middle course profile, lower course profile, river channel, valley floor.",
+    "parts": [
+      "upper course profile",
+      "middle course profile",
+      "lower course profile",
+      "river channel",
+      "valley floor"
+    ],
+    "subject": "geography",
+    "topic": "rivers",
+    "grade_band": "11-16",
+    "why": "comparing valley shape between the three courses of a river"
+  },
+  {
+    "key": "v_shaped_valley",
+    "prompt": "A cross-section of a V-shaped river valley in the upper course, with steep valley sides meeting at a narrow rocky channel at the bottom and loose rock resting on the slopes. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: steep valley side, river channel, valley floor, loose rock on slope.",
+    "parts": [
+      "steep valley side",
+      "river channel",
+      "valley floor",
+      "loose rock on slope"
+    ],
+    "subject": "geography",
+    "topic": "rivers",
+    "grade_band": "11-16",
+    "why": "explaining vertical erosion and valley shape in the upper course"
+  },
+  {
+    "key": "interlocking_spurs",
+    "prompt": "An upper-course valley seen from above and slightly to the side, a winding stream weaving between ridges of higher land that stick out alternately from each side of the valley. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: interlocking spur, winding stream, valley side, high ground.",
+    "parts": [
+      "interlocking spur",
+      "winding stream",
+      "valley side",
+      "high ground"
+    ],
+    "subject": "geography",
+    "topic": "rivers",
+    "grade_band": "14-16",
+    "why": "explaining why an upper-course river bends around obstacles it cannot erode"
+  },
+  {
+    "key": "river_transport_processes",
+    "prompt": "A cross-section through a river channel showing four ways sediment moves: a large boulder rolling along the bed, smaller pebbles bouncing above the bed, fine particles held within the water, and dissolved material shown as faint specks spread through the water. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: traction, saltation, suspension, solution, river bed, water surface.",
+    "parts": [
+      "traction",
+      "saltation",
+      "suspension",
+      "solution",
+      "river bed",
+      "water surface"
+    ],
+    "subject": "geography",
+    "topic": "rivers",
+    "grade_band": "14-16",
+    "why": "teaching the four transport processes in one picture"
+  },
+  {
+    "key": "river_meander_plan_view",
+    "prompt": "A meandering river seen from directly above with one sweeping bend, a curved dashed line showing the fastest water hugging the outer bank, and a crescent of deposited sediment on the inside of the bend. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: outer bend, inner bend, point bar, river cliff, fastest flow line.",
+    "parts": [
+      "outer bend",
+      "inner bend",
+      "point bar",
+      "river cliff",
+      "fastest flow line"
+    ],
+    "subject": "geography",
+    "topic": "rivers",
+    "grade_band": "11-16",
+    "why": "any lesson on meanders, erosion on the outside and deposition on the inside"
+  },
+  {
+    "key": "meander_cross_section",
+    "prompt": "A cross-section straight through a river meander, deep with a steep undercut bank on one side and shallow with a gently shelving bank of sediment on the other, the water surface drawn straight across. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: river cliff, slip off slope, deepest water, shallow water, water surface.",
+    "parts": [
+      "river cliff",
+      "slip off slope",
+      "deepest water",
+      "shallow water",
+      "water surface"
+    ],
+    "subject": "geography",
+    "topic": "rivers",
+    "grade_band": "14-16",
+    "why": "pairing with the plan view to show why a meander is asymmetric"
+  },
+  {
+    "key": "oxbow_lake_formation",
+    "prompt": "Three stages of oxbow lake formation as three separate plan-view frames in a row: a large loop with a narrowing neck, the neck broken through so the river runs straight, and a curved lake cut off beside the straightened river. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: meander loop, narrow neck, new straight channel, deposition plug, oxbow lake.",
+    "parts": [
+      "meander loop",
+      "narrow neck",
+      "new straight channel",
+      "deposition plug",
+      "oxbow lake"
+    ],
+    "subject": "geography",
+    "topic": "rivers",
+    "grade_band": "11-16",
+    "why": "the standard three-stage sequence in any meander chapter"
+  },
+  {
+    "key": "waterfall_and_gorge",
+    "prompt": "A side-on cross-section of a waterfall, a hard rock layer lying over a softer rock layer, the soft rock undercut to leave an overhang, water falling into a deep round pool below and a steep narrow gorge running away downstream. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: hard rock layer, soft rock layer, overhang, plunge pool, gorge.",
+    "parts": [
+      "hard rock layer",
+      "soft rock layer",
+      "overhang",
+      "plunge pool",
+      "gorge"
+    ],
+    "subject": "geography",
+    "topic": "rivers",
+    "grade_band": "11-16",
+    "why": "explaining waterfall retreat and gorge formation"
+  },
+  {
+    "key": "river_floodplain_and_levees",
+    "prompt": "A cross-section of a wide flat river valley, the channel in the middle raised slightly between two low banks of sediment, flat land stretching away on both sides, layers of sediment beneath it and valley sides at the far edges. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: river channel, natural levee, floodplain, sediment layers, valley side.",
+    "parts": [
+      "river channel",
+      "natural levee",
+      "floodplain",
+      "sediment layers",
+      "valley side"
+    ],
+    "subject": "geography",
+    "topic": "rivers",
+    "grade_band": "11-16",
+    "why": "explaining lower-course deposition and why floods build levees"
+  },
+  {
+    "key": "river_delta",
+    "prompt": "A river delta seen from above, the main channel splitting into several smaller channels that fan out into open sea, wedges of sediment between the channels and a fringe of marshy ground. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: main channel, distributary, sediment deposit, marshland, open sea.",
+    "parts": [
+      "main channel",
+      "distributary",
+      "sediment deposit",
+      "marshland",
+      "open sea"
+    ],
+    "subject": "geography",
+    "topic": "rivers",
+    "grade_band": "11-16",
+    "why": "the depositional mouth landform in every river chapter"
+  },
+  {
+    "key": "flood_hydrograph_blank",
+    "prompt": "A blank storm hydrograph frame: an empty rectangular chart with a horizontal axis and a vertical axis on each side, a group of vertical bars at the left standing for rainfall, and one curve that rises steeply to a peak then falls away more gently. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: rainfall bars, discharge curve, rising limb, peak discharge, falling limb, base flow.",
+    "parts": [
+      "rainfall bars",
+      "discharge curve",
+      "rising limb",
+      "peak discharge",
+      "falling limb",
+      "base flow"
+    ],
+    "subject": "geography",
+    "topic": "rivers",
+    "grade_band": "14-16",
+    "why": "the frame the engine labels for lag time, peak discharge and storm response"
+  },
+  {
+    "key": "river_flood_defences",
+    "prompt": "A cross-section of a river valley with flood management features: a raised earth embankment beside the channel, a deepened straightened channel, houses set back from the river and an area of open land left free to flood. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: raised embankment, deepened channel, floodplain, houses, washland.",
+    "parts": [
+      "raised embankment",
+      "deepened channel",
+      "floodplain",
+      "houses",
+      "washland"
+    ],
+    "subject": "geography",
+    "topic": "rivers",
+    "grade_band": "14-16",
+    "why": "comparing hard and soft engineering in flood management"
+  },
+  {
+    "key": "sea_wave_structure",
+    "prompt": "A side-on view of a sea wave approaching a beach, showing the raised top of the wave, the dip between waves, the wave breaking, water running up the beach and water draining back down, with the sea bed shelving upwards. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: crest, trough, breaking wave, swash, backwash, sea bed.",
+    "parts": [
+      "crest",
+      "trough",
+      "breaking wave",
+      "swash",
+      "backwash",
+      "sea bed"
+    ],
+    "subject": "geography",
+    "topic": "coasts",
+    "grade_band": "11-16",
+    "why": "defining the parts of a wave before any coastal erosion topic"
+  },
+  {
+    "key": "constructive_and_destructive_waves",
+    "prompt": "Two side-by-side cross-section frames of waves meeting a beach: on the left a low wave running a long way up a broad building beach, on the right a tall steep wave crashing down and dragging material back off a steeper narrow beach. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: constructive wave, building beach, destructive wave, eroding beach, sea bed.",
+    "parts": [
+      "constructive wave",
+      "building beach",
+      "destructive wave",
+      "eroding beach",
+      "sea bed"
+    ],
+    "subject": "geography",
+    "topic": "coasts",
+    "grade_band": "11-16",
+    "why": "contrasting the two wave types in coastal processes lessons"
+  },
+  {
+    "key": "longshore_drift",
+    "prompt": "A beach seen from above with waves arriving at an angle to the shore, a zigzag path showing a pebble carried up the beach at an angle and washed straight back down, repeated along the shore, and a wooden barrier built out across the beach. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: beach, waves at an angle, zigzag sediment path, groyne, sea.",
+    "parts": [
+      "beach",
+      "waves at an angle",
+      "zigzag sediment path",
+      "groyne",
+      "sea"
+    ],
+    "subject": "geography",
+    "topic": "coasts",
+    "grade_band": "11-16",
+    "why": "explaining sediment movement along a coast and why groynes work"
+  },
+  {
+    "key": "headland_and_bay",
+    "prompt": "A stretch of coast seen from above where bands of hard and soft rock meet the sea at right angles, the hard rock standing out as a blunt promontory and the soft rock worn back into curved inlets with beaches. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: hard rock, soft rock, headland, bay, beach.",
+    "parts": [
+      "hard rock",
+      "soft rock",
+      "headland",
+      "bay",
+      "beach"
+    ],
+    "subject": "geography",
+    "topic": "coasts",
+    "grade_band": "11-16",
+    "why": "explaining differential erosion along a coastline"
+  },
+  {
+    "key": "cave_arch_stack_stump",
+    "prompt": "A headland seen from the side, showing the erosion sequence along it: a hollow cut into the rock at sea level, a hole eroded right through the rock, a separated pillar standing in the sea and a low worn-down remnant. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: headland, cave, arch, stack, stump.",
+    "parts": [
+      "headland",
+      "cave",
+      "arch",
+      "stack",
+      "stump"
+    ],
+    "subject": "geography",
+    "topic": "coasts",
+    "grade_band": "11-16",
+    "why": "the four-stage headland erosion sequence taught in every coasts chapter"
+  },
+  {
+    "key": "wave_cut_platform",
+    "prompt": "A cross-section of a cliff being eroded, with a notch cut into the base of the cliff by waves, the cliff face rising above it, a broad flat rocky ledge stretching seawards under shallow water and a dashed line marking where the cliff once stood. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: cliff face, wave cut notch, wave cut platform, sea level, former cliff line.",
+    "parts": [
+      "cliff face",
+      "wave cut notch",
+      "wave cut platform",
+      "sea level",
+      "former cliff line"
+    ],
+    "subject": "geography",
+    "topic": "coasts",
+    "grade_band": "11-16",
+    "why": "explaining how cliffs retreat and leave a platform behind"
+  },
+  {
+    "key": "spit_formation",
+    "prompt": "A coastline seen from above where the shore turns a corner at a river mouth, a long finger of sand and shingle continuing out across the water, its far end curved back towards the land and sheltered muddy ground behind it. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: coastline, spit, recurved end, salt marsh, river mouth.",
+    "parts": [
+      "coastline",
+      "spit",
+      "recurved end",
+      "salt marsh",
+      "river mouth"
+    ],
+    "subject": "geography",
+    "topic": "coasts",
+    "grade_band": "11-16",
+    "why": "the standard depositional landform diagram in coasts topics"
+  },
+  {
+    "key": "coastal_bar_and_lagoon",
+    "prompt": "A bay seen from above with a ridge of sand and shingle stretching right across its mouth from one headland to the other, trapping a body of still water behind it, with open sea on the seaward side. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: headland, bar, lagoon, open sea, beach.",
+    "parts": [
+      "headland",
+      "bar",
+      "lagoon",
+      "open sea",
+      "beach"
+    ],
+    "subject": "geography",
+    "topic": "coasts",
+    "grade_band": "14-16",
+    "why": "the follow-on landform after a spit grows across a bay"
+  },
+  {
+    "key": "beach_profile_features",
+    "prompt": "A cross-section from the sea up onto the land showing the shape of a beach: a shallow slope under water, a step of shingle part way up, a higher ridge of coarse material at the back thrown up by storms and low hills of sand behind. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: low tide line, berm, storm beach, sand dunes, beach slope.",
+    "parts": [
+      "low tide line",
+      "berm",
+      "storm beach",
+      "sand dunes",
+      "beach slope"
+    ],
+    "subject": "geography",
+    "topic": "coasts",
+    "grade_band": "14-16",
+    "why": "used in fieldwork lessons measuring and describing a beach profile"
+  },
+  {
+    "key": "sand_dune_succession",
+    "prompt": "A cross-section through a line of sand dunes running inland from a beach, the dunes growing taller and more thickly vegetated away from the sea, with a damp hollow between two of the larger dunes. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: beach, embryo dune, fore dune, yellow dune, grey dune, dune slack.",
+    "parts": [
+      "beach",
+      "embryo dune",
+      "fore dune",
+      "yellow dune",
+      "grey dune",
+      "dune slack"
+    ],
+    "subject": "geography",
+    "topic": "coasts",
+    "grade_band": "14-16",
+    "why": "explaining plant succession and dune development behind a beach"
+  },
+  {
+    "key": "coastal_hard_defences",
+    "prompt": "A cross-section of a defended coast with several engineered structures together: a curved concrete wall at the back of the beach, a heap of large boulders in front of it, wire cages of stones on the upper beach and a wooden barrier running down the beach into the sea. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: sea wall, rock armour, gabions, groyne, beach.",
+    "parts": [
+      "sea wall",
+      "rock armour",
+      "gabions",
+      "groyne",
+      "beach"
+    ],
+    "subject": "geography",
+    "topic": "coasts",
+    "grade_band": "11-16",
+    "why": "comparing coastal defence methods in coastal management lessons"
+  },
+  {
+    "key": "discordant_and_concordant_coast",
+    "prompt": "Two plan-view frames side by side of rock bands meeting the sea: on the left the bands run at right angles to the coast giving an uneven shoreline of promontories and inlets, on the right the bands run parallel to the coast giving a straight even shoreline. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: hard rock band, soft rock band, discordant coastline, concordant coastline, sea.",
+    "parts": [
+      "hard rock band",
+      "soft rock band",
+      "discordant coastline",
+      "concordant coastline",
+      "sea"
+    ],
+    "subject": "geography",
+    "topic": "coasts",
+    "grade_band": "14-16",
+    "why": "explaining why geology controls coastline shape"
+  },
+  {
+    "key": "corrie_formation",
+    "prompt": "A cross-section of a mountainside hollow holding ice, a steep back wall above it, the ice rotating within the hollow, a rock lip at the front edge and a small round lake left in the hollow after the ice has gone. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: back wall, hollow, rotational slip, rock lip, tarn.",
+    "parts": [
+      "back wall",
+      "hollow",
+      "rotational slip",
+      "rock lip",
+      "tarn"
+    ],
+    "subject": "geography",
+    "topic": "glaciation",
+    "grade_band": "14-16",
+    "why": "the first glacial erosion landform in any glaciation chapter"
+  },
+  {
+    "key": "arete_and_pyramidal_peak",
+    "prompt": "A mountain seen from the side and slightly above, three hollows carved into its flanks, sharp narrow ridges between neighbouring hollows and a sharp pointed summit where the ridges meet. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: corrie, arete, pyramidal peak, valley below.",
+    "parts": [
+      "corrie",
+      "arete",
+      "pyramidal peak",
+      "valley below"
+    ],
+    "subject": "geography",
+    "topic": "glaciation",
+    "grade_band": "14-16",
+    "why": "showing how several corries together shape a mountain top"
+  },
+  {
+    "key": "u_shaped_valley",
+    "prompt": "A glacial trough seen looking along the valley, a wide flat floor and steep straight sides, blunt cut-off ridges on the valley walls, a smaller side valley entering high above the main floor and a long narrow lake on the valley floor. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: u shaped valley, truncated spur, hanging valley, valley floor, ribbon lake.",
+    "parts": [
+      "u shaped valley",
+      "truncated spur",
+      "hanging valley",
+      "valley floor",
+      "ribbon lake"
+    ],
+    "subject": "geography",
+    "topic": "glaciation",
+    "grade_band": "11-16",
+    "why": "the classic glaciated valley diagram, contrasted with a V-shaped valley"
+  },
+  {
+    "key": "glacial_plucking_and_abrasion",
+    "prompt": "A close cross-section of the base of a glacier moving over bedrock, ice frozen around loose blocks of rock being pulled away on one side, and rock fragments held in the ice scraping the bedrock smooth with fine scratches on the other. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: glacier ice, bedrock, plucked rock block, embedded rock fragment, scratched rock surface.",
+    "parts": [
+      "glacier ice",
+      "bedrock",
+      "plucked rock block",
+      "embedded rock fragment",
+      "scratched rock surface"
+    ],
+    "subject": "geography",
+    "topic": "glaciation",
+    "grade_band": "14-16",
+    "why": "the two glacial erosion processes shown in one cross-section"
+  },
+  {
+    "key": "moraine_types",
+    "prompt": "A valley glacier seen from above and to the side carrying lines of rock debris: ridges of debris along each edge, one ridge running down the middle where two ice streams have joined, a curved ridge at the end of the ice and a spread of debris beneath it. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: lateral moraine, medial moraine, terminal moraine, ground moraine, glacier.",
+    "parts": [
+      "lateral moraine",
+      "medial moraine",
+      "terminal moraine",
+      "ground moraine",
+      "glacier"
+    ],
+    "subject": "geography",
+    "topic": "glaciation",
+    "grade_band": "14-16",
+    "why": "naming the four moraines in glacial deposition lessons"
+  },
+  {
+    "key": "drumlin_form",
+    "prompt": "A single drumlin drawn twice, in side view and from above, a smooth egg-shaped hill that is blunt and steep at one end and long and tapering at the other, sitting on flat ground. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: blunt stoss end, tapering lee end, drumlin summit, flat ground.",
+    "parts": [
+      "blunt stoss end",
+      "tapering lee end",
+      "drumlin summit",
+      "flat ground"
+    ],
+    "subject": "geography",
+    "topic": "glaciation",
+    "grade_band": "14-16",
+    "why": "explaining glacial deposition landforms and how they record ice direction"
+  },
+  {
+    "key": "glacier_accumulation_and_ablation",
+    "prompt": "A side-on cross-section of a valley glacier from its snowfield down to its end, snow building up in the upper part, ice melting away in the lower part, a dividing line between the two, cracks across the ice surface and meltwater leaving the end. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: zone of accumulation, zone of ablation, equilibrium line, crevasses, snout, meltwater stream.",
+    "parts": [
+      "zone of accumulation",
+      "zone of ablation",
+      "equilibrium line",
+      "crevasses",
+      "snout",
+      "meltwater stream"
+    ],
+    "subject": "geography",
+    "topic": "glaciation",
+    "grade_band": "14-16",
+    "why": "explaining the glacier budget and why glaciers advance or retreat"
+  },
+  {
+    "key": "earth_internal_structure",
+    "prompt": "A cut-away sphere of the Earth showing four concentric layers of very different thickness: a solid centre, a surrounding liquid layer, a thick layer above that and a very thin outer skin, drawn with clean separated boundaries. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: inner core, outer core, mantle, crust.",
+    "parts": [
+      "inner core",
+      "outer core",
+      "mantle",
+      "crust"
+    ],
+    "subject": "geography",
+    "topic": "tectonics",
+    "grade_band": "11-16",
+    "why": "the opening diagram for any plate tectonics or earthquake chapter"
+  },
+  {
+    "key": "destructive_plate_boundary",
+    "prompt": "A cross-section of a destructive plate boundary, a thin dense plate sliding down beneath a thicker plate, a deep trough in the sea floor where they meet, melted rock rising through the upper plate, a volcano at the surface and crumpled mountains beside it. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: oceanic plate, continental plate, ocean trench, subduction zone, rising magma, volcano, fold mountains.",
+    "parts": [
+      "oceanic plate",
+      "continental plate",
+      "ocean trench",
+      "subduction zone",
+      "rising magma",
+      "volcano",
+      "fold mountains"
+    ],
+    "subject": "geography",
+    "topic": "tectonics",
+    "grade_band": "11-16",
+    "why": "the most-drawn boundary diagram, used for volcanoes, earthquakes and trenches"
+  },
+  {
+    "key": "constructive_plate_boundary",
+    "prompt": "A cross-section of a constructive plate boundary under the sea, two plates moving apart, a raised ridge along the gap, molten rock rising into the gap and cooling to form new sea floor on either side. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: diverging plates, mid ocean ridge, rising magma, new crust, sea floor.",
+    "parts": [
+      "diverging plates",
+      "mid ocean ridge",
+      "rising magma",
+      "new crust",
+      "sea floor"
+    ],
+    "subject": "geography",
+    "topic": "tectonics",
+    "grade_band": "11-16",
+    "why": "explaining sea-floor spreading and mid-ocean ridge volcanoes"
+  },
+  {
+    "key": "conservative_plate_boundary",
+    "prompt": "A plan view of a conservative plate boundary, two blocks of crust sliding past each other along a straight break, a stream and a road stepped sideways where they cross the break, and a rough locked section along the line. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: left plate, right plate, fault line, offset stream, locked section.",
+    "parts": [
+      "left plate",
+      "right plate",
+      "fault line",
+      "offset stream",
+      "locked section"
+    ],
+    "subject": "geography",
+    "topic": "tectonics",
+    "grade_band": "11-16",
+    "why": "explaining earthquakes with no volcanoes at a sliding boundary"
+  },
+  {
+    "key": "collision_boundary_fold_mountains",
+    "prompt": "A cross-section of two thick plates of continental crust pushing into each other, the sediments between them squeezed into tight folds that rise into a high mountain range, with a deep thickened root of crust below. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: continental crust, folded rock layers, fold mountains, thickened crust root.",
+    "parts": [
+      "continental crust",
+      "folded rock layers",
+      "fold mountains",
+      "thickened crust root"
+    ],
+    "subject": "geography",
+    "topic": "tectonics",
+    "grade_band": "14-16",
+    "why": "explaining how the great mountain ranges form"
+  },
+  {
+    "key": "composite_volcano_cross_section",
+    "prompt": "A cross-section of a steep-sided composite volcano, a reservoir of molten rock deep below, a central pipe rising to a bowl at the summit, a smaller branch pipe breaking out of the side, alternating layers building the cone and a cloud rising from the top. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: magma chamber, main vent, side vent, crater, layers of lava and ash, ash cloud.",
+    "parts": [
+      "magma chamber",
+      "main vent",
+      "side vent",
+      "crater",
+      "layers of lava and ash",
+      "ash cloud"
+    ],
+    "subject": "geography",
+    "topic": "tectonics",
+    "grade_band": "11-16",
+    "why": "the standard volcano cross-section for structure, eruption and hazards"
+  },
+  {
+    "key": "shield_volcano_cross_section",
+    "prompt": "A cross-section of a broad low shield volcano with very gentle slopes, a wide reservoir of molten rock below, a straight central pipe, a shallow bowl at the top and thin runny flows spreading far out from it. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: magma chamber, vent, gentle slopes, runny lava flows, crater.",
+    "parts": [
+      "magma chamber",
+      "vent",
+      "gentle slopes",
+      "runny lava flows",
+      "crater"
+    ],
+    "subject": "geography",
+    "topic": "tectonics",
+    "grade_band": "14-16",
+    "why": "contrasting the two volcano types in a single lesson"
+  },
+  {
+    "key": "earthquake_focus_and_epicentre",
+    "prompt": "A cross-section of the ground during an earthquake, a break running down through the rock, the point underground where movement starts, the point on the surface directly above it and rings of energy spreading outwards through the rock. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: ground surface, fault line, focus, epicentre, seismic waves.",
+    "parts": [
+      "ground surface",
+      "fault line",
+      "focus",
+      "epicentre",
+      "seismic waves"
+    ],
+    "subject": "geography",
+    "topic": "tectonics",
+    "grade_band": "11-16",
+    "why": "defining focus, epicentre and wave spread in every earthquake lesson"
+  },
+  {
+    "key": "seismometer_apparatus",
+    "prompt": "A simple seismometer: a heavy weight hanging from a spring on a fixed frame with a pen attached to it, resting against a rotating drum wrapped in paper, with a wavy line already traced on the paper. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: frame, heavy weight, spring, pen, rotating drum, wavy trace.",
+    "parts": [
+      "frame",
+      "heavy weight",
+      "spring",
+      "pen",
+      "rotating drum",
+      "wavy trace"
+    ],
+    "subject": "geography",
+    "topic": "tectonics",
+    "grade_band": "14-16",
+    "why": "explaining how earthquakes are measured and recorded"
+  },
+  {
+    "key": "mantle_convection_currents",
+    "prompt": "A cross-section of the upper Earth showing two large circulating loops in the hot mantle, material rising in the middle and sinking at the edges, with thin plates of crust riding on top and moving apart above the rising limb. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: mantle, convection cell, rising material, sinking material, crustal plates.",
+    "parts": [
+      "mantle",
+      "convection cell",
+      "rising material",
+      "sinking material",
+      "crustal plates"
+    ],
+    "subject": "geography",
+    "topic": "tectonics",
+    "grade_band": "11-16",
+    "why": "the driving mechanism behind plate movement"
+  },
+  {
+    "key": "fold_and_fault_structures",
+    "prompt": "A block of layered sedimentary rock in cross-section, the layers arched up in one place, dipping down into a basin next to it, and further along broken by a slanting break with the rock on one side dropped lower than the other. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: rock layers, anticline, syncline, fault plane, displaced block.",
+    "parts": [
+      "rock layers",
+      "anticline",
+      "syncline",
+      "fault plane",
+      "displaced block"
+    ],
+    "subject": "geography",
+    "topic": "tectonics",
+    "grade_band": "14-16",
+    "why": "explaining rock structures behind fold mountains and rift valleys"
+  },
+  {
+    "key": "tsunami_formation",
+    "prompt": "A cross-section from open ocean to a coastline showing how a tsunami forms and grows: the sea bed jolting upwards at a fault, a low fast wave crossing deep water, the wave shortening and rising as the water shallows and a tall wall of water reaching the shore. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: sea bed, uplifted fault, low wave in deep water, rising wave in shallow water, coastline.",
+    "parts": [
+      "sea bed",
+      "uplifted fault",
+      "low wave in deep water",
+      "rising wave in shallow water",
+      "coastline"
+    ],
+    "subject": "geography",
+    "topic": "tectonics",
+    "grade_band": "14-16",
+    "why": "explaining how an undersea earthquake becomes a coastal hazard"
+  },
+  {
+    "key": "earthquake_resistant_building",
+    "prompt": "A cross-section of a tall building designed to survive earthquakes, deep foundations sunk into solid rock, rubber pads between the foundations and the building, diagonal bracing in the frame and a heavy block on rollers near the roof. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: deep foundations, rubber shock absorbers, cross bracing, roof counterweight, building frame.",
+    "parts": [
+      "deep foundations",
+      "rubber shock absorbers",
+      "cross bracing",
+      "roof counterweight",
+      "building frame"
+    ],
+    "subject": "geography",
+    "topic": "tectonics",
+    "grade_band": "14-16",
+    "why": "the standard example when a chapter turns to reducing earthquake damage"
+  },
+  {
+    "key": "water_cycle",
+    "prompt": "The water cycle over a coastline: the sea on one side, arrows lifting moisture upwards, a cloud forming above, rain falling on a hill, a river running back to the sea, an arrow from a tree to the cloud and an arrow soaking down into the ground. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: evaporation, condensation, precipitation, transpiration, surface runoff, infiltration, sea.",
+    "parts": [
+      "evaporation",
+      "condensation",
+      "precipitation",
+      "transpiration",
+      "surface runoff",
+      "infiltration",
+      "sea"
+    ],
+    "subject": "geography",
+    "topic": "weather_and_climate",
+    "grade_band": "11-16",
+    "why": "the backbone diagram of every rivers, weather or water-supply chapter"
+  },
+  {
+    "key": "relief_rainfall",
+    "prompt": "A cross-section of a mountain by the sea with moist air arriving from the sea, rising up the windward slope, a cloud forming near the summit, heavy rain on that slope, and dry sinking air with clear sky on the far side. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: moist air from sea, rising air, cloud, rainfall, descending air, rain shadow.",
+    "parts": [
+      "moist air from sea",
+      "rising air",
+      "cloud",
+      "rainfall",
+      "descending air",
+      "rain shadow"
+    ],
+    "subject": "geography",
+    "topic": "weather_and_climate",
+    "grade_band": "11-16",
+    "why": "one of the three rainfall types, always taught as a set"
+  },
+  {
+    "key": "convectional_rainfall",
+    "prompt": "A cross-section of hot flat ground with the sun above, air rising in a strong column from the warm surface, a tall anvil-shaped cloud building over it, and heavy rain with lightning falling beneath. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: warm ground, rising warm air, towering cloud, heavy rain, sun.",
+    "parts": [
+      "warm ground",
+      "rising warm air",
+      "towering cloud",
+      "heavy rain",
+      "sun"
+    ],
+    "subject": "geography",
+    "topic": "weather_and_climate",
+    "grade_band": "11-16",
+    "why": "one of the three rainfall types, and the mechanism behind tropical storms"
+  },
+  {
+    "key": "frontal_rainfall",
+    "prompt": "A cross-section where a mass of warm air meets a mass of cold air, the warm air riding up over the wedge of denser cold air along a sloping boundary, cloud forming along that slope and a belt of rain falling from it onto the ground. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: warm air, cold air, front, cloud, rain belt, ground.",
+    "parts": [
+      "warm air",
+      "cold air",
+      "front",
+      "cloud",
+      "rain belt",
+      "ground"
+    ],
+    "subject": "geography",
+    "topic": "weather_and_climate",
+    "grade_band": "11-16",
+    "why": "one of the three rainfall types, and the base for depression weather"
+  },
+  {
+    "key": "warm_front_cross_section",
+    "prompt": "A cross-section of a warm front, a gently sloping boundary with warm air climbing slowly over cold air, wispy high cloud far ahead of the front, thickening sheet cloud closer in and a wide belt of steady light rain at the surface. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: warm air, cold air, gently sloping front, high wispy cloud, thick sheet cloud, steady rain.",
+    "parts": [
+      "warm air",
+      "cold air",
+      "gently sloping front",
+      "high wispy cloud",
+      "thick sheet cloud",
+      "steady rain"
+    ],
+    "subject": "geography",
+    "topic": "weather_and_climate",
+    "grade_band": "14-16",
+    "why": "reading the weather sequence as a depression passes over"
+  },
+  {
+    "key": "cold_front_cross_section",
+    "prompt": "A cross-section of a cold front, a steep boundary where cold air pushes under warm air and forces it sharply upwards, one tall anvil-topped cloud on the boundary and a narrow band of very heavy rain beneath it. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: cold air, warm air, steep front, towering cloud, heavy rain burst.",
+    "parts": [
+      "cold air",
+      "warm air",
+      "steep front",
+      "towering cloud",
+      "heavy rain burst"
+    ],
+    "subject": "geography",
+    "topic": "weather_and_climate",
+    "grade_band": "14-16",
+    "why": "contrasting with the warm front in depression weather lessons"
+  },
+  {
+    "key": "depression_weather_map",
+    "prompt": "A simplified weather map of a depression seen from above: closed oval rings around a centre of low pressure, a curved boundary with rounded bumps along it, a second curved boundary with triangular points, and the wedge of air between the two boundaries. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: low pressure centre, isobars, warm front, cold front, warm sector.",
+    "parts": [
+      "low pressure centre",
+      "isobars",
+      "warm front",
+      "cold front",
+      "warm sector"
+    ],
+    "subject": "geography",
+    "topic": "weather_and_climate",
+    "grade_band": "14-16",
+    "why": "interpreting synoptic charts and predicting the weather sequence"
+  },
+  {
+    "key": "anticyclone_pressure_pattern",
+    "prompt": "A cross-section and plan of an anticyclone: widely spaced closed rings around a centre of high pressure seen from above, and beside it a cross-section of air sinking from high in the atmosphere towards the ground under a clear sky. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: high pressure centre, widely spaced isobars, sinking air, clear sky, light winds.",
+    "parts": [
+      "high pressure centre",
+      "widely spaced isobars",
+      "sinking air",
+      "clear sky",
+      "light winds"
+    ],
+    "subject": "geography",
+    "topic": "weather_and_climate",
+    "grade_band": "14-16",
+    "why": "the settled-weather half of a pressure systems lesson"
+  },
+  {
+    "key": "cloud_types_chart",
+    "prompt": "A single tall frame showing the main cloud types at their correct heights above a ground line: thin wispy streaks very high up, a flat sheet of cloud lower down, small separate puffy clouds lower still, a low grey sheet and one huge anvil-topped cloud reaching from low to very high. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: cirrus, altostratus, cumulus, stratus, nimbostratus, cumulonimbus, ground line.",
+    "parts": [
+      "cirrus",
+      "altostratus",
+      "cumulus",
+      "stratus",
+      "nimbostratus",
+      "cumulonimbus",
+      "ground line"
+    ],
+    "subject": "geography",
+    "topic": "weather_and_climate",
+    "grade_band": "11-16",
+    "why": "identifying clouds in weather observation and forecasting lessons"
+  },
+  {
+    "key": "global_atmospheric_circulation",
+    "prompt": "A cross-section of half the globe from equator to pole showing three circulation loops stacked side by side, air rising at the equator, sinking at about thirty degrees, rising again at sixty degrees and sinking at the pole, with the ground curve beneath. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: hadley cell, ferrel cell, polar cell, equator, rising air at equator, sinking air at desert belt, polar front.",
+    "parts": [
+      "hadley cell",
+      "ferrel cell",
+      "polar cell",
+      "equator",
+      "rising air at equator",
+      "sinking air at desert belt",
+      "polar front"
+    ],
+    "subject": "geography",
+    "topic": "weather_and_climate",
+    "grade_band": "14-16",
+    "why": "explaining why deserts, rainforests and wind belts sit where they do"
+  },
+  {
+    "key": "land_and_sea_breeze",
+    "prompt": "Two frames side by side of a coast in cross-section: by day air rising over the warm land, sinking over the cooler sea and blowing inland at the surface; by night the pattern reversed with air rising over the warmer sea. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: land, sea, rising warm air, sinking cool air, surface breeze.",
+    "parts": [
+      "land",
+      "sea",
+      "rising warm air",
+      "sinking cool air",
+      "surface breeze"
+    ],
+    "subject": "geography",
+    "topic": "weather_and_climate",
+    "grade_band": "11-16",
+    "why": "a simple everyday example of pressure differences driving wind"
+  },
+  {
+    "key": "greenhouse_effect",
+    "prompt": "A cross-section of the Earth's surface with the sun above, rays passing down through a band of gas in the atmosphere, warming the ground, heat radiating back up, and part of that heat bouncing back down off the gas band. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: sun, incoming solar radiation, earth surface, outgoing heat, greenhouse gas layer, reflected heat.",
+    "parts": [
+      "sun",
+      "incoming solar radiation",
+      "earth surface",
+      "outgoing heat",
+      "greenhouse gas layer",
+      "reflected heat"
+    ],
+    "subject": "geography",
+    "topic": "weather_and_climate",
+    "grade_band": "11-16",
+    "why": "the mechanism behind every climate change chapter"
+  },
+  {
+    "key": "climate_graph_blank",
+    "prompt": "A blank climate graph frame: an empty rectangular chart with a vertical axis on the left, a second vertical axis on the right, twelve equal divisions along the bottom, a row of vertical bars and a smooth curved line drawn over them. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: temperature axis, rainfall axis, month divisions, rainfall bars, temperature line, plot frame.",
+    "parts": [
+      "temperature axis",
+      "rainfall axis",
+      "month divisions",
+      "rainfall bars",
+      "temperature line",
+      "plot frame"
+    ],
+    "subject": "geography",
+    "topic": "weather_and_climate",
+    "grade_band": "11-16",
+    "why": "the reusable frame for reading or drawing any place's climate"
+  },
+  {
+    "key": "tropical_storm_cross_section",
+    "prompt": "A cross-section through a tropical storm above a warm sea, a calm clear column down the middle, towering thick cloud walls either side of it, spiralling bands of cloud further out, air rising within the walls and cloud spreading outwards at the top. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: eye, eye wall, rain bands, rising air, outflow at top, warm sea surface.",
+    "parts": [
+      "eye",
+      "eye wall",
+      "rain bands",
+      "rising air",
+      "outflow at top",
+      "warm sea surface"
+    ],
+    "subject": "geography",
+    "topic": "weather_and_climate",
+    "grade_band": "14-16",
+    "why": "the anatomy diagram in every tropical storm or hurricane chapter"
+  },
+  {
+    "key": "weather_station_instruments",
+    "prompt": "A group of weather-measuring instruments standing on open ground: a white louvred box on legs, a funnel-topped cylinder set into the ground, a set of spinning cups on a pole, a pointer with a tail on a pole and a simple thermometer on a stand. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: stevenson screen, rain gauge, anemometer, wind vane, thermometer.",
+    "parts": [
+      "stevenson screen",
+      "rain gauge",
+      "anemometer",
+      "wind vane",
+      "thermometer"
+    ],
+    "subject": "geography",
+    "topic": "weather_and_climate",
+    "grade_band": "11-13",
+    "why": "introducing how each weather element is measured"
+  },
+  {
+    "key": "world_climate_zones_map",
+    "prompt": "A simple outline world map with horizontal belts shaded by texture rather than colour, a hot wet belt along the middle, dry belts either side of it, mild belts beyond those and cold belts at the top and bottom, with a line across the middle. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: equator, tropical belt, desert belt, temperate belt, polar belt, continents outline.",
+    "parts": [
+      "equator",
+      "tropical belt",
+      "desert belt",
+      "temperate belt",
+      "polar belt",
+      "continents outline"
+    ],
+    "subject": "geography",
+    "topic": "ecosystems",
+    "grade_band": "11-16",
+    "why": "locating biomes and climate types before studying any one of them"
+  },
+  {
+    "key": "tropical_rainforest_structure",
+    "prompt": "A cross-section through a tropical rainforest showing its layers: a few very tall trees sticking out above a dense continuous roof of leaves, a thinner layer of smaller trees below, shrubs beneath and dark bare ground with wide spreading tree roots. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: emergent layer, canopy, under canopy, shrub layer, forest floor, buttress roots.",
+    "parts": [
+      "emergent layer",
+      "canopy",
+      "under canopy",
+      "shrub layer",
+      "forest floor",
+      "buttress roots"
+    ],
+    "subject": "geography",
+    "topic": "ecosystems",
+    "grade_band": "11-16",
+    "why": "the layered structure diagram in every rainforest chapter"
+  },
+  {
+    "key": "ecosystem_nutrient_cycle",
+    "prompt": "A nutrient cycle drawn as three circles of different sizes joined by arrows, one for living matter, one for dead leaves on the ground and one for the soil, with an arrow entering from rainfall above and an arrow leaving as runoff. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: biomass store, litter store, soil store, transfer arrows, rainfall input, runoff loss.",
+    "parts": [
+      "biomass store",
+      "litter store",
+      "soil store",
+      "transfer arrows",
+      "rainfall input",
+      "runoff loss"
+    ],
+    "subject": "geography",
+    "topic": "ecosystems",
+    "grade_band": "14-16",
+    "why": "comparing nutrient stores between rainforest and other biomes"
+  },
+  {
+    "key": "hot_desert_ecosystem",
+    "prompt": "A cross-section of a hot desert landscape with the sun high above, curved sand dunes, bare rocky ground, a thick-stemmed spiny plant with shallow wide roots, a low thorny shrub with one very deep root and a small burrow under the sand. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: sand dunes, rocky ground, cactus with shallow roots, shrub with deep root, animal burrow, sun.",
+    "parts": [
+      "sand dunes",
+      "rocky ground",
+      "cactus with shallow roots",
+      "shrub with deep root",
+      "animal burrow",
+      "sun"
+    ],
+    "subject": "geography",
+    "topic": "ecosystems",
+    "grade_band": "11-16",
+    "why": "explaining plant and animal adaptations to heat and drought"
+  },
+  {
+    "key": "deciduous_woodland_structure",
+    "prompt": "A cross-section through a temperate deciduous woodland showing its layers: a roof of broad-leaved trees, a lower layer of small trees and bushes, low plants near the ground and a mat of fallen leaves over the soil. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: canopy layer, shrub layer, herb layer, leaf litter, soil.",
+    "parts": [
+      "canopy layer",
+      "shrub layer",
+      "herb layer",
+      "leaf litter",
+      "soil"
+    ],
+    "subject": "geography",
+    "topic": "ecosystems",
+    "grade_band": "14-16",
+    "why": "the temperate counterpart to the rainforest layers diagram"
+  },
+  {
+    "key": "deforestation_before_and_after",
+    "prompt": "Two frames side by side of the same hillside: on the left thick forest with deep roots holding the soil and a clear stream, on the right cut stumps, bare soil, deep channels cut by rain down the slope and a stream choked with sediment. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: standing forest, tree stumps, bare soil, erosion gullies, sediment filled stream.",
+    "parts": [
+      "standing forest",
+      "tree stumps",
+      "bare soil",
+      "erosion gullies",
+      "sediment filled stream"
+    ],
+    "subject": "geography",
+    "topic": "ecosystems",
+    "grade_band": "11-16",
+    "why": "showing the consequences of clearing forest in any land-use chapter"
+  },
+  {
+    "key": "soil_profile_horizons",
+    "prompt": "A vertical cut through soil from the surface down to solid rock, showing distinct bands: a dark layer of leaves and dead matter on top, a dark mixed layer below it, a paler layer with washed-down material, a stony broken layer and unbroken rock at the base. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: surface litter layer, topsoil, subsoil, weathered rock layer, bedrock.",
+    "parts": [
+      "surface litter layer",
+      "topsoil",
+      "subsoil",
+      "weathered rock layer",
+      "bedrock"
+    ],
+    "subject": "geography",
+    "topic": "ecosystems",
+    "grade_band": "14-16",
+    "why": "explaining soil formation, fertility and erosion"
+  },
+  {
+    "key": "contour_lines_hill",
+    "prompt": "A hill drawn twice: on the left the hill in side view, on the right the same hill seen from above as a set of closed nested loops, the loops packed close together on the steep side and spread widely apart on the gentle side. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: hill in side view, contour lines, summit, closely spaced contours, widely spaced contours.",
+    "parts": [
+      "hill in side view",
+      "contour lines",
+      "summit",
+      "closely spaced contours",
+      "widely spaced contours"
+    ],
+    "subject": "geography",
+    "topic": "map_skills",
+    "grade_band": "11-16",
+    "why": "teaching how contours show height and steepness on a map"
+  },
+  {
+    "key": "contour_valley_and_spur",
+    "prompt": "A map extract seen from above with two contour patterns side by side, one where the lines point uphill in a V with a stream running through it, and one where the lines point downhill as a rounded tongue of high ground, with a ridge line along the top. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: valley contours, stream, spur contours, ridge line, high ground.",
+    "parts": [
+      "valley contours",
+      "stream",
+      "spur contours",
+      "ridge line",
+      "high ground"
+    ],
+    "subject": "geography",
+    "topic": "map_skills",
+    "grade_band": "14-16",
+    "why": "the map-reading skill of telling a valley from a spur"
+  },
+  {
+    "key": "cross_section_from_contours",
+    "prompt": "A strip of contour map above an empty graph frame, with a straight line drawn across the map, vertical guide lines dropping from where that line crosses each contour, and a smooth profile curve drawn on the graph below. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: contour map strip, section line, guide lines, graph frame, profile curve.",
+    "parts": [
+      "contour map strip",
+      "section line",
+      "guide lines",
+      "graph frame",
+      "profile curve"
+    ],
+    "subject": "geography",
+    "topic": "map_skills",
+    "grade_band": "14-16",
+    "why": "the standard method question of drawing a cross-section from a map"
+  },
+  {
+    "key": "compass_rose_eight_points",
+    "prompt": "A compass rose with eight arms of equal length radiating from a centre point, the four main arms longer with pointed heads and the four in-between arms shorter, drawn inside a circle. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: north arm, east arm, south arm, west arm, north east arm, south east arm, south west arm, north west arm.",
+    "parts": [
+      "north arm",
+      "east arm",
+      "south arm",
+      "west arm",
+      "north east arm",
+      "south east arm",
+      "south west arm",
+      "north west arm"
+    ],
+    "subject": "geography",
+    "topic": "map_skills",
+    "grade_band": "11-13",
+    "why": "giving directions on maps, winds and fieldwork sketches"
+  },
+  {
+    "key": "grid_reference_square",
+    "prompt": "A blank map grid of squares with one square drawn thicker than the rest, that square shown enlarged beside the grid and divided into ten by ten smaller squares with a single dot marked inside it. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: grid squares, vertical grid lines, horizontal grid lines, enlarged square, tenths subdivision, marked point.",
+    "parts": [
+      "grid squares",
+      "vertical grid lines",
+      "horizontal grid lines",
+      "enlarged square",
+      "tenths subdivision",
+      "marked point"
+    ],
+    "subject": "geography",
+    "topic": "map_skills",
+    "grade_band": "11-16",
+    "why": "teaching four-figure and six-figure grid references"
+  },
+  {
+    "key": "map_symbols_common",
+    "prompt": "A neat grid of small separate map symbols with no words: a small building with a tower and cross, a double line with cross ticks for a railway, a thick road line, a dashed path line, a small triangular tent and a tree shape. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: church symbol, railway symbol, main road symbol, footpath symbol, campsite symbol, woodland symbol.",
+    "parts": [
+      "church symbol",
+      "railway symbol",
+      "main road symbol",
+      "footpath symbol",
+      "campsite symbol",
+      "woodland symbol"
+    ],
+    "subject": "geography",
+    "topic": "map_skills",
+    "grade_band": "11-13",
+    "why": "reading a map key in early map-skills lessons"
+  },
+  {
+    "key": "latitude_and_longitude_globe",
+    "prompt": "A globe drawn as a circle with horizontal lines curving across it and vertical lines running from top to bottom, one horizontal line thicker around the middle, two further horizontal lines above and below it and one thicker vertical line down the front. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: equator, lines of latitude, lines of longitude, prime meridian, tropic lines, north pole.",
+    "parts": [
+      "equator",
+      "lines of latitude",
+      "lines of longitude",
+      "prime meridian",
+      "tropic lines",
+      "north pole"
+    ],
+    "subject": "geography",
+    "topic": "map_skills",
+    "grade_band": "11-16",
+    "why": "locating places and explaining climate zones by position"
+  },
+  {
+    "key": "compass_bearing_measurement",
+    "prompt": "A protractor circle laid over a map point, an arrow pointing straight up from that point, a second straight line from the same point out to a small marked object, and the angle between the two lines shaded as a sector. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: protractor circle, north line, bearing line, target point, measured angle.",
+    "parts": [
+      "protractor circle",
+      "north line",
+      "bearing line",
+      "target point",
+      "measured angle"
+    ],
+    "subject": "geography",
+    "topic": "map_skills",
+    "grade_band": "14-16",
+    "why": "fieldwork and navigation questions that ask for a bearing"
+  },
+  {
+    "key": "slope_gradient_triangle",
+    "prompt": "A hillside slope drawn as the sloping side of a right-angled triangle, with a horizontal base line beneath it and a vertical line at the end joining the two, the right angle marked with a small square. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: slope surface, horizontal distance, vertical height gain, right angle.",
+    "parts": [
+      "slope surface",
+      "horizontal distance",
+      "vertical height gain",
+      "right angle"
+    ],
+    "subject": "geography",
+    "topic": "map_skills",
+    "grade_band": "14-16",
+    "why": "calculating gradient from a map or a field measurement"
+  },
+  {
+    "key": "scatter_graph_blank",
+    "prompt": "A blank scatter graph frame: an empty rectangle with a vertical axis on the left and a horizontal axis along the bottom, a scattering of small dots inside and one straight line drawn through the middle of the scatter. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: vertical axis, horizontal axis, plotted points, line of best fit, plot frame.",
+    "parts": [
+      "vertical axis",
+      "horizontal axis",
+      "plotted points",
+      "line of best fit",
+      "plot frame"
+    ],
+    "subject": "geography",
+    "topic": "map_skills",
+    "grade_band": "14-16",
+    "why": "presenting fieldwork data and describing relationships"
+  },
+  {
+    "key": "population_pyramid_blank",
+    "prompt": "A blank population pyramid frame: a vertical centre line with horizontal bars extending left and right from it, the bars widest at the bottom and narrowing towards the top, with a horizontal scale line beneath. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: centre age axis, male side bars, female side bars, wide base, narrow top, population scale.",
+    "parts": [
+      "centre age axis",
+      "male side bars",
+      "female side bars",
+      "wide base",
+      "narrow top",
+      "population scale"
+    ],
+    "subject": "geography",
+    "topic": "population_and_settlement",
+    "grade_band": "11-16",
+    "why": "the reusable frame for reading any country's age structure"
+  },
+  {
+    "key": "demographic_transition_model_blank",
+    "prompt": "A blank demographic transition model frame: an empty chart with vertical divisions splitting it into five stages, one line starting high and falling, a second line starting high and falling earlier, and a third rising curve that levels off near the top. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: birth rate line, death rate line, total population line, stage divisions, plot frame.",
+    "parts": [
+      "birth rate line",
+      "death rate line",
+      "total population line",
+      "stage divisions",
+      "plot frame"
+    ],
+    "subject": "geography",
+    "topic": "population_and_settlement",
+    "grade_band": "14-16",
+    "why": "the model behind every population change lesson"
+  },
+  {
+    "key": "population_growth_curve_blank",
+    "prompt": "A blank graph frame containing two curves rising from the same starting point, one bending steeply upwards without stopping and the other levelling off into a flat top, with a horizontal line marking a ceiling. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: exponential curve, levelling curve, carrying capacity line, vertical axis, horizontal axis.",
+    "parts": [
+      "exponential curve",
+      "levelling curve",
+      "carrying capacity line",
+      "vertical axis",
+      "horizontal axis"
+    ],
+    "subject": "geography",
+    "topic": "population_and_settlement",
+    "grade_band": "14-16",
+    "why": "contrasting runaway growth with growth limited by resources"
+  },
+  {
+    "key": "burgess_concentric_model",
+    "prompt": "A town plan drawn as four or five circles one inside another, a small dense centre with tall closely packed blocks, a ring of tight terraced housing, a ring of larger detached houses with gardens and an outer ring of open land. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: central business district, inner city, inner suburbs, outer suburbs, rural urban fringe.",
+    "parts": [
+      "central business district",
+      "inner city",
+      "inner suburbs",
+      "outer suburbs",
+      "rural urban fringe"
+    ],
+    "subject": "geography",
+    "topic": "population_and_settlement",
+    "grade_band": "14-16",
+    "why": "the first urban land-use model in any settlement chapter"
+  },
+  {
+    "key": "hoyt_sector_model",
+    "prompt": "A town plan drawn as wedge-shaped sectors radiating from a small central circle, with one wedge following a transport line out of the city and different housing densities drawn in the neighbouring wedges. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: central business district, industry sector, low cost housing sector, middle cost housing sector, high cost housing sector.",
+    "parts": [
+      "central business district",
+      "industry sector",
+      "low cost housing sector",
+      "middle cost housing sector",
+      "high cost housing sector"
+    ],
+    "subject": "geography",
+    "topic": "population_and_settlement",
+    "grade_band": "14-16",
+    "why": "compared with the concentric model when explaining urban land use"
+  },
+  {
+    "key": "urban_land_use_transect",
+    "prompt": "A cross-section straight through a city from one edge to the other, buildings tall and packed tightly in the middle, becoming lower and more widely spaced towards each edge, with open fields beyond, and a curve above showing building height falling outwards. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: city centre, inner city, suburbs, rural urban fringe, building height curve.",
+    "parts": [
+      "city centre",
+      "inner city",
+      "suburbs",
+      "rural urban fringe",
+      "building height curve"
+    ],
+    "subject": "geography",
+    "topic": "population_and_settlement",
+    "grade_band": "14-16",
+    "why": "describing how land use and building height change across a city"
+  },
+  {
+    "key": "settlement_hierarchy_pyramid",
+    "prompt": "A hierarchy drawn as a triangle divided into four or five horizontal bands, the widest band at the bottom containing many tiny house clusters and each band above containing fewer but larger built-up shapes, one large shape at the top. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: hamlet band, village band, town band, city band, conurbation top.",
+    "parts": [
+      "hamlet band",
+      "village band",
+      "town band",
+      "city band",
+      "conurbation top"
+    ],
+    "subject": "geography",
+    "topic": "population_and_settlement",
+    "grade_band": "11-13",
+    "why": "introducing settlement size, services and sphere of influence"
+  },
+  {
+    "key": "settlement_patterns",
+    "prompt": "Three plan-view frames side by side of houses in the countryside: houses clustered tightly around a crossroads, houses scattered singly across fields, and houses in one line strung along a road. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: nucleated pattern, dispersed pattern, linear pattern, road, fields.",
+    "parts": [
+      "nucleated pattern",
+      "dispersed pattern",
+      "linear pattern",
+      "road",
+      "fields"
+    ],
+    "subject": "geography",
+    "topic": "population_and_settlement",
+    "grade_band": "11-13",
+    "why": "classifying settlement shape in early settlement lessons"
+  },
+  {
+    "key": "settlement_site_factors",
+    "prompt": "A landscape in plan view showing why a village grew where it did: a river with a narrow crossing point, flat land beside it, a low hill giving a view over the surroundings, woodland on one side and fields around. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: river, bridging point, flat land, defensive hill, woodland, farmland.",
+    "parts": [
+      "river",
+      "bridging point",
+      "flat land",
+      "defensive hill",
+      "woodland",
+      "farmland"
+    ],
+    "subject": "geography",
+    "topic": "population_and_settlement",
+    "grade_band": "11-16",
+    "why": "explaining site and situation when a chapter asks why settlements are where they are"
+  },
+  {
+    "key": "rural_to_urban_migration",
+    "prompt": "Two areas side by side joined by a broad arrow: on the left a small farm with fields, a well and a single track, on the right a crowded city with tall buildings, factories and a fringe of small self-built shelters, the arrow pointing from countryside to city. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: countryside, farm, migration arrow, city buildings, factories, informal housing.",
+    "parts": [
+      "countryside",
+      "farm",
+      "migration arrow",
+      "city buildings",
+      "factories",
+      "informal housing"
+    ],
+    "subject": "geography",
+    "topic": "population_and_settlement",
+    "grade_band": "11-16",
+    "why": "the push and pull diagram in urbanisation lessons"
+  },
+  {
+    "key": "farming_system_flow",
+    "prompt": "A farming system drawn as three boxes in a row joined by arrows, the first holding a seed bag, a tractor and a rain cloud, the middle holding a ploughed field being worked, and the last holding stacked crates of produce and a milk churn. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: inputs box, processes box, outputs box, connecting arrows.",
+    "parts": [
+      "inputs box",
+      "processes box",
+      "outputs box",
+      "connecting arrows"
+    ],
+    "subject": "geography",
+    "topic": "economy_and_resources",
+    "grade_band": "11-16",
+    "why": "the systems framework used for every farming type studied"
+  },
+  {
+    "key": "arable_and_pastoral_farming",
+    "prompt": "Two farm scenes side by side: on the left straight ploughed furrows with rows of crops and a harvester, on the right a fenced grass field with grazing animals, a water trough and a barn. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: ploughed field, crop rows, grazing animals, field fence, farm building.",
+    "parts": [
+      "ploughed field",
+      "crop rows",
+      "grazing animals",
+      "field fence",
+      "farm building"
+    ],
+    "subject": "geography",
+    "topic": "economy_and_resources",
+    "grade_band": "11-13",
+    "why": "distinguishing the main farming types in an agriculture chapter"
+  },
+  {
+    "key": "terraced_hillside_farming",
+    "prompt": "A cross-section of a steep hillside cut into a staircase of flat level steps, each step held up by a low stone wall at its outer edge, crops growing on the flat surfaces and a small channel carrying water along one step. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: hillside slope, flat terrace, retaining wall, crops, irrigation channel.",
+    "parts": [
+      "hillside slope",
+      "flat terrace",
+      "retaining wall",
+      "crops",
+      "irrigation channel"
+    ],
+    "subject": "geography",
+    "topic": "economy_and_resources",
+    "grade_band": "14-16",
+    "why": "showing how farming adapts to steep land and controls soil erosion"
+  },
+  {
+    "key": "industrial_system_flow",
+    "prompt": "An industrial system drawn as boxes joined by arrows, a box of raw materials and a power symbol feeding into a factory building in the middle, finished boxed goods leaving on one side and waste leaving through a pipe and chimney on the other. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: raw materials, energy input, factory, finished products, waste output.",
+    "parts": [
+      "raw materials",
+      "energy input",
+      "factory",
+      "finished products",
+      "waste output"
+    ],
+    "subject": "geography",
+    "topic": "economy_and_resources",
+    "grade_band": "14-16",
+    "why": "the inputs and outputs framework for any industry case study"
+  },
+  {
+    "key": "hydroelectric_dam_cross_section",
+    "prompt": "A cross-section of a hydroelectric dam, deep still water held back behind a thick sloping wall, an opening near the base feeding a pipe that slopes down to a bladed wheel, a machine housing beside it and the river continuing below the dam. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: reservoir, dam wall, intake, turbine, generator, river downstream.",
+    "parts": [
+      "reservoir",
+      "dam wall",
+      "intake",
+      "turbine",
+      "generator",
+      "river downstream"
+    ],
+    "subject": "geography",
+    "topic": "economy_and_resources",
+    "grade_band": "11-16",
+    "why": "the worked example in renewable energy and water resource lessons"
+  },
+  {
+    "key": "wind_turbine_parts",
+    "prompt": "A single wind turbine seen from the side against open ground, three long slender blades on a central hub, a box-shaped housing behind the hub, a tall tapering tower and a concrete base set into the ground. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: blades, hub, nacelle, tower, foundation base.",
+    "parts": [
+      "blades",
+      "hub",
+      "nacelle",
+      "tower",
+      "foundation base"
+    ],
+    "subject": "geography",
+    "topic": "economy_and_resources",
+    "grade_band": "11-16",
+    "why": "naming the parts when a chapter covers wind power"
+  },
+  {
+    "key": "solar_panel_array",
+    "prompt": "A row of flat rectangular solar panels tilted towards the sun on angled metal frames standing on open ground, the panel faces divided into a grid of small squares, with a small box unit and cable at the end of the row. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: solar panel, grid of cells, tilted mounting frame, sun, control box.",
+    "parts": [
+      "solar panel",
+      "grid of cells",
+      "tilted mounting frame",
+      "sun",
+      "control box"
+    ],
+    "subject": "geography",
+    "topic": "economy_and_resources",
+    "grade_band": "11-16",
+    "why": "the second worked example in renewable energy lessons"
+  },
+  {
+    "key": "fossil_fuel_power_station",
+    "prompt": "A cross-section of a coal-fired power station: a heap of fuel beside a furnace, a boiler of water pipes above the flames, steam piped to a bladed wheel, a machine housing beside it, a wide waisted cooling tower and a tall chimney. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: fuel store, furnace, boiler, turbine, generator, cooling tower, chimney.",
+    "parts": [
+      "fuel store",
+      "furnace",
+      "boiler",
+      "turbine",
+      "generator",
+      "cooling tower",
+      "chimney"
+    ],
+    "subject": "geography",
+    "topic": "economy_and_resources",
+    "grade_band": "14-16",
+    "why": "contrasting fossil fuel generation with renewables"
+  },
+  {
+    "key": "open_cast_mine_cross_section",
+    "prompt": "A cross-section of an open cast mine, the surface soil and rock stripped off and heaped to one side, the pit cut down in wide steps, a dark seam of ore exposed at the bottom, a track spiralling down the steps and a digger at the pit floor. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: overburden, spoil heap, benches, ore seam, haul road, pit floor.",
+    "parts": [
+      "overburden",
+      "spoil heap",
+      "benches",
+      "ore seam",
+      "haul road",
+      "pit floor"
+    ],
+    "subject": "geography",
+    "topic": "economy_and_resources",
+    "grade_band": "14-16",
+    "why": "showing how minerals are extracted and the landscape scars left behind"
+  },
+  {
+    "key": "aquifer_and_water_table",
+    "prompt": "A cross-section of the ground showing groundwater: a layer of porous rock holding water, a solid layer beneath it, a wavy line marking the top of the saturated zone that dips below a hill and meets the surface in a valley, and a well shaft reaching below that line. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: permeable rock, impermeable rock, water table, well, spring.",
+    "parts": [
+      "permeable rock",
+      "impermeable rock",
+      "water table",
+      "well",
+      "spring"
+    ],
+    "subject": "geography",
+    "topic": "economy_and_resources",
+    "grade_band": "14-16",
+    "why": "explaining water supply, boreholes and springs"
+  },
+  {
+    "key": "sustainable_city_features",
+    "prompt": "A street scene of a sustainable city: panels on the roofs, plants growing on a flat roof, a marked cycle lane beside the road, a tram on rails, a small park with trees and a row of separate recycling bins on the pavement. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: roof solar panels, green roof, cycle lane, tram, public park, recycling bins.",
+    "parts": [
+      "roof solar panels",
+      "green roof",
+      "cycle lane",
+      "tram",
+      "public park",
+      "recycling bins"
+    ],
+    "subject": "geography",
+    "topic": "economy_and_resources",
+    "grade_band": "14-16",
+    "why": "the summary diagram in sustainable urban living chapters"
+  },
+  {
+    "key": "desertification_and_soil_erosion",
+    "prompt": "Two frames of the same dry landscape side by side: on the left too many animals grazing thin grass, bare cracked ground, soil blowing away and a channel cut by rain; on the right the same slope with a line of trees, ploughing following the contours and a low stone line across the slope. Draw it as a simple, uncluttered, unshaded black line diagram on a white background, with every named part clearly separated. Do not include any text, letters, numbers or labels anywhere in the image. Name the layer groups exactly: overgrazed bare ground, wind blown soil, erosion gully, tree windbreak, contour ploughing, stone line.",
+    "parts": [
+      "overgrazed bare ground",
+      "wind blown soil",
+      "erosion gully",
+      "tree windbreak",
+      "contour ploughing",
+      "stone line"
+    ],
+    "subject": "geography",
+    "topic": "economy_and_resources",
+    "grade_band": "14-16",
+    "why": "the degradation and management pairing in drylands and sustainability topics"
+  }
+]

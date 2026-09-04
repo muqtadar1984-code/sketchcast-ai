@@ -1,0 +1,1602 @@
+[
+  {
+    "key": "egyptian_pyramid_cross_section",
+    "prompt": "A cut-away cross-section of an Egyptian pyramid, showing the outer casing stones, a sloping entrance passage, a rising gallery, the burial chamber deep inside, and the bedrock platform it stands on. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: casing stones, entrance passage, grand gallery, burial chamber, bedrock.",
+    "parts": [
+      "casing stones",
+      "entrance passage",
+      "grand gallery",
+      "burial chamber",
+      "bedrock"
+    ],
+    "subject": "history",
+    "topic": "ancient egypt",
+    "grade_band": "11-13",
+    "why": "any lesson on pyramid building, pharaohs or tombs"
+  },
+  {
+    "key": "shaduf_water_lifting",
+    "prompt": "A shaduf beside a river bank: a long pole balanced on a pivot at the top of an upright post, with a heavy counterweight at one end and a bucket hanging from a rope at the other, dipping towards the water, and an irrigation channel running away to a field. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: upright post, pivot, long pole, counterweight, bucket, irrigation channel.",
+    "parts": [
+      "upright post",
+      "pivot",
+      "long pole",
+      "counterweight",
+      "bucket",
+      "irrigation channel"
+    ],
+    "subject": "history",
+    "topic": "ancient egypt",
+    "grade_band": "11-13",
+    "why": "explaining irrigation and why farming clustered on the Nile"
+  },
+  {
+    "key": "nile_valley_schematic_map",
+    "prompt": "A schematic map of the Nile valley as a simple outline: a long river running from the bottom to the top, a fan-shaped delta at the top, cataract lines crossing the river in the south, a narrow strip of fertile land on both banks, and empty desert beyond it. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: river, delta, cataracts, fertile strip, desert.",
+    "parts": [
+      "river",
+      "delta",
+      "cataracts",
+      "fertile strip",
+      "desert"
+    ],
+    "subject": "history",
+    "topic": "ancient egypt",
+    "grade_band": "11-13",
+    "why": "opening any Egypt unit on why the river shaped the civilisation"
+  },
+  {
+    "key": "canopic_jars_and_chest",
+    "prompt": "Four canopic jars standing in a row on a low wooden chest, each jar a plain rounded vessel with a differently shaped stopper on top, drawn as a clean outline with a shallow plinth beneath. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: stoppers, jar bodies, wooden chest, plinth.",
+    "parts": [
+      "stoppers",
+      "jar bodies",
+      "wooden chest",
+      "plinth"
+    ],
+    "subject": "history",
+    "topic": "ancient egypt",
+    "grade_band": "11-13",
+    "why": "teaching mummification, burial beliefs and the afterlife"
+  },
+  {
+    "key": "egyptian_social_pyramid",
+    "prompt": "An empty social pyramid chart: a large triangle divided by horizontal lines into five stacked tiers, the narrowest tier at the top and the widest tier at the bottom, with nothing inside the tiers. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: top tier, second tier, third tier, fourth tier, base tier.",
+    "parts": [
+      "top tier",
+      "second tier",
+      "third tier",
+      "fourth tier",
+      "base tier"
+    ],
+    "subject": "history",
+    "topic": "ancient egypt",
+    "grade_band": "11-16",
+    "why": "showing the ranks of Egyptian society, reusable for any hierarchy"
+  },
+  {
+    "key": "egyptian_reed_boat",
+    "prompt": "A reed boat on the Nile seen from the side: a hull of bundled reeds lashed together, curved upturned prow and stern, a single mast carrying a square sail, and a long steering oar at the back. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: reed hull, upturned prow, mast, square sail, steering oar.",
+    "parts": [
+      "reed hull",
+      "upturned prow",
+      "mast",
+      "square sail",
+      "steering oar"
+    ],
+    "subject": "history",
+    "topic": "ancient egypt",
+    "grade_band": "11-13",
+    "why": "transport, trade and moving stone along the Nile"
+  },
+  {
+    "key": "ziggurat_cross_section",
+    "prompt": "A cut-away view of a Mesopotamian ziggurat: three stepped mud-brick terraces of decreasing size, a long straight staircase ramp up the front, a small shrine building on the summit, flat buttress strips down the outer walls, and a solid mud-brick core visible in the cut face. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: stepped terraces, staircase ramp, summit shrine, buttress strips, mud-brick core.",
+    "parts": [
+      "stepped terraces",
+      "staircase ramp",
+      "summit shrine",
+      "buttress strips",
+      "mud-brick core"
+    ],
+    "subject": "history",
+    "topic": "mesopotamia",
+    "grade_band": "11-13",
+    "why": "temple religion and city life in Sumer"
+  },
+  {
+    "key": "cuneiform_tablet_and_stylus",
+    "prompt": "A scribe's kit laid out flat: a rectangular slab of damp clay with rounded corners and a completely blank surface, a cut reed stylus with a wedge-shaped tip lying beside it, a lump of raw clay, and a small drying rack behind. Leave the tablet surface entirely blank with no marks. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: clay tablet, reed stylus, wedge tip, raw clay lump, drying rack.",
+    "parts": [
+      "clay tablet",
+      "reed stylus",
+      "wedge tip",
+      "raw clay lump",
+      "drying rack"
+    ],
+    "subject": "history",
+    "topic": "mesopotamia",
+    "grade_band": "11-13",
+    "why": "the invention of writing and the work of scribes"
+  },
+  {
+    "key": "mesopotamian_city_state_plan",
+    "prompt": "A bird's-eye plan of a walled Mesopotamian city drawn as flat outlines: a thick city wall with one gateway, a stepped temple platform in the middle, an open market square, a grid of small house blocks, an irrigation canal entering through the wall, and farmed fields outside. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: city wall, gateway, temple platform, market square, house blocks, canal, fields.",
+    "parts": [
+      "city wall",
+      "gateway",
+      "temple platform",
+      "market square",
+      "house blocks",
+      "canal",
+      "fields"
+    ],
+    "subject": "history",
+    "topic": "mesopotamia",
+    "grade_band": "11-13",
+    "why": "what made a city-state different from a village"
+  },
+  {
+    "key": "indus_valley_city_grid",
+    "prompt": "A bird's-eye plan of an Indus valley city: a raised walled citadel mound on one side, a lower town of rectangular blocks laid out on a grid of straight streets, a large rectangular water tank, thin drainage channels running along the streets, a pillared granary block, and an outer wall. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: citadel mound, lower town grid, great bath tank, drainage channels, granary, outer wall.",
+    "parts": [
+      "citadel mound",
+      "lower town grid",
+      "great bath tank",
+      "drainage channels",
+      "granary",
+      "outer wall"
+    ],
+    "subject": "history",
+    "topic": "indus valley",
+    "grade_band": "11-13",
+    "why": "town planning and sanitation in the Harappan cities"
+  },
+  {
+    "key": "indus_valley_seal",
+    "prompt": "A small square Indus seal shown twice: the flat carved face bearing a single simple animal figure inside a plain border, and the back of the same seal with a raised knob pierced by a cord hole. Leave the face free of any script or symbols other than the animal. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: seal face, animal motif, border, raised boss, cord hole.",
+    "parts": [
+      "seal face",
+      "animal motif",
+      "border",
+      "raised boss",
+      "cord hole"
+    ],
+    "subject": "history",
+    "topic": "indus valley",
+    "grade_band": "11-16",
+    "why": "evidence, trade contacts and undeciphered scripts"
+  },
+  {
+    "key": "greek_temple_facade",
+    "prompt": "The front of a Greek temple drawn in flat elevation: a row of fluted columns standing on a stepped stone platform, a plain horizontal entablature beam across their tops, a triangular pediment gable above, and the wall of the inner chamber visible behind the columns. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: stepped platform, columns, entablature, pediment, inner chamber wall.",
+    "parts": [
+      "stepped platform",
+      "columns",
+      "entablature",
+      "pediment",
+      "inner chamber wall"
+    ],
+    "subject": "history",
+    "topic": "ancient greece",
+    "grade_band": "11-13",
+    "why": "Greek architecture, religion and the legacy of classical style"
+  },
+  {
+    "key": "greek_column_orders",
+    "prompt": "Three Greek columns standing side by side for comparison: one with a plain cushion capital on a heavy fluted shaft, one with a scroll-shaped capital on a slimmer shaft with a moulded base, and one with a tall leafy capital. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: doric column, ionic column, corinthian column, capitals, bases.",
+    "parts": [
+      "doric column",
+      "ionic column",
+      "corinthian column",
+      "capitals",
+      "bases"
+    ],
+    "subject": "history",
+    "topic": "ancient greece",
+    "grade_band": "14-16",
+    "why": "comparing architectural orders and spotting them in later buildings"
+  },
+  {
+    "key": "greek_trireme",
+    "prompt": "A Greek trireme seen from the side: a long low hull, three staggered rows of oars along the flank, a pointed bronze ram at the waterline of the bow, a single mast with a furled square sail, and a steering oar at the stern. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: hull, three oar banks, bronze ram, mast and sail, steering oar.",
+    "parts": [
+      "hull",
+      "three oar banks",
+      "bronze ram",
+      "mast and sail",
+      "steering oar"
+    ],
+    "subject": "history",
+    "topic": "ancient greece",
+    "grade_band": "11-16",
+    "why": "sea power, the Persian wars and the Athenian empire"
+  },
+  {
+    "key": "greek_theatre_plan",
+    "prompt": "A bird's-eye plan of a Greek theatre: a semicircular fan of tiered seating rows cut into a hillside, a circular flat orchestra performing area at the centre, a rectangular stage building behind it, and two side entrance passages between the seating and the stage. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: tiered seating, orchestra circle, stage building, side entrances.",
+    "parts": [
+      "tiered seating",
+      "orchestra circle",
+      "stage building",
+      "side entrances"
+    ],
+    "subject": "history",
+    "topic": "ancient greece",
+    "grade_band": "11-13",
+    "why": "drama, festivals and public life in Athens"
+  },
+  {
+    "key": "athenian_democracy_structure",
+    "prompt": "A structure chart of empty rectangular boxes joined by arrows: one wide box at the bottom for all citizens, an arrow up to a box for the council, an arrow across to a box for the law courts, and an arrow up to a box for elected officials, every box left blank inside. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: citizen assembly box, council box, law courts box, officials box, arrows.",
+    "parts": [
+      "citizen assembly box",
+      "council box",
+      "law courts box",
+      "officials box",
+      "arrows"
+    ],
+    "subject": "history",
+    "topic": "ancient greece",
+    "grade_band": "14-16",
+    "why": "how Athenian democracy worked, and comparisons with today"
+  },
+  {
+    "key": "hoplite_equipment_layout",
+    "prompt": "A hoplite's equipment laid out flat and separated on the ground with no person present: a large round shield seen face-on, a crested helmet, a moulded chest armour piece, a pair of greaves over the shins, and a long spear laid along the bottom. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: round shield, crested helmet, body armour, greaves, spear.",
+    "parts": [
+      "round shield",
+      "crested helmet",
+      "body armour",
+      "greaves",
+      "spear"
+    ],
+    "subject": "history",
+    "topic": "ancient greece",
+    "grade_band": "11-13",
+    "why": "the citizen soldier, Sparta and Greek warfare"
+  },
+  {
+    "key": "roman_road_cross_section",
+    "prompt": "A cut-away cross-section through a Roman road: a bed of large foundation stones at the bottom, packed rubble above it, a layer of sand and gravel, flat paving slabs on top curving slightly higher in the middle, raised kerb stones along both edges, and a drainage ditch on each side. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: foundation stones, rubble layer, gravel layer, paving slabs, kerb stones, drainage ditch.",
+    "parts": [
+      "foundation stones",
+      "rubble layer",
+      "gravel layer",
+      "paving slabs",
+      "kerb stones",
+      "drainage ditch"
+    ],
+    "subject": "history",
+    "topic": "roman empire",
+    "grade_band": "11-13",
+    "why": "Roman engineering and how the empire was held together"
+  },
+  {
+    "key": "roman_aqueduct_arches",
+    "prompt": "A Roman aqueduct seen from the side: tall stone piers carrying a row of large lower arches, a second row of smaller arches stacked above them, and a covered water channel running along the very top with a gentle downward slope. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: piers, lower arches, upper arches, water channel.",
+    "parts": [
+      "piers",
+      "lower arches",
+      "upper arches",
+      "water channel"
+    ],
+    "subject": "history",
+    "topic": "roman empire",
+    "grade_band": "11-13",
+    "why": "water supply, engineering and Roman towns"
+  },
+  {
+    "key": "roman_villa_plan",
+    "prompt": "A bird's-eye floor plan of a Roman villa drawn as flat outlines: an entrance corridor, a central atrium hall with a shallow rectangular pool set in its floor, a colonnaded garden courtyard behind, a dining room off one side, small bedrooms along another, and a bath suite in one corner. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: entrance corridor, atrium, impluvium pool, garden courtyard, dining room, bedrooms, bath suite.",
+    "parts": [
+      "entrance corridor",
+      "atrium",
+      "impluvium pool",
+      "garden courtyard",
+      "dining room",
+      "bedrooms",
+      "bath suite"
+    ],
+    "subject": "history",
+    "topic": "roman empire",
+    "grade_band": "11-13",
+    "why": "everyday Roman life and how rich and poor housing differed"
+  },
+  {
+    "key": "roman_hypocaust_heating",
+    "prompt": "A cut-away view of a Roman hypocaust: a raised floor supported on short stacks of square tiles, an open hot-air space beneath it, a furnace opening at one side, and hollow flue channels running upwards inside the wall. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: raised floor, tile pillars, underfloor space, furnace, wall flues.",
+    "parts": [
+      "raised floor",
+      "tile pillars",
+      "underfloor space",
+      "furnace",
+      "wall flues"
+    ],
+    "subject": "history",
+    "topic": "roman empire",
+    "grade_band": "11-13",
+    "why": "Roman baths, technology and comfort"
+  },
+  {
+    "key": "roman_coin_obverse_reverse",
+    "prompt": "A Roman coin shown from both sides as two circles side by side: the obverse disc carries an anonymous profile head inside a laurel wreath ring, the reverse disc carries a small temple with columns, and both have a plain raised rim. Do not add any lettering around the rim. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: obverse disc, profile head, wreath border, reverse disc, temple motif, raised rim.",
+    "parts": [
+      "obverse disc",
+      "profile head",
+      "wreath border",
+      "reverse disc",
+      "temple motif",
+      "raised rim"
+    ],
+    "subject": "history",
+    "topic": "roman empire",
+    "grade_band": "14-16",
+    "why": "coins as evidence, propaganda and dating a site"
+  },
+  {
+    "key": "motte_and_bailey_castle",
+    "prompt": "A motte and bailey castle drawn in cut-away side view: a steep artificial earth mound with a square wooden tower on top, a wooden palisade fence ringing the mound, a larger flat enclosure beside it holding small huts and a stable, a ditch around the whole site, and a bridge across the ditch. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: earth motte, wooden keep, palisade, bailey enclosure, ditch, bridge.",
+    "parts": [
+      "earth motte",
+      "wooden keep",
+      "palisade",
+      "bailey enclosure",
+      "ditch",
+      "bridge"
+    ],
+    "subject": "history",
+    "topic": "medieval castles",
+    "grade_band": "11-13",
+    "why": "the Norman conquest and the first castles"
+  },
+  {
+    "key": "stone_keep_castle_cross_section",
+    "prompt": "A cut-away cross-section through a square stone keep: very thick walls, a storage basement, a great hall on the first floor, private chambers above it, a spiral staircase in one corner, crenellated battlements on the roof, and a deep well shaft. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: basement store, great hall, private chamber, spiral stair, battlements, well shaft.",
+    "parts": [
+      "basement store",
+      "great hall",
+      "private chamber",
+      "spiral stair",
+      "battlements",
+      "well shaft"
+    ],
+    "subject": "history",
+    "topic": "medieval castles",
+    "grade_band": "11-13",
+    "why": "how castles changed from wood to stone, and life inside"
+  },
+  {
+    "key": "castle_gatehouse_defences",
+    "prompt": "A castle gatehouse seen from the front and partly cut away: two flanking towers, an arched entrance passage, a lifting portcullis grid in its slot, a drawbridge lowered over a water-filled moat, murder holes opening in the passage ceiling, and an outer barbican forecourt. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: flanking towers, entrance passage, portcullis, drawbridge, moat, murder holes, barbican.",
+    "parts": [
+      "flanking towers",
+      "entrance passage",
+      "portcullis",
+      "drawbridge",
+      "moat",
+      "murder holes",
+      "barbican"
+    ],
+    "subject": "history",
+    "topic": "medieval castles",
+    "grade_band": "11-13",
+    "why": "attack and defence, and why sieges were so hard"
+  },
+  {
+    "key": "feudal_system_pyramid",
+    "prompt": "An empty feudal pyramid: a large triangle divided by horizontal lines into four stacked tiers, narrow at the top and wide at the base, with a downward arrow drawn alongside on the left and an upward arrow alongside on the right. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: top tier, second tier, third tier, base tier, downward arrow, upward arrow.",
+    "parts": [
+      "top tier",
+      "second tier",
+      "third tier",
+      "base tier",
+      "downward arrow",
+      "upward arrow"
+    ],
+    "subject": "history",
+    "topic": "medieval europe",
+    "grade_band": "11-13",
+    "why": "explaining land, loyalty and service in feudal society"
+  },
+  {
+    "key": "medieval_manor_plan",
+    "prompt": "A bird's-eye plan of a medieval manor: three large open fields divided into narrow parallel strips, a manor house with a walled yard, a small church, a cluster of village cottages along a lane, a stream with a mill on it, common pasture, and woodland at the edge. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: open field strips, manor house, church, village cottages, mill, common pasture, woodland.",
+    "parts": [
+      "open field strips",
+      "manor house",
+      "church",
+      "village cottages",
+      "mill",
+      "common pasture",
+      "woodland"
+    ],
+    "subject": "history",
+    "topic": "medieval europe",
+    "grade_band": "11-13",
+    "why": "village life, the manor and how land was farmed"
+  },
+  {
+    "key": "three_field_rotation",
+    "prompt": "A crop rotation diagram: three large circular fields in a row, the first field drawn with rows of tall crop marks, the second field with rows of low crop marks, the third field left completely empty as fallow, and curved arrows leading from each field to the next and back round again. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: first field, second field, fallow field, rotation arrows.",
+    "parts": [
+      "first field",
+      "second field",
+      "fallow field",
+      "rotation arrows"
+    ],
+    "subject": "history",
+    "topic": "medieval europe",
+    "grade_band": "11-13",
+    "why": "how the open field system kept the soil productive"
+  },
+  {
+    "key": "medieval_watermill",
+    "prompt": "A cut-away side view of a watermill: a large vertical waterwheel turning in a channel, a sluice gate controlling the flow, a large wooden gear wheel meshing with a smaller gear wheel, a pair of round millstones above, a grain hopper feeding the stones, and the mill building around them. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: waterwheel, sluice gate, gear wheels, millstones, grain hopper, mill building.",
+    "parts": [
+      "waterwheel",
+      "sluice gate",
+      "gear wheels",
+      "millstones",
+      "grain hopper",
+      "mill building"
+    ],
+    "subject": "history",
+    "topic": "medieval technology",
+    "grade_band": "11-13",
+    "why": "medieval machines and the power that ground the village grain"
+  },
+  {
+    "key": "gothic_cathedral_cross_section",
+    "prompt": "A cut-away cross-section across a Gothic cathedral: a tall central nave with a pointed vaulted ceiling, lower side aisles, tall clerestory windows high on the nave wall, an arched flying buttress leaning in from an outer pier on each side, and a spire above. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: nave, side aisles, pointed vault, clerestory windows, flying buttress, outer pier, spire.",
+    "parts": [
+      "nave",
+      "side aisles",
+      "pointed vault",
+      "clerestory windows",
+      "flying buttress",
+      "outer pier",
+      "spire"
+    ],
+    "subject": "history",
+    "topic": "medieval europe",
+    "grade_band": "14-16",
+    "why": "the church's power and how such tall stone buildings stood up"
+  },
+  {
+    "key": "plate_armour_display_stand",
+    "prompt": "A full suit of plate armour mounted empty on a display stand with no person inside: a visored helmet, a breastplate, articulated arm pieces ending in gauntlets, leg pieces, pointed foot plates, and a small shield propped at the base. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: helmet, breastplate, gauntlets, leg armour, foot plates, shield.",
+    "parts": [
+      "helmet",
+      "breastplate",
+      "gauntlets",
+      "leg armour",
+      "foot plates",
+      "shield"
+    ],
+    "subject": "history",
+    "topic": "medieval warfare",
+    "grade_band": "11-13",
+    "why": "knights, chivalry and the cost of equipment"
+  },
+  {
+    "key": "longbow_and_crossbow",
+    "prompt": "A longbow and a crossbow laid side by side as flat outlines with no person present: the longbow a tall curved stave with its bowstring and one arrow beside it, the crossbow a short horizontal bow fixed across a wooden stock with a trigger and a winding handle. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: longbow stave, bowstring, arrow, crossbow stock, crossbow bow, winding handle.",
+    "parts": [
+      "longbow stave",
+      "bowstring",
+      "arrow",
+      "crossbow stock",
+      "crossbow bow",
+      "winding handle"
+    ],
+    "subject": "history",
+    "topic": "medieval warfare",
+    "grade_band": "11-13",
+    "why": "comparing weapons, training time and battle tactics"
+  },
+  {
+    "key": "black_death_spread_map",
+    "prompt": "A schematic outline map of Europe and the Mediterranean with no place names: a simple coastline, small dots marking port towns, thick curved arrows sweeping from the south-east across the sea to those ports, and thinner arrows spreading inland to the north and west. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: coastline outline, port dots, sea route arrows, inland arrows.",
+    "parts": [
+      "coastline outline",
+      "port dots",
+      "sea route arrows",
+      "inland arrows"
+    ],
+    "subject": "history",
+    "topic": "medieval europe",
+    "grade_band": "11-16",
+    "why": "tracing how plague travelled along trade routes"
+  },
+  {
+    "key": "mosque_plan",
+    "prompt": "A bird's-eye plan of a congregational mosque drawn as flat outlines: a large open rectangular courtyard, a covered prayer hall of repeated columns along one side, a small semicircular niche in the middle of the far wall, a stepped pulpit beside it, a fountain in the courtyard, and a tall slender minaret tower at one corner. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: courtyard, prayer hall, columns, mihrab niche, minbar steps, ablution fountain, minaret.",
+    "parts": [
+      "courtyard",
+      "prayer hall",
+      "columns",
+      "mihrab niche",
+      "minbar steps",
+      "ablution fountain",
+      "minaret"
+    ],
+    "subject": "history",
+    "topic": "islamic world",
+    "grade_band": "11-16",
+    "why": "worship, community and Islamic architecture"
+  },
+  {
+    "key": "astrolabe_parts",
+    "prompt": "An astrolabe laid flat and slightly separated into its pieces: a round dished body, a flat inner plate disc that sits inside it, an open fretwork star map ring above that, a straight pointer bar across the front, a hanging ring at the top, and a sighting bar for the back. Leave every scale and edge completely blank with no numbers or marks. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: dished body, inner plate, star map ring, pointer bar, suspension ring, sighting bar.",
+    "parts": [
+      "dished body",
+      "inner plate",
+      "star map ring",
+      "pointer bar",
+      "suspension ring",
+      "sighting bar"
+    ],
+    "subject": "history",
+    "topic": "islamic world",
+    "grade_band": "14-16",
+    "why": "science, navigation and astronomy in the Islamic golden age"
+  },
+  {
+    "key": "translation_movement_flow",
+    "prompt": "A flow diagram of plain outlines: three rolled scrolls of different lengths on the left, arrows leading right to a low writing desk holding an open blank book and an inkpot, and further arrows leading on to a neat stack of bound volumes on a shelf. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: scrolls, arrows, writing desk, open book, bound volumes.",
+    "parts": [
+      "scrolls",
+      "arrows",
+      "writing desk",
+      "open book",
+      "bound volumes"
+    ],
+    "subject": "history",
+    "topic": "islamic world",
+    "grade_band": "11-16",
+    "why": "how ancient knowledge was preserved and passed on"
+  },
+  {
+    "key": "islamic_geometric_tile_pattern",
+    "prompt": "A geometric tile pattern drawn as clean interlacing lines: a central eight-pointed star, cross-shaped tiles filling the gaps between the stars, continuous interlacing bands weaving over and under, and a faint square repeat grid showing how the pattern tiles. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: eight pointed star, cross tiles, interlacing bands, repeat grid.",
+    "parts": [
+      "eight pointed star",
+      "cross tiles",
+      "interlacing bands",
+      "repeat grid"
+    ],
+    "subject": "history",
+    "topic": "islamic world",
+    "grade_band": "11-13",
+    "why": "art, mathematics and decoration without figures"
+  },
+  {
+    "key": "qanat_cross_section",
+    "prompt": "A cut-away cross-section through a hillside showing an underground water channel: a deep mother well at the high end reaching the water table, a line of vertical maintenance shafts down the slope each with a small spoil ring at the surface, a gently sloping tunnel connecting them, an outlet where the tunnel meets the surface, and irrigated fields beyond. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: mother well, vertical shafts, sloping tunnel, water table, outlet, fields.",
+    "parts": [
+      "mother well",
+      "vertical shafts",
+      "sloping tunnel",
+      "water table",
+      "outlet",
+      "fields"
+    ],
+    "subject": "history",
+    "topic": "islamic world",
+    "grade_band": "14-16",
+    "why": "water engineering and farming in dry lands"
+  },
+  {
+    "key": "paper_making_process",
+    "prompt": "A four-stage process drawn left to right with arrows between the stages: a vat of pulped rag fibre, a rectangular mesh mould being lifted out flat, a screw press squeezing a stack of wet sheets, and finished sheets hanging on a line to dry. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: pulp vat, mesh mould, screw press, drying sheets, process arrows.",
+    "parts": [
+      "pulp vat",
+      "mesh mould",
+      "screw press",
+      "drying sheets",
+      "process arrows"
+    ],
+    "subject": "history",
+    "topic": "islamic world",
+    "grade_band": "11-16",
+    "why": "the spread of paper and why cheap writing material mattered"
+  },
+  {
+    "key": "ashoka_pillar",
+    "prompt": "A tall polished stone pillar standing alone: a smooth tapering shaft, an inverted bell-shaped capital of lotus petals above it, a round drum band carved with small animals and wheels, four seated lions back to back on the very top, and a simple base platform. Leave the shaft completely blank with no inscription. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: shaft, lotus bell capital, abacus band, lion capital, base platform.",
+    "parts": [
+      "shaft",
+      "lotus bell capital",
+      "abacus band",
+      "lion capital",
+      "base platform"
+    ],
+    "subject": "history",
+    "topic": "ancient india",
+    "grade_band": "11-13",
+    "why": "Ashoka, Mauryan rule and a state emblem students recognise"
+  },
+  {
+    "key": "buddhist_stupa_cross_section",
+    "prompt": "A cut-away cross-section of a Buddhist stupa: a solid hemispherical dome on a circular drum, a small square summit railing box with three tiered umbrellas rising from it, a small relic chamber at the centre of the dome, a circular walking path around the base enclosed by a stone railing, and an ornate gateway in that railing. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: dome, drum base, relic chamber, summit railing box, umbrella tiers, walking path, railing, gateway.",
+    "parts": [
+      "dome",
+      "drum base",
+      "relic chamber",
+      "summit railing box",
+      "umbrella tiers",
+      "walking path",
+      "railing",
+      "gateway"
+    ],
+    "subject": "history",
+    "topic": "ancient india",
+    "grade_band": "11-16",
+    "why": "Buddhism, pilgrimage and Mauryan architecture"
+  },
+  {
+    "key": "mauryan_administration_structure",
+    "prompt": "A structure chart of empty rectangular boxes joined by plain lines: one box at the top, a row of two advisory boxes just below it, a wider row of province boxes under those, a row of district boxes beneath, and a bottom row of small village boxes, all left blank inside. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: ruler box, council boxes, province boxes, district boxes, village boxes, connecting lines.",
+    "parts": [
+      "ruler box",
+      "council boxes",
+      "province boxes",
+      "district boxes",
+      "village boxes",
+      "connecting lines"
+    ],
+    "subject": "history",
+    "topic": "ancient india",
+    "grade_band": "14-16",
+    "why": "how a very large empire was actually governed"
+  },
+  {
+    "key": "charbagh_garden_plan",
+    "prompt": "A bird's-eye plan of a four-part Mughal garden: a square enclosing wall, two straight water channels crossing at right angles to divide the garden into four equal quarters, a square pool where the channels meet, planted beds inside each quarter, a raised pavilion at one end, and a gateway opposite. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: enclosing wall, water channels, central pool, four quarters, pavilion, gateway.",
+    "parts": [
+      "enclosing wall",
+      "water channels",
+      "central pool",
+      "four quarters",
+      "pavilion",
+      "gateway"
+    ],
+    "subject": "history",
+    "topic": "mughal india",
+    "grade_band": "11-13",
+    "why": "Mughal gardens, symmetry and the idea of paradise on earth"
+  },
+  {
+    "key": "mughal_tomb_elevation",
+    "prompt": "The front elevation of a Mughal garden tomb: a wide raised plinth, a tall recessed arched entrance in the centre of the facade, a large bulbous dome on a narrow neck above it, four small domed kiosks on the roof corners, and a slender tower at each corner of the plinth. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: plinth, arched entrance, facade, bulbous dome, roof kiosks, corner minarets.",
+    "parts": [
+      "plinth",
+      "arched entrance",
+      "facade",
+      "bulbous dome",
+      "roof kiosks",
+      "corner minarets"
+    ],
+    "subject": "history",
+    "topic": "mughal india",
+    "grade_band": "11-13",
+    "why": "Mughal architecture and the buildings that survive as evidence"
+  },
+  {
+    "key": "stepwell_cross_section",
+    "prompt": "A cut-away cross-section of an Indian stepwell: a long flight of steps descending in tiers from ground level, pillared galleries on several storeys down the sides, a deep circular well shaft at the far end, a low water level in the shaft, and a small shaded pavilion on the bottom landing. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: descending steps, tiered galleries, pillars, well shaft, water level, landing pavilion.",
+    "parts": [
+      "descending steps",
+      "tiered galleries",
+      "pillars",
+      "well shaft",
+      "water level",
+      "landing pavilion"
+    ],
+    "subject": "history",
+    "topic": "medieval india",
+    "grade_band": "14-16",
+    "why": "water storage, climate and architecture in dry regions"
+  },
+  {
+    "key": "indian_ocean_monsoon_routes",
+    "prompt": "A schematic outline map of the Indian Ocean with no place names: coastlines of the surrounding landmasses, small square markers for ports on each coast, a broad arrow curving north-east across the ocean, a second broad arrow curving back south-west, and dotted sailing lines linking the port markers. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: coastlines, port markers, north-east monsoon arrow, south-west monsoon arrow, sailing routes.",
+    "parts": [
+      "coastlines",
+      "port markers",
+      "north-east monsoon arrow",
+      "south-west monsoon arrow",
+      "sailing routes"
+    ],
+    "subject": "history",
+    "topic": "trade and empire",
+    "grade_band": "14-16",
+    "why": "why monsoon winds set the timetable of ocean trade"
+  },
+  {
+    "key": "charkha_spinning_wheel",
+    "prompt": "A simple floor spinning wheel seen from the side: a wooden box frame, a large drive wheel with spokes, a hand crank on its axle, a fine drive band running to a small spindle, the spindle held between two uprights, and a loose roll of cotton beside it. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: box frame, drive wheel, hand crank, drive band, spindle, cotton roving.",
+    "parts": [
+      "box frame",
+      "drive wheel",
+      "hand crank",
+      "drive band",
+      "spindle",
+      "cotton roving"
+    ],
+    "subject": "history",
+    "topic": "modern india",
+    "grade_band": "11-16",
+    "why": "hand spinning, swadeshi and a symbol of the independence movement"
+  },
+  {
+    "key": "partition_boundary_map",
+    "prompt": "A schematic outline map of a large subcontinent with no place names: the coastline and northern mountains as plain outlines, a bold boundary line separating a region in the north-west and a region in the north-east from the rest, and pairs of arrows crossing that boundary in both directions. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: subcontinent outline, boundary line, north-west region, north-east region, movement arrows.",
+    "parts": [
+      "subcontinent outline",
+      "boundary line",
+      "north-west region",
+      "north-east region",
+      "movement arrows"
+    ],
+    "subject": "history",
+    "topic": "modern india",
+    "grade_band": "14-16",
+    "why": "explaining partition, new borders and mass movement of people"
+  },
+  {
+    "key": "great_wall_cross_section",
+    "prompt": "A cut-away cross-section through a long defensive wall: a rammed earth core inside a facing of fitted stone blocks, a paved walkway along the top, a toothed parapet on the outer edge, a lower parapet on the inner edge, a square watchtower rising at one end, and a signal beacon platform beyond it. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: earth core, stone facing, walkway, outer parapet, inner parapet, watchtower, beacon platform.",
+    "parts": [
+      "earth core",
+      "stone facing",
+      "walkway",
+      "outer parapet",
+      "inner parapet",
+      "watchtower",
+      "beacon platform"
+    ],
+    "subject": "history",
+    "topic": "imperial china",
+    "grade_band": "11-13",
+    "why": "frontier defence, forced labour and the scale of imperial projects"
+  },
+  {
+    "key": "silk_road_route_map",
+    "prompt": "A schematic route map with no place names: a landmass outline with mountain ridge marks and a stippled desert band, a chain of small circles marking oasis towns, a line threading between them through a narrow gap in the mountains, a branch line curving south to a coast, and a dashed sea route round the coastline. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: landmass outline, mountain ranges, desert band, oasis towns, overland route, mountain pass, sea route.",
+    "parts": [
+      "landmass outline",
+      "mountain ranges",
+      "desert band",
+      "oasis towns",
+      "overland route",
+      "mountain pass",
+      "sea route"
+    ],
+    "subject": "history",
+    "topic": "trade and empire",
+    "grade_band": "11-16",
+    "why": "long-distance trade, and how goods and ideas travelled"
+  },
+  {
+    "key": "chinese_junk_ship",
+    "prompt": "A Chinese junk seen from the side and partly cut away: a broad flat-bottomed hull, a high square stern, three masts carrying sails stiffened by horizontal battens, a deep rudder hung at the stern, and internal partition walls dividing the hull into separate compartments. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: hull, high stern, battened sails, masts, stern rudder, bulkhead compartments.",
+    "parts": [
+      "hull",
+      "high stern",
+      "battened sails",
+      "masts",
+      "stern rudder",
+      "bulkhead compartments"
+    ],
+    "subject": "history",
+    "topic": "imperial china",
+    "grade_band": "14-16",
+    "why": "Chinese maritime technology and the treasure voyages"
+  },
+  {
+    "key": "south_pointing_compass",
+    "prompt": "An early Chinese compass: a square bronze base plate with a polished round hollow in the centre, a spoon-shaped lodestone resting in the hollow with its handle swung to one side, plain tick marks around the rim, and a side view of the same spoon beside it. Do not add any characters or numbers. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: base plate, polished hollow, lodestone spoon, spoon handle, rim marks.",
+    "parts": [
+      "base plate",
+      "polished hollow",
+      "lodestone spoon",
+      "spoon handle",
+      "rim marks"
+    ],
+    "subject": "history",
+    "topic": "imperial china",
+    "grade_band": "11-13",
+    "why": "Chinese inventions and their effect on later navigation"
+  },
+  {
+    "key": "han_seismoscope",
+    "prompt": "A cut-away drawing of an ancient earthquake detector: a large round bronze vessel on a stand, eight dragon heads spaced around the outside each holding a small ball in its jaws, eight open-mouthed toads sitting on the ground below, and a heavy pendulum with a lever arm shown hanging inside the vessel. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: bronze vessel, dragon heads, bronze balls, toad figures, internal pendulum, lever arm, stand.",
+    "parts": [
+      "bronze vessel",
+      "dragon heads",
+      "bronze balls",
+      "toad figures",
+      "internal pendulum",
+      "lever arm",
+      "stand"
+    ],
+    "subject": "history",
+    "topic": "imperial china",
+    "grade_band": "11-13",
+    "why": "Han science and technology, and how an invention is tested"
+  },
+  {
+    "key": "woodblock_printing_process",
+    "prompt": "A four-stage printing process drawn left to right with arrows: a wooden block with a raised carved pattern on its face, an ink brush spreading ink across the raised surface, a sheet of paper laid on the block and rubbed with a flat pad, and a stack of finished sheets. Leave the carved face as a plain pattern with no characters. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: carved block, ink brush, paper sheet, rubbing pad, printed stack, process arrows.",
+    "parts": [
+      "carved block",
+      "ink brush",
+      "paper sheet",
+      "rubbing pad",
+      "printed stack",
+      "process arrows"
+    ],
+    "subject": "history",
+    "topic": "imperial china",
+    "grade_band": "11-16",
+    "why": "printing, literacy and the spread of ideas long before Gutenberg"
+  },
+  {
+    "key": "terracotta_pit_site_plan",
+    "prompt": "An archaeological plan of an excavated pit: a large rectangular trench outline, long parallel rows of small oval figure positions inside it, earth partition walls between the rows, sloping access ramps at one end, patches marking collapsed timber roofing, and a faint survey grid over the whole plan. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: trench outline, figure rows, earth partitions, access ramps, timber roof remains, survey grid.",
+    "parts": [
+      "trench outline",
+      "figure rows",
+      "earth partitions",
+      "access ramps",
+      "timber roof remains",
+      "survey grid"
+    ],
+    "subject": "history",
+    "topic": "imperial china",
+    "grade_band": "14-16",
+    "why": "archaeology as evidence, and the tomb of the first emperor"
+  },
+  {
+    "key": "oracle_bone_divination",
+    "prompt": "An oracle bone laid flat: a broad flat shoulder blade of an ox, a row of small drilled hollows on the back, fine branching heat cracks radiating from those hollows on the front, a heated bronze poker resting beside it, and a small brazier. Leave the bone surface free of any writing. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: shoulder blade, drilled hollows, heat cracks, bronze poker, brazier.",
+    "parts": [
+      "shoulder blade",
+      "drilled hollows",
+      "heat cracks",
+      "bronze poker",
+      "brazier"
+    ],
+    "subject": "history",
+    "topic": "imperial china",
+    "grade_band": "14-16",
+    "why": "Shang beliefs, and the earliest evidence for Chinese writing"
+  },
+  {
+    "key": "trans_saharan_trade_routes",
+    "prompt": "A schematic outline map with no place names: a stippled desert band across the middle, a coastline along the top, a broad river curving along the bottom, small circles marking oasis stops in the desert, pick symbols marking mines in the north, nugget symbols marking goldfields in the south, and arrows running north and south between them. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: desert band, coastline, river, oasis stops, salt mines, gold fields, caravan arrows.",
+    "parts": [
+      "desert band",
+      "coastline",
+      "river",
+      "oasis stops",
+      "salt mines",
+      "gold fields",
+      "caravan arrows"
+    ],
+    "subject": "history",
+    "topic": "african kingdoms",
+    "grade_band": "11-16",
+    "why": "the wealth of Mali and Songhai and what actually crossed the desert"
+  },
+  {
+    "key": "great_zimbabwe_enclosure",
+    "prompt": "A great stone enclosure drawn in bird's-eye plan with a small side elevation beside it: a thick curving dry-stone outer wall of stacked blocks laid without mortar, a narrow entrance gap, a tapering solid conical tower inside, a narrow passage running between the outer wall and an inner wall, and round huts in the enclosed space. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: outer wall, stone courses, entrance gap, conical tower, narrow passage, inner wall, huts.",
+    "parts": [
+      "outer wall",
+      "stone courses",
+      "entrance gap",
+      "conical tower",
+      "narrow passage",
+      "inner wall",
+      "huts"
+    ],
+    "subject": "history",
+    "topic": "african kingdoms",
+    "grade_band": "14-16",
+    "why": "African states, stone building and challenging assumptions about the past"
+  },
+  {
+    "key": "lost_wax_bronze_casting",
+    "prompt": "A four-stage casting process drawn left to right with arrows: a rough clay core shaped like a head, the same core covered in a smooth modelled wax layer with wax rods attached, the whole thing encased in a clay mould with a pouring funnel on top, and the finished bronze piece with the mould broken away. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: clay core, wax model, wax rods, clay mould, pouring funnel, finished casting, process arrows.",
+    "parts": [
+      "clay core",
+      "wax model",
+      "wax rods",
+      "clay mould",
+      "pouring funnel",
+      "finished casting",
+      "process arrows"
+    ],
+    "subject": "history",
+    "topic": "african kingdoms",
+    "grade_band": "14-16",
+    "why": "Benin bronzes, craft skill and questions about looted objects"
+  },
+  {
+    "key": "aztec_chinampa_cross_section",
+    "prompt": "A cut-away cross-section of a raised lake garden: shallow lake water on both sides, a rectangular plot built up from layers of lake mud and cut vegetation, woven reed mats holding the layers together, willow posts driven down at the corners with roots reaching into the lake bed, crops growing on the surface, and a canoe in the channel alongside. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: lake water, mud layers, reed mats, willow posts, crops, canoe channel.",
+    "parts": [
+      "lake water",
+      "mud layers",
+      "reed mats",
+      "willow posts",
+      "crops",
+      "canoe channel"
+    ],
+    "subject": "history",
+    "topic": "aztec empire",
+    "grade_band": "11-13",
+    "why": "farming a lake city and feeding a huge population"
+  },
+  {
+    "key": "tenochtitlan_island_city_plan",
+    "prompt": "A bird's-eye plan of an island city on a lake: the lake as an open outline, the island city as a grid of blocks, three straight raised causeways linking the island to the shore, canals threading between the blocks, a walled ceremonial precinct at the centre with a stepped temple platform, and a large open market square. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: lake, island city, causeways, canals, ceremonial precinct, temple platform, market square.",
+    "parts": [
+      "lake",
+      "island city",
+      "causeways",
+      "canals",
+      "ceremonial precinct",
+      "temple platform",
+      "market square"
+    ],
+    "subject": "history",
+    "topic": "aztec empire",
+    "grade_band": "11-13",
+    "why": "the size and organisation of the Aztec capital"
+  },
+  {
+    "key": "inca_terrace_farming",
+    "prompt": "A cut-away cross-section of a terraced hillside: a series of flat planting platforms stepped up the slope, a fitted stone retaining wall holding up each platform, a coarse gravel drainage layer inside each terrace beneath a layer of topsoil, a narrow irrigation channel running along one terrace, and stone steps projecting from a wall. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: terrace platforms, retaining walls, gravel drainage layer, topsoil, irrigation channel, projecting steps.",
+    "parts": [
+      "terrace platforms",
+      "retaining walls",
+      "gravel drainage layer",
+      "topsoil",
+      "irrigation channel",
+      "projecting steps"
+    ],
+    "subject": "history",
+    "topic": "inca empire",
+    "grade_band": "11-16",
+    "why": "mountain farming, engineering and how the Inca fed an empire"
+  },
+  {
+    "key": "inca_quipu_cords",
+    "prompt": "A quipu hanging from a hook: a thick horizontal main cord, many thinner cords hanging down from it, groups of knots tied at different heights along the hanging cords, a few extra cords branching sideways from those, and a plain end tassel. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: main cord, pendant cords, knot clusters, subsidiary cords, end tassel.",
+    "parts": [
+      "main cord",
+      "pendant cords",
+      "knot clusters",
+      "subsidiary cords",
+      "end tassel"
+    ],
+    "subject": "history",
+    "topic": "inca empire",
+    "grade_band": "14-16",
+    "why": "record keeping without writing, and what counts as a written source"
+  },
+  {
+    "key": "caravel_sailing_ship",
+    "prompt": "A caravel seen from the side: a rounded hull with a raised deck at the stern, three masts, triangular sails on the rear masts and one square sail on the front mast, a stern rudder with a tiller, a small lookout platform on the main mast, and rigging lines running down to the hull. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: hull, raised stern deck, masts, triangular sails, square sail, stern rudder, lookout platform.",
+    "parts": [
+      "hull",
+      "raised stern deck",
+      "masts",
+      "triangular sails",
+      "square sail",
+      "stern rudder",
+      "lookout platform"
+    ],
+    "subject": "history",
+    "topic": "age of exploration",
+    "grade_band": "11-13",
+    "why": "the ship technology that made ocean voyages possible"
+  },
+  {
+    "key": "mariners_compass_rose",
+    "prompt": "A ship's compass shown cut away: a round bowl, a pivot pin rising from its base, a flat circular card balanced on the pivot with plain radiating point lines and no letters, a magnetised needle fixed under the card, and a pair of pivoted rings suspending the bowl so it stays level. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: bowl, pivot pin, compass card, point lines, magnetised needle, gimbal rings.",
+    "parts": [
+      "bowl",
+      "pivot pin",
+      "compass card",
+      "point lines",
+      "magnetised needle",
+      "gimbal rings"
+    ],
+    "subject": "history",
+    "topic": "age of exploration",
+    "grade_band": "11-16",
+    "why": "navigation out of sight of land, and instruments as evidence"
+  },
+  {
+    "key": "columbian_exchange_flow",
+    "prompt": "An exchange diagram: two plain landmass outlines facing each other across an open sea gap, a broad arrow crossing from left to right with small crop and animal symbols riding on it, a second broad arrow crossing right to left carrying different crop symbols, and a small cluster of germ symbols on one arrow. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: old world landmass, new world landmass, westward arrow, eastward arrow, crop symbols, animal symbols, disease symbols.",
+    "parts": [
+      "old world landmass",
+      "new world landmass",
+      "westward arrow",
+      "eastward arrow",
+      "crop symbols",
+      "animal symbols",
+      "disease symbols"
+    ],
+    "subject": "history",
+    "topic": "age of exploration",
+    "grade_band": "14-16",
+    "why": "the two-way consequences of contact between continents"
+  },
+  {
+    "key": "triangular_trade_routes",
+    "prompt": "A schematic outline map of the Atlantic Ocean with no place names: plain coastline outlines of three landmasses around the ocean, three thick arrows forming a rough triangle between them, small square markers for ports at each corner, and small cargo boxes drawn on each arrow. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: ocean, coastline outlines, first leg arrow, second leg arrow, third leg arrow, port markers, cargo boxes.",
+    "parts": [
+      "ocean",
+      "coastline outlines",
+      "first leg arrow",
+      "second leg arrow",
+      "third leg arrow",
+      "port markers",
+      "cargo boxes"
+    ],
+    "subject": "history",
+    "topic": "atlantic slave trade",
+    "grade_band": "14-16",
+    "why": "the structure of the trade before studying its human cost"
+  },
+  {
+    "key": "sugar_plantation_plan",
+    "prompt": "A bird's-eye plan of a sugar estate: large rectangular cane fields divided by cart tracks, a windmill-driven crushing mill, a long boiling house next to it, a curing store, rows of very small dwellings, a large house set apart, and a wharf on a creek at one edge. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: cane fields, cart tracks, crushing mill, boiling house, curing store, workers dwellings, great house, wharf.",
+    "parts": [
+      "cane fields",
+      "cart tracks",
+      "crushing mill",
+      "boiling house",
+      "curing store",
+      "workers dwellings",
+      "great house",
+      "wharf"
+    ],
+    "subject": "history",
+    "topic": "atlantic slave trade",
+    "grade_band": "14-16",
+    "why": "how a plantation economy was organised and who did the work"
+  },
+  {
+    "key": "printing_press_screw",
+    "prompt": "A wooden screw printing press seen from the side: a heavy timber frame, a large central screw, a long lever bar turning the screw, a flat pressing plate below the screw, a sliding bed carrying a tray of type, and a hinged frame holding a sheet of paper. Leave the type tray as plain blank rectangles. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: timber frame, screw, lever bar, pressing plate, sliding bed, type tray, paper frame.",
+    "parts": [
+      "timber frame",
+      "screw",
+      "lever bar",
+      "pressing plate",
+      "sliding bed",
+      "type tray",
+      "paper frame"
+    ],
+    "subject": "history",
+    "topic": "renaissance and reformation",
+    "grade_band": "11-16",
+    "why": "printing, the Reformation and how ideas spread fast"
+  },
+  {
+    "key": "spinning_jenny",
+    "prompt": "A spinning jenny seen from the side and slightly above: a low wooden frame, a row of many upright spindles along one end, a large hand-turned wheel with a drive band, a sliding carriage bar that grips the fibres, and loose rovings of cotton feeding in from a rack. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: wooden frame, spindles, drive wheel, drive band, sliding carriage, roving rack.",
+    "parts": [
+      "wooden frame",
+      "spindles",
+      "drive wheel",
+      "drive band",
+      "sliding carriage",
+      "roving rack"
+    ],
+    "subject": "history",
+    "topic": "industrial revolution",
+    "grade_band": "11-13",
+    "why": "the machines that moved spinning out of the home"
+  },
+  {
+    "key": "power_loom",
+    "prompt": "A power loom drawn as a clear side view: a beam of warp threads at the back, vertical heddle frames lifting alternate threads, a shuttle carrying the weft across the gap, a comb-like beater bar pressing the weave tight, a cloth beam winding the finished cloth at the front, and a drive belt running up to a shaft above. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: warp beam, heddle frames, shuttle, beater bar, cloth beam, drive belt.",
+    "parts": [
+      "warp beam",
+      "heddle frames",
+      "shuttle",
+      "beater bar",
+      "cloth beam",
+      "drive belt"
+    ],
+    "subject": "history",
+    "topic": "industrial revolution",
+    "grade_band": "14-16",
+    "why": "mechanised weaving, factory discipline and skilled workers displaced"
+  },
+  {
+    "key": "newcomen_atmospheric_engine",
+    "prompt": "A cut-away side view of an early atmospheric steam engine: a brick-set boiler with a furnace fire beneath it, a tall open-topped cylinder above holding a piston, a chain from the piston to one end of a heavy rocking beam pivoted at the centre, a pump rod hanging from the other end down a mine shaft, and a cold water pipe spraying into the cylinder. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: boiler, furnace, cylinder, piston, rocking beam, pump rod, cold water pipe.",
+    "parts": [
+      "boiler",
+      "furnace",
+      "cylinder",
+      "piston",
+      "rocking beam",
+      "pump rod",
+      "cold water pipe"
+    ],
+    "subject": "history",
+    "topic": "industrial revolution",
+    "grade_band": "14-16",
+    "why": "the first steam power, and why it was used to drain mines"
+  },
+  {
+    "key": "watt_rotative_steam_engine",
+    "prompt": "A cut-away side view of an improved steam engine: a closed cylinder with a piston, a separate condenser vessel beside it linked by a pipe, a rocking beam above, a crank turning a large flywheel, a spinning ball governor on a spindle, and a boiler feeding steam through a valve. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: cylinder, piston, separate condenser, rocking beam, crank, flywheel, ball governor, boiler.",
+    "parts": [
+      "cylinder",
+      "piston",
+      "separate condenser",
+      "rocking beam",
+      "crank",
+      "flywheel",
+      "ball governor",
+      "boiler"
+    ],
+    "subject": "history",
+    "topic": "industrial revolution",
+    "grade_band": "14-16",
+    "why": "the improvement that let steam drive factory machinery"
+  },
+  {
+    "key": "steam_locomotive",
+    "prompt": "A steam locomotive seen from the side and cut away along the boiler: a fire grate in the firebox at the back, fire tubes running forward through the water-filled boiler, a tall chimney at the front, a cylinder and piston low at the front driving a connecting rod, large driving wheels linked by a coupling rod, and a coal and water tender behind. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: firebox, boiler tubes, chimney, cylinder and piston, connecting rod, driving wheels, tender.",
+    "parts": [
+      "firebox",
+      "boiler tubes",
+      "chimney",
+      "cylinder and piston",
+      "connecting rod",
+      "driving wheels",
+      "tender"
+    ],
+    "subject": "history",
+    "topic": "industrial revolution",
+    "grade_band": "11-13",
+    "why": "the railway age and how a steam engine actually moves"
+  },
+  {
+    "key": "textile_mill_cross_section",
+    "prompt": "A cut-away cross-section of a multi-storey textile mill: a water wheel in a channel at one end, a vertical drive shaft rising through the building, horizontal line shafting under each ceiling, rows of machines on three floors linked to the shafting by belts, a tall chimney at one side, and a warehouse block at the base. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: water wheel, vertical shaft, line shafting, drive belts, machine floors, chimney, warehouse.",
+    "parts": [
+      "water wheel",
+      "vertical shaft",
+      "line shafting",
+      "drive belts",
+      "machine floors",
+      "chimney",
+      "warehouse"
+    ],
+    "subject": "history",
+    "topic": "industrial revolution",
+    "grade_band": "11-16",
+    "why": "why factories stood where they did, and what a working day looked like"
+  },
+  {
+    "key": "coal_mine_cross_section",
+    "prompt": "A cut-away cross-section of a coal mine: a headframe carrying a winding wheel at the surface, a deep vertical shaft with a cage in it, two horizontal coal seams with tunnels driven along them, timber props holding the tunnel roofs, a ventilation furnace at the foot of a second shaft, and a pumping engine house at the surface. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: headframe, winding wheel, shaft, cage, coal seams, tunnels, roof props, pumping engine.",
+    "parts": [
+      "headframe",
+      "winding wheel",
+      "shaft",
+      "cage",
+      "coal seams",
+      "tunnels",
+      "roof props",
+      "pumping engine"
+    ],
+    "subject": "history",
+    "topic": "industrial revolution",
+    "grade_band": "11-13",
+    "why": "coal as the fuel of industry, and the dangers of mining work"
+  },
+  {
+    "key": "davy_safety_lamp",
+    "prompt": "A miner's safety lamp shown whole and cut away: an oil reservoir at the base, a wick rising from it, a glass cylinder around the flame, a fine wire gauze cylinder enclosing the top, a metal cap with air holes, and a carrying hook above. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: oil reservoir, wick, glass cylinder, wire gauze, vented cap, carrying hook.",
+    "parts": [
+      "oil reservoir",
+      "wick",
+      "glass cylinder",
+      "wire gauze",
+      "vented cap",
+      "carrying hook"
+    ],
+    "subject": "history",
+    "topic": "industrial revolution",
+    "grade_band": "11-16",
+    "why": "science applied to a real problem, and the limits of a technical fix"
+  },
+  {
+    "key": "blast_furnace_ironmaking",
+    "prompt": "A cut-away cross-section of a blast furnace: a charging platform at the top with a hopper, a tall stone stack narrowing to a wide belly, layers of ore, coke and limestone stacked inside, angled air pipes entering near the base, a tapping hole at the very bottom with a channel running to moulds, and a higher slag hole to one side. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: charging hopper, furnace stack, charge layers, air pipes, tap hole, casting channel, slag hole.",
+    "parts": [
+      "charging hopper",
+      "furnace stack",
+      "charge layers",
+      "air pipes",
+      "tap hole",
+      "casting channel",
+      "slag hole"
+    ],
+    "subject": "history",
+    "topic": "industrial revolution",
+    "grade_band": "14-16",
+    "why": "iron and steel making and the raw materials industry needed"
+  },
+  {
+    "key": "canal_lock_operation",
+    "prompt": "A cut-away side view of a canal lock: a high water level on the left, a low water level on the right, a rectangular lock chamber between them, a pair of gates at each end, small sluice openings in the gates with paddle gear above, a narrow boat sitting in the chamber, and a towpath along the bank. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: upper level, lower level, lock chamber, upper gates, lower gates, paddle sluices, narrow boat, towpath.",
+    "parts": [
+      "upper level",
+      "lower level",
+      "lock chamber",
+      "upper gates",
+      "lower gates",
+      "paddle sluices",
+      "narrow boat",
+      "towpath"
+    ],
+    "subject": "history",
+    "topic": "industrial revolution",
+    "grade_band": "11-13",
+    "why": "moving heavy goods before railways, and simple engineering"
+  },
+  {
+    "key": "enclosure_before_and_after",
+    "prompt": "Two field plans side by side for comparison: on the left a village with three great open fields split into many narrow parallel strips plus rough common land, on the right the same area redrawn as regular rectangular fields divided by hedge lines, with a farmstead standing away from the village and a straight new lane. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: open field strips, common land, hedged fields, farmstead, new lane.",
+    "parts": [
+      "open field strips",
+      "common land",
+      "hedged fields",
+      "farmstead",
+      "new lane"
+    ],
+    "subject": "history",
+    "topic": "industrial revolution",
+    "grade_band": "14-16",
+    "why": "enclosure, changing land ownership and why people moved to towns"
+  },
+  {
+    "key": "back_to_back_housing_cross_section",
+    "prompt": "A cut-away cross-section through crowded terraced housing: two rows of small houses built back to back sharing a rear wall, a cramped cellar dwelling beneath one row, a narrow paved courtyard, a shared outdoor privy with a cesspit below it, a single water pump in the yard, and a well close to the cesspit. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: terrace houses, shared back wall, cellar dwelling, courtyard, shared privy, cesspit, water pump, well.",
+    "parts": [
+      "terrace houses",
+      "shared back wall",
+      "cellar dwelling",
+      "courtyard",
+      "shared privy",
+      "cesspit",
+      "water pump",
+      "well"
+    ],
+    "subject": "history",
+    "topic": "public health",
+    "grade_band": "14-16",
+    "why": "urban living conditions, cholera and the case for public health reform"
+  },
+  {
+    "key": "trench_cross_section",
+    "prompt": "A cut-away cross-section through a front line trench: a raised earth parapet bank topped with sandbags on the enemy side, a firing step cut into the forward wall, wooden duckboards along the muddy floor, a low sump beneath them, a covered dugout hollowed into the rear wall, a raised parados bank behind, and a belt of barbed wire on stakes out in front. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: parapet, sandbags, fire step, duckboards, sump, dugout, parados, barbed wire.",
+    "parts": [
+      "parapet",
+      "sandbags",
+      "fire step",
+      "duckboards",
+      "sump",
+      "dugout",
+      "parados",
+      "barbed wire"
+    ],
+    "subject": "history",
+    "topic": "first world war",
+    "grade_band": "11-16",
+    "why": "trench conditions, and why attacking was so costly"
+  },
+  {
+    "key": "trench_system_plan",
+    "prompt": "A bird's-eye plan of a trench system: a zig-zag front line trench, a support trench behind it, a reserve trench further back, straight communication trenches linking all three, a band of barbed wire in front of the front line, an open strip beyond that, and a mirrored front line on the far side. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: front line trench, support trench, reserve trench, communication trenches, barbed wire belt, open ground, opposing front line.",
+    "parts": [
+      "front line trench",
+      "support trench",
+      "reserve trench",
+      "communication trenches",
+      "barbed wire belt",
+      "open ground",
+      "opposing front line"
+    ],
+    "subject": "history",
+    "topic": "first world war",
+    "grade_band": "11-16",
+    "why": "the depth of a trench system and why breakthroughs failed"
+  },
+  {
+    "key": "european_alliance_blocs",
+    "prompt": "An alliance diagram of empty outlined boxes: three boxes grouped inside one large rectangle on the left, three more boxes grouped inside another large rectangle on the right, a double-headed arrow drawn between the two rectangles, and thin lines linking the boxes inside each group. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: first alliance group, second alliance group, member boxes, internal links, tension arrow.",
+    "parts": [
+      "first alliance group",
+      "second alliance group",
+      "member boxes",
+      "internal links",
+      "tension arrow"
+    ],
+    "subject": "history",
+    "topic": "first world war",
+    "grade_band": "14-16",
+    "why": "how the alliance system turned a local crisis into a world war"
+  },
+  {
+    "key": "gas_mask_respirator",
+    "prompt": "An early gas mask laid out flat with no wearer: a moulded face mask with two round eyepieces, a corrugated hose leading from the mask, a cylindrical filter canister at the end of the hose, adjustable head straps behind the mask, and a canvas carrying bag beside it. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: face mask, eyepieces, hose, filter canister, head straps, carrying bag.",
+    "parts": [
+      "face mask",
+      "eyepieces",
+      "hose",
+      "filter canister",
+      "head straps",
+      "carrying bag"
+    ],
+    "subject": "history",
+    "topic": "first world war",
+    "grade_band": "11-16",
+    "why": "new weapons, protection and the industrialisation of war"
+  },
+  {
+    "key": "first_world_war_tank",
+    "prompt": "An early tank seen from the side as a plain outline: a rhomboid armoured hull, a continuous track running right around the outside of the hull, a side sponson box projecting from the flank, small vision slits at the front, an exhaust pipe on the roof, and a pair of trailing steering wheels behind. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: armoured hull, track, sponson, vision slits, exhaust pipe, steering wheels.",
+    "parts": [
+      "armoured hull",
+      "track",
+      "sponson",
+      "vision slits",
+      "exhaust pipe",
+      "steering wheels"
+    ],
+    "subject": "history",
+    "topic": "first world war",
+    "grade_band": "11-13",
+    "why": "new technology and attempts to break the deadlock"
+  },
+  {
+    "key": "atlantic_convoy_formation",
+    "prompt": "A bird's-eye diagram of a convoy at sea: several columns of identical merchant ship shapes arranged in a rectangle, smaller escort ship shapes spaced around the outside, a dashed ring showing the escort screen, a long route line running across the diagram, and arrows approaching the ring from outside. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: merchant columns, escort ships, escort screen, route line, threat arrows.",
+    "parts": [
+      "merchant columns",
+      "escort ships",
+      "escort screen",
+      "route line",
+      "threat arrows"
+    ],
+    "subject": "history",
+    "topic": "second world war",
+    "grade_band": "14-16",
+    "why": "the battle of the Atlantic and why supply lines decided the war"
+  },
+  {
+    "key": "anderson_air_raid_shelter",
+    "prompt": "A cut-away view of a garden air raid shelter: curved corrugated steel panels bolted into an arch, the arch sunk into a shallow pit, a thick layer of earth heaped over the top, a low entrance with a sandbag blast wall in front of it, wooden bunks inside, and the garden ground line on either side. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: corrugated panels, sunken pit, earth covering, entrance, blast wall, bunks.",
+    "parts": [
+      "corrugated panels",
+      "sunken pit",
+      "earth covering",
+      "entrance",
+      "blast wall",
+      "bunks"
+    ],
+    "subject": "history",
+    "topic": "second world war",
+    "grade_band": "11-13",
+    "why": "the home front, the Blitz and civilian protection"
+  },
+  {
+    "key": "chain_home_radar_station",
+    "prompt": "A radar station diagram: a tall lattice transmitter mast on the left, a shorter receiver mast on the right, a low control hut between them, curved arcs spreading out to sea from the transmitter, an aircraft outline far out over the sea, and returning arcs coming back to the receiver. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: transmitter mast, receiver mast, control hut, outgoing arcs, aircraft, returning arcs.",
+    "parts": [
+      "transmitter mast",
+      "receiver mast",
+      "control hut",
+      "outgoing arcs",
+      "aircraft",
+      "returning arcs"
+    ],
+    "subject": "history",
+    "topic": "second world war",
+    "grade_band": "14-16",
+    "why": "how the Battle of Britain was won by a system, not just by planes"
+  },
+  {
+    "key": "berlin_wall_cross_section",
+    "prompt": "A cut-away cross-section across a divided city border: a smooth outer concrete wall with a rounded pipe along its top, a wide open patrol strip behind it, a raised watchtower overlooking the strip, a line of anti-vehicle obstacles, a patrol road, a fence with lamps along it, and an inner wall on the far side. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: outer wall, control strip, watchtower, vehicle obstacles, patrol road, lamp fence, inner wall.",
+    "parts": [
+      "outer wall",
+      "control strip",
+      "watchtower",
+      "vehicle obstacles",
+      "patrol road",
+      "lamp fence",
+      "inner wall"
+    ],
+    "subject": "history",
+    "topic": "cold war",
+    "grade_band": "14-16",
+    "why": "the divided city as the clearest physical symbol of the Cold War"
+  },
+  {
+    "key": "divided_germany_zones_map",
+    "prompt": "A schematic outline map of a country divided into four zones: the national outline, three internal boundary lines splitting it into four regions, a small circle marking the capital deep inside one region, and that circle itself split into four sectors by short lines. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: country outline, zone boundaries, four zones, capital circle, capital sectors.",
+    "parts": [
+      "country outline",
+      "zone boundaries",
+      "four zones",
+      "capital circle",
+      "capital sectors"
+    ],
+    "subject": "history",
+    "topic": "cold war",
+    "grade_band": "14-16",
+    "why": "post-war occupation and how the Cold War divide began"
+  },
+  {
+    "key": "iron_curtain_europe_map",
+    "prompt": "A schematic outline map of Europe with no place names: the coastline and a few national boundary lines as plain outlines, a heavy line running from the north down to the south-east dividing the continent, light hatching over the eastern bloc region on one side of it and the western bloc region left plain, small dots marking capitals, and an arrow head at each end of the dividing line. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: europe outline, dividing line, eastern bloc region, western bloc region, capital dots.",
+    "parts": [
+      "europe outline",
+      "dividing line",
+      "eastern bloc region",
+      "western bloc region",
+      "capital dots"
+    ],
+    "subject": "history",
+    "topic": "cold war",
+    "grade_band": "14-16",
+    "why": "the shape of a divided Europe behind every Cold War topic"
+  },
+  {
+    "key": "united_nations_structure",
+    "prompt": "A structure chart of empty outlined boxes: one wide box at the top, five boxes in a row beneath it joined to it by lines, a small ring of seats drawn inside one of those boxes, a plain box for a court at one end, and short lines running down from two boxes to a row of smaller agency boxes, all left blank inside. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: assembly box, council boxes, seat ring, secretariat box, court box, agency boxes, connecting lines.",
+    "parts": [
+      "assembly box",
+      "council boxes",
+      "seat ring",
+      "secretariat box",
+      "court box",
+      "agency boxes",
+      "connecting lines"
+    ],
+    "subject": "history",
+    "topic": "modern world",
+    "grade_band": "14-16",
+    "why": "international organisations after 1945 and how power is distributed"
+  },
+  {
+    "key": "multistage_rocket_stages",
+    "prompt": "A multistage launch rocket drawn as a tall side view with separation lines between the sections: a wide first stage with engine bells at the bottom, a narrower second stage above it, a slimmer third stage, a small crew capsule near the top, a pointed escape tower on the tip, and short thin arrows at each separation line. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: first stage, second stage, third stage, crew capsule, escape tower, separation lines.",
+    "parts": [
+      "first stage",
+      "second stage",
+      "third stage",
+      "crew capsule",
+      "escape tower",
+      "separation lines"
+    ],
+    "subject": "history",
+    "topic": "modern world",
+    "grade_band": "11-13",
+    "why": "the space race as Cold War competition, and twentieth century technology"
+  },
+  {
+    "key": "decolonisation_world_map",
+    "prompt": "A schematic world outline map with no place names: continent outlines only, light hatching over several large territories, short outward arrows springing from each hatched territory, and small flag-pole markers standing in them. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: continent outlines, hatched territories, independence arrows, new state markers.",
+    "parts": [
+      "continent outlines",
+      "hatched territories",
+      "independence arrows",
+      "new state markers"
+    ],
+    "subject": "history",
+    "topic": "decolonisation",
+    "grade_band": "14-16",
+    "why": "the scale and speed of empires ending after 1945"
+  },
+  {
+    "key": "cause_and_consequence_chain",
+    "prompt": "An empty cause and consequence chart: three outlined boxes stacked on the left, arrows from each pointing right into one larger box in the middle, and arrows from that box fanning out to three outlined boxes on the right, every box left blank inside. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: cause boxes, inward arrows, event box, outward arrows, consequence boxes.",
+    "parts": [
+      "cause boxes",
+      "inward arrows",
+      "event box",
+      "outward arrows",
+      "consequence boxes"
+    ],
+    "subject": "history",
+    "topic": "historical thinking",
+    "grade_band": "11-16",
+    "why": "any lesson that asks why something happened and what followed"
+  },
+  {
+    "key": "archaeological_stratigraphy_section",
+    "prompt": "A cut-away section through an archaeological trench: horizontal soil layers stacked one above another, dark topsoil at the top, a rubble layer, an occupation layer with small artefact shapes in it, a thin burnt layer, undisturbed natural subsoil at the bottom, and a vertical measuring pole standing against the section face. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: topsoil, rubble layer, occupation layer, artefacts, burnt layer, natural subsoil, measuring pole.",
+    "parts": [
+      "topsoil",
+      "rubble layer",
+      "occupation layer",
+      "artefacts",
+      "burnt layer",
+      "natural subsoil",
+      "measuring pole"
+    ],
+    "subject": "history",
+    "topic": "archaeology",
+    "grade_band": "11-16",
+    "why": "how layers date a site and what counts as physical evidence"
+  },
+  {
+    "key": "archaeological_excavation_grid",
+    "prompt": "A bird's-eye plan of an excavation: a rectangular trench outline divided into equal square sections by taut string lines, wooden pegs at the string corners, a fixed datum peg at one corner, a spoil heap outside the trench, a finds tray beside it, and a north arrow. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: trench outline, grid squares, string lines, corner pegs, datum peg, spoil heap, finds tray, north arrow.",
+    "parts": [
+      "trench outline",
+      "grid squares",
+      "string lines",
+      "corner pegs",
+      "datum peg",
+      "spoil heap",
+      "finds tray",
+      "north arrow"
+    ],
+    "subject": "history",
+    "topic": "archaeology",
+    "grade_band": "11-13",
+    "why": "how a dig is recorded, and why position matters as much as the object"
+  },
+  {
+    "key": "historical_source_classification_tree",
+    "prompt": "An empty branching classification tree of outlined boxes: one box at the top, two branches running down to a box on each side, and three smaller boxes hanging beneath each of those, joined by plain straight lines and left blank inside. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: root box, left branch box, right branch box, left sub boxes, right sub boxes, branch lines.",
+    "parts": [
+      "root box",
+      "left branch box",
+      "right branch box",
+      "left sub boxes",
+      "right sub boxes",
+      "branch lines"
+    ],
+    "subject": "history",
+    "topic": "historical thinking",
+    "grade_band": "11-16",
+    "why": "sorting primary and secondary evidence at the start of any enquiry"
+  },
+  {
+    "key": "dynasty_family_tree_chart",
+    "prompt": "An empty family tree chart: a single box at the top with a small crown shape above it, a horizontal marriage link joining it to a second box, a vertical line dropping to a horizontal bar, three boxes hanging from that bar as the next generation, and two smaller boxes below one of those, all left blank inside. Simple unshaded black line art on white, clear separated parts, no shading, no colour, and no text, letters, numbers or labels of any kind. Name the layer groups exactly: crown marker, top boxes, marriage link, descent lines, second generation boxes, third generation boxes.",
+    "parts": [
+      "crown marker",
+      "top boxes",
+      "marriage link",
+      "descent lines",
+      "second generation boxes",
+      "third generation boxes"
+    ],
+    "subject": "history",
+    "topic": "historical thinking",
+    "grade_band": "11-16",
+    "why": "tracing succession and dynastic disputes in any monarchy topic"
+  }
+]
