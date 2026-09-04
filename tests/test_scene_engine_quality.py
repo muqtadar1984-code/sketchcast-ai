@@ -877,6 +877,58 @@ class TestPartNamesFromLabelText:
             assets["s002"]["plant_cell"].lower()
 
 
+class TestAQuestionIsNotAPartName:
+    """`_classify_text` keeps a short question as a LABEL on purpose — 'Why?'
+    and 'What is a cell?' are exactly the board text a socratic lesson wants —
+    but a label is not therefore a NAME for a part of the picture, and nothing
+    stopped one entering the label-text candidate pool.
+
+    That pool is written verbatim into the asset prompt as 'Name the layer
+    groups exactly: ...', so the image model was asked for a layer group
+    called 'why?' and the vision annotator was then paid to go looking for it.
+    """
+
+    @staticmethod
+    def _report(labels, narr):
+        raw = _plan_raw()
+        ch = raw["chapters"][0]
+        ch["assets"]["plant_cell"] = "A rectangular plant cell."   # no tail
+        ch["elements"] = [e for e in ch["elements"] if e["id"] == "cell"]
+        ch["elements"] += [
+            {"id": f"lbl{i}", "type": "text", "text": t, "at": [90, 120 + 60 * i],
+             "role": "label"} for i, t in enumerate(labels)]
+        for st in ch["steps"]:
+            st["actions"] = [a for a in st["actions"]
+                             if a.get("target") == "cell"]
+        plan = parse_visual_plan(raw)
+        _, assets, report = compile_plan(plan, narr,
+                                         all_segments=["s001", "s002", "s003"],
+                                         skip_hold=set())
+        line = next(ln for ln in report if "PART NAMES from label text" in ln)
+        return line, assets
+
+    @pytest.mark.parametrize("question", ["Why?", "What is a cell?",
+                                          "How does it work?"])
+    def test_a_question_never_becomes_a_layer_group(self, question):
+        narr = {"s001": "The cell wall is rigid.",
+                "s002": f"{question} The nucleus is the control centre.",
+                "s003": "look closer"}
+        line, assets = self._report([question, "Nucleus"], narr)
+        assert "nucleus" in line, line
+        first = question.split()[0].lower()
+        assert first not in line.lower(), line
+        tail = assets["s002"]["plant_cell"].lower()
+        assert "name the layer groups exactly: nucleus." in tail, tail
+
+    def test_a_real_name_still_reaches_the_pool(self):
+        """The exclusion must not cost the tier the names it exists for."""
+        narr = {"s001": "The cell wall is rigid.",
+                "s002": "The nucleus is the control centre.",
+                "s003": "look closer"}
+        line, _ = self._report(["Nucleus", "Cell wall"], narr)
+        assert "nucleus" in line and "cell wall" in line, line
+
+
 class TestRegionCarryBeatsLayers:
     def test_draws_with_both_layers_and_labels_carry_regions(self):
         """The model stamps `layers` on its draws; region tracking must win
@@ -2079,6 +2131,34 @@ class TestTextClassification:
         for sc in scenes.values():
             assert not any(a.get("target") == "compare_table"
                            for a in sc["actions"])
+
+    def test_a_short_instruction_is_dropped_not_captioned(self):
+        """The demote-instead-of-delete branch tested LENGTH and nothing else.
+        'Compare your models.' is 20 characters, so the branch lettered it
+        under the picture as a caption — readmitting through the back door the
+        exact class of text this pass exists to keep off the board."""
+        text = "Compare your models."
+        assert len(text) <= 40, "the length branch must be the one under test"
+        _, scenes, report = self._chapter(
+            text, {"s001": "Here is a plant cell.",
+                   "s002": "The nucleus is the control centre."})
+        assert any("DROPPED text->compare_table" in ln for ln in report),             report
+        assert not any("CAPTIONED text->compare_table" in ln
+                       for ln in report), report
+        for sc in scenes.values():
+            assert not any(e["id"] == "compare_table" for e in sc["elements"])
+
+    def test_a_verb_with_no_object_is_still_captioned(self):
+        """The carve-out has to reach this branch too: 'List of organs...'
+        opens with a verb from the instruction list but is a NOUN phrase, and
+        the classifier already refuses to call it an instruction. The demote
+        branch must agree, or the fix above deletes real board text."""
+        text = "List of organs in the human body"
+        assert len(text) <= 40
+        _, _, report = self._chapter(
+            text, {"s001": "a plant cell", "s002": "water moves"},
+            role="term")
+        assert any("CAPTIONED text->compare_table" in ln for ln in report),             report
 
     def test_a_spoken_sentence_becomes_a_key_point(self):
         text = "The nucleus controls everything the cell does."

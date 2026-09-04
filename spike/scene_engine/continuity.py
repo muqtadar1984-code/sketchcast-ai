@@ -180,6 +180,50 @@ _CAPTION_MAX_CHARS = 60
 # under the picture as a caption, not in the bin. Only a genuinely long
 # unspoken instruction is worth deleting.
 _SHORT_SENTENCE_CHARS = 40
+# A part NAME is a noun phrase. These open something else — a question the
+# teacher asks, an auxiliary, a connective — and none of them names a region
+# a vision annotator could find.
+_INTERROGATIVES = {"what", "why", "how", "when", "where", "who", "whom",
+                   "whose", "which"}
+_NON_NOUN_OPENERS = _INTERROGATIVES | _INSTRUCTION_VERBS | {
+    "is", "are", "was", "were", "do", "does", "did", "can", "could", "will",
+    "would", "should", "shall", "has", "have", "had", "let", "if", "and",
+    "but", "or", "so", "because", "not", "no", "yes", "true", "false",
+}
+
+
+def _is_instruction(text: str) -> bool:
+    """Board text that TELLS the reader to do something.
+
+    An instruction needs an OBJECT: 'Record' on its own is a noun, and so is
+    the 'List' of 'List of organs'; only 'Compare the two' is telling anybody
+    to do anything.
+    """
+    import re as _re
+    words = " ".join(str(text or "").split()).split()
+    if len(words) < 2:
+        return False
+    return (_re.sub(r"[^a-z]", "", words[0].lower()) in _INSTRUCTION_VERBS
+            and _re.sub(r"[^a-z]", "", words[1].lower()) != "of")
+
+
+def _is_part_name(text: str) -> bool:
+    """Could this board text be the NAME of a part of the picture?
+
+    `_classify_text` deliberately keeps a short question as a LABEL — 'Why?'
+    and 'What is a cell?' are exactly the board text a socratic lesson wants —
+    but a label is not therefore a part name, and nothing stopped one entering
+    the candidate pool below. That pool is written verbatim into the image
+    prompt as "Name the layer groups exactly: ...", so a question mark on the
+    board asked the image model for a layer group called 'why' and then paid
+    the vision annotator to go looking for it.
+    """
+    import re as _re
+    t = " ".join(str(text or "").split())
+    if not t or t.endswith(("?", "!")):
+        return False
+    words = [w for w in _re.sub(r"[^a-z0-9 ]", " ", t.lower()).split() if w]
+    return bool(words) and words[0] not in _NON_NOUN_OPENERS
 
 
 def _classify_text(e: dict) -> str:
@@ -191,13 +235,11 @@ def _classify_text(e: dict) -> str:
     no enforcement. So a 62-character activity instruction became a size-27
     'label', overran the safe area and was clamped straight across the art.
     """
-    import re as _re
     role = str(e.get("role") or "label").strip().lower()
     if role == "title":
         return "title"
     text = " ".join(str(e.get("text") or "").split())
     words = text.split()
-    first = _re.sub(r"[^a-z]", "", words[0].lower()) if words else ""
     # A full stop is a statement's mark — but a ONE-word text that carries one
     # is an abbreviation or a numbered tag ('Nucleus.', '1.'), and a question
     # or exclamation mark on a short text is a socratic prompt ('Why?', 'What
@@ -206,11 +248,7 @@ def _classify_text(e: dict) -> str:
     # the roster, not demoted, so a one-word label the model happened to
     # punctuate disappeared from the lesson.
     statement_stop = text.endswith(".") and len(words) > 1
-    # An instruction needs an OBJECT. 'Record' alone is a noun, and so is the
-    # 'List' of 'List of organs'; only 'Compare the two' is telling anybody
-    # to do anything.
-    instructing = (first in _INSTRUCTION_VERBS and len(words) >= 2
-                   and _re.sub(r"[^a-z]", "", words[1].lower()) != "of")
+    instructing = _is_instruction(text)
     if (len(words) <= _LABEL_MAX_WORDS and len(text) <= _LABEL_MAX_CHARS
             and not statement_stop and not instructing):
         return "caption" if role == "caption" else "label"
@@ -784,11 +822,17 @@ def _drop_sentence_text(ch: VisualChapter, roster: dict, narrations: dict,
                 f"CHAPTER {ch.concept} | KEY POINT from text->{eid} "
                 f"(a sentence is spoken, not lettered onto the board): "
                 f"{snapped!r}")
-        elif len(text) <= _SHORT_SENTENCE_CHARS:
+        elif len(text) <= _SHORT_SENTENCE_CHARS and not _is_instruction(text):
             # short enough to sit under the picture: demote rather than
             # delete. 'Osmosis: water moves across a membrane' is board text
             # somebody meant, and _keep_text_off_art already parks a caption
             # below the root.
+            #
+            # An INSTRUCTION is not, however short. 'Compare your models.' is
+            # 21 characters, so this branch lettered it onto the board as a
+            # caption — the exact class of text the pass above exists to keep
+            # off it, readmitted through the back door because the length
+            # test was the only test here.
             roster[eid] = {**e, "role": "caption"}
             report.append(
                 f"CHAPTER {ch.concept} | CAPTIONED text->{eid} (a short "
@@ -1029,7 +1073,7 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             if str(e.get("role") or "label") not in ("label", "term"):
                 continue
             t = " ".join(str(e.get("text") or "").split())
-            if not t or len(t.split()) > 4:
+            if not t or len(t.split()) > 4 or not _is_part_name(t):
                 continue
             n = t.strip().lower()
             if n and n not in cand_text:
