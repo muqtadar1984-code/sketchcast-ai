@@ -817,6 +817,55 @@ class TestHydrationHoldsThePerKeyLock:
         assert not list(d.glob("*.part"))
 
 
+class TestTheScratchFileIsPrivateToItsWriter:
+    """`_write_atomic` writes beside the target and renames it in, so a reader
+    never opens a half-written asset.png. One FIXED `asset.png.part` for every
+    writer defeated exactly the case it exists for: two writers of the same
+    key — the parent and a segment subprocess, or two workers sharing a cache
+    volume — opened the SAME scratch path, so one could overwrite the other's
+    bytes and the unconditional finally-unlink could delete a scratch file
+    still on its way in. The name now carries the writer's pid and a uuid4,
+    and the unlink runs only on failure."""
+
+    def test_two_writers_never_share_a_scratch_path(self, tmp_path, monkeypatch):
+        import os
+        png = tmp_path / "asset.png"
+        scratch: list[Path] = []
+        real_write = Path.write_bytes
+
+        def spy(self, data):
+            scratch.append(Path(self))
+            return real_write(self, data)
+        monkeypatch.setattr(Path, "write_bytes", spy)
+
+        vl._write_atomic(png, b"first")
+        vl._write_atomic(png, b"second")
+        assert png.read_bytes() == b"second"
+        assert len(scratch) == 2 and scratch[0] != scratch[1],             "each writer needs its own scratch file"
+        assert all(q.name.endswith(".part") and f".{os.getpid()}." in q.name
+                   for q in scratch), scratch
+        assert not list(tmp_path.glob("*.part")), "renamed away, never left behind"
+
+    def test_a_second_writer_cannot_clobber_a_flight_in_progress(self, tmp_path, monkeypatch):
+        """Writer A is interrupted between its write and its rename; writer B
+        runs to completion inside that window. With one shared name B
+        overwrote A's bytes AND its finally-unlink removed the file A was
+        about to rename, so A raised FileNotFoundError — which hydrate_avatar
+        turns into a lost face and a regenerated, different one."""
+        png = tmp_path / "asset.png"
+        real_write = Path.write_bytes
+
+        def spy(self, data):
+            real_write(self, data)
+            if data == b"A":            # A's window: B runs start to finish
+                vl._write_atomic(png, b"B")
+        monkeypatch.setattr(Path, "write_bytes", spy)
+
+        vl._write_atomic(png, b"A")     # must not raise
+        assert png.read_bytes() == b"A", "A renamed in ITS OWN bytes, last"
+        assert not list(tmp_path.glob("*.part"))
+
+
 class TestTheDrawIsInsertionStable:
     """The draw is rendezvous hashing: each row's rank for a seed is
     sha256(f"{seed}:{row_id}"), the smallest wins. A roster row approved

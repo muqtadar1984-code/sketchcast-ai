@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import shutil
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -640,14 +641,28 @@ def find_avatar(key: str) -> dict[str, Any] | None:
 
 
 def _write_atomic(png: Path, data: bytes) -> None:
-    """Write `data` to a sibling and rename it into place, so `png` is never
-    observable half-written (os.replace is atomic on POSIX and NTFS)."""
-    part = png.with_name(png.name + ".part")
+    """Write `data` to a PRIVATE sibling and rename it into place, so `png` is
+    never observable half-written (os.replace is atomic on POSIX and NTFS).
+
+    The scratch name carries this writer's pid and a fresh uuid4 because the
+    concurrent case this function exists for is exactly the case one fixed
+    ``asset.png.part`` could not survive: two writers of the same key (the
+    parent and a segment subprocess, or two workers sharing a cache volume)
+    opened the SAME scratch path, so one could rename in a file the other was
+    still writing — the torn read, moved one level down. A private name makes
+    each writer's scratch file its own.
+
+    The unlink only runs on failure. After a successful os.replace the scratch
+    name no longer exists, and an unconditional ``finally`` unlink of a SHARED
+    name could only ever delete some other writer's file out from under it.
+    """
+    part = png.with_name(f"{png.name}.{os.getpid()}.{uuid.uuid4().hex}.part")
     try:
         part.write_bytes(data)
         os.replace(part, png)
-    finally:
+    except BaseException:
         part.unlink(missing_ok=True)
+        raise
 
 
 def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
