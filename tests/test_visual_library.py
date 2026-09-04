@@ -466,3 +466,111 @@ class TestReportReadsBothSinks:
                              capture_output=True, text=True).stdout
         assert "2 visual requests" in out
         assert "BORDERLINE HITS (reused at 0.58-0.70): 1" in out
+
+
+# ── asset_format is a SECOND axis, not a second library ──────────────────────
+# The library has always assumed its bytes were a PNG: publish took a
+# `png_path`, hydrate wrote `asset.png`, and storage_path ended in `.png`.
+# Making SVG first-class must not fork the library in two, and must not
+# disturb the 230 rows already in production — every one of which is a PNG
+# that carries no asset_format column at all.
+
+class TestAssetFormatVocabulary:
+    def test_a_row_without_the_column_is_a_png(self):
+        """The 230 live rows predate asset_format. They are PNGs."""
+        from shared.visual_library import row_format
+        assert row_format({"asset_key": "volcano"}) == "png"
+        assert row_format({"asset_key": "v", "asset_format": None}) == "png"
+        assert row_format(None) == "png"
+
+    def test_the_stored_object_answers_when_the_column_does_not(self):
+        """Belt and braces, exactly like is_avatar_row: a row written by a
+        newer worker against an un-migrated database still reads correctly."""
+        from shared.visual_library import row_format
+        assert row_format({"storage_path": "generated/x/aa.svg"}) == "svg"
+        assert row_format({"storage_path": "generated/x/aa.png"}) == "png"
+        assert row_format({"local_cache_path": "/tmp/svg_x/asset.svg"}) == "svg"
+
+    def test_the_column_wins_over_the_extension(self):
+        from shared.visual_library import row_format
+        assert row_format({"asset_format": "svg",
+                           "storage_path": "generated/x/aa.png"}) == "svg"
+
+    def test_an_unknown_format_reads_as_a_png_rather_than_failing(self):
+        from shared.visual_library import row_format, normalize_format
+        assert row_format({"asset_format": "webp"}) == "png"
+        assert normalize_format("webp") == "png"
+        assert normalize_format("") == "png"
+        assert normalize_format(None) == "png"
+
+    def test_a_path_suffix_is_a_format(self):
+        """Callers hold a Path, not a format string."""
+        from pathlib import Path
+        from shared.visual_library import normalize_format
+        assert normalize_format(Path("a/b/asset.svg").suffix) == "svg"
+        assert normalize_format(Path("a/b/asset.png").suffix) == "png"
+        assert normalize_format("SVG") == "svg"
+
+    def test_format_and_type_are_independent_axes(self):
+        """asset_type says what an asset is FOR; asset_format says what its
+        bytes ARE. Neither implies the other."""
+        from shared.visual_library import is_avatar_row, row_format
+        svg_visual = {"asset_key": "chloroplast", "asset_format": "svg"}
+        png_avatar = {"asset_key": "avatar_teacher", "asset_format": "png"}
+        assert row_format(svg_visual) == "svg" and not is_avatar_row(svg_visual)
+        assert row_format(png_avatar) == "png" and is_avatar_row(png_avatar)
+
+
+class TestTheMigrationIsSafeToRunOnProduction:
+    """The founder applies this by hand against 230 live rows; the file has to
+    be readable as a promise, not just as DDL."""
+
+    def _sql(self) -> str:
+        from pathlib import Path
+        p = (Path(__file__).resolve().parents[1] / "database"
+             / "0104_visual_assets_asset_format.sql")
+        assert p.exists(), "the prod migration is missing"
+        return p.read_text(encoding="utf-8")
+
+    def test_every_structural_statement_is_idempotent(self):
+        sql = self._sql().lower()
+        for stmt in ("add column if not exists asset_format",
+                     "add column if not exists group_ids",
+                     "add column if not exists group_count",
+                     "create index if not exists visual_assets_format_idx"):
+            assert stmt in sql, stmt
+        # the check constraint cannot use `if not exists`, so it is guarded
+        assert "from pg_constraint" in sql
+        assert "visual_assets_asset_format_check" in sql
+
+    def test_existing_rows_are_stamped_png(self):
+        sql = self._sql().lower()
+        assert "asset_format text not null default 'png'" in sql
+
+    def test_it_does_not_touch_asset_type_or_storage(self):
+        """asset_format is a NEW axis. Nothing about the existing rows, their
+        type or their stored objects may move: an avatar stays an avatar and
+        every published PNG stays exactly where it is."""
+        import re
+        body = self._sql().lower().split("begin;", 1)[1]
+        # `-- …` comments and `comment on …` payloads explain the new columns
+        # by contrasting them with asset_type; only the statements that CHANGE
+        # something are under test here.
+        stripped = "\n".join(line.split("--", 1)[0]
+                             for line in body.splitlines())
+        stripped = re.sub(r"comment on\b.*?';", "", stripped, flags=re.S)
+        assert "comment on" not in stripped
+        statements = stripped
+        assert "asset_type" not in statements
+        assert "drop column" not in statements
+        assert "storage.objects" not in statements
+        assert "storage_path" not in statements
+
+    def test_the_checked_in_ddl_carries_the_same_columns(self):
+        from pathlib import Path
+        ddl = (Path(__file__).resolve().parents[1] / "database"
+               / "visual_asset_library.sql").read_text(encoding="utf-8").lower()
+        assert "asset_format text not null default 'png'" in ddl
+        assert "check (asset_format in ('png', 'svg'))" in ddl
+        assert "group_ids jsonb not null default '[]'::jsonb" in ddl
+        assert "group_count integer not null default 0" in ddl

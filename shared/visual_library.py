@@ -119,6 +119,49 @@ def avatar_fields(key: str) -> dict[str, Any]:
             "age_band": m.group(1) if m else None}
 
 
+# ── format is a SECOND axis, not a second library ─────────────────────────────
+# asset_type says what an asset is FOR (educational visual vs persistent
+# character). asset_format says what its BYTES ARE. They are independent: an
+# avatar PNG and an educational SVG differ on both, and neither implies the
+# other. There is exactly ONE library — an SVG is a row with a different
+# format, stored beside the PNGs in the same bucket, and it is never
+# rasterised to fit the older path. The markup is the canonical asset.
+
+ASSET_FORMATS = ("png", "svg")
+DEFAULT_FORMAT = "png"
+CONTENT_TYPES = {"png": "image/png", "svg": "image/svg+xml"}
+
+
+def normalize_format(value: Any) -> str:
+    """A format name, or DEFAULT_FORMAT for anything unrecognised.
+
+    Accepts what callers actually hold: 'svg', '.svg', 'SVG', a Path suffix.
+    Anything else reads as a PNG, because that is what every asset published
+    before this column existed is.
+    """
+    v = str(value or "").strip().lower().lstrip(".")
+    return v if v in ASSET_FORMATS else DEFAULT_FORMAT
+
+
+def row_format(row: dict[str, Any] | None) -> str:
+    """The format of a STORED row, without needing the column to exist.
+
+    Belt-and-braces exactly like is_avatar_row: the 230 rows published before
+    asset_format existed carry no such key, and they are all PNGs. When the
+    column is absent the stored object's own extension answers instead, so a
+    row written by a newer worker against an un-migrated database still reads
+    correctly.
+    """
+    if not row:
+        return DEFAULT_FORMAT
+    explicit = str(row.get("asset_format") or "").strip().lower()
+    if explicit in ASSET_FORMATS:
+        return explicit
+    path = str(row.get("storage_path") or row.get("local_cache_path") or "")
+    suffix = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    return suffix if suffix in ASSET_FORMATS else DEFAULT_FORMAT
+
+
 def is_avatar_row(row: dict[str, Any] | None) -> bool:
     """Whether a stored row is an avatar, by type OR by key.
 
