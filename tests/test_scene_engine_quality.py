@@ -2741,6 +2741,31 @@ class TestTheTitleKeepsItsSlot:
         r = _board([lbl])
         assert "TEXT_MOVED_OFF_ART lbl" in r.audit()["warnings"]
 
+    def test_the_exempt_title_still_occupies_the_space_it_sits_in(self):
+        """Exempt from being MOVED is not the same as not being THERE.
+
+        The title was filtered out of the pass's `texts` and so never joined
+        `occupied` — a hole in the board exactly where the top row is. This
+        geometry (a picture whose ink leaves a wide margin, and a label too
+        wide for either column) sends the label to the top row, where every
+        slot crosses the title: measured on the previous commit the label was
+        placed at (24, 120)-(502, 175), 2167px^2 across the chapter title,
+        with the pass reporting TEXT_MOVED_OFF_ART as if it had succeeded.
+        One collision traded for another.
+        """
+        lbl = {"id": "lbl", "type": "text", "size": 34, "role": "label",
+               "text": "Chloroplasts trap sunlight energy",
+               "at": [560, 350], "anchor": "lt"}
+        r = _board([_TITLE_EL, lbl], inset=160)
+        warns = r.audit()["warnings"]
+        ttl, box = r.bound["ttl"].box, r.bound["lbl"].box
+        assert "TEXT_MOVED_OFF_ART lbl" in warns
+        assert ttl == (421.0, 80.0, 859.0, 147.0), ttl   # the title is unmoved
+        overlap = (max(0.0, min(ttl[2], box[2]) - max(ttl[0], box[0]))
+                   * max(0.0, min(ttl[3], box[3]) - max(ttl[1], box[1])))
+        assert overlap == 0.0, (box, ttl)
+        assert not any(w.startswith("TEXT_OVERLAP") for w in warns), warns
+
 
 class TestArtIsTheInkNotTheCanvas:
     """A generated illustration arrives on a square canvas with a wide

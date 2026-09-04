@@ -926,7 +926,15 @@ class SceneRenderer:
                         if b.text is not None and b.box and not _is_overlay(eid)
                         and not _is_title(b)),
                        key=lambda t: (t[1].box[1], t[1].box[0], t[0]))
+        # The title is exempt from being MOVED, which is not the same as being
+        # invisible. Left out of `occupied` it was a hole in the board: the top
+        # row is the third slot this pass tries, the title sits in it, and a
+        # relocated label was lettered straight across the chapter title —
+        # trading one collision for another.
         occupied = list(self._avatar_zones)
+        occupied += [b.box for eid, b in self.bound.items()
+                     if b.text is not None and b.box
+                     and not _is_overlay(eid) and _is_title(b)]
         pending: list[tuple] = []
         for eid, b in texts:
             if self._overlap_frac(b.box, art) <= 0.15:
