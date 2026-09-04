@@ -2307,6 +2307,112 @@ class TestSeededMomentIsNotSaidTwice:
                                                     "production?"})
         assert els and acts
 
+class TestOrphansOfAnUnresolvedAsset:
+    """Cells Part 3 (generation fa8c0d7d, 2026-09-04): three illustrations
+    were lost to image-model 429s on both providers. The engine dropped the
+    elements — §20, a missing asset never fails the scene — but laid out their
+    LABELS anyway: the two labels for the missing ciliated cell were placed
+    over the red blood cell diagram, with their arrows pointing into empty
+    space. Naming the wrong picture's parts is worse than saying nothing."""
+
+    def _scene(self):
+        return Scene.model_validate({
+            "id": "p3", "compiled": True, "narration": "blood and cilia",
+            "elements": [
+                {"id": "rbc", "type": "illustration", "asset": "plant_cell",
+                 "at": [640, 360], "scale": 1.0},
+                {"id": "cilia_cell", "type": "illustration",
+                 "asset": "ciliated_cell", "at": [640, 360], "scale": 1.0},
+                {"id": "lbl_hair", "type": "text", "text": "Hair-like cilia",
+                 "at": [95, 140], "role": "label"},
+                {"id": "lbl_tail", "type": "text", "text": "Sweeping motion",
+                 "at": [95, 220], "role": "label"},
+                {"id": "lbl_rbc", "type": "text", "text": "Nucleus",
+                 "at": [95, 300], "role": "label"},
+                {"id": "arr_hair", "type": "arrow",
+                 "tail": {"el": "lbl_hair", "edge": "right"},
+                 "head": {"el": "cilia_cell", "layer": "cilia",
+                          "edge": "center"}},
+                {"id": "arr_tail", "type": "arrow",
+                 "tail": {"el": "lbl_tail", "edge": "right"},
+                 "head": {"el": "cilia_cell", "layer": "motion",
+                          "edge": "center"}},
+                {"id": "arr_rbc", "type": "arrow",
+                 "tail": {"el": "lbl_rbc", "edge": "right"},
+                 "head": {"el": "rbc", "layer": "nucleus", "edge": "center"}},
+            ],
+            "actions": [{"verb": "draw", "target": "rbc"},
+                        {"verb": "draw", "target": "cilia_cell"},
+                        {"verb": "write", "target": "lbl_hair"},
+                        {"verb": "write", "target": "lbl_tail"},
+                        {"verb": "write", "target": "lbl_rbc"},
+                        {"verb": "draw", "target": "arr_hair"},
+                        {"verb": "draw", "target": "arr_tail"},
+                        {"verb": "draw", "target": "arr_rbc"}]})
+
+    def _rendered(self):
+        # only the red blood cell resolves; 'ciliated_cell' is the 429
+        return SceneRenderer(self._scene(),
+                             asset_resolver=_resolver(_cell_asset()))
+
+    def test_the_orphan_labels_and_arrows_are_dropped(self):
+        r = self._rendered()
+        warns = r.audit()["warnings"]
+        for eid in ("lbl_hair", "lbl_tail", "arr_hair", "arr_tail"):
+            assert any(w.startswith(f"ORPHANED_BY_UNRESOLVED_ASSET {eid} ")
+                       for w in warns), (eid, warns)
+            assert not r._flat[eid]
+        # ...and the warning names the element that went missing
+        assert any("(cilia_cell)" in w for w in warns
+                   if w.startswith("ORPHANED_BY_UNRESOLVED_ASSET"))
+        assert any(w.startswith("ASSET_UNRESOLVED cilia_cell") for w in warns)
+
+    def test_nothing_of_the_orphans_is_drawn(self):
+        r = self._rendered()
+        for eid in ("lbl_hair", "lbl_tail"):
+            assert r.bound[eid].text is None
+        for eid in ("arr_hair", "arr_tail"):
+            assert eid not in r.audit()["arrow_heads"]
+
+    def test_they_are_never_laid_out_over_the_other_diagram(self):
+        r = self._rendered()
+        art = r.bound["rbc"].box
+        for eid in ("lbl_hair", "lbl_tail"):
+            box = r.bound[eid].box
+            assert not (box[0] < art[2] and box[2] > art[0]
+                        and box[1] < art[3] and box[3] > art[1]), (eid, box)
+        assert not any(w.startswith("TEXT_OVER_ART") for w in r.audit()["warnings"])
+
+    def test_the_surviving_diagram_keeps_its_own_label(self):
+        r = self._rendered()
+        assert r.bound["lbl_rbc"].text is not None
+        assert "arr_rbc" in r.audit()["arrow_heads"]
+        assert not any("ORPHANED_BY_UNRESOLVED_ASSET lbl_rbc" in w
+                       for w in r.audit()["warnings"])
+
+    def test_the_pen_does_not_mime_the_dropped_write(self):
+        r = self._rendered()
+        r.compile(20.0)
+        for ta in r.timeline:
+            if ta.action.target in ("lbl_hair", "arr_hair"):
+                assert ta.duration <= 0.05 + 1e-6, ta.action.target
+
+    def test_a_decoration_aimed_at_an_orphan_draws_nothing(self):
+        data = self._scene().model_dump()
+        data["actions"].append({"verb": "circle", "target": "lbl_hair"})
+        r = SceneRenderer(Scene.model_validate(data),
+                          asset_resolver=_resolver(_cell_asset()))
+        assert not r.deco
+
+    def test_a_scene_whose_assets_all_resolve_is_untouched(self):
+        r = SceneRenderer(self._scene(),
+                          asset_resolver=lambda k: ("raster", _cell_asset(k)))
+        assert not any(w.startswith("ORPHANED_BY_UNRESOLVED_ASSET")
+                       for w in r.audit()["warnings"])
+        for eid in ("lbl_hair", "lbl_tail", "lbl_rbc"):
+            assert r.bound[eid].text is not None
+
+
 class TestBubbleFootprint:
     """Founder: bubbles 'take up a lot of space on the whiteboard and in some
     instances hide the image being drawn underneath'."""

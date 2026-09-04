@@ -282,6 +282,11 @@ class SceneRenderer:
         self._audit_warnings: list[str] = []
         self._warned: set[str] = set()
         self._suppressed: set[str] = set()   # arrows with no locatable target
+        # illustrations whose asset never arrived (image model 429, budget
+        # exhausted, cache miss in a child process) and the labels/arrows that
+        # went with them
+        self._unresolved_ills: set[str] = set()
+        self._dropped: set[str] = set()
         self._text_boxes: list[tuple] = []   # bound text boxes, for stacking
         # keep-out zones around the persistent avatars: board labels must
         # never write over the teacher or the student (founder screenshot:
@@ -343,6 +348,12 @@ class SceneRenderer:
                 pass
             self.bound[el.id] = b
             self._flat[el.id] = [st for layer in b.layers for st in layer.strokes]
+
+        # PASS 1.4: a picture that never arrived takes its annotations with
+        # it. MUST run before the layout below, which would otherwise flow
+        # these orphans around whatever OTHER diagram is on the board.
+        deferred_arrows = self._drop_orphans_of_unresolved_assets(
+            deferred_arrows)
 
         # PASS 1.5: part-label LAYOUT. Model-placed label coordinates made
         # leader lines cross and labels pile onto each other/the avatars —
@@ -457,6 +468,10 @@ class SceneRenderer:
 
         # workloads + decoration geometry
         for i, a in enumerate(self.scene.actions):
+            if a.target in self._dropped:
+                # a circle/underline/highlight aimed at a dropped orphan would
+                # still draw its decoration over the board
+                continue
             tgt = self.bound.get(a.target) if a.target else None
             if a.verb == "draw" and tgt:
                 if tgt.raster is not None:
@@ -526,6 +541,7 @@ class SceneRenderer:
             # dropped 18 illustrations across 12 of 15 segments still reported
             # PASSED over what were effectively blank boards.
             self._warn(f"ASSET_UNRESOLVED {el.id} ({el.asset})")
+            self._unresolved_ills.add(el.id)
             b.box = (el.at[0], el.at[1], el.at[0], el.at[1])
             return
         kind, asset = resolved
@@ -697,6 +713,65 @@ class SceneRenderer:
                     self._warn(f"TEXT_OVERLAP {aid}+{bid}")
 
     # ── text must never be drawn over the art ────────────────────────────
+
+    def _drop_orphans_of_unresolved_assets(self, arrows: list) -> list:
+        """An illustration that never rendered takes its labels and arrows
+        with it. Returns the arrows that survive.
+
+        §20 says a missing asset never fails the scene: the element simply
+        does not exist and the rest of the scene still teaches. But its
+        ANNOTATIONS were left behind, and they are not neutral — a label is
+        laid out around "the largest illustration on the board", which is now
+        a DIFFERENT picture, and its arrow resolves against a box collapsed to
+        a point at the missing element's `at`. Measured in production (Cells
+        Part 3, generation fa8c0d7d, 2026-09-04: three assets lost to image-
+        model 429s on both providers): the two labels for the missing ciliated
+        cell were laid out over the red blood cell diagram with their arrows
+        pointing into empty space. Naming the wrong picture's parts is worse
+        than saying nothing.
+
+        Placed here, in bind, because this is the one gate every render path
+        goes through — in-process and the child-process worker alike.
+        """
+        if not self._unresolved_ills:
+            return arrows
+        gone = self._unresolved_ills
+        doomed_arrows, kept = [], []
+        for ar in arrows:
+            refs = {getattr(ar.tail, "el", None), getattr(ar.head, "el", None)}
+            (doomed_arrows if refs & gone else kept).append(ar)
+        # a label survives only if some OTHER arrow still ties it to a
+        # picture that exists — otherwise it is a name with no subject
+        still_anchored: set[str] = set()
+        for ar in kept:
+            for end in (ar.tail, ar.head):
+                if isinstance(end, AnchorRef):
+                    still_anchored.add(end.el)
+        for ar in doomed_arrows:
+            owner = next((e for e in (getattr(ar.tail, "el", None),
+                                      getattr(ar.head, "el", None))
+                          if e in gone), "?")
+            self._drop_element(ar.id, owner)
+            for end in (ar.tail, ar.head):
+                if not isinstance(end, AnchorRef) or end.el in gone:
+                    continue
+                lb = self.bound.get(end.el)
+                if lb is None or lb.text is None or end.el in still_anchored:
+                    continue
+                self._drop_element(end.el, owner)
+        return kept
+
+    def _drop_element(self, eid: str, because: str) -> None:
+        b = self.bound.get(eid)
+        if b is None or eid in self._dropped:
+            return
+        self._dropped.add(eid)
+        b.text = None
+        b.layers = []
+        b.spawn = []
+        self._flat[eid] = []
+        b.box = (0.0, 0.0, 0.0, 0.0)
+        self._warn(f"ORPHANED_BY_UNRESOLVED_ASSET {eid} ({because})")
 
     def _floor_for(self, x0: float, x1: float) -> float:
         """How far down a column at this x-range may run.
@@ -1220,6 +1295,13 @@ class SceneRenderer:
                 TimedAction(t.action, t.start, 0.05)
                 if t.action.verb == "draw" and t.action.target in self._suppressed
                 else t for t in self.timeline]
+        if self._dropped:
+            # same for an orphan's write/draw: nothing is on the board to
+            # letter, so the pen must not mime it
+            self.timeline = [
+                TimedAction(t.action, t.start, 0.05)
+                if t.action.target in self._dropped else t
+                for t in self.timeline]
         self._enforce_dependencies()
         focus: dict[int, Point] = {}
         hud = self._hud_element_ids()
