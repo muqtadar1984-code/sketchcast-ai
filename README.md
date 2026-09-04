@@ -112,8 +112,23 @@ a picture that had a prompt still cannot be got, the board keeps a dashed
 placeholder frame rather than collapsing its labels onto a point, and the
 renderer reports `ASSET_PLACEHOLDER`; the acceptance gate counts that exactly
 as it counts `ASSET_UNRESOLVED`, so a lesson mostly made of frames still
-blocks. All of this state is per GENERATION, not per process — with
-`WORKER_CONCURRENCY > 1` several lessons share one process.
+blocks. The frame answers to any layer the scene names — it has no parts to
+tell apart — and the two persistent avatars are excluded from it: a teacher we
+cannot draw is simply absent, not a dashed rectangle in the corner of every
+frame of the lesson. All of this state is per GENERATION, not per process —
+with `WORKER_CONCURRENCY > 1` several lessons share one process.
+
+Every unresolved board carries `reason=` on its warning line, and the
+acceptance summary counts them per cause:
+
+| Reason | What to do about it |
+|---|---|
+| `no_prompt` | The director planned an illustration and named no asset prompt. A script bug. |
+| `rate_limited` | A provider 429'd and the lesson chose to wait rather than retry harder. Read the logged response body: a QUOTA 429 names a number to raise, a CAPACITY 429 does not. |
+| `budget_exhausted` | Our OWN ceiling refused the call, not the provider. Raise `IMAGE_CALLS_PER_LESSON` if the lesson legitimately needs more. |
+| `generation_failed` | The provider was asked and produced nothing, for a reason that was not a rate limit. Go and look at the provider. |
+| `cache_only_miss` | A render child (`RENDER_PROCESSES > 1`) may only read the cache, and the warm pass did not land this file. |
+| `no_vector` | Nothing at any tier, including the authored vectors. |
 
 ## Project Structure
 
