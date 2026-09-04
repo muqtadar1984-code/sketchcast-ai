@@ -395,8 +395,15 @@ def generate_episode_script(
         )
     raw_segments = data.get("segments", []) if isinstance(data, dict) else []
 
-    # the ONE predicate for two-voice dialogue, shared with the avatar cast
-    from spike.scene_engine.whiteboard import two_voice_dialogue
+    # the ONE predicate for two-voice dialogue, shared with the avatar cast.
+    # Guarded like the adapter import above: spike/ may be absent, and a script
+    # must still be produced when it is — a missing scene engine degrades the
+    # visuals, it does not fail the lesson.
+    try:
+        from spike.scene_engine.whiteboard import two_voice_dialogue
+    except Exception:  # noqa: BLE001
+        def two_voice_dialogue(style: str) -> bool:
+            return normalize_style(style) == "conversational"
     segments = []
     for i, seg in enumerate(raw_segments):
         # Parse segment type

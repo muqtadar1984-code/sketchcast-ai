@@ -677,8 +677,12 @@ def cast_avatars(effective_voice: str | None, grade, seed: str, *,
       teacher  — gender of the EFFECTIVE narration voice (resolve it after the
                  tier gate; a downgraded premium pick casts the voice that
                  actually speaks), any approved teacher face of that gender,
-                 drawn with `seed` (the generation id) so retries and later
-                 parts agree and a regeneration may differ.
+                 drawn with `seed`, which the worker sets to the BOOK AND
+                 CHAPTER rather than the generation: every part of a chapter
+                 is its own generation, so a generation-id seed would change
+                 the teacher between Part 1 and Part 2. Seeded this way,
+                 retries and later parts agree and another chapter casts
+                 afresh.
       student  — age band from the book grade; gender from the SECOND voice
                  when the lesson carries two-voice dialogue (the voice that
                  will read the student's lines — Ana/Emma in English, the

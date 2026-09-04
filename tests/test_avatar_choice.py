@@ -564,12 +564,16 @@ class TestEngineWiring:
         assert sorted(warmed) == sorted([avatars["teacher"], avatars["student"]])
 
     def test_the_worker_casts_once_before_the_parts_loop(self):
-        """The one source check kept: the seed is the generation id and the
-        cast happens ABOVE the parts loop, so every part shares the face."""
+        """The one source check kept: the cast happens ABOVE the parts loop so
+        every part of THIS generation shares the face, and it is seeded on the
+        chapter so the separately-generated parts of one chapter agree too.
+        The seed was the generation id until 2026-09-05, which silently broke
+        the second half of that promise."""
         src = (REPO / "worker" / "process.py").read_text(encoding="utf-8")
-        cast = re.search(r"avatars = cast_avatars\(\s*effective_voice,[\s\S]{0,200}?generation_id", src)
+        cast = re.search(r"avatars = cast_avatars\(\s*effective_voice,[\s\S]{0,200}?cast_seed", src)
         loop = re.search(r"for part_idx, episode in enumerate\(episodes_plan", src)
         assert cast and loop and cast.start() < loop.start()
+        assert 'cast_seed = f"{book_id}:{chapter_num}"' in src
 
 
 # ── 8. second adversarial pass ──────────────────────────────────────────────
@@ -1205,3 +1209,53 @@ class TestTheDrawIsInsertionStable:
     def test_a_draw_still_spreads_across_the_roster(self):
         picks = {vl._stable_pick(FEMALE_TEACHERS, s)["id"] for s in self.SEEDS}
         assert picks == {r["id"] for r in FEMALE_TEACHERS}
+
+
+# ── the cast seed is the CHAPTER, not the generation ────────────────────────
+class TestFaceHoldsAcrossParts:
+    """Founder saw Part 1..4 of one chapter as one lesson series; a per-
+    generation seed put a different teacher in each, because every part is its
+    own generation."""
+
+    def test_the_worker_seeds_the_cast_on_book_and_chapter(self):
+        import inspect
+        from worker import process
+        src = inspect.getsource(process.process_generation)
+        assert 'cast_seed = f"{book_id}:{chapter_num}"' in src
+        assert "cast_avatars(effective_voice, book.get(\"grade\"), cast_seed" in src
+        assert "cast_avatars(effective_voice, book.get(\"grade\"), generation_id" not in src
+
+    def test_every_part_of_a_chapter_casts_the_same_face(self):
+        from spike.scene_engine.whiteboard import cast_avatars
+        roster = [
+            {"id": "a1", "asset_key": "avatar_teacher_female", "canonical_key": "avatar_female_teacher",
+             "asset_type": "avatar", "status": "approved", "description": "female teacher"},
+            {"id": "b2", "asset_key": "avatar_teacher_female", "canonical_key": "avatar_female_teacher",
+             "asset_type": "avatar", "status": "approved", "description": "female teacher"},
+            {"id": "c3", "asset_key": "avatar_teacher_female", "canonical_key": "avatar_female_teacher",
+             "asset_type": "avatar", "status": "approved", "description": "female teacher"},
+        ]
+        seed = "book-8fce:0"
+        casts = [cast_avatars("edge-aria", 7, seed, roster=roster) for _ in range(4)]
+        assert len({c["teacher"] for c in casts}) == 1, casts
+
+    def test_another_chapter_may_cast_another_face(self):
+        from spike.scene_engine.whiteboard import cast_avatars
+        roster = [
+            {"id": f"id{i}", "asset_key": "avatar_teacher_female",
+             "canonical_key": "avatar_female_teacher", "asset_type": "avatar",
+             "status": "approved", "description": "female teacher"} for i in range(8)
+        ]
+        seen = {cast_avatars("edge-aria", 7, f"book-8fce:{ch}", roster=roster)["teacher"]
+                for ch in range(12)}
+        assert len(seen) > 1, "every chapter drew the same face; the seed is not varying"
+
+
+class TestScriptGeneratorDegradesWithoutSpike:
+    def test_the_dialogue_predicate_import_is_guarded(self):
+        import inspect
+        from agent3_scripts import script_generator
+        src = inspect.getsource(script_generator)
+        i = src.index("from spike.scene_engine.whiteboard import two_voice_dialogue")
+        before = src[max(0, i - 400):i]
+        assert "try:" in before, "the spike import must be guarded like the adapter import"
