@@ -207,23 +207,35 @@ def _is_instruction(text: str) -> bool:
             and _re.sub(r"[^a-z]", "", words[1].lower()) != "of")
 
 
-def _is_part_name(text: str) -> bool:
-    """Could this board text be the NAME of a part of the picture?
+def _part_name_candidate(text: str) -> str | None:
+    """This board text as a NAME for a part of the picture, or None.
 
     `_classify_text` deliberately keeps a short question as a LABEL — 'Why?'
     and 'What is a cell?' are exactly the board text a socratic lesson wants —
     but a label is not therefore a part name, and nothing stopped one entering
-    the candidate pool below. That pool is written verbatim into the image
-    prompt as "Name the layer groups exactly: ...", so a question mark on the
-    board asked the image model for a layer group called 'why' and then paid
-    the vision annotator to go looking for it.
+    the candidate pool. That pool is written verbatim into the image prompt as
+    "Name the layer groups exactly: ...", so a question mark on the board
+    asked the image model for a layer group called 'why?' and then paid the
+    vision annotator a call to go looking for it.
+
+    A question is out, and so is anything opening on a word that cannot start
+    a noun phrase. What is left is RETURNED CLEANED rather than merely
+    approved: the pool used the raw board text, so 'Nucleus.' asked for a
+    layer group with a full stop in its name. Refusing those instead would
+    cost the diagram a real label, which is the harm this whole pass exists
+    to fix.
     """
     import re as _re
     t = " ".join(str(text or "").split())
-    if not t or t.endswith(("?", "!")):
-        return False
+    if not t or t.endswith("?"):
+        return None
+    t = t.rstrip(".!:;,").strip()
     words = [w for w in _re.sub(r"[^a-z0-9 ]", " ", t.lower()).split() if w]
-    return bool(words) and words[0] not in _NON_NOUN_OPENERS
+    if not words or words[0] in _NON_NOUN_OPENERS:
+        return None
+    if all(w.isdigit() for w in words):
+        return None          # '1.' is a numbered tag, not a structure
+    return t.lower()
 
 
 def _classify_text(e: dict) -> str:
@@ -829,7 +841,7 @@ def _drop_sentence_text(ch: VisualChapter, roster: dict, narrations: dict,
             # below the root.
             #
             # An INSTRUCTION is not, however short. 'Compare your models.' is
-            # 21 characters, so this branch lettered it onto the board as a
+            # 20 characters, so this branch lettered it onto the board as a
             # caption — the exact class of text the pass above exists to keep
             # off it, readmitted through the back door because the length
             # test was the only test here.
@@ -1073,9 +1085,9 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             if str(e.get("role") or "label") not in ("label", "term"):
                 continue
             t = " ".join(str(e.get("text") or "").split())
-            if not t or len(t.split()) > 4 or not _is_part_name(t):
+            if not t or len(t.split()) > 4:
                 continue
-            n = t.strip().lower()
+            n = _part_name_candidate(t)
             if n and n not in cand_text:
                 cand_text.append(n)
         cand_text = _narrated(cand_text)

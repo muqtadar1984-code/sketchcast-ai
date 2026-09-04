@@ -948,6 +948,31 @@ class TestAQuestionIsNotAPartName:
         line, _ = self._report(["Nucleus", "Cell wall"], narr)
         assert "nucleus" in line and "cell wall" in line, line
 
+    @pytest.mark.parametrize("label,name", [
+        ("Nucleus.", "nucleus"),                 # a punctuated one-word label
+        ("Nucleus!", "nucleus"),
+    ])
+    def test_a_punctuated_name_is_cleaned_not_refused(self, label, name):
+        """Refusing everything with terminal punctuation would cost the
+        diagram a real label — the harm this whole pass exists to fix. The
+        pool used the RAW board text, so 'Nucleus.' asked the image model for
+        a layer group with a full stop in its name; it is cleaned instead."""
+        narr = {"s001": "The cell wall is rigid.",
+                "s002": "The nucleus is the control centre.",
+                "s003": "look closer"}
+        line, assets = self._report([label], narr)
+        assert f"'{name}'" in line, line
+        assert f"name the layer groups exactly: {name}." in             assets["s002"]["plant_cell"].lower()
+
+    def test_a_numbered_tag_is_not_a_structure(self):
+        """'1.' survives `_classify_text` as a label on purpose. It is still
+        not the name of anything a vision annotator can find."""
+        narr = {"s001": "Step 1 of 3.",
+                "s002": "The nucleus is the control centre.",
+                "s003": "look closer"}
+        line, _ = self._report(["1.", "Nucleus"], narr)
+        assert "nucleus" in line and "'1" not in line, line
+
 
 class TestRegionCarryBeatsLayers:
     def test_draws_with_both_layers_and_labels_carry_regions(self):
@@ -2162,7 +2187,8 @@ class TestTextClassification:
         _, scenes, report = self._chapter(
             text, {"s001": "Here is a plant cell.",
                    "s002": "The nucleus is the control centre."})
-        assert any("DROPPED text->compare_table" in ln for ln in report),             report
+        assert any("DROPPED text->compare_table" in ln
+                   for ln in report), report
         assert not any("CAPTIONED text->compare_table" in ln
                        for ln in report), report
         for sc in scenes.values():
@@ -2178,7 +2204,8 @@ class TestTextClassification:
         _, _, report = self._chapter(
             text, {"s001": "a plant cell", "s002": "water moves"},
             role="term")
-        assert any("CAPTIONED text->compare_table" in ln for ln in report),             report
+        assert any("CAPTIONED text->compare_table" in ln
+                   for ln in report), report
 
     def test_a_spoken_sentence_becomes_a_key_point(self):
         text = "The nucleus controls everything the cell does."

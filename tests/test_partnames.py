@@ -157,7 +157,8 @@ class TestThereIsNoGuessingTier:
     def test_shared_words_in_another_order_are_not_a_match(self):
         # the shared-TOKEN tier's own showcase case. It is also the case that
         # let three-word names bind each other, so it goes with them.
-        assert resolve_part("wall cell", ["cell wall", "nucleus"]) ==             (None, None)
+        assert resolve_part("wall cell",
+                            ["cell wall", "nucleus"]) == (None, None)
 
     @pytest.mark.parametrize("want,other", [
         # two of three words shared — the class of collision the token tier
