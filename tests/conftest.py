@@ -43,6 +43,11 @@ app.dependency_overrides[get_db] = override_get_db
 app._session_factory = TestSession
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "slow: spawns real processes / runs ffmpeg; still part of the suite")
+
+
 @pytest.fixture(autouse=True)
 def setup_db():
     """Create all tables before each test and drop them after."""

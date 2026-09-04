@@ -21,12 +21,16 @@ from __future__ import annotations
 
 import json
 import logging
+import multiprocessing
 import os
 import re
 import shutil
 import subprocess
+import threading
+import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -52,6 +56,61 @@ try:
     _MAX_RENDER_WORKERS = max(1, int(os.getenv("RENDER_WORKERS", "4")))
 except ValueError:
     _MAX_RENDER_WORKERS = 4
+
+# Rasterization in CHILD PROCESSES. A segment thread does TTS (network) and
+# then rasterizes + encodes (pure CPU, held by the GIL); with
+# RENDER_PROCESSES > 0 that second half is submitted to a process pool and the
+# thread blocks on the result. 0 (default) keeps everything in-process — the
+# path every test exercises, and the rollback (delete the variable). The
+# number of segments rendering at once is min(threads, processes), so set
+# RENDER_WORKERS alongside it. One pool per worker PROCESS, shared by every
+# WORKER_CONCURRENCY job thread: total CPU is bounded and lessons queue
+# behind each other on it (intended).
+try:
+    _RENDER_PROCESSES = max(0, int(os.getenv("RENDER_PROCESSES", "0")))
+except ValueError:
+    _RENDER_PROCESSES = 0
+
+_POOL: Optional[ProcessPoolExecutor] = None
+_POOL_LOCK = threading.Lock()
+
+
+def _cpus() -> int:
+    """CPUs this process may use. os.cpu_count() reports the HOST inside a
+    container; the affinity mask is the one thing that honours a cpuset."""
+    try:
+        return len(os.sched_getaffinity(0))  # type: ignore[attr-defined]
+    except AttributeError:
+        return os.cpu_count() or 2
+
+
+def _pool() -> ProcessPoolExecutor:
+    """The module-global render pool, created on first use. The start method
+    is an EXPLICIT spawn on every platform: this process holds worker-loop
+    threads, the segment thread pool and the daemon tier thread, so a fork
+    would copy locks mid-hold. The child never generates assets (the
+    limiters, image budget and spend labels are parent-only)."""
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is None:
+            _POOL = ProcessPoolExecutor(
+                max_workers=max(1, min(_RENDER_PROCESSES, _cpus())),
+                mp_context=multiprocessing.get_context("spawn"),
+                max_tasks_per_child=32)
+        return _POOL
+
+
+def _reset_pool() -> None:
+    """Drop a broken pool (an OOM-killed child poisons every pending future
+    and the executor is unusable afterwards); the next render recreates it."""
+    global _POOL
+    with _POOL_LOCK:
+        old, _POOL = _POOL, None
+    if old is not None:
+        try:
+            old.shutdown(wait=False, cancel_futures=True)
+        except Exception:  # noqa: BLE001 — a broken executor may refuse
+            pass
 
 STORAGE_DIR = Path(__file__).resolve().parent.parent / "storage"
 VIDEO_DIR = STORAGE_DIR / "video_segments"
@@ -152,6 +211,36 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
                     words = json.loads(wjson.read_text(encoding="utf-8"))
                 except Exception:  # noqa: BLE001 — timing falls back gracefully
                     words = None
+        if _RENDER_PROCESSES > 0:
+            # Rasterize in a child process. Generation, annotation and spend
+            # attribution happen HERE first, on the thread that owns the
+            # segment: warm every illustration the renderer will bind (the
+            # hand is warmed once per lesson before the pool), so the child's
+            # cache-only resolver finds everything on disk. On a cache hit the
+            # child can still ask vision for region names when the meta lacks
+            # them — the warm-up with the same prompt writes them; if that
+            # write failed (swallowed OSError) it is logged and accepted.
+            warm = make_resolver(prompts)
+            for e in scene_dict.get("elements") or []:
+                if isinstance(e, dict) and e.get("type") == "illustration" and e.get("asset"):
+                    warm(str(e["asset"]))
+            payload = {"scene": scene_dict, "narration": narration, "prompts": prompts,
+                       "words": words, "audio_path": str(audio_path) if audio_path else None,
+                       "audio_secs": float(audio_secs), "out_mp4": str(out_mp4),
+                       "direction": direction}
+            from spike.scene_engine.segment_worker import render_segment_in_child
+            try:
+                ok, warnings = _pool().submit(render_segment_in_child, payload).result()
+            except BrokenProcessPool:
+                # an OOM-killed child breaks the whole pool: recreate it on
+                # the next render and finish THIS segment in-process below
+                logger.exception("render pool broken; rendering %s in-process",
+                                 script_seg.get("segment_id"))
+                _reset_pool()
+            else:
+                if ok and warnings:
+                    script_seg["scene_audit"] = warnings
+                return ok
         # allow_generate=False: the hand sprite is warmed ONCE per lesson
         # before the segment pool (compose_episode_videos). Each segment used
         # to generate it on its own thread on a fresh container, so under an
@@ -586,7 +675,10 @@ def compose_episode_videos(
         except Exception as exc:  # noqa: BLE001
             logger.warning("hand sprite warm-up failed: %s", exc)
 
-    workers = max(1, min(os.cpu_count() or 2, _MAX_RENDER_WORKERS))
+    # with a process pool the thread count must not cap the pool: a thread
+    # blocks on its child's future, so simultaneous renders = min(threads,
+    # processes)
+    workers = max(1, min(_cpus(), max(_MAX_RENDER_WORKERS, _RENDER_PROCESSES)))
     results: list[Optional[dict]] = [None] * total
     if workers > 1 and total > 1:
         with ThreadPoolExecutor(max_workers=workers) as ex:
