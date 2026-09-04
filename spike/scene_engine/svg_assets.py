@@ -28,10 +28,20 @@ from pathlib import Path
 
 import requests
 
+from shared.asset_keys import canonical_key
+
 from .geometry import Point, path_length, resample, roughen
+from .svg_validate import (SvgValidation, is_valid_group_id,
+                           validate_svg_document)
 from .vector_assets import VectorAsset, VLayer, VStroke
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "CACHE_DIR", "NOMINAL_W", "SvgValidation", "extract_svg_document",
+    "get_svg_asset", "is_valid_group_id", "parse_path_d", "parse_svg_asset",
+    "svg_cache_dir", "svg_group_ids", "validate_svg_document",
+]
 
 SVG_MODEL = os.getenv("GEMINI_SVG_MODEL", "gemini-2.5-flash")
 CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "storage" / "scene_assets"
@@ -222,15 +232,50 @@ _PATH = re.compile(r"<path\b[^>]*?>", re.S)
 _ATTR_D = re.compile(r'\bd\s*=\s*"([^"]+)"')
 _ATTR_W = re.compile(r'\bstroke-width\s*=\s*"([\d.]+)"')
 _ATTR_S = re.compile(r'\bstroke\s*=\s*"([^"]+)"')
+_DOC = re.compile(r"<svg\b.*?</svg>", re.S)
+
+
+def extract_svg_document(text: str) -> str | None:
+    """The ``<svg>…</svg>`` slice of a model reply, or None.
+
+    A generation arrives wrapped in prose or markdown fences; the STORED asset
+    is this slice and nothing else, so validation and parsing see the same
+    bytes the library will serve.
+    """
+    m = _DOC.search(str(text or ""))
+    return m.group(0) if m else None
+
+
+def svg_group_ids(svg_text: str) -> list[str]:
+    """The group ids of a document, EXACTLY as written, in drawing order.
+
+    Storage is exact: this is what goes into the library row, because the ids
+    are the labelling contract a lesson will address. Matching stays tolerant
+    elsewhere (`vector_assets.match_layer_ids`), and validation is exact and
+    unforgiving (`validate_svg_document`) — three different jobs.
+    """
+    doc = extract_svg_document(svg_text) or str(svg_text or "")
+    return [m.group(1) for m in _GROUP.finditer(doc)]
+
+
+def svg_cache_dir(cache_dir: Path | None, key: str) -> Path:
+    """Where an SVG asset for `key` lives on disk.
+
+    Keyed by CANONICAL identity, like the raster tier and like the library, so
+    a hydrated download lands where the renderer will read it — the bug that
+    made every *_cell library hit a paid regeneration. The ``svg_`` prefix
+    keeps the markup in its own directory beside the PNG cache rather than
+    sharing one meta.json between two formats.
+    """
+    return (cache_dir or CACHE_DIR) / f"svg_{canonical_key(key)}"
 
 
 def parse_svg_asset(key: str, svg_text: str) -> VectorAsset | None:
     """SVG markup -> VectorAsset (normalized to NOMINAL_W wide, hand-roughened).
     Returns None for anything that would not read as a layered line diagram."""
-    m = re.search(r"<svg\b.*?</svg>", svg_text, re.S)
-    if not m:
+    doc = extract_svg_document(svg_text)
+    if doc is None:
         return None
-    doc = m.group(0)
     vb = _VIEWBOX.search(doc)
     try:
         _, _, vbw, vbh = [float(x) for x in vb.group(1).split()] if vb else (0, 0, 800, 600)
@@ -269,7 +314,14 @@ def parse_svg_asset(key: str, svg_text: str) -> VectorAsset | None:
     layers: list[VLayer] = []
     consumed_spans: list[tuple[int, int]] = []
     for li, gm in enumerate(_GROUP.finditer(doc)):
-        gid = re.sub(r"[^a-z0-9_]+", "_", gm.group(1).lower()).strip("_") or f"layer{li}"
+        # An id that already satisfies the contract is kept VERBATIM. The
+        # rewrite below is a runtime repair for markup that would be refused
+        # at publish anyway (a stray capital, a hyphen, a space) — it must not
+        # touch a valid id, because the stored id is the labelling contract
+        # and a silently normalised one no longer names what the row says.
+        raw = gm.group(1).strip()
+        gid = raw if is_valid_group_id(raw) else (
+            re.sub(r"[^a-z0-9_]+", "_", raw.lower()).strip("_") or f"layer{li}")
         strokes = build_strokes(gm.group(2), li)
         if strokes:
             layers.append(VLayer(gid, tuple(strokes)))
@@ -296,7 +348,7 @@ def parse_svg_asset(key: str, svg_text: str) -> VectorAsset | None:
 
 def get_svg_asset(key: str, prompt: str, cache_dir: Path | None = None,
                   allow_generate: bool = True) -> VectorAsset | None:
-    cache = (cache_dir or CACHE_DIR) / f"svg_{key}"
+    cache = svg_cache_dir(cache_dir, key)
     svg_file, meta = cache / "asset.svg", cache / "meta.json"
     if svg_file.exists():
         asset = parse_svg_asset(key, svg_file.read_text(encoding="utf-8"))
@@ -313,10 +365,20 @@ def get_svg_asset(key: str, prompt: str, cache_dir: Path | None = None,
         return None
     try:  # cache best-effort
         cache.mkdir(parents=True, exist_ok=True)
-        m = re.search(r"<svg\b.*?</svg>", text, re.S)
-        svg_file.write_text(m.group(0), encoding="utf-8")
+        doc = extract_svg_document(text) or text
+        svg_file.write_text(doc, encoding="utf-8")
         meta.write_text(json.dumps({"key": key, "prompt": prompt,
-                                    "model": SVG_MODEL, "provenance": "generated-svg",
+                                    "model": SVG_MODEL,
+                                    # "generated", spelled the same way the
+                                    # raster tier spells it: the visual-library
+                                    # wrapper publishes what it generated and
+                                    # must never re-publish what it hydrated,
+                                    # and it decides that by reading this word.
+                                    "provenance": "generated",
+                                    "asset_format": "svg",
+                                    # exact ids, drawing order — the row's
+                                    # labelling contract
+                                    "group_ids": svg_group_ids(doc),
                                     "layers": asset.layer_ids()}, indent=2),
                         encoding="utf-8")
     except OSError:
