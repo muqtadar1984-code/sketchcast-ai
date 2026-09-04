@@ -244,8 +244,10 @@ class TestOneLessonOneFace:
         roster.remove(chosen)                      # demoted in the console mid-run
         after = vl.cast_avatar_key("teacher", "f", "gen-1", "avatar_teacher_female")
         assert after != first, "a demoted face must never be cast again"
-        assert after == vl.face_key("avatar_teacher_female",
-                                    vl._stable_pick(roster, "teacher:gen-1")["id"]),             "and the replacement is the next-ranked face, not an arbitrary one"
+        assert after == vl.face_key(
+            "avatar_teacher_female",
+            vl._stable_pick(roster, "teacher:gen-1")["id"],
+        ), "and the replacement is the next-ranked face, not an arbitrary one"
         assert len(calls) == 3, "the roster is read on every cast; nothing is memoised"
 
         # an APPROVAL lands the same way: a new row that outranks the current
@@ -255,7 +257,8 @@ class TestOneLessonOneFace:
                                        "teacher", "2026-12-01T00:00:00Z") for i in range(200))
                       if vl._pick_rank("teacher:gen-1", r) < standing)
         roster.append(winner)
-        assert vl.cast_avatar_key("teacher", "f", "gen-1", "avatar_teacher_female") ==             vl.face_key("avatar_teacher_female", winner["id"])
+        assert (vl.cast_avatar_key("teacher", "f", "gen-1", "avatar_teacher_female")
+                == vl.face_key("avatar_teacher_female", winner["id"]))
 
 
 # ── 3. fallbacks: any gender, then the generate path; never a failed lesson ─
@@ -916,7 +919,8 @@ class TestTheScratchFileIsPrivateToItsWriter:
         vl._write_atomic(png, b"first")
         vl._write_atomic(png, b"second")
         assert png.read_bytes() == b"second"
-        assert len(scratch) == 2 and scratch[0] != scratch[1],             "each writer needs its own scratch file"
+        assert (len(scratch) == 2 and scratch[0] != scratch[1]), (
+            "each writer needs its own scratch file")
         assert all(q.name.endswith(".part") and f".{os.getpid()}." in q.name
                    for q in scratch), scratch
         assert not list(tmp_path.glob("*.part")), "renamed away, never left behind"
@@ -939,6 +943,45 @@ class TestTheScratchFileIsPrivateToItsWriter:
         vl._write_atomic(png, b"A")     # must not raise
         assert png.read_bytes() == b"A", "A renamed in ITS OWN bytes, last"
         assert not list(tmp_path.glob("*.part"))
+
+
+class TestThisModuleStaysReadable:
+    """A wrapped assert whose backslash continuation is lost still passes: the
+    message glues onto the end of the expression behind a run of spaces, the
+    assert still runs and still reports the right thing, and nothing at all
+    complains. Two arrived that way in section 2 (164 and 149 characters) and
+    a THIRD slipped into section 9 while those were being fixed — at 115
+    characters, under any width floor worth setting. So width is the second
+    net, not the test.
+
+    The signature is the run of spaces itself: within ONE physical line, code
+    does not put three of them between two tokens. Deliberate alignment lives
+    on continuation lines (where the gap is leading indentation this cannot
+    see) or before a trailing comment (dropped below), which is why the whole
+    module has exactly zero hits once the collapses are wrapped."""
+
+    LIMIT = 125        # the widest line this module was actually written to
+
+    def _lines(self) -> list[str]:
+        return Path(__file__).read_text(encoding="utf-8").splitlines()
+
+    def test_no_assert_lost_its_line_continuation(self):
+        import token as tk
+        import tokenize
+        skip = {tk.NL, tk.NEWLINE, tk.INDENT, tk.DEDENT, tk.ENDMARKER, tk.COMMENT}
+        with open(__file__, "rb") as fh:
+            toks = [t for t in tokenize.tokenize(fh.readline) if t.type not in skip]
+        glued = [(b.start[0], b.start[1] - a.end[1]) for a, b in zip(toks, toks[1:])
+                 if a.end[0] == b.start[0] and b.start[1] - a.end[1] >= 3]
+        lines = self._lines()
+        assert not glued, ("collapsed continuation(s) (line, spaces) "
+                           + repr(glued) + " in "
+                           + repr([lines[n - 1].strip()[:70] for n, _ in glued]))
+
+    def test_no_line_runs_past_the_width_this_module_was_written_to(self):
+        wide = [(i, len(line)) for i, line in enumerate(self._lines(), 1)
+                if len(line) > self.LIMIT]
+        assert not wide, "re-wrap these lines (number, width): " + repr(wide)
 
 
 class TestTheDrawIsInsertionStable:
