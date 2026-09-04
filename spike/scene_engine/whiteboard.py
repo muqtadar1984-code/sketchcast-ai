@@ -685,7 +685,8 @@ def narration_stream(narration: str, uid: str,
                      bold: set[str] | None = None,
                      dialogue: list[dict] | None = None,
                      line_starts: list[float] | None = None,
-                     total_secs: float | None = None
+                     total_secs: float | None = None,
+                     skip: set[str] | None = None
                      ) -> tuple[list[dict], list[dict]]:
     """The continuous speech-caption track for ONE segment.
 
@@ -696,7 +697,13 @@ def narration_stream(narration: str, uid: str,
 
     Dialogue mode: `dialogue` = [{"who", "line"}, ...] with `line_starts`
     (measured seconds, from per-line TTS) — each line's bubble appears beside
-    ITS speaker at the exact offset. Bubble ids carry CAPTION_PREFIX."""
+    ITS speaker at the exact offset. Bubble ids carry CAPTION_PREFIX.
+
+    `skip` drops sentences another bubble is already showing. A seeded student
+    moment lifts a question VERBATIM out of the narration, and in a
+    single-narrator style the same narrator also speaks it — so the founder's
+    frame at 3:35 showed 'What about energy production?' twice, once in each
+    bubble."""
     bold = bold or set()
     if dialogue and line_starts and len(line_starts) == len(dialogue):
         entries, cues = [], []
@@ -719,6 +726,13 @@ def narration_stream(narration: str, uid: str,
         entries = [("teacher", s) for s in sents]
         cues = [{"phrase": bubble_cue_phrase(s, narration), "offset": -0.05}
                 for s in sents]
+    skip_norm = {_norm_stream(x) for x in (skip or set()) if _norm_stream(x)}
+    if skip_norm and len(entries) > 1:
+        keep = [i for i, (_who, t) in enumerate(entries)
+                if _norm_stream(t) not in skip_norm]
+        if keep and len(keep) < len(entries):
+            entries = [entries[i] for i in keep]
+            cues = [cues[i] for i in keep]
     elements: list[dict] = []
     actions: list[dict] = []
     norm_bold = {_norm_stream(b) for b in bold}

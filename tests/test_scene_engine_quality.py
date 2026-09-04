@@ -2233,6 +2233,80 @@ class TestTextHeavyLintMeansSomething:
         assert any("text-heavy" in w for w in scene_warnings(scene))
 
 
+class TestSeededMomentIsNotSaidTwice:
+    """Founder frame at 3:35 of Cells Part 2: the student bubble and the
+    teacher's caption bubble both read 'What about energy production?'.
+    seed_moment lifts the question VERBATIM from the narration, and in a
+    single-narrator style the same narrator speaks it."""
+
+    _NARR = {
+        "s001": "Here is a plant cell.",
+        "s002": "Animal cells are more flexible. What about energy "
+                "production? They rely on mitochondria.",
+    }
+
+    def _plan(self):
+        return parse_visual_plan({"chapters": [{
+            "concept": "cells", "transition": "clear_and_redraw",
+            "assets": {"pc": "A plant cell."},
+            "elements": [{"id": "cell", "type": "illustration", "asset": "pc",
+                          "at": [600, 380], "scale": 1.0}],
+            "steps": [
+                {"segment": 1, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "cell"}]},
+                {"segment": 2, "decision": "CONTINUE", "actions": []},
+            ]}]})
+
+    def test_the_seeded_question_is_flagged_as_seeded(self):
+        plan = self._plan()
+        sid = seed_moment(plan, self._NARR)
+        assert sid == "s002"
+        moment = plan.chapters[0].steps[1].moment
+        assert moment["text"] == "What about energy production?"
+        assert moment["seeded"] is True
+
+    def test_the_caption_stream_does_not_repeat_it(self):
+        plan = self._plan()
+        seed_moment(plan, self._NARR)
+        scenes, _, _ = compile_plan(plan, self._NARR,
+                                    all_segments=["s001", "s002"],
+                                    skip_hold=set())
+        captions = [e["text"] for e in scenes["s002"]["elements"]
+                    if str(e["id"]).startswith("__nb_")
+                    and isinstance(e.get("text"), str)]
+        assert not any("energy production" in c for c in captions), captions
+        # the rest of the narration is still captioned
+        assert any("mitochondria" in c for c in captions), captions
+        # ...and the student bubble does carry it
+        bubbles = [e["text"] for e in scenes["s002"]["elements"]
+                   if str(e["id"]).startswith("__hm_")
+                   and isinstance(e.get("text"), str)]
+        assert any("energy production" in b for b in bubbles), bubbles
+
+    def test_a_planned_moment_is_left_alone(self):
+        """Only a SEEDED moment quotes the narration verbatim; a moment the
+        director wrote is its own line and the caption stream keeps every
+        sentence."""
+        plan = self._plan()
+        plan.chapters[0].steps[1].moment = {
+            "role": "student", "text": "What about energy production?"}
+        scenes, _, _ = compile_plan(plan, self._NARR,
+                                    all_segments=["s001", "s002"],
+                                    skip_hold=set())
+        captions = [e["text"] for e in scenes["s002"]["elements"]
+                    if str(e["id"]).startswith("__nb_")
+                    and isinstance(e.get("text"), str)]
+        assert any("energy production" in c for c in captions)
+
+    def test_a_single_sentence_segment_keeps_its_caption(self):
+        """Skipping the only sentence would leave the segment with no caption
+        track at all."""
+        from spike.scene_engine.whiteboard import narration_stream
+        els, acts = narration_stream("What about energy production?",
+                                     uid="s", skip={"What about energy "
+                                                    "production?"})
+        assert els and acts
+
 class TestBubbleFootprint:
     """Founder: bubbles 'take up a lot of space on the whiteboard and in some
     instances hide the image being drawn underneath'."""

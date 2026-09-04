@@ -457,14 +457,18 @@ def seed_moment(plan: VisualPlan, narrations: dict[str, str]) -> str | None:
     for st in steps[1:]:
         for q in _questions(st.segment_id):
             if len(q.split()) <= 8 and len(q) <= 60:
-                st.moment = {"role": "student", "text": q}
+                # 'seeded' is load-bearing: this line is VERBATIM narration,
+                # so in a single-narrator style the caption stream would show
+                # it in the teacher's bubble at the same moment as the
+                # student's. compile_plan reads the flag and skips it there.
+                st.moment = {"role": "student", "text": q, "seeded": True}
                 return st.segment_id
     # pass 2: shorten the first real question found
     for st in steps[1:]:
         qs = _questions(st.segment_id)
         if qs:
             q = " ".join(qs[0].split()[:8]).rstrip(",;:?") + "?"
-            st.moment = {"role": "student", "text": q[:60]}
+            st.moment = {"role": "student", "text": q[:60], "seeded": True}
             return st.segment_id
     return None
 
@@ -615,7 +619,16 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
             b = select_key_sentence(narr)
             if b:
                 bold.add(b)
-        nb_els, nb_acts = narration_stream(narr, uid=sid, bold=bold)
+        # a SEEDED student moment quotes the narration, and this stream
+        # captions the narration — without this both bubbles carry the same
+        # sentence at the same instant (founder frame, 3:35)
+        skip: set[str] = set()
+        if st is not None and st.moment and st.moment.get("seeded")                 and st.moment.get("role") == "student":
+            dup = snap_to_narration(st.moment["text"], narr)
+            if dup:
+                skip.add(dup)
+        nb_els, nb_acts = narration_stream(narr, uid=sid, bold=bold,
+                                           skip=skip)
         if nb_els:
             sc["elements"].extend(nb_els)
             sc["actions"] = sc["actions"] + nb_acts
