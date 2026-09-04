@@ -244,6 +244,8 @@ class Bound:
     spawn: list[Point] = field(default_factory=list)   # particles
     box: tuple[float, float, float, float] = (0, 0, 0, 0)
     introduced: bool = False  # True => starts hidden until its intro action
+    # last _draw_raster result: ((k, alpha, pulse, cam), (out, bx0, by0) | None)
+    _raster_cache: Optional[tuple] = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -1368,6 +1370,7 @@ class SceneRenderer:
             if b.raster is not None:
                 b.raster.mask = Image.new("L", b.raster.ink.size, 0)
                 b.raster._stamped = 0
+                b._raster_cache = None
         total = self.total_secs(audio_secs, fps)
         n = max(1, round(total * fps))
         w, h = WORLD_W * SS, WORLD_H * SS
@@ -1636,6 +1639,19 @@ class SceneRenderer:
         ra.reveal_to(k)
         if k <= 0:
             return
+        # The composite + alpha + cropped affine below depend only on
+        # (k, alpha, pulse, camera) — all constant for a static raster, and
+        # the two persistent avatars are static on essentially every frame.
+        # Keep the last result on the Bound and paste it straight back on a
+        # hit (exact: same inputs, same bytes). Keyed on the exact floats, not
+        # rounded ones, so a hit can only ever be a bit-identical repeat.
+        ckey = (k, alpha, s.pulse, cam)
+        hit = b._raster_cache
+        if hit is not None and hit[0] == ckey:
+            if hit[1] is not None:
+                out, bx0, by0 = hit[1]
+                frame.paste(out, (bx0, by0), out)
+            return
         ink = Image.composite(ra.ink, Image.new("RGBA", ra.ink.size, (0, 0, 0, 0)), ra.mask)
         if alpha < 0.999:
             a = ink.getchannel("A").point(lambda v: int(v * alpha))
@@ -1665,9 +1681,11 @@ class SceneRenderer:
         bx0, by0 = max(0, dx0), max(0, dy0)
         bx1, by1 = min(fw, dx1), min(fh, dy1)
         if bx1 <= bx0 or by1 <= by0:
+            b._raster_cache = (ckey, None)
             return                      # entirely off-camera this frame
         inv = (1.0 / k_ws, 0.0, (bx0 - offx) / k_ws,
                0.0, 1.0 / k_ws, (by0 - offy) / k_ws)
         out = ink.transform((bx1 - bx0, by1 - by0), Image.AFFINE, inv,
                             resample=Image.BILINEAR)
+        b._raster_cache = (ckey, (out, bx0, by0))
         frame.paste(out, (bx0, by0), out)

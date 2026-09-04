@@ -881,3 +881,68 @@ class TestMarkerLayerCrop:
         r2.compile(4.0)
         full = [img.tobytes() for img in r2.frames(4.0)]
         assert cropped == full
+
+
+class TestStaticRasterCache:
+    """_draw_raster keeps its last composite+affine result on the Bound and
+    pastes it back while (k, alpha, pulse, camera) are unchanged — the two
+    persistent avatars hit this on essentially every frame. Pinned against a
+    render with the cache defeated on every frame."""
+
+    def _scene(self):
+        return _mini_scene(
+            elements=[{"id": "av", "type": "illustration", "asset": "avatar",
+                       "at": (1120, 560), "scale": 0.5, "hud": True},
+                      {"id": "im", "type": "illustration", "asset": "disc",
+                       "at": (640, 360)},
+                      {"id": "lbl", "type": "text", "text": "Cell", "at": (400, 120)}],
+            actions=[{"verb": "draw", "target": "im", "duration": 0.6},
+                     {"verb": "pulse", "target": "av", "duration": 0.5},
+                     {"verb": "fade", "target": "lbl", "to": 0.3, "duration": 0.4},
+                     {"verb": "zoom", "target": "im", "scale": 1.4, "duration": 0.5}])
+
+    def _assets(self):
+        import numpy as np
+        from PIL import Image as PILImage, ImageDraw as PILDraw
+        from spike.scene_engine.raster_assets import RasterAsset
+        from spike.scene_engine.trace import drawing_order
+        out = {}
+        for key, size, col in (("avatar", (300, 400), (60, 120, 180, 255)),
+                               ("disc", (200, 150), (20, 20, 20, 255))):
+            ink = PILImage.new("RGBA", size, (0, 0, 0, 0))
+            d = PILDraw.Draw(ink)
+            d.ellipse([30, 30, size[0] - 30, size[1] - 30], outline=col, width=6)
+            d.rectangle([60, 60, size[0] - 60, size[1] - 60], fill=col)
+            trace = drawing_order(np.asarray(ink.getchannel("A")))
+            out[key] = RasterAsset(key, ink, trace, 4.0, 2.0)
+        return out
+
+    def test_cached_rasters_equal_a_per_frame_render(self, monkeypatch):
+        assets = self._assets()
+        s = self._scene()
+        r = SceneRenderer(s, asset_resolver=lambda k: ("raster", assets[k]))
+        r.compile(2.0)
+        import itertools
+        cached = [img.tobytes() for img in itertools.islice(r.frames(2.0), 0, 48)]
+        hits = sum(1 for b in r.bound.values() if b._raster_cache is not None)
+        assert hits == 2
+
+        real = SceneRenderer._draw_raster
+
+        def never_hit(self, frame, b, s_, cam, alpha):
+            b._raster_cache = None
+            return real(self, frame, b, s_, cam, alpha)
+        monkeypatch.setattr(SceneRenderer, "_draw_raster", never_hit)
+        r2 = SceneRenderer(s, asset_resolver=lambda k: ("raster", assets[k]))
+        r2.compile(2.0)
+        fresh = [img.tobytes() for img in itertools.islice(r2.frames(2.0), 0, 48)]
+        assert cached == fresh
+
+    def test_the_cache_resets_between_passes(self):
+        assets = self._assets()
+        s = self._scene()
+        r = SceneRenderer(s, asset_resolver=lambda k: ("raster", assets[k]))
+        r.compile(2.0)
+        a = [img.tobytes() for img in r.frames(2.0)]
+        b = [img.tobytes() for img in r.frames(2.0)]
+        assert a == b
