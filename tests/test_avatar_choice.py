@@ -11,6 +11,7 @@ import io
 import json
 import logging
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -943,6 +944,91 @@ class TestTheScratchFileIsPrivateToItsWriter:
         vl._write_atomic(png, b"A")     # must not raise
         assert png.read_bytes() == b"A", "A renamed in ITS OWN bytes, last"
         assert not list(tmp_path.glob("*.part"))
+
+    # a day is long past any plausible age floor, so these say "abandoned"
+    # without pinning the constant; the floor itself is pinned below.
+    DAY = 24 * 3600.0
+
+    def _age(self, path: Path, seconds: float) -> Path:
+        import os
+        t = time.time() - seconds
+        os.utime(path, (t, t))
+        return path
+
+    def test_an_abandoned_scratch_file_is_swept_and_a_live_one_is_not(self, tmp_path):
+        """A writer killed between write_bytes and os.replace leaves a
+        uniquely named, full-size PNG that nothing will ever name again — one
+        per crash, forever, on a persistent cache volume. Each writer sweeps
+        its own directory on the way in. The age floor is the safety: a young
+        .part may belong to a writer still in flight, and taking it would be
+        the shared-name bug again with a stopwatch on."""
+        import os
+        png = tmp_path / "asset.png"
+        orphan = tmp_path / f"asset.png.{os.getpid() - 1}.deadbeef.part"
+        orphan.write_bytes(b"x" * 4096)
+        self._age(orphan, self.DAY)
+        inflight = tmp_path / "asset.png.99999.cafe.part"
+        inflight.write_bytes(b"still being written")
+        other = tmp_path / "keep.png"
+        other.write_bytes(b"not a scratch file")
+
+        vl._write_atomic(png, b"new")
+
+        assert png.read_bytes() == b"new"
+        assert not orphan.exists(), "a day-old orphan belongs to no live writer"
+        assert inflight.read_bytes() == b"still being written", \
+            "a young .part belongs to a writer that may still rename it in"
+        assert other.exists(), "the sweep only takes .part files"
+
+    def test_the_age_floor_outlives_any_write_this_module_makes(self, tmp_path):
+        """Where the line sits. Below the floor a scratch file is another
+        writer's property; above it, it is litter. The floor has to be far
+        longer than a few hundred KB take to hit the disk."""
+        assert vl._SCRATCH_TTL_S >= 600, "an in-flight write must never look abandoned"
+        png = tmp_path / "asset.png"
+        inside, outside = tmp_path / "asset.png.1.aaa.part", tmp_path / "asset.png.1.bbb.part"
+        for q, age in ((inside, vl._SCRATCH_TTL_S - 120), (outside, vl._SCRATCH_TTL_S + 120)):
+            q.write_bytes(b"scratch")
+            self._age(q, age)
+        vl._write_atomic(png, b"new")
+        assert inside.exists() and not outside.exists()
+
+    def test_the_sweep_only_takes_the_directory_it_writes_to(self, tmp_path):
+        here, elsewhere = tmp_path / "a", tmp_path / "b"
+        here.mkdir()
+        elsewhere.mkdir()
+        stale = []
+        for d in (here, elsewhere):
+            q = d / "asset.png.1.abc.part"
+            q.write_bytes(b"orphan")
+            stale.append(self._age(q, self.DAY))
+        vl._write_atomic(here / "asset.png", b"new")
+        assert not stale[0].exists()
+        assert stale[1].exists(), "a sibling key's directory is not this writer's to tidy"
+
+    def test_a_sweep_that_cannot_run_still_lets_the_write_through(self, tmp_path, monkeypatch):
+        """Tidy-up, never a precondition: a listing or an unlink that raises
+        must not cost the caller its asset."""
+        png = tmp_path / "asset.png"
+        orphan = tmp_path / "asset.png.1.abc.part"
+        orphan.write_bytes(b"orphan")
+        self._age(orphan, self.DAY)
+        real_unlink = Path.unlink
+
+        def refuse(self, *a, **k):
+            if self.name.endswith(".part") and self == orphan:
+                raise PermissionError("in use")
+            return real_unlink(self, *a, **k)
+        monkeypatch.setattr(Path, "unlink", refuse)
+        vl._write_atomic(png, b"new")
+        assert png.read_bytes() == b"new" and orphan.exists()
+        monkeypatch.undo()
+
+        def blind(self, pattern):
+            raise OSError("cannot list")
+        monkeypatch.setattr(Path, "glob", blind)
+        vl._write_atomic(png, b"newer")
+        assert png.read_bytes() == b"newer"
 
 
 class TestThisModuleStaysReadable:

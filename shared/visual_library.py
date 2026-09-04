@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import shutil
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -640,6 +641,42 @@ def find_avatar(key: str) -> dict[str, Any] | None:
     return faces[0] if faces else None
 
 
+# A scratch file is private to its writer (see _write_atomic), which is what
+# makes concurrent writers safe — and also what makes an abandoned one
+# immortal: a process killed between write_bytes and os.replace leaves behind
+# a uniquely named, full-size PNG whose name nothing will ever compute again.
+# On the persistent cache volume that is unbounded: one orphan per crash,
+# forever. So every writer sweeps the directory it is about to write to.
+#
+# The age floor is the whole safety argument. A .part younger than this may
+# belong to a writer still in flight, and deleting it would be the shared-name
+# bug again wearing a stopwatch — one writer removing the file another is
+# about to rename in. An hour is orders of magnitude longer than a write of a
+# few hundred KB takes, so anything older belongs to nobody.
+_SCRATCH_TTL_S = 3600.0
+
+
+def _sweep_scratch(directory: Path, *, ttl_s: float = _SCRATCH_TTL_S) -> None:
+    """Unlink abandoned ``*.part`` scratch files in `directory`.
+
+    Best effort in every direction: an unreadable directory, a file that
+    another writer renamed away between the listing and the stat, a
+    permission error — none of them may fail the write this precedes. The
+    sweep is a tidy-up, never a precondition.
+    """
+    cutoff = time.time() - ttl_s
+    try:
+        found = list(directory.glob("*.part"))
+    except OSError:
+        return
+    for stale in found:
+        try:
+            if stale.stat().st_mtime < cutoff:
+                stale.unlink()
+        except OSError:
+            continue
+
+
 def _write_atomic(png: Path, data: bytes) -> None:
     """Write `data` to a PRIVATE sibling and rename it into place, so `png` is
     never observable half-written (os.replace is atomic on POSIX and NTFS).
@@ -656,6 +693,7 @@ def _write_atomic(png: Path, data: bytes) -> None:
     name no longer exists, and an unconditional ``finally`` unlink of a SHARED
     name could only ever delete some other writer's file out from under it.
     """
+    _sweep_scratch(png.parent)
     part = png.with_name(f"{png.name}.{os.getpid()}.{uuid.uuid4().hex}.part")
     try:
         part.write_bytes(data)
