@@ -114,3 +114,20 @@ def canonical_key(value: str) -> str:
     colliding.
     """
     return "_".join(sorted(core_tokens(value))) or "asset"
+
+
+def is_avatar_key(key: str) -> bool:
+    """Avatar identity from the asset key alone.
+
+    Keys are the durable signal here: the roster is named avatar_* by the
+    renderer (spike/scene_engine/whiteboard.py), and a key is available
+    everywhere, including for rows written before asset_type was populated.
+
+    Lives beside `canonical_key` because BOTH retrieval domains ask it and the
+    answer must not differ: the visual library uses it to keep the persistent
+    characters out of educational reuse, and the renderer uses it to keep an
+    unresolvable avatar out of the placeholder tier -- a stand-in frame is a
+    board that lost its diagram, whereas a missing teacher is simply a teacher
+    who is not there.
+    """
+    return str(key or "").strip().lower().startswith("avatar")

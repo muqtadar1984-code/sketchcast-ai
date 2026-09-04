@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from shared.asset_keys import (all_noise, canonical_key, core_tokens,
-                               distinguishes)
+                               distinguishes, is_avatar_key)
 from shared.asset_keys import tokens as _tokens_of
 
 logger = logging.getLogger(__name__)
@@ -100,14 +100,8 @@ _AVATAR_ROLES = ("teacher", "student")
 _AGE_BAND_RE = re.compile(r"(\d{1,2}_\d{1,2})")
 
 
-def is_avatar_key(key: str) -> bool:
-    """Avatar identity from the asset key alone.
-
-    Keys are the durable signal here: the roster is named avatar_* by the
-    renderer (spike/scene_engine/whiteboard.py), and a key is available
-    everywhere, including for rows written before asset_type was populated.
-    """
-    return str(key or "").strip().lower().startswith("avatar")
+# is_avatar_key is imported from shared.asset_keys: the renderer needs the
+# SAME answer, to keep an unresolvable avatar out of the placeholder tier.
 
 
 def avatar_fields(key: str) -> dict[str, Any]:

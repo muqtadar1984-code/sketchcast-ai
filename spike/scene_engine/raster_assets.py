@@ -33,7 +33,7 @@ import numpy as np
 import requests
 from PIL import Image
 
-from shared.asset_keys import KEY_NOISE, canonical_key
+from shared.asset_keys import KEY_NOISE, canonical_key, is_avatar_key
 
 from .trace import drawing_order
 
@@ -1295,13 +1295,22 @@ def make_resolver(prompts: dict[str, str], prefer_ai: bool = True,
             last_reason.pop(key, None)
             return ("vector", va)
         last_reason[key] = reason or "no_vector"
-        if key in prompts:
+        if key in prompts and not is_avatar_key(key):
             # The picture was PLANNED and we could not get it. A frame where it
             # should be keeps the labels and leaders anchored to a real box
             # instead of collapsing them onto one point; the renderer reports
             # ASSET_PLACEHOLDER and the acceptance gate counts it exactly as it
             # counted the blank board. A key with no prompt still resolves to
             # None -- an unknown key is not a missing picture.
+            #
+            # NOT the avatars. The teacher and the student are injected into
+            # EVERY compiled scene (continuity.py) and stand in a fixed corner
+            # for the whole lesson, so a placeholder for one is not a board
+            # that lost its diagram -- it is a dashed rectangle in the corner
+            # of every frame of every segment, plus an ASSET_PLACEHOLDER on
+            # each one telling the acceptance gate the whole lesson is blank.
+            # A character we cannot draw is simply absent, exactly as on
+            # master; the board behind them is unaffected.
             return ("vector", placeholder_asset(key))
         return None
 

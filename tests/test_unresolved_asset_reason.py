@@ -350,3 +350,67 @@ class TestTheReportCountsTheCause:
         assert r["ship"] is False
         assert "BLOCKING" in r["summary"]
         assert "generation_failed=10" in r["summary"]
+
+
+class TestTheAvatarsAreNotBoards:
+    """The placeholder tier fires for any key that HAD a prompt — and the two
+    persistent avatars have one on every compiled scene (continuity.py injects
+    the teacher into all of them, the student into every conversational one).
+
+    So a teacher whose picture could not be fetched became a dashed rectangle
+    standing in the corner of EVERY frame of EVERY segment, with an
+    ASSET_PLACEHOLDER on each one telling the acceptance gate that the whole
+    lesson's boards were blank. A character we cannot draw is simply absent —
+    which is what master does, and what the board behind them needs."""
+
+    def _prompts(self):
+        from spike.scene_engine.whiteboard import AVATAR_PROMPTS
+        return {**AVATAR_PROMPTS, "ciliated_cell": "a ciliated cell"}
+
+    def test_an_unresolvable_avatar_stays_absent(self, tmp_path):
+        from spike.scene_engine.whiteboard import AVATAR_PROMPTS
+        resolve = make_resolver(self._prompts(), cache_dir=tmp_path,
+                                allow_generate=False)
+        for key in AVATAR_PROMPTS:
+            assert resolve(key) is None, key
+
+    def test_the_reason_is_still_recorded_for_it(self, tmp_path):
+        """Absent, not unexamined: the log line still says why."""
+        resolve = make_resolver(self._prompts(), cache_dir=tmp_path,
+                                allow_generate=False)
+        assert resolve("avatar_teacher") is None
+        assert resolve.last_reason["avatar_teacher"] == "cache_only_miss"
+
+    def test_a_board_picture_in_the_same_lesson_still_gets_its_frame(
+            self, tmp_path):
+        resolve = make_resolver(self._prompts(), cache_dir=tmp_path,
+                                allow_generate=False)
+        assert _is_placeholder(resolve("ciliated_cell"))
+
+    def test_no_placeholder_warning_for_the_persistent_pair(self, tmp_path):
+        from spike.scene_engine.render import SceneRenderer
+        from spike.scene_engine.schema import Scene
+        from spike.scene_engine.whiteboard import (STUDENT_ID, TEACHER_ID,
+                                                   student_element,
+                                                   teacher_element)
+        scene = {"id": "s1", "narration": "Here is a ciliated cell.",
+                 "compiled": True, "actions": [],
+                 "elements": [{"id": "pic", "type": "illustration",
+                               "asset": "ciliated_cell", "at": [640, 360],
+                               "scale": 1.0},
+                              teacher_element(), student_element()]}
+        r = SceneRenderer(Scene.model_validate(scene),
+                          asset_resolver=make_resolver(
+                              self._prompts(), cache_dir=tmp_path,
+                              allow_generate=False))
+        r.compile(4.0)
+        placeholders = [w for w in r._audit_warnings
+                        if w.startswith("ASSET_PLACEHOLDER")]
+        assert placeholders == ["ASSET_PLACEHOLDER pic (ciliated_cell) "
+                                "reason=cache_only_miss"], placeholders
+        # …and the avatars really are absent, not merely unwarned
+        for aid in (TEACHER_ID, STUDENT_ID):
+            x0, y0, x1, y1 = r.bound[aid].box
+            assert (x1 - x0, y1 - y0) == (0.0, 0.0), aid
+            assert not r.bound[aid].layers and r.bound[aid].raster is None, aid
+        assert r.bound["pic"].box[2] - r.bound["pic"].box[0] > 100
