@@ -822,27 +822,77 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         except Exception:  # noqa: BLE001 — auto-anchoring is best-effort
             part_names = []
     if root_id and not part_names:
-        # the prompt never named its parts, but the chapter's OWN labels and
-        # arrows do (lbl_nucleus, arrow_wall, ...) — they are the ground
-        # truth of what gets taught, so they become the layer-group tail.
-        # Without this, every arrow falls back to eyeballed coordinates.
-        cand: list[str] = []
+        # The prompt never named its parts. Three further sources, in order of
+        # how much they are worth trusting. Until this existed, a chapter whose
+        # asset prompt merely DESCRIBED the cell ("with a cell wall, cell
+        # membrane, nucleus, chloroplasts, and cytoplasm") produced no part
+        # names at all, and the whole labelling pass below — gated on
+        # `part_names` — was skipped: the founder's Cells Part 2 drew an
+        # unlabelled plant cell for six and a half minutes.
+        akey = str(roster[root_id].get("asset") or "")
+        prompt0 = ch.assets.get(akey, "")
+
+        def _narrated(names: list[str]) -> list[str]:
+            """Only names the chapter actually SAYS. The vision annotator is
+            paid per name and a junk name costs a wrong region as well as a
+            call; the label/arrow synthesis below already requires a
+            narration mention, so an unspoken name could never be used."""
+            narr = " ".join(_norm_name(narrations.get(s.segment_id, ""))
+                            for s in ch.steps)
+            return [n for n in names if _norm_name(n) and _norm_name(n) in narr]
+
+        # (ii) the TEXT of the chapter's own short labels — 'Nucleus' on an
+        # element called lbl1 says what the picture must contain even though
+        # its id says nothing at all
+        cand_text: list[str] = []
+        for eid, e in roster.items():
+            if e.get("type") != "text":
+                continue
+            if str(e.get("role") or "label") not in ("label", "term"):
+                continue
+            t = " ".join(str(e.get("text") or "").split())
+            if not t or len(t.split()) > 4:
+                continue
+            n = t.strip().lower()
+            if n and n not in cand_text:
+                cand_text.append(n)
+        cand_text = _narrated(cand_text)
+
+        # (iii) element IDS (existing tier). Noisy — an id is a programmer's
+        # name, not a part name — so it keeps its >= 2 corroboration rule and
+        # is deliberately NOT narration-filtered: it predates the filter and
+        # a chapter can legitimately label a part its narration paraphrases.
+        cand_ids: list[str] = []
         for eid, e in roster.items():
             if e.get("type") in ("text", "arrow"):
                 p = _guess_part_name(eid)
-                if p and p not in cand and _norm_name(eid) != _norm_name(p):
-                    cand.append(p)
-        akey = str(roster[root_id].get("asset") or "")
-        prompt0 = ch.assets.get(akey, "")
-        if len(cand) >= 2 and prompt0:
+                if p and p not in cand_ids and _norm_name(eid) != _norm_name(p):
+                    cand_ids.append(p)
+        if len(cand_ids) < 2:
+            cand_ids = []
+
+        # (iv) the prompt's own enumeration of what the picture contains
+        cand_desc: list[str] = []
+        try:
+            from .raster_assets import part_names_from_description
+            cand_desc = _narrated(part_names_from_description(prompt0))
+        except Exception:  # noqa: BLE001 — best-effort, like the tail parse
+            cand_desc = []
+
+        for cand, source in ((cand_text, "label text"),
+                             (cand_ids, "labels"),
+                             (cand_desc, "description")):
+            if not cand or not prompt0:
+                continue
             ch.assets[akey] = (prompt0.rstrip().rstrip(".") +
                                ". Name the layer groups exactly: " +
                                ", ".join(cand) + ".")
             seg_assets[akey] = ch.assets[akey]
             assets_seen[akey] = ch.assets[akey]
             part_names = cand
-            report.append(f"CHAPTER {ch.concept} | PART NAMES from labels: "
+            report.append(f"CHAPTER {ch.concept} | PART NAMES from {source}: "
                           f"{cand}")
+            break
 
     def _match_part(name: str) -> str | None:
         if not name or not part_names:

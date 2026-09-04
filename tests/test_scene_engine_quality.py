@@ -639,6 +639,110 @@ class TestPartNamesFromLabels:
         assert any("ANCHORED arr_nucleus" in ln for ln in report)
 
 
+class TestPartNamesFromDescription:
+    """The founder's Cells Part 2: the root prompt NAMED every part in prose
+    and carried no 'Name the layer groups exactly' tail, so part_names was
+    empty and the entire labelling pass was skipped."""
+
+    def test_the_prompt_enumeration_becomes_part_names(self):
+        from spike.scene_engine.raster_assets import part_names_from_description
+        got = part_names_from_description(
+            "A plant cell in cross-section with a cell wall, cell membrane, "
+            "nucleus, chloroplasts, and cytoplasm. Do not show a vacuole or "
+            "label parts.")
+        assert got == ["cell wall", "cell membrane", "nucleus",
+                       "chloroplasts", "cytoplasm"]
+        assert "vacuole" not in got          # a negated clause names an ABSENCE
+
+    def test_a_short_enumeration_parses(self):
+        from spike.scene_engine.raster_assets import part_names_from_description
+        assert part_names_from_description(
+            "A river meander showing an outer bank and an inner bank") == \
+            ["outer bank", "inner bank"]
+
+    def test_a_prompt_with_no_list_yields_nothing(self):
+        from spike.scene_engine.raster_assets import part_names_from_description
+        assert part_names_from_description("A rectangular plant cell.") == []
+        assert part_names_from_description("") == []
+
+    def test_an_explicit_tail_wins_outright(self):
+        from spike.scene_engine.raster_assets import part_names_from_description
+        assert part_names_from_description(
+            "A cell with a wall and a nucleus. Name the layer groups "
+            "exactly: wall, nucleus.") == []
+
+    def _chapter(self, narrations):
+        raw = _plan_raw()
+        ch = raw["chapters"][0]
+        ch["assets"]["plant_cell"] = (
+            "A plant cell in cross-section with a cell wall, cell membrane, "
+            "nucleus, chloroplasts, and cytoplasm. Do not show a vacuole or "
+            "label parts.")
+        # no label/arrow ids that strip to a part name, so only the
+        # description tier can supply names
+        ch["elements"] = [e for e in ch["elements"]
+                          if e["id"] not in ("lbl_nucleus", "arr_nucleus")]
+        for st in ch["steps"]:
+            st["actions"] = [a for a in st["actions"]
+                             if a.get("target") not in ("lbl_nucleus",
+                                                        "arr_nucleus")]
+        plan = parse_visual_plan(raw)
+        return compile_plan(plan, narrations,
+                            all_segments=sorted(narrations), skip_hold=set())
+
+    def test_the_description_tier_names_the_diagram(self):
+        narr = {"s001": "The cell wall is rigid.",
+                "s002": "Inside, the nucleus directs everything.",
+                "s003": "The chloroplasts catch the light."}
+        _, assets, report = self._chapter(narr)
+        line = next(ln for ln in report if "PART NAMES from description" in ln)
+        assert "cell wall" in line and "nucleus" in line \
+            and "chloroplasts" in line
+        assert "vacuole" not in line
+        # 'cell membrane' and 'cytoplasm' are never spoken in this chapter —
+        # asking vision for them buys a wrong box and a paid call
+        assert "membrane" not in line and "cytoplasm" not in line
+        assert "name the layer groups exactly:" in \
+            assets["s002"]["plant_cell"].lower()
+
+    def test_names_the_narration_never_says_are_not_requested(self):
+        _, assets, report = self._chapter(
+            {"s001": "a", "s002": "b", "s003": "c"})
+        assert not any("PART NAMES" in ln for ln in report)
+        assert "name the layer groups exactly:" not in \
+            assets["s002"]["plant_cell"].lower()
+
+
+class TestPartNamesFromLabelText:
+    """An id says what a programmer called the element; the TEXT says what the
+    picture must contain. lbl1/'Nucleus' used to yield nothing at all."""
+
+    def test_label_text_supplies_the_tail(self):
+        raw = _plan_raw()
+        ch = raw["chapters"][0]
+        ch["assets"]["plant_cell"] = "A rectangular plant cell."   # no tail
+        ch["elements"] = [e for e in ch["elements"] if e["id"] == "cell"]
+        ch["elements"] += [
+            {"id": "lbl1", "type": "text", "text": "Nucleus",
+             "at": [90, 120], "role": "label"},
+            {"id": "lbl2", "type": "text", "text": "Cell wall",
+             "at": [90, 200], "role": "label"}]
+        for st in ch["steps"]:
+            st["actions"] = [a for a in st["actions"]
+                             if a.get("target") == "cell"]
+        plan = parse_visual_plan(raw)
+        narr = {"s001": "The cell wall is rigid.",
+                "s002": "The nucleus is the control centre.",
+                "s003": "look closer"}
+        _, assets, report = compile_plan(plan, narr,
+                                         all_segments=["s001", "s002", "s003"],
+                                         skip_hold=set())
+        line = next(ln for ln in report if "PART NAMES from label text" in ln)
+        assert "nucleus" in line and "cell wall" in line
+        assert "name the layer groups exactly:" in \
+            assets["s002"]["plant_cell"].lower()
+
+
 class TestRegionCarryBeatsLayers:
     def test_draws_with_both_layers_and_labels_carry_regions(self):
         """The model stamps `layers` on its draws; region tracking must win

@@ -400,6 +400,78 @@ def part_names_from_prompt(prompt: str) -> list[str]:
             if p.strip()][:12]
 
 
+# enumeration triggers: the point in an asset prompt after which the model
+# lists what the picture contains
+_LIST_TRIGGER = re.compile(
+    r"\b(?:with|showing|shows?|including|includes?|containing|contains?|"
+    r"consisting of|comprising|made up of|made of|depicting|labelled|labeled)\b",
+    re.IGNORECASE)
+# everything from here to the end of the sentence describes what must NOT be
+# drawn. 'Do not show a vacuole or label parts.' must never yield 'vacuole'.
+_NEGATION = re.compile(
+    r"\b(?:do not|don't|does not|must not|never|without|no|avoid|omit|"
+    r"exclude|rather than|instead of)\b", re.IGNORECASE)
+# leading words that describe an item rather than name it
+_ITEM_STOPWORDS = {"a", "an", "the", "its", "their", "one", "two", "three",
+                   "several", "many", "some", "large", "small", "single",
+                   "double", "clear", "simple", "visible", "all", "of",
+                   "following", "each", "both"}
+
+
+def part_names_from_description(prompt: str) -> list[str]:
+    """The parts an asset prompt ENUMERATES, when it never named layer groups.
+
+    Measured on the founder's Cells Part 2: the root prompt read "A plant cell
+    in cross-section with a cell wall, cell membrane, nucleus, chloroplasts,
+    and cytoplasm. Do not show a vacuole or label parts." — every part named,
+    no "Name the layer groups exactly" tail, so part_names came back empty and
+    the entire labelling pass (label synthesis, arrow synthesis, the region
+    schedule) was skipped. The cell was drawn bare for six and a half minutes.
+
+    Second tier only: a prompt that carries the explicit tail is authoritative
+    and this returns []. Negated clauses are dropped whole, because a prompt
+    that says what NOT to draw is naming the one part the picture lacks.
+    """
+    if not prompt:
+        return []
+    text = str(prompt)
+    if part_names_from_prompt(text):
+        return []                      # the explicit tail wins outright
+    # never mine the engine's own appended instructions
+    text = re.split(r"name the layer groups exactly", text,
+                    flags=re.IGNORECASE)[0]
+    out: list[str] = []
+    seen: set[str] = set()
+    for sentence in re.split(r"(?<=[.;!?])\s+|\n", text):
+        neg = _NEGATION.search(sentence)
+        if neg is not None:
+            sentence = sentence[:neg.start()]
+        m = _LIST_TRIGGER.search(sentence)
+        if m is None:
+            continue
+        tail = sentence[m.end():]
+        tail = re.sub(r"^\s*(?:all of|the following|these)\b", "", tail,
+                      flags=re.IGNORECASE)
+        tail = tail.strip().lstrip(":").strip()
+        for chunk in re.split(r",|\band\b|\bor\b|;|/", tail):
+            item = re.sub(r"[^A-Za-z0-9 \-]+", " ", chunk).strip().lower()
+            words = [w for w in item.split() if w]
+            while words and words[0] in _ITEM_STOPWORDS:
+                words.pop(0)
+            while words and words[-1] in _ITEM_STOPWORDS:
+                words.pop()
+            if not (1 <= len(words) <= 3):
+                continue
+            name = " ".join(words)
+            if len(name.replace(" ", "")) < 3 or name in seen:
+                continue
+            seen.add(name)
+            out.append(name)
+            if len(out) >= 8:
+                return out
+    return out
+
+
 def annotate_regions(ink: Image.Image, part_names: list[str]) -> dict:
     """Vision pass over a generated illustration: named part bounding boxes
     (multiple boxes per name for repeated structures) + a text-presence
