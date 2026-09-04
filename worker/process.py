@@ -1,8 +1,10 @@
-"""Process one generation: book PDF -> lesson (slides + video + deck) -> Supabase.
+"""Process one generation: book PDF -> lesson (slides + video) -> Supabase.
 
 Reuses the existing agents end-to-end. Files are processed in a temp dir and the
-final deck (.pptx) + video (.mp4) are uploaded to the `artifacts` bucket under
-{owner_id}/{generation_id}/.
+final video (.mp4) is uploaded to the `artifacts` bucket under
+{owner_id}/{generation_id}/. The slide deck (.pptx) is its own generation kind,
+'deck' — authored by agent5_slides.deck_notes and built by `_generate_deck`
+below; the presentation embeds one only while DECK_IN_PRESENTATION=1 (rollout).
 """
 
 from __future__ import annotations
@@ -494,6 +496,70 @@ def _combine_units(all_chapters: list[dict], scope: list, sb: Client, book_id: s
     }
 
 
+def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chapter: dict,
+                   analysis: dict, client, params: dict, branding: dict, lesson_lang: str,
+                   lesson_dir: str, tmp: str | Path, base: str, unit_label: str) -> str:
+    """The 'deck' generation kind: author the slides, render them, build the
+    .pptx, upload it. Returns the generation title.
+
+    Module-level (not inline in process_generation) so it is testable with a
+    fake Supabase and a stub client — the shared prelude (download, ingest,
+    chapter pick, part narrowing, analysis, branding) is process_generation's,
+    and everything after it is here. ``client`` is the AUTHORING client (the
+    per-kind artifact model); the caller folds its usage into the job's.
+
+    Unlike the presentation's embedded deck ("deck is a bonus"), here the deck
+    IS the artifact: no file means the job fails, never 'done' without it.
+    """
+    from agent5_slides.deck_notes import author_deck_slides
+    from agent5_slides.slide_generator import generate_episode_slides
+
+    slides_spec = author_deck_slides(book, chapter, analysis, client, params or {}, lesson_lang)
+    book_id = book.get("id") or "unknown"
+    chapter_num = int(chapter.get("chapter_num") or 0)
+    deck_script = {
+        "book_id": book_id,
+        "chapter_num": chapter_num,
+        "episodes": [{
+            "book_id": book_id,
+            "chapter_num": chapter_num,
+            "episode_num": 1,
+            "episode_title": unit_label,
+            "segments": slides_spec,
+        }],
+    }
+    # out_dir = the job's own temp dir: the presentation job of the same
+    # chapter may be rendering into the shared storage/slides dir right now.
+    manifest = generate_episode_slides(
+        script_data=deck_script, branding=branding, direction=lesson_dir,
+        out_dir=Path(tmp) / "deck",
+    ).model_dump()
+    deck_path = manifest.get("deck_path")
+    if not deck_path or not Path(deck_path).exists():
+        raise RuntimeError("deck build produced no file")
+
+    # Coverage: MEASURED and RECORDED, never gated — same rule as the documents.
+    # coverage.script_text reads heading/points/visual, so on-screen content
+    # counts as taught, exactly as it does for the video script.
+    try:
+        _record_coverage(sb, generation_id, [_coverage_report(
+            analysis, None, coverage.script_text({"segments": slides_spec}),
+            kind="deck", model=str(getattr(client, "model", "") or ""),
+        )])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("coverage not recorded for deck: %s", exc)
+
+    db.set_progress(sb, job_id, 90)
+    # Same storage name the presentation's embedded deck used for part 1, so
+    # the app's deck readers need nothing new; the deck generation is per unit
+    # (chapter or part), so there is never a _part{k} suffix here.
+    dest = f"{base}/deck.pptx"
+    db.upload_artifact(sb, deck_path, dest)
+    db.add_artifact_row(sb, generation_id, "deck_pptx", dest)
+    db.set_progress(sb, job_id, 96)
+    return f"{book.get('title', 'Document')} · {unit_label} · Slide deck"
+
+
 def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     # Lazy imports shared by every generation kind.
     from agent1_ingestion.extractor import extract_pdf
@@ -958,6 +1024,12 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             from agent6_animation.video_composer import compose_episode_videos
             from agent8_render.renderer import render_final_video
 
+            # Rollout flag: the deck is becoming its own generation kind
+            # ('deck', _generate_deck). "1" (default) keeps embedding a deck in
+            # the presentation as before; "0" stops building/uploading it once
+            # the app queues deck rows. Delete the flag after "0" has been live.
+            _deck_in_presentation = os.getenv("DECK_IN_PRESENTATION", "1").strip() == "1"
+
             params = gen.get("params") or {}
             narration_style = params.get("narration_style") or "socratic"
             tts_voice_requested = params.get("tts_voice")  # registry id, "auto", or None
@@ -1128,6 +1200,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 }
                 slides = generate_episode_slides(
                     script_data=part_scripts, branding=branding, direction=lesson_dir,
+                    build_deck=_deck_in_presentation,
                 ).model_dump()
 
                 video = compose_episode_videos(
@@ -1155,6 +1228,8 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                             f"lesson failed acceptance: {_accept['summary']}")
 
                 suffix = "" if part_idx == 1 else f"_part{part_idx}"
+                # deck_path is None when DECK_IN_PRESENTATION=0 (build_deck
+                # above) — the deck is then the 'deck' generation's artifact.
                 deck_path = slides.get("deck_path")
                 if deck_path and Path(deck_path).exists():
                     db.upload_artifact(sb, deck_path, f"{base}/deck{suffix}.pptx")
@@ -1400,6 +1475,25 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             db.set_progress(sb, job_id, 96)
             _exam_title = str((gen.get("params") or {}).get("title") or "").strip()
             title = f"{book.get('title', 'Document')} · {_exam_title or 'Exam'}"
+
+        elif kind == "deck":
+            # Slide deck as its OWN artifact (2026-09): one authoring call on
+            # the artifact model (ARTIFACT_MODEL_DECK / GEMINI_MODEL_DECK
+            # override per kind, like the documents), rendered through the
+            # same slide/deck code the presentation used. Jawi keeps the
+            # documents' exception (kind=None → the stronger general model).
+            # Free with its lesson — no ledger row; the DB guards it.
+            gen_client = client_for(lesson_lang, kind=None if jawi else "deck")
+            _unit = (
+                part_label(chapter_title, part_ref, part_total, pk.get("section_titles"))
+                if part_ref is not None else chapter_title
+            )
+            title = _generate_deck(
+                sb, job_id, generation_id, book, chapter, analysis, gen_client,
+                gen.get("params") or {}, branding, lesson_lang, lesson_dir, tmp, base, _unit,
+            )
+            for _k, _v in gen_client.session_usage.items():
+                client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
 
         else:
             raise RuntimeError(f"Unsupported generation kind: {kind}")
