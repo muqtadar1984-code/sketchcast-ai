@@ -210,9 +210,16 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
             prompts[str(k)] = str(v)
         # avatars resolve everywhere — whiteboard-fallback segments carry no
         # scene_assets map, but the persistent teacher appears on them too
-        from spike.scene_engine.whiteboard import AVATAR_PROMPTS
+        from spike.scene_engine.whiteboard import AVATAR_PROMPTS, avatar_prompt
         for k, v in AVATAR_PROMPTS.items():
             prompts.setdefault(k, v)
+        # a cast face (`avatar_teacher_female__face_<id>`, one roster row) is
+        # keyed by its own name in the cache; its prompt is the family's
+        for k in list((avatars or {}).values()) + [
+                str(e.get("asset") or "") for e in (scene_dict or {}).get("elements") or []
+                if isinstance(e, dict) and e.get("type") == "illustration"]:
+            if str(k).startswith("avatar") and str(k) not in prompts:
+                prompts[str(k)] = avatar_prompt(str(k))
         words = None
         if audio_path:
             wjson = Path(str(audio_path)).with_suffix(".words.json")

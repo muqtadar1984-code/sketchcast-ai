@@ -532,7 +532,7 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
     # never fades at a chapter boundary, never renames to prev__*, never
     # counts against the one-root rule. On the lesson's first segment the
     # hand draws them in; everywhere else they are simply present at t=0.
-    from .whiteboard import (AVATAR_PROMPTS, STUDENT_ID, TEACHER_ID,
+    from .whiteboard import (STUDENT_ID, TEACHER_ID, avatar_prompt,
                              narration_stream, select_key_sentence,
                              snap_to_narration, student_element,
                              teacher_element)
@@ -547,14 +547,14 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
             sc["elements"].append(teacher_element(teach_key))
             assets_by_seg.setdefault(sid, {})
             assets_by_seg[sid] = {**assets_by_seg[sid],
-                                  teach_key: AVATAR_PROMPTS[teach_key]}
+                                  teach_key: avatar_prompt(teach_key)}
         if style == "conversational":
             # the student is a PERMANENT speaker too; the caption stream is
             # injected at COMPOSE time, once per-line audio offsets exist
             if not any(e.get("id") == STUDENT_ID for e in sc["elements"]):
                 sc["elements"].append(student_element(stud_key))
                 assets_by_seg[sid] = {**assets_by_seg.get(sid, {}),
-                                      stud_key: AVATAR_PROMPTS[stud_key]}
+                                      stud_key: avatar_prompt(stud_key)}
             continue
         narr = narrations.get(sid, "")
         st = step_by_sid.get(sid)
@@ -1242,7 +1242,7 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         # spawning a competing bubble.
         if st.moment and st.moment["role"] == "student" \
                 and style != "conversational":
-            from .whiteboard import (AVATAR_PROMPTS, human_moment,
+            from .whiteboard import (avatar_prompt, human_moment,
                                      snap_to_narration)
             m_text = snap_to_narration(st.moment["text"], narration_here) \
                 or st.moment["text"]
@@ -1250,8 +1250,7 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             hm_els, hm_acts, _ = human_moment(
                 "student", m_text, uid=f"hm_{seg_id}", asset=hm_asset)
             seg_assets = {**seg_assets}
-            seg_assets[hm_asset] = AVATAR_PROMPTS.get(
-                hm_asset, AVATAR_PROMPTS["avatar_student"])
+            seg_assets[hm_asset] = avatar_prompt(hm_asset)
             elements.extend(hm_els)
             step_actions = step_actions + hm_acts
             moment_note = f" | HUMAN_TEACHING_MOMENT (student: {m_text!r})"
