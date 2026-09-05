@@ -146,6 +146,81 @@ CONTENT_TYPES = {"png": "image/png", "svg": "image/svg+xml"}
 # retries once WITHOUT them rather than losing the row (see _insert_row).
 FORMAT_COLUMNS = ("asset_format", "group_ids", "group_count")
 
+# The column migration 0105 adds, degraded SEPARATELY from the three above.
+# 0104 is applied to prod (measured read-only 2026-09-05, version
+# 20260905054301); 0105 is not. Folding them into one set would mean a schema
+# miss on `vision` also threw away asset_format/group_ids/group_count — which
+# the live database has — so the degrade walks down one step at a time.
+VISION_COLUMNS = ("vision",)
+
+
+def _png_dimensions(data: bytes) -> tuple[int, int]:
+    """(width, height) of PNG bytes, from the IHDR, or (0, 0).
+
+    Read from the BYTES ABOUT TO BE UPLOADED rather than copied out of the
+    caller's metadata, because that is the whole safety property of the vision
+    payload: regions are pixel coordinates and are meaningful only for an
+    image of exactly these dimensions. A number carried along beside them can
+    drift; a number measured off them cannot. (0, 0) means "could not tell",
+    which no real image matches, so a consumer's dimension check refuses the
+    boxes rather than trusting them — fail closed.
+
+    Parsed by hand instead of through Pillow: shared/ is imported by the app
+    and the worker alike, and a 25-byte header read is not worth an image
+    decode or a dependency.
+    """
+    sig = bytes((137, 80, 78, 71, 13, 10, 26, 10))    # the PNG magic number
+    if len(data) < 24 or data[:8] != sig or data[12:16] != b"IHDR":
+        return (0, 0)
+    return (int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big"))
+
+
+def vision_payload(regions: dict[str, Any] | None, annotated_for,
+                   baked_text: bool, width: int, height: int) -> dict[str, Any]:
+    """The self-describing annotation document stored on a row.
+
+    `annotated_for` is the names ASKED for, not the names found, and the
+    difference is load-bearing: a part vision genuinely cannot see must count
+    as ANSWERED, or every later lesson re-asks the same question forever and
+    the cache never converges.
+    """
+    boxes = {str(k): [[float(v) for v in box] for box in (val or [])]
+             for k, val in (regions or {}).items()}
+    asked = [str(n) for n in (annotated_for or [])]
+    return {"regions": boxes, "annotated_for": asked,
+            "baked_text": bool(baked_text),
+            "w": int(width or 0), "h": int(height or 0)}
+
+
+def row_vision(row: dict[str, Any] | None) -> dict[str, Any]:
+    """A row's stored annotation, normalised, or {} for a row that has none.
+
+    Defensive in the same way row_format is: every row published before this
+    column existed carries no such key, and a database that predates 0105
+    returns rows without it at all.
+    """
+    v = (row or {}).get("vision")
+    if not isinstance(v, dict) or not v:
+        return {}
+    return vision_payload(v.get("regions"), v.get("annotated_for"),
+                          bool(v.get("baked_text")), v.get("w") or 0,
+                          v.get("h") or 0)
+
+
+def vision_group_ids(payload: dict[str, Any] | None) -> list[str]:
+    """The parts a raster asset demonstrably CONTAINS: the annotated names
+    that came back with at least one box.
+
+    A name that was asked for and not found is deliberately absent. group_ids
+    is what row_has_parts answers from, and promising a part the renderer then
+    cannot anchor is worse than admitting the asset does not have it.
+    """
+    out: list[str] = []
+    for name, boxes in ((payload or {}).get("regions") or {}).items():
+        if boxes:
+            out.append(str(name))
+    return out
+
 
 def normalize_format(value: Any) -> str:
     """A format name, or DEFAULT_FORMAT for anything unrecognised.
@@ -178,7 +253,13 @@ def row_format(row: dict[str, Any] | None) -> str:
 
 
 def row_group_ids(row: dict[str, Any] | None) -> list[str]:
-    """The EXACT group ids stored on a row, in drawing order."""
+    """The parts stored on a row, in drawing order.
+
+    For an SVG these are the EXACT <g id>s taken from the markup at publish;
+    for a PNG they are the part names its vision pass found a box for. Two
+    ways of learning the same fact — what this asset contains — so callers
+    ask one question and never branch on format.
+    """
     if not row:
         return []
     return [str(g) for g in (row.get("group_ids") or [])]
@@ -194,8 +275,10 @@ def row_has_parts(row: dict[str, Any] | None, wanted) -> bool:
     decides they are the same part. Using a different rule here would let the
     library promise a part the renderer then cannot find.
 
-    A row with no recorded groups (every PNG, and any SVG published before the
-    column existed) answers False for a real request rather than guessing.
+    A row with no recorded groups answers False for a real request rather than
+    guessing. That was every PNG until 0105: a raster asset learns its parts
+    from the paid vision pass, and the answer had nowhere to live, so all 217
+    approved non-avatar PNGs measured on 2026-09-05 carried group_count = 0.
     """
     want = [str(w) for w in (wanted or []) if str(w).strip()]
     if not want:
@@ -666,10 +749,20 @@ def _local_candidates() -> list[dict[str, Any]]:
 
 
 def _write_local_index(rows: list[dict[str, Any]]) -> None:
+    """Stage and rename, through a scratch name PRIVATE to this writer.
+
+    register_local holds ra.asset_lock(key), which is per-KEY, so two segment
+    threads publishing two different assets are genuinely concurrent right
+    here. One fixed ``index.json.tmp`` meant they opened the same file with
+    truncation and interleaved into it: whoever renamed first published a
+    document half-written by the other, and whoever renamed second raised
+    FileNotFoundError out through publish_generated and lost its row. A torn
+    index.json is worse than either — _local_candidates cannot parse it,
+    returns [], and every key the local index held is generated again.
+    """
     LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = LIBRARY_DIR / "index.json.tmp"
-    tmp.write_text(json.dumps(rows, indent=2, sort_keys=True), encoding="utf-8")
-    tmp.replace(LIBRARY_DIR / "index.json")
+    _write_atomic(LIBRARY_DIR / "index.json",
+                  json.dumps(rows, indent=2, sort_keys=True).encode("utf-8"))
 
 
 def _index_identity(row: dict[str, Any]) -> tuple[str, str]:
@@ -987,7 +1080,15 @@ def hydrate(key: str, prompt: str, cache_dir: Path,
         metadata = {**hit, "provenance": "visual_library",
                     "library_asset_id": hit.get("id"), "asset_format": fmt,
                     "group_ids": list(hit.get("group_ids") or []),
-                    "group_count": int(hit.get("group_count") or 0)}
+                    "group_count": int(hit.get("group_count") or 0),
+                    # Normalised rather than passed through: a row from a
+                    # database that predates 0105 has no such key at all, and
+                    # the renderer must read one shape either way. This is the
+                    # whole read path — raster_assets seeds annotated_for from
+                    # it and its existing cache guard then skips the vision
+                    # call it would otherwise pay for a picture the library
+                    # already knows.
+                    "vision": row_vision(hit)}
         _write_json_atomic(meta, metadata)
         logger.info("visual library hit: %s <- %s (%s, score %.2f)", key,
                     hit.get("asset_key"), fmt, hit.get("match_score", 0))
@@ -1099,7 +1200,7 @@ def _write_atomic(path: Path, data: bytes) -> None:
         raise
 
 
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     """meta.json goes in the same way asset.png does.
 
     Making only the PNG atomic moved the torn read one file over rather than
@@ -1107,8 +1208,15 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     catches it mid-write parses nothing, falls back to ``md = {}``, finds no
     ``annotated_for`` and re-runs annotate_regions — a PAID vision call, for a
     file that was perfectly good a moment earlier and is again a moment later.
+
+    Public because raster_assets writes the same file from the other end, and
+    a torn read there costs the same call. The private alias below is the name
+    this module's own callers have always used.
     """
     _write_atomic(path, json.dumps(payload, indent=2).encode("utf-8"))
+
+
+_write_json_atomic = write_json_atomic
 
 
 def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
@@ -1162,31 +1270,206 @@ def _looks_like_missing_column(exc: Exception) -> bool:
 
 
 def _insert_row(sb, row: dict[str, Any], asset_key: str) -> None:
-    """Insert a library row, degrading to the pre-0104 column set if needed.
+    """Insert a library row, degrading one migration at a time if needed.
 
     Deploys and migrations are separate acts: the worker ships on a push, the
-    schema changes when the founder applies 0104. Between the two, a row
-    carrying asset_format/group_ids/group_count is refused whole — and because
+    schema changes when the founder applies the file. Between the two, a row
+    carrying columns the database does not have is refused WHOLE — and because
     the bytes are uploaded first, the failure would leave an orphaned storage
     object and no row at all, silently, on every single generation.
 
-    So a schema miss is not fatal: drop the three new columns and insert the
-    row the old schema understands. Nothing is lost that cannot be recovered —
-    ``row_format`` already answers from the stored object's extension when the
-    column is absent, so a degraded SVG row still reads back as an SVG from
-    ``generated/<canonical>/<hash>.svg``. Only the group metadata waits for the
-    migration, and that is a lookup optimisation, not the asset.
+    So a schema miss is not fatal, and the retry walks DOWN ONE STEP AT A
+    TIME rather than falling to the oldest schema it knows:
+
+        full row  ->  drop `vision` (0105)  ->  also drop the 0104 format
+                      columns  ->  raise
+
+    The order is not cosmetic. 0104 is applied to prod and 0105 is not
+    (measured read-only 2026-09-05), so the common case in the deploy window
+    is a database that knows asset_format/group_ids/group_count perfectly
+    well. A single-step degrade would throw those away too on every publish,
+    which is how a cost optimisation for one column silently disables the
+    part lookup for every asset.
+
+    Nothing that matters is lost at any step. ``row_format`` already answers
+    from the stored object's extension when its column is absent, so even a
+    fully degraded SVG row reads back as an SVG from
+    ``generated/<canonical>/<hash>.svg``. What waits for a migration is the
+    part metadata and the cached annotation: lookup optimisations, not the
+    asset.
+    """
+    ladder = [row]
+    rungs: list[str] = []    # what to say when falling from ladder[i] to i+1
+    for drop, complaint in (
+            (VISION_COLUMNS,
+             "0105 (%s); publishing %s without the cached vision annotation"),
+            (VISION_COLUMNS + FORMAT_COLUMNS,
+             "0104 (%s); publishing %s without the format columns")):
+        candidate = {k: v for k, v in row.items() if k not in drop}
+        # A step that removes nothing is not a step. An SVG carries no vision
+        # payload at all, so retrying it minus a column it never had would
+        # fail identically — a wasted round trip and a warning naming the
+        # wrong migration.
+        if len(candidate) == len(ladder[-1]):
+            continue
+        ladder.append(candidate)
+        rungs.append(complaint)
+
+    for i, candidate in enumerate(ladder):
+        try:
+            sb.table("visual_assets").insert(candidate).execute()
+            return
+        except Exception as exc:  # noqa: BLE001
+            # The last rung has nowhere left to fall: a schema miss there is
+            # about a column no migration of ours adds, so it is a real error
+            # and must surface rather than be retried into silence.
+            if i >= len(rungs) or not _looks_like_missing_column(exc):
+                raise
+            logger.warning("visual library: schema predates " + rungs[i],
+                           exc, asset_key)
+
+
+def merge_vision(stored: dict[str, Any] | None,
+                 fresh: dict[str, Any] | None) -> dict[str, Any]:
+    """The row's annotation after a container contributes what it just learned.
+
+    UNION, never replacement. The accumulation that makes an asset converge
+    used to live only in the container's meta.json, so any write-back from a
+    container whose local baseline was NARROWER than the row shrank the row:
+    a lesson naming one part of a three-part picture rewrote it as a one-part
+    picture and the other two boxes had to be bought again. Three reachable
+    paths produce exactly that baseline — a row flagged ``baked_text`` (which
+    ``_lift_library_vision`` deliberately refuses to seed from), a local
+    meta.json that already carried its own older ``annotated_for``, and every
+    single bind while 0105 is unapplied, because then no payload ever comes
+    back to seed from at all.
+
+    Three rules, each with a reason:
+
+    * a stored box is only overwritten by a box, never by a "not found". A
+      pass that asks for a part and cannot see it must still mark the part
+      ANSWERED — otherwise it is re-asked forever — but it must not erase the
+      earlier pass that did see it.
+    * ``baked_text`` LATCHES. It describes the object in Supabase Storage, and
+      ``scrub_all_text`` only cleans the local copy, so once the stored bytes
+      are known to carry words nothing this side of a re-upload makes them
+      clean. A later pass over a scrubbed local file reports no text quite
+      honestly, and must not be allowed to say so about the stored object.
+    * boxes are pixel coordinates. If the two payloads disagree about the
+      dimensions they were measured on, they describe different images and
+      must not be mixed: the fresh one — measured against the bytes in hand —
+      replaces the stored one outright rather than being merged into it.
+
+    This is still read-modify-write, not compare-and-set: two containers that
+    read the same row before either writes still lose one another's newest
+    names. That race self-heals (the next reader accumulates over whatever it
+    finds and writes the wider union back) and costs at worst a repeat call,
+    where replacement cost a permanent deletion.
+    """
+    old, new = row_vision({"vision": stored}), row_vision({"vision": fresh})
+    if not new:
+        return old
+    if not old:
+        return new
+    if (old["w"], old["h"]) != (new["w"], new["h"]):
+        return new
+    regions = dict(old["regions"])
+    for name, boxes in new["regions"].items():
+        if boxes or name not in regions:
+            regions[name] = boxes
+    asked = list(dict.fromkeys(old["annotated_for"] + new["annotated_for"]))
+    return vision_payload(regions, asked,
+                          old["baked_text"] or new["baked_text"],
+                          new["w"], new["h"])
+
+
+def _stored_annotation(sb, asset_id: str) -> tuple[dict[str, Any], list[str]]:
+    """(the row's vision payload, its group_ids) — or ({}, []) for a row this
+    client cannot read.
+
+    ``select("*")`` on purpose: naming ``vision`` would make this fail on a
+    database that predates 0105, which is every database in the deploy window
+    and precisely when the group columns still need reading.
     """
     try:
-        sb.table("visual_assets").insert(row).execute()
-        return
+        res = sb.table("visual_assets").select("*").eq(
+            "id", str(asset_id)).limit(1).execute()
+        row = ((getattr(res, "data", None) or [None])[0]) or {}
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("visual library: could not read %s before recording "
+                     "its annotation: %s", asset_id, exc)
+        return {}, []
+    return row_vision(row), row_group_ids(row)
+
+
+def record_vision(asset_id: str, payload: dict[str, Any] | None) -> bool:
+    """Write a freshly measured vision annotation onto an EXISTING row.
+
+    This is the half that converges the assets already in the library. A
+    published PNG carries its annotation from birth, but the 217 approved
+    non-avatar PNGs measured on 2026-09-05 predate the column and carry none;
+    the renderer re-derived it on every hydration, and CACHE_DIR lives inside
+    the Railway container with no volume mounted, so every redeploy wiped the
+    local copy and every one of them re-bought the same vision call. Writing
+    it back on the first hit makes that one call per asset EVER.
+
+    READ-MODIFY-WRITE, not blind write. PostgREST replaces the columns named
+    in an update, so sending only what this container learned SHRANK any row
+    that already knew more — and a narrower local baseline is the normal
+    case, not the corner one (merge_vision lists the three paths that produce
+    one, including every single bind while 0105 is unapplied). The write is
+    also aimed: an unfiltered PATCH stamps every row in visual_assets.
+
+    Degrades like _insert_row and for the same reason, but one step shorter:
+    the group columns are live in prod today and `vision` is not, so a schema
+    miss retries with the 0104 columns alone — the part names are exactly what
+    row_has_parts answers from, and they are worth landing even when the
+    payload cannot. The return value still reports the payload: False means
+    the annotation did not reach the database, whatever else did.
+
+    Never raises. A render must not fail because a cost optimisation could not
+    write; the worst case is that the next worker pays for vision again, which
+    is precisely today's behaviour.
+    """
+    if not asset_id or not payload:
+        return False
+    sb = _sb()
+    if sb is None:
+        return False
+    # Read first. The update replaces these columns whole, so what goes back
+    # has to be the union of the row and this container — see merge_vision on
+    # why a narrower local baseline is the normal case, not the corner one.
+    stored, stored_groups = _stored_annotation(sb, asset_id)
+    payload = merge_vision(stored, payload)
+    groups = vision_group_ids(payload)
+    if not stored or (stored["w"], stored["h"]) == (payload["w"], payload["h"]):
+        # The column is older than the payload — until 0105 lands, group_ids
+        # is the ONLY thing a bind can leave behind — so it accumulates on its
+        # own account rather than being re-derived from a payload that may not
+        # exist yet. The one case it must not: a merge that was really a
+        # replacement, because the stored boxes turned out to describe an
+        # image of other dimensions. Those names are not parts of THIS asset,
+        # and group_ids is a promise the renderer then has to keep.
+        groups = list(dict.fromkeys(stored_groups + groups))
+    full = {"vision": payload, "group_ids": groups, "group_count": len(groups)}
+    try:
+        sb.table("visual_assets").update(full).eq("id", str(asset_id)).execute()
+        return True
     except Exception as exc:  # noqa: BLE001
         if not _looks_like_missing_column(exc):
-            raise
-        legacy = {k: v for k, v in row.items() if k not in FORMAT_COLUMNS}
-        logger.warning("visual library: schema predates 0104 (%s); publishing "
-                       "%s without the format columns", exc, asset_key)
-        sb.table("visual_assets").insert(legacy).execute()
+            logger.warning("visual library: could not record the vision "
+                           "annotation for %s: %s", asset_id, exc)
+            return False
+        logger.info("visual library: schema predates 0105 (%s); recording the "
+                    "parts of %s without the annotation", exc, asset_id)
+    try:
+        sb.table("visual_assets").update(
+            {"group_ids": groups, "group_count": len(groups)}
+        ).eq("id", str(asset_id)).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.info("visual library: could not record the parts of %s "
+                    "either: %s", asset_id, exc)
+    return False
 
 
 def publish_generated(asset_key: str, prompt: str, asset_path: Path,
@@ -1223,6 +1506,37 @@ def publish_generated(asset_key: str, prompt: str, asset_path: Path,
                            or asset_path.suffix)
     data = asset_path.read_bytes()
     group_ids: list[str] = []
+    md = metadata or {}
+    # A raster asset's parts cost a paid vision call; an SVG's are free from
+    # its <g id>s. Both end up in the SAME two columns, because a lesson asks
+    # "do you have a chloroplast" and must not have to know which. What the
+    # PNG additionally carries is the payload itself — the boxes, and the
+    # dimensions they were measured on — so the call is bought once ever
+    # instead of once per worker deploy: CACHE_DIR is inside the Railway
+    # container and no volume is mounted, so the local copy dies at every
+    # redeploy.
+    vision: dict[str, Any] = {}
+    if fmt == "png":
+        # Two dialects reach here and both are legitimate. raster_assets
+        # writes regions/annotated_for/baked_text at the TOP level of its
+        # meta.json and has done since long before the library existed; a file
+        # the library hydrated and the renderer then re-annotated carries the
+        # nested payload as well. The nested one wins when present because it
+        # is the one that also knows its dimensions.
+        nested = md["vision"] if isinstance(md.get("vision"), dict) else {}
+        w, h = _png_dimensions(data)
+        vision = vision_payload(nested.get("regions", md.get("regions")),
+                                nested.get("annotated_for",
+                                           md.get("annotated_for")),
+                                bool(md.get("baked_text")), w, h)
+        group_ids = vision_group_ids(vision)
+        if not vision["regions"] and not vision["annotated_for"]:
+            # Nothing was ever asked of vision for this asset (a hand sprite,
+            # a prompt with no part names, the one-shot cache migration over a
+            # meta.json that predates annotation). An empty document says "not
+            # annotated", which is true and re-askable; a document full of
+            # empty fields would say "asked and found nothing", which is not.
+            vision = {}
     if fmt == "svg":
         from spike.scene_engine.svg_validate import validate_svg_document
         verdict = validate_svg_document(data.decode("utf-8", "replace"))
@@ -1252,7 +1566,7 @@ def publish_generated(asset_key: str, prompt: str, asset_path: Path,
         # what the asset actually passed, not a generic word: an SVG cleared
         # the publish contract above, a PNG cleared the renderer's coverage
         # and baked-text checks
-        "quality": (metadata or {}).get(
+        "quality": md.get(
             "quality", "svg_contract_validated" if fmt == "svg"
             else "renderer_validated"),
         "asset_format": fmt,
@@ -1262,6 +1576,13 @@ def publish_generated(asset_key: str, prompt: str, asset_path: Path,
         # the whole avatar roster entered the educational library.
         **avatar_fields(asset_key),
     }
+    if vision:
+        # Sent only when there is something to say. '{}' is the column
+        # default, so a row with no annotation — every SVG, and any PNG whose
+        # prompt named no parts — gains nothing by carrying the key and would
+        # pay for it: until 0105 is applied, naming the column costs one
+        # refused insert per publish (see _insert_row).
+        row["vision"] = vision
     register_local(row)
 
     sb = _sb()

@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 import requests
 
-from .partnames import norm_part
+from .partnames import norm_part, resolve_part, same_part
 from PIL import Image
 
 from shared.asset_keys import KEY_NOISE, canonical_key, is_avatar_key
@@ -1125,6 +1125,236 @@ def _finish(key: str, ink: Image.Image, regions: dict | None = None,
                        regions=regions or {}, baked_text=baked_text)
 
 
+# ── the annotation is an ASSET, not a per-deploy expense ─────────────────────
+# A PNG's named parts cost a paid vision call; an SVG's are free from its
+# <g id>s. That asymmetry is fine — what was not fine is paying for the PNG's
+# again and again. The answer was cached ONLY under CACHE_DIR, which lives
+# inside the Railway worker container with no volume mounted, so every
+# redeploy wiped it and every library PNG re-bought the same call. Measured on
+# prod 2026-09-05: 217 approved non-avatar PNG rows, group_count = 0 on every
+# one of them. So the annotation now travels with the row, and the two
+# functions below are the ends of that pipe.
+
+
+def _lift_library_vision(md: dict, size: tuple[int, int]) -> None:
+    """Teach a library-hydrated meta.json the keys this module reads.
+
+    hydrate() writes the matched ROW, whose annotation lives under "vision".
+    This module has always read top-level regions/annotated_for/baked_text, so
+    a hydrated file looked un-annotated and the guard below re-bought vision
+    for a picture the library already knew.
+
+    The dimension check is why w/h are in the payload at all. A region is
+    pixel coordinates, valid only for bytes of exactly those dimensions, so a
+    mismatch is DETECTED and the payload dropped — the call is re-bought
+    rather than the boxes being drawn somewhere plausible and wrong. A file
+    that already speaks this module's dialect is left alone: locally measured
+    beats anything carried in.
+
+    What seeding gives up, deliberately: annotate_regions is also the only
+    producer of has_text/text_boxes, so a library PNG that is never re-asked
+    is never re-scanned for baked words either. That repetition was not free
+    — it was a full paid call for every library PNG on every cold container,
+    which is the entire expense this change exists to delete — and it was
+    never universal anyway, since the old guard skipped a prompt with no
+    layer-group tail too. Two things keep the trade honest. An asset only
+    enters the library after passing the birth-time check (annotate_regions
+    asks a second, single-purpose text question when the multiplexed one
+    reports nothing, and _decide refuses to publish anything flagged). And
+    the flag LATCHES: the moment any container sees words the row says so
+    forever, this function refuses to seed from it, and every later container
+    rescans and scrubs. What is given up is the asset no container ever
+    catches at all.
+    """
+    v = md.get("vision")
+    if md.get("annotated_for") is not None or not isinstance(v, dict) or not v:
+        return
+    if not v.get("annotated_for") and not v.get("regions"):
+        return
+    if v.get("baked_text"):
+        # A row that admits its bytes carry words does NOT get to skip the
+        # pass: the text_boxes are what scrubbing needs, and they are not in
+        # the payload. Seeding here would serve the picture flagged instead of
+        # cleaning it — the one case where re-buying the call is the point.
+        return
+    if (int(v.get("w") or 0), int(v.get("h") or 0)) != (size[0], size[1]):
+        logger.warning("library annotation is for a %sx%s image and this one "
+                       "is %sx%s — ignoring its regions",
+                       v.get("w"), v.get("h"), size[0], size[1])
+        return
+    md["annotated_for"] = [str(n) for n in (v.get("annotated_for") or [])]
+    md["regions"] = dict(v.get("regions") or {})
+    md.setdefault("baked_text", bool(v.get("baked_text")))
+
+
+def _vision_doc(ann: dict, names, size: tuple[int, int]) -> dict:
+    """An annotate_regions result in the library's payload shape, or {}.
+
+    Empty when nothing was ever asked: an empty document says "not annotated",
+    which is true and re-askable, where a document full of empty fields would
+    say "asked and found nothing", which is not.
+    """
+    if not names and not (ann.get("regions") or {}):
+        return {}
+    try:
+        from shared.visual_library import vision_payload
+        return vision_payload(ann.get("regions"), names,
+                              bool(ann.get("has_text")), size[0], size[1])
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _record_library_vision(md: dict, size: tuple[int, int],
+                           stored_baked_text: bool) -> dict:
+    """Push a freshly measured annotation back onto the row it came from, and
+    return the payload for the local meta.
+
+    This is the half that converges the assets the library ALREADY holds:
+    publishing cannot carry their payload because their row exists, so only an
+    update reaches them. One vision call per asset ever, instead of one per
+    asset per deploy.
+
+    `stored_baked_text` is what the object in Supabase Storage is known to
+    carry, LATCHED across passes. scrub_all_text only zeroes alpha on the
+    local copy — the boxes stay valid for both, but the stored bytes keep
+    their words, so neither the row nor the payload written back into
+    meta.json may be told otherwise. That is also why the returned document
+    carries the stored flag rather than the local one: it is what the NEXT
+    pass in this container reads to latch from, and md["baked_text"] beside
+    it goes on describing the file on disk.
+
+    Never raises, and its failure is not an error: a render must not break
+    because a cost optimisation could not write. The worst case is the next
+    worker paying what this one just paid, which is exactly today's behaviour.
+    """
+    payload: dict = {}
+    try:
+        from shared.visual_library import record_vision, vision_payload
+        payload = vision_payload(md.get("regions"), md.get("annotated_for"),
+                                 bool(stored_baked_text), size[0], size[1])
+        asset_id = str(md.get("library_asset_id") or "")
+        if asset_id:
+            record_vision(asset_id, payload)
+    except Exception:  # noqa: BLE001
+        logger.debug("could not record the vision annotation upstream",
+                     exc_info=True)
+    return payload
+
+
+def _write_meta(meta: Path, md: dict) -> None:
+    """meta.json goes in atomically, the way asset.png does.
+
+    A truncating write_text is observable half-written, and the reader that
+    catches it is not hypothetical: `asset_lock` is a threading lock, so it
+    serialises the parent's render threads and nothing else, while with
+    RENDER_PROCESSES > 0 a spawned segment child re-binds against this very
+    CACHE_DIR (segment_worker._bind). A child that parses nothing falls back
+    to md = {}, finds no annotated_for and buys a vision call — from the
+    process whose whole contract is that it never calls a model — and then
+    writes that empty document back, taking provenance, library_asset_id and
+    the payload with it. The document only got bigger when the annotation
+    moved into it, so the window only got wider.
+    """
+    try:
+        from shared.visual_library import write_json_atomic
+    except Exception:  # noqa: BLE001
+        write_json_atomic = None
+    try:
+        if write_json_atomic is not None:
+            write_json_atomic(meta, md)
+            return
+        # Same shape, locally, for a worker that somehow cannot import the
+        # library half: stage under a name private to this writer (pid + a
+        # fresh uuid, so two writers of one key never share a scratch file)
+        # and rename it into place. os.replace is atomic on POSIX and NTFS.
+        import uuid as _uuid
+        part = meta.with_name(
+            f"{meta.name}.{os.getpid()}.{_uuid.uuid4().hex}.part")
+        try:
+            part.write_text(json.dumps(md, indent=2), encoding="utf-8")
+            os.replace(part, meta)
+        except BaseException:
+            part.unlink(missing_ok=True)
+            raise
+    except OSError:
+        pass
+
+
+def _unasked_names(names, asked) -> list[str]:
+    """The wanted names the annotation has no answer for yet.
+
+    Compared through partnames, NOT by string identity. Every other name
+    comparison in the engine is tolerant — annotate_regions files its keys
+    under norm_part, render.match_layer_ids falls back to resolve_part, and
+    partnames exists precisely because 'chloroplasts' vs 'chloroplast' cost
+    the founder's killed Cells Part 2 run five leader lines. A verbatim guard
+    here buys a fresh vision call for a row that already answers the question,
+    and writes a second spelling of one part into annotated_for and group_ids
+    — so an asset with N spellings in circulation costs N calls instead of one
+    and over-counts its own parts. The layer-group tail is written per lesson,
+    so that drift is the normal case, not a corner.
+
+    Exact and plural only. Containment is deliberately NOT enough to call a
+    name answered: 'membrane' is not answered by having asked about 'nuclear
+    membrane', and treating it as answered would mean never buying a box for
+    the part the lesson actually names.
+    """
+    out: list[str] = []
+    for n in names:
+        if any(same_part(n, a) for a in list(asked) + out):
+            continue
+        out.append(n)
+    return out
+
+
+def _regions_for_prompt(regions: dict | None, asked, names,
+                        fresh: set | None = None) -> dict:
+    """The accumulated annotation NARROWED to the parts this prompt named.
+
+    `regions` is the cache — the union of everything ever asked of this one
+    picture, which is what makes the call worth buying once. It is not what
+    the renderer may see. render.match_layer_ids resolves a wanted layer
+    against the keys it is handed and, when none matches exactly, falls back
+    to bare substring containment; that rung is only safe while the keys are
+    the parts of the prompt being rendered, which is the invariant the old
+    replace-everything code kept by accident. Widen the namespace with another
+    lesson's names and a label anchors confidently on a foreign part: a scene
+    asking for 'membrane' on a picture whose cache also holds 'nuclear
+    membrane' draws its leader line to the nucleus, and _region_ordered_trace
+    reveals the nuclear membrane's pixels on the membrane beat. Unresolved is
+    the designed outcome there — render.py logs UNRESOLVED_ANCHOR and draws to
+    the element edge, which reads as an unlabelled part. A confident label on
+    the wrong structure teaches a child something false (partnames' docstring
+    on why there is no nearest-by-name tier).
+
+    A key is kept when the name it was BOUGHT for is one this prompt names.
+    That owner needs no extra state: annotated_for is every name ever asked,
+    and resolve_part over it answers which of them a key came back for —
+    including the model-whim key that matched its request only by containment
+    ('vacuole' asked, 'sap vacuole' returned), which the old code showed the
+    renderer and which therefore must survive. `fresh` is this pass's own
+    output and is always visible: those keys are exactly what the old code
+    would have handed over.
+    """
+    if not regions or not names:
+        # No parts named means no part boxes. A freshly generated asset whose
+        # prompt has no layer-group tail gets regions {} out of
+        # annotate_regions for the same reason; only a warm cache written by a
+        # DIFFERENT prompt ever had anything else to offer, and that is the
+        # pollution above.
+        return {}
+    fresh = fresh or set()
+    keep: dict = {}
+    for k, boxes in regions.items():
+        if k in fresh:
+            keep[k] = boxes
+            continue
+        owner, _how = resolve_part(k, list(asked)) if asked else (None, None)
+        if any(same_part(owner if owner is not None else k, n) for n in names):
+            keep[k] = boxes
+    return keep
+
+
 # ── cache + public API ───────────────────────────────────────────────────────
 
 _ASSET_LOCKS: dict[str, "threading.RLock"] = {}
@@ -1197,19 +1427,47 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
             except Exception:
                 pass
             fresh_baked = False
-            # backfill when annotation never ran, ran without part names, or
-            # ran for a DIFFERENT name set (a prompt can learn its layer-group
-            # tail later — the compiler appends one when it merges per-part
-            # handles into the root). annotated_for pins the set so a part
-            # vision genuinely cannot find is not re-asked every load.
-            if names and (md.get("annotated_for") is None
-                          or sorted(md.get("annotated_for") or [])
-                          != sorted(names)):
-                # lazy backfill: assets cached before region annotation
-                ann = annotate_regions(ink, names)
-                md["annotated_for"] = list(names)
-                md["regions"], md["baked_text"] = ann["regions"], ann["has_text"]
+            # A hydrated row speaks the library's dialect; give it this one.
+            _lift_library_vision(md, ink.size)
+            # ACCUMULATE, do not replace. annotated_for is the set of names
+            # ever ASKED — including ones vision could not see, because a part
+            # it genuinely cannot find must count as answered or it is re-asked
+            # every load forever. The old guard compared the whole set for
+            # equality, so a second lesson wanting a DIFFERENT part of the same
+            # picture re-annotated it and overwrote the first lesson's regions;
+            # across many lessons the same asset thrashed between name sets
+            # instead of converging. Now only the genuinely new names are
+            # bought, and what was already learned survives — which is safe
+            # precisely because these are pixel boxes on ONE unchanging image
+            # (scrub_all_text only zeroes alpha; nothing here resizes or
+            # re-crops).
+            # What the STORED object is known to carry, LATCHED. The flag
+            # describes the bytes in Supabase Storage, and scrub_all_text only
+            # zeroes alpha on the local copy, so from the second pass onward
+            # `ink` is clean while the stored object is not. Taking the flag
+            # from that pass alone downgraded the row True -> False, and the
+            # read path leans on it: a row saying False is seeded from, so
+            # annotate_regions never runs again, the scrub never runs, and the
+            # picture is drawn with its printed words sitting under the
+            # engine's own labels — with baked_text False, so validate.py
+            # reports nothing either.
+            stored_baked = bool((md.get("vision") or {}).get("baked_text"))
+            asked = list(md.get("annotated_for") or [])
+            unasked = _unasked_names(names, asked)
+            fresh_keys: set[str] = set()
+            if unasked:
+                # lazy backfill: assets cached before region annotation, and
+                # the parts a later prompt learned to name (the compiler
+                # appends a layer-group tail when it merges per-part handles
+                # into the root).
+                ann = annotate_regions(ink, unasked)
+                fresh_keys = set(ann["regions"] or {})
+                md["annotated_for"] = asked + list(dict.fromkeys(unasked))
+                md["regions"] = {**(md.get("regions") or {}),
+                                 **(ann["regions"] or {})}
+                md["baked_text"] = ann["has_text"]
                 fresh_baked = bool(ann["has_text"])
+                stored_baked = stored_baked or bool(ann["has_text"])
                 if ann.get("text_boxes"):
                     logger.warning("cached asset %r has baked text — scrubbing "
                                    "%d box(es)", key, len(ann["text_boxes"]))
@@ -1219,13 +1477,17 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
                     except OSError:
                         pass
                     md["baked_text"], fresh_baked = bool(left), bool(left)
-                try:
-                    meta.write_text(json.dumps(md, indent=2), encoding="utf-8")
-                except OSError:
-                    pass
+                # Upstream FIRST, then the local file: the call that has to
+                # survive a redeploy is the one that leaves this container.
+                md["vision"] = _record_library_vision(md, ink.size, stored_baked)
+                _write_meta(meta, md)
+            # The cache is the union of every lesson; the renderer is handed
+            # only this prompt's parts (see _regions_for_prompt).
+            visible = _regions_for_prompt(md.get("regions"),
+                                          md.get("annotated_for"), names,
+                                          fresh_keys)
             if not (fresh_baked and allow_generate):
-                return _finish(key, ink, md.get("regions"),
-                               bool(md.get("baked_text")))
+                return _finish(key, ink, visible, bool(md.get("baked_text")))
             # a pre-annotation cache with baked-in labels: fall through to the
             # generation path ONCE (it retries with the escalated prohibition
             # and re-caches). Only on the discovery run — a persistent flag in
@@ -1233,7 +1495,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
             # would just burn image credits on the same outcome. The cached
             # ink stays as the fallback: a flagged asset beats no asset.
             logger.warning("cached asset %r has baked text — regenerating", key)
-            cached_fallback = _finish(key, ink, md.get("regions"), True)
+            cached_fallback = _finish(key, ink, visible, True)
         except Exception:
             logger.exception("corrupt cached asset %s; regenerating", key)
     if not allow_generate:
@@ -1330,13 +1592,19 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
     try:  # cache persistence is best-effort — never fail a good asset over IO
         cache.mkdir(parents=True, exist_ok=True)
         ink.save(png)
-        meta.write_text(json.dumps({"key": key, "prompt": prompt,
-                                    "model": IMAGE_MODEL,
-                                    "provenance": "generated",
-                                    "regions": ann["regions"],
-                                    "annotated_for": list(names),
-                                    "baked_text": ann["has_text"]}, indent=2),
-                        encoding="utf-8")
+        _write_meta(meta, {"key": key, "prompt": prompt,
+                           "model": IMAGE_MODEL,
+                           "provenance": "generated",
+                           "regions": ann["regions"],
+                           "annotated_for": list(names),
+                           "baked_text": ann["has_text"],
+                           # The same annotation in the library's own shape,
+                           # so the publish that follows a generation hands
+                           # the row a payload that already knows which pixels
+                           # it describes. The 378 diagrams still to be
+                           # commissioned therefore cost nothing extra: they
+                           # are annotated on the way in.
+                           "vision": _vision_doc(ann, names, ink.size)})
     except OSError:
         logger.exception("could not cache asset %r (continuing uncached)", key)
     return _finish(key, ink, ann["regions"], ann["has_text"])
@@ -1371,8 +1639,11 @@ def load_hand(key: str = "hand_pen", cache_dir: Path | None = None,
                 ys, xs = np.nonzero(a > 128)
                 # the nib is the opaque pixel closest to the bottom-left corner
                 tip_i = int(np.argmin(xs.astype(np.int64) + (ink.height - ys)))
-                meta.write_text(json.dumps({"tip": [int(xs[tip_i]), int(ys[tip_i])],
-                                            "model": IMAGE_MODEL}), encoding="utf-8")
+                # atomic for the same reason the asset meta is: two threads
+                # asking for the hand at once, or a segment child reading the
+                # cache the parent is warming, must never see half a document
+                _write_meta(meta, {"tip": [int(xs[tip_i]), int(ys[tip_i])],
+                                   "model": IMAGE_MODEL})
             except Exception:
                 logger.exception("hand asset post-process failed")
     if not png.exists():
