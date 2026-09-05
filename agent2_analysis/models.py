@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class AnalysisStatus(str, enum.Enum):
@@ -29,7 +29,34 @@ class Concept(BaseModel):
     concept_id: str
     name: str
     definition: str
-    first_introduced_page: int = 0
+    # A PAGE LABEL, not an index — and nothing in the codebase reads it.
+    #
+    # Declared `int`, it took down three of one teacher's four artifacts on
+    # 2026-09-05: her book "Islamic y6" numbers its pages A1, A2, A3, so the
+    # extractor returned exactly what it saw and pydantic refused the whole
+    # ConceptResult — "12 validation errors ... input_value='A2'". lesson_plan,
+    # worksheet and case_study all died on it; the three artifacts that carry no
+    # concept extraction came through fine.
+    #
+    # A book is free to label its pages i, ii, iii or A1 or 7a, and a cosmetic
+    # field no consumer reads must never be the thing that fails a lesson. Kept
+    # as an int where the model gives a number (so existing rows and fixtures
+    # are unchanged) and carried as text otherwise.
+    first_introduced_page: int | str = 0
+
+    @field_validator("first_introduced_page", mode="before")
+    @classmethod
+    def _page_label(cls, v):
+        if v is None:
+            return 0
+        if isinstance(v, bool):      # bool is an int; a page is not a flag
+            return 0
+        if isinstance(v, int):
+            return v
+        text = str(v).strip()
+        if not text:
+            return 0
+        return int(text) if text.isdigit() else text
     importance: str = "supporting"  # foundational, supporting, application
     related_concepts: list[str] = Field(default_factory=list)
 

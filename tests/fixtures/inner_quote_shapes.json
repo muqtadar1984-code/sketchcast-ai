@@ -1,0 +1,163 @@
+{
+  "measured_on": "c851e0a",
+  "note": "Verdicts are the CURRENT (pre-fix) behaviour of ClaudeClient._extract_json. CORRUPTED is worse than LOUD: the lesson ships with words the model did not write.",
+  "cases": [
+    {
+      "name": "S1_plain_quoted_phrase",
+      "kind": "line",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"Everything you can see is a trust, and the word for it is \"khalifah\" and that means a steward.\"},{\"who\":\"student\",\"line\":\"Yes, I see.\"}],\"slide_heading\":\"The earth as a trust\",\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": "Everything you can see is a trust, and the word for it is \"khalifah\" and that means a steward.",
+      "json_loads": "Expecting ',' delimiter at char 158",
+      "verdict": "REPAIRED",
+      "got": "Everything you can see is a trust, and the word for it is \"khalifah\" and that means a steward."
+    },
+    {
+      "name": "S2_quoted_phrase_then_comma_then_prose",
+      "kind": "line",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"We call that trust \"amanah\", a thing handed to you that you will be asked about.\"},{\"who\":\"student\",\"line\":\"Yes, I see.\"}],\"slide_heading\":\"The earth as a trust\",\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": "We call that trust \"amanah\", a thing handed to you that you will be asked about.",
+      "json_loads": "Expecting ',' delimiter at char 119",
+      "verdict": "REPAIRED",
+      "got": "We call that trust \"amanah\", a thing handed to you that you will be asked about."
+    },
+    {
+      "name": "S3_quoted_phrase_containing_a_comma",
+      "kind": "line",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"The greeting \"peace, mercy and blessings of Allah\" is the one we say at the door.\"},{\"who\":\"student\",\"line\":\"Yes, I see.\"}],\"slide_heading\":\"The earth as a trust\",\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": "The greeting \"peace, mercy and blessings of Allah\" is the one we say at the door.",
+      "json_loads": "Expecting ',' delimiter at char 113",
+      "verdict": "REPAIRED",
+      "got": "The greeting \"peace, mercy and blessings of Allah\" is the one we say at the door."
+    },
+    {
+      "name": "S4_enumeration_of_quoted_words",
+      "kind": "line",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"This week we learn \"amanah\", \"khalifah\" and \"ihsan\" and we use all three.\"},{\"who\":\"student\",\"line\":\"Yes, I see.\"}],\"slide_heading\":\"The earth as a trust\",\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": "This week we learn \"amanah\", \"khalifah\" and \"ihsan\" and we use all three.",
+      "json_loads": "Expecting ',' delimiter at char 119",
+      "verdict": "REPAIRED",
+      "got": "This week we learn \"amanah\", \"khalifah\" and \"ihsan\" and we use all three."
+    },
+    {
+      "name": "S5_quoted_word_comma_quoted_word_colon",
+      "kind": "line",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"Two words to hold: \"amanah\", \"khalifah\": a caretaker who answers for the keys.\"},{\"who\":\"student\",\"line\":\"Yes, I see.\"}],\"slide_heading\":\"The earth as a trust\",\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": "Two words to hold: \"amanah\", \"khalifah\": a caretaker who answers for the keys.",
+      "json_loads": "Expecting ',' delimiter at char 119",
+      "verdict": "LOUD",
+      "got": null
+    },
+    {
+      "name": "S6_quoted_word_colon_then_quoted_gloss",
+      "kind": "line",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"The name \"Ar-Rahman\": \"the Most Merciful\" is the one we say most often.\"},{\"who\":\"student\",\"line\":\"Yes, I see.\"}],\"slide_heading\":\"The earth as a trust\",\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": "The name \"Ar-Rahman\": \"the Most Merciful\" is the one we say most often.",
+      "json_loads": "Expecting ',' delimiter at char 109",
+      "verdict": "LOUD",
+      "got": null
+    },
+    {
+      "name": "S7_quoted_word_colon_then_plain_prose",
+      "kind": "line",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"The name \"Ar-Rahman\": mercy that covers everyone, believer and stranger alike.\"},{\"who\":\"student\",\"line\":\"Yes, I see.\"}],\"slide_heading\":\"The earth as a trust\",\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": "The name \"Ar-Rahman\": mercy that covers everyone, believer and stranger alike.",
+      "json_loads": "Expecting ',' delimiter at char 109",
+      "verdict": "REPAIRED",
+      "got": "The name \"Ar-Rahman\": mercy that covers everyone, believer and stranger alike."
+    },
+    {
+      "name": "S8_apostrophes_only_valid_json",
+      "kind": "line",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"We say dua'a after salah, and we learn Al-Asmaa' ul-Husna, Allah's beautiful names.\"},{\"who\":\"student\",\"line\":\"Yes, I see.\"}],\"slide_heading\":\"The earth as a trust\",\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": "We say dua'a after salah, and we learn Al-Asmaa' ul-Husna, Allah's beautiful names.",
+      "json_loads": "PARSES (valid JSON already)",
+      "verdict": "REPAIRED",
+      "got": "We say dua'a after salah, and we learn Al-Asmaa' ul-Husna, Allah's beautiful names."
+    },
+    {
+      "name": "S9_apostrophes_plus_a_bare_quote",
+      "kind": "line",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"The list is Al-Asmaa' ul-Husna, and dua'a means \"a calling upon Allah\" in plain English.\"},{\"who\":\"student\",\"line\":\"Yes, I see.\"}],\"slide_heading\":\"The earth as a trust\",\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": "The list is Al-Asmaa' ul-Husna, and dua'a means \"a calling upon Allah\" in plain English.",
+      "json_loads": "Expecting ',' delimiter at char 148",
+      "verdict": "REPAIRED",
+      "got": "The list is Al-Asmaa' ul-Husna, and dua'a means \"a calling upon Allah\" in plain English."
+    },
+    {
+      "name": "S10_over_escaped_apostrophe_plus_bare_quote",
+      "kind": "line",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"After salah we make dua\\'a, which means \"a calling upon Allah\" and nothing less.\"},{\"who\":\"student\",\"line\":\"Yes, I see.\"}],\"slide_heading\":\"The earth as a trust\",\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": "After salah we make dua'a, which means \"a calling upon Allah\" and nothing less.",
+      "json_loads": "Invalid \\escape at char 122",
+      "verdict": "REPAIRED",
+      "got": "After salah we make dua'a, which means \"a calling upon Allah\" and nothing less."
+    },
+    {
+      "name": "S11_legit_escaped_quote_at_end_of_value",
+      "kind": "line",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"The whole class answered together, \\\"Ameen.\\\"\"},{\"who\":\"student\",\"line\":\"Yes, I see.\"}],\"slide_heading\":\"The earth as a trust\",\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": "The whole class answered together, \"Ameen.\"",
+      "json_loads": "PARSES (valid JSON already)",
+      "verdict": "REPAIRED",
+      "got": "The whole class answered together, \"Ameen.\""
+    },
+    {
+      "name": "S12_bare_quote_then_the_real_comma",
+      "kind": "line",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"At the end of every dua we all say \"Ameen\"\"},{\"who\":\"student\",\"line\":\"Yes, I see.\"}],\"slide_heading\":\"The earth as a trust\",\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": "At the end of every dua we all say \"Ameen\"",
+      "json_loads": "Expecting ',' delimiter at char 135",
+      "verdict": "REPAIRED",
+      "got": "At the end of every dua we all say \"Ameen\""
+    },
+    {
+      "name": "S13_bare_quote_then_the_real_brace",
+      "kind": "line_last",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"At the end of every dua we all say \"Ameen\"\"}],\"slide_heading\":\"The earth as a trust\",\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": "At the end of every dua we all say \"Ameen\"",
+      "json_loads": "Expecting ',' delimiter at char 135",
+      "verdict": "REPAIRED",
+      "got": "At the end of every dua we all say \"Ameen\""
+    },
+    {
+      "name": "S14_bare_quote_in_an_array_element",
+      "kind": "array",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"Look at the picture.\"}],\"slide_heading\":\"H\",\"slide_points\":[\"the \"outer\" edge of the courtyard\",\"then pray\"],\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": [
+        "the \"outer\" edge of the courtyard",
+        "then pray"
+      ],
+      "json_loads": "Expecting ',' delimiter at char 165",
+      "verdict": "REPAIRED",
+      "got": [
+        "the \"outer\" edge of the courtyard",
+        "then pray"
+      ]
+    },
+    {
+      "name": "S15_enumeration_in_an_array_element",
+      "kind": "array",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"Look at the picture.\"}],\"slide_heading\":\"H\",\"slide_points\":[\"remember \"amanah\", \"khalifah\" today\",\"then pray\"],\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": [
+        "remember \"amanah\", \"khalifah\" today",
+        "then pray"
+      ],
+      "json_loads": "Expecting ',' delimiter at char 170",
+      "verdict": "CORRUPTED",
+      "got": [
+        "remember \"amanah",
+        "khalifah\" today",
+        "then pray"
+      ]
+    },
+    {
+      "name": "S16_quoted_phrase_opens_the_value",
+      "kind": "line",
+      "raw_reply": "{\"segments\":[{\"type\":\"explore\",\"text\":\"\",\"elevenlabs_text\":\"\",\"dialogue\":[{\"who\":\"teacher\",\"line\":\"\"Bismillah\" is how every surah begins, and it is how you should begin too.\"},{\"who\":\"student\",\"line\":\"Yes, I see.\"}],\"slide_heading\":\"The earth as a trust\",\"pause_for_question\":false}],\"visual_plan\":{\"chapters\":[]}}",
+      "intended": "\"Bismillah\" is how every surah begins, and it is how you should begin too.",
+      "json_loads": "Expecting ',' delimiter at char 100",
+      "verdict": "REPAIRED",
+      "got": "\"Bismillah\" is how every surah begins, and it is how you should begin too."
+    }
+  ]
+}

@@ -238,25 +238,23 @@ def _get_api_key() -> str:
     return key
 
 
-def _escape_inner_quotes(text: str) -> str:
-    """Escape double quotes the model left bare INSIDE a string.
+def _as_document(src: str):
+    """`src` parsed as a NON-EMPTY object or array, or None. The same
+    acceptance _repair_json's candidate loop uses, so a reading this walk
+    calls "a document" is one the caller would have kept."""
+    try:
+        out = json.loads(src, strict=False)
+    except Exception:  # noqa: BLE001 — any parse failure means "not a document"
+        return None
+    return out if isinstance(out, (dict, list)) and out else None
 
-    Measured: '...often called the "powerhouses" of the cell...' inside a
-    dialogue line; then 'called "organelles", tiny structures' and 'ask
-    "why?": because…' — a quoted word before a comma or colon is how English
-    prose quotes a word, and the first rule ("a quote before structural
-    punctuation closes the string") turned a complete 54,000-character reply
-    into "produced no segments" on 2026-09-04.
 
-    So the walk tracks the containers it is inside and closes a string only
-    where JSON could actually continue:
-      inside an OBJECT — a `,` closes only if a KEY follows ("name":); a `:`
-        closes only if this string IS the key; `}` closes.
-      inside an ARRAY — a `,` closes if an element follows (a string, a
-        container, a number, a literal); `]` closes.
-    Enumerations inside an array element ('"cell", "tissue"') stay ambiguous
-    and are left as they were; five of the six schema strings are object
-    values, where the rule is decidable. Valid JSON is a no-op.
+def _scan_inner_quotes(text: str, pair_parity: bool) -> tuple[str, int]:
+    """One walk of `text`, escaping bare inner quotes; see _escape_inner_quotes.
+
+    `pair_parity` off reproduces the pre-2026-09-05 reading exactly, so the
+    caller can hold the two side by side. Returns (source, flips), flips being
+    the number of would-be closers parity handed back to the prose.
     """
     import re as _re
     key_shape = _re.compile(r'\s*"(?:[^"\\]|\\.)*"\s*:')
@@ -265,6 +263,23 @@ def _escape_inner_quotes(text: str) -> str:
     stack: list[str] = []          # containers we are inside: "{" or "["
     expect_key: list[bool] = []    # per container: is the next string a key?
     in_str = esc = is_key = False
+    quotes_in_str = 0              # quotes already escaped INSIDE this string
+    flips = 0
+
+    def parity_says_prose() -> bool:
+        # An ODD number of quotes already escaped in this string means the
+        # model is mid-phrase — it opened `"Ar-Rahman` and this is the closing
+        # half — and the closing half of a pair cannot also be the string's
+        # terminator. English quotes come in twos; a JSON boundary does not
+        # care how many came before it. Held to the two branches that were
+        # guesses already: `}`, `]` and end-of-input stay absolute, so a reply
+        # whose last prose quote the model simply dropped still closes at its
+        # container instead of running off the end.
+        nonlocal flips
+        if pair_parity and quotes_in_str % 2:
+            flips += 1
+            return True
+        return False
 
     def closes(j: int) -> bool:
         if j >= n:
@@ -281,17 +296,26 @@ def _escape_inner_quotes(text: str) -> str:
             # A colon after a VALUE string is never valid JSON, so this is
             # either prose ('ask "why?": because') or a mangled object
             # ('"who":"alice":"bob"'). If a JSON value follows the colon the
-            # two readings are indistinguishable, and this layer must never
-            # choose between readings — it stays a closer and the reply fails
-            # loudly unless a schema-aware rule (dialogue speakers) owns it.
+            # two readings are indistinguishable LOCALLY — and this is exactly
+            # the shape that killed Sara Hamaydeh's first lesson (gen
+            # eb12963c, 2026-09-05): 22,538 chars, 6,168 output tokens against
+            # a 30,000 cap, NO truncation reported by the provider, dead at
+            # char 14,380 on the Islamic-studies habit of glossing a
+            # transliterated name with a colon — `the name "Ar-Rahman": "the
+            # Most Merciful" is the one we say most often`. Parity breaks the
+            # tie: an odd count says the string is inside a pair and cannot
+            # end here. '"who":"alice":"bob"' has an EVEN count (zero) and
+            # still fails loudly, which is the reading nobody may guess.
             k = j + 1
             while k < n and text[k] in " \t\r\n":
                 k += 1
             if k >= n:
                 return True
             d = text[k]
-            return (d in starters
-                    or any(text.startswith(lit, k) for lit in ("true", "false", "null")))
+            if not (d in starters
+                    or any(text.startswith(lit, k) for lit in ("true", "false", "null"))):
+                return False
+            return not parity_says_prose()
         if c != ",":
             return False
         k = j + 1
@@ -300,15 +324,29 @@ def _escape_inner_quotes(text: str) -> str:
         if k >= n or text[k] in "]}":
             return True      # a trailing comma; a later rule strips it
         if top == "{":
-            return key_shape.match(text, j + 1) is not None
+            if key_shape.match(text, j + 1) is None:
+                return False
+            # '"amanah", "khalifah": a caretaker' — the second quoted word
+            # reads as a key, so the comma looked structural. An odd count
+            # says the FIRST pair is still open, so it is not.
+            return not parity_says_prose()
         d = text[k]
-        return (d in starters
-                or any(text.startswith(lit, k) for lit in ("true", "false", "null")))
+        if not (d in starters
+                or any(text.startswith(lit, k) for lit in ("true", "false", "null"))):
+            return False
+        # An array element boundary. An odd count means the boundary would
+        # fall between the halves of one quoted phrase and split it across two
+        # elements — the only SILENT corruption measured in this class:
+        # ["remember "amanah", "khalifah" today"] became the two slide points
+        # 'remember "amanah' and 'khalifah" today', words no model wrote.
+        return not parity_says_prose()
 
     while i < n:
         c = text[i]
         if esc:
             out.append(c)
+            if c == '"':
+                quotes_in_str += 1   # a quote the MODEL escaped — still a pair half
             esc = False
         elif in_str:
             if c == "\\":
@@ -323,11 +361,13 @@ def _escape_inner_quotes(text: str) -> str:
                     out.append(c)
                 else:
                     out.append('\\"')
+                    quotes_in_str += 1
             else:
                 out.append(c)
         else:
             if c == '"':
                 in_str = True
+                quotes_in_str = 0
                 is_key = bool(stack) and stack[-1] == "{" and expect_key[-1]
             elif c == "{":
                 stack.append("{")
@@ -345,7 +385,65 @@ def _escape_inner_quotes(text: str) -> str:
                 expect_key[-1] = True
             out.append(c)
         i += 1
-    return "".join(out)
+    return "".join(out), flips
+
+
+def _escape_inner_quotes(text: str):
+    """Escape double quotes the model left bare INSIDE a string.
+
+    Measured: '...often called the "powerhouses" of the cell...' inside a
+    dialogue line; then 'called "organelles", tiny structures' and 'ask
+    "why?": because…' — a quoted word before a comma or colon is how English
+    prose quotes a word, and the first rule ("a quote before structural
+    punctuation closes the string") turned a complete 54,000-character reply
+    into "produced no segments" on 2026-09-04.
+
+    So the walk tracks the containers it is inside and closes a string only
+    where JSON could actually continue:
+      inside an OBJECT — a `,` closes only if a KEY follows ("name":); a `:`
+        closes only if this string IS the key; `}` closes.
+      inside an ARRAY — a `,` closes if an element follows (a string, a
+        container, a number, a literal); `]` closes.
+    Valid JSON is a no-op.
+
+    That was still not enough. Sara Hamaydeh's first lesson (gen eb12963c,
+    2026-09-05, "Islamic y6") died on a reply the walk had every rule for:
+    22,538 chars, 6,168 output tokens against a 30,000 cap, the provider
+    reporting NO truncation, dead at char 14,380. Islamic-studies prose
+    glosses a transliterated name with a colon — `the name "Ar-Rahman": "the
+    Most Merciful"` — and both branches above read the CLOSING half of a
+    quoted phrase as the end of the string. Three shapes fail that way: the
+    colon gloss, `"amanah", "khalifah": a caretaker`, and — the dangerous one,
+    because it failed silently — an enumeration inside an array element, where
+    ["remember "amanah", "khalifah" today"] parsed into two slide points
+    carrying words no model wrote.
+
+    PAIR PARITY is the signal that was missing: a quote can only be a closer
+    when the quotes already escaped inside this string are EVEN. An odd count
+    means the string sits between the halves of a pair, and the second half of
+    a pair is not a terminator.
+
+    PARITY DOES NOT GET THE LAST WORD. It is a claim about prose, and a wrong
+    repair silently changes what a teacher's lesson says. So wherever parity
+    overrode a closer, BOTH readings are walked to the end and both parsed,
+    and the outcome turns on which of them is a document at all:
+      * only parity's reading parses  -> parity's reading  (the three shapes)
+      * only the old reading parses   -> the old reading   (parity was wrong;
+        the model really had dropped a quote)
+      * both parse and they DIFFER    -> None. Two readings of one lesson is
+        the one thing this layer may never choose between.
+      * neither parses                -> parity's reading, so the rest of the
+        ladder still has something to work on. Nothing has been chosen while
+        nothing yet parses.
+    """
+    primary, flips = _scan_inner_quotes(text, pair_parity=True)
+    if not flips:
+        return primary
+    legacy, _ = _scan_inner_quotes(text, pair_parity=False)
+    a, b = _as_document(primary), _as_document(legacy)
+    if a is not None and b is not None:
+        return None if a != b else primary
+    return legacy if a is None and b is not None else primary
 
 
 def _fix_bad_escapes(text: str) -> str:
@@ -510,6 +608,90 @@ def _substitute_closers(text: str):
     return "".join(out)
 
 
+def _drop_superfluous_closers(text: str):
+    """A closer the model wrote ONE TOO MANY of, mid-document.
+
+    Measured on Sara Hamaydeh's lost lesson (gen eb12963c, job 8e3d26dd,
+    2026-09-05) — the malformation the 300-character issue context had cut
+    away, read back off the 500-character jobs.error row:
+        "assets": {"creation_scene": "…illustrating Allah's creation
+        effortlessly."}}, "semantic_regions": ["allah_central_script", …
+    The assets object is closed, and then closed again. That second `}` shut
+    the CHAPTER object, which left "semantic_regions" standing in the chapters
+    ARRAY as though it were an element, and json.loads stopped at its colon:
+    "Expecting ',' delimiter", char 14,380 of 22,538, on 6,168 output tokens
+    against a 30,000 cap that the provider never called truncated.
+
+    Neither neighbour reaches it. _rebalance_json only INSERTS closers it
+    believes are missing; _substitute_closers only swaps a closer for a
+    different character, or drops one with nothing open. This one is
+    well-formed, correctly matched to the object it closes, and simply not
+    wanted.
+
+    Decidable, not guessed. It fires only where the container the closer
+    returns into is an ARRAY and the next thing past the comma is a KEY:
+    `["a", "b": 1]` is not valid JSON under any reading, so there are no two
+    readings to choose between. Everything else — a closer that returns into
+    an object, a mismatched closer, a comma followed by a real element — is
+    left to the rules that own it. Same severed-tail refusal as its
+    neighbours: a reply cut off mid-value must stay a loud failure.
+
+    Returns the corrected source, or None when nothing was dropped, the text
+    was truncated, or the shape belongs to another rule.
+    """
+    import re as _re
+    key_shape = _re.compile(r'\s*"(?:[^"\\]|\\.)*"\s*:')
+    out, stack = [], []
+    ins = esc = dropped = False
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        i += 1
+        if esc:
+            out.append(c)
+            esc = False
+            continue
+        if ins:
+            out.append(c)
+            if c == "\\":
+                esc = True
+            elif c == '"':
+                ins = False
+            continue
+        if c == '"':
+            ins = True
+            out.append(c)
+            continue
+        if c in "{[":
+            stack.append(c)
+            out.append(c)
+            continue
+        if c in "}]":
+            want = "{" if c == "}" else "["
+            if not stack or stack[-1] != want:
+                return None      # a MIS-nested closer — _substitute_closers' shape
+            if len(stack) >= 2 and stack[-2] == "[":
+                j = i
+                while j < n and text[j] in " \t\r\n":
+                    j += 1
+                if j < n and text[j] == "," and key_shape.match(text, j + 1):
+                    # closing here would put a KEY into an array. The closer is
+                    # the thing that is wrong: drop it, stay in the object, and
+                    # let the members that follow land where the schema puts them.
+                    dropped = True
+                    continue
+            stack.pop()
+        out.append(c)
+    if ins or esc or not dropped:
+        return None
+    tail = "".join(out).rstrip()
+    if not tail or tail[-1] in ",:":
+        return None          # a value was severed — leave the failure loud
+    while stack:
+        out.append("]" if stack.pop() == "[" else "}")
+    return "".join(out)
+
+
 def _repair_json(text: str):
     """Salvage a reply that is COMPLETE but slightly malformed.
 
@@ -589,7 +771,19 @@ def _repair_json(text: str):
                     r'"who": \1, "line": ', fixed)
     candidates.append(fixed)
     # 2d. bare quotes inside a string ('called the "powerhouses" of the cell')
-    fixed = _escape_inner_quotes(fixed)
+    escaped = _escape_inner_quotes(fixed)
+    if escaped is None:
+        # The walk found two readings of this reply that BOTH parse and
+        # disagree about the words. Its refusal has to end the whole repair,
+        # not just drop one candidate: when two readings parse, the reply is
+        # structurally sound apart from that one quote, so the tail-walk and
+        # the re-balancers below would go on to rediscover one of the two by
+        # luck and the richest-parse rule would pick the LONGER — which for an
+        # enumeration split across array elements is the corrupt one. A lesson
+        # that fails is recoverable; a lesson that ships words the model never
+        # wrote is not.
+        return None
+    fixed = escaped
     candidates.append(fixed)
     # 3. trailing commas
     decommaed = _re.sub(r",\s*([}\]])", r"\1", fixed)
@@ -601,6 +795,11 @@ def _repair_json(text: str):
     #    object closed with `]`. Read as an omission that `]` closes every level
     #    down to the next array and drags the step's key_point out of its
     #    object; read as a substitution it is one character, and the reply parses.
+    # 3. and the THIRD reading: the model wrote a closer it did not need.
+    #    Measured on gen eb12963c (2026-09-05) — `"assets": {...}}` closed the
+    #    chapter object early and stranded its remaining keys in the chapters
+    #    array. Neither reading above can see it: the closer is present,
+    #    matched and well-formed, just surplus.
     for src in (fixed, decommaed):
         mended = _rebalance_json(src)
         if mended:
@@ -608,6 +807,9 @@ def _repair_json(text: str):
         swapped = _substitute_closers(src)
         if swapped:
             candidates.append(swapped)
+        surplus = _drop_superfluous_closers(src)
+        if surplus:
+            candidates.append(surplus)
     # 3. a stray closer sits at the very end of an otherwise good reply, so
     #    walk the tail back — but ONLY over structural punctuation. Trimming
     #    CONTENT would turn a genuinely truncated reply into a plausible,
@@ -699,8 +901,17 @@ class ClaudeClient:
         max_tokens: int = 4096,
         retries: int = 3,
         cache_prefix: str | None = None,
+        response_schema: dict | None = None,
     ) -> dict:
         """Send a text prompt, return parsed JSON dict.
+
+        `response_schema` is accepted and IGNORED, for the same reason
+        `cache_prefix` is accepted by GeminiClient and not implemented:
+        worker/process.py holds either object without knowing which, so a
+        keyword one of them understands must not raise on the other.
+        Anthropic constrains output through tool schemas, not a response
+        schema, so honouring it here would be a different mechanism
+        wearing the same name.
 
         `cache_prefix` is a large, STABLE block (e.g. the chapter grounding shared
         by all of a book's artifacts) placed first and marked with cache_control,

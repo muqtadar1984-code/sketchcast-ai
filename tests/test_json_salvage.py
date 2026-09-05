@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -74,12 +75,19 @@ class TestProseQuotes:
         followed by a comma and ANOTHER quoted word is not a key that follows."""
         out = X(doc(seg('Remember the words "cell", "tissue" and "organ" today.')))
         assert ok(out) and out["segments"][0]["text"] == 'Remember the words "cell", "tissue" and "organ" today.'
-        # a quoted word, a colon, then something that could be a JSON value
-        # ('"photosynthesis": 6CO2') is indistinguishable from a mangled
-        # object ('"who":"alice":"bob"'); the layer refuses rather than guess
-        # (see test_semantic_prompt: repairs never choose between readings)
+        # A quoted word, a colon, then something that could be a JSON value
+        # ('"photosynthesis": 6CO2') used to be refused as indistinguishable
+        # from a mangled object ('"who":"alice":"bob"'). It is not: the quote
+        # count inside the string separates them. Here it is ODD — the pair
+        # opened at "photo… is still open, so its second half cannot also end
+        # the string. This is the shape that cost Sara Hamaydeh her first
+        # lesson (gen eb12963c, 2026-09-05) as an Arabic gloss.
         out = X(doc(seg('Recall "photosynthesis": 6CO2 + 6H2O makes sugar.')))
-        assert not ok(out), "ambiguous — must stay a loud failure, not a guessed lesson"
+        assert ok(out) and out["segments"][0]["text"] == 'Recall "photosynthesis": 6CO2 + 6H2O makes sugar.'
+        # The mangled object it was confused with keeps its EVEN count (zero
+        # inner quotes) and still fails loudly — see test_semantic_prompt's
+        # "repairs never choose between two readings", which pins it.
+        assert _repair_json('{"d": [{"who":"alice":"bob"}]}') is None
         out = X(doc(seg('called "organelles", 2 of which matter.')))
         assert ok(out) and '"organelles", 2 of' in out["segments"][0]["text"]
 
@@ -248,3 +256,189 @@ class TestWrongCloser:
         raw = '{"segments": [{"type": "hook", "text": "x", "slide_points": ["a"}], "visual_plan": {"chapters": []}}'
         out = X(raw)
         assert ok(out) and out["segments"][0]["slide_points"] == ["a"]
+
+class TestSaraLostLesson:
+    """gen eb12963c / issue 24b6cadd, 2026-09-05. Sara Hamaydeh signed up at
+    14:05 UTC, clicked Generate at 14:16 on "Islamic y6", and the lesson never
+    arrived. Her third attempt (job 8e3d26dd, 14:42) came back COMPLETE —
+    22,538 chars, 6,168 output tokens against a 30,000 cap, the provider
+    reporting no truncation — and would not parse at char 14,380.
+
+    Two shapes are pinned here because the incident had two readings. The
+    stored evidence (300 characters, see tests/test_failure_evidence.py) ended
+    on "… natural land" and could only support the INFERENCE that a quote had
+    been left bare in the prose; the 500-character jobs.error row, read back
+    off the live table, showed the actual malformation — an assets object
+    closed twice. Both are real, both failed the whole lesson, and both are
+    fixed; the fixtures keep them apart so a future reader is not misled the
+    same way.
+    """
+
+    FIX = Path(__file__).resolve().parent / "fixtures"
+
+    def _shapes(self):
+        return json.loads((self.FIX / "inner_quote_shapes.json").read_text(encoding="utf-8"))
+
+    def _value(self, case, out):
+        """The one field the shape was built around, or None if nothing parsed."""
+        if not isinstance(out, dict) or set(out) == {"raw_text"}:
+            return None
+        segs = out.get("segments") or []
+        if not segs:
+            return None
+        if case["kind"] == "array":
+            return segs[0].get("slide_points")
+        dialogue = segs[0].get("dialogue") or []
+        return dialogue[0].get("line") if dialogue else None
+
+    def test_the_reply_that_failed_now_yields_the_lesson(self):
+        """The whole 22,538-char reply, not a reduction. Ten segments and the
+        visual plan — a repair that produced segments and dropped the plan
+        would render every one of them as a plain card."""
+        raw = (self.FIX / "sara_islamic_y6_script_reply.txt").read_text(encoding="utf-8")
+        assert len(raw) == 22538, "the fixture is the measured size"
+        out = X(raw)
+        assert ok(out) and len(out["segments"]) == 10
+        assert out["visual_plan"]["chapters"], "the plan must survive with the segments"
+        lines = [d["line"] for s in out["segments"] for d in (s.get("dialogue") or [])]
+        assert any('"khalifah": "a caretaker who answers for the keys"' in ln for ln in lines), \
+            "the gloss reaches the lesson with the model's own quotation marks"
+
+    def test_the_ab_control_still_parses(self):
+        """Same length, same fault offset, same window — only the sub-shape at
+        the bare quote differs. It repaired before the fix and must still, or
+        the change traded one failure for another."""
+        raw = (self.FIX / "sara_islamic_y6_plain_quote_reply.txt").read_text(encoding="utf-8")
+        out = X(raw)
+        assert ok(out) and len(out["segments"]) == 10 and out["visual_plan"]["chapters"]
+
+    def test_no_shape_is_ever_silently_rewritten(self):
+        """THE acceptance rule, over all sixteen measured shapes: each one is
+        either repaired to exactly what the model wrote, or refused outright.
+        A parse carrying different words is the outcome none of them may have
+        — a teacher would ship it without ever knowing."""
+        for case in self._shapes()["cases"]:
+            got = self._value(case, X(case["raw_reply"]))
+            assert got is None or got == case["intended"], \
+                f"{case['name']}: silently rewritten to {got!r}"
+
+    def test_the_shapes_that_used_to_fail_now_repair(self):
+        """S5/S6 were LOUD before the fix — a complete lesson thrown away over
+        a colon. S15 was CORRUPTED, which is worse, and is now refused."""
+        by_name = {c["name"]: c for c in self._shapes()["cases"]}
+        for name in ("S5_quoted_word_comma_quoted_word_colon",
+                     "S6_quoted_word_colon_then_quoted_gloss"):
+            case = by_name[name]
+            assert self._value(case, X(case["raw_reply"])) == case["intended"], name
+
+    def test_an_arabic_gloss_survives_the_colon(self):
+        """The sub-shape the 300-character evidence pointed at, in miniature:
+        a transliterated name, a colon, and a quoted translation. Prose, not a
+        mangled object — the quote count inside the string says so."""
+        raw = ('{"segments":[{"type":"hook","text":"x","dialogue":[{"who":"teacher",'
+               '"line":"The name "Ar-Rahman": "the Most Merciful" is the one we say most."}]}]}')
+        out = X(raw)
+        assert ok(out)
+        assert out["segments"][0]["dialogue"][0]["line"] == \
+            'The name "Ar-Rahman": "the Most Merciful" is the one we say most.'
+
+    def test_an_enumeration_in_an_array_element_is_refused_not_split(self):
+        """The only SILENT corruption in the class, and the reason the walk
+        refuses instead of preferring its own reading: both readings parse.
+        Splitting the pair invents two slide points out of one, in words no
+        model wrote, and every downstream check waves them through."""
+        raw = ('{"segments":[{"type":"hook","text":"x","slide_heading":"H",'
+               '"slide_points":["remember "amanah", "khalifah" today","then pray"]}]}')
+        out = X(raw)
+        assert not ok(out), "two readings both parse — this must stay a loud failure"
+        assert _repair_json(raw) is None, "and the refusal ends the WHOLE repair"
+        assert 'khalifah" today' not in json.dumps(out), "the split words never reach a caller"
+
+    def test_a_legitimately_escaped_quote_at_a_strings_end_is_left_alone(self):
+        """The walk counts the quotes the MODEL escaped as well as its own, so
+        a value that properly ends on \\" has an even count and closes where it
+        always did. Valid JSON stays a no-op, byte for byte."""
+        raw = ('{"segments":[{"type":"hook","text":"x","dialogue":[{"who":"teacher",'
+               '"line":"The whole class answered together, \\"Ameen.\\""}]}]}')
+        assert _escape_inner_quotes(raw) == raw, "nothing to escape — a no-op"
+        out = X(raw)
+        assert ok(out)
+        assert out["segments"][0]["dialogue"][0]["line"] == \
+            'The whole class answered together, "Ameen."'
+
+    def test_parity_never_overrules_a_reading_that_actually_parses(self):
+        """Parity is a claim about prose, so it loses to evidence. Here the
+        model really did drop the closing half of its pair: reading the comma
+        as prose swallows the rest of the object and terminates nothing, so the
+        OLD reading is the only one that is a document and it wins — keeping
+        `b`, and the lesson, at the cost of one quotation mark."""
+        assert _escape_inner_quotes('{"a":"say "hi","b":2}') == '{"a":"say \\"hi","b":2}'
+        assert X('{"a":"say "hi","b":2}') == {"a": 'say "hi', "b": 2}
+
+    def test_where_both_readings_are_documents_the_repair_refuses(self):
+        """The other half of the same rule. Both readings of this object parse
+        — one keeps `slide_heading` as a key, the other reads it as prose the
+        text swallowed — so there is nothing to choose between and the reply
+        fails loudly instead of shipping one of them."""
+        raw = '{"segments":[{"type":"hook","text":"The "Big Idea","slide_heading":"H"}]}'
+        assert _repair_json(raw) is None
+        assert set(X(raw)) == {"raw_text"}
+
+
+class TestSuperfluousCloser:
+    """The malformation the live jobs.error row recorded for Sara's third
+    attempt, which the 300-character issue context had cut away:
+
+        "assets": {"creation_scene": "…Allah's creation effortlessly."}},
+        "semantic_regions": ["allah_central_script", …
+
+    The assets object closed twice. The second `}` shut the CHAPTER, leaving
+    its remaining keys stranded in the chapters ARRAY, and json.loads stopped
+    at the colon after "semantic_regions" — char 14,380 of 22,538.
+    """
+
+    BAD = ('{"segments":[{"type":"hook","text":"Allah made all of this.",'
+           '"slide_heading":"The names of Allah"}],'
+           '"visual_plan":{"chapters":[{"id":"chapter_1","concept":"asmaa_ul_husna",'
+           '"assets":{"creation_scene":"A natural landscape, illustrating creation."}},'
+           '"semantic_regions":["allah_central_script"],'
+           '"steps":[{"segment":1,"decision":"EXTEND","actions":[]}]}]}}')
+
+    def test_the_measured_shape_parses_with_the_chapter_intact(self):
+        out = X(self.BAD)
+        assert ok(out)
+        chapter = out["visual_plan"]["chapters"][0]
+        assert chapter["id"] == "chapter_1"
+        assert chapter["assets"]["creation_scene"].startswith("A natural landscape")
+        assert chapter["semantic_regions"] == ["allah_central_script"], \
+            "the stranded keys go back INSIDE the chapter, not beside it"
+        assert chapter["steps"][0]["segment"] == 1
+
+    def test_the_neighbouring_rules_cannot_reach_it(self):
+        """Pins WHY a fourth rule exists: the closer is present, matched and
+        well-formed, so the omission and substitution readings both decline."""
+        from shared.claude_client import _rebalance_json, _substitute_closers
+        for rule in (_rebalance_json, _substitute_closers):
+            out = rule(self.BAD)
+            if out is None:
+                continue
+            with pytest.raises(json.JSONDecodeError):
+                json.loads(out, strict=False)  # a candidate, but never a document
+
+    def test_it_fires_only_where_no_other_reading_exists(self):
+        from shared.claude_client import _drop_superfluous_closers
+        assert _drop_superfluous_closers('{"a": {"b": 1}, "c": 2}') is None, \
+            "a closer returning into an OBJECT is ordinary, valid JSON"
+        assert _drop_superfluous_closers('{"a": [{"b": 1}, {"c": 2}]}') is None, \
+            "a closer returning into an array followed by an ELEMENT is fine"
+        assert _drop_superfluous_closers('{"a": [{"b": 1}], "c": 2}') is None, \
+            "nothing dropped, nothing to report"
+        assert _drop_superfluous_closers('{"a": [{"b": 1}}, "c": 2') is None, \
+            "a severed tail stays loud"
+        assert _drop_superfluous_closers('{"a": [1, 2}, "b": 3') is None, \
+            "a MIS-nested closer belongs to _substitute_closers"
+
+    def test_valid_json_is_untouched(self):
+        payload = {"segments": [{"type": "hook"}],
+                   "visual_plan": {"chapters": [{"id": "c1", "assets": {"k": "v"}}]}}
+        assert X(json.dumps(payload)) == payload
