@@ -460,5 +460,7 @@ class TestAvatarRoster:
     def test_the_renderer_wrapper_routes_avatars_to_the_roster_first(self):
         src = Path("shared/visual_library_integration.py").read_text(encoding="utf-8")
         assert "hydrate_avatar(key, cache)" in src
-        assert src.index("hydrate_avatar(key, cache)") < src.index("hydrate(key, prompt, cache, context())")
+        semantic = 'hydrate(key, prompt, cache, context(), asset_format="png")'
+        assert semantic in src
+        assert src.index("hydrate_avatar(key, cache)") < src.index(semantic)
         assert "if not existed_before and not avatar:" in src, "avatars are not scored against diagrams"

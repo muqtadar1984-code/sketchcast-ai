@@ -53,14 +53,66 @@ context where possible. If it is not available, the library conservatively
 uses `generic/k12` and may infer subject from the visual request. It must not
 pretend that a free-text prompt proves syllabus alignment.
 
+## Two formats, one library
+
+`asset_format` is `png` or `svg`. It is a SECOND axis, independent of
+`asset_type`: `asset_type` says what an asset is FOR (educational visual vs
+persistent avatar), `asset_format` says what its bytes ARE. Neither implies
+the other, and there is exactly one library — an SVG is a row with a different
+format in the same bucket, never a parallel store and never rasterised to fit
+the older path. The markup is the canonical asset.
+
+An SVG row also carries `group_ids` (the exact `<g id>` values, in drawing
+order) and `group_count`. The group ids are the labelling contract, so the
+library can answer "does this asset contain the part the lesson wants to
+label?" without downloading anything.
+
+Group ids do three different jobs and conflating them is a bug:
+
+| job | behaviour | where |
+| --- | --- | --- |
+| storage | exact — preserved verbatim | `svg_group_ids`, `parse_svg_asset` |
+| validation | exact — a bad id is rejected, never repaired | `validate_svg_document` |
+| matching | tolerant — "chloroplast" finds "chloroplasts" | `match_layer_ids` |
+
+### Two validation philosophies
+
+- **Publish is strict.** `spike/scene_engine/svg_validate.validate_svg_document`
+  enforces `svg > g > path` with no exceptions: a valid viewBox, unique
+  lowercase_snake_case group ids, no text/rect/circle/image/use/defs/marker/
+  style elements, no transforms, stylesheets, CSS geometry, gradients, fills,
+  embedded raster data, arcs or path commands outside `M L H V C Q Z`. A row
+  is served to other lessons on other machines for months, so a defect stored
+  there is handed out rather than costing one board. `publish_generated` is
+  the gate and every publisher goes through it.
+- **Runtime is forgiving.** `parse_svg_asset` degrades — an arc becomes a
+  chord, a malformed tail is dropped, an unreadable document returns `None`
+  and the ladder continues svg -> raster -> authored vector. A bad generation
+  must never blank a board.
+
+`tools/validate_svg_batch.py` runs the strict validator over a delivered
+folder offline and additionally cross-checks each file's group ids against
+that key's `parts` in the delivery catalogue.
+
+### The SVG tier makes no vision call
+
+`annotate_regions` is a paid vision request that guesses where the named parts
+of a flat image are. An SVG's groups ARE the regions, named by the model that
+drew them, so the SVG path never calls it — for a generation or for a library
+hit. That is the tier's largest single saving and it is pinned by a test.
+
 ## Storage
 
 - **Postgres:** `public.visual_assets` stores identity, curriculum metadata,
-  provenance, validation status, content hash, usage telemetry and Storage
-  path.
-- **Supabase Storage:** private `visual-assets` bucket stores PNG binaries.
+  format, group metadata, provenance, validation status, content hash, usage
+  telemetry and Storage path.
+- **Supabase Storage:** private `visual-assets` bucket stores the binaries at
+  `generated/<canonical_key>/<hash>.<png|svg>`.
 - **Worker cache:** the existing `storage/scene_assets` directory remains the
-  hot local cache used by the renderer.
+  hot local cache used by the renderer — `<canonical>/asset.png` for raster,
+  `svg_<canonical>/asset.svg` for markup. Both are keyed by CANONICAL
+  identity, and a hydrated download is filed under the key that was REQUESTED,
+  because that is the only path the renderer will look at.
 
 Supabase recommends storing media outside Postgres; the library follows that
 model. The worker already uses a server-side service-role client, so the

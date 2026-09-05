@@ -125,6 +125,88 @@ def avatar_fields(key: str) -> dict[str, Any]:
             "age_band": m.group(1) if m else None}
 
 
+# ── format is a SECOND axis, not a second library ─────────────────────────────
+# asset_type says what an asset is FOR (educational visual vs persistent
+# character). asset_format says what its BYTES ARE. They are independent: an
+# avatar PNG and an educational SVG differ on both, and neither implies the
+# other. There is exactly ONE library — an SVG is a row with a different
+# format, stored beside the PNGs in the same bucket, and it is never
+# rasterised to fit the older path. The markup is the canonical asset.
+
+ASSET_FORMATS = ("png", "svg")
+DEFAULT_FORMAT = "png"
+CONTENT_TYPES = {"png": "image/png", "svg": "image/svg+xml"}
+
+# The columns migration 0104 adds. Code ships through Railway on a push; the
+# schema changes only when the founder applies the migration, so there is a
+# real window where a worker that knows these columns talks to a database that
+# does not. PostgREST answers an unknown column with PGRST204 and writes
+# NOTHING — the bytes would already be in storage, so every generation in that
+# window would leave an orphaned object and no row. publish_generated therefore
+# retries once WITHOUT them rather than losing the row (see _insert_row).
+FORMAT_COLUMNS = ("asset_format", "group_ids", "group_count")
+
+
+def normalize_format(value: Any) -> str:
+    """A format name, or DEFAULT_FORMAT for anything unrecognised.
+
+    Accepts what callers actually hold: 'svg', '.svg', 'SVG', a Path suffix.
+    Anything else reads as a PNG, because that is what every asset published
+    before this column existed is.
+    """
+    v = str(value or "").strip().lower().lstrip(".")
+    return v if v in ASSET_FORMATS else DEFAULT_FORMAT
+
+
+def row_format(row: dict[str, Any] | None) -> str:
+    """The format of a STORED row, without needing the column to exist.
+
+    Belt-and-braces exactly like is_avatar_row: the 230 rows published before
+    asset_format existed carry no such key, and they are all PNGs. When the
+    column is absent the stored object's own extension answers instead, so a
+    row written by a newer worker against an un-migrated database still reads
+    correctly.
+    """
+    if not row:
+        return DEFAULT_FORMAT
+    explicit = str(row.get("asset_format") or "").strip().lower()
+    if explicit in ASSET_FORMATS:
+        return explicit
+    path = str(row.get("storage_path") or row.get("local_cache_path") or "")
+    suffix = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    return suffix if suffix in ASSET_FORMATS else DEFAULT_FORMAT
+
+
+def row_group_ids(row: dict[str, Any] | None) -> list[str]:
+    """The EXACT group ids stored on a row, in drawing order."""
+    if not row:
+        return []
+    return [str(g) for g in (row.get("group_ids") or [])]
+
+
+def row_has_parts(row: dict[str, Any] | None, wanted) -> bool:
+    """Whether a stored asset contains every part a lesson wants to label,
+    answered from the ROW — no download.
+
+    Storage is exact and matching is tolerant, and this is the seam between
+    them: the row records "chloroplasts" verbatim, a lesson asks for
+    "chloroplast", and the same matcher the renderer uses to pick layers
+    decides they are the same part. Using a different rule here would let the
+    library promise a part the renderer then cannot find.
+
+    A row with no recorded groups (every PNG, and any SVG published before the
+    column existed) answers False for a real request rather than guessing.
+    """
+    want = [str(w) for w in (wanted or []) if str(w).strip()]
+    if not want:
+        return True
+    from spike.scene_engine.vector_assets import match_layer_ids
+    available = row_group_ids(row)
+    if not available:
+        return False
+    return all(match_layer_ids(available, [w]) for w in want)
+
+
 def is_avatar_row(row: dict[str, Any] | None) -> bool:
     """Whether a stored row is an avatar, by type OR by key.
 
@@ -535,12 +617,28 @@ def _score(row: dict[str, Any], query_key: str, prompt: str, ctx: LibraryContext
     return score
 
 
-def _local_meta_path(cache_dir: Path, key: str) -> Path:
-    return cache_dir / canonical_key(key) / "meta.json"
+def _asset_dir(cache_dir: Path, key: str, fmt: str = DEFAULT_FORMAT) -> Path:
+    """The renderer's cache directory for `key` in `fmt`.
+
+    The SVG layout is asked of the module that OWNS it rather than reproduced
+    here. Two copies of a path fold is the exact bug that made every *_cell
+    library hit land where nobody reads and be paid for again; there is no
+    reason to reintroduce it one format later.
+    """
+    if normalize_format(fmt) == "svg":
+        from spike.scene_engine.svg_assets import svg_cache_dir
+        return svg_cache_dir(cache_dir, key)
+    return cache_dir / canonical_key(key)
 
 
-def _local_png_path(cache_dir: Path, key: str) -> Path:
-    return cache_dir / canonical_key(key) / "asset.png"
+def _local_meta_path(cache_dir: Path, key: str,
+                     fmt: str = DEFAULT_FORMAT) -> Path:
+    return _asset_dir(cache_dir, key, fmt) / "meta.json"
+
+
+def _local_asset_path(cache_dir: Path, key: str,
+                      fmt: str = DEFAULT_FORMAT) -> Path:
+    return _asset_dir(cache_dir, key, fmt) / f"asset.{normalize_format(fmt)}"
 
 
 def _sb():
@@ -574,27 +672,54 @@ def _write_local_index(rows: list[dict[str, Any]]) -> None:
     tmp.replace(LIBRARY_DIR / "index.json")
 
 
+def _index_identity(row: dict[str, Any]) -> tuple[str, str]:
+    """What makes two local index rows the SAME row: the key AND the format.
+
+    The key alone was wrong the moment a second format existed. One asset_key
+    legitimately has two cached files — ``<canonical>/asset.png`` from the
+    raster tier and ``svg_<canonical>/asset.svg`` from the SVG tier — and the
+    cache bootstrap indexes both on every worker start. Keyed by asset_key
+    alone, the second registration EVICTED the first, so whichever format the
+    glob reached last was the only one the index knew: a PNG this container had
+    already paid for became invisible to the raster tier, which then generated
+    it again. Two rows, one per format, is the correct shape.
+    """
+    return (str(row.get("asset_key") or row.get("canonical_key") or ""),
+            row_format(row))
+
+
 def register_local(row: dict[str, Any]) -> None:
     """Register metadata locally; safe to call from every generation."""
     rows = _local_candidates()
-    key = str(row.get("asset_key") or row.get("canonical_key") or "")
-    rows = [r for r in rows if str(r.get("asset_key") or r.get("canonical_key")) != key]
+    ident = _index_identity(row)
+    rows = [r for r in rows if _index_identity(r) != ident]
     rows.append(row)
     _write_local_index(rows)
 
 
 def find(key: str, prompt: str, context: dict[str, Any] | None = None,
-         *, min_score: float | None = None) -> dict[str, Any] | None:
-    """Find an approved reusable asset without invoking an AI model."""
+         *, min_score: float | None = None,
+         asset_format: str | None = None) -> dict[str, Any] | None:
+    """Find an approved reusable asset without invoking an AI model.
+
+    `asset_format` restricts the candidates to one format. The two tiers ask
+    for what they can actually USE: the SVG tier wants markup it can parse
+    into layers, the raster tier wants pixels. Serving either the other's
+    bytes would be a cache miss dressed as a hit — a file written where the
+    caller does not look, which is a mistake this module has already made
+    once.
+    """
     ctx = infer_context(key, prompt, context)
     threshold = float(os.getenv("VISUAL_LIBRARY_MIN_SCORE", "0.58")) if min_score is None else min_score
     # `guarded`: only rows whose OWN key shares a core token with the request
     # may be served. best_match() without it still sees everything, so the
     # near-miss evidence the threshold argument runs on keeps flowing.
     best, best_score, source = best_match(key, prompt, context, _ctx=ctx,
-                                          guarded=True)
+                                          guarded=True,
+                                          asset_format=asset_format)
     if best is None or best_score < threshold:
-        near, near_score, _ = best_match(key, prompt, context, _ctx=ctx)
+        near, near_score, _ = best_match(key, prompt, context, _ctx=ctx,
+                                         asset_format=asset_format)
         if near is not None and near_score >= threshold and not key_guard_ok(key, near):
             logger.info("visual library: refused %s <- %s (score %.2f) — the "
                         "keys share no concept token", key,
@@ -608,8 +733,123 @@ def threshold_now() -> float:
     return float(os.getenv("VISUAL_LIBRARY_MIN_SCORE", "0.58"))
 
 
+# ── the remote candidate set ─────────────────────────────────────────────────
+# Read in PAGES, filtered in the query. The old read was a single
+# ``.limit(250)`` with every predicate but status and asset_type applied in
+# Python afterwards, which is not a tuning knob — it is a silent correctness
+# bug with a deadline. Production held 217 approved non-avatar visuals of 230
+# rows on 2026-09-05 and the diagram catalogue is still being filled: the
+# first row to fall outside the window would simply never be found, and the
+# lesson would pay to regenerate a picture the library already holds. Nothing
+# would log, because the query succeeded.
+#
+# The cap that remains is a runaway guard, not a window: a page short of
+# PAGE_SIZE ends the read, so the normal cost is one query.
+REMOTE_PAGE_SIZE = max(1, int(os.getenv("VISUAL_LIBRARY_PAGE_SIZE") or 500))
+REMOTE_ROW_CAP = max(1, int(os.getenv("VISUAL_LIBRARY_MAX_ROWS") or 50000))
+
+
+def _format_predicate(query, want_format: str):
+    """Narrow to one format IN THE QUERY without dropping a legacy row.
+
+    A bare ``eq("asset_format", "png")`` would hide every PNG the library held
+    before 0104 — the column is nullable and those rows carry NULL — which is
+    the same class of silent drop this module is busy removing, one column
+    over. So the default format admits NULL as well, and row_format() decides
+    in Python either way.
+
+    Kept to plain equality and IS NULL on purpose: the clause is the one part
+    of this read that a database can refuse, and the cheapest way to keep the
+    remote search alive is to give it nothing exotic to refuse.
+    """
+    if want_format != DEFAULT_FORMAT:
+        return query.eq("asset_format", want_format)
+    # NULL reads as a PNG — normalize_format says so, and every row published
+    # before the column existed is one — so a NULL row is a candidate for the
+    # default format and for no other.
+    return query.or_(f"asset_format.is.null,asset_format.eq.{want_format}")
+
+
+def _remote_page(sb, want_format: str | None, start: int, end: int):
+    q = (sb.table("visual_assets").select("*")
+         .eq("status", "approved")
+         .neq("asset_type", "avatar"))
+    if want_format is not None:
+        q = _format_predicate(q, want_format)
+    # Ordered because a page is only a page if the order is stable; without it
+    # Postgres may return the same row twice and never return another.
+    return list(q.order("id").range(start, end).execute().data or [])
+
+
+def _remote_pages(sb, want_format: str | None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    start = 0
+    while start < REMOTE_ROW_CAP:
+        page = _remote_page(sb, want_format, start,
+                            start + REMOTE_PAGE_SIZE - 1)
+        rows.extend(page)
+        if len(page) < REMOTE_PAGE_SIZE:
+            # A short page is the end of the table ONLY while the page size is
+            # under the server's own row cap. Raise VISUAL_LIBRARY_PAGE_SIZE
+            # past it and every page comes back "short" at the cap, silently
+            # reinstating the window this function exists to remove.
+            if len(page) == 0 or start + len(page) < REMOTE_ROW_CAP:
+                return rows
+            logger.warning("visual library: a page came back short at %d rows, "
+                           "which is where the server caps a read — set "
+                           "VISUAL_LIBRARY_PAGE_SIZE lower than the server cap",
+                           len(page))
+            return rows
+        start += REMOTE_PAGE_SIZE
+    # Reaching the guard means rows are being dropped again. It is a decade
+    # away at the current rate, but the whole point of this change is that a
+    # window nobody can see is worse than one that says so.
+    logger.warning("visual library: stopped reading at %d rows (the runaway "
+                   "guard); rows past it cannot be matched", len(rows))
+    return rows
+
+
+_FORMAT_FILTER_UNAVAILABLE = False
+
+
+def _remote_rows(sb, want_format: str | None) -> list[dict[str, Any]]:
+    """Every approved, non-avatar row a request in `want_format` could match.
+
+    The format filter is attempted in the query and abandoned whole if the
+    database refuses it — an un-migrated schema answers an unknown column with
+    PGRST204, and losing the remote search entirely to save a transfer would
+    trade a cheap read for every reuse the library exists to provide.
+    """
+    # Remember the refusal. Between a deploy and 0104 the column does not
+    # exist, and asking again on every lookup buys a guaranteed-failing round
+    # trip per lesson visual for as long as that window lasts.
+    global _FORMAT_FILTER_UNAVAILABLE
+    if _FORMAT_FILTER_UNAVAILABLE:
+        return _remote_pages(sb, None)
+    try:
+        return _remote_pages(sb, want_format)
+    except Exception as exc:  # noqa: BLE001
+        if want_format is None or not _format_filter_refused(exc):
+            raise
+        logger.info("visual library: this database has no asset_format column "
+                    "yet (%s); reading approved rows unfiltered until restart", exc)
+        _FORMAT_FILTER_UNAVAILABLE = True
+        return _remote_pages(sb, None)
+
+
+def _format_filter_refused(exc: Exception) -> bool:
+    """Whether a failed read is the DATABASE not knowing asset_format.
+
+    Narrow on purpose. Retrying every failure without the filter would double
+    the cost of a network blip and hide nothing useful; retrying this one keeps
+    the whole remote search alive in the window between a push and 0104.
+    """
+    return _looks_like_missing_column(exc) or "asset_format" in f"{exc}"
+
+
 def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
-               *, _ctx: LibraryContext | None = None, guarded: bool = False):
+               *, _ctx: LibraryContext | None = None, guarded: bool = False,
+               asset_format: str | None = None):
     """The best candidate and its score, WITHOUT applying the threshold.
 
     Split out of find() so a near-miss is observable. find() returns None
@@ -622,19 +862,27 @@ def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
     own key shares a core token with the request, so the best SERVEABLE row is
     chosen rather than the best-scoring one being chosen and then refused.
 
+    `asset_format` narrows the remote query too — see _remote_rows, which
+    also pages rather than truncating. The Python filter below stays the
+    authority, because an un-migrated database has no asset_format column and
+    a legacy row carries NULL.
+
     Returns (row | None, score, source) where source is 'local' or 'remote'.
     """
     ctx = _ctx or infer_context(key, prompt, context)
+    want_format = normalize_format(asset_format) if asset_format else None
 
     def _eligible(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if want_format is not None:
+            candidates = [r for r in candidates
+                          if row_format(r) == want_format]
         return [r for r in candidates if key_guard_ok(key, r)] if guarded \
             else candidates
 
     # Educational retrieval NEVER sees avatars. Filtered on both sides: the
-    # remote query narrows in Postgres (cheap, and keeps the 250-row window for
-    # real visuals rather than spending it on avatars), and both result sets
-    # are filtered again in Python by is_avatar_row(), which also catches rows
-    # published before asset_type was set.
+    # remote query narrows in Postgres, and both result sets are filtered
+    # again in Python by is_avatar_row(), which also catches rows published
+    # before asset_type was set.
     rows = _eligible([r for r in _local_candidates() if not is_avatar_row(r)])
     best = max(rows, key=lambda r: _score(r, key, prompt, ctx), default=None)
     best_score = _score(best, key, prompt, ctx) if best else 0.0
@@ -643,10 +891,7 @@ def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
     sb = _sb()
     if sb is not None:
         try:
-            remote = (sb.table("visual_assets").select("*")
-                      .eq("status", "approved")
-                      .neq("asset_type", "avatar")
-                      .limit(250).execute().data or [])
+            remote = _remote_rows(sb, want_format)
             remote = _eligible([r for r in remote if not is_avatar_row(r)])
             remote_best = max(remote, key=lambda r: _score(r, key, prompt, ctx), default=None)
             remote_score = _score(remote_best, key, prompt, ctx) if remote_best else 0.0
@@ -694,11 +939,12 @@ def log_decision(record: dict[str, Any]) -> None:
 
 
 def hydrate(key: str, prompt: str, cache_dir: Path,
-            context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+            context: dict[str, Any] | None = None,
+            *, asset_format: str | None = None) -> dict[str, Any] | None:
     """Download a remote approved asset into the renderer's existing cache.
 
     Cached under the REQUESTED key, not the matched one. The caller looks for
-    ``cache_dir/canonical_key(key)/asset.png`` — that is the only path it will
+    the path built from ``canonical_key(key)`` — that is the only path it will
     ever check — so filing the download under the match's key left the file
     somewhere nobody looks.
 
@@ -706,14 +952,20 @@ def hydrate(key: str, prompt: str, cache_dir: Path,
     matched the stored asset at score 1.00 and the renderer generated a second
     image anyway, adding a duplicate row for a concept the library already
     had. Semantic matching that cannot deliver its match is just an expensive
-    way to agree with itself.
+    way to agree with itself. That holds for SVG exactly as it does for PNG —
+    the format decides the FILENAME, never the identity.
+
+    `asset_format` says which tier is asking. The bytes are written unchanged:
+    an SVG is stored and served as markup, never rasterised to fit the older
+    path.
     """
-    hit = find(key, prompt, context)
+    hit = find(key, prompt, context, asset_format=asset_format)
     if not hit:
         return None
-    png = _local_png_path(cache_dir, key)
-    meta = _local_meta_path(cache_dir, key)
-    if png.exists():
+    fmt = row_format(hit)
+    target = _local_asset_path(cache_dir, key, fmt)
+    meta = _local_meta_path(cache_dir, key, fmt)
+    if target.exists():
         return hit
     path = str(hit.get("storage_path") or "")
     sb = _sb()
@@ -721,18 +973,24 @@ def hydrate(key: str, prompt: str, cache_dir: Path,
         return None
     try:
         data = sb.storage.from_(BUCKET).download(path)
-        png.parent.mkdir(parents=True, exist_ok=True)
-        # Written beside and renamed in: asset.png either does not exist or
-        # is complete. A concurrent reader (segments render on parallel
-        # threads) must never open a half-written file, take it for a
-        # corrupt cache and generate a DIFFERENT image mid-lesson. The
-        # per-key asset lock in the renderer wrapper serializes the
-        # threads; this makes the file itself safe for any reader that
-        # is not holding it.
-        _write_atomic(png, data)
-        metadata = {**hit, "provenance": "visual_library", "library_asset_id": hit.get("id")}
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Written beside and renamed in: the asset file either does not
+        # exist or is complete. A concurrent reader (segments render on
+        # parallel threads) must never open a half-written file, take it for
+        # a corrupt cache and generate a DIFFERENT image mid-lesson. The
+        # per-key asset lock in the renderer wrapper serializes the threads;
+        # this makes the file itself safe for any reader that is not holding
+        # it. It matters more for SVG, not less: a truncated PNG usually
+        # fails to decode, while a truncated SVG can parse into a PARTIAL
+        # drawing and be believed.
+        _write_atomic(target, data)
+        metadata = {**hit, "provenance": "visual_library",
+                    "library_asset_id": hit.get("id"), "asset_format": fmt,
+                    "group_ids": list(hit.get("group_ids") or []),
+                    "group_count": int(hit.get("group_count") or 0)}
         _write_json_atomic(meta, metadata)
-        logger.info("visual library hit: %s <- %s (score %.2f)", key, hit.get("asset_key"), hit.get("match_score", 0))
+        logger.info("visual library hit: %s <- %s (%s, score %.2f)", key,
+                    hit.get("asset_key"), fmt, hit.get("match_score", 0))
         return hit
     except Exception as exc:  # noqa: BLE001
         logger.warning("visual library hydration failed for %s: %s", key, exc)
@@ -860,8 +1118,9 @@ def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
     hit = find_avatar(key)
     if not hit:
         return None
-    png = _local_png_path(cache_dir, key)
-    meta = _local_meta_path(cache_dir, key)
+    fmt = row_format(hit)
+    png = _local_asset_path(cache_dir, key, fmt)
+    meta = _local_meta_path(cache_dir, key, fmt)
     if png.exists():
         return hit
     path = str(hit.get("storage_path") or "")
@@ -871,15 +1130,12 @@ def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
     try:
         data = sb.storage.from_(BUCKET).download(path)
         png.parent.mkdir(parents=True, exist_ok=True)
-        # Written beside and renamed in: asset.png either does not exist or
-        # is complete. A concurrent reader (segments render on parallel
-        # threads) must never open a half-written file, take it for a
-        # corrupt cache and generate a DIFFERENT image mid-lesson. The
-        # per-key asset lock in the renderer wrapper serializes the
-        # threads; this makes the file itself safe for any reader that
-        # is not holding it.
+        # Beside-and-rename, for the reason spelled out in hydrate(): a
+        # half-written face read by a parallel segment is a SECOND paid
+        # avatar mid-lesson.
         _write_atomic(png, data)
-        metadata = {**hit, "provenance": "visual_library", "library_asset_id": hit.get("id")}
+        metadata = {**hit, "provenance": "visual_library",
+                    "library_asset_id": hit.get("id"), "asset_format": fmt}
         _write_json_atomic(meta, metadata)
         logger.info("visual library avatar: %s <- %s", key, hit.get("id"))
         return hit
@@ -888,25 +1144,99 @@ def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
         return None
 
 
-def publish_generated(asset_key: str, prompt: str, png_path: Path,
-                      metadata: dict[str, Any] | None = None,
-                      context: dict[str, Any] | None = None) -> bool:
-    """Publish a newly generated, already-validated image as a reusable asset.
+_SCHEMA_MISS = ("pgrst204", "schema cache", "does not exist", "unknown column",
+                "could not find")
 
-    The binary goes to Supabase Storage; metadata goes to Postgres. A matching
+
+def _looks_like_missing_column(exc: Exception) -> bool:
+    """Whether a failed insert is the database not knowing a column yet.
+
+    PostgREST reports it as PGRST204 with "Could not find the 'x' column of
+    'visual_assets' in the schema cache"; a direct Postgres error says
+    "column ... does not exist". Anything else — a network blip, a permission
+    error, a constraint violation — is NOT this, and must not trigger a retry
+    that would only fail the same way or, worse, hide a real problem.
+    """
+    text = f"{exc}".lower()
+    return any(marker in text for marker in _SCHEMA_MISS)
+
+
+def _insert_row(sb, row: dict[str, Any], asset_key: str) -> None:
+    """Insert a library row, degrading to the pre-0104 column set if needed.
+
+    Deploys and migrations are separate acts: the worker ships on a push, the
+    schema changes when the founder applies 0104. Between the two, a row
+    carrying asset_format/group_ids/group_count is refused whole — and because
+    the bytes are uploaded first, the failure would leave an orphaned storage
+    object and no row at all, silently, on every single generation.
+
+    So a schema miss is not fatal: drop the three new columns and insert the
+    row the old schema understands. Nothing is lost that cannot be recovered —
+    ``row_format`` already answers from the stored object's extension when the
+    column is absent, so a degraded SVG row still reads back as an SVG from
+    ``generated/<canonical>/<hash>.svg``. Only the group metadata waits for the
+    migration, and that is a lookup optimisation, not the asset.
+    """
+    try:
+        sb.table("visual_assets").insert(row).execute()
+        return
+    except Exception as exc:  # noqa: BLE001
+        if not _looks_like_missing_column(exc):
+            raise
+        legacy = {k: v for k, v in row.items() if k not in FORMAT_COLUMNS}
+        logger.warning("visual library: schema predates 0104 (%s); publishing "
+                       "%s without the format columns", exc, asset_key)
+        sb.table("visual_assets").insert(legacy).execute()
+
+
+def publish_generated(asset_key: str, prompt: str, asset_path: Path,
+                      metadata: dict[str, Any] | None = None,
+                      context: dict[str, Any] | None = None,
+                      *, asset_format: str | None = None) -> bool:
+    """Publish a newly generated, already-validated asset as a reusable one.
+
+    The bytes go to Supabase Storage; metadata goes to Postgres. A matching
     canonical key is never silently overwritten. The asset is inserted as
     ``approved`` because it has already passed the renderer's deterministic
-    image validation (coverage/baked-text checks). A later human-review field
-    can demote it without deleting history.
+    validation. A later human-review field can demote it without deleting
+    history.
+
+    Format-agnostic: it takes a PATH and a FORMAT, not a PNG. The format is
+    inferred from the file when the caller does not say, so every existing
+    call site keeps publishing exactly what it published before.
+
+    This is also where the STRICT gate lives, and it lives here on purpose —
+    every publisher goes through this function, including the one-shot
+    migration script, so an SVG that breaks the asset contract cannot enter
+    the library by another door. Refusal returns False; the render that
+    produced it is untouched and still draws.
     """
-    if not png_path.exists():
+    asset_path = Path(asset_path)
+    if not asset_path.exists():
         return False
     # A face-bearing key (one roster face, see face_key) is a cache identity,
     # not a roster identity: what gets published — when it gets published at
     # all — is the roster key, so the duplicate check below sees the family.
     asset_key = base_avatar_key(str(asset_key))
+    fmt = normalize_format(asset_format
+                           or (metadata or {}).get("asset_format")
+                           or asset_path.suffix)
+    data = asset_path.read_bytes()
+    group_ids: list[str] = []
+    if fmt == "svg":
+        from spike.scene_engine.svg_validate import validate_svg_document
+        verdict = validate_svg_document(data.decode("utf-8", "replace"))
+        if not verdict.ok:
+            logger.warning("visual library: refusing to publish %s — the SVG "
+                           "breaks the asset contract (%s)",
+                           asset_key, verdict.reason)
+            return False
+        # EXACT ids, in drawing order. They are the labelling contract, so the
+        # library can answer whether an asset contains the part a lesson wants
+        # to label without downloading it.
+        group_ids = list(verdict.group_ids)
     ctx = infer_context(asset_key, prompt, context)
-    digest = hashlib.sha256(png_path.read_bytes()).hexdigest()
+    digest = hashlib.sha256(data).hexdigest()
     row = {
         "asset_key": str(asset_key),
         "canonical_key": canonical_key(asset_key),
@@ -919,7 +1249,15 @@ def publish_generated(asset_key: str, prompt: str, png_path: Path,
         "status": "approved",
         "provenance": "generated",
         "content_hash": digest,
-        "quality": (metadata or {}).get("quality", "renderer_validated"),
+        # what the asset actually passed, not a generic word: an SVG cleared
+        # the publish contract above, a PNG cleared the renderer's coverage
+        # and baked-text checks
+        "quality": (metadata or {}).get(
+            "quality", "svg_contract_validated" if fmt == "svg"
+            else "renderer_validated"),
+        "asset_format": fmt,
+        "group_ids": group_ids,
+        "group_count": len(group_ids),
         # Without this the column default ('visual') applied to everything, and
         # the whole avatar roster entered the educational library.
         **avatar_fields(asset_key),
@@ -937,18 +1275,21 @@ def publish_generated(asset_key: str, prompt: str, png_path: Path,
         logger.info("visual library: avatar %s already published; not adding another", asset_key)
         return True
     try:
-        storage_path = f"generated/{canonical_key(asset_key)}/{digest[:16]}.png"
-        with png_path.open("rb") as fh:
+        # One bucket, one layout, the extension carried by the format:
+        # generated/<canonical>/<hash>.<ext>. There is no parallel SVG store.
+        storage_path = f"generated/{canonical_key(asset_key)}/{digest[:16]}.{fmt}"
+        with asset_path.open("rb") as fh:
             sb.storage.from_(BUCKET).upload(
                 storage_path, fh,
-                {"content-type": "image/png", "cache-control": "31536000", "upsert": "false"},
+                {"content-type": CONTENT_TYPES[fmt],
+                 "cache-control": "31536000", "upsert": "false"},
             )
         row["storage_path"] = storage_path
         # Idempotency is by content hash, while canonical_key remains searchable.
         existing = (sb.table("visual_assets").select("id")
                     .eq("content_hash", digest).limit(1).execute().data or [])
         if not existing:
-            sb.table("visual_assets").insert(row).execute()
+            _insert_row(sb, row, str(asset_key))
         else:
             row["id"] = existing[0].get("id")
         logger.info("visual library published: %s (%s/%s/%s)",
@@ -956,7 +1297,15 @@ def publish_generated(asset_key: str, prompt: str, png_path: Path,
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("visual library publish failed for %s: %s", asset_key, exc)
-        return True  # local cache/index remains useful
+        # Still True, and deliberately: the False return means ONE thing —
+        # "this markup broke the asset contract" — and the decision log reads
+        # it that way. Folding a network blip or a permission error into the
+        # same answer would make `published: false` ambiguous between "your
+        # SVG is defective" and "Supabase was unreachable", which is worse
+        # observability, not better. Infrastructure failures announce
+        # themselves in the warning above; the local cache/index is written
+        # either way and remains useful.
+        return True
 
 
 def seed_from_catalog(catalog_path: Path | None = None) -> int:
