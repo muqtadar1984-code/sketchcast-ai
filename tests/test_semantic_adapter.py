@@ -574,3 +574,51 @@ class TestEndToEnd:
         Scene.model_validate(scenes["s001"])
         with pytest.raises(AdapterError):
             adapt_semantic_plan(hostile, NARR, strict=True)
+
+
+class TestASentenceIsNotALabel:
+    """EVERY non-title text became a size-27 'label' at x=95. A 62-character
+    textbook instruction went through that path in production, measured ~694px
+    wide, and the renderer clamped it straight across the diagram."""
+
+    def _plan_with(self, text, role=None):
+        p = _plan()
+        el = {"id": "instr", "type": "text", "text": text}
+        if role:
+            el["role"] = role
+        p["chapters"][0]["elements"].append(el)
+        p["chapters"][0]["steps"][0]["actions"].append(
+            {"verb": "WRITE", "target": {"element": "instr"}})
+        return p
+
+    def test_a_sentence_is_reported_and_never_placed(self):
+        plan, issues = adapt_semantic_plan(
+            self._plan_with("Compare your model triangle with the ones made "
+                            "by other groups."), NARR)
+        assert any(i["code"] == "SENTENCE_AS_LABEL" for i in issues)
+        els = {e["id"]: e for e in plan["chapters"][0]["elements"]}
+        assert "instr" not in els
+        # ...and no leftover action pointing at an element that is not there
+        for st in plan["chapters"][0]["steps"]:
+            assert not any(a.get("target") == "instr" for a in st["actions"])
+
+    def test_a_spoken_sentence_is_offered_as_a_key_point(self):
+        spoken = "The hypotenuse is the longest side."
+        plan, _ = adapt_semantic_plan(self._plan_with(spoken), NARR)
+        assert plan["chapters"][0]["steps"][0]["key_point"] == spoken
+
+    def test_a_caption_role_leaves_the_label_column(self):
+        plan, _ = adapt_semantic_plan(
+            self._plan_with("The three sides of a triangle", role="caption"),
+            NARR)
+        el = next(e for e in plan["chapters"][0]["elements"]
+                  if e["id"] == "instr")
+        assert el["role"] == "caption"
+        assert el["at"][0] != 95.0          # never in the label column
+        assert el["at"][1] > 500.0          # under the picture
+
+    def test_short_labels_still_take_the_column(self):
+        plan, issues = adapt_semantic_plan(_plan(), NARR, strict=True)
+        els = {e["id"]: e for e in plan["chapters"][0]["elements"]}
+        assert els["lbl_hyp"]["at"][0] == 95.0 and \
+            els["lbl_hyp"]["role"] == "label"

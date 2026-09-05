@@ -13,13 +13,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest
 from PIL import Image
 
 from spike.scene_engine.continuity import (compile_plan, parse_visual_plan,
                                            seed_moment)
 from spike.scene_engine.raster_assets import RasterAsset, part_names_from_prompt
 from spike.scene_engine.render import SceneRenderer, _region_ordered_trace
-from spike.scene_engine.schema import Scene
+from spike.scene_engine.schema import Scene, WORLD_H, WORLD_W
 from spike.scene_engine.timing import resolve_cue
 from spike.scene_engine.schema import Cue
 
@@ -110,14 +111,97 @@ class TestLayerAnchors:
         # ...and NOT the element centre (the converging-arrows defect)
         assert ((head[0] - 640) ** 2 + (head[1] - 360) ** 2) ** 0.5 > 40.0
 
-    def test_unresolved_layer_suppresses_the_arrow(self):
+    def test_unresolved_layer_gets_an_edge_leader(self):
+        """The part cannot be located in the art. Suppressing the arrow
+        outright (the old behaviour) left the label floating in a margin
+        column beside a picture, saying nothing about WHICH picture it names
+        — the founder saw exactly that. A leader keeps the honest half: it
+        runs to the picture's EDGE on the ray toward its own label, and it
+        carries no arrowhead, so it asserts association without asserting a
+        structure that may not be there.
+
+        It lands ON the picture. Stopping short of it — which is what the
+        first version did, padding OUTWARD from the canvas — is a line that
+        associates the label with nothing.
+        """
         r = SceneRenderer(_anchor_scene("ribosome"),
                           asset_resolver=_resolver(_cell_asset()))
-        assert any(w.startswith("ARROW_SUPPRESSED")
-                   for w in r.audit()["warnings"])
-        # a label with no arrow beats a confident arrow to the wrong part
-        assert not r._flat["ar"]
-        assert "ar" not in r.audit()["arrow_heads"]
+        warns = r.audit()["warnings"]
+        assert any(w.startswith("ANCHOR_EDGE_FALLBACK") for w in warns)
+        assert any(w.startswith("UNRESOLVED_ANCHOR") for w in warns)
+        head = r.audit()["arrow_heads"]["ar"]
+        art = r.bound["cell"].box
+        # on the art...
+        assert (art[0] <= head[0] <= art[2]
+                and art[1] <= head[1] <= art[3]), (head, art)
+        # ...at its edge, never its middle
+        cx, cy = (art[0] + art[2]) / 2, (art[1] + art[3]) / 2
+        assert ((head[0] - cx) ** 2 + (head[1] - cy) ** 2) ** 0.5 > 40.0
+        edge = min(head[0] - art[0], art[2] - head[0],
+                   head[1] - art[1], art[3] - head[1])
+        assert edge <= 0.15 * min(art[2] - art[0], art[3] - art[1]), (head, art)
+        # a leader tick: one polyline, no barbs
+        assert len(r.bound["ar"].layers[0].strokes) == 1
+
+    def test_two_unresolved_labels_get_distinct_edge_points(self):
+        s = Scene.model_validate({
+            "id": "two_missing", "narration": "ribosomes and golgi",
+            "compiled": True,
+            "elements": [
+                {"id": "cell", "type": "illustration", "asset": "plant_cell",
+                 "at": [640, 360], "scale": 1.0},
+                {"id": "l1", "type": "text", "text": "Ribosome",
+                 "at": [80, 80], "role": "label"},
+                {"id": "l2", "type": "text", "text": "Golgi",
+                 "at": [80, 600], "role": "label"},
+                {"id": "a1", "type": "arrow",
+                 "tail": {"el": "l1", "edge": "right"},
+                 "head": {"el": "cell", "layer": "ribosome", "edge": "center"}},
+                {"id": "a2", "type": "arrow",
+                 "tail": {"el": "l2", "edge": "right"},
+                 "head": {"el": "cell", "layer": "golgi", "edge": "center"}},
+            ],
+            "actions": [{"verb": "draw", "target": "cell"},
+                        {"verb": "write", "target": "l1"},
+                        {"verb": "write", "target": "l2"},
+                        {"verb": "draw", "target": "a1"},
+                        {"verb": "draw", "target": "a2"}]})
+        r = SceneRenderer(s, asset_resolver=_resolver(_cell_asset()))
+        audit = r.audit()
+        h1, h2 = audit["arrow_heads"]["a1"], audit["arrow_heads"]["a2"]
+        # each leader leaves the picture on the ray toward ITS OWN label, so
+        # the two ends are separated by the labels' own column pitch — they
+        # used to be the identical element-box centre. 30px is the bar the
+        # ARROWS_CONVERGE audit itself uses.
+        assert ((h1[0] - h2[0]) ** 2 + (h1[1] - h2[1]) ** 2) ** 0.5 > 30.0
+        assert not any(w.startswith("ARROWS_CONVERGE")
+                       for w in audit["warnings"])
+
+    def test_relayout_orders_unresolved_labels_by_their_own_height(self):
+        """The relayout pre-pass resolved the head with no `toward`, so every
+        unresolved label got the element CENTRE as its target height and they
+        all sorted equal — a pile in one row."""
+        s = Scene.model_validate({
+            "id": "order", "narration": "x", "compiled": True,
+            "elements": [
+                {"id": "cell", "type": "illustration", "asset": "plant_cell",
+                 "at": [640, 360], "scale": 1.0},
+                {"id": "l1", "type": "text", "text": "Alpha", "at": [80, 60],
+                 "role": "label"},
+                {"id": "l2", "type": "text", "text": "Beta", "at": [80, 300],
+                 "role": "label"},
+                {"id": "l3", "type": "text", "text": "Gamma", "at": [80, 560],
+                 "role": "label"},
+            ] + [{"id": f"a{i}", "type": "arrow",
+                  "tail": {"el": f"l{i}", "edge": "right"},
+                  "head": {"el": "cell", "layer": "ribosome",
+                           "edge": "center"}} for i in (1, 2, 3)],
+            "actions": [{"verb": "draw", "target": "cell"}]
+            + [{"verb": "write", "target": f"l{i}"} for i in (1, 2, 3)]
+            + [{"verb": "draw", "target": f"a{i}"} for i in (1, 2, 3)]})
+        r = SceneRenderer(s, asset_resolver=_resolver(_cell_asset()))
+        ys = [r.bound[f"l{i}"].box[1] for i in (1, 2, 3)]
+        assert ys[0] < ys[1] < ys[2], ys
 
     def test_two_arrows_to_distinct_parts_do_not_converge(self):
         s = Scene.model_validate({
@@ -637,6 +721,321 @@ class TestPartNamesFromLabels:
         assert any("PART NAMES from labels" in ln for ln in report)
         assert "name the layer groups exactly:" in assets["s002"]["plant_cell"].lower()
         assert any("ANCHORED arr_nucleus" in ln for ln in report)
+
+
+class TestPartNamesFromDescription:
+    """The founder's Cells Part 2: the root prompt NAMED every part in prose
+    and carried no 'Name the layer groups exactly' tail, so part_names was
+    empty and the entire labelling pass was skipped."""
+
+    def test_the_prompt_enumeration_becomes_part_names(self):
+        from spike.scene_engine.raster_assets import part_names_from_description
+        got = part_names_from_description(
+            "A plant cell in cross-section with a cell wall, cell membrane, "
+            "nucleus, chloroplasts, and cytoplasm. Do not show a vacuole or "
+            "label parts.")
+        assert got == ["cell wall", "cell membrane", "nucleus",
+                       "chloroplasts", "cytoplasm"]
+        assert "vacuole" not in got          # a negated clause names an ABSENCE
+
+    def test_a_short_enumeration_parses(self):
+        from spike.scene_engine.raster_assets import part_names_from_description
+        assert part_names_from_description(
+            "A river meander showing an outer bank and an inner bank") == \
+            ["outer bank", "inner bank"]
+
+    def test_a_prompt_with_no_list_yields_nothing(self):
+        from spike.scene_engine.raster_assets import part_names_from_description
+        assert part_names_from_description("A rectangular plant cell.") == []
+        assert part_names_from_description("") == []
+
+    def test_an_explicit_tail_wins_outright(self):
+        from spike.scene_engine.raster_assets import part_names_from_description
+        assert part_names_from_description(
+            "A cell with a wall and a nucleus. Name the layer groups "
+            "exactly: wall, nucleus.") == []
+
+    def test_the_enumeration_comes_from_the_last_trigger_not_the_first(self):
+        """Taking the FIRST trigger made the opening chunk 'the human heart
+        with the left atrium' — six words, discarded — so three chambers got
+        labels and the fourth did not, which reads as a mistake on screen."""
+        from spike.scene_engine.raster_assets import part_names_from_description
+        assert part_names_from_description(
+            "A diagram showing the human heart with the left atrium, right "
+            "atrium, left ventricle and right ventricle.") == \
+            ["left atrium", "right atrium", "left ventricle",
+             "right ventricle"]
+
+    def test_a_trailing_clause_does_not_swallow_the_last_part(self):
+        """The last item wears the sentence's tail: 'carpel on a white
+        background' is four words, so the carpel was thrown away whole."""
+        from spike.scene_engine.raster_assets import part_names_from_description
+        assert part_names_from_description(
+            "A simple line drawing of a flower with petals, sepals, stamen "
+            "and carpel on a white background.") == \
+            ["petals", "sepals", "stamen", "carpel"]
+
+    @pytest.mark.parametrize("prompt,expect", [
+        ("A plant cell with a nucleus, cytoplasm on white.",
+         ["nucleus", "cytoplasm"]),
+        ("A flower with petals, sepals and a stamen in profile.",
+         ["petals", "sepals", "stamen"]),
+        ("A leaf with a midrib, veins and a blade in section.",
+         ["midrib", "veins", "blade"]),
+    ])
+    def test_a_short_name_plus_clause_is_trimmed_too(self, prompt, expect):
+        # each of these chunks is THREE words or fewer, so the old length
+        # gate never let the trim look at it
+        """The trim ran only ABOVE three words — the length at which a clause
+        makes a chunk fail the 1..3 length check anyway. So a chunk that was
+        name-plus-clause and still short passed straight through: 'cytoplasm
+        on white' shipped as a part name, went into the image prompt's layer
+        tail, and the vision annotator was paid to find a region by that
+        name."""
+        from spike.scene_engine.raster_assets import part_names_from_description
+        assert part_names_from_description(prompt) == expect
+
+    def test_a_chunk_that_is_only_a_clause_names_nothing_and_is_not_reported(self):
+        from spike.scene_engine.raster_assets import part_names_from_description
+        skipped = []
+        assert part_names_from_description(
+            "A diagram with a nucleus, cytoplasm and cell wall, drawn in "
+            "black ink on white paper.", skipped) == \
+            ["nucleus", "cytoplasm", "cell wall"]
+        assert skipped == []
+
+    def test_a_discarded_chunk_is_handed_back_to_the_caller(self):
+        from spike.scene_engine.raster_assets import part_names_from_description
+        skipped = []
+        got = part_names_from_description(
+            "A cell with a nucleus, cytoplasm and the region where the "
+            "spindle fibres attach.", skipped)
+        assert got == ["nucleus", "cytoplasm"]
+        assert skipped == ["region where the spindle fibres attach"]
+
+    def _chapter(self, narrations, prompt=None):
+        raw = _plan_raw()
+        ch = raw["chapters"][0]
+        ch["assets"]["plant_cell"] = prompt or (
+            "A plant cell in cross-section with a cell wall, cell membrane, "
+            "nucleus, chloroplasts, and cytoplasm. Do not show a vacuole or "
+            "label parts.")
+        # no label/arrow ids that strip to a part name, so only the
+        # description tier can supply names
+        ch["elements"] = [e for e in ch["elements"]
+                          if e["id"] not in ("lbl_nucleus", "arr_nucleus")]
+        for st in ch["steps"]:
+            st["actions"] = [a for a in st["actions"]
+                             if a.get("target") not in ("lbl_nucleus",
+                                                        "arr_nucleus")]
+        plan = parse_visual_plan(raw)
+        return compile_plan(plan, narrations,
+                            all_segments=sorted(narrations), skip_hold=set())
+
+    def test_the_description_tier_names_the_diagram(self):
+        narr = {"s001": "The cell wall is rigid.",
+                "s002": "Inside, the nucleus directs everything.",
+                "s003": "The chloroplasts catch the light."}
+        _, assets, report = self._chapter(narr)
+        line = next(ln for ln in report if "PART NAMES from description" in ln)
+        assert "cell wall" in line and "nucleus" in line \
+            and "chloroplasts" in line
+        assert "vacuole" not in line
+        # 'cell membrane' and 'cytoplasm' are never spoken in this chapter —
+        # asking vision for them buys a wrong box and a paid call
+        assert "membrane" not in line and "cytoplasm" not in line
+        assert "name the layer groups exactly:" in \
+            assets["s002"]["plant_cell"].lower()
+
+    def test_names_the_narration_never_says_are_not_requested(self):
+        _, assets, report = self._chapter(
+            {"s001": "a", "s002": "b", "s003": "c"})
+        assert not any("PART NAMES" in ln for ln in report)
+        assert "name the layer groups exactly:" not in \
+            assets["s002"]["plant_cell"].lower()
+
+    def test_an_inflected_narration_still_names_the_part(self):
+        """The narration filter was a raw substring test, so 'Each
+        chloroplast traps light.' did not count as saying 'chloroplasts' and
+        'Inside the nuclei...' did not count as saying 'nucleus' — the two
+        organelles the chapter is about were the two it refused to name."""
+        narr = {"s001": "The cell wall is rigid.",
+                "s002": "Inside the nuclei sit the chromosomes.",
+                "s003": "Each chloroplast traps light."}
+        _, _, report = self._chapter(narr)
+        line = next(ln for ln in report if "PART NAMES from description" in ln)
+        assert "nucleus" in line and "chloroplasts" in line, line
+
+    def test_the_report_says_which_chunk_it_could_not_name(self):
+        narr = {"s001": "The cell wall is rigid.",
+                "s002": "Inside, the nucleus directs everything.",
+                "s003": "The spindle fibres attach here."}
+        _, _, report = self._chapter(
+            narr, prompt="A cell with a cell wall, nucleus and the region "
+                         "where the spindle fibres attach.")
+        assert any("PART NAME SKIPPED" in ln and "spindle fibres" in ln
+                   for ln in report), report
+
+
+class TestPartNamesFromLabelText:
+    """An id says what a programmer called the element; the TEXT says what the
+    picture must contain. lbl1/'Nucleus' used to yield nothing at all."""
+
+    def test_label_text_supplies_the_tail(self):
+        raw = _plan_raw()
+        ch = raw["chapters"][0]
+        ch["assets"]["plant_cell"] = "A rectangular plant cell."   # no tail
+        ch["elements"] = [e for e in ch["elements"] if e["id"] == "cell"]
+        ch["elements"] += [
+            {"id": "lbl1", "type": "text", "text": "Nucleus",
+             "at": [90, 120], "role": "label"},
+            {"id": "lbl2", "type": "text", "text": "Cell wall",
+             "at": [90, 200], "role": "label"}]
+        for st in ch["steps"]:
+            st["actions"] = [a for a in st["actions"]
+                             if a.get("target") == "cell"]
+        plan = parse_visual_plan(raw)
+        narr = {"s001": "The cell wall is rigid.",
+                "s002": "The nucleus is the control centre.",
+                "s003": "look closer"}
+        _, assets, report = compile_plan(plan, narr,
+                                         all_segments=["s001", "s002", "s003"],
+                                         skip_hold=set())
+        line = next(ln for ln in report if "PART NAMES from label text" in ln)
+        assert "nucleus" in line and "cell wall" in line
+        assert "name the layer groups exactly:" in \
+            assets["s002"]["plant_cell"].lower()
+
+    def _labelled(self):
+        """The exact shape the label-text tier is FOR: element ids that name
+        nothing (lbl1, lbl2), and the part names carried only by the text."""
+        raw = _plan_raw()
+        ch = raw["chapters"][0]
+        ch["assets"]["plant_cell"] = "A rectangular plant cell."   # no tail
+        ch["elements"] = [e for e in ch["elements"] if e["id"] == "cell"]
+        ch["elements"] += [
+            {"id": "lbl1", "type": "text", "text": "Nucleus",
+             "at": [90, 120], "role": "label"},
+            {"id": "lbl2", "type": "text", "text": "Cell wall",
+             "at": [90, 200], "role": "label"}]
+        for st in ch["steps"]:
+            st["actions"] = [a for a in st["actions"]
+                             if a.get("target") == "cell"]
+        ch["steps"][0]["actions"].append({"verb": "write", "target": "lbl2"})
+        ch["steps"][1]["actions"].append({"verb": "write", "target": "lbl1"})
+        narr = {"s001": "The cell wall is rigid.",
+                "s002": "The nucleus is the control centre.",
+                "s003": "look closer"}
+        scenes, _, report = compile_plan(
+            parse_visual_plan(raw), narr,
+            all_segments=["s001", "s002", "s003"], skip_hold=set())
+        return scenes, report
+
+    def test_the_directors_own_labels_are_not_cloned(self):
+        """`covered` — the set of parts that already HAVE a label — was read
+        off the element IDS alone. This tier wins precisely when the ids name
+        nothing, so `covered` came back empty exactly when it mattered and the
+        synthesiser made a second copy of every label it had just learned
+        from: 'Nucleus' was written on the board twice, once by lbl1 and once
+        by lbl_auto_nucleus.
+        """
+        scenes, report = self._labelled()
+        assert not any("SYNTHESIZED lbl_auto_" in ln for ln in report), report
+        texts = [" ".join(str(e.get("text") or "").split()).lower()
+                 for e in scenes["s003"]["elements"]
+                 if e.get("type") == "text"
+                 and str(e.get("role") or "") == "label"]
+        assert sorted(texts) == ["cell wall", "nucleus"], texts
+
+    def test_the_directors_own_label_is_the_one_that_gets_the_leader(self):
+        """The point of not cloning: the leader must arm the label the
+        director declared, not a duplicate made to carry it. The lookup that
+        arms it reads the id too, so it needed the same text fallback."""
+        scenes, report = self._labelled()
+        assert any("SYNTHESIZED arr_auto_lbl1 -> cell.nucleus" in ln
+                   for ln in report), report
+        assert any("SYNTHESIZED arr_auto_lbl2 -> cell.cell wall" in ln
+                   for ln in report), report
+        arrows = [e for e in scenes["s003"]["elements"]
+                  if e.get("type") == "arrow"]
+        assert {a["tail"]["el"] for a in arrows} == {"lbl1", "lbl2"}, arrows
+
+
+class TestAQuestionIsNotAPartName:
+    """`_classify_text` keeps a short question as a LABEL on purpose — 'Why?'
+    and 'What is a cell?' are exactly the board text a socratic lesson wants —
+    but a label is not therefore a NAME for a part of the picture, and nothing
+    stopped one entering the label-text candidate pool.
+
+    That pool is written verbatim into the asset prompt as 'Name the layer
+    groups exactly: ...', so the image model was asked for a layer group
+    called 'why?' and the vision annotator was then paid to go looking for it.
+    """
+
+    @staticmethod
+    def _report(labels, narr):
+        raw = _plan_raw()
+        ch = raw["chapters"][0]
+        ch["assets"]["plant_cell"] = "A rectangular plant cell."   # no tail
+        ch["elements"] = [e for e in ch["elements"] if e["id"] == "cell"]
+        ch["elements"] += [
+            {"id": f"lbl{i}", "type": "text", "text": t, "at": [90, 120 + 60 * i],
+             "role": "label"} for i, t in enumerate(labels)]
+        for st in ch["steps"]:
+            st["actions"] = [a for a in st["actions"]
+                             if a.get("target") == "cell"]
+        plan = parse_visual_plan(raw)
+        _, assets, report = compile_plan(plan, narr,
+                                         all_segments=["s001", "s002", "s003"],
+                                         skip_hold=set())
+        line = next(ln for ln in report if "PART NAMES from label text" in ln)
+        return line, assets
+
+    @pytest.mark.parametrize("question", ["Why?", "What is a cell?",
+                                          "How does it work?"])
+    def test_a_question_never_becomes_a_layer_group(self, question):
+        narr = {"s001": "The cell wall is rigid.",
+                "s002": f"{question} The nucleus is the control centre.",
+                "s003": "look closer"}
+        line, assets = self._report([question, "Nucleus"], narr)
+        assert "nucleus" in line, line
+        first = question.split()[0].lower()
+        assert first not in line.lower(), line
+        tail = assets["s002"]["plant_cell"].lower()
+        assert "name the layer groups exactly: nucleus." in tail, tail
+
+    def test_a_real_name_still_reaches_the_pool(self):
+        """The exclusion must not cost the tier the names it exists for."""
+        narr = {"s001": "The cell wall is rigid.",
+                "s002": "The nucleus is the control centre.",
+                "s003": "look closer"}
+        line, _ = self._report(["Nucleus", "Cell wall"], narr)
+        assert "nucleus" in line and "cell wall" in line, line
+
+    @pytest.mark.parametrize("label,name", [
+        ("Nucleus.", "nucleus"),                 # a punctuated one-word label
+        ("Nucleus!", "nucleus"),
+    ])
+    def test_a_punctuated_name_is_cleaned_not_refused(self, label, name):
+        """Refusing everything with terminal punctuation would cost the
+        diagram a real label — the harm this whole pass exists to fix. The
+        pool used the RAW board text, so 'Nucleus.' asked the image model for
+        a layer group with a full stop in its name; it is cleaned instead."""
+        narr = {"s001": "The cell wall is rigid.",
+                "s002": "The nucleus is the control centre.",
+                "s003": "look closer"}
+        line, assets = self._report([label], narr)
+        assert f"'{name}'" in line, line
+        assert f"name the layer groups exactly: {name}." in             assets["s002"]["plant_cell"].lower()
+
+    def test_a_numbered_tag_is_not_a_structure(self):
+        """'1.' survives `_classify_text` as a label on purpose. It is still
+        not the name of anything a vision annotator can find."""
+        narr = {"s001": "Step 1 of 3.",
+                "s002": "The nucleus is the control centre.",
+                "s003": "look closer"}
+        line, _ = self._report(["1.", "Nucleus"], narr)
+        assert "nucleus" in line and "'1" not in line, line
 
 
 class TestRegionCarryBeatsLayers:
@@ -1747,6 +2146,607 @@ class TestLabelsGetLeaderLines:
             "no step demonstrates a label and its leader line together"
 
 
+class TestTextClassification:
+    """The founder's Cells Part 2 wrote 'Compare your model cell with the
+    models made by other groups.' — a verbatim textbook activity line — across
+    the plant cell for nine segments. Nothing between the model and the pixels
+    refused a sentence as a label."""
+
+    @staticmethod
+    def _chapter(text, narr, role=None, eid="compare_table"):
+        el = {"id": eid, "type": "text", "text": text, "at": [700, 230]}
+        if role:
+            el["role"] = role
+        raw = {"chapters": [{
+            "concept": "cells", "transition": "clear_and_redraw",
+            "assets": {"pc": "A plant cell."},
+            "elements": [
+                {"id": "cell", "type": "illustration", "asset": "pc",
+                 "at": [600, 380], "scale": 1.0},
+                el,
+            ],
+            "steps": [
+                {"segment": 1, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "cell"}]},
+                {"segment": 2, "decision": "EXTEND",
+                 "actions": [{"verb": "write", "target": eid,
+                              "at": {"phrase": text[:20]}}]},
+            ],
+        }]}
+        plan = parse_visual_plan(raw)
+        scenes, _, report = compile_plan(plan, narr,
+                                         all_segments=["s001", "s002"],
+                                         skip_hold=set())
+        return plan, scenes, report
+
+    def test_short_labels_are_untouched(self):
+        from spike.scene_engine.continuity import _classify_text
+        for t in ("Cell wall", "Outer bank", "Cut off loop", "Mitochondria",
+                  "Nucleus"):
+            assert _classify_text({"text": t}) == "label", t
+        assert _classify_text({"text": "Photosynthesis",
+                               "role": "title"}) == "title"
+
+    def test_a_sentence_is_a_sentence(self):
+        from spike.scene_engine.continuity import _classify_text
+        assert _classify_text({
+            "text": "Compare your model cell with the models made by other "
+                    "groups."}) == "sentence"
+        # an instruction verb gives it away even when it is short
+        assert _classify_text({"text": "Compare the two"}) == "sentence"
+        # ...and so does terminal punctuation
+        assert _classify_text({"text": "It is small."}) == "sentence"
+
+    @pytest.mark.parametrize("text", [
+        "Nucleus.",                 # a one-word name that ends in a full stop
+        "1.",                       # a numbered tag
+        "Why?",                     # a socratic prompt
+        "What is a cell?",
+        "Concentration gradient!",
+        "Record",                   # a verb homograph with no object
+        "List of organs",           # ...and one followed by 'of'
+    ])
+    def test_short_board_text_is_a_label_not_a_deletion(self, text):
+        """Each of these classified as 'sentence' and was DELETED from the
+        roster — not demoted, deleted — so a one-word label the model happened
+        to punctuate, or a three-word question, vanished from the lesson."""
+        from spike.scene_engine.continuity import _classify_text
+        assert _classify_text({"text": text}) == "label", text
+
+    def test_a_short_statement_is_captioned_not_deleted(self):
+        text = "Osmosis: water moves across a membrane"
+        assert len(text) <= 40
+        _, scenes, report = self._chapter(
+            text, {"s001": "a plant cell", "s002": "water moves"},
+            role="term")
+        assert any("CAPTIONED text->compare_table" in ln for ln in report), \
+            report
+        el = next(e for e in scenes["s002"]["elements"]
+                  if e["id"] == "compare_table")
+        assert el["role"] == "caption"
+
+    def test_an_instruction_is_dropped_with_a_report(self):
+        text = ("Compare your model cell with the models made by other "
+                "groups.")
+        _, scenes, report = self._chapter(
+            text, {"s001": "Here is a plant cell.",
+                   "s002": "The nucleus is the control centre."})
+        assert any("DROPPED text->compare_table" in ln and "sentence, not a "
+                   "label" in ln for ln in report)
+        for sc in scenes.values():
+            assert not any(e["id"] == "compare_table"
+                           for e in sc["elements"])
+        # its write went with it, so there is no lost cue either
+        for sc in scenes.values():
+            assert not any(a.get("target") == "compare_table"
+                           for a in sc["actions"])
+
+    def test_a_short_instruction_is_dropped_not_captioned(self):
+        """The demote-instead-of-delete branch tested LENGTH and nothing else.
+        'Compare your models.' is 20 characters, so the branch lettered it
+        under the picture as a caption — readmitting through the back door the
+        exact class of text this pass exists to keep off the board."""
+        text = "Compare your models."
+        assert len(text) <= 40, "the length branch must be the one under test"
+        _, scenes, report = self._chapter(
+            text, {"s001": "Here is a plant cell.",
+                   "s002": "The nucleus is the control centre."})
+        assert any("DROPPED text->compare_table" in ln
+                   for ln in report), report
+        assert not any("CAPTIONED text->compare_table" in ln
+                       for ln in report), report
+        for sc in scenes.values():
+            assert not any(e["id"] == "compare_table" for e in sc["elements"])
+
+    def test_a_verb_with_no_object_is_still_captioned(self):
+        """The carve-out has to reach this branch too: 'List of organs...'
+        opens with a verb from the instruction list but is a NOUN phrase, and
+        the classifier already refuses to call it an instruction. The demote
+        branch must agree, or the fix above deletes real board text."""
+        text = "List of organs in the human body"
+        assert len(text) <= 40
+        _, _, report = self._chapter(
+            text, {"s001": "a plant cell", "s002": "water moves"},
+            role="term")
+        assert any("CAPTIONED text->compare_table" in ln
+                   for ln in report), report
+
+    @pytest.mark.parametrize("term", ["Complete Blood Count", "List price",
+                                      "Record high", "Answer key",
+                                      "Draw distance"])
+    def test_a_term_that_merely_opens_on_a_verb_survives(self, term):
+        """A leading instruction verb was the whole test, so a real subject
+        term that begins with one was called a sentence — and, the demote
+        branch having been widened to consult this too, DELETED from the board
+        rather than captioned. Every one of these is a legitimate board label
+        in a biology, commerce or assessment lesson."""
+        from spike.scene_engine.continuity import (_classify_text,
+                                                   _is_instruction)
+        assert not _is_instruction(term), term
+        assert _classify_text({"text": term}) == "label", term
+
+    @pytest.mark.parametrize("order", ["Compare the two",
+                                       "Compare your models",
+                                       "Discuss in pairs", "Draw a diagram",
+                                       "Look at the graph"])
+    def test_a_real_instruction_still_reads_as_one(self, order):
+        """The carve-out must not readmit the text it exists to keep off the
+        board: a verb followed by the determiner or preposition an imperative
+        actually uses is still an instruction."""
+        from spike.scene_engine.continuity import (_classify_text,
+                                                   _is_instruction)
+        assert _is_instruction(order), order
+        assert _classify_text({"text": order}) == "sentence", order
+
+    def test_a_spoken_sentence_becomes_a_key_point(self):
+        text = "The nucleus controls everything the cell does."
+        plan, scenes, report = self._chapter(
+            text, {"s001": "Here is a plant cell.",
+                   "s002": "The nucleus controls everything the cell does. "
+                           "It is the control centre."})
+        step = plan.chapters[0].steps[1]
+        assert step.key_point == text
+        assert any("KEY POINT from text->compare_table" in ln
+                   for ln in report)
+        assert not any(e["id"] == "compare_table"
+                       for e in scenes["s002"]["elements"])
+        # ...and the narration stream bolds it, which is where a statement
+        # belongs: spoken by the teacher, not lettered onto the diagram
+        assert any("STREAM" in ln and text in ln for ln in report)
+
+    def test_an_arrow_anchored_to_a_dropped_sentence_goes_too(self):
+        """An arrow whose tail names a missing element fails scene validation
+        outright — the segment would lose its picture, not just its label."""
+        text = ("Compare your model cell with the models made by other "
+                "groups.")
+        raw = {"chapters": [{
+            "concept": "cells", "transition": "clear_and_redraw",
+            "assets": {"pc": "A plant cell."},
+            "elements": [
+                {"id": "cell", "type": "illustration", "asset": "pc",
+                 "at": [600, 380], "scale": 1.0},
+                {"id": "sent", "type": "text", "text": text, "at": [700, 230]},
+                {"id": "arr", "type": "arrow",
+                 "tail": {"el": "sent", "edge": "right"},
+                 "head": [600, 380]},
+            ],
+            "steps": [{"segment": 1, "decision": "NEW_VISUAL",
+                       "actions": [{"verb": "draw", "target": "cell"},
+                                   {"verb": "write", "target": "sent"},
+                                   {"verb": "draw", "target": "arr"}]}],
+        }]}
+        plan = parse_visual_plan(raw)
+        scenes, _, report = compile_plan(plan, {"s001": "a plant cell"},
+                                         all_segments=["s001"],
+                                         skip_hold=set())
+        assert any("DROPPED arrow 'arr'" in ln for ln in report)
+        Scene.model_validate(scenes["s001"])       # would have raised before
+
+    def test_the_prompts_say_a_long_text_is_discarded(self):
+        from spike.scene_engine.director import SCENE_DIRECTION_SPEC
+        from agent3_scripts.semantic_prompt import _LABELS_CAMERA
+        for src in (SCENE_DIRECTION_SPEC, _LABELS_CAMERA):
+            assert "longer than 5 words is DISCARDED" in src
+
+
+_PART2_PROMPT = ("A plant cell in cross-section with a cell wall, cell "
+                 "membrane, nucleus, chloroplasts, and cytoplasm. Do not show "
+                 "a vacuole or label parts.")
+_PART2_SENTENCE = ("Compare your model cell with the models made by other "
+                   "groups.")
+
+
+class TestCellsPart2Regression:
+    """The founder's shipped Cells Part 2 (generation 18202ff7): a plant cell
+    drawn for 6.5 minutes with NO part labels, and a 62-character textbook
+    activity line lettered across it from s010 to s018."""
+
+    _NARR = {
+        "s004": "The cell wall is a rigid box around the whole cell.",
+        "s005": "Just inside it lies the cell membrane, which controls what "
+                "gets in.",
+        "s006": "The green chloroplasts are where photosynthesis happens.",
+        "s007": "The nucleus is the control centre of the cell.",
+        "s008": "Everything floats in a jelly called cytoplasm.",
+        "s009": "So a plant cell is a busy place.",
+    }
+
+    def _plan(self):
+        els = [{"id": "cell", "type": "illustration",
+                "asset": "plant_cell_simplified", "at": [600, 380],
+                "scale": 1.0},
+               {"id": "compare_table", "type": "text",
+                "text": _PART2_SENTENCE, "at": [700, 230], "role": "label"}]
+        steps = [{"segment": int(sid[1:]), "decision": "EXTEND",
+                  "actions": [{"verb": "draw", "target": "cell"}]}
+                 for sid in ("s004", "s005", "s006", "s007", "s008")]
+        steps[0]["decision"] = "NEW_VISUAL"
+        steps.append({"segment": 9, "decision": "CONTINUE", "actions": [
+            {"verb": "write", "target": "compare_table",
+             "at": {"phrase": _PART2_SENTENCE}}]})
+        return parse_visual_plan({"chapters": [{
+            "concept": "plant_cell", "transition": "clear_and_redraw",
+            "assets": {"plant_cell_simplified": _PART2_PROMPT},
+            "elements": els, "steps": steps}]})
+
+    _NARR_INFLECTED = {
+        "s004": "A rigid cell wall boxes the whole cell in.",
+        "s005": "Just inside it lies the cell membrane, which controls what "
+                "gets in.",
+        "s006": "Each chloroplast traps light for photosynthesis.",
+        "s007": "Inside the nuclei sit the chromosomes.",
+        "s008": "Everything floats in a jelly called cytoplasm.",
+        "s009": "So a plant cell is a busy place.",
+    }
+
+    def _compiled(self, narr=None):
+        narr = narr or self._NARR
+        return compile_plan(self._plan(), narr,
+                            all_segments=sorted(narr), skip_hold=set())
+
+    def test_singular_narration_still_labels_every_part(self):
+        """The narration filter and the synthesis gate were raw substring
+        tests. With this narration the report read PART NAMES from
+        description: ['cell wall','cell membrane','cytoplasm'] and only three
+        labels were synthesized — the nucleus and the chloroplasts shipped
+        bare and nothing said why."""
+        scenes, _, report = self._compiled(self._NARR_INFLECTED)
+        want = {"cell_wall": "s004", "cell_membrane": "s005",
+                "chloroplasts": "s006", "nucleus": "s007",
+                "cytoplasm": "s008"}
+        for part, sid in want.items():
+            lid = "lbl_auto_" + part
+            assert any("SYNTHESIZED " + lid in ln for ln in report), \
+                (lid, [ln for ln in report if "PART NAMES" in ln])
+            assert any(a["verb"] == "write" and a["target"] == lid
+                       for a in scenes[sid]["actions"]), lid
+
+    def test_untailed_prompt_that_lists_its_parts_gets_labelled(self):
+        scenes, assets, report = self._compiled()
+        line = next(ln for ln in report if "PART NAMES from description" in ln)
+        for p in ("cell wall", "cell membrane", "nucleus", "chloroplasts",
+                  "cytoplasm"):
+            assert p in line, p
+        assert "vacuole" not in line
+        prompt = assets["s004"]["plant_cell_simplified"]
+        assert prompt.lower().rstrip().endswith(
+            "name the layer groups exactly: cell wall, cell membrane, "
+            "nucleus, chloroplasts, cytoplasm."), prompt
+
+    def test_every_part_gets_a_label_in_its_own_step(self):
+        scenes, _, report = self._compiled()
+        want = {"cell_wall": "s004", "cell_membrane": "s005",
+                "chloroplasts": "s006", "nucleus": "s007",
+                "cytoplasm": "s008"}
+        for part, sid in want.items():
+            lid = "lbl_auto_" + part
+            assert any("SYNTHESIZED " + lid in ln for ln in report), lid
+            writes = [a for a in scenes[sid]["actions"]
+                      if a["verb"] == "write" and a["target"] == lid]
+            assert writes, lid + " is not written in " + sid
+            arr = "arr_auto_" + lid
+            el = next(e for e in scenes[sid]["elements"] if e["id"] == arr)
+            assert el["head"]["el"] == "cell"
+            assert el["head"]["layer"] == part.replace("_", " ")
+
+    def test_the_root_is_drawn_region_by_region(self):
+        _, _, report = self._compiled()
+        assert any("REGION SCHEDULE cell:" in ln for ln in report)
+
+    def test_the_activity_sentence_never_reaches_the_board(self):
+        scenes, _, report = self._compiled()
+        assert any("DROPPED text->compare_table" in ln for ln in report)
+        for sc in scenes.values():
+            assert not any(e["id"] == "compare_table" for e in sc["elements"])
+            assert not any(a.get("target") == "compare_table"
+                           for a in sc["actions"])
+
+    # the renderer half: even if a sentence DID reach a scene
+    def _rendered(self, at, extra_labels=0):
+        els = [{"id": "cell", "type": "illustration", "asset": "plant_cell",
+                "at": [600, 380], "scale": 2.0},
+               {"id": "__teach_av", "type": "illustration",
+                "asset": "avatar_teacher", "at": [1150, 556], "scale": 0.30},
+               {"id": "__nb_s010_0", "type": "text", "role": "caption",
+                "text": "What about energy production?", "at": [970, 360]},
+               {"id": "compare_table", "type": "text", "text": _PART2_SENTENCE,
+                "at": list(at), "size": 27, "anchor": "lt", "role": "label"}]
+        acts = [{"verb": "draw", "target": "cell"},
+                {"verb": "write", "target": "compare_table"}]
+        for i in range(extra_labels):
+            els.append({"id": "lbl%d" % i, "type": "text",
+                        "text": "Part %d" % i,
+                        "at": [95, 140 + 78 * i], "role": "label"})
+            acts.append({"verb": "write", "target": "lbl%d" % i})
+        scene = Scene.model_validate({"id": "p2", "compiled": True,
+                                      "narration": "the plant cell",
+                                      "elements": els, "actions": acts})
+        return SceneRenderer(scene, asset_resolver=_resolver(_cell_asset()))
+
+    @pytest.mark.parametrize("at,extra", [([700, 230], 0),   # legacy plan
+                                          ([95, 296], 0),    # semantic column
+                                          ([700, 230], 3)])  # with a column
+    def test_the_stray_sentence_never_lands_on_the_diagram(self, at, extra):
+        r = self._rendered(at, extra)
+        box = r.bound["compare_table"].box
+        art = r.bound["cell"].box
+        assert not (box[0] < art[2] and box[2] > art[0]
+                    and box[1] < art[3] and box[3] > art[1]), (box, art)
+        assert 24.0 <= box[0] and box[2] <= WORLD_W - 24.0
+        assert 22.0 <= box[1] and box[3] <= WORLD_H - 46.0
+        warns = r.audit()["warnings"]
+        if not extra:
+            # with a full label column the relayout's new per-side width
+            # budget already spills it to the top row, so the keep-off-art
+            # pass finds nothing left to move
+            assert "TEXT_MOVED_OFF_ART compare_table" in warns
+        assert not any(w.startswith("TEXT_OVER_ART") for w in warns)
+
+    def test_a_caption_sits_under_the_root(self):
+        scene = Scene.model_validate({
+            "id": "cap", "compiled": True, "narration": "the plant cell",
+            "elements": [
+                {"id": "cell", "type": "illustration", "asset": "plant_cell",
+                 "at": [600, 300], "scale": 1.0},
+                {"id": "cap1", "type": "text", "role": "caption",
+                 "text": "A plant cell in cross-section",
+                 "at": [600, 300], "anchor": "mt"}],
+            "actions": [{"verb": "draw", "target": "cell"},
+                        {"verb": "write", "target": "cap1"}]})
+        r = SceneRenderer(scene, asset_resolver=_resolver(_cell_asset()))
+        box, art = r.bound["cap1"].box, r.bound["cell"].box
+        assert box[1] >= art[3], (box, art)      # under the picture
+        assert not any(w.startswith("TEXT_OVER_ART")
+                       for w in r.audit()["warnings"])
+
+    def test_text_over_art_is_reported_when_nothing_fits(self):
+        """A board with no free margin at all: the audit must SAY the text is
+        on the picture rather than report a clean lesson."""
+        scene = Scene.model_validate({
+            "id": "full", "compiled": True, "narration": "x",
+            "elements": [
+                {"id": "cell", "type": "illustration", "asset": "plant_cell",
+                 "at": [640, 360], "scale": 6.0},
+                {"id": "t", "type": "text", "text": _PART2_SENTENCE,
+                 "at": [400, 340], "size": 27, "anchor": "lt"}],
+            "actions": [{"verb": "draw", "target": "cell"},
+                        {"verb": "write", "target": "t"}]})
+        r = SceneRenderer(scene, asset_resolver=_resolver(_cell_asset()))
+        assert "TEXT_OVER_ART t" in r.audit()["warnings"]
+
+
+class TestTextHeavyLintMeansSomething:
+    def test_caption_bubbles_do_not_trip_the_lint(self):
+        """The narration stream adds a __nb_ element per sentence, so this
+        lint fired on 14 of 17 scenes in a lesson whose BOARD text was one
+        label. A lint that always fires carries no signal."""
+        from spike.scene_engine.schema import scene_warnings
+        els = [{"id": "d", "type": "shape", "shape": "path",
+                "points": [[10, 10], [200, 200]]}]
+        for i in range(6):
+            els.append({"id": "__nb_x_%d" % i, "type": "text",
+                        "role": "caption", "text": "A" * 60,
+                        "at": [970, 360]})
+        scene = Scene.model_validate({"id": "s", "narration": "n",
+                                      "elements": els,
+                                      "actions": [{"verb": "draw",
+                                                   "target": "d"}]})
+        assert not any("text-heavy" in w for w in scene_warnings(scene))
+
+    def test_real_board_text_still_trips_it(self):
+        from spike.scene_engine.schema import scene_warnings
+        els = [{"id": "d", "type": "shape", "shape": "path",
+                "points": [[10, 10], [200, 200]]}]
+        for i in range(6):
+            els.append({"id": "t%d" % i, "type": "text", "text": "A" * 60,
+                        "at": [100, 100 + i * 40]})
+        scene = Scene.model_validate({"id": "s", "narration": "n",
+                                      "elements": els,
+                                      "actions": [{"verb": "draw",
+                                                   "target": "d"}]})
+        assert any("text-heavy" in w for w in scene_warnings(scene))
+
+
+class TestSeededMomentIsNotSaidTwice:
+    """Founder frame at 3:35 of Cells Part 2: the student bubble and the
+    teacher's caption bubble both read 'What about energy production?'.
+    seed_moment lifts the question VERBATIM from the narration, and in a
+    single-narrator style the same narrator speaks it."""
+
+    _NARR = {
+        "s001": "Here is a plant cell.",
+        "s002": "Animal cells are more flexible. What about energy "
+                "production? They rely on mitochondria.",
+    }
+
+    def _plan(self):
+        return parse_visual_plan({"chapters": [{
+            "concept": "cells", "transition": "clear_and_redraw",
+            "assets": {"pc": "A plant cell."},
+            "elements": [{"id": "cell", "type": "illustration", "asset": "pc",
+                          "at": [600, 380], "scale": 1.0}],
+            "steps": [
+                {"segment": 1, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "cell"}]},
+                {"segment": 2, "decision": "CONTINUE", "actions": []},
+            ]}]})
+
+    def test_the_seeded_question_is_flagged_as_seeded(self):
+        plan = self._plan()
+        sid = seed_moment(plan, self._NARR)
+        assert sid == "s002"
+        moment = plan.chapters[0].steps[1].moment
+        assert moment["text"] == "What about energy production?"
+        assert moment["seeded"] is True
+
+    def test_the_caption_stream_does_not_repeat_it(self):
+        plan = self._plan()
+        seed_moment(plan, self._NARR)
+        scenes, _, _ = compile_plan(plan, self._NARR,
+                                    all_segments=["s001", "s002"],
+                                    skip_hold=set())
+        captions = [e["text"] for e in scenes["s002"]["elements"]
+                    if str(e["id"]).startswith("__nb_")
+                    and isinstance(e.get("text"), str)]
+        assert not any("energy production" in c for c in captions), captions
+        # the rest of the narration is still captioned
+        assert any("mitochondria" in c for c in captions), captions
+        # ...and the student bubble does carry it
+        bubbles = [e["text"] for e in scenes["s002"]["elements"]
+                   if str(e["id"]).startswith("__hm_")
+                   and isinstance(e.get("text"), str)]
+        assert any("energy production" in b for b in bubbles), bubbles
+
+    def test_a_planned_moment_is_left_alone(self):
+        """Only a SEEDED moment quotes the narration verbatim; a moment the
+        director wrote is its own line and the caption stream keeps every
+        sentence."""
+        plan = self._plan()
+        plan.chapters[0].steps[1].moment = {
+            "role": "student", "text": "What about energy production?"}
+        scenes, _, _ = compile_plan(plan, self._NARR,
+                                    all_segments=["s001", "s002"],
+                                    skip_hold=set())
+        captions = [e["text"] for e in scenes["s002"]["elements"]
+                    if str(e["id"]).startswith("__nb_")
+                    and isinstance(e.get("text"), str)]
+        assert any("energy production" in c for c in captions)
+
+    def test_a_single_sentence_segment_keeps_its_caption(self):
+        """Skipping the only sentence would leave the segment with no caption
+        track at all."""
+        from spike.scene_engine.whiteboard import narration_stream
+        els, acts = narration_stream("What about energy production?",
+                                     uid="s", skip={"What about energy "
+                                                    "production?"})
+        assert els and acts
+
+class TestOrphansOfAnUnresolvedAsset:
+    """Cells Part 3 (generation fa8c0d7d, 2026-09-04): three illustrations
+    were lost to image-model 429s on both providers. The engine dropped the
+    elements — §20, a missing asset never fails the scene — but laid out their
+    LABELS anyway: the two labels for the missing ciliated cell were placed
+    over the red blood cell diagram, with their arrows pointing into empty
+    space. Naming the wrong picture's parts is worse than saying nothing."""
+
+    def _scene(self):
+        return Scene.model_validate({
+            "id": "p3", "compiled": True, "narration": "blood and cilia",
+            "elements": [
+                {"id": "rbc", "type": "illustration", "asset": "plant_cell",
+                 "at": [640, 360], "scale": 1.0},
+                {"id": "cilia_cell", "type": "illustration",
+                 "asset": "ciliated_cell", "at": [640, 360], "scale": 1.0},
+                {"id": "lbl_hair", "type": "text", "text": "Hair-like cilia",
+                 "at": [95, 140], "role": "label"},
+                {"id": "lbl_tail", "type": "text", "text": "Sweeping motion",
+                 "at": [95, 220], "role": "label"},
+                {"id": "lbl_rbc", "type": "text", "text": "Nucleus",
+                 "at": [95, 300], "role": "label"},
+                {"id": "arr_hair", "type": "arrow",
+                 "tail": {"el": "lbl_hair", "edge": "right"},
+                 "head": {"el": "cilia_cell", "layer": "cilia",
+                          "edge": "center"}},
+                {"id": "arr_tail", "type": "arrow",
+                 "tail": {"el": "lbl_tail", "edge": "right"},
+                 "head": {"el": "cilia_cell", "layer": "motion",
+                          "edge": "center"}},
+                {"id": "arr_rbc", "type": "arrow",
+                 "tail": {"el": "lbl_rbc", "edge": "right"},
+                 "head": {"el": "rbc", "layer": "nucleus", "edge": "center"}},
+            ],
+            "actions": [{"verb": "draw", "target": "rbc"},
+                        {"verb": "draw", "target": "cilia_cell"},
+                        {"verb": "write", "target": "lbl_hair"},
+                        {"verb": "write", "target": "lbl_tail"},
+                        {"verb": "write", "target": "lbl_rbc"},
+                        {"verb": "draw", "target": "arr_hair"},
+                        {"verb": "draw", "target": "arr_tail"},
+                        {"verb": "draw", "target": "arr_rbc"}]})
+
+    def _rendered(self):
+        # only the red blood cell resolves; 'ciliated_cell' is the 429
+        return SceneRenderer(self._scene(),
+                             asset_resolver=_resolver(_cell_asset()))
+
+    def test_the_orphan_labels_and_arrows_are_dropped(self):
+        r = self._rendered()
+        warns = r.audit()["warnings"]
+        for eid in ("lbl_hair", "lbl_tail", "arr_hair", "arr_tail"):
+            assert any(w.startswith(f"ORPHANED_BY_UNRESOLVED_ASSET {eid} ")
+                       for w in warns), (eid, warns)
+            assert not r._flat[eid]
+        # ...and the warning names the element that went missing
+        assert any("(cilia_cell)" in w for w in warns
+                   if w.startswith("ORPHANED_BY_UNRESOLVED_ASSET"))
+        assert any(w.startswith("ASSET_UNRESOLVED cilia_cell") for w in warns)
+
+    def test_nothing_of_the_orphans_is_drawn(self):
+        r = self._rendered()
+        for eid in ("lbl_hair", "lbl_tail"):
+            assert r.bound[eid].text is None
+        for eid in ("arr_hair", "arr_tail"):
+            assert eid not in r.audit()["arrow_heads"]
+
+    def test_they_are_never_laid_out_over_the_other_diagram(self):
+        r = self._rendered()
+        art = r.bound["rbc"].box
+        for eid in ("lbl_hair", "lbl_tail"):
+            box = r.bound[eid].box
+            assert not (box[0] < art[2] and box[2] > art[0]
+                        and box[1] < art[3] and box[3] > art[1]), (eid, box)
+        assert not any(w.startswith("TEXT_OVER_ART") for w in r.audit()["warnings"])
+
+    def test_the_surviving_diagram_keeps_its_own_label(self):
+        r = self._rendered()
+        assert r.bound["lbl_rbc"].text is not None
+        assert "arr_rbc" in r.audit()["arrow_heads"]
+        assert not any("ORPHANED_BY_UNRESOLVED_ASSET lbl_rbc" in w
+                       for w in r.audit()["warnings"])
+
+    def test_the_pen_does_not_mime_the_dropped_write(self):
+        r = self._rendered()
+        r.compile(20.0)
+        for ta in r.timeline:
+            if ta.action.target in ("lbl_hair", "arr_hair"):
+                assert ta.duration <= 0.05 + 1e-6, ta.action.target
+
+    def test_a_decoration_aimed_at_an_orphan_draws_nothing(self):
+        data = self._scene().model_dump()
+        data["actions"].append({"verb": "circle", "target": "lbl_hair"})
+        r = SceneRenderer(Scene.model_validate(data),
+                          asset_resolver=_resolver(_cell_asset()))
+        assert not r.deco
+
+    def test_a_scene_whose_assets_all_resolve_is_untouched(self):
+        r = SceneRenderer(self._scene(),
+                          asset_resolver=lambda k: ("raster", _cell_asset(k)))
+        assert not any(w.startswith("ORPHANED_BY_UNRESOLVED_ASSET")
+                       for w in r.audit()["warnings"])
+        for eid in ("lbl_hair", "lbl_tail", "lbl_rbc"):
+            assert r.bound[eid].text is not None
+
+
 class TestBubbleFootprint:
     """Founder: bubbles 'take up a lot of space on the whiteboard and in some
     instances hide the image being drawn underneath'."""
@@ -1894,3 +2894,316 @@ class TestRedrawStatCountsRealWipes:
         """There is no board to clear before the first one."""
         from spike.scene_engine.continuity import plan_stats
         assert plan_stats(self._plan(["clear_and_redraw"]))["full_redraws"] == 0
+
+
+# ── the title's slot, and the picture's transparent margin ───────────────────
+
+def _fitted_asset(key: str = "big_cell", size: int = 1024,
+                  inset: int = 0) -> RasterAsset:
+    """The production root geometry: a square generated illustration fitted to
+    the board (1024px -> 520px world, world_scale 0.5078125). `inset` is the
+    transparent margin around the drawing, which every generated image has and
+    which `b.box` — the CANVAS — knows nothing about."""
+    from PIL import ImageDraw
+    ink = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    ImageDraw.Draw(ink).ellipse(
+        [inset, inset, size - 1 - inset, size - 1 - inset],
+        outline=(0, 0, 0, 255), width=10)
+    trace = [(size / 2.0, float(inset + 20 + i))
+             for i in range(0, max(20, size - 2 * inset - 40), 20)]
+    return RasterAsset(key=key, ink=ink, trace=trace, stamp_r=8.0,
+                       world_scale=0.5078125, regions={})
+
+
+_TITLE_EL = {"id": "ttl", "type": "text", "text": "Structure of a plant cell",
+             "role": "title", "size": 42, "at": [640, 80], "anchor": "mt"}
+
+
+def _board(extra: list, inset: int = 0) -> SceneRenderer:
+    els = [{"id": "cell", "type": "illustration", "asset": "big_cell",
+            "at": [600, 380], "scale": 1.0}] + extra
+    acts = [{"verb": "draw", "target": "cell"}] + \
+           [{"verb": "write", "target": e["id"]} for e in extra]
+    scene = Scene.model_validate({"id": "t", "compiled": True,
+                                  "narration": "the plant cell",
+                                  "elements": els, "actions": acts})
+    return SceneRenderer(scene,
+                         asset_resolver=_resolver(_fitted_asset(inset=inset)))
+
+
+class TestTheTitleKeepsItsSlot:
+    """`_keep_text_off_art` had no exemption for role='title', and it measured
+    against the illustration's CANVAS. On the production root geometry the
+    title clipped the canvas's transparent top margin by 40% of its own
+    height, so every scene-engine lesson's title was yanked from top-centre to
+    the corner at (24, 27)."""
+
+    def test_the_title_is_not_moved_off_the_picture(self):
+        r = _board([_TITLE_EL])
+        box = r.bound["ttl"].box
+        # the geometry that reproduces the defect: the art really does reach
+        # up under the title
+        assert r._root_art_box()[1] < box[3]
+        assert box[0] > 300.0, box            # still centred, not the corner
+        assert box[1] == 80.0, box            # ...at its own y
+        warns = r.audit()["warnings"]
+        assert not any("ttl" in w for w in warns
+                       if w.startswith(("TEXT_MOVED_OFF_ART",
+                                        "TEXT_OVER_ART"))), warns
+
+    def test_a_labels_slot_is_still_a_collision_to_resolve(self):
+        """The exemption is for the title alone: ordinary board text over the
+        art must still move."""
+        lbl = {"id": "lbl", "type": "text", "text": "Nucleus", "role": "label",
+               "size": 27, "at": [560, 350], "anchor": "lt"}
+        r = _board([lbl])
+        assert "TEXT_MOVED_OFF_ART lbl" in r.audit()["warnings"]
+
+    def test_the_exempt_title_still_occupies_the_space_it_sits_in(self):
+        """Exempt from being MOVED is not the same as not being THERE.
+
+        The title was filtered out of the pass's `texts` and so never joined
+        `occupied` — a hole in the board exactly where the top row is. This
+        geometry (a picture whose ink leaves a wide margin, and a label too
+        wide for either column) sends the label to the top row, where every
+        slot crosses the title: measured on the previous commit the label was
+        placed at (24, 120)-(502, 175), 2167px^2 across the chapter title,
+        with the pass reporting TEXT_MOVED_OFF_ART as if it had succeeded.
+        One collision traded for another.
+        """
+        lbl = {"id": "lbl", "type": "text", "size": 34, "role": "label",
+               "text": "Chloroplasts trap sunlight energy",
+               "at": [560, 350], "anchor": "lt"}
+        r = _board([_TITLE_EL, lbl], inset=160)
+        warns = r.audit()["warnings"]
+        ttl, box = r.bound["ttl"].box, r.bound["lbl"].box
+        assert "TEXT_MOVED_OFF_ART lbl" in warns
+        assert ttl == (421.0, 80.0, 859.0, 147.0), ttl   # the title is unmoved
+        overlap = (max(0.0, min(ttl[2], box[2]) - max(ttl[0], box[0]))
+                   * max(0.0, min(ttl[3], box[3]) - max(ttl[1], box[1])))
+        assert overlap == 0.0, (box, ttl)
+        assert not any(w.startswith("TEXT_OVERLAP") for w in warns), warns
+
+
+class TestArtIsTheInkNotTheCanvas:
+    """A generated illustration arrives on a square canvas with a wide
+    transparent margin. Measuring board text against the canvas counts empty
+    air as part of the picture."""
+
+    def test_the_art_box_is_the_inks_extent(self):
+        r = _board([], inset=160)
+        canvas = r.bound["cell"].box
+        art = r._root_art_box()
+        assert canvas == (340.0, 120.0, 860.0, 640.0)
+        assert art[0] > canvas[0] + 60 and art[3] < canvas[3] - 60, art
+
+    def test_an_untextured_canvas_falls_back_to_the_whole_box(self):
+        # the vector tier and a fully transparent ink have no bbox to read;
+        # the pass must degrade to what it measured before, not to nothing
+        r = SceneRenderer(
+            Scene.model_validate({
+                "id": "v", "compiled": True, "narration": "x",
+                "elements": [{"id": "cell", "type": "illustration",
+                              "asset": "plant_cell", "at": [640, 360],
+                              "scale": 1.0}],
+                "actions": [{"verb": "draw", "target": "cell"}]}),
+            asset_resolver=_resolver(_cell_asset()))
+        assert r._root_art_box() == r.bound["cell"].box
+
+    def test_a_label_in_the_margin_is_left_where_it_was(self):
+        lbl = {"id": "lbl", "type": "text", "text": "Nucleus", "role": "label",
+               "size": 27, "at": [350, 150], "anchor": "lt"}
+        r = _board([lbl], inset=160)
+        assert r.bound["lbl"].box[:2] == (350.0, 150.0)
+        assert not any(w.startswith("TEXT_MOVED_OFF_ART")
+                       for w in r.audit()["warnings"])
+
+    def test_a_caption_still_gets_one_row_under_a_deep_picture(self):
+        """A picture whose ink ends within a caption's height of the bottom
+        safe edge: `below()` started at ry1+12, which no longer fits, so the
+        caption was pushed into the right column beside the picture it is
+        about."""
+        cap = {"id": "cap", "type": "text", "role": "caption", "size": 24,
+               "text": "A plant cell in cross-section", "at": [640, 400],
+               "anchor": "mt"}
+        r = _board([cap], inset=12)
+        art, box = r._root_art_box(), r.bound["cap"].box
+        assert 630.0 < art[3] < 636.0, art     # the geometry under test
+        assert box[1] >= art[3], (box, art)    # under the picture...
+        assert box[3] <= WORLD_H - 46.0
+        assert abs((box[0] + box[2]) / 2 - (art[0] + art[2]) / 2) < 40.0
+
+
+def _annotated_board(labels: list, inset: int = 0, title: bool = True,
+                     head=None) -> SceneRenderer:
+    """The production root geometry, with real leader lines: a 1024px asset
+    fitted to 520px world at [600, 380], a chapter title in its top-centre
+    slot, and size-27 labels whose arrows point into the LEFT half of the
+    picture (so the layout sends them to the left column, the narrow one)."""
+    els = [{"id": "cell", "type": "illustration", "asset": "big_cell",
+            "at": [600, 380], "scale": 1.0}] + ([dict(_TITLE_EL)] if title
+                                                else [])
+    acts = [{"verb": "draw", "target": "cell"}] + \
+           ([{"verb": "write", "target": "ttl"}] if title else [])
+    for i, text in enumerate(labels):
+        els.append({"id": f"l{i}", "type": "text", "text": text,
+                    "role": "label", "size": 27, "at": [80, 120 + 70 * i],
+                    "anchor": "lt"})
+        els.append({"id": f"a{i}", "type": "arrow", "curve": 0,
+                    "tail": {"el": f"l{i}", "edge": "right", "dx": 6},
+                    "head": head if head is not None
+                    else [420.0, 300.0 + 60.0 * i]})
+        acts.append({"verb": "write", "target": f"l{i}"})
+        acts.append({"verb": "draw", "target": f"a{i}"})
+    scene = Scene.model_validate({"id": "t", "compiled": True,
+                                  "narration": "the plant cell",
+                                  "elements": els, "actions": acts})
+    return SceneRenderer(scene,
+                         asset_resolver=_resolver(_fitted_asset(inset=inset)))
+
+
+def _overlap(a: tuple, b: tuple) -> float:
+    return (max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+            * max(0.0, min(a[3], b[3]) - max(a[1], b[1])))
+
+
+class TestASpilledLabelNeverCrossesTheTitle:
+    """`_keep_text_off_art` learned that the title occupies board space; the
+    label relayout, which runs FIRST and has the last word on a label's box,
+    had not — and it newly routed any label WIDER than its side margin into
+    the top row, which is exactly where the title lives.
+
+    Measured on the production geometry with three ordinary size-27 labels of
+    29 characters each: two were lettered across the chapter title (2646 and
+    2982 px^2) and two landed on each other, with the pass reporting nothing.
+    """
+
+    LABELS = ["Chloroplasts trap the sunlight"] * 3
+
+    def test_no_label_is_written_across_the_title(self):
+        r = _annotated_board(self.LABELS)
+        ttl = r.bound["ttl"].box
+        for i in range(3):
+            box = r.bound[f"l{i}"].box
+            assert _overlap(box, ttl) == 0.0, (i, box, ttl)
+        assert ttl == (421.0, 80.0, 859.0, 147.0), ttl   # ...and unmoved
+
+    def test_a_label_that_merely_clips_the_margin_keeps_its_column(self):
+        """The hard width test was the cause. A 336px label in a 290px left
+        margin clamps to the safe edge and clips the picture by 6% of its own
+        area — under the 0.15 fraction the keep-off-art pass calls a
+        collision — which is where master left it and where it belongs."""
+        r = _annotated_board(self.LABELS)
+        art = r._root_art_box()
+        ys = []
+        for i in range(3):
+            x0, y0, x1, y1 = r.bound[f"l{i}"].box
+            assert x0 == 24.0, (i, x0)               # the left column, clamped
+            assert x1 - x0 > 290.0, (i, x1 - x0)     # wider than that margin
+            assert r._overlap_frac((x0, y0, x1, y1), art) <= 0.15
+            ys.append(y0)
+        assert ys == sorted(ys) and len(set(ys)) == 3, ys
+
+    def test_the_labels_do_not_land_on_each_other(self):
+        r = _annotated_board(self.LABELS)
+        warns = r.audit()["warnings"]
+        assert not any(w.startswith("TEXT_OVERLAP") for w in warns), warns
+
+    def test_a_label_with_nowhere_left_says_so(self):
+        """A label too wide for any column AND for every row above the title
+        keeps its authored box and is REPORTED, rather than being clamped
+        onto the title as if there had been room."""
+        r = _annotated_board(["Chloroplasts trap the sunlight energy from "
+                              "the sun for photosynthesis"] * 3)
+        ttl = r.bound["ttl"].box
+        warns = r.audit()["warnings"]
+        assert any(w.startswith("TEXT_OVER_ART") for w in warns), warns
+        for i in range(3):
+            assert _overlap(r.bound[f"l{i}"].box, ttl) == 0.0, i
+
+
+class TestTheEdgeLeaderReachesThePicture:
+    """The leader that replaced arrow suppression measured the illustration's
+    CANVAS and then padded OUTWARD — away from the picture, toward the label.
+    On the production geometry that left a ~12px stub floating beside the
+    label, up to 100px short of the ink it is meant to associate it with."""
+
+    def _leader(self, inset: int):
+        r = _annotated_board(["Nucleus", "Golgi body"], inset=inset,
+                             title=False,
+                             head={"el": "cell", "layer": "nucleus",
+                                   "edge": "center"})
+        b = r.bound["a0"]
+        pts = [q for st in b.layers[0].strokes for q in st.pts]
+        length = sum(((pts[i + 1][0] - pts[i][0]) ** 2
+                      + (pts[i + 1][1] - pts[i][1]) ** 2) ** 0.5
+                     for i in range(len(pts) - 1))
+        return r, b.head_pt, length
+
+    def test_the_geometry_under_test_is_the_production_one(self):
+        r, _, _ = self._leader(160)
+        assert r.bound["cell"].box == (340.0, 120.0, 860.0, 640.0)
+        ink = r._root_art_box()
+        assert ink[0] > 420.0 and ink[2] < 780.0, ink   # a wide clear margin
+        lbl = r.bound["l0"].box
+        # the label the reviewer measured: the left column, hugging
+        # the CANVAS edge, 107px of transparent margin short of the ink
+        assert lbl[0] == 230.0 and lbl[2] == 314.0, lbl
+
+    @pytest.mark.parametrize("inset", [0, 160])
+    def test_the_leader_lands_on_the_ink_not_on_the_canvas(self, inset):
+        r, head, _ = self._leader(inset)
+        ink = r._root_art_box()
+        assert ink[0] <= head[0] <= ink[2] and ink[1] <= head[1] <= ink[3], \
+            (head, ink, r.bound["cell"].box)
+
+    @pytest.mark.parametrize("inset", [0, 160])
+    def test_a_leader_is_long_enough_to_be_one(self, inset):
+        """40px is the bar: below that it is a tick beside the label, which
+        is what the canvas-plus-outward-pad version drew (~12px)."""
+        r, _, length = self._leader(inset)
+        assert length >= 40.0, length
+
+    def test_it_is_still_a_leader_and_not_an_arrow(self):
+        r, _, _ = self._leader(160)
+        assert len(r.bound["a0"].layers[0].strokes) == 1
+        warns = r.audit()["warnings"]
+        assert any(w.startswith("ANCHOR_EDGE_FALLBACK") for w in warns), warns
+
+
+class TestADroppedElementIsNotAZoomTarget:
+    """Cells Part 3: a 429'd illustration took its labels with it, and
+    `_drop_element` zeroes the orphan's box. A zoom whose target was one of
+    them focused (0, 0) — the empty top-left corner of the board."""
+
+    def _rendered(self):
+        base = TestOrphansOfAnUnresolvedAsset()._scene().model_dump()
+        base["actions"].insert(2, {"verb": "zoom", "target": "lbl_hair",
+                                   "scale": 1.6})
+        r = SceneRenderer(Scene.model_validate(base),
+                          asset_resolver=_resolver(_cell_asset()))
+        r.compile(30.0)
+        return r
+
+    def test_the_camera_follows_the_next_board_action_instead(self):
+        r = self._rendered()
+        assert r.bound["lbl_hair"].box == (0.0, 0.0, 0.0, 0.0)
+        zt = next(ta for ta in r.timeline if ta.action.verb == "zoom")
+        st = r.cam.state_at(zt.end)
+        # lbl_rbc — the one label whose picture arrived — is the next board
+        # action with ink; its box centre is y=300. The zeroed corner clamps
+        # to y=225 at this scale, which is what shipped.
+        lo, hi = r.bound["lbl_rbc"].box[1], r.bound["lbl_rbc"].box[3]
+        assert st.cy == pytest.approx((lo + hi) / 2, abs=1.0), st.cy
+
+    def test_a_live_element_is_still_framed_directly(self):
+        base = TestOrphansOfAnUnresolvedAsset()._scene().model_dump()
+        base["actions"].append({"verb": "zoom", "target": "lbl_rbc",
+                                "scale": 1.6})
+        r = SceneRenderer(Scene.model_validate(base),
+                          asset_resolver=_resolver(_cell_asset()))
+        r.compile(30.0)
+        zt = next(ta for ta in r.timeline if ta.action.verb == "zoom")
+        b = r.bound["lbl_rbc"].box
+        assert r.cam.state_at(zt.end).cy == \
+            pytest.approx((b[1] + b[3]) / 2, abs=1.0)

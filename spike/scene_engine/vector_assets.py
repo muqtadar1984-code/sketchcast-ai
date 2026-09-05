@@ -78,14 +78,28 @@ def match_layer_ids(available: list[str], want: list[str]) -> list[str]:
     draw distribution alike, so 'wall' means the same strokes everywhere.
     Exact (case-insensitive) wins outright; only when nothing matches exactly
     does substring containment apply — which keeps 'membrane' from bleeding
-    into 'nucleus_membrane' when a literal 'membrane' layer exists."""
+    into 'nucleus_membrane' when a literal 'membrane' layer exists.
+
+    LAST resort, only once both of those found nothing: partnames.resolve_part,
+    which knows that 'cell_wall' and 'cell wall' are one name and that
+    'mitochondria' is 'mitochondrion'. Running it last means every pair that
+    matched before still matches the same way."""
     wl = [w.lower() for w in want]
     by_lower = {a.lower(): a for a in available}
     exact = [by_lower[w] for w in wl if w in by_lower]
     if exact:
         return exact
-    return [a for a in available
+    subs = [a for a in available
             if any(w in a.lower() or a.lower() in w for w in wl)]
+    if subs:
+        return subs
+    from .partnames import resolve_part
+    out: list[str] = []
+    for w in want:
+        key, _how = resolve_part(w, list(available))
+        if key is not None and key not in out:
+            out.append(key)
+    return out
 
 
 # ── path helpers ─────────────────────────────────────────────────────────────

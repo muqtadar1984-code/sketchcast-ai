@@ -135,7 +135,19 @@ def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
     try:
         from spike.scene_engine.validate import (format_report,
                                                  validate_visual_language)
-        plan = (script_data or {}).get("visual_plan")
+        # The dump lives at episodes[0].visual_plan (EpisodeScript.visual_plan);
+        # the top-level key was never written, so EVERY production lesson
+        # reported "Visual Chapters 0 / Arrow Count 0 / Human Teaching Moments
+        # 0" no matter what the compiler actually did — the founder's Cells
+        # Part 2 ran 17 scene segments and seeded a moment and a key point, and
+        # this report printed zeros for all of them. Both shapes are read so
+        # the direct key (tests, drivers) keeps working.
+        script_data = script_data or {}
+        plan = script_data.get("visual_plan")
+        if not plan:
+            eps = script_data.get("episodes") or []
+            first = eps[0] if eps and isinstance(eps[0], dict) else {}
+            plan = first.get("visual_plan")
         report = validate_visual_language(video_manifest, plan)
         n = max(1, int(report.get("narration_segments") or 0))
         tolerance = max(1, n // 4)
@@ -184,8 +196,14 @@ def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
                     "PASSED" if report.get("passed") else "FAILED",
                     "yes" if not blocking else "NO",
                     format_report(report))
+        # The COMPILER's own report (PART NAMES / SYNTHESIZED / ANCHORED /
+        # DROPPED lines) never reached a log or the DB, so whether a diagram
+        # was labelled at all was undiagnosable from production. It rides back
+        # with the acceptance verdict now.
+        plan_report = [str(ln) for ln in ((plan or {}).get("report") or [])]
         return {"passed": bool(report.get("passed")), "ship": not blocking,
-                "summary": summary, "report": report}
+                "summary": summary, "report": report,
+                "plan_report": plan_report}
     except Exception:  # noqa: BLE001 — never fail a rendered lesson on the checker
         logger.exception("acceptance check itself failed; lesson allowed through")
         return None
@@ -1072,20 +1090,30 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 explicit_language=bool(params.get("language")),
                 provider=canary_provider)
 
-            # Avatar casting: teacher matches the narration VOICE, student
-            # matches the book's GRADE band (auto-detected at upload,
-            # teacher-editable), gender seeded by generation id so retries
-            # render the identical character. Cast from the RESOLVED voice —
+            # Avatar casting (founder, 2026-09-04): a RANDOM approved roster
+            # face, restricted only by the narration voice's gender; the
+            # student's age band from the book's grade (auto-detected at
+            # upload, teacher-editable) and, in a dialogue, the gender of the
+            # voice that reads the student's lines. Seeded by the CHAPTER, not
+            # the generation: each part of a chapter is its own generation, so
+            # a generation-id seed would put a different teacher in Part 1 and
+            # Part 2 of one lesson series. The book-and-chapter seed keeps one
+            # face across every part and every retry, while another chapter
+            # casts afresh. Cast from the RESOLVED voice —
             # after the gate — so a downgraded premium pick casts the avatar
-            # of the voice that will actually speak.
-            from spike.scene_engine.whiteboard import (
-                student_avatar_for_grade, teacher_avatar_for_voice)
+            # of the voice that will actually speak. Cast ONCE, here, before
+            # the parts loop: the keys travel on every part's script.
+            from spike.scene_engine.whiteboard import cast_avatars, two_voice_dialogue
             effective_voice = resolve_voice(tts_voice, allow_premium, lang=lesson_lang).voice_id
-            avatars = {
-                "teacher": teacher_avatar_for_voice(effective_voice),
-                "student": student_avatar_for_grade(book.get("grade"),
-                                                    seed=generation_id),
-            }
+            # `dialogue` is the SAME predicate the script generator will run
+            # with for this style: the student face follows the second voice
+            # exactly when that voice will read the student's lines.
+            cast_seed = f"{book_id}:{chapter_num}"
+            avatars = cast_avatars(effective_voice, book.get("grade"), cast_seed,
+                                   lang=lesson_lang, style=narration_style,
+                                   dialogue=two_voice_dialogue(narration_style))
+            logger.info("avatars cast for %s (seed %s): %s (voice %s)",
+                        generation_id, cast_seed, avatars, effective_voice)
 
             episodes_plan = (analysis.get("episodes") or {}).get("episodes") or []
             n_parts = max(len(episodes_plan), 1)
@@ -1218,6 +1246,10 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     "total_episodes": 1,
                     "generated_at": datetime.now().isoformat(),
                     "episodes": [script_dict],
+                    # the acceptance check reads this key; the compose and
+                    # slide builders read only episodes/book_id/chapter_num/
+                    # avatars, so an extra top-level key is inert to them
+                    "visual_plan": script_dict.get("visual_plan"),
                 }
                 slides = generate_episode_slides(
                     script_data=part_scripts, branding=branding, direction=lesson_dir,
@@ -1244,6 +1276,32 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     db.set_stage(sb, job_id, {"phase": "video", "part": part_idx,
                                               "total": n_parts, "part_pct": 99,
                                               "acceptance": _accept["summary"]})
+                    # jobs.stage is cleared when the job finishes, so the
+                    # acceptance summary evaporated the moment the lesson was
+                    # done. Persist it (and the compiler's own report) on the
+                    # generation so the next "the labels are missing" is
+                    # answerable from the DB instead of from Railway logs that
+                    # a redeploy has already thrown away.
+                    for _ln in _accept.get("plan_report") or []:
+                        logger.info("visual plan: %s", _ln)
+                    try:
+                        # Keyed by PART. A multi-part lesson writes this once
+                        # per part, and under one key each part overwrote the
+                        # last — so the part that failed is exactly the one
+                        # whose verdict you lost.
+                        db.merge_generation_params(sb, generation_id, {
+                            f"acceptance_part{part_idx}": {
+                                "part": part_idx,
+                                "passed": _accept["passed"],
+                                "ship": _accept["ship"],
+                                "summary": _accept["summary"],
+                            },
+                            f"visual_plan_report_part{part_idx}":
+                                (_accept.get("plan_report") or [])[:200],
+                        })
+                    except Exception:  # noqa: BLE001 — telemetry, never fatal
+                        logger.warning("could not persist the acceptance report",
+                                       exc_info=True)
                     if not _accept["ship"]:
                         raise RuntimeError(
                             f"lesson failed acceptance: {_accept['summary']}")

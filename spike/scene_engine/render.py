@@ -114,6 +114,14 @@ def _is_overlay(eid) -> bool:
         str(eid).startswith(("__nb_", "__hm_", "__kp_", "__tm_"))
 
 
+def _is_title(b) -> bool:
+    """A chapter title. Its slot is a design decision — top-centre, above the
+    picture — not a collision to be resolved: the keep-off-art pass measured
+    the title against the illustration's transparent canvas margin and moved
+    every scene-engine lesson's title into the top-left corner."""
+    return str(getattr(getattr(b, "element", None), "role", "") or "") == "title"
+
+
 def _region_ordered_trace(trace: list, regions: dict, order: list[str]
                           ) -> tuple[list, dict]:
     """Re-bucket a drawing-order trace: unassigned points (the outline and
@@ -291,7 +299,9 @@ class SceneRenderer:
         # placeholder tier a missing picture still has a real box, so "the box
         # collapsed to a point" is no longer the same question.
         self._unresolved_ills: set[str] = set()
+        self._dropped: set[str] = set()
         self._text_boxes: list[tuple] = []   # bound text boxes, for stacking
+        self._ink_bbox: dict[int, tuple | None] = {}   # id(ink) -> alpha bbox
         # keep-out zones around the persistent avatars: board labels must
         # never write over the teacher or the student (founder screenshot:
         # three organelle labels rendered across the teacher's face)
@@ -353,6 +363,12 @@ class SceneRenderer:
             self.bound[el.id] = b
             self._flat[el.id] = [st for layer in b.layers for st in layer.strokes]
 
+        # PASS 1.4: a picture that never arrived takes its annotations with
+        # it. MUST run before the layout below, which would otherwise flow
+        # these orphans around whatever OTHER diagram is on the board.
+        deferred_arrows = self._drop_orphans_of_unresolved_assets(
+            deferred_arrows)
+
         # PASS 1.5: part-label LAYOUT. Model-placed label coordinates made
         # leader lines cross and labels pile onto each other/the avatars —
         # instead, labels flow around the root diagram: RIGHT column first,
@@ -360,34 +376,44 @@ class SceneRenderer:
         # column ordered by target height so leaders stay parallel, columns
         # hugging the diagram (founder-specified sequence).
         self._relayout_part_labels(deferred_arrows)
+        # PASS 1.6: the invariant the relayout cannot provide. It needs >= 2
+        # column entries and only ever considers labels; the founder's stray
+        # sentence was ONE non-label text and sailed straight through, then
+        # rendered across the diagram for nine segments. This runs on every
+        # non-overlay text, whatever its role and however many there are.
+        self._keep_text_off_art()
         self._audit_text_overlaps()
+        self._audit_text_over_art()
 
         # PASS 2: arrows, with anchor refs resolved against real bound
         # geometry. The tail (label side) resolves first so the head can pick
         # the nearest instance and land on the part's boundary facing it.
         for el in deferred_arrows:
             b = self.bound[el.id]
+            leader_only = False
+            head_owner = None
             if isinstance(el.head, AnchorRef) and el.head.layer:
                 tb = self.bound.get(el.head.el)
-                # suppress ONLY when the target IS annotated but this part is
-                # absent. An asset with no annotation at all (vision outage,
-                # legacy tier) keeps the element-edge fallback — scoping this
-                # wrong once deleted every leader line in the lesson.
-                annotated = tb is not None and (
-                    (tb.raster is not None and tb.raster.regions) or tb.layers)
-                if annotated and \
+                if tb is not None and \
                         not self._layer_instance_boxes(tb, el.head.layer):
-                    # the named part cannot be located in the art — a label
-                    # with NO arrow teaches better than a confident arrow to
-                    # the wrong structure (a 'Nucleus' arrow once pointed at
-                    # the cell wall)
-                    self._warn(f"ARROW_SUPPRESSED {el.id} "
-                               f"({el.head.el}.{el.head.layer})")
-                    p = self._resolve_point(el.tail)
-                    b.box = (p[0], p[1], p[0], p[1])
-                    self._flat[el.id] = []
-                    self._suppressed.add(el.id)
-                    continue
+                    # The named part cannot be located in the art. The old
+                    # behaviour was to SUPPRESS the arrow whenever the asset
+                    # was annotated — the reason being that a confident
+                    # 'Nucleus' arrow once pointed at the cell wall. But a
+                    # label alone, floating in a margin column beside a
+                    # picture, does not say WHICH picture it names; the
+                    # founder saw exactly that.
+                    #
+                    # A leader keeps the honest half and drops the false one:
+                    # it ends OUTSIDE the picture's boundary on the ray from
+                    # the picture toward its own label, and carries no
+                    # arrowhead, so it asserts association without asserting
+                    # structure. UNRESOLVED_ANCHOR still fires from
+                    # _resolve_point; ANCHOR_EDGE_FALLBACK says what was done.
+                    leader_only = True
+                    head_owner = tb
+                    self._warn(f"ANCHOR_EDGE_FALLBACK "
+                               f"{el.head.el}.{el.head.layer}")
             tail = None
             if isinstance(el.tail, AnchorRef):
                 tb2 = self.bound.get(el.tail.el)
@@ -404,9 +430,23 @@ class SceneRenderer:
             if tail is None:
                 tail = self._resolve_point(el.tail)
             head = self._resolve_point(el.head, toward=tail)
+            if leader_only and head_owner is not None:
+                # Measure the INK, never the canvas, and LAND on the picture.
+                # `_outside_boundary(head_owner.box, tail)` did neither: a
+                # generated illustration's canvas carries a wide transparent
+                # margin, and the pad ran OUTWARD, toward the label. On the
+                # production geometry that left a ~12px stub floating beside
+                # the label, up to 100px short of the drawing it is supposed
+                # to associate it with. `_toward_boundary` is the helper
+                # resolved anchors already use: it stops on the boundary
+                # facing the label, a shade inside, so the line visibly meets
+                # the picture without an arrowhead claiming a structure.
+                head = self._toward_boundary(
+                    self._ink_box(head_owner) or head_owner.box, tail)
             paths = arrow_paths(tail, head, curve=el.curve,
                                 seed=_seed(el.id),
-                                head_len=max(16.0, el.width * 4.5))
+                                head_len=0.0 if leader_only
+                                else max(16.0, el.width * 4.5))
             b.layers = [BLayer("arrow", [
                 BStroke(p, el.width, el.color, None, path_length(p)) for p in paths])]
             b.box = bbox([q for p in paths for q in p])
@@ -453,6 +493,10 @@ class SceneRenderer:
 
         # workloads + decoration geometry
         for i, a in enumerate(self.scene.actions):
+            if a.target in self._dropped:
+                # a circle/underline/highlight aimed at a dropped orphan would
+                # still draw its decoration over the board
+                continue
             tgt = self.bound.get(a.target) if a.target else None
             if a.verb == "draw" and tgt:
                 if tgt.raster is not None:
@@ -720,6 +764,295 @@ class SceneRenderer:
                 if a[0] < c[2] and a[2] > c[0] and a[1] < c[3] and a[3] > c[1]:
                     self._warn(f"TEXT_OVERLAP {aid}+{bid}")
 
+    # ── text must never be drawn over the art ────────────────────────────
+
+    def _drop_orphans_of_unresolved_assets(self, arrows: list) -> list:
+        """An illustration that never rendered takes its labels and arrows
+        with it. Returns the arrows that survive.
+
+        §20 says a missing asset never fails the scene: the element simply
+        does not exist and the rest of the scene still teaches. But its
+        ANNOTATIONS were left behind, and they are not neutral — a label is
+        laid out around "the largest illustration on the board", which is now
+        a DIFFERENT picture, and its arrow resolves against a box collapsed to
+        a point at the missing element's `at`. Measured in production (Cells
+        Part 3, generation fa8c0d7d, 2026-09-04: three assets lost to image-
+        model 429s on both providers): the two labels for the missing ciliated
+        cell were laid out over the red blood cell diagram with their arrows
+        pointing into empty space. Naming the wrong picture's parts is worse
+        than saying nothing.
+
+        Placed here, in bind, because this is the one gate every render path
+        goes through — in-process and the child-process worker alike.
+        """
+        if not self._unresolved_ills:
+            return arrows
+        gone = self._unresolved_ills
+        doomed_arrows, kept = [], []
+        for ar in arrows:
+            refs = {getattr(ar.tail, "el", None), getattr(ar.head, "el", None)}
+            (doomed_arrows if refs & gone else kept).append(ar)
+        # a label survives only if some OTHER arrow still ties it to a
+        # picture that exists — otherwise it is a name with no subject
+        still_anchored: set[str] = set()
+        for ar in kept:
+            for end in (ar.tail, ar.head):
+                if isinstance(end, AnchorRef):
+                    still_anchored.add(end.el)
+        for ar in doomed_arrows:
+            owner = next((e for e in (getattr(ar.tail, "el", None),
+                                      getattr(ar.head, "el", None))
+                          if e in gone), "?")
+            self._drop_element(ar.id, owner)
+            for end in (ar.tail, ar.head):
+                if not isinstance(end, AnchorRef) or end.el in gone:
+                    continue
+                lb = self.bound.get(end.el)
+                if lb is None or lb.text is None or end.el in still_anchored:
+                    continue
+                self._drop_element(end.el, owner)
+        return kept
+
+    def _drop_element(self, eid: str, because: str) -> None:
+        b = self.bound.get(eid)
+        if b is None or eid in self._dropped:
+            return
+        self._dropped.add(eid)
+        b.text = None
+        b.layers = []
+        b.spawn = []
+        self._flat[eid] = []
+        b.box = (0.0, 0.0, 0.0, 0.0)
+        self._warn(f"ORPHANED_BY_UNRESOLVED_ASSET {eid} ({because})")
+
+    def _floor_for(self, x0: float, x1: float) -> float:
+        """How far down a column at this x-range may run.
+
+        A keep-out is a RECTANGLE, not a full-width band. Taking the global
+        `min(z[1])` let the caption panel — which spans only x714..1226 — cap
+        the left column too. Measured on a 7-label cell: it collapsed the
+        usable column to 28px, everything spilled to the top row, and the last
+        two labels clamped onto each other. The keep-out meant to stop overlap
+        caused it: 0 overlapping pairs before, 2 after. Only zones that
+        actually overlap this column's x range can limit it.
+        """
+        tops = [z[1] for z in self._avatar_zones if z[0] < x1 and z[2] > x0]
+        return min(WORLD_H - 60.0, (min(tops) - 12.0) if tops else WORLD_H)
+
+    def _root_art_box(self) -> tuple | None:
+        """The largest non-overlay illustration — the picture the board is
+        about. Same definition the label relayout uses, including its 40000px²
+        floor, so the two passes agree on what 'the diagram' is.
+
+        The box returned is the INK's extent, not the canvas's: see _ink_box.
+        The 40000px² floor still reads the canvas, so WHICH element counts as
+        'the diagram' is decided exactly as before.
+        """
+        best_b, best = None, 0.0
+        for eid, b in self.bound.items():
+            if isinstance(b.element, IllustrationElement) and \
+                    not _is_overlay(eid) and b.box:
+                area = (b.box[2] - b.box[0]) * (b.box[3] - b.box[1])
+                if area > best:
+                    best_b, best = b, area
+        if best_b is None or best < 40000:
+            return None
+        return self._ink_box(best_b) or best_b.box
+
+    def _ink_box(self, b: "Bound") -> tuple | None:
+        """A raster illustration's INK extent in world coordinates, or None.
+
+        A generated illustration arrives on a square canvas with a wide
+        transparent margin, and `b.box` is that whole canvas. Measuring board
+        text against the canvas counts the empty air around the drawing as part
+        of the drawing: on the production root geometry (a 1024px asset fitted
+        to the board at [600,380]) the chapter title clipped that margin by 40%
+        of its own height, so the keep-off-art pass yanked it out of the
+        top-centre slot the design gives it and parked it in the corner.
+        """
+        r = getattr(b, "raster", None)
+        ink = getattr(r, "ink", None)
+        if r is None or ink is None or not b.box:
+            return None
+        key = id(ink)
+        if key not in self._ink_bbox:
+            try:
+                self._ink_bbox[key] = (ink.getchannel("A").getbbox()
+                                       if ink.mode == "RGBA" else ink.getbbox())
+            except Exception:  # noqa: BLE001 — degrade to the canvas box
+                self._ink_bbox[key] = None
+        bb = self._ink_bbox[key]
+        if not bb:
+            return None
+        sc = r.scale
+        return (b.box[0] + bb[0] * sc, b.box[1] + bb[1] * sc,
+                b.box[0] + bb[2] * sc, b.box[1] + bb[3] * sc)
+
+    @staticmethod
+    def _overlap_frac(box: tuple, other: tuple) -> float:
+        """How much of `box` sits inside `other`, as a fraction of its OWN
+        area — a long label clipping the corner of a diagram is not the same
+        defect as one written across its middle."""
+        ow = min(box[2], other[2]) - max(box[0], other[0])
+        oh = min(box[3], other[3]) - max(box[1], other[1])
+        if ow <= 0 or oh <= 0:
+            return 0.0
+        own = max(1e-6, (box[2] - box[0]) * (box[3] - box[1]))
+        return (ow * oh) / own
+
+    @staticmethod
+    def _hits(box: tuple, boxes: list) -> bool:
+        return any(box[0] < c[2] and box[2] > c[0]
+                   and box[1] < c[3] and box[3] > c[1] for c in boxes)
+
+    def _top_row_slots(self, w: float, h: float,
+                       ry0: float) -> Iterator[tuple]:
+        """Rows above the picture: left to right, then upward, and it STOPS.
+
+        Shared by `_text_slots` and the label relayout's final spill so both
+        agree on where the space above a diagram is. The relayout used to
+        compute its own row y with a `max(16.0, ...)` floor, which handed
+        every row past the last one the identical y — the overflow stacked on
+        itself. Running out of rows is a real answer; clamping is not.
+        """
+        SAFE_L, SAFE_R, SAFE_T = 24.0, WORLD_W - 24.0, 22.0
+        y = ry0 - h - 26.0
+        while y >= SAFE_T:
+            x = SAFE_L
+            while x + w <= SAFE_R:
+                yield (x, y, x + w, y + h)
+                x += 40.0
+            y -= h + 10.0
+
+    def _text_slots(self, w: float, h: float, art: tuple,
+                    caption: bool) -> Iterator[tuple]:
+        """Candidate positions, in the founder-specified order: right column,
+        left column, top row (wrapping upward), then below the picture. A
+        caption is a statement ABOUT the picture, so it takes the below-root
+        slot first — that is where a caption belongs on a whiteboard."""
+        SAFE_L, SAFE_R, SAFE_T, SAFE_B = 24.0, WORLD_W - 24.0, 22.0, WORLD_H - 46.0
+        rx0, ry0, rx1, ry1 = art
+        pitch = max(50.0, h + 16.0)
+
+        def column(x0: float) -> Iterator[tuple]:
+            y = max(SAFE_T, ry0)
+            floor = min(SAFE_B, self._floor_for(x0, x0 + w))
+            while y + h <= floor:
+                yield (x0, y, x0 + w, y + h)
+                y += pitch
+
+        def below() -> Iterator[tuple]:
+            x0 = min(max(SAFE_L, (rx0 + rx1) / 2 - w / 2), SAFE_R - w)
+            # a picture that reaches the bottom safe edge still owes its
+            # caption ONE row: start at the last row that fits rather than at
+            # a y this loop would refuse outright, and let the caller's own
+            # overlap test decide. Without it a full-height root pushed the
+            # caption into the right column, beside the picture it describes.
+            y = min(ry1 + 12.0, SAFE_B - h)
+            while y + h <= SAFE_B:
+                yield (x0, y, x0 + w, y + h)
+                y += h + 10.0
+
+        def top() -> Iterator[tuple]:
+            return self._top_row_slots(w, h, ry0)
+
+        gens = [below, lambda: column(min(rx1 + 26.0, SAFE_R - w)),
+                lambda: column(max(SAFE_L, rx0 - 26.0 - w)), top] \
+            if caption else \
+            [lambda: column(min(rx1 + 26.0, SAFE_R - w)),
+             lambda: column(max(SAFE_L, rx0 - 26.0 - w)), top, below]
+        for g in gens:
+            for box in g():
+                yield box
+
+    def _keep_text_off_art(self) -> None:
+        """No board text is drawn over the picture. Path-independent.
+
+        `_relayout_part_labels` cannot be this: it returns early below two
+        entries, only considers role=='label', and has no width check at all
+        — a label wider than the margin is still placed at the margin's x, i.e.
+        across the diagram. In the founder's Cells Part 2 a single 694px
+        sentence therefore kept the position `_bind_text` had clamped it to,
+        over the cell's right half, for nine segments.
+        """
+        art = self._root_art_box()
+        if art is None:
+            return
+        texts = sorted(((eid, b) for eid, b in self.bound.items()
+                        if b.text is not None and b.box and not _is_overlay(eid)
+                        and not _is_title(b)),
+                       key=lambda t: (t[1].box[1], t[1].box[0], t[0]))
+        # The title is exempt from being MOVED, which is not the same as being
+        # invisible. Left out of `occupied` it was a hole in the board: the top
+        # row is the third slot this pass tries, the title sits in it, and a
+        # relocated label was lettered straight across the chapter title —
+        # trading one collision for another.
+        occupied = list(self._avatar_zones)
+        occupied += [b.box for eid, b in self.bound.items()
+                     if b.text is not None and b.box
+                     and not _is_overlay(eid) and _is_title(b)]
+        pending: list[tuple] = []
+        for eid, b in texts:
+            if self._overlap_frac(b.box, art) <= 0.15:
+                occupied.append(b.box)      # already clear; it holds its place
+            else:
+                pending.append((eid, b))
+        for eid, b in pending:
+            caption = str(getattr(b.element, "role", "") or "") == "caption"
+            placed = False
+            # try the text at its own size first, then progressively smaller —
+            # a shrink buys height as well as width, and 20px is the floor the
+            # safe-area pass already treats as the smallest readable label
+            size = float(b.text.size)
+            while True:
+                w = b.box[2] - b.box[0]
+                h = b.box[3] - b.box[1]
+                for box in self._text_slots(w, h, art, caption):
+                    if self._overlap_frac(box, art) > 0.0 or \
+                            self._hits(box, occupied):
+                        continue
+                    b.box = box
+                    occupied.append(box)
+                    self._warn(f"TEXT_MOVED_OFF_ART {eid}")
+                    placed = True
+                    break
+                if placed or size <= 20.0:
+                    break
+                size = max(20.0, size * 0.85)
+                self._resize_text(b, size)
+            if not placed:
+                # nothing fits even shrunk: say so rather than pretending.
+                # _audit_text_over_art reports it; validate.py surfaces it.
+                self._warn(f"TEXT_OVER_ART {eid}")
+
+    def _resize_text(self, b: Bound, size: float) -> None:
+        """Re-measure a bound text at a new size, keeping its top-left."""
+        tx = b.text
+        f = self._font_for(tx.bold, int(size), tx.display)
+        try:
+            w = f.getlength(tx.display)
+            asc, desc = f.getmetrics()
+            h = asc + desc
+        except Exception:  # noqa: BLE001 — degrade to the old metrics
+            return
+        b.text = BText(tx.display, tx.at, size, tx.color, tx.bold, tx.rtl,
+                       tx.shaped, tx.anchor, w, h)
+        b.box = (b.box[0], b.box[1], b.box[0] + w, b.box[1] + h)
+
+    def _audit_text_over_art(self) -> None:
+        """Text left sitting on the picture. Nothing measured this before —
+        `_audit_text_overlaps` is text-vs-text only — so the founder's stray
+        sentence rode nine segments while the report said the lesson was
+        clean."""
+        art = self._root_art_box()
+        if art is None:
+            return
+        for eid, b in self.bound.items():
+            if b.text is None or not b.box or _is_overlay(eid) or _is_title(b):
+                continue
+            if self._overlap_frac(b.box, art) > 0.15:
+                self._warn(f"TEXT_OVER_ART {eid}")
+
     def _emphasis_box(self, tgt, a) -> tuple:
         """The box an emphasis gesture is about.
 
@@ -761,7 +1094,18 @@ class SceneRenderer:
                 tb = self.bound.get(ar.tail.el)
                 if tb is not None and tb.text is not None \
                         and ar.tail.el not in entries:
-                    entries[ar.tail.el] = self._resolve_point(ar.head)
+                    # resolve TOWARD the label's own current position. With
+                    # no `toward` an unresolved layer returns the element
+                    # CENTRE, so every label whose part vision could not find
+                    # got the identical target height and they piled into one
+                    # row; and a resolved multi-instance part picked instance
+                    # 'first' here but the nearest instance in PASS 2, so the
+                    # column ordering disagreed with the leader it was laid
+                    # out for.
+                    lc = ((tb.box[0] + tb.box[2]) / 2,
+                          (tb.box[1] + tb.box[3]) / 2)
+                    entries[ar.tail.el] = self._resolve_point(ar.head,
+                                                              toward=lc)
         # LABELS WITHOUT ARROWS COUNT TOO. This used to consider only labels
         # that had a leader line, which created a closed loop with the
         # director prompt: the prompt says to prefer pointing and
@@ -780,22 +1124,20 @@ class SceneRenderer:
         if len(entries) < 2:
             return
         y_top = max(40.0, ry0 + 4.0)
-
-        def _floor_for(x0: float, x1: float) -> float:
-            """How far down THIS column may run.
-
-            A keep-out is a RECTANGLE, not a full-width band. Taking the
-            global `min(z[1])` let the caption panel — which spans only
-            x714..1226 — cap the left column too. Measured on a 7-label cell:
-            it collapsed the usable column to 28px, everything spilled to the
-            top row, and the last two labels clamped onto each other. The
-            keep-out meant to stop overlap caused it: 0 overlapping pairs
-            before, 2 after. Only zones that actually overlap this column's x
-            range can limit it.
-            """
-            tops = [z[1] for z in self._avatar_zones
-                    if z[0] < x1 and z[2] > x0]
-            return min(WORLD_H - 60.0, (min(tops) - 12.0) if tops else WORLD_H)
+        SAFE_L, SAFE_R = 24.0, WORLD_W - 24.0
+        # The picture as INK, not canvas — the same box `_keep_text_off_art`
+        # measures against, so the two passes cannot disagree about where the
+        # art is.
+        art = self._root_art_box() or root_b.box
+        # The spill row sits above the picture, which is exactly where the
+        # chapter TITLE lives — and the title is exempt from being moved by
+        # every later pass, so nothing downstream can rescue a label written
+        # across it. This pass had no title awareness at all. The avatars'
+        # keep-out zones join it: space above the board is board space.
+        occupied = [b.box for eid, b in self.bound.items()
+                    if b.text is not None and b.box and not _is_overlay(eid)
+                    and _is_title(b)]
+        occupied += list(self._avatar_zones)
 
         def place_column(items: list, side: str) -> list:
             items = sorted(items, key=lambda e: e[1][1])   # by target height
@@ -805,13 +1147,34 @@ class SceneRenderer:
                 w = bb.box[2] - bb.box[0]
                 h = bb.box[3] - bb.box[1]
                 if side == "right":
-                    x0 = min(rx1 + 26.0, WORLD_W - 24.0 - w)
+                    x0 = min(rx1 + 26.0, SAFE_R - w)
                 else:
-                    x0 = max(24.0, rx0 - 26.0 - w)
-                if y + h > _floor_for(x0, x0 + w):
+                    x0 = max(SAFE_L, rx0 - 26.0 - w)
+                x0 = max(SAFE_L, min(x0, SAFE_R - w))
+                box = (x0, y, x0 + w, y + h)
+                # A WIDTH test is not a placement test. Spilling every label
+                # wider than its side margin sent ordinary labels to the top
+                # row — across the title — for clipping that margin by a few
+                # pixels, when clamping them to the safe edge (what this did
+                # before) left them clear of the art. Measure the box the
+                # label would actually get, against the same 0.15 fraction
+                # `_keep_text_off_art` treats as "on the picture".
+                if self._overlap_frac(box, art) > 0.15:
                     spill.append((lid, tgt))
                     continue
-                bb.box = (x0, y, x0 + w, y + h)
+                if y + h > self._floor_for(x0, x0 + w):
+                    spill.append((lid, tgt))
+                    continue
+                # The column has to answer `occupied` too. It is built from the
+                # title and the avatar zones and appended to on every placement,
+                # but only the SPILL path tested it — so a column label could
+                # still be lettered across the title, or onto the label placed
+                # two rows above it.
+                if self._hits(box, occupied):
+                    spill.append((lid, tgt))
+                    continue
+                bb.box = box
+                occupied.append(box)
                 y += max(50.0, h + 16.0)
             return spill
 
@@ -819,23 +1182,22 @@ class SceneRenderer:
         left = [(l, t) for l, t in entries.items() if t[0] < rcx]
         spill = place_column(right, "right")
         spill = place_column(left + spill, "left")
-        # Final spill: rows above the diagram, ordered by target x. It WRAPS.
-        # A single row that clamped with `x = min(x, WORLD_W - 24 - w)` gave
-        # every label past the right edge the same x and the same y, i.e. it
-        # stacked them exactly on top of one another — the clamp turned an
-        # overflow into a collision.
-        x = max(24.0, rx0 - 60.0)
-        rows = 0
+        # Final spill: rows above the diagram, ordered by target x, taking the
+        # first slot that is free of the title, the avatars and the labels
+        # already placed. A label with nowhere left to go keeps its authored
+        # box and `_keep_text_off_art` gets the last word — better than a
+        # clamp that pretends there was room.
         for lid, tgt in sorted(spill, key=lambda e: e[1][0]):
             bb = self.bound[lid]
             w = bb.box[2] - bb.box[0]
             h = bb.box[3] - bb.box[1]
-            if x + w > WORLD_W - 24.0:          # wrap to the next row up
-                x = max(24.0, rx0 - 60.0)
-                rows += 1
-            y0t = max(16.0, ry0 - h - 26.0 - rows * (h + 10.0))
-            bb.box = (x, y0t, x + w, y0t + h)
-            x += w + 30.0
+            for box in self._top_row_slots(w, h, ry0):
+                if self._hits(box, occupied) or \
+                        self._overlap_frac(box, art) > 0.15:
+                    continue
+                bb.box = box
+                occupied.append(box)
+                break
 
     def _match_region_names(self, spans: dict, names: list[str]) -> list[str]:
         from .vector_assets import match_layer_ids
@@ -978,7 +1340,8 @@ class SceneRenderer:
                 lo, hi = spans["__base"]
                 return (lo, max(0.0, hi - lo))
             matched = self._match_region_names(spans, [region])
-            exact = [m for m in matched if m.lower() == region.lower()]
+            from .partnames import norm_part
+            exact = [m for m in matched if norm_part(m) == norm_part(region)]
             if exact:
                 # an exact key never widens to fuzzy siblings — min/max over
                 # 'inner_membrane'+'inner_fold' once straddled (and revealed)
@@ -1069,6 +1432,13 @@ class SceneRenderer:
                 TimedAction(t.action, t.start, 0.05)
                 if t.action.verb == "draw" and t.action.target in self._suppressed
                 else t for t in self.timeline]
+        if self._dropped:
+            # same for an orphan's write/draw: nothing is on the board to
+            # letter, so the pen must not mime it
+            self.timeline = [
+                TimedAction(t.action, t.start, 0.05)
+                if t.action.target in self._dropped else t
+                for t in self.timeline]
         self._enforce_dependencies()
         focus: dict[int, Point] = {}
         hud = self._hud_element_ids()
@@ -1079,7 +1449,12 @@ class SceneRenderer:
             # a screen-fixed element (a corner sketch, the recap) is never a
             # zoom target: its world slot is an empty corner. Such a zoom
             # follows the next board action instead.
-            if a.target in self.bound and a.target not in hud:
+            # ...and neither is an element the missing-picture rule dropped:
+            # _drop_element zeroes its box, so focusing it framed the empty
+            # top-left corner of the board instead of the lesson. Falling
+            # through to the follow rule frames the next board action.
+            if (a.target in self.bound and a.target not in hud
+                    and a.target not in self._dropped):
                 x0, y0, x1, y1 = self.bound[a.target].box
                 focus[i] = ((x0 + x1) / 2, (y0 + y1) / 2)
             elif getattr(a, "follow", True):
@@ -1185,6 +1560,11 @@ class SceneRenderer:
         for j in range(i + 1, len(self.timeline)):
             a = self.timeline[j].action
             if a.target in hud:
+                continue
+            if a.target in self._dropped:
+                # the missing-picture rule zeroed this element's box; there
+                # is no ink here to frame, and (0,0) clamps to the empty
+                # top-left corner of the board
                 continue
             b = self.bound.get(a.target) if a.target else None
             if b is None:

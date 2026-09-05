@@ -230,6 +230,11 @@ def arrow_paths(tail: Point, head: Point, *, curve: float = 0.0, head_len: float
     shaft = roughen(resample(shaft, 6.0), amplitude=0.8, wobble=1.2, seed=seed)
     if len(shaft) < 2:
         shaft = [tail, head]
+    if head_len <= 0.0:
+        # a LEADER, not an arrow: no barbs. An arrowhead asserts "this is the
+        # thing"; when the part could not be located in the art all we can
+        # honestly say is "this label belongs to this picture".
+        return [shaft]
     # barbs angle back from the head along the *final* shaft direction
     fx, fy = shaft[-1][0] - shaft[-2][0], shaft[-1][1] - shaft[-2][1]
     fn = math.hypot(fx, fy) or 1.0

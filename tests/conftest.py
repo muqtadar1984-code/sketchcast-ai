@@ -108,3 +108,21 @@ def _fresh_model_call_limiters(monkeypatch):
     monkeypatch.setattr(ra, "_LIMITERS",
                         {"image": RateLimiter(10**6), "vision": RateLimiter(10**6)})
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_live_visual_library(monkeypatch):
+    """The suite must never reach the real visual library.
+
+    worker/run.py loads .env into every pytest run, so the moment a developer
+    puts real SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY in it — needed to
+    publish the diagram catalogue — the library wrapper starts answering test
+    lookups from PRODUCTION. It cost an integration run on 2026-09-05: a
+    placeholder test got a real hydrated ciliated-cell raster instead of the
+    placeholder it asserted, because that picture had just been published.
+    Tests that want a library supply their own fake; the rest get none.
+    """
+    for var in ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY",
+                "SUPABASE_ANON_KEY", "SUPABASE_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    yield
