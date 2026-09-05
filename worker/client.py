@@ -439,11 +439,71 @@ def premium_override_for(sb: Client, owner_id: str) -> Optional[bool]:
     return val
 
 
+class _UnreadableAnswer(RuntimeError):
+    """premium_voices_allowed replied with something that is not a boolean.
+    Not worth a retry (it will reply the same way) and NOT "the function is
+    missing" either — so it is reported as unknown, never as a confident no."""
+
+
+def premium_allowed_for(sb: Client, owner_id: str) -> tuple[Optional[bool], Optional[str]]:
+    """The DATABASE's answer to "may this account use the premium voices?".
+
+    Migration 0105 put that question in one place — premium_voices_allowed(uid):
+    a paid tier, OR a comp override of at least the threshold that function
+    alone carries. The app asks it through my_fair_use().premium_voices; we ask
+    it directly. Neither side re-derives it, so neither side can drift.
+
+    Why not read profiles.max_books here and compare? Because then the number
+    would be written twice, and the day it moves one of the two halves of the
+    product would keep offering a voice the other refuses.
+
+    Returns (allowed, note), never raises:
+        (True/False, None)          the database answered
+        (None, "unavailable")       a non-transient refusal — 0105 is not
+                                    applied yet, or the key may not execute it.
+                                    The caller degrades; it must NOT fail a job.
+        (None, "unread")            a timeout or transport failure. Nothing is
+                                    known; the caller must not grant premium.
+    """
+    def call():
+        res = _call_with_timeout(
+            lambda: sb.rpc("premium_voices_allowed", {"uid": owner_id}).execute(), _TIER_TIMEOUT_S)
+        data = getattr(res, "data", None)
+        if isinstance(data, list):
+            data = data[0] if data else None
+        if not isinstance(data, bool):
+            # A shape we do not understand is not an answer.
+            raise _UnreadableAnswer(f"premium_voices_allowed returned {data!r}")
+        return data
+    val, exc = _retrying("premium_voices_allowed", owner_id, call)
+    if exc is None and isinstance(val, bool):
+        return val, None
+    if exc is not None and not _is_transient(exc) and not isinstance(exc, _UnreadableAnswer):
+        return None, "unavailable"
+    return None, "unread"
+
+
 def resolve_tier(sb: Client, owner_id: str) -> dict:
     """Everything the premium gate needs, in one dict:
-        {"tier": str|None, "override": bool|None, "paid": bool, "error": str|None}
-    `paid` mirrors the DB's precedence: override first, then the tier
-    allow-list.
+        {"tier": str|None, "override": bool|None, "paid": bool,
+         "premium": bool, "premium_note": str|None, "error": str|None}
+
+    TWO different questions, deliberately kept apart since 0105:
+
+    `paid` = "exempt from the credit gate". Unchanged: an override of ANY size
+    still buys unlimited generation, and other code and the job logs read this.
+
+    `premium` = "may hear the premium voices". The DATABASE decides
+    (premium_voices_allowed: a paid tier, or a comp override at or above the
+    threshold that SQL function alone carries). This is what worker/process.py
+    hands to allow_premium. A comped account below the threshold is therefore
+    `paid: True, premium: False` — unlimited kits, free voice — which is
+    exactly the founder's 2026-09-05 decision.
+
+    `premium_note` is None when the database answered. Otherwise it says why it
+    did not ("unavailable": 0105 not applied / not executable, so premium falls
+    back to the paid tiers alone; "unread": a timeout, so premium is refused).
+    Either way the job still renders — with the free voice.
 
     A read that FAILED is recorded as None, never as False: `override: False`
     means "read it, not comped", and writing that for an unread row would be
@@ -458,18 +518,38 @@ def resolve_tier(sb: Client, owner_id: str) -> dict:
     from shared.tts.registry import PAID_TIERS
     override = premium_override_for(sb, owner_id)
     tier = plan_tier_for(sb, owner_id)
+    allowed, note = premium_allowed_for(sb, owner_id)
+
+    # `premium` is the DB's answer when we have one. When we do not, degrade to
+    # PAID TIERS ONLY — deliberately NOT to `override`, which is the whole
+    # point of 0105: before it, any override at all (including the eleven
+    # seeded accounts capped at 20 books) counted as premium. Under-offering
+    # while the migration is pending is the small wrong; over-granting is the
+    # one the founder asked us to stop.
+    premium = allowed if allowed is not None else (tier in PAID_TIERS)
+
+    # Deliberately NO new raise here. An unreadable premium answer resolves to
+    # "no premium" and the job renders with the free voice — the tier reads'
+    # existing requeue behaviour is untouched. Refusing is the safe direction,
+    # and the alternative would loop: premium_voices_allowed has no boot probe
+    # of its own, so a persistently slow RPC could requeue a comped account's
+    # job forever. `premium_note` carries the reason so process.py can say so
+    # in the log rather than let it pass as a plan decision.
+    def _out(**kw) -> dict:
+        return {"tier": tier, "premium": premium, "premium_note": note, **kw}
+
     if override:
-        return {"tier": tier, "override": True, "paid": True, "error": None}
+        return _out(override=True, paid=True, error=None)
     if tier in PAID_TIERS:
-        return {"tier": tier, "override": override, "paid": True, "error": None}
+        return _out(override=override, paid=True, error=None)
     unread = [n for n, v in (("override", override), ("tier", tier)) if v is None]
     if unread:
         if _PLAN_TIER_PROBE_OK is not False:
             raise TransientTierError(
                 f"plan tier unresolvable for {owner_id}: {', '.join(unread)} unread (transient)")
-        return {"tier": tier, "override": override, "paid": False,
-                "error": "+".join(f"{n}_unread" for n in unread)}
-    return {"tier": tier, "override": override, "paid": False, "error": None}
+        return _out(override=override, paid=False,
+                    error="+".join(f"{n}_unread" for n in unread))
+    return _out(override=override, paid=False, error=None)
 
 
 def probe_plan_tier(sb: Client) -> Optional[bool]:

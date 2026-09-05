@@ -212,17 +212,46 @@ class _Res:
 
 class _SB:
     """A Supabase stand-in with scripted rpc / profiles answers. An exception
-    given as `rpc_exc` / `prof_exc` is raised on EVERY call."""
-    def __init__(self, tier=None, override=None, rpc_exc=None, prof_exc=None):
+    given as `rpc_exc` / `prof_exc` is raised on EVERY call.
+
+    0105 added a second RPC, premium_voices_allowed(uid). Unless a test says
+    otherwise it answers the way the migration's SQL would for the scripted
+    profile and tier — a comp override of PREMIUM_THRESHOLD or more, or a paid
+    tier — so the existing cases keep describing a MIGRATED database.
+    `premium=` forces the answer; `premium_exc=` makes the RPC fail (and
+    `premium_exc=_ABSENT` makes it fail the way a database without 0105 does).
+    """
+    def __init__(self, tier=None, override=None, rpc_exc=None, prof_exc=None,
+                 premium=None, premium_exc=None):
         self._tier, self._override = tier, override
         self._rpc_exc, self._prof_exc = rpc_exc, prof_exc
+        self._premium, self._premium_exc = premium, premium_exc
         self.rpc_calls = 0
         self.prof_calls = 0
+        self.premium_calls = 0
+
+    def _premium_answer(self):
+        if self._premium is not None:
+            return self._premium
+        caps = self._override or {}
+        big = max(caps.get("max_books") or 0, caps.get("max_chapters") or 0) >= PREMIUM_THRESHOLD
+        return bool(big or self._tier in PAID_TIERS)
 
     def rpc(self, name, args):
-        assert name == "plan_tier" and "uid" in args
-        self.rpc_calls += 1
+        assert name in ("plan_tier", "premium_voices_allowed") and "uid" in args
         sb = self
+        if name == "premium_voices_allowed":
+            self.premium_calls += 1
+
+            class PQ:
+                def execute(self_):
+                    if sb._premium_exc:
+                        raise sb._premium_exc
+                    if sb._rpc_exc:          # the whole RPC surface is down
+                        raise sb._rpc_exc
+                    return _Res(sb._premium_answer())
+            return PQ()
+        self.rpc_calls += 1
 
         class Q:
             def execute(self_):
@@ -248,6 +277,17 @@ class _SB:
 
 
 NO_COMP = {"max_books": None, "max_chapters": None}
+# Test data only — the ONE production copy of this number is
+# premium_voices_allowed() in supabase/migrations/0105_premium_voices_threshold.sql
+# (app repo). The shared fixture below carries it too and is checksummed.
+PREMIUM_THRESHOLD = 100000
+
+
+class _APIError(Exception):
+    """Stands in for postgrest.APIError: _is_transient() keys off the NAME."""
+
+
+_ABSENT = _APIError("PGRST202 Could not find the function public.premium_voices_allowed")
 
 
 @pytest.fixture

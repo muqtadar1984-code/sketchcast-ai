@@ -1,0 +1,142 @@
+{
+  "_": "THE premium-voice truth table. One file, two copies, byte-identical: sketchcast-app/src/utils/__tests__/fixtures/premium-voice-cases.json and sketchcast/tests/fixtures/premium_voice_cases.json. Both tests assert the sha256 below, so editing one copy and not the other fails the other repo's suite. Change it only together with migration 0105.",
+  "threshold": 100000,
+  "paid_tiers": ["pro", "pro_plus", "family", "homeschool", "school"],
+  "cases": [
+    {
+      "name": "comp override exactly at the threshold",
+      "max_books": 100000,
+      "max_chapters": null,
+      "tier": "trial",
+      "db_premium": true,
+      "unlimited": true,
+      "expect_premium": true
+    },
+    {
+      "name": "comp override above the threshold, in max_chapters",
+      "max_books": null,
+      "max_chapters": 2147483647,
+      "tier": "trial",
+      "db_premium": true,
+      "unlimited": true,
+      "expect_premium": true
+    },
+    {
+      "name": "seeded 20-book override keeps unlimited generation, loses premium",
+      "max_books": 20,
+      "max_chapters": null,
+      "tier": "trial",
+      "db_premium": false,
+      "unlimited": true,
+      "expect_premium": false
+    },
+    {
+      "name": "one below the threshold is still not premium",
+      "max_books": 99999,
+      "max_chapters": null,
+      "tier": "trial",
+      "db_premium": false,
+      "unlimited": true,
+      "expect_premium": false
+    },
+    {
+      "name": "a big override on a paid tier is premium twice over",
+      "max_books": null,
+      "max_chapters": 100000,
+      "tier": "pro",
+      "db_premium": true,
+      "unlimited": true,
+      "expect_premium": true
+    },
+    {
+      "name": "paid tier: pro",
+      "max_books": null,
+      "max_chapters": null,
+      "tier": "pro",
+      "db_premium": true,
+      "unlimited": false,
+      "expect_premium": true
+    },
+    {
+      "name": "paid tier: pro_plus",
+      "max_books": null,
+      "max_chapters": null,
+      "tier": "pro_plus",
+      "db_premium": true,
+      "unlimited": false,
+      "expect_premium": true
+    },
+    {
+      "name": "paid tier: family",
+      "max_books": null,
+      "max_chapters": null,
+      "tier": "family",
+      "db_premium": true,
+      "unlimited": false,
+      "expect_premium": true
+    },
+    {
+      "name": "paid tier: homeschool",
+      "max_books": null,
+      "max_chapters": null,
+      "tier": "homeschool",
+      "db_premium": true,
+      "unlimited": false,
+      "expect_premium": true
+    },
+    {
+      "name": "paid tier: school (its cap is unlimited too)",
+      "max_books": null,
+      "max_chapters": null,
+      "tier": "school",
+      "db_premium": true,
+      "unlimited": true,
+      "expect_premium": true
+    },
+    {
+      "name": "trial",
+      "max_books": null,
+      "max_chapters": null,
+      "tier": "trial",
+      "db_premium": false,
+      "unlimited": false,
+      "expect_premium": false
+    },
+    {
+      "name": "promo",
+      "max_books": null,
+      "max_chapters": null,
+      "tier": "promo",
+      "db_premium": false,
+      "unlimited": false,
+      "expect_premium": false
+    },
+    {
+      "name": "school_trial",
+      "max_books": null,
+      "max_chapters": null,
+      "tier": "school_trial",
+      "db_premium": false,
+      "unlimited": false,
+      "expect_premium": false
+    },
+    {
+      "name": "school_expired",
+      "max_books": null,
+      "max_chapters": null,
+      "tier": "school_expired",
+      "db_premium": false,
+      "unlimited": false,
+      "expect_premium": false
+    },
+    {
+      "name": "school_suspended",
+      "max_books": null,
+      "max_chapters": null,
+      "tier": "school_suspended",
+      "db_premium": false,
+      "unlimited": false,
+      "expect_premium": false
+    }
+  ]
+}
