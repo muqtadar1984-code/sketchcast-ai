@@ -678,6 +678,13 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 # size only that function knows. The free voice is going out to
                 # someone who may be owed better, so say so. "unavailable" on
                 # every job means 0105 has not been applied yet.
+                #
+                # Since the review this line means the failure was PERMANENT:
+                # "unavailable" (missing/unexecutable) or "unreadable" (a shape
+                # that will never parse), or else the whole RPC surface was down
+                # so plan_tier did not answer either. A plain timeout against a
+                # reachable RPC now requeues the job instead of landing here —
+                # see the raise in client.py resolve_tier.
                 logger.error("generation %s: premium_voices_allowed %s — premium REFUSED "
                              "for a comped account (tier=%s), rendering FREE",
                              generation_id, tier_info["premium_note"], tier_info.get("tier"))

@@ -298,6 +298,9 @@ def wc(monkeypatch):
     monkeypatch.setattr(wc, "_TIER_RETRIES", 2)
     monkeypatch.setattr(wc, "_TIER_TIMEOUT_S", 2.0)
     monkeypatch.setattr(wc, "_PLAN_TIER_PROBE_OK", True)
+    # 0105's probe too: it is a real module global that probe_premium_voices_allowed
+    # writes, so without this a probe test would leak its answer into later ones.
+    monkeypatch.setattr(wc, "_PREMIUM_PROBE_OK", True)
     monkeypatch.setattr(wc.time, "sleep", lambda s: None)
     return wc
 
@@ -327,12 +330,17 @@ class TestResolveTier:
         with pytest.raises(wc.TransientTierError):
             wc.resolve_tier(sb, "u")
         assert sb.rpc_calls == 2, "a transient error is retried"
+        assert sb.premium_calls == 0, (
+            "second review finding: this job is doomed before the premium RPC is "
+            "asked, and its answer would be discarded — asking anyway cost another "
+            "_TIER_RETRIES x _TIER_TIMEOUT_S (~31 s in production) per attempt")
 
     def test_case_b_comped_founder_with_the_profile_read_down_is_requeued(self, wc):
         sb = _SB(tier="trial", override=None, prof_exc=wc._Timeout("t"))
         with pytest.raises(wc.TransientTierError):
             wc.resolve_tier(sb, "u")
         assert sb.prof_calls == 2, "the override read is retried like the RPC"
+        assert sb.premium_calls == 0, "and the doomed job does not pay for a third read"
 
     def test_a_paid_tier_needs_no_override_read_to_succeed(self, wc):
         """One read failing must not veto an answer the other read settled."""
