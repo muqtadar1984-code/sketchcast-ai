@@ -322,3 +322,179 @@ class TestTheRowAnswersWithoutADownload:
         by_key = {r["asset_key"]: r for r in vl._local_candidates()}
         assert by_key["chloroplast"]["quality"] == "svg_contract_validated"
         assert by_key["volcano"]["quality"] == "renderer_validated"
+
+
+class TestPublishSurvivesADatabaseThatPredatesTheMigration:
+    """Code deploys on a push; the schema changes when the founder applies
+    0104. Between the two, a worker knows three columns the database does not.
+
+    PostgREST answers an unknown column with PGRST204 and writes NOTHING —
+    and the bytes are uploaded BEFORE the insert, so the failure would leave
+    an orphaned storage object and no row, silently, on every generation.
+    That is the shape of the 262 MB of unreferenced storage already on file,
+    and it would also stop the library learning: every worker keeps re-paying
+    for pictures it has already made.
+
+    The prod column list below is the one measured read-only against the live
+    database while 0104 was still unapplied.
+    """
+
+    PROD_COLUMNS = {
+        "id", "asset_key", "canonical_key", "asset_type", "role", "description",
+        "curriculum", "subject", "grade", "age_band", "topic", "concepts",
+        "status", "provenance", "source", "storage_path", "content_hash",
+        "quality", "usage_count", "last_used_at", "created_at", "updated_at",
+    }
+
+    def _unmigrated(self, monkeypatch, tmp_path, columns=None):
+        """A Supabase double that refuses any column the schema lacks, the way
+        PostgREST does: one message, naming the first unknown column."""
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "idx")
+        known = set(self.PROD_COLUMNS if columns is None else columns)
+        seen: dict = {"uploaded": [], "inserted": [], "refused": []}
+
+        class Storage:
+            def from_(self, bucket):
+                return self
+
+            def upload(self, path, fh, opts):
+                seen["uploaded"].append(path)
+
+        class Table:
+            def select(self, *a, **k):
+                return self
+
+            def eq(self, *a):
+                return self
+
+            def limit(self, n):
+                return self
+
+            def order(self, *a, **k):
+                return self
+
+            def execute(self):
+                return type("R", (), {"data": []})()
+
+            def insert(self, row):
+                unknown = sorted(set(row) - known)
+                if unknown:
+                    seen["refused"].append(unknown)
+                    raise RuntimeError(
+                        "{'code': 'PGRST204', 'message': \"Could not find the "
+                        f"'{unknown[0]}' column of 'visual_assets' in the "
+                        "schema cache\"}")
+                seen["inserted"].append(dict(row))
+                return self
+
+        class SB:
+            storage = Storage()
+
+            def table(self, _n):
+                return Table()
+
+        monkeypatch.setattr(vl, "_sb", lambda: SB())
+        return vl, seen
+
+    def test_an_svg_still_gets_a_row_before_0104_is_applied(
+            self, tmp_path, monkeypatch):
+        vl, seen = self._unmigrated(monkeypatch, tmp_path)
+        svg = tmp_path / "asset.svg"
+        svg.write_bytes(SVG_DOC.encode("utf-8"))
+
+        assert vl.publish_generated("chloroplast", "A chloroplast", svg)
+
+        assert seen["refused"] == [["asset_format", "group_count", "group_ids"]]
+        assert len(seen["inserted"]) == 1, \
+            "bytes in storage with no row is the orphan we are preventing"
+        row = seen["inserted"][0]
+        assert not set(row) & set(vl.FORMAT_COLUMNS)
+        assert row["storage_path"].endswith(".svg")
+        assert len(seen["uploaded"]) == 1
+
+    def test_the_degraded_row_still_reads_back_as_an_svg(
+            self, tmp_path, monkeypatch):
+        """Nothing that matters is lost: row_format falls back to the stored
+        object's own extension, so the asset the library serves is still the
+        markup. Only the group metadata waits for the migration, and that is a
+        lookup shortcut, not the asset."""
+        vl, seen = self._unmigrated(monkeypatch, tmp_path)
+        svg = tmp_path / "asset.svg"
+        svg.write_bytes(SVG_DOC.encode("utf-8"))
+        vl.publish_generated("chloroplast", "A chloroplast", svg)
+
+        assert vl.row_format(seen["inserted"][0]) == "svg"
+
+    def test_a_png_still_gets_a_row_too(self, tmp_path, monkeypatch):
+        vl, seen = self._unmigrated(monkeypatch, tmp_path)
+        png = tmp_path / "asset.png"
+        png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
+
+        assert vl.publish_generated("volcano", "A volcano", png)
+        assert len(seen["inserted"]) == 1
+        assert vl.row_format(seen["inserted"][0]) == "png"
+
+    def test_after_the_migration_the_columns_are_written(
+            self, tmp_path, monkeypatch):
+        """The degrade is a window, not the new normal — once 0104 is applied
+        the full row goes in on the first attempt and nothing is dropped."""
+        vl, seen = self._unmigrated(
+            monkeypatch, tmp_path,
+            columns=self.PROD_COLUMNS | set(
+                __import__("shared.visual_library", fromlist=["x"]).FORMAT_COLUMNS))
+        svg = tmp_path / "asset.svg"
+        svg.write_bytes(SVG_DOC.encode("utf-8"))
+
+        assert vl.publish_generated("chloroplast", "A chloroplast", svg)
+        assert seen["refused"] == []
+        assert seen["inserted"][0]["asset_format"] == "svg"
+        assert seen["inserted"][0]["group_ids"] == ["outline", "nucleus"]
+
+    def test_a_failure_that_is_not_a_schema_miss_is_not_retried(
+            self, tmp_path, monkeypatch):
+        """A permission error, a constraint violation or a network blip must
+        not be papered over by silently writing a lesser row — the retry is
+        for one specific, known, temporary condition."""
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "idx")
+        attempts: list[dict] = []
+
+        class Storage:
+            def from_(self, bucket):
+                return self
+
+            def upload(self, path, fh, opts):
+                pass
+
+        class Table:
+            def select(self, *a, **k):
+                return self
+
+            def eq(self, *a):
+                return self
+
+            def limit(self, n):
+                return self
+
+            def order(self, *a, **k):
+                return self
+
+            def execute(self):
+                return type("R", (), {"data": []})()
+
+            def insert(self, row):
+                attempts.append(dict(row))
+                raise RuntimeError("permission denied for table visual_assets")
+
+        class SB:
+            storage = Storage()
+
+            def table(self, _n):
+                return Table()
+
+        monkeypatch.setattr(vl, "_sb", lambda: SB())
+        svg = tmp_path / "asset.svg"
+        svg.write_bytes(SVG_DOC.encode("utf-8"))
+        vl.publish_generated("chloroplast", "A chloroplast", svg)
+        assert len(attempts) == 1, "a real error is raised, not retried blind"

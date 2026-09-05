@@ -19,6 +19,14 @@ one of them is visible to a parser:
             tries to label a thylakoid finds nothing, and the failure appears
             months later in a video rather than here.
 
+            This pass matches parts the way the RENDERER matches them
+            (``match_part``, mirroring ``vector_assets.match_layer_ids``):
+            exact first, then substring containment. A catalogue that says
+            "chloroplast" against a group named "chloroplasts" is reported as
+            an inexact NOTE, not a failure, because the renderer places that
+            label without difficulty — failing it would send back a delivery
+            that is fine.
+
 Offline and dependency-free: no model, no network, no image library. 378 files
 take a second, so the whole delivery can be checked on arrival and again on
 every redelivery.
@@ -72,6 +80,36 @@ def normalise_part(name: str) -> str:
     fail every file for a reason that is not a defect.
     """
     return _NON_WORD.sub("_", str(name or "").strip().lower()).strip("_")
+
+
+def match_part(wanted: str, group_ids: list[str]) -> tuple[str | None, bool]:
+    """Find the group that answers a catalogue part. Returns (group_id, exact).
+
+    This deliberately mirrors ``vector_assets.match_layer_ids``, which is what
+    the RENDERER uses when it places a label: exact (case-insensitive) wins
+    outright, and only when nothing matches exactly does substring containment
+    apply. That module cannot be imported here — this tool loads the validator
+    by path precisely so it runs with no PIL, no numpy and no credentials — so
+    the rule is restated, and ``test_validate_svg_batch`` pins the two against
+    each other.
+
+    Copying the renderer's tolerance is the whole point. Checking group ids
+    with ``==`` fails a file whose only sin is that the catalogue says
+    "chloroplast" and the diagram says "chloroplasts" — a label the renderer
+    places without difficulty. Across 378 files that manufactures
+    re-commissions of assets that are fine.
+    """
+    norm = normalise_part(wanted)
+    if not norm:
+        return None, False
+    for gid in group_ids:
+        if gid.lower() == norm:
+            return gid, True
+    for gid in group_ids:
+        low = gid.lower()
+        if norm in low or low in norm:
+            return gid, False
+    return None, False
 
 
 @dataclass
@@ -164,15 +202,31 @@ def check_file(key: str, svg_path: Path, entry: dict | None) -> FileReport:
         return report
 
     report.expected_parts = parts
-    wanted = {normalise_part(p): p for p in parts if normalise_part(p)}
-    have = {g for g in verdict.group_ids}
-    report.missing_parts = sorted(original for norm, original in wanted.items()
-                                  if norm not in have)
-    report.extra_groups = sorted(g for g in have if g not in wanted)
+    ids = list(verdict.group_ids)
+    missing: list[str] = []
+    inexact: list[str] = []
+    claimed: set[str] = set()
+    for part in parts:
+        gid, exact = match_part(part, ids)
+        if gid is None:
+            if normalise_part(part):
+                missing.append(part)
+            continue
+        claimed.add(gid)
+        if not exact:
+            inexact.append(f"{part!r} matched group {gid!r}")
+    report.missing_parts = sorted(missing)
+    report.extra_groups = sorted(g for g in ids if g not in claimed)
+    if inexact:
+        # The renderer would place these labels, so the delivery is usable and
+        # this is NOT a failure. It is still worth saying: a whole batch of
+        # inexact hits is naming drift between the catalogue and the artist.
+        report.notes.append("inexact_parts: " + "; ".join(sorted(inexact)))
     if report.missing_parts:
-        # The group ids are the labelling contract. A part with no group is a
-        # label the lesson can never place, so this is a failure and not a
-        # note — it is exactly what this pass exists to catch before render.
+        # The group ids are the labelling contract. A part that no group
+        # answers to — not even tolerantly — is a label the lesson can never
+        # place, so this is a failure and not a note: it is exactly what this
+        # pass exists to catch before render.
         report.fail("missing_parts: " + ", ".join(report.missing_parts))
     if report.extra_groups:
         # Extra groups are not a defect: a good diagram carries structure the

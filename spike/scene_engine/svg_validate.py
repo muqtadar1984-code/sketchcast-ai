@@ -19,9 +19,18 @@ is enforced exactly as written in ``svg_assets._SVG_RULES``:
 which means: a valid viewBox; groups that all carry a unique, well-formed
 lowercase_snake_case id; every path inside a group; no other element anywhere;
 no transforms, stylesheets, CSS geometry, gradients, fills or embedded raster
-data; and path data drawn only with M L H V C Q Z. Arcs are singled out
-because the runtime parser silently straightens them — the picture the library
-would serve is not the picture that was validated.
+data; and path data drawn only with M L H V C Q S T Z.
+
+The command list is exactly what ``parse_path_d`` renders faithfully, and the
+three places that state it — the prompt (``_SVG_RULES``), the parser and this
+gate — must agree. They did not: S and T are the smooth-curve variants the
+parser reflects control points for, and the prompt asks the model for "long,
+smooth, confident C-curves", of which S is the natural spelling. Refusing them
+here would not have lost a board — publish returns False and the render still
+draws — but it would have refused a perfectly renderable diagram ENTRY TO THE
+LIBRARY, permanently, so every machine regenerates it forever. Arcs stay
+refused for the opposite reason: the parser silently straightens an arc, so
+the picture the library would serve is not the picture that was validated.
 
 Group ids get three different treatments and conflating them is a bug:
 
@@ -49,8 +58,12 @@ FORBIDDEN_ELEMENTS = frozenset({
     "clipPath", "symbol", "foreignObject", "switch", "animate", "script",
 })
 
-# _SVG_RULES: "Path data uses ONLY M, L, H, V, C, Q, Z commands."
-ALLOWED_PATH_COMMANDS = frozenset("MLHVCQZ")
+# _SVG_RULES: "Path data uses ONLY M, L, H, V, C, Q, S, T, Z commands."
+# This set must equal what parse_path_d renders EXACTLY (svg_assets.py). A
+# command the parser draws correctly but the gate refuses is a permanent
+# reuse failure, not a safety margin. Arcs are the deliberate exception: the
+# parser degrades them to a straight line, so it does not render them exactly.
+ALLOWED_PATH_COMMANDS = frozenset("MLHVCQSTZ")
 ARC_COMMANDS = frozenset("Aa")
 
 # lowercase_snake_case: what the prompt asks for and what the delivery spec

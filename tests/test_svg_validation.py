@@ -158,7 +158,7 @@ class TestPathCommands:
         assert not v.ok and "arc" in v.codes
         assert "'A'" in v.reason
 
-    @pytest.mark.parametrize("cmd", ["S", "T", "a", "s", "X"])
+    @pytest.mark.parametrize("cmd", ["A", "a", "X", "b"])
     def test_any_unsupported_command_is_refused(self, cmd):
         v = validate_svg_document(_mutate(
             f'<path d="M 80 300 {cmd} 10 10 20 20 720 300" stroke="black" fill="none"/>',
@@ -167,7 +167,7 @@ class TestPathCommands:
         assert not v.ok, cmd
         assert {"arc", "unsupported_path_command"} & set(v.codes), cmd
 
-    @pytest.mark.parametrize("cmd", list("MLHVCQZmlhvcqz"))
+    @pytest.mark.parametrize("cmd", list("MLHVCQSTZmlhvcqstz"))
     def test_the_allowed_commands_pass(self, cmd):
         v = validate_svg_document(_mutate(
             f'<path d="M 80 300 {cmd} 10 10 10 10 10 10" stroke="black" fill="none"/>',
@@ -314,3 +314,66 @@ class TestRuntimeStaysForgivingWherePublishIsStrict:
     def test_a_document_too_broken_to_draw_returns_none_rather_than_raising(self):
         for junk in ("", "sorry, I cannot draw that", "<svg>", "<svg/>"):
             assert parse_svg_asset("leaf", junk) is None
+
+
+class TestTheGateSpeaksTheSameLanguageAsTheParser:
+    """A command the renderer draws faithfully but the gate refuses is not a
+    safety margin — it is a permanent reuse failure.
+
+    The board is never lost (publish returns False and the render still draws)
+    but the asset can never ENTER the library, so every machine regenerates it
+    forever and re-pays for it. S and T were exactly that: parse_path_d
+    reflects control points for both, and _SVG_RULES asks the model for the
+    "long, smooth, confident C-curves" that S is the natural spelling of.
+
+    Arcs are the deliberate exception in the other direction: the parser
+    degrades an arc to a straight line to its endpoint, so what the library
+    would serve is not what was validated.
+    """
+
+    SMOOTH = """<svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg">
+<g id="outer_membrane">
+  <path d="M 100 300 C 160 140, 640 140, 700 300 S 560 500, 400 500 L 100 300 Z" stroke="black" fill="none" stroke-width="4"/>
+</g>
+<g id="inner_membrane">
+  <path d="M 160 300 Q 260 200, 380 260 T 620 320" stroke="black" fill="none" stroke-width="4"/>
+  <path d="M 200 340 C 280 300, 360 380, 440 340" stroke="black" fill="none" stroke-width="4"/>
+</g>
+</svg>"""
+
+    def test_a_smooth_curve_diagram_renders_and_is_publishable(self):
+        asset = parse_svg_asset("chloroplast", self.SMOOTH)
+        assert asset is not None, "the runtime renders S and T today"
+        assert [l.id for l in asset.layers] == ["outer_membrane",
+                                                "inner_membrane"]
+        v = validate_svg_document(self.SMOOTH)
+        assert v.ok, v.reason
+        assert v.group_ids == ("outer_membrane", "inner_membrane")
+
+    def test_the_allowed_set_is_exactly_what_the_parser_draws(self):
+        """Read from the source of both, so widening one without the other
+        fails here rather than months later in a re-commission request."""
+        import inspect
+
+        from spike.scene_engine import svg_assets
+        from spike.scene_engine.svg_validate import ALLOWED_PATH_COMMANDS
+
+        body = inspect.getsource(svg_assets.parse_path_d)
+        for cmd in ALLOWED_PATH_COMMANDS:
+            assert f'"{cmd}"' in body, \
+                f"the gate allows {cmd!r} but parse_path_d has no branch for it"
+        # and the prompt asks for the same language it will be judged against
+        for cmd in ALLOWED_PATH_COMMANDS:
+            assert f" {cmd}," in svg_assets._SVG_RULES or \
+                f" {cmd} " in svg_assets._SVG_RULES, \
+                f"_SVG_RULES does not ask for {cmd!r}"
+
+    def test_an_arc_is_still_refused_because_the_parser_straightens_it(self):
+        arced = self.SMOOTH.replace(
+            'd="M 160 300 Q 260 200, 380 260 T 620 320"',
+            'd="M 160 300 A 40 40 0 0 1 380 260"')
+        assert parse_svg_asset("chloroplast", arced) is not None, \
+            "runtime forgives: the arc degrades to a line, the board survives"
+        v = validate_svg_document(arced)
+        assert not v.ok and "arc" in v.codes, \
+            "publish refuses: the served picture would not be the validated one"

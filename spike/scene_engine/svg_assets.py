@@ -14,7 +14,11 @@ returns None and falls through; a lesson never fails because an asset did.
 
 The path parser is deliberately minimal (M L H V C Q S T Z, absolute and
 relative; arcs degrade to a line to the endpoint) because the prompt forbids
-everything else and the validator rejects what slips through anyway.
+everything else and the validator rejects what slips through anyway. That
+command list is stated in three places — here, in ``_SVG_RULES`` and in
+``svg_validate.ALLOWED_PATH_COMMANDS`` — and they must stay equal; a command
+this parser draws but the gate refuses is a diagram that renders perfectly and
+can never be reused.
 """
 
 from __future__ import annotations
@@ -57,7 +61,7 @@ STRICT RULES:
   Use 4 to 12 groups, 1 to 8 paths each.
 - Every path: stroke="black" (or a single dark accent color for one featured
   part), fill="none", stroke-width between 3.5 and 5.
-- Path data uses ONLY M, L, H, V, C, Q, Z commands. NO arcs (A), NO
+- Path data uses ONLY M, L, H, V, C, Q, S, T, Z commands. NO arcs (A), NO
   transforms, NO text, NO rect/circle/ellipse/line elements, NO defs, NO use.
 - Draw with long, smooth, confident C-curves — organic shapes need many
   control points, never polygonal approximations.
@@ -314,11 +318,23 @@ def parse_svg_asset(key: str, svg_text: str) -> VectorAsset | None:
     layers: list[VLayer] = []
     consumed_spans: list[tuple[int, int]] = []
     for li, gm in enumerate(_GROUP.finditer(doc)):
-        # An id that already satisfies the contract is kept VERBATIM. The
-        # rewrite below is a runtime repair for markup that would be refused
-        # at publish anyway (a stray capital, a hyphen, a space) — it must not
-        # touch a valid id, because the stored id is the labelling contract
-        # and a silently normalised one no longer names what the row says.
+        # An id that already satisfies the contract is kept VERBATIM; the
+        # rewrite is a runtime repair for markup that would be refused at
+        # publish anyway (a stray capital, a hyphen, a space).
+        #
+        # Be honest about what this branch buys TODAY: nothing observable.
+        # GROUP_ID_RE admits only [a-z0-9_] with no leading or trailing
+        # underscore, which is exactly the character set the re.sub leaves
+        # alone and the strip("_") cannot shorten — so for every id the
+        # contract currently accepts, the two arms agree. What actually makes
+        # the STORED ids exact is that publish_generated records
+        # verdict.group_ids from validate_svg_document, not this line.
+        #
+        # It is kept as a GUARD, not decoration: it couples the parser to
+        # is_valid_group_id, so the day the contract is loosened (hyphens, a
+        # capital, a digit lead) an already-valid id keeps its spelling
+        # instead of being silently renamed out from under the row that names
+        # it. test_svg_library pins that coupling by loosening the predicate.
         raw = gm.group(1).strip()
         gid = raw if is_valid_group_id(raw) else (
             re.sub(r"[^a-z0-9_]+", "_", raw.lower()).strip("_") or f"layer{li}")

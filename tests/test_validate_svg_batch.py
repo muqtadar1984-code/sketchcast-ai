@@ -268,3 +268,98 @@ class TestItEnforcesTheSameContractAsPublish:
                 validate_svg_document(doc).ok
             assert vsb.validate_svg_document(doc).codes == \
                 validate_svg_document(doc).codes
+
+
+class TestSemanticsMatchTheWayTheRendererMatches:
+    """The gate must not be stricter than the thing it is a gate for.
+
+    ``match_layer_ids`` is what actually places a label at render time, and it
+    is tolerant: exact (case-insensitive) wins outright, and only when nothing
+    matches exactly does substring containment apply. Checking group ids with
+    ``==`` instead fails a delivery the renderer would handle perfectly — the
+    catalogue says "chloroplast", the artist drew "chloroplasts" — and across
+    378 files that manufactures re-commission requests for assets that are
+    fine. A part that nothing answers to is still a hard failure, because that
+    is a label no lesson can ever place.
+    """
+
+    PLURAL = """<svg viewBox="0 0 800 600">
+<g id="outer_membrane"><path d="M 60 300 C 200 100, 600 100, 740 300 Z" stroke="black" fill="none"/></g>
+<g id="chloroplasts"><path d="M 250 260 Q 300 230, 350 260 Z" stroke="black" fill="none"/></g>
+</svg>"""
+
+    def test_a_plural_group_answers_a_singular_part_with_a_note(self, delivery):
+        delivery.write_catalogue([
+            {"asset_key": "leaf", "parts": ["Outer membrane", "chloroplast"]},
+        ])
+        delivery.file("leaf", self.PLURAL)
+
+        code, report = delivery.run()
+
+        assert code == 0, "the renderer would place this label"
+        entry = report["files"][0]
+        assert entry["ok"] and entry["missing_parts"] == []
+        assert any("inexact_parts" in n for n in entry["notes"])
+        assert "'chloroplast' matched group 'chloroplasts'" in \
+            " ".join(entry["notes"])
+
+    def test_a_tolerantly_matched_group_is_not_also_reported_as_extra(
+            self, delivery):
+        """It answered a commissioned part; calling it surplus as well would
+        read as naming drift in both directions at once."""
+        delivery.write_catalogue([
+            {"asset_key": "leaf", "parts": ["Outer membrane", "chloroplast"]},
+        ])
+        delivery.file("leaf", self.PLURAL)
+        _, report = delivery.run()
+        assert report["files"][0]["extra_groups"] == []
+
+    def test_a_part_nothing_answers_to_is_still_a_hard_failure(self, delivery):
+        delivery.write_catalogue([
+            {"asset_key": "leaf", "parts": ["Outer membrane", "thylakoid"]},
+        ])
+        delivery.file("leaf", self.PLURAL)
+
+        code, report = delivery.run()
+
+        assert code == 1
+        entry = report["files"][0]
+        assert not entry["ok"]
+        assert entry["missing_parts"] == ["thylakoid"]
+        assert "missing_parts" in entry["failures"][0]
+
+    def test_an_exact_hit_beats_a_containing_one(self, delivery):
+        """Same rule as match_layer_ids: a literal "membrane" group must not
+        be answered by "nucleus_membrane" while it exists."""
+        svg = """<svg viewBox="0 0 800 600">
+<g id="nucleus_membrane"><path d="M 60 300 C 200 100, 600 100, 740 300 Z" stroke="black" fill="none"/></g>
+<g id="membrane"><path d="M 250 260 Q 300 230, 350 260 Z" stroke="black" fill="none"/></g>
+</svg>"""
+        delivery.write_catalogue([{"asset_key": "cell", "parts": ["membrane"]}])
+        delivery.file("cell", svg)
+        _, report = delivery.run()
+        entry = report["files"][0]
+        assert entry["ok"] and entry["notes"] == [] or \
+            all("inexact" not in n for n in entry["notes"])
+        assert entry["extra_groups"] == ["nucleus_membrane"]
+
+    def test_it_agrees_with_the_renderers_own_matcher(self):
+        """The tool restates the rule because it cannot import the renderer
+        (no PIL, no numpy, no credentials offline). Restating is only safe if
+        the two are pinned against each other."""
+        from spike.scene_engine.vector_assets import match_layer_ids
+
+        cases = [
+            (["chloroplasts", "outer_membrane"], "chloroplast"),
+            (["membrane", "nucleus_membrane"], "membrane"),
+            (["outer_membrane"], "Outer membrane"),
+            (["stroma", "thylakoid"], "thylakoid"),
+            (["stroma"], "thylakoid"),
+            (["cell_wall"], "wall"),
+        ]
+        for available, wanted in cases:
+            gid, _exact = vsb.match_part(wanted, available)
+            renderer = match_layer_ids(available, [vsb.normalise_part(wanted)])
+            assert (gid is None) == (not renderer), (available, wanted)
+            if gid is not None:
+                assert gid in renderer, (available, wanted, gid, renderer)

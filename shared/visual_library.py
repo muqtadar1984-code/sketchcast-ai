@@ -131,6 +131,15 @@ ASSET_FORMATS = ("png", "svg")
 DEFAULT_FORMAT = "png"
 CONTENT_TYPES = {"png": "image/png", "svg": "image/svg+xml"}
 
+# The columns migration 0104 adds. Code ships through Railway on a push; the
+# schema changes only when the founder applies the migration, so there is a
+# real window where a worker that knows these columns talks to a database that
+# does not. PostgREST answers an unknown column with PGRST204 and writes
+# NOTHING — the bytes would already be in storage, so every generation in that
+# window would leave an orphaned object and no row. publish_generated therefore
+# retries once WITHOUT them rather than losing the row (see _insert_row).
+FORMAT_COLUMNS = ("asset_format", "group_ids", "group_count")
+
 
 def normalize_format(value: Any) -> str:
     """A format name, or DEFAULT_FORMAT for anything unrecognised.
@@ -684,6 +693,51 @@ def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
         return None
 
 
+_SCHEMA_MISS = ("pgrst204", "schema cache", "does not exist", "unknown column",
+                "could not find")
+
+
+def _looks_like_missing_column(exc: Exception) -> bool:
+    """Whether a failed insert is the database not knowing a column yet.
+
+    PostgREST reports it as PGRST204 with "Could not find the 'x' column of
+    'visual_assets' in the schema cache"; a direct Postgres error says
+    "column ... does not exist". Anything else — a network blip, a permission
+    error, a constraint violation — is NOT this, and must not trigger a retry
+    that would only fail the same way or, worse, hide a real problem.
+    """
+    text = f"{exc}".lower()
+    return any(marker in text for marker in _SCHEMA_MISS)
+
+
+def _insert_row(sb, row: dict[str, Any], asset_key: str) -> None:
+    """Insert a library row, degrading to the pre-0104 column set if needed.
+
+    Deploys and migrations are separate acts: the worker ships on a push, the
+    schema changes when the founder applies 0104. Between the two, a row
+    carrying asset_format/group_ids/group_count is refused whole — and because
+    the bytes are uploaded first, the failure would leave an orphaned storage
+    object and no row at all, silently, on every single generation.
+
+    So a schema miss is not fatal: drop the three new columns and insert the
+    row the old schema understands. Nothing is lost that cannot be recovered —
+    ``row_format`` already answers from the stored object's extension when the
+    column is absent, so a degraded SVG row still reads back as an SVG from
+    ``generated/<canonical>/<hash>.svg``. Only the group metadata waits for the
+    migration, and that is a lookup optimisation, not the asset.
+    """
+    try:
+        sb.table("visual_assets").insert(row).execute()
+        return
+    except Exception as exc:  # noqa: BLE001
+        if not _looks_like_missing_column(exc):
+            raise
+        legacy = {k: v for k, v in row.items() if k not in FORMAT_COLUMNS}
+        logger.warning("visual library: schema predates 0104 (%s); publishing "
+                       "%s without the format columns", exc, asset_key)
+        sb.table("visual_assets").insert(legacy).execute()
+
+
 def publish_generated(asset_key: str, prompt: str, asset_path: Path,
                       metadata: dict[str, Any] | None = None,
                       context: dict[str, Any] | None = None,
@@ -780,7 +834,7 @@ def publish_generated(asset_key: str, prompt: str, asset_path: Path,
         existing = (sb.table("visual_assets").select("id")
                     .eq("content_hash", digest).limit(1).execute().data or [])
         if not existing:
-            sb.table("visual_assets").insert(row).execute()
+            _insert_row(sb, row, str(asset_key))
         else:
             row["id"] = existing[0].get("id")
         logger.info("visual library published: %s (%s/%s/%s)",
@@ -788,7 +842,15 @@ def publish_generated(asset_key: str, prompt: str, asset_path: Path,
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("visual library publish failed for %s: %s", asset_key, exc)
-        return True  # local cache/index remains useful
+        # Still True, and deliberately: the False return means ONE thing —
+        # "this markup broke the asset contract" — and the decision log reads
+        # it that way. Folding a network blip or a permission error into the
+        # same answer would make `published: false` ambiguous between "your
+        # SVG is defective" and "Supabase was unreachable", which is worse
+        # observability, not better. Infrastructure failures announce
+        # themselves in the warning above; the local cache/index is written
+        # either way and remains useful.
+        return True
 
 
 def seed_from_catalog(catalog_path: Path | None = None) -> int:

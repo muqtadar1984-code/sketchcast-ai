@@ -736,3 +736,85 @@ class TestCrossMachineReuse:
         assert row["matched_key"] == "chloroplast"
         assert row["match_source"] == "remote", "machine B's index is cold"
         assert row["key_guard_passed"] is True
+
+
+class TestGroupIdsAreStoredExactly:
+    """Three jobs, three treatments, and conflating them is the bug.
+
+    STORAGE is exact, and what makes it exact is that publish_generated
+    records ``verdict.group_ids`` from the validator — NOT the parser. The
+    parser's own "keep a valid id verbatim" branch buys nothing observable
+    today: GROUP_ID_RE admits only the characters the old re.sub left alone,
+    with no leading or trailing underscore for strip() to remove, so both arms
+    agree on every id the contract currently accepts. That is measured below
+    rather than asserted, so the claim cannot rot.
+
+    The branch is kept as a GUARD, and a guard is testable: it couples the
+    parser to ``is_valid_group_id``, so the day the contract is loosened, an
+    already-valid id keeps its spelling instead of being renamed out from
+    under the row that names it. That coupling IS pinned.
+    """
+
+    def test_the_legacy_rewrite_is_identity_on_every_id_the_contract_admits(self):
+        """The honest version of "storage is exact at the parser": today it is
+        a no-op, and here is the proof rather than the claim."""
+        import random
+        import re
+        import string
+
+        from spike.scene_engine.svg_validate import is_valid_group_id
+
+        def legacy(raw: str) -> str:
+            return re.sub(r"[^a-z0-9_]+", "_", raw.lower()).strip("_")
+
+        rng = random.Random(20260905)
+        alphabet = string.ascii_letters + string.digits + "_- ."
+        checked = 0
+        for _ in range(20000):
+            candidate = "".join(rng.choice(alphabet)
+                                for _ in range(rng.randint(1, 12)))
+            if not is_valid_group_id(candidate):
+                continue
+            checked += 1
+            assert legacy(candidate) == candidate, candidate
+        assert checked > 500, "the sample must actually contain valid ids"
+
+    def test_the_parser_asks_the_contract_instead_of_rewriting_blind(self, monkeypatch):
+        """Loosen the contract — the way a future spec change would — and the
+        guard earns its place: a now-valid id survives verbatim. Without the
+        branch the parser renames it and the stored id stops naming what the
+        row says."""
+        from spike.scene_engine import svg_assets
+
+        monkeypatch.setattr(svg_assets, "is_valid_group_id",
+                            lambda value: bool(str(value or "").strip()))
+        svg = """<svg viewBox="0 0 800 600">
+<g id="cellWall">
+  <path d="M 100 300 C 160 140, 640 140, 700 300 L 100 300 Z" stroke="black" fill="none" stroke-width="4"/>
+  <path d="M 160 320 C 260 220, 540 220, 640 320" stroke="black" fill="none" stroke-width="4"/>
+</g>
+<g id="Nucleus-Membrane">
+  <path d="M 220 360 Q 320 300, 420 360 L 220 360 Z" stroke="black" fill="none" stroke-width="4"/>
+</g>
+</svg>"""
+        asset = svg_assets.parse_svg_asset("cell", svg)
+        assert asset is not None
+        assert [l.id for l in asset.layers] == ["cellWall", "Nucleus-Membrane"]
+
+    def test_under_todays_contract_an_invalid_id_is_still_repaired_at_runtime(self):
+        """Runtime stays forgiving: a bad id costs no board. It is PUBLISH
+        that refuses it, which is pinned in test_svg_validation."""
+        from spike.scene_engine import svg_assets
+
+        svg = """<svg viewBox="0 0 800 600">
+<g id="cell Wall">
+  <path d="M 100 300 C 160 140, 640 140, 700 300 L 100 300 Z" stroke="black" fill="none" stroke-width="4"/>
+  <path d="M 160 320 C 260 220, 540 220, 640 320" stroke="black" fill="none" stroke-width="4"/>
+</g>
+<g id="Nucleus">
+  <path d="M 220 360 Q 320 300, 420 360 L 220 360 Z" stroke="black" fill="none" stroke-width="4"/>
+</g>
+</svg>"""
+        asset = svg_assets.parse_svg_asset("cell", svg)
+        assert asset is not None
+        assert [l.id for l in asset.layers] == ["cell_wall", "nucleus"]
