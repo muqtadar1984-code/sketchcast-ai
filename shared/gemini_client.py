@@ -62,10 +62,54 @@ def gemini_model(kind: str | None = None) -> str:
 
 
 def _json_mode() -> bool:
-    """Ask Gemini for structured JSON output (responseMimeType). ON unless
-    GEMINI_JSON_MODE is 0/false/no/off — every caller of this client parses
-    the reply as JSON, so there is no free-text caller to break."""
+    """Ask Gemini for a JSON reply (responseMimeType). ON unless
+    GEMINI_JSON_MODE is 0/false/no/off.
+
+    It used to say "every caller of this client parses the reply as JSON, so
+    there is no free-text caller to break". That was wrong: transcribe_images
+    returns ``self._text(response).strip()`` verbatim to the chapter-vision
+    path, so a JSON mime type there asks the model to wrap a page of
+    transcription in a JSON string — quotes, escapes and all — and hands the
+    result on as if it were prose. Callers that read free text now say so
+    (``wants_json=False``) rather than relying on a claim about all of them.
+
+    Note what this flag does NOT do. responseMimeType asks for JSON; it
+    constrains nothing. Sara Hamaydeh's lesson (gen eb12963c, 2026-09-05) came
+    back with it ON and still failed: 22,538 chars, 6,168 output tokens
+    against a 30,000 cap, no truncation reported, unparseable at char 14,380.
+    Constraint needs a schema — see _response_schema_enabled.
+    """
     return (os.getenv("GEMINI_JSON_MODE") or "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _response_schema_enabled() -> bool:
+    """May a caller's responseSchema actually be sent? OFF unless
+    GEMINI_RESPONSE_SCHEMA is 1/true/yes/on.
+
+    responseSchema is the real thing: Vertex CONSTRAINS decoding to the schema,
+    so a malformed reply becomes impossible rather than repairable. Default OFF
+    all the same, because it is a generation-behaviour change on the calls that
+    earn the money, unproven in this project, and its failure modes are quiet
+    ones — a schema the API dislikes 400s every lesson, and a schema that is
+    merely too narrow silently drops the properties it forgot to name. OFF
+    keeps today's behaviour byte-for-byte; the flag is how it gets proven on
+    one account before it is anyone's default.
+
+    WHY THE SCRIPT CALL PASSES NO SCHEMA. It is the call that failed, and it is
+    the one payload that cannot be described here. Vertex's responseSchema is
+    the OpenAPI 3.0 subset, which has no additionalProperties — and the
+    semantic director's reply contains
+        "assets": {"river_valley": "A river seen from above, one clear bend"}
+    an object whose KEYS the model invents per lesson, one per illustration.
+    A responseSchema is closed: a property it does not name cannot be emitted.
+    So there is no schema that keeps `assets` — and a schema without it would
+    return well-formed lessons with every generated illustration missing,
+    which is the failure this codebase already treats as the worst kind
+    (a lesson that ships wrong beats a lesson that fails). `target` is
+    polymorphic for the same reason. Until the payload changes shape, the
+    script call keeps the belt (claude_client's salvage) and no braces.
+    """
+    return (os.getenv("GEMINI_RESPONSE_SCHEMA") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _access_token() -> str:
@@ -119,7 +163,15 @@ class GeminiClient:
             f"/locations/{self.region}/publishers/google/models/{self.model}:generateContent"
         )
 
-    def _post(self, parts: list[dict], system: str, max_tokens: int) -> dict:
+    def _post(self, parts: list[dict], system: str, max_tokens: int,
+              response_schema: dict | None = None, wants_json: bool = True) -> dict:
+        # `wants_json` is the CALLER's contract, not a preference: a caller
+        # that returns the reply as prose (transcribe_images) must not ask for
+        # a JSON mime type. The env flag is the second gate.
+        json_on = wants_json and _json_mode()
+        # A schema needs the mime type with it — Vertex rejects responseSchema
+        # on a free-text reply — so the two travel together or not at all.
+        schema_on = bool(response_schema) and json_on and _response_schema_enabled()
         body = {
             "contents": [{"role": "user", "parts": parts}],
             "systemInstruction": {"parts": [{"text": system}]},
@@ -128,13 +180,16 @@ class GeminiClient:
                 # See module docstring: thinking bills as output, +38% measured,
                 # and this workload gains nothing from it.
                 "thinkingConfig": {"thinkingBudget": 0},
-                # Structured output: the model is CONSTRAINED to emit valid
-                # JSON, which is what every caller of this client parses. Two of
-                # the founder's lessons failed on 2026-09-04 with complete replies
-                # whose JSON was malformed (a wrong bracket; quotes in prose) —
-                # the salvage in claude_client is the belt, this is the braces.
+                # Ask for JSON. Two of the founder's lessons failed on
+                # 2026-09-04, and Sara Hamaydeh's on 2026-09-05, with COMPLETE
+                # replies whose JSON was malformed — asking is not constraining,
+                # so the salvage in claude_client stays the belt.
                 # GEMINI_JSON_MODE=0 switches it off without a deploy.
-                **({"responseMimeType": "application/json"} if _json_mode() else {}),
+                **({"responseMimeType": "application/json"} if json_on else {}),
+                # Constrained decoding, when the caller can name a schema and
+                # the flag is on. See _response_schema_enabled for why the
+                # script call is not one of those callers.
+                **({"responseSchema": response_schema} if schema_on else {}),
             },
         }
         res = requests.post(
@@ -148,16 +203,28 @@ class GeminiClient:
         )
         if res.status_code == 429:
             raise _RateLimited(res.text)
+        if schema_on and res.status_code == 400:
+            # Vertex rejects a schema it cannot express (a keyword outside the
+            # OpenAPI subset, a nesting depth, a model that does not support
+            # constrained decoding) with a 400 on EVERY call — so a bad schema
+            # is not a degraded lesson, it is an outage for whatever passed it.
+            # Drop the schema once and let the reply take its chances with the
+            # salvage, loudly, rather than fail the job.
+            raise _SchemaRejected(res.text[:500])
         res.raise_for_status()
         return res.json()
 
-    def _call(self, parts: list[dict], system: str, max_tokens: int, retries: int) -> dict:
+    def _call(self, parts: list[dict], system: str, max_tokens: int, retries: int,
+              response_schema: dict | None = None, wants_json: bool = True) -> dict:
         for attempt in range(retries):
             try:
-                return self._post(parts, system, max_tokens)
+                return self._post(parts, system, max_tokens, response_schema, wants_json)
             except _RateLimited:
                 time.sleep(2 ** (attempt + 1))
-        return self._post(parts, system, max_tokens)
+            except _SchemaRejected as exc:
+                logger.error("Vertex rejected responseSchema, retrying unconstrained: %s", exc)
+                response_schema = None
+        return self._post(parts, system, max_tokens, response_schema, wants_json)
 
     # ── response shaping ──────────────────────────────────────────────
 
@@ -216,8 +283,16 @@ class GeminiClient:
         max_tokens: int = 4096,
         retries: int = 3,
         cache_prefix: str | None = None,
+        response_schema: dict | None = None,
     ) -> dict:
         """Text prompt in, parsed JSON out.
+
+        `response_schema` is a Vertex responseSchema (the OpenAPI 3.0 subset)
+        for callers whose payload is CLOSED — every property nameable up
+        front. It is sent only when GEMINI_RESPONSE_SCHEMA is on, and dropped
+        for one retry if Vertex rejects it, so a schema can never take a
+        caller down. ClaudeClient.analyze accepts and ignores it, so
+        process.py can keep holding either object.
 
         `cache_prefix` is accepted for interface compatibility and simply
         prepended. Vertex context caching is a separate API with its own minimum
@@ -226,7 +301,7 @@ class GeminiClient:
         known cost gap against the Claude path, not an oversight.
         """
         parts = ([{"text": cache_prefix}] if cache_prefix else []) + [{"text": prompt}]
-        response = self._call(parts, system, max_tokens, retries)
+        response = self._call(parts, system, max_tokens, retries, response_schema)
         usage = self.track_tokens(response)
         parsed = ClaudeClient._extract_json(self._text(response))
 
@@ -240,7 +315,8 @@ class GeminiClient:
             # Both attempts are billed and BOTH are reported, so caller
             # aggregates stay consistent with jobs.usage.
             response = self._call(parts, system,
-                                  min(max_tokens * 2, MAX_OUTPUT_TOKENS), retries)
+                                  min(max_tokens * 2, MAX_OUTPUT_TOKENS), retries,
+                                  response_schema)
             usage = _merge_usage(usage, self.track_tokens(response))
             parsed = ClaudeClient._extract_json(self._text(response))
 
@@ -330,9 +406,13 @@ class GeminiClient:
             return {"text": "", "usage": {"input_tokens": 0, "output_tokens": 0,
                                           "total_tokens": 0, "estimated_cost_usd": 0}}
         parts.append({"text": prompt})
+        # THE free-text caller: this returns the reply verbatim to the
+        # chapter-vision path, so it must not be asked for a JSON mime type —
+        # that would wrap a page of transcription in a JSON string and pass
+        # the quotes and escapes on as if they were the page.
         response = self._call(
             parts, "You are a precise transcriber of educational materials.",
-            max_tokens, retries,
+            max_tokens, retries, wants_json=False,
         )
         usage = self.track_tokens(response)
         return {"text": self._text(response).strip(), "usage": usage}
@@ -340,3 +420,9 @@ class GeminiClient:
 
 class _RateLimited(Exception):
     """429 from Vertex — retried with backoff, mirroring RateLimitError."""
+
+
+class _SchemaRejected(Exception):
+    """400 from Vertex on a request that carried a responseSchema. Never
+    surfaced to a caller: _call drops the schema and tries once more, because
+    a schema the API dislikes fails EVERY call and would be an outage."""

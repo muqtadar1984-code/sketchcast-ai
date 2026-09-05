@@ -375,6 +375,15 @@ def generate_episode_script(
     _long_reply = scene_on or _semantic
     max_out = (32000 if style == "conversational" else 30000) if _long_reply \
         else 16000
+    # No response_schema. Vertex would CONSTRAIN decoding to one and make
+    # this whole failure class impossible — Sara Hamaydeh's lesson (gen
+    # eb12963c, 2026-09-05) died on 22,538 complete chars that would not
+    # parse — but the semantic reply carries an "assets" object whose keys
+    # the model invents per lesson, and Vertex's schema dialect has no
+    # additionalProperties to describe it. A schema that omitted `assets`
+    # would return valid lessons with no illustrations at all. The reasons
+    # in full, and the flag for callers that CAN name a schema, are in
+    # shared/gemini_client._response_schema_enabled.
     result = client.analyze(prompt=prompt, system=system, max_tokens=max_out)
 
     data = result.get("data", result)

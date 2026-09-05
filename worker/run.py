@@ -76,6 +76,46 @@ def _support_agent_enabled() -> bool:
     return os.getenv("SUPPORT_AGENT_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
 
 
+# How much of a failure message survives to the reader. NOT a storage limit:
+# platform_issues.context is jsonb and jobs.error is text, neither of them
+# bounded — 300 and 500 were budgets we picked, and both were picked too small.
+#
+# Measured on Sara Hamaydeh's lost lesson (gen eb12963c, issue 24b6cadd,
+# 2026-09-05). The script failure builds its message DELIBERATELY long: the
+# preamble, then the JSON fault window, then the reply's first 220 and last 160
+# characters, then the path of the saved dump — because the reply itself dies
+# with the container and this line is all a later reader has. It was 1,018
+# characters. jobs.error kept 500, which stopped a few words past the
+# malformation; platform_issues.context kept 300, which stopped BEFORE it, on
+# "… natural land". The console reader therefore had strictly less than the job
+# row, and the incident was diagnosed by inference instead of by reading.
+#
+# 4,000 holds that whole message with room for a longer fault window, and still
+# refuses to let a pathological reply become the row.
+_EVIDENCE_CHARS = 4000
+
+
+def _evidence(error, limit: int = _EVIDENCE_CHARS) -> str:
+    """A failure message trimmed to `limit`, from the MIDDLE.
+
+    A head-only cut is the worst possible choice here: this message is built
+    head-to-tail as preamble → fault window → reply excerpts → dump path, so
+    cutting the tail loses the fault AND the excerpts AND the path, in that
+    order. Removing the middle keeps both ends — what broke, and where the
+    evidence was saved — and says how much it dropped, so nobody mistakes a
+    trimmed message for a short one.
+    """
+    text = str(error or "")
+    if len(text) <= limit:
+        return text
+    marker = f"\n… [{len(text) - limit} chars elided] …\n"
+    if limit <= len(marker):
+        return text[:limit]     # no room to say anything; never overrun the budget
+    keep = limit - len(marker)
+    head = keep // 2
+    return text[:head] + marker + text[len(text) - (keep - head):]
+
+
 def _auto_file_support_issue(sb, job: dict, error: str) -> None:
     """A failed job auto-triggers the support agent: file a console issue for
     the content owner and queue a diagnosis job. Never for support jobs
@@ -112,7 +152,9 @@ def _auto_file_support_issue(sb, job: dict, error: str) -> None:
                     "generation_id": gen_id,
                     "book_id": gen_d.get("book_id"),
                     "job_id": job["id"],
-                    "context": {"error": error[:300]},
+                    # The whole point of this row: the reporter is waiting
+                    # and a human (or the diagnosis agent) reads this line.
+                    "context": {"error": _evidence(error)},
                 }
             )
             .execute()
@@ -183,7 +225,8 @@ def run_once(sb) -> bool:
         if att >= 3:
             log.error("Job %s: plan tier unresolvable after %d attempts: %r", job["id"], att, exc)
             try:
-                db.finish_job(sb, job["id"], gen_id, error=f"plan tier unresolvable: {exc!r}"[:500])
+                db.finish_job(sb, job["id"], gen_id,
+                              error=_evidence(f"plan tier unresolvable: {exc!r}"))
             except Exception:  # noqa: BLE001
                 pass
             # Same hook the generic failure path gets: a tier outage that
@@ -215,7 +258,10 @@ def run_once(sb) -> bool:
             # assigned) generation — an agent crash must never flip it to error.
             # One rule for every writer: db.generation_to_mirror decides.
             mirror_gen = db.generation_to_mirror(job)
-            db.finish_job(sb, job["id"], mirror_gen, error=str(exc)[:500])
+            # Same budget as the issue row: a 500-char head cut stopped just
+            # past the malformation on gen eb12963c and lost the excerpts and
+            # the dump path that the message was built to carry.
+            db.finish_job(sb, job["id"], mirror_gen, error=_evidence(str(exc)))
         except Exception:  # noqa: BLE001
             pass
         # Stop the UI's "Finding chapters…" spinner if indexing failed.
