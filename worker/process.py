@@ -648,7 +648,8 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     # become premium (provider is not `legacy`) or the request names a premium
     # id. Under today's production state (legacy, ElevenLabs effectively off)
     # no lookup happens at all, so the dark ship adds no new way to fail.
-    tier_info: dict = {"tier": "skipped", "override": None, "paid": False, "error": None}
+    tier_info: dict = {"tier": "skipped", "override": None, "paid": False,
+                       "premium": False, "premium_note": None, "error": None}
     allow_premium = False
     canary_provider: str | None = None
     if kind == "presentation":
@@ -662,10 +663,31 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         if premium_available and (premium_provider() != "legacy" or canary_provider is not None
                                   or (_req_voice is not None and _req_voice.tier == "premium")):
             tier_info = db.resolve_tier(sb, owner_id)   # may raise TransientTierError → requeue
-            allow_premium = bool(tier_info["paid"])
+            # `premium`, NOT `paid` (0105). They part company for exactly one
+            # kind of account: a console comp below the threshold, which stays
+            # exempt from the credit gate (`paid`) but hears the free voice.
+            # Before 0105 this line read `paid` and would have handed premium
+            # to all 18 comped accounts instead of the 7 the founder named.
+            allow_premium = bool(tier_info.get("premium"))
             if tier_info.get("error"):
                 logger.error("generation %s: plan tier unresolved (%s) — rendering FREE",
                              generation_id, tier_info["error"])
+            if tier_info.get("premium_note") and tier_info["paid"] and not allow_premium:
+                # 0105's function could not be reached AND the paid-tiers-only
+                # fallback did not cover this account — a console comp, whose
+                # size only that function knows. The free voice is going out to
+                # someone who may be owed better, so say so. "unavailable" on
+                # every job means 0105 has not been applied yet.
+                #
+                # Since the review this line means the failure was PERMANENT:
+                # "unavailable" (missing/unexecutable) or "unreadable" (a shape
+                # that will never parse), or else the whole RPC surface was down
+                # so plan_tier did not answer either. A plain timeout against a
+                # reachable RPC now requeues the job instead of landing here —
+                # see the raise in client.py resolve_tier.
+                logger.error("generation %s: premium_voices_allowed %s — premium REFUSED "
+                             "for a comped account (tier=%s), rendering FREE",
+                             generation_id, tier_info["premium_note"], tier_info.get("tier"))
     # Idempotent re-run: if the reaper requeued this generation after the worker
     # died mid-run, drop any artifact rows it already produced so the re-run can't
     # leave duplicates (deterministic storage paths are overwritten on re-upload).
@@ -1077,8 +1099,10 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             # the top of process_generation, before any expensive work. This
             # used to be `_elevenlabs_enabled()`, a deployment flag: everyone
             # or no one, never the account's plan. Now the account that
-            # GENERATES decides (paying teacher or school → premium; anyone
-            # else → free; students receive whatever their teacher produced).
+            # GENERATES decides — and since 0105 the DATABASE decides for it:
+            # a paid plan, or a console comp at or above the threshold
+            # premium_voices_allowed() carries → premium; anyone else → free;
+            # students receive whatever their teacher produced.
             from shared.tts import enabled_providers, pick_voice_id, resolve_voice
 
             # The concrete voice this generation renders with. `auto` (or no
@@ -1371,8 +1395,10 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     "tts_voice_requested": tts_voice_requested,
                     "tts_voice_resolved": tts_voice,
                     # 'override' when the console comp decided it (the founder's
-                    # account: plan_tier says trial, the override says premium);
+                    # account: plan_tier says trial, the override says unlimited);
                     # the error string when a read failed; else the plan tier.
+                    # NB since 0105 an override here does NOT imply premium was
+                    # allowed — read tts_premium_allowed for that.
                     "tts_tier_resolved": ("override" if tier_info.get("override")
                                           else tier_info.get("error") or tier_info.get("tier") or "unknown"),
                     "tts_premium_allowed": bool(allow_premium),
@@ -1380,9 +1406,10 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 if voice_report.get("downgraded"):
                     logger.warning(
                         "generation %s: requested premium voice %r but rendered %s — "
-                        "tier=%s paid=%s providers=%s.",
+                        "tier=%s paid=%s premium=%s providers=%s.",
                         generation_id, tts_voice, voice_report.get("used"),
-                        tier_info.get("tier"), tier_info.get("paid"), sorted(enabled_providers()),
+                        tier_info.get("tier"), tier_info.get("paid"),
+                        tier_info.get("premium"), sorted(enabled_providers()),
                     )
             if part_ref is not None:
                 # The chapter name and the part's position always travel

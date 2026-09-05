@@ -344,6 +344,12 @@ _TIER_RETRIES = 3
 # probe itself timed out — treated as GOOD, so failures still requeue rather
 # than a boot-time blip disabling the requeue path for the process lifetime.
 _PLAN_TIER_PROBE_OK: Optional[bool] = None
+# The same tri-state for 0105's premium_voices_allowed(), kept SEPARATE because
+# the two RPCs fail for different reasons and only one of them is allowed to
+# requeue a job. False here means the function is missing or unexecutable —
+# overwhelmingly "0105 has not been applied yet", which is a legitimate state
+# this branch was built to survive — so it must never turn into a requeue loop.
+_PREMIUM_PROBE_OK: Optional[bool] = None
 
 
 class _Timeout(Exception):
@@ -439,11 +445,89 @@ def premium_override_for(sb: Client, owner_id: str) -> Optional[bool]:
     return val
 
 
+class _UnreadableAnswer(RuntimeError):
+    """premium_voices_allowed replied with something that is not a boolean.
+    Not worth a retry (it will reply the same way) and NOT "the function is
+    missing" either — so it is reported as unknown, never as a confident no."""
+
+
+def premium_allowed_for(sb: Client, owner_id: str) -> tuple[Optional[bool], Optional[str]]:
+    """The DATABASE's answer to "may this account use the premium voices?".
+
+    Migration 0105 put that question in one place — premium_voices_allowed(uid):
+    a paid tier, OR a comp override of at least the threshold that function
+    alone carries. The app asks it through my_fair_use().premium_voices; we ask
+    it directly. Neither side re-derives it, so neither side can drift.
+
+    Why not read profiles.max_books here and compare? Because then the number
+    would be written twice, and the day it moves one of the two halves of the
+    product would keep offering a voice the other refuses.
+
+    Returns (allowed, note), never raises:
+        (True/False, None)          the database answered
+        (None, "unavailable")       a non-transient refusal — 0105 is not
+                                    applied yet, or the key may not execute it.
+                                    The caller degrades; it must NOT fail a job.
+        (None, "unreadable")        the RPC answered with a shape that is not a
+                                    boolean. Also permanent — asking again gets
+                                    the same reply — so the caller degrades.
+        (None, "unread")            a timeout or transport failure. Nothing is
+                                    known, and asking again may well work, so
+                                    this is the ONLY note a caller may requeue
+                                    on. It must never grant premium.
+
+    Review finding: "unreadable" used to be folded into "unread". That was
+    harmless while nothing requeued, but resolve_tier now does, and requeueing
+    a job whose answer will never parse spends three attempts and then fails
+    the lesson. The two are kept apart so the requeue can key on the one case
+    that a retry can actually fix.
+    """
+    def call():
+        res = _call_with_timeout(
+            lambda: sb.rpc("premium_voices_allowed", {"uid": owner_id}).execute(), _TIER_TIMEOUT_S)
+        data = getattr(res, "data", None)
+        if isinstance(data, list):
+            data = data[0] if data else None
+        if not isinstance(data, bool):
+            # A shape we do not understand is not an answer.
+            raise _UnreadableAnswer(f"premium_voices_allowed returned {data!r}")
+        return data
+    val, exc = _retrying("premium_voices_allowed", owner_id, call)
+    if exc is None and isinstance(val, bool):
+        return val, None
+    if isinstance(exc, _UnreadableAnswer):
+        return None, "unreadable"
+    if exc is not None and not _is_transient(exc):
+        return None, "unavailable"
+    return None, "unread"
+
+
 def resolve_tier(sb: Client, owner_id: str) -> dict:
     """Everything the premium gate needs, in one dict:
-        {"tier": str|None, "override": bool|None, "paid": bool, "error": str|None}
-    `paid` mirrors the DB's precedence: override first, then the tier
-    allow-list.
+        {"tier": str|None, "override": bool|None, "paid": bool,
+         "premium": bool, "premium_note": str|None, "error": str|None}
+
+    TWO different questions, deliberately kept apart since 0105:
+
+    `paid` = "exempt from the credit gate". Unchanged: an override of ANY size
+    still buys unlimited generation, and other code and the job logs read this.
+
+    `premium` = "may hear the premium voices". The DATABASE decides
+    (premium_voices_allowed: a paid tier, or a comp override at or above the
+    threshold that SQL function alone carries). This is what worker/process.py
+    hands to allow_premium. A comped account below the threshold is therefore
+    `paid: True, premium: False` — unlimited kits, free voice — which is
+    exactly the founder's 2026-09-05 decision.
+
+    `premium_note` is None when the database answered. Otherwise it says why it
+    did not, and the three reasons are kept apart because only one of them is
+    worth another attempt:
+        "unavailable"  0105 not applied, or the key may not execute it.
+        "unreadable"   the RPC replied with something that is not a boolean.
+        "unread"       a timeout or transport failure.
+    The first two are permanent, so premium degrades to the paid tiers alone
+    and the job renders with the free voice. The third can be requeued — see
+    the raise below for the one account shape that is.
 
     A read that FAILED is recorded as None, never as False: `override: False`
     means "read it, not comped", and writing that for an unread row would be
@@ -452,24 +536,89 @@ def resolve_tier(sb: Client, owner_id: str) -> dict:
     not known to be broken — the first draft raised only when BOTH failed,
     which let a Pro teacher whose RPC timed out, or the comped founder whose
     profile read timed out, render FREE with error=None. Requeue is cheap;
-    a paying customer hearing the free voice over a timeout is not."""
+    a paying customer hearing the free voice over a timeout is not.
+
+    Since the review, the SAME rule covers the premium read: a comped account
+    whose premium_voices_allowed call TIMED OUT is requeued too, rather than
+    quietly rendered with the free voice. See the note at that raise for why
+    only that one case, and only the timeout."""
     if not owner_id:
         raise ValueError("resolve_tier: owner_id is required")
     from shared.tts.registry import PAID_TIERS
     override = premium_override_for(sb, owner_id)
     tier = plan_tier_for(sb, owner_id)
-    if override:
-        return {"tier": tier, "override": True, "paid": True, "error": None}
-    if tier in PAID_TIERS:
-        return {"tier": tier, "override": override, "paid": True, "error": None}
+
+    # The two reads that settle `paid` are asked FIRST, and a job neither of
+    # them can answer goes back to the queue before the premium RPC is called
+    # at all. Review finding: the premium answer is discarded on this path, so
+    # fetching it up front spent another _TIER_RETRIES x _TIER_TIMEOUT_S — about
+    # 31 s with production settings — on a job that was already doomed. Nothing
+    # about the returned dict changes; only the doomed path gets its time back.
     unread = [n for n, v in (("override", override), ("tier", tier)) if v is None]
-    if unread:
-        if _PLAN_TIER_PROBE_OK is not False:
-            raise TransientTierError(
-                f"plan tier unresolvable for {owner_id}: {', '.join(unread)} unread (transient)")
-        return {"tier": tier, "override": override, "paid": False,
-                "error": "+".join(f"{n}_unread" for n in unread)}
-    return {"tier": tier, "override": override, "paid": False, "error": None}
+    doomed = bool(unread) and not override and tier not in PAID_TIERS
+    if doomed and _PLAN_TIER_PROBE_OK is not False:
+        raise TransientTierError(
+            f"plan tier unresolvable for {owner_id}: {', '.join(unread)} unread (transient)")
+
+    allowed, note = premium_allowed_for(sb, owner_id)
+
+    # `premium` is the DB's answer when we have one. When we do not, degrade to
+    # PAID TIERS ONLY — deliberately NOT to `override`, which is the whole
+    # point of 0105: before it, any override at all (including the eleven
+    # seeded accounts capped at 20 books) counted as premium. Under-offering
+    # while the migration is pending is the small wrong; over-granting is the
+    # one the founder asked us to stop.
+    premium = allowed if allowed is not None else (tier in PAID_TIERS)
+
+    # A COMPED account whose premium read TIMED OUT is requeued, exactly as a
+    # Pro teacher whose plan_tier read times out already is. Review finding:
+    # without this the two behaved differently for the same failure — the tier
+    # read requeued, the premium read silently downgraded — and it is the
+    # comped accounts (all seven of them plan_tier='trial' on prod) whose
+    # entitlement lives ONLY in the premium answer, so a timeout was the one
+    # way to hand the founder's own 100k accounts the free voice with nothing
+    # but an ERROR line to show for it.
+    #
+    # Narrow on purpose, four ways:
+    #   * `override is True` only. A paid tier already falls back to premium
+    #     through PAID_TIERS below, so nothing is lost there and nothing needs
+    #     requeueing; an uncomped free account's answer is False either way.
+    #   * note == "unread" only. "unavailable" (0105 not applied, or the key
+    #     may not execute it) and "unreadable" (a shape that will never parse)
+    #     do not get better on a retry — they degrade to paid-tiers-only, which
+    #     is what lets this deploy land BEFORE the migration.
+    #   * `tier is not None`, i.e. plan_tier answered on the SAME connection a
+    #     moment ago. This one is load-bearing and was found by an existing
+    #     test (test_a_comp_needs_no_rpc_to_succeed): when the whole RPC
+    #     surface is down, a comped account is supposed to keep rendering — it
+    #     needs no RPC to establish `paid` — and requeueing it would spend the
+    #     3-attempt cap and then FAIL the lesson. A requeue is only worth it
+    #     when the evidence says this one function was slow, not the database.
+    #   * both probes not-known-broken, the same guard the tier raise uses.
+    # A comp BELOW the threshold still requeues: without the answer we just
+    # failed to get, the worker cannot know its size — the threshold lives in
+    # the migration alone, which is the point of 0105. That costs those eleven
+    # seeded accounts a requeue they did not need, bounded at 3 attempts by
+    # worker/run.py, and only while this one RPC is timing out.
+    if (override is True and note == "unread" and tier is not None
+            and _PLAN_TIER_PROBE_OK is not False and _PREMIUM_PROBE_OK is not False):
+        raise TransientTierError(
+            f"premium voices unresolvable for {owner_id}: premium_voices_allowed "
+            f"unread (transient) for a comped account")
+
+    def _out(**kw) -> dict:
+        return {"tier": tier, "premium": premium, "premium_note": note, **kw}
+
+    if override:
+        return _out(override=True, paid=True, error=None)
+    if tier in PAID_TIERS:
+        return _out(override=override, paid=True, error=None)
+    if doomed:
+        # Only reachable with the probe at False: the RPC is known broken, so
+        # requeueing would just burn the attempt cap. Render free, on the record.
+        return _out(override=override, paid=False,
+                    error="+".join(f"{n}_unread" for n in unread))
+    return _out(override=override, paid=False, error=None)
 
 
 def probe_plan_tier(sb: Client) -> Optional[bool]:
@@ -501,6 +650,44 @@ def probe_plan_tier(sb: Client) -> Optional[bool]:
                 "this is fixed. Check that plan_tier(uuid) exists and the service role may "
                 "execute it.", type(exc).__name__, exc)
     return _PLAN_TIER_PROBE_OK
+
+
+def probe_premium_voices_allowed(sb: Client) -> Optional[bool]:
+    """Boot-time: can this worker's key execute 0105's premium_voices_allowed?
+
+    The same tri-state as probe_plan_tier, but a FALSE here is a warning and
+    not a critical: the overwhelmingly likely cause is that 0105 has not been
+    applied yet, which this branch is built to survive — every account degrades
+    to paid-tiers-only and the jobs still render. What it buys is (a) one loud
+    line at boot instead of one ERROR per job, and (b) the guard that stops
+    resolve_tier requeueing a comped account against an RPC that is not there.
+
+    A timeout leaves it None ("not known broken"), so a blip at boot does not
+    disable the requeue path for the process lifetime — the same reasoning as
+    the plan_tier probe."""
+    global _PREMIUM_PROBE_OK
+    try:
+        _call_with_timeout(
+            lambda: sb.rpc("premium_voices_allowed",
+                           {"uid": "00000000-0000-0000-0000-000000000000"}).execute(),
+            _TIER_TIMEOUT_S)
+        _PREMIUM_PROBE_OK = True
+        logging.getLogger("worker").info(
+            "PREMIUM VOICE CHECK OK: worker can execute premium_voices_allowed().")
+    except BaseException as exc:  # noqa: BLE001
+        if _is_transient(exc):
+            _PREMIUM_PROBE_OK = None
+            logging.getLogger("worker").warning(
+                "PREMIUM VOICE CHECK inconclusive (%s: %r) — treating the RPC as good.",
+                type(exc).__name__, exc)
+        else:
+            _PREMIUM_PROBE_OK = False
+            logging.getLogger("worker").warning(
+                "PREMIUM VOICE CHECK FAILED: %s: %r — migration 0105 is probably not applied. "
+                "Premium voices fall back to the PAID TIERS alone, so console comps (any size) "
+                "will hear the free voice until it is. Jobs still render.",
+                type(exc).__name__, exc)
+    return _PREMIUM_PROBE_OK
 
 
 def set_book_chapters(sb: Client, book_id: str, chapters: list[dict], status: str) -> None:

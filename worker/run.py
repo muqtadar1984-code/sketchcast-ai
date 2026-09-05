@@ -270,6 +270,11 @@ def main() -> None:
     # it, every job would quietly resolve to FREE — which looks like a slow
     # day, not an outage. Say so once, loudly, at boot.
     db.probe_plan_tier(sb)
+    # And 0105's helper, which decides the premium voice for COMPED accounts.
+    # A failure here is survivable (paid tiers still get their voice) but it is
+    # the difference between "the migration is pending" and a silent downgrade,
+    # so it is said once at boot rather than once per job.
+    db.probe_premium_voices_allowed(sb)
 
     once = "--once" in sys.argv
     if once:
