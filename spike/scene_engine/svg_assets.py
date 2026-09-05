@@ -366,7 +366,11 @@ def get_svg_asset(key: str, prompt: str, cache_dir: Path | None = None,
     try:  # cache best-effort
         cache.mkdir(parents=True, exist_ok=True)
         doc = extract_svg_document(text) or text
-        svg_file.write_text(doc, encoding="utf-8")
+        # newline="\n" on purpose. The stored bytes are hashed for publish
+        # idempotency, so letting Windows translate LF to CRLF would give the
+        # same asset two content hashes and two library rows depending on
+        # which machine generated it.
+        svg_file.write_text(doc, encoding="utf-8", newline="\n")
         meta.write_text(json.dumps({"key": key, "prompt": prompt,
                                     "model": SVG_MODEL,
                                     # "generated", spelled the same way the
