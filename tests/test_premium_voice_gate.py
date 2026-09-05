@@ -36,7 +36,25 @@ FIXTURE = Path(__file__).parent / "fixtures" / "premium_voice_cases.json"
 # Bump ONLY when the app's copy is changed to match, byte for byte.
 PREMIUM_VOICE_CASES_SHA256 = "403e9119f81e9f67771dc36b7dcf287c24bec2a5c7d4e0efcdad51a69d22cad3"
 
-_RAW = FIXTURE.read_bytes()
+def _canonical(raw: bytes) -> bytes:
+    """The fixture's bytes with line endings normalised to LF.
+
+    The pin proves the two repos run the SAME TABLE, and it used to hash the
+    file exactly as it sat on disk. That made it fail on every Windows
+    checkout — measured 2026-09-05: the git blob hashes to 403e9119…, the
+    working copy to 9d1a74aa…, because the checkout rewrote 142 lines to CRLF.
+    The table was identical; only the line endings were not, and the suite went
+    red for a difference that cannot change what a single test asserts.
+
+    Normalising is not a weakening. Byte-identity ON DISK was a proxy for the
+    property actually wanted, and a proxy that reports a platform's checkout
+    convention as cross-repo drift is the wrong proxy. .gitattributes now also
+    pins the file to LF on checkout, so the two halves agree.
+    """
+    return raw.replace(b"\r\n", b"\n")
+
+
+_RAW = _canonical(FIXTURE.read_bytes())
 TABLE = json.loads(_RAW.decode("utf-8"))
 CASES = TABLE["cases"]
 
