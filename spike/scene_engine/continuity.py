@@ -192,19 +192,43 @@ _NON_NOUN_OPENERS = _INTERROGATIVES | _INSTRUCTION_VERBS | {
 }
 
 
+# The word an imperative puts in front of its object. Requiring one is what
+# separates 'Compare the two' from 'Complete Blood Count': both open on a verb
+# from the list above, only one is telling anybody to do anything. 'of' is
+# deliberately absent — 'List of organs' is a NAME — and so is every ordinary
+# noun, which is the whole point.
+_IMPERATIVE_OBJECT_OPENERS = {
+    "a", "an", "the", "this", "that", "these", "those", "each", "every",
+    "all", "both", "any", "some", "one", "two", "three",
+    "your", "our", "their", "its", "my",
+    "in", "on", "at", "to", "with", "from", "into", "about", "between",
+    "how", "why", "what", "where", "when", "which", "who",
+}
+
+
 def _is_instruction(text: str) -> bool:
     """Board text that TELLS the reader to do something.
 
     An instruction needs an OBJECT: 'Record' on its own is a noun, and so is
     the 'List' of 'List of organs'; only 'Compare the two' is telling anybody
     to do anything.
+
+    A leading verb alone is not enough, because the verbs of instruction are
+    also ordinary English words: 'Complete Blood Count', 'List price',
+    'Record high' and 'Answer key' are real board terms in a biology,
+    commerce or assessment lesson, and every one of them was classified as a
+    sentence and DELETED from the roster — the demote branch had been widened
+    to consult this too, so they could not even fall through to a caption. So
+    require the SHAPE of an imperative as well: verb, then the determiner,
+    possessive or preposition a classroom instruction actually uses.
     """
     import re as _re
     words = " ".join(str(text or "").split()).split()
     if len(words) < 2:
         return False
     return (_re.sub(r"[^a-z]", "", words[0].lower()) in _INSTRUCTION_VERBS
-            and _re.sub(r"[^a-z]", "", words[1].lower()) != "of")
+            and _re.sub(r"[^a-z]", "", words[1].lower())
+            in _IMPERATIVE_OBJECT_OPENERS)
 
 
 def _part_name_candidate(text: str) -> str | None:
@@ -1151,6 +1175,28 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         key, _how = resolve_part(name, list(part_names))
         return key
 
+    def _label_part(lid: str, le: dict) -> str | None:
+        """The part a label names: by its ID first, then by its own TEXT.
+
+        An id is a programmer's name and routinely says nothing — 'lbl1' —
+        while the text is what the reader actually sees. Reading only the id
+        is what made the label-text tier duplicate its own evidence: that
+        tier wins PRECISELY when the ids name nothing, so the `covered` set
+        below came back empty and the synthesiser cloned every label the
+        director had already declared. 'Nucleus' was written on the board
+        twice, once by lbl1 and once by lbl_auto_nucleus.
+
+        The text arm is restricted to the roles the label-text tier itself
+        harvests. A title or a caption that happens to say a part's name is
+        not a label for it, and must not collect a leader line.
+        """
+        p = _match_part(_guess_part_name(lid))
+        if p:
+            return p
+        if str(le.get("role") or "label") not in ("label", "term"):
+            return None
+        return _match_part(_part_name_candidate(str(le.get("text") or "")) or "")
+
     if root_id and part_names:
         root_at = _pt(roster[root_id].get("at")) or [640, 340]
         labels = {eid: e for eid, e in roster.items() if e.get("type") == "text"}
@@ -1159,8 +1205,8 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         # a full plant cell with NO labels or arrows at all. Synthesize the
         # label (left column, written in the step whose OWN narration first
         # names the part) — the arrow-synthesis pass below then arms it.
-        covered = {p for lid in labels
-                   for p in [_match_part(_guess_part_name(lid))] if p}
+        covered = {p for lid, le in labels.items()
+                   for p in [_label_part(lid, le)] if p}
         # Start BELOW whatever already occupies the left column. The semantic
         # adapter lays declared labels out on this same column and pitch, so
         # starting at the top wrote synthesized labels exactly on top of them
@@ -1208,9 +1254,7 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             tail = e.get("tail")
             if not (isinstance(tail, dict) and isinstance(tail.get("el"), str)):
                 lbl = next((lid for lid, le in labels.items()
-                            if _match_part(_guess_part_name(lid)) == part
-                            or _match_part(str(le.get("text", ""))) == part),
-                           None)
+                            if _label_part(lid, le) == part), None)
                 if lbl is not None:
                     at = _pt(labels[lbl].get("at")) or root_at
                     side = "right" if at[0] < root_at[0] else "left"
@@ -1229,7 +1273,7 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                           and isinstance(e.get("head"), dict)
                           and e["head"].get("layer")}
         for lid, le in list(labels.items()):
-            part = _match_part(_guess_part_name(lid))
+            part = _label_part(lid, le)
             if part is None or part.lower() in anchored_parts:
                 continue
             aid = f"arr_auto_{lid}"

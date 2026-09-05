@@ -426,7 +426,18 @@ class SceneRenderer:
                 tail = self._resolve_point(el.tail)
             head = self._resolve_point(el.head, toward=tail)
             if leader_only and head_owner is not None:
-                head = self._outside_boundary(head_owner.box, tail)
+                # Measure the INK, never the canvas, and LAND on the picture.
+                # `_outside_boundary(head_owner.box, tail)` did neither: a
+                # generated illustration's canvas carries a wide transparent
+                # margin, and the pad ran OUTWARD, toward the label. On the
+                # production geometry that left a ~12px stub floating beside
+                # the label, up to 100px short of the drawing it is supposed
+                # to associate it with. `_toward_boundary` is the helper
+                # resolved anchors already use: it stops on the boundary
+                # facing the label, a shade inside, so the line visibly meets
+                # the picture without an arrowhead claiming a structure.
+                head = self._toward_boundary(
+                    self._ink_box(head_owner) or head_owner.box, tail)
             paths = arrow_paths(tail, head, curve=el.curve,
                                 seed=_seed(el.id),
                                 head_len=0.0 if leader_only
@@ -862,6 +873,25 @@ class SceneRenderer:
         return any(box[0] < c[2] and box[2] > c[0]
                    and box[1] < c[3] and box[3] > c[1] for c in boxes)
 
+    def _top_row_slots(self, w: float, h: float,
+                       ry0: float) -> Iterator[tuple]:
+        """Rows above the picture: left to right, then upward, and it STOPS.
+
+        Shared by `_text_slots` and the label relayout's final spill so both
+        agree on where the space above a diagram is. The relayout used to
+        compute its own row y with a `max(16.0, ...)` floor, which handed
+        every row past the last one the identical y — the overflow stacked on
+        itself. Running out of rows is a real answer; clamping is not.
+        """
+        SAFE_L, SAFE_R, SAFE_T = 24.0, WORLD_W - 24.0, 22.0
+        y = ry0 - h - 26.0
+        while y >= SAFE_T:
+            x = SAFE_L
+            while x + w <= SAFE_R:
+                yield (x, y, x + w, y + h)
+                x += 40.0
+            y -= h + 10.0
+
     def _text_slots(self, w: float, h: float, art: tuple,
                     caption: bool) -> Iterator[tuple]:
         """Candidate positions, in the founder-specified order: right column,
@@ -892,13 +922,7 @@ class SceneRenderer:
                 y += h + 10.0
 
         def top() -> Iterator[tuple]:
-            y = ry0 - h - 26.0
-            while y >= SAFE_T:
-                x = SAFE_L
-                while x + w <= SAFE_R:
-                    yield (x, y, x + w, y + h)
-                    x += 40.0
-                y -= h + 10.0
+            return self._top_row_slots(w, h, ry0)
 
         gens = [below, lambda: column(min(rx1 + 26.0, SAFE_R - w)),
                 lambda: column(max(SAFE_L, rx0 - 26.0 - w)), top] \
@@ -1068,12 +1092,20 @@ class SceneRenderer:
         if len(entries) < 2:
             return
         y_top = max(40.0, ry0 + 4.0)
-        # per-side width budgets: the margin a column actually has. Without
-        # this a label wider than its margin was still placed AT the margin's
-        # x, i.e. straight across the diagram — the layout that exists to stop
-        # collisions was itself putting text on the art.
-        bw_right = (WORLD_W - 24.0) - (rx1 + 26.0)
-        bw_left = (rx0 - 26.0) - 24.0
+        SAFE_L, SAFE_R = 24.0, WORLD_W - 24.0
+        # The picture as INK, not canvas — the same box `_keep_text_off_art`
+        # measures against, so the two passes cannot disagree about where the
+        # art is.
+        art = self._root_art_box() or root_b.box
+        # The spill row sits above the picture, which is exactly where the
+        # chapter TITLE lives — and the title is exempt from being moved by
+        # every later pass, so nothing downstream can rescue a label written
+        # across it. This pass had no title awareness at all. The avatars'
+        # keep-out zones join it: space above the board is board space.
+        occupied = [b.box for eid, b in self.bound.items()
+                    if b.text is not None and b.box and not _is_overlay(eid)
+                    and _is_title(b)]
+        occupied += list(self._avatar_zones)
 
         def place_column(items: list, side: str) -> list:
             items = sorted(items, key=lambda e: e[1][1])   # by target height
@@ -1082,17 +1114,27 @@ class SceneRenderer:
                 bb = self.bound[lid]
                 w = bb.box[2] - bb.box[0]
                 h = bb.box[3] - bb.box[1]
-                if w > (bw_right if side == "right" else bw_left):
+                if side == "right":
+                    x0 = min(rx1 + 26.0, SAFE_R - w)
+                else:
+                    x0 = max(SAFE_L, rx0 - 26.0 - w)
+                x0 = max(SAFE_L, min(x0, SAFE_R - w))
+                box = (x0, y, x0 + w, y + h)
+                # A WIDTH test is not a placement test. Spilling every label
+                # wider than its side margin sent ordinary labels to the top
+                # row — across the title — for clipping that margin by a few
+                # pixels, when clamping them to the safe edge (what this did
+                # before) left them clear of the art. Measure the box the
+                # label would actually get, against the same 0.15 fraction
+                # `_keep_text_off_art` treats as "on the picture".
+                if self._overlap_frac(box, art) > 0.15:
                     spill.append((lid, tgt))
                     continue
-                if side == "right":
-                    x0 = min(rx1 + 26.0, WORLD_W - 24.0 - w)
-                else:
-                    x0 = max(24.0, rx0 - 26.0 - w)
                 if y + h > self._floor_for(x0, x0 + w):
                     spill.append((lid, tgt))
                     continue
-                bb.box = (x0, y, x0 + w, y + h)
+                bb.box = box
+                occupied.append(box)
                 y += max(50.0, h + 16.0)
             return spill
 
@@ -1100,23 +1142,22 @@ class SceneRenderer:
         left = [(l, t) for l, t in entries.items() if t[0] < rcx]
         spill = place_column(right, "right")
         spill = place_column(left + spill, "left")
-        # Final spill: rows above the diagram, ordered by target x. It WRAPS.
-        # A single row that clamped with `x = min(x, WORLD_W - 24 - w)` gave
-        # every label past the right edge the same x and the same y, i.e. it
-        # stacked them exactly on top of one another — the clamp turned an
-        # overflow into a collision.
-        x = max(24.0, rx0 - 60.0)
-        rows = 0
+        # Final spill: rows above the diagram, ordered by target x, taking the
+        # first slot that is free of the title, the avatars and the labels
+        # already placed. A label with nowhere left to go keeps its authored
+        # box and `_keep_text_off_art` gets the last word — better than a
+        # clamp that pretends there was room.
         for lid, tgt in sorted(spill, key=lambda e: e[1][0]):
             bb = self.bound[lid]
             w = bb.box[2] - bb.box[0]
             h = bb.box[3] - bb.box[1]
-            if x + w > WORLD_W - 24.0:          # wrap to the next row up
-                x = max(24.0, rx0 - 60.0)
-                rows += 1
-            y0t = max(16.0, ry0 - h - 26.0 - rows * (h + 10.0))
-            bb.box = (x, y0t, x + w, y0t + h)
-            x += w + 30.0
+            for box in self._top_row_slots(w, h, ry0):
+                if self._hits(box, occupied) or \
+                        self._overlap_frac(box, art) > 0.15:
+                    continue
+                bb.box = box
+                occupied.append(box)
+                break
 
     def _match_region_names(self, spans: dict, names: list[str]) -> list[str]:
         from .vector_assets import match_layer_ids
@@ -1162,23 +1203,6 @@ class SceneRenderer:
         ty = abs(((y1 - y0) / 2) / dy) if abs(dy) > 1e-6 else float("inf")
         t = min(tx, ty) * 0.88
         return (cx + dx * t, cy + dy * t)
-
-    @staticmethod
-    def _outside_boundary(box: tuple, toward: Point, pad: float = 14.0) -> Point:
-        """Where the ray from the box centre toward `toward` leaves the box,
-        plus a small gap — a leader that STOPS at the picture instead of
-        stabbing into it."""
-        x0, y0, x1, y1 = box
-        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-        dx, dy = toward[0] - cx, toward[1] - cy
-        n = math.hypot(dx, dy)
-        if n < 1e-6:
-            return (cx, cy)
-        ux, uy = dx / n, dy / n
-        tx = abs(((x1 - x0) / 2) / ux) if abs(ux) > 1e-6 else float("inf")
-        ty = abs(((y1 - y0) / 2) / uy) if abs(uy) > 1e-6 else float("inf")
-        t = min(tx, ty) + pad
-        return (cx + ux * t, cy + uy * t)
 
     def _resolve_point(self, spec, toward: Point | None = None) -> Point:
         """A PointSpec -> world point. Tuples pass through; AnchorRefs resolve

@@ -116,9 +116,14 @@ class TestLayerAnchors:
         outright (the old behaviour) left the label floating in a margin
         column beside a picture, saying nothing about WHICH picture it names
         — the founder saw exactly that. A leader keeps the honest half: it
-        stops OUTSIDE the picture on the ray toward its own label, and it
+        runs to the picture's EDGE on the ray toward its own label, and it
         carries no arrowhead, so it asserts association without asserting a
-        structure that may not be there."""
+        structure that may not be there.
+
+        It lands ON the picture. Stopping short of it — which is what the
+        first version did, padding OUTWARD from the canvas — is a line that
+        associates the label with nothing.
+        """
         r = SceneRenderer(_anchor_scene("ribosome"),
                           asset_resolver=_resolver(_cell_asset()))
         warns = r.audit()["warnings"]
@@ -126,10 +131,15 @@ class TestLayerAnchors:
         assert any(w.startswith("UNRESOLVED_ANCHOR") for w in warns)
         head = r.audit()["arrow_heads"]["ar"]
         art = r.bound["cell"].box
-        # outside the art, not stabbing its middle
-        assert not (art[0] <= head[0] <= art[2] and art[1] <= head[1] <= art[3]),             (head, art)
+        # on the art...
+        assert (art[0] <= head[0] <= art[2]
+                and art[1] <= head[1] <= art[3]), (head, art)
+        # ...at its edge, never its middle
         cx, cy = (art[0] + art[2]) / 2, (art[1] + art[3]) / 2
         assert ((head[0] - cx) ** 2 + (head[1] - cy) ** 2) ** 0.5 > 40.0
+        edge = min(head[0] - art[0], art[2] - head[0],
+                   head[1] - art[1], art[3] - head[1])
+        assert edge <= 0.15 * min(art[2] - art[0], art[3] - art[1]), (head, art)
         # a leader tick: one polyline, no barbs
         assert len(r.bound["ar"].layers[0].strokes) == 1
 
@@ -895,6 +905,60 @@ class TestPartNamesFromLabelText:
         assert "nucleus" in line and "cell wall" in line
         assert "name the layer groups exactly:" in \
             assets["s002"]["plant_cell"].lower()
+
+    def _labelled(self):
+        """The exact shape the label-text tier is FOR: element ids that name
+        nothing (lbl1, lbl2), and the part names carried only by the text."""
+        raw = _plan_raw()
+        ch = raw["chapters"][0]
+        ch["assets"]["plant_cell"] = "A rectangular plant cell."   # no tail
+        ch["elements"] = [e for e in ch["elements"] if e["id"] == "cell"]
+        ch["elements"] += [
+            {"id": "lbl1", "type": "text", "text": "Nucleus",
+             "at": [90, 120], "role": "label"},
+            {"id": "lbl2", "type": "text", "text": "Cell wall",
+             "at": [90, 200], "role": "label"}]
+        for st in ch["steps"]:
+            st["actions"] = [a for a in st["actions"]
+                             if a.get("target") == "cell"]
+        ch["steps"][0]["actions"].append({"verb": "write", "target": "lbl2"})
+        ch["steps"][1]["actions"].append({"verb": "write", "target": "lbl1"})
+        narr = {"s001": "The cell wall is rigid.",
+                "s002": "The nucleus is the control centre.",
+                "s003": "look closer"}
+        scenes, _, report = compile_plan(
+            parse_visual_plan(raw), narr,
+            all_segments=["s001", "s002", "s003"], skip_hold=set())
+        return scenes, report
+
+    def test_the_directors_own_labels_are_not_cloned(self):
+        """`covered` — the set of parts that already HAVE a label — was read
+        off the element IDS alone. This tier wins precisely when the ids name
+        nothing, so `covered` came back empty exactly when it mattered and the
+        synthesiser made a second copy of every label it had just learned
+        from: 'Nucleus' was written on the board twice, once by lbl1 and once
+        by lbl_auto_nucleus.
+        """
+        scenes, report = self._labelled()
+        assert not any("SYNTHESIZED lbl_auto_" in ln for ln in report), report
+        texts = [" ".join(str(e.get("text") or "").split()).lower()
+                 for e in scenes["s003"]["elements"]
+                 if e.get("type") == "text"
+                 and str(e.get("role") or "") == "label"]
+        assert sorted(texts) == ["cell wall", "nucleus"], texts
+
+    def test_the_directors_own_label_is_the_one_that_gets_the_leader(self):
+        """The point of not cloning: the leader must arm the label the
+        director declared, not a duplicate made to carry it. The lookup that
+        arms it reads the id too, so it needed the same text fallback."""
+        scenes, report = self._labelled()
+        assert any("SYNTHESIZED arr_auto_lbl1 -> cell.nucleus" in ln
+                   for ln in report), report
+        assert any("SYNTHESIZED arr_auto_lbl2 -> cell.cell wall" in ln
+                   for ln in report), report
+        arrows = [e for e in scenes["s003"]["elements"]
+                  if e.get("type") == "arrow"]
+        assert {a["tail"]["el"] for a in arrows} == {"lbl1", "lbl2"}, arrows
 
 
 class TestAQuestionIsNotAPartName:
@@ -2207,6 +2271,33 @@ class TestTextClassification:
         assert any("CAPTIONED text->compare_table" in ln
                    for ln in report), report
 
+    @pytest.mark.parametrize("term", ["Complete Blood Count", "List price",
+                                      "Record high", "Answer key",
+                                      "Draw distance"])
+    def test_a_term_that_merely_opens_on_a_verb_survives(self, term):
+        """A leading instruction verb was the whole test, so a real subject
+        term that begins with one was called a sentence — and, the demote
+        branch having been widened to consult this too, DELETED from the board
+        rather than captioned. Every one of these is a legitimate board label
+        in a biology, commerce or assessment lesson."""
+        from spike.scene_engine.continuity import (_classify_text,
+                                                   _is_instruction)
+        assert not _is_instruction(term), term
+        assert _classify_text({"text": term}) == "label", term
+
+    @pytest.mark.parametrize("order", ["Compare the two",
+                                       "Compare your models",
+                                       "Discuss in pairs", "Draw a diagram",
+                                       "Look at the graph"])
+    def test_a_real_instruction_still_reads_as_one(self, order):
+        """The carve-out must not readmit the text it exists to keep off the
+        board: a verb followed by the determiner or preposition an imperative
+        actually uses is still an instruction."""
+        from spike.scene_engine.continuity import (_classify_text,
+                                                   _is_instruction)
+        assert _is_instruction(order), order
+        assert _classify_text({"text": order}) == "sentence", order
+
     def test_a_spoken_sentence_becomes_a_key_point(self):
         text = "The nucleus controls everything the cell does."
         plan, scenes, report = self._chapter(
@@ -2941,6 +3032,143 @@ class TestArtIsTheInkNotTheCanvas:
         assert box[1] >= art[3], (box, art)    # under the picture...
         assert box[3] <= WORLD_H - 46.0
         assert abs((box[0] + box[2]) / 2 - (art[0] + art[2]) / 2) < 40.0
+
+
+def _annotated_board(labels: list, inset: int = 0, title: bool = True,
+                     head=None) -> SceneRenderer:
+    """The production root geometry, with real leader lines: a 1024px asset
+    fitted to 520px world at [600, 380], a chapter title in its top-centre
+    slot, and size-27 labels whose arrows point into the LEFT half of the
+    picture (so the layout sends them to the left column, the narrow one)."""
+    els = [{"id": "cell", "type": "illustration", "asset": "big_cell",
+            "at": [600, 380], "scale": 1.0}] + ([dict(_TITLE_EL)] if title
+                                                else [])
+    acts = [{"verb": "draw", "target": "cell"}] + \
+           ([{"verb": "write", "target": "ttl"}] if title else [])
+    for i, text in enumerate(labels):
+        els.append({"id": f"l{i}", "type": "text", "text": text,
+                    "role": "label", "size": 27, "at": [80, 120 + 70 * i],
+                    "anchor": "lt"})
+        els.append({"id": f"a{i}", "type": "arrow", "curve": 0,
+                    "tail": {"el": f"l{i}", "edge": "right", "dx": 6},
+                    "head": head if head is not None
+                    else [420.0, 300.0 + 60.0 * i]})
+        acts.append({"verb": "write", "target": f"l{i}"})
+        acts.append({"verb": "draw", "target": f"a{i}"})
+    scene = Scene.model_validate({"id": "t", "compiled": True,
+                                  "narration": "the plant cell",
+                                  "elements": els, "actions": acts})
+    return SceneRenderer(scene,
+                         asset_resolver=_resolver(_fitted_asset(inset=inset)))
+
+
+def _overlap(a: tuple, b: tuple) -> float:
+    return (max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+            * max(0.0, min(a[3], b[3]) - max(a[1], b[1])))
+
+
+class TestASpilledLabelNeverCrossesTheTitle:
+    """`_keep_text_off_art` learned that the title occupies board space; the
+    label relayout, which runs FIRST and has the last word on a label's box,
+    had not — and it newly routed any label WIDER than its side margin into
+    the top row, which is exactly where the title lives.
+
+    Measured on the production geometry with three ordinary size-27 labels of
+    29 characters each: two were lettered across the chapter title (2646 and
+    2982 px^2) and two landed on each other, with the pass reporting nothing.
+    """
+
+    LABELS = ["Chloroplasts trap the sunlight"] * 3
+
+    def test_no_label_is_written_across_the_title(self):
+        r = _annotated_board(self.LABELS)
+        ttl = r.bound["ttl"].box
+        for i in range(3):
+            box = r.bound[f"l{i}"].box
+            assert _overlap(box, ttl) == 0.0, (i, box, ttl)
+        assert ttl == (421.0, 80.0, 859.0, 147.0), ttl   # ...and unmoved
+
+    def test_a_label_that_merely_clips_the_margin_keeps_its_column(self):
+        """The hard width test was the cause. A 336px label in a 290px left
+        margin clamps to the safe edge and clips the picture by 6% of its own
+        area — under the 0.15 fraction the keep-off-art pass calls a
+        collision — which is where master left it and where it belongs."""
+        r = _annotated_board(self.LABELS)
+        art = r._root_art_box()
+        ys = []
+        for i in range(3):
+            x0, y0, x1, y1 = r.bound[f"l{i}"].box
+            assert x0 == 24.0, (i, x0)               # the left column, clamped
+            assert x1 - x0 > 290.0, (i, x1 - x0)     # wider than that margin
+            assert r._overlap_frac((x0, y0, x1, y1), art) <= 0.15
+            ys.append(y0)
+        assert ys == sorted(ys) and len(set(ys)) == 3, ys
+
+    def test_the_labels_do_not_land_on_each_other(self):
+        r = _annotated_board(self.LABELS)
+        warns = r.audit()["warnings"]
+        assert not any(w.startswith("TEXT_OVERLAP") for w in warns), warns
+
+    def test_a_label_with_nowhere_left_says_so(self):
+        """A label too wide for any column AND for every row above the title
+        keeps its authored box and is REPORTED, rather than being clamped
+        onto the title as if there had been room."""
+        r = _annotated_board(["Chloroplasts trap the sunlight energy from "
+                              "the sun for photosynthesis"] * 3)
+        ttl = r.bound["ttl"].box
+        warns = r.audit()["warnings"]
+        assert any(w.startswith("TEXT_OVER_ART") for w in warns), warns
+        for i in range(3):
+            assert _overlap(r.bound[f"l{i}"].box, ttl) == 0.0, i
+
+
+class TestTheEdgeLeaderReachesThePicture:
+    """The leader that replaced arrow suppression measured the illustration's
+    CANVAS and then padded OUTWARD — away from the picture, toward the label.
+    On the production geometry that left a ~12px stub floating beside the
+    label, up to 100px short of the ink it is meant to associate it with."""
+
+    def _leader(self, inset: int):
+        r = _annotated_board(["Nucleus", "Golgi body"], inset=inset,
+                             title=False,
+                             head={"el": "cell", "layer": "nucleus",
+                                   "edge": "center"})
+        b = r.bound["a0"]
+        pts = [q for st in b.layers[0].strokes for q in st.pts]
+        length = sum(((pts[i + 1][0] - pts[i][0]) ** 2
+                      + (pts[i + 1][1] - pts[i][1]) ** 2) ** 0.5
+                     for i in range(len(pts) - 1))
+        return r, b.head_pt, length
+
+    def test_the_geometry_under_test_is_the_production_one(self):
+        r, _, _ = self._leader(160)
+        assert r.bound["cell"].box == (340.0, 120.0, 860.0, 640.0)
+        ink = r._root_art_box()
+        assert ink[0] > 420.0 and ink[2] < 780.0, ink   # a wide clear margin
+        lbl = r.bound["l0"].box
+        # the label the reviewer measured: the left column, hugging
+        # the CANVAS edge, 107px of transparent margin short of the ink
+        assert lbl[0] == 230.0 and lbl[2] == 314.0, lbl
+
+    @pytest.mark.parametrize("inset", [0, 160])
+    def test_the_leader_lands_on_the_ink_not_on_the_canvas(self, inset):
+        r, head, _ = self._leader(inset)
+        ink = r._root_art_box()
+        assert ink[0] <= head[0] <= ink[2] and ink[1] <= head[1] <= ink[3], \
+            (head, ink, r.bound["cell"].box)
+
+    @pytest.mark.parametrize("inset", [0, 160])
+    def test_a_leader_is_long_enough_to_be_one(self, inset):
+        """40px is the bar: below that it is a tick beside the label, which
+        is what the canvas-plus-outward-pad version drew (~12px)."""
+        r, _, length = self._leader(inset)
+        assert length >= 40.0, length
+
+    def test_it_is_still_a_leader_and_not_an_arrow(self):
+        r, _, _ = self._leader(160)
+        assert len(r.bound["a0"].layers[0].strokes) == 1
+        warns = r.audit()["warnings"]
+        assert any(w.startswith("ANCHOR_EDGE_FALLBACK") for w in warns), warns
 
 
 class TestADroppedElementIsNotAZoomTarget:
