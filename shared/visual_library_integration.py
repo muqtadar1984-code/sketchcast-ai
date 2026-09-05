@@ -120,14 +120,29 @@ def _patch() -> None:
         return
     from spike.scene_engine import raster_assets as ra
     from shared.visual_library import (best_match, hydrate, hydrate_avatar,
-                                       is_avatar_key, log_decision,
-                                       publish_generated, threshold_now)
+                                       is_avatar_key, key_guard_ok,
+                                       log_decision, publish_generated,
+                                       threshold_now)
 
     _bootstrap_existing_cache(ra)
     original = ra.get_raster_asset
 
     def wrapped_get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
                                  allow_generate: bool = True):
+        # The whole decision — did it exist, hydrate, generate, publish, log —
+        # runs under the SAME per-key lock the generator uses (re-entrant, so
+        # `original` may take it again). It closes two races that were found
+        # separately: taken inside `original` only, two render threads could
+        # both read existed_before=False for one key and both log
+        # generated+published for a single image; and hydration ran OUTSIDE it,
+        # so one thread could open the half-written asset.png another was
+        # writing, call it corrupt, and pay for a second, different face
+        # mid-lesson.
+        with ra.asset_lock(key):
+            return _decide(key, prompt, cache_dir, allow_generate)
+
+    def _decide(key: str, prompt: str, cache_dir: Path | None,
+                allow_generate: bool):
         cache = cache_dir or ra.CACHE_DIR
         cache.mkdir(parents=True, exist_ok=True)
         asset_dir = cache / ra.canonical_key(key)
@@ -212,6 +227,11 @@ def _patch() -> None:
             "match_source": source,
             "threshold": threshold_now(),
             "cleared_threshold": bool(match is not None and score >= threshold_now()),
+            # Whether the best-scoring row was even ABOUT the requested key.
+            # cleared_threshold=true with library_hit=false used to mean a
+            # canonical-key path mismatch; now it can also mean this guard
+            # refused a confident wrong picture, and the log says which.
+            "key_guard_passed": bool(match is not None and key_guard_ok(key, match)),
             "ai_generated": provenance == "generated" and not existed_before,
             "published": published,
             "asset_used": str(png) if png.exists() else None,

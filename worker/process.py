@@ -168,13 +168,28 @@ def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
             v = report.get(key)
             count = len(v) if isinstance(v, list) else int(v or 0)
             if count > tolerance:
-                blocking.append(f"{key}={count}/{n}")
+                reasons = (report.get("unresolved_asset_reasons") or {}
+                           if key == "unresolved_assets" else {})
+                tail = ("(" + ",".join(f"{r}={c}" for r, c
+                                       in sorted(reasons.items())) + ")"
+                        if reasons else "")
+                blocking.append(f"{key}={count}/{n}{tail}")
 
         noted = [k for k in ("no_scenes_produced", "mostly_silent")
                  if report.get(k)]
         for k in ("unresolved_assets", "silent_segments", "overlapping_text"):
             if report.get(k):
-                noted.append(f"{k}={len(report[k])}")
+                why = ""
+                if k == "unresolved_assets":
+                    # WHY the boards are blank, not just how many. The summary
+                    # is what a human reads first, and it used to assert a
+                    # cause ("no asset prompt") that was wrong for the only
+                    # two real cases we have.
+                    reasons = report.get("unresolved_asset_reasons") or {}
+                    if reasons:
+                        why = "(" + ",".join(f"{r}={n}" for r, n
+                                             in sorted(reasons.items())) + ")"
+                noted.append(f"{k}={len(report[k])}{why}")
         summary = ("BLOCKING: " + ", ".join(blocking) if blocking
                    else (", ".join(noted) if noted else "clean"))
         logger.info("acceptance: audit=%s ship=%s\n%s",
@@ -603,9 +618,12 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     # Image generation is the expensive call and had no cap at all, while TTS
     # has had one since it became metered. Per LESSON, so a global counter
     # cannot refuse the hundredth honest generation.
+    # Keyed by GENERATION, because WORKER_CONCURRENCY>1 runs several lessons
+    # in this one process: a shared counter let one book's 429 blank another
+    # book's boards, and one book's reset wipe the other's protection.
     try:
         from spike.scene_engine.raster_assets import reset_image_budget
-        reset_image_budget()
+        reset_image_budget(generation_id)
     except Exception:  # noqa: BLE001 — the guard must not break the pipeline
         pass
 
@@ -1072,20 +1090,30 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 explicit_language=bool(params.get("language")),
                 provider=canary_provider)
 
-            # Avatar casting: teacher matches the narration VOICE, student
-            # matches the book's GRADE band (auto-detected at upload,
-            # teacher-editable), gender seeded by generation id so retries
-            # render the identical character. Cast from the RESOLVED voice —
+            # Avatar casting (founder, 2026-09-04): a RANDOM approved roster
+            # face, restricted only by the narration voice's gender; the
+            # student's age band from the book's grade (auto-detected at
+            # upload, teacher-editable) and, in a dialogue, the gender of the
+            # voice that reads the student's lines. Seeded by the CHAPTER, not
+            # the generation: each part of a chapter is its own generation, so
+            # a generation-id seed would put a different teacher in Part 1 and
+            # Part 2 of one lesson series. The book-and-chapter seed keeps one
+            # face across every part and every retry, while another chapter
+            # casts afresh. Cast from the RESOLVED voice —
             # after the gate — so a downgraded premium pick casts the avatar
-            # of the voice that will actually speak.
-            from spike.scene_engine.whiteboard import (
-                student_avatar_for_grade, teacher_avatar_for_voice)
+            # of the voice that will actually speak. Cast ONCE, here, before
+            # the parts loop: the keys travel on every part's script.
+            from spike.scene_engine.whiteboard import cast_avatars, two_voice_dialogue
             effective_voice = resolve_voice(tts_voice, allow_premium, lang=lesson_lang).voice_id
-            avatars = {
-                "teacher": teacher_avatar_for_voice(effective_voice),
-                "student": student_avatar_for_grade(book.get("grade"),
-                                                    seed=generation_id),
-            }
+            # `dialogue` is the SAME predicate the script generator will run
+            # with for this style: the student face follows the second voice
+            # exactly when that voice will read the student's lines.
+            cast_seed = f"{book_id}:{chapter_num}"
+            avatars = cast_avatars(effective_voice, book.get("grade"), cast_seed,
+                                   lang=lesson_lang, style=narration_style,
+                                   dialogue=two_voice_dialogue(narration_style))
+            logger.info("avatars cast for %s (seed %s): %s (voice %s)",
+                        generation_id, cast_seed, avatars, effective_voice)
 
             episodes_plan = (analysis.get("episodes") or {}).get("episodes") or []
             n_parts = max(len(episodes_plan), 1)
@@ -1257,14 +1285,18 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     for _ln in _accept.get("plan_report") or []:
                         logger.info("visual plan: %s", _ln)
                     try:
+                        # Keyed by PART. A multi-part lesson writes this once
+                        # per part, and under one key each part overwrote the
+                        # last — so the part that failed is exactly the one
+                        # whose verdict you lost.
                         db.merge_generation_params(sb, generation_id, {
-                            "acceptance": {
+                            f"acceptance_part{part_idx}": {
                                 "part": part_idx,
                                 "passed": _accept["passed"],
                                 "ship": _accept["ship"],
                                 "summary": _accept["summary"],
                             },
-                            "visual_plan_report":
+                            f"visual_plan_report_part{part_idx}":
                                 (_accept.get("plan_report") or [])[:200],
                         })
                     except Exception:  # noqa: BLE001 — telemetry, never fatal

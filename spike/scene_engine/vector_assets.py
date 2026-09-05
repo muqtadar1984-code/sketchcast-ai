@@ -45,6 +45,9 @@ class VectorAsset:
     w: float
     h: float
     layers: tuple[VLayer, ...]
+    # a stand-in frame, not the diagram (see `placeholder_asset`). The renderer
+    # reports it so the acceptance gate keeps counting the board as unresolved.
+    placeholder: bool = False
 
     def layer_ids(self) -> list[str]:
         return [l.id for l in self.layers]
@@ -53,7 +56,14 @@ class VectorAsset:
         """Layers matching `ids` — via the ONE shared matcher every consumer
         uses (draw distribution, carried-state reveal, workloads). Divergent
         matchers once made a draw reveal nothing while the carry showed it."""
-        if not ids:
+        if not ids or self.placeholder:
+            # A placeholder has ONE layer, named "frame", which is not the
+            # nucleus or the cilia the scene asked to draw. Matched normally
+            # it answers nothing, so the frame that exists to show the board
+            # is missing was itself invisible on every scene whose draw names
+            # layers -- and the director writes those for exactly the detailed
+            # diagrams most likely to be the ones that failed. It has no parts
+            # to distinguish, so it answers to all of them.
             return self.layers
         matched = set(match_layer_ids([l.id for l in self.layers], ids))
         return tuple(l for l in self.layers if l.id in matched)
@@ -225,6 +235,37 @@ def _membrane_section() -> VectorAsset:
     ), label_anchor=(500, (top + bot) / 2)))
 
     return VectorAsset("membrane_section", W, H, tuple(layers))
+
+
+# ── the placeholder tier ─────────────────────────────────────────────────────
+
+def placeholder_asset(key: str) -> VectorAsset:
+    """A dashed frame standing where a picture should have been.
+
+    Dropping the element entirely left `b.box` a ZERO-SIZE point at the
+    element's nominal centre (render.py), so every label and leader anchored to
+    the missing diagram was laid out around one pixel -- a fan of arrows
+    converging on nothing, which reads as a rendering bug rather than a missing
+    picture. A real box gives them somewhere honest to point.
+
+    Deliberately NOT in `_BUILDERS`: `vector_asset("volcano")` must still be
+    None, so this can only be reached through the resolver's last rung, and
+    only for a key that HAD a prompt.
+    """
+    W, H = 800.0, 540.0
+    # a dashed border: short arcs of the rounded rect, drawn as separate
+    # strokes, so it never reads as a real drawn outline
+    ring = rrect_path(30, 30, W - 30, H - 30, 46, seed=7, rough=1.4)
+    dashes: list[VStroke] = []
+    step, gap = 9, 5
+    for i in range(0, len(ring) - step, step + gap):
+        seg = tuple(ring[i:i + step])
+        if len(seg) >= 2:
+            dashes.append(VStroke(seg, 2.4, "muted"))
+    return VectorAsset(f"placeholder:{key}", W, H,
+                       (VLayer("frame", tuple(dashes),
+                               label_anchor=(W / 2, H / 2)),),
+                       placeholder=True)
 
 
 # ── registry ─────────────────────────────────────────────────────────────────

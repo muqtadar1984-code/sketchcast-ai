@@ -15,7 +15,11 @@ avatar teaching moments.
 
 from __future__ import annotations
 
+import logging
+
 from .schema import WORLD_W
+
+logger = logging.getLogger(__name__)
 
 _MAX_POINTS = 3
 _MAX_POINT_CHARS = 64
@@ -562,53 +566,177 @@ _FEMALE_VOICE_HINTS = ("aria", "jenny", "emma", "ana", "ava", "michelle",
                        "female", "neerja", "swara", "aisha", "salma")
 
 
-def teacher_avatar_for_voice(voice_id: str | None) -> str:
-    """The teacher avatar matching a voice. The registry's `gender` field is
-    the source of truth; the name-fragment list below is only a fallback for
-    ids the registry does not know (raw provider refs in dev scripts).
-
-    Measured before the field existed: eight female voices — every non-English
-    default and Rachel — were absent from the fragment list and cast the male
-    teacher. Pass the RESOLVED voice (after the tier gate), not the requested
-    one, or a downgraded premium pick casts the wrong avatar over Aria."""
+def voice_gender(voice_id: str | None) -> str:
+    """'f' | 'm' for a voice. The registry's `gender` field is the source of
+    truth; the name-fragment list above is only a fallback for ids the
+    registry does not know (raw provider refs — the student's Edge voices,
+    dev scripts). Anything unknown is male, as it always was."""
     try:
         from shared.tts.registry import get_voice
         v = get_voice(voice_id)
         if v is not None:
-            return "avatar_teacher_female" if v.gender == "f" else "avatar_teacher"
+            return "f" if v.gender == "f" else "m"
     except Exception:  # noqa: BLE001 — casting must never fail a render
         pass
     s = (voice_id or "").lower()
-    if any(h in s for h in _FEMALE_VOICE_HINTS):
-        return "avatar_teacher_female"
-    return "avatar_teacher"
+    return "f" if any(h in s for h in _FEMALE_VOICE_HINTS) else "m"
+
+
+def teacher_avatar_for_voice(voice_id: str | None) -> str:
+    """The teacher avatar KEY matching a voice (the roster family, not a
+    face — see cast_avatars for the face).
+
+    Measured before the registry's gender field existed: eight female voices —
+    every non-English default and Rachel — were absent from the fragment list
+    and cast the male teacher. Pass the RESOLVED voice (after the tier gate),
+    not the requested one, or a downgraded premium pick casts the wrong avatar
+    over Aria."""
+    return "avatar_teacher_female" if voice_gender(voice_id) == "f" else "avatar_teacher"
+
+
+def student_band_for_grade(grade) -> str:
+    """The student age band for a book grade. Unknown grades keep the
+    youngest — wrong-young is friendlier than wrong-old."""
+    try:
+        g = int(str(grade).strip().split()[-1])
+    except (ValueError, IndexError, TypeError):
+        g = 6
+    if g <= 7:
+        return "5_7"
+    if g <= 10:
+        return "8_10"
+    if g <= 12:
+        return "11_12"
+    if g <= 16:
+        return "undergrad"
+    if g <= 18:
+        return "grad"
+    return "doctorate"
+
+
+def student_avatar_key(band: str, sex: str) -> str:
+    """The roster key for a band + gender (the legacy key is the 5-7 boy)."""
+    if band == "5_7":
+        return "avatar_student" if sex == "m" else "avatar_student_5_7_f"
+    return f"avatar_student_{band}_{sex}"
 
 
 def student_avatar_for_grade(grade, seed: str = "") -> str:
     """Grade band + a deterministic per-lesson gender pick -> student avatar
     key. `seed` (e.g. the script/lesson id) decides male vs female so the
     system varies between lessons but a RETRY of the same lesson renders the
-    identical character. Unknown grades keep the youngest — wrong-young is
-    friendlier than wrong-old."""
+    identical character."""
     import zlib
     sex = "f" if zlib.crc32(str(seed).encode("utf-8")) & 1 else "m"
+    return student_avatar_key(student_band_for_grade(grade), sex)
+
+
+def avatar_prompt(key: str) -> str:
+    """The generation prompt for an avatar key — a roster key or a
+    face-bearing one (`avatar_teacher_female__face_f3c6fcb3`, one specific
+    roster face; the prompt is the family's). Unknown keys get the role's
+    legacy prompt so a render never fails over a name."""
+    from shared.visual_library import base_avatar_key
+    base = base_avatar_key(str(key or ""))
+    if base in AVATAR_PROMPTS:
+        return AVATAR_PROMPTS[base]
+    return AVATAR_PROMPTS["avatar_student" if "student" in base else "avatar_teacher"]
+
+
+def two_voice_dialogue(style: str | None) -> bool:
+    """Does a lesson of this narration style carry TWO-VOICE dialogue — a
+    second (student) voice reading the student's lines?
+
+    The ONE predicate for that question. Its answer decides, in
+    script_generator, whether a segment's dialogue array becomes
+    `ScriptSegment.dialogue` (per-line two-voice TTS); in continuity,
+    whether the student is a permanent on-board speaker; and here, in
+    cast_avatars, whether the student FACE must match the second voice's
+    gender. Three sites once each tested the style label on their own,
+    which is how the face could drift from the audio.
+
+    Today only `conversational` is two-voice, on BOTH script paths: the
+    SEMANTIC prompt (SEMANTIC_PLAN=1) asks every style for a dialogue
+    array, but script_generator harvests the WORDS from it for the other
+    four styles and narrates them singly — a direct explainer read by two
+    people is a different product. So SEMANTIC_PLAN is deliberately NOT
+    part of this predicate: with it, a socratic lesson on the live path
+    would cast a face for a student voice that never speaks. Should the
+    other styles ever go two-voice, change it HERE and the face follows."""
+    return str(style or "").strip().lower() == "conversational"
+
+
+def cast_avatars(effective_voice: str | None, grade, seed: str, *,
+                 lang: str | None = "en", style: str = "socratic",
+                 dialogue: bool | None = None,
+                 roster: list | None = None) -> dict:
+    """The two avatar KEYS one generation renders with — founder decision,
+    2026-09-04: a random approved roster face, restricted only by the
+    narration voice's gender, and the SAME face on every segment and part.
+
+      teacher  — gender of the EFFECTIVE narration voice (resolve it after the
+                 tier gate; a downgraded premium pick casts the voice that
+                 actually speaks), any approved teacher face of that gender,
+                 drawn with `seed`, which the worker sets to the BOOK AND
+                 CHAPTER rather than the generation: every part of a chapter
+                 is its own generation, so a generation-id seed would change
+                 the teacher between Part 1 and Part 2. Seeded this way,
+                 retries and later parts agree and another chapter casts
+                 afresh.
+      student  — age band from the book grade; gender from the SECOND voice
+                 when the lesson carries two-voice dialogue (the voice that
+                 will read the student's lines — Ana/Emma in English, the
+                 language's free default elsewhere), else the seeded
+                 per-lesson pick as before. `dialogue` says whether it does;
+                 callers that know (the worker, which owns the style the
+                 script generator will run with) pass it explicitly, and an
+                 unstated one falls back to two_voice_dialogue(style) — the
+                 SAME predicate script_generator decides with, so the face
+                 and the audio can only ever disagree by editing one place.
+
+    Fallbacks live in shared.visual_library.pick_avatar: no face of that
+    gender → any face of the role (logged); no roster face of the role, or
+    no student face in the book's AGE BAND (a grade-13+ book against a
+    school-only roster) → the roster key itself, which is today's generate
+    path and seeds the roster with the age-matched face. Never raises."""
+    seed = str(seed or "")
     try:
-        g = int(str(grade).strip().split()[-1])
-    except (ValueError, IndexError, TypeError):
-        g = 6
-    if g <= 7:
-        return "avatar_student" if sex == "m" else "avatar_student_5_7_f"
-    if g <= 10:
-        band = "8_10"
-    elif g <= 12:
-        band = "11_12"
-    elif g <= 16:
-        band = "undergrad"
-    elif g <= 18:
-        band = "grad"
+        from shared.visual_library import cast_avatar_key
+    except Exception:  # noqa: BLE001
+        cast_avatar_key = None  # type: ignore[assignment]
+    t_gender = voice_gender(effective_voice)
+    t_default = teacher_avatar_for_voice(effective_voice)
+    band = student_band_for_grade(grade)
+    if dialogue is None:
+        dialogue = two_voice_dialogue(style)
+    if dialogue:
+        s_gender = voice_gender(student_voice_for_band(band, lang or "en")
+                                or _free_voice_ref(lang))
     else:
-        band = "doctorate"
-    return f"avatar_student_{band}_{sex}"
+        import zlib
+        s_gender = "f" if zlib.crc32(seed.encode("utf-8")) & 1 else "m"
+    s_default = student_avatar_key(band, s_gender)
+    out = {"teacher": t_default, "student": s_default}
+    if cast_avatar_key is None:
+        return out
+    try:
+        out["teacher"] = cast_avatar_key("teacher", t_gender, seed, t_default, roster=roster)
+        out["student"] = cast_avatar_key("student", s_gender, seed, s_default,
+                                         age_band=band, roster=roster)
+    except Exception:  # noqa: BLE001 — a lesson is never failed over an avatar
+        logger.exception("avatar cast failed; using the roster keys")
+    return out
+
+
+def _free_voice_ref(lang: str | None) -> str:
+    """The provider ref of the language's free default voice — what the
+    dialogue uses for the student's lines outside English."""
+    try:
+        from shared.tts.registry import default_voice, default_voice_id_for, get_voice
+        v = get_voice(default_voice_id_for(lang)) or default_voice()
+        return v.voice_id
+    except Exception:  # noqa: BLE001
+        return ""
 
 _AV_AT = (178.0, 568.0)      # lower-LEFT: the persistent teacher owns the
 _AV_SCALE = 0.38             # lower-right corner now
@@ -772,15 +900,24 @@ def student_element(asset: str = "avatar_student") -> dict:
             "at": list(STUDENT_AT), "scale": AVATAR_SCALE}
 
 
-def student_voice_for_avatar(avatar_key: str, lang: str = "en") -> str:
-    """A student TTS voice matching the avatar's age band (English only —
-    other languages reuse the lesson voice, since age-matched voices are not
-    guaranteed per locale)."""
+def student_voice_for_band(band: str, lang: str = "en") -> str:
+    """A student TTS voice for an age band (English only — other languages
+    reuse the lesson voice, since age-matched voices are not guaranteed per
+    locale). Both English picks are female Edge voices: Ana is the only child
+    voice Edge ships, so the dialogue's student is a girl in English until a
+    male young voice exists (the avatar follows the voice, not the reverse)."""
     if lang != "en":
         return ""
-    young = avatar_key in ("avatar_student", "avatar_student_5_7_f",
-                           "avatar_student_8_10_m", "avatar_student_8_10_f")
-    return "en-US-AnaNeural" if young else "en-US-EmmaNeural"
+    return "en-US-AnaNeural" if band in ("5_7", "8_10") else "en-US-EmmaNeural"
+
+
+def student_voice_for_avatar(avatar_key: str, lang: str = "en") -> str:
+    """A student TTS voice matching the avatar's age band. Accepts a
+    face-bearing key (the band is the family's)."""
+    from shared.visual_library import avatar_age_band, base_avatar_key
+    base = base_avatar_key(str(avatar_key or ""))
+    band = avatar_age_band(base) or ("5_7" if base == "avatar_student" else "11_12")
+    return student_voice_for_band(band, lang)
 
 
 def key_point_choreo(text: str, uid: str) -> tuple[list[dict], list[dict]]:

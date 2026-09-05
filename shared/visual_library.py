@@ -24,9 +24,15 @@ import logging
 import os
 import re
 import shutil
+import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from shared.asset_keys import (all_noise, canonical_key, core_tokens,
+                               distinguishes, is_avatar_key)
+from shared.asset_keys import tokens as _tokens_of
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +76,15 @@ class LibraryContext:
         )
 
 
-def canonical_key(value: str) -> str:
-    """Stable concept identity; order/noise changes do not create new assets."""
-    tokens = [t for t in re.split(r"[^a-z0-9]+", str(value).lower()) if t]
-    core = [t for t in tokens if t not in _STOP] or tokens
-    return "_".join(sorted(set(core))) or "asset"
+# canonical_key is imported from shared.asset_keys, NOT defined here. This
+# module had its own copy whose stop-list kept "cell"/"figure", so for every
+# *_cell key in the biology curriculum it disagreed with the renderer's fold:
+# hydrate() filed a downloaded picture under cache/cell_ciliated/ while the
+# renderer only ever reads cache/ciliated/. Every cell-key library hit landed
+# where nobody looks and the picture was generated again.
+#
+# _STOP stays, but only for scoring PROSE (descriptions, prompts), where words
+# like "showing" and "whiteboard" are genuinely noise.
 
 
 # ── avatars are not educational visuals ──────────────────────────────────────
@@ -89,17 +99,15 @@ def canonical_key(value: str) -> str:
 # design; asset_type is the only thing keeping them apart.
 
 _AVATAR_ROLES = ("teacher", "student")
-_AGE_BAND_RE = re.compile(r"(\d{1,2}_\d{1,2})")
+# The band token of a student key: a school band (`5_7`, `8_10`, `11_12`) or
+# a post-school one (`undergrad`, `grad`, `doctorate` — AVATAR_PROMPTS keeps
+# faces for them, and a grade-13+ book asks for them). Token-bounded so
+# `undergrad` is never read as `grad`. A band the key does not carry is None.
+_AGE_BAND_RE = re.compile(r"(?:^|_)(\d{1,2}_\d{1,2}|undergrad|grad|doctorate)(?:_|$)")
 
 
-def is_avatar_key(key: str) -> bool:
-    """Avatar identity from the asset key alone.
-
-    Keys are the durable signal here: the roster is named avatar_* by the
-    renderer (spike/scene_engine/whiteboard.py), and a key is available
-    everywhere, including for rows written before asset_type was populated.
-    """
-    return str(key or "").strip().lower().startswith("avatar")
+# is_avatar_key is imported from shared.asset_keys: the renderer needs the
+# SAME answer, to keep an unresolvable avatar out of the placeholder tier.
 
 
 def avatar_fields(key: str) -> dict[str, Any]:
@@ -108,7 +116,7 @@ def avatar_fields(key: str) -> dict[str, Any]:
     Returns the ordinary-visual shape for anything that is not an avatar, so
     callers can merge it unconditionally.
     """
-    k = str(key or "").strip().lower()
+    k = base_avatar_key(str(key or "").strip().lower())
     if not is_avatar_key(k):
         return {"asset_type": "visual", "role": None, "age_band": None}
     role = next((r for r in _AVATAR_ROLES if r in k), None)
@@ -130,6 +138,231 @@ def is_avatar_row(row: dict[str, Any] | None) -> bool:
     if str(row.get("asset_type") or "").lower() == "avatar":
         return True
     return is_avatar_key(str(row.get("asset_key") or row.get("canonical_key") or ""))
+
+
+# ── one lesson, one face ─────────────────────────────────────────────────────
+# Founder decision (2026-09-04): the avatar is chosen AT RANDOM among the
+# roster's approved faces, restricted only by the narration voice's gender.
+# The roster holds several faces per key (five approved avatar_female_teacher
+# rows by 2026-09-04, each a different drawing), so "which face" is no longer
+# implied by the key. It has to travel WITH the key: the renderer's raster
+# cache is per key and shared by every lesson on a container, and the child
+# render process resolves assets by key alone. A face-bearing key is
+#
+#     avatar_teacher_female__face_f3c6fcb3
+#
+# — the roster key plus the first 8 hex chars of the chosen row's id. Every
+# consumer that needs the ROSTER key (the prompt, the student voice's age
+# band, publish) strips the suffix with base_avatar_key(); everything keyed
+# on cache identity (canonical_key, the asset dir) keeps it, so two faces of
+# one teacher never share a cache directory.
+FACE_SEP = "__face_"
+_FACE_ID_LEN = 8
+
+
+def face_key(base_key: str, row_id: str) -> str:
+    """The asset key for one specific roster face."""
+    fid = re.sub(r"[^a-z0-9]", "", str(row_id or "").lower())[:_FACE_ID_LEN]
+    base = base_avatar_key(base_key)
+    return f"{base}{FACE_SEP}{fid}" if fid else base
+
+
+def base_avatar_key(key: str) -> str:
+    """The roster key under a face-bearing key (identity for non-face keys)."""
+    k = str(key or "")
+    i = k.find(FACE_SEP)
+    return k[:i] if i > 0 else k
+
+
+def face_id_of(key: str) -> str | None:
+    """The row-id prefix a face-bearing key names, else None."""
+    k = str(key or "")
+    i = k.find(FACE_SEP)
+    if i < 0:
+        return None
+    fid = k[i + len(FACE_SEP):].strip().lower()
+    return fid or None
+
+
+# Gender is NOT a column on visual_assets and the rows carry no metadata JSON,
+# so it is read from the KEY the renderer named the face with — the roster is
+# generated from AVATAR_PROMPTS, whose keys encode it (`_female`, `_f`, `_m`;
+# the two legacy keys `avatar_teacher` / `avatar_student` are male by their
+# prompt text). The description is the fallback for a row named some other
+# way. Measured on the live roster (13 rows, 2026-09-04): every row resolves
+# from its key.
+_DESC_FEMALE = re.compile(r"\b(female|woman|girl|schoolgirl|lady|she)\b", re.I)
+_DESC_MALE = re.compile(r"\b(male|man|boy|schoolboy|he)\b", re.I)
+_LEGACY_MALE_KEYS = {"avatar_teacher", "avatar_student"}
+
+
+def avatar_gender(row_or_key) -> str | None:
+    """'f' | 'm' for a roster row (or a bare key), None when unknowable."""
+    if isinstance(row_or_key, dict):
+        key = str(row_or_key.get("asset_key") or row_or_key.get("canonical_key") or "")
+        desc = str(row_or_key.get("description") or "")
+    else:
+        key, desc = str(row_or_key or ""), ""
+    k = base_avatar_key(key).strip().lower()
+    toks = [t for t in re.split(r"[^a-z0-9]+", k) if t]
+    if "female" in toks or (toks and toks[-1] == "f"):
+        return "f"
+    if "male" in toks or (toks and toks[-1] == "m"):
+        return "m"
+    if k in _LEGACY_MALE_KEYS:
+        return "m"
+    if _DESC_FEMALE.search(desc):
+        return "f"
+    if _DESC_MALE.search(desc):
+        return "m"
+    return None
+
+
+def avatar_role(row_or_key) -> str | None:
+    if isinstance(row_or_key, dict):
+        r = str(row_or_key.get("role") or "").strip().lower()
+        if r in _AVATAR_ROLES:
+            return r
+        key = str(row_or_key.get("asset_key") or row_or_key.get("canonical_key") or "")
+    else:
+        key = str(row_or_key or "")
+    return avatar_fields(key)["role"]
+
+
+def avatar_age_band(row_or_key) -> str | None:
+    """'5_7' | '8_10' | ... for a student face; the legacy avatar_student
+    (an 11-year-old by its prompt) is the 5_7 band."""
+    if isinstance(row_or_key, dict):
+        b = str(row_or_key.get("age_band") or "").strip()
+        if b:
+            return b
+        key = str(row_or_key.get("asset_key") or row_or_key.get("canonical_key") or "")
+    else:
+        key = str(row_or_key or "")
+    band = avatar_fields(key)["age_band"]
+    if band is None and base_avatar_key(key).strip().lower() == "avatar_student":
+        return "5_7"
+    return band
+
+
+# One page size for BOTH roster queries. The listing (every avatar, which
+# picks the face) and the family lookup (one canonical key, which serves it)
+# must reach equally far: a family is a subset of the roster, so any face the
+# listing can pick, the lookup with the same limit can find. Two different
+# limits here once meant a picked face past the lookup's page was "gone" and
+# silently replaced by the oldest.
+ROSTER_LIMIT = 200
+
+
+def list_avatar_roster() -> list[dict[str, Any]]:
+    """Every approved avatar row, oldest first. Empty offline or on error."""
+    sb = _sb()
+    if sb is None:
+        return []
+    try:
+        rows = (sb.table("visual_assets").select("*")
+                .eq("status", "approved").like("asset_key", "avatar%")
+                .order("created_at").limit(ROSTER_LIMIT).execute().data or [])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("visual library avatar roster listing failed: %s", exc)
+        return []
+    return [r for r in rows if is_avatar_row(r)]
+
+
+def _pick_rank(seed: str, row: dict[str, Any]) -> tuple:
+    """A row's rank in the draw for `seed`: the sha256 of seed and ROW ID,
+    so it depends on nothing but the row itself."""
+    digest = hashlib.sha256(f"{seed}:{row.get('id') or ''}".encode("utf-8")).hexdigest()
+    return (digest, str(row.get("created_at") or ""), str(row.get("id") or ""))
+
+
+def _stable_pick(rows: list[dict[str, Any]], seed: str) -> dict[str, Any]:
+    """A random-but-reproducible member: the same seed (a generation id) picks
+    the same face on every part, every retry and every worker; a different
+    generation may pick another.
+
+    INSERTION-STABLE (rendezvous hashing): the winner is the candidate with
+    the smallest sha256(f"{seed}:{row_id}"), a rank each row owns on its
+    own. So the draw is independent of the roster's row order AND of which
+    OTHER rows are present: a row approved between a lesson's first run and
+    its retry cannot shift the pick from one existing face to another. Only
+    two events change the face of a given generation — the chosen row is
+    removed (demoted/deleted; the next-ranked face takes over), or a NEW row
+    ranks below the chosen one for this seed (then the new face is cast, and
+    stays cast from that moment). `random.choice` over the current list, by
+    contrast, reshuffled every seed's draw on every insertion."""
+    return min(rows, key=lambda r: _pick_rank(seed, r))
+
+
+def pick_avatar(role: str, gender: str | None, seed: str, *,
+                age_band: str | None = None,
+                roster: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
+    """The roster face for a lesson: a random approved face of `role` whose
+    gender matches the voice's, seeded by the generation so one lesson keeps
+    one face.
+
+    Fallbacks, each logged: no face of that gender → any face of that role
+    (and band); no face of that role at all → None, which sends the caller
+    down the generate path exactly as before the roster existed. A lesson is
+    never failed over an avatar.
+
+    The student's AGE BAND is not relaxed. The roster holds school bands only
+    (5_7 / 8_10 / 11_12 on 2026-09-04), so a university or graduate book
+    (grade 13+) has no face in its band — and a schoolchild must not stand
+    in for an undergraduate. Returning None hands the caller its age-matched
+    roster key, and the generate-then-publish path draws that face and seeds
+    the roster with it; from then on the band has a face to pick.
+    """
+    rows = list_avatar_roster() if roster is None else list(roster)
+    pool = [r for r in rows if avatar_role(r) == role]
+    if not pool:
+        logger.info("avatar roster: no approved %s face; generating as before", role)
+        return None
+    cands = pool
+    if age_band:
+        in_band = [r for r in cands if avatar_age_band(r) == age_band]
+        if not in_band:
+            logger.info("avatar roster: no %s face in age band %s; generating "
+                        "the age-matched face as before", role, age_band)
+            return None
+        cands = in_band
+    if gender:
+        of_gender = [r for r in cands if avatar_gender(r) == gender]
+        if of_gender:
+            cands = of_gender
+        else:
+            # the gender is the voice's; without a match the lesson still has
+            # a face, and the log says the roster is short one drawing
+            logger.warning("avatar roster: no approved %s face of gender %r "
+                           "(band %s); falling back to any %s face",
+                           role, gender, age_band, role)
+    return _stable_pick(cands, f"{role}:{seed}")
+
+
+def cast_avatar_key(role: str, gender: str | None, seed: str, default_key: str, *,
+                    age_band: str | None = None,
+                    roster: list[dict[str, Any]] | None = None) -> str:
+    """The asset KEY a lesson renders `role` with: a face-bearing roster key,
+    or `default_key` (today's generate path) when the roster has no face for
+    the role.
+
+    Every call READS THE ROSTER, deliberately. There is no per-process memo:
+    a memo would answer from a roster snapshot taken minutes or days earlier,
+    so a face demoted in the console would keep being cast until the worker
+    restarted — and `pick_avatar`'s guarantee that a removed row hands the
+    lesson its next-ranked face would be false in a running worker. The cast
+    is made ONCE per generation anyway (worker/process.py, before the parts
+    loop) and travels with the script, so the memo was buying one Supabase
+    select per repeat cast against a whole lesson's work. Determinism comes
+    from the seed, not from caching: the same seed over the same roster picks
+    the same face every time, in any process."""
+    row = pick_avatar(role, gender, str(seed), age_band=age_band, roster=roster)
+    if row is None or not row.get("id"):
+        return default_key
+    key = face_key(str(row.get("asset_key") or default_key), str(row["id"]))
+    logger.info("avatar cast: %s -> %s (gender %s, band %s, seed %s)",
+                role, key, avatar_gender(row), avatar_age_band(row), seed)
+    return key
 
 
 def _tokens(*values: str) -> set[str]:
@@ -164,12 +397,131 @@ def infer_context(key: str, prompt: str, context: dict[str, Any] | None = None) 
     return LibraryContext(base.curriculum, subject, base.grade, topic, base.concepts)
 
 
+# The "Name the layer groups exactly: a, b, c." tail addresses the VISION
+# annotator, not the reader, and it is the same shape on every asset prompt in
+# the library. Scored, it is a bag of shared tokens that lifts every
+# comparison — part of how "ciliated_cell" reached 1.23 against a red blood
+# cell. Stripped from both sides, exactly as raster_assets strips it before
+# generating.
+_LAYER_TAIL = re.compile(r"\s*name the layer groups exactly:[^.]*\.?", re.I)
+
+
+def strip_layer_tail(text: str) -> str:
+    return _LAYER_TAIL.sub("", str(text or ""))
+
+
+# ── a match must be ABOUT the thing that was asked for ───────────────────────
+# Scoring is a bag of tokens over key + description, so "ciliated_cell" scored
+# 1.23 against red_blood_cell (shared: cell, blood-vessel prose, the boilerplate
+# tail, plus +0.40 of subject/curriculum/grade bonuses) — over the 0.58
+# threshold. It was accepted, hydrated, and the neurone board in fa8c0d7d shows
+# a red blood cell. A wrong picture is not a smaller version of a missing one:
+# it teaches something false while looking confident, and no report catches it.
+#
+# So before any score can clear the bar, the REQUESTED key and the candidate's
+# own key must share at least one core token. Prose alone can never carry a
+# match.
+
+# "sk" is the auto-sketch NAMESPACE, not part of what the picture is of.
+# Left in, every sketch key overlapped every other sketch key on that one
+# token — which is how sk_boat matched sk_ant at 0.90 and the "boat" in
+# fa8c0d7d is an ant. Removed, sk_person still answers a request for a person.
+_KEY_NAMESPACE_TOKENS = frozenset({"sk"})
+
+# Connectives never say WHICH picture an asset is. Left in, `cells_to_tissue`
+# and `tissues_to_organ_diagram` shared exactly one guard token -- "to" -- and
+# scored 0.771 against each other, over the 0.58 default, so the whole
+# levels-of-organisation family could still serve one another's diagrams.
+#
+# Subtracted HERE and not added to KEY_NOISE on purpose: KEY_NOISE decides the
+# cache directory, and folding "to" away would make `cells_to_tissue` and a
+# plain `tissue` one cache entry -- two different pictures in one file.
+_CONNECTIVES = frozenset({"to", "for", "in", "on", "with", "from", "into",
+                          "by", "at", "vs", "versus"})
+
+
+def guard_tokens(value: str) -> set[str]:
+    """The tokens a key must share with another key to be about the same
+    thing: its core tokens, minus the namespace prefix and the connectives."""
+    return core_tokens(value) - _KEY_NAMESPACE_TOKENS - _CONNECTIVES
+
+
+def _fallback_tokens(value: str) -> set[str]:
+    """Every token of a key, for a key that has no distinguishing one."""
+    return set(_tokens_of(value)) - _KEY_NAMESPACE_TOKENS - _CONNECTIVES
+
+
+def key_guard_ok(query_key: str, row: dict[str, Any] | None) -> bool:
+    """Whether `row` is even a candidate for `query_key`.
+
+    A necessary condition, not a sufficient one — the score still has to clear
+    the threshold. What it forbids is a match carried entirely by PROSE.
+    """
+    if not row:
+        return False
+    ak, ck = row.get("asset_key") or "", row.get("canonical_key") or ""
+    # Same cache identity, same picture — by definition, everywhere else in
+    # this system. Checked first so a key with nothing distinguishing in it
+    # ("figure_3") can still be answered by ITSELF, which the abstention rule
+    # below would otherwise refuse.
+    qc = canonical_key(query_key)
+    if qc and qc in {canonical_key(k) for k in (ak, ck) if k}:
+        return True
+    q = guard_tokens(query_key)
+    r = guard_tokens(ak) | guard_tokens(ck)
+    undistinguished = (all_noise(query_key)
+                       or all(all_noise(k) for k in (ak, ck) if k))
+    # The shared token has to be one that NARROWS. `guard_tokens` keeps
+    # numerals (they are what separates `stage_2` from `stage_3` in the
+    # cache), so without this `stage_3` and `phase_3` share "3" and each
+    # becomes a candidate for the other's picture -- the same collapse the
+    # canonical key was just taught to avoid, arriving through the guard.
+    if q and r and not undistinguished and any(distinguishes(t) for t in q & r):
+        return True
+    # A key made ENTIRELY of noise ("cell_diagram", "cells") keeps its noise
+    # words through core_tokens' fallback, while every candidate row has had
+    # them stripped -- so the guard could never be satisfied and a request the
+    # library answers correctly today (cell_diagram -> animal_cell_diagram,
+    # score 1.40) became a paid regeneration and fresh 429 exposure. When
+    # either side carries nothing distinguishing, the guard has nothing to
+    # assert: compare the raw tokens and let the score decide.
+    if not q or not r or undistinguished:
+        qf, rf = _fallback_tokens(query_key), (_fallback_tokens(ak)
+                                               | _fallback_tokens(ck))
+        shared = qf & rf
+        # …but the abstention still has to REST on something. Raw-token
+        # overlap alone let `cell_diagram` be a candidate for
+        # `volcano_diagram` on the word "diagram", and `the_picture` for
+        # anything at all: every key in the library carries a medium word, so
+        # an all-noise request became eligible for the whole catalogue with
+        # only the threshold left in the way. At least one shared token must
+        # name something — not a medium word, not a bare numeral.
+        carriers = {t for t in shared if distinguishes(t)}
+        ok = bool(carriers)
+        # Logged, because this is the one path where the guard abstains: the
+        # threshold is the only thing standing between the request and a wrong
+        # picture, and "why did cells match X" has to be answerable.
+        logger.debug("key guard abstained for %r vs %r/%r (nothing "
+                     "distinguishing on %s); shared=%s carrying=%s",
+                     query_key, ak, ck,
+                     "the request" if all_noise(query_key) else "the row",
+                     sorted(shared), sorted(carriers))
+        if shared and not ok:
+            logger.info("visual library: refused %s <- %s/%s — the only "
+                        "tokens they share (%s) name a medium or an index, "
+                        "not a subject", query_key, ak, ck,
+                        ", ".join(sorted(shared)))
+        return ok
+    return False
+
+
 def _score(row: dict[str, Any], query_key: str, prompt: str, ctx: LibraryContext) -> float:
     key = str(row.get("canonical_key") or row.get("asset_key") or "")
-    desc = str(row.get("description") or "")
+    desc = strip_layer_tail(row.get("description") or "")
     concepts = row.get("concepts") or []
     row_tokens = _tokens(key, desc, " ".join(map(str, concepts)))
-    query_tokens = _tokens(query_key, prompt, ctx.topic, " ".join(ctx.concepts))
+    query_tokens = _tokens(query_key, strip_layer_tail(prompt), ctx.topic,
+                           " ".join(ctx.concepts))
     if not query_tokens or not row_tokens:
         return 0.0
     overlap = len(query_tokens & row_tokens) / max(1, len(query_tokens))
@@ -236,8 +588,17 @@ def find(key: str, prompt: str, context: dict[str, Any] | None = None,
     """Find an approved reusable asset without invoking an AI model."""
     ctx = infer_context(key, prompt, context)
     threshold = float(os.getenv("VISUAL_LIBRARY_MIN_SCORE", "0.58")) if min_score is None else min_score
-    best, best_score, source = best_match(key, prompt, context, _ctx=ctx)
+    # `guarded`: only rows whose OWN key shares a core token with the request
+    # may be served. best_match() without it still sees everything, so the
+    # near-miss evidence the threshold argument runs on keeps flowing.
+    best, best_score, source = best_match(key, prompt, context, _ctx=ctx,
+                                          guarded=True)
     if best is None or best_score < threshold:
+        near, near_score, _ = best_match(key, prompt, context, _ctx=ctx)
+        if near is not None and near_score >= threshold and not key_guard_ok(key, near):
+            logger.info("visual library: refused %s <- %s (score %.2f) — the "
+                        "keys share no concept token", key,
+                        near.get("asset_key"), near_score)
         return None
     return {**best, "match_score": round(best_score, 4),
             "match_source": source, "context": ctx.__dict__}
@@ -248,7 +609,7 @@ def threshold_now() -> float:
 
 
 def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
-               *, _ctx: LibraryContext | None = None):
+               *, _ctx: LibraryContext | None = None, guarded: bool = False):
     """The best candidate and its score, WITHOUT applying the threshold.
 
     Split out of find() so a near-miss is observable. find() returns None
@@ -257,16 +618,24 @@ def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
     only records the matches we already accepted. The decision log records
     this score whether or not it cleared the bar.
 
+    `guarded=True` (what find() uses) restricts the candidates to rows whose
+    own key shares a core token with the request, so the best SERVEABLE row is
+    chosen rather than the best-scoring one being chosen and then refused.
+
     Returns (row | None, score, source) where source is 'local' or 'remote'.
     """
     ctx = _ctx or infer_context(key, prompt, context)
+
+    def _eligible(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [r for r in candidates if key_guard_ok(key, r)] if guarded \
+            else candidates
 
     # Educational retrieval NEVER sees avatars. Filtered on both sides: the
     # remote query narrows in Postgres (cheap, and keeps the 250-row window for
     # real visuals rather than spending it on avatars), and both result sets
     # are filtered again in Python by is_avatar_row(), which also catches rows
     # published before asset_type was set.
-    rows = [r for r in _local_candidates() if not is_avatar_row(r)]
+    rows = _eligible([r for r in _local_candidates() if not is_avatar_row(r)])
     best = max(rows, key=lambda r: _score(r, key, prompt, ctx), default=None)
     best_score = _score(best, key, prompt, ctx) if best else 0.0
     source = "local" if best is not None else "none"
@@ -278,7 +647,7 @@ def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
                       .eq("status", "approved")
                       .neq("asset_type", "avatar")
                       .limit(250).execute().data or [])
-            remote = [r for r in remote if not is_avatar_row(r)]
+            remote = _eligible([r for r in remote if not is_avatar_row(r)])
             remote_best = max(remote, key=lambda r: _score(r, key, prompt, ctx), default=None)
             remote_score = _score(remote_best, key, prompt, ctx) if remote_best else 0.0
             if remote_score > best_score:
@@ -353,9 +722,16 @@ def hydrate(key: str, prompt: str, cache_dir: Path,
     try:
         data = sb.storage.from_(BUCKET).download(path)
         png.parent.mkdir(parents=True, exist_ok=True)
-        png.write_bytes(data)
+        # Written beside and renamed in: asset.png either does not exist or
+        # is complete. A concurrent reader (segments render on parallel
+        # threads) must never open a half-written file, take it for a
+        # corrupt cache and generate a DIFFERENT image mid-lesson. The
+        # per-key asset lock in the renderer wrapper serializes the
+        # threads; this makes the file itself safe for any reader that
+        # is not holding it.
+        _write_atomic(png, data)
         metadata = {**hit, "provenance": "visual_library", "library_asset_id": hit.get("id")}
-        meta.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        _write_json_atomic(meta, metadata)
         logger.info("visual library hit: %s <- %s (score %.2f)", key, hit.get("asset_key"), hit.get("match_score", 0))
         return hit
     except Exception as exc:  # noqa: BLE001
@@ -377,7 +753,8 @@ def find_avatar(key: str) -> dict[str, Any] | None:
     sb = _sb()
     if sb is None:
         return None
-    ck = canonical_key(key)
+    fid = face_id_of(key)
+    ck = canonical_key(base_avatar_key(key))
     try:
         # Filtered by KEY in SQL and by is_avatar_row in Python — not by
         # asset_type in SQL: a row published before asset_type existed
@@ -385,14 +762,95 @@ def find_avatar(key: str) -> dict[str, Any] | None:
         # that has always been there.
         rows = (sb.table("visual_assets").select("*")
                 .eq("status", "approved").eq("canonical_key", ck)
-                .order("created_at").limit(20).execute().data or [])
+                .order("created_at").limit(ROSTER_LIMIT).execute().data or [])
     except Exception as exc:  # noqa: BLE001
         logger.warning("visual library avatar lookup failed for %s: %s", key, exc)
         return None
-    for row in rows:
-        if is_avatar_row(row):
-            return row
-    return None
+    faces = [row for row in rows if is_avatar_row(row)]
+    if fid:
+        # a face-bearing key names ONE row (see face_key); a face that has
+        # since been demoted or deleted falls back to the oldest, and says so
+        for row in faces:
+            if str(row.get("id") or "").lower().replace("-", "").startswith(fid):
+                return row
+        if faces:
+            logger.warning("visual library: face %s of %s is gone; serving the oldest face",
+                           fid, ck)
+    return faces[0] if faces else None
+
+
+# A scratch file is private to its writer (see _write_atomic), which is what
+# makes concurrent writers safe — and also what makes an abandoned one
+# immortal: a process killed between write_bytes and os.replace leaves behind
+# a uniquely named, full-size PNG whose name nothing will ever compute again.
+# On the persistent cache volume that is unbounded: one orphan per crash,
+# forever. So every writer sweeps the directory it is about to write to.
+#
+# The age floor is the whole safety argument. A .part younger than this may
+# belong to a writer still in flight, and deleting it would be the shared-name
+# bug again wearing a stopwatch — one writer removing the file another is
+# about to rename in. An hour is orders of magnitude longer than a write of a
+# few hundred KB takes, so anything older belongs to nobody.
+_SCRATCH_TTL_S = 3600.0
+
+
+def _sweep_scratch(directory: Path, *, ttl_s: float = _SCRATCH_TTL_S) -> None:
+    """Unlink abandoned ``*.part`` scratch files in `directory`.
+
+    Best effort in every direction: an unreadable directory, a file that
+    another writer renamed away between the listing and the stat, a
+    permission error — none of them may fail the write this precedes. The
+    sweep is a tidy-up, never a precondition.
+    """
+    cutoff = time.time() - ttl_s
+    try:
+        found = list(directory.glob("*.part"))
+    except OSError:
+        return
+    for stale in found:
+        try:
+            if stale.stat().st_mtime < cutoff:
+                stale.unlink()
+        except OSError:
+            continue
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    """Write `data` to a PRIVATE sibling and rename it into place, so `path` is
+    never observable half-written (os.replace is atomic on POSIX and NTFS).
+
+    The scratch name carries this writer's pid and a fresh uuid4 because the
+    concurrent case this function exists for is exactly the case one fixed
+    ``asset.png.part`` could not survive: two writers of the same key (the
+    parent and a segment subprocess, or two workers sharing a cache volume)
+    opened the SAME scratch path, so one could rename in a file the other was
+    still writing — the torn read, moved one level down. A private name makes
+    each writer's scratch file its own.
+
+    The unlink only runs on failure. After a successful os.replace the scratch
+    name no longer exists, and an unconditional ``finally`` unlink of a SHARED
+    name could only ever delete some other writer's file out from under it.
+    """
+    _sweep_scratch(path.parent)
+    part = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.part")
+    try:
+        part.write_bytes(data)
+        os.replace(part, path)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    """meta.json goes in the same way asset.png does.
+
+    Making only the PNG atomic moved the torn read one file over rather than
+    closing it: meta.json was still a truncating write_text, and a reader that
+    catches it mid-write parses nothing, falls back to ``md = {}``, finds no
+    ``annotated_for`` and re-runs annotate_regions — a PAID vision call, for a
+    file that was perfectly good a moment earlier and is again a moment later.
+    """
+    _write_atomic(path, json.dumps(payload, indent=2).encode("utf-8"))
 
 
 def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
@@ -413,9 +871,16 @@ def hydrate_avatar(key: str, cache_dir: Path) -> dict[str, Any] | None:
     try:
         data = sb.storage.from_(BUCKET).download(path)
         png.parent.mkdir(parents=True, exist_ok=True)
-        png.write_bytes(data)
+        # Written beside and renamed in: asset.png either does not exist or
+        # is complete. A concurrent reader (segments render on parallel
+        # threads) must never open a half-written file, take it for a
+        # corrupt cache and generate a DIFFERENT image mid-lesson. The
+        # per-key asset lock in the renderer wrapper serializes the
+        # threads; this makes the file itself safe for any reader that
+        # is not holding it.
+        _write_atomic(png, data)
         metadata = {**hit, "provenance": "visual_library", "library_asset_id": hit.get("id")}
-        meta.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        _write_json_atomic(meta, metadata)
         logger.info("visual library avatar: %s <- %s", key, hit.get("id"))
         return hit
     except Exception as exc:  # noqa: BLE001
@@ -436,6 +901,10 @@ def publish_generated(asset_key: str, prompt: str, png_path: Path,
     """
     if not png_path.exists():
         return False
+    # A face-bearing key (one roster face, see face_key) is a cache identity,
+    # not a roster identity: what gets published — when it gets published at
+    # all — is the roster key, so the duplicate check below sees the family.
+    asset_key = base_avatar_key(str(asset_key))
     ctx = infer_context(asset_key, prompt, context)
     digest = hashlib.sha256(png_path.read_bytes()).hexdigest()
     row = {
