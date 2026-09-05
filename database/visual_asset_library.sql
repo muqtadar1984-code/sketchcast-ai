@@ -19,12 +19,22 @@ create table if not exists public.visual_assets (
     check (asset_type in ('visual', 'avatar')),
   asset_format text not null default 'png'
     check (asset_format in ('png', 'svg')),
-  -- For an SVG asset: the EXACT group ids, in drawing order, and how many
-  -- there are. The group ids are the labelling contract, so this lets the
-  -- library answer "does this asset contain the part the lesson wants to
-  -- label?" without downloading the markup.
+  -- The parts an asset contains, in drawing order, and how many there are.
+  -- For an SVG they are the EXACT <g id>s; for a PNG they are the part names
+  -- the vision pass actually FOUND a box for. Either way they are the
+  -- labelling contract, so this lets the library answer "does this asset
+  -- contain the part the lesson wants to label?" without downloading it.
   group_ids jsonb not null default '[]'::jsonb,
   group_count integer not null default 0,
+  -- A raster asset's cached vision annotation, bought once ever instead of
+  -- once per worker deploy:
+  --   {"regions": {"<part>": [[x0,y0,x1,y1], ...]}, "annotated_for": [...],
+  --    "baked_text": bool, "w": int, "h": int}
+  -- Boxes are in the ASSET pixel coordinates of the stored object and w/h are
+  -- the dimensions they were measured on, so a consumer holding differently
+  -- sized bytes can detect the mismatch rather than draw in the wrong place.
+  -- '{}' means not annotated; SVG assets stay empty, their groups are free.
+  vision jsonb not null default '{}'::jsonb,
   role text,
   description text not null default '',
   curriculum text not null default 'generic',
@@ -53,6 +63,7 @@ alter table public.visual_assets add column if not exists age_band text;
 alter table public.visual_assets add column if not exists asset_format text not null default 'png';
 alter table public.visual_assets add column if not exists group_ids jsonb not null default '[]'::jsonb;
 alter table public.visual_assets add column if not exists group_count integer not null default 0;
+alter table public.visual_assets add column if not exists vision jsonb not null default '{}'::jsonb;
 
 create index if not exists visual_assets_type_idx
   on public.visual_assets (asset_type);

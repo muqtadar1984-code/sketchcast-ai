@@ -326,7 +326,7 @@ class TestTheRowAnswersWithoutADownload:
 
 class TestPublishSurvivesADatabaseThatPredatesTheMigration:
     """Code deploys on a push; the schema changes when the founder applies
-    0104. Between the two, a worker knows three columns the database does not.
+    the file. Between the two, a worker knows columns the database does not.
 
     PostgREST answers an unknown column with PGRST204 and writes NOTHING —
     and the bytes are uploaded BEFORE the insert, so the failure would leave
@@ -334,6 +334,11 @@ class TestPublishSurvivesADatabaseThatPredatesTheMigration:
     That is the shape of the 262 MB of unreferenced storage already on file,
     and it would also stop the library learning: every worker keeps re-paying
     for pictures it has already made.
+
+    There are now TWO migrations in that window and they are at different
+    stages — 0104 is applied to prod (measured 2026-09-05, version
+    20260905054301) and 0105 is not — so the degrade has to walk down one at
+    a time rather than fall to the oldest schema it knows.
 
     The prod column list below is the one measured read-only against the live
     database while 0104 was still unapplied.
@@ -450,6 +455,34 @@ class TestPublishSurvivesADatabaseThatPredatesTheMigration:
         assert seen["refused"] == []
         assert seen["inserted"][0]["asset_format"] == "svg"
         assert seen["inserted"][0]["group_ids"] == ["outline", "nucleus"]
+
+    def test_a_database_with_0104_but_not_0105_keeps_its_0104_data(
+            self, tmp_path, monkeypatch):
+        """The state prod is actually in. A single-step degrade would answer
+        one unknown column by throwing away three the database has, so every
+        publish in this window would silently stop recording the format and
+        the parts — a cost optimisation for one column disabling the part
+        lookup for every asset."""
+        vl, seen = self._unmigrated(
+            monkeypatch, tmp_path, columns=self.PROD_COLUMNS | set(
+                __import__("shared.visual_library",
+                           fromlist=["x"]).FORMAT_COLUMNS))
+        png = tmp_path / "asset.png"
+        # 24 bytes is all _png_dimensions reads: signature, chunk length, IHDR,
+        # width, height.
+        png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR"
+                        + (640).to_bytes(4, "big") + (480).to_bytes(4, "big")
+                        + b"0" * 32)
+
+        assert vl.publish_generated("plant_cell", "A plant cell", png, {
+            "regions": {"nucleus": [[1, 2, 3, 4]]},
+            "annotated_for": ["nucleus"]})
+
+        assert seen["refused"] == [["vision"]], "one step down, not two"
+        row = seen["inserted"][0]
+        assert "vision" not in row
+        assert row["asset_format"] == "png"
+        assert row["group_ids"] == ["nucleus"] and row["group_count"] == 1
 
     def test_a_failure_that_is_not_a_schema_miss_is_not_retried(
             self, tmp_path, monkeypatch):
