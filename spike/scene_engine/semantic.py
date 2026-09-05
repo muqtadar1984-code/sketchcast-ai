@@ -606,6 +606,20 @@ def _steps(craw, narrations, ctx, concept, by_id, root_id, label_for_region,
                     ctx.note("ARROW_WITHOUT_REGION",
                              f"{where}: an arrow needs a semantic region to point at")
                     continue
+                if by_id.get(el, {}).get("type") in (None, "arrow"):
+                    # the director named a visual that was never declared
+                    # (or used a second id for the root: plant_cell_box for
+                    # plant_cell_diagram). The region is what the arrow is
+                    # about; the root is the only picture it can be on.
+                    if not root_id:
+                        ctx.note("UNKNOWN_ARROW_TARGET",
+                                 f"{where}: {el!r} is not an element of this "
+                                 f"chapter and it has no root visual")
+                        continue
+                    ctx.note("UNKNOWN_ARROW_TARGET",
+                             f"{where}: {el!r} is not an element of this "
+                             f"chapter — anchored to root {root_id!r}")
+                    el = root_id
                 aid = f"arr_{_slug(region)}"
                 if aid not in made_arrows:
                     made_arrows.add(aid)
