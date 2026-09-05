@@ -75,6 +75,30 @@ def sample_pdf_path():
 
 
 @pytest.fixture(autouse=True)
+def _visual_library_is_offline_by_default(monkeypatch):
+    """No test may reach the PRODUCTION visual library.
+
+    `agent1_ingestion.config` calls load_dotenv() at import, and this conftest
+    imports it — so SUPABASE_URL and the service-role key are set in every
+    pytest process on a developer machine, and `visual_library._sb()` returns a
+    live admin client against prod. The renderer integration calls hydrate() on
+    every uncached asset, so a test of the FALLBACK LADDER was querying the
+    real library and downloading a real picture out of production storage.
+
+    Measured on one commit, minutes apart: `ciliated_cell` resolved to a
+    placeholder frame at 23:59 and to a hydrated library asset at 00:10. The
+    test did not change; the answer came from somewhere the test does not
+    control, which is the definition of a test that is not testing anything.
+
+    Every test that exercises the library installs its own fake client, and
+    still does — this only changes the DEFAULT from "production" to "nothing".
+    """
+    import shared.visual_library as vl
+    monkeypatch.setattr(vl, "_sb", lambda: None)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _fresh_model_call_limiters(monkeypatch):
     """The image/vision per-minute windows are process-wide; without a reset a
     test that spends tokens makes a later test sleep for real (54 s seen).
