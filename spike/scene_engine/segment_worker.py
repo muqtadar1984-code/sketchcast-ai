@@ -47,7 +47,9 @@ def _bind(payload: dict) -> SceneRenderer | None:
     scene.style.hand_scale = HAND_SCALE
     prompts = {str(k): str(v) for k, v in (payload.get("prompts") or {}).items()}
     r = SceneRenderer(scene,
-                      asset_resolver=make_resolver(prompts, allow_generate=False),
+                      asset_resolver=make_resolver(
+                          prompts, allow_generate=False,
+                          rate_limited_keys=payload.get("rate_limited")),
                       hand_loader=lambda k: load_hand(k, allow_generate=False))
     r.compile(float(payload.get("audio_secs") or 0.0), words=payload.get("words"))
     return r
@@ -58,7 +60,8 @@ def render_segment_in_child(payload: dict) -> tuple[bool, list[str]]:
 
     payload = {"scene": dict, "narration": str, "prompts": {key: prompt},
                "words": list | None, "audio_path": str | None,
-               "audio_secs": float, "out_mp4": str, "direction": "ltr" | "rtl"}
+               "audio_secs": float, "out_mp4": str, "direction": "ltr" | "rtl",
+               "rate_limited": [key, ...]}
 
     Returns (ok, audit warnings) — the child cannot mutate the caller's
     segment dict, so the parent records the warnings. Any exception

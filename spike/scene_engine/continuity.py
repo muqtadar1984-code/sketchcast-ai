@@ -37,6 +37,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .anchors import (WORDS_BOARD, WORDS_SEGMENT, resolve_roster_anchors,
+                      sanitize_scene)
 from .schema import WORLD_H, WORLD_W
 
 logger = logging.getLogger(__name__)
@@ -532,10 +534,10 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
     # never fades at a chapter boundary, never renames to prev__*, never
     # counts against the one-root rule. On the lesson's first segment the
     # hand draws them in; everywhere else they are simply present at t=0.
-    from .whiteboard import (AVATAR_PROMPTS, STUDENT_ID, TEACHER_ID,
+    from .whiteboard import (STUDENT_ID, TEACHER_ID, avatar_prompt,
                              narration_stream, select_key_sentence,
                              snap_to_narration, student_element,
-                             teacher_element)
+                             teacher_element, two_voice_dialogue)
     teach_key = (avatars or {}).get("teacher", "avatar_teacher")
     stud_key = (avatars or {}).get("student", "avatar_student")
     # which sentences the stream should BOLD, per segment: the model's
@@ -547,14 +549,14 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
             sc["elements"].append(teacher_element(teach_key))
             assets_by_seg.setdefault(sid, {})
             assets_by_seg[sid] = {**assets_by_seg[sid],
-                                  teach_key: AVATAR_PROMPTS[teach_key]}
-        if style == "conversational":
+                                  teach_key: avatar_prompt(teach_key)}
+        if two_voice_dialogue(style):
             # the student is a PERMANENT speaker too; the caption stream is
             # injected at COMPOSE time, once per-line audio offsets exist
             if not any(e.get("id") == STUDENT_ID for e in sc["elements"]):
                 sc["elements"].append(student_element(stud_key))
                 assets_by_seg[sid] = {**assets_by_seg.get(sid, {}),
-                                      stud_key: AVATAR_PROMPTS[stud_key]}
+                                      stud_key: avatar_prompt(stud_key)}
             continue
         narr = narrations.get(sid, "")
         st = step_by_sid.get(sid)
@@ -844,6 +846,41 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             report.append(f"CHAPTER {ch.concept} | PART NAMES from labels: "
                           f"{cand}")
 
+    # ── anchor tolerance ────────────────────────────────────────────────
+    # An anchor whose `el` names no roster element (the founder's "Cells":
+    # root declared as plant_cell_diagram, arrows pointing at plant_cell_box)
+    # used to ride into every scene the arrow appeared in and fail each one
+    # at schema validation — four boards lost to one arrow head. Convert it
+    # here, before the anchoring pass reads the refs: a normalised id/asset
+    # match, a merged handle (root + its part), a part name used as an id
+    # (root + layer), else the single root visual; only an unresolvable
+    # LABEL reference costs the arrow itself, never the scene.
+    # The dropped ids matter as much as the notes: a GROUP that listed a
+    # dropped arrow would fail the schema ("group references unknown") in
+    # every scene the group rode into — the resolver prunes the child out of
+    # the roster and reports a group left empty as dropped in its own right.
+    # The guard is a last line of defence, so it never gets to be the
+    # failure: an exception raised inside it once escaped compile_plan and
+    # took the WHOLE chapter with it — zero scenes, the loss it exists to
+    # prevent. Report it and carry on with the roster AS PLANNED — which
+    # means a COPY: the pass mutates in place, so catching halfway through
+    # it and saying "left as planned" was a claim about a roster that had
+    # already lost some arrows and kept others' re-anchored ends. The swap
+    # happens only when the pass finished, and `roster` keeps its identity
+    # (everything downstream holds this dict).
+    _work = dict(roster)
+    try:
+        _notes, _dropped_ch = resolve_roster_anchors(
+            _work, root_id, part_names=part_names, aliases=alias_parts)
+    except Exception as _e:
+        _notes, _dropped_ch = [f"ANCHOR GUARD FAILED ({_e}); roster "
+                               f"left as planned"], []
+    else:
+        roster.clear()
+        roster.update(_work)
+    for _n in _notes:
+        report.append(f"CHAPTER {ch.concept} | {_n}")
+
     def _match_part(name: str) -> str | None:
         if not name or not part_names:
             return None
@@ -1072,11 +1109,49 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                         bf + (done / n) * (1.0 - bf) if n else bf, 4)
         return el
 
-    def board_now() -> list[dict]:
-        return [carry(eid, e) for eid, e in roster.items()
-                if eid not in erased
-                and (eid in introduced or eid in drawn_layers
-                     or eid in drawn_regions)]
+    def board_now(label: str, drop_word: str = "DROPPED") -> list[dict]:
+        """The board as it stands — SEALED: no element on it refers to one
+        that is not. An arrow drawn before its label was written carried
+        the label's id off the board into HOLD scenes (the director dropped
+        it there: visible, gone, back) and into the next chapter's fade-out
+        (where the resolver re-bound it to whatever the NEW chapter called
+        something alike). A ref to an off-board roster element flattens to
+        its planned point, as the stepped scenes already do; one nothing
+        can place is dropped, and every case is reported under ``label``.
+
+        The sealing is THE sanitisation pass (anchors.py), run to a fixed
+        point with this board's vocabulary — a HOLD board is a scene like
+        any other and never reached it before, so its own seal could leave
+        a text chained behind an arrow it had just dropped, or an arrow
+        anchored to a group it had just emptied, and the schema threw the
+        whole held board away. No re-anchoring here: on an exported board a
+        name that is not present means "not drawn", not "misnamed", and the
+        chapter pass already re-anchored this roster."""
+        board = [carry(eid, e) for eid, e in roster.items()
+                 if eid not in erased
+                 and (eid in introduced or eid in drawn_layers
+                      or eid in drawn_regions)]
+
+        def _place(_eid, _end, ref):
+            tgt = ref["el"]
+            at = _pt(roster[tgt].get("at")) if tgt in roster else None
+            if at is None:
+                return None
+            return [round(at[0] + float(ref.get("dx", 0.0)), 2),
+                    round(at[1] + float(ref.get("dy", 0.0)), 2)]
+
+        held = {"elements": board, "actions": []}
+        try:
+            notes = sanitize_scene(held, None, resolve=False, place=_place,
+                                   words=WORDS_BOARD._replace(
+                                       drop_word=drop_word))
+        except Exception as _e:   # the guard may never be the loss
+            report.append(f"{label} | ANCHOR GUARD FAILED ({_e}); board "
+                          f"exported unsealed")
+            return board
+        for n in notes:
+            report.append(f"{label} | {n}")
+        return held["elements"]
 
     # work order: plan steps + HOLD entries for unplanned span segments
     step_by_id = {st.segment_id: st for st in ch.steps}
@@ -1096,7 +1171,7 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
     first = True
     for seg_id, st in work:
         if st is None:
-            held = board_now()
+            held = board_now(f"SEGMENT {seg_id}")
             if held:
                 scenes[seg_id] = {"id": f"vc_{seg_id}", "compiled": True, "scene_type": "process",
                                   "narration": narrations.get(seg_id, ""),
@@ -1162,12 +1237,25 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                          or eid in drawn_regions)}
         valid = on_board | intro_targets
         kept_actions: list[dict] = []
+
+        def _reachable(t, _valid=valid) -> bool:
+            return bool(t is None or t in _valid
+                        or (t in roster and roster[t].get("type") == "group"
+                            and set(_group_children(roster, t)) & _valid))
+
         for a in st.actions:
             tgt = a.get("target")
-            if a["verb"] in _CAMERA or tgt is None or tgt in valid \
-                    or (tgt in roster and roster[tgt].get("type") == "group"
-                        and set(_group_children(roster, tgt)) & valid):
+            # a morph names its destination in `into`, not `target`. Dropping
+            # only the targeting actions left "morph into unknown element" on
+            # a scene whose arrow the guard had just dropped, so the board
+            # was lost anyway — the thing the guard exists to prevent.
+            into = a.get("into") if a.get("verb") == "morph" else None
+            if a["verb"] in _CAMERA or (_reachable(tgt) and _reachable(into)):
                 kept_actions.append(a)
+            elif into is not None and not _reachable(into) and _reachable(tgt):
+                report.append(f"SEGMENT {seg_id} | DROPPED {a['verb']} into "
+                              f"{into} (not on the board, not introduced this "
+                              f"step)")
             else:
                 report.append(f"SEGMENT {seg_id} | DROPPED {a['verb']}->{tgt} "
                               f"(not on the board, not introduced this step)")
@@ -1220,6 +1308,43 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         for tid, c in step_done.items():
             draws_done[tid] = draws_done.get(tid, 0) + c
 
+        # last guard before validation: THE sanitisation pass (anchors.py),
+        # run to a fixed point so nothing this scene names is missing from
+        # it. An arrow whose anchor names a roster element that is NOT on
+        # this board (a label written two steps later, a picture drawn one
+        # step after its leader line) — or a boundary rename nothing else
+        # caught — must not fail the scene: `_place` flattens that end to
+        # the element's planned point (a point reveals nothing early, and
+        # the draw action survives so the arrow rides into the steps where
+        # its anchor IS there). An ERASED target and anything else take the
+        # pass's own rungs, which re-anchor or drop that one arrow for this
+        # scene with a report.
+        _on_scene = {e["id"] for e in elements if isinstance(e.get("id"), str)}
+
+        def _place(_eid, _end, _ref, _on=_on_scene):
+            _tgt = _ref["el"]
+            # ...only for something this board never had: an id that IS on
+            # the scene but was removed by the pass itself is not "not drawn
+            # yet" — it is gone, and it takes the re-anchor/drop rungs.
+            if _tgt in _on or _tgt not in roster or _tgt in erased:
+                return None
+            _at = _pt(roster[_tgt].get("at"))
+            if _at is None:
+                return None
+            return [round(_at[0] + float(_ref.get("dx", 0.0)), 2),
+                    round(_at[1] + float(_ref.get("dy", 0.0)), 2)]
+
+        _guard = {"elements": elements, "actions": step_actions}
+        try:
+            _gnotes = sanitize_scene(
+                _guard, root_id if root_id in _on_scene else None,
+                part_names=part_names, place=_place, words=WORDS_SEGMENT)
+        except Exception as _e:
+            _gnotes = [f"ANCHOR GUARD FAILED ({_e}); scene left unchanged"]
+        for _n in _gnotes:
+            report.append(f"SEGMENT {seg_id} | {_n}")
+        elements, step_actions = _guard["elements"], _guard["actions"]
+
         if not elements:
             # every declared visual of this step was dropped/converted away —
             # an empty scene fails schema validation downstream and once fell
@@ -1242,7 +1367,7 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         # spawning a competing bubble.
         if st.moment and st.moment["role"] == "student" \
                 and style != "conversational":
-            from .whiteboard import (AVATAR_PROMPTS, human_moment,
+            from .whiteboard import (avatar_prompt, human_moment,
                                      snap_to_narration)
             m_text = snap_to_narration(st.moment["text"], narration_here) \
                 or st.moment["text"]
@@ -1250,8 +1375,7 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             hm_els, hm_acts, _ = human_moment(
                 "student", m_text, uid=f"hm_{seg_id}", asset=hm_asset)
             seg_assets = {**seg_assets}
-            seg_assets[hm_asset] = AVATAR_PROMPTS.get(
-                hm_asset, AVATAR_PROMPTS["avatar_student"])
+            seg_assets[hm_asset] = avatar_prompt(hm_asset)
             elements.extend(hm_els)
             step_actions = step_actions + hm_acts
             moment_note = f" | HUMAN_TEACHING_MOMENT (student: {m_text!r})"
@@ -1321,7 +1445,10 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             + moment_note)
         first = False
 
-    return board_now(), cam
+    # the exported board is what the next chapter fades out (clear_and_redraw)
+    # or keeps (carry) — sealed, so no ref ever crosses the boundary dangling
+    return board_now(f"CHAPTER {ch.concept} | CARRY-OUT",
+                     drop_word="LEFT BEHIND"), cam
 
 
 def _group_children(roster: dict, tgt) -> list[str]:

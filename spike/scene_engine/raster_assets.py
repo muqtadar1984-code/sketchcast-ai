@@ -19,16 +19,21 @@ vector tier — a lesson never fails because an asset did (§20).
 from __future__ import annotations
 
 import base64
+import contextvars
+import functools
 import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import requests
 from PIL import Image
+
+from shared.asset_keys import KEY_NOISE, canonical_key, is_avatar_key
 
 from .trace import drawing_order
 
@@ -128,11 +133,45 @@ def _vertex_call(prompt: str) -> bytes | None:
         _note_spend("image.vertex")
         return _image_from(_with_backoff(_go, "Vertex image"))
     except Exception as e:
-        logger.warning("Vertex image call failed (%s); trying AI Studio", e)
+        if _is_rate_limited(e):
+            # A 429 produced no image; it must not spend the lesson's
+            # allowance, or a burst of failures starves the successes.
+            _refund_image_call()
+            _note_rate_limited(e)
+            logger.warning("Vertex image call rate-limited (%s): %s",
+                           e, _error_body(e))
+        else:
+            # Not a rate limit: this is the path that goes dark if the SA key
+            # expires or the project locks. Say so loudly — with the AI Studio
+            # image fallback off by default there is no second provider.
+            logger.error("Vertex image call failed for a NON-rate-limit "
+                         "reason (%s): %s", e, _error_body(e))
         return None
 
 
+def aistudio_image_fallback_enabled() -> bool:
+    """The AI Studio IMAGE fallback, off unless explicitly switched on.
+
+    Measured 2026-09-04: the GOOGLE_AI_API_KEY project is on the FREE tier and
+    gemini-2.5-flash-image has NO free-tier allowance — the 429 body names
+    three quotas with limit 0. Every fallback therefore burned 4 attempts,
+    ~58 s of a render thread and one unit of the per-lesson image budget to
+    produce, reliably, nothing. The VISION path is untouched: flash vision
+    still has real free-tier quota and is not affected by this switch.
+    """
+    return str(os.getenv("AISTUDIO_IMAGE_FALLBACK", "")).strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 def _aistudio_call(prompt: str) -> bytes | None:
+    if not aistudio_image_fallback_enabled():
+        _calls = _lesson_calls()
+        if not _calls["aistudio_off_logged"]:
+            _calls["aistudio_off_logged"] = True
+            logger.info("AI Studio image fallback is off (set "
+                        "AISTUDIO_IMAGE_FALLBACK=1 once that key's project "
+                        "has billing); Vertex is the only image provider")
+        return None
     if not _image_budget_ok():
         return None
     key = os.getenv("GOOGLE_AI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
@@ -149,7 +188,10 @@ def _aistudio_call(prompt: str) -> bytes | None:
         _note_spend("image.aistudio")
         return _image_from(_with_backoff(_go, "AI Studio image"))
     except Exception as e:
-        logger.warning("AI Studio image call failed: %s", e)
+        if _is_rate_limited(e):
+            _refund_image_call()
+            _note_rate_limited(e)
+        logger.warning("AI Studio image call failed: %s: %s", e, _error_body(e))
         return None
 
 
@@ -188,6 +230,35 @@ def _model_gate():
 def _is_rate_limited(exc: Exception) -> bool:
     r = getattr(exc, "response", None)
     return getattr(r, "status_code", None) in (429, 503)
+
+
+# A 429 was logged as its STATUS LINE and nothing else ("429 Client Error"),
+# which is the one fact that was never in doubt. The body is what decides the
+# next incident: a Vertex QUOTA 429 names quotaMetric/quotaId (there is a
+# number to raise), a CAPACITY 429 says only "Resource exhausted, please try
+# again later" (there is not, and the fix is deferral). AI Studio's body names
+# the free-tier quota ids and their limits.
+#
+# Response body ONLY, capped: request headers carry the bearer token and the
+# request body carries the prompt. Neither is ever logged.
+_ERROR_BODY_CHARS = 500
+
+
+def _error_body(exc: Exception) -> str:
+    """First 500 chars of the server's response body, or '' — never headers."""
+    r = getattr(exc, "response", None)
+    if r is None:
+        return ""
+    try:
+        text = r.text
+    except Exception:  # noqa: BLE001 — diagnostics must never raise
+        return ""
+    return str(text or "")[:_ERROR_BODY_CHARS].replace("\n", " ").strip()
+
+
+def _status_of(exc: Exception) -> str:
+    r = getattr(exc, "response", None)
+    return str(getattr(r, "status_code", "?"))
 
 
 def _retry_after(exc: Exception) -> float | None:
@@ -257,15 +328,36 @@ def _with_backoff(fn, what: str, tries: int = 4, kind: str = "image"):
         waited = _limiter(kind).acquire()
         if waited > 0.5:
             logger.info("%s paced %.1fs by %s", what, waited, _LIMITER_DEFAULTS[kind][0])
+        if kind == "image":
+            # one request, about to go out -- the ceiling counts REQUESTS
+            _note_image_attempt()
         try:
             with gate:                 # at most N paid calls in flight
                 return fn()
         except Exception as exc:  # noqa: BLE001 — transport errors only
-            if not _is_rate_limited(exc) or attempt == tries - 1:
+            limited = _is_rate_limited(exc)
+            if limited:
+                # EVERY attempt, the final one included — the body is the only
+                # evidence that separates a raisable quota from capacity.
+                logger.warning("%s rate-limited HTTP %s (attempt %d/%d) "
+                               "retry_after=%s body=%s", what, _status_of(exc),
+                               attempt + 1, tries, _retry_after(exc),
+                               _error_body(exc))
+            if not limited or attempt == tries - 1:
                 raise
             server = _retry_after(exc)
-            wait = ((min(max(server, 1.0), _RETRY_AFTER_CAP) if server is not None else delay)
-                    + random.uniform(0, 2.0))
+            base = (min(max(server, 1.0), _RETRY_AFTER_CAP)
+                    if server is not None else delay)
+            # Three gate slots that 429 together retried on the identical
+            # 7/15/36 cadence and re-collided every round. When the SERVER
+            # named the second, honour it: jitter stays inside 25% of the wait
+            # it asked for. When the wait is our OWN ladder there is no such
+            # promise, so spread across half of it -- at 25% three slots
+            # released 36 s later still land inside 6 s of each other, which is
+            # the lockstep this exists to break.
+            span = (min(2.0 + 2.0 * attempt, base * 0.25) if server is not None
+                    else base * 0.5)
+            wait = base + random.uniform(0, span)
             logger.warning("%s rate-limited; retrying in %.0fs (%d/%d)",
                            what, wait, attempt + 1, tries - 1)
             _t.sleep(wait)
@@ -283,32 +375,271 @@ def _with_backoff(fn, what: str, tries: int = 4, kind: str = "image"):
 # Per-LESSON, not global: a global counter would refuse the hundredth honest
 # lesson. Reset by the worker at the start of each generation.
 _IMAGE_BUDGET = _env_int("IMAGE_CALLS_PER_LESSON", 24)
-_image_calls = {"n": 0, "blocked": 0}
+# The refund below removes the cap that FAILURES used to provide, so a dead
+# provider could otherwise be hammered for the whole lesson. HTTP attempts are
+# counted separately, inside _with_backoff where they actually happen, and are
+# never refunded: this is the hard stop. x2, so the number an operator reads in
+# the log means what they assume it means -- "48 requests", not "48 entries,
+# each of which may fire four".
+_IMAGE_ATTEMPT_FACTOR = 2
 
 
-def reset_image_budget() -> None:
-    _image_calls["n"] = 0
-    _image_calls["blocked"] = 0
+# -- per-generation state ----------------------------------------------------
+# WORKER_CONCURRENCY>1 runs several LESSONS in one process (worker/run.py), so
+# a module-level counter is shared by unrelated books. Measured in-process:
+# lesson A deferring ciliated_cell and abandoning red_blood_cell made lesson B
+# -- a different book -- skip both pictures with ZERO attempts and ship blank
+# boards though it never saw a 429; and lesson B's reset_image_budget() wiped
+# lesson A's protection mid-flight, so A's eight render threads resumed
+# hammering the 429'd key and the never-refunded ceiling stopped binding.
+#
+# So every counter and both maps hang off the generation the caller belongs
+# to. The id travels in a ContextVar; a thread does NOT inherit its parent's
+# context, so the two places that fan a lesson out onto threads (the composer's
+# render pool, the warm pass) submit through `bind_generation` below.
+_GENERATION_VAR: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "scene_image_generation", default="")
+# A finished lesson's bucket is dead weight; drop it an hour after its last
+# touch so a long-lived worker process does not grow one dict per generation.
+_STATE_TTL_SECS = 3600.0
+_STATE: dict[str, dict] = {}
+# One RE-ENTRANT lock for the whole map: `_bucket()` takes it and callers hold
+# it across a read-modify-write.
+_IMAGE_BUDGET_LOCK = _threading.RLock()
+
+
+def current_generation() -> str:
+    """The generation this thread's image calls belong to ("" = the process
+    default, which is what tests and single-lesson runs use)."""
+    return _GENERATION_VAR.get()
+
+
+def bind_generation(fn, generation_id: str | None = None):
+    """Wrap `fn` so a worker thread runs inside THIS lesson's state.
+
+    contextvars are per THREAD: a ThreadPoolExecutor worker starts with an
+    empty context, so without this a render thread would read the process
+    default bucket and mix its lesson with whatever else is running. Each
+    invocation sets and resets its own thread's var, so one wrapper is safe to
+    submit many times and from many threads at once.
+    """
+    gid = current_generation() if generation_id is None else str(generation_id)
+
+    @functools.wraps(fn)
+    def _run(*a, **kw):
+        token = _GENERATION_VAR.set(gid)
+        try:
+            return fn(*a, **kw)
+        finally:
+            _GENERATION_VAR.reset(token)
+    return _run
+
+
+def _new_bucket() -> dict:
+    return {"calls": {"n": 0, "blocked": 0, "attempts": 0, "refunded": 0,
+                      "aistudio_off_logged": False, "ceiling_logged": False},
+            "deferred": {}, "abandoned": set(), "touched": time.monotonic()}
+
+
+def _bucket() -> dict:
+    """This generation's state, created on first use."""
+    gid = current_generation()
+    with _IMAGE_BUDGET_LOCK:
+        b = _STATE.get(gid)
+        if b is None:
+            b = _STATE[gid] = _new_bucket()
+        b["touched"] = time.monotonic()
+        return b
+
+
+def _lesson_calls() -> dict:
+    with _IMAGE_BUDGET_LOCK:
+        return _bucket()["calls"]
+
+
+def reset_image_budget(generation_id: str | None = None) -> None:
+    """Start a lesson's image accounting. Pass the generation id when several
+    lessons may share this process -- without it they share one bucket."""
+    if generation_id is not None:
+        _GENERATION_VAR.set(str(generation_id))
+    gid = current_generation()
+    now = time.monotonic()
+    with _IMAGE_BUDGET_LOCK:
+        _STATE[gid] = _new_bucket()
+        for stale in [k for k, v in _STATE.items()
+                      if k != gid and now - v["touched"] > _STATE_TTL_SECS]:
+            _STATE.pop(stale, None)
 
 
 def image_budget_state() -> dict:
-    return dict(_image_calls)
+    return dict(_lesson_calls())
+
+
+def image_attempt_ceiling() -> int:
+    return max(1, _IMAGE_BUDGET * _IMAGE_ATTEMPT_FACTOR)
+
+
+def image_budget_exhausted() -> bool:
+    """True when THIS lesson may make no further image calls.
+
+    Read-only: `_image_budget_ok` is the same question but it SPENDS a unit
+    when the answer is yes, so a caller asking merely to explain itself must
+    not use it.
+
+    Exists because a board the lesson's own accounting refused was reported as
+    `generation_failed` -- the reason that means "the provider tried and could
+    not". Those are different incidents with different fixes (raise
+    IMAGE_CALLS_PER_LESSON, or go and look at the provider), and the attempt
+    ceiling at 2x the budget rather than 3x makes the misattribution more
+    reachable, not less.
+    """
+    with _IMAGE_BUDGET_LOCK:
+        c = _bucket()["calls"]
+        return (c["attempts"] >= image_attempt_ceiling()
+                or c["n"] >= _IMAGE_BUDGET)
 
 
 def _image_budget_ok() -> bool:
     """False once this lesson has spent its allowance. The caller degrades to
     the authored vector tier, exactly as it does for any other image failure —
     a lesson never dies because an asset did."""
-    if _image_calls["n"] >= _IMAGE_BUDGET:
-        _image_calls["blocked"] += 1
-        if _image_calls["blocked"] == 1:      # say it once, not forty times
-            logger.error("image budget spent (%d calls this lesson); further "
-                         "assets fall back to the vector tier. Raise "
-                         "IMAGE_CALLS_PER_LESSON if this is legitimate.",
-                         _IMAGE_BUDGET)
-        return False
-    _image_calls["n"] += 1
-    return True
+    with _IMAGE_BUDGET_LOCK:
+        _image_calls = _bucket()["calls"]
+        if _image_calls["attempts"] >= image_attempt_ceiling():
+            if not _image_calls["ceiling_logged"]:
+                _image_calls["ceiling_logged"] = True
+                logger.error("image ATTEMPT ceiling reached (%d attempts this "
+                             "lesson, budget %d); no further image calls will "
+                             "be made. A provider is failing, not busy.",
+                             image_attempt_ceiling(), _IMAGE_BUDGET)
+            return False
+        if _image_calls["n"] >= _IMAGE_BUDGET:
+            _image_calls["blocked"] += 1
+            if _image_calls["blocked"] == 1:  # say it once, not forty times
+                logger.error("image budget spent (%d calls this lesson); further "
+                             "assets fall back to the vector tier. Raise "
+                             "IMAGE_CALLS_PER_LESSON if this is legitimate.",
+                             _IMAGE_BUDGET)
+            return False
+        _image_calls["n"] += 1
+        return True
+
+
+def _note_image_attempt() -> None:
+    """One HTTP request to an image provider was just made.
+
+    Counted HERE, not once per transport ENTRY: one entry runs a four-try
+    ladder inside _with_backoff, so a ceiling counted per entry allowed four
+    times as many requests into the very burst it exists to stop."""
+    with _IMAGE_BUDGET_LOCK:
+        _bucket()["calls"]["attempts"] += 1
+
+
+def _refund_image_call() -> None:
+    """Give the lesson its unit back when the call was refused, not spent.
+
+    Charging on ENTRY meant a 429 storm spent the whole allowance without
+    producing an image: in fa8c0d7d the failures consumed the budget the
+    successes needed. The ATTEMPT counter is deliberately not refunded."""
+    with _IMAGE_BUDGET_LOCK:
+        _image_calls = _bucket()["calls"]
+        if _image_calls["n"] > 0:
+            _image_calls["n"] -= 1
+            _image_calls["refunded"] += 1
+
+
+# The transports swallow their exception and return None, so the caller cannot
+# see WHY an image is missing. This carries the one fact that changes what the
+# caller should do — "the provider is rate-limited, come back later" — without
+# changing any signature. Thread-local: eight render threads generate at once.
+_rate_limit_note = _threading.local()
+
+
+def _note_rate_limited(exc: Exception) -> None:
+    _rate_limit_note.hit = True
+    _rate_limit_note.retry_after = _retry_after(exc)
+
+
+def _take_rate_limited() -> tuple[bool, float | None]:
+    """(was the last generation attempt rate-limited, server Retry-After) —
+    and clears it, so a later success cannot inherit an old 429."""
+    hit = bool(getattr(_rate_limit_note, "hit", False))
+    after = getattr(_rate_limit_note, "retry_after", None)
+    _rate_limit_note.hit = False
+    _rate_limit_note.retry_after = None
+    return hit, after
+
+
+# ── per-lesson deferral (the negative cache) ─────────────────────────────────
+# A 429'd key used to cost EVERY render thread its own two-minute retry ladder
+# for the same picture, and then be given up on for good — while in fa8c0d7d
+# that very key (ciliated_cell) generated successfully 14 seconds after the
+# segment that needed it had stopped waiting. Pacing harder does not help: the
+# incident 429s came at under 10 requests/minute with at most 3 in flight, so
+# the thing being exceeded was not our rate. The answer is to come back LATER,
+# once, rather than to retry harder, eight times over.
+#
+# Both maps are per GENERATION (see _STATE above) and keyed by CANONICAL key,
+# because that is what identifies the picture. Per generation, not per process:
+# one lesson's 429 must never blank another lesson's board.
+_DEFER_CAP = 120.0     # a server may name an hour; a lesson cannot wait one
+
+
+def _now() -> float:
+    """Monotonic clock, indirected so a test can drive time."""
+    return time.monotonic()
+
+
+def reset_deferrals() -> None:
+    with _IMAGE_BUDGET_LOCK:
+        b = _bucket()
+        b["deferred"].clear()
+        b["abandoned"].clear()
+
+
+def defer_asset(key: str, retry_after: float | None = None) -> float:
+    """Do not attempt this key again for a while. Returns the seconds."""
+    wait = float(retry_after) if retry_after else float(
+        _env_int("IMAGE_DEFER_SECONDS", 45))
+    wait = min(max(wait, 1.0), _DEFER_CAP)
+    with _IMAGE_BUDGET_LOCK:
+        _bucket()["deferred"][canonical_key(key)] = _now() + wait
+    return wait
+
+
+def asset_deferred(key: str) -> float | None:
+    """Seconds still to wait for this key, or None if it may be tried now."""
+    ck = canonical_key(key)
+    with _IMAGE_BUDGET_LOCK:
+        deferred = _bucket()["deferred"]
+        until = deferred.get(ck)
+        if until is None:
+            return None
+        left = until - _now()
+        if left <= 0:
+            deferred.pop(ck, None)
+            return None
+        return left
+
+
+def abandon_asset(key: str) -> None:
+    """Give up on this key for the rest of the lesson. Reserved for a failure
+    another attempt would NOT fix -- a rate limit is a deferral, never this:
+    the burst that cost fa8c0d7d its ciliated cell cleared 14 seconds later."""
+    with _IMAGE_BUDGET_LOCK:
+        _bucket()["abandoned"].add(canonical_key(key))
+
+
+def asset_abandoned(key: str) -> bool:
+    with _IMAGE_BUDGET_LOCK:
+        return canonical_key(key) in _bucket()["abandoned"]
+
+
+def deferral_state() -> dict:
+    with _IMAGE_BUDGET_LOCK:
+        b = _bucket()
+        return {"deferred": dict(b["deferred"]),
+                "abandoned": set(b["abandoned"])}
 
 
 def _note_spend(service: str, **fields) -> None:
@@ -678,37 +1009,47 @@ def _finish(key: str, ink: Image.Image, regions: dict | None = None,
 
 # ── cache + public API ───────────────────────────────────────────────────────
 
-_ASSET_LOCKS: dict[str, "threading.Lock"] = {}
+_ASSET_LOCKS: dict[str, "threading.RLock"] = {}
 _LOCKS_GUARD = None  # created lazily so the module stays import-light
 
 
-# Words that decorate a subject without changing which picture it is. The
-# cache key is a free-text string the DIRECTOR invents, so one chapter
-# produced ciliated_epithelium, ciliated_epithelium_cells and
-# ciliated_epithelium_diagram as three separately-paid generations of one
-# image — 71 cached assets and 32 MB from a single chapter, with a near-zero
-# hit rate across re-runs of the SAME chapter.
-#
-# Deliberately conservative: "outline" and "view" are NOT here, because
-# plant_cell_outline and plant_cell_diagram are different pictures and
-# merging them would serve the wrong art, which is worse than paying twice.
-_KEY_NOISE = {"diagram", "diagrams", "cell", "cells", "illustration",
-              "illustrations", "image", "images", "picture", "pictures",
-              "figure", "figures", "drawing", "drawings", "asset", "assets",
-              "visual", "visuals", "graphic", "graphics", "sketch", "art",
-              "of", "the", "a", "an", "and"}
+def asset_lock(key: str) -> "threading.RLock":
+    """The per-key lock every reader and writer of `key`'s cache directory
+    holds. Re-entrant so the visual-library wrapper can hold it across its
+    hydration AND the wrapped get_raster_asset call, which takes it again:
+    hydration used to run outside it, and a parallel segment could open a
+    half-written face, call it corrupt and generate another (2026-09-04)."""
+    global _LOCKS_GUARD
+    import threading
+    if _LOCKS_GUARD is None:
+        _LOCKS_GUARD = threading.Lock()
+    with _LOCKS_GUARD:
+        return _ASSET_LOCKS.setdefault(key, threading.RLock())
 
 
-def canonical_key(key: str) -> str:
-    """The cache identity of an asset, independent of how the model named it.
+# The fold lives in shared/asset_keys.py because the visual library needs the
+# SAME answer: it had its own copy that kept "cell", so hydrate() filed every
+# downloaded *_cell picture at a path this module never reads, and the picture
+# was generated again. `_KEY_NOISE` is re-exported for callers that read it.
+_KEY_NOISE = KEY_NOISE
 
-    Measured on a real cache: folds 71 directories into 62, saving 9 paid
-    image generations from one chapter, with no two distinct pictures
-    colliding.
+
+def asset_lock(key: str):
+    """The per-asset lock, keyed by CACHE identity (two spellings of one
+    picture share a directory, so they must share a lock).
+
+    Public and RE-ENTRANT so the visual-library wrapper can hold it across its
+    whole decision — look, hydrate, generate, publish, log. It used to sit
+    inside this function only, so two render threads could both observe "not
+    cached", both generate, and both log generated+published for one key
+    (ciliated_cell, 17:55:09 in fa8c0d7d).
     """
-    toks = [t for t in re.split(r"[^a-z0-9]+", str(key).lower()) if t]
-    core = [t for t in toks if t not in _KEY_NOISE] or toks
-    return "_".join(sorted(set(core))) or "asset"
+    global _LOCKS_GUARD
+    import threading
+    if _LOCKS_GUARD is None:
+        _LOCKS_GUARD = threading.Lock()
+    with _LOCKS_GUARD:
+        return _ASSET_LOCKS.setdefault(canonical_key(key), threading.RLock())
 
 
 def get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
@@ -716,13 +1057,7 @@ def get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
     """Per-key serialized: segments render in parallel threads, and a
     baked-text regeneration once raced the readers — two segments bound the
     flagged ink mid-rewrite."""
-    global _LOCKS_GUARD
-    import threading
-    if _LOCKS_GUARD is None:
-        _LOCKS_GUARD = threading.Lock()
-    with _LOCKS_GUARD:
-        lock = _ASSET_LOCKS.setdefault(key, threading.Lock())
-    with lock:
+    with asset_lock(key):
         return _get_raster_asset(key, prompt, cache_dir, allow_generate)
 
 
@@ -786,12 +1121,25 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
     if not allow_generate:
         return None
 
+    # Eight render threads asking for one 429'd key used to run eight
+    # independent two-minute ladders. The first caller pays; the rest are told
+    # immediately. `cached_fallback` (a baked-text cache) still beats nothing.
+    if asset_abandoned(key):
+        logger.info("asset %r was abandoned earlier this lesson; not retrying", key)
+        return cached_fallback
+    waiting = asset_deferred(key)
+    if waiting is not None:
+        logger.info("asset %r is deferred for %.0fs more (rate limit); "
+                    "returning without a retry ladder", key, waiting)
+        return cached_fallback
+
     def generate(extra: str = "") -> Image.Image | None:
         # the layer-groups tail addresses the VISION annotator, never the
         # image model — left in, it reads as 'write these names' and the
         # model bakes exactly those labels into the art (measured: a cell
         # covered in 'membi'/'chloropsapts'/'mito!' gibberish)
         import re as _re
+        _take_rate_limited()          # a stale 429 must not survive into this try
         gen_prompt = _re.sub(r"\s*name the layer groups exactly:[^.]*\.?",
                              "", prompt, flags=_re.I)
         suffix = _COLOR_SUFFIX if is_color else _STYLE_SUFFIX
@@ -820,6 +1168,12 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
 
     ink = generate()
     if ink is None:
+        limited, after = _take_rate_limited()
+        if limited:
+            waited = defer_asset(key, after)
+            logger.warning("asset %r was rate-limited; deferring it for %.0fs "
+                           "instead of retrying it on every render thread",
+                           key, waited)
         if cached_fallback is not None:
             logger.warning("regeneration of %r failed — keeping the "
                            "baked-text cache, flagged for validation", key)
@@ -915,29 +1269,89 @@ def load_hand(key: str = "hand_pen", cache_dir: Path | None = None,
 
 def make_resolver(prompts: dict[str, str], prefer_ai: bool = True,
                   cache_dir: Path | None = None, allow_generate: bool = True,
-                  prefer_svg: bool | None = None):
+                  prefer_svg: bool | None = None,
+                  rate_limited_keys=None):
     """Asset resolver for SceneRenderer implementing the §20 fallback ladder:
-    AI svg (true layered vectors) -> AI raster -> authored vector -> None."""
-    from .vector_assets import vector_asset
+    AI svg (true layered vectors) -> AI raster -> authored vector ->
+    placeholder frame (only for a key that HAD a prompt) -> None.
+
+    `rate_limited_keys` is for the CACHE-ONLY child (segment_worker): it cannot
+    see the deferral map, which lives in the parent process, so without this
+    every 429'd picture is reported as `cache_only_miss` -- and with
+    RENDER_PROCESSES=8, which is how fa8c0d7d ran, that is EVERY unresolved
+    asset in the acceptance summary. The parent hands over what it knows.
+    """
+    from .vector_assets import placeholder_asset, vector_asset
+
+    _rate_limited = {canonical_key(k) for k in (rate_limited_keys or ())}
 
     # SVG art is behind a flag until its visual quality matches the raster
     # tier (its drawing MECHANICS are already better: true strokes, layers)
     if prefer_svg is None:
         prefer_svg = os.getenv("SCENE_SVG_ASSETS", "").strip() == "1"
 
+    # WHY a key resolved to nothing. validate.py hard-coded "had no asset
+    # prompt" for every unresolved illustration; in fa8c0d7d both of the two
+    # blank boards HAD prompts and had been abandoned after a 429 ladder, so
+    # the acceptance report named the wrong cause and the real one — a rate
+    # limit — was invisible. Keyed by the asset key the renderer asked for.
+    last_reason: dict[str, str] = {}
+
     def resolve(key: str):
-        if prefer_ai and key in prompts:
+        reason = None
+        if key not in prompts:
+            reason = "no_prompt"
+        elif prefer_ai:
             if prefer_svg:
                 from .svg_assets import get_svg_asset
                 sa = get_svg_asset(key, prompts[key], cache_dir, allow_generate)
                 if sa is not None:
+                    last_reason.pop(key, None)
                     return ("vector", sa)  # renders exactly like authored vectors
             ra = get_raster_asset(key, prompts[key], cache_dir, allow_generate)
             if ra is not None and ra.trace:
+                last_reason.pop(key, None)
                 return ("raster", ra)
+            if not allow_generate:
+                # the child-process path: it may only read the cache, so a
+                # miss here means the parent's warm-up did not land the file
+                # -- unless the parent already told us the provider refused it
+                reason = ("rate_limited" if canonical_key(key) in _rate_limited
+                          else "cache_only_miss")
+            elif asset_abandoned(key) or asset_deferred(key) is not None:
+                # the honest cause: a rate limit we chose to wait out, not a
+                # director who forgot a prompt
+                reason = "rate_limited"
+            elif image_budget_exhausted():
+                # OUR ceiling refused it, not the provider. Checked after the
+                # rate limit because a 429 that also drained the budget is
+                # still a 429 -- the provider is the thing to look at.
+                reason = "budget_exhausted"
+            else:
+                reason = "generation_failed"
         va = vector_asset(key)
         if va is not None:
+            last_reason.pop(key, None)
             return ("vector", va)
+        last_reason[key] = reason or "no_vector"
+        if key in prompts and not is_avatar_key(key):
+            # The picture was PLANNED and we could not get it. A frame where it
+            # should be keeps the labels and leaders anchored to a real box
+            # instead of collapsing them onto one point; the renderer reports
+            # ASSET_PLACEHOLDER and the acceptance gate counts it exactly as it
+            # counted the blank board. A key with no prompt still resolves to
+            # None -- an unknown key is not a missing picture.
+            #
+            # NOT the avatars. The teacher and the student are injected into
+            # EVERY compiled scene (continuity.py) and stand in a fixed corner
+            # for the whole lesson, so a placeholder for one is not a board
+            # that lost its diagram -- it is a dashed rectangle in the corner
+            # of every frame of every segment, plus an ASSET_PLACEHOLDER on
+            # each one telling the acceptance gate the whole lesson is blank.
+            # A character we cannot draw is simply absent, exactly as on
+            # master; the board behind them is unaffected.
+            return ("vector", placeholder_asset(key))
         return None
 
+    resolve.last_reason = last_reason
     return resolve

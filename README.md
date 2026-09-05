@@ -93,6 +93,43 @@ process is shared by every `WORKER_CONCURRENCY` job. A broken pool
 (workers=W, processes=P)` per lesson. Railway: `RENDER_PROCESSES=8`,
 `RENDER_WORKERS=8` on the 24 vCPU box (~200 MB per child).
 
+## Image reliability
+
+Pictures are the one paid, rate-limited call in a render, and a 429 burst once
+cost a lesson two blank boards. Four variables govern how hard a lesson tries
+and how it degrades when it cannot get a picture.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `IMAGE_CALLS_PER_LESSON` | 24 | Image generations one lesson may pay for. A refused call is refunded; the hard stop is a separate ceiling at 2x this, counted in HTTP REQUESTS. |
+| `IMAGE_WARM_BUDGET_SECS` | 180 | Wall clock the up-front warm pass may spend fetching the lesson's pictures before rendering starts. |
+| `IMAGE_WARM_RETRY_SECS` | 120 | How long a key still pending when that budget expires is deferred for. It is NEVER abandoned: a rate limit expires, so exactly one later segment retries it. |
+| `IMAGE_DEFER_SECONDS` | 45 | Default deferral when a provider 429s without naming a `Retry-After`. Capped at 120 s either way. |
+
+A key that is deferred or abandoned costs no provider call at all, so eight
+render threads asking for one refused picture run one ladder, not eight. When
+a picture that had a prompt still cannot be got, the board keeps a dashed
+placeholder frame rather than collapsing its labels onto a point, and the
+renderer reports `ASSET_PLACEHOLDER`; the acceptance gate counts that exactly
+as it counts `ASSET_UNRESOLVED`, so a lesson mostly made of frames still
+blocks. The frame answers to any layer the scene names — it has no parts to
+tell apart — and the two persistent avatars are excluded from it: a teacher we
+cannot draw is simply absent, not a dashed rectangle in the corner of every
+frame of the lesson. All of this state is per GENERATION, not per process —
+with `WORKER_CONCURRENCY > 1` several lessons share one process.
+
+Every unresolved board carries `reason=` on its warning line, and the
+acceptance summary counts them per cause:
+
+| Reason | What to do about it |
+|---|---|
+| `no_prompt` | The director planned an illustration and named no asset prompt. A script bug. |
+| `rate_limited` | A provider 429'd and the lesson chose to wait rather than retry harder. Read the logged response body: a QUOTA 429 names a number to raise, a CAPACITY 429 does not. |
+| `budget_exhausted` | Our OWN ceiling refused the call, not the provider. Raise `IMAGE_CALLS_PER_LESSON` if the lesson legitimately needs more. |
+| `generation_failed` | The provider was asked and produced nothing, for a reason that was not a rate limit. Go and look at the provider. |
+| `cache_only_miss` | A render child (`RENDER_PROCESSES > 1`) may only read the cache, and the warm pass did not land this file. |
+| `no_vector` | Nothing at any tier, including the authored vectors. |
+
 ## Project Structure
 
 ```
