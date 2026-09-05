@@ -499,7 +499,14 @@ def sanitize_scene(scene: dict, root_id: Optional[str] = None, *,
     notes, dropped = _sanitize_roster(
         roster, root_id, part_names=part_names, aliases=aliases,
         resolve=resolve, place=place, words=words)
-    if not notes:
+    # A repair does not always speak. Pruning a dropped child out of a group
+    # replaces that group's roster entry (see the `children` rebuild above) and
+    # emits no note, so gating the write-back on `notes` alone computed the
+    # prune and then threw it away — the group kept naming an element the scene
+    # no longer had, and the schema rejected the whole board: the exact loss
+    # this pass exists to prevent. Write back whenever ANYTHING changed.
+    changed = any(roster.get(k) is not v for k, v in original.items())
+    if not notes and not dropped and not changed:
         return []
     # rebuild from the ORIGINAL list: a fixed element replaces the entry it
     # was made from, everything else passes through untouched — a duplicate

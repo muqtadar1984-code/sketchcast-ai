@@ -514,3 +514,48 @@ def test_a_raising_pass_leaves_the_scene_exactly_as_it_was():
     finally:
         _a._sanitize_roster = orig
     assert scene == before
+
+
+# ── the silent repair must still be written back ────────────────────────────
+class TestASilentRepairIsWrittenBack:
+    """Pruning a dropped child out of a group emits no note. Gating the
+    write-back on notes alone computed that prune and discarded it, so the
+    group went on naming an element the scene no longer had and the schema
+    rejected the whole board (adversarial pass, 2026-09-05)."""
+
+    def _scene(self):
+        # `grp` names a child that the roster does not contain: no arrow is
+        # dropped here, so the pass has nothing to say — it only prunes.
+        return {
+            "id": "s001", "narration": "look at the cell",
+            "elements": [
+                {"id": "cell", "type": "illustration", "asset": "plant_cell",
+                 "at": [600, 380], "scale": 2.0},
+                {"id": "grp", "type": "group", "children": ["cell", "ghost"]},
+            ],
+            "actions": [{"verb": "draw", "target": "cell", "duration": 1.0}],
+        }
+
+    def test_the_group_loses_the_child_the_scene_does_not_have(self):
+        from spike.scene_engine.anchors import sanitize_scene
+        scene = self._scene()
+        sanitize_scene(scene, "cell", part_names=[], aliases={})
+        grp = next(e for e in scene["elements"] if e.get("id") == "grp")
+        assert "ghost" not in (grp.get("children") or []), grp
+        assert "cell" in (grp.get("children") or []), "the innocent child was lost"
+
+    def test_the_scene_validates_afterwards(self):
+        from spike.scene_engine.anchors import sanitize_scene
+        from spike.scene_engine.schema import Scene
+        scene = self._scene()
+        sanitize_scene(scene, "cell", part_names=[], aliases={})
+        Scene.model_validate(scene)   # must not raise
+
+    def test_a_scene_needing_nothing_is_left_alone(self):
+        from spike.scene_engine.anchors import sanitize_scene
+        scene = self._scene()
+        scene["elements"][1]["children"] = ["cell"]
+        before = [dict(e) for e in scene["elements"]]
+        notes = sanitize_scene(scene, "cell", part_names=[], aliases={})
+        assert notes == []
+        assert [dict(e) for e in scene["elements"]] == before
