@@ -31,6 +31,8 @@ from pathlib import Path
 
 import numpy as np
 import requests
+
+from .partnames import norm_part
 from PIL import Image
 
 from shared.asset_keys import KEY_NOISE, canonical_key, is_avatar_key
@@ -731,6 +733,119 @@ def part_names_from_prompt(prompt: str) -> list[str]:
             if p.strip()][:12]
 
 
+# enumeration triggers: the point in an asset prompt after which the model
+# lists what the picture contains
+_LIST_TRIGGER = re.compile(
+    r"\b(?:with|showing|shows?|including|includes?|containing|contains?|"
+    r"consisting of|comprising|made up of|made of|depicting|labelled|labeled)\b",
+    re.IGNORECASE)
+# everything from here to the end of the sentence describes what must NOT be
+# drawn. 'Do not show a vacuole or label parts.' must never yield 'vacuole'.
+_NEGATION = re.compile(
+    r"\b(?:do not|don't|does not|must not|never|without|no|avoid|omit|"
+    r"exclude|rather than|instead of)\b", re.IGNORECASE)
+# leading words that describe an item rather than name it
+_ITEM_STOPWORDS = {"a", "an", "the", "its", "their", "one", "two", "three",
+                   "several", "many", "some", "large", "small", "single",
+                   "double", "clear", "simple", "visible", "all", "of",
+                   "following", "each", "both"}
+# The LAST item of an enumeration carries the sentence's trailing clause with
+# it ("... stamen and carpel on a white background"), which made the chunk too
+# long and threw a real part away whole. The clause starts at one of these.
+_TRAILING_CLAUSE = re.compile(
+    r"\b(?:on|in|at|against|over|under|around|beside|inside|outside|onto|"
+    r"drawn|seen|shown|showing|viewed|placed|rendered|labelled|labeled|"
+    r"arranged|surrounded|filled|floating|sitting|resting)\b", re.IGNORECASE)
+# what makes a trigger's tail an ENUMERATION rather than a single noun
+_LIST_SEPARATOR = re.compile(r",|\band\b|\bor\b|;|/", re.IGNORECASE)
+
+
+def part_names_from_description(prompt: str,
+                                skipped: list[str] | None = None) -> list[str]:
+    """The parts an asset prompt ENUMERATES, when it never named layer groups.
+
+    Measured on the founder's Cells Part 2: the root prompt read "A plant cell
+    in cross-section with a cell wall, cell membrane, nucleus, chloroplasts,
+    and cytoplasm. Do not show a vacuole or label parts." — every part named,
+    no "Name the layer groups exactly" tail, so part_names came back empty and
+    the entire labelling pass (label synthesis, arrow synthesis, the region
+    schedule) was skipped. The cell was drawn bare for six and a half minutes.
+
+    Second tier only: a prompt that carries the explicit tail is authoritative
+    and this returns []. Negated clauses are dropped whole, because a prompt
+    that says what NOT to draw is naming the one part the picture lacks.
+
+    Chunks discarded for length are appended to `skipped` when a list is
+    given, so a partly-extracted enumeration is VISIBLE in the acceptance
+    report instead of shipping as three labelled heart chambers and one bare
+    one, which reads on screen as a mistake rather than as restraint.
+    """
+    if not prompt:
+        return []
+    text = str(prompt)
+    if part_names_from_prompt(text):
+        return []                      # the explicit tail wins outright
+    # never mine the engine's own appended instructions
+    text = re.split(r"name the layer groups exactly", text,
+                    flags=re.IGNORECASE)[0]
+    out: list[str] = []
+    seen: set[str] = set()
+    for sentence in re.split(r"(?<=[.;!?])\s+|\n", text):
+        neg = _NEGATION.search(sentence)
+        if neg is not None:
+            sentence = sentence[:neg.start()]
+        # the LAST trigger whose tail is actually a list wins. Taking the
+        # first made "A diagram showing the human heart with the left atrium,
+        # right atrium, left ventricle and right ventricle." enumerate from
+        # 'showing', so the opening chunk was the six-word "the human heart
+        # with the left atrium" and the left atrium — a real chamber — was
+        # dropped for length while its three siblings got labels.
+        ms = list(_LIST_TRIGGER.finditer(sentence))
+        if not ms:
+            continue
+        m = next((x for x in reversed(ms)
+                  if _LIST_SEPARATOR.search(sentence[x.end():])), ms[0])
+        tail = sentence[m.end():]
+        tail = re.sub(r"^\s*(?:all of|the following|these)\b", "", tail,
+                      flags=re.IGNORECASE)
+        tail = tail.strip().lstrip(":").strip()
+        for chunk in _LIST_SEPARATOR.split(tail):
+            item = re.sub(r"[^A-Za-z0-9 \-]+", " ", chunk).strip().lower()
+            words = [w for w in item.split() if w]
+            while words and words[0] in _ITEM_STOPWORDS:
+                words.pop(0)
+            while words and words[-1] in _ITEM_STOPWORDS:
+                words.pop()
+            # the last item wears the sentence's trailing clause: keep the
+            # head that NAMES the part, drop the clause that places it. This
+            # ran only above three words, which is the length at which a
+            # clause makes a chunk fail the check below — so a chunk that was
+            # name-plus-clause and still SHORT ("cytoplasm on white", "stamen
+            # in profile") passed straight through and shipped as a part
+            # name, and the annotator was asked to find a region called
+            # 'cytoplasm on white'.
+            cl = _TRAILING_CLAUSE.search(" ".join(words))
+            if cl is not None:
+                # a chunk that IS the clause ("drawn in black ink on white
+                # paper") names no part at all: it is not a part this pass
+                # lost, so it is not worth a report line either
+                words = " ".join(words)[:cl.start()].split()
+                while words and words[-1] in _ITEM_STOPWORDS:
+                    words.pop()
+            if not (1 <= len(words) <= 3):
+                if words and skipped is not None:
+                    skipped.append(" ".join(words))
+                continue
+            name = " ".join(words)
+            if len(name.replace(" ", "")) < 3 or name in seen:
+                continue
+            seen.add(name)
+            out.append(name)
+            if len(out) >= 8:
+                return out
+    return out
+
+
 def annotate_regions(ink: Image.Image, part_names: list[str]) -> dict:
     """Vision pass over a generated illustration: named part bounding boxes
     (multiple boxes per name for repeated structures) + a text-presence
@@ -788,10 +903,13 @@ def annotate_regions(ink: Image.Image, part_names: list[str]) -> dict:
                 clean.append([xmin / 1000 * w, ymin / 1000 * h,
                               xmax / 1000 * w, ymax / 1000 * h])
             if clean:
-                regions[str(name).strip().lower()] = clean
+                # normalized on the way IN: the vision model writes back
+                # whatever separator style it likes ('Cell Wall', 'cell_wall'),
+                # and a key that differs from the requested name only by a
+                # space cost the part its leader line
+                regions[norm_part(name) or str(name).strip().lower()] = clean
     out["regions"] = regions
-    missing = [n for n in part_names
-               if str(n).strip().lower() not in regions]
+    missing = [n for n in part_names if norm_part(n) not in regions]
     if missing and regions:
         # focused re-ask for JUST the unboxed parts — the multiplexed
         # N-part question reliably drops one or two (a run once lost 3 of 7,
@@ -805,7 +923,7 @@ def annotate_regions(ink: Image.Image, part_names: list[str]) -> dict:
             buf.getvalue())
         if isinstance(data3, dict) and isinstance(data3.get("regions"), dict):
             for name, boxes in data3["regions"].items():
-                key2 = str(name).strip().lower()
+                key2 = norm_part(name) or str(name).strip().lower()
                 if key2 in regions or not isinstance(boxes, list):
                     continue
                 if boxes and isinstance(boxes[0], (int, float)):

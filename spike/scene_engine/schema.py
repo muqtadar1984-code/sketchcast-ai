@@ -444,7 +444,13 @@ def scene_warnings(scene: Scene) -> list[str]:
     """Soft lints (clamp philosophy): things the renderer will survive but a
     director should hear about."""
     warns: list[str] = []
-    texts = [e for e in scene.elements if isinstance(e, TextElement)]
+    # OVERLAY ids are the engine's own speech captions and moment bubbles,
+    # not board content. Once the narration stream started adding a __nb_
+    # element per sentence this lint fired on 14 of 17 scenes in a lesson
+    # whose boards carried almost no text at all — a lint that cries wolf
+    # gets ignored, which is how a real 62-character label went unnoticed.
+    texts = [e for e in scene.elements if isinstance(e, TextElement)
+             and not str(e.id).startswith(("__nb_", "__hm_", "__kp_", "__tm_"))]
     if sum(len(t.text) for t in texts) > 260:
         warns.append("scene is text-heavy for video; labels only — the deck carries detail")
     if not any(a.verb == "draw" for a in scene.actions):

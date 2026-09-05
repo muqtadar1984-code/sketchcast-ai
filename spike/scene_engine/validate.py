@@ -167,6 +167,18 @@ def validate_visual_language(video_manifest: dict,
         # measured it
         "overlapping_text": _pick("TEXT_OVERLAP"),
         "arrows_converging": _pick("ARROWS_CONVERGE"),
+        # text left sitting ON the picture. Nothing measured this: the
+        # overlap audit is text-vs-text, so a 62-character sentence rode
+        # across the founder's plant cell for nine segments while this
+        # report said the lesson was clean
+        "text_over_art": _pick("TEXT_OVER_ART"),
+        "text_moved_off_art": _pick("TEXT_MOVED_OFF_ART"),
+        # a label whose part could not be located: it gets a leader to the
+        # picture's edge rather than a confident line to the wrong structure
+        "anchor_edge_fallbacks": _pick("ANCHOR_EDGE_FALLBACK"),
+        # a planned illustration that never rendered takes its labels and
+        # arrows with it, instead of laying them over a DIFFERENT diagram
+        "orphaned_by_unresolved_asset": _pick("ORPHANED_BY_UNRESOLVED_ASSET"),
         "baked_text_warnings": _pick("BAKED_TEXT"),
         # a planned illustration that resolved to nothing is a BLANK BOARD
         # under a narration describing a diagram — 13 of 15 segments shipped
@@ -201,6 +213,10 @@ def validate_visual_language(video_manifest: dict,
     # arrows — and this function returned PASSED, because `passed` only ever
     # asked whether the LEGACY renderer had leaked in. Every quality metric
     # was zero, which read as "nothing wrong" instead of "nothing happened".
+    # a chapter whose root diagram is drawn again and again and never
+    # labelled: the compiler's own report is the only record of it
+    report["unlabelled_root_chapters"] = _unlabelled_root_chapters(plan,
+                                                                   plan_report)
     report["no_scenes_produced"] = (report["scene_segments"] == 0
                                     and report["narration_segments"] > 0)
     # ...and a lesson nobody speaks is not a lesson either. A 4-minute video
@@ -218,6 +234,37 @@ def validate_visual_language(video_manifest: dict,
                         and not report["mostly_silent"]
                         and not report["unresolved_assets"])
     return report
+
+
+def _unlabelled_root_chapters(plan: dict, plan_report: list) -> list[str]:
+    """Chapters with a root illustration the plan DRAWS at least three times
+    and never writes a label onto. NOTED, never blocking: the founder's Cells
+    Part 2 passed acceptance with a bare plant cell on screen for six and a
+    half minutes, because nothing in the report asked the question."""
+    out: list[str] = []
+    labelled = {ln.split("|")[0].strip() for ln in plan_report
+                if "| SYNTHESIZED" in ln or "| INJECTED" in ln}
+    for ch in (plan or {}).get("chapters", []) or []:
+        if not isinstance(ch, dict):
+            continue
+        ills = {e.get("id") for e in ch.get("elements", []) or []
+                if isinstance(e, dict) and e.get("type") == "illustration"}
+        if not ills:
+            continue
+        draws = writes = 0
+        for st in ch.get("steps", []) or []:
+            for a in (st.get("actions") or []) if isinstance(st, dict) else []:
+                if not isinstance(a, dict):
+                    continue
+                if a.get("verb") in ("draw", "DRAW") and a.get("target") in ills:
+                    draws += 1
+                elif a.get("verb") in ("write", "WRITE"):
+                    writes += 1
+        concept = str(ch.get("concept") or "?")
+        if (draws >= 3 and writes == 0
+                and not any(concept in ln for ln in labelled)):
+            out.append(f"{concept}: root drawn {draws}x, never labelled")
+    return out
 
 
 def format_report(report: dict) -> str:

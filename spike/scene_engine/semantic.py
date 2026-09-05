@@ -43,6 +43,8 @@ import re
 
 logger = logging.getLogger(__name__)
 
+from .continuity import _classify_text
+
 SEMANTIC_PLAN_VERSION = 1
 
 # world placement for the pieces the director is no longer allowed to place.
@@ -51,6 +53,9 @@ SEMANTIC_PLAN_VERSION = 1
 _ROOT_AT = [600.0, 380.0]
 _TITLE_AT = [640.0, 80.0]
 _LABEL_X = 95.0
+# a caption is not a label: it sits UNDER the picture, centred, and the
+# renderer's keep-text-off-art pass parks it against the root's real box
+_CAPTION_AT = [640.0, 626.0]
 _LABEL_TOP = 140.0
 _LABEL_STEP = 78.0
 # The student avatar's keep-out zone starts here, and the renderer pushes any
@@ -407,7 +412,8 @@ def _chapter(craw, ci: int, narrations: dict, ctx: _Ctx) -> dict | None:
                                 ". Name the layer groups exactly: " +
                                 ", ".join(regions) + ".")
 
-    elements, by_id, label_for_region = _elements(craw, ctx, concept)
+    elements, by_id, label_for_region, sentences = _elements(craw, ctx,
+                                                             concept)
     if not elements:
         ctx.note("EMPTY_CHAPTER", f"{concept}: no placeable elements")
         return None
@@ -419,7 +425,7 @@ def _chapter(craw, ci: int, narrations: dict, ctx: _Ctx) -> dict | None:
                 and isinstance(e.get("asset"), str)}
     steps, extra_elements = _steps(craw, narrations, ctx, concept, by_id,
                                    root_id, label_for_region, len(elements),
-                                   by_asset)
+                                   by_asset, sentences=sentences)
     elements.extend(extra_elements)
     return {"concept": concept, "transition": transition, "assets": assets,
             "elements": elements, "steps": steps}
@@ -447,6 +453,7 @@ def _elements(craw: dict, ctx: _Ctx, concept: str):
     out: list[dict] = []
     by_id: dict[str, dict] = {}
     label_for_region: dict[str, str] = {}
+    sentences: dict[str, str] = {}
     label_i = 0
     # the pitch depends on HOW MANY labels there are, so count before placing
     _n_labels = sum(
@@ -500,9 +507,25 @@ def _elements(craw: dict, ctx: _Ctx, concept: str):
                 ctx.note("TEXT_WITHOUT_CONTENT", f"{concept}: {eid!r}")
                 continue
             role = str(e.get("role") or "label").lower()
+            # EVERY non-title text used to become a size-27 'label' in the
+            # left column — a sentence included. One measured 694px wide and
+            # ran across the diagram. The engine has a home for a statement
+            # (the teacher speaks it: key_point) and one for a caption (under
+            # the picture); the label column is for NAMES.
+            kind = _classify_text({"role": role, "text": text})
             if role == "title":
                 el = {"id": eid, "type": "text", "text": text, "role": "title",
                       "size": 42, "at": list(_TITLE_AT), "anchor": "mt"}
+            elif kind == "sentence":
+                ctx.note("SENTENCE_AS_LABEL",
+                         f"{concept}: {eid!r} is a sentence, not a label — "
+                         f"offered as a key point instead: {text[:60]!r}")
+                sentences[eid] = text
+                continue
+            elif kind == "caption":
+                el = {"id": eid, "type": "text", "text": text,
+                      "role": "caption", "size": 24, "anchor": "mt",
+                      "at": list(_CAPTION_AT)}
             else:
                 el = {"id": eid, "type": "text", "text": text, "role": "label",
                       "size": 27, "anchor": "lt",
@@ -516,7 +539,7 @@ def _elements(craw: dict, ctx: _Ctx, concept: str):
             continue
         out.append(el)
         by_id[eid] = el
-    return out, by_id, label_for_region
+    return out, by_id, label_for_region, sentences
 
 
 def _target(t, ctx: _Ctx, where: str, root_id: str | None, by_asset=None):
@@ -552,7 +575,7 @@ def _target(t, ctx: _Ctx, where: str, root_id: str | None, by_asset=None):
 
 
 def _steps(craw, narrations, ctx, concept, by_id, root_id, label_for_region,
-           n_elements, by_asset=None):
+           n_elements, by_asset=None, sentences=None):
     steps: list[dict] = []
     extra: list[dict] = []
     made_arrows: set[str] = set()
@@ -569,6 +592,7 @@ def _steps(craw, narrations, ctx, concept, by_id, root_id, label_for_region,
             decision = "CONTINUE"
         actions: list[dict] = []
         moment = None
+        key_point_cand = None
         for a in st.get("actions") or []:
             if not isinstance(a, dict):
                 ctx.note("MALFORMED_ACTION", f"{concept}/{sid}: not an object")
@@ -576,6 +600,16 @@ def _steps(craw, narrations, ctx, concept, by_id, root_id, label_for_region,
             verb_raw = str(a.get("verb") or "").strip().lower()
             where = f"{concept}/{sid}/{verb_raw or '?'}"
             cue = _cue(a.get("cue"), narration, ctx, where)
+
+            # a text element _elements refused to place (a sentence): the
+            # action that would have lettered it onto the board becomes the
+            # offer of a key point, so an important statement is SPOKEN
+            _t = a.get("target")
+            _tid = _t.get("element") if isinstance(_t, dict) else _t
+            if sentences and isinstance(_tid, str) and _tid in sentences:
+                if verb_raw in ("write", "reveal", "draw"):
+                    key_point_cand = key_point_cand or sentences[_tid]
+                continue
 
             if verb_raw == "human_teaching_moment":
                 moment = _moment(a, ctx, where)
@@ -666,6 +700,11 @@ def _steps(craw, narrations, ctx, concept, by_id, root_id, label_for_region,
             step["moment"] = moment
         if isinstance(st.get("key_point"), str):
             step["key_point"] = st["key_point"]
+        elif key_point_cand:
+            from .whiteboard import snap_to_narration
+            snapped = snap_to_narration(key_point_cand, narration)
+            if snapped:
+                step["key_point"] = snapped
         steps.append(step)
     return steps, extra
 

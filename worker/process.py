@@ -135,7 +135,19 @@ def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
     try:
         from spike.scene_engine.validate import (format_report,
                                                  validate_visual_language)
-        plan = (script_data or {}).get("visual_plan")
+        # The dump lives at episodes[0].visual_plan (EpisodeScript.visual_plan);
+        # the top-level key was never written, so EVERY production lesson
+        # reported "Visual Chapters 0 / Arrow Count 0 / Human Teaching Moments
+        # 0" no matter what the compiler actually did — the founder's Cells
+        # Part 2 ran 17 scene segments and seeded a moment and a key point, and
+        # this report printed zeros for all of them. Both shapes are read so
+        # the direct key (tests, drivers) keeps working.
+        script_data = script_data or {}
+        plan = script_data.get("visual_plan")
+        if not plan:
+            eps = script_data.get("episodes") or []
+            first = eps[0] if eps and isinstance(eps[0], dict) else {}
+            plan = first.get("visual_plan")
         report = validate_visual_language(video_manifest, plan)
         n = max(1, int(report.get("narration_segments") or 0))
         tolerance = max(1, n // 4)
@@ -184,8 +196,14 @@ def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
                     "PASSED" if report.get("passed") else "FAILED",
                     "yes" if not blocking else "NO",
                     format_report(report))
+        # The COMPILER's own report (PART NAMES / SYNTHESIZED / ANCHORED /
+        # DROPPED lines) never reached a log or the DB, so whether a diagram
+        # was labelled at all was undiagnosable from production. It rides back
+        # with the acceptance verdict now.
+        plan_report = [str(ln) for ln in ((plan or {}).get("report") or [])]
         return {"passed": bool(report.get("passed")), "ship": not blocking,
-                "summary": summary, "report": report}
+                "summary": summary, "report": report,
+                "plan_report": plan_report}
     except Exception:  # noqa: BLE001 — never fail a rendered lesson on the checker
         logger.exception("acceptance check itself failed; lesson allowed through")
         return None
@@ -1228,6 +1246,10 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     "total_episodes": 1,
                     "generated_at": datetime.now().isoformat(),
                     "episodes": [script_dict],
+                    # the acceptance check reads this key; the compose and
+                    # slide builders read only episodes/book_id/chapter_num/
+                    # avatars, so an extra top-level key is inert to them
+                    "visual_plan": script_dict.get("visual_plan"),
                 }
                 slides = generate_episode_slides(
                     script_data=part_scripts, branding=branding, direction=lesson_dir,
@@ -1254,6 +1276,32 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                     db.set_stage(sb, job_id, {"phase": "video", "part": part_idx,
                                               "total": n_parts, "part_pct": 99,
                                               "acceptance": _accept["summary"]})
+                    # jobs.stage is cleared when the job finishes, so the
+                    # acceptance summary evaporated the moment the lesson was
+                    # done. Persist it (and the compiler's own report) on the
+                    # generation so the next "the labels are missing" is
+                    # answerable from the DB instead of from Railway logs that
+                    # a redeploy has already thrown away.
+                    for _ln in _accept.get("plan_report") or []:
+                        logger.info("visual plan: %s", _ln)
+                    try:
+                        # Keyed by PART. A multi-part lesson writes this once
+                        # per part, and under one key each part overwrote the
+                        # last — so the part that failed is exactly the one
+                        # whose verdict you lost.
+                        db.merge_generation_params(sb, generation_id, {
+                            f"acceptance_part{part_idx}": {
+                                "part": part_idx,
+                                "passed": _accept["passed"],
+                                "ship": _accept["ship"],
+                                "summary": _accept["summary"],
+                            },
+                            f"visual_plan_report_part{part_idx}":
+                                (_accept.get("plan_report") or [])[:200],
+                        })
+                    except Exception:  # noqa: BLE001 — telemetry, never fatal
+                        logger.warning("could not persist the acceptance report",
+                                       exc_info=True)
                     if not _accept["ship"]:
                         raise RuntimeError(
                             f"lesson failed acceptance: {_accept['summary']}")

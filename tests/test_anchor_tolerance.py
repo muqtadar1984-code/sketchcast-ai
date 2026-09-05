@@ -727,7 +727,14 @@ class TestReviewFindings:
         assert s3["tail"]["el"] == "lbl_wall"
         assert not any(e["id"] == "cell" for e in scenes["s003"]["elements"])
         s4 = next(e for e in scenes["s004"]["elements"] if e["id"] == "arr_wall")
-        assert s4["head"] == {"el": "cell", "edge": "center"}
+        # Once the picture is on the board the head re-anchors to it — and
+        # since the labelling work it also carries the PART it names, read
+        # from the label's own text, so the arrow lands on the cell wall
+        # rather than the middle of the cell. The layer is an addition to
+        # this expectation, not a change of it.
+        assert s4["head"]["el"] == "cell"
+        assert s4["head"]["edge"] == "center"
+        assert s4["head"].get("layer") == "cell wall"
         assert not any("DROPPED" in ln for ln in report), report
         assert any(ln.startswith("SEGMENT s003 | FLATTENED arr_wall.head 'cell'")
                    for ln in report)

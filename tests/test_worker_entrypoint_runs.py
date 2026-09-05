@@ -167,11 +167,25 @@ class TestAcceptanceGateIsCalibrated:
         assert r["ship"] is False and "mostly_silent" in r["summary"]
 
     def test_the_worker_gates_on_ship_not_on_the_audit(self):
+        """The gate is `ship`, never `passed`. Promoting the full quality
+        audit to a shipping gate destroyed lessons that were fine — an
+        all-whiteboard lesson and a lesson that lost one image out of thirty.
+
+        `passed` may be RECORDED (it is persisted on the generation so a
+        complaint is answerable later); what it must never do is decide
+        anything, so the check is that it never appears in a CONDITION."""
         import inspect
         from worker.process import process_generation
         src = inspect.getsource(process_generation)
-        assert '_accept["ship"]' in src
-        assert '_accept["passed"]' not in src
+        assert 'if not _accept["ship"]' in src
+        for ln in src.splitlines():
+            if '_accept["passed"]' not in ln:
+                continue
+            stripped = ln.strip()
+            assert not stripped.startswith(("if ", "elif ", "assert ",
+                                            "while ")), ln
+            assert not any(op in stripped for op in (" if ", " and ", " or ",
+                                                     "not ")), ln
 
 
 class TestAFailedSegmentReachesTheConcatGate:
