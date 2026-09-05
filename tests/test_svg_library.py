@@ -119,11 +119,20 @@ def rig(tmp_path, monkeypatch):
         integration = vli
         calls = counts
 
-        def resolver(self, prompts, allow_generate=True):
+        def resolver(self, prompts, allow_generate=True, cache=None):
             return ra.make_resolver(prompts, prefer_ai=True,
-                                    cache_dir=self.cache,
+                                    cache_dir=cache or self.cache,
                                     allow_generate=allow_generate,
                                     prefer_svg=True)
+
+        def cold_machine(self, name: str):
+            """A SECOND worker: its own empty cache, its own empty local
+            index, the same Supabase. This is the only honest way to test
+            cross-machine reuse — a warm local index would answer from the
+            first machine's disk and prove nothing."""
+            monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / f"index_{name}")
+            counts.clear()
+            return tmp_path / f"cache_{name}"
 
         def raster_resolver(self, prompts, allow_generate=True):
             return ra.make_resolver(prompts, prefer_ai=True,
@@ -627,3 +636,103 @@ class TestNoVisionCallOnTheSvgPath:
         assert "annotate_regions(" not in svg_half
         assert "annotate_regions(" in inspect.getsource(ra._get_raster_asset), \
             "the raster tier's vision pass must still be there"
+
+
+class TestCrossMachineReuse:
+    """The point of a durable library: machine A pays once, machine B never
+    pays again — and machine B is a fresh container, so its local index is
+    empty and only Supabase can answer.
+
+    Machine B also asks in DIFFERENT WORDS under a DIFFERENT key. Both halves
+    matter: semantic matching is what finds the asset, and caching it under
+    the REQUESTED key is what delivers it. A match filed under the matched
+    row's key lands where nobody reads, which for PNG meant a hit at 17:52:10
+    and a paid regeneration of the same picture twelve seconds later.
+    """
+
+    REWORDED = ("A labelled diagram of a chloroplast: its outer membrane, "
+                "its inner membrane and the grana inside it")
+
+    def test_machine_b_reuses_machine_as_svg_without_a_single_ai_call(
+            self, rig):
+        store: dict = {}
+        rig.publishes_to(store)
+
+        # ── machine A: miss -> generate -> validate -> publish ──
+        rig.generates_svg()
+        kind, drawn_a = rig.resolver({"chloroplast": PROMPT})("chloroplast")
+        assert kind == "vector"
+        assert rig.calls["svg_text"] == 1
+        assert len(store["rows"]) == 1
+        published = store["rows"][0]
+        assert published["asset_format"] == "svg"
+        assert published["group_count"] == 4
+
+        # ── machine B: cold cache, empty local index, reworded request ──
+        cache_b = rig.cold_machine("b")
+        resolve_b = rig.resolver({"chloroplast_structure_diagram": self.REWORDED},
+                                 cache=cache_b)
+        kind_b, drawn_b = resolve_b("chloroplast_structure_diagram")
+
+        assert kind_b == "vector", "a library SVG is a vector, like any other"
+        assert isinstance(drawn_b, VectorAsset) and not drawn_b.placeholder
+        assert rig.calls.ai == 0, f"machine B paid for something: {rig.calls}"
+        assert rig.calls.get("annotate_regions", 0) == 0
+        assert len(store["rows"]) == 1, "and it did not add a duplicate row"
+        assert store["downloads"] == [published["storage_path"]]
+
+    def test_machine_b_files_it_under_the_REQUESTED_key(self, rig):
+        """The hydration bug, one format later. The renderer only ever looks
+        at the path built from the key it asked for."""
+        store: dict = {}
+        rig.publishes_to(store)
+        rig.generates_svg()
+        rig.resolver({"chloroplast": PROMPT})("chloroplast")
+
+        cache_b = rig.cold_machine("b")
+        requested = "chloroplast_structure_diagram"
+        rig.resolver({requested: self.REWORDED}, cache=cache_b)(requested)
+
+        landed = sa.svg_cache_dir(cache_b, requested) / "asset.svg"
+        assert landed.exists(), [str(p) for p in cache_b.rglob("*")]
+        assert landed.read_bytes() == CHLOROPLAST_SVG.encode("utf-8")
+        assert not (sa.svg_cache_dir(cache_b, "chloroplast") / "asset.svg").exists()
+
+    def test_the_layers_survive_the_round_trip(self, rig):
+        """Bytes are not the deliverable; addressable named layers are."""
+        store: dict = {}
+        rig.publishes_to(store)
+        rig.generates_svg()
+        _, drawn_a = rig.resolver({"chloroplast": PROMPT})("chloroplast")
+
+        cache_b = rig.cold_machine("b")
+        requested = "chloroplast_structure_diagram"
+        _, drawn_b = rig.resolver({requested: self.REWORDED},
+                                  cache=cache_b)(requested)
+        assert drawn_b.layer_ids() == drawn_a.layer_ids()
+        assert drawn_b.layer_ids() == ["outer_membrane", "inner_membrane",
+                                       "chloroplasts", "stroma"]
+        # the tolerant matcher still answers a lesson that says "chloroplast"
+        assert [l.id for l in drawn_b.subset(["chloroplast"])] == ["chloroplasts"]
+
+    def test_machine_b_records_it_as_a_library_hit_not_a_generation(self, rig):
+        store: dict = {}
+        rig.publishes_to(store)
+        rig.generates_svg()
+        rig.resolver({"chloroplast": PROMPT})("chloroplast")
+
+        cache_b = rig.cold_machine("b")
+        requested = "chloroplast_structure_diagram"
+        rig.resolver({requested: self.REWORDED}, cache=cache_b)(requested)
+
+        rows = [r for r in rig.decisions()
+                if r["tier"] == "svg" and r["requested_key"] == requested]
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["library_hit"] is True
+        assert row["ai_generated"] is False and row["published"] is False
+        assert row["asset_provenance"] == "visual_library"
+        assert row["asset_format"] == "svg" and row["group_count"] == 4
+        assert row["matched_key"] == "chloroplast"
+        assert row["match_source"] == "remote", "machine B's index is cold"
+        assert row["key_guard_passed"] is True
