@@ -257,7 +257,7 @@ def validate_svg_document(svg_text: str) -> SvgValidation:
             else:
                 refuse_element(grandchild, where)
         if paths_here == 0:
-            issues.append(SvgIssue("empty_group", str(gid)))
+            issues.append(SvgIssue("empty_group", where))
 
     if not group_ids and not any(i.code == "group_without_id" for i in issues):
         issues.append(SvgIssue("no_groups"))

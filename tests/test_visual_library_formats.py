@@ -267,3 +267,58 @@ class TestFindAndHydrateRespectTheFormat:
                 svg_cache_dir(tmp_path, key) / "asset.svg", key
             assert vl._local_asset_path(tmp_path, key, "png") == \
                 tmp_path / vl.canonical_key(key) / "asset.png", key
+
+
+class TestTheRowAnswersWithoutADownload:
+    """The reason group metadata is on the row at all: a lesson that wants to
+    label the thylakoid should not have to fetch 40 KB of markup to discover
+    the asset has no such group."""
+
+    ROW = {"asset_key": "chloroplast", "asset_format": "svg",
+           "group_ids": ["outer_membrane", "inner_membrane", "chloroplasts"],
+           "group_count": 3}
+
+    def test_it_answers_from_the_stored_ids(self):
+        import shared.visual_library as vl
+        assert vl.row_group_ids(self.ROW) == ["outer_membrane",
+                                              "inner_membrane", "chloroplasts"]
+        assert vl.row_has_parts(self.ROW, ["outer_membrane"]) is True
+        assert vl.row_has_parts(self.ROW, ["flagellum"]) is False
+
+    def test_the_question_is_asked_with_the_RENDERER_S_matcher(self):
+        """Storage is exact and matching is tolerant; this is the seam. A
+        different rule here would let the library promise a part the renderer
+        then cannot find."""
+        import shared.visual_library as vl
+        from spike.scene_engine.vector_assets import match_layer_ids
+        assert vl.row_has_parts(self.ROW, ["chloroplast"]) is True
+        assert match_layer_ids(vl.row_group_ids(self.ROW),
+                               ["chloroplast"]) == ["chloroplasts"]
+
+    def test_every_wanted_part_has_to_be_there(self):
+        import shared.visual_library as vl
+        assert vl.row_has_parts(self.ROW, ["chloroplast", "flagellum"]) is False
+        assert vl.row_has_parts(
+            self.ROW, ["chloroplast", "outer_membrane"]) is True
+
+    def test_a_row_with_no_recorded_groups_does_not_guess(self):
+        """Every PNG, and any SVG published before the column existed."""
+        import shared.visual_library as vl
+        assert vl.row_has_parts({"asset_key": "volcano"}, ["crater"]) is False
+        assert vl.row_has_parts({"asset_key": "volcano"}, []) is True
+        assert vl.row_has_parts(None, ["crater"]) is False
+
+    def test_the_quality_field_says_which_gate_the_asset_passed(
+            self, tmp_path, monkeypatch):
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "idx")
+        monkeypatch.setattr(vl, "_sb", lambda: None)
+        svg = tmp_path / "asset.svg"
+        svg.write_bytes(SVG_DOC.encode("utf-8"))
+        png = tmp_path / "asset.png"
+        png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
+        vl.publish_generated("chloroplast", "A chloroplast", svg)
+        vl.publish_generated("volcano", "A volcano", png)
+        by_key = {r["asset_key"]: r for r in vl._local_candidates()}
+        assert by_key["chloroplast"]["quality"] == "svg_contract_validated"
+        assert by_key["volcano"]["quality"] == "renderer_validated"

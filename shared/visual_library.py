@@ -162,6 +162,36 @@ def row_format(row: dict[str, Any] | None) -> str:
     return suffix if suffix in ASSET_FORMATS else DEFAULT_FORMAT
 
 
+def row_group_ids(row: dict[str, Any] | None) -> list[str]:
+    """The EXACT group ids stored on a row, in drawing order."""
+    if not row:
+        return []
+    return [str(g) for g in (row.get("group_ids") or [])]
+
+
+def row_has_parts(row: dict[str, Any] | None, wanted) -> bool:
+    """Whether a stored asset contains every part a lesson wants to label,
+    answered from the ROW — no download.
+
+    Storage is exact and matching is tolerant, and this is the seam between
+    them: the row records "chloroplasts" verbatim, a lesson asks for
+    "chloroplast", and the same matcher the renderer uses to pick layers
+    decides they are the same part. Using a different rule here would let the
+    library promise a part the renderer then cannot find.
+
+    A row with no recorded groups (every PNG, and any SVG published before the
+    column existed) answers False for a real request rather than guessing.
+    """
+    want = [str(w) for w in (wanted or []) if str(w).strip()]
+    if not want:
+        return True
+    from spike.scene_engine.vector_assets import match_layer_ids
+    available = row_group_ids(row)
+    if not available:
+        return False
+    return all(match_layer_ids(available, [w]) for w in want)
+
+
 def is_avatar_row(row: dict[str, Any] | None) -> bool:
     """Whether a stored row is an avatar, by type OR by key.
 
@@ -710,7 +740,12 @@ def publish_generated(asset_key: str, prompt: str, asset_path: Path,
         "status": "approved",
         "provenance": "generated",
         "content_hash": digest,
-        "quality": (metadata or {}).get("quality", "renderer_validated"),
+        # what the asset actually passed, not a generic word: an SVG cleared
+        # the publish contract above, a PNG cleared the renderer's coverage
+        # and baked-text checks
+        "quality": (metadata or {}).get(
+            "quality", "svg_contract_validated" if fmt == "svg"
+            else "renderer_validated"),
         "asset_format": fmt,
         "group_ids": group_ids,
         "group_count": len(group_ids),
