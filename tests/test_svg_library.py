@@ -413,6 +413,12 @@ class TestGeneratingAnSvgValidatesThenPublishes:
 
 
 class TestTheRasterTierIsUnchanged:
+    """The reworded request here was `erupting_volcano_diagram` until the
+    contrast guard landed; an eruption is not a cut-away, so that pair is
+    refused now (pinned in test_visual_library_reuse). `volcano_diagram` is
+    the same rewording without the rival claim, and these tests are about
+    format handling, not about which pictures may answer which."""
+
     def test_a_raster_library_hit_still_works(self, rig):
         store: dict = {}
         rig.publishes_to(store)
@@ -430,10 +436,10 @@ class TestTheRasterTierIsUnchanged:
             "objects": {"generated/cross_section_volcano/aa.png": _png_bytes()},
             "downloads": [],
         })
-        resolve = rig.raster_resolver({"erupting_volcano_diagram":
+        resolve = rig.raster_resolver({"volcano_diagram":
                                        "A volcano cut in half showing the "
                                        "magma chamber, central vent and cone"})
-        kind, asset = resolve("erupting_volcano_diagram")
+        kind, asset = resolve("volcano_diagram")
         assert kind == "raster"
         assert rig.calls.get("image", 0) == 0, "a hit must not also generate"
 
@@ -456,7 +462,7 @@ class TestTheRasterTierIsUnchanged:
             "downloads": [],
         })
         assert rig.library.find(
-            "erupting_volcano_diagram",
+            "volcano_diagram",
             "A volcano cut in half showing the magma chamber, central vent "
             "and cone", asset_format="png") is not None
 

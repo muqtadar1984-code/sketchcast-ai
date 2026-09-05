@@ -171,8 +171,15 @@ class TestAWrongPictureIsNeverServed:
 class TestGenuineReuseStillWorks:
     def test_a_synonym_of_the_same_concept_still_clears(
             self, tmp_path, monkeypatch):
+        """The row was keyed `heart_anatomical` here until the contrast rule
+        landed, and that pair is now REFUSED — see
+        TestTwoKeysThatDenyEachOtherAreNotOneAnothersPicture for the pin and
+        for what it costs. A qualifier the candidate simply does not carry is
+        still fine: `anatomical` narrows the same heart, it does not name a
+        different one."""
         _library(monkeypatch, tmp_path, {
-            "asset_key": "heart_anatomical", "canonical_key": "anatomical_heart",
+            "asset_key": "human_heart_anatomical",
+            "canonical_key": "anatomical_heart_human",
             "description": ("An educational diagram of the human heart showing "
                             "its four chambers and the flow of blood"),
             "subject": "biology", "grade": "k12", "curriculum": "generic",
@@ -183,13 +190,19 @@ class TestGenuineReuseStillWorks:
                       "The human heart with its four chambers and the flow "
                       "of blood")
         assert hit is not None
-        assert hit["asset_key"] == "heart_anatomical"
+        assert hit["asset_key"] == "human_heart_anatomical"
         assert hit["match_score"] >= vl.threshold_now()
         # and it would survive the 1.25 stopgap threshold too
         assert hit["match_score"] >= 1.25
 
     def test_a_reworded_request_still_finds_its_asset(
             self, tmp_path, monkeypatch):
+        """The request key here was `erupting_volcano_diagram` until the
+        contrast rule landed. An eruption and a cut-away are two pictures, and
+        the library holds both `volcano_cross_section` and
+        `composite_volcano_cross_section` — so that pair is refused now, and
+        pinned as a refusal below. Rewording that does not introduce a rival
+        claim still finds the asset."""
         _library(monkeypatch, tmp_path, {
             "asset_key": "volcano_cross_section",
             "canonical_key": "cross_section_volcano",
@@ -199,7 +212,7 @@ class TestGenuineReuseStillWorks:
             "topic": "volcano cross section", "concepts": [],
             "status": "approved", "asset_type": "visual",
             "local_cache_path": "/tmp/v.png"})
-        assert vl.find("erupting_volcano_diagram",
+        assert vl.find("volcano_diagram",
                        "A volcano cut in half showing the magma chamber, "
                        "central vent and cone") is not None
 
@@ -454,3 +467,550 @@ class TestTheAbstentionMustRestOnSomething:
             assert vl.key_guard_ok("cell_diagram", self._VOLCANO) is False
         assert any("name a medium or an index" in r.getMessage()
                    for r in caplog.records), caplog.text
+
+
+def _chem(key: str, canonical: str, description: str) -> dict:
+    return {"asset_key": key, "canonical_key": canonical,
+            "description": description, "subject": "chemistry",
+            "grade": "14-16", "curriculum": "generic", "topic": key,
+            "concepts": ["energy"], "status": "approved",
+            "asset_type": "visual", "local_cache_path": f"/tmp/{key}.png"}
+
+
+# The three real rows, carrying their live descriptions. Near-identical prose
+# describing opposite pictures, which is the whole reason the score cannot
+# separate them and the KEY has to.
+_ENDOTHERMIC = _chem(
+    "endothermic_energy_profile", "endothermic_energy_profile",
+    "A blank pair of axes with a flat line on the left at a low level, a flat "
+    "line on the right at a higher level, a curved hump rising from the left "
+    "line and settling on the right line, a vertical arrow from the left line "
+    "to the top of the hump and a second vertical arrow from the left line up "
+    "to the right line. Write no numbers or words. Name the layer groups "
+    "exactly: vertical axis, horizontal axis, reactants level.")
+_EXOTHERMIC = _chem(
+    "exothermic_energy_profile", "energy_exothermic_profile",
+    "A blank pair of axes with a flat line on the left at a high level, a flat "
+    "line on the right at a lower level, a curved hump rising from the left "
+    "line and falling to the right line, a vertical arrow from the left line "
+    "to the top of the hump and a second vertical arrow from the left line "
+    "down to the right line. Write no numbers or words. Name the layer groups "
+    "exactly: vertical axis, horizontal axis, reactants level.")
+_CATALYST = _chem(
+    "catalyst_energy_profile", "catalyst_energy_profile",
+    "A blank pair of axes with a flat line on the left for the starting level, "
+    "a lower flat line on the right for the finishing level, and two curved "
+    "humps joining them, a tall solid hump and a lower dashed hump, with a "
+    "vertical arrow measuring the height of each hump from the starting "
+    "level. Write no numbers or words. Name the layer groups exactly: "
+    "vertical axis, horizontal axis, reactants level.")
+
+
+class TestTwoKeysThatDenyEachOtherAreNotOneAnothersPicture:
+    """On 2026-09-05 the library served `catalyst_energy_profile` to BOTH
+    `endothermic_energy_profile` and `exothermic_energy_profile`. All three
+    share "energy" and "profile", so the guard's inclusive test passed and
+    only the threshold was left — and in the production context those pairs
+    score 0.79 and 0.82, twice over the 0.58 default. Three chemically
+    distinct diagrams, one picture served for all of them, on a classroom
+    board, confidently.
+
+    This one could not be closed by subtracting a class of token the way "sk",
+    the connectives and the layer tail were: "energy" and "profile" are what
+    these keys are ABOUT. What separates them is the token each key carries
+    that the other does not.
+
+    Measured over all 100,172 ordered pairs of the 317 approved visual rows,
+    each row's own description as the prompt and no explicit caller context
+    (which is what production runs — `set_context` is called from nowhere):
+    the guard admitted 1,936 pairs and the contrast rule refuses 1,506 of
+    them; 272 of the 448 admissions clearing the 0.58 default are contrast
+    pairs. Simulating find(), that costs 59 of 125 served requests their
+    answer — every one a different picture — and changes 9 answers, of which
+    8 are neutral or better and one (`plant_cell_outline__merged`) is worse.
+    The full accounting, and why 0.58 rather than 0.85 is the column to read,
+    is the comment above `_unmatched` in shared/visual_library.py.
+    """
+
+    def test_all_three_energy_profiles_refuse_each_other(self):
+        rows = (_ENDOTHERMIC, _EXOTHERMIC, _CATALYST)
+        for q in rows:
+            for c in rows:
+                if q is c:
+                    continue
+                assert vl.key_guard_ok(q["asset_key"], c) is False, \
+                    f'{q["asset_key"]} <- {c["asset_key"]}'
+
+    def test_the_catalyst_curve_is_not_served_to_either_reaction(
+            self, tmp_path, monkeypatch):
+        """The reported incident, both halves of it."""
+        _library(monkeypatch, tmp_path, _CATALYST)
+        for row in (_ENDOTHERMIC, _EXOTHERMIC):
+            assert vl.find(row["asset_key"], row["description"]) is None
+            # …and not because the threshold happened to save us
+            assert vl.find(row["asset_key"], row["description"],
+                           min_score=0.0) is None
+
+    def test_the_worst_pair_is_the_one_nobody_reported(
+            self, tmp_path, monkeypatch):
+        """Measured at 1.23 — above the catalyst pair that WAS reported. The
+        library would hand an exothermic profile, products BELOW the
+        reactants, to a request for an endothermic one, products above."""
+        _library(monkeypatch, tmp_path, _EXOTHERMIC)
+        row, score, _ = vl.best_match("endothermic_energy_profile",
+                                      _ENDOTHERMIC["description"])
+        assert row is not None and score >= 0.85, \
+            "the score alone was never going to refuse this"
+        assert vl.find("endothermic_energy_profile",
+                       _ENDOTHERMIC["description"], min_score=0.0) is None
+
+    def test_the_near_miss_is_still_recorded_as_evidence(
+            self, tmp_path, monkeypatch):
+        """find() refuses it; best_match must still see it, or "is 0.85 the
+        right threshold" stops being answerable."""
+        _library(monkeypatch, tmp_path, _CATALYST)
+        row, score, source = vl.best_match("endothermic_energy_profile",
+                                           _ENDOTHERMIC["description"])
+        assert row["asset_key"] == "catalyst_energy_profile"
+        assert score > 0 and source == "local"
+
+    def test_plant_and_animal_cells_are_different_pictures(self):
+        """Passes on the baseline too, and it is worth saying which rule does
+        the work: "cell" is KEY_NOISE, so the two keys reduce to {plant} and
+        {animal} and share NO token — the contrast branch is never reached.
+        What separates them is the older shared-token rule. Kept because the
+        pair must stay separated however the guard is rearranged; asserted
+        with its precondition so it cannot be misread as evidence for the
+        contrast rule, and so that promoting "cell" out of KEY_NOISE fails
+        here rather than silently changing what this test means."""
+        assert vl.guard_tokens("plant_cell") & vl.guard_tokens("animal_cell") \
+            == set(), "reaching the contrast branch would change this test"
+        for a, b in (("plant_cell", "animal_cell"),
+                     ("animal_cell", "plant_cell")):
+            assert vl.key_guard_ok(a, {"asset_key": b,
+                                       "canonical_key": vl.canonical_key(b)}) \
+                is False, f"{a} <- {b}"
+
+    @pytest.mark.parametrize("query,candidate", [
+        ("meiosis_stages", "mitosis_stages"),
+        ("covalent_bonding_dot_and_cross_methane",
+         "covalent_bonding_dot_and_cross_water"),
+        ("capillary_exchange", "alveolus_gas_exchange"),
+        ("nitrogen_cycle", "carbon_cycle"),
+        ("concave_mirror_ray_diagram", "converging_lens_ray_diagram"),
+        ("constructive_and_destructive_waves", "constructive_plate_boundary"),
+        ("red_blood_cell__merged", "plant_cell_wall__merged"),
+        ("digestive_system", "respiratory_system"),
+    ])
+    def test_the_rest_of_the_wrong_pictures_this_closes(self, query, candidate):
+        """Every one of these is a real live pair the library admits today
+        and scores over the 0.58 default. The last two are worth naming:
+        `constructive_and_destructive_waves` is two waves on a beach and
+        `constructive_plate_boundary` is a sea-floor ridge; and
+        `red_blood_cell__merged` <- `plant_cell_wall__merged` is the
+        `ciliated_cell` bug verbatim — the ONLY token those two keys share is
+        the pipeline suffix "merged", and it scores 0.99."""
+        assert vl.key_guard_ok(query, {
+            "asset_key": candidate,
+            "canonical_key": vl.canonical_key(candidate)}) is False
+
+    def test_an_eruption_is_not_a_cut_away(self):
+        """Moved out of TestGenuineReuseStillWorks, where it asserted the
+        opposite. Two different specialisations of "volcano" are two different
+        pictures, and the library holds both cross-sections already."""
+        assert vl.key_guard_ok("erupting_volcano_diagram", {
+            "asset_key": "volcano_cross_section",
+            "canonical_key": "cross_section_volcano"}) is False
+
+    def test_what_this_costs_when_two_qualifiers_mean_the_same_thing(self):
+        """The honest price of a key-level rule, pinned so it is not
+        discovered by surprise. `human` and `anatomical` narrow the SAME
+        heart, but nothing in the two KEYS says so, while `endothermic` and
+        `catalyst` name different curves — so this reuse is refused and the
+        heart is paid for again.
+
+        Measured, the class barely occurs at the point of service: of the
+        272 contrast refusals that clear the 0.58 default, the only pair
+        holding the same picture is `leaf_microscope_view` /
+        `microscope_split_view` (identical descriptions), and neither board
+        loses its diagram, because `microscope_view` answers both by subset at
+        1.21. A re-SPELLING is a different matter and is not refused at all —
+        see TestASpellingIsNotARivalClaim."""
+        assert vl.key_guard_ok("human_heart_diagram", {
+            "asset_key": "heart_anatomical",
+            "canonical_key": "anatomical_heart"}) is False
+
+
+class TestSpecialisationIsNotContrast:
+    """The rule is symmetric, so BOTH pure-subset directions stay open: a key
+    whose tokens the other simply contains is narrowing the same subject, not
+    denying it. Measured at the production threshold the two directions hold
+    31 and 16 pairs and are each about half genuine reuse and half
+    reduced-variant error, so closing either would cost as much correct reuse
+    as it saves."""
+
+    _COMPOSITE = {"asset_key": "composite_volcano_cross_section",
+                  "canonical_key": "composite_cross_section_volcano"}
+    _GENERIC = {"asset_key": "volcano_cross_section",
+                "canonical_key": "cross_section_volcano"}
+
+    def test_a_more_specific_candidate_may_answer_a_general_request(self):
+        assert vl.key_guard_ok("volcano_cross_section", self._COMPOSITE) is True
+
+    def test_and_the_general_one_may_answer_the_specific_request(self):
+        """Asked explicitly in the brief, and left open: `volcano_cross_section`
+        is the same cut-away with one fewer claim on it. Closing this direction
+        would also refuse `human_ciliated_cell_diagram <- ciliated_cell_asset`
+        (1.23) and `microscope_split_view <- microscope_view` (1.21), which are
+        the same picture — 15 answers lost and 2 changed at the 0.58
+        default, against no wrong picture prevented."""
+        assert vl.key_guard_ok("composite_volcano_cross_section",
+                               self._GENERIC) is True
+
+    def test_an_exact_key_is_untouched(self):
+        for key in ("endothermic_energy_profile", "plant_cell", "sk_boat"):
+            assert vl.key_guard_ok(key, {
+                "asset_key": key, "canonical_key": vl.canonical_key(key)}), key
+
+
+class TestASpellingIsNotARivalClaim:
+    """A key written differently is not a key that denies you.
+
+    The keys are free text a MODEL invents, over a product shipping Cambridge,
+    CBSE and US curricula in ten locales, so the same picture arrives spelled
+    more than one way — and the LIBRARY is not consistent either: it holds
+    `addition_polymerisation_of_ethene`, `muscle_fibre` and
+    `fertilisation_oviduct` beside `copper_sulfate`, `fetus_uterus` and
+    `organization_hierarchy`.
+
+    A plain set difference reads every one of those as a contrast. Measured
+    against the 317 live rows by asking find() for each key with one word
+    respelled: 36 library keys become unreachable through a regular English
+    plural the Latin table does not cover, and 11 more through the other
+    orthography — every one at a score clearing 0.85, every one a paid
+    regeneration (~US$0.04, ~53 s) for a picture the library already holds, on
+    the quota that is the binding constraint. So the residual is computed
+    through `asset_keys.same_word`.
+    """
+
+    @pytest.mark.parametrize("query,stored", [
+        # the regular -y -> -ies rule partnames' Latin table cannot see
+        ("capillaries_exchange", "capillary_exchange"),
+        ("constructive_plate_boundaries", "constructive_plate_boundary"),
+        ("organization_hierarchies", "organization_hierarchy"),
+        ("athenian_democracies_structure", "athenian_democracy_structure"),
+        # -f/-fe -> -ves and the irregulars
+        ("leaves_cross_section", "leaf_cross_section_diagram"),
+        ("starch_test_leaves", "starch_test_leaf"),
+        ("teeth_structure", "tooth_structure"),
+        ("mosquito_lives_cycle_malaria", "mosquito_life_cycle_malaria"),
+        # British/American — both directions, because the library holds both
+        ("extraction_of_aluminum", "extraction_of_aluminium"),
+        ("displacement_reaction_iron_nail_copper_sulphate",
+         "displacement_reaction_iron_nail_copper_sulfate"),
+        ("foetus_uterus", "fetus_uterus"),
+        ("muscle_fiber", "muscle_fibre"),
+        ("biological_organisation_hierarchy", "organization_hierarchy"),
+        ("addition_polymerization_of_ethene",
+         "addition_polymerisation_of_ethene"),
+        ("specialized_animal_cells_table", "specialised_animal_cells_table"),
+        ("fertilization_oviduct", "fertilisation_oviduct"),
+        ("evaporation_and_crystallization", "evaporation_and_crystallisation"),
+    ])
+    def test_the_same_picture_spelled_differently_is_still_a_candidate(
+            self, query, stored):
+        assert vl.key_guard_ok(query, {
+            "asset_key": stored,
+            "canonical_key": vl.canonical_key(stored)}) is True, \
+            f"{query} <- {stored}"
+
+    def test_and_the_library_actually_serves_it(self, tmp_path, monkeypatch):
+        """Through find(), at the production threshold, on the real row: the
+        guard is only half the path and a refusal here is a paid image."""
+        _library(monkeypatch, tmp_path, {
+            "asset_key": "leaf_cross_section_diagram",
+            "canonical_key": "cross_leaf_section",
+            "description": ("A cross-section of a leaf showing the upper "
+                            "epidermis, the palisade layer, the spongy layer "
+                            "and the lower epidermis"),
+            "subject": "biology", "grade": "k12", "curriculum": "generic",
+            "topic": "leaf cross section", "concepts": [],
+            "status": "approved", "asset_type": "visual",
+            "local_cache_path": "/tmp/leaf.png"})
+        hit = vl.find("leaves_cross_section",
+                      "A cross-section of a leaf showing the upper epidermis, "
+                      "the palisade layer, the spongy layer and the lower "
+                      "epidermis", min_score=0.85)
+        assert hit is not None and hit["asset_key"] == "leaf_cross_section_diagram"
+
+    def test_a_plural_does_not_deny_its_own_singular(self):
+        assert vl.key_guard_ok("organ_system_diagram", {
+            "asset_key": "organs_to_system",
+            "canonical_key": "organs_system"}) is True
+        assert vl.key_guard_ok("organs_to_system", {
+            "asset_key": "organ_system_diagram",
+            "canonical_key": "organ_system"}) is True
+
+    def test_a_latin_plural_does_not_either(self):
+        assert vl.key_guard_ok("mitochondrion_structure", {
+            "asset_key": "mitochondria_structure",
+            "canonical_key": "mitochondria_structure"}) is True
+
+    def test_the_helper_answers_directly(self):
+        assert vl._unmatched({"organ", "system"}, {"organs", "system"}) == set()
+        assert vl._unmatched({"leaf", "section"}, {"leaves", "section"}) == set()
+        assert vl._unmatched({"aluminum"}, {"aluminium"}) == set()
+        assert vl._unmatched({"endothermic", "energy"},
+                             {"catalyst", "energy"}) == {"endothermic"}
+
+    def test_a_compound_the_model_split_is_the_same_key(self):
+        """The live library holds `backtoback_housing_cross_section`; a book
+        that writes `back_to_back_housing_cross_section` shares NO token with
+        it ("back" against "backtoback"), so the contrast rule read a rival
+        claim and refused a row scoring 1.40. The canonical key cannot catch
+        it — it sorts tokens, and these two have different ones."""
+        assert vl.key_guard_ok("back_to_back_housing_cross_section", {
+            "asset_key": "backtoback_housing_cross_section",
+            "canonical_key": "backtoback_cross_housing_section"}) is True
+        assert vl.key_guard_ok("backtoback_housing_cross_section", {
+            "asset_key": "back_to_back_housing_cross_section",
+            "canonical_key": "back_cross_housing_section_to"}) is True
+
+    def test_but_only_the_same_letters_in_the_same_order(self):
+        """Not an anagram, not a prefix: it is one name punctuated twice."""
+        assert vl.key_guard_ok("housing_back_to_back_cross_section", {
+            "asset_key": "backtoback_housing_cross_section",
+            "canonical_key": "backtoback_cross_housing_section"}) is False
+
+
+class TestTheFoldIsSpellingsAndInflectionsAndNothingElse:
+    """The rule that keeps the loosening honest, pinned THROUGH THE GUARD.
+
+    `same_word` is not a similarity measure and must never become one. The
+    tempting simplification is containment — "one token contains the other, so
+    they are the same word" — which is `partnames.resolve_part`'s third tier
+    and reads like a drop-in. Over the 508 distinct guard tokens in the live
+    library that tier folds 90 extra pairs, including female/male, cat/catalyst,
+    ant/plant, organ/organism, ear/heart, carbon/hydrocarbon and stem/system.
+    Every assertion below goes through `key_guard_ok`, so the mutation fails
+    here and not only in a helper's unit test.
+    """
+
+    @pytest.mark.parametrize("query,candidate", [
+        ("male_reproductive_system", "female_reproductive_system"),
+        ("female_reproductive_system", "male_reproductive_system"),
+        ("cat_skeleton", "catalyst_energy_profile"),
+        ("ant_anatomy", "plant_cell_wall"),
+        ("organ_transplant", "organism_classification"),
+        ("carbon_cycle", "hydrocarbon_cracking"),
+        ("stem_cross_section", "system_overview"),
+    ])
+    def test_containment_is_not_a_fold(self, query, candidate):
+        assert vl.key_guard_ok(query, {
+            "asset_key": candidate,
+            "canonical_key": vl.canonical_key(candidate)}) is False, \
+            f"{query} <- {candidate}"
+
+    def test_it_never_folds_a_real_contrast(self):
+        """The pairs partnames' own docstring warns a spelling tier gets
+        wrong. Over the live vocabulary `same_word` folds exactly the 18 pairs
+        `same_part` folds — all singular/plural of one word — and no more."""
+        from shared.asset_keys import same_word
+        for a, b in (("meiosis", "mitosis"), ("nucleolus", "nucleus"),
+                     ("neutron", "neuron"), ("endothermic", "exothermic"),
+                     ("alkane", "alkene"), ("male", "female"),
+                     ("fetus", "uterus"), ("concave", "convex")):
+            assert not same_word(a, b), f"{a}/{b}"
+        assert vl.key_guard_ok("meiosis_stages", {
+            "asset_key": "mitosis_stages",
+            "canonical_key": "mitosis_stages"}) is False
+
+    def test_it_folds_everything_the_renderer_s_matcher_folds(self):
+        """Anti-drift. `same_word` answers a wider question than
+        `partnames.same_part` and lives in a different module, so the two
+        could disagree about a plural — which is how this codebase got two
+        canonical_key functions. They may not: whatever the renderer calls one
+        name, the guard must too."""
+        from shared.asset_keys import same_word
+        from spike.scene_engine.partnames import same_part
+        for a, b in (("organ", "organs"), ("bacterium", "bacteria"),
+                     ("nucleus", "nuclei"), ("villus", "villi"),
+                     ("ovum", "ova"), ("mitochondria", "mitochondrion"),
+                     ("analysis", "analyses"), ("tissue", "tissues"),
+                     ("neurone", "neuron"), ("membrane", "membranes")):
+            assert same_part(a, b), f"partnames changed: {a}/{b}"
+            assert same_word(a, b), f"same_word is behind same_part: {a}/{b}"
+
+
+class TestTheGuardDoesNotDragInTheRenderer:
+    """`shared` may not import `spike.scene_engine`.
+
+    Importing any module of that package runs its `__init__`, whose last
+    statement imports `visual_library_integration` — whose module body calls
+    `_patch()`: it reindexes storage/scene_assets into the local library index
+    (a read and rewrite of index.json per cached asset) and monkeypatches
+    `raster_assets.get_raster_asset` and `svg_assets.get_svg_asset`. A
+    function-local import does not avoid that, it defers it — onto the one
+    function in this module that is a pure predicate. So the word fold lives
+    in `shared.asset_keys`, which has no side effects at all.
+    """
+
+    def test_calling_the_guard_does_not_import_the_scene_engine(self):
+        import subprocess
+        import sys
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1]
+        script = (
+            "import sys\n"
+            "import shared.visual_library as vl\n"
+            "before = 'spike.scene_engine' in sys.modules\n"
+            "vl.key_guard_ok('endothermic_energy_profile', "
+            "{'asset_key': 'catalyst_energy_profile', "
+            "'canonical_key': 'catalyst_energy_profile'})\n"
+            "vl.key_guard_ok('leaves_cross_section', "
+            "{'asset_key': 'leaf_cross_section', "
+            "'canonical_key': 'cross_leaf_section'})\n"
+            "after = 'spike.scene_engine' in sys.modules\n"
+            "print(before, after)\n")
+        out = subprocess.run([sys.executable, "-c", script], cwd=str(root),
+                             capture_output=True, text=True)
+        assert out.returncode == 0, out.stderr
+        assert out.stdout.split() == ["False", "False"], out.stdout
+
+
+class TestTheAbstentionPathIsUntouched:
+    """The contrast test is applied ONLY where the guard admitted on a shared
+    distinguishing token. Applied on the abstention path it would refuse
+    `cell_diagram <- animal_cell_diagram` — the named regression — because an
+    all-noise key keeps its noise words while the row has had them stripped,
+    so both residuals are non-empty by construction.
+
+    Empirically the abstention path was taken by 0 of the 100,172 live pairs:
+    no key in the library is all-noise. It is exercised only by request keys a
+    book invents, which is exactly when it must not be tightened."""
+
+    _ANIMAL_CELL = {
+        "asset_key": "animal_cell_diagram", "canonical_key": "animal",
+        "description": ("An educational diagram of an animal cell showing the "
+                        "nucleus, cytoplasm and cell membrane."),
+        "subject": "biology", "grade": "k12", "curriculum": "generic",
+        "topic": "animal cell", "concepts": ["cell"], "status": "approved",
+        "asset_type": "visual", "local_cache_path": "/tmp/ac.png",
+    }
+
+    def test_the_residuals_look_like_a_contrast_and_it_is_admitted_anyway(self):
+        """Not luck: the gate is which path admitted, not the token counts."""
+        q = vl.guard_tokens("cell_diagram")
+        r = vl.guard_tokens("animal_cell_diagram") | vl.guard_tokens("animal")
+        assert vl._unmatched(q, r) == {"cell", "diagram"}
+        assert vl._unmatched(r, q) == {"animal"}
+        assert all_noise("cell_diagram")
+        assert vl.key_guard_ok("cell_diagram", self._ANIMAL_CELL) is True
+
+    def test_and_the_library_still_serves_it(self, tmp_path, monkeypatch):
+        _library(monkeypatch, tmp_path, self._ANIMAL_CELL)
+        assert vl.find("cell_diagram",
+                       "An educational diagram of an animal cell showing the "
+                       "nucleus, cytoplasm and cell membrane") is not None
+
+    def test_an_all_noise_row_is_abstained_on_too(self):
+        assert vl.key_guard_ok("plant_cell", {
+            "asset_key": "cell_diagram",
+            "canonical_key": "cell_diagram"}) is True
+
+    def test_the_abstention_still_refuses_what_it_always_did(self):
+        assert vl.key_guard_ok("cell_diagram", {
+            "asset_key": "volcano_diagram",
+            "canonical_key": "volcano"}) is False
+
+
+class TestWhyDidXNotMatchYIsAnswerableFromTheLog:
+    """One line per DECISION, carrying the score and the REAL reason.
+
+    Two things were wrong with logging the contrast refusal inside the guard.
+    Volume: `key_guard_ok` is a predicate inside `best_match`'s `_eligible`
+    filter, so it runs once per row of the local set and once per row of the
+    remote set, and `_decide` performs four such scans per uncached asset —
+    a measured mean of 4.75 refusals per scan against the live library, about
+    760 lines for a 40-asset lesson, ~90 % of them about rows that never came
+    within reach of the threshold, in the one stream an operator greps when a
+    lesson fails. And accuracy: find() then re-tested the same row and printed
+    a FIXED reason, "the keys share no concept token", which is the opposite
+    of true for a contrast pair — the branch is only reachable when they share
+    one. The last, summary-shaped, score-carrying line said the two keys were
+    unrelated.
+    """
+
+    def _find_against(self, tmp_path, monkeypatch, row, key, prompt, caplog):
+        import logging
+        _library(monkeypatch, tmp_path, row)
+        with caplog.at_level(logging.INFO, logger="shared.visual_library"):
+            assert vl.find(key, prompt, min_score=0.58) is None
+        return [r.getMessage() for r in caplog.records
+                if "refused" in r.getMessage()]
+
+    def test_find_logs_the_contrast_refusal_once_with_the_right_reason(
+            self, tmp_path, monkeypatch, caplog):
+        lines = self._find_against(
+            tmp_path, monkeypatch, _CATALYST, "endothermic_energy_profile",
+            _ENDOTHERMIC["description"], caplog)
+        assert len(lines) == 1, lines
+        line = lines[0]
+        assert "endothermic_energy_profile" in line
+        assert "catalyst_energy_profile" in line
+        assert "endothermic" in line and "catalyst" in line
+        assert "energy, profile" in line, \
+            "the shared tokens too, so the refusal can be argued with"
+        assert "share no concept token" not in line, \
+            "they share two; that sentence is what made the log misleading"
+        assert "(score 0." in line, "the line an operator greps carries a score"
+
+    def test_the_prose_refusal_keeps_the_words_it_always_had(
+            self, tmp_path, monkeypatch, caplog):
+        """The reason is now the guard's, so the OTHER reasons must survive
+        the change intact — this is the line that has been in the log since
+        the key guard landed."""
+        volcano = {
+            "asset_key": "volcano_cross_section",
+            "canonical_key": "cross_section_volcano",
+            "description": ("A volcano cut in half showing the magma chamber, "
+                            "the central vent and the cone"),
+            "subject": "geography", "grade": "k12", "curriculum": "generic",
+            "topic": "volcano", "concepts": [], "status": "approved",
+            "asset_type": "visual", "local_cache_path": "/tmp/v.png"}
+        lines = self._find_against(
+            tmp_path, monkeypatch, volcano, "magma_chamber_labels",
+            "A volcano cut in half showing the magma chamber, the central "
+            "vent and the cone", caplog)
+        assert len(lines) == 1, lines
+        assert "share no concept token" in lines[0], lines
+
+    def test_the_guard_itself_stays_quiet_while_it_filters(self, caplog):
+        """The predicate runs once per candidate row. Scanned over a library,
+        it must not put a line in the stream for every one of them."""
+        import logging
+        rows = [{"asset_key": f"{w}_energy_profile",
+                 "canonical_key": f"{w}_energy_profile"}
+                for w in ("catalyst", "exothermic", "activation", "reaction",
+                          "bond", "combustion", "neutralisation", "fuel")]
+        with caplog.at_level(logging.INFO, logger="shared.visual_library"):
+            refused = [r for r in rows
+                       if not vl.key_guard_ok("endothermic_energy_profile", r)]
+        assert len(refused) == len(rows), "all eight are contrasts"
+        assert [r.getMessage() for r in caplog.records] == [], \
+            "a whole-library filter must not log per candidate"
+
+    def test_but_the_reason_is_still_available_to_whoever_decides(self):
+        why = vl._guard_refusal("endothermic_energy_profile", _CATALYST)
+        assert why and "endothermic" in why and "catalyst" in why
+        assert vl._guard_refusal("endothermic_energy_profile", {
+            "asset_key": "endothermic_energy_profile",
+            "canonical_key": "endothermic_energy_profile"}) is None
+
+    def test_an_admitted_pair_is_not_logged_as_a_refusal(self, caplog):
+        import logging
+        with caplog.at_level(logging.INFO, logger="shared.visual_library"):
+            assert vl.key_guard_ok("volcano_cross_section", {
+                "asset_key": "composite_volcano_cross_section",
+                "canonical_key": "composite_cross_section_volcano"}) is True
+        assert not any("denies" in r.getMessage() for r in caplog.records)

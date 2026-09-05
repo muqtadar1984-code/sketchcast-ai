@@ -274,6 +274,13 @@ class TestHydrateCachesWhereTheCallerLooks:
     reworded request for a volcano cross-section matched the stored asset at
     score 1.00 and the renderer generated a second image anyway, adding a
     duplicate row for a concept the library already had.
+
+    The rewording used here was `erupting_volcano_diagram` until the contrast
+    guard landed: an eruption and a cut-away are two different pictures, and
+    that pair is now refused (and pinned as a refusal in
+    test_visual_library_reuse). `volcano_diagram` is the same rewording
+    without the rival claim, and still folds to a DIFFERENT cache directory
+    from the matched key, which is the only thing these tests are about.
     """
 
     def _library_of_one(self, monkeypatch, tmp_path):
@@ -336,7 +343,7 @@ class TestHydrateCachesWhereTheCallerLooks:
             self, tmp_path, monkeypatch):
         vl = self._library_of_one(monkeypatch, tmp_path)
         cache = tmp_path / "cache"
-        requested = "erupting_volcano_diagram"
+        requested = "volcano_diagram"
         hit = vl.hydrate(
             requested,
             "A volcano cut in half showing the magma chamber, central vent and cone",
@@ -355,7 +362,7 @@ class TestHydrateCachesWhereTheCallerLooks:
         import json
         vl = self._library_of_one(monkeypatch, tmp_path)
         cache = tmp_path / "cache"
-        requested = "erupting_volcano_diagram"
+        requested = "volcano_diagram"
         vl.hydrate(requested, "A volcano cut in half showing the magma chamber",
                    cache)
         meta = json.loads(
