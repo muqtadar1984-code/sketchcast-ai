@@ -1,0 +1,9 @@
+{
+  "batch": "catalogue-png-100",
+  "total_assets": 100,
+  "status": "generation_targets",
+  "asset_format": "png",
+  "source": "svg_delivery_spec.md",
+  "note": "First 100 catalogue entries from the 378-entry diagram specification. This manifest defines the PNG generation targets and prompts; generated PNG binaries are intentionally not stored in Git.",
+  "entries": []
+}
