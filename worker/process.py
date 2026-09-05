@@ -1072,20 +1072,30 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                 explicit_language=bool(params.get("language")),
                 provider=canary_provider)
 
-            # Avatar casting: teacher matches the narration VOICE, student
-            # matches the book's GRADE band (auto-detected at upload,
-            # teacher-editable), gender seeded by generation id so retries
-            # render the identical character. Cast from the RESOLVED voice —
+            # Avatar casting (founder, 2026-09-04): a RANDOM approved roster
+            # face, restricted only by the narration voice's gender; the
+            # student's age band from the book's grade (auto-detected at
+            # upload, teacher-editable) and, in a dialogue, the gender of the
+            # voice that reads the student's lines. Seeded by the CHAPTER, not
+            # the generation: each part of a chapter is its own generation, so
+            # a generation-id seed would put a different teacher in Part 1 and
+            # Part 2 of one lesson series. The book-and-chapter seed keeps one
+            # face across every part and every retry, while another chapter
+            # casts afresh. Cast from the RESOLVED voice —
             # after the gate — so a downgraded premium pick casts the avatar
-            # of the voice that will actually speak.
-            from spike.scene_engine.whiteboard import (
-                student_avatar_for_grade, teacher_avatar_for_voice)
+            # of the voice that will actually speak. Cast ONCE, here, before
+            # the parts loop: the keys travel on every part's script.
+            from spike.scene_engine.whiteboard import cast_avatars, two_voice_dialogue
             effective_voice = resolve_voice(tts_voice, allow_premium, lang=lesson_lang).voice_id
-            avatars = {
-                "teacher": teacher_avatar_for_voice(effective_voice),
-                "student": student_avatar_for_grade(book.get("grade"),
-                                                    seed=generation_id),
-            }
+            # `dialogue` is the SAME predicate the script generator will run
+            # with for this style: the student face follows the second voice
+            # exactly when that voice will read the student's lines.
+            cast_seed = f"{book_id}:{chapter_num}"
+            avatars = cast_avatars(effective_voice, book.get("grade"), cast_seed,
+                                   lang=lesson_lang, style=narration_style,
+                                   dialogue=two_voice_dialogue(narration_style))
+            logger.info("avatars cast for %s (seed %s): %s (voice %s)",
+                        generation_id, cast_seed, avatars, effective_voice)
 
             episodes_plan = (analysis.get("episodes") or {}).get("episodes") or []
             n_parts = max(len(episodes_plan), 1)

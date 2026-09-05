@@ -131,9 +131,13 @@ def _patch() -> None:
                                  allow_generate: bool = True):
         # The whole decision — did it exist, hydrate, generate, publish, log —
         # runs under the SAME per-key lock the generator uses (re-entrant, so
-        # `original` may take it again). It used to be taken inside `original`
-        # only, so two render threads could both read existed_before=False for
-        # one key and both log generated+published for a single image.
+        # `original` may take it again). It closes two races that were found
+        # separately: taken inside `original` only, two render threads could
+        # both read existed_before=False for one key and both log
+        # generated+published for a single image; and hydration ran OUTSIDE it,
+        # so one thread could open the half-written asset.png another was
+        # writing, call it corrupt, and pay for a second, different face
+        # mid-lesson.
         with ra.asset_lock(key):
             return _decide(key, prompt, cache_dir, allow_generate)
 
