@@ -21,6 +21,7 @@ functions) and for search, while publish idempotency is by content hash.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 # Words that decorate a subject without changing which picture it is. The key
 # is free text a MODEL invented, so one chapter produced ciliated_epithelium,
@@ -51,6 +52,173 @@ _SPLIT = re.compile(r"[^a-z0-9]+")
 
 def tokens(value: str) -> list[str]:
     return [t for t in _SPLIT.split(str(value).lower()) if t]
+
+
+# ── one word, written two ways, is not two claims ────────────────────────────
+# Keys are free text a MODEL invented, over a product that ships Cambridge,
+# CBSE and US curricula in ten locales, so the same picture arrives spelled
+# more than one way: `leaves_cross_section` for a stored `leaf_cross_section`,
+# `extraction_of_aluminum` for `extraction_of_aluminium`. The library itself is
+# not consistent — it holds `addition_polymerisation_of_ethene`, `muscle_fibre`
+# and `fertilisation_oviduct` beside `copper_sulfate`, `fetus_uterus` and
+# `organization_hierarchy`.
+#
+# This lives here, beside `canonical_key`, and not in the renderer's
+# `partnames` module, for two reasons. Layering: `shared` may not import
+# `spike.scene_engine`, whose package __init__ installs the visual-library
+# wrapper and reindexes the local asset cache — a side effect no pure
+# predicate should carry. And scope: partnames answers "is this annotator
+# region the part that arrow head names", and its docstring refuses any
+# spelling tier on purpose, because a wrong guess there puts a confident label
+# on the wrong structure. The question HERE is narrower and safer — two single
+# tokens of a cache key, where the cost of missing an equivalence is a paid
+# regeneration.
+#
+# The two live in different modules and answer different questions, which is
+# exactly how this codebase ended up with two canonical_key functions that
+# drifted. So `TestTheFoldIsSpellingsAndInflectionsAndNothingElse` in
+# tests/test_visual_library_reuse.py pins that `same_word` folds everything
+# `same_part` folds: they may not disagree about a plural.
+
+# British/American, most productive rule first; word-specific rules run before
+# the morpheme rules they would otherwise mangle (practise -> practice, not
+# "practize"). Position: "any" anywhere in the token, "start"/"end" anchored.
+_ORTHOGRAPHY: tuple[tuple[str, str, str], ...] = (
+    ("practis", "practic", "any"),
+    ("defence", "defense", "any"),
+    ("offence", "offense", "any"),
+    ("licence", "license", "any"),
+    ("pretence", "pretense", "any"),
+    ("aluminium", "aluminum", "any"),
+    ("sulph", "sulf", "any"),
+    ("foet", "fet", "start"),
+    ("haem", "hem", "start"),
+    ("anaem", "anem", "any"),
+    ("paed", "ped", "start"),
+    ("caes", "ces", "start"),
+    ("oe", "e", "start"),          # oesophagus, oestrogen, oedema
+    ("colour", "color", "any"),
+    ("vapour", "vapor", "any"),
+    ("behaviour", "behavior", "any"),
+    ("neighbour", "neighbor", "any"),
+    ("mould", "mold", "any"),
+    ("smoulder", "smolder", "any"),
+    ("plough", "plow", "any"),
+    ("draught", "draft", "any"),
+    ("grey", "gray", "any"),
+    ("sceptic", "skeptic", "any"),
+    ("ageing", "aging", "any"),
+    ("judgement", "judgment", "any"),
+    ("programme", "program", "end"),
+    ("tyre", "tire", "end"),
+    ("metre", "meter", "any"),     # voltmetre, millimetre, thermometre
+    ("litre", "liter", "any"),
+    ("fibre", "fiber", "any"),
+    ("centre", "center", "any"),
+    ("theatre", "theater", "any"),
+    ("calibre", "caliber", "any"),
+    ("spectre", "specter", "any"),
+    ("logue", "log", "end"),       # catalogue, dialogue, analogue
+    ("isation", "ization", "end"),
+    ("isations", "izations", "end"),
+    ("ised", "ized", "end"),
+    ("ises", "izes", "end"),
+    ("ising", "izing", "end"),
+    ("iser", "izer", "end"),
+    ("ise", "ize", "end"),
+    ("ysed", "yzed", "end"),
+    ("ysing", "yzing", "end"),
+    ("yse", "yze", "end"),
+    ("lled", "led", "end"),        # labelled, modelled
+    ("lling", "ling", "end"),
+    ("ller", "ler", "end"),
+)
+
+# Plurals no ending rule reaches. English -f/-fe -> -ves is here rather than in
+# the ending table because the stem changes, and the rest are simply irregular.
+_IRREGULAR_PLURALS = {
+    "leaves": "leaf", "halves": "half", "shelves": "shelf",
+    "wolves": "wolf", "calves": "calf", "hooves": "hoof", "loaves": "loaf",
+    "thieves": "thief", "lives": "life", "knives": "knife",
+    "wives": "wife", "wharves": "wharf", "scarves": "scarf",
+    "teeth": "tooth", "feet": "foot", "geese": "goose", "mice": "mouse",
+    "lice": "louse", "men": "man", "women": "woman", "children": "child",
+    "people": "person", "oxen": "ox", "stomata": "stoma",
+}
+
+# Inflections, in the shape partnames uses: expand BOTH names to every form
+# they could be written in and intersect, rather than picking a single
+# canonical direction that would have to be right about which is the singular.
+# The Latin rows mirror `spike/scene_engine/partnames._ENDINGS`; the -ies row
+# is the regular English rule that table is missing.
+_ENDINGS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("ies", ("y",)),             # arteries -> artery, bodies -> body
+    ("y", ("ies",)),
+    ("ia", ("ion", "ium")),      # mitochondria -> mitochondrion / bacterium
+    ("ae", ("a",)),
+    ("i", ("us",)),              # nuclei -> nucleus
+    ("a", ("um", "on")),
+    ("ion", ("ia",)),
+    ("ium", ("ia",)),
+    ("us", ("i",)),
+    ("um", ("a",)),
+    ("es", ("", "is")),          # analyses -> analysis
+    ("s", ("",)),
+)
+
+
+@lru_cache(maxsize=4096)
+def respell(token: str) -> str:
+    """One token in a single orthography. Idempotent for already-US spelling.
+
+    Cached: the guard asks this once per token PAIR per candidate row, so a
+    single guarded scan of the library runs it thousands of times over a
+    vocabulary of a few hundred words."""
+    t = str(token or "").lower()
+    for pat, repl, where in _ORTHOGRAPHY:
+        if where == "any":
+            t = t.replace(pat, repl)
+        elif where == "start" and t.startswith(pat):
+            t = repl + t[len(pat):]
+        elif where == "end" and t.endswith(pat) and len(t) > len(pat):
+            t = t[:len(t) - len(pat)] + repl
+    return t
+
+
+def word_forms(token: str) -> set[str]:
+    """A token, respelled, with its singular/plural variants."""
+    return set(_word_forms(token))
+
+
+@lru_cache(maxsize=4096)
+def _word_forms(token: str) -> frozenset[str]:
+    t = respell(token)
+    if not t:
+        return frozenset()
+    out = {t, _IRREGULAR_PLURALS.get(t, t)}
+    for base in tuple(out):
+        for suffix, repls in _ENDINGS:
+            if not base.endswith(suffix) or len(base) - len(suffix) < 2:
+                continue
+            stem = base[:len(base) - len(suffix)]
+            out.update(stem + r for r in repls if stem + r)
+        out.update((base + "s", base + "es"))
+    return frozenset(out)
+
+
+@lru_cache(maxsize=8192)
+def same_word(a: str, b: str) -> bool:
+    """Whether two key tokens are the same word differently written.
+
+    Deliberately NOT a similarity measure. Every fold is a spelling rule or an
+    inflection, so the pairs a similarity score gets wrong survive it:
+    meiosis/mitosis, nucleolus/nucleus, neutron/neuron, endothermic/exothermic
+    are four different pictures and stay four different words.
+    """
+    ra, rb = respell(a), respell(b)
+    if not ra or not rb:
+        return False
+    return ra == rb or bool(_word_forms(ra) & _word_forms(rb))
 
 
 def distinguishes(token: str) -> bool:

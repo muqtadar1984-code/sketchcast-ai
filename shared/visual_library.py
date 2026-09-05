@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from shared.asset_keys import (all_noise, canonical_key, core_tokens,
-                               distinguishes, is_avatar_key)
+                               distinguishes, is_avatar_key, same_word)
 from shared.asset_keys import tokens as _tokens_of
 
 logger = logging.getLogger(__name__)
@@ -616,14 +616,141 @@ def _fallback_tokens(value: str) -> set[str]:
     return set(_tokens_of(value)) - _KEY_NAMESPACE_TOKENS - _CONNECTIVES
 
 
-def key_guard_ok(query_key: str, row: dict[str, Any] | None) -> bool:
-    """Whether `row` is even a candidate for `query_key`.
+# ── …and it must not make a DIFFERENT claim about that thing ─────────────────
+# Sharing a distinguishing token only says two keys are about the same
+# subject. On 2026-09-05 `catalyst_energy_profile` was served to BOTH
+# `endothermic_energy_profile` and `exothermic_energy_profile`: all three
+# share "energy" and "profile", so the guard passed and only the threshold was
+# left — and in the production context those score 0.79 and 0.82, which the
+# 0.58 default clears twice over. (The 1.09 and 1.12 first written down came
+# from a bench context this system cannot produce; see the measurement note
+# below.) Those are three different diagrams — products above the reactants,
+# products below, two curves — and a board that asked for one and was handed
+# another is teaching false chemistry with a confident label on it.
+#
+# Nothing can be SUBTRACTED to fix this, which is what makes it a different
+# defect from the three before it. "sk" was a namespace, the connectives were
+# grammar and the layer tail addressed the annotator; "energy" and "profile"
+# are exactly what these keys are ABOUT. What separates them is the token each
+# key carries that the other does not — so when the request names something
+# the candidate does not AND the candidate names something the request does
+# not, each key denies the other's claim and neither may answer it.
+#
+# ── what it costs, measured ──────────────────────────────────────────────────
+# The recipe, so the next reader can re-run it: all 100,172 ordered pairs of
+# the 317 approved visual rows in the 2026-09-05 library snapshot, each row's
+# own stored description as the prompt, and NO explicit caller context —
+# which is the production context. `visual_library_integration.set_context`
+# is called from nowhere in the repo, so `_CONTEXT` is permanently {} and
+# every live lookup runs at curriculum "generic", grade "k12" and a subject
+# INFERRED from the words of the key and the prompt.
+#
+# The guard admitted 1,936 of those pairs; the contrast rule refuses 1,506 of
+# them. At the 0.58 default threshold, 272 of the 448 admissions that clear it
+# are contrast pairs; at 0.85 it is 50 of 114.
+#
+# Simulating find() over the whole library at 0.58: of the 125 requests that
+# were served a row, 57 keep it, 9 are answered by a different row and 59 lose
+# their answer. Every one of the 59 is a different picture — endothermic <-
+# exothermic at 0.93 (worse than the incident that WAS reported), methane <-
+# water at 1.07, meiosis <- mitosis at 1.07, red_blood_cell__merged <-
+# plant_cell_wall__merged at 0.99, beach waves <- a plate boundary at 0.60. At
+# 0.85 the same simulation loses 21 and changes 5.
+#
+# Which of those is the operating point is NOT settled here, and the earlier
+# note that called 0.85 "the production threshold" was wrong twice over:
+# VISUAL_LIBRARY_MIN_SCORE defaults to 0.58, and the reported incident pair
+# scores 0.79 in this context — the 1.09 first written down needs
+# ctx.subject="chemistry", while infer_context reads "energy" in the
+# endothermic description and answers "physics". A pair that WAS served at
+# 0.79 puts the live threshold at or below it, so 0.58 is the column to read.
+#
+# Of the 9 changed answers at 0.58, 8 are neutral or better: `human_outline`
+# stops being served `human_body_organs` and gets `human_body_outline`, and
+# `plant_cell_outline` stops being served `plant_and_animal_shrinking`. ONE is
+# worse, and it is the honest price of the rule: `plant_cell_outline__merged`
+# — a progressive-drawing build step whose description ends "No internal
+# structures yet" — loses `plant_cell_wall__merged` (0.86) and falls to
+# `plant_cell_diagram` (0.78), the finished cell. The refusal itself is right,
+# because an outline and a wall are two steps; what carries the request down
+# to the finished cell is the subset hole described next.
+#
+# Both directions of pure specialisation stay open, because a subset is not a
+# contrast: `volcano_cross_section` may still be answered by
+# `composite_volcano_cross_section` and vice versa. Closing either costs far
+# more than it saves — measured at 0.58, refusing a candidate that merely
+# GENERALISES the request loses 15 answers and changes 2 (it would take
+# `leaf_microscope_view <- microscope_view` at 1.21, `timeline_cell_discovery
+# <- timeline_asset` at 1.30 and `organism_to_cell_animation <-
+# organism_to_cell` at 1.30, all the same picture), and refusing one that
+# SPECIALISES it loses 21 and changes 10 (including every `sk_*` sketch and
+# `volcano_cross_section <- composite_volcano_cross_section`).
+#
+# The known cost of leaving them open, unchanged by this rule and true on
+# either side of it: `core_tokens` strips "cell", so `plant_cell_diagram`
+# reduces to the single token {plant} and is a subset of — and an admissible
+# answer for — every plant-cell specialisation in the library.
+# `find("plant_cells", "A drawing of plant cells.")` returns
+# `animal_plant_compare_table__merged` at 1.30, a comparison TABLE, both
+# before and after this change. That is a hole in the SHARED-token rule, not
+# in this one, and it wants a separate fix.
 
-    A necessary condition, not a sufficient one — the score still has to clear
-    the threshold. What it forbids is a match carried entirely by PROSE.
+
+def _unmatched(these: set[str], those: set[str]) -> set[str]:
+    """The tokens of `these` that `those` does not name.
+
+    A re-spelling is not a contrast. `organ_system_diagram` and
+    `organs_to_system` hold the same picture and differ by one plural;
+    `extraction_of_aluminum` and `extraction_of_aluminium` differ by one
+    ocean. A plain set difference reads both as two keys denying each other,
+    and that refusal is not a smaller mistake than a wrong picture: it is a
+    paid regeneration — ~US$0.04 and ~53 s against an image quota measured at
+    about one call a minute — for a diagram the library already holds.
+
+    Measured over the 317 live approved rows, a plain difference makes 36
+    library keys unreachable by a request that writes one of their words as a
+    regular English plural (`leaves_cross_section` for `leaf_cross_section`,
+    `capillaries_exchange`, `teeth_structure`) and 11 more unreachable in the
+    other orthography (`extraction_of_aluminum`, `muscle_fiber`,
+    `foetus_uterus`, `displacement_reaction_iron_nail_copper_sulphate`) —
+    every one of them at a score that clears 0.85 today. The library holds
+    both orthographies itself, so both reach find() as request keys.
+
+    So the comparison goes through `asset_keys.same_word`, which folds
+    spellings and inflections and nothing else. It is not a similarity
+    measure: meiosis/mitosis, nucleolus/nucleus, neutron/neuron and
+    endothermic/exothermic are four different pictures and survive it.
+    """
+    return {t for t in these if not any(same_word(t, u) for u in those)}
+
+
+_SEPARATORS = re.compile(r"[^a-z0-9]+")
+
+
+def _letters(key: str) -> str:
+    """A key with every separator removed — `back_to_back` and `backtoback`."""
+    return _SEPARATORS.sub("", str(key or "").lower())
+
+
+def _guard_refusal(query_key: str, row: dict[str, Any] | None) -> str | None:
+    """WHY `row` is not a candidate for `query_key` — None when it is.
+
+    The reason is returned rather than logged, because this runs inside a
+    whole-library filter: `best_match` calls it once per row of the local set
+    and once per row of the remote set, and `_decide` performs four such scans
+    per uncached asset. A refusal logged here is logged per CANDIDATE, and the
+    contrast rule refuses a mean of 4.75 rows per scan against the live
+    library — roughly 760 lines for a 40-asset lesson, about 90 % of them
+    reporting a row that never came within reach of the threshold, in the one
+    stream an operator greps when a lesson fails.
+
+    find() decides once and knows the score, so find() is where the line
+    belongs — and it must print THIS reason rather than a fixed one: before
+    the contrast rule the only refusal find() could hit was "no shared token",
+    and those words are false for a pair that shares two.
     """
     if not row:
-        return False
+        return "there is no row"
     ak, ck = row.get("asset_key") or "", row.get("canonical_key") or ""
     # Same cache identity, same picture — by definition, everywhere else in
     # this system. Checked first so a key with nothing distinguishing in it
@@ -631,7 +758,18 @@ def key_guard_ok(query_key: str, row: dict[str, Any] | None) -> bool:
     # below would otherwise refuse.
     qc = canonical_key(query_key)
     if qc and qc in {canonical_key(k) for k in (ak, ck) if k}:
-        return True
+        return None
+    # …and so is the same key with the underscores in different places. Where
+    # the model split a compound the library ran together, the two keys share
+    # no token at all: `back_to_back_housing_cross_section` against the stored
+    # `backtoback_housing_cross_section` leaves "back" against "backtoback",
+    # so the contrast rule reads a rival claim and refuses a row scoring 1.40.
+    # The canonical key cannot see it either — it sorts TOKENS, and these two
+    # do not have the same ones. The same letters in the same order is not a
+    # similarity judgement; it is one name, punctuated twice.
+    ql = _letters(query_key)
+    if ql and ql in {_letters(k) for k in (ak, ck) if k}:
+        return None
     q = guard_tokens(query_key)
     r = guard_tokens(ak) | guard_tokens(ck)
     undistinguished = (all_noise(query_key)
@@ -642,7 +780,21 @@ def key_guard_ok(query_key: str, row: dict[str, Any] | None) -> bool:
     # becomes a candidate for the other's picture -- the same collapse the
     # canonical key was just taught to avoid, arriving through the guard.
     if q and r and not undistinguished and any(distinguishes(t) for t in q & r):
-        return True
+        # Being about the same subject is not being the same picture. See the
+        # note above `_unmatched`: the energy profiles shared "energy" and
+        # "profile" and got here, and the catalyst curve went onto a board
+        # that had asked for an endothermic one.
+        q_only, r_only = _unmatched(q, r), _unmatched(r, q)
+        if q_only and r_only:
+            why = ("each key names something the other denies (%s vs %s); the "
+                   "tokens they share (%s) say only that they are about the "
+                   "same subject"
+                   % (", ".join(sorted(q_only)), ", ".join(sorted(r_only)),
+                      ", ".join(sorted(q & r)) or "none literally"))
+            logger.debug("visual library: %s is not a candidate for %s — %s",
+                         ak or ck, query_key, why)
+            return why
+        return None
     # A key made ENTIRELY of noise ("cell_diagram", "cells") keeps its noise
     # words through core_tokens' fallback, while every candidate row has had
     # them stripped -- so the guard could never be satisfied and a request the
@@ -662,7 +814,6 @@ def key_guard_ok(query_key: str, row: dict[str, Any] | None) -> bool:
         # only the threshold left in the way. At least one shared token must
         # name something — not a medium word, not a bare numeral.
         carriers = {t for t in shared if distinguishes(t)}
-        ok = bool(carriers)
         # Logged, because this is the one path where the guard abstains: the
         # threshold is the only thing standing between the request and a wrong
         # picture, and "why did cells match X" has to be answerable.
@@ -671,13 +822,31 @@ def key_guard_ok(query_key: str, row: dict[str, Any] | None) -> bool:
                      query_key, ak, ck,
                      "the request" if all_noise(query_key) else "the row",
                      sorted(shared), sorted(carriers))
-        if shared and not ok:
+        if carriers:
+            return None
+        # Kept at INFO where the contrast refusal is not, and the difference
+        # is volume: no key in the live library is all-noise, so this path was
+        # taken by 0 of the 100,172 ordered pairs. It is reached only by a key
+        # a book invented, which is exactly when the evidence is worth having.
+        if shared:
             logger.info("visual library: refused %s <- %s/%s — the only "
                         "tokens they share (%s) name a medium or an index, "
                         "not a subject", query_key, ak, ck,
                         ", ".join(sorted(shared)))
-        return ok
-    return False
+            return ("the only tokens they share (%s) name a medium or an "
+                    "index, not a subject" % ", ".join(sorted(shared)))
+        return "the keys share no token at all"
+    return "the keys share no concept token"
+
+
+def key_guard_ok(query_key: str, row: dict[str, Any] | None) -> bool:
+    """Whether `row` is even a candidate for `query_key`.
+
+    A necessary condition, not a sufficient one — the score still has to clear
+    the threshold. What it forbids is a match carried entirely by PROSE, and a
+    match between two keys that each name something the other denies.
+    """
+    return _guard_refusal(query_key, row) is None
 
 
 def _score(row: dict[str, Any], query_key: str, prompt: str, ctx: LibraryContext) -> float:
@@ -813,10 +982,16 @@ def find(key: str, prompt: str, context: dict[str, Any] | None = None,
     if best is None or best_score < threshold:
         near, near_score, _ = best_match(key, prompt, context, _ctx=ctx,
                                          asset_format=asset_format)
-        if near is not None and near_score >= threshold and not key_guard_ok(key, near):
-            logger.info("visual library: refused %s <- %s (score %.2f) — the "
-                        "keys share no concept token", key,
-                        near.get("asset_key"), near_score)
+        # One line per DECISION, carrying the score and the guard's own
+        # reason. Hard-coding "the keys share no concept token" here was true
+        # while that was the only way to be refused; the contrast rule refuses
+        # pairs that share two, so a fixed reason would tell an operator the
+        # opposite of what happened on the very line they grep.
+        if near is not None and near_score >= threshold:
+            why = _guard_refusal(key, near)
+            if why:
+                logger.info("visual library: refused %s <- %s (score %.2f) — "
+                            "%s", key, near.get("asset_key"), near_score, why)
         return None
     return {**best, "match_score": round(best_score, 4),
             "match_source": source, "context": ctx.__dict__}
