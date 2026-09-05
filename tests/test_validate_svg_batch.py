@@ -68,10 +68,27 @@ class TestItRunsOffline:
     def test_it_does_not_import_the_scene_engine_package(self):
         """Importing spike.scene_engine installs the visual-library wrapper
         and indexes the local asset cache into the REAL library index. A
-        validator must touch none of that."""
-        src = self._source()
-        assert "from spike" not in src and "import spike" not in src
-        assert "spec_from_file_location" in src
+        validator must touch none of that.
+
+        Checked on the import STATEMENTS, not on the source text: the tool now
+        borrows the renderer's matcher, so its prose names the package it is
+        careful not to import.
+        """
+        import ast
+        for node in ast.walk(ast.parse(self._source())):
+            if isinstance(node, ast.Import):
+                assert not any(a.name.startswith("spike") for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                assert not node.module.startswith("spike")
+        assert "spec_from_file_location" in self._source()
+
+    def test_what_it_borrows_arrives_under_the_stand_in_package(self):
+        """The validator and the matcher are the real files, loaded by path
+        under a stand-in package — so spike.scene_engine.__init__ never runs,
+        however many modules the tool comes to need."""
+        assert vsb.match_layer_ids.__module__.startswith(vsb._PKG)
+        assert vsb.norm_part.__module__.startswith(vsb._PKG)
+        assert vsb.validate_svg_document.__module__.startswith(vsb._PKG)
 
     def test_it_imports_nothing_but_the_standard_library(self):
         """378 files should be checkable on any machine: no PIL, no numpy, no
@@ -169,9 +186,14 @@ class TestSemantics:
         code, report = delivery.run()
         assert code == 0
         assert report["files"][0]["missing_parts"] == []
-        assert vsb.normalise_part("Outer membrane") == "outer_membrane"
-        assert vsb.normalise_part("  Cell-Wall  ") == "cell_wall"
-        assert vsb.normalise_part("thylakoid (granum)") == "thylakoid_granum"
+        # and it is an EXACT hit, not naming drift: separator style is model
+        # whim, so a note here would fire on nearly every line of a real
+        # 378-file report and mean nothing.
+        assert vsb.match_part("Outer membrane", ["outer_membrane"]) == \
+            ("outer_membrane", True)
+        assert vsb.match_part("  Cell-Wall  ", ["cell_wall"]) == \
+            ("cell_wall", True)
+        assert report["files"][0]["notes"] == []
 
     def test_extra_structure_is_a_note_not_a_failure(self, delivery):
         """A good diagram carries structure the catalogue did not enumerate.
@@ -343,23 +365,56 @@ class TestSemanticsMatchTheWayTheRendererMatches:
             all("inexact" not in n for n in entry["notes"])
         assert entry["extra_groups"] == ["nucleus_membrane"]
 
+    CASES = [
+        (["chloroplasts", "outer_membrane"], "chloroplast"),
+        (["membrane", "nucleus_membrane"], "membrane"),
+        (["outer_membrane"], "Outer membrane"),
+        (["stroma", "thylakoid"], "thylakoid"),
+        (["stroma"], "thylakoid"),
+        (["cell_wall"], "wall"),
+        # the divergence that made this a finding: the tool snake-cased the
+        # catalogue name before comparing and the renderer did not.
+        #   - the tool answered "Outer membrane" with the group
+        #     `outer_membrane` and passed the file; the renderer's substring
+        #     tier answers it with `membrane` and would have labelled the
+        #     WRONG structure, which the report never mentioned
+        #   - and it refused "Mitochondrion" against `mitochondria`, which the
+        #     renderer resolves, sending back a delivery that was fine
+        (["outer_membrane", "membrane"], "Outer membrane"),
+        (["mitochondria"], "Mitochondrion"),
+        (["cell_wall"], "cell walls"),
+        (["stroma_region"], "stroma region"),
+    ]
+
     def test_it_agrees_with_the_renderers_own_matcher(self):
-        """The tool restates the rule because it cannot import the renderer
-        (no PIL, no numpy, no credentials offline). Restating is only safe if
-        the two are pinned against each other."""
+        """Pinned against the renderer with the RAW catalogue name — the name
+        the renderer would actually be handed. Passing a pre-normalised name
+        to one side and not the other is how the two drifted apart while a
+        test said they agreed."""
         from spike.scene_engine.vector_assets import match_layer_ids
 
-        cases = [
-            (["chloroplasts", "outer_membrane"], "chloroplast"),
-            (["membrane", "nucleus_membrane"], "membrane"),
-            (["outer_membrane"], "Outer membrane"),
-            (["stroma", "thylakoid"], "thylakoid"),
-            (["stroma"], "thylakoid"),
-            (["cell_wall"], "wall"),
-        ]
-        for available, wanted in cases:
+        for available, wanted in self.CASES:
             gid, _exact = vsb.match_part(wanted, available)
-            renderer = match_layer_ids(available, [vsb.normalise_part(wanted)])
+            renderer = match_layer_ids(available, [wanted])
             assert (gid is None) == (not renderer), (available, wanted)
             if gid is not None:
                 assert gid in renderer, (available, wanted, gid, renderer)
+
+    def test_the_tool_calls_the_renderers_matcher_rather_than_copying_it(self):
+        """The strongest form of "they agree": there is only one of them.
+
+        Pinned by substitution — replace the matcher the tool holds and the
+        tool's answer changes with it. A restatement would go on answering the
+        old way, which is exactly how it came to be the more permissive of the
+        two.
+        """
+        import tools.validate_svg_batch as tool
+        original = tool.match_layer_ids
+        try:
+            tool.match_layer_ids = lambda available, want: ["sentinel"]
+            assert tool.match_part("anything", ["real_group"]) == \
+                ("sentinel", False)
+        finally:
+            tool.match_layer_ids = original
+        assert tool.match_part("real_group", ["real_group"]) == \
+            ("real_group", True)

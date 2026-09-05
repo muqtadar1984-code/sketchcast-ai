@@ -59,12 +59,30 @@ FORBIDDEN_ELEMENTS = frozenset({
 })
 
 # _SVG_RULES: "Path data uses ONLY M, L, H, V, C, Q, S, T, Z commands."
-# This set must equal what parse_path_d renders EXACTLY (svg_assets.py). A
-# command the parser draws correctly but the gate refuses is a permanent
-# reuse failure, not a safety margin. Arcs are the deliberate exception: the
-# parser degrades them to a straight line, so it does not render them exactly.
+#
+# This set is EXACTLY the set parse_path_d (svg_assets.py) renders faithfully,
+# and that is the rule for changing it: a command the parser draws correctly
+# but the gate refuses is not a safety margin, it is a permanent reuse failure
+# — publish returns False, the board still draws, and every machine
+# regenerates that diagram forever. S and T were exactly that; parse_path_d
+# reflects the previous control point for both.
+#
+# The parser's own command alphabet is MmLlHhVvCcQqSsTtAaZz (its _CMD regex).
+# Subtract the arcs and you have this set. Arcs are the deliberate exception
+# in the other direction: parse_path_d silently straightens an arc to its
+# endpoint, so the picture the library would serve is not the picture that was
+# validated. test_svg_validation pins the two alphabets against each other so
+# they cannot drift apart again.
 ALLOWED_PATH_COMMANDS = frozenset("MLHVCQSTZ")
 ARC_COMMANDS = frozenset("Aa")
+
+# The number grammar parse_path_d accepts (its _NUM regex, restated here so
+# this module stays pure stdlib and importable by path — the batch tool loads
+# it on machines with no PIL, no numpy and no credentials). Scientific
+# notation is part of it, and has to be: scanning the `d` attribute for bare
+# letters read the 'e' of "1e3" as a command and refused a path the runtime
+# parses without complaint. Every SVG exporter writes exponents eventually.
+_PATH_NUMBER = re.compile(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?")
 
 # lowercase_snake_case: what the prompt asks for and what the delivery spec
 # makes the labelling contract. No leading digit, no trailing or doubled
@@ -135,6 +153,41 @@ class SvgValidation:
         }
 
 
+def tokenise_path_d(d: str) -> tuple[list[str], list[str]]:
+    """Split path data into (command letters, unparseable characters).
+
+    A tokeniser, not a scan for ``[A-Za-z]``. The scan counted the 'e' of an
+    exponent as a command and refused "M 1e3 2e2 L 4 5" — valid path data that
+    parse_path_d reads correctly — so a diagram whose only sin was an
+    exponent-writing exporter could never enter the library, and was
+    regenerated on every machine forever.
+
+    Numbers are consumed by the parser's own grammar, separators are skipped,
+    a letter is a command, and anything else is junk the caller reports rather
+    than guesses at.
+    """
+    text = str(d or "")
+    commands: list[str] = []
+    junk: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch.isspace() or ch == ",":
+            i += 1
+            continue
+        m = _PATH_NUMBER.match(text, i)
+        if m:
+            i = m.end()
+            continue
+        if ch.isalpha():
+            commands.append(ch)
+            i += 1
+            continue
+        junk.append(ch)
+        i += 1
+    return commands, junk
+
+
 def _local(tag: str) -> str:
     """`{http://www.w3.org/2000/svg}g` -> `g`."""
     return str(tag).rsplit("}", 1)[-1]
@@ -186,6 +239,7 @@ def validate_svg_document(svg_text: str) -> SvgValidation:
     group_ids: list[str] = []
     seen: set[str] = set()
     path_count = 0
+    loose = 0          # paths directly under <svg>, numbered for the report
 
     def check_attrs(el: ET.Element, where: str) -> None:
         for raw_name, value in el.attrib.items():
@@ -206,20 +260,36 @@ def validate_svg_document(svg_text: str) -> SvgValidation:
                 issues.append(SvgIssue("embedded_raster",
                                        f"{where} {name}={val!r}"))
 
-    def check_path(el: ET.Element, where: str) -> None:
+    def check_path(el: ET.Element, where: str, index: int) -> None:
+        """`index` is the path's 1-based position inside `where`.
+
+        Reporting a path-level refusal against the enclosing group made a
+        report on a multi-path group name that group over and over and never
+        say which path was broken — the one thing the reader has to know to
+        fix the file. The refusal belongs to the path, so it is reported
+        against the path.
+        """
         nonlocal path_count
         path_count += 1
-        check_attrs(el, where)
+        at = f"{where} path #{index}"
+        check_attrs(el, at)
         d = el.get("d")
         if not d or not d.strip():
-            issues.append(SvgIssue("path_without_d", where))
+            issues.append(SvgIssue("path_without_d", at))
             return
-        for letter in re.findall(r"[A-Za-z]", d):
+        commands, junk = tokenise_path_d(d)
+        # Each offending character once per path, in first-seen order. A path
+        # drawn with twelve arcs is one fact about that path, not twelve
+        # identical lines to read past.
+        for letter in dict.fromkeys(commands):
             if letter in ARC_COMMANDS:
-                issues.append(SvgIssue("arc", f"{where} command {letter!r}"))
+                issues.append(SvgIssue("arc", f"{at} command {letter!r}"))
             elif letter.upper() not in ALLOWED_PATH_COMMANDS:
                 issues.append(SvgIssue("unsupported_path_command",
-                                       f"{where} command {letter!r}"))
+                                       f"{at} command {letter!r}"))
+        for ch in dict.fromkeys(junk):
+            issues.append(SvgIssue("malformed_path_data",
+                                   f"{at} unexpected {ch!r}"))
 
     def refuse_element(el: ET.Element, where: str) -> None:
         tag = _local(el.tag)
@@ -237,9 +307,10 @@ def validate_svg_document(svg_text: str) -> SvgValidation:
             continue  # a comment or processing instruction
         tag = _local(child.tag)
         if tag == "path":
+            loose += 1
             issues.append(SvgIssue("path_outside_group",
                                    f"d={str(child.get('d') or '')[:40]!r}"))
-            check_path(child, "<path> outside any group")
+            check_path(child, "<svg> (no group)", loose)
             continue
         if tag != "g":
             refuse_element(child, "<svg>")
@@ -266,7 +337,7 @@ def validate_svg_document(svg_text: str) -> SvgValidation:
                 continue
             if _local(grandchild.tag) == "path":
                 paths_here += 1
-                check_path(grandchild, where)
+                check_path(grandchild, where, paths_here)
             else:
                 refuse_element(grandchild, where)
         if paths_here == 0:

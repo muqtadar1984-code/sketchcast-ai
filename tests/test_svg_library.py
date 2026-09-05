@@ -134,9 +134,9 @@ def rig(tmp_path, monkeypatch):
             counts.clear()
             return tmp_path / f"cache_{name}"
 
-        def raster_resolver(self, prompts, allow_generate=True):
+        def raster_resolver(self, prompts, allow_generate=True, cache=None):
             return ra.make_resolver(prompts, prefer_ai=True,
-                                    cache_dir=self.cache,
+                                    cache_dir=cache or self.cache,
                                     allow_generate=allow_generate,
                                     prefer_svg=False)
 
@@ -199,6 +199,14 @@ def _fake_sb(store: dict):
         def order(self, col, **_k):
             return self
 
+        def range(self, start, end):
+            self.f["range"] = (start, end)
+            return self
+
+        def or_(self, clause):
+            self.f["or"] = clause
+            return self
+
         def limit(self, _n):
             return self
 
@@ -216,6 +224,11 @@ def _fake_sb(store: dict):
                         if r.get("canonical_key") == self.f["eq:canonical_key"]]
             if self.f.get("neq:asset_type") == "avatar":
                 rows = [r for r in rows if r.get("asset_type") != "avatar"]
+            if "range" in self.f:
+                # A page, so a paging reader that ignored the window would be
+                # visible as a repeated row rather than passing quietly.
+                start, end = self.f["range"]
+                rows = rows[start:end + 1]
             return type("R", (), {"data": rows})()
 
     class Storage:
@@ -818,3 +831,129 @@ class TestGroupIdsAreStoredExactly:
         asset = svg_assets.parse_svg_asset("cell", svg)
         assert asset is not None
         assert [l.id for l in asset.layers] == ["cell_wall", "nucleus"]
+
+
+class TestTheLogSaysWhatActuallyHappenedToAHydratedAsset:
+    """Hydration is not the end of the story.
+
+    Both renderers re-validate what they find in the cache and replace it IN
+    PLACE when it does not hold up — get_svg_asset when the markup no longer
+    parses, get_raster_asset when the image is corrupt — rewriting meta.json
+    as "generated". Deciding reuse from "a file appeared where none was" put
+    ``library_hit: true`` and ``ai_generated: true`` on the SAME row: two
+    mutually exclusive facts, in the one record anyone judges the threshold
+    and the reuse rate by. A hit that had to be redrawn is not a hit.
+    """
+
+    REWORDED = ("A labelled diagram of a chloroplast: its outer membrane, "
+                "its inner membrane and the grana inside it")
+
+    def _machine_a_publishes(self, rig, store):
+        rig.publishes_to(store)
+        rig.generates_svg()
+        rig.resolver({"chloroplast": PROMPT})("chloroplast")
+        assert len(store["rows"]) == 1
+        return store["rows"][0]
+
+    def _corrupt_the_stored_object(self, store, row):
+        """The bytes rot after publish — a truncated upload, a bad migration,
+        a hand-edited object. The ROW still says approved, so the library
+        still offers it and the renderer still has to cope."""
+        store["objects"][row["storage_path"]] = b"<svg>truncated"
+
+    def test_a_hydrated_svg_that_had_to_be_redrawn_is_not_a_library_hit(
+            self, rig):
+        store: dict = {}
+        row = self._machine_a_publishes(rig, store)
+        self._corrupt_the_stored_object(store, row)
+
+        cache_b = rig.cold_machine("b")
+        rig.generates_svg()
+        requested = "chloroplast_structure_diagram"
+        kind, drawn = rig.resolver({requested: self.REWORDED},
+                                   cache=cache_b)(requested)
+
+        assert kind == "vector" and not drawn.placeholder, \
+            "the board is still drawn — that half was never in doubt"
+        svg = [d for d in rig.decisions() if d["tier"] == "svg"][-1]
+        assert svg["library_hit"] is False, \
+            "it was handed an asset it could not use and paid to redraw it"
+        assert svg["ai_generated"] is True
+        assert svg["library_discarded"] == "regenerated"
+        assert svg["outcome"] == "library_asset_regenerated"
+        assert rig.calls["svg_text"] == 1, "and it really did pay"
+
+    def test_the_row_still_records_which_row_it_tried(self, rig):
+        """The match is evidence about the THRESHOLD and stays on the row —
+        the point is to separate 'matched and served' from 'matched and had to
+        be thrown away', not to forget the match."""
+        store: dict = {}
+        row = self._machine_a_publishes(rig, store)
+        self._corrupt_the_stored_object(store, row)
+
+        cache_b = rig.cold_machine("b")
+        rig.generates_svg()
+        requested = "chloroplast_structure_diagram"
+        rig.resolver({requested: self.REWORDED}, cache=cache_b)(requested)
+
+        svg = [d for d in rig.decisions() if d["tier"] == "svg"][-1]
+        assert svg["matched_key"] == "chloroplast"
+        assert svg["cleared_threshold"] is True
+        assert svg["match_source"] == "remote"
+
+    def test_an_unusable_asset_that_could_not_be_redrawn_says_so(self, rig):
+        """Nothing was served and nothing was generated. Logging that as a
+        library hit would count a blank board as reuse."""
+        store: dict = {}
+        row = self._machine_a_publishes(rig, store)
+        self._corrupt_the_stored_object(store, row)
+
+        cache_b = rig.cold_machine("b")
+        requested = "chloroplast_structure_diagram"
+        # allow_generate=False: the corrupt asset is all there is, and there
+        # is no permission to draw a replacement.
+        rig.resolver({requested: self.REWORDED}, cache=cache_b,
+                     allow_generate=False)(requested)
+
+        svg = [d for d in rig.decisions() if d["tier"] == "svg"][-1]
+        assert svg["library_hit"] is False
+        assert svg["ai_generated"] is False
+        assert svg["library_discarded"] == "unusable"
+        assert svg["outcome"] == "library_asset_unusable"
+
+    def test_an_svg_that_survives_is_still_logged_as_a_hit(self, rig):
+        """The guard must not eat the ordinary case it exists to qualify."""
+        store: dict = {}
+        self._machine_a_publishes(rig, store)
+
+        cache_b = rig.cold_machine("b")
+        requested = "chloroplast_structure_diagram"
+        rig.resolver({requested: self.REWORDED}, cache=cache_b)(requested)
+
+        svg = [d for d in rig.decisions() if d["tier"] == "svg"][-1]
+        assert svg["library_hit"] is True
+        assert svg["ai_generated"] is False
+        assert svg["library_discarded"] is None
+        assert svg["outcome"] == "library_hit"
+        assert rig.calls.ai == 0
+
+    def test_the_raster_tier_is_read_the_same_way(self, rig):
+        """Same shape, same bug: raster_assets regenerates a corrupt cached
+        image in place. One helper answers for both tiers."""
+        store: dict = {}
+        rig.publishes_to(store)
+        rig.generates_png()
+        rig.raster_resolver({"volcano": "A cross-section of a volcano"})("volcano")
+        assert len(store["rows"]) == 1
+        row = store["rows"][0]
+        store["objects"][row["storage_path"]] = b"\x89PNG\r\n\x1a\n truncated"
+
+        cache_b = rig.cold_machine("b")
+        rig.generates_png()
+        rig.raster_resolver({"volcano": "A cross-section of a volcano"},
+                            cache=cache_b)("volcano")
+
+        raster = [d for d in rig.decisions() if d["tier"] == "raster"][-1]
+        assert raster["library_hit"] is False
+        assert raster["library_discarded"] == "regenerated"
+        assert raster["ai_generated"] is True

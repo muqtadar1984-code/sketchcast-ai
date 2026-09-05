@@ -672,11 +672,27 @@ def _write_local_index(rows: list[dict[str, Any]]) -> None:
     tmp.replace(LIBRARY_DIR / "index.json")
 
 
+def _index_identity(row: dict[str, Any]) -> tuple[str, str]:
+    """What makes two local index rows the SAME row: the key AND the format.
+
+    The key alone was wrong the moment a second format existed. One asset_key
+    legitimately has two cached files — ``<canonical>/asset.png`` from the
+    raster tier and ``svg_<canonical>/asset.svg`` from the SVG tier — and the
+    cache bootstrap indexes both on every worker start. Keyed by asset_key
+    alone, the second registration EVICTED the first, so whichever format the
+    glob reached last was the only one the index knew: a PNG this container had
+    already paid for became invisible to the raster tier, which then generated
+    it again. Two rows, one per format, is the correct shape.
+    """
+    return (str(row.get("asset_key") or row.get("canonical_key") or ""),
+            row_format(row))
+
+
 def register_local(row: dict[str, Any]) -> None:
     """Register metadata locally; safe to call from every generation."""
     rows = _local_candidates()
-    key = str(row.get("asset_key") or row.get("canonical_key") or "")
-    rows = [r for r in rows if str(r.get("asset_key") or r.get("canonical_key")) != key]
+    ident = _index_identity(row)
+    rows = [r for r in rows if _index_identity(r) != ident]
     rows.append(row)
     _write_local_index(rows)
 
@@ -717,6 +733,100 @@ def threshold_now() -> float:
     return float(os.getenv("VISUAL_LIBRARY_MIN_SCORE", "0.58"))
 
 
+# ── the remote candidate set ─────────────────────────────────────────────────
+# Read in PAGES, filtered in the query. The old read was a single
+# ``.limit(250)`` with every predicate but status and asset_type applied in
+# Python afterwards, which is not a tuning knob — it is a silent correctness
+# bug with a deadline. Production held 217 approved non-avatar visuals of 230
+# rows on 2026-09-05 and the diagram catalogue is still being filled: the
+# first row to fall outside the window would simply never be found, and the
+# lesson would pay to regenerate a picture the library already holds. Nothing
+# would log, because the query succeeded.
+#
+# The cap that remains is a runaway guard, not a window: a page short of
+# PAGE_SIZE ends the read, so the normal cost is one query.
+REMOTE_PAGE_SIZE = max(1, int(os.getenv("VISUAL_LIBRARY_PAGE_SIZE") or 500))
+REMOTE_ROW_CAP = max(1, int(os.getenv("VISUAL_LIBRARY_MAX_ROWS") or 50000))
+
+
+def _format_predicate(query, want_format: str):
+    """Narrow to one format IN THE QUERY without dropping a legacy row.
+
+    A bare ``eq("asset_format", "png")`` would hide every PNG the library held
+    before 0104 — the column is nullable and those rows carry NULL — which is
+    the same class of silent drop this module is busy removing, one column
+    over. So the default format admits NULL as well, and row_format() decides
+    in Python either way.
+
+    Kept to plain equality and IS NULL on purpose: the clause is the one part
+    of this read that a database can refuse, and the cheapest way to keep the
+    remote search alive is to give it nothing exotic to refuse.
+    """
+    if want_format != DEFAULT_FORMAT:
+        return query.eq("asset_format", want_format)
+    # NULL reads as a PNG — normalize_format says so, and every row published
+    # before the column existed is one — so a NULL row is a candidate for the
+    # default format and for no other.
+    return query.or_(f"asset_format.is.null,asset_format.eq.{want_format}")
+
+
+def _remote_page(sb, want_format: str | None, start: int, end: int):
+    q = (sb.table("visual_assets").select("*")
+         .eq("status", "approved")
+         .neq("asset_type", "avatar"))
+    if want_format is not None:
+        q = _format_predicate(q, want_format)
+    # Ordered because a page is only a page if the order is stable; without it
+    # Postgres may return the same row twice and never return another.
+    return list(q.order("id").range(start, end).execute().data or [])
+
+
+def _remote_pages(sb, want_format: str | None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    start = 0
+    while start < REMOTE_ROW_CAP:
+        page = _remote_page(sb, want_format, start,
+                            start + REMOTE_PAGE_SIZE - 1)
+        rows.extend(page)
+        if len(page) < REMOTE_PAGE_SIZE:
+            return rows          # a short page is the end of the table
+        start += REMOTE_PAGE_SIZE
+    # Reaching the guard means rows are being dropped again. It is a decade
+    # away at the current rate, but the whole point of this change is that a
+    # window nobody can see is worse than one that says so.
+    logger.warning("visual library: stopped reading at %d rows (the runaway "
+                   "guard); rows past it cannot be matched", len(rows))
+    return rows
+
+
+def _remote_rows(sb, want_format: str | None) -> list[dict[str, Any]]:
+    """Every approved, non-avatar row a request in `want_format` could match.
+
+    The format filter is attempted in the query and abandoned whole if the
+    database refuses it — an un-migrated schema answers an unknown column with
+    PGRST204, and losing the remote search entirely to save a transfer would
+    trade a cheap read for every reuse the library exists to provide.
+    """
+    try:
+        return _remote_pages(sb, want_format)
+    except Exception as exc:  # noqa: BLE001
+        if want_format is None or not _format_filter_refused(exc):
+            raise
+        logger.debug("visual library: format filter refused (%s); reading the "
+                     "approved rows unfiltered", exc)
+        return _remote_pages(sb, None)
+
+
+def _format_filter_refused(exc: Exception) -> bool:
+    """Whether a failed read is the DATABASE not knowing asset_format.
+
+    Narrow on purpose. Retrying every failure without the filter would double
+    the cost of a network blip and hide nothing useful; retrying this one keeps
+    the whole remote search alive in the window between a push and 0104.
+    """
+    return _looks_like_missing_column(exc) or "asset_format" in f"{exc}"
+
+
 def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
                *, _ctx: LibraryContext | None = None, guarded: bool = False,
                asset_format: str | None = None):
@@ -732,10 +842,10 @@ def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
     own key shares a core token with the request, so the best SERVEABLE row is
     chosen rather than the best-scoring one being chosen and then refused.
 
-    `asset_format` restricts them to one format. It is applied in PYTHON, not
-    in the remote query: the column does not exist on an un-migrated database,
-    and a filter that errors there would take the whole remote search down
-    with it rather than one row.
+    `asset_format` narrows the remote query too — see _remote_rows, which
+    also pages rather than truncating. The Python filter below stays the
+    authority, because an un-migrated database has no asset_format column and
+    a legacy row carries NULL.
 
     Returns (row | None, score, source) where source is 'local' or 'remote'.
     """
@@ -750,10 +860,9 @@ def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
             else candidates
 
     # Educational retrieval NEVER sees avatars. Filtered on both sides: the
-    # remote query narrows in Postgres (cheap, and keeps the 250-row window for
-    # real visuals rather than spending it on avatars), and both result sets
-    # are filtered again in Python by is_avatar_row(), which also catches rows
-    # published before asset_type was set.
+    # remote query narrows in Postgres, and both result sets are filtered
+    # again in Python by is_avatar_row(), which also catches rows published
+    # before asset_type was set.
     rows = _eligible([r for r in _local_candidates() if not is_avatar_row(r)])
     best = max(rows, key=lambda r: _score(r, key, prompt, ctx), default=None)
     best_score = _score(best, key, prompt, ctx) if best else 0.0
@@ -762,10 +871,7 @@ def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
     sb = _sb()
     if sb is not None:
         try:
-            remote = (sb.table("visual_assets").select("*")
-                      .eq("status", "approved")
-                      .neq("asset_type", "avatar")
-                      .limit(250).execute().data or [])
+            remote = _remote_rows(sb, want_format)
             remote = _eligible([r for r in remote if not is_avatar_row(r)])
             remote_best = max(remote, key=lambda r: _score(r, key, prompt, ctx), default=None)
             remote_score = _score(remote_best, key, prompt, ctx) if remote_best else 0.0

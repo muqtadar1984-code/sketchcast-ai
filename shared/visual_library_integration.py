@@ -145,6 +145,35 @@ def _hydrate_local_library(key: str, prompt: str, cache: Path,
         return False
 
 
+def _library_outcome(hydrated: bool, provenance: str,
+                     usable: bool) -> tuple[bool, str | None]:
+    """What actually became of a file the library put into the cache.
+
+    Hydration is not the end of the story. BOTH renderers re-validate what
+    they find in the cache and replace it IN PLACE when it does not hold up —
+    svg_assets when the markup no longer parses, raster_assets when the image
+    is corrupt or carries baked text — and the meta.json they rewrite then
+    says "generated". Deciding reuse from "a file appeared where none was"
+    therefore logged one request as a library hit AND ai_generated=true at the
+    same time: two mutually exclusive facts on one row, in the only record
+    anyone judges the threshold and the reuse rate by. A hit that had to be
+    redrawn is not a hit; counting it as one overstates the library's value
+    exactly where the evidence is supposed to be read.
+
+    Returns (served_by_library, discarded), where `discarded` names what
+    happened instead: 'regenerated' when the renderer replaced the hydrated
+    asset, 'unusable' when it could not be replaced either and no asset was
+    bound at all.
+    """
+    if not hydrated:
+        return False, None
+    if provenance == "generated":
+        return False, "regenerated"
+    if not usable:
+        return False, "unusable"
+    return True, None
+
+
 def _patch() -> None:
     global _PATCHED
     if _PATCHED:
@@ -215,7 +244,7 @@ def _patch() -> None:
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("visual library lookup failed for %s: %s", key, exc)
 
-        served_by_library = (not existed_before) and png.exists()
+        hydrated = (not existed_before) and png.exists()
         published = False
         result = original(key, prompt, cache, allow_generate)
 
@@ -246,6 +275,11 @@ def _patch() -> None:
             except Exception:  # noqa: BLE001
                 final = {}
         provenance = str(final.get("provenance") or ("absent" if not png.exists() else "unknown"))
+        # Read from the provenance the renderer wrote, not from the fact that
+        # a file arrived: raster_assets replaces a corrupt or text-baked
+        # hydrated asset in place and stamps it "generated".
+        served_by_library, library_discarded = _library_outcome(
+            hydrated, provenance, result is not None)
         log_decision({
             "tier": "raster",
             "requested_key": key,
@@ -253,9 +287,15 @@ def _patch() -> None:
             "requested_prompt": prompt[:300],
             "outcome": ("local_cache" if existed_before
                         else "library_hit" if served_by_library
+                        else f"library_asset_{library_discarded}"
+                        if library_discarded
                         else "generated" if provenance == "generated"
                         else "failed" if not png.exists() else provenance),
             "library_hit": bool(served_by_library),
+            # Set only when the library DID hand over an asset and it did not
+            # survive: 'regenerated' or 'unusable'. A reader counting reuse
+            # wants these separated from a request the library never answered.
+            "library_discarded": library_discarded,
             "matched_key": (match or {}).get("asset_key"),
             "matched_id": (match or {}).get("id"),
             "match_score": round(score, 4),
@@ -325,7 +365,7 @@ def _patch() -> None:
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("visual library lookup failed for %s: %s", key, exc)
 
-        served_by_library = (not existed_before) and svg_file.exists()
+        hydrated = (not existed_before) and svg_file.exists()
         published = False
         result = original_svg(key, prompt, cache, allow_generate)
 
@@ -337,6 +377,11 @@ def _patch() -> None:
                 final = {}
         provenance = str(final.get("provenance")
                          or ("absent" if not svg_file.exists() else "unknown"))
+        # A hydrated SVG that no longer parses is regenerated IN PLACE by
+        # get_svg_asset, which rewrites meta.json as "generated". The row says
+        # so rather than claiming a hit it did not get.
+        served_by_library, library_discarded = _library_outcome(
+            hydrated, provenance, result is not None)
 
         if (not existed_before and not avatar and result is not None
                 and svg_file.exists() and provenance == "generated"):
@@ -360,9 +405,12 @@ def _patch() -> None:
             "requested_prompt": prompt[:300],
             "outcome": ("local_cache" if existed_before
                         else "library_hit" if served_by_library
+                        else f"library_asset_{library_discarded}"
+                        if library_discarded
                         else "generated" if provenance == "generated"
                         else "failed" if not svg_file.exists() else provenance),
             "library_hit": bool(served_by_library),
+            "library_discarded": library_discarded,
             "matched_key": (match or {}).get("asset_key"),
             "matched_id": (match or {}).get("id"),
             "match_score": round(score, 4),

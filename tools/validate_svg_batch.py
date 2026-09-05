@@ -19,17 +19,18 @@ one of them is visible to a parser:
             tries to label a thylakoid finds nothing, and the failure appears
             months later in a video rather than here.
 
-            This pass matches parts the way the RENDERER matches them
-            (``match_part``, mirroring ``vector_assets.match_layer_ids``):
-            exact first, then substring containment. A catalogue that says
-            "chloroplast" against a group named "chloroplasts" is reported as
-            an inexact NOTE, not a failure, because the renderer places that
-            label without difficulty — failing it would send back a delivery
-            that is fine.
+            This pass matches parts with the renderer's OWN matcher —
+            ``vector_assets.match_layer_ids``, imported, not restated — so the
+            tool cannot be kinder or harsher than the thing it is a gate for.
+            A catalogue that says "chloroplast" against a group named
+            "chloroplasts" is reported as an inexact NOTE, not a failure,
+            because the renderer places that label without difficulty; failing
+            it would send back a delivery that is fine.
 
-Offline and dependency-free: no model, no network, no image library. 378 files
-take a second, so the whole delivery can be checked on arrival and again on
-every redelivery.
+Offline and dependency-free: no model, no network, no image library — the
+scene-engine modules it borrows (the validator, the matcher) are pure stdlib
+and are loaded by path. 378 files take a second, so the whole delivery can be
+checked on arrival and again on every redelivery.
 
 Exit status is 0 when nothing failed and 1 otherwise, so it can gate a
 delivery in CI.
@@ -40,76 +41,86 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import re
 import sys
+import types
 from dataclasses import dataclass, field
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-_VALIDATOR = _HERE.parent / "spike" / "scene_engine" / "svg_validate.py"
+_SCENE_DIR = _HERE.parent / "spike" / "scene_engine"
+# A stand-in package, so a loaded module's relative imports resolve against
+# spike/scene_engine WITHOUT running spike.scene_engine.__init__.
+_PKG = "_svg_batch_scene"
 
 
-def _load_validator():
-    """Load svg_validate.py by PATH, not as ``spike.scene_engine.svg_validate``.
+def _scene_module(name: str):
+    """Load ``spike/scene_engine/<name>.py`` by PATH, under a stand-in package.
 
-    Importing the package runs its ``__init__``, which installs the visual
-    library wrapper and indexes the local asset cache into the real library
-    index. A validator must not touch any of that — and it must run on a
-    machine with no PIL, no numpy and no credentials.
+    Not ``import spike.scene_engine.<name>``: importing the package runs its
+    ``__init__``, which installs the visual library wrapper and indexes the
+    local asset cache into the real library index. A delivery checker must not
+    touch any of that — and it must run on a machine with no PIL, no numpy and
+    no credentials.
+
+    The stand-in package carries only a ``__path__``, which is what makes
+    ``from .geometry import ...`` inside vector_assets resolve. That is the
+    whole trick, and it is what lets this tool IMPORT the renderer's matcher
+    rather than restate it: every module it reaches this way (svg_validate,
+    partnames, geometry, vector_assets) is pure stdlib, so the offline promise
+    is kept.
     """
-    spec = importlib.util.spec_from_file_location("_svg_validate", _VALIDATOR)
+    full = f"{_PKG}.{name}"
+    if full in sys.modules:
+        return sys.modules[full]
+    if _PKG not in sys.modules:
+        pkg = types.ModuleType(_PKG)
+        pkg.__path__ = [str(_SCENE_DIR)]
+        sys.modules[_PKG] = pkg
+    spec = importlib.util.spec_from_file_location(full, _SCENE_DIR / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     # registered before exec: @dataclass resolves annotations through
     # sys.modules[cls.__module__], and an unregistered module makes that None
-    sys.modules.setdefault(spec.name, module)
+    sys.modules[full] = module
     spec.loader.exec_module(module)
     return module
 
 
-_V = _load_validator()
-validate_svg_document = _V.validate_svg_document
+validate_svg_document = _scene_module("svg_validate").validate_svg_document
 
-_NON_WORD = re.compile(r"[^a-z0-9]+")
-
-
-def normalise_part(name: str) -> str:
-    """A catalogue part name as a group id would spell it.
-
-    The catalogue is written for humans ("Outer membrane", "cell wall") and
-    the group ids are lowercase_snake_case. Comparing the two literally would
-    fail every file for a reason that is not a defect.
-    """
-    return _NON_WORD.sub("_", str(name or "").strip().lower()).strip("_")
+# THE renderer's matcher and THE renderer's name normaliser: the same functions
+# render.py places labels with, reached by path instead of reimplemented.
+match_layer_ids = _scene_module("vector_assets").match_layer_ids
+norm_part = _scene_module("partnames").norm_part
 
 
 def match_part(wanted: str, group_ids: list[str]) -> tuple[str | None, bool]:
     """Find the group that answers a catalogue part. Returns (group_id, exact).
 
-    This deliberately mirrors ``vector_assets.match_layer_ids``, which is what
-    the RENDERER uses when it places a label: exact (case-insensitive) wins
-    outright, and only when nothing matches exactly does substring containment
-    apply. That module cannot be imported here — this tool loads the validator
-    by path precisely so it runs with no PIL, no numpy and no credentials — so
-    the rule is restated, and ``test_validate_svg_batch`` pins the two against
-    each other.
+    Delegates to ``vector_assets.match_layer_ids``, which is what the RENDERER
+    uses when it places a label. This tool used to restate that rule and
+    drifted the way a restatement always does: it snake-cased the catalogue
+    part name before comparing and match_layer_ids does not, so the tool was
+    the MORE PERMISSIVE of the two and passed deliveries the renderer would
+    not label — a green report on arrival and a silently unlabelled part in a
+    video months later, which is the exact failure this pass exists to
+    prevent. Now there is one comparison and both callers make it.
 
-    Copying the renderer's tolerance is the whole point. Checking group ids
-    with ``==`` fails a file whose only sin is that the catalogue says
-    "chloroplast" and the diagram says "chloroplasts" — a label the renderer
-    places without difficulty. Across 378 files that manufactures
-    re-commissions of assets that are fine.
+    "Exact" keeps a meaning of its own because it drives a NOTE, not a verdict,
+    and it is measured with the renderer's own normaliser: separator style is
+    model whim, never semantics, so "Outer membrane" against the group
+    ``outer_membrane`` is an exact hit and would otherwise put a naming-drift
+    note on nearly every line of a 378-file report. What IS inexact is a
+    different word — "chloroplast" answered by ``chloroplasts`` — and a whole
+    batch of those is real drift between the catalogue and the artist.
     """
-    norm = normalise_part(wanted)
-    if not norm:
+    want = str(wanted or "").strip()
+    if not norm_part(want):
         return None, False
-    for gid in group_ids:
-        if gid.lower() == norm:
-            return gid, True
-    for gid in group_ids:
-        low = gid.lower()
-        if norm in low or low in norm:
-            return gid, False
-    return None, False
+    matched = match_layer_ids(list(group_ids), [want])
+    if not matched:
+        return None, False
+    gid = matched[0]
+    return gid, norm_part(gid) == norm_part(want)
 
 
 @dataclass
@@ -209,7 +220,7 @@ def check_file(key: str, svg_path: Path, entry: dict | None) -> FileReport:
     for part in parts:
         gid, exact = match_part(part, ids)
         if gid is None:
-            if normalise_part(part):
+            if norm_part(part):
                 missing.append(part)
             continue
         claimed.add(gid)

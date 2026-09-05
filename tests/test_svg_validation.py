@@ -377,3 +377,157 @@ class TestTheGateSpeaksTheSameLanguageAsTheParser:
         v = validate_svg_document(arced)
         assert not v.ok and "arc" in v.codes, \
             "publish refuses: the served picture would not be the validated one"
+
+
+class TestPathDataIsTokenisedNotScanned:
+    r"""The gate read the ``d`` attribute with ``re.findall(r"[A-Za-z]")``.
+
+    That is not a path parser, it is a letter hunt, and it read the 'e' of
+    "1e3" as a command. Scientific notation is ordinary path data — every SVG
+    exporter writes it eventually, and parse_path_d accepts it explicitly (its
+    number grammar carries ``(?:[eE][-+]?\d+)?``) — so a diagram that rendered
+    perfectly was refused ENTRY TO THE LIBRARY and regenerated on every
+    machine, forever. Refusal costs no board; it costs the reuse.
+    """
+
+    def _doc(self, d: str) -> str:
+        return ('<svg viewBox="0 0 800 600"><g id="curve">'
+                f'<path d="{d}" stroke="black" fill="none" stroke-width="4"/>'
+                '</g></svg>')
+
+    @pytest.mark.parametrize("d", [
+        "M 1e3 2e2 L 4 5 Z",
+        "M 1E3 2E2 L 4 5 Z",
+        "M 1.5e-3 2e+2 C 1 2 3 4 5 6",
+        "M0 0L1e1 1e1",
+    ])
+    def test_scientific_notation_is_path_data_not_a_command(self, d):
+        v = validate_svg_document(self._doc(d))
+        assert v.ok, v.reason
+
+    def test_what_the_gate_accepts_the_runtime_parser_draws(self):
+        """The two must agree on the exponent, not merely both survive it."""
+        from spike.scene_engine.svg_assets import parse_path_d
+
+        d = "M 1e2 1e2 L 2e2 1e2 L 2e2 2e2 Z"
+        assert validate_svg_document(self._doc(d)).ok
+        assert parse_path_d(d), "the parser reads it; the gate must not refuse it"
+
+    def test_the_tokeniser_returns_commands_and_nothing_else(self):
+        from spike.scene_engine.svg_validate import tokenise_path_d
+
+        assert tokenise_path_d("M 1e3 2e2 L 4 5 Z")[0] == ["M", "L", "Z"]
+        assert tokenise_path_d("M10-20L1.5.5C1 2 3 4 5 6z")[0] == \
+            ["M", "L", "C", "z"]
+        assert tokenise_path_d("M 0 0 L 1 1")[1] == []
+
+    def test_a_genuinely_unsupported_command_is_still_refused(self):
+        """The tokeniser must not be a way in: only a real command letter is
+        read as one, and a real command letter outside the set still fails."""
+        v = validate_svg_document(self._doc("M 0 0 R 1 2 3 4"))
+        assert "unsupported_path_command" in v.codes
+        assert "'R'" in v.reason
+
+    def test_junk_in_the_path_is_named_rather_than_guessed_at(self):
+        v = validate_svg_document(self._doc("M 0 0 L (1 2)"))
+        assert "malformed_path_data" in v.codes
+
+
+class TestTheGateAcceptsExactlyWhatTheParserDraws:
+    """Three places state the command list — the prompt (_SVG_RULES), the
+    runtime parser and this gate — and a gate STRICTER than the parser is a
+    permanent reuse failure: publish returns False, the board still draws, and
+    every machine redraws that diagram forever. S and T were exactly that.
+
+    Arcs are the deliberate exception in the other direction: parse_path_d
+    straightens an arc to its endpoint, so the picture the library would serve
+    is not the picture that was validated.
+    """
+
+    def test_the_gates_alphabet_is_the_parsers_alphabet_minus_arcs(self):
+        import re as _re
+
+        from spike.scene_engine import svg_assets
+        from spike.scene_engine.svg_validate import (ALLOWED_PATH_COMMANDS,
+                                                     ARC_COMMANDS)
+
+        parser_letters = set(_re.findall(r"[A-Za-z]",
+                                         svg_assets._CMD.pattern))
+        upper = {c.upper() for c in parser_letters}
+        arcs = {c.upper() for c in ARC_COMMANDS}
+        assert set(ALLOWED_PATH_COMMANDS) == upper - arcs, (
+            "the gate and parse_path_d have drifted apart")
+
+    @pytest.mark.parametrize("cmd", ["S", "T", "s", "t"])
+    def test_the_smooth_curve_commands_reach_the_library(self, cmd):
+        doc = ('<svg viewBox="0 0 800 600"><g id="curve">'
+               '<path d="M 100 300 C 160 140, 640 140, 700 300 '
+               f'{cmd} 560 500, 400 500" stroke="black" fill="none" '
+               'stroke-width="4"/></g></svg>')
+        assert validate_svg_document(doc).ok, validate_svg_document(doc).reason
+
+    def test_the_prompt_still_asks_for_the_same_set(self):
+        from spike.scene_engine.svg_assets import _SVG_RULES
+        from spike.scene_engine.svg_validate import ALLOWED_PATH_COMMANDS
+
+        rules = _SVG_RULES.upper()
+        line = [l for l in rules.splitlines() if "COMMAND" in l]
+        assert line, _SVG_RULES
+        for cmd in ALLOWED_PATH_COMMANDS:
+            assert cmd in line[0], (cmd, line[0])
+
+
+class TestARefusalNamesThePathItIsAbout:
+    """A path-level refusal reported against the enclosing group named that
+    group over and over and never said WHICH path was broken — the one thing
+    the reader has to know to fix the file. A 30-path group produced 30
+    identical lines."""
+
+    TWO_BAD = """<svg viewBox="0 0 800 600">
+<g id="leaf">
+  <path d="M 10 10 L 20 20" stroke="black" fill="none"/>
+  <path d="M 10 10 A 5 5 0 0 1 20 20" stroke="black" fill="none"/>
+  <path d="M 30 30 L 40 40" stroke="black" fill="none"/>
+  <path d="M 30 30 R 1 2 3" stroke="black" fill="none"/>
+</g>
+</svg>"""
+
+    def test_the_report_says_which_path(self):
+        v = validate_svg_document(self.TWO_BAD)
+        assert not v.ok
+        assert "path #2" in v.reason and "path #4" in v.reason
+        assert "path #1" not in v.reason and "path #3" not in v.reason
+
+    def test_two_refusals_in_one_group_are_told_apart(self):
+        v = validate_svg_document(self.TWO_BAD)
+        details = [i.detail for i in v.issues
+                   if i.code in ("arc", "unsupported_path_command")]
+        assert len(details) == 2
+        assert len(set(details)) == 2, "the same line twice names nothing"
+        assert all("<g id='leaf'>" in d for d in details), \
+            "the group is still named — the reader needs both"
+
+    def test_one_offending_command_is_reported_once_per_path(self):
+        """A path drawn with twelve arcs is one fact about that path, not
+        twelve identical lines to read past."""
+        v = validate_svg_document(
+            '<svg viewBox="0 0 800 600"><g id="leaf">'
+            '<path d="M 0 0 A 1 1 0 0 1 2 2 A 1 1 0 0 1 4 4 A 1 1 0 0 1 6 6" '
+            'stroke="black" fill="none"/></g></svg>')
+        assert [i.code for i in v.issues].count("arc") == 1
+
+    def test_a_path_without_d_is_numbered_too(self):
+        v = validate_svg_document(
+            '<svg viewBox="0 0 800 600"><g id="leaf">'
+            '<path d="M 1 1 L 2 2" stroke="black" fill="none"/>'
+            '<path stroke="black" fill="none"/></g></svg>')
+        assert "path_without_d" in v.codes
+        assert "path #2" in v.reason
+
+    def test_a_loose_path_is_numbered_within_the_document(self):
+        v = validate_svg_document(
+            '<svg viewBox="0 0 800 600">'
+            '<path d="M 1 1 A 5 5 0 0 1 2 2" stroke="black" fill="none"/>'
+            '</svg>')
+        assert "path_outside_group" in v.codes and "arc" in v.codes
+        assert "path #1" in v.reason

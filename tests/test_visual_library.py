@@ -181,6 +181,18 @@ class TestAvatarsNeverReachEducationalRetrieval:
                 seen[f"neq:{col}"] = val
                 return self
 
+            def or_(self, clause):
+                seen["or"] = clause
+                return self
+
+            def order(self, col, **_k):
+                seen["order"] = col
+                return self
+
+            def range(self, start, end):
+                seen["range"] = (start, end)
+                return self
+
             def limit(self, _n):
                 return self
 
@@ -283,6 +295,15 @@ class TestHydrateCachesWhereTheCallerLooks:
                 return self
 
             def neq(self, *_a):
+                return self
+
+            def or_(self, *_a):
+                return self
+
+            def order(self, *_a, **_k):
+                return self
+
+            def range(self, *_a):
                 return self
 
             def limit(self, _n):
@@ -574,3 +595,341 @@ class TestTheMigrationIsSafeToRunOnProduction:
         assert "check (asset_format in ('png', 'svg'))" in ddl
         assert "group_ids jsonb not null default '[]'::jsonb" in ddl
         assert "group_count integer not null default 0" in ddl
+
+
+class TestTheRemoteSearchSeesEveryApprovedRow:
+    """A constant-sized window over a growing table is a silent correctness
+    bug with a deadline, not a tuning knob.
+
+    The remote search read ``.limit(250)`` and did every other bit of
+    filtering in Python afterwards. Production held 217 approved non-avatar
+    visuals of 230 rows on 2026-09-05 and the diagram catalogue is still being
+    filled: the first row past the window would simply never be found, and the
+    lesson would pay a model to redraw a picture the library already holds.
+    Nothing would log, because the query SUCCEEDED — it just answered a
+    different question.
+    """
+
+    def _row(self, n: int, *, fmt: str = "png") -> dict:
+        return {
+            "id": f"row-{n:04d}",
+            "asset_key": f"filler_{n}",
+            "canonical_key": f"filler_{n}",
+            "description": f"filler asset number {n}",
+            "subject": "general", "grade": "k12", "curriculum": "generic",
+            "topic": f"filler {n}", "concepts": [], "status": "approved",
+            "asset_type": "visual", "asset_format": fmt,
+            "storage_path": f"generated/filler_{n}/aa.{fmt}",
+        }
+
+    def _volcano(self, *, fmt: str = "png") -> dict:
+        return {
+            "id": "row-9999",
+            "asset_key": "volcano_cross_section",
+            "canonical_key": "cross_section_volcano",
+            "description": "A cross-section of a volcano showing the magma "
+                           "chamber, the central vent and the cone",
+            "subject": "geography", "grade": "k12", "curriculum": "generic",
+            "topic": "volcano cross section", "concepts": [],
+            "status": "approved", "asset_type": "visual", "asset_format": fmt,
+            "storage_path": f"generated/cross_section_volcano/aa.{fmt}",
+        }
+
+    def _server(self, monkeypatch, tmp_path, rows: list[dict]):
+        """A Supabase that honours range() the way PostgREST does, and counts
+        the pages it was asked for."""
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "index")
+        seen: dict = {"pages": [], "or": []}
+
+        class Q:
+            def __init__(self):
+                self.window = None
+
+            def select(self, *_a, **_k):
+                return self
+
+            def eq(self, col, val):
+                seen[f"eq:{col}"] = val
+                return self
+
+            def neq(self, col, val):
+                seen[f"neq:{col}"] = val
+                return self
+
+            def or_(self, clause):
+                seen["or"].append(clause)
+                return self
+
+            def order(self, col, **_k):
+                seen["order"] = col
+                return self
+
+            def range(self, start, end):
+                self.window = (start, end)
+                return self
+
+            def limit(self, n):
+                seen["limit"] = n
+                return self
+
+            def execute(self):
+                start, end = self.window or (0, len(rows) - 1)
+                seen["pages"].append((start, end))
+                return type("R", (), {"data": rows[start:end + 1]})()
+
+        class SB:
+            def table(self, _name):
+                return Q()
+
+        monkeypatch.setattr(vl, "_sb", lambda: SB())
+        return vl, seen
+
+    def test_a_row_beyond_the_first_page_is_still_found(self, tmp_path,
+                                                        monkeypatch):
+        """THE regression. The wanted row sits at index 520 of 600, past any
+        fixed 250- or 500-row read."""
+        rows = [self._row(n) for n in range(600)]
+        rows[520] = self._volcano()
+        vl, seen = self._server(monkeypatch, tmp_path, rows)
+
+        hit = vl.find("volcano_cross_section",
+                      "A cross-section of a volcano showing the magma chamber")
+
+        assert hit is not None, "the library holds it and could not find it"
+        assert hit["asset_key"] == "volcano_cross_section"
+        assert hit["match_source"] == "remote"
+        assert len(seen["pages"]) > 1, "it must page, not widen the window"
+
+    def test_a_small_library_still_costs_one_query(self, tmp_path, monkeypatch):
+        """Paging must not turn every lookup into a second round trip: a page
+        that comes back short is the end of the table."""
+        vl, seen = self._server(monkeypatch, tmp_path, [self._volcano()])
+
+        vl.find("volcano_cross_section", "A cross-section of a volcano")
+
+        assert len(seen["pages"]) == 1
+
+    def test_the_page_size_is_the_page_size_not_the_answer(self, tmp_path,
+                                                            monkeypatch):
+        """Paging is not a bigger constant: the wanted row is found whatever
+        the page size happens to be."""
+        rows = [self._row(n) for n in range(60)]
+        rows[57] = self._volcano()
+        vl, seen = self._server(monkeypatch, tmp_path, rows)
+        monkeypatch.setattr(vl, "REMOTE_PAGE_SIZE", 7)
+
+        hit = vl.find("volcano_cross_section", "A cross-section of a volcano")
+
+        assert hit is not None and hit["asset_key"] == "volcano_cross_section"
+        assert len(seen["pages"]) == 9, seen["pages"]
+
+    def test_the_runaway_guard_says_so_instead_of_dropping_rows_quietly(
+            self, tmp_path, monkeypatch, caplog):
+        """The cap that remains is a guard, not a window — and the whole point
+        of this change is that a limit nobody can see is worse than one that
+        announces itself."""
+        import logging
+        rows = [self._row(n) for n in range(60)]
+        vl, seen = self._server(monkeypatch, tmp_path, rows)
+        monkeypatch.setattr(vl, "REMOTE_PAGE_SIZE", 10)
+        monkeypatch.setattr(vl, "REMOTE_ROW_CAP", 20)
+
+        with caplog.at_level(logging.WARNING):
+            vl.best_match("filler_3", "filler asset number 3")
+
+        assert len(seen["pages"]) == 2
+        assert "runaway guard" in caplog.text
+
+    def test_the_query_itself_narrows_by_status_type_and_format(
+            self, tmp_path, monkeypatch):
+        vl, seen = self._server(monkeypatch, tmp_path, [self._volcano()])
+
+        vl.find("volcano_cross_section", "A cross-section of a volcano",
+                asset_format="svg")
+
+        assert seen["eq:status"] == "approved"
+        assert seen["neq:asset_type"] == "avatar"
+        assert seen["eq:asset_format"] == "svg"
+        assert seen.get("order"), "a page is only a page if the order is stable"
+
+    def test_the_png_predicate_admits_a_row_published_before_0104(
+            self, tmp_path, monkeypatch):
+        """asset_format is nullable and did not exist before the migration. A
+        bare eq('asset_format','png') would hide every PNG the library held
+        first — the same silent drop, one column over."""
+        legacy = self._volcano()
+        legacy.pop("asset_format")
+        vl, seen = self._server(monkeypatch, tmp_path, [legacy])
+
+        hit = vl.find("volcano_cross_section", "A cross-section of a volcano",
+                      asset_format="png")
+
+        assert hit is not None
+        assert "asset_format.is.null" in seen["or"][0]
+        assert "eq:asset_format" not in seen,             "a bare equality here would hide every pre-0104 PNG"
+
+    def test_a_database_that_has_not_seen_0104_still_answers(
+            self, tmp_path, monkeypatch):
+        """Code ships on a push, the schema changes when the founder applies
+        the migration. In that window PostgREST refuses the unknown column —
+        and losing the whole remote search to save a transfer would cost every
+        reuse the library exists to provide."""
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "index")
+        row = self._volcano()
+        row.pop("asset_format")
+        state: dict = {"filtered_attempts": 0}
+
+        class Q:
+            def __init__(self):
+                self.filtered = False
+
+            def select(self, *_a, **_k):
+                return self
+
+            def eq(self, *_a):
+                return self
+
+            def neq(self, *_a):
+                return self
+
+            def or_(self, _clause):
+                self.filtered = True
+                return self
+
+            def order(self, *_a, **_k):
+                return self
+
+            def range(self, *_a):
+                return self
+
+            def execute(self):
+                if self.filtered:
+                    state["filtered_attempts"] += 1
+                    raise RuntimeError(
+                        "column visual_assets.asset_format does not exist")
+                return type("R", (), {"data": [row]})()
+
+        class SB:
+            def table(self, _name):
+                return Q()
+
+        monkeypatch.setattr(vl, "_sb", lambda: SB())
+
+        hit = vl.find("volcano_cross_section", "A cross-section of a volcano",
+                      asset_format="png")
+
+        assert state["filtered_attempts"] == 1, "it should try the filter once"
+        assert hit is not None, "and fall back to reading the rows unfiltered"
+
+    def test_an_unrelated_failure_is_not_retried_unfiltered(
+            self, tmp_path, monkeypatch):
+        """A network blip is not a missing column. Retrying everything would
+        double the cost of an outage and hide nothing."""
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "index")
+        attempts: list[bool] = []
+
+        class Q:
+            def select(self, *_a, **_k):
+                return self
+
+            def eq(self, *_a):
+                return self
+
+            def neq(self, *_a):
+                return self
+
+            def or_(self, _c):
+                return self
+
+            def order(self, *_a, **_k):
+                return self
+
+            def range(self, *_a):
+                return self
+
+            def execute(self):
+                attempts.append(True)
+                raise TimeoutError("connection reset")
+
+        class SB:
+            def table(self, _name):
+                return Q()
+
+        monkeypatch.setattr(vl, "_sb", lambda: SB())
+
+        # best_match, not find: find() searches twice on a miss (guarded,
+        # then unguarded for the near-miss evidence), and the count under test
+        # here is the retries within ONE search.
+        row, _score, _src = vl.best_match("volcano_cross_section", "A volcano",
+                                          asset_format="png")
+        assert row is None
+        assert len(attempts) == 1
+
+
+class TestTheLocalIndexHoldsBothFormats:
+    """One asset_key legitimately has two cached files — ``<canonical>/asset.png``
+    from the raster tier and ``svg_<canonical>/asset.svg`` from the SVG tier —
+    and the cache bootstrap registers both on every worker start.
+
+    Keyed by asset_key alone, the second registration EVICTED the first: a PNG
+    this container had already paid for became invisible to the raster tier,
+    which then generated it again. The identity of an index row is the key AND
+    the format.
+    """
+
+    def _row(self, key: str, fmt: str) -> dict:
+        return {
+            "asset_key": key, "canonical_key": key,
+            "description": f"a {key}", "curriculum": "generic",
+            "subject": "general", "grade": "k12", "topic": key,
+            "concepts": [], "status": "approved", "provenance": "generated",
+            "local_cache_path": f"/cache/{key}/asset.{fmt}",
+            "asset_format": fmt, "group_ids": [], "group_count": 0,
+        }
+
+    def test_indexing_the_svg_does_not_evict_the_png(self, tmp_path,
+                                                     monkeypatch):
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "index")
+
+        vl.register_local(self._row("chloroplast", "png"))
+        vl.register_local(self._row("chloroplast", "svg"))
+
+        formats = sorted(vl.row_format(r) for r in vl._local_candidates())
+        assert formats == ["png", "svg"], \
+            "a cached PNG the worker already holds must stay findable"
+
+    def test_each_format_is_still_found_by_its_own_tier(self, tmp_path,
+                                                        monkeypatch):
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "index")
+        monkeypatch.setattr(vl, "_sb", lambda: None)
+
+        vl.register_local(self._row("chloroplast", "png"))
+        vl.register_local(self._row("chloroplast", "svg"))
+
+        png = vl.find("chloroplast", "a chloroplast", asset_format="png")
+        svg = vl.find("chloroplast", "a chloroplast", asset_format="svg")
+        assert png is not None and vl.row_format(png) == "png"
+        assert svg is not None and vl.row_format(svg) == "svg"
+
+    def test_re_registering_one_format_replaces_only_that_row(
+            self, tmp_path, monkeypatch):
+        """The dedupe still has to dedupe — the bootstrap runs on every worker
+        start, so a key/format pair must not accumulate copies."""
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "index")
+
+        vl.register_local(self._row("chloroplast", "png"))
+        vl.register_local(self._row("chloroplast", "svg"))
+        newer = self._row("chloroplast", "png")
+        newer["description"] = "a redrawn chloroplast"
+        vl.register_local(newer)
+
+        rows = vl._local_candidates()
+        assert len(rows) == 2
+        assert {r["description"] for r in rows} == {
+            "a redrawn chloroplast", "a chloroplast"}
