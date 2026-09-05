@@ -789,7 +789,17 @@ def _remote_pages(sb, want_format: str | None) -> list[dict[str, Any]]:
                             start + REMOTE_PAGE_SIZE - 1)
         rows.extend(page)
         if len(page) < REMOTE_PAGE_SIZE:
-            return rows          # a short page is the end of the table
+            # A short page is the end of the table ONLY while the page size is
+            # under the server's own row cap. Raise VISUAL_LIBRARY_PAGE_SIZE
+            # past it and every page comes back "short" at the cap, silently
+            # reinstating the window this function exists to remove.
+            if len(page) == 0 or start + len(page) < REMOTE_ROW_CAP:
+                return rows
+            logger.warning("visual library: a page came back short at %d rows, "
+                           "which is where the server caps a read — set "
+                           "VISUAL_LIBRARY_PAGE_SIZE lower than the server cap",
+                           len(page))
+            return rows
         start += REMOTE_PAGE_SIZE
     # Reaching the guard means rows are being dropped again. It is a decade
     # away at the current rate, but the whole point of this change is that a
@@ -797,6 +807,9 @@ def _remote_pages(sb, want_format: str | None) -> list[dict[str, Any]]:
     logger.warning("visual library: stopped reading at %d rows (the runaway "
                    "guard); rows past it cannot be matched", len(rows))
     return rows
+
+
+_FORMAT_FILTER_UNAVAILABLE = False
 
 
 def _remote_rows(sb, want_format: str | None) -> list[dict[str, Any]]:
@@ -807,13 +820,20 @@ def _remote_rows(sb, want_format: str | None) -> list[dict[str, Any]]:
     PGRST204, and losing the remote search entirely to save a transfer would
     trade a cheap read for every reuse the library exists to provide.
     """
+    # Remember the refusal. Between a deploy and 0104 the column does not
+    # exist, and asking again on every lookup buys a guaranteed-failing round
+    # trip per lesson visual for as long as that window lasts.
+    global _FORMAT_FILTER_UNAVAILABLE
+    if _FORMAT_FILTER_UNAVAILABLE:
+        return _remote_pages(sb, None)
     try:
         return _remote_pages(sb, want_format)
     except Exception as exc:  # noqa: BLE001
         if want_format is None or not _format_filter_refused(exc):
             raise
-        logger.debug("visual library: format filter refused (%s); reading the "
-                     "approved rows unfiltered", exc)
+        logger.info("visual library: this database has no asset_format column "
+                    "yet (%s); reading approved rows unfiltered until restart", exc)
+        _FORMAT_FILTER_UNAVAILABLE = True
         return _remote_pages(sb, None)
 
 

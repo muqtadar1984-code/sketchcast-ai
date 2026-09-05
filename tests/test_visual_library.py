@@ -933,3 +933,69 @@ class TestTheLocalIndexHoldsBothFormats:
         assert len(rows) == 2
         assert {r["description"] for r in rows} == {
             "a redrawn chloroplast", "a chloroplast"}
+
+
+class TestTheRefusedFormatFilterIsAskedOnce:
+    """Between a deploy and 0104 the column does not exist. Re-asking on every
+    lookup buys a guaranteed-failing round trip per lesson visual for as long
+    as that window lasts (adversarial pass, 2026-09-05)."""
+
+    def _sb(self, calls):
+        import shared.visual_library as vl
+
+        class Q:
+            def __init__(self, fmt_filtered): self.fmt = fmt_filtered
+            def select(self, *a, **k): return self
+            def order(self, *a, **k): return self
+            def range(self, *a, **k): return self
+            def eq(self, col, val):
+                if col == "asset_format": self.fmt = True
+                return self
+            def or_(self, *a, **k):
+                self.fmt = True
+                return self
+            def neq(self, *a, **k): return self
+            def execute(self):
+                calls.append(self.fmt)
+                if self.fmt:
+                    raise RuntimeError("PGRST204 column visual_assets.asset_format does not exist")
+                return type("R", (), {"data": []})()
+
+        class SB:
+            def table(self, name): return Q(False)
+        return SB()
+
+    def test_the_second_lookup_does_not_re_ask(self, monkeypatch):
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "_FORMAT_FILTER_UNAVAILABLE", False, raising=False)
+        calls: list = []
+        sb = self._sb(calls)
+        vl._remote_rows(sb, "svg")
+        first = len([c for c in calls if c])
+        vl._remote_rows(sb, "svg")
+        second = len([c for c in calls if c])
+        assert first == 1, calls
+        assert second == 1, "the refused filter was asked a second time"
+
+    def test_a_migrated_database_keeps_the_filter(self, monkeypatch):
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "_FORMAT_FILTER_UNAVAILABLE", False, raising=False)
+
+        class Q:
+            def __init__(self): self.fmt = False
+            def select(self, *a, **k): return self
+            def order(self, *a, **k): return self
+            def range(self, *a, **k): return self
+            def eq(self, col, val):
+                if col == "asset_format": self.fmt = True
+                return self
+            def or_(self, *a, **k):
+                self.fmt = True
+                return self
+            def neq(self, *a, **k): return self
+            def execute(self): return type("R", (), {"data": []})()
+
+        class SB:
+            def table(self, name): return Q()
+        vl._remote_rows(SB(), "svg")
+        assert vl._FORMAT_FILTER_UNAVAILABLE is False
