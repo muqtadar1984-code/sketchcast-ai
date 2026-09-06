@@ -11,7 +11,7 @@ catalogue_key_cases.json``, sha256-pinned, mirroring the premium-voice table).
 
 The rule, in order — stdlib only, no locale, no dictionary:
 
-  1. NFKD, drop combining marks (Unicode category Mn), lower-case
+  1. NFKD, drop every Unicode mark (categories Mn, Mc, Me — the app's \p{M}), lower-case
      ("Réfraction" → "refraction", full-width digits → ASCII);
   2. ``&`` → " and " ("Acids, Bases & Salts" reads as its spoken form);
   3. every run of characters outside [a-z0-9] → ONE "_";
@@ -73,7 +73,9 @@ def canonical_key(text: object) -> str:
     if text is None:
         return ""
     s = unicodedata.normalize("NFKD", str(text))
-    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+    # Every mark category, not only Mn: a spacing or enclosing mark between
+    # two Latin letters must vanish (app: \p{M}), not become a separator.
+    s = "".join(ch for ch in s if not unicodedata.category(ch).startswith("M"))
     s = s.lower()
     s = s.replace("&", " and ")
     s = _NON_KEY.sub("_", s).strip("_")

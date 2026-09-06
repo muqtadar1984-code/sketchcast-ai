@@ -28,7 +28,7 @@ from catalogue.key import canonical_key, singular_token
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalogue_key_cases.json"
 # Bump ONLY when the app's copy is changed to match, byte for byte.
-CATALOGUE_KEY_CASES_SHA256 = "b392712ee147d8890410387daa5a475708e07391ae7943befbf3bab9bf7a782b"
+CATALOGUE_KEY_CASES_SHA256 = "599c789783ed0260d4d2f0615186976c2e9e495fe1afd34b1f955f31effe2275"
 
 
 def _canonical(raw: bytes) -> bytes:
