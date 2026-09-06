@@ -33,8 +33,9 @@ AUTO_VOICE_ID = "auto"
 
 # Tiers that unlock premium voices. An explicit allow-list: `promo` (the
 # expired launch trial, branch still live in plan_tier) and any unknown string
-# are FREE. Mirrors the app's plan vocabulary in migration 0086.
-PAID_TIERS = frozenset({"pro", "pro_plus", "family", "homeschool", "school"})
+# are FREE. Mirrors the app's plan vocabulary in migration 0086; `staff`
+# (0109: platform_admins members) hears the premium voices like a paid plan.
+PAID_TIERS = frozenset({"pro", "pro_plus", "family", "homeschool", "school", "staff"})
 
 _PROVIDERS = ("legacy", "google", "elevenlabs")
 
