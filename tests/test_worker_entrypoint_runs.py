@@ -31,7 +31,7 @@ def test_every_module_attribute_used_is_actually_imported():
     """
     offenders = []
     for pkg in ("worker", "shared", "agent3_scripts", "agent6_animation",
-                "agent8_render", "spike/scene_engine"):
+                "agent8_render", "spike/scene_engine", "catalogue"):
         for f in (ROOT / pkg).rglob("*.py"):
             src = f.read_text(encoding="utf-8", errors="replace")
             try:

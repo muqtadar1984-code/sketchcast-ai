@@ -1,4 +1,2 @@
-# The premium-voice truth table is pinned by sha256 in BOTH repos. Any EOL
-# conversion on checkout breaks that pin on Windows while changing nothing
-# the tests assert (measured 2026-09-05). Keep it byte-stable everywhere.
 tests/fixtures/premium_voice_cases.json -text
+tests/fixtures/catalogue_key_cases.json -text

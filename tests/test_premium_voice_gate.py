@@ -34,7 +34,7 @@ from tests.test_tts_gate import _ABSENT, _APIError, _SB, NO_COMP, wc  # noqa: F4
 
 FIXTURE = Path(__file__).parent / "fixtures" / "premium_voice_cases.json"
 # Bump ONLY when the app's copy is changed to match, byte for byte.
-PREMIUM_VOICE_CASES_SHA256 = "403e9119f81e9f67771dc36b7dcf287c24bec2a5c7d4e0efcdad51a69d22cad3"
+PREMIUM_VOICE_CASES_SHA256 = "5edb7d740ce81082c718fb8392b06ba4f1d7094af16eb35217d57b6ac5f2c3e3"
 
 def _canonical(raw: bytes) -> bytes:
     """The fixture's bytes with line endings normalised to LF.

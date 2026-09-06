@@ -1,7 +1,7 @@
 {
-  "_": "THE premium-voice truth table. One file, two copies, byte-identical: sketchcast-app/src/utils/__tests__/fixtures/premium-voice-cases.json and sketchcast/tests/fixtures/premium_voice_cases.json. Both tests assert the sha256 below, so editing one copy and not the other fails the other repo's suite. Change it only together with migration 0105.",
+  "_": "THE premium-voice truth table. One file, two copies, byte-identical: sketchcast-app/src/utils/__tests__/fixtures/premium-voice-cases.json and sketchcast/tests/fixtures/premium_voice_cases.json. Both tests assert the sha256 below, so editing one copy and not the other fails the other repo's suite. Change it only together with migration 0105 (0109 added the staff tier).",
   "threshold": 100000,
-  "paid_tiers": ["pro", "pro_plus", "family", "homeschool", "school"],
+  "paid_tiers": ["pro", "pro_plus", "family", "homeschool", "school", "staff"],
   "cases": [
     {
       "name": "comp override exactly at the threshold",
@@ -82,6 +82,15 @@
       "tier": "homeschool",
       "db_premium": true,
       "unlimited": false,
+      "expect_premium": true
+    },
+    {
+      "name": "staff (0109: an unrevoked platform_admins row; no plan, no caps, unlimited like school)",
+      "max_books": null,
+      "max_chapters": null,
+      "tier": "staff",
+      "db_premium": true,
+      "unlimited": true,
       "expect_premium": true
     },
     {

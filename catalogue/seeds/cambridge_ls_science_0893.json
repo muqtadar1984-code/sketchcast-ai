@@ -1,0 +1,2674 @@
+{
+  "curriculum": {
+    "code": "cambridge_ls_science_0893",
+    "name": "Cambridge Lower Secondary Science 0893",
+    "kind": "syllabus",
+    "country": "GB",
+    "edition": "2020 (first teaching 2021)",
+    "source_url": "https://www.cambridgeinternational.org/programmes-and-qualifications/cambridge-lower-secondary/curriculum/science/",
+    "partial": false,
+    "candidates": "none"
+  },
+  "nodes": [
+    {
+      "code": "7/Biology",
+      "grade": "7",
+      "strand": "Biology",
+      "sub_strand": null,
+      "title": "Biology",
+      "description": null,
+      "parent_code": null,
+      "sort": 1
+    },
+    {
+      "code": "7/Bs",
+      "grade": "7",
+      "strand": "Biology",
+      "sub_strand": "Structure and function",
+      "title": "Structure and function",
+      "description": null,
+      "parent_code": "7/Biology",
+      "sort": 2
+    },
+    {
+      "code": "7Bs.01",
+      "grade": "7",
+      "strand": "Biology",
+      "sub_strand": "Structure and function",
+      "title": "Understand that all organisms are made of cells and microorganisms are typically single celled.",
+      "description": "Understand that all organisms are made of cells and microorganisms are typically single celled.",
+      "parent_code": "7/Bs",
+      "sort": 3
+    },
+    {
+      "code": "7Bs.02",
+      "grade": "7",
+      "strand": "Biology",
+      "sub_strand": "Structure and function",
+      "title": "Identify and describe the functions of cell structures (limited to cell membrane, cytoplasm, nucleus, cell wall, chloroplast, mitochondria and sap vacuole).",
+      "description": "Identify and describe the functions of cell structures (limited to cell membrane, cytoplasm, nucleus, cell wall, chloroplast, mitochondria and sap vacuole).",
+      "parent_code": "7/Bs",
+      "sort": 4
+    },
+    {
+      "code": "7Bs.03",
+      "grade": "7",
+      "strand": "Biology",
+      "sub_strand": "Structure and function",
+      "title": "Explain how the structures of some specialised cells are related to their functions (including red blood cells, neurones, ciliated cells, root hair cells and palisade cells).",
+      "description": "Explain how the structures of some specialised cells are related to their functions (including red blood cells, neurones, ciliated cells, root hair cells and palisade cells).",
+      "parent_code": "7/Bs",
+      "sort": 5
+    },
+    {
+      "code": "7Bs.04",
+      "grade": "7",
+      "strand": "Biology",
+      "sub_strand": "Structure and function",
+      "title": "Describe the similarities and differences between the structures of plant and animal cells.",
+      "description": "Describe the similarities and differences between the structures of plant and animal cells.",
+      "parent_code": "7/Bs",
+      "sort": 6
+    },
+    {
+      "code": "7Bs.05",
+      "grade": "7",
+      "strand": "Biology",
+      "sub_strand": "Structure and function",
+      "title": "Understand that cells can be grouped together to form tissues, organs and organ systems.",
+      "description": "Understand that cells can be grouped together to form tissues, organs and organ systems.",
+      "parent_code": "7/Bs",
+      "sort": 7
+    },
+    {
+      "code": "7/Bp",
+      "grade": "7",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Life processes",
+      "description": null,
+      "parent_code": "7/Biology",
+      "sort": 8
+    },
+    {
+      "code": "7Bp.01",
+      "grade": "7",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Describe the seven characteristics of living organisms.",
+      "description": "Describe the seven characteristics of living organisms.",
+      "parent_code": "7/Bp",
+      "sort": 9
+    },
+    {
+      "code": "7Bp.02",
+      "grade": "7",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Discuss reasons for classifying viruses as living or non-living.",
+      "description": "Discuss reasons for classifying viruses as living or non-living.",
+      "parent_code": "7/Bp",
+      "sort": 10
+    },
+    {
+      "code": "7Bp.03",
+      "grade": "7",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Describe a species as a group of organisms that can reproduce to produce fertile offspring.",
+      "description": "Describe a species as a group of organisms that can reproduce to produce fertile offspring.",
+      "parent_code": "7/Bp",
+      "sort": 11
+    },
+    {
+      "code": "7Bp.04",
+      "grade": "7",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Use and construct dichotomous keys to classify species and groups of related organisms.",
+      "description": "Use and construct dichotomous keys to classify species and groups of related organisms.",
+      "parent_code": "7/Bp",
+      "sort": 12
+    },
+    {
+      "code": "7/Be",
+      "grade": "7",
+      "strand": "Biology",
+      "sub_strand": "Ecosystems",
+      "title": "Ecosystems",
+      "description": null,
+      "parent_code": "7/Biology",
+      "sort": 13
+    },
+    {
+      "code": "7Be.01",
+      "grade": "7",
+      "strand": "Biology",
+      "sub_strand": "Ecosystems",
+      "title": "Know and describe the ecological role some microorganisms have as decomposers.",
+      "description": "Know and describe the ecological role some microorganisms have as decomposers.",
+      "parent_code": "7/Be",
+      "sort": 14
+    },
+    {
+      "code": "7Be.02",
+      "grade": "7",
+      "strand": "Biology",
+      "sub_strand": "Ecosystems",
+      "title": "Construct and interpret food chains and webs which include microorganisms as decomposers.",
+      "description": "Construct and interpret food chains and webs which include microorganisms as decomposers.",
+      "parent_code": "7/Be",
+      "sort": 15
+    },
+    {
+      "code": "7/Chemistry",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": null,
+      "title": "Chemistry",
+      "description": null,
+      "parent_code": null,
+      "sort": 16
+    },
+    {
+      "code": "7/Cm",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Materials and their structure",
+      "description": null,
+      "parent_code": "7/Chemistry",
+      "sort": 17
+    },
+    {
+      "code": "7Cm.01",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Understand that all matter is made of atoms, with each different type of atom being a different element.",
+      "description": "Understand that all matter is made of atoms, with each different type of atom being a different element.",
+      "parent_code": "7/Cm",
+      "sort": 18
+    },
+    {
+      "code": "7Cm.02",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Know that the Periodic Table presents the known elements in an order.",
+      "description": "Know that the Periodic Table presents the known elements in an order.",
+      "parent_code": "7/Cm",
+      "sort": 19
+    },
+    {
+      "code": "7Cm.03",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Know metals and non-metals as the two main groupings of elements.",
+      "description": "Know metals and non-metals as the two main groupings of elements.",
+      "parent_code": "7/Cm",
+      "sort": 20
+    },
+    {
+      "code": "7Cm.04",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Describe the differences between elements, compounds and mixtures, including alloys as an example of a mixture.",
+      "description": "Describe the differences between elements, compounds and mixtures, including alloys as an example of a mixture.",
+      "parent_code": "7/Cm",
+      "sort": 21
+    },
+    {
+      "code": "7Cm.05",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Describe a vacuum as a space devoid of matter.",
+      "description": "Describe a vacuum as a space devoid of matter.",
+      "parent_code": "7/Cm",
+      "sort": 22
+    },
+    {
+      "code": "7Cm.06",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Describe the three states of matter as solid, liquid and gas in terms of the arrangement, separation and motion of particles.",
+      "description": "Describe the three states of matter as solid, liquid and gas in terms of the arrangement, separation and motion of particles.",
+      "parent_code": "7/Cm",
+      "sort": 23
+    },
+    {
+      "code": "7Cm.07",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Use the particle model to represent elements, compounds and mixtures.",
+      "description": "Use the particle model to represent elements, compounds and mixtures.",
+      "parent_code": "7/Cm",
+      "sort": 24
+    },
+    {
+      "code": "7/Cp",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Properties of materials",
+      "description": null,
+      "parent_code": "7/Chemistry",
+      "sort": 25
+    },
+    {
+      "code": "7Cp.01",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Understand that all substances have chemical properties and physical properties.",
+      "description": "Understand that all substances have chemical properties and physical properties.",
+      "parent_code": "7/Cp",
+      "sort": 26
+    },
+    {
+      "code": "7Cp.02",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Understand that the acidity or alkalinity of a substance is a chemical property and is measured by pH.",
+      "description": "Understand that the acidity or alkalinity of a substance is a chemical property and is measured by pH.",
+      "parent_code": "7/Cp",
+      "sort": 27
+    },
+    {
+      "code": "7Cp.03",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Use indicators (including Universal Indicator and litmus) to distinguish between acidic, alkaline and neutral solutions.",
+      "description": "Use indicators (including Universal Indicator and litmus) to distinguish between acidic, alkaline and neutral solutions.",
+      "parent_code": "7/Cp",
+      "sort": 28
+    },
+    {
+      "code": "7Cp.04",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Use tests to identify hydrogen, carbon dioxide and oxygen gases.",
+      "description": "Use tests to identify hydrogen, carbon dioxide and oxygen gases.",
+      "parent_code": "7/Cp",
+      "sort": 29
+    },
+    {
+      "code": "7Cp.05",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Describe common differences between metals and non-metals, referring to their physical properties.",
+      "description": "Describe common differences between metals and non-metals, referring to their physical properties.",
+      "parent_code": "7/Cp",
+      "sort": 30
+    },
+    {
+      "code": "7Cp.06",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Understand that alloys are mixtures that have different chemical and physical properties from the constituent substances.",
+      "description": "Understand that alloys are mixtures that have different chemical and physical properties from the constituent substances.",
+      "parent_code": "7/Cp",
+      "sort": 31
+    },
+    {
+      "code": "7Cp.07",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Use the particle model to explain the difference in hardness between pure metals and their alloys.",
+      "description": "Use the particle model to explain the difference in hardness between pure metals and their alloys.",
+      "parent_code": "7/Cp",
+      "sort": 32
+    },
+    {
+      "code": "7/Cc",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Changes to materials",
+      "description": null,
+      "parent_code": "7/Chemistry",
+      "sort": 33
+    },
+    {
+      "code": "7Cc.01",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Identify whether a chemical reaction has taken place through observations of the loss of reactants and/or the formation of products which have different properties to the reactants (including evolving a gas, formation of a precipitate or change of colour).",
+      "description": "Identify whether a chemical reaction has taken place through observations of the loss of reactants and/or the formation of products which have different properties to the reactants (including evolving a gas, formation of a precipitate or change of colour).",
+      "parent_code": "7/Cc",
+      "sort": 34
+    },
+    {
+      "code": "7Cc.02",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Explain why a precipitate forms, in terms of a chemical reaction between soluble reactants forming at least one insoluble product.",
+      "description": "Explain why a precipitate forms, in terms of a chemical reaction between soluble reactants forming at least one insoluble product.",
+      "parent_code": "7/Cc",
+      "sort": 35
+    },
+    {
+      "code": "7Cc.03",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Use the particle model to describe chemical reactions.",
+      "description": "Use the particle model to describe chemical reactions.",
+      "parent_code": "7/Cc",
+      "sort": 36
+    },
+    {
+      "code": "7Cc.04",
+      "grade": "7",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Describe neutralisation reactions in terms of change of pH.",
+      "description": "Describe neutralisation reactions in terms of change of pH.",
+      "parent_code": "7/Cc",
+      "sort": 37
+    },
+    {
+      "code": "7/Physics",
+      "grade": "7",
+      "strand": "Physics",
+      "sub_strand": null,
+      "title": "Physics",
+      "description": null,
+      "parent_code": null,
+      "sort": 38
+    },
+    {
+      "code": "7/Pf",
+      "grade": "7",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Forces and energy",
+      "description": null,
+      "parent_code": "7/Physics",
+      "sort": 39
+    },
+    {
+      "code": "7Pf.01",
+      "grade": "7",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Describe changes in energy that are a result of an event or process.",
+      "description": "Describe changes in energy that are a result of an event or process.",
+      "parent_code": "7/Pf",
+      "sort": 40
+    },
+    {
+      "code": "7Pf.02",
+      "grade": "7",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Know that energy tends to dissipate and in doing so it becomes less useful.",
+      "description": "Know that energy tends to dissipate and in doing so it becomes less useful.",
+      "parent_code": "7/Pf",
+      "sort": 41
+    },
+    {
+      "code": "7Pf.03",
+      "grade": "7",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Describe gravity as a force of attraction between any two objects and describe how the size of the force is related to the masses of the objects.",
+      "description": "Describe gravity as a force of attraction between any two objects and describe how the size of the force is related to the masses of the objects.",
+      "parent_code": "7/Pf",
+      "sort": 42
+    },
+    {
+      "code": "7Pf.04",
+      "grade": "7",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Understand that there is no air resistance to oppose movement in a vacuum.",
+      "description": "Understand that there is no air resistance to oppose movement in a vacuum.",
+      "parent_code": "7/Pf",
+      "sort": 43
+    },
+    {
+      "code": "7/Ps",
+      "grade": "7",
+      "strand": "Physics",
+      "sub_strand": "Electricity and magnetism",
+      "title": "Electricity and magnetism",
+      "description": null,
+      "parent_code": "7/Physics",
+      "sort": 44
+    },
+    {
+      "code": "7Ps.01",
+      "grade": "7",
+      "strand": "Physics",
+      "sub_strand": "Electricity and magnetism",
+      "title": "Describe the vibration of particles in a sound wave and explain why sound does not travel in a vacuum.",
+      "description": "Describe the vibration of particles in a sound wave and explain why sound does not travel in a vacuum.",
+      "parent_code": "7/Ps",
+      "sort": 45
+    },
+    {
+      "code": "7Ps.02",
+      "grade": "7",
+      "strand": "Physics",
+      "sub_strand": "Electricity and magnetism",
+      "title": "Explain echoes in terms of the reflection of sound waves.",
+      "description": "Explain echoes in terms of the reflection of sound waves.",
+      "parent_code": "7/Ps",
+      "sort": 46
+    },
+    {
+      "code": "7/Earth and Space",
+      "grade": "7",
+      "strand": "Earth and Space",
+      "sub_strand": null,
+      "title": "Earth and Space",
+      "description": null,
+      "parent_code": null,
+      "sort": 47
+    },
+    {
+      "code": "7/ESp",
+      "grade": "7",
+      "strand": "Earth and Space",
+      "sub_strand": "Planet Earth",
+      "title": "Planet Earth",
+      "description": null,
+      "parent_code": "7/Earth and Space",
+      "sort": 48
+    },
+    {
+      "code": "7ESp.01",
+      "grade": "7",
+      "strand": "Earth and Space",
+      "sub_strand": "Planet Earth",
+      "title": "Describe the model of plate tectonics, in which a solid outer layer (made up of the crust and uppermost mantle) moves because of flow lower in the mantle.",
+      "description": "Describe the model of plate tectonics, in which a solid outer layer (made up of the crust and uppermost mantle) moves because of flow lower in the mantle.",
+      "parent_code": "7/ESp",
+      "sort": 49
+    },
+    {
+      "code": "7ESp.02",
+      "grade": "7",
+      "strand": "Earth and Space",
+      "sub_strand": "Planet Earth",
+      "title": "Describe how earthquakes, volcanoes and fold mountains occur near the boundaries of tectonic plates.",
+      "description": "Describe how earthquakes, volcanoes and fold mountains occur near the boundaries of tectonic plates.",
+      "parent_code": "7/ESp",
+      "sort": 50
+    },
+    {
+      "code": "7ESp.03",
+      "grade": "7",
+      "strand": "Earth and Space",
+      "sub_strand": "Planet Earth",
+      "title": "Know that clean, dry air contains 78% nitrogen, 21% oxygen and small amounts of carbon dioxide and other gases, and this composition can change because of pollution and natural emissions.",
+      "description": "Know that clean, dry air contains 78% nitrogen, 21% oxygen and small amounts of carbon dioxide and other gases, and this composition can change because of pollution and natural emissions.",
+      "parent_code": "7/ESp",
+      "sort": 51
+    },
+    {
+      "code": "7/ESc",
+      "grade": "7",
+      "strand": "Earth and Space",
+      "sub_strand": "Cycles on Earth",
+      "title": "Cycles on Earth",
+      "description": null,
+      "parent_code": "7/Earth and Space",
+      "sort": 52
+    },
+    {
+      "code": "7ESc.01",
+      "grade": "7",
+      "strand": "Earth and Space",
+      "sub_strand": "Cycles on Earth",
+      "title": "Describe the water cycle (limited to evaporation, condensation, precipitation, water runoff, open water and groundwater).",
+      "description": "Describe the water cycle (limited to evaporation, condensation, precipitation, water runoff, open water and groundwater).",
+      "parent_code": "7/ESc",
+      "sort": 53
+    },
+    {
+      "code": "7/ESs",
+      "grade": "7",
+      "strand": "Earth and Space",
+      "sub_strand": "Earth in space",
+      "title": "Earth in space",
+      "description": null,
+      "parent_code": "7/Earth and Space",
+      "sort": 54
+    },
+    {
+      "code": "7ESs.01",
+      "grade": "7",
+      "strand": "Earth and Space",
+      "sub_strand": "Earth in space",
+      "title": "Describe how planets form from dust and gas, which are pulled together by gravity.",
+      "description": "Describe how planets form from dust and gas, which are pulled together by gravity.",
+      "parent_code": "7/ESs",
+      "sort": 55
+    },
+    {
+      "code": "7ESs.02",
+      "grade": "7",
+      "strand": "Earth and Space",
+      "sub_strand": "Earth in space",
+      "title": "Know that gravity is the force that holds components of the Solar System in orbit around the Sun.",
+      "description": "Know that gravity is the force that holds components of the Solar System in orbit around the Sun.",
+      "parent_code": "7/ESs",
+      "sort": 56
+    },
+    {
+      "code": "7ESs.03",
+      "grade": "7",
+      "strand": "Earth and Space",
+      "sub_strand": "Earth in space",
+      "title": "Describe tidal forces on Earth as a consequence of the gravitational attraction between the Earth, Moon and Sun.",
+      "description": "Describe tidal forces on Earth as a consequence of the gravitational attraction between the Earth, Moon and Sun.",
+      "parent_code": "7/ESs",
+      "sort": 57
+    },
+    {
+      "code": "7ESs.04",
+      "grade": "7",
+      "strand": "Earth and Space",
+      "sub_strand": "Earth in space",
+      "title": "Explain how solar and lunar eclipses happen.",
+      "description": "Explain how solar and lunar eclipses happen.",
+      "parent_code": "7/ESs",
+      "sort": 58
+    },
+    {
+      "code": "7/Thinking and Working Scientifically",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": null,
+      "title": "Thinking and Working Scientifically",
+      "description": null,
+      "parent_code": null,
+      "sort": 59
+    },
+    {
+      "code": "7/TWSm",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Models and representations",
+      "title": "Models and representations",
+      "description": null,
+      "parent_code": "7/Thinking and Working Scientifically",
+      "sort": 60
+    },
+    {
+      "code": "7TWSm.01",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Models and representations",
+      "title": "Describe the strengths and limitations of a model.",
+      "description": "Describe the strengths and limitations of a model.",
+      "parent_code": "7/TWSm",
+      "sort": 61
+    },
+    {
+      "code": "7TWSm.02",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Models and representations",
+      "title": "Use symbols and formulae to represent scientific ideas.",
+      "description": "Use symbols and formulae to represent scientific ideas.",
+      "parent_code": "7/TWSm",
+      "sort": 62
+    },
+    {
+      "code": "7/TWSp",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Scientific enquiry: purpose and planning",
+      "description": null,
+      "parent_code": "7/Thinking and Working Scientifically",
+      "sort": 63
+    },
+    {
+      "code": "7TWSp.01",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Identify whether a given hypothesis is testable.",
+      "description": "Identify whether a given hypothesis is testable.",
+      "parent_code": "7/TWSp",
+      "sort": 64
+    },
+    {
+      "code": "7TWSp.02",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Describe how scientific hypotheses can be supported or contradicted by evidence from an enquiry.",
+      "description": "Describe how scientific hypotheses can be supported or contradicted by evidence from an enquiry.",
+      "parent_code": "7/TWSp",
+      "sort": 65
+    },
+    {
+      "code": "7TWSp.03",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Make predictions of likely outcomes for a scientific enquiry based on scientific knowledge and understanding.",
+      "description": "Make predictions of likely outcomes for a scientific enquiry based on scientific knowledge and understanding.",
+      "parent_code": "7/TWSp",
+      "sort": 66
+    },
+    {
+      "code": "7TWSp.04",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Plan a range of investigations of different types, while considering variables appropriately, and recognise that not all investigations can be fair tests.",
+      "description": "Plan a range of investigations of different types, while considering variables appropriately, and recognise that not all investigations can be fair tests.",
+      "parent_code": "7/TWSp",
+      "sort": 67
+    },
+    {
+      "code": "7TWSp.05",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Know the meaning of hazard symbols, and consider them when planning practical work.",
+      "description": "Know the meaning of hazard symbols, and consider them when planning practical work.",
+      "parent_code": "7/TWSp",
+      "sort": 68
+    },
+    {
+      "code": "7/TWSc",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Carrying out scientific enquiry",
+      "description": null,
+      "parent_code": "7/Thinking and Working Scientifically",
+      "sort": 69
+    },
+    {
+      "code": "7TWSc.01",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Sort, group and classify phenomena, objects, materials and organisms through testing, observation, using secondary information, and making and using keys.",
+      "description": "Sort, group and classify phenomena, objects, materials and organisms through testing, observation, using secondary information, and making and using keys.",
+      "parent_code": "7/TWSc",
+      "sort": 70
+    },
+    {
+      "code": "7TWSc.02",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Decide what equipment is required to carry out an investigation or experiment and use it appropriately.",
+      "description": "Decide what equipment is required to carry out an investigation or experiment and use it appropriately.",
+      "parent_code": "7/TWSc",
+      "sort": 71
+    },
+    {
+      "code": "7TWSc.03",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Evaluate whether measurements and observations have been repeated sufficiently to be reliable.",
+      "description": "Evaluate whether measurements and observations have been repeated sufficiently to be reliable.",
+      "parent_code": "7/TWSc",
+      "sort": 72
+    },
+    {
+      "code": "7TWSc.04",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Take appropriately accurate and precise measurements, explaining why accuracy and precision are important.",
+      "description": "Take appropriately accurate and precise measurements, explaining why accuracy and precision are important.",
+      "parent_code": "7/TWSc",
+      "sort": 73
+    },
+    {
+      "code": "7TWSc.05",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Carry out practical work safely.",
+      "description": "Carry out practical work safely.",
+      "parent_code": "7/TWSc",
+      "sort": 74
+    },
+    {
+      "code": "7TWSc.06",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Evaluate a range of secondary information sources for their relevance and know that some sources may be biased.",
+      "description": "Evaluate a range of secondary information sources for their relevance and know that some sources may be biased.",
+      "parent_code": "7/TWSc",
+      "sort": 75
+    },
+    {
+      "code": "7TWSc.07",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Collect and record sufficient observations and/or measurements in an appropriate form.",
+      "description": "Collect and record sufficient observations and/or measurements in an appropriate form.",
+      "parent_code": "7/TWSc",
+      "sort": 76
+    },
+    {
+      "code": "7/TWSa",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Scientific enquiry: analysis, evaluation and conclusions",
+      "description": null,
+      "parent_code": "7/Thinking and Working Scientifically",
+      "sort": 77
+    },
+    {
+      "code": "7TWSa.01",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Describe the accuracy of predictions, based on results, and suggest why they were or were not accurate.",
+      "description": "Describe the accuracy of predictions, based on results, and suggest why they were or were not accurate.",
+      "parent_code": "7/TWSa",
+      "sort": 78
+    },
+    {
+      "code": "7TWSa.02",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Describe trends and patterns in results, including identifying any anomalous results.",
+      "description": "Describe trends and patterns in results, including identifying any anomalous results.",
+      "parent_code": "7/TWSa",
+      "sort": 79
+    },
+    {
+      "code": "7TWSa.03",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Make conclusions by interpreting results and explain the limitations of the conclusions.",
+      "description": "Make conclusions by interpreting results and explain the limitations of the conclusions.",
+      "parent_code": "7/TWSa",
+      "sort": 80
+    },
+    {
+      "code": "7TWSa.04",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Evaluate experiments and investigations, and suggest improvements, explaining any proposed changes.",
+      "description": "Evaluate experiments and investigations, and suggest improvements, explaining any proposed changes.",
+      "parent_code": "7/TWSa",
+      "sort": 81
+    },
+    {
+      "code": "7TWSa.05",
+      "grade": "7",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Present and interpret observations and measurements appropriately.",
+      "description": "Present and interpret observations and measurements appropriately.",
+      "parent_code": "7/TWSa",
+      "sort": 82
+    },
+    {
+      "code": "7/Science in Context",
+      "grade": "7",
+      "strand": "Science in Context",
+      "sub_strand": null,
+      "title": "Science in Context",
+      "description": null,
+      "parent_code": null,
+      "sort": 83
+    },
+    {
+      "code": "7/SIC",
+      "grade": "7",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Science in context",
+      "description": null,
+      "parent_code": "7/Science in Context",
+      "sort": 84
+    },
+    {
+      "code": "7SIC.01",
+      "grade": "7",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Discuss how scientific knowledge is developed through collective understanding and scrutiny over time.",
+      "description": "Discuss how scientific knowledge is developed through collective understanding and scrutiny over time.",
+      "parent_code": "7/SIC",
+      "sort": 85
+    },
+    {
+      "code": "7SIC.02",
+      "grade": "7",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Describe how science is applied across societies and industries, and in research.",
+      "description": "Describe how science is applied across societies and industries, and in research.",
+      "parent_code": "7/SIC",
+      "sort": 86
+    },
+    {
+      "code": "7SIC.03",
+      "grade": "7",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Evaluate issues which involve and/or require scientific understanding.",
+      "description": "Evaluate issues which involve and/or require scientific understanding.",
+      "parent_code": "7/SIC",
+      "sort": 87
+    },
+    {
+      "code": "7SIC.04",
+      "grade": "7",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Describe how people develop and use scientific understanding, as individuals and through collaboration, e.g. through peer-review.",
+      "description": "Describe how people develop and use scientific understanding, as individuals and through collaboration, e.g. through peer-review.",
+      "parent_code": "7/SIC",
+      "sort": 88
+    },
+    {
+      "code": "7SIC.05",
+      "grade": "7",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Discuss how the uses of science can have a global environmental impact.",
+      "description": "Discuss how the uses of science can have a global environmental impact.",
+      "parent_code": "7/SIC",
+      "sort": 89
+    },
+    {
+      "code": "8/Biology",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": null,
+      "title": "Biology",
+      "description": null,
+      "parent_code": null,
+      "sort": 90
+    },
+    {
+      "code": "8/Bs",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": "Structure and function",
+      "title": "Structure and function",
+      "description": null,
+      "parent_code": "8/Biology",
+      "sort": 91
+    },
+    {
+      "code": "8Bs.01",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": "Structure and function",
+      "title": "Identify ball-and-socket and hinge joints, and explain how antagonistic muscles move the bones at a hinge joint.",
+      "description": "Identify ball-and-socket and hinge joints, and explain how antagonistic muscles move the bones at a hinge joint.",
+      "parent_code": "8/Bs",
+      "sort": 92
+    },
+    {
+      "code": "8Bs.02",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": "Structure and function",
+      "title": "Describe the components of blood and their functions (limited to red blood cells transporting oxygen, white blood cells protecting against pathogens and plasma transporting blood cells, nutrients and carbon dioxide).",
+      "description": "Describe the components of blood and their functions (limited to red blood cells transporting oxygen, white blood cells protecting against pathogens and plasma transporting blood cells, nutrients and carbon dioxide).",
+      "parent_code": "8/Bs",
+      "sort": 93
+    },
+    {
+      "code": "8Bs.03",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": "Structure and function",
+      "title": "Describe how the structure of the human respiratory system is related to its function of gas exchange (in terms of lung structure and the action of the diaphragm and intercostal muscles) and understand the difference between breathing and respiration.",
+      "description": "Describe how the structure of the human respiratory system is related to its function of gas exchange (in terms of lung structure and the action of the diaphragm and intercostal muscles) and understand the difference between breathing and respiration.",
+      "parent_code": "8/Bs",
+      "sort": 94
+    },
+    {
+      "code": "8Bs.04",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": "Structure and function",
+      "title": "Describe the diffusion of oxygen and carbon dioxide between blood and the air in the lungs.",
+      "description": "Describe the diffusion of oxygen and carbon dioxide between blood and the air in the lungs.",
+      "parent_code": "8/Bs",
+      "sort": 95
+    },
+    {
+      "code": "8/Bp",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Life processes",
+      "description": null,
+      "parent_code": "8/Biology",
+      "sort": 96
+    },
+    {
+      "code": "8Bp.01",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Identify the constituents of a balanced diet for humans as including protein, carbohydrates, fats and oils, water, minerals (limited to calcium and iron) and vitamins (limited to A, C and D), and describe the functions of these nutrients.",
+      "description": "Identify the constituents of a balanced diet for humans as including protein, carbohydrates, fats and oils, water, minerals (limited to calcium and iron) and vitamins (limited to A, C and D), and describe the functions of these nutrients.",
+      "parent_code": "8/Bp",
+      "sort": 97
+    },
+    {
+      "code": "8Bp.02",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Understand that carbohydrates and fats can be used as a store of energy in animals, and animals consume food to obtain energy and nutrients.",
+      "description": "Understand that carbohydrates and fats can be used as a store of energy in animals, and animals consume food to obtain energy and nutrients.",
+      "parent_code": "8/Bp",
+      "sort": 98
+    },
+    {
+      "code": "8Bp.03",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Discuss how human growth, development and health can be affected by lifestyle, including diet and smoking.",
+      "description": "Discuss how human growth, development and health can be affected by lifestyle, including diet and smoking.",
+      "parent_code": "8/Bp",
+      "sort": 99
+    },
+    {
+      "code": "8Bp.04",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Know that aerobic respiration occurs in the mitochondria of plant and animal cells, and gives a controlled release of energy.",
+      "description": "Know that aerobic respiration occurs in the mitochondria of plant and animal cells, and gives a controlled release of energy.",
+      "parent_code": "8/Bp",
+      "sort": 100
+    },
+    {
+      "code": "8Bp.05",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Know and use the summary word equation for aerobic respiration (glucose + oxygen -> carbon dioxide + water).",
+      "description": "Know and use the summary word equation for aerobic respiration (glucose + oxygen -> carbon dioxide + water).",
+      "parent_code": "8/Bp",
+      "sort": 101
+    },
+    {
+      "code": "8/Be",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": "Ecosystems",
+      "title": "Ecosystems",
+      "description": null,
+      "parent_code": "8/Biology",
+      "sort": 102
+    },
+    {
+      "code": "8Be.01",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": "Ecosystems",
+      "title": "Identify different ecosystems on the Earth, recognising the variety of habitats that exist within an ecosystem.",
+      "description": "Identify different ecosystems on the Earth, recognising the variety of habitats that exist within an ecosystem.",
+      "parent_code": "8/Be",
+      "sort": 103
+    },
+    {
+      "code": "8Be.02",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": "Ecosystems",
+      "title": "Describe the impact of the bioaccumulation of toxic substances on an ecosystem.",
+      "description": "Describe the impact of the bioaccumulation of toxic substances on an ecosystem.",
+      "parent_code": "8/Be",
+      "sort": 104
+    },
+    {
+      "code": "8Be.03",
+      "grade": "8",
+      "strand": "Biology",
+      "sub_strand": "Ecosystems",
+      "title": "Describe how a new and/or invasive species can affect other organisms and an ecosystem.",
+      "description": "Describe how a new and/or invasive species can affect other organisms and an ecosystem.",
+      "parent_code": "8/Be",
+      "sort": 105
+    },
+    {
+      "code": "8/Chemistry",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": null,
+      "title": "Chemistry",
+      "description": null,
+      "parent_code": null,
+      "sort": 106
+    },
+    {
+      "code": "8/Cm",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Materials and their structure",
+      "description": null,
+      "parent_code": "8/Chemistry",
+      "sort": 107
+    },
+    {
+      "code": "8Cm.01",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Describe the Rutherford model of the structure of an atom.",
+      "description": "Describe the Rutherford model of the structure of an atom.",
+      "parent_code": "8/Cm",
+      "sort": 108
+    },
+    {
+      "code": "8Cm.02",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Know that electrons have negative charge, protons have positive charge and neutrons have no charge.",
+      "description": "Know that electrons have negative charge, protons have positive charge and neutrons have no charge.",
+      "parent_code": "8/Cm",
+      "sort": 109
+    },
+    {
+      "code": "8Cm.03",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Know that the electrostatic attraction between positive and negative charge is what holds together individual atoms.",
+      "description": "Know that the electrostatic attraction between positive and negative charge is what holds together individual atoms.",
+      "parent_code": "8/Cm",
+      "sort": 110
+    },
+    {
+      "code": "8Cm.04",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Know that purity is a way to describe how much of a specific chemical is in a mixture.",
+      "description": "Know that purity is a way to describe how much of a specific chemical is in a mixture.",
+      "parent_code": "8/Cm",
+      "sort": 111
+    },
+    {
+      "code": "8/Cp",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Properties of materials",
+      "description": null,
+      "parent_code": "8/Chemistry",
+      "sort": 112
+    },
+    {
+      "code": "8Cp.01",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Understand that the concentration of a solution relates to how many particles of the solute are present in a volume of the solvent.",
+      "description": "Understand that the concentration of a solution relates to how many particles of the solute are present in a volume of the solvent.",
+      "parent_code": "8/Cp",
+      "sort": 113
+    },
+    {
+      "code": "8Cp.02",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Describe how paper chromatography can be used to separate and identify substances in a sample.",
+      "description": "Describe how paper chromatography can be used to separate and identify substances in a sample.",
+      "parent_code": "8/Cp",
+      "sort": 114
+    },
+    {
+      "code": "8/Cc",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Changes to materials",
+      "description": null,
+      "parent_code": "8/Chemistry",
+      "sort": 115
+    },
+    {
+      "code": "8Cc.01",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Use word equations to describe reactions.",
+      "description": "Use word equations to describe reactions.",
+      "parent_code": "8/Cc",
+      "sort": 116
+    },
+    {
+      "code": "8Cc.02",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Know that some processes and reactions are endothermic or exothermic, and this can be identified by temperature change.",
+      "description": "Know that some processes and reactions are endothermic or exothermic, and this can be identified by temperature change.",
+      "parent_code": "8/Cc",
+      "sort": 117
+    },
+    {
+      "code": "8Cc.03",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Describe the reactivity of metals (limited to sodium, potassium, calcium, magnesium, zinc, iron, copper, gold and silver) with oxygen, water and dilute acids.",
+      "description": "Describe the reactivity of metals (limited to sodium, potassium, calcium, magnesium, zinc, iron, copper, gold and silver) with oxygen, water and dilute acids.",
+      "parent_code": "8/Cc",
+      "sort": 118
+    },
+    {
+      "code": "8Cc.04",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Know that reactions do not always lead to a single pure product and that sometimes a reaction will produce an impure mixture of products.",
+      "description": "Know that reactions do not always lead to a single pure product and that sometimes a reaction will produce an impure mixture of products.",
+      "parent_code": "8/Cc",
+      "sort": 119
+    },
+    {
+      "code": "8Cc.05",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Describe how the solubility of different salts varies with temperature.",
+      "description": "Describe how the solubility of different salts varies with temperature.",
+      "parent_code": "8/Cc",
+      "sort": 120
+    },
+    {
+      "code": "8Cc.06",
+      "grade": "8",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Understand that some substances are generally unreactive and can be described as inert.",
+      "description": "Understand that some substances are generally unreactive and can be described as inert.",
+      "parent_code": "8/Cc",
+      "sort": 121
+    },
+    {
+      "code": "8/Physics",
+      "grade": "8",
+      "strand": "Physics",
+      "sub_strand": null,
+      "title": "Physics",
+      "description": null,
+      "parent_code": null,
+      "sort": 122
+    },
+    {
+      "code": "8/Pf",
+      "grade": "8",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Forces and energy",
+      "description": null,
+      "parent_code": "8/Physics",
+      "sort": 123
+    },
+    {
+      "code": "8Pf.01",
+      "grade": "8",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Calculate speed (speed = distance / time).",
+      "description": "Calculate speed (speed = distance / time).",
+      "parent_code": "8/Pf",
+      "sort": 124
+    },
+    {
+      "code": "8Pf.02",
+      "grade": "8",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Interpret and draw simple distance / time graphs.",
+      "description": "Interpret and draw simple distance / time graphs.",
+      "parent_code": "8/Pf",
+      "sort": 125
+    },
+    {
+      "code": "8Pf.03",
+      "grade": "8",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Describe the effects of balanced and unbalanced forces on motion.",
+      "description": "Describe the effects of balanced and unbalanced forces on motion.",
+      "parent_code": "8/Pf",
+      "sort": 126
+    },
+    {
+      "code": "8Pf.04",
+      "grade": "8",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Identify and calculate turning forces (moment = force x distance).",
+      "description": "Identify and calculate turning forces (moment = force x distance).",
+      "parent_code": "8/Pf",
+      "sort": 127
+    },
+    {
+      "code": "8Pf.05",
+      "grade": "8",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Explain that pressure is caused by the action of a force, exerted by a substance, on an area (pressure = force / area).",
+      "description": "Explain that pressure is caused by the action of a force, exerted by a substance, on an area (pressure = force / area).",
+      "parent_code": "8/Pf",
+      "sort": 128
+    },
+    {
+      "code": "8Pf.06",
+      "grade": "8",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Use particle theory to explain pressures in gases and liquids (qualitative only).",
+      "description": "Use particle theory to explain pressures in gases and liquids (qualitative only).",
+      "parent_code": "8/Pf",
+      "sort": 129
+    },
+    {
+      "code": "8Pf.07",
+      "grade": "8",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Describe the diffusion of gases and liquids as the intermingling of substances by the movement of particles.",
+      "description": "Describe the diffusion of gases and liquids as the intermingling of substances by the movement of particles.",
+      "parent_code": "8/Pf",
+      "sort": 130
+    },
+    {
+      "code": "8/Ps",
+      "grade": "8",
+      "strand": "Physics",
+      "sub_strand": "Electricity and magnetism",
+      "title": "Electricity and magnetism",
+      "description": null,
+      "parent_code": "8/Physics",
+      "sort": 131
+    },
+    {
+      "code": "8Ps.01",
+      "grade": "8",
+      "strand": "Physics",
+      "sub_strand": "Electricity and magnetism",
+      "title": "Describe reflection at a plane surface and use the law of reflection.",
+      "description": "Describe reflection at a plane surface and use the law of reflection.",
+      "parent_code": "8/Ps",
+      "sort": 132
+    },
+    {
+      "code": "8Ps.02",
+      "grade": "8",
+      "strand": "Physics",
+      "sub_strand": "Electricity and magnetism",
+      "title": "Describe refraction of light at the boundary between air and glass or air and water in terms of change of speed.",
+      "description": "Describe refraction of light at the boundary between air and glass or air and water in terms of change of speed.",
+      "parent_code": "8/Ps",
+      "sort": 133
+    },
+    {
+      "code": "8Ps.03",
+      "grade": "8",
+      "strand": "Physics",
+      "sub_strand": "Electricity and magnetism",
+      "title": "Know that white light is made of many colours and this can be shown through the dispersion of white light, using a prism.",
+      "description": "Know that white light is made of many colours and this can be shown through the dispersion of white light, using a prism.",
+      "parent_code": "8/Ps",
+      "sort": 134
+    },
+    {
+      "code": "8Ps.04",
+      "grade": "8",
+      "strand": "Physics",
+      "sub_strand": "Electricity and magnetism",
+      "title": "Describe how colours of light can be added, subtracted, absorbed and reflected.",
+      "description": "Describe how colours of light can be added, subtracted, absorbed and reflected.",
+      "parent_code": "8/Ps",
+      "sort": 135
+    },
+    {
+      "code": "8/Earth and Space",
+      "grade": "8",
+      "strand": "Earth and Space",
+      "sub_strand": null,
+      "title": "Earth and Space",
+      "description": null,
+      "parent_code": null,
+      "sort": 136
+    },
+    {
+      "code": "8/ESp",
+      "grade": "8",
+      "strand": "Earth and Space",
+      "sub_strand": "Planet Earth",
+      "title": "Planet Earth",
+      "description": null,
+      "parent_code": "8/Earth and Space",
+      "sort": 137
+    },
+    {
+      "code": "8ESp.01",
+      "grade": "8",
+      "strand": "Earth and Space",
+      "sub_strand": "Planet Earth",
+      "title": "Know that the reason the Earth has a magnetic field is that the core acts as a magnet.",
+      "description": "Know that the reason the Earth has a magnetic field is that the core acts as a magnet.",
+      "parent_code": "8/ESp",
+      "sort": 138
+    },
+    {
+      "code": "8ESp.02",
+      "grade": "8",
+      "strand": "Earth and Space",
+      "sub_strand": "Planet Earth",
+      "title": "Identify renewable resources (including wind, tidal and solar power, and bioplastics) and non-renewable resources (including fossil fuels), and describe how humans use them.",
+      "description": "Identify renewable resources (including wind, tidal and solar power, and bioplastics) and non-renewable resources (including fossil fuels), and describe how humans use them.",
+      "parent_code": "8/ESp",
+      "sort": 139
+    },
+    {
+      "code": "8/ESc",
+      "grade": "8",
+      "strand": "Earth and Space",
+      "sub_strand": "Cycles on Earth",
+      "title": "Cycles on Earth",
+      "description": null,
+      "parent_code": "8/Earth and Space",
+      "sort": 140
+    },
+    {
+      "code": "8ESc.01",
+      "grade": "8",
+      "strand": "Earth and Space",
+      "sub_strand": "Cycles on Earth",
+      "title": "Understand that there is evidence that the Earth's climate exists in a cycle between warm periods and ice ages, and the cycle takes place over long time periods.",
+      "description": "Understand that there is evidence that the Earth's climate exists in a cycle between warm periods and ice ages, and the cycle takes place over long time periods.",
+      "parent_code": "8/ESc",
+      "sort": 141
+    },
+    {
+      "code": "8ESc.02",
+      "grade": "8",
+      "strand": "Earth and Space",
+      "sub_strand": "Cycles on Earth",
+      "title": "Understand that the Earth's climate can change due to atmospheric change.",
+      "description": "Understand that the Earth's climate can change due to atmospheric change.",
+      "parent_code": "8/ESc",
+      "sort": 142
+    },
+    {
+      "code": "8ESc.03",
+      "grade": "8",
+      "strand": "Earth and Space",
+      "sub_strand": "Cycles on Earth",
+      "title": "Describe the difference between climate and weather.",
+      "description": "Describe the difference between climate and weather.",
+      "parent_code": "8/ESc",
+      "sort": 143
+    },
+    {
+      "code": "8/ESs",
+      "grade": "8",
+      "strand": "Earth and Space",
+      "sub_strand": "Earth in space",
+      "title": "Earth in space",
+      "description": null,
+      "parent_code": "8/Earth and Space",
+      "sort": 144
+    },
+    {
+      "code": "8ESs.01",
+      "grade": "8",
+      "strand": "Earth and Space",
+      "sub_strand": "Earth in space",
+      "title": "Describe a galaxy in terms of stellar dust and gas, stars and planetary systems.",
+      "description": "Describe a galaxy in terms of stellar dust and gas, stars and planetary systems.",
+      "parent_code": "8/ESs",
+      "sort": 145
+    },
+    {
+      "code": "8ESs.02",
+      "grade": "8",
+      "strand": "Earth and Space",
+      "sub_strand": "Earth in space",
+      "title": "Describe asteroids as rocks, smaller than planets, and describe their formation from rocks left over from the formation of a planetary system.",
+      "description": "Describe asteroids as rocks, smaller than planets, and describe their formation from rocks left over from the formation of a planetary system.",
+      "parent_code": "8/ESs",
+      "sort": 146
+    },
+    {
+      "code": "8/Thinking and Working Scientifically",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": null,
+      "title": "Thinking and Working Scientifically",
+      "description": null,
+      "parent_code": null,
+      "sort": 147
+    },
+    {
+      "code": "8/TWSm",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Models and representations",
+      "title": "Models and representations",
+      "description": null,
+      "parent_code": "8/Thinking and Working Scientifically",
+      "sort": 148
+    },
+    {
+      "code": "8TWSm.01",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Models and representations",
+      "title": "Describe what an analogy is and how it can be used as a model.",
+      "description": "Describe what an analogy is and how it can be used as a model.",
+      "parent_code": "8/TWSm",
+      "sort": 149
+    },
+    {
+      "code": "8TWSm.02",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Models and representations",
+      "title": "Use an existing analogy for a purpose.",
+      "description": "Use an existing analogy for a purpose.",
+      "parent_code": "8/TWSm",
+      "sort": 150
+    },
+    {
+      "code": "8TWSm.03",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Models and representations",
+      "title": "Use symbols and formulae to represent scientific ideas.",
+      "description": "Use symbols and formulae to represent scientific ideas.",
+      "parent_code": "8/TWSm",
+      "sort": 151
+    },
+    {
+      "code": "8/TWSp",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Scientific enquiry: purpose and planning",
+      "description": null,
+      "parent_code": "8/Thinking and Working Scientifically",
+      "sort": 152
+    },
+    {
+      "code": "8TWSp.01",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Identify whether a given hypothesis is testable.",
+      "description": "Identify whether a given hypothesis is testable.",
+      "parent_code": "8/TWSp",
+      "sort": 153
+    },
+    {
+      "code": "8TWSp.02",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Describe how scientific hypotheses can be supported or contradicted by evidence from an enquiry.",
+      "description": "Describe how scientific hypotheses can be supported or contradicted by evidence from an enquiry.",
+      "parent_code": "8/TWSp",
+      "sort": 154
+    },
+    {
+      "code": "8TWSp.03",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Make predictions of likely outcomes for a scientific enquiry based on scientific knowledge and understanding.",
+      "description": "Make predictions of likely outcomes for a scientific enquiry based on scientific knowledge and understanding.",
+      "parent_code": "8/TWSp",
+      "sort": 155
+    },
+    {
+      "code": "8TWSp.04",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Plan a range of investigations of different types, while considering variables appropriately, and recognise that not all investigations can be fair tests.",
+      "description": "Plan a range of investigations of different types, while considering variables appropriately, and recognise that not all investigations can be fair tests.",
+      "parent_code": "8/TWSp",
+      "sort": 156
+    },
+    {
+      "code": "8TWSp.05",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Make risk assessments for practical work to identify and control risks.",
+      "description": "Make risk assessments for practical work to identify and control risks.",
+      "parent_code": "8/TWSp",
+      "sort": 157
+    },
+    {
+      "code": "8/TWSc",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Carrying out scientific enquiry",
+      "description": null,
+      "parent_code": "8/Thinking and Working Scientifically",
+      "sort": 158
+    },
+    {
+      "code": "8TWSc.01",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Sort, group and classify phenomena, objects, materials and organisms through testing, observation, using secondary information, and making and using keys.",
+      "description": "Sort, group and classify phenomena, objects, materials and organisms through testing, observation, using secondary information, and making and using keys.",
+      "parent_code": "8/TWSc",
+      "sort": 159
+    },
+    {
+      "code": "8TWSc.02",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Decide what equipment is required to carry out an investigation or experiment and use it appropriately.",
+      "description": "Decide what equipment is required to carry out an investigation or experiment and use it appropriately.",
+      "parent_code": "8/TWSc",
+      "sort": 160
+    },
+    {
+      "code": "8TWSc.03",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Evaluate whether measurements and observations have been repeated sufficiently to be reliable.",
+      "description": "Evaluate whether measurements and observations have been repeated sufficiently to be reliable.",
+      "parent_code": "8/TWSc",
+      "sort": 161
+    },
+    {
+      "code": "8TWSc.04",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Take appropriately accurate and precise measurements, explaining why accuracy and precision are important.",
+      "description": "Take appropriately accurate and precise measurements, explaining why accuracy and precision are important.",
+      "parent_code": "8/TWSc",
+      "sort": 162
+    },
+    {
+      "code": "8TWSc.05",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Carry out practical work safely, supported by risk assessments where appropriate.",
+      "description": "Carry out practical work safely, supported by risk assessments where appropriate.",
+      "parent_code": "8/TWSc",
+      "sort": 163
+    },
+    {
+      "code": "8TWSc.06",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Evaluate a range of secondary information sources for their relevance and know that some sources may be biased.",
+      "description": "Evaluate a range of secondary information sources for their relevance and know that some sources may be biased.",
+      "parent_code": "8/TWSc",
+      "sort": 164
+    },
+    {
+      "code": "8TWSc.07",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Collect and record sufficient observations and/or measurements in an appropriate form.",
+      "description": "Collect and record sufficient observations and/or measurements in an appropriate form.",
+      "parent_code": "8/TWSc",
+      "sort": 165
+    },
+    {
+      "code": "8/TWSa",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Scientific enquiry: analysis, evaluation and conclusions",
+      "description": null,
+      "parent_code": "8/Thinking and Working Scientifically",
+      "sort": 166
+    },
+    {
+      "code": "8TWSa.01",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Describe the accuracy of predictions, based on results, and suggest why they were or were not accurate.",
+      "description": "Describe the accuracy of predictions, based on results, and suggest why they were or were not accurate.",
+      "parent_code": "8/TWSa",
+      "sort": 167
+    },
+    {
+      "code": "8TWSa.02",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Describe trends and patterns in results, including identifying any anomalous results.",
+      "description": "Describe trends and patterns in results, including identifying any anomalous results.",
+      "parent_code": "8/TWSa",
+      "sort": 168
+    },
+    {
+      "code": "8TWSa.03",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Make conclusions by interpreting results and explain the limitations of the conclusions.",
+      "description": "Make conclusions by interpreting results and explain the limitations of the conclusions.",
+      "parent_code": "8/TWSa",
+      "sort": 169
+    },
+    {
+      "code": "8TWSa.04",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Evaluate experiments and investigations, and suggest improvements, explaining any proposed changes.",
+      "description": "Evaluate experiments and investigations, and suggest improvements, explaining any proposed changes.",
+      "parent_code": "8/TWSa",
+      "sort": 170
+    },
+    {
+      "code": "8TWSa.05",
+      "grade": "8",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Present and interpret observations and measurements appropriately.",
+      "description": "Present and interpret observations and measurements appropriately.",
+      "parent_code": "8/TWSa",
+      "sort": 171
+    },
+    {
+      "code": "8/Science in Context",
+      "grade": "8",
+      "strand": "Science in Context",
+      "sub_strand": null,
+      "title": "Science in Context",
+      "description": null,
+      "parent_code": null,
+      "sort": 172
+    },
+    {
+      "code": "8/SIC",
+      "grade": "8",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Science in context",
+      "description": null,
+      "parent_code": "8/Science in Context",
+      "sort": 173
+    },
+    {
+      "code": "8SIC.01",
+      "grade": "8",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Discuss how scientific knowledge is developed through collective understanding and scrutiny over time.",
+      "description": "Discuss how scientific knowledge is developed through collective understanding and scrutiny over time.",
+      "parent_code": "8/SIC",
+      "sort": 174
+    },
+    {
+      "code": "8SIC.02",
+      "grade": "8",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Describe how science is applied across societies and industries, and in research.",
+      "description": "Describe how science is applied across societies and industries, and in research.",
+      "parent_code": "8/SIC",
+      "sort": 175
+    },
+    {
+      "code": "8SIC.03",
+      "grade": "8",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Evaluate issues which involve and/or require scientific understanding.",
+      "description": "Evaluate issues which involve and/or require scientific understanding.",
+      "parent_code": "8/SIC",
+      "sort": 176
+    },
+    {
+      "code": "8SIC.04",
+      "grade": "8",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Describe how people develop and use scientific understanding as individuals and through collaboration, e.g. through peer-review.",
+      "description": "Describe how people develop and use scientific understanding as individuals and through collaboration, e.g. through peer-review.",
+      "parent_code": "8/SIC",
+      "sort": 177
+    },
+    {
+      "code": "8SIC.05",
+      "grade": "8",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Discuss how the uses of science can have a global environmental impact.",
+      "description": "Discuss how the uses of science can have a global environmental impact.",
+      "parent_code": "8/SIC",
+      "sort": 178
+    },
+    {
+      "code": "9/Biology",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": null,
+      "title": "Biology",
+      "description": null,
+      "parent_code": null,
+      "sort": 179
+    },
+    {
+      "code": "9/Bs",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": "Structure and function",
+      "title": "Structure and function",
+      "description": null,
+      "parent_code": "9/Biology",
+      "sort": 180
+    },
+    {
+      "code": "9Bs.01",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": "Structure and function",
+      "title": "Describe the pathway of water and mineral salts from the roots to the leaves in flowering plants, including absorption in root hair cells, transport through xylem and transpiration from the surface of leaves.",
+      "description": "Describe the pathway of water and mineral salts from the roots to the leaves in flowering plants, including absorption in root hair cells, transport through xylem and transpiration from the surface of leaves.",
+      "parent_code": "9/Bs",
+      "sort": 181
+    },
+    {
+      "code": "9Bs.02",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": "Structure and function",
+      "title": "Describe the structure of the human excretory (renal) system and its function (limited to kidneys filtering blood to remove urea, which is excreted in urine).",
+      "description": "Describe the structure of the human excretory (renal) system and its function (limited to kidneys filtering blood to remove urea, which is excreted in urine).",
+      "parent_code": "9/Bs",
+      "sort": 182
+    },
+    {
+      "code": "9Bs.03",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": "Structure and function",
+      "title": "Know that chromosomes contain genes, made of DNA, and that genes contribute to the determination of an organism's characteristics.",
+      "description": "Know that chromosomes contain genes, made of DNA, and that genes contribute to the determination of an organism's characteristics.",
+      "parent_code": "9/Bs",
+      "sort": 183
+    },
+    {
+      "code": "9/Bp",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Life processes",
+      "description": null,
+      "parent_code": "9/Biology",
+      "sort": 184
+    },
+    {
+      "code": "9Bp.01",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Describe the fusion of gametes to produce a fertilised egg with a new combination of DNA.",
+      "description": "Describe the fusion of gametes to produce a fertilised egg with a new combination of DNA.",
+      "parent_code": "9/Bp",
+      "sort": 185
+    },
+    {
+      "code": "9Bp.02",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Describe the inheritance of sex in humans in terms of XX and XY chromosomes.",
+      "description": "Describe the inheritance of sex in humans in terms of XX and XY chromosomes.",
+      "parent_code": "9/Bp",
+      "sort": 186
+    },
+    {
+      "code": "9Bp.03",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Describe variation within a species and relate this to genetic differences between individuals.",
+      "description": "Describe variation within a species and relate this to genetic differences between individuals.",
+      "parent_code": "9/Bp",
+      "sort": 187
+    },
+    {
+      "code": "9Bp.04",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Describe the scientific theory of natural selection and how it relates to genetic changes over time.",
+      "description": "Describe the scientific theory of natural selection and how it relates to genetic changes over time.",
+      "parent_code": "9/Bp",
+      "sort": 188
+    },
+    {
+      "code": "9Bp.05",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Know that plants require minerals to maintain healthy growth and life processes (limited to magnesium to make chlorophyll and nitrates to make protein).",
+      "description": "Know that plants require minerals to maintain healthy growth and life processes (limited to magnesium to make chlorophyll and nitrates to make protein).",
+      "parent_code": "9/Bp",
+      "sort": 189
+    },
+    {
+      "code": "9Bp.06",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Know that photosynthesis occurs in chloroplasts and is the process by which plants make carbohydrates, using the energy from light.",
+      "description": "Know that photosynthesis occurs in chloroplasts and is the process by which plants make carbohydrates, using the energy from light.",
+      "parent_code": "9/Bp",
+      "sort": 190
+    },
+    {
+      "code": "9Bp.07",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Know and use the summary word equation for photosynthesis (carbon dioxide + water -> glucose + oxygen, in the presence of light and chlorophyll).",
+      "description": "Know and use the summary word equation for photosynthesis (carbon dioxide + water -> glucose + oxygen, in the presence of light and chlorophyll).",
+      "parent_code": "9/Bp",
+      "sort": 191
+    },
+    {
+      "code": "9Bp.08",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": "Life processes",
+      "title": "Discuss how fetal development is affected by the health of the mother, including the effect of diet, smoking and drugs.",
+      "description": "Discuss how fetal development is affected by the health of the mother, including the effect of diet, smoking and drugs.",
+      "parent_code": "9/Bp",
+      "sort": 192
+    },
+    {
+      "code": "9/Be",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": "Ecosystems",
+      "title": "Ecosystems",
+      "description": null,
+      "parent_code": "9/Biology",
+      "sort": 193
+    },
+    {
+      "code": "9Be.01",
+      "grade": "9",
+      "strand": "Biology",
+      "sub_strand": "Ecosystems",
+      "title": "Describe what could happen to the population of a species, including extinction, when there is an environmental change.",
+      "description": "Describe what could happen to the population of a species, including extinction, when there is an environmental change.",
+      "parent_code": "9/Be",
+      "sort": 194
+    },
+    {
+      "code": "9/Chemistry",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": null,
+      "title": "Chemistry",
+      "description": null,
+      "parent_code": null,
+      "sort": 195
+    },
+    {
+      "code": "9/Cm",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Materials and their structure",
+      "description": null,
+      "parent_code": "9/Chemistry",
+      "sort": 196
+    },
+    {
+      "code": "9Cm.01",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Understand that the structure of the Periodic Table is related to the atomic structure of the elements and the Periodic Table can be used to predict an element’s structure and properties.",
+      "description": "Understand that the structure of the Periodic Table is related to the atomic structure of the elements and the Periodic Table can be used to predict an element’s structure and properties.",
+      "parent_code": "9/Cm",
+      "sort": 197
+    },
+    {
+      "code": "9Cm.02",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Understand that a molecule is formed when two or more atoms join together chemically, through a covalent bond.",
+      "description": "Understand that a molecule is formed when two or more atoms join together chemically, through a covalent bond.",
+      "parent_code": "9/Cm",
+      "sort": 198
+    },
+    {
+      "code": "9Cm.03",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Describe a covalent bond as a bond made when a pair of electrons is shared by two atoms (limited to single bonds).",
+      "description": "Describe a covalent bond as a bond made when a pair of electrons is shared by two atoms (limited to single bonds).",
+      "parent_code": "9/Cm",
+      "sort": 199
+    },
+    {
+      "code": "9Cm.04",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Describe an ion as an atom which has gained at least one electron to be negatively charged or lost at least one electron to be positively charged.",
+      "description": "Describe an ion as an atom which has gained at least one electron to be negatively charged or lost at least one electron to be positively charged.",
+      "parent_code": "9/Cm",
+      "sort": 200
+    },
+    {
+      "code": "9Cm.05",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Materials and their structure",
+      "title": "Describe an ionic bond as an attraction between a positively charged ion and a negatively charged ion.",
+      "description": "Describe an ionic bond as an attraction between a positively charged ion and a negatively charged ion.",
+      "parent_code": "9/Cm",
+      "sort": 201
+    },
+    {
+      "code": "9/Cp",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Properties of materials",
+      "description": null,
+      "parent_code": "9/Chemistry",
+      "sort": 202
+    },
+    {
+      "code": "9Cp.01",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Understand that the groups within the Periodic Table have trends in physical and chemical properties, using group 1 as an example.",
+      "description": "Understand that the groups within the Periodic Table have trends in physical and chemical properties, using group 1 as an example.",
+      "parent_code": "9/Cp",
+      "sort": 203
+    },
+    {
+      "code": "9Cp.02",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Describe how the density of a substance relates to its mass in a defined volume.",
+      "description": "Describe how the density of a substance relates to its mass in a defined volume.",
+      "parent_code": "9/Cp",
+      "sort": 204
+    },
+    {
+      "code": "9Cp.03",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Calculate and compare densities of solids, liquids and gases.",
+      "description": "Calculate and compare densities of solids, liquids and gases.",
+      "parent_code": "9/Cp",
+      "sort": 205
+    },
+    {
+      "code": "9Cp.04",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Properties of materials",
+      "title": "Know that elements and compounds exist in structures (simple or giant), and this influences their physical properties.",
+      "description": "Know that elements and compounds exist in structures (simple or giant), and this influences their physical properties.",
+      "parent_code": "9/Cp",
+      "sort": 206
+    },
+    {
+      "code": "9/Cc",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Changes to materials",
+      "description": null,
+      "parent_code": "9/Chemistry",
+      "sort": 207
+    },
+    {
+      "code": "9Cc.01",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Use word equations and symbol equations to describe reactions (balancing symbol equations is not required).",
+      "description": "Use word equations and symbol equations to describe reactions (balancing symbol equations is not required).",
+      "parent_code": "9/Cc",
+      "sort": 208
+    },
+    {
+      "code": "9Cc.02",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Identify examples of displacement reactions and predict products (limited to reactions involving calcium, magnesium, zinc, iron, copper, gold and silver salts).",
+      "description": "Identify examples of displacement reactions and predict products (limited to reactions involving calcium, magnesium, zinc, iron, copper, gold and silver salts).",
+      "parent_code": "9/Cc",
+      "sort": 209
+    },
+    {
+      "code": "9Cc.03",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Describe how to prepare some common salts by the reactions of metals with acids, and metal carbonates with acids, and purify them, using filtration, evaporation and crystallisation.",
+      "description": "Describe how to prepare some common salts by the reactions of metals with acids, and metal carbonates with acids, and purify them, using filtration, evaporation and crystallisation.",
+      "parent_code": "9/Cc",
+      "sort": 210
+    },
+    {
+      "code": "9Cc.04",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Describe the effects of concentration, surface area and temperature on the rate of reaction, and explain them using the particle model.",
+      "description": "Describe the effects of concentration, surface area and temperature on the rate of reaction, and explain them using the particle model.",
+      "parent_code": "9/Cc",
+      "sort": 211
+    },
+    {
+      "code": "9Cc.05",
+      "grade": "9",
+      "strand": "Chemistry",
+      "sub_strand": "Changes to materials",
+      "title": "Understand that in chemical reactions mass and energy are conserved.",
+      "description": "Understand that in chemical reactions mass and energy are conserved.",
+      "parent_code": "9/Cc",
+      "sort": 212
+    },
+    {
+      "code": "9/Physics",
+      "grade": "9",
+      "strand": "Physics",
+      "sub_strand": null,
+      "title": "Physics",
+      "description": null,
+      "parent_code": null,
+      "sort": 213
+    },
+    {
+      "code": "9/Pf",
+      "grade": "9",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Forces and energy",
+      "description": null,
+      "parent_code": "9/Physics",
+      "sort": 214
+    },
+    {
+      "code": "9Pf.01",
+      "grade": "9",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Use density to explain why objects float or sink in water.",
+      "description": "Use density to explain why objects float or sink in water.",
+      "parent_code": "9/Pf",
+      "sort": 215
+    },
+    {
+      "code": "9Pf.02",
+      "grade": "9",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Describe the difference between heat and temperature.",
+      "description": "Describe the difference between heat and temperature.",
+      "parent_code": "9/Pf",
+      "sort": 216
+    },
+    {
+      "code": "9Pf.03",
+      "grade": "9",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Know that energy is conserved, meaning it cannot be created or destroyed.",
+      "description": "Know that energy is conserved, meaning it cannot be created or destroyed.",
+      "parent_code": "9/Pf",
+      "sort": 217
+    },
+    {
+      "code": "9Pf.04",
+      "grade": "9",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Know that thermal energy will always transfer from hotter regions or objects to colder ones, and this is known as heat dissipation.",
+      "description": "Know that thermal energy will always transfer from hotter regions or objects to colder ones, and this is known as heat dissipation.",
+      "parent_code": "9/Pf",
+      "sort": 218
+    },
+    {
+      "code": "9Pf.05",
+      "grade": "9",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Describe thermal transfer by the processes of conduction, convection and radiation.",
+      "description": "Describe thermal transfer by the processes of conduction, convection and radiation.",
+      "parent_code": "9/Pf",
+      "sort": 219
+    },
+    {
+      "code": "9Pf.06",
+      "grade": "9",
+      "strand": "Physics",
+      "sub_strand": "Forces and energy",
+      "title": "Explain cooling by evaporation.",
+      "description": "Explain cooling by evaporation.",
+      "parent_code": "9/Pf",
+      "sort": 220
+    },
+    {
+      "code": "9/Ps",
+      "grade": "9",
+      "strand": "Physics",
+      "sub_strand": "Electricity and magnetism",
+      "title": "Electricity and magnetism",
+      "description": null,
+      "parent_code": "9/Physics",
+      "sort": 221
+    },
+    {
+      "code": "9Ps.01",
+      "grade": "9",
+      "strand": "Physics",
+      "sub_strand": "Electricity and magnetism",
+      "title": "Draw and interpret waveforms, and recognise the link between loudness and amplitude, pitch and frequency.",
+      "description": "Draw and interpret waveforms, and recognise the link between loudness and amplitude, pitch and frequency.",
+      "parent_code": "9/Ps",
+      "sort": 222
+    },
+    {
+      "code": "9Ps.02",
+      "grade": "9",
+      "strand": "Physics",
+      "sub_strand": "Electricity and magnetism",
+      "title": "Use waveforms to show how sound waves interact to reinforce or cancel each other.",
+      "description": "Use waveforms to show how sound waves interact to reinforce or cancel each other.",
+      "parent_code": "9/Ps",
+      "sort": 223
+    },
+    {
+      "code": "9/Earth and Space",
+      "grade": "9",
+      "strand": "Earth and Space",
+      "sub_strand": null,
+      "title": "Earth and Space",
+      "description": null,
+      "parent_code": null,
+      "sort": 224
+    },
+    {
+      "code": "9/ESp",
+      "grade": "9",
+      "strand": "Earth and Space",
+      "sub_strand": "Planet Earth",
+      "title": "Planet Earth",
+      "description": null,
+      "parent_code": "9/Earth and Space",
+      "sort": 225
+    },
+    {
+      "code": "9ESp.01",
+      "grade": "9",
+      "strand": "Earth and Space",
+      "sub_strand": "Planet Earth",
+      "title": "Explain the movement of tectonic plates in terms of convection currents.",
+      "description": "Explain the movement of tectonic plates in terms of convection currents.",
+      "parent_code": "9/ESp",
+      "sort": 226
+    },
+    {
+      "code": "9ESp.02",
+      "grade": "9",
+      "strand": "Earth and Space",
+      "sub_strand": "Planet Earth",
+      "title": "Explain why the jigsaw appearance of continental coasts, location of volcanoes and earthquakes, fossil record and alignment of magnetic materials in the Earth's crust are all evidence for tectonic plates.",
+      "description": "Explain why the jigsaw appearance of continental coasts, location of volcanoes and earthquakes, fossil record and alignment of magnetic materials in the Earth's crust are all evidence for tectonic plates.",
+      "parent_code": "9/ESp",
+      "sort": 227
+    },
+    {
+      "code": "9/ESc",
+      "grade": "9",
+      "strand": "Earth and Space",
+      "sub_strand": "Cycles on Earth",
+      "title": "Cycles on Earth",
+      "description": null,
+      "parent_code": "9/Earth and Space",
+      "sort": 228
+    },
+    {
+      "code": "9ESc.01",
+      "grade": "9",
+      "strand": "Earth and Space",
+      "sub_strand": "Cycles on Earth",
+      "title": "Describe the carbon cycle (limited to photosynthesis, respiration, feeding, decomposition and combustion).",
+      "description": "Describe the carbon cycle (limited to photosynthesis, respiration, feeding, decomposition and combustion).",
+      "parent_code": "9/ESc",
+      "sort": 229
+    },
+    {
+      "code": "9ESc.02",
+      "grade": "9",
+      "strand": "Earth and Space",
+      "sub_strand": "Cycles on Earth",
+      "title": "Describe the historical and predicted future impacts of climate change, including sea level change, flooding, drought and extreme weather events.",
+      "description": "Describe the historical and predicted future impacts of climate change, including sea level change, flooding, drought and extreme weather events.",
+      "parent_code": "9/ESc",
+      "sort": 230
+    },
+    {
+      "code": "9/ESs",
+      "grade": "9",
+      "strand": "Earth and Space",
+      "sub_strand": "Earth in space",
+      "title": "Earth in space",
+      "description": null,
+      "parent_code": "9/Earth and Space",
+      "sort": 231
+    },
+    {
+      "code": "9ESs.01",
+      "grade": "9",
+      "strand": "Earth and Space",
+      "sub_strand": "Earth in space",
+      "title": "Describe the consequences of asteroid collision with the Earth, including climate change and mass extinctions.",
+      "description": "Describe the consequences of asteroid collision with the Earth, including climate change and mass extinctions.",
+      "parent_code": "9/ESs",
+      "sort": 232
+    },
+    {
+      "code": "9ESs.02",
+      "grade": "9",
+      "strand": "Earth and Space",
+      "sub_strand": "Earth in space",
+      "title": "Describe the evidence for the collision theory for the formation of the Moon.",
+      "description": "Describe the evidence for the collision theory for the formation of the Moon.",
+      "parent_code": "9/ESs",
+      "sort": 233
+    },
+    {
+      "code": "9ESs.03",
+      "grade": "9",
+      "strand": "Earth and Space",
+      "sub_strand": "Earth in space",
+      "title": "Know that nebulae are clouds of dust and gas, and can act as stellar nurseries.",
+      "description": "Know that nebulae are clouds of dust and gas, and can act as stellar nurseries.",
+      "parent_code": "9/ESs",
+      "sort": 234
+    },
+    {
+      "code": "9/Thinking and Working Scientifically",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": null,
+      "title": "Thinking and Working Scientifically",
+      "description": null,
+      "parent_code": null,
+      "sort": 235
+    },
+    {
+      "code": "9/TWSm",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Models and representations",
+      "title": "Models and representations",
+      "description": null,
+      "parent_code": "9/Thinking and Working Scientifically",
+      "sort": 236
+    },
+    {
+      "code": "9TWSm.01",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Models and representations",
+      "title": "Understand that models and analogies reflect current scientific evidence and understanding and can change.",
+      "description": "Understand that models and analogies reflect current scientific evidence and understanding and can change.",
+      "parent_code": "9/TWSm",
+      "sort": 237
+    },
+    {
+      "code": "9TWSm.02",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Models and representations",
+      "title": "Describe some important models, including analogies, and discuss their strengths and limitations.",
+      "description": "Describe some important models, including analogies, and discuss their strengths and limitations.",
+      "parent_code": "9/TWSm",
+      "sort": 238
+    },
+    {
+      "code": "9TWSm.03",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Models and representations",
+      "title": "Use symbols and formulae to represent scientific ideas.",
+      "description": "Use symbols and formulae to represent scientific ideas.",
+      "parent_code": "9/TWSm",
+      "sort": 239
+    },
+    {
+      "code": "9/TWSp",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Scientific enquiry: purpose and planning",
+      "description": null,
+      "parent_code": "9/Thinking and Working Scientifically",
+      "sort": 240
+    },
+    {
+      "code": "9TWSp.01",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Suggest a testable hypothesis based on scientific understanding.",
+      "description": "Suggest a testable hypothesis based on scientific understanding.",
+      "parent_code": "9/TWSp",
+      "sort": 241
+    },
+    {
+      "code": "9TWSp.02",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Describe examples where scientists' unexpected results from enquiries have led to improved scientific understanding.",
+      "description": "Describe examples where scientists' unexpected results from enquiries have led to improved scientific understanding.",
+      "parent_code": "9/TWSp",
+      "sort": 242
+    },
+    {
+      "code": "9TWSp.03",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Make predictions of likely outcomes for a scientific enquiry based on scientific knowledge and understanding.",
+      "description": "Make predictions of likely outcomes for a scientific enquiry based on scientific knowledge and understanding.",
+      "parent_code": "9/TWSp",
+      "sort": 243
+    },
+    {
+      "code": "9TWSp.04",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Plan a range of investigations of different types to obtain appropriate evidence when testing hypotheses.",
+      "description": "Plan a range of investigations of different types to obtain appropriate evidence when testing hypotheses.",
+      "parent_code": "9/TWSp",
+      "sort": 244
+    },
+    {
+      "code": "9TWSp.05",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: purpose and planning",
+      "title": "Make risk assessments for practical work to identify and control risks.",
+      "description": "Make risk assessments for practical work to identify and control risks.",
+      "parent_code": "9/TWSp",
+      "sort": 245
+    },
+    {
+      "code": "9/TWSc",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Carrying out scientific enquiry",
+      "description": null,
+      "parent_code": "9/Thinking and Working Scientifically",
+      "sort": 246
+    },
+    {
+      "code": "9TWSc.01",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Sort, group and classify phenomena, objects, materials and organisms through testing, observation, using secondary information, and making and using keys.",
+      "description": "Sort, group and classify phenomena, objects, materials and organisms through testing, observation, using secondary information, and making and using keys.",
+      "parent_code": "9/TWSc",
+      "sort": 247
+    },
+    {
+      "code": "9TWSc.02",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Decide what equipment is required to carry out an investigation or experiment and use it appropriately.",
+      "description": "Decide what equipment is required to carry out an investigation or experiment and use it appropriately.",
+      "parent_code": "9/TWSc",
+      "sort": 248
+    },
+    {
+      "code": "9TWSc.03",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Decide when to increase the range of observations and measurements, and increase the extent of repetition, to give sufficiently reliable data.",
+      "description": "Decide when to increase the range of observations and measurements, and increase the extent of repetition, to give sufficiently reliable data.",
+      "parent_code": "9/TWSc",
+      "sort": 249
+    },
+    {
+      "code": "9TWSc.04",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Take appropriately accurate and precise measurements, explaining why accuracy and precision are important.",
+      "description": "Take appropriately accurate and precise measurements, explaining why accuracy and precision are important.",
+      "parent_code": "9/TWSc",
+      "sort": 250
+    },
+    {
+      "code": "9TWSc.05",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Carry out practical work safely, supported by risk assessments where appropriate.",
+      "description": "Carry out practical work safely, supported by risk assessments where appropriate.",
+      "parent_code": "9/TWSc",
+      "sort": 251
+    },
+    {
+      "code": "9TWSc.06",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Make an informed decision whether to use evidence from first-hand experience or secondary sources.",
+      "description": "Make an informed decision whether to use evidence from first-hand experience or secondary sources.",
+      "parent_code": "9/TWSc",
+      "sort": 252
+    },
+    {
+      "code": "9TWSc.07",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Carrying out scientific enquiry",
+      "title": "Collect, record and summarise sufficient observations and measurements, in an appropriate form.",
+      "description": "Collect, record and summarise sufficient observations and measurements, in an appropriate form.",
+      "parent_code": "9/TWSc",
+      "sort": 253
+    },
+    {
+      "code": "9/TWSa",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Scientific enquiry: analysis, evaluation and conclusions",
+      "description": null,
+      "parent_code": "9/Thinking and Working Scientifically",
+      "sort": 254
+    },
+    {
+      "code": "9TWSa.01",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Evaluate the strength of the evidence collected and how it supports, or refutes, the prediction.",
+      "description": "Evaluate the strength of the evidence collected and how it supports, or refutes, the prediction.",
+      "parent_code": "9/TWSa",
+      "sort": 255
+    },
+    {
+      "code": "9TWSa.02",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Describe trends and patterns in results, identifying any anomalous results and suggesting why results are anomalous.",
+      "description": "Describe trends and patterns in results, identifying any anomalous results and suggesting why results are anomalous.",
+      "parent_code": "9/TWSa",
+      "sort": 256
+    },
+    {
+      "code": "9TWSa.03",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Make conclusions by interpreting results, explain the limitations of the conclusions and describe how the conclusions can be further investigated.",
+      "description": "Make conclusions by interpreting results, explain the limitations of the conclusions and describe how the conclusions can be further investigated.",
+      "parent_code": "9/TWSa",
+      "sort": 257
+    },
+    {
+      "code": "9TWSa.04",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Evaluate experiments and investigations, including those by others, and suggest improvements, explaining any proposed changes.",
+      "description": "Evaluate experiments and investigations, including those by others, and suggest improvements, explaining any proposed changes.",
+      "parent_code": "9/TWSa",
+      "sort": 258
+    },
+    {
+      "code": "9TWSa.05",
+      "grade": "9",
+      "strand": "Thinking and Working Scientifically",
+      "sub_strand": "Scientific enquiry: analysis, evaluation and conclusions",
+      "title": "Present and interpret results, and predict results between the data points collected.",
+      "description": "Present and interpret results, and predict results between the data points collected.",
+      "parent_code": "9/TWSa",
+      "sort": 259
+    },
+    {
+      "code": "9/Science in Context",
+      "grade": "9",
+      "strand": "Science in Context",
+      "sub_strand": null,
+      "title": "Science in Context",
+      "description": null,
+      "parent_code": null,
+      "sort": 260
+    },
+    {
+      "code": "9/SIC",
+      "grade": "9",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Science in context",
+      "description": null,
+      "parent_code": "9/Science in Context",
+      "sort": 261
+    },
+    {
+      "code": "9SIC.01",
+      "grade": "9",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Discuss how scientific knowledge is developed through collective understanding and scrutiny over time.",
+      "description": "Discuss how scientific knowledge is developed through collective understanding and scrutiny over time.",
+      "parent_code": "9/SIC",
+      "sort": 262
+    },
+    {
+      "code": "9SIC.02",
+      "grade": "9",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Describe how science is applied across societies and industries, and in research.",
+      "description": "Describe how science is applied across societies and industries, and in research.",
+      "parent_code": "9/SIC",
+      "sort": 263
+    },
+    {
+      "code": "9SIC.03",
+      "grade": "9",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Evaluate issues which involve and/or require scientific understanding.",
+      "description": "Evaluate issues which involve and/or require scientific understanding.",
+      "parent_code": "9/SIC",
+      "sort": 264
+    },
+    {
+      "code": "9SIC.04",
+      "grade": "9",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Describe how people develop and use scientific understanding as individuals and through collaboration, e.g. through peer-review.",
+      "description": "Describe how people develop and use scientific understanding as individuals and through collaboration, e.g. through peer-review.",
+      "parent_code": "9/SIC",
+      "sort": 265
+    },
+    {
+      "code": "9SIC.05",
+      "grade": "9",
+      "strand": "Science in Context",
+      "sub_strand": "Science in context",
+      "title": "Discuss how the uses of science can have a global environmental impact.",
+      "description": "Discuss how the uses of science can have a global environmental impact.",
+      "parent_code": "9/SIC",
+      "sort": 266
+    }
+  ]
+}

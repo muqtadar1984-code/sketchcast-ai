@@ -93,7 +93,7 @@ class TestRegistry:
         assert R.equivalent_voice_id("nope", "elevenlabs") is None
 
     def test_paid_tiers_are_an_explicit_allow_list(self):
-        assert PAID_TIERS == {"pro", "pro_plus", "family", "homeschool", "school"}
+        assert PAID_TIERS == {"pro", "pro_plus", "family", "homeschool", "school", "staff"}
         assert "promo" not in PAID_TIERS and "trial" not in PAID_TIERS
 
 

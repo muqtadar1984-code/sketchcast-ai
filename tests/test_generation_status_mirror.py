@@ -92,7 +92,8 @@ def test_a_poison_pill_marks_its_generation_error():
 
 
 def test_observer_jobs_are_named_and_the_resolver_exists():
-    assert 'OBSERVER_JOB_TYPES = frozenset({"support_diagnose"})' in SRC
+    # topic_harvest joined 2026-09 (catalogue): it owns no generation either.
+    assert 'OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "topic_harvest"})' in SRC
     body = _body("generation_to_mirror")
     assert "OBSERVER_JOB_TYPES" in body and "return None" in body
     assert 'return job.get("generation_id")' in body
