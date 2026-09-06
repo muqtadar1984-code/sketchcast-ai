@@ -29,7 +29,12 @@ What the job reads:
   * the previous version for continuity (its headings and glossary terms), or
     — when ``params.source_article_id`` names a version — that version's full
     text, so a regeneration REVISES it under the reviewer's ``hints`` rather
-    than starting over.
+    than starting over. The source must belong to the SAME topic and language
+    as the job (else the job errors: revising another topic's text into this
+    one would be a silent content mix-up). ``hints`` keep their line breaks
+    (stripped, capped at ``HINTS_MAX_CHARS``); ``language`` is read stripped
+    and lower-cased, default 'en' — the same key the 0114 one-live-job index
+    coalesces to.
 
 What it writes (``write_article`` + ``write_figures``):
     topic_articles  {topic_id, version = max existing + 1 for (topic, language),
@@ -38,6 +43,9 @@ What it writes (``write_article`` + ``write_figures``):
                      misconceptions, worked_examples, claims, depth_node_id,
                      depth_rationale, word_count, status 'draft',
                      author 'model', notes = hints}
+    A version another writer lands first (Postgres 23505 on the unique
+    (topic, language, version)) is retried at the next number — versions are
+    reloaded, up to ``VERSION_RETRIES`` more inserts, never another model call.
     article_figures {article_id, figure_key, caption, spec {subject, parts,
                      style, notes}, labels [{group_id: canonical_key(part),
                      label: part}], sort, status 'draft'}
@@ -50,25 +58,45 @@ The reply is VALIDATED in code (``validate_article``), never trusted:
     one fails the job — the article's parts are the kit's inputs);
     ``worked_examples`` may be absent (history has none);
   * a section needs a non-empty ``body_md``; one without is dropped, and
-    fewer than ``MIN_SECTIONS`` (3) surviving sections fails the job;
+    fewer than ``MIN_SECTIONS`` (3) surviving sections fails the job, as do
+    more than ``MAX_SECTIONS`` (10) — a 200-section reply is not an article;
+  * ``body_md`` and ``solution_md`` are prose in markdown, so HTML tags
+    (``<script>``/``<style>`` blocks whole), markdown images ``![alt](url)``,
+    bare URLs and the target of a link ``[text](url)`` (the text stays) are
+    STRIPPED before anything else is judged, and the stripping is recorded;
   * section ids are re-issued ``s1..sN`` when missing or duplicated, and the
     model's ids are mapped so claims and figures still resolve;
   * a figure needs key material (``figure_key``, else the spec's subject, else
     the caption); duplicates by key merge into the first; at most
-    ``MAX_FIGURES`` (8) survive, in the model's order;
+    ``MAX_FIGURES`` (8) survive, in the model's order; a spec naming more than
+    ``MAX_PARTS_PER_FIGURE`` (12) parts keeps the first 12 and the count
+    dropped is recorded; a reply declaring no figure at all, and a figure no
+    section references, are recorded (the figure is kept for the reviewer);
   * ``figure_keys`` on a section are canonicalised, deduplicated and pruned
     to declared figures; a ``claim.section_id`` naming no section is set to
     None (the fact is kept, the pointer is not); ``covers`` keeps only codes
     from the coverage target, and the codes no section covers are recorded in
     the summary as ``uncovered`` for the reviewer;
-  * ``word_count`` is computed from the section bodies, never taken from the
-    reply.
+  * ``title`` and ``heading`` are read as strings only (a number or an object
+    where a string belongs is treated as absent, never ``str()``-ed);
+  * ``word_count`` is computed from the (stripped) section bodies, never
+    taken from the reply; fewer than ``WORDS_FLOOR`` (300) words fails the
+    job — the prompt asks for 900, and a 200-word reply is a refusal or a
+    truncation, not an article.
   Every repair is listed in the summary (``repairs``) so a reviewer can see
   what the model got wrong.
 
-Idempotent per job: a job row whose ``stage.article_id`` is already set
-produced its article on an earlier attempt (the reaper requeued it after the
-write); the re-run finishes the row done and writes nothing.
+Idempotent per job (``earlier_attempt`` / ``resume_article``). The stage is
+written with ``article_id``, ``version`` and the validated ``figure_specs``
+IMMEDIATELY after the article insert, BEFORE the figures are written — so a
+process kill or a transient error inside ``write_figures`` leaves a record of
+what exists. A re-run of the same job row (the reaper requeues it) then:
+  * ``stage.step`` 'done' → finishes the row done, writes nothing (as before);
+  * ``stage.article_id`` set, step not terminal → RESUMES: writes the figures
+    from ``stage.figure_specs`` when the article has none yet (no model call),
+    and finishes done with ``resumed: true`` in the summary.
+The window between the article insert and that stage write is the one place
+a kill still costs a second version; it is a single round trip wide.
 
 Quota: ONE text call per job (≈ 16k output tokens at most). Never an image,
 never a vision call.
@@ -94,11 +122,24 @@ STATUS_DRAFT = "draft"
 AUTHOR_MODEL = "model"
 
 MIN_SECTIONS = 3
+# The prompt asks for 4-8; ten is the most a reviewer can still read as one
+# article. Beyond that the model has written an outline or a list, not prose.
+MAX_SECTIONS = 10
 MAX_FIGURES = 8
 # The vision annotator reads at most 12 part names off a prompt tail
 # (raster_assets.part_names_from_prompt); a spec naming more would lose them.
 MAX_PARTS_PER_FIGURE = 12
 WORDS_MIN, WORDS_MAX = 900, 1600
+# Below this the reply is a refusal, a truncation or a stub — never an
+# article a reviewer should be asked to read. A third of the asked minimum.
+WORDS_FLOOR = 300
+# Reviewer notes are stored on the row and put in the prompt verbatim; a cap
+# keeps a pasted document out of both.
+HINTS_MAX_CHARS = 4000
+# Extra insert attempts when another writer lands our version number first.
+VERSION_RETRIES = 3
+STEP_FIGURES = "figures"
+TERMINAL_STEPS = frozenset({"done", "already_done"})
 # A 1,600-word article with its apparatus is ~6k output tokens; 16k leaves
 # room for a verbose model without inviting a 30k essay.
 MAX_TOKENS = 16000
@@ -175,6 +216,18 @@ RESPONSE_SCHEMA = {
 REQUIRED_ARRAYS = ("objectives", "sections", "glossary", "misconceptions", "claims", "figures")
 DEFAULT_STYLE = "whiteboard diagram"
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
+# Markup the prompt forbids in a body ("No images, no HTML, no links") and
+# the portal must never render from a model reply. Order matters: a block's
+# content goes with its block, an image's alt text goes with its image, a
+# link keeps its text, a tag goes, a bare URL goes.
+_HTML_BLOCK = re.compile(r"<(script|style)\b[^>]*>.*?</\1\s*>", re.I | re.S)
+_HTML_TAG = re.compile(r"</?[A-Za-z][^<>]*>|<!--.*?-->", re.S)
+_MD_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_BARE_URL = re.compile(r"(?<![\w/])(?:https?://|www\.)[^\s<>()\[\]]+", re.I)
+_MARKUP = (("html", _HTML_BLOCK, ""), ("image", _MD_IMAGE, ""), ("link", _MD_LINK, r"\1"),
+           ("html", _HTML_TAG, ""), ("url", _BARE_URL, ""))
+_BLANKS = re.compile(r"[ \t]{2,}")
 
 
 class ArticleInvalid(RuntimeError):
@@ -377,7 +430,9 @@ def build_article_prompt(topic: dict, language: str, mappings: list[Mapping], de
         "(CODE: STATEMENT):\n"
         f"{coverage_block(mappings)}\n"
     )
-    notes = f"\nREVIEWER NOTES (a regeneration; address every note):\n{clean_heading(hints)}\n" if clean_heading(hints) else ""
+    # Verbatim, line breaks kept: a reviewer's numbered notes are a list, and
+    # collapsing them into one line would hand the model a run-on sentence.
+    notes = f"\nREVIEWER NOTES (a regeneration; address every note):\n{_s(hints)}\n" if _s(hints) else ""
     return head + _previous_block(previous, full=revise) + notes + "\n" + ARTICLE_PROMPT
 
 
@@ -416,6 +471,33 @@ def _s(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _line(value: object) -> str:
+    """A one-line string field (title, heading, caption): whitespace collapsed
+    and trimmed, or "" for anything that is not a string — a number or an
+    object where a string belongs is absent, never ``str()``-ed into text."""
+    return clean_heading(value) if isinstance(value, str) else ""
+
+
+def strip_markup(text: str) -> tuple[str, list[str]]:
+    """Body markdown without the markup the prompt forbids. Pure.
+
+    ``<script>``/``<style>`` blocks go whole (their content is not prose),
+    other HTML tags go, ``![alt](url)`` goes, ``[text](url)`` keeps its text,
+    a bare URL goes. Returns the text and the KINDS removed ('html', 'image',
+    'link', 'url'), in the order the passes run, so the repair names what the
+    model did without quoting the payload back into the summary."""
+    kinds: list[str] = []
+    out = text or ""
+    for kind, rx, repl in _MARKUP:
+        new = rx.sub(repl, out)
+        if new != out and kind not in kinds:
+            kinds.append(kind)
+        out = new
+    if kinds:
+        out = "\n".join(_BLANKS.sub(" ", ln).rstrip() for ln in out.splitlines()).strip()
+    return out, kinds
+
+
 def word_count(sections: Iterable[dict]) -> int:
     """Words in the section bodies (markdown punctuation is not a word). Pure."""
     return sum(len(_WORD.findall(str(s.get("body_md") or ""))) for s in sections)
@@ -432,16 +514,21 @@ def figure_key_of(item: dict) -> str:
     return ""
 
 
-def _parts(raw: object) -> list[str]:
+def _parts(raw: object, key: str, repairs: list[str]) -> list[str]:
     out: list[str] = []
     for p in (raw if isinstance(raw, list) else []):
-        t = clean_heading(p) if isinstance(p, str) else ""
+        t = _line(p)
         if t and canonical_key(t) and t.lower() not in {o.lower() for o in out}:
             out.append(t[:60])
-    return out[:MAX_PARTS_PER_FIGURE]
+    if len(out) > MAX_PARTS_PER_FIGURE:
+        repairs.append(f"{len(out) - MAX_PARTS_PER_FIGURE} part(s) dropped over {MAX_PARTS_PER_FIGURE} on figure {key}")
+        out = out[:MAX_PARTS_PER_FIGURE]
+    return out
 
 
 def _validate_figures(raw: list, repairs: list[str]) -> list[dict]:
+    if not raw:
+        repairs.append("0 figures declared")
     figures: list[dict] = []
     seen: set[str] = set()
     for item in raw:
@@ -456,19 +543,21 @@ def _validate_figures(raw: list, repairs: list[str]) -> list[dict]:
             repairs.append(f"duplicate figure merged: {key}")
             continue
         spec = item.get("spec") if isinstance(item.get("spec"), dict) else {}
-        caption = clean_heading(item.get("caption")) or clean_heading(spec.get("subject")) or key.replace("_", " ")
-        subject = clean_heading(spec.get("subject")) or caption
+        caption = _line(item.get("caption")) or _line(spec.get("subject")) or key.replace("_", " ")
+        subject = _line(spec.get("subject")) or caption
         seen.add(key)
         figures.append({
             "figure_key": key,
             "caption": caption[:500],
-            "spec": {"subject": subject[:300], "parts": _parts(spec.get("parts")),
-                     "style": clean_heading(spec.get("style")) or DEFAULT_STYLE,
-                     "notes": clean_heading(spec.get("notes"))[:1000]},
+            "spec": {"subject": subject[:300], "parts": _parts(spec.get("parts"), key, repairs),
+                     "style": _line(spec.get("style")) or DEFAULT_STYLE,
+                     "notes": _line(spec.get("notes"))[:1000]},
         })
     if len(figures) > MAX_FIGURES:
         repairs.append(f"{len(figures) - MAX_FIGURES} figure(s) over the cap of {MAX_FIGURES} dropped")
         figures = figures[:MAX_FIGURES]
+    if raw and not figures:
+        repairs.append("no usable figure declared")
     return figures
 
 
@@ -481,11 +570,13 @@ def _validate_sections(raw: list, repairs: list[str]) -> tuple[list[dict], dict[
         if not isinstance(item, dict):
             repairs.append("section dropped: not an object")
             continue
-        body = _s(item.get("body_md"))
+        body, stripped = strip_markup(_s(item.get("body_md")))
         if not body:
-            repairs.append(f"section dropped: empty body ({clean_heading(item.get('heading')) or '?'})")
+            repairs.append(f"section dropped: empty body ({_line(item.get('heading')) or '?'})")
             continue
         final = f"s{len(sections) + 1}"
+        if stripped:
+            repairs.append(f"markup stripped from {final}: {', '.join(stripped)}")
         model_id = _s(item.get("id"))
         if model_id and model_id not in id_map:
             id_map[model_id] = final
@@ -493,7 +584,7 @@ def _validate_sections(raw: list, repairs: list[str]) -> tuple[list[dict], dict[
             repairs.append(f"duplicate section id re-issued: {model_id} -> {final}")
         sections.append({
             "id": final,
-            "heading": clean_heading(item.get("heading"))[:200] or f"Section {len(sections) + 1}",
+            "heading": _line(item.get("heading"))[:200] or f"Section {len(sections) + 1}",
             "body_md": body,
             "figure_keys": item.get("figure_keys"),   # resolved once the figures are known
             "covers": item.get("covers"),
@@ -530,9 +621,15 @@ def validate_article(raw: object, coverage_codes: list[str], fallback_title: str
     sections, id_map = _validate_sections(raw["sections"], repairs)
     if len(sections) < MIN_SECTIONS:
         raise ArticleInvalid(f"only {len(sections)} usable section(s); at least {MIN_SECTIONS} needed")
+    if len(sections) > MAX_SECTIONS:
+        raise ArticleInvalid(f"{len(sections)} sections; at most {MAX_SECTIONS} make one article")
+    words = word_count(sections)
+    if words < WORDS_FLOOR:
+        raise ArticleInvalid(f"only {words} words of body text; at least {WORDS_FLOOR} needed")
 
     figures = _validate_figures(raw["figures"], repairs)
     declared = {f["figure_key"] for f in figures}
+    used: set[str] = set()
     known_codes = {c.lower(): c for c in coverage_codes}
     covered: set[str] = set()
     for s in sections:
@@ -545,6 +642,7 @@ def validate_article(raw: object, coverage_codes: list[str], fallback_title: str
             elif ck:
                 repairs.append(f"dangling figure key dropped from {s['id']}: {ck}")
         s["figure_keys"] = keys
+        used.update(keys)
         covers: list[str] = []
         for c in (s["covers"] if isinstance(s["covers"], list) else []):
             real = known_codes.get(str(c).strip().lower()) if isinstance(c, str) else None
@@ -552,6 +650,19 @@ def validate_article(raw: object, coverage_codes: list[str], fallback_title: str
                 covers.append(real)
         s["covers"] = covers
         covered.update(covers)
+    for f in figures:
+        if f["figure_key"] not in used:
+            repairs.append(f"figure declared but unused: {f['figure_key']}")
+
+    worked: list[dict] = []
+    for w in _validate_named(raw.get("worked_examples"), ("problem", "solution_md"), "w", "worked example", repairs):
+        solution, stripped = strip_markup(w["solution_md"])
+        if not solution:
+            repairs.append(f"worked example dropped: only markup ({w['id']})")
+            continue
+        if stripped:
+            repairs.append(f"markup stripped from {w['id']}: {', '.join(stripped)}")
+        worked.append({**w, "id": f"w{len(worked) + 1}", "solution_md": solution})
 
     claims: list[dict] = []
     for item in raw["claims"]:
@@ -568,18 +679,17 @@ def validate_article(raw: object, coverage_codes: list[str], fallback_title: str
         claims.append({"id": f"c{len(claims) + 1}", "text": _s(item.get("text")), "section_id": sid})
 
     return Article(
-        title=clean_heading(raw.get("title"))[:300] or fallback_title,
+        title=_line(raw.get("title"))[:300] or fallback_title,
         objectives=_validate_named(raw["objectives"], ("text",), "o", "objective", repairs),
         sections=sections,
         glossary=_validate_named(raw["glossary"], ("term", "definition"), "", "glossary entry", repairs),
         misconceptions=_validate_named(raw["misconceptions"], ("misconception", "correction"), "m",
                                        "misconception", repairs),
-        worked_examples=_validate_named(raw.get("worked_examples"), ("problem", "solution_md"), "w",
-                                        "worked example", repairs),
+        worked_examples=worked,
         claims=claims,
         figures=figures,
         depth_rationale=_s(raw.get("depth_rationale"))[:2000],
-        word_count=word_count(sections),
+        word_count=words,
         uncovered=[c for c in coverage_codes if c not in covered],
         repairs=repairs,
     )
@@ -619,13 +729,41 @@ def write_article(sb, topic_id: str, language: str, version: int, article: Artic
         "word_count": article.word_count,
         "status": STATUS_DRAFT,
         "author": AUTHOR_MODEL,
-        "notes": clean_heading(hints) or None,
+        "notes": _s(hints) or None,
     }
     res = sb.table("topic_articles").insert(row).execute()
     rows = _rows(res)
     if not rows or not rows[0].get("id"):
         raise RuntimeError("topic_articles insert returned no id")
     return rows[0]["id"]
+
+
+def _is_duplicate_key(exc: BaseException) -> bool:
+    """Postgres 23505 (unique_violation) as postgrest surfaces it: an
+    ``APIError`` whose ``code`` is the SQLSTATE; the text is the fallback."""
+    return str(getattr(exc, "code", "") or "") == "23505" or "23505" in str(exc)
+
+
+def write_article_versioned(sb, topic_id: str, language: str, versions: list[dict], article: Article,
+                            depth_node_id: Optional[str], hints: Optional[str],
+                            source_article_id: Optional[str]) -> tuple[str, int]:
+    """``write_article`` at ``max(versions) + 1`` — and when another writer
+    (a second replica, a hand insert) lands that number first, the versions
+    are reloaded and the next number tried, up to ``VERSION_RETRIES`` more
+    times. The model is never asked again: the article is already in hand.
+    Returns ``(article_id, version)``."""
+    for attempt in range(1 + VERSION_RETRIES):
+        version = next_version(versions)
+        try:
+            return write_article(sb, topic_id, language, version, article, depth_node_id, hints,
+                                 source_article_id), version
+        except Exception as exc:  # noqa: BLE001 — only the duplicate is retried
+            if not _is_duplicate_key(exc) or attempt == VERSION_RETRIES:
+                raise
+            log.warning("article: version %s of %s/%s taken by another writer; retrying (%d/%d)",
+                        version, topic_id, language, attempt + 1, VERSION_RETRIES)
+            versions = load_versions(sb, topic_id, language)
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def write_figures(sb, article_id: str, figures: list[dict]) -> int:
@@ -650,19 +788,57 @@ def record_depth_node(sb, topic: dict, node_id: Optional[str]) -> None:
         topic["depth_node_id"] = node_id
 
 
-def existing_article_id(sb, job: dict) -> Optional[str]:
-    """The article an earlier attempt of THIS job row wrote (``stage.
-    article_id``), from the row itself or the database copy of it."""
+def earlier_attempt(sb, job: dict) -> Optional[dict]:
+    """The stage an earlier attempt of THIS job row left once its article was
+    inserted (``stage.article_id`` set), from the row itself or the database
+    copy of it; None when no article exists for this job yet."""
     stage = job.get("stage")
+    if not (isinstance(stage, dict) and stage.get("article_id")):
+        try:
+            rows = _rows(sb.table("jobs").select("stage").eq("id", job["id"]).limit(1).execute())
+        except Exception as exc:  # noqa: BLE001
+            log.warning("article: job row unreadable, assuming no earlier attempt: %s", exc)
+            return None
+        stage = rows[0].get("stage") if rows else None
     if isinstance(stage, dict) and stage.get("article_id"):
-        return str(stage["article_id"])
-    try:
-        rows = _rows(sb.table("jobs").select("stage").eq("id", job["id"]).limit(1).execute())
-    except Exception as exc:  # noqa: BLE001
-        log.warning("article: job row unreadable, assuming no earlier attempt: %s", exc)
-        return None
-    st = rows[0].get("stage") if rows else None
-    return str(st["article_id"]) if isinstance(st, dict) and st.get("article_id") else None
+        return {**stage, "article_id": str(stage["article_id"])}
+    return None
+
+
+def existing_article_id(sb, job: dict) -> Optional[str]:
+    """The article an earlier attempt of THIS job row wrote, or None."""
+    stage = earlier_attempt(sb, job)
+    return stage["article_id"] if stage else None
+
+
+def _finish_summary(stage: dict, n_figures: int) -> dict:
+    """The final summary: the pre-figures stage with the figure COUNT in
+    place of the specs (article_figures holds them now) and step done."""
+    return {**{k: v for k, v in stage.items() if k != "figure_specs"}, "step": "done", "figures": n_figures}
+
+
+def resume_article(sb, job_id: str, stage: dict) -> dict:
+    """Finish what an earlier attempt of this job row started. The article
+    exists (``stage.article_id``); a terminal step means the figures do too
+    and there is nothing to write. Otherwise the attempt died between the
+    article insert and the figure insert (or inside it): the figures are
+    written from ``stage.figure_specs`` unless the article already has rows —
+    the insert is one statement, so it is all or none. No model call."""
+    article_id = str(stage["article_id"])
+    if stage.get("step") in TERMINAL_STEPS:
+        return {**stage, "step": "already_done"}
+    if load_article(sb, article_id) is None:
+        raise RuntimeError(f"article {article_id} recorded by an earlier attempt of job {job_id} is gone")
+    have = _rows(sb.table("article_figures").select("id").eq("article_id", article_id).execute())
+    if have:
+        n_figures = len(have)
+        log.info("article job %s: %s already has its %d figure(s); finishing", job_id, article_id, n_figures)
+    else:
+        specs = [f for f in (stage.get("figure_specs") or []) if isinstance(f, dict) and f.get("figure_key")]
+        n_figures = write_figures(sb, article_id, specs)
+        log.info("article job %s: resumed — %d figure(s) written for %s", job_id, n_figures, article_id)
+    db.set_progress(sb, job_id, 95)
+    return {**_finish_summary(stage, n_figures), "resumed": True}
 
 
 # ── the job ────────────────────────────────────────────────────────────
@@ -675,9 +851,9 @@ def author_article(sb, job_id: str, params: dict, client=None) -> dict:
     topic_id = params.get("topic_id")
     if not isinstance(topic_id, str) or not topic_id:
         raise RuntimeError("topic_article job without params.topic_id")
-    language = clean_heading(params.get("language")) or DEFAULT_LANGUAGE
-    hints = params.get("hints") if isinstance(params.get("hints"), str) else None
-    source_id = params.get("source_article_id") if isinstance(params.get("source_article_id"), str) else None
+    language = _s(params.get("language")).lower() or DEFAULT_LANGUAGE
+    hints = _s(params.get("hints"))[:HINTS_MAX_CHARS] or None
+    source_id = _s(params.get("source_article_id")) or None
 
     stage: dict = {"phase": "article", "step": "load", "topic_id": topic_id, "language": language}
     db.set_stage(sb, job_id, dict(stage))
@@ -700,6 +876,12 @@ def author_article(sb, job_id: str, params: dict, client=None) -> dict:
     source = load_article(sb, source_id) if source_id else None
     if source_id and source is None:
         raise RuntimeError(f"source article {source_id} not found")
+    if source is not None:
+        src_topic, src_lang = source.get("topic_id"), (_s(source.get("language")).lower() or DEFAULT_LANGUAGE)
+        if src_topic != topic_id or src_lang != language:
+            raise RuntimeError(
+                f"source article {source_id} belongs to topic {src_topic} in {src_lang}, not to this job's "
+                f"topic {topic_id} in {language}; a revision must start from a version of the same article")
     previous = source or (versions[-1] if versions else None)
     codes = [m.code for m in mappings if m.code]
 
@@ -723,18 +905,23 @@ def author_article(sb, job_id: str, params: dict, client=None) -> dict:
 
     stage["step"] = "write"
     db.set_stage(sb, job_id, dict(stage))
-    version = next_version(versions)
-    article_id = write_article(sb, topic_id, language, version, article,
-                               depth_node.get("id") if depth_node else None, hints, source_id)
+    article_id, version = write_article_versioned(sb, topic_id, language, versions, article,
+                                                  depth_node.get("id") if depth_node else None, hints, source_id)
+    # The record a re-run resumes from, written BEFORE the figures: from here
+    # on a kill or a failed figure insert costs a resume, not a second
+    # version. figure_specs is the validated list write_figures is about to
+    # store; the final summary swaps it for the count.
+    stage.update({
+        "step": STEP_FIGURES, "article_id": article_id, "version": version,
+        "title": article.title, "word_count": article.word_count,
+        "sections": len(article.sections), "claims": len(article.claims),
+        "uncovered": article.uncovered, "repairs": article.repairs[:20],
+        "source_article_id": source_id, "figure_specs": article.figures,
+    })
+    db.set_stage(sb, job_id, dict(stage))
     n_figures = write_figures(sb, article_id, article.figures)
     db.set_progress(sb, job_id, 95)
-    return {
-        **stage, "step": "done", "article_id": article_id, "version": version,
-        "title": article.title, "word_count": article.word_count,
-        "sections": len(article.sections), "figures": n_figures, "claims": len(article.claims),
-        "uncovered": article.uncovered, "repairs": article.repairs[:20],
-        "source_article_id": source_id,
-    }
+    return _finish_summary(stage, n_figures)
 
 
 def run_article_job(sb, job: dict, client=None) -> Optional[dict]:
@@ -745,12 +932,13 @@ def run_article_job(sb, job: dict, client=None) -> Optional[dict]:
     job_id = job["id"]
     try:
         params = job.get("params") if isinstance(job.get("params"), dict) else {}
-        done_before = existing_article_id(sb, job)
-        if done_before:
-            summary = {"phase": "article", "step": "already_done", "article_id": done_before}
-            db.set_stage(sb, job_id, {**(job.get("stage") if isinstance(job.get("stage"), dict) else {}), **summary})
+        earlier = earlier_attempt(sb, job)
+        if earlier:
+            summary = resume_article(sb, job_id, earlier)
+            db.set_stage(sb, job_id, summary)
             db.finish_job(sb, job_id)
-            log.info("article job %s already produced %s; nothing to do", job_id, done_before)
+            log.info("article job %s: earlier attempt produced %s; %s", job_id, earlier["article_id"],
+                     "resumed" if summary.get("resumed") else "nothing to do")
             return summary
         summary = author_article(sb, job_id, params, client=client)
         db.set_stage(sb, job_id, summary)
@@ -767,10 +955,12 @@ def run_article_job(sb, job: dict, client=None) -> Optional[dict]:
 
 
 __all__ = [
-    "JOB_TYPE", "DEFAULT_LANGUAGE", "MIN_SECTIONS", "MAX_FIGURES", "MAX_PARTS_PER_FIGURE", "MAX_TOKENS",
+    "JOB_TYPE", "DEFAULT_LANGUAGE", "MIN_SECTIONS", "MAX_SECTIONS", "MAX_FIGURES", "MAX_PARTS_PER_FIGURE",
+    "MAX_TOKENS", "WORDS_FLOOR", "HINTS_MAX_CHARS", "VERSION_RETRIES", "STEP_FIGURES", "TERMINAL_STEPS",
     "SYSTEM_PROMPT", "ARTICLE_PROMPT", "RESPONSE_SCHEMA", "REQUIRED_ARRAYS", "ArticleInvalid", "Mapping",
     "Article", "pick_depth_node", "load_topic", "load_mappings", "load_prerequisite_titles", "load_versions",
-    "load_article", "coverage_block", "build_article_prompt", "ask_model", "word_count", "figure_key_of",
-    "validate_article", "next_version", "figure_labels", "write_article", "write_figures",
-    "record_depth_node", "existing_article_id", "author_article", "run_article_job",
+    "load_article", "coverage_block", "build_article_prompt", "ask_model", "strip_markup", "word_count",
+    "figure_key_of", "validate_article", "next_version", "figure_labels", "write_article",
+    "write_article_versioned", "write_figures", "record_depth_node", "earlier_attempt", "existing_article_id",
+    "resume_article", "author_article", "run_article_job",
 ]

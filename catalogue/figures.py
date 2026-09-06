@@ -31,11 +31,13 @@ Per figure (``render_figure``), in order:
      (``row_has_parts``: exact storage, tolerant matching) and a library id.
      A hit costs nothing: no image call, no vision call;
   3. else GENERATE — but a generation call may START only when
-       * no BUILDER job is queued (``builder_queued``: any queued job whose
-         type is not an observer type — presentations, decks, documents,
-         index_book, exams): the job stops with ``paused: builder jobs
-         queued`` and finishes DONE with the remaining figures still draft,
-         so re-enqueueing it picks up where it left;
+       * no BUILDER job is live (``builder_queued``: any job with status
+         queued OR processing whose type is not an observer type —
+         presentations, decks, documents, index_book, exams; a processing
+         builder on a sibling thread of a ``WORKER_CONCURRENCY > 1`` worker
+         is real contention for the same image pool): the job stops with
+         ``paused: builder jobs queued`` and finishes DONE with the remaining
+         figures still draft, so re-enqueueing it picks up where it left;
        * this job's image budget holds: ``reset_image_budget(job_id)`` at the
          start, at most ``IMAGE_CALLS_PER_LESSON`` generations per job and
          never once the engine's own ``image_budget_exhausted`` says so —
@@ -46,7 +48,21 @@ Per figure (``render_figure``), in order:
      visual-library wrapper's (shared/visual_library_integration), so a
      generated asset is normally published on the way out; the job then finds
      the row by CONTENT HASH of the cached file, and publishes it itself
-     (``publish_generated``) when the wrapper did not;
+     (``publish_generated``) when the wrapper did not.
+     THE WRAPPER HYDRATES BY SCORE ALONE. Its ``_decide``/``_decide_svg`` copy
+     the library's best match into the cache before the generator runs, never
+     asking about parts — so the asset step 2 rejected for missing parts is
+     exactly what step 3 gets back (same bytes, same row by content hash), and
+     the cache ``meta.json`` says ``provenance: visual_library``. The job reads
+     that provenance (``served_by_library``) and, when the served asset still
+     lacks a part the spec names, REFUSES (``FigureRefused``): the figure
+     stays draft with ``render_error`` naming the asset and the missing parts,
+     so the reviewer approves a fuller asset or adds the parts, instead of a
+     figure marked rendered with null group ids nobody notices. A hydrated
+     asset that does carry every part is accepted and counted as reused (no
+     image call was made). Reaching past the wrapper to the unwrapped ladder
+     is deliberately NOT done: the wrapper is the reuse policy for the whole
+     engine, and this job is not the place to fork it;
   4. write ``article_figures``: ``visual_asset_id``, ``labels`` reconciled
      against the asset's group ids (``reconcile_labels``: a part found keeps
      its group id, a part not found keeps ``group_id: null`` so the reviewer
@@ -94,6 +110,9 @@ LAYER_TAIL = "Name the layer groups exactly: "
 NO_TEXT_RULE = "No text, letters, numbers or labels anywhere in the drawing."
 PAUSED_BUILDERS = "paused: builder jobs queued"
 PAUSED_BUDGET = "paused: image budget spent"
+# A builder in either of these states is real contention for the image pool.
+BUILDER_LIVE_STATUSES = ("queued", "processing")
+PROVENANCE_LIBRARY = "visual_library"
 # raster_assets reads the same variable (default 24) for the engine's own
 # per-generation budget; this job caps its generation COUNT at the same number
 # so the two never disagree about how much one job may spend.
@@ -193,6 +212,31 @@ def _tolerant_match(part: str, available: list[str]) -> Optional[str]:
 
 def content_hash(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def served_by_library(rendered: "Rendered", rejected_hit: Optional[dict], row: Optional[dict]) -> bool:
+    """Whether the file the ladder handed back came from the library rather
+    than a generation: the cache ``meta.json`` says so (``provenance:
+    visual_library`` — written by hydrate() and _hydrate_local_library(), and
+    rewritten to "generated" by the renderers when they redraw in place), or
+    the row the bytes hash to IS the hit this job already rejected. Pure."""
+    if str((rendered.meta or {}).get("provenance") or "") == PROVENANCE_LIBRARY:
+        return True
+    hit_id = str((rejected_hit or {}).get("id") or "")
+    return bool(hit_id) and str((row or {}).get("id") or "") == hit_id
+
+
+def missing_parts(group_ids: list[str], parts: list[str]) -> list[str]:
+    """The spec parts an asset with ``group_ids`` does not carry, by the SAME
+    rule ``row_has_parts`` answers with (exact storage, tolerant matching), so
+    the refusal names exactly the parts the acceptance test failed on."""
+    if row_has_parts({"group_ids": list(group_ids or [])}, parts):
+        return []
+    available = [str(g) for g in (group_ids or []) if str(g).strip()]
+    if not available:
+        return list(parts)
+    from spike.scene_engine.vector_assets import match_layer_ids
+    return [p for p in parts if not match_layer_ids(available, [p])]
 
 
 def curriculum_family(code: object) -> str:
@@ -319,10 +363,13 @@ def library_context(sb, article: dict) -> dict:
 
 
 def builder_queued(sb) -> bool:
-    """Whether any job a real user is waiting on is queued: every type that
-    is not an observer (presentations, decks, documents, index_book, exams).
-    THE never-starve gate — a generation call may not start while one is."""
-    res = (sb.table("jobs").select("id,type").eq("status", "queued")
+    """Whether any job a real user is waiting on is LIVE — queued or
+    processing — of a type that is not an observer (presentations, decks,
+    documents, index_book, exams). THE never-starve gate: a generation call
+    may not start while one is. Processing counts because a worker with
+    ``WORKER_CONCURRENCY > 1`` runs a builder on a sibling thread while this
+    job runs, and that builder's image calls share the pool."""
+    res = (sb.table("jobs").select("id,type,status").in_("status", list(BUILDER_LIVE_STATUSES))
            .not_.in_("type", sorted(db.OBSERVER_JOB_TYPES)).limit(1).execute())
     return bool(_rows(res))
 
@@ -334,7 +381,7 @@ def lookup_asset(sb, rendered: Rendered) -> Optional[dict]:
         digest = content_hash(rendered.path)
     except OSError as exc:
         raise RuntimeError(f"rendered asset unreadable: {exc}") from exc
-    rows = _rows(sb.table("visual_assets").select("id,group_ids,vision,asset_format,status")
+    rows = _rows(sb.table("visual_assets").select("id,asset_key,group_ids,vision,asset_format,status")
                  .eq("content_hash", digest).limit(1).execute())
     return rows[0] if rows else None
 
@@ -359,6 +406,12 @@ class _Pause(Exception):
     def __init__(self, note: str):
         super().__init__(note)
         self.note = note
+
+
+class FigureRefused(RuntimeError):
+    """This module declined to mark a figure rendered; the message is written
+    for the reviewer and is stored in ``render_error`` as it stands (no
+    exception-type prefix)."""
 
 
 def render_figure(sb, backend: FigureBackend, figure: dict, context: dict, gate: Callable[[], None]) -> str:
@@ -387,9 +440,17 @@ def render_figure(sb, backend: FigureBackend, figure: dict, context: dict, gate:
     if row is None:
         raise RuntimeError("asset rendered but not found in the visual library after publish")
     groups = row_group_ids(row) or list(rendered.group_ids)
+    reused = served_by_library(rendered, hit, row)
+    if reused:
+        lacking = missing_parts(groups, parts)
+        if lacking:
+            raise FigureRefused(
+                f"library asset {row.get('asset_key') or (hit or {}).get('asset_key') or key} lacks parts "
+                f"{', '.join(lacking)}; hydrated instead of generated — approve a fuller asset or add the parts")
     mark_rendered(sb, figure["id"], str(row["id"]), reconcile_labels(parts, groups))
-    log.info("figure %s: generated (%s, %d groups)", key, rendered.fmt, len(groups))
-    return "generated"
+    log.info("figure %s: %s (%s, %d groups)", key, "library asset hydrated by the wrapper" if reused else "generated",
+             rendered.fmt, len(groups))
+    return "reused" if reused else "generated"
 
 
 def render_figures(sb, job_id: str, params: dict, backend: Optional[FigureBackend] = None) -> dict:
@@ -433,11 +494,12 @@ def render_figures(sb, job_id: str, params: dict, backend: Optional[FigureBacken
                         job_id, pause.note, len(figures) - stage["done"])
             break
         except Exception as exc:  # noqa: BLE001 — the next figure still runs
-            msg = f"{fig.get('figure_key') or '?'}: {type(exc).__name__}: {exc}"[:300]
+            detail = str(exc) if isinstance(exc, FigureRefused) else f"{type(exc).__name__}: {exc}"
+            msg = f"{fig.get('figure_key') or '?'}: {detail}"[:300]
             errors.append(msg)
             stage["failed"] += 1
             try:
-                mark_failed(sb, fig["id"], f"{type(exc).__name__}: {exc}")
+                mark_failed(sb, fig["id"], detail)
             except Exception as exc2:  # noqa: BLE001
                 log.error("figure %s: could not record the failure: %s", fig.get("id"), exc2)
             log.warning("figure failed — %s", msg)
@@ -482,8 +544,9 @@ def run_figure_render_job(sb, job: dict, backend: Optional[FigureBackend] = None
 
 __all__ = [
     "JOB_TYPE", "STATUS_DRAFT", "STATUS_RENDERED", "LAYER_TAIL", "NO_TEXT_RULE", "PAUSED_BUILDERS",
-    "PAUSED_BUDGET", "FORMATS_LIBRARY_FIRST", "max_generations", "asset_key_for", "spec_parts",
-    "figure_prompt", "reconcile_labels", "content_hash", "curriculum_family", "Rendered", "FigureBackend",
+    "PAUSED_BUDGET", "BUILDER_LIVE_STATUSES", "PROVENANCE_LIBRARY", "FORMATS_LIBRARY_FIRST", "max_generations",
+    "asset_key_for", "spec_parts", "figure_prompt", "reconcile_labels", "content_hash", "served_by_library",
+    "missing_parts", "curriculum_family", "Rendered", "FigureBackend", "FigureRefused",
     "default_backend", "load_article", "load_figures", "library_context", "builder_queued", "lookup_asset",
     "mark_rendered", "mark_failed", "render_figure", "render_figures", "run_figure_render_job",
 ]

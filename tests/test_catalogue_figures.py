@@ -1,12 +1,17 @@
 """``figure_render``: an article's draft figures become labelled visual
 assets — a library hit costs nothing, a miss costs ONE generation, and no
-generation starts while a real user's job is queued.
+generation starts while a real user's job is queued or being built.
 
 Everything here CALLS things. The engine (library lookup, the §20 ladder,
 publish, the image budget) is a fake ``FigureBackend`` that records every
 call; the database is the fake Supabase in tests/catalogue_fakes.py. No
-network, no model, no image API, no live Supabase — and no import of
-``spike.scene_engine`` unless a tolerant label match needs it.
+network, no model, no image API, no live Supabase. The library-hit path DOES
+import ``spike.scene_engine.vector_assets``: ``row_has_parts`` and the label
+reconciliation share the renderer's own layer matcher on purpose (the library
+must never promise a part the renderer cannot find), and that import is local
+code that costs nothing. What must never happen in a test is a CALL into the
+engine — a lookup, a generation, a publish — and the fake backend is the only
+thing here that answers those.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ import pytest
 from catalogue import figures
 from catalogue.figures import (
     LAYER_TAIL, NO_TEXT_RULE, PAUSED_BUDGET, PAUSED_BUILDERS, FigureBackend, Rendered, asset_key_for, content_hash,
-    figure_prompt, reconcile_labels, run_figure_render_job,
+    figure_prompt, missing_parts, reconcile_labels, run_figure_render_job, served_by_library,
 )
 from tests.catalogue_fakes import FakeSB
 
@@ -80,10 +85,14 @@ class FakeBackend:
         self.exhausted, self.publish_fails = exhausted, publish_fails
         self.finds, self.generates, self.publishes, self.contexts, self.resets = [], [], [], [], []
 
-    def rendered(self, key, fmt="svg", groups=("cell_wall", "nucleus", "chloroplast_layer"), body=None):
+    def rendered(self, key, fmt="svg", groups=("cell_wall", "nucleus", "chloroplast_layer"), body=None, meta=None):
+        """A cached asset as the ladder returns it; ``meta`` overrides the
+        cache meta.json (production's says "generated" for a fresh drawing and
+        "visual_library" for a file the wrapper hydrated)."""
         path = self.tmp / f"{key}.{fmt}"
         path.write_bytes(body or f"<svg>{key}</svg>".encode())
-        return Rendered(path=path, fmt=fmt, group_ids=list(groups), meta={"provenance": "generated", "key": key})
+        return Rendered(path=path, fmt=fmt, group_ids=list(groups),
+                        meta={"provenance": "generated", "key": key, **(meta or {})})
 
     def as_backend(self) -> FigureBackend:
         return FigureBackend(set_context=self._set_context, find=self._find, generate=self._generate,
@@ -246,6 +255,140 @@ def test_a_publish_that_leaves_no_row_is_a_failure_not_a_rendered_figure(tmp_pat
     assert _job_row(sb)["status"] == "error"
 
 
+# ── the wrapper seam: the ladder hands back the library's own asset ──────
+
+
+def _wrapper_backend(tmp_path, sb, hit, hydrated_groups, body=b"<svg>library bytes</svg>"):
+    """A backend shaped like production. ``find`` returns the library's best
+    match. ``generate`` does what visual_library_integration._decide_svg does
+    with an empty cache: it HYDRATES that same match into the cache (the
+    meta.json it writes says ``provenance: visual_library``) and returns it
+    as the asset, never asking about parts. The library row for those bytes
+    exists, as publish_generated stored it, so the content-hash lookup finds
+    it and nothing is published."""
+    fb = FakeBackend(tmp_path, sb, hits={"plant_cell": hit})
+    hydrated = fb.rendered("plant_cell", groups=hydrated_groups, body=body,
+                           meta={"provenance": "visual_library", "library_asset_id": hit.get("id")})
+    sb.tables["visual_assets"].append({**hit, "content_hash": content_hash(hydrated.path)})
+    fb.renders["plant_cell"] = hydrated
+    return fb
+
+
+def test_a_rejected_library_hit_the_wrapper_hydrates_anyway_is_refused_not_marked_rendered(tmp_path):
+    """The reviewer's probe. find() returned a plant cell carrying two of the
+    four parts; render_figure rejected it and asked the ladder — but in
+    production the ladder is the wrapper, which hydrates the library's best
+    match by score alone: the same row, the same bytes. Marking THAT
+    'rendered' would file a figure with two null group ids that nobody looks
+    at again. The honest outcome is a draft with a render_error the reviewer
+    can act on."""
+    partial = {**LIB_PLANT, "group_ids": ["cell_wall", "nucleus"]}
+    sb = _sb(figs=(PLANT,))
+    fb = _wrapper_backend(tmp_path, sb, partial, ["cell_wall", "nucleus"])
+    summary = run_figure_render_job(sb, _job(), backend=fb.as_backend())
+
+    assert [k for k, _ in fb.generates] == ["plant_cell"], "the ladder was asked, as before"
+    plant = _fig(sb, "fig-plant")
+    assert plant["status"] == "draft" and plant.get("visual_asset_id") is None
+    assert plant["render_error"] == ("library asset plant_cell lacks parts chloroplasts, sap vacuole; "
+                                     "hydrated instead of generated — approve a fuller asset or add the parts")
+    assert plant["labels"] == PLANT["labels"], "the figure row is otherwise untouched"
+    assert fb.publishes == [], "the bytes are the library's own; nothing new to publish"
+    assert summary["failed"] == 1 and summary["reused"] == 0 and summary["generated"] == 0
+    job = _job_row(sb)
+    assert job["status"] == "error" and "lacks parts chloroplasts, sap vacuole" in job["error"]
+
+    # Once a reviewer approves a fuller asset, the re-run takes it as a hit.
+    sb.tables["jobs"] = [_job(id="job-fr2")]
+    fb2 = FakeBackend(tmp_path, sb, hits={"plant_cell": LIB_PLANT})
+    run_figure_render_job(sb, _job(id="job-fr2"), backend=fb2.as_backend())
+    assert fb2.generates == [] and _fig(sb, "fig-plant")["status"] == "rendered"
+    assert _fig(sb, "fig-plant")["visual_asset_id"] == "va-plant" and _fig(sb, "fig-plant")["render_error"] is None
+
+
+def test_the_provenance_alone_names_a_hydrated_asset_when_its_row_differs_from_the_hit(tmp_path):
+    """find() tries SVG then PNG; the wrapper serves its OWN tier, so the row
+    it hydrates may differ from the one find() offered. The cache meta.json's
+    provenance is what says the bytes were the library's, whichever row they
+    hash to — and the refusal names that row's key."""
+    sb = _sb(figs=(PLANT,))
+    fb = FakeBackend(tmp_path, sb, hits={"plant_cell": {**LIB_PLANT, "id": "va-png", "asset_format": "png",
+                                                        "group_ids": ["cell_wall"]}})
+    hydrated = fb.rendered("plant_cell", groups=["cell_wall", "nucleus"], body=b"<svg>another library svg</svg>",
+                           meta={"provenance": "visual_library", "library_asset_id": "va-svg"})
+    sb.tables["visual_assets"].append({"id": "va-svg", "asset_key": "plant_cell_outline", "canonical_key": "plant_cell",
+                                       "status": "approved", "asset_format": "svg", "group_ids": ["cell_wall", "nucleus"],
+                                       "content_hash": content_hash(hydrated.path)})
+    fb.renders["plant_cell"] = hydrated
+    run_figure_render_job(sb, _job(), backend=fb.as_backend())
+    plant = _fig(sb, "fig-plant")
+    assert plant["status"] == "draft"
+    assert plant["render_error"].startswith("library asset plant_cell_outline lacks parts chloroplasts, sap vacuole;")
+
+
+def test_the_rejected_hit_s_own_row_is_refused_even_when_the_cache_meta_is_unreadable(tmp_path):
+    """No meta.json to read (``_meta`` returns {}), but the bytes hash to the
+    very row this job rejected a moment ago: that is the rejected asset."""
+    partial = {**LIB_PLANT, "group_ids": ["cell_wall", "nucleus"]}
+    sb = _sb(figs=(PLANT,))
+    fb = FakeBackend(tmp_path, sb, hits={"plant_cell": partial})
+    hydrated = fb.rendered("plant_cell", groups=["cell_wall", "nucleus"], body=b"<svg>lib</svg>")
+    hydrated.meta = {}
+    sb.tables["visual_assets"].append({**partial, "content_hash": content_hash(hydrated.path)})
+    fb.renders["plant_cell"] = hydrated
+    run_figure_render_job(sb, _job(), backend=fb.as_backend())
+    plant = _fig(sb, "fig-plant")
+    assert plant["status"] == "draft" and "hydrated instead of generated" in plant["render_error"]
+
+
+def test_a_hydrated_library_asset_that_carries_every_part_is_accepted_and_counted_as_reused(tmp_path):
+    """find() offered a row without an id (a local index row), so the hit was
+    not taken; the wrapper hydrated the durable copy, which has every part.
+    That is a fine figure — and no image call was made, so it is reuse, not
+    generation, and it does not spend the job's generation budget."""
+    sb = _sb(figs=(PLANT,))
+    fb = FakeBackend(tmp_path, sb, hits={"plant_cell": {k: v for k, v in LIB_PLANT.items() if k != "id"}})
+    hydrated = fb.rendered("plant_cell", groups=LIB_PLANT["group_ids"], body=b"<svg>the full plant cell</svg>",
+                           meta={"provenance": "visual_library", "library_asset_id": "va-plant"})
+    sb.tables["visual_assets"].append({**LIB_PLANT, "content_hash": content_hash(hydrated.path)})
+    fb.renders["plant_cell"] = hydrated
+    summary = run_figure_render_job(sb, _job(), backend=fb.as_backend())
+    plant = _fig(sb, "fig-plant")
+    assert plant["status"] == "rendered" and plant["visual_asset_id"] == "va-plant" and plant["render_error"] is None
+    assert [l["group_id"] for l in plant["labels"]] == ["cell_wall", "nucleus", "chloroplasts", "sap_vacuole"]
+    assert summary["reused"] == 1 and summary["generated"] == 0 and summary["failed"] == 0
+    assert fb.publishes == [] and _job_row(sb)["status"] == "done"
+
+
+def test_a_freshly_generated_asset_is_never_mistaken_for_a_library_one(tmp_path):
+    """The other side of the seam: a drawing the ladder made (meta says
+    "generated", hashes to no rejected row) is accepted with whatever parts
+    it has — the null-group label is the reviewer's signal there, as before."""
+    partial = {**LIB_PLANT, "group_ids": ["cell_wall", "nucleus"]}
+    sb = _sb(figs=(PLANT,))
+    fb = FakeBackend(tmp_path, sb, hits={"plant_cell": partial})
+    fb.renders["plant_cell"] = fb.rendered("plant_cell", groups=["cell_wall", "nucleus", "chloroplasts"])
+    summary = run_figure_render_job(sb, _job(), backend=fb.as_backend())
+    plant = _fig(sb, "fig-plant")
+    assert plant["status"] == "rendered" and plant["visual_asset_id"] == "va-plant_cell"
+    assert plant["labels"][-1] == {"group_id": None, "label": "sap vacuole"}
+    assert summary["generated"] == 1 and len(fb.publishes) == 1
+
+
+def test_served_by_library_and_missing_parts_are_pure(tmp_path):
+    lib = Rendered(path=tmp_path / "x.svg", fmt="svg", meta={"provenance": "visual_library"})
+    gen = Rendered(path=tmp_path / "x.svg", fmt="svg", meta={"provenance": "generated"})
+    bare = Rendered(path=tmp_path / "x.svg", fmt="svg")
+    assert served_by_library(lib, None, {"id": "va-1"})
+    assert not served_by_library(gen, {"id": "va-1"}, {"id": "va-2"})
+    assert served_by_library(gen, {"id": "va-1"}, {"id": "va-1"}), "the bytes ARE the rejected hit"
+    assert served_by_library(bare, {"id": "va-1"}, {"id": "va-1"}) and not served_by_library(bare, None, {"id": "va-1"})
+    assert not served_by_library(bare, {"id": ""}, {"id": ""}), "two blank ids are not the same row"
+    assert missing_parts(["cell_wall", "nucleus"], ["cell wall", "chloroplasts", "sap vacuole"]) == ["chloroplasts", "sap vacuole"]
+    assert missing_parts(["cell_wall", "nucleus", "chloroplasts"], ["cell wall", "chloroplast"]) == [], "tolerant, like row_has_parts"
+    assert missing_parts([], ["a", "b"]) == ["a", "b"] and missing_parts(["a"], []) == []
+
+
 # ── the never-starve rule ───────────────────────────────────────────────
 
 
@@ -275,20 +418,34 @@ def test_every_builder_kind_pauses_a_generation(tmp_path, kind):
     assert fb.generates == [] and summary["paused"] == PAUSED_BUILDERS
 
 
+@pytest.mark.parametrize("status", ["queued", "processing"])
 @pytest.mark.parametrize("kind", ["topic_harvest", "topic_derive", "topic_article", "figure_render", "support_diagnose"])
-def test_a_queued_observer_job_does_not_pause_a_generation(tmp_path, kind):
-    sb = _sb(figs=(PLANT,), jobs=[_job(), {**_builder(kind=kind), "generation_id": None}])
+def test_a_live_observer_job_does_not_pause_a_generation(tmp_path, kind, status):
+    """Observers spend no image quota (this job's own processing row is one of
+    them), so neither a queued nor a running one is contention."""
+    sb = _sb(figs=(PLANT,), jobs=[_job(), {**_builder(kind=kind, status=status), "generation_id": None}])
     fb = FakeBackend(tmp_path, sb)
     fb.renders["plant_cell"] = fb.rendered("plant_cell")
     summary = run_figure_render_job(sb, _job(), backend=fb.as_backend())
     assert len(fb.generates) == 1 and summary["paused"] is None
 
 
-def test_a_processing_or_done_builder_does_not_pause(tmp_path):
-    sb = _sb(figs=(PLANT,), jobs=[_job(), _builder(status="processing"), _builder("job-d", status="done")])
+def test_a_processing_builder_pauses_too_but_a_finished_one_does_not(tmp_path):
+    """WORKER_CONCURRENCY > 1: a builder another thread is BUILDING right now
+    draws on the same image pool, so it counts exactly like a queued one. A
+    builder that is done or errored is history, not contention."""
+    sb = _sb(figs=(PLANT,), jobs=[_job(), _builder(status="processing")])
+    fb = FakeBackend(tmp_path, sb)
+    fb.renders["plant_cell"] = fb.rendered("plant_cell")
+    summary = run_figure_render_job(sb, _job(), backend=fb.as_backend())
+    assert fb.generates == [] and summary["paused"] == PAUSED_BUILDERS
+    assert _fig(sb, "fig-plant")["status"] == "draft" and _job_row(sb)["status"] == "done"
+
+    sb = _sb(figs=(PLANT,), jobs=[_job(), _builder("job-d", status="done"), _builder("job-e", status="error")])
     fb = FakeBackend(tmp_path, sb)
     fb.renders["plant_cell"] = fb.rendered("plant_cell")
     assert run_figure_render_job(sb, _job(), backend=fb.as_backend())["paused"] is None
+    assert len(fb.generates) == 1
 
 
 def test_a_builder_arriving_mid_job_pauses_the_next_generation_and_keeps_what_was_done(tmp_path):
