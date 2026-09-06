@@ -98,7 +98,11 @@ class _Query:
         self.filters.append(("lt", col, val))
         return self
 
-    def order(self, *a, **k):
+    def order(self, col, desc=False, **k):
+        """postgrest's ``.order("created_at")`` — the claim's oldest-first
+        rule is the database's, so the fake must sort or the lane tests
+        below would only be asserting insertion order."""
+        self.order_by = (col, bool(desc))
         return self
 
     def limit(self, n):
@@ -131,6 +135,10 @@ class _Query:
     def execute(self):
         rows = [r for r in self.store.tables.setdefault(self.table, []) if self._match(r)]
         if self.op == "select":
+            order_by = getattr(self, "order_by", None)
+            if order_by:
+                col, desc = order_by
+                rows = sorted(rows, key=lambda r: str(r.get(col) or ""), reverse=desc)
             if self.limit_n:
                 rows = rows[: self.limit_n]
             if self._single:
@@ -214,6 +222,11 @@ def test_the_resolver_names_the_owner_and_only_the_owner():
     assert "topic_harvest" in db.OBSERVER_JOB_TYPES
     assert db.generation_to_mirror({"type": "topic_harvest", "generation_id": None}) is None
     assert db.generation_to_mirror({"type": "topic_harvest", "generation_id": GEN}) is None
+    # topic_derive (catalogue Phase 2a) reads a curriculum's nodes and owns no
+    # generation and no book; the same refusal.
+    assert "topic_derive" in db.OBSERVER_JOB_TYPES
+    assert db.generation_to_mirror({"type": "topic_derive", "generation_id": None}) is None
+    assert db.generation_to_mirror({"type": "topic_derive", "generation_id": GEN}) is None
 
 
 # ── the prod sequence, step by step ─────────────────────────────────────
@@ -480,3 +493,112 @@ def test_a_support_diagnosis_still_goes_first(monkeypatch):
 
     assert run.run_once(sb) is True and order == ["support_diagnose"]
     assert run.run_once(sb) is True and order == ["support_diagnose", "presentation"]
+
+
+# ── the catalogue's derive shares the LAST lane ─────────────────────────
+#
+# topic_derive (Phase 2a) is one sequential text call per sub-strand (48 for
+# Cambridge 0893): cheap on image quota, but model time a teacher's document
+# would otherwise have.
+# It is claimed in the same last lane as the harvest — after every builder —
+# and hands off to catalogue.derive.run_derive_job, which finishes its own row.
+
+
+def _derive(job_id="job-td", status="queued", generation_id=None, created_at="3"):
+    return {"id": job_id, "type": "topic_derive", "status": status, "generation_id": generation_id,
+            "book_id": None, "params": {"curriculum_id": "cur-1"}, "attempts": 0,
+            "created_at": created_at, "updated_at": "0"}
+
+
+def test_exclude_types_keeps_the_generic_claim_off_a_derive():
+    sb = _fresh("queued", jobs=[_derive(created_at="0"), _builder("job-p", "presentation")])
+    claimed = db.claim_next_job(sb, exclude_types=db.OBSERVER_JOB_TYPES)
+    assert claimed and claimed["type"] == "presentation", "the OLDER derive is skipped"
+    assert db.claim_next_job(sb, exclude_types=db.OBSERVER_JOB_TYPES) is None
+    import worker.run as run
+    last = db.claim_next_job(sb, job_type=run.CATALOGUE_JOB_TYPES)
+    assert last and last["type"] == "topic_derive"
+    assert _gen_status(sb) == "processing", "only the builder's claim mirrored onto its generation"
+
+
+def test_run_once_dispatches_a_topic_derive_to_the_catalogue(monkeypatch):
+    """Called, not grepped: the last lane must pick the job up and hand it to
+    catalogue.derive.run_derive_job, which finishes its own row. The
+    generations table is never written."""
+    import worker.run as run
+    import catalogue.derive as derive
+
+    sb = _fresh("done", jobs=[_derive()])
+    seen = []
+
+    def fake_derive(sb_, job):
+        seen.append((job["id"], job["params"]["curriculum_id"]))
+        db.finish_job(sb_, job["id"])  # what the real one does on success
+
+    monkeypatch.setattr(derive, "run_derive_job", fake_derive)
+    monkeypatch.setattr(run, "process_generation",
+                        lambda *a, **k: pytest.fail("a derive must not reach process_generation"))
+    monkeypatch.delenv("SUPPORT_AGENT_ENABLED", raising=False)
+
+    assert run.run_once(sb) is True
+    assert seen == [("job-td", "cur-1")]
+    assert sb.tables["jobs"][0]["status"] == "done"
+    assert _gen_status(sb) == "done" and _gen_writes(sb) == []
+
+
+@pytest.mark.parametrize("kind", ["presentation", "worksheet", "deck", "exam"])
+def test_a_queued_builder_is_claimed_before_an_older_derive(monkeypatch, kind):
+    import worker.run as run
+    import catalogue.derive as derive
+
+    sb = _fresh("queued", jobs=[_derive(generation_id=GEN, created_at="0"), _builder(job_id="job-b", kind=kind)])
+    order = []
+    monkeypatch.setattr(derive, "run_derive_job",
+                        lambda sb_, job: (order.append(job["type"]), db.finish_job(sb_, job["id"])))
+    monkeypatch.setattr(run, "process_generation",
+                        lambda sb_, job, gen: (order.append(job["type"]), db.finish_job(sb_, job["id"], gen)))
+    monkeypatch.delenv("SUPPORT_AGENT_ENABLED", raising=False)
+
+    assert run.run_once(sb) is True and order == [kind]
+    mark = len(sb.log)
+    assert run.run_once(sb) is True and order == [kind, "topic_derive"]
+    assert _gen_writes(sb, mark) == [] and _gen_status(sb) == "done", "the derive touched no generation"
+    assert run.run_once(sb) is False
+
+
+def test_the_last_lane_takes_harvest_and_derive_by_age(monkeypatch):
+    """Neither catalogue job outranks the other: the older is claimed first,
+    whichever kind it is."""
+    import worker.run as run
+    import catalogue.derive as derive
+    import catalogue.harvest as harvest
+
+    sb = _fresh("done", jobs=[_harvest(created_at="5"), _derive(created_at="4")])
+    order = []
+    monkeypatch.setattr(derive, "run_derive_job",
+                        lambda sb_, job: (order.append(job["type"]), db.finish_job(sb_, job["id"])))
+    monkeypatch.setattr(harvest, "run_harvest_job",
+                        lambda sb_, job: (order.append(job["type"]), db.finish_job(sb_, job["id"])))
+    monkeypatch.setattr(run, "process_generation", lambda *a, **k: pytest.fail("no builder is queued"))
+    monkeypatch.delenv("SUPPORT_AGENT_ENABLED", raising=False)
+
+    assert run.run_once(sb) is True and run.run_once(sb) is True
+    assert order == ["topic_derive", "topic_harvest"]
+    assert run.run_once(sb) is False
+    assert _gen_writes(sb) == []
+
+
+def test_a_crashing_derive_dispatch_never_writes_the_generation(monkeypatch):
+    """run_derive_job never raises; should it ever, run.py's generic failure
+    path resolves the generation through the ownership rule and finds none."""
+    import worker.run as run
+    import catalogue.derive as derive
+
+    sb = _fresh("done", jobs=[_derive(generation_id=GEN)])
+    monkeypatch.setattr(derive, "run_derive_job", lambda sb_, job: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(run, "process_generation", lambda *a, **k: pytest.fail("not a builder"))
+    monkeypatch.delenv("SUPPORT_AGENT_ENABLED", raising=False)
+
+    assert run.run_once(sb) is True
+    assert sb.tables["jobs"][0]["status"] == "error"
+    assert _gen_status(sb) == "done" and _gen_writes(sb) == []

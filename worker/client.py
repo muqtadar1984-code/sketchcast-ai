@@ -47,8 +47,10 @@ def admin() -> Client:
 # headings into topic_candidates and owns NO generation (its generation_id is
 # NULL by construction). Listing it here is belt-and-braces — should a harvest
 # ever be filed carrying a generation_id, claiming or finishing it must still
-# never relabel that row.
-OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "topic_harvest"})
+# never relabel that row. topic_derive (catalogue Phase 2a) is the same shape:
+# it reads a curriculum's nodes (jobs.params.curriculum_id) into grouped
+# candidates, owns no generation and no book.
+OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "topic_harvest", "topic_derive"})
 
 
 def generation_to_mirror(job: Optional[dict]) -> Optional[str]:

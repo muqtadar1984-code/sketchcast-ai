@@ -48,11 +48,17 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from catalogue.key import canonical_key
+from catalogue.node_kind import NODE_KINDS, infer_node_kind
 
 log = logging.getLogger("worker.seeds")
 
 _CURRICULUM_FIELDS = ("code", "name", "kind", "country", "edition", "source_url")
-_NODE_FIELDS = ("code", "grade", "strand", "sub_strand", "title", "description", "sort")
+# ``kind`` (0113) is what the node IS — strand / sub_strand / objective / unit /
+# chapter / topic. A file may say it; when it does not, ``_row_for_node`` infers
+# it from the code with the same six rules the 0113 backfill used
+# (catalogue.node_kind), so a node written today carries what the backfill
+# would have given it and the derive job reads both the same way.
+_NODE_FIELDS = ("code", "grade", "strand", "sub_strand", "title", "description", "sort", "kind")
 RAW_TITLE_MAX = 120
 _CHUNK = 200
 
@@ -105,6 +111,9 @@ def validate_seed(seed: dict, where: str = "seed") -> None:
         codes.add(code)
         if not str(n.get("title") or "").strip():
             raise SeedError(f"{where}: node {code!r} has no title")
+        kind = n.get("kind")
+        if kind is not None and str(kind).strip().lower() not in NODE_KINDS:
+            raise SeedError(f"{where}: node {code!r} has kind {kind!r}; expected one of {NODE_KINDS}")
     for n in nodes:
         parent = _parent_code(n)
         if parent and parent not in codes:
@@ -178,10 +187,24 @@ def _row_for_curriculum(cur: dict) -> dict:
     return row
 
 
+def node_kind_for(node: dict) -> Optional[str]:
+    """The ``kind`` the loader writes for a seed node: the file's value when
+    it gives one, else the 0113 backfill's inference from the code (a parent
+    is a ``parent_code`` here). None when neither says — the column stays
+    NULL rather than guessing."""
+    declared = node.get("kind")
+    if declared is not None and str(declared).strip():
+        return str(declared).strip().lower()
+    return infer_node_kind(_code(node), bool(_parent_code(node)))
+
+
 def _row_for_node(node: dict, curriculum_id: str) -> dict:
-    row = {k: node.get(k) for k in _NODE_FIELDS if k in node}
+    row = {k: node.get(k) for k in _NODE_FIELDS if k in node and k != "kind"}
     row["code"] = _code(node)
     row["curriculum_id"] = curriculum_id
+    kind = node_kind_for(node)
+    if kind is not None:
+        row["kind"] = kind
     return row
 
 
@@ -348,4 +371,5 @@ def load_seed(sb, path: str | Path, dry_run: bool = False) -> dict:
 
 
 __all__ = ["SeedError", "read_seed", "validate_seed", "leaf_codes", "candidate_for_node",
-           "candidate_mode", "CANDIDATE_MODES", "plan_seed", "load_seed", "RAW_TITLE_MAX"]
+           "candidate_mode", "CANDIDATE_MODES", "node_kind_for", "plan_seed", "load_seed",
+           "RAW_TITLE_MAX"]
