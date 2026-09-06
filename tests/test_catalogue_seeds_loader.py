@@ -254,7 +254,7 @@ class TestLoad:
         assert set(row) <= {"id", "code", "name", "kind", "country", "edition", "source_url"}
         for n in sb.tables["curriculum_nodes"]:
             assert set(n) <= {"id", "curriculum_id", "code", "grade", "strand", "sub_strand",
-                              "title", "description", "parent_id", "sort"}
+                              "title", "description", "parent_id", "sort", "kind"}
 
     def test_kind_defaults_to_syllabus(self, tmp_path):
         seed = json.loads(json.dumps(SEED))
@@ -270,6 +270,76 @@ class TestLoad:
         with pytest.raises(SeedError):
             load_seed(sb, _write(tmp_path, seed))
         assert sb.log == [] and sb.calls == []
+
+
+class TestNodeKind:
+    """``curriculum_nodes.kind`` (0113): passed through when the file says it,
+    inferred from the code with the backfill's six rules when it does not."""
+
+    @pytest.mark.parametrize("code,has_parent,kind", [
+        ("7Bs.01", True, "objective"), ("8TWSm.03", True, "objective"), ("9SIC.02", True, "objective"),
+        ("7ESp.01", True, "objective"), ("7Bs.01", False, "objective"),
+        ("7/Biology", False, "strand"), ("7/Bs", True, "sub_strand"), ("7/TWSm", True, "sub_strand"),
+        ("cbse:6:ch01", False, "chapter"), ("cbse:10:U1", False, "unit"), ("cbse:9:U1:01", True, "topic"),
+        ("7", False, None), ("7Bs.1", True, None), ("7Xy.01", True, None), ("cbse:9:U1:01:02", True, None),
+        ("", False, None), (None, False, None),
+    ])
+    def test_the_backfill_rules(self, code, has_parent, kind):
+        from catalogue.node_kind import infer_node_kind
+        assert infer_node_kind(code, has_parent) == kind
+
+    def test_the_loader_infers_a_kind_for_every_node_the_rules_know(self, tmp_path):
+        sb = FakeSB()
+        load_seed(sb, _write(tmp_path))
+        nodes = _nodes_by_code(sb)
+        assert nodes["7Bs.01"]["kind"] == "objective" and nodes["7Cm.01"]["kind"] == "objective"
+        assert nodes["7/Bio"]["kind"] == "strand", "a '/' code with no parent"
+        assert nodes["7/Chem"]["kind"] == "sub_strand", "a '/' code under a parent"
+        assert "kind" not in nodes["7"], "a root the rules do not know stays NULL, not guessed"
+
+    def test_a_declared_kind_passes_through(self, tmp_path):
+        seed = json.loads(json.dumps(SEED))
+        seed["nodes"][2]["kind"] = "topic"   # 7Cm.01, an LO-shaped code the file says is a NAME
+        seed["nodes"][5]["kind"] = "Strand"  # "7", case-insensitive
+        sb = FakeSB()
+        load_seed(sb, _write(tmp_path, seed))
+        nodes = _nodes_by_code(sb)
+        assert nodes["7Cm.01"]["kind"] == "topic" and nodes["7"]["kind"] == "strand"
+
+    def test_an_unknown_kind_is_refused_before_anything_is_written(self, tmp_path):
+        seed = json.loads(json.dumps(SEED))
+        seed["nodes"][0]["kind"] = "lesson"
+        sb = FakeSB()
+        with pytest.raises(SeedError, match="kind"):
+            load_seed(sb, _write(tmp_path, seed))
+        assert sb.log == []
+
+    def test_a_second_run_still_writes_nothing(self, tmp_path):
+        """The inferred kind is compared like every other field."""
+        sb = FakeSB()
+        path = _write(tmp_path)
+        load_seed(sb, path)
+        n_log = len(sb.log)
+        out = load_seed(sb, path)
+        assert out["nodes_updated"] == 0 and sb.log[n_log:] == []
+
+    def test_every_node_of_the_shipped_seeds_gets_a_kind(self):
+        """The backfill's regexes were written against these files; every
+        node of both must land on one of the six kinds."""
+        from catalogue.seeds.loader import node_kind_for
+        files = sorted((ROOT / "catalogue" / "seeds").glob("*.json"))
+        if not files:
+            pytest.skip("no seed files present in this checkout")
+        for f in files:
+            seed = loader.read_seed(f)
+            kinds = {n["code"]: node_kind_for(n) for n in seed["nodes"]}
+            missing = [c for c, k in kinds.items() if k is None]
+            assert not missing, f"{f.name}: no kind for {missing[:5]}"
+            if "cambridge" in f.name:
+                from collections import Counter
+                counts = Counter(kinds.values())
+                # 3 stages × (6 strands + 16 sub-strands), 200 objectives = 266 nodes.
+                assert counts == {"objective": 200, "sub_strand": 48, "strand": 18}
 
 
 class TestDryRun:
