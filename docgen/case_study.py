@@ -59,8 +59,11 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
 
     title = data.get("title") or f"{dx._t('doc_case_study', language)} — {chapter_title}"
     subtitle = f"{grade} · {subject}"
+    # Catalogue documents carry their curriculum block (decision 10); a
+    # textbook case study passes none and renders as before.
+    header_lines = p.get("curriculum_header")
     doc = dx.new_doc(title, subtitle, template=template, kind="case_study",
-                     language=language)
+                     language=language, header_lines=header_lines)
 
     if data.get("background"):
         dx.heading(doc, dx._t("background", language), 1)
@@ -90,7 +93,7 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     # is its own document. Masthead reuses the localized teacher_notes string.
     key_doc = dx.new_doc(f"{title} — {dx._t('teacher_notes', language)}",
                          subtitle, template=template, kind="case_study",
-                         language=language)
+                         language=language, header_lines=header_lines)
     dx.para(key_doc, dx._t("teacher_only", language), italic=True)
     if qs:
         dx.heading(key_doc, dx._t("teacher_notes", language), 0)

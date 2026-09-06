@@ -1220,7 +1220,9 @@ class TestFaceHoldsAcrossParts:
     def test_the_worker_seeds_the_cast_on_book_and_chapter(self):
         import inspect
         from worker import process
-        src = inspect.getsource(process.process_generation)
+        # The cast lives in the shared build half of process_generation
+        # (_build_from_analysis, split out 2026-09-06 for the catalogue path).
+        src = inspect.getsource(process._build_from_analysis)
         assert 'cast_seed = f"{book_id}:{chapter_num}"' in src
         assert "cast_avatars(effective_voice, book.get(\"grade\"), cast_seed" in src
         assert "cast_avatars(effective_voice, book.get(\"grade\"), generation_id" not in src

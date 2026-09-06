@@ -130,6 +130,33 @@ acceptance summary counts them per cause:
 | `cache_only_miss` | A render child (`RENDER_PROCESSES > 1`) may only read the cache, and the warm pass did not land this file. |
 | `no_vector` | Nothing at any tier, including the authored vectors. |
 
+## Catalogue kits (Phase 3): deploy order and the never-starve rule
+
+A catalogue kit's generations are ordinary builder rows (presentation, deck,
+documents) owned by the system account with `params.catalogue = true`. The
+worker's lanes tell them from a teacher's by the copy of that flag on
+**`jobs.params`**, which only app migration **0115** (`create_job_for_generation()`)
+writes at insert. **Apply 0115 before `FEATURE_CATALOGUE_GENERATE` is turned
+on**: a kit row inserted before it carries no flag, so the user lanes claim
+it (the never-starve gate is bypassed for it), `builder_queued` counts it as a
+user waiting, and its failure files a console issue under the system account.
+The worker checks at boot (`CATALOGUE FLAG CHECK`) and logs CRITICAL when any
+queued catalogue job lacks the flag; requeue or re-create those rows after the
+migration.
+
+Kits yield to real users twice: at CLAIM (the last lane runs only with no live
+user builder and inside the window) and DURING the render (the presentation
+loop polls the queue between parts, and the scene engine asks the same probe
+before every image generation; a user who outlasts the wait fails the kit
+rather than being rendered over — Retry it inside the window).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CATALOGUE_WINDOW_UTC` | `20:00-05:00` | When kit generations may be claimed (UTC, wraps midnight). `always` disables the window and is ONLY for a supervised pilot. A typo — a zero-width `HH:MM-HH:MM` included — keeps the default. |
+| `CATALOGUE_PRESENTATION_MARGIN_MIN` | 60 | A presentation is claimed only while the window stays open this long; documents and decks need no margin. |
+| `CATALOGUE_YIELD_POLL_SECONDS` | 20 | How often a rendering kit re-asks whether a user builder is live. |
+| `CATALOGUE_YIELD_MAX_SECONDS` | 1800 | How long it waits before giving the contended work up (an image is skipped; a part boundary fails the kit). |
+
 ## Project Structure
 
 ```

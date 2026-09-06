@@ -112,6 +112,10 @@ PAUSED_BUILDERS = "paused: builder jobs queued"
 PAUSED_BUDGET = "paused: image budget spent"
 # A builder in either of these states is real contention for the image pool.
 BUILDER_LIVE_STATUSES = ("queued", "processing")
+# How many live builder rows builder_queued reads before deciding. Far above
+# any real queue depth (production idles at 0-5 live jobs); it exists so a
+# runaway queue cannot make the probe unbounded.
+BUILDER_PROBE_LIMIT = 200
 PROVENANCE_LIBRARY = "visual_library"
 # raster_assets reads the same variable (default 24) for the engine's own
 # per-generation budget; this job caps its generation COUNT at the same number
@@ -362,16 +366,36 @@ def library_context(sb, article: dict) -> dict:
     return ctx
 
 
+def is_catalogue_job(job: Optional[dict]) -> bool:
+    """A CATALOGUE generation job: migration 0115 copies ``{"catalogue": true}``
+    from the generation's params into ``jobs.params`` at insert, so the flag is
+    on the row itself (JSON ``true`` in Postgres, the text ``"true"`` through
+    ``->>``). Nothing a real user is waiting on ever carries it. ONE reading
+    of the flag (worker.client.is_catalogue_params), shared with the worker's
+    own branch (catalogue.kit.is_catalogue) — and needing nothing from the
+    catalogue package, so run.py's failure path can ask it cheaply."""
+    return db.is_catalogue_params((job or {}).get("params"))
+
+
 def builder_queued(sb) -> bool:
-    """Whether any job a real user is waiting on is LIVE — queued or
+    """Whether any job a REAL USER is waiting on is LIVE — queued or
     processing — of a type that is not an observer (presentations, decks,
     documents, index_book, exams). THE never-starve gate: a generation call
     may not start while one is. Processing counts because a worker with
     ``WORKER_CONCURRENCY > 1`` runs a builder on a sibling thread while this
-    job runs, and that builder's image calls share the pool."""
-    res = (sb.table("jobs").select("id,type,status").in_("status", list(BUILDER_LIVE_STATUSES))
-           .not_.in_("type", sorted(db.OBSERVER_JOB_TYPES)).limit(1).execute())
-    return bool(_rows(res))
+    job runs, and that builder's image calls share the pool.
+
+    Catalogue-flagged generation jobs (Phase 3 kits) are builders by TYPE
+    but nobody is waiting on them — they are the very batch this gate exists
+    to hold back, so counting them would let one kit's queued worksheet stop
+    every other kit forever. They are excluded here in Python: PostgREST's
+    ``or=(...is.null,...neq.true)`` is the only way to say "flag absent or
+    false" in one filter, and reading a bounded page of live builders and
+    filtering it is exact for any queue this worker has ever seen (the live
+    set is a handful of rows) while staying honest with every fake client."""
+    res = (sb.table("jobs").select("id,type,status,params").in_("status", list(BUILDER_LIVE_STATUSES))
+           .not_.in_("type", sorted(db.OBSERVER_JOB_TYPES)).limit(BUILDER_PROBE_LIMIT).execute())
+    return any(not is_catalogue_job(r) for r in _rows(res))
 
 
 def lookup_asset(sb, rendered: Rendered) -> Optional[dict]:

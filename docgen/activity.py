@@ -61,12 +61,15 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     # Filter non-dicts ONCE — the student sheet and the teacher notes must
     # enumerate the SAME list, or notes N stops describing Activity N.
     acts = [a for a in (data.get("activities") or []) if isinstance(a, dict)]
+    # Catalogue documents carry their curriculum block (decision 10); a
+    # textbook activity passes none and renders as before.
+    header_lines = (params or {}).get("curriculum_header")
 
     # ── Student sheet: everything a learner runs the activity from ──────────
     # The intro ("overview for the teacher") and the per-activity facilitation
     # and success criteria are teacher-only — they live in the second document.
     doc = dx.new_doc(title, subtitle, template=template, kind="activity",
-                     language=language)
+                     language=language, header_lines=header_lines)
     for i, act in enumerate(acts, 1):
         dx.heading(doc, f"{dx._t('activity', language)} {i}: "
                         f"{act.get('name', dx._t('activity', language))}", 1)
@@ -88,7 +91,7 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     # string — no new docgen strings.
     key_doc = dx.new_doc(f"{title} — {dx._t('teacher_facilitation', language)}",
                          subtitle, template=template, kind="activity",
-                         language=language)
+                         language=language, header_lines=header_lines)
     dx.para(key_doc, dx._t("teacher_only", language), italic=True)
     if data.get("intro"):
         dx.instructions(key_doc, data["intro"])

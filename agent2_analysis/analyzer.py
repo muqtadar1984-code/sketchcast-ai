@@ -63,8 +63,14 @@ NARRATION_WPM = 130
 _MIN_TAIL_WORDS = 400
 
 
-def _hard_split(block: str) -> list[str]:
+def _hard_split(block: str, max_words: int = MAX_PART_WORDS) -> list[str]:
     """Split one oversized unit so every piece honours BOTH budgets.
+
+    ``max_words`` is the teaching budget; the default is the classroom's 15
+    minutes. The catalogue's YouTube kits (2026-09-06) pass a longer one —
+    the 17-to-20-minute deep-dive video — through build_chapter_parts, and
+    it must reach every place the words bound is applied or a section would
+    still be cut at 1,950 words while the accumulator packs 2,600.
 
     This is where a scanned book's whole chapter arrives: the OCR is stored as a
     SINGLE "Content" section, so there is nothing to split on but the block
@@ -96,7 +102,7 @@ def _hard_split(block: str) -> list[str]:
     # video in a chapter roughly the same length, which is what a teacher
     # planning a week of classes actually wants.
     n = max(
-        -(-total_words // MAX_PART_WORDS),      # lesson bound (the classroom)
+        -(-total_words // max_words),           # lesson bound (the classroom)
         -(-len(block) // MAX_ANALYSIS_CHARS),   # context bound (the model)
         1,
     )
@@ -111,7 +117,7 @@ def _hard_split(block: str) -> list[str]:
         # unusually long run of characters cannot smuggle a piece past the
         # model's context bound.
         if cur and (cur_chars + len(tok) > MAX_ANALYSIS_CHARS
-                    or (is_word and cur_words + 1 > MAX_PART_WORDS)
+                    or (is_word and cur_words + 1 > max_words)
                     or (is_word and cur_words >= per and len(pieces) < n - 1)):
             pieces.append("".join(cur))
             cur, cur_chars, cur_words = [], 0, 0
@@ -123,8 +129,14 @@ def _hard_split(block: str) -> list[str]:
     return pieces or [""]
 
 
-def build_chapter_parts(chapter_content: dict) -> list[dict]:
+def build_chapter_parts(chapter_content: dict, max_words: int = MAX_PART_WORDS) -> list[dict]:
     """The SINGLE source of truth for how a chapter splits into parts.
+
+    ``max_words`` defaults to MAX_PART_WORDS, so every existing caller — the
+    indexer's part map, the generation's part narrowing, the exam's units —
+    splits exactly as before. Only the catalogue kit (catalogue/kit.py)
+    passes a larger budget, for the longer YouTube video; the char bound
+    (MAX_ANALYSIS_CHARS) is the model's and is never widened.
 
     Used by INDEXING (to show "Part 1..N" per chapter the moment a book is
     uploaded) and by GENERATION (whole-chapter analysis, and on-demand
@@ -175,10 +187,10 @@ def build_chapter_parts(chapter_content: dict) -> list[dict]:
         cur_parts, cur_titles, cur_len, cur_words = [], [], 0, 0
 
     for sec_title, block in units:
-        pieces = _hard_split(block)
+        pieces = _hard_split(block, max_words)
         for piece in pieces:
             piece_words = len(piece.split())
-            if cur_parts and (cur_len + len(piece) > MAX_ANALYSIS_CHARS or cur_words + piece_words > MAX_PART_WORDS):
+            if cur_parts and (cur_len + len(piece) > MAX_ANALYSIS_CHARS or cur_words + piece_words > max_words):
                 _flush()
             cur_parts.append(piece)
             if sec_title:
@@ -211,7 +223,7 @@ def build_chapter_parts(chapter_content: dict) -> list[dict]:
     # an already-full part would push that video back over 15 minutes, which is
     # the exact compression this file exists to prevent.
     if (len(chunks) > 1 and chunks[-1]["words"] < _MIN_TAIL_WORDS
-            and chunks[-2]["words"] + chunks[-1]["words"] <= MAX_PART_WORDS):
+            and chunks[-2]["words"] + chunks[-1]["words"] <= max_words):
         tail = chunks.pop()
         prev = chunks[-1]
         prev["text"] = f"{prev['text']}\n\n{tail['text']}".strip()
