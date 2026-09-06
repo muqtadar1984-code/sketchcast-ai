@@ -50,6 +50,14 @@ WORKER_CONCURRENCY = max(1, int(os.getenv("WORKER_CONCURRENCY", "1")))
 # slide deck ('deck', 2026-09) is the same shape: one authoring call + a .pptx.
 DOC_JOB_TYPES = ["lesson_plan", "activity", "worksheet", "exam_paper", "case_study", "exam", "deck"]
 
+# Observer jobs (db.OBSERVER_JOB_TYPES): they report on or read from content
+# without building a generation. Both are bounded and model-free or one-call
+# — a support diagnosis is one Sonnet call; a topic harvest is a download plus
+# CPU-only heading extraction, no image or model quota at all — so they run
+# ahead of documents. Claimed together so claim_next_job's created_at order
+# decides between them.
+OBSERVER_JOB_TYPES = ["support_diagnose", "topic_harvest"]
+
 # Job ids this process is ACTIVELY running. The crash-reaper must never requeue
 # these — with concurrency, a live 'processing' row is not an orphan. (Sketches
 # are seconds-long, far under the stale window, so they aren't tracked.)
@@ -175,7 +183,9 @@ def run_once(sb) -> bool:
 
     Priority (fast/interactive work never sits behind a long batch render):
       1. AI-Tutor sketches — a student is waiting live; tiny SVG→MP4.
-      2. Support diagnoses — a reporter is watching an issue's status.
+      2. Observer jobs — support diagnoses (a reporter is watching an issue's
+         status) and topic harvests (a curator is waiting on the candidates
+         queue; download + CPU, no quota).
       3. Documents — a teacher's papers/plans; one model call + a .docx.
       4. Everything else — video lessons (presentation), index_book.
     All of 1–3 are bounded/fast, so they can't starve the lesson queue."""
@@ -195,7 +205,7 @@ def run_once(sb) -> bool:
         return True
 
     job = (
-        db.claim_next_job(sb, job_type="support_diagnose")
+        db.claim_next_job(sb, job_type=OBSERVER_JOB_TYPES)
         or db.claim_next_job(sb, job_type=DOC_JOB_TYPES)
         or db.claim_next_job(sb)
     )
@@ -214,6 +224,10 @@ def run_once(sb) -> bool:
 
             run_support_job(sb, job)
             db.finish_job(sb, job["id"])
+        elif job_type == "topic_harvest":
+            from catalogue.harvest import run_harvest_job
+
+            run_harvest_job(sb, job)  # self-contained: finishes its own row, done or error
         else:
             process_generation(sb, job, gen_id)
     except db.TransientTierError as exc:
@@ -271,8 +285,9 @@ def run_once(sb) -> bool:
             except Exception:  # noqa: BLE001
                 pass
         # A failed generation triggers the diagnosis agent (flag-gated; never
-        # for a support job itself — that would recurse).
-        if _support_agent_enabled() and job_type not in ("support_diagnose", "index_book"):
+        # for a support job itself — that would recurse — nor for the other
+        # generation-less jobs, which have no reporter waiting on a lesson).
+        if _support_agent_enabled() and job_type not in ("support_diagnose", "index_book", "topic_harvest"):
             _auto_file_support_issue(sb, job, str(exc))
     finally:
         _inflight_remove(job["id"])

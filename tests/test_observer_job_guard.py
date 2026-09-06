@@ -190,6 +190,12 @@ def test_the_resolver_names_the_owner_and_only_the_owner():
     assert db.generation_to_mirror({"generation_id": GEN}) == GEN
     assert db.generation_to_mirror({"type": "index_book", "generation_id": None}) is None
     assert "support_diagnose" in db.OBSERVER_JOB_TYPES
+    # The catalogue's harvest (2026-09) reads a book's headings and owns no
+    # generation. Its generation_id is NULL by construction; were one ever
+    # attached, the resolver must still refuse to mirror onto it.
+    assert "topic_harvest" in db.OBSERVER_JOB_TYPES
+    assert db.generation_to_mirror({"type": "topic_harvest", "generation_id": None}) is None
+    assert db.generation_to_mirror({"type": "topic_harvest", "generation_id": GEN}) is None
 
 
 # ── the prod sequence, step by step ─────────────────────────────────────
@@ -360,3 +366,58 @@ def test_run_once_finishing_a_builder_still_writes_done(monkeypatch):
     assert _run_once_with(monkeypatch, sb) is True
     assert sb.tables["jobs"][0]["status"] == "done"
     assert _gen_status(sb) == "done"
+
+
+# ── the catalogue's harvest is dispatched in the observer lane ──────────
+
+
+def _harvest(job_id="job-th", status="queued", generation_id=None):
+    return {"id": job_id, "type": "topic_harvest", "status": status, "generation_id": generation_id,
+            "book_id": BOOK, "attempts": 0, "created_at": "3", "updated_at": "0"}
+
+
+def test_run_once_dispatches_a_topic_harvest_to_the_catalogue(monkeypatch):
+    """Called, not grepped: the claim must pick the job up in the observer lane
+    and hand it to catalogue.harvest.run_harvest_job, which finishes its own
+    row. The generations table is never written."""
+    import worker.run as run
+    import catalogue.harvest as harvest
+
+    sb = _fresh("done", jobs=[_harvest()])
+    seen = []
+
+    def fake_harvest(sb_, job):
+        seen.append(job["id"])
+        db.finish_job(sb_, job["id"])  # what the real one does on success
+
+    monkeypatch.setattr(harvest, "run_harvest_job", fake_harvest)
+    monkeypatch.setattr(run, "process_generation",
+                        lambda *a, **k: pytest.fail("a harvest must not reach process_generation"))
+    monkeypatch.delenv("SUPPORT_AGENT_ENABLED", raising=False)
+
+    assert run.run_once(sb) is True
+    assert seen == ["job-th"]
+    assert sb.tables["jobs"][0]["status"] == "done"
+    assert _gen_status(sb) == "done" and _gen_writes(sb) == []
+
+
+def test_a_harvest_claim_beats_a_queued_document_and_never_touches_a_generation(monkeypatch):
+    """The observer lane is claimed before the document lane, so a harvest
+    filed AFTER a worksheet still runs first — and even a harvest row that
+    somehow carries a generation_id leaves that generation alone."""
+    import worker.run as run
+    import catalogue.harvest as harvest
+
+    sb = _fresh("done", jobs=[_builder(job_id="job-ws"), _harvest(generation_id=GEN)])
+    order = []
+    monkeypatch.setattr(harvest, "run_harvest_job",
+                        lambda sb_, job: (order.append(job["type"]), db.finish_job(sb_, job["id"])))
+    monkeypatch.setattr(run, "process_generation",
+                        lambda sb_, job, gen: (order.append(job["type"]), db.finish_job(sb_, job["id"], gen)))
+    monkeypatch.delenv("SUPPORT_AGENT_ENABLED", raising=False)
+
+    assert run.run_once(sb) is True
+    assert order == ["topic_harvest"]
+    assert _gen_status(sb) == "done" and _gen_writes(sb) == []
+    assert run.run_once(sb) is True
+    assert order == ["topic_harvest", "worksheet"]

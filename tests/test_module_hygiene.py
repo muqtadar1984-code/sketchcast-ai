@@ -34,6 +34,7 @@ MODULES = sorted(
         *ROOT.glob("worker/*.py"),
         *ROOT.glob("support_agent/*.py"),
         *ROOT.rglob("shared/**/*.py"),
+        *ROOT.rglob("catalogue/**/*.py"),
         *ROOT.glob("agent6_animation/*.py"),
         *ROOT.glob("agent8_render/*.py"),
     ]

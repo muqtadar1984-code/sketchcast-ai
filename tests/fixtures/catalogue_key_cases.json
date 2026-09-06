@@ -1,0 +1,194 @@
+{
+  "_": "THE canonical-key truth table. One file, two copies, byte-identical: sketchcast-app/src/utils/__tests__/fixtures/catalogue_key_cases.json and sketchcast/tests/fixtures/catalogue_key_cases.json. Both tests pin the sha256 below of the LF-normalised bytes.",
+  "rules": [
+    "1. Unicode NFKD, remove combining marks (Unicode category M), lower-case.",
+    "2. Replace '&' with ' and '.",
+    "3. Every run of characters not in [a-z0-9] becomes one '_'.",
+    "4. Trim leading and trailing '_'.",
+    "5. Drop ONE leading article token: 'the', 'a' or 'an' (a title that is only an article becomes '').",
+    "6. For each '_'-separated token: drop a final 's' when the token is purely alphabetic [a-z], has at least 4 letters, and the letter before that 's' is not 's' and not one of a/i/o/u (so a consonant or an 'e'). Tokens with digits (curriculum codes), a lone 's', 'glass' (ss), 'gas'/'bus'/'this' (vowel) and 3-letter words stay.",
+    "7. Rejoin with '_'."
+  ],
+  "cases": [
+    {
+      "in": "The Cell",
+      "key": "cell"
+    },
+    {
+      "in": "Cells",
+      "key": "cell"
+    },
+    {
+      "in": "Acids, Bases & Salts",
+      "key": "acid_base_and_salt"
+    },
+    {
+      "in": "Light — Reflection and Refraction",
+      "key": "light_reflection_and_refraction"
+    },
+    {
+      "in": "Newton's Laws",
+      "key": "newton_s_law"
+    },
+    {
+      "in": "7Bs.01",
+      "key": "7bs_01"
+    },
+    {
+      "in": "  ",
+      "key": ""
+    },
+    {
+      "in": "",
+      "key": ""
+    },
+    {
+      "in": "Énergie",
+      "key": "energie"
+    },
+    {
+      "in": "الخلية",
+      "key": ""
+    },
+    {
+      "in": "7/Biology",
+      "key": "7_biology"
+    },
+    {
+      "in": "gases",
+      "key": "gase"
+    },
+    {
+      "in": "glass",
+      "key": "glass"
+    },
+    {
+      "in": "forces",
+      "key": "force"
+    },
+    {
+      "in": "bases",
+      "key": "base"
+    },
+    {
+      "in": "physics",
+      "key": "physic"
+    },
+    {
+      "in": "mathematics",
+      "key": "mathematic"
+    },
+    {
+      "in": "Atoms and Molecules",
+      "key": "atom_and_molecule"
+    },
+    {
+      "in": "An Introduction to Cells",
+      "key": "introduction_to_cell"
+    },
+    {
+      "in": "A",
+      "key": ""
+    },
+    {
+      "in": "The",
+      "key": ""
+    },
+    {
+      "in": "Theory of Evolution",
+      "key": "theory_of_evolution"
+    },
+    {
+      "in": "  Multiple   spaces  here ",
+      "key": "multiple_space_here"
+    },
+    {
+      "in": "Photo-synthesis",
+      "key": "photo_synthesis"
+    },
+    {
+      "in": "Ohm's Law & Resistance",
+      "key": "ohm_s_law_and_resistance"
+    },
+    {
+      "in": "H2O and CO2",
+      "key": "h2o_and_co2"
+    },
+    {
+      "in": "1990s",
+      "key": "1990s"
+    },
+    {
+      "in": "Class 10 Science",
+      "key": "class_10_science"
+    },
+    {
+      "in": "Bus",
+      "key": "bus"
+    },
+    {
+      "in": "This",
+      "key": "this"
+    },
+    {
+      "in": "Its",
+      "key": "its"
+    },
+    {
+      "in": "Yes",
+      "key": "yes"
+    },
+    {
+      "in": "cbse:9:ch5:2025",
+      "key": "cbse_9_ch5_2025"
+    },
+    {
+      "in": "Ecosystems",
+      "key": "ecosystem"
+    },
+    {
+      "in": "Ｆｕｌｌｗｉｄｔｈ",
+      "key": "fullwidth"
+    },
+    {
+      "in": "Straße",
+      "key": "stra_e"
+    },
+    {
+      "in": "Water Cycle (Grade 7)",
+      "key": "water_cycle_grade_7"
+    },
+    {
+      "in": "Species",
+      "key": "specie"
+    },
+    {
+      "in": "Waves",
+      "key": "wave"
+    },
+    {
+      "in": "Sound & Light",
+      "key": "sound_and_light"
+    },
+    {
+      "in": "Analysis",
+      "key": "analysis"
+    },
+    {
+      "in": "Process",
+      "key": "process"
+    },
+    {
+      "in": "Tests",
+      "key": "test"
+    },
+    {
+      "in": "Focus",
+      "key": "focus"
+    },
+    {
+      "in": "Gas",
+      "key": "gas"
+    }
+  ]
+}

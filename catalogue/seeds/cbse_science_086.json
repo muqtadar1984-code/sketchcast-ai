@@ -1,0 +1,773 @@
+{
+  "curriculum": {
+    "code": "cbse_science_086",
+    "name": "CBSE Science (Class 6-10)",
+    "kind": "syllabus",
+    "country": "IN",
+    "edition": "2025-26",
+    "source_url": "https://cbseacademic.nic.in/web_material/CurriculumMain26/Sec/Science_Sec_2025-26.pdf",
+    "partial": false
+  },
+  "nodes": [
+    {
+      "code": "cbse:9:U1",
+      "grade": "9",
+      "strand": "Materials",
+      "sub_strand": null,
+      "title": "Matter-Nature and Behaviour",
+      "description": null,
+      "parent_code": null,
+      "sort": 1
+    },
+    {
+      "code": "cbse:9:U1:01",
+      "grade": "9",
+      "strand": "Materials",
+      "sub_strand": null,
+      "title": "Matter in Our Surroundings",
+      "description": "Definition of matter; Particulate Nature of Matter; States of",
+      "parent_code": "cbse:9:U1",
+      "sort": 2
+    },
+    {
+      "code": "cbse:9:U1:02",
+      "grade": "9",
+      "strand": "Materials",
+      "sub_strand": null,
+      "title": "Is Matter Around Us Pure",
+      "description": "Elements, compounds and mixtures. Heterogeneous and homogenous mixtures, colloids and suspensions. Physical and chemical changes (excluding separating the components of a mixture); Pure and Impure substances.",
+      "parent_code": "cbse:9:U1",
+      "sort": 3
+    },
+    {
+      "code": "cbse:9:U1:03",
+      "grade": "9",
+      "strand": "Materials",
+      "sub_strand": null,
+      "title": "Atoms and Molecules",
+      "description": "Atoms and molecules, Law of Chemical Combination, Chemical formula of common compounds, Atomic and molecular masses.",
+      "parent_code": "cbse:9:U1",
+      "sort": 4
+    },
+    {
+      "code": "cbse:9:U1:04",
+      "grade": "9",
+      "strand": "Materials",
+      "sub_strand": null,
+      "title": "Structure of atom",
+      "description": "Sub-atomic particles: Electrons, protons and neutrons, Models of atom; Valency, Atomic Number and Mass Number, Isotopes and Isobars.",
+      "parent_code": "cbse:9:U1",
+      "sort": 5
+    },
+    {
+      "code": "cbse:9:U2",
+      "grade": "9",
+      "strand": "The World of the Living",
+      "sub_strand": null,
+      "title": "Organization in the Living World",
+      "description": null,
+      "parent_code": null,
+      "sort": 6
+    },
+    {
+      "code": "cbse:9:U2:01",
+      "grade": "9",
+      "strand": "The World of the Living",
+      "sub_strand": null,
+      "title": "Cell - Basic Unit of life",
+      "description": "Cell as a basic unit of life; prokaryotic and eukaryotic cells, multicellular organisms; cell membrane and cell wall, cell organelles and cell inclusions; chloroplast, mitochondria, vacuoles, endoplasmic reticulum, Golgi apparatus; nucleus, chromosomes - basic structure, number.",
+      "parent_code": "cbse:9:U2",
+      "sort": 7
+    },
+    {
+      "code": "cbse:9:U2:02",
+      "grade": "9",
+      "strand": "The World of the Living",
+      "sub_strand": null,
+      "title": "Tissues, Organs, Organ System, Organism",
+      "description": "Structure and functions of animal and plant tissues (only four types of tissues in animals; Meristematic and Permanent tissues in plants).",
+      "parent_code": "cbse:9:U2",
+      "sort": 8
+    },
+    {
+      "code": "cbse:9:U2:03",
+      "grade": "9",
+      "strand": "The World of the Living",
+      "sub_strand": null,
+      "title": "Health and Diseases",
+      "description": "Health and its failure. Infectious and Non-infectious diseases, their causes and manifestation. Diseases caused by microbes (Virus, Bacteria and Protozoans) and their prevention; Principles of treatment and prevention. Pulse Polio programmes.",
+      "parent_code": "cbse:9:U2",
+      "sort": 9
+    },
+    {
+      "code": "cbse:9:U3",
+      "grade": "9",
+      "strand": "Moving Things, People and Ideas",
+      "sub_strand": null,
+      "title": "Motion, Force and Work",
+      "description": null,
+      "parent_code": null,
+      "sort": 10
+    },
+    {
+      "code": "cbse:9:U3:01",
+      "grade": "9",
+      "strand": "Moving Things, People and Ideas",
+      "sub_strand": null,
+      "title": "Motion",
+      "description": "Distance and displacement, velocity; uniform and non-uniform motion along a straight line; acceleration, distance-time and velocity-time graphs for uniform motion and uniformly accelerated motion, elementary idea of uniform circular motion.",
+      "parent_code": "cbse:9:U3",
+      "sort": 11
+    },
+    {
+      "code": "cbse:9:U3:02",
+      "grade": "9",
+      "strand": "Moving Things, People and Ideas",
+      "sub_strand": null,
+      "title": "Force and Newton’s laws",
+      "description": "Force and Motion, Newton’s Laws of Motion, Action and Reaction forces, Inertia of a body, Inertia and mass, Momentum, Force and Acceleration.",
+      "parent_code": "cbse:9:U3",
+      "sort": 12
+    },
+    {
+      "code": "cbse:9:U3:03",
+      "grade": "9",
+      "strand": "Moving Things, People and Ideas",
+      "sub_strand": null,
+      "title": "Gravitation",
+      "description": "Gravitation; Universal Law of Gravitation, Force of Gravitation of the earth (gravity), Acceleration due to Gravity; Mass and Weight; Free fall.",
+      "parent_code": "cbse:9:U3",
+      "sort": 13
+    },
+    {
+      "code": "cbse:9:U3:04",
+      "grade": "9",
+      "strand": "Moving Things, People and Ideas",
+      "sub_strand": null,
+      "title": "Floatation",
+      "description": "Thrust and Pressure. Archimedes’ Principle; Buoyancy.",
+      "parent_code": "cbse:9:U3",
+      "sort": 14
+    },
+    {
+      "code": "cbse:9:U3:05",
+      "grade": "9",
+      "strand": "Moving Things, People and Ideas",
+      "sub_strand": null,
+      "title": "Work, Energy and Power",
+      "description": "Work done by a Force, Energy, power; Kinetic and Potential energy; Law of conservation of energy (excluding commercial unit of Energy).",
+      "parent_code": "cbse:9:U3",
+      "sort": 15
+    },
+    {
+      "code": "cbse:9:U3:06",
+      "grade": "9",
+      "strand": "Moving Things, People and Ideas",
+      "sub_strand": null,
+      "title": "Sound",
+      "description": "Nature of sound and its propagation in various media, speed of sound, range of hearing in humans; ultrasound; reflection of sound; echo.",
+      "parent_code": "cbse:9:U3",
+      "sort": 16
+    },
+    {
+      "code": "cbse:9:U4",
+      "grade": "9",
+      "strand": "Food",
+      "sub_strand": null,
+      "title": "Food Production",
+      "description": null,
+      "parent_code": null,
+      "sort": 17
+    },
+    {
+      "code": "cbse:10:U1",
+      "grade": "10",
+      "strand": "Materials",
+      "sub_strand": null,
+      "title": "Chemical Substances - Nature and Behaviour",
+      "description": null,
+      "parent_code": null,
+      "sort": 18
+    },
+    {
+      "code": "cbse:10:U1:01",
+      "grade": "10",
+      "strand": "Materials",
+      "sub_strand": null,
+      "title": "Chemical Reactions and Equations",
+      "description": "Chemical reactions, Chemical equation, Balanced chemical equation, types of chemical reactions: combination, decomposition, displacement, double displacement, precipitation, endothermic exothermic reactions, oxidation and reduction.",
+      "parent_code": "cbse:10:U1",
+      "sort": 19
+    },
+    {
+      "code": "cbse:10:U1:02",
+      "grade": "10",
+      "strand": "Materials",
+      "sub_strand": null,
+      "title": "Acids, Bases and Salts",
+      "description": "Acids and Bases – definitions in terms of furnishing of H+ and OH– ions, identification using indicators, chemical properties, examples and uses, neutralization, concept of pH scale (Definition relating to logarithm not required), importance of pH in everyday life; preparation and uses of Sodium Hydroxide, Bleaching powder, Baking soda, Washing soda and Plaster of Paris.",
+      "parent_code": "cbse:10:U1",
+      "sort": 20
+    },
+    {
+      "code": "cbse:10:U1:03",
+      "grade": "10",
+      "strand": "Materials",
+      "sub_strand": null,
+      "title": "Metals and Non-metals",
+      "description": "Properties of metals and non-metals; Reactivity series; Formation and properties of ionic compounds; Basic metallurgical processes; Corrosion and its prevention.",
+      "parent_code": "cbse:10:U1",
+      "sort": 21
+    },
+    {
+      "code": "cbse:10:U1:04",
+      "grade": "10",
+      "strand": "Materials",
+      "sub_strand": null,
+      "title": "Carbon and its Compounds",
+      "description": "Covalent bonds – formation and properties of covalent compounds, Versatile nature of carbon, Hydrocarbons – saturated and unsaturated Homologous series. Nomenclature of alkanes, alkenes, alkyne and carbon compounds containing functional groups (halogens, alcohol, ketones, aldehydes). Chemical properties of carbon compounds (combustion, oxidation, addition and substitution reaction). Ethanol and Ethanoic acid (only properties and uses), soaps and detergents.",
+      "parent_code": "cbse:10:U1",
+      "sort": 22
+    },
+    {
+      "code": "cbse:10:U2",
+      "grade": "10",
+      "strand": "The World of the Living",
+      "sub_strand": null,
+      "title": "World of Living",
+      "description": null,
+      "parent_code": null,
+      "sort": 23
+    },
+    {
+      "code": "cbse:10:U2:01",
+      "grade": "10",
+      "strand": "The World of the Living",
+      "sub_strand": null,
+      "title": "Life processes",
+      "description": "‘Living Being’. Basic concept of nutrition, respiration, transport and excretion in plants and animals.",
+      "parent_code": "cbse:10:U2",
+      "sort": 24
+    },
+    {
+      "code": "cbse:10:U2:02",
+      "grade": "10",
+      "strand": "The World of the Living",
+      "sub_strand": null,
+      "title": "Control and co-ordination in animals and plants",
+      "description": "Tropic movements in plants; Introduction of plant hormones; Control and co-ordination in animals: Nervous system; Voluntary, involuntary and reflex action; Chemical co-ordination: animal hormones.",
+      "parent_code": "cbse:10:U2",
+      "sort": 25
+    },
+    {
+      "code": "cbse:10:U2:03",
+      "grade": "10",
+      "strand": "The World of the Living",
+      "sub_strand": null,
+      "title": "Reproduction",
+      "description": "Reproduction in animals and plants (asexual and sexual) reproductive health - need and methods of family planning. Safe sex vs HIV/AIDS. Child bearing and women’s health.",
+      "parent_code": "cbse:10:U2",
+      "sort": 26
+    },
+    {
+      "code": "cbse:10:U2:04",
+      "grade": "10",
+      "strand": "The World of the Living",
+      "sub_strand": null,
+      "title": "Heredity and Evolution",
+      "description": "Heredity; Mendel’s contribution- Laws for inheritance of traits: Sex determination; brief introduction.",
+      "parent_code": "cbse:10:U2",
+      "sort": 27
+    },
+    {
+      "code": "cbse:10:U3",
+      "grade": "10",
+      "strand": "Natural Phenomena",
+      "sub_strand": null,
+      "title": "Natural Phenomena",
+      "description": null,
+      "parent_code": null,
+      "sort": 28
+    },
+    {
+      "code": "cbse:10:U4",
+      "grade": "10",
+      "strand": "How Things Work",
+      "sub_strand": null,
+      "title": "Effects of Current",
+      "description": null,
+      "parent_code": null,
+      "sort": 29
+    },
+    {
+      "code": "cbse:10:U5",
+      "grade": "10",
+      "strand": "Natural Resources",
+      "sub_strand": null,
+      "title": "Natural Resources",
+      "description": null,
+      "parent_code": null,
+      "sort": 31
+    },
+    {
+      "code": "cbse:10:U5:01",
+      "grade": "10",
+      "strand": "Natural Resources",
+      "sub_strand": null,
+      "title": "Our environment",
+      "description": "Eco-system, Environmental problems, Ozone depletion, waste production and their solutions. Biodegradable and non-biodegradable substances.",
+      "parent_code": "cbse:10:U5",
+      "sort": 32
+    },
+    {
+      "code": "cbse:10:U3:01",
+      "grade": "10",
+      "strand": "Natural Phenomena",
+      "sub_strand": null,
+      "title": "Reflection of light by curved surfaces",
+      "description": "Images formed by spherical mirrors, centre of curvature, principal axis, principal focus, focal length, mirror formula (derivation not required), magnification.",
+      "parent_code": "cbse:10:U3",
+      "sort": 33
+    },
+    {
+      "code": "cbse:10:U3:02",
+      "grade": "10",
+      "strand": "Natural Phenomena",
+      "sub_strand": null,
+      "title": "Refraction of light",
+      "description": "Laws of refraction, refractive index.",
+      "parent_code": "cbse:10:U3",
+      "sort": 34
+    },
+    {
+      "code": "cbse:10:U3:03",
+      "grade": "10",
+      "strand": "Natural Phenomena",
+      "sub_strand": null,
+      "title": "Refraction of light by spherical lenses",
+      "description": "Image formed by spherical lenses; lens formula (derivation not required); magnification; power of a lens.",
+      "parent_code": "cbse:10:U3",
+      "sort": 35
+    },
+    {
+      "code": "cbse:10:U3:04",
+      "grade": "10",
+      "strand": "Natural Phenomena",
+      "sub_strand": null,
+      "title": "The human eye and defects of vision",
+      "description": "Functioning of a lens in the human eye, defects of vision and their corrections, applications of spherical mirrors and lenses.",
+      "parent_code": "cbse:10:U3",
+      "sort": 36
+    },
+    {
+      "code": "cbse:10:U3:05",
+      "grade": "10",
+      "strand": "Natural Phenomena",
+      "sub_strand": null,
+      "title": "Refraction through a prism, dispersion and scattering of light",
+      "description": "Refraction of light through a prism, dispersion of light, scattering of light, applications in daily life (excluding colour of the sun at sunrise and sunset).",
+      "parent_code": "cbse:10:U3",
+      "sort": 37
+    },
+    {
+      "code": "cbse:10:U4:01",
+      "grade": "10",
+      "strand": "How Things Work",
+      "sub_strand": null,
+      "title": "Electric current and Ohm's law",
+      "description": "Electric current, potential difference; Ohm's law; resistance, resistivity, factors on which the resistance of a conductor depends; series and parallel combinations of resistors and their applications; heating effect of electric current and its applications; electric power, interrelation between P, V, I and R.",
+      "parent_code": "cbse:10:U4",
+      "sort": 38
+    },
+    {
+      "code": "cbse:10:U4:02",
+      "grade": "10",
+      "strand": "How Things Work",
+      "sub_strand": null,
+      "title": "Magnetic effects of current",
+      "description": "Magnetic field, field lines, field due to a current carrying conductor, field due to current carrying coil or solenoid; Force on current carrying",
+      "parent_code": "cbse:10:U4",
+      "sort": 30
+    },
+    {
+      "code": "cbse:9:U4:01",
+      "grade": "9",
+      "strand": "Food",
+      "sub_strand": null,
+      "title": "Food Production",
+      "description": null,
+      "parent_code": "cbse:9:U4",
+      "sort": 39
+    },
+    {
+      "code": "cbse:6:ch01",
+      "grade": "6",
+      "strand": null,
+      "sub_strand": null,
+      "title": "The Wonderful World of Science",
+      "description": null,
+      "parent_code": null,
+      "sort": 40
+    },
+    {
+      "code": "cbse:6:ch02",
+      "grade": "6",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Diversity in the Living World",
+      "description": null,
+      "parent_code": null,
+      "sort": 41
+    },
+    {
+      "code": "cbse:6:ch03",
+      "grade": "6",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Mindful Eating: A Path to a Healthy Body",
+      "description": null,
+      "parent_code": null,
+      "sort": 42
+    },
+    {
+      "code": "cbse:6:ch04",
+      "grade": "6",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Exploring Magnets",
+      "description": null,
+      "parent_code": null,
+      "sort": 43
+    },
+    {
+      "code": "cbse:6:ch05",
+      "grade": "6",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Measurement of Length and Motion",
+      "description": null,
+      "parent_code": null,
+      "sort": 44
+    },
+    {
+      "code": "cbse:6:ch06",
+      "grade": "6",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Materials Around Us",
+      "description": null,
+      "parent_code": null,
+      "sort": 45
+    },
+    {
+      "code": "cbse:6:ch07",
+      "grade": "6",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Temperature and its Measurement",
+      "description": null,
+      "parent_code": null,
+      "sort": 46
+    },
+    {
+      "code": "cbse:6:ch08",
+      "grade": "6",
+      "strand": null,
+      "sub_strand": null,
+      "title": "A Journey through States of Water",
+      "description": null,
+      "parent_code": null,
+      "sort": 47
+    },
+    {
+      "code": "cbse:6:ch09",
+      "grade": "6",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Methods of Separation in Everyday Life",
+      "description": null,
+      "parent_code": null,
+      "sort": 48
+    },
+    {
+      "code": "cbse:6:ch10",
+      "grade": "6",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Living Creatures: Exploring their Characteristics",
+      "description": null,
+      "parent_code": null,
+      "sort": 49
+    },
+    {
+      "code": "cbse:6:ch11",
+      "grade": "6",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Nature's Treasures",
+      "description": null,
+      "parent_code": null,
+      "sort": 50
+    },
+    {
+      "code": "cbse:6:ch12",
+      "grade": "6",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Beyond Earth",
+      "description": null,
+      "parent_code": null,
+      "sort": 51
+    },
+    {
+      "code": "cbse:7:ch01",
+      "grade": "7",
+      "strand": null,
+      "sub_strand": null,
+      "title": "The Ever-Evolving World of Science",
+      "description": null,
+      "parent_code": null,
+      "sort": 52
+    },
+    {
+      "code": "cbse:7:ch02",
+      "grade": "7",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Exploring Substances: Acidic, Basic, and Neutral",
+      "description": null,
+      "parent_code": null,
+      "sort": 53
+    },
+    {
+      "code": "cbse:7:ch03",
+      "grade": "7",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Electricity: Circuits and their Components",
+      "description": null,
+      "parent_code": null,
+      "sort": 54
+    },
+    {
+      "code": "cbse:7:ch04",
+      "grade": "7",
+      "strand": null,
+      "sub_strand": null,
+      "title": "The World of Metals and Non-metals",
+      "description": null,
+      "parent_code": null,
+      "sort": 55
+    },
+    {
+      "code": "cbse:7:ch05",
+      "grade": "7",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Changes Around Us: Physical and Chemical",
+      "description": null,
+      "parent_code": null,
+      "sort": 56
+    },
+    {
+      "code": "cbse:7:ch06",
+      "grade": "7",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Adolescence: A Stage of Growth and Change",
+      "description": null,
+      "parent_code": null,
+      "sort": 57
+    },
+    {
+      "code": "cbse:7:ch07",
+      "grade": "7",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Heat Transfer in Nature",
+      "description": null,
+      "parent_code": null,
+      "sort": 58
+    },
+    {
+      "code": "cbse:7:ch08",
+      "grade": "7",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Measurement of Time and Motion",
+      "description": null,
+      "parent_code": null,
+      "sort": 59
+    },
+    {
+      "code": "cbse:7:ch09",
+      "grade": "7",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Life Processes in Animals",
+      "description": null,
+      "parent_code": null,
+      "sort": 60
+    },
+    {
+      "code": "cbse:7:ch10",
+      "grade": "7",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Life Processes in Plants",
+      "description": null,
+      "parent_code": null,
+      "sort": 61
+    },
+    {
+      "code": "cbse:7:ch11",
+      "grade": "7",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Light: Shadows and Reflections",
+      "description": null,
+      "parent_code": null,
+      "sort": 62
+    },
+    {
+      "code": "cbse:7:ch12",
+      "grade": "7",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Earth, Moon, and the Sun",
+      "description": null,
+      "parent_code": null,
+      "sort": 63
+    },
+    {
+      "code": "cbse:8:ch01",
+      "grade": "8",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Exploring the Investigative World of Science",
+      "description": null,
+      "parent_code": null,
+      "sort": 64
+    },
+    {
+      "code": "cbse:8:ch02",
+      "grade": "8",
+      "strand": null,
+      "sub_strand": null,
+      "title": "The Invisible Living World: Beyond Our Naked Eye",
+      "description": null,
+      "parent_code": null,
+      "sort": 65
+    },
+    {
+      "code": "cbse:8:ch03",
+      "grade": "8",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Health: The Ultimate Treasure",
+      "description": null,
+      "parent_code": null,
+      "sort": 66
+    },
+    {
+      "code": "cbse:8:ch04",
+      "grade": "8",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Electricity: Magnetic and Heating Effects",
+      "description": null,
+      "parent_code": null,
+      "sort": 67
+    },
+    {
+      "code": "cbse:8:ch05",
+      "grade": "8",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Exploring Forces",
+      "description": null,
+      "parent_code": null,
+      "sort": 68
+    },
+    {
+      "code": "cbse:8:ch06",
+      "grade": "8",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Pressure, Winds, Storms, and Cyclones",
+      "description": null,
+      "parent_code": null,
+      "sort": 69
+    },
+    {
+      "code": "cbse:8:ch07",
+      "grade": "8",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Particulate Nature of Matter",
+      "description": null,
+      "parent_code": null,
+      "sort": 70
+    },
+    {
+      "code": "cbse:8:ch08",
+      "grade": "8",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Nature of Matter: Elements, Compounds, and Mixtures",
+      "description": null,
+      "parent_code": null,
+      "sort": 71
+    },
+    {
+      "code": "cbse:8:ch09",
+      "grade": "8",
+      "strand": null,
+      "sub_strand": null,
+      "title": "The Amazing World of Solutes, Solvents, and Solutions",
+      "description": null,
+      "parent_code": null,
+      "sort": 72
+    },
+    {
+      "code": "cbse:8:ch10",
+      "grade": "8",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Light: Mirrors and Lenses",
+      "description": null,
+      "parent_code": null,
+      "sort": 73
+    },
+    {
+      "code": "cbse:8:ch11",
+      "grade": "8",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Keeping Time with the Skies",
+      "description": null,
+      "parent_code": null,
+      "sort": 74
+    },
+    {
+      "code": "cbse:8:ch12",
+      "grade": "8",
+      "strand": null,
+      "sub_strand": null,
+      "title": "How Nature Works in Harmony",
+      "description": null,
+      "parent_code": null,
+      "sort": 75
+    },
+    {
+      "code": "cbse:8:ch13",
+      "grade": "8",
+      "strand": null,
+      "sub_strand": null,
+      "title": "Our Home: Earth, a Unique Life-Sustaining Planet",
+      "description": null,
+      "parent_code": null,
+      "sort": 76
+    }
+  ]
+}
