@@ -11,16 +11,21 @@ and records every write. No network, no model, no live Supabase.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from catalogue import derive
 from catalogue.derive import (
-    MAX_TOPICS_PER_CLUSTER, RESPONSE_SCHEMA, SYSTEM_PROMPT, Cluster, build_clusters, build_prompt,
-    clean_name, content_words, run_derive_job, validate_proposals,
+    DEFAULT_RATIONALE, MAX_TOPICS_PER_CLUSTER, RESPONSE_SCHEMA, SYSTEM_PROMPT, Cluster, build_clusters,
+    build_prompt, clean_name, content_words, leaf_name, plan_writes, run_derive_job, validate_proposals,
 )
 from catalogue.harvest import is_heading
 from catalogue.key import canonical_key
+from catalogue.seeds.loader import load_seed
 from tests.catalogue_fakes import FakeSB
+
+SEEDS = Path(__file__).resolve().parents[1] / "catalogue" / "seeds"
 
 CUR = {"id": "cur-cam", "code": "cambridge_ls_science_0893", "name": "Cambridge Lower Secondary Science 0893"}
 JOB = "job-td"
@@ -231,6 +236,9 @@ class TestPrompt:
         text = build_prompt(CUR, c, [], [])
         assert "TOPIC NAMES in this unit" in text and "normalise these names and suggest merges" in text
         assert "SKILLS" not in text
+        # A chapter list is its topics: no cap, and no invitation to reword.
+        assert "never more than 8" not in text and "8 topics" not in text
+        assert "do not shorten or reword it" in text and "2-5 words" not in text
 
     def test_the_context_lists_are_capped(self):
         (bs, _, _) = build_clusters(_nodes())
@@ -247,6 +255,7 @@ class TestCleanName:
         ("Cells", "Cells"), ("Cells.", "Cells"), ('"Cells"', "Cells"), ("  Plant and  animal cells ", "Plant and animal cells"),
         ("3.2 Cells", "Cells"), ("The digestive system", "The digestive system"),
         ("What is matter?", "What is matter?"),
+        ("[Cells]", "Cells"), ("{Cells}", "Cells"), ("Plant [and] animal {cells}", "Plant and animal cells"),
     ])
     def test_tidied(self, raw, clean):
         assert clean_name(raw) == clean
@@ -257,6 +266,7 @@ class TestCleanName:
         "7Bs.01",                                              # an LO code
         "", None, "   ", "12", "الخلية",                       # nothing, or no key material
         "Fig. 3 shows the cell",
+        "{}", "[]", "[{}]",                                    # JSON punctuation and nothing else
     ])
     def test_dropped(self, raw):
         assert clean_name(raw) == ""
@@ -345,9 +355,145 @@ class TestValidate:
         assert "Forces" in {p.name for p in props}, "the orphans landed under the sub-strand"
 
     @pytest.mark.parametrize("raw", [None, [], "not a list", [{"name": "Cells"}], [{"name": "Cells", "objective_codes": []}],
-                                     [{"name": "All living things are made of cells.", "objective_codes": ["7Bs.01"]}]])
+                                     [{"name": "All living things are made of cells.", "objective_codes": ["7Bs.01"]}],
+                                     [{"name": 42, "objective_codes": ["7Bs.01"]}], [{"name": None, "objective_codes": ["7Bs.01"]}],
+                                     [{"name": ["Cells"], "objective_codes": ["7Bs.01"]}], ["Cells", 7, None]])
     def test_a_reply_that_names_nothing_usable_is_empty(self, raw):
         assert validate_proposals(raw, _bs_cluster()) == []
+
+    def test_a_name_that_is_not_a_string_is_skipped_and_its_codes_repaired(self):
+        reply = [{"name": {"text": "Cells"}, "objective_codes": ["7Bs.01", "7Bs.02"]},
+                 {"name": "Specialised cells", "objective_codes": ["7Bs.03", "7Bs.04", "7Bs.05"]}]
+        props = validate_proposals(reply, _bs_cluster())
+        assert [p.name for p in props] == ["Specialised cells"]
+        assert props[0].codes == [c for _, c, _ in BS], "the skipped item's codes were repaired, not lost"
+
+    @pytest.mark.parametrize("matches,kept", [
+        ("Cell - Basic Unit of life", []),                     # a string is not a list of strings
+        ({"title": "Cells"}, []),
+        (["Cell - Basic Unit of life", 7, None, ["x"], "  "], ["Cell - Basic Unit of life"]),
+        ([f"M{i}" for i in range(20)], [f"M{i}" for i in range(10)]),
+    ])
+    def test_matches_must_be_a_list_of_strings(self, matches, kept):
+        (p,) = validate_proposals([{"name": "Cells", "objective_codes": [c for _, c, _ in BS], "matches": matches}],
+                                  _bs_cluster())
+        assert p.matches == kept
+
+    @pytest.mark.parametrize("rationale", [None, 7, {"why": "x"}, ["x"]])
+    def test_a_rationale_that_is_not_a_string_is_empty(self, rationale):
+        (p,) = validate_proposals([{"name": "Cells", "objective_codes": [c for _, c, _ in BS], "rationale": rationale}],
+                                  _bs_cluster())
+        assert p.rationale == ""
+
+
+# ── names mode validation (pure): a chapter list is its topics ──────────
+
+# The real CBSE grade 8 chapter list (catalogue/seeds/cbse_science_086.json):
+# thirteen chapters, two of which the harvest's gate refuses as names.
+GRADE8 = [
+    "Exploring the Investigative World of Science",
+    "The Invisible Living World: Beyond Our Naked Eye",           # is_heading: False (determiner run)
+    "Health: The Ultimate Treasure",
+    "Electricity: Magnetic and Heating Effects",
+    "Exploring Forces",
+    "Pressure, Winds, Storms, and Cyclones",
+    "Particulate Nature of Matter",
+    "Nature of Matter: Elements, Compounds, and Mixtures",
+    "The Amazing World of Solutes, Solvents, and Solutions",      # is_heading: False (determiner run)
+    "Light: Mirrors and Lenses",
+    "Keeping Time with the Skies",
+    "How Nature Works in Harmony",
+    "Our Home: Earth, a Unique Life-Sustaining Planet",
+]
+
+
+def _grade8_cluster():
+    nodes = [_node(f"g8-{i + 1:02d}", f"cbse:8:ch{i + 1:02d}", t, grade="8", sort=i) for i, t in enumerate(GRADE8)]
+    (c,) = build_clusters(nodes)
+    assert c.mode == "names" and c.parent_id == "g8-01" and len(c.leaves) == 13
+    return c
+
+
+def _identity_reply(cluster):
+    return [{"name": cluster.statement(n), "objective_codes": [code]} for code, n in zip(cluster.codes, cluster.leaves)]
+
+
+class TestValidateNames:
+    def test_the_gate_refuses_two_real_chapter_titles(self):
+        assert [t for t in GRADE8 if not is_heading(t)] == [GRADE8[1], GRADE8[8]]
+
+    def test_an_identity_reply_keeps_all_thirteen_chapters_as_their_own_topics(self):
+        c = _grade8_cluster()
+        props = validate_proposals(_identity_reply(c), c)
+        assert [p.name for p in props] == GRADE8, "no cap of eight, no grade-label bucket"
+        assert [p.codes for p in props] == [[code] for code in c.codes]
+        assert all(p.key == canonical_key(leaf_name(n)) for p, n in zip(props, c.leaves)), (
+            "each proposal keys exactly as the loader's row for that leaf")
+
+    def test_a_merge_of_two_spellings_survives_with_the_leaf_s_own_title(self):
+        c = _grade8_cluster()
+        reply = _identity_reply(c)
+        # The model merges ch03 into ch02 and names the pair by ch02's title -
+        # a title the gate refuses. It is the leaf's own name: accepted as is.
+        reply[1]["objective_codes"] = ["cbse:8:ch02", "cbse:8:ch03"]
+        del reply[2]
+        props = validate_proposals(reply, c)
+        assert len(props) == 12
+        assert (props[1].name, props[1].codes) == (GRADE8[1], ["cbse:8:ch02", "cbse:8:ch03"])
+
+    def test_a_merge_under_a_new_name_is_kept_and_the_rest_stay_their_own(self):
+        c = _grade8_cluster()
+        reply = _identity_reply(c)
+        reply[6] = {"name": "Matter and its nature", "objective_codes": ["cbse:8:ch07", "cbse:8:ch08"]}
+        del reply[7]
+        props = {p.name: p.codes for p in validate_proposals(reply, c)}
+        assert props["Matter and its nature"] == ["cbse:8:ch07", "cbse:8:ch08"]
+        assert len(props) == 12 and "Grade 8 chapters" not in props
+
+    def test_an_orphaned_leaf_is_its_own_topic_never_a_neighbour_or_the_grade_label(self):
+        c = _grade8_cluster()
+        # The model names three chapters and forgets ten - among them ch02,
+        # whose title shares "World" with ch01's; ch09 shares "Solutions"
+        # with nothing. Before: word overlap or "Grade 8 chapters".
+        reply = [{"name": GRADE8[0], "objective_codes": ["cbse:8:ch01"]},
+                 {"name": "Exploring Forces", "objective_codes": ["cbse:8:ch05"]},
+                 {"name": "Light: Mirrors and Lenses", "objective_codes": ["cbse:8:ch10"]}]
+        props = validate_proposals(reply, c)
+        by_code = {code: p for p in props for code in p.codes}
+        assert len(props) == 13 and "Grade 8 chapters" not in {p.name for p in props}
+        assert by_code["cbse:8:ch02"].name == GRADE8[1] and by_code["cbse:8:ch09"].name == GRADE8[8]
+        assert by_code["cbse:8:ch02"].rationale == DEFAULT_RATIONALE
+        assert sorted(code for p in props for code in p.codes) == sorted(c.codes)
+
+    def test_an_invented_sentence_is_dropped_and_the_leaf_falls_back_to_its_own_title(self):
+        c = _grade8_cluster()
+        reply = _identity_reply(c)
+        reply[4] = {"name": "Forces make things move.", "objective_codes": ["cbse:8:ch05"]}   # a sentence
+        reply[9] = {"name": "cbse:8:ch10", "objective_codes": ["cbse:8:ch10"]}              # a code
+        props = {code: p.name for p in validate_proposals(reply, c) for code in p.codes}
+        assert props["cbse:8:ch05"] == "Exploring Forces" and props["cbse:8:ch10"] == "Light: Mirrors and Lenses"
+
+    def test_a_tidied_spelling_of_a_refused_title_still_resolves_to_the_leaf_s_own_form(self):
+        c = _grade8_cluster()
+        reply = _identity_reply(c)
+        reply[8]["name"] = '"9. The amazing world of solutes, solvents, and solutions."'
+        props = {code: p.name for p in validate_proposals(reply, c) for code in p.codes}
+        assert props["cbse:8:ch09"] == GRADE8[8], "same key as the leaf: the curriculum's spelling wins"
+
+    def test_default_proposals_carry_the_refused_titles_too(self):
+        c = _grade8_cluster()
+        assert [p.name for p in derive.default_proposals(c)] == GRADE8
+        assert validate_proposals({"raw_text": "nope"}.get("topics"), c) == []
+
+    def test_objectives_mode_keeps_its_cap_and_repair(self):
+        leaves = [_node(f"n-pf{i}", f"7Pf.{i:02d}", f"Statement about item{i} alpha{i}.", parent="n-pf",
+                        strand="Physics", sub_strand="Forces", sort=i) for i in range(1, 14)]
+        parent = _node("n-pf", "7/Pf", "Forces", parent="n-phy", strand="Physics", sub_strand="Forces")
+        (cluster,) = build_clusters(leaves + [parent, _node("n-phy", "7/Physics", "Physics", strand="Physics")])
+        props = validate_proposals([{"name": f"Topic item{i}", "objective_codes": [f"7Pf.{i:02d}"]} for i in range(1, 14)],
+                                   cluster)
+        assert cluster.mode == "objectives" and len(props) == MAX_TOPICS_PER_CLUSTER
+        assert sorted(code for p in props for code in p.codes) == sorted(cluster.codes)
 
 
 # ── the job ─────────────────────────────────────────────────────────────
@@ -415,19 +561,50 @@ def test_a_partly_done_curriculum_calls_only_for_the_missing_clusters():
     assert len(_rows(sb, "n-bs")) == 1, "the curator's merged row is left alone"
 
 
-def test_a_row_the_loader_filed_under_the_parent_does_not_count_as_done():
+def test_a_row_the_loader_filed_under_the_parent_does_not_count_as_done_and_is_updated():
     """A key already under the parent WITHOUT node_ids is not this job's work:
-    the model is still asked, and the select-then-insert keeps that one key
-    from being filed twice."""
-    sb = _sb(candidates=[{"source_kind": "curriculum", "node_id": "n-bs", "raw_title": "Cells", "normalized": "cell"}])
+    the model is still asked — and the proposal with that key UPDATES the old
+    row (node_ids, rationale) rather than vanishing with the objectives it
+    covered (review 2026-09-06). The unique index is never hit."""
+    sb = _sb(candidates=[{"source_kind": "curriculum", "node_id": "n-bs", "raw_title": "Cells", "normalized": "cell",
+                          "status": "open"}])
     model = _good_model()
     summary = run_derive_job(sb, _job(), client=model)
     assert len(model.calls) == 3 and summary["skipped"] == 0
     bs_rows = _rows(sb, "n-bs")
     assert sorted(r["raw_title"] for r in bs_rows) == ["Cells", "Plant and animal cells", "Specialised cells",
                                                        "Tissues, organs and organ systems"]
-    assert [r for r in bs_rows if r["raw_title"] == "Cells"][0].get("node_ids") is None, "the old row, not a new one"
-    assert summary["proposed"] == 5
+    (cells,) = [r for r in bs_rows if r["raw_title"] == "Cells"]
+    assert cells["node_ids"] == ["n-bs1", "n-bs2"] and cells["rationale"] == "What a cell is and its parts."
+    assert cells["status"] == "open", "status is the curator's; only coverage and rationale are ours"
+    assert summary["proposed"] == 5 and summary["updated"] == 1 and summary["dismissed"] == 0
+    placed = [nid for r in sb.tables["topic_candidates"] for nid in (r.get("node_ids") or [])]
+    assert sorted(placed) == sorted(id_ for id_, _, _ in BS + BP + TWS), "7Bs.01 and 7Bs.02 are covered"
+    assert [e for e in sb.writes("topic_candidates") if e[0] == "update"] == [
+        ("update", "topic_candidates", {"node_ids": ["n-bs1", "n-bs2"], "rationale": "What a cell is and its parts."},
+         [("eq", "source_kind", "curriculum"), ("eq", "node_id", "n-bs"), ("eq", "normalized", "cell")])]
+
+    # The run is now done: nothing is asked again.
+    model2 = FakeModel(default=GOOD_BS)
+    assert run_derive_job(sb, _job(), client=model2)["skipped"] == 3 and model2.calls == []
+
+
+def test_a_curator_s_dismissed_row_under_the_parent_gains_coverage_but_keeps_its_status():
+    sb = _sb(candidates=[{"source_kind": "curriculum", "node_id": "n-bs", "raw_title": "Cells", "normalized": "cell",
+                          "status": "dismissed", "suggested_topic_id": "t-human"}])
+    run_derive_job(sb, _job(), client=_good_model())
+    (cells,) = [r for r in _rows(sb, "n-bs") if r["raw_title"] == "Cells"]
+    assert cells["status"] == "dismissed" and cells["node_ids"] == ["n-bs1", "n-bs2"]
+    assert cells["suggested_topic_id"] == "t-human", "a suggestion already there is not overwritten"
+
+
+def test_an_existing_row_s_node_ids_are_unioned_not_replaced():
+    sb = _sb(candidates=[{"source_kind": "curriculum", "node_id": "n-bs", "raw_title": "Cells", "normalized": "cell",
+                          "node_ids": ["n-elsewhere"], "status": "open"}])
+    # node_ids naming a node outside the cluster: not done, so the model is asked.
+    run_derive_job(sb, _job(), client=_good_model())
+    (cells,) = [r for r in _rows(sb, "n-bs") if r["raw_title"] == "Cells"]
+    assert cells["node_ids"] == ["n-elsewhere", "n-bs1", "n-bs2"]
 
 
 def test_the_repairs_reach_the_written_rows():
@@ -544,14 +721,122 @@ def test_names_mode_with_an_unusable_reply_defaults_to_each_leaf_and_skips_what_
     assert len(sb.tables["topic_candidates"]) == 2, "the loader's rows, and nothing new"
 
 
-def test_names_mode_files_a_merge_under_the_unit():
+def test_names_mode_files_a_merge_under_a_new_name_under_the_unit_and_dismisses_the_swallowed_rows():
     sb = _sb(nodes=_cbse_nodes(), curriculum=CBSE, jobs=[_cbse_job()], candidates=LOADER_ROWS)
     reply = {"topics": [{"name": "Matter around us", "objective_codes": ["cbse:9:U1:01", "cbse:9:U1:02"],
                          "rationale": "Two chapters on one topic."}]}
     summary = run_derive_job(sb, _cbse_job(), client=FakeModel(default=reply))
     new = _rows(sb, "u1")
     assert [(r["raw_title"], r["node_ids"]) for r in new] == [("Matter around us", ["t1", "t2"])]
-    assert summary["proposed"] == 1
+    assert summary["proposed"] == 1 and summary["updated"] == 0 and summary["dismissed"] == 2
+    # One candidate per topic: the two leaves' own rows leave the queue, saying where they went.
+    for nid in ("t1", "t2"):
+        (own,) = _rows(sb, nid)
+        assert own["status"] == "dismissed" and own["rationale"] == "Merged into Matter around us."
+    assert len(sb.tables["topic_candidates"]) == 3
+
+    # Done: the merged row under the unit names the leaves.
+    model2 = FakeModel(default=reply)
+    assert run_derive_job(sb, _cbse_job(), client=model2)["skipped"] == 1 and model2.calls == []
+
+
+def test_names_mode_a_merge_named_after_a_leaf_updates_that_leaf_s_row_and_dismisses_the_other():
+    """Two spellings of one topic: the merged row IS the first leaf's own row
+    (node_ids = both); the second leaf's open row is dismissed."""
+    sb = _sb(nodes=_cbse_nodes(), curriculum=CBSE, jobs=[_cbse_job()], candidates=LOADER_ROWS)
+    reply = {"topics": [{"name": "Matter in Our Surroundings", "objective_codes": ["cbse:9:U1:01", "cbse:9:U1:02"],
+                         "rationale": "Same topic, two spellings."}]}
+    summary = run_derive_job(sb, _cbse_job(), client=FakeModel(default=reply))
+    assert _rows(sb, "u1") == [], "nothing new under the unit"
+    (t1,) = _rows(sb, "t1")
+    assert t1["node_ids"] == ["t1", "t2"] and t1["rationale"] == "Same topic, two spellings." and t1["status"] == "open"
+    (t2,) = _rows(sb, "t2")
+    assert t2["status"] == "dismissed" and t2["rationale"] == "Merged into Matter in Our Surroundings."
+    assert summary["proposed"] == 0 and summary["updated"] == 1 and summary["dismissed"] == 1
+    assert len(sb.tables["topic_candidates"]) == 2
+
+    # Done, by the rows alone: the leaf's row names both leaves.
+    model2 = FakeModel(default=reply)
+    assert run_derive_job(sb, _cbse_job(), client=model2)["skipped"] == 1 and model2.calls == []
+
+
+def test_a_merge_never_dismisses_a_row_a_curator_has_already_decided():
+    rows = [dict(r) for r in LOADER_ROWS]
+    rows[1]["status"] = "merged"
+    sb = _sb(nodes=_cbse_nodes(), curriculum=CBSE, jobs=[_cbse_job()], candidates=rows)
+    reply = {"topics": [{"name": "Matter in Our Surroundings", "objective_codes": ["cbse:9:U1:01", "cbse:9:U1:02"]}]}
+    summary = run_derive_job(sb, _cbse_job(), client=FakeModel(default=reply))
+    (t2,) = _rows(sb, "t2")
+    assert t2["status"] == "merged" and "rationale" not in t2 and summary["dismissed"] == 0
+    assert _rows(sb, "t1")[0]["node_ids"] == ["t1", "t2"]
+
+
+def test_a_one_leaf_rename_dismisses_nothing():
+    """A rename is not a merge: the loader's row and the renamed one both
+    stay open, for the curator to choose."""
+    sb = _sb(nodes=_cbse_nodes(), curriculum=CBSE, jobs=[_cbse_job()], candidates=LOADER_ROWS)
+    reply = {"topics": [{"name": "Matter in Our Surroundings", "objective_codes": ["cbse:9:U1:01"]},
+                        {"name": "Pure substances and mixtures", "objective_codes": ["cbse:9:U1:02"]}]}
+    summary = run_derive_job(sb, _cbse_job(), client=FakeModel(default=reply))
+    assert [(r["raw_title"], r["node_ids"]) for r in _rows(sb, "u1")] == [("Pure substances and mixtures", ["t2"])]
+    assert _rows(sb, "t2")[0]["status"] == "open" and summary["dismissed"] == 0
+    assert summary["proposed"] == 1 and summary["updated"] == 0
+
+
+class TestPlanWrites:
+    """The pure planner, on the grade-8 cluster with the loader's rows."""
+
+    def _existing(self, cluster, **extra_rows):
+        ex = {n["id"]: {canonical_key(leaf_name(n)): {"node_id": n["id"], "normalized": canonical_key(leaf_name(n)),
+                                                     "status": "open", "node_ids": None}}
+              for n in cluster.leaves}
+        for nid, rows in extra_rows.items():
+            ex.setdefault(nid, {}).update(rows)
+        return ex
+
+    def test_identity_writes_nothing(self):
+        c = _grade8_cluster()
+        props = validate_proposals(_identity_reply(c), c)
+        rows = derive.rows_for_cluster(c, props, {})
+        assert plan_writes(c, props, rows, self._existing(c)) == ([], [], [])
+
+    def test_a_merge_named_after_the_first_leaf(self):
+        c = _grade8_cluster()
+        reply = _identity_reply(c)
+        reply[0]["objective_codes"] = ["cbse:8:ch01", "cbse:8:ch02"]
+        del reply[1]
+        props = validate_proposals(reply, c)
+        rows = derive.rows_for_cluster(c, props, {})
+        inserts, updates, dismissals = plan_writes(c, props, rows, self._existing(c))
+        k1, k2 = canonical_key(GRADE8[0]), canonical_key(GRADE8[1])
+        assert inserts == []
+        assert updates == [("g8-01", k1, {"node_ids": ["g8-01", "g8-02"]})]
+        assert dismissals == [("g8-02", k2, {"status": "dismissed", "rationale": f"Merged into {GRADE8[0]}."})]
+
+    def test_a_new_key_is_inserted_under_the_parent_with_no_loader_rows_touched_for_one_leaf(self):
+        c = _grade8_cluster()
+        reply = _identity_reply(c)
+        reply[4]["name"] = "Forces"
+        props = validate_proposals(reply, c)
+        rows = derive.rows_for_cluster(c, props, {})
+        inserts, updates, dismissals = plan_writes(c, props, rows, self._existing(c))
+        assert [(r["node_id"], r["raw_title"], r["node_ids"]) for r in inserts] == [("g8-01", "Forces", ["g8-05"])]
+        assert updates == [] and dismissals == []
+
+    def test_a_suggested_topic_fills_an_empty_slot_only(self):
+        c = _grade8_cluster()
+        reply = _identity_reply(c)
+        reply[0]["objective_codes"] = ["cbse:8:ch01", "cbse:8:ch02"]
+        del reply[1]
+        props = validate_proposals(reply, c)
+        k1 = canonical_key(GRADE8[0])
+        rows = derive.rows_for_cluster(c, props, {k1: "t-new"})
+        _, updates, _ = plan_writes(c, props, rows, self._existing(c))
+        assert updates[0][2]["suggested_topic_id"] == "t-new"
+        ex = self._existing(c)
+        ex["g8-01"][k1]["suggested_topic_id"] = "t-curator"
+        _, updates, _ = plan_writes(c, props, rows, ex)
+        assert "suggested_topic_id" not in updates[0][2]
 
 
 def test_names_mode_default_without_loader_rows_files_each_leaf_under_the_unit():
@@ -582,6 +867,262 @@ def test_a_chapter_list_is_not_mistaken_for_done_because_the_loader_filed_its_fi
     new = [r for r in _rows(sb, "c1") if r.get("node_ids")]
     assert [(r["raw_title"], r["node_ids"]) for r in new] == [("Living things around us", ["c2"])], (
         "the renamed chapter is filed under the grade's first chapter node; the unchanged one is not filed twice")
+    assert _rows(sb, "c2")[0]["status"] == "open", "a rename dismisses nothing"
+    assert summary["done_clusters"] == [["c1", "names"]]
+
+
+# ── idempotency: (parent_id, mode) and the record in jobs.stage ─────────
+
+
+def test_the_skip_set_is_keyed_on_parent_and_mode():
+    """One parent, two clusters (a names leaf and four objective leaves). A
+    row covering the names leaf says the NAMES cluster is done; the objectives
+    cluster under the same parent is still asked."""
+    nodes = _nodes()
+    for n in nodes:
+        if n["id"] == "n-bs1":
+            n["kind"], n["title"] = "topic", "Cells"
+    sb = _sb(nodes=nodes, candidates=[{"source_kind": "curriculum", "node_id": "n-bs", "raw_title": "Cells",
+                                       "normalized": "cell", "node_ids": ["n-bs1"], "status": "open"}])
+    objectives_reply = {"topics": [{"name": "Cell structure", "objective_codes": ["7Bs.02", "7Bs.03", "7Bs.04", "7Bs.05"]}]}
+    model = FakeModel({"bs": {"topics": [{"name": "Cells", "objective_codes": ["7Bs.01"]}]},   # "bs" = the names cluster (7Bs.01)
+                       "bp": GOOD_BP, "tws": GOOD_TWS}, default=objectives_reply)
+    summary = run_derive_job(sb, _job(), client=model)
+    prompts = [c["prompt"] for c in model.calls]
+    assert not any("7Bs.01:" in p for p in prompts), "the names cluster is done"
+    assert sum("7Bs.02:" in p for p in prompts) == 1, "the objectives cluster under the same parent is asked"
+    assert summary["skipped"] == 1 and summary["calls"] == 3
+    assert ["n-bs", "names"] in summary["done_clusters"] and ["n-bs", "objectives"] in summary["done_clusters"]
+    assert {r["raw_title"]: r["node_ids"] for r in _rows(sb, "n-bs")} == {
+        "Cells": ["n-bs1"], "Cell structure": ["n-bs2", "n-bs3", "n-bs4", "n-bs5"]}
+
+
+def test_done_clusters_recorded_by_an_earlier_job_are_skipped_without_a_row():
+    """The names-mode case in miniature: an earlier run finished a cluster
+    but wrote nothing (every proposal was the loader's row). Its jobs.stage
+    record is what says so."""
+    old = _job(id="job-old", status="done", stage={"step": "done", "done_clusters": [["n-bs", "objectives"]]})
+    sb = _sb(jobs=[old, _job()])
+    model = _good_model()
+    summary = run_derive_job(sb, _job(), client=model)
+    assert [_cluster_of(c["prompt"]) for c in model.calls] == ["bp", "tws"]
+    assert summary["skipped"] == 1 and _rows(sb, "n-bs") == []
+    assert sorted(summary["done_clusters"]) == [["n-bp", "objectives"], ["n-bs", "objectives"], ["n-twsm", "objectives"]], (
+        "the record carries every cluster done as of this run, skipped ones included")
+    assert sb.tables["jobs"][1]["stage"]["done_clusters"] == summary["done_clusters"]
+
+
+@pytest.mark.parametrize("old", [
+    dict(id="job-other", status="done", params={"curriculum_id": "cur-other"},
+         stage={"done_clusters": [["n-bs", "objectives"]]}),                       # another curriculum
+    dict(id="job-harvest", type="topic_harvest", status="done", stage={"done_clusters": [["n-bs", "objectives"]]}),
+    dict(id="job-junk", status="done", stage={"done_clusters": "n-bs"}),
+    dict(id="job-junk2", status="done", stage={"done_clusters": [["n-bs"], ["n-bs", "objectives", "x"], [1, 2], None]}),
+    dict(id="job-junk3", status="done", stage="clusters"),
+    dict(id="job-junk4", status="done", stage=None),
+])
+def test_a_record_that_is_not_this_curriculum_s_or_not_a_pair_is_ignored(old):
+    sb = _sb(jobs=[_job(**old), _job()])
+    model = _good_model()
+    run_derive_job(sb, _job(), client=model)
+    assert len(model.calls) == 3
+
+
+def test_a_processing_job_s_partial_record_counts():
+    """A run that is still going (or a runner re-using this row) lists the
+    clusters it has finished; those ARE done."""
+    sb = _sb(jobs=[_job(id="job-running", status="processing", stage={"done_clusters": [["n-bp", "objectives"]]}), _job()])
+    model = _good_model()
+    summary = run_derive_job(sb, _job(), client=model)
+    assert [_cluster_of(c["prompt"]) for c in model.calls] == ["bs", "tws"] and summary["skipped"] == 1
+
+
+def test_a_reused_job_row_keeps_its_record_because_it_is_read_before_the_first_stage_write():
+    sb = _sb()
+    run_derive_job(sb, _job(), client=_good_model())
+    sb.tables["topic_candidates"] = []          # the rows are gone; only the record remains
+    sb.tables["jobs"][0]["status"] = "processing"
+    model = FakeModel(default=GOOD_BS)
+    summary = run_derive_job(sb, _job(), client=model)
+    assert model.calls == [] and summary["skipped"] == 3
+
+
+def test_an_unreadable_jobs_record_costs_calls_not_the_job(monkeypatch):
+    """The record is an optimisation: a PostgREST that refuses the JSON-path
+    filter means clusters are re-asked, never that the job fails."""
+    from tests.catalogue_fakes import _Query
+    real = _Query.execute
+
+    def execute(self):
+        if self.table == "jobs" and self.op == "select":
+            raise RuntimeError("PGRST100: malformed filter")
+        return real(self)
+
+    monkeypatch.setattr(_Query, "execute", execute)
+    sb = _sb()
+    run_derive_job(sb, _job(), client=_good_model())            # writes the rows
+    sb.tables["jobs"][0]["status"] = "processing"
+    model = _good_model()
+    summary = run_derive_job(sb, _job(), client=model)
+    assert model.calls == [] and summary["skipped"] == 3, "the rows still say done"
+    sb.tables["topic_candidates"] = []
+    sb.tables["jobs"][0]["status"] = "processing"
+    model = _good_model()
+    summary = run_derive_job(sb, _job(), client=model)
+    assert len(model.calls) == 3 and summary["failed"] == 0 and _job_row(sb)["status"] == "done"
+
+
+# ── the real seeds through the real loader ──────────────────────────────
+
+
+def _loaded(which):
+    """The REAL loader against the fake DB: exactly what prod has after
+    ``load_seed`` (nodes with parent_id and kind; the loader's per-leaf
+    candidates for CBSE, none for Cambridge)."""
+    sb = FakeSB()
+    out = load_seed(sb, SEEDS / f"{which}.json")
+    sb.tables["jobs"] = []
+    sb.tables.setdefault("topics", [])
+    return sb, out["curriculum_id"]
+
+
+def _run(sb, cur_id, model, job_id):
+    """A fresh job row per run, as the queue gives it."""
+    job = {"id": job_id, "type": "topic_derive", "status": "processing", "generation_id": None, "book_id": None,
+           "params": {"curriculum_id": cur_id}}
+    sb.tables["jobs"].append(dict(job))
+    return run_derive_job(sb, job, client=model)
+
+
+def _lines(prompt):
+    """The CODE: STATEMENT lines of a prompt."""
+    block = prompt.split("(one per line, CODE: ", 1)[1].split("\n\nTASK:", 1)[0]
+    return [tuple(line.split(": ", 1)) for line in block.split("\n")[1:] if ": " in line]
+
+
+def _identity(prompt):
+    return {"topics": [{"name": s, "objective_codes": [c]} for c, s in _lines(prompt)]}
+
+
+def _merge_first_two(prompt):
+    tops = [{"name": s, "objective_codes": [c]} for c, s in _lines(prompt)]
+    if len(tops) >= 2:
+        tops[0]["objective_codes"] += tops[1]["objective_codes"]
+        del tops[1]
+    return {"topics": tops}
+
+
+def _grouper(prompt):
+    """A plausible objectives model: one topic per two objectives, named from words of the first."""
+    lines = _lines(prompt)
+    topics = []
+    for i in range(0, len(lines), 2):
+        chunk = lines[i:i + 2]
+        words = [w for w in chunk[0][1].split() if w.isalpha()][2:5]
+        topics.append({"name": " ".join(words).title() or "Things", "objective_codes": [c for c, _ in chunk]})
+    return {"topics": topics}
+
+
+def test_the_real_cbse_seed_with_an_identity_model_is_asked_once_and_never_again():
+    sb, cur_id = _loaded("cbse_science_086")
+    assert len(sb.tables["topic_candidates"]) == 67, "the loader's per-leaf rows"
+    before = sb.snapshot()["topic_candidates"]
+
+    m1 = FakeModel(default=_identity)
+    s1 = _run(sb, cur_id, m1, "job-1")
+    assert len(m1.calls) == 12 and s1["clusters_total"] == 12
+    assert (s1["proposed"], s1["updated"], s1["dismissed"], s1["failed"]) == (0, 0, 0, 0)
+    assert sb.tables["topic_candidates"] == before, "every leaf keeps its own candidate; nothing new under any parent"
+    assert not any(r.get("raw_title", "").startswith("Grade ") for r in sb.tables["topic_candidates"])
+    assert len(s1["done_clusters"]) == 12 and all(mode == "names" for _, mode in s1["done_clusters"])
+
+    m2 = FakeModel(default=_identity)
+    s2 = _run(sb, cur_id, m2, "job-2")
+    assert m2.calls == [] and s2["skipped"] == 12 and s2["calls"] == 0
+    assert sb.tables["topic_candidates"] == before
+
+
+def test_the_real_cbse_grade_8_list_keeps_all_thirteen_chapters():
+    sb, cur_id = _loaded("cbse_science_086")
+    by_code = {n["code"]: n for n in sb.tables["curriculum_nodes"]}
+    _run(sb, cur_id, FakeModel(default=_identity), "job-1")
+    for i, title in enumerate(GRADE8, start=1):
+        node = by_code[f"cbse:8:ch{i:02d}"]
+        (own,) = _rows(sb, node["id"])
+        # The loader writes no status (the column defaults to 'open'); the fake keeps it absent.
+        assert own["raw_title"] == title and own.get("status", "open") == "open" and not own.get("node_ids")
+    assert [r for r in sb.tables["topic_candidates"] if r.get("node_ids")] == []
+
+
+def test_the_real_cbse_seed_with_a_merging_model_files_one_merged_row_per_cluster():
+    sb, cur_id = _loaded("cbse_science_086")
+    by_code = {n["code"]: n for n in sb.tables["curriculum_nodes"]}
+    m1 = FakeModel(default=_merge_first_two)
+    s1 = _run(sb, cur_id, m1, "job-1")
+    # 12 clusters; the two one-leaf units have nothing to merge.
+    assert len(m1.calls) == 12 and (s1["proposed"], s1["updated"], s1["dismissed"]) == (0, 10, 10)
+    assert len(sb.tables["topic_candidates"]) == 67, "no new row: every merge lives in the first leaf's own row"
+    for first, second in (("cbse:8:ch01", "cbse:8:ch02"), ("cbse:6:ch01", "cbse:6:ch02"), ("cbse:9:U1:01", "cbse:9:U1:02")):
+        (a,), (b,) = _rows(sb, by_code[first]["id"]), _rows(sb, by_code[second]["id"])
+        assert a["node_ids"] == [by_code[first]["id"], by_code[second]["id"]] and a.get("status", "open") == "open"
+        assert b["status"] == "dismissed" and b["rationale"] == f"Merged into {by_code[first]['title']}."
+    merged = [r for r in sb.tables["topic_candidates"] if r.get("node_ids")]
+    assert len(merged) == 10 and all(len(r["node_ids"]) == 2 for r in merged)
+
+    m2 = FakeModel(default=_merge_first_two)
+    s2 = _run(sb, cur_id, m2, "job-2")
+    assert m2.calls == [] and s2["skipped"] == 12
+
+
+def test_the_real_cambridge_seed_is_asked_once_per_sub_strand_and_never_again():
+    sb, cur_id = _loaded("cambridge_ls_science_0893")
+    assert sb.tables["topic_candidates"] == [], "its seed says candidates: none"
+    m1 = FakeModel(default=_grouper)
+    s1 = _run(sb, cur_id, m1, "job-1")
+    assert len(m1.calls) == 48 and s1["clusters_total"] == 48 and s1["failed"] == 0
+    placed = [nid for r in sb.tables["topic_candidates"] for nid in r["node_ids"]]
+    objectives = [n["id"] for n in sb.tables["curriculum_nodes"] if n.get("kind") == "objective"]
+    assert len(objectives) == 200 and sorted(placed) == sorted(objectives), "every objective in exactly one row"
+    assert all(mode == "objectives" for _, mode in s1["done_clusters"]) and len(s1["done_clusters"]) == 48
+
+    m2 = FakeModel(default=_grouper)
+    s2 = _run(sb, cur_id, m2, "job-2")
+    assert m2.calls == [] and s2["skipped"] == 48 and s2["proposed"] == 0
+
+
+# ── prompt hygiene ──────────────────────────────────────────────────────
+
+
+def test_only_headings_reach_the_prompt_from_existing_topics_and_other_curricula():
+    sb = _sb(topics=[
+        {"id": "t1", "canonical_key": "photosynthesi", "title": "Photosynthesis", "status": "approved"},
+        {"id": "t2", "canonical_key": "x", "title": "The cell is the basic unit of life", "status": "approved"},  # a sentence
+        {"id": "t3", "canonical_key": "y", "title": "Understand that all organisms are made of cells.", "status": "approved"},
+        {"id": "t4", "canonical_key": "z", "title": "T" * 130, "status": "approved"},                             # too long
+    ])
+    sb.tables["curricula"].append({"id": "cur-cbse", "code": "cbse_science_086", "name": "CBSE Science"})
+    sb.tables["curriculum_nodes"] += [
+        {"id": "cb-1", "curriculum_id": "cur-cbse", "code": "cbse:9:U2:01", "title": "Cell - Basic Unit of life", "sort": 1},
+        {"id": "cb-2", "curriculum_id": "cur-cbse", "code": "cbse:9:U2:02", "title": "x", "sort": 2},
+    ]
+    sb.tables["topic_candidates"] += [
+        {"source_kind": "curriculum", "node_id": "cb-1", "raw_title": "Cell - Basic Unit of life",
+         "normalized": "cell_basic_unit_of_life", "status": "open"},
+        # Filed from the portal off an objective node: a sentence, not a name.
+        {"source_kind": "curriculum", "node_id": "cb-2", "raw_title": "Describe the process of digestion, including the role of enzymes.",
+         "normalized": "describe_the_process_of_digestion_including_the_role_of_enzyme", "status": "open"},
+    ]
+    model = _good_model()
+    run_derive_job(sb, _job(), client=model)
+    prompt = model.calls[0]["prompt"]
+    # The two context sections, exactly (the cluster's OWN objective lines
+    # above them are sentences by design — they are what is being named).
+    existing = prompt.split("EXISTING TOPICS (titles already in the catalogue):\n", 1)[1].split("\n\nOPEN CANDIDATES", 1)[0]
+    others = prompt.split("OPEN CANDIDATES FROM OTHER CURRICULA (title | curriculum code):\n", 1)[1].split("\n\nReply with", 1)[0]
+    assert existing == "- Photosynthesis"
+    assert others == "- Cell - Basic Unit of life | cbse_science_086"
+    assert derive.load_existing_titles(sb) == ["Photosynthesis"]
+    assert derive.load_other_candidates(sb, CUR["id"]) == [("Cell - Basic Unit of life", "cbse_science_086")]
 
 
 # ── failure paths ───────────────────────────────────────────────────────
@@ -664,7 +1205,7 @@ def test_a_curriculum_without_nodes_finishes_done_with_zero_clusters():
 
 def test_a_database_failure_after_the_read_is_recorded(monkeypatch):
     sb = _sb()
-    monkeypatch.setattr(derive, "existing_keys_by_node",
+    monkeypatch.setattr(derive, "existing_rows_by_node",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("503 upstream")))
     assert run_derive_job(sb, _job(), client=_good_model()) is None
     assert _job_row(sb)["status"] == "error" and "503" in _job_row(sb)["error"]

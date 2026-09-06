@@ -18,6 +18,8 @@ client surfaces (postgrest.APIError carries {"code": "23505", ...}).
 from __future__ import annotations
 
 import itertools
+import json
+import re
 
 ZERO = "00000000-0000-0000-0000-000000000000"
 
@@ -98,9 +100,24 @@ class _Query:
         return self
 
     # ── execution ──
+    @staticmethod
+    def _value(row, col):
+        """A column — or a PostgREST JSON path: ``params->>curriculum_id``
+        (text), ``a->b->>c``. ``->>`` yields text, as Postgres does."""
+        if "->" not in col:
+            return row.get(col)
+        parts = [p for p in re.split(r"->>?", col) if p]
+        v = row.get(parts[0])
+        for p in parts[1:]:
+            v = v.get(p) if isinstance(v, dict) else None
+        as_text = re.search(r"->>[^>-]*$", col) is not None  # the LAST operator is ->>
+        if as_text and v is not None and not isinstance(v, str):
+            return json.dumps(v)
+        return v
+
     def _match(self, row):
         for kind, col, val in self.filters:
-            v = row.get(col)
+            v = self._value(row, col)
             if kind == "eq" and v != val:
                 return False
             if kind == "neq" and v == val:

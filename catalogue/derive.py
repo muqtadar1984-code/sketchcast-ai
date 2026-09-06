@@ -30,31 +30,79 @@ Clusters (``build_clusters``):
   * a childless grouping node (strand / sub_strand / unit) is not a leaf that
     names anything and is left alone.
 
-What is written, per proposed topic (``rows_for_cluster``):
+What is written, per proposed topic (``rows_for_cluster`` + ``plan_writes``):
     topic_candidates {source_kind: 'curriculum', node_id: <the cluster's parent>,
-                      node_ids: [<the objective nodes it covers>], raw_title,
+                      node_ids: [<the leaf nodes it covers>], raw_title,
                       normalized: canonical_key(raw_title), rationale,
                       suggested_topic_id}
 ``suggested_topic_id`` is an existing topic whose ``canonical_key`` or alias
 equals the name's key, or the key of any ``matches`` entry that is an existing
-topic title. Idempotent: the keys already filed under the parent node are read
-first, a cluster that already HAS candidates is skipped WITHOUT a model call,
-and a racing insert is absorbed by the harvest's 23505 fallback.
+topic title.
+
+A proposal whose key is ALREADY filed is never dropped (review 2026-09-06 —
+it used to vanish, and with it the objectives it covered):
+  * a row under the parent with that key (the seed loader's, a curator's from
+    the portal, any status) is UPDATED — ``node_ids`` unioned, ``rationale``
+    set, ``suggested_topic_id`` filled when the row has none; its ``status``
+    is never touched;
+  * names mode, a ONE-leaf proposal that is that leaf's own candidate (the
+    key the loader filed under the leaf itself) is a no-op — the loader's row
+    stands, nothing is written;
+  * names mode, a MERGE (a proposal covering two or more leaves) named after
+    one of its leaves UPDATES that leaf's own row (``node_ids`` = every leaf
+    it covers); a merge under a new name is inserted under the parent. Either
+    way the OTHER leaves' own rows lose their place in the queue: each one
+    still ``open`` is set ``dismissed`` with the rationale "Merged into
+    <name>." — one candidate per topic, and the curator can read where the
+    swallowed one went. A one-leaf RENAME dismisses nothing: the loader's row
+    and the renamed one both stay open, for the curator to choose.
+
+Idempotent, two ways, keyed on (parent_id, mode) — a names cluster and an
+objectives cluster under one parent are two clusters:
+  * rows: a cluster is done when any candidate under its parent (or, names
+    mode, under one of its leaves) carries ``node_ids`` that name one of its
+    leaves — only this job writes ``node_ids``;
+  * jobs: every run records ``done_clusters: [[parent_id, mode], …]`` (the
+    clusters done as of that run, skipped ones included) in the summary it
+    writes to ``jobs.stage``, and a run starts by unioning the ``done_clusters``
+    of every earlier ``topic_derive`` job for the same ``params.curriculum_id``
+    (any status: a processing job's list is partial but true). This is what
+    makes a names cluster whose reply matched the loader row for row — nothing
+    to write — done rather than re-asked on every run (measured before: CBSE
+    12 calls on run 1, then 8 on every run after).
+A racing insert is absorbed by the harvest's 23505 fallback.
 
 The reply is VALIDATED in code (``validate_proposals``), never trusted:
+  * an item must be an object whose ``name`` is a string; ``matches`` must be
+    a list (its string entries are kept) and ``rationale`` a string, else they
+    are empty;
   * a name must pass ``catalogue.harvest.is_heading``, carry a non-empty
     ``canonical_key``, and not be one of the cluster's codes; a trailing
-    period and surrounding quotes are stripped first; an offender is dropped
-    and its codes fall through to the orphan repair;
+    period, surrounding quotes and any ``{}[]`` are stripped first; an
+    offender is dropped and its codes fall through to the repair. Names mode
+    EXEMPTS a leaf's own title: the loader accepted it as a curriculum name
+    and ``is_heading`` (a harvest gate tuned to book text) refuses five real
+    CBSE chapter titles ("A Journey through States of Water"…). Only a name
+    the model INVENTS is gated;
   * a code the cluster does not have is dropped; a code two topics claim stays
     with the FIRST; two topics with one key are merged;
-  * at most ``MAX_TOPICS_PER_CLUSTER`` (8) topics survive — the overflow's
-    codes become orphans;
-  * every orphan (a code no surviving topic lists) is attached to the topic
+  * objectives mode: at most ``MAX_TOPICS_PER_CLUSTER`` (8) topics survive —
+    the overflow's codes become orphans; every orphan is attached to the topic
     whose name shares the most content words with its statement; with no
     shared word it goes to a topic named from the sub-strand (created if
-    needed, merging the smallest topics into it should that breach the cap).
-  So every code in the cluster ends up in exactly ONE row.
+    needed, merging the smallest topics into it should that breach the cap);
+  * names mode: NO cap (a 13-chapter grade list is 13 topics, ``leaf_name``
+    each) and an orphan leaf is its OWN topic — never a word-overlap
+    neighbour, never the grade label. Measured before this rule: "Grade 6
+    chapters" covering four real chapters, "Diversity in the Living World"
+    swallowing "Living Creatures…".
+  So every code in the cluster ends up in exactly ONE row (names mode: a leaf
+  whose title has no key material — the loader files nothing for it either —
+  is the one exception).
+
+Prompt hygiene: the existing-topic and other-curriculum lists offered to the
+model carry only strings that pass ``is_heading`` at ``MAX_HEADING_CHARS`` —
+a portal-filed objective sentence never reaches another curriculum's prompt.
 
 Quota: text-only calls, one per cluster, SEQUENTIAL — Cambridge is 48 calls
 (one per sub-strand). Never an image, never a vision call, never while a
@@ -95,6 +143,10 @@ OTHER_CANDIDATES_IN_PROMPT = 300
 MAX_TOKENS = 2048
 _QUERY_CHUNK = 150
 
+DEFAULT_RATIONALE = "Default: one topic per listed name."
+STATUS_OPEN = "open"
+STATUS_DISMISSED = "dismissed"
+
 SYSTEM_PROMPT = (
     "You are a curriculum specialist who names the lesson topics of a school science "
     "catalogue. You reply with JSON only: no prose before or after it, no markdown fences."
@@ -134,6 +186,8 @@ including limited related different similar important simple basic
 """.split())
 _TOKEN = re.compile(r"[a-z0-9]+")
 _MIN_WORD = 3
+# JSON punctuation a model sometimes leaks into a name ("[Cells]", "{Cells}").
+_BRACKETS = re.compile(r"[{}\[\]]")
 
 
 # ── clusters ───────────────────────────────────────────────────────────
@@ -156,6 +210,11 @@ class Cluster:
     def codes(self) -> list[str]:
         return [_code(n) for n in self.leaves]
 
+    @property
+    def key(self) -> tuple[str, str]:
+        """What the skip set is keyed on: ``(parent_id, mode)``."""
+        return (self.parent_id, self.mode)
+
     def statement(self, node: dict) -> str:
         """What the model reads for a leaf: an objective's full statement (the
         description, which the seed carries in full; the title may be the same
@@ -167,6 +226,15 @@ class Cluster:
 
 def _code(node: dict) -> str:
     return str(node.get("code") or "").strip()
+
+
+def leaf_name(node: dict) -> str:
+    """A leaf's own title in the form the seed loader files it: whitespace
+    collapsed, cut at the column's 120 characters (``loader.RAW_TITLE_MAX`` ==
+    ``MAX_HEADING_CHARS``) — so ``canonical_key(leaf_name(n))`` is the key of
+    the loader's row for ``n``, and the two agree on which row is the leaf's
+    own. Pure."""
+    return clean_heading(node.get("title"))[:MAX_HEADING_CHARS]
 
 
 def _sort_key(node: dict) -> tuple:
@@ -281,6 +349,8 @@ def build_prompt(curriculum: dict, cluster: Cluster, existing_titles: list[str],
             "\"Models in science\"), not as content.\n"
         )
     else:
+        # No cap here: a grade's chapter list IS its topics, one per chapter,
+        # and "2-5 words" would invite the model to reword eight-word titles.
         task = (
             "TOPIC NAMES in this unit (one per line, CODE: NAME):\n"
             f"{lines}\n\n"
@@ -289,11 +359,11 @@ def build_prompt(curriculum: dict, cluster: Cluster, existing_titles: list[str],
             "RULES\n"
             "1. Every code above appears in exactly ONE topic. Use the codes exactly as written; "
             "never invent a code.\n"
-            "2. Keep each name as given unless it needs tidying: title case, no numbering, no "
-            "trailing period, a short noun or noun phrase of 2-5 words. No verbs, no sentences, no "
-            "code in the name.\n"
+            "2. Keep each name exactly as given unless it needs tidying: title case, no numbering, "
+            "no trailing period, no code in the name. A chapter or topic title is already a name: "
+            "do not shorten or reword it.\n"
             "3. Merge two names into one topic only when they are the same topic under two "
-            "spellings; never merge different topics. Never more than 8 topics.\n"
+            "spellings; never merge different topics. One topic per name is the normal answer.\n"
             "4. A name that is a chapter title stays a topic in its own right.\n"
         )
     tail = (
@@ -352,10 +422,11 @@ def content_words(text: object) -> set[str]:
 
 def clean_name(text: object, codes: Iterable[str] = ()) -> str:
     """A proposed name fit to be a candidate, or "". Whitespace collapsed,
-    surrounding quotes and trailing periods stripped, a leading numbering
-    token removed, then the harvest's gate (``is_heading``) plus a non-empty
-    key — and never one of the cluster's own codes or any LO-shaped code."""
-    s = clean_heading(text).strip("\"'“”‘’ ")
+    ``{}[]`` removed, surrounding quotes and trailing periods stripped, a
+    leading numbering token removed, then the harvest's gate (``is_heading``)
+    plus a non-empty key — and never one of the cluster's own codes or any
+    LO-shaped code."""
+    s = clean_heading(_BRACKETS.sub("", clean_heading(text))).strip("\"'“”‘’ ")
     s = strip_numbering(s)[:MAX_HEADING_CHARS].strip()
     # The gate sees the trailing period: "All living things are made of
     # cells." is refused as a sentence BEFORE the period is tidied away.
@@ -379,55 +450,24 @@ def _fallback_name(cluster: Cluster) -> str:
     return "Topics"
 
 
-def validate_proposals(raw_topics: Optional[list], cluster: Cluster) -> list[Proposal]:
-    """The rules in the module docstring, applied in order. Pure. Returns
-    proposals covering EVERY code of the cluster exactly once — or an empty
-    list when the reply named nothing usable at all (the caller decides
-    between the names-mode default and a failure)."""
-    codes = cluster.codes
-    known = {c.lower(): c for c in codes}
-    proposals: list[Proposal] = []
-    by_key: dict[str, Proposal] = {}
-    claimed: set[str] = set()
+def _own_names(cluster: Cluster) -> dict[str, str]:
+    """Names mode: ``key → leaf_name`` for every leaf with key material — the
+    names the curriculum already accepted, exempt from the gate."""
+    out: dict[str, str] = {}
+    for n in cluster.leaves:
+        t = leaf_name(n)
+        k = canonical_key(t)
+        if k:
+            out.setdefault(k, t)
+    return out
 
-    for item in (raw_topics or []):
-        if not isinstance(item, dict):
-            continue
-        name = clean_name(item.get("name"), codes)
-        if not name:
-            continue
-        key = canonical_key(name)
-        item_codes: list[str] = []
-        raw_codes = item.get("objective_codes")
-        if raw_codes is None:
-            raw_codes = item.get("codes")
-        for c in (raw_codes if isinstance(raw_codes, list) else []):
-            real = known.get(str(c).strip().lower())
-            if real and real not in claimed and real not in item_codes:
-                item_codes.append(real)
-        matches = [clean_heading(m) for m in (item.get("matches") or []) if isinstance(m, str)]
-        matches = [m for m in matches if m][:MAX_MATCHES]
-        rationale = clean_heading(item.get("rationale"))[:MAX_RATIONALE_CHARS]
-        claimed.update(item_codes)
-        if key in by_key:
-            p = by_key[key]
-            p.codes.extend(item_codes)
-            p.matches.extend(m for m in matches if m not in p.matches)
-            continue
-        p = Proposal(name=name, key=key, codes=item_codes, rationale=rationale, matches=matches)
-        by_key[key] = p
-        proposals.append(p)
 
-    proposals = [p for p in proposals if p.codes]
-    if not proposals:
-        return []
-
-    # The cap: the model's order is its priority order; the overflow's codes
-    # are orphans below.
+def _repair_objectives(cluster: Cluster, proposals: list[Proposal]) -> list[Proposal]:
+    """Objectives mode: the cap, then every orphan to the topic sharing the
+    most content words with its statement, else to the sub-strand topic."""
     proposals = proposals[:MAX_TOPICS_PER_CLUSTER]
     claimed = {c for p in proposals for c in p.codes}
-
-    # Orphans: best word overlap, else the sub-strand topic.
+    codes = cluster.codes
     statements = {code: cluster.statement(n) for code, n in zip(codes, cluster.leaves)}
     name_words = [content_words(p.name) for p in proposals]
     unplaced: list[str] = []
@@ -457,6 +497,86 @@ def validate_proposals(raw_topics: Optional[list], cluster: Cluster) -> list[Pro
             smallest = min((p for p in proposals if p is not target), key=lambda p: len(p.codes))
             proposals.remove(smallest)
             target.codes.extend(smallest.codes)
+    return proposals
+
+
+def _repair_names(cluster: Cluster, proposals: list[Proposal]) -> list[Proposal]:
+    """Names mode: no cap; an orphan leaf is its OWN topic (joining a proposal
+    that already carries its key), never a neighbour's and never the grade
+    label. A leaf whose title has no key material is left out, as the loader
+    leaves it out."""
+    by_key = {p.key: p for p in proposals}
+    claimed = {c for p in proposals for c in p.codes}
+    for code, n in zip(cluster.codes, cluster.leaves):
+        if code in claimed:
+            continue
+        t = leaf_name(n)
+        k = canonical_key(t)
+        if not k:
+            continue
+        p = by_key.get(k)
+        if p is None:
+            p = Proposal(name=t, key=k, codes=[], rationale=DEFAULT_RATIONALE)
+            by_key[k] = p
+            proposals.append(p)
+        p.codes.append(code)
+    return proposals
+
+
+def validate_proposals(raw_topics: Optional[list], cluster: Cluster) -> list[Proposal]:
+    """The rules in the module docstring, applied in order. Pure. Returns
+    proposals covering EVERY code of the cluster exactly once — or an empty
+    list when the reply named nothing usable at all (the caller decides
+    between the names-mode default and a failure)."""
+    codes = cluster.codes
+    known = {c.lower(): c for c in codes}
+    names_mode = cluster.mode == MODE_NAMES
+    own = _own_names(cluster) if names_mode else {}
+    proposals: list[Proposal] = []
+    by_key: dict[str, Proposal] = {}
+    claimed: set[str] = set()
+
+    for item in (raw_topics or []):
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            continue
+        name = clean_name(item["name"], codes)
+        if not name and names_mode:
+            # The gate refused it — but if it IS a leaf's own title (same key),
+            # the curriculum already accepted that name; use the leaf's form.
+            name = own.get(canonical_key(strip_numbering(item["name"])), "")
+        if not name:
+            continue
+        key = canonical_key(name)
+        item_codes: list[str] = []
+        raw_codes = item.get("objective_codes")
+        if raw_codes is None:
+            raw_codes = item.get("codes")
+        for c in (raw_codes if isinstance(raw_codes, list) else []):
+            real = known.get(str(c).strip().lower())
+            if real and real not in claimed and real not in item_codes:
+                item_codes.append(real)
+        raw_matches = item.get("matches")
+        matches = ([clean_heading(m)[:MAX_HEADING_CHARS] for m in raw_matches if isinstance(m, str)]
+                   if isinstance(raw_matches, list) else [])
+        matches = [m for m in matches if m][:MAX_MATCHES]
+        raw_rationale = item.get("rationale")
+        rationale = clean_heading(raw_rationale)[:MAX_RATIONALE_CHARS] if isinstance(raw_rationale, str) else ""
+        claimed.update(item_codes)
+        if key in by_key:
+            p = by_key[key]
+            p.codes.extend(item_codes)
+            p.matches.extend(m for m in matches if m not in p.matches)
+            continue
+        p = Proposal(name=name, key=key, codes=item_codes, rationale=rationale, matches=matches)
+        by_key[key] = p
+        proposals.append(p)
+
+    proposals = [p for p in proposals if p.codes]
+    if not proposals:
+        return []
+
+    # The model's order is its priority order (objectives mode caps on it).
+    proposals = _repair_names(cluster, proposals) if names_mode else _repair_objectives(cluster, proposals)
 
     order = {c: i for i, c in enumerate(codes)}
     for p in proposals:
@@ -466,21 +586,9 @@ def validate_proposals(raw_topics: Optional[list], cluster: Cluster) -> list[Pro
 
 def default_proposals(cluster: Cluster) -> list[Proposal]:
     """Names mode, unusable reply: each leaf is its own topic (what the seed
-    loader would have queued), skipping a leaf whose title is not a name."""
-    out: list[Proposal] = []
-    by_key: dict[str, Proposal] = {}
-    for code, n in zip(cluster.codes, cluster.leaves):
-        name = clean_name(cluster.statement(n), cluster.codes)
-        if not name:
-            continue
-        key = canonical_key(name)
-        if key in by_key:
-            by_key[key].codes.append(code)
-            continue
-        p = Proposal(name=name, key=key, codes=[code], rationale="Default: one topic per listed name.")
-        by_key[key] = p
-        out.append(p)
-    return out
+    loader queued, in the loader's form — its title is exempt from the gate),
+    skipping only a leaf whose title has no key material."""
+    return _repair_names(cluster, [])
 
 
 # ── database edges ─────────────────────────────────────────────────────
@@ -504,47 +612,95 @@ def load_nodes(sb, curriculum_id: str) -> list[dict]:
     return _rows(sb.table("curriculum_nodes").select("*").eq("curriculum_id", curriculum_id).execute())
 
 
-def existing_keys_by_node(sb, node_ids: list[str]) -> tuple[dict[str, set[str]], set[str]]:
-    """``(node_id → {normalized}, derived_nodes)`` over every curriculum
-    candidate (any status) filed under the given nodes. The keys: a re-run
-    must not re-open what a curator has merged or dismissed. ``derived_nodes``
-    are the nodes that already carry a row THIS job filed — one with a
-    non-empty ``node_ids`` — and a cluster whose parent is among them is done.
+def existing_rows_by_node(sb, node_ids: list[str]) -> dict[str, dict[str, dict]]:
+    """``node_id → {normalized → row}`` over every curriculum candidate (any
+    status) filed under the given nodes; a row carries ``node_ids``, ``status``
+    and ``suggested_topic_id``. The keys: a re-run must not file a key twice
+    under one node (the unique index) — it UPDATES the row instead. The
+    ``node_ids``: only this job writes them, so a row naming one of a
+    cluster's leaves says that cluster is done (``done_from_rows``).
 
-    Why not "any row under the parent": a CBSE grade's chapter list is filed
-    under its FIRST chapter node, and the seed loader already queued that
-    chapter's own title under the same node (``node_ids`` empty, the column's
-    default). That row is the loader's, not ours, and must not stop the run."""
-    keys: dict[str, set[str]] = {}
-    derived: set[str] = set()
+    Why not "any row under the parent" for done: a CBSE grade's chapter list
+    is filed under its FIRST chapter node, and the seed loader already queued
+    that chapter's own title under the same node (``node_ids`` empty, the
+    column's default). That row is the loader's, not ours."""
+    out: dict[str, dict[str, dict]] = {}
     for chunk in _chunks(list(dict.fromkeys(node_ids)), _QUERY_CHUNK):
         if not chunk:
             continue
-        res = (sb.table("topic_candidates").select("node_id,normalized,node_ids")
+        res = (sb.table("topic_candidates").select("node_id,normalized,node_ids,status,suggested_topic_id")
                .eq("source_kind", "curriculum").in_("node_id", chunk).execute())
         for r in _rows(res):
             if not (r.get("node_id") and r.get("normalized")):
                 continue
-            keys.setdefault(r["node_id"], set()).add(r["normalized"])
-            if r.get("node_ids"):
-                derived.add(r["node_id"])
-    return keys, derived
+            out.setdefault(r["node_id"], {}).setdefault(r["normalized"], r)
+    return out
+
+
+def done_from_rows(clusters: list[Cluster], existing: dict[str, dict[str, dict]]) -> set[tuple[str, str]]:
+    """The ``(parent_id, mode)`` of every cluster some candidate already
+    covers: a row under its parent — or, names mode, under one of its leaves
+    (a merge named after a leaf lives there) — whose ``node_ids`` name one of
+    ITS leaves. A names cluster and an objectives cluster under one parent
+    have disjoint leaves, so neither is mistaken for the other. Pure."""
+    done: set[tuple[str, str]] = set()
+    for c in clusters:
+        leaf_ids = {n["id"] for n in c.leaves}
+        under = [c.parent_id] + ([n["id"] for n in c.leaves] if c.mode == MODE_NAMES else [])
+        if any(leaf_ids.intersection(row.get("node_ids") or [])
+               for nid in under for row in existing.get(nid, {}).values()):
+            done.add(c.key)
+    return done
+
+
+def load_done_clusters(sb, curriculum_id: str) -> set[tuple[str, str]]:
+    """The ``done_clusters`` every ``topic_derive`` job for this curriculum has
+    recorded in ``jobs.stage`` — any status: a job that is still processing
+    (or the row of THIS run, when a runner reuses it) lists the clusters it
+    has finished so far, which are done. Best-effort: a failing read costs
+    re-asked clusters, not the job (``done_from_rows`` still applies)."""
+    try:
+        res = (sb.table("jobs").select("params,stage").eq("type", JOB_TYPE)
+               .eq("params->>curriculum_id", curriculum_id).execute())
+    except Exception as exc:  # noqa: BLE001
+        log.warning("derive: earlier jobs unreadable, every cluster is a candidate for a call: %s", exc)
+        return set()
+    done: set[tuple[str, str]] = set()
+    for j in _rows(res):
+        params = j.get("params")
+        if not isinstance(params, dict) or params.get("curriculum_id") != curriculum_id:
+            continue
+        stage = j.get("stage")
+        for pair in (stage.get("done_clusters") if isinstance(stage, dict) else None) or []:
+            if (isinstance(pair, (list, tuple)) and len(pair) == 2
+                    and all(isinstance(x, str) and x for x in pair)):
+                done.add((pair[0], pair[1]))
+    return done
+
+
+def prompt_title(text: object) -> str:
+    """A title fit for the prompt: whitespace collapsed, a heading by the
+    harvest's gate, at most MAX_HEADING_CHARS — else "". Pure."""
+    t = clean_heading(text)
+    return t[:MAX_HEADING_CHARS] if t and is_heading(t) else ""
 
 
 def load_existing_titles(sb) -> list[str]:
-    """The first EXISTING_TITLES_IN_PROMPT topic titles, alphabetical (sorted
-    here too, so the list is the same whatever the client's ordering does)."""
+    """The first EXISTING_TITLES_IN_PROMPT topic titles that are headings,
+    alphabetical (sorted here too, so the list is the same whatever the
+    client's ordering does)."""
     res = sb.table("topics").select("id,title").order("title").limit(EXISTING_TITLES_IN_PROMPT).execute()
-    titles = sorted({clean_heading(r.get("title")) for r in _rows(res)} - {""}, key=str.lower)
+    titles = sorted({prompt_title(r.get("title")) for r in _rows(res)} - {""}, key=str.lower)
     return titles[:EXISTING_TITLES_IN_PROMPT]
 
 
 def load_other_candidates(sb, curriculum_id: str) -> list[tuple[str, str]]:
     """Open curriculum candidates from OTHER curricula as (raw_title,
-    curriculum code), alphabetical, for the prompt's cross-link list."""
+    curriculum code), alphabetical, for the prompt's cross-link list — only
+    titles that are headings (a sentence filed from the portal stays out)."""
     res = (sb.table("topic_candidates").select("node_id,raw_title")
-           .eq("source_kind", "curriculum").eq("status", "open").execute())
-    cands = [r for r in _rows(res) if r.get("node_id") and clean_heading(r.get("raw_title"))]
+           .eq("source_kind", "curriculum").eq("status", STATUS_OPEN).execute())
+    cands = [r for r in _rows(res) if r.get("node_id") and prompt_title(r.get("raw_title"))]
     if not cands:
         return []
     node_cur: dict[str, str] = {}
@@ -566,7 +722,7 @@ def load_other_candidates(sb, curriculum_id: str) -> list[tuple[str, str]]:
         cid = node_cur.get(r["node_id"])
         if not cid or cid == curriculum_id or cid not in codes:
             continue
-        pair = (clean_heading(r["raw_title"]), codes[cid])
+        pair = (prompt_title(r["raw_title"]), codes[cid])
         if pair not in seen:
             seen.add(pair)
             out.append(pair)
@@ -591,13 +747,20 @@ def lookup_topic_ids(sb, keys: list[str]) -> dict[str, str]:
     return found
 
 
+def update_candidate(sb, node_id: str, normalized: str, patch: dict) -> None:
+    """One row by its natural key — (source_kind, node_id, normalized) is the
+    unique index for a node-filed candidate."""
+    (sb.table("topic_candidates").update(patch)
+     .eq("source_kind", "curriculum").eq("node_id", node_id).eq("normalized", normalized).execute())
+
+
 def rows_for_cluster(cluster: Cluster, proposals: list[Proposal], topic_ids: dict[str, str],
                      other_by_key: Optional[dict[str, tuple[str, str]]] = None) -> list[dict]:
-    """The ``topic_candidates`` payloads for a cluster's proposals. Pure.
-    ``topic_ids`` maps keys (the names' and the matches') to existing topics;
-    ``other_by_key`` maps keys to another curriculum's open candidate so a
-    match against one is recorded in the rationale (there is no column for
-    that link yet — the curator reads it)."""
+    """The ``topic_candidates`` payloads for a cluster's proposals, one per
+    proposal in order. Pure. ``topic_ids`` maps keys (the names' and the
+    matches') to existing topics; ``other_by_key`` maps keys to another
+    curriculum's open candidate so a match against one is recorded in the
+    rationale (there is no column for that link yet — the curator reads it)."""
     id_by_code = {code: n["id"] for code, n in zip(cluster.codes, cluster.leaves)}
     rows: list[dict] = []
     for p in proposals:
@@ -625,32 +788,104 @@ def rows_for_cluster(cluster: Cluster, proposals: list[Proposal], topic_ids: dic
     return rows
 
 
+Write = tuple[str, str, dict]  # (node_id, normalized, patch) for update_candidate
+
+
+def plan_writes(cluster: Cluster, proposals: list[Proposal], rows: list[dict],
+                existing: dict[str, dict[str, dict]]) -> tuple[list[dict], list[Write], list[Write]]:
+    """What a cluster's proposals become against what is already filed —
+    ``(inserts, updates, dismissals)``. Pure; the rules of the module
+    docstring ("A proposal whose key is ALREADY filed is never dropped"):
+
+      * one-leaf names proposal that is the leaf's own candidate → nothing;
+      * key filed under the parent → UPDATE that row (node_ids unioned,
+        rationale set, suggested_topic_id filled when empty);
+      * names mode, key filed under one of the leaves it covers → UPDATE
+        that leaf's row the same way;
+      * else → INSERT under the parent;
+      * names mode, a proposal covering two or more leaves DISMISSES each
+        other covered leaf's own row that is still open ("Merged into
+        <name>."), never the row it just updated.
+    """
+    names_mode = cluster.mode == MODE_NAMES
+    leaf_by_code = dict(zip(cluster.codes, cluster.leaves))
+    parent_rows = existing.get(cluster.parent_id, {})
+    inserts: list[dict] = []
+    updates: list[Write] = []
+    dismissals: list[Write] = []
+
+    for p, row in zip(proposals, rows):
+        leaves = [leaf_by_code[c] for c in p.codes if c in leaf_by_code]
+        if names_mode and len(leaves) == 1 and p.key in existing.get(leaves[0]["id"], {}):
+            continue  # the leaf's own candidate: the loader's row stands
+
+        target: Optional[tuple[str, dict]] = None
+        if p.key in parent_rows:
+            target = (cluster.parent_id, parent_rows[p.key])
+        elif names_mode:
+            for leaf in leaves:
+                have = existing.get(leaf["id"], {}).get(p.key)
+                if have is not None:
+                    target = (leaf["id"], have)
+                    break
+
+        if target is None:
+            inserts.append(row)
+        else:
+            node_id, have = target
+            patch: dict = {"node_ids": list(dict.fromkeys([*(have.get("node_ids") or []), *row["node_ids"]]))}
+            if row.get("rationale"):
+                patch["rationale"] = row["rationale"]
+            if row.get("suggested_topic_id") and not have.get("suggested_topic_id"):
+                patch["suggested_topic_id"] = row["suggested_topic_id"]
+            updates.append((node_id, p.key, patch))
+
+        if names_mode and len(leaves) > 1:
+            kept = (target[0], p.key) if target else None
+            for leaf in leaves:
+                own_key = canonical_key(leaf_name(leaf))
+                own = existing.get(leaf["id"], {}).get(own_key) if own_key else None
+                if own is None or (leaf["id"], own_key) == kept:
+                    continue
+                if (own.get("status") or STATUS_OPEN) != STATUS_OPEN:
+                    continue  # a curator's decision stands
+                dismissals.append((leaf["id"], own_key,
+                                   {"status": STATUS_DISMISSED, "rationale": f"Merged into {p.name}."[:MAX_RATIONALE_CHARS]}))
+    return inserts, updates, dismissals
+
+
 # ── the job ────────────────────────────────────────────────────────────
 
 
 def derive_curriculum(sb, job_id: str, curriculum: dict, nodes: list[dict], client=None) -> dict:
-    """The derive proper. One model call per cluster that has no candidates
-    yet; a failing cluster is counted and the next one runs (a re-run skips
-    the clusters that succeeded). Returns the summary also written to
-    ``jobs.stage``; ``failed > 0`` is the caller's cue to finish with error."""
+    """The derive proper. One model call per cluster not already done; a
+    failing cluster is counted and the next one runs (a re-run skips the
+    clusters that succeeded). Returns the summary also written to
+    ``jobs.stage`` — with ``done_clusters``, the (parent_id, mode) pairs done
+    as of this run; ``failed > 0`` is the caller's cue to finish with error."""
     curriculum_id = curriculum["id"]
     clusters = build_clusters(nodes)
     stage = {
         "phase": "derive", "step": "clusters", "curriculum": curriculum.get("code"),
         "clusters_total": len(clusters), "clusters_done": 0,
-        "proposed": 0, "skipped": 0, "failed": 0, "calls": 0,
+        "proposed": 0, "updated": 0, "dismissed": 0, "skipped": 0, "failed": 0, "calls": 0,
+        "done_clusters": [],
     }
     errors: list[str] = []
+    # Read the earlier runs' record BEFORE the first stage write: a runner that
+    # re-uses the job row would otherwise clobber the very list it needs.
+    done = load_done_clusters(sb, curriculum_id) if clusters else set()
     db.set_stage(sb, job_id, dict(stage))
     db.set_progress(sb, job_id, 5)
 
     node_ids = [c.parent_id for c in clusters]
     node_ids += [n["id"] for c in clusters if c.mode == MODE_NAMES for n in c.leaves]
-    existing, derived = existing_keys_by_node(sb, node_ids) if node_ids else ({}, set())
+    existing = existing_rows_by_node(sb, node_ids) if node_ids else {}
+    done |= done_from_rows(clusters, existing)
     context: Optional[tuple[list[str], list[tuple[str, str]], dict]] = None
 
     for cluster in clusters:
-        if cluster.parent_id in derived:
+        if cluster.key in done:
             stage["skipped"] += 1  # done on an earlier run: no model call
         else:
             try:
@@ -670,23 +905,25 @@ def derive_curriculum(sb, job_id: str, curriculum: dict, nodes: list[dict], clie
                     if cluster.mode != MODE_NAMES:
                         raise RuntimeError("model reply carried no usable topics")
                     proposals = default_proposals(cluster)
-                # Names mode: a one-leaf proposal the seed loader already
-                # filed under that leaf is not filed again under the unit.
-                leaf_keys = {_code(n): existing.get(n["id"], set()) for n in cluster.leaves}
-                proposals = [p for p in proposals
-                             if not (len(p.codes) == 1 and p.key in leaf_keys.get(p.codes[0], ()))]
                 keys = [p.key for p in proposals] + [canonical_key(m) for p in proposals for m in p.matches]
                 topic_ids = lookup_topic_ids(sb, keys) if keys else {}
                 rows = rows_for_cluster(cluster, proposals, topic_ids, other_by_key)
-                already = existing.get(cluster.parent_id, set())
-                rows = [r for r in rows if r["normalized"] not in already]
-                stage["proposed"] += insert_candidates(sb, rows) if rows else 0
+                inserts, updates, dismissals = plan_writes(cluster, proposals, rows, existing)
+                stage["proposed"] += insert_candidates(sb, inserts) if inserts else 0
+                for node_id, key, patch in updates:
+                    update_candidate(sb, node_id, key, patch)
+                    stage["updated"] += 1
+                for node_id, key, patch in dismissals:
+                    update_candidate(sb, node_id, key, patch)
+                    stage["dismissed"] += 1
+                done.add(cluster.key)
             except Exception as exc:  # noqa: BLE001 — the next cluster still runs
                 stage["failed"] += 1
                 msg = f"{cluster.label}: {type(exc).__name__}: {exc}"[:300]
                 errors.append(msg)
                 log.warning("derive %s cluster failed — %s", curriculum.get("code"), msg)
         stage["clusters_done"] += 1
+        stage["done_clusters"] = [list(k) for k in sorted(done)]
         db.set_stage(sb, job_id, dict(stage))
         db.set_progress(sb, job_id, 5 + int(90 * stage["clusters_done"] / max(1, len(clusters))))
 
@@ -738,9 +975,10 @@ def run_derive_job(sb, job: dict, client=None) -> Optional[dict]:
 
 
 __all__ = [
-    "JOB_TYPE", "MODE_OBJECTIVES", "MODE_NAMES", "MAX_TOPICS_PER_CLUSTER", "SYSTEM_PROMPT",
-    "RESPONSE_SCHEMA", "Cluster", "Proposal", "leaf_mode", "build_clusters", "build_prompt",
-    "ask_model", "content_words", "clean_name", "validate_proposals", "default_proposals",
-    "existing_keys_by_node", "load_existing_titles", "load_other_candidates", "lookup_topic_ids",
-    "rows_for_cluster", "derive_curriculum", "run_derive_job",
+    "JOB_TYPE", "MODE_OBJECTIVES", "MODE_NAMES", "MAX_TOPICS_PER_CLUSTER", "DEFAULT_RATIONALE",
+    "SYSTEM_PROMPT", "RESPONSE_SCHEMA", "Cluster", "Proposal", "leaf_mode", "leaf_name",
+    "build_clusters", "build_prompt", "ask_model", "content_words", "clean_name", "validate_proposals",
+    "default_proposals", "existing_rows_by_node", "done_from_rows", "load_done_clusters", "prompt_title",
+    "load_existing_titles", "load_other_candidates", "lookup_topic_ids", "update_candidate",
+    "rows_for_cluster", "plan_writes", "derive_curriculum", "run_derive_job",
 ]
