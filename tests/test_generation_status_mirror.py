@@ -93,8 +93,10 @@ def test_a_poison_pill_marks_its_generation_error():
 
 def test_observer_jobs_are_named_and_the_resolver_exists():
     # topic_harvest joined 2026-09 (catalogue): it owns no generation either;
-    # topic_derive (Phase 2a) owns no generation and no book.
-    assert 'OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "topic_harvest", "topic_derive"})' in SRC
+    # topic_derive (Phase 2a) owns no generation and no book; topic_article
+    # and figure_render (Phase 2b) write the knowledge base and own neither.
+    assert ('OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "topic_harvest", "topic_derive", '
+            '"topic_article", "figure_render"})') in SRC
     body = _body("generation_to_mirror")
     assert "OBSERVER_JOB_TYPES" in body and "return None" in body
     assert 'return job.get("generation_id")' in body
