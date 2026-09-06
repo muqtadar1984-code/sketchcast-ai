@@ -25,7 +25,7 @@
       "strand": "Materials",
       "sub_strand": null,
       "title": "Matter in Our Surroundings",
-      "description": "Definition of matter; Particulate Nature of Matter; States of",
+      "description": "Definition of matter; Particulate Nature of Matter; States of Matter: solid, liquid and gas and their characteristics; change of statemelting (absorption of heat), freezing, evaporation (cooling by evaporation), condensation, sublimation.",
       "parent_code": "cbse:9:U1",
       "sort": 2
     },
@@ -385,7 +385,7 @@
       "strand": "How Things Work",
       "sub_strand": null,
       "title": "Magnetic effects of current",
-      "description": "Magnetic field, field lines, field due to a current carrying conductor, field due to current carrying coil or solenoid; Force on current carrying",
+      "description": "Magnetic field, field lines, field due to a current carrying conductor, field due to current carrying coil or solenoid; Force on current carrying conductor, Fleming’s Left Hand Rule, Direct current. Alternating current: frequency of AC. Advantage of AC over DC. Domestic electric circuits.",
       "parent_code": "cbse:10:U4",
       "sort": 30
     },
