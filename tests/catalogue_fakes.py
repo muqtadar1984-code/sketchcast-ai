@@ -10,6 +10,8 @@ storage shim. Unique keys per table mirror migration 0112:
     curricula         (code)
     curriculum_nodes  (curriculum_id, code)
     topic_aliases     (normalized)
+    topic_articles    (topic_id, language, version)          -- Phase 2b
+    article_figures   (article_id, figure_key)               -- Phase 2b
 
 A violating INSERT raises with Postgres's 23505 text, which is what the real
 client surfaces (postgrest.APIError carries {"code": "23505", ...}).
@@ -30,6 +32,8 @@ UNIQUE = {
     "curricula": lambda r: (r.get("code"),),
     "curriculum_nodes": lambda r: (r.get("curriculum_id"), r.get("code")),
     "topic_aliases": lambda r: (r.get("normalized"),),
+    "topic_articles": lambda r: (r.get("topic_id"), r.get("language"), r.get("version")),
+    "article_figures": lambda r: (r.get("article_id"), r.get("figure_key")),
 }
 
 
@@ -84,7 +88,27 @@ class _Query:
         self.filters.append(("in", col, list(vals)))
         return self
 
+    @property
+    def not_(self):
+        """postgrest's ``q.not_.in_(col, vals)`` — the next filter is negated
+        (the builder-queued probe of the figure job uses it)."""
+        outer = self
+
+        class _Negated:
+            def in_(self_, col, vals):
+                outer.filters.append(("not_in", col, list(vals)))
+                return outer
+
+            def eq(self_, col, val):
+                outer.filters.append(("neq", col, val))
+                return outer
+
+        return _Negated()
+
     def order(self, *a, **k):
+        return self
+
+    def range(self, *a, **k):
         return self
 
     def limit(self, n):
@@ -123,6 +147,8 @@ class _Query:
             if kind == "neq" and v == val:
                 return False
             if kind == "in" and v not in val:
+                return False
+            if kind == "not_in" and v in val:
                 return False
         return True
 
@@ -214,7 +240,9 @@ class FakeSB:
 
     def __init__(self):
         self.tables = {"jobs": [], "generations": [], "books": [], "topic_candidates": [],
-                       "topic_aliases": [], "curricula": [], "curriculum_nodes": []}
+                       "topic_aliases": [], "curricula": [], "curriculum_nodes": [],
+                       "topics": [], "topic_curriculum_map": [], "topic_articles": [],
+                       "article_figures": [], "visual_assets": []}
         self.log = []
         self.calls = []
         self.files = {}

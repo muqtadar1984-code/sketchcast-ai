@@ -60,8 +60,12 @@ DOC_JOB_TYPES = ["lesson_plan", "activity", "worksheet", "exam_paper", "case_stu
 # every observer type so a harvest can never slip in through it. A topic
 # derive (catalogue Phase 2a) shares that last lane: one sequential text call
 # per sub-strand (48 for Cambridge 0893), so it too waits for every builder.
-OBSERVER_JOB_TYPES = ["support_diagnose", "topic_harvest", "topic_derive"]
-CATALOGUE_JOB_TYPES = ["topic_harvest", "topic_derive"]  # the last lane
+# Phase 2b adds two more to the same lane: topic_article (one 16k-token text
+# call) and figure_render — the one catalogue job that may make IMAGE calls,
+# which is why it also re-checks the queue itself before every generation
+# (catalogue/figures.py, builder_queued) and pauses when a builder appears.
+OBSERVER_JOB_TYPES = ["support_diagnose", "topic_harvest", "topic_derive", "topic_article", "figure_render"]
+CATALOGUE_JOB_TYPES = ["topic_harvest", "topic_derive", "topic_article", "figure_render"]  # the last lane
 
 # Job ids this process is ACTIVELY running. The crash-reaper must never requeue
 # these — with concurrency, a live 'processing' row is not an orphan. (Sketches
@@ -191,8 +195,10 @@ def run_once(sb) -> bool:
       2. Support diagnoses — a reporter is watching an issue's status.
       3. Documents — a teacher's papers/plans; one model call + a .docx.
       4. Everything else — video lessons (presentation), index_book.
-      5. Catalogue observers — topic harvests (download + CPU) and topic
-         derives (one text call per sub-strand): only when nothing above is queued.
+      5. Catalogue observers — topic harvests (download + CPU), topic
+         derives (one text call per sub-strand), topic articles (one text
+         call) and figure renders (image calls, self-pausing): only when
+         nothing above is queued.
     All of 1–3 are bounded/fast, so they can't starve the lesson queue."""
     sketch = db.claim_next_sketch(sb)
     if sketch:
@@ -238,6 +244,14 @@ def run_once(sb) -> bool:
             from catalogue.derive import run_derive_job
 
             run_derive_job(sb, job)  # self-contained: finishes its own row, done or error
+        elif job_type == "topic_article":
+            from catalogue.article import run_article_job
+
+            run_article_job(sb, job)  # self-contained: finishes its own row, done or error
+        elif job_type == "figure_render":
+            from catalogue.figures import run_figure_render_job
+
+            run_figure_render_job(sb, job)  # self-contained: finishes its own row, done or error
         else:
             process_generation(sb, job, gen_id)
     except db.TransientTierError as exc:

@@ -49,8 +49,10 @@ def admin() -> Client:
 # ever be filed carrying a generation_id, claiming or finishing it must still
 # never relabel that row. topic_derive (catalogue Phase 2a) is the same shape:
 # it reads a curriculum's nodes (jobs.params.curriculum_id) into grouped
-# candidates, owns no generation and no book.
-OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "topic_harvest", "topic_derive"})
+# candidates, owns no generation and no book. topic_article and figure_render
+# (Phase 2b) write topic_articles / article_figures from jobs.params
+# (topic_id / article_id) and likewise own no generation and no book.
+OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "topic_harvest", "topic_derive", "topic_article", "figure_render"})
 
 
 def generation_to_mirror(job: Optional[dict]) -> Optional[str]:
