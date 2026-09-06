@@ -10,19 +10,32 @@ tutor sketch does; run.py only dispatches.
 What is written, per heading that survives ``is_heading``:
     topic_candidates {source_kind: 'book', book_id, raw_title, normalized,
                       suggested_topic_id}
-``raw_title`` is the heading with its whitespace collapsed, at most 120
-characters; ``normalized`` is ``canonical_key(raw_title)``; and
+``raw_title`` is the heading with its whitespace collapsed and any leading
+numbering token removed ("3.2 Cells" → "Cells", see ``strip_numbering``), at
+most 120 characters; ``normalized`` is ``canonical_key(raw_title)``; and
 ``suggested_topic_id`` is the topic whose alias already carries that key, when
 one does. The unique index on (source_kind, book, node, normalized) makes a
 re-harvest a no-op for every heading it has already filed.
 
 THE GUARANTEE. The catalogue's founding rule (plan §1.1: "Textbooks are used
-only to harvest topic names. No page spans, no book text") is enforced in ONE
-pure function, ``is_heading``, that every candidate passes through before it
-can be written — the tests exercise it directly, including a 200-character
-sentence, "Fig. 3 shows the cell" and a heading with a trailing period. The
-harvest reads the whole PDF (it must, to find the headings), but the only
-strings that leave this module are the ones ``is_heading`` accepts.
+only to harvest topic names. No page spans, no book text") is enforced in TWO
+pure layers, both exercised directly by the tests:
+
+  * ``headings_from_structured`` reads only what the structurer derived from
+    a FONT-SIZE-DISTINCT level — chapter titles and ``section_type ==
+    'heading'`` sections. The PyMuPDF extractor (prod's path) labels EVERY
+    bold span at body size a level-3 heading, so a bold sentence in the body
+    becomes a subsection or, with no section above it yet, an implicit
+    'subheading' section; neither is read. Measured 2026-09-06 before this
+    layer existed: a real PDF with two bold body-size sentences yielded both
+    as candidates.
+  * ``is_heading`` gates every string before it can be written — a
+    200-character sentence, "Fig. 3 shows the cell", a running header, an
+    imprint line, an eight-word sentence with no full stop and a heading WITH
+    a trailing period are all in the tests.
+
+The harvest reads the whole PDF (it must, to find the headings), but the only
+strings that leave this module are the ones both layers accept.
 
 Why a plain INSERT-the-new-ones rather than an upsert with
 ``ignore_duplicates``: the uniqueness that guards this table is an EXPRESSION
@@ -50,14 +63,42 @@ JOB_TYPE = "topic_harvest"
 
 # A heading longer than this is a paragraph that happened to be bold.
 MAX_HEADING_CHARS = 120
+# A name is short. "Scientific enquiry: analysis, evaluation and conclusions"
+# is six words; "Plants make their own food using sunlight, water and carbon
+# dioxide" is eleven, and a sentence. A word is a whitespace token carrying a
+# letter or digit, so the dash in "Light — Reflection" is not one.
+MAX_HEADING_WORDS = 10
+# This many words ENDING in a full stop is a sentence whatever its shape
+# ("All living things are made of cells."); fewer ("1.2 Cells.") is a heading
+# the book printed with a period.
+_PERIOD_SENTENCE_WORDS = 4
+# "The cell is the basic unit of life": eight words, no terminal mark, still
+# a sentence. A determiner opening a run of six or more words is prose; "The
+# Cell", "The Solar System" and "The cell membrane" stay.
+_DETERMINERS = frozenset({"the", "a", "an", "this", "these"})
+_DETERMINER_RUN = 5  # words AFTER the determiner that make it prose
 # Sentence: a terminal mark followed by whitespace and MORE TEXT. A trailing
 # period on its own ("1.2 Cells.") is a heading with a full stop, not prose.
 _SENTENCE = re.compile(r"[.!?]\s+\S")
 # "Page 12", "p. 12", "pg 12", "12 / 240" — running folios, not topics.
 _PAGE_LIKE = re.compile(r"^(?:page|pages|p|pg|pp)\.?\s*\d+(?:\s*[-–/]\s*\d+)?$", re.I)
+# "CHAPTER 3 CELLS 47" — a running header is the chapter name in capitals with
+# the folio on the end. Only the COMBINATION is rejected: "CO2" has no separate
+# trailing number and "Cambridge Lower Secondary Science 7" is not all capitals.
+_TRAILING_NUMBER = re.compile(r"\s\d+$")
+# "(c) Cambridge University Press 2021", "ISBN 978-…": imprint lines.
+_IMPRINT = re.compile(r"©|\(c\)|\bisbn\b", re.I)
+# A leading numbering token: "3.2 ", "1.1.4 ", "Chapter 3 ", "Unit 5: ",
+# "Section 2) " — and the dash or colon a book puts after it ("2.1 – Indicators").
+# Stripped by the harvest ONLY, never by canonical_key: the Cambridge code
+# "7Bs.01" must keep its key, and the harvest never sees a curriculum code.
+_NUMBERING = re.compile(
+    r"^(?:(?:chapter|unit|lesson|section|topic|part)\s*)?\d+(?:\.\d+)*[.):]?\s+(?:[-–—:]\s+)?",
+    re.I,
+)
 _WS = re.compile(r"\s+")
 # A queue nobody can read is a queue nobody reads. Chapter titles come first,
-# then section headings, then sub-headings, so the cap trims the finest grain.
+# then section headings, so the cap trims the finer grain.
 MAX_CANDIDATES_PER_BOOK = 400
 # PostgREST filters travel in the URL; keep an IN (...) list well under 8 KB.
 _QUERY_CHUNK = 150
@@ -72,13 +113,23 @@ def clean_heading(text: object) -> str:
     return _WS.sub(" ", str(text)).strip()
 
 
+def _words(s: str) -> list[str]:
+    """Whitespace tokens that carry a letter or digit — a lone dash or
+    ampersand between words is not a word."""
+    return [w for w in s.split() if any(ch.isalnum() for ch in w)]
+
+
 def is_heading(text: object) -> bool:
     """The gate. True only for a string that can be a topic NAME.
 
     Rejected: empty; longer than MAX_HEADING_CHARS; a sentence (a . ! or ?
     followed by whitespace and another word); fewer than two letters; purely
-    numeric or a page folio. Pure — no I/O, no state — so the tests can throw
-    book prose at it directly.
+    numeric or a page folio; more than MAX_HEADING_WORDS words; four or more
+    words ending in a full stop; a determiner (the/a/an/this/these) opening
+    six or more words; all capitals with a trailing number (a running header);
+    an imprint line (©, (c), ISBN). Question-style headings ("What happens
+    when we heat ice?") are real in textbooks and pass. Pure — no I/O, no
+    state — so the tests can throw book prose at it directly.
     """
     s = clean_heading(text)
     if not s or len(s) > MAX_HEADING_CHARS:
@@ -89,34 +140,71 @@ def is_heading(text: object) -> bool:
         return False
     if _PAGE_LIKE.match(s):
         return False
+    words = _words(s)
+    if len(words) > MAX_HEADING_WORDS:
+        return False
+    if s.endswith(".") and len(words) >= _PERIOD_SENTENCE_WORDS:
+        return False
+    if words and words[0].lower() in _DETERMINERS and len(words) > _DETERMINER_RUN:
+        return False
+    if _TRAILING_NUMBER.search(s) and s == s.upper():
+        return False
+    if _IMPRINT.search(s):
+        return False
     return True
 
 
-def headings_from_structured(structured: dict) -> list[str]:
-    """Chapter titles, then section headings, then sub-headings, from a
-    ``StructuredBook.model_dump()``. Unfiltered — ``build_candidates`` gates.
+def strip_numbering(text: object) -> str:
+    """Drop ONE leading numbering token — "3.2 Cells" → "Cells", "Chapter 3
+    Cells" → "Cells", "1.1 The cell membrane" → "The cell membrane" — so a
+    numbered heading keys like the alias a curator typed ("cell", never
+    "3_2_cell"). Pure. Harvest-only: ``canonical_key`` must never do this,
+    because a curriculum code ("7Bs.01" → "7bs_01") keeps its digits, and the
+    harvest never sees one. A string the token would swallow whole comes back
+    as it came."""
+    s = clean_heading(text)
+    return _NUMBERING.sub("", s, count=1) or s
 
-    The structurer's own placeholder section ("Content", section_type 'body',
-    created when a chapter has no detectable headings) is skipped: it is a
-    label the code made up, not one the book printed.
+
+def headings_from_structured(structured: dict) -> list[str]:
+    """Chapter titles, then the section headings the structurer derived from
+    a FONT-SIZE-DISTINCT level, from a ``StructuredBook.model_dump()``.
+    Unfiltered — ``build_candidates`` gates.
+
+    The discriminator is ``section_type``. In
+    ``structurer._build_sections_from_items`` a Section is ``'heading'`` only
+    when it came from a level-2 DocItem, and the PyMuPDF extractor (prod's
+    path) assigns level 2 only to spans at the second-largest recurring font
+    size above the body size — a size the book reserved for headings. Level 1
+    (the largest) is the chapter title, which ``chapters[].title`` already
+    carries. Level 3 is "bold at body size or larger": every bold sentence,
+    key term and emphasised phrase in the body. A level-3 item becomes a
+    Subsection under the current section or, with no section open yet, an
+    implicit Section typed ``'subheading'``. Docling maps SECTION_HEADER tree
+    depth onto the same 1/2/3, so the rule holds for that backend too. Hence:
+
+      * ``'heading'``    — read;
+      * ``'subheading'`` — skipped (an orphan bold span);
+      * ``'body'``       — skipped (the structurer's own "Content" placeholder
+                           for a chapter with no detectable headings — a label
+                           the code made up, not one the book printed);
+      * ``subsections``  — never read (all level 3).
+
+    Measured before this rule (2026-09-06): a real PDF with two bold body-size
+    sentences yielded "All living things are made of cells." and "A cell
+    membrane controls what enters and leaves the cell" as candidates.
     """
     titles: list[str] = []
     sections: list[str] = []
-    subsections: list[str] = []
     for ch in structured.get("chapters") or []:
         if not isinstance(ch, dict):
             continue
         titles.append(clean_heading(ch.get("title")))
         for sec in ch.get("sections") or []:
-            if not isinstance(sec, dict):
-                continue
-            if (sec.get("section_type") or "heading") == "body":
+            if not isinstance(sec, dict) or sec.get("section_type") != "heading":
                 continue
             sections.append(clean_heading(sec.get("section_title")))
-            for sub in sec.get("subsections") or []:
-                if isinstance(sub, dict):
-                    subsections.append(clean_heading(sub.get("section_title")))
-    return titles + sections + subsections
+    return titles + sections
 
 
 def headings_from_book_row(book: dict) -> list[str]:
@@ -129,24 +217,42 @@ def headings_from_book_row(book: dict) -> list[str]:
     return out
 
 
-def build_candidates(headings: Iterable[str], limit: int = MAX_CANDIDATES_PER_BOOK) -> list[dict]:
-    """Gate, key, and dedupe (first spelling of a key wins) — in input order,
-    so callers put the coarse headings first and the cap trims the fine ones.
-    Returns ``[{raw_title, normalized}]``; nothing here has touched a database.
+def build_candidates(headings: Iterable[str], limit: int = MAX_CANDIDATES_PER_BOOK,
+                     stats: Optional[dict] = None) -> list[dict]:
+    """Strip numbering, gate, key, and dedupe (first spelling of a key wins) —
+    in input order, so callers put the coarse headings first and the cap trims
+    the fine ones. Returns ``[{raw_title, normalized}]``; nothing here has
+    touched a database.
+
+    ``raw_title`` is the heading AFTER ``strip_numbering``, so every row keeps
+    ``normalized == canonical_key(raw_title)``; the remainder must pass
+    ``is_heading`` on its own ("3.2 All living things are made of cells." is
+    still a sentence). When ``stats`` is a dict it receives the drop counts —
+    ``not_heading`` (failed the gate) and ``no_key`` (passed it but carries no
+    key material: an Arabic-only title, a bare article) — so a curator can read
+    WHY a book yielded nothing.
     """
     seen: set[str] = set()
     out: list[dict] = []
+    not_heading = no_key = 0
     for h in headings:
-        raw = clean_heading(h)
+        raw = strip_numbering(h)
         if not is_heading(raw):
+            not_heading += 1
             continue
         key = canonical_key(raw)
-        if not key or key in seen:
+        if not key:
+            no_key += 1
+            continue
+        if key in seen:
             continue
         seen.add(key)
         out.append({"raw_title": raw[:MAX_HEADING_CHARS], "normalized": key})
         if len(out) >= limit:
             break
+    if stats is not None:
+        stats["not_heading"] = not_heading
+        stats["no_key"] = no_key
     return out
 
 
@@ -217,7 +323,8 @@ def _headings_from_pdf(pdf_path: Path, book: dict) -> list[str]:
     the stored chapter map (num/title/start_page/end_page) is passed as
     ``known_chapters`` so the split is identical and no Claude/vision call is
     made — a harvest costs a download and CPU, never quota. Returns unfiltered
-    headings (chapter titles, section and sub-section headings)."""
+    headings (chapter titles and font-size-distinct section headings — see
+    ``headings_from_structured`` for why sub-sections are not among them)."""
     from agent1_ingestion.extractor import extract_pdf
     from agent1_ingestion.structurer import structure_book
 
@@ -271,7 +378,8 @@ def harvest_book(sb, job_id: str, book: dict, pdf_headings: Optional[list[str]] 
     db.set_progress(sb, job_id, 60)
     # Stored chapter titles FIRST (the indexed truth), then what the PDF yields.
     headings = headings_from_book_row(book) + list(pdf_headings)
-    candidates = build_candidates(headings)
+    drops: dict = {}
+    candidates = build_candidates(headings, stats=drops)
 
     db.set_stage(sb, job_id, {"phase": "harvest", "step": "match"})
     keys = [c["normalized"] for c in candidates]
@@ -297,6 +405,10 @@ def harvest_book(sb, job_id: str, book: dict, pdf_headings: Optional[list[str]] 
         "source": source,
         "headings_seen": len(headings),
         "candidates": len(candidates),
+        # Why a book yielded few or none: prose the gate refused, and titles
+        # that passed it but carry no key material (an Arabic-only heading).
+        "dropped_not_heading": drops.get("not_heading", 0),
+        "dropped_no_key": drops.get("no_key", 0),
         "inserted": inserted,
         "existing": len(candidates) - len(rows),
         "suggested": sum(1 for r in rows if r["suggested_topic_id"]),
@@ -338,8 +450,9 @@ def run_harvest_job(sb, job: dict) -> Optional[dict]:
 
 
 __all__ = [
-    "JOB_TYPE", "MAX_HEADING_CHARS", "MAX_CANDIDATES_PER_BOOK",
-    "clean_heading", "is_heading", "headings_from_structured", "headings_from_book_row",
+    "JOB_TYPE", "MAX_HEADING_CHARS", "MAX_HEADING_WORDS", "MAX_CANDIDATES_PER_BOOK",
+    "clean_heading", "is_heading", "strip_numbering", "headings_from_structured",
+    "headings_from_book_row",
     "build_candidates", "lookup_alias_topics", "existing_book_keys", "insert_candidates",
     "harvest_book", "run_harvest_job",
 ]

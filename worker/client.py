@@ -92,16 +92,21 @@ def mirror_generation_status(sb: Client, generation_id, status: str) -> None:
         )
 
 
-def claim_next_job(sb: Client, job_type=None) -> Optional[dict]:
+def claim_next_job(sb: Client, job_type=None, exclude_types=None) -> Optional[dict]:
     """Atomically-ish claim the oldest queued job (sets it to processing).
     `job_type` may be a single type or a LIST of types — only those are
-    considered. Lets the loop prioritise small/fast work (support diagnoses,
-    then documents) over long batch video renders."""
+    considered; `exclude_types` is a collection of types NOT to consider
+    (run.py's generic lane passes OBSERVER_JOB_TYPES, so a topic_harvest —
+    cheap on quota, heavy on CPU and egress — is claimed only by its own last
+    lane, when nothing else is queued). Lets the loop prioritise small/fast
+    work (support diagnoses, then documents) over long batch video renders."""
     q = sb.table("jobs").select("*").eq("status", "queued")
-    if isinstance(job_type, (list, tuple, set)):
+    if isinstance(job_type, (list, tuple, set, frozenset)):
         q = q.in_("type", list(job_type))
     elif job_type:
         q = q.eq("type", job_type)
+    if exclude_types:
+        q = q.not_.in_("type", list(exclude_types))
     res = q.order("created_at").limit(1).execute()
     if not res.data:
         return None

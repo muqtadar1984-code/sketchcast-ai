@@ -2,10 +2,12 @@
 
 The catalogue's founding rule (plan §1.1): textbooks are used only to harvest
 topic names — no page spans, no book text. The harvest necessarily reads the
-whole PDF to find its headings, so the rule is enforced at the one exit,
-``catalogue.harvest.is_heading``, and these tests throw book prose at it
-directly and then run the whole job against a fake Supabase that records every
-write.
+whole PDF to find its headings, so the rule is enforced in two layers —
+``headings_from_structured`` reads only font-size-distinct headings (a bold
+body sentence is level 3 to the extractor and never reaches the gate), and
+``catalogue.harvest.is_heading`` gates every string at the one exit — and
+these tests throw book prose at both directly and then run the whole job
+against a fake Supabase that records every write.
 
 Everything here CALLS things (tests/test_worker_entrypoint_runs.py explains
 why a source-substring test is worth nothing here). No network, no model, no
@@ -21,6 +23,7 @@ from catalogue import harvest
 from catalogue.harvest import (
     build_candidates, clean_heading, harvest_book, headings_from_book_row,
     headings_from_structured, insert_candidates, is_heading, run_harvest_job,
+    strip_numbering,
 )
 from catalogue.key import canonical_key
 from tests.catalogue_fakes import DuplicateKey, FakeSB
@@ -71,6 +74,13 @@ class TestIsHeading:
         "Cell", "Cells", "1.2 Cells.", "Chapter 1  Cells", "What is matter?",
         "Acids, Bases & Salts", "Light — Reflection and Refraction", "Newton's Laws",
         "7Bs.01", "CO2", "Activity 1.2", "1.1 The cell membrane", "Énergie",
+        "Cells: the building blocks of life",           # a colon, not a sentence
+        "Activity 1.2 Observing onion cells",
+        "Key words",
+        "What happens when we heat ice?",               # question headings are real
+        "Scientific enquiry: analysis, evaluation and conclusions",  # six words
+        "The Cell", "The Solar System", "The cell membrane",  # a determiner + a short name
+        "Cambridge Lower Secondary Science 7",          # a trailing number, not all caps
     ])
     def test_headings_pass(self, text):
         assert is_heading(text) is True
@@ -89,6 +99,32 @@ class TestIsHeading:
     ])
     def test_prose_and_noise_are_dropped(self, text):
         assert is_heading(text) is False
+
+    @pytest.mark.parametrize("text,why", [
+        # The two strings a real PDF's bold body text yielded as candidates
+        # (2026-09-06) before the layers below existed.
+        ("All living things are made of cells.", "4+ words ending in a full stop"),
+        ("A cell membrane controls what enters and leaves the cell", "a determiner opening 6+ words"),
+        ("Plants make their own food using sunlight, water and carbon dioxide", "11 words"),
+        ("The cell is the basic unit of life", "8 words, no full stop, opens with a determiner"),
+        ("These are the parts of a plant cell", "a determiner opening 6+ words"),
+        ("CHAPTER 3 CELLS 47", "all capitals with a trailing folio: a running header"),
+        ("(c) Cambridge University Press 2021", "an imprint line"),
+        ("© Cambridge University Press 2021", "an imprint line"),
+        ("ISBN 978-1-108-74283-2", "an imprint line"),
+    ])
+    def test_bold_body_text_and_page_furniture_are_dropped(self, text, why):
+        assert is_heading(text) is False, why
+
+    def test_the_word_cap_is_exactly_ten(self):
+        assert is_heading(" ".join(["word"] * 10)) is True
+        assert is_heading(" ".join(["word"] * 11)) is False
+        # A dash between words is not a word.
+        assert is_heading("Light — Reflection and Refraction") is True
+
+    def test_a_trailing_period_needs_four_words_to_be_prose(self):
+        assert is_heading("Observing onion cells.") is True
+        assert is_heading("Observing an onion cell.") is False
 
     def test_the_boundary_is_exactly_120(self):
         assert is_heading("a" * 120) is True
@@ -128,19 +164,73 @@ class TestBuildCandidates:
         for c in build_candidates(["b" * 120]):
             assert len(c["raw_title"]) <= 120
 
+    @pytest.mark.parametrize("heading,raw_title,key", [
+        ("3.2 Cells", "Cells", "cell"),
+        ("Chapter 3 Cells", "Cells", "cell"),
+        ("Chapter 1  Cells", "Cells", "cell"),
+        ("1.1 The cell membrane", "The cell membrane", "cell_membrane"),
+        ("Unit 5: Forces", "Forces", "force"),
+        ("2.1 – Indicators", "Indicators", "indicator"),
+        ("1.2 Cells.", "Cells.", "cell"),
+        ("Cells", "Cells", "cell"),
+    ])
+    def test_a_leading_numbering_token_is_stripped_before_keying(self, heading, raw_title, key):
+        """"3.2 Cells" keyed "3_2_cell" and never met the alias "cell". The
+        STRIPPED text is what is stored, so normalized == canonical_key(raw_title)
+        still holds for every row."""
+        assert strip_numbering(heading) == raw_title
+        assert build_candidates([heading]) == [{"raw_title": raw_title, "normalized": key}]
+        assert canonical_key(raw_title) == key
+
+    def test_numbering_is_stripped_by_the_harvest_never_by_canonical_key(self):
+        """The harvest never sees a curriculum code, and canonical_key must not
+        learn the rule: "7Bs.01" keeps its digits on both sides of the alias."""
+        assert strip_numbering("7Bs.01") == "7Bs.01"
+        assert canonical_key("7Bs.01") == "7bs_01"
+        assert canonical_key("3.2 Cells") == "3_2_cell"
+        # A bare number is not swallowed into nothing.
+        assert strip_numbering("1.2") == "1.2"
+
+    def test_the_remainder_must_still_be_a_heading(self):
+        assert build_candidates(["3.2 All living things are made of cells."]) == []
+        assert build_candidates(["Chapter 3 The cell is the basic unit of life"]) == []
+
+    def test_stats_say_why_a_heading_was_dropped(self):
+        stats = {}
+        out = build_candidates(["Cells", SENTENCE_200, "Fig. 3 shows the cell",
+                                "The", "An", "الخلية", "cell"], stats=stats)
+        assert out == [{"raw_title": "Cells", "normalized": "cell"}]
+        assert stats == {"not_heading": 2, "no_key": 3}
+        # A duplicate is neither: it passed the gate and has a key.
+        assert build_candidates(["Cells", "cell"]) == [{"raw_title": "Cells", "normalized": "cell"}]
+
 
 class TestHeadingsFromStructured:
-    def test_titles_sections_and_subsections_but_not_the_placeholder(self):
+    def test_titles_and_font_size_headings_only(self):
+        """Subsections and 'subheading' sections are level-3 items — "bold at
+        body size" to the PyMuPDF extractor, i.e. any bold sentence — and the
+        'body' section is the structurer's own placeholder. None is read."""
         structured = {"chapters": [
             {"title": "Cells", "sections": [
+                {"section_title": "All living things are made of cells.", "section_type": "subheading",
+                 "content": SENTENCE_200, "subsections": []},
                 {"section_title": "1.1 The cell membrane", "section_type": "heading", "content": SENTENCE_200,
-                 "subsections": [{"section_title": "Diffusion", "content": SENTENCE_200}]},
+                 "subsections": [{"section_title": "Diffusion", "content": SENTENCE_200},
+                                 {"section_title": "A cell membrane controls what enters and leaves the cell",
+                                  "content": SENTENCE_200}]},
                 {"section_title": "Content", "section_type": "body", "content": SENTENCE_200},
             ]},
             {"title": "Acids, Bases & Salts", "sections": []},
         ]}
         assert headings_from_structured(structured) == [
-            "Cells", "Acids, Bases & Salts", "1.1 The cell membrane", "Diffusion"]
+            "Cells", "Acids, Bases & Salts", "1.1 The cell membrane"]
+
+    def test_a_section_without_a_type_is_not_trusted(self):
+        """Only an explicit 'heading' — the one type the structurer derives
+        from a font-size-distinct level — is read."""
+        structured = {"chapters": [{"title": "Cells", "sections": [
+            {"section_title": "Membranes", "content": ""}]}]}
+        assert headings_from_structured(structured) == ["Cells"]
 
     def test_section_content_never_appears(self):
         structured = {"chapters": [{"title": "Cells", "sections": [
@@ -156,7 +246,8 @@ class TestHeadingsFromStructured:
 
 
 PDF_HEADINGS = ["Cells", "1.1 The cell membrane", "1.2 Diffusion.", SENTENCE_200,
-                "Fig. 3 shows the cell", "Acids, Bases & Salts", "2.1 Indicators", "Page 12"]
+                "Fig. 3 shows the cell", "Acids, Bases & Salts", "2.1 Indicators", "Page 12",
+                "الخلية"]
 
 
 @pytest.fixture
@@ -172,8 +263,8 @@ def test_the_job_writes_only_headings_and_finishes_done(no_pdf):
     summary = run_harvest_job(sb, _job())
 
     titles = _titles(sb)
-    assert titles == ["Cells", "Acids, Bases & Salts", "1.1 The cell membrane", "1.2 Diffusion.",
-                      "2.1 Indicators"]
+    # Numbering stripped, the book's own trailing period kept.
+    assert titles == ["Cells", "Acids, Bases & Salts", "The cell membrane", "Diffusion.", "Indicators"]
     assert SENTENCE_200 not in titles and "Fig. 3 shows the cell" not in titles
     for row in sb.tables["topic_candidates"]:
         assert row["source_kind"] == "book" and row["book_id"] == BOOK
@@ -186,6 +277,10 @@ def test_the_job_writes_only_headings_and_finishes_done(no_pdf):
     assert job["status"] == "done" and job["progress"] == 100 and job["error"] is None
     assert job["stage"]["step"] == "done"
     assert job["stage"]["inserted"] == 5 and job["stage"]["candidates"] == 5
+    # Why the other headings yielded nothing: SENTENCE_200, the caption and
+    # the folio failed the gate; the Arabic-only title passed it with no key.
+    assert job["stage"]["headings_seen"] == 2 + len(PDF_HEADINGS)
+    assert job["stage"]["dropped_not_heading"] == 3 and job["stage"]["dropped_no_key"] == 1
     assert job["stage"]["source"] == "pdf+chapters"
     assert summary == job["stage"]
     assert sb.downloads == ["u1/books/b1.pdf"]
@@ -213,12 +308,15 @@ def test_the_generation_table_is_never_written(no_pdf):
 
 
 def test_alias_suggestion(no_pdf):
+    """A curator's alias "Diffusion" now meets the book's "1.2 Diffusion." —
+    before the numbering strip that heading keyed "1_2_diffusion" and never
+    matched anything."""
     sb = _sb(_book(), aliases=[{"topic_id": "topic-cell", "alias": "The Cell", "normalized": "cell"},
-                               {"topic_id": "topic-diff", "alias": "Diffusion", "normalized": "1_2_diffusion"}])
+                               {"topic_id": "topic-diff", "alias": "Diffusion", "normalized": "diffusion"}])
     run_harvest_job(sb, _job())
     by_key = {r["normalized"]: r["suggested_topic_id"] for r in sb.tables["topic_candidates"]}
     assert by_key["cell"] == "topic-cell"
-    assert by_key["1_2_diffusion"] == "topic-diff"
+    assert by_key["diffusion"] == "topic-diff"
     assert by_key["acid_base_and_salt"] is None
     assert sb.tables["jobs"][0]["stage"]["suggested"] == 2
 
@@ -352,11 +450,21 @@ BODY = [
     "reminded him of the small rooms in a monastery. Fig. 1 shows his drawing of the cork.",
     "Acids taste sour and turn blue litmus red. Bases feel soapy and turn red litmus blue.",
 ]
+# Bold, at body size: the extractor calls every such span a level-3 heading.
+# The first is printed BEFORE the section heading on its page, so the
+# structurer has no section to hang it on and makes an implicit 'subheading'
+# Section of it; the second comes after the body and becomes a Subsection.
+# Both leaked as candidates on 2026-09-06.
+BOLD_BODY = [
+    "All living things are made of cells.",
+    "A cell membrane controls what enters and leaves the cell",
+]
 
 
 def _make_pdf(path):
-    """Two chapters with a big title, medium section headings and small body
-    prose — the font-size shape the PyMuPDF backend classifies on."""
+    """Two chapters with a big title, medium section headings, small body
+    prose and two BOLD body-size sentences — the font-size shape the PyMuPDF
+    backend classifies on, including the bold-at-body-size rung."""
     import fitz
 
     doc = fitz.open()
@@ -368,13 +476,42 @@ def _make_pdf(path):
         for s in sections:
             page = doc.new_page()
             page.insert_text((72, 80), title, fontsize=22)
+            page.insert_text((72, 105), BOLD_BODY[0], fontsize=10, fontname="hebo")  # Helvetica-Bold
             page.insert_text((72, 130), s, fontsize=16)
             y = 170
             for line in BODY * 3:
                 page.insert_text((72, y), line, fontsize=10)
                 y += 16
+            page.insert_text((72, y), BOLD_BODY[1], fontsize=10, fontname="hebo")
     doc.save(str(path))
     doc.close()
+
+
+def test_the_pdf_fixture_has_the_bold_body_shape(tmp_path, monkeypatch):
+    """The end-to-end test below is only worth something if the fixture really
+    puts a bold body-size span through the extractor's level-3 rung and the
+    structurer's two homes for it — pinned here so a fitz change cannot turn
+    the test into a pass by accident."""
+    pdf = tmp_path / "book.pdf"
+    _make_pdf(pdf)
+    monkeypatch.setenv("DOCLING_BACKEND", "pymupdf")
+    from agent1_ingestion.extractor import extract_pdf
+    from agent1_ingestion.structurer import structure_book
+    extraction = extract_pdf(str(pdf), cache_dir=tmp_path / "cache")
+    by_text = {i.text: i.level for i in extraction.items}
+    assert by_text[BOLD_BODY[0]] == 3 and by_text[BOLD_BODY[1]] == 3
+    assert by_text["1.1 The cell membrane"] == 2 and by_text["Chapter 1  Cells"] == 1
+    structured = structure_book(
+        book_id="b", title="Science 7", author="X", isbn=None, extraction=extraction, images=[],
+        pdf_path=str(pdf), client=None,
+        known_chapters=[{"num": 1, "title": "Cells", "start_page": 0, "end_page": 1},
+                        {"num": 2, "title": "Acids, Bases and Salts", "start_page": 2, "end_page": 3}],
+    ).model_dump()
+    types = {(s["section_title"], s["section_type"]) for ch in structured["chapters"] for s in ch["sections"]}
+    subs = {sub["section_title"] for ch in structured["chapters"] for s in ch["sections"]
+            for sub in s["subsections"]}
+    assert (BOLD_BODY[0], "subheading") in types, types
+    assert BOLD_BODY[1] in subs, subs
 
 
 def test_a_real_pdf_yields_headings_and_no_prose(tmp_path, monkeypatch):
@@ -398,12 +535,20 @@ def test_a_real_pdf_yields_headings_and_no_prose(tmp_path, monkeypatch):
     titles = _titles(sb)
     keys = {r["normalized"] for r in sb.tables["topic_candidates"]}
     assert "cell" in keys and "acid_base_and_salt" in keys
-    # Only a LEADING article is dropped, so "1.1 The cell membrane" keeps its "the".
-    assert {"1_1_the_cell_membrane", "1_2_diffusion", "2_1_indicator", "2_2_neutralisation"} <= keys, keys
-    prose = " ".join(BODY).lower()
+    # The section numbering is stripped before keying; then only a LEADING
+    # article is dropped, so "The cell membrane" keys as "cell_membrane".
+    assert {"cell_membrane", "diffusion", "indicator", "neutralisation"} <= keys, keys
+    assert "The cell membrane" in titles and "1.1 The cell membrane" not in titles
+    # The bold body-size sentences never arrive — not as an implicit section,
+    # not as a subsection — and nothing that reads as prose does.
+    for bold in BOLD_BODY:
+        assert bold not in titles, f"a bold body sentence leaked: {bold!r}"
+        assert canonical_key(bold) not in keys
+    prose = " ".join(BODY + BOLD_BODY).lower()
     for t in titles:
         assert is_heading(t), t
         assert t.lower() not in prose or len(t) < 25, f"a body line leaked: {t!r}"
         assert "hooke" not in t.lower() and "litmus" not in t.lower(), t
     assert summary["source"] == "pdf+chapters" and summary["inserted"] == len(titles) > 0
+    assert summary["dropped_no_key"] == 0
     assert sb.downloads == [("uploads", "u1/books/b1.pdf")]

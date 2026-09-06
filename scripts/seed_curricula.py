@@ -10,9 +10,12 @@ admin client (``worker.client.admin``). ``--dry-run`` parses and validates
 every file and prints what would be written without building a client at all,
 so it needs no credentials.
 
-Idempotent: running it twice writes nothing the second time (see
-catalogue/seeds/loader.py for the two-pass parent resolution that makes that
-true). Exit code 1 on any error; the failing file is named on stderr.
+Idempotent: running it twice writes nothing the second time — the loader
+reads the stored rows and upserts only what is new or differs, and the counts
+it prints (nodes_created, nodes_updated, parents_set, candidates_created) are
+of rows actually written, so an unchanged file reports zeros (see
+catalogue/seeds/loader.py for the two-pass parent resolution). Exit code 1 on
+any error; the failing file is named on stderr.
 """
 
 from __future__ import annotations

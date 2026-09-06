@@ -50,12 +50,14 @@ WORKER_CONCURRENCY = max(1, int(os.getenv("WORKER_CONCURRENCY", "1")))
 # slide deck ('deck', 2026-09) is the same shape: one authoring call + a .pptx.
 DOC_JOB_TYPES = ["lesson_plan", "activity", "worksheet", "exam_paper", "case_study", "exam", "deck"]
 
-# Observer jobs (db.OBSERVER_JOB_TYPES): they report on or read from content
-# without building a generation. Both are bounded and model-free or one-call
-# — a support diagnosis is one Sonnet call; a topic harvest is a download plus
-# CPU-only heading extraction, no image or model quota at all — so they run
-# ahead of documents. Claimed together so claim_next_job's created_at order
-# decides between them.
+# Observer jobs (db.OBSERVER_JOB_TYPES) report on or read from content without
+# building a generation — and they take OPPOSITE lanes. A support diagnosis is
+# one Sonnet call with a teacher waiting on the answer: it is claimed first. A
+# topic harvest costs no model or image quota, but it re-downloads and
+# re-extracts the whole PDF — CPU and storage egress a real user's render would
+# otherwise have — so it is claimed LAST, only when no builder job (documents,
+# presentations, decks, index_book, exams) is queued. The generic lane excludes
+# every observer type so a harvest can never slip in through it.
 OBSERVER_JOB_TYPES = ["support_diagnose", "topic_harvest"]
 
 # Job ids this process is ACTIVELY running. The crash-reaper must never requeue
@@ -205,9 +207,10 @@ def run_once(sb) -> bool:
         return True
 
     job = (
-        db.claim_next_job(sb, job_type=OBSERVER_JOB_TYPES)
+        db.claim_next_job(sb, job_type="support_diagnose")
         or db.claim_next_job(sb, job_type=DOC_JOB_TYPES)
-        or db.claim_next_job(sb)
+        or db.claim_next_job(sb, exclude_types=OBSERVER_JOB_TYPES)  # every builder
+        or db.claim_next_job(sb, job_type="topic_harvest")          # only when nothing else waits
     )
     if not job:
         return False

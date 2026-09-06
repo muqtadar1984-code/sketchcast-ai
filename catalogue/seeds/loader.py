@@ -18,14 +18,20 @@ in any order — a parent after its children is fine.
 
 Write order, and why it is two passes:
   1. ``curricula`` upserted on ``code`` (a real unique column, so PostgREST's
-     ``on_conflict`` can name it).
+     ``on_conflict`` can name it) — only when the row is new or a field the
+     file carries is stored differently.
   2. ``curriculum_nodes`` upserted on ``(curriculum_id, code)`` WITHOUT
-     ``parent_id``. Parents are resolved by code → id, and an id exists only
-     after the row does, so no single pass can set parents for a file whose
-     parents come after their children.
+     ``parent_id`` — again only the rows that are new or whose stored fields
+     differ from the file: the stored rows (id, code and every node column)
+     are read first and compared field by field, so ``nodes_updated`` is the
+     number of rows that actually changed, never the number the file has.
+     Parents are resolved by code → id, and an id exists only after the row
+     does, so no single pass can set parents for a file whose parents come
+     after their children.
   3. Every node's ``parent_id`` is read back and set where it differs from
      what ``parent_code`` says — an UPDATE per node that is wrong, none for a
-     node that is already right. That is what makes the second run silent.
+     node that is already right. Together with the diffs in 1 and 2 that is
+     what makes the second run silent: it reads, compares, and writes nothing.
   4. ``topic_candidates {source_kind: 'curriculum', node_id, raw_title,
      normalized}`` for LEAF nodes only (a strand or a unit is a grouping, not
      a topic), inserting only the keys the node does not already carry.
@@ -188,12 +194,36 @@ def _rows(res) -> list[dict]:
     return list(getattr(res, "data", None) or [])
 
 
+def _same(a, b) -> bool:
+    """One stored field against the file's. Equal values are equal; so are a
+    number and its string ("7" in the file, 7 back from an integer column) —
+    PostgREST would store them as the same value, so they are not a reason to
+    write. None only equals None."""
+    if a == b:
+        return True
+    if a is None or b is None:
+        return False
+    return str(a) == str(b)
+
+
+def _differs(want: dict, have: dict) -> bool:
+    """True when any field the payload carries is stored differently. Only
+    the payload's columns are compared — PostgREST's upsert SETs only those,
+    so a column the file omits is never a reason to write."""
+    return any(not _same(have.get(k), v) for k, v in want.items())
+
+
 # ── database half ──────────────────────────────────────────────────────
 
 
 def _upsert_curriculum(sb, cur_row: dict) -> tuple[str, bool]:
-    """Returns (curriculum_id, created)."""
-    before = _rows(sb.table("curricula").select("id").eq("code", cur_row["code"]).execute())
+    """Returns (curriculum_id, created). The row is upserted only when it is
+    new or a field the file carries is stored differently — a second run of
+    an unchanged file reads it and writes nothing."""
+    before = _rows(sb.table("curricula").select("id," + ",".join(_CURRICULUM_FIELDS))
+                   .eq("code", cur_row["code"]).execute())
+    if before and not _differs(cur_row, before[0]):
+        return before[0]["id"], False
     sb.table("curricula").upsert(cur_row, on_conflict="code").execute()
     after = _rows(sb.table("curricula").select("id").eq("code", cur_row["code"]).execute())
     if not after:
@@ -203,19 +233,28 @@ def _upsert_curriculum(sb, cur_row: dict) -> tuple[str, bool]:
 
 def _upsert_nodes(sb, curriculum_id: str, nodes: list[dict]) -> tuple[dict[str, str], int, int]:
     """Pass 1: every node row WITHOUT parent_id, upserted on (curriculum_id,
-    code). Returns (code → id, created, updated)."""
-    existing = {r["code"]: r["id"] for r in _rows(
-        sb.table("curriculum_nodes").select("id,code").eq("curriculum_id", curriculum_id).execute())}
+    code) — but only the rows that are new or whose stored fields differ from
+    the file. The curriculum's rows are read once (id, code and every
+    _NODE_FIELDS column) and compared field by field, so an unchanged file
+    upserts nothing and ``updated`` counts the rows that actually changed.
+    Returns (code → id, created, updated)."""
+    cols = "id,curriculum_id," + ",".join(_NODE_FIELDS)  # code is among the fields
+    existing = {r["code"]: r for r in _rows(
+        sb.table("curriculum_nodes").select(cols).eq("curriculum_id", curriculum_id).execute())}
     rows = [_row_for_node(n, curriculum_id) for n in nodes]
-    for chunk in _chunks(rows, _CHUNK):
+    to_write = [r for r in rows if r["code"] not in existing or _differs(r, existing[r["code"]])]
+    for chunk in _chunks(to_write, _CHUNK):
         sb.table("curriculum_nodes").upsert(chunk, on_conflict="curriculum_id,code").execute()
-    ids = {r["code"]: r["id"] for r in _rows(
-        sb.table("curriculum_nodes").select("id,code").eq("curriculum_id", curriculum_id).execute())}
+    if to_write:
+        ids = {r["code"]: r["id"] for r in _rows(
+            sb.table("curriculum_nodes").select("id,code").eq("curriculum_id", curriculum_id).execute())}
+    else:
+        ids = {code: r["id"] for code, r in existing.items()}
     missing = [r["code"] for r in rows if r["code"] not in ids]
     if missing:
         raise RuntimeError(f"curriculum_nodes not written for codes {missing[:5]}")
-    created = sum(1 for r in rows if r["code"] not in existing)
-    return ids, created, len(rows) - created
+    created = sum(1 for r in to_write if r["code"] not in existing)
+    return ids, created, len(to_write) - created
 
 
 def _set_parents(sb, curriculum_id: str, nodes: list[dict], ids: dict[str, str]) -> int:
@@ -269,8 +308,13 @@ def load_seed(sb, path: str | Path, dry_run: bool = False) -> dict:
         {"file", "curriculum", "dry_run", "nodes", "roots", "leaves",
          "candidates",                      # the file's own plan
          "curriculum_id", "curriculum_created": 0|1,
-         "nodes_created", "nodes_updated", "parents_set",
+         "nodes_created", "nodes_updated",  # rows written: new / stored fields differed
+         "parents_set",
          "candidates_created", "candidates_existing"}   # what was written
+
+    Every count is of rows actually WRITTEN: a second run of an unchanged
+    file reports zeros for all of them (and ``candidates_existing`` for the
+    candidates it found already filed).
 
     On a dry run only the plan is returned; the client is never called and
     may be None.

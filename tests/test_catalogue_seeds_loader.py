@@ -174,6 +174,9 @@ class TestLoad:
         assert not any("basic unit" in c["raw_title"] for c in cands)
 
     def test_a_second_run_changes_nothing(self, tmp_path):
+        """Reads, compares, writes nothing — and SAYS so. The loader used to
+        re-upsert every node with identical values and report nodes_updated: 7,
+        which read as seven changed rows to anyone checking the run."""
         sb = FakeSB()
         path = _write(tmp_path)
         load_seed(sb, path)
@@ -184,12 +187,38 @@ class TestLoad:
 
         assert sb.tables == before, "the second run must leave every table as it found it"
         assert out["curriculum_created"] == 0
-        assert out["nodes_created"] == 0 and out["nodes_updated"] == 7
+        assert out["nodes_created"] == 0 and out["nodes_updated"] == 0
         assert out["parents_set"] == 0
         assert out["candidates_created"] == 0 and out["candidates_existing"] == 4
-        second = sb.log[n_log:]
-        assert not [e for e in second if e[0] in ("insert", "update")], (
-            "a second run may re-upsert identical values but must insert or update nothing")
+        assert sb.log[n_log:] == [], "a second run of an unchanged file writes nothing: no upsert, insert or update"
+
+    def test_nodes_updated_counts_only_the_rows_that_changed(self, tmp_path):
+        sb = FakeSB()
+        load_seed(sb, _write(tmp_path))
+        seed = json.loads(json.dumps(SEED))
+        seed["nodes"][1]["title"] = "Diffusion, osmosis and active transport"
+        seed["nodes"][4]["sort"] = 9
+        n_log = len(sb.log)
+        out = load_seed(sb, _write(tmp_path, seed))
+        assert out["nodes_created"] == 0 and out["nodes_updated"] == 2
+        upserted = [r["code"] for e in sb.log[n_log:] if e[0] == "upsert" and e[1] == "curriculum_nodes"
+                    for r in e[2]]
+        assert sorted(upserted) == ["7/Chem", "7Bs.02"], "only the two changed rows are upserted"
+        assert not [e for e in sb.log[n_log:] if e[1] == "curricula"], "the unchanged curriculum row is not"
+        nodes = _nodes_by_code(sb)
+        assert nodes["7Bs.02"]["title"] == "Diffusion, osmosis and active transport"
+        assert nodes["7/Chem"]["sort"] == 9
+
+    def test_a_changed_curriculum_field_is_written_once(self, tmp_path):
+        sb = FakeSB()
+        load_seed(sb, _write(tmp_path))
+        seed = json.loads(json.dumps(SEED))
+        seed["curriculum"]["edition"] = "2027"
+        n_log = len(sb.log)
+        out = load_seed(sb, _write(tmp_path, seed))
+        assert out["curriculum_created"] == 0 and out["nodes_updated"] == 0
+        assert [e[1] for e in sb.log[n_log:] if e[0] == "upsert"] == ["curricula"]
+        assert sb.tables["curricula"][0]["edition"] == "2027"
 
     def test_an_edited_title_updates_the_node_and_opens_a_new_candidate(self, tmp_path):
         """The old candidate stays (a curator may have acted on it); the new
@@ -203,7 +232,7 @@ class TestLoad:
         nodes = _nodes_by_code(sb)
         assert nodes["7Bs.01"]["title"] == "The Cell"
         assert nodes["7Bs.01"]["parent_id"] == nodes["7/Chem"]["id"]
-        assert out["parents_set"] == 1
+        assert out["parents_set"] == 1 and out["nodes_updated"] == 1
         # "The Cell" keys to "cell" — the same key the old title carried under
         # this node, so no new candidate row is needed.
         assert out["candidates_created"] == 0

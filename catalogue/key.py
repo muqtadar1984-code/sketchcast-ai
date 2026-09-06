@@ -11,7 +11,7 @@ catalogue_key_cases.json``, sha256-pinned, mirroring the premium-voice table).
 
 The rule, in order — stdlib only, no locale, no dictionary:
 
-  1. NFKD, drop every Unicode mark (categories Mn, Mc, Me — the app's \p{M}), lower-case
+  1. NFKD, drop every Unicode mark (categories Mn, Mc, Me — the app's \\p{M}), lower-case
      ("Réfraction" → "refraction", full-width digits → ASCII);
   2. ``&`` → " and " ("Acids, Bases & Salts" reads as its spoken form);
   3. every run of characters outside [a-z0-9] → ONE "_";
