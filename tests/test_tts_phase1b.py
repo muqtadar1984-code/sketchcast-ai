@@ -62,7 +62,10 @@ class TestGoogleEntries:
     }
 
     def test_every_google_entry_is_pinned(self):
-        assert {v.voice_id for v in R.VOICES if v.provider == "google"} == set(self.VERIFIED)
+        # Narrator voices only: the catalogue's student voices (role
+        # "student", Leda/Puck) are pinned in tests/test_dialogue_student_voice.py
+        # and are never offered as a narration voice.
+        assert {v.voice_id for v in R.VOICES if v.provider == "google" and v.role == "narrator"} == set(self.VERIFIED)
 
     def test_verified_names_and_genders(self):
         for vid, (ref, gender, lang) in self.VERIFIED.items():

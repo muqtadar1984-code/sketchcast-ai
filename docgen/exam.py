@@ -178,8 +178,13 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         i = ord(a) - ord("A") if a else -1
         return letters[i] if 0 <= i < len(letters) else (a or "?")
 
+    # Catalogue documents carry their curriculum block (decision 10); a
+    # textbook exam passes none and renders as before.
+    header_lines = (params or {}).get("curriculum_header")
+
     # ── Exam paper (questions only) ─────────────────────────────────────────────
-    paper = dx.new_doc(title, subtitle, template=template, kind="exam", language=language)
+    paper = dx.new_doc(title, subtitle, template=template, kind="exam", language=language,
+                       header_lines=header_lines)
     dx.marks_table(paper, [(letters[i], m) for i, m in enumerate(section_marks)])
     coverage_line(paper)
     if data.get("instructions"):
@@ -231,7 +236,8 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
 
     # ── Answer key (separate document) ──────────────────────────────────────────
     key = dx.new_doc(f"{title} — {dx._t('answer_key', language)}", subtitle,
-                     template=template, kind="exam", language=language)
+                     template=template, kind="exam", language=language,
+                     header_lines=header_lines)
     coverage_line(key)
     dx.para(key, dx._t("teacher_only", language), italic=True)
 

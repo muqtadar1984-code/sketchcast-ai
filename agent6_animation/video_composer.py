@@ -344,16 +344,23 @@ def _same_prose(markup_copy: str, plain_copy: str) -> bool:
 def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
                     tts_voice, ffmpeg: str, avatars: dict | None = None,
                     lang: str | None = None, allow_premium: bool = False,
-                    report: dict | None = None) -> list:
+                    report: dict | None = None,
+                    student_voice: str | None = None) -> list:
     """Per-line two-voice TTS -> one concatenated MP3 + measured line-start
-    offsets (seconds). Teacher lines use the lesson's Edge voice; student
-    lines an age-matched Edge voice (non-English falls back to the lesson
-    voice — age-matched voices are not guaranteed per locale).
+    offsets (seconds). Teacher lines use the lesson's voice through
+    synthesize(); student lines an age-matched Edge voice (non-English falls
+    back to the lesson voice — age-matched voices are not guaranteed per
+    locale), or — catalogue kits, 2026-09-06 — the PREMIUM student voice
+    named by ``student_voice`` (a registry id with role "student") when the
+    account may render premium and that voice's provider is enabled here.
 
-    Dialogue is still Edge-only (Phase 1b routes it through the premium
-    provider). Until then a non-Edge pick falls to the free voice for the
-    LESSON LANGUAGE — it used to fall to English Aria, so an Arabic teacher
-    who picked a premium voice got an English conversation."""
+    The student's premium path reuses synthesize() exactly as the teacher's
+    does: gate, cap, per-call report, provider fallback. What happened is
+    recorded under ``report["student"]`` ({requested, used, downgraded,
+    reasons}) so the worker can write ``student_voice_fallback`` on the
+    generation instead of a reviewer discovering the wrong voice by ear.
+    Without ``student_voice`` (every non-catalogue lesson) the student stays
+    on Edge, as before, and no ``student`` key is reported."""
     from shared.tts import resolve_voice
     from shared.tts.providers import edge as edge_tts
     from shared.tts.registry import default_voice, default_voice_id_for, get_voice
@@ -364,12 +371,29 @@ def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
     # premium provider when the account has one. Conversational is the app's
     # default from grade 10, so leaving dialogue Edge-only would have made
     # premium meaningless for every secondary-school lesson. The STUDENT's
-    # lines stay on the free age-matched Edge voice: no provider offers an
-    # age-banded child voice, and the student is a foil, not the narrator.
+    # lines stay on the free age-matched Edge voice unless a premium student
+    # voice is named: no provider offers an age-banded child voice for a
+    # teacher's own lesson, and the student is a foil, not the narrator.
     teacher = resolve_voice(tts_voice, allow_premium, lang=lang)
     stud_ref = student_voice_for_avatar(
         (avatars or {}).get("student", "avatar_student"),
         getattr(free, "lang", "en") or "en") or free.ref
+    # Decided ONCE for the segment, not per line: a student who is premium
+    # on line 2 and Edge on line 4 is a worse lesson than one who is Edge
+    # throughout. The gate is checked here because resolve_voice's warning
+    # for an ungated premium id is about the TEACHER's pick; a student voice
+    # under a free account is simply not offered.
+    student_premium: str | None = None
+    student_note: dict | None = None
+    if student_voice:
+        resolved = resolve_voice(student_voice, allow_premium, lang=lang) if allow_premium else None
+        if resolved is not None and resolved.tier == "premium":
+            student_premium = student_voice
+            student_note = {"requested": student_voice, "used": resolved.voice_id,
+                            "downgraded": False, "reasons": []}
+        else:
+            student_note = {"requested": student_voice, "used": stud_ref, "downgraded": True,
+                            "reasons": ["gate" if not allow_premium else "provider_disabled"]}
     starts, cursor, parts = [], 0.0, []
     used_voice, downgraded = teacher.voice_id, False
     reasons: set[str] = set()
@@ -381,7 +405,21 @@ def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
             continue
         f = vid_dir / f"{seg_id}_dl{i}.mp3"
         if str(d.get("who")) == "student":
-            edge_tts.synthesize(line, f, stud_ref)
+            if student_premium:
+                sr: dict = {}
+                synthesize(line, f, voice_id=student_premium, allow_premium=allow_premium,
+                           report=sr, lang=lang)
+                if sr.get("downgraded") and student_note is not None:
+                    # a mid-segment provider failure lands on the free voice
+                    # of the student's gender — say so, once, on the row
+                    student_note.update({"used": sr.get("used") or student_note["used"],
+                                         "downgraded": True})
+                    if sr.get("reason"):
+                        student_note["reasons"] = sorted(set(student_note["reasons"]) | {str(sr["reason"])})
+                if report is not None:
+                    _fold_stats(report, sr)
+            else:
+                edge_tts.synthesize(line, f, stud_ref)
         else:
             r: dict = {}
             # The REQUESTED id goes in, not the resolved one: resolving here
@@ -410,6 +448,8 @@ def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
     if report is not None:
         report.update({"used": used_voice, "downgraded": downgraded,
                        "reasons": sorted(reasons)})
+        if student_note is not None:
+            report["student"] = student_note
     return starts
 
 
@@ -433,11 +473,17 @@ def compose_episode_videos(
     voice_report: Optional[dict] = None,
     direction: str = "ltr",
     lang: Optional[str] = None,
+    student_voice: Optional[str] = None,
 ) -> VideoManifest:
     """Generate a narrated, object-animated MP4 per segment.
 
     ``lang`` is the lesson language; every TTS fallback (gate, cap, provider
     failure) lands on that language's free voice rather than English Aria.
+
+    ``student_voice`` (catalogue kits) is the registry id that reads the
+    student's dialogue lines through the premium provider; None keeps the
+    free age-matched Edge student. What actually spoke is merged into
+    ``voice_report["student"]`` across parts, like the teacher's report.
 
     ``branding`` = {accent_rgb, logo_path} applies the school's colour/logo to the
     animated slide (must match what Agent 5 baked into the deck). Any field may be
@@ -563,6 +609,7 @@ def compose_episode_videos(
         downgraded = False
         seg_stats: dict = {}
         reasons: list[str] = []
+        student_note: dict | None = None
 
         # 1. TTS (provider-agnostic: free Edge default; premium ElevenLabs
         # gated). Conversational segments carry speaker-tagged DIALOGUE: each
@@ -580,13 +627,15 @@ def compose_episode_videos(
                 starts = _synth_dialogue(script_seg["dialogue"], mp3, vid_dir,
                                          seg_id, tts_voice, ffmpeg,
                                          avatars=_avatars, lang=lang,
-                                         allow_premium=allow_premium, report=dlg_report)
+                                         allow_premium=allow_premium, report=dlg_report,
+                                         student_voice=student_voice)
                 script_seg["_dialogue_starts"] = starts
                 used = dlg_report.get("used") or "dialogue-edge"
                 downgraded = bool(dlg_report.get("downgraded"))
                 seg_stats = {k: v for k, v in dlg_report.items()
                              if isinstance(v, (int, float)) and not isinstance(v, bool)}
                 reasons = list(dlg_report.get("reasons") or [])
+                student_note = dlg_report.get("student")
                 audio_path = str(mp3)
                 duration = _audio_duration(audio_path, ffmpeg) or est
             except Exception as exc:  # noqa: BLE001
@@ -688,6 +737,7 @@ def compose_episode_videos(
             "downgraded": downgraded,
             "stats": seg_stats,
             "reasons": reasons,
+            "student": student_note,
             "duration": duration,
             "segment": VideoSegment(
                 segment_id=seg_id,
@@ -838,6 +888,7 @@ def compose_episode_videos(
 
     # Aggregate in segment order — Agent 8's concat needs them ordered.
     total_duration = 0.0
+    _student: dict = {}
     for i, r in enumerate(results):
         if not r:
             # RECORD the failure; do not erase it. Skipping the segment
@@ -860,6 +911,12 @@ def compose_episode_videos(
         for k, v in (r.get("stats") or {}).items():
             _stats[k] = _stats.get(k, 0) + v
         _reasons.update(r.get("reasons") or [])
+        sn = r.get("student")
+        if sn:
+            _student["requested"] = sn.get("requested")
+            _student.setdefault("used", set()).add(sn.get("used"))
+            _student["downgraded"] = bool(_student.get("downgraded")) or bool(sn.get("downgraded"))
+            _student.setdefault("reasons", set()).update(sn.get("reasons") or [])
         manifest_segments.append(r["segment"])
 
     if progress_callback:
@@ -887,6 +944,15 @@ def compose_episode_videos(
             "stats": merged,
             "parts": int(voice_report.get("parts") or 0) + 1,
         })
+        if _student:
+            # Same merge rule as the teacher's report: one dict across parts.
+            prev = dict(voice_report.get("student") or {})
+            voice_report["student"] = {
+                "requested": _student.get("requested") or prev.get("requested"),
+                "used": sorted({u for u in (set(prev.get("used") or []) | _student["used"]) if u}),
+                "downgraded": bool(prev.get("downgraded")) or bool(_student.get("downgraded")),
+                "reasons": sorted(set(prev.get("reasons") or []) | set(_student.get("reasons") or [])),
+            }
 
     manifest = VideoManifest(
         manifest_id=str(uuid.uuid4()),

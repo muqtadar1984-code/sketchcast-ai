@@ -82,10 +82,14 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     subj = _dicts(data.get("subjective"))[:n_subj]
 
     title = data.get("title") or f"{dx._t('doc_test_paper', language)} — {chapter_title}"
+    # Catalogue documents carry their curriculum block (decision 10); a
+    # textbook test paper passes none and renders as before.
+    header_lines = (params or {}).get("curriculum_header")
     doc = dx.new_doc(
         title,
         f"{grade} · {subject}",
         template=template, kind="exam_paper", language=language,
+        header_lines=header_lines,
     )
 
     # ONE localized letter sequence (A B C… / أ ب ج…) shared by the marks
@@ -168,6 +172,7 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         f"{title} — {dx._t('answer_key', language)}",
         f"{grade} · {subject}",
         template=template, kind="exam_paper", language=language,
+        header_lines=header_lines,
     )
     dx.para(key_doc, dx._t("teacher_only", language), italic=True)
     for sec_name, items in answers:

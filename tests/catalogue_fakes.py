@@ -12,6 +12,7 @@ storage shim. Unique keys per table mirror migration 0112:
     topic_aliases     (normalized)
     topic_articles    (topic_id, language, version)          -- Phase 2b
     article_figures   (article_id, figure_key)               -- Phase 2b
+    topic_questions   (topic_id, language, content_hash)     -- Phase 3
 
 A violating INSERT raises with Postgres's 23505 text, which is what the real
 client surfaces (postgrest.APIError carries {"code": "23505", ...}).
@@ -34,6 +35,7 @@ UNIQUE = {
     "topic_aliases": lambda r: (r.get("normalized"),),
     "topic_articles": lambda r: (r.get("topic_id"), r.get("language"), r.get("version")),
     "article_figures": lambda r: (r.get("article_id"), r.get("figure_key")),
+    "topic_questions": lambda r: (r.get("topic_id"), r.get("language"), r.get("content_hash")),
 }
 
 
@@ -235,6 +237,55 @@ class _Storage:
         return _Bucket(self.store, name)
 
 
+class RpcError(Exception):
+    """What postgrest surfaces for a failed function call: ``code`` is the
+    SQLSTATE (or PGRST202 for a function the schema does not have)."""
+
+    def __init__(self, code, message):
+        self.code, self.message = code, message
+        super().__init__(f"{message} ({code})")
+
+
+class _Rpc:
+    """``sb.rpc(name, params).execute()`` — the one function the worker calls
+    on a kit, ``repoint_kit_generation`` (app migration 0115), with the SQL
+    body's semantics: the kit must exist (P0002) and be ``generating``
+    (23514), the pointer for ``p_kind`` must still be ``p_replaces`` (23514)
+    and the write is a MERGE of one key, never a replace. Any other name is
+    a function this database does not have (PGRST202), which is what a
+    pre-0115 database answers."""
+
+    def __init__(self, store, name, params):
+        self.store, self.name, self.params = store, name, params
+
+    def execute(self):
+        # ``calls`` keeps its (op, table) shape — tests unpack it in pairs;
+        # the arguments go to ``rpc_calls``.
+        self.store.calls.append(("rpc", self.name))
+        self.store.rpc_calls.append((self.name, dict(self.params)))
+        if self.name != "repoint_kit_generation":
+            raise RpcError("PGRST202", f"Could not find the function public.{self.name} in the schema cache")
+        p = self.params
+        kits = [k for k in self.store.tables.get("topic_kits", []) if k.get("id") == p.get("p_kit")]
+        if not kits:
+            raise RpcError("P0002", f"kit {p.get('p_kit')} not found")
+        k = kits[0]
+        if k.get("status") != "generating":
+            raise RpcError("23514", f"kit {k['id']} is {k.get('status')}, not generating — nothing is repointed")
+        kind = p.get("p_kind")
+        docs = k.get("doc_generation_ids") if isinstance(k.get("doc_generation_ids"), dict) else {}
+        current = k.get("presentation_generation_id") if kind == "presentation" else docs.get(kind)
+        if (current or None) != (p.get("p_replaces") or None):
+            raise RpcError("23514", f"kit {k['id']} points its {kind} at {current or 'nothing'}, not "
+                                    f"{p.get('p_replaces') or 'nothing'} — the pointer moved; nothing is repointed")
+        if kind == "presentation":
+            k["presentation_generation_id"] = p["p_generation"]
+        else:
+            k["doc_generation_ids"] = {**docs, kind: p["p_generation"]}
+        self.store.log.append(("rpc", "topic_kits", dict(k), [("id", k["id"])]))
+        return _Res(dict(k))
+
+
 class FakeSB:
     """``tables`` is the state; ``log`` every write; ``calls`` every execute."""
 
@@ -245,6 +296,7 @@ class FakeSB:
                        "article_figures": [], "visual_assets": []}
         self.log = []
         self.calls = []
+        self.rpc_calls = []
         self.files = {}
         self.downloads = []
         self.ids = itertools.count(1)
@@ -252,6 +304,9 @@ class FakeSB:
 
     def table(self, name):
         return _Query(self, name)
+
+    def rpc(self, name, params=None):
+        return _Rpc(self, name, dict(params or {}))
 
     # helpers for assertions
     def writes(self, table=None):

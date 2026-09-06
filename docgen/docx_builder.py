@@ -668,14 +668,52 @@ def _footer(doc: Document, ctx: _Ctx, brand_text: str) -> None:
     r.font.size = Pt(2)
 
 
+def header_lines_of(value) -> list[str]:
+    """The curriculum header lines a caller passed, cleaned: a list of
+    non-empty strings, or []. Anything else (None, a string, numbers inside
+    the list) is not a header — ``params.curriculum_header`` comes from a
+    JSON column the portal and the worker both write."""
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [s.strip() for s in value if isinstance(s, str) and s.strip()]
+
+
+def curriculum_header(doc: Document, lines) -> None:
+    """The curriculum block of a catalogue document (Phase 3 decision 10):
+    one small meta-coloured line per curriculum — ``Cambridge Lower Secondary
+    Science 0893 · 7Bs.01, 7Bs.02`` — under the subtitle, so a teacher sees
+    at a glance which syllabus codes the document serves. Direction-aware
+    through ``_p`` like every other paragraph; a no-op for no lines."""
+    cleaned = header_lines_of(lines)
+    if not cleaned:
+        return
+    ctx = _ctx(doc)
+    for i, line in enumerate(cleaned):
+        p = _p(doc, ctx, before=2 if i == 0 else 0, after=6 if i == len(cleaned) - 1 else 1)
+        _run(p, line, ctx, size=9, color=ctx.style.meta_color)
+
+
+def page_break(doc: Document) -> None:
+    """A hard page break — its own paragraph, so a following heading starts
+    the new page. python-docx has this; wrapped so builders keep the single
+    ``dx`` surface (and tests can count them)."""
+    doc.add_page_break()
+
+
 def new_doc(title: str, subtitle: str = "", template: str | None = None,
-            kind: str | None = None, language: str = "en") -> Document:
+            kind: str | None = None, language: str = "en",
+            header_lines: list[str] | None = None) -> Document:
     """Create a styled document: page setup, masthead (title block), footer.
 
     `template` = school letterhead .docx. When present the letterhead owns the
     masthead and footer: the style's own title rules / two-tone bars and its
     SketchCast footer are DEMOTED (skipped) so they never collide with the
     school branding; section styling below stays.
+
+    `header_lines` = the curriculum block (catalogue documents, decision 10):
+    a non-empty list renders one small line each under the subtitle via
+    ``curriculum_header``; None / [] renders nothing, so every existing
+    document is byte-for-byte what it was.
     """
     style = STYLES[STYLE_BY_KIND.get(kind or "", "classroom")]
     branded = bool(template)
@@ -723,6 +761,11 @@ def new_doc(title: str, subtitle: str = "", template: str | None = None,
         if subtitle:
             m = _p(doc, ctx, before=2, after=6)
             _run(m, subtitle, ctx, size=10, italic=True, color=style.meta_color)
+
+    # The curriculum block sits under the subtitle in every style, branded or
+    # not: the letterhead owns the masthead, not the syllabus the document
+    # serves.
+    curriculum_header(doc, header_lines)
 
     if not branded:
         _footer(doc, ctx, f"SketchCast · {title}")

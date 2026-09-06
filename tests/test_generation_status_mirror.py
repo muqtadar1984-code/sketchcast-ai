@@ -72,8 +72,11 @@ def test_a_poison_pill_marks_its_generation_error():
     its credit: credit_ledger_sync only voids on generations.status = 'error'."""
     body = _body("requeue_stale_jobs")
     assert 'mirror_generation_status(sb, owned_gen, "error")' in body
-    assert 'select("id,type,book_id,attempts,generation_id")' in body, (
-        "the reaper must SELECT generation_id or it has nothing to mirror onto"
+    # `params` joined the select for catalogue Phase 3: a poison-pill KIT job
+    # must also take its topic_kits row to 'failed' (kit_id_of(j["params"])),
+    # or the portal keeps Generate disabled on a kit that reads 'generating'.
+    assert 'select("id,type,book_id,attempts,generation_id,params")' in body, (
+        "the reaper must SELECT generation_id (to mirror onto) and params (to find the kit)"
     )
 
 
@@ -94,9 +97,15 @@ def test_a_poison_pill_marks_its_generation_error():
 def test_observer_jobs_are_named_and_the_resolver_exists():
     # topic_harvest joined 2026-09 (catalogue): it owns no generation either;
     # topic_derive (Phase 2a) owns no generation and no book; topic_article
-    # and figure_render (Phase 2b) write the knowledge base and own neither.
-    assert ('OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "topic_harvest", "topic_derive", '
-            '"topic_article", "figure_render"})') in SRC
+    # and figure_render (Phase 2b) write the knowledge base and own neither;
+    # topic_questions (Phase 3) drafts the question bank and owns neither.
+    # The literal now spans lines, so the pin reads the set's members rather
+    # than one exact line.
+    start = SRC.index("OBSERVER_JOB_TYPES = frozenset({")
+    literal = SRC[start:SRC.index("})", start)]
+    for kind in ("support_diagnose", "topic_harvest", "topic_derive", "topic_article",
+                 "figure_render", "topic_questions"):
+        assert f'"{kind}"' in literal, kind
     body = _body("generation_to_mirror")
     assert "OBSERVER_JOB_TYPES" in body and "return None" in body
     assert 'return job.get("generation_id")' in body

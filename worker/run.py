@@ -64,8 +64,67 @@ DOC_JOB_TYPES = ["lesson_plan", "activity", "worksheet", "exam_paper", "case_stu
 # call) and figure_render — the one catalogue job that may make IMAGE calls,
 # which is why it also re-checks the queue itself before every generation
 # (catalogue/figures.py, builder_queued) and pauses when a builder appears.
-OBSERVER_JOB_TYPES = ["support_diagnose", "topic_harvest", "topic_derive", "topic_article", "figure_render"]
-CATALOGUE_JOB_TYPES = ["topic_harvest", "topic_derive", "topic_article", "figure_render"]  # the last lane
+# Phase 3 adds topic_questions (one text call drafting a topic's question
+# bank, plus one coverage top-up) to the same lane.
+OBSERVER_JOB_TYPES = ["support_diagnose", "topic_harvest", "topic_derive", "topic_article", "figure_render",
+                      "topic_questions"]
+CATALOGUE_JOB_TYPES = ["topic_harvest", "topic_derive", "topic_article", "figure_render", "topic_questions"]  # the last lane
+
+
+def _claim_catalogue_generation(sb):
+    """The LAST lane (Phase 3, decision 12): a catalogue KIT generation —
+    a presentation, deck or document whose job row carries
+    ``params.catalogue = true`` (migration 0115 stamps it at insert). These
+    are ordinary builder types, so every user lane above excludes them by
+    the flag, and this lane claims them only when
+
+      * no job a real user is waiting on is live (``builder_queued``: queued
+        OR processing, any non-observer type, the flag ignored) — a kit's
+        image calls share the one Vertex pool, and a batch during a
+        teacher's render is a total image outage for that teacher; and
+      * the off-peak window is open (``CATALOGUE_WINDOW_UTC``, default
+        20:00-05:00 UTC; ``always`` ONLY for a supervised pilot — it lets a
+        kit render into users' hours) — and, for a PRESENTATION, stays open
+        for ``CATALOGUE_PRESENTATION_MARGIN_MIN`` more minutes (default 60):
+        a render claimed at 04:50 would otherwise run through the hours
+        teachers use. Documents and decks take a minute each and need no
+        margin, so near the window's end only they are claimed.
+
+    Claiming is the BEFORE half of the never-starve rule; the DURING half —
+    a builder appearing while a kit renders — is worker/process.py's
+    (``catalogue.kit.yield_to_users`` between parts, and the scene engine's
+    contention probe before every image call).
+
+    Imported lazily: catalogue.figures pulls the visual library in, and the
+    poll loop must stay cheap when the answer is "nothing to do"."""
+    from catalogue.figures import builder_queued
+    from catalogue.kit import catalogue_window_open, presentation_margin_minutes
+
+    if not catalogue_window_open() or builder_queued(sb):
+        return None
+    if catalogue_window_open(margin_minutes=presentation_margin_minutes()):
+        return db.claim_next_job(sb, exclude_types=OBSERVER_JOB_TYPES, catalogue=True)
+    return db.claim_next_job(sb, exclude_types=[*OBSERVER_JOB_TYPES, "presentation"], catalogue=True)
+
+
+def _is_catalogue_job(job: dict | None) -> bool:
+    """The one reading of the kit flag (worker.client.is_catalogue_params) —
+    nothing from the catalogue package, so the failure path stays importable
+    without its dependencies."""
+    return db.is_catalogue_params((job or {}).get("params"))
+
+
+def _fail_catalogue_kit(sb, job: dict, error: str) -> None:
+    """A catalogue kit job that failed anywhere — before its prelude ran
+    (the generation row unreadable, taken down, the tier unresolvable) as
+    much as inside the build — must leave its kit ``failed`` (guarded), or
+    the portal keeps Generate disabled on a kit that reads 'generating'
+    forever and offers no Retry. process.py marks it too when it can;
+    the guard makes the second write a no-op."""
+    if not _is_catalogue_job(job):
+        return
+    db.mark_kit_failed(sb, db.kit_id_of(job.get("params")),
+                       f"{job.get('type') or 'generation'} failed: {_evidence(error, 900)}")
 
 # Job ids this process is ACTIVELY running. The crash-reaper must never requeue
 # these — with concurrency, a live 'processing' row is not an orphan. (Sketches
@@ -197,8 +256,11 @@ def run_once(sb) -> bool:
       4. Everything else — video lessons (presentation), index_book.
       5. Catalogue observers — topic harvests (download + CPU), topic
          derives (one text call per sub-strand), topic articles (one text
-         call) and figure renders (image calls, self-pausing): only when
-         nothing above is queued.
+         call), figure renders (image calls, self-pausing) and question
+         drafts: only when nothing above is queued.
+      6. Catalogue KIT generations (params.catalogue = true): only when no
+         user builder is live AND the off-peak window is open — see
+         _claim_catalogue_generation. Lanes 1-4 exclude them by the flag.
     All of 1–3 are bounded/fast, so they can't starve the lesson queue."""
     sketch = db.claim_next_sketch(sb)
     if sketch:
@@ -215,11 +277,14 @@ def run_once(sb) -> bool:
                 pass
         return True
 
+    # catalogue=False on the user lanes: a kit's rows are the same builder
+    # TYPES as a teacher's, and only the flag tells them apart.
     job = (
-        db.claim_next_job(sb, job_type="support_diagnose")
-        or db.claim_next_job(sb, job_type=DOC_JOB_TYPES)
-        or db.claim_next_job(sb, exclude_types=OBSERVER_JOB_TYPES)  # every builder
-        or db.claim_next_job(sb, job_type=CATALOGUE_JOB_TYPES)      # harvest / derive: only when nothing else waits
+        db.claim_next_job(sb, job_type="support_diagnose", catalogue=False)
+        or db.claim_next_job(sb, job_type=DOC_JOB_TYPES, catalogue=False)
+        or db.claim_next_job(sb, exclude_types=OBSERVER_JOB_TYPES, catalogue=False)  # every user builder
+        or db.claim_next_job(sb, job_type=CATALOGUE_JOB_TYPES)      # harvest / derive / …: only when nothing else waits
+        or _claim_catalogue_generation(sb)                          # kits: no live user builder + off-peak
     )
     if not job:
         return False
@@ -252,6 +317,10 @@ def run_once(sb) -> bool:
             from catalogue.figures import run_figure_render_job
 
             run_figure_render_job(sb, job)  # self-contained: finishes its own row, done or error
+        elif job_type == "topic_questions":
+            from catalogue.questions import run_questions_job
+
+            run_questions_job(sb, job)  # self-contained: finishes its own row, done or error
         else:
             process_generation(sb, job, gen_id)
     except db.TransientTierError as exc:
@@ -267,9 +336,10 @@ def run_once(sb) -> bool:
                               error=_evidence(f"plan tier unresolvable: {exc!r}"))
             except Exception:  # noqa: BLE001
                 pass
+            _fail_catalogue_kit(sb, job, f"plan tier unresolvable: {exc!r}")
             # Same hook the generic failure path gets: a tier outage that
             # exhausts its retries is a console issue, not a quiet log line.
-            if _support_agent_enabled():
+            if _support_agent_enabled() and not _is_catalogue_job(job):
                 _auto_file_support_issue(sb, job, f"plan tier unresolvable: {exc!r}")
         else:
             log.warning("Job %s requeued (attempt %d): %r", job["id"], att + 1, exc)
@@ -302,6 +372,7 @@ def run_once(sb) -> bool:
             db.finish_job(sb, job["id"], mirror_gen, error=_evidence(str(exc)))
         except Exception:  # noqa: BLE001
             pass
+        _fail_catalogue_kit(sb, job, str(exc))
         # Stop the UI's "Finding chapters…" spinner if indexing failed.
         if job_type == "index_book" and job.get("book_id"):
             try:
@@ -311,7 +382,11 @@ def run_once(sb) -> bool:
         # A failed generation triggers the diagnosis agent (flag-gated; never
         # for a support job itself — that would recurse — nor for the other
         # generation-less jobs, which have no reporter waiting on a lesson).
-        if _support_agent_enabled() and job_type not in ("support_diagnose", "index_book", *CATALOGUE_JOB_TYPES):
+        # A catalogue kit's failure is the reviewer's, in the portal (the kit
+        # row goes 'failed' with the reason): filing a console issue under
+        # the system account would only spend a diagnosis call on nobody.
+        if (_support_agent_enabled() and job_type not in ("support_diagnose", "index_book", *CATALOGUE_JOB_TYPES)
+                and not _is_catalogue_job(job)):
             _auto_file_support_issue(sb, job, str(exc))
     finally:
         _inflight_remove(job["id"])
@@ -360,6 +435,10 @@ def main() -> None:
     # the difference between "the migration is pending" and a silent downgrade,
     # so it is said once at boot rather than once per job.
     db.probe_premium_voices_allowed(sb)
+    # Phase 3's lanes read the kit flag from jobs.params, which only migration
+    # 0115 stamps. A kit row inserted before 0115 is applied would be claimed
+    # by the USER lanes — the never-starve gate bypassed — so say so at boot.
+    db.probe_catalogue_job_flags(sb)
 
     once = "--once" in sys.argv
     if once:
