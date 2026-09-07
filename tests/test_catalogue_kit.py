@@ -374,6 +374,84 @@ class TestPartsBudget:
         assert len(_hard_split(block, 2600)) < len(_hard_split(block, MAX_PART_WORDS))
 
 
+# ── a part with no section is not a part ───────────────────────────────
+
+
+def _chapter_with_boxes(section_words=1200, n_boxes=50, box_words=15):
+    """Sections first, then key boxes — the order build_chapter_parts sees.
+    Sized so the chunk closes inside the boxes, which is the live shape."""
+    body = " ".join(f"word{i}" for i in range(section_words))
+    return {"chapter_num": -1, "title": "T", "start_page": 0, "end_page": 0, "images": [],
+            "sections": [{"section_title": "Only Section", "section_type": "body",
+                          "content": body, "page_num": 0, "subsections": []}],
+            "key_boxes": [{"type": "definition", "title": f"Term {k}",
+                           "content": " ".join(f"gloss{k}x{j}" for j in range(box_words)),
+                           "page_num": 0} for k in range(n_boxes)]}
+
+
+class TestASectionlessTailIsNotAPart:
+    """Cells kit 70f4a3c2, 2026-09-07: part 2 was 1.8 minutes of "Recap" and
+    "Chapter Summary" over `sections: []`, while part 1 already carried all six
+    sections. The chapter's key boxes — glossary, misconceptions, claims — are
+    reference material with no teaching thread, and handed one the narration
+    model writes the only thing it can."""
+
+    def test_the_tail_is_folded_back(self):
+        ch = _chapter_with_boxes()
+        parts = build_chapter_parts(ch, max_words=2210, max_chars=6000)
+        assert all(p["section_titles"] for p in parts), \
+            [p["section_titles"] for p in parts]
+
+    def test_even_when_the_word_budget_forbids_the_merge(self):
+        """The runt rule could not catch the live case: the tail was inside its
+        400-word threshold but merging was refused on the WORD budget, and the
+        split had been forced by the CHAR budget in the first place. One budget
+        made a part the other would not let go of, so this rule consults
+        neither."""
+        ch = _chapter_with_boxes()          # 1,200 section words + 750 in boxes
+        parts = build_chapter_parts(ch, max_words=1950, max_chars=11000)
+        assert len(parts) == 1
+        assert parts[0]["words"] > 1950, "folded past the words bound on purpose"
+
+    def test_and_no_text_is_ever_dropped(self):
+        """Merging is content-neutral — the whole reason it is safe."""
+        ch = _chapter_with_boxes()
+        parts = build_chapter_parts(ch, max_words=2210, max_chars=6000)
+        joined = "\n\n".join(p["text"] for p in parts)
+        for k in range(30):
+            assert f"Term {k}" in joined
+        assert "## Only Section" in joined
+
+    def test_a_real_final_section_still_becomes_its_own_part(self):
+        """Only a SECTIONLESS tail folds. A chapter that genuinely runs long
+        still splits, or the parts feature stops working."""
+        ch = _long_chapter(n_sections=6, words_each=600)   # 3,600 words, no boxes
+        parts = build_chapter_parts(ch, max_words=1950)
+        assert len(parts) > 1 and all(p["section_titles"] for p in parts)
+
+
+class TestTheCharsBudgetScalesWithTheWords:
+    def test_the_default_is_unchanged(self):
+        ch = _long_chapter()
+        assert build_chapter_parts(ch) == \
+               build_chapter_parts(ch, max_words=MAX_PART_WORDS,
+                                   max_chars=MAX_ANALYSIS_CHARS)
+
+    def test_the_catalogue_budget_keeps_the_books_ratio(self):
+        """Raising only the words bound did nothing: the chunker closes on
+        EITHER, and at the book's 15,000-per-1,950 ratio the char ceiling
+        always bound first, so the 17-minute setting never decided anything."""
+        assert kit.part_chars_budget() == 17000
+        assert (kit.part_chars_budget() / kit.part_words_budget()) == \
+               pytest.approx(MAX_ANALYSIS_CHARS / MAX_PART_WORDS, rel=0.01)
+
+    def test_a_wider_char_budget_can_hold_a_chapter_the_narrow_one_split(self):
+        ch = _chapter_with_boxes()
+        narrow = build_chapter_parts(ch, max_words=2210, max_chars=4000)
+        wide = build_chapter_parts(ch, max_words=2210, max_chars=17000)
+        assert len(wide) <= len(narrow) and len(wide) == 1
+
+
 # ── after_generation (decision 6) ──────────────────────────────────────
 
 

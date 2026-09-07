@@ -63,7 +63,8 @@ NARRATION_WPM = 130
 _MIN_TAIL_WORDS = 400
 
 
-def _hard_split(block: str, max_words: int = MAX_PART_WORDS) -> list[str]:
+def _hard_split(block: str, max_words: int = MAX_PART_WORDS,
+                max_chars: int = MAX_ANALYSIS_CHARS) -> list[str]:
     """Split one oversized unit so every piece honours BOTH budgets.
 
     ``max_words`` is the teaching budget; the default is the classroom's 15
@@ -103,7 +104,7 @@ def _hard_split(block: str, max_words: int = MAX_PART_WORDS) -> list[str]:
     # planning a week of classes actually wants.
     n = max(
         -(-total_words // max_words),           # lesson bound (the classroom)
-        -(-len(block) // MAX_ANALYSIS_CHARS),   # context bound (the model)
+        -(-len(block) // max_chars),            # context bound (the model)
         1,
     )
     per = -(-total_words // n)
@@ -116,7 +117,7 @@ def _hard_split(block: str, max_words: int = MAX_PART_WORDS) -> list[str]:
         # The hard budgets still bind — `per` only decides where to aim, so an
         # unusually long run of characters cannot smuggle a piece past the
         # model's context bound.
-        if cur and (cur_chars + len(tok) > MAX_ANALYSIS_CHARS
+        if cur and (cur_chars + len(tok) > max_chars
                     or (is_word and cur_words + 1 > max_words)
                     or (is_word and cur_words >= per and len(pieces) < n - 1)):
             pieces.append("".join(cur))
@@ -129,7 +130,8 @@ def _hard_split(block: str, max_words: int = MAX_PART_WORDS) -> list[str]:
     return pieces or [""]
 
 
-def build_chapter_parts(chapter_content: dict, max_words: int = MAX_PART_WORDS) -> list[dict]:
+def build_chapter_parts(chapter_content: dict, max_words: int = MAX_PART_WORDS,
+                        max_chars: int = MAX_ANALYSIS_CHARS) -> list[dict]:
     """The SINGLE source of truth for how a chapter splits into parts.
 
     ``max_words`` defaults to MAX_PART_WORDS, so every existing caller — the
@@ -187,10 +189,10 @@ def build_chapter_parts(chapter_content: dict, max_words: int = MAX_PART_WORDS) 
         cur_parts, cur_titles, cur_len, cur_words = [], [], 0, 0
 
     for sec_title, block in units:
-        pieces = _hard_split(block, max_words)
+        pieces = _hard_split(block, max_words, max_chars)
         for piece in pieces:
             piece_words = len(piece.split())
-            if cur_parts and (cur_len + len(piece) > MAX_ANALYSIS_CHARS or cur_words + piece_words > max_words):
+            if cur_parts and (cur_len + len(piece) > max_chars or cur_words + piece_words > max_words):
                 _flush()
             cur_parts.append(piece)
             if sec_title:
@@ -224,12 +226,44 @@ def build_chapter_parts(chapter_content: dict, max_words: int = MAX_PART_WORDS) 
     # the exact compression this file exists to prevent.
     if (len(chunks) > 1 and chunks[-1]["words"] < _MIN_TAIL_WORDS
             and chunks[-2]["words"] + chunks[-1]["words"] <= max_words):
-        tail = chunks.pop()
-        prev = chunks[-1]
-        prev["text"] = f"{prev['text']}\n\n{tail['text']}".strip()
-        prev["section_titles"] = list(dict.fromkeys(prev["section_titles"] + tail["section_titles"]))
-        prev["words"] = len(prev["text"].split())
+        _merge_tail(chunks)
+
+    # A part with NO SECTION is not a part.
+    #
+    # The units above are the chapter's sections FOLLOWED BY its key boxes,
+    # and only a section carries a title. So a chunk that closes just before
+    # the boxes leaves a tail made entirely of glossary, misconceptions and
+    # claims: reference material that annotates the sections and feeds the
+    # concept pass, with no teaching thread of its own. Given one, the
+    # narration model writes the only thing it can — a recap.
+    #
+    # Live proof (Cells kit 70f4a3c2, 2026-09-07): part 2 was 1.8 minutes of
+    # "Recap", "Cellular Recap", "Chapter Summary" over `sections: []`, while
+    # part 1 already held all six sections. A whole extra render, its images,
+    # its upload and its CREDIT, for no new material — and part 1 ended by
+    # advertising it.
+    #
+    # The runt rule above could not catch it. The tail was 319 words, inside
+    # its 400-word threshold, but merging was refused on the WORD budget
+    # (2,059 + 319 > 2,210) — and the split had been forced by the CHAR budget
+    # in the first place (part 1 stopped at 14,532 chars, 151 words short of
+    # its words bound). One budget made a part the other would not let go of.
+    # So this rule does not consult either: a sectionless tail is never a
+    # lesson, at any length. Merging stays content-neutral — the text is
+    # concatenated, never dropped — and still moves the credit count DOWN.
+    while (len(chunks) > 1 and not chunks[-1]["section_titles"]
+            and chunks[-2]["section_titles"]):
+        _merge_tail(chunks)
     return chunks
+
+
+def _merge_tail(chunks: list[dict]) -> None:
+    """Fold the last chunk into the one before it, losing no text."""
+    tail = chunks.pop()
+    prev = chunks[-1]
+    prev["text"] = f"{prev['text']}\n\n{tail['text']}".strip()
+    prev["section_titles"] = list(dict.fromkeys(prev["section_titles"] + tail["section_titles"]))
+    prev["words"] = len(prev["text"].split())
 
 
 def run_full_analysis(
