@@ -35,7 +35,8 @@ import requests
 from .partnames import norm_part, resolve_part, same_part
 from PIL import Image
 
-from shared.asset_keys import KEY_NOISE, canonical_key, is_avatar_key
+from shared.asset_keys import (KEY_NOISE, canonical_key, is_avatar_key,
+                               spelling_variants)
 
 from .trace import drawing_order
 
@@ -1464,6 +1465,35 @@ def asset_lock(key: str):
         return _ASSET_LOCKS.setdefault(canonical_key(key), threading.RLock())
 
 
+def cache_dir_for(key: str, cache_dir: Path | None = None) -> Path:
+    """Where `key`'s cached PNG lives: its own canonical directory, or — when
+    that one is empty — an existing directory for the SAME WORD spelled the
+    other way.
+
+    `canonical_key` may not learn the spelling fold (its output is pinned
+    against the app and 684 published assets are filed under it), so the alias
+    happens HERE, on the read. Measured on the live Cells kit: part 1 asked
+    `levels_of_organization` and cached it; part 2 asked
+    `levels_of_organisation`, found nothing, was rate-limited and shipped a
+    scene with no diagram.
+
+    Only ever returns a directory that already HAS an asset; a miss returns
+    the requested key's own directory, so a generation still writes under the
+    key it was asked for and nothing is stored under an alias.
+    """
+    root = cache_dir or CACHE_DIR
+    primary = root / canonical_key(key)
+    if (primary / "asset.png").exists():
+        return primary
+    for alt in spelling_variants(key)[1:]:
+        candidate = root / canonical_key(alt)
+        if candidate != primary and (candidate / "asset.png").exists():
+            logger.info("asset %r reuses the cache of its other spelling (%s)",
+                        key, candidate.name)
+            return candidate
+    return primary
+
+
 def get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
                      allow_generate: bool = True) -> RasterAsset | None:
     """Per-key serialized: segments render in parallel threads, and a
@@ -1478,7 +1508,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
     # avatars are the one COLOUR tier: they are characters, not board ink,
     # and they are revealed rather than drawn
     is_color = key.startswith("avatar_")
-    cache = (cache_dir or CACHE_DIR) / canonical_key(key)
+    cache = cache_dir_for(key, cache_dir)
     png, meta = cache / "asset.png", cache / "meta.json"
     names = part_names_from_prompt(prompt)
     cached_fallback: RasterAsset | None = None   # baked-text cache, still usable

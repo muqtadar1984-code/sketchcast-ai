@@ -13,7 +13,18 @@ The target lifecycle is:
 visual request
      |
      v
-local cache ---- hit ----> render
+local cache (this key, or the same word spelled the other way)
+     |
+     +---- hit, provenance "visual_library" ----> render
+     |
+     +---- hit, provenance "generated" ---> Supabase visual library
+     |          |                                |
+     |          |                       approved row ---> refresh the cache
+     |          |                                |            -> render
+     |          +<---- nothing there ------------+
+     |          |
+     |          v
+     |        render the cached asset
      |
      miss
      v
@@ -33,6 +44,23 @@ existing renderer validation
 
 Image generation remains the fallback. The library never becomes a hard
 dependency for producing a lesson.
+
+Two refinements to that order, both added 2026-09-07 after a catalogue kit
+generated five diagrams the library already held:
+
+- **an approved library asset outranks a cache entry an earlier GENERATION
+  wrote.** A cache entry is one model's first attempt, kept because it was
+  first; a library row has been reviewed and published for reuse. The
+  decision log calls this outcome `library_over_generated_cache`, so it stays
+  countable apart from an ordinary `library_hit`. A cache entry the library
+  already supplied is never re-checked, so the cost falls away as the cache
+  fills. Turn it off with `LIBRARY_OVER_GENERATED_CACHE=0`.
+- **two spellings of one word are one picture.** `canonical_key` does NOT fold
+  them (its output is pinned against the app and every published asset is
+  filed under it), so the alias happens at LOOKUP: both the local cache
+  (`raster_assets.cache_dir_for`) and the library (`visual_library.find`) ask
+  once more in the other orthography. The list is short and explicit —
+  `shared.asset_keys.spelling_variants`.
 
 ## Curriculum model
 

@@ -1279,6 +1279,25 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("figure load failed: %s", exc)
+        if catalogue is not None and getattr(catalogue, "article_id", None):
+            # A catalogue kit's figures are the article's OWN approved artwork
+            # (article_figures → visual_assets), downloaded from the library's
+            # bucket. NOT gated by FEATURE_TEXTBOOK_FIGURES: that flag guards
+            # cropping someone else's book, and these diagrams are ours — made
+            # for this topic and passed by a reviewer.
+            #
+            # Prepended, not appended: the reviewed artwork is the topic's own
+            # truth and must win a slot over an invented scene asset.
+            # attach_figures_to_segments places in figure-index order and caps
+            # at half a part's open slots, so being first IS the priority.
+            try:
+                from catalogue.artwork import load_article_artwork
+
+                chapter_figures = load_article_artwork(
+                    sb, catalogue.article_id, Path(tmp) / "artwork"
+                ) + chapter_figures
+            except Exception as exc:  # noqa: BLE001 — a missing figure never fails a kit
+                logger.warning("catalogue artwork load failed: %s", exc)
 
         for part_idx, episode in enumerate(episodes_plan, start=1):
             # This part's slice of the overall bar: 45 → 96 split evenly.

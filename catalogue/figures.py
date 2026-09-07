@@ -284,7 +284,6 @@ def default_backend() -> FigureBackend:
     from shared import visual_library_integration as integration
     from spike.scene_engine import raster_assets as ra
     from spike.scene_engine import svg_assets as sa
-    from shared.asset_keys import canonical_key as asset_canonical
 
     def find(key: str, prompt: str, context: dict) -> Optional[dict]:
         for fmt in FORMATS_LIBRARY_FIRST:
@@ -301,7 +300,11 @@ def default_backend() -> FigureBackend:
                 return Rendered(path, "svg", list(asset.layer_ids()), _meta(path.parent))
         asset = ra.get_raster_asset(key, prompt, None, True)
         if asset is not None and asset.trace:
-            path = ra.CACHE_DIR / asset_canonical(key) / "asset.png"
+            # Asked of the renderer rather than rebuilt from the key: the
+            # ladder may have served this key from the cache of the SAME WORD
+            # spelled the other way (raster_assets.cache_dir_for), and a path
+            # computed here would then point at a file that does not exist.
+            path = ra.cache_dir_for(key) / "asset.png"
             groups = [n for n, boxes in (asset.regions or {}).items() if boxes]
             return Rendered(path, "png", groups, _meta(path.parent))
         return None
