@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import pytest
 
+import shared.asset_keys as ak
 import shared.visual_library as vl
 from shared.asset_keys import all_noise
 from shared.asset_keys import canonical_key as shared_key
@@ -51,10 +52,109 @@ class TestOneCanonicalKey:
         assert vl.canonical_key is renderer_key is shared_key
 
     def test_the_cell_keys_that_broke_hydration_now_fold_the_same(self):
+        """Both modules agree on every cell key — the original point of this
+        test, and the half that no rule change may touch."""
         for key in ("ciliated_cell", "red_blood_cell", "root_hair_cell",
                     "palisade_cell", "specialised_animal_cells_table"):
-            assert "cell" not in vl.canonical_key(key).split("_"), key
             assert vl.canonical_key(key) == renderer_key(key), key
+
+    def test_cell_still_folds_while_something_else_names_the_subject(self):
+        """The measured saving: one chapter paid three times for
+        ciliated_epithelium, ciliated_epithelium_cells and
+        ciliated_epithelium_diagram. Two or more tokens survive, so the
+        compound still names itself and the fold is kept."""
+        assert vl.canonical_key("ciliated_epithelium_cells") == \
+               vl.canonical_key("ciliated_epithelium")
+        for key in ("red_blood_cell", "root_hair_cell",
+                    "cell_membrane_selectivity", "animal_plant_cells",
+                    "specialised_animal_cells_table"):
+            assert "cell" not in vl.canonical_key(key).split("_"), key
+
+    def test_but_never_onto_a_bare_word_that_names_something_else(self):
+        """Live library, 2026-09-07: an ANIMAL CELL cutaway was filed under the
+        bare key `factory` (from `cell_factory`), a plant cell under `plant`
+        and an animal cell under `animal`. `_asset_dir` is `canonical_key`
+        alone, so a topic asking for a real factory would have been served the
+        cell diagram out of the cache with no score and no threshold in the
+        way. Where "cell" leaves ONE token, that token is carrying the whole
+        identity and the fold is refused."""
+        for compound, plain in (("cell_factory", "factory"),
+                                ("plant_cell", "plant"),
+                                ("animal_cell", "animal"),
+                                ("stem_cell", "stem"),
+                                ("cell_wall", "wall"),
+                                ("palisade_cell", "palisade"),
+                                ("nerve_cell", "nerve")):
+            assert vl.canonical_key(compound) != vl.canonical_key(plain), \
+                f"{compound} and {plain} are two pictures, not one"
+
+    def test_the_fold_still_dedups_two_spellings_of_one_cell_picture(self):
+        """Refusing the bare-word fold must not cost the within-cell dedup:
+        `animal_cell` and `animal_cell_diagram` are one picture and the live
+        library holds both."""
+        assert vl.canonical_key("animal_cell") == \
+               vl.canonical_key("animal_cell_diagram")
+
+    def test_the_lost_dedup_comes_back_as_a_lookup_variant(self):
+        """`ciliated_cell` no longer folds to `ciliated`, so the retry has to
+        reach a library that still holds the stripped form."""
+        assert "ciliated" in ak.lookup_variants("ciliated_cell")
+        assert "plant" in ak.lookup_variants("plant_cell")
+
+    def test_but_the_variant_never_adds_the_word_back(self):
+        """Asking `factory` for `cell_factory` would walk the bug back in
+        through the retry. Stripping is safe; adding is not."""
+        assert ak.lookup_variants("factory") == ["factory"]
+        for key in ("plant", "animal", "wall", "stem"):
+            assert all("cell" not in v.split("_")
+                       for v in ak.lookup_variants(key)), key
+
+    def test_a_variant_is_never_the_same_question_twice(self):
+        """Each variant costs a whole-library scan on a miss, so two that
+        canonicalise alike are one question. `cells_to_tissue` strips to
+        `to_tissue`, which folds straight back onto its own primary."""
+        for key in ("cells_to_tissue", "red_blood_cell",
+                    "specialised_animal_cells_table"):
+            keys = [vl.canonical_key(v) for v in ak.lookup_variants(key)]
+            assert len(keys) == len(set(keys)), (key, keys)
+
+    def test_the_search_refuses_a_compound_against_its_bare_word(self):
+        """`core_tokens` stopped MERGING these in the cache; this is the other
+        half. `plant` against a stored `plant_cell` leaves nothing unmatched on
+        the query side, so the contrast rule — which needs a rival claim on
+        BOTH sides — admits it, and a terse prompt then clears the threshold on
+        the shared token alone. The cache path had no threshold at all; this
+        one does, which is why it needed its own rule rather than the fold."""
+        for query, stored in (("plant", "plant_cell"),
+                              ("animal", "animal_cell"),
+                              ("factory", "cell_factory"),
+                              ("wall", "cell_wall")):
+            row = {"asset_key": stored,
+                   "canonical_key": vl.canonical_key(stored)}
+            assert vl.key_guard_ok(query, row) is False, f"{query} <- {stored}"
+
+    def test_including_the_rows_that_are_still_keyed_the_old_way(self):
+        """Six live rows still carry the pre-2026-09-07 canonical_key (a plant
+        CELL under a bare `plant`). The guard canonicalises the row's stored
+        key as well as its asset_key, so it must refuse on either spelling —
+        the code fix cannot wait for the data migration."""
+        stale = {"asset_key": "plant_cell", "canonical_key": "plant"}
+        assert vl.key_guard_ok("plant", stale) is False
+
+    def test_but_the_stripped_form_is_still_asked_for_separately(self):
+        """Refusing `ciliated_cell` <- `ciliated` at the guard is only safe
+        because `lookup_variants` asks again without the word, and THAT query
+        matches exactly. End to end, not just the predicate."""
+        assert vl.key_guard_ok("ciliated_cell",
+                               {"asset_key": "ciliated",
+                                "canonical_key": "ciliated"}) is False
+        row = {"asset_key": "ciliated", "canonical_key": "ciliated",
+               "description": "ciliated epithelium cells lining a tube",
+               "subject": "biology", "grade": "k12", "curriculum": "generic",
+               "topic": "ciliated", "concepts": ["ciliated"],
+               "status": "approved", "asset_type": "visual",
+               "local_cache_path": "/tmp/c.png"}
+        assert vl.key_guard_ok("ciliated", row) is True
 
     def test_a_hydrated_file_lands_where_the_renderer_reads(self, tmp_path):
         """The whole point: one path, computed by one function."""
@@ -258,13 +358,16 @@ class TestAnAllNoiseKeyIsNotAutomaticallyRefused:
     }
 
     def test_the_query_that_could_never_be_satisfied(self):
+        """The request is still all-noise, which is what sends it down the
+        abstention path. Since 2026-09-07 the ROW keeps "cell" too
+        (`animal_cell_diagram` leaves one token, so the fold is refused), so
+        the two now share a token where they once shared none — but
+        `all_noise` on the REQUEST is what selects the branch, and that is
+        unchanged."""
         from shared.asset_keys import all_noise, core_tokens
         assert all_noise("cell_diagram"), "nothing here says WHICH picture"
         assert core_tokens("cell_diagram") == {"cell", "diagram"}
-        assert vl.guard_tokens("animal_cell_diagram") == {"animal"}
-        assert core_tokens("cell_diagram") & vl.guard_tokens(
-            "animal_cell_diagram") == set(), \
-            "empty by construction: the guard could NEVER pass"
+        assert vl.guard_tokens("animal_cell_diagram") == {"animal", "cell"}
 
     def test_the_guard_abstains_instead_of_refusing(self):
         assert vl.key_guard_ok("cell_diagram", self._ANIMAL_CELL) is True
@@ -280,8 +383,11 @@ class TestAnAllNoiseKeyIsNotAutomaticallyRefused:
         nothing has nothing to assert about the request either — and it is the
         ROW that kept the noise words this time."""
         row = {"asset_key": "cell_diagram", "canonical_key": "cell_diagram"}
-        assert vl.guard_tokens("plant_cell") & vl.guard_tokens(
-            "cell_diagram") == set(), "the same empty-by-construction refusal"
+        # The ROW is the all-noise side here, and `all_noise` on either side
+        # selects the abstention branch. The two share "cell" since 2026-09-07
+        # (see TestOneCanonicalKey); what matters is that the row still has
+        # nothing to assert, so the score decides and the guard says yes.
+        assert all_noise("cell_diagram")
         assert vl.key_guard_ok("plant_cell", row) is True
 
     def test_abstaining_is_not_matching_everything(self):
@@ -576,15 +682,23 @@ class TestTwoKeysThatDenyEachOtherAreNotOneAnothersPicture:
 
     def test_plant_and_animal_cells_are_different_pictures(self):
         """Passes on the baseline too, and it is worth saying which rule does
-        the work: "cell" is KEY_NOISE, so the two keys reduce to {plant} and
-        {animal} and share NO token — the contrast branch is never reached.
-        What separates them is the older shared-token rule. Kept because the
-        pair must stay separated however the guard is rearranged; asserted
-        with its precondition so it cannot be misread as evidence for the
-        contrast rule, and so that promoting "cell" out of KEY_NOISE fails
-        here rather than silently changing what this test means."""
+        the work — because it CHANGED on 2026-09-07, and this assertion is
+        what caught it.
+
+        It used to be the shared-token rule: "cell" was KEY_NOISE, the two
+        keys reduced to {plant} and {animal}, they shared NO token, and the
+        contrast branch was never reached. Now each keeps "cell" — a single
+        surviving token no longer folds, so a plant CELL is not filed under a
+        bare `plant` — so they share it and the CONTRAST branch separates them
+        instead: each names something the other denies. Different rule, same
+        verdict, which is exactly why the precondition is asserted here and
+        not only the outcome."""
         assert vl.guard_tokens("plant_cell") & vl.guard_tokens("animal_cell") \
-            == set(), "reaching the contrast branch would change this test"
+            == {"cell"}, "separated by the contrast rule now, not by sharing nothing"
+        assert "each key names something the other denies" in (
+            vl._guard_refusal("plant_cell",
+                              {"asset_key": "animal_cell",
+                               "canonical_key": "animal_cell"}) or "")
         for a, b in (("plant_cell", "animal_cell"),
                      ("animal_cell", "plant_cell")):
             assert vl.key_guard_ok(a, {"asset_key": b,
@@ -902,7 +1016,9 @@ class TestTheAbstentionPathIsUntouched:
         """Not luck: the gate is which path admitted, not the token counts."""
         q = vl.guard_tokens("cell_diagram")
         r = vl.guard_tokens("animal_cell_diagram") | vl.guard_tokens("animal")
-        assert vl._unmatched(q, r) == {"cell", "diagram"}
+        # "cell" is matched on both sides since 2026-09-07 — the row keeps it
+        # now. The residuals still LOOK like a contrast, which is the point.
+        assert vl._unmatched(q, r) == {"diagram"}
         assert vl._unmatched(r, q) == {"animal"}
         assert all_noise("cell_diagram")
         assert vl.key_guard_ok("cell_diagram", self._ANIMAL_CELL) is True

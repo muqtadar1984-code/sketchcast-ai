@@ -30,9 +30,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from shared.asset_keys import (all_noise, canonical_key, core_tokens,
-                               distinguishes, is_avatar_key, same_word,
-                               spelling_variants)
+from shared.asset_keys import (SUBJECT_NOISE, all_noise, canonical_key,
+                               core_tokens, distinguishes, is_avatar_key,
+                               lookup_variants, same_word)
 from shared.asset_keys import tokens as _tokens_of
 
 logger = logging.getLogger(__name__)
@@ -758,7 +758,17 @@ def _guard_refusal(query_key: str, row: dict[str, Any] | None) -> str | None:
     # ("figure_3") can still be answered by ITSELF, which the abstention rule
     # below would otherwise refuse.
     qc = canonical_key(query_key)
-    if qc and qc in {canonical_key(k) for k in (ak, ck) if k}:
+    # BOTH identity clauses below read the row's ASSET KEY, not its stored
+    # canonical_key. `canonical_key` changed
+    # on 2026-09-07 and six live rows still carry what it used to return — a
+    # plant CELL stored as a bare `plant`. Letting that stale string assert
+    # "same cache identity, same picture" would hand a request for a real
+    # plant the cell diagram, on the strength of a value the current code
+    # would never write. The stored key is still honoured when there is no
+    # asset_key to recompute from, which is the case this clause was written
+    # for (`figure_3` answering itself).
+    identities = {canonical_key(ak)} if ak else {canonical_key(k) for k in (ck,) if k}
+    if qc and qc in identities:
         return None
     # …and so is the same key with the underscores in different places. Where
     # the model split a compound the library ran together, the two keys share
@@ -769,7 +779,7 @@ def _guard_refusal(query_key: str, row: dict[str, Any] | None) -> str | None:
     # do not have the same ones. The same letters in the same order is not a
     # similarity judgement; it is one name, punctuated twice.
     ql = _letters(query_key)
-    if ql and ql in {_letters(k) for k in (ak, ck) if k}:
+    if ql and ql in ({_letters(ak)} if ak else {_letters(k) for k in (ck,) if k}):
         return None
     q = guard_tokens(query_key)
     r = guard_tokens(ak) | guard_tokens(ck)
@@ -792,6 +802,27 @@ def _guard_refusal(query_key: str, row: dict[str, Any] | None) -> str | None:
                    "same subject"
                    % (", ".join(sorted(q_only)), ", ".join(sorted(r_only)),
                       ", ".join(sorted(q & r)) or "none literally"))
+            logger.debug("visual library: %s is not a candidate for %s — %s",
+                         ak or ck, query_key, why)
+            return why
+        # A COMPOUND and the bare word inside it are not one picture, and only
+        # one side has to say so. `plant` against a stored `plant_cell` leaves
+        # nothing unmatched on the query's side, so the contrast rule above --
+        # which needs a rival claim on BOTH sides -- lets it through, and a
+        # terse prompt then clears the threshold on the shared token alone.
+        # Measured 2026-09-07: a plant CELL was on the shelf under a bare
+        # `plant`, an animal CELL under `animal` and one under `factory`.
+        # `core_tokens` stopped MERGING those in the cache the same day; this
+        # is the other half, the SEARCH, where the merge was never needed for
+        # them to meet. Refusing is safe in both directions because the
+        # stripped form is asked for separately: `lookup_variants` retries
+        # `ciliated_cell` as `ciliated`, so a real equivalence is still found,
+        # by a query that says so.
+        residual = q_only | r_only
+        if residual and residual <= SUBJECT_NOISE:
+            why = ("one key is the other plus %s; a compound and the bare "
+                   "word inside it are two pictures"
+                   % ", ".join(sorted(residual)))
             logger.debug("visual library: %s is not a candidate for %s — %s",
                          ak or ck, query_key, why)
             return why
@@ -972,25 +1003,27 @@ def find(key: str, prompt: str, context: dict[str, Any] | None = None,
     caller does not look, which is a mistake this module has already made
     once.
 
-    A key that misses is asked ONCE MORE in the other orthography
-    (`spelling_variants`): the library itself holds `organization_hierarchy`
-    beside `fertilisation_oviduct`, and a request spelled the other way was a
-    paid regeneration of a picture already on the shelf. Only the LOOKUP is
-    aliased — nothing here changes a stored key, and the hit comes back
+    A key that misses is asked again under every other name the same picture
+    may be filed under (`lookup_variants`): the other orthography — the
+    library holds `organization_hierarchy` beside `fertilisation_oviduct`, and
+    a request spelled the other way was a paid regeneration of a picture
+    already on the shelf — and, since 2026-09-07, the cell-stripped form, so a
+    `cell_ciliated` request still reaches a stored `ciliated`. Only the LOOKUP
+    is aliased — nothing here changes a stored key, and the hit comes back
     verbatim, so `hydrate` still files it under the key the CALLER asked for.
     """
     hit = _find_one(key, prompt, context, min_score=min_score,
                     asset_format=asset_format)
     if hit is not None:
         return hit
-    for alt in spelling_variants(key)[1:]:
+    for alt in lookup_variants(key)[1:]:
         # `explain=False`: the near-miss refusal for the original key is
         # already in the log, and repeating it once per spelling would double
         # the very line volume the guard was made quiet to control.
         hit = _find_one(alt, prompt, context, min_score=min_score,
                         asset_format=asset_format, explain=False)
         if hit is not None:
-            logger.info("visual library: %s served from its other spelling "
+            logger.info("visual library: %s served from its variant "
                         "%s <- %s (%s, score %.2f)", key, alt,
                         hit.get("asset_key"), row_format(hit),
                         hit.get("match_score", 0))
