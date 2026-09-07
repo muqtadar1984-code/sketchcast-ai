@@ -19,6 +19,7 @@ vector tier — a lesson never fails because an asset did (§20).
 from __future__ import annotations
 
 import base64
+import contextlib
 import contextvars
 import functools
 import json
@@ -35,13 +36,20 @@ import requests
 from .partnames import norm_part, resolve_part, same_part
 from PIL import Image
 
-from shared.asset_keys import KEY_NOISE, canonical_key, is_avatar_key
+from shared.asset_keys import (KEY_NOISE, canonical_key, is_avatar_key,
+                               spelling_variants)
+from shared.image_models import SCENE, ImageModel, nearest_aspect
+from shared.image_models import resolve as resolve_image_model
 
 from .trace import drawing_order
 
 logger = logging.getLogger(__name__)
 
-IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
+# WHICH model draws an asset is no longer a module constant read at import.
+# `gemini-2.5-flash-image` — the id this line used to hard-code — retires
+# 2026-10-02, and a reviewed article figure and a throwaway board diagram no
+# longer have to be the same model at the same resolution. See
+# shared/image_models.py; `current_image_model()` below is how a call asks.
 CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "storage" / "scene_assets"
 # Assets committed with the code. Checked before the cache and before any
 # model call: the drawing hand lives here, so no lesson ever spends an image
@@ -57,6 +65,19 @@ NOMINAL_WORLD_W = 700.0  # an illustration at element scale 1.0 spans ~700 world
 # is worse than a smaller one. Landscape art is unaffected: it stays
 # width-bound, exactly as before.
 NOMINAL_WORLD_H = 520.0
+
+# The shape to ASK the model for. Derived from the nominal box above rather
+# than written down, so the request keeps matching the box if the box ever
+# moves: 700x520 is landscape and lands on 4:3, and an avatar — "waist-up,
+# centred", see _COLOR_SUFFIX — is that same box stood up, 3:4.
+#
+# This matters now in a way it never did. `_body` sent NO imageConfig at all,
+# and the documented default of the 3.x models is that they match the input
+# image's size or "otherwise generate 1:1 squares" — so merely pointing the
+# env var at a new model would have started producing SQUARE diagrams for a
+# landscape board, silently, with nothing in any log to say so.
+BOARD_ASPECT = nearest_aspect(NOMINAL_WORLD_W, NOMINAL_WORLD_H)   # "4:3"
+AVATAR_ASPECT = nearest_aspect(NOMINAL_WORLD_H, NOMINAL_WORLD_W)  # "3:4"
 
 
 def fit_scale(w: float, h: float) -> float:
@@ -102,11 +123,49 @@ class RasterAsset:
             self.regions = {}
 
 
+# ── which model this call uses ───────────────────────────────────────────────
+# The ROLE travels in a ContextVar for the same reason the generation id does:
+# it belongs to the work in flight, not to the process, and one worker runs a
+# catalogue figure job and a teacher's lesson in the same interpreter. A thread
+# does NOT inherit its parent's context, and the default a pool worker starts
+# with is SCENE — which happens to be right for the render pool, since it draws
+# scenes. It is not something to LEAN on: `bind_generation` re-sets this var
+# alongside the generation id precisely so a future parallel warm of an
+# article's figures cannot silently drop them to the scene model.
+_ROLE_VAR: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "scene_image_role", default=SCENE)
+
+
+def current_image_role() -> str:
+    return _ROLE_VAR.get()
+
+
+@contextlib.contextmanager
+def image_role(role: str):
+    """Draw everything inside this block as `role` (shared.image_models.FIGURE
+    or SCENE). Reset on the way out, so a raised exception cannot leave the
+    next lesson generating article-grade artwork for a throwaway board."""
+    token = _ROLE_VAR.set(role)
+    try:
+        yield
+    finally:
+        _ROLE_VAR.reset(token)
+
+
+def current_image_model() -> ImageModel:
+    """The model, size and thinking level for a call made right here, right
+    now. Resolved per call — never cached — so a role, a profile or a rollback
+    pin takes effect on the call it was set for."""
+    return resolve_image_model(current_image_role())
+
+
 # ── transport ────────────────────────────────────────────────────────────────
 
-def _vertex_call(prompt: str) -> bytes | None:
+def _vertex_call(prompt: str, model: ImageModel | None = None,
+                 aspect: str = BOARD_ASPECT) -> bytes | None:
     if not _image_budget_ok():
         return None
+    model = model or current_image_model()
     project = os.getenv("VERTEX_PROJECT_ID", "").strip()
     if not project:
         return None
@@ -125,15 +184,23 @@ def _vertex_call(prompt: str) -> bytes | None:
         host = ("aiplatform.googleapis.com" if region == "global"
                 else f"{region}-aiplatform.googleapis.com")
         url = (f"https://{host}/v1/projects/{project}/locations/{region}"
-               f"/publishers/google/models/{IMAGE_MODEL}:generateContent")
+               f"/publishers/google/models/{model.id}:generateContent")
         def _go():
             res = requests.post(url,
                                 headers={"Authorization": f"Bearer {creds.token}"},
-                                json=_body(prompt), timeout=120)
+                                json=_body(prompt, model, aspect), timeout=120)
             res.raise_for_status()
             return res.json()
-        _note_spend("image.vertex")
-        return _image_from(_with_backoff(_go, "Vertex image"))
+        # The ledger row is written AFTER the transport and in a `finally`,
+        # so the ATTEMPT is counted whatever happens and the PRICE only ever
+        # rides on a picture that exists (see _note_spend).
+        image = None
+        try:
+            image = _image_from(_with_backoff(_go, "Vertex image"),
+                                "Vertex image", model)
+            return image
+        finally:
+            _note_spend("image.vertex", model, produced=image is not None)
     except Exception as e:
         if _is_rate_limited(e):
             # A 429 produced no image; it must not spend the lesson's
@@ -165,7 +232,8 @@ def aistudio_image_fallback_enabled() -> bool:
         "1", "true", "yes", "on")
 
 
-def _aistudio_call(prompt: str) -> bytes | None:
+def _aistudio_call(prompt: str, model: ImageModel | None = None,
+                   aspect: str = BOARD_ASPECT) -> bytes | None:
     if not aistudio_image_fallback_enabled():
         _calls = _lesson_calls()
         if not _calls["aistudio_off_logged"]:
@@ -179,16 +247,22 @@ def _aistudio_call(prompt: str) -> bytes | None:
     key = os.getenv("GOOGLE_AI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     if not key:
         return None
+    model = model or current_image_model()
     try:
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-               f"{IMAGE_MODEL}:generateContent")
+               f"{model.id}:generateContent")
         def _go():
             res = requests.post(url, headers={"x-goog-api-key": key},
-                                json=_body(prompt), timeout=120)
+                                json=_body(prompt, model, aspect), timeout=120)
             res.raise_for_status()
             return res.json()
-        _note_spend("image.aistudio")
-        return _image_from(_with_backoff(_go, "AI Studio image"))
+        image = None
+        try:
+            image = _image_from(_with_backoff(_go, "AI Studio image"),
+                                "AI Studio image", model)
+            return image
+        finally:
+            _note_spend("image.aistudio", model, produced=image is not None)
     except Exception as e:
         if _is_rate_limited(e):
             _refund_image_call()
@@ -424,15 +498,29 @@ def bind_generation(fn, generation_id: str | None = None):
     default bucket and mix its lesson with whatever else is running. Each
     invocation sets and resets its own thread's var, so one wrapper is safe to
     submit many times and from many threads at once.
+
+    The IMAGE ROLE is captured and re-set here too. Nothing fans a figure job
+    out onto threads today, so `_ROLE_VAR` resetting to its SCENE default in a
+    pool worker costs nothing — but that is a property of the current call
+    graph, not something the code enforced, and the failure it invites is
+    silent: warm ten of an article's figures in parallel through this wrapper,
+    the obvious optimisation, and under `mixed` the reviewed, publish-once,
+    reused-forever artwork is quietly drawn by flash at 1K. Nothing errors; the
+    figures are just permanently worse, and the only trace is a model name in a
+    meta.json nobody reads. Two lines here make the role travel exactly as far
+    as the generation id it belongs to.
     """
     gid = current_generation() if generation_id is None else str(generation_id)
+    role = current_image_role()
 
     @functools.wraps(fn)
     def _run(*a, **kw):
         token = _GENERATION_VAR.set(gid)
+        role_token = _ROLE_VAR.set(role)
         try:
             return fn(*a, **kw)
         finally:
+            _ROLE_VAR.reset(role_token)
             _GENERATION_VAR.reset(token)
     return _run
 
@@ -442,7 +530,10 @@ def _new_bucket() -> dict:
                       "aistudio_off_logged": False, "ceiling_logged": False},
             "deferred": {}, "abandoned": set(), "touched": time.monotonic(),
             # the never-starve hook (set_user_yield) and whether it gave up
-            "yield": None, "yield_gave_up": False, "yield_skipped": 0}
+            "yield": None, "yield_gave_up": False, "yield_skipped": 0,
+            # patient mode (set_patient_assets): a batch lesson waits a
+            # deferral out rather than shipping the board without the picture
+            "patient": None, "patience_spent": 0.0, "patience_waits": 0}
 
 
 def _bucket() -> dict:
@@ -539,6 +630,125 @@ def _clear_to_generate(what: str) -> bool:
         logger.error("%s: a user's job stayed live past the wait cap; this lesson makes no further image "
                      "calls (its boards fall back to the vector tier)", what)
     return ok
+
+
+# -- patient mode: waiting a deferral out instead of shipping a hole --------
+# A deferral is a NEGATIVE CACHE: the first caller to be 429'd records "not
+# this key, not yet", and every later caller in the lesson is told immediately
+# so eight render threads do not each burn a two-minute ladder on one picture.
+# For a teacher's lesson that is right — somebody is waiting, and a board that
+# falls back to the vector tier beats a lesson that stalls.
+#
+# For a CATALOGUE kit it is exactly wrong, and the pilot proved it: the Cells
+# kit failed acceptance with `unresolved_assets=4/11(rate_limited=4)` — four
+# pictures were not missing, they were merely not-yet, and nothing in a lesson
+# ever comes back for them. Nobody is waiting on a catalogue kit. It runs in
+# an off-peak lane, it is rebuilt only by a human clicking Retry, and a
+# reviewer's time is the scarcest thing we spend. So a catalogue lesson SLEEPS
+# out the deferral and then draws the picture.
+#
+# Three bounds, because patience must not become a stall:
+#   * a single wait is capped (CATALOGUE_ASSET_WAIT_MAX_S) — a deferral longer
+#     than that still gives up at once, as today;
+#   * the lesson has a total patience budget (CATALOGUE_ASSET_WAIT_BUDGET_S),
+#     after which it behaves exactly as an impatient lesson does;
+#   * the never-starve rule OUTRANKS patience. The yield hook is asked before
+#     the wait and on every tick of it, so a teacher's job arriving mid-sleep
+#     stops the waiting immediately. We must never hold the pool while a real
+#     user waits for it — that is the whole point of the off-peak lane.
+
+def set_patient_assets(on: bool, generation_id: str | None = None, *,
+                       max_wait: float | None = None,
+                       budget: float | None = None) -> None:
+    """Arm (or disarm) waiting-out-deferrals for ONE generation. Armed by the
+    catalogue branch beside the never-starve hook and removed with it."""
+    gid = current_generation() if generation_id is None else str(generation_id)
+    with _IMAGE_BUDGET_LOCK:
+        b = _STATE.get(gid)
+        if b is None:
+            b = _STATE[gid] = _new_bucket()
+        b["patient"] = None if not on else {
+            "max_wait": float(_env_int("CATALOGUE_ASSET_WAIT_MAX_S", 180)
+                              if max_wait is None else max_wait),
+            "budget": float(_env_int("CATALOGUE_ASSET_WAIT_BUDGET_S", 900)
+                            if budget is None else budget),
+        }
+        b["patience_spent"] = 0.0
+        b["patience_waits"] = 0
+        b["touched"] = time.monotonic()
+
+
+def patience_state() -> dict:
+    with _IMAGE_BUDGET_LOCK:
+        b = _bucket()
+        p = b.get("patient")
+        return {"armed": p is not None,
+                "max_wait": (p or {}).get("max_wait"),
+                "budget": (p or {}).get("budget"),
+                "spent": float(b.get("patience_spent") or 0.0),
+                "waits": int(b.get("patience_waits") or 0)}
+
+
+# Indirected so a test drives it without sleeping. Ticks are short so the
+# never-starve check runs often during a long wait.
+_PATIENCE_TICK_S = 2.0
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def _wait_out_deferral(key: str, waiting: float) -> bool:
+    """A deferred key, in patient mode: sleep until it may be tried again.
+
+    Returns True when the wait completed and the caller should go on to
+    generate, False when it should behave as an impatient lesson does (no
+    patience armed, the wait is longer than the cap, the budget is spent, or
+    a user's job arrived while we were waiting)."""
+    with _IMAGE_BUDGET_LOCK:
+        b = _bucket()
+        p = b.get("patient")
+        spent = float(b.get("patience_spent") or 0.0)
+    if p is None:
+        return False
+    if waiting > p["max_wait"]:
+        logger.info("asset %r is deferred for %.0fs, longer than the %.0fs a kit will wait; "
+                    "not waiting", key, waiting, p["max_wait"])
+        return False
+    left = p["budget"] - spent
+    if left <= 0:
+        logger.warning("asset %r is deferred and this lesson has spent its whole %.0fs patience "
+                       "budget; falling back to the vector tier as an ordinary lesson would",
+                       key, p["budget"])
+        return False
+    wait = min(waiting, left)
+    logger.info("asset %r is deferred for %.0fs — waiting it out (a kit has nobody waiting on it; "
+                "%.0fs of patience left)", key, wait, left)
+    waited = 0.0
+    while waited < wait:
+        # the never-starve rule outranks patience: a teacher's job arriving
+        # mid-sleep ends the wait, and _clear_to_generate has already made the
+        # give-up sticky for the rest of the lesson.
+        if not _clear_to_generate(f"waiting for {key!r}"):
+            logger.warning("asset %r: a user's job arrived while waiting; giving the pool back", key)
+            _account_patience(waited)
+            return False
+        tick = min(_PATIENCE_TICK_S, wait - waited)
+        _sleep(tick)
+        waited += tick
+    _account_patience(waited)
+    still = asset_deferred(key)
+    if still is not None:
+        logger.info("asset %r is still deferred after waiting %.0fs; not waiting again", key, waited)
+        return False
+    return True
+
+
+def _account_patience(waited: float) -> None:
+    with _IMAGE_BUDGET_LOCK:
+        b = _bucket()
+        b["patience_spent"] = float(b.get("patience_spent") or 0.0) + max(0.0, waited)
+        b["patience_waits"] = int(b.get("patience_waits") or 0) + 1
 
 
 def image_attempt_ceiling() -> int:
@@ -708,30 +918,152 @@ def deferral_state() -> dict:
                 "abandoned": set(b["abandoned"])}
 
 
-def _note_spend(service: str, **fields) -> None:
+def _note_spend(service: str, model: ImageModel | None = None, *,
+                produced: bool = True, **fields) -> None:
     """Image and vision calls were never recorded anywhere, so the measured
     cost per lesson counted only the TEXT calls — in a pipeline that
-    generates dozens of images per lesson."""
+    generates dozens of images per lesson.
+
+    The model is the one THIS call actually used, passed in, never a module
+    constant: with a profile and per-role overrides, two calls a second apart
+    legitimately bill different models at different resolutions, and a ledger
+    that names the wrong one is worse than one that names none. The size and
+    price ride along so the cost of a profile can be read off the ledger
+    without anyone having to remember a rate card.
+
+    `produced` is what keeps the price honest. The row used to be written
+    BEFORE the request, which was harmless while it carried only a service name
+    and a model id and became a lie the moment it carried `usd`: a 429 ladder
+    that exhausted, a 400, and a safety refusal each booked the full
+    per-image price for a picture that does not exist, and a Vertex failure
+    followed by the AI Studio fallback booked it twice for the same picture.
+    The overstatement is largest exactly in a capacity window — the conditions
+    under which somebody would be reading this ledger to decide whether a
+    profile is affordable. So the ATTEMPT is always recorded (the count is what
+    the budget guard is about) and the MONEY only when an image came back;
+    `outcome` keeps the two separable for anyone summing the file.
+    """
     try:
         from shared.claude_client import log_external_usage
-        log_external_usage(service, model=IMAGE_MODEL, **fields)
+        model = model or current_image_model()
+        log_external_usage(service, model=model.id, image_size=model.size or None,
+                           image_role=model.role,
+                           image_tokens=model.output_tokens if produced else None,
+                           usd=model.cost_usd if produced else None,
+                           outcome="image" if produced else "no_image", **fields)
     except Exception:  # noqa: BLE001 — accounting must never break a render
         pass
 
 
-def _body(prompt: str) -> dict:
+def _body(prompt: str, model: ImageModel | None = None,
+          aspect: str = BOARD_ASPECT) -> dict:
+    """The generateContent body for one image request.
+
+    THE MIGRATION HAZARD LIVES HERE. This used to send no `imageConfig` at
+    all, which was survivable only because 2.5-flash-image picks a resolution
+    from the aspect ratio. Every 3.x model documents the opposite default —
+    it matches the input image's size, "or otherwise generates 1:1 squares" —
+    so changing the model id alone would have started returning square art for
+    a landscape board with nothing to show for it in any log. The shape and the
+    resolution are therefore always stated.
+
+    `imageSize` is UPPERCASE because the docs say lowercase is rejected, and
+    omitted entirely for a model that has no such parameter (see
+    shared.image_models.FIXED_SIZE) rather than sent as an empty string.
+
+    AND THE WHOLE `imageConfig` IS OMITTED for a model whose spec says it takes
+    none — which today means exactly the retiring 2.5-flash-image. That is not
+    tidiness, it is what makes the rollback a rollback. `GEMINI_IMAGE_MODEL=
+    gemini-2.5-flash-image` is the documented lever and the only id the 684
+    published assets were drawn with, and the body production has actually sent
+    that model, every time, is `generationConfig: {responseModalities: [...]}`
+    and nothing else. Sending it an `imageConfig` it has never received turns
+    the lever into a second, untested change made during an incident: if this
+    v1 surface rejects the field, every image call 400s, `_with_backoff` does
+    not retry a non-429, and the pull that was supposed to end the outage
+    continues it. The models that DO take the field must always state the shape
+    and the size, for the reason directly above.
+    """
+    model = model or current_image_model()
+    generation_config: dict = {"responseModalities": ["TEXT", "IMAGE"]}
+    if model.spec.image_config:
+        image_config: dict = {"aspectRatio": aspect}
+        if model.size:
+            image_config["imageSize"] = model.size
+        generation_config["imageConfig"] = image_config
+    if model.thinking_level:
+        # Adherence IS the product here: the whole no-text requirement is one
+        # long multi-constraint sentence (_STYLE_SUFFIX), and a model that
+        # skims it bakes labels into the art. Sent as the wire form —
+        # thinkingConfig.thinkingLevel — not the SDK's `thinking_level`
+        # keyword; Vertex rejects an unknown top-level field outright.
+        generation_config["thinkingConfig"] = {
+            "thinkingLevel": model.thinking_level.upper()}
     return {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+        "generationConfig": generation_config,
     }
 
 
-def _image_from(payload: dict) -> bytes | None:
+# An HTTP 200 carrying no image part has more than one cause, and the tail of
+# the log line used to assert the commonest one — "a refusal, not an empty
+# success" — whatever the finish reason said. MAX_TOKENS is the other reachable
+# case and the `economy` profile is where it lives: flash-lite's 4096-token
+# output ceiling has to hold both `thinkingLevel: HIGH` and the image's 1120
+# output tokens. Filing that as a safety refusal sends the reader to the prompt
+# when the answer is the budget, so the sentence is DERIVED from the reason.
+_REFUSAL_REASONS = frozenset({"SAFETY", "PROHIBITED_CONTENT", "IMAGE_SAFETY",
+                              "RECITATION", "BLOCKLIST", "SPII", "IMAGE_PROHIBITED_CONTENT"})
+
+
+def _no_image_diagnosis(reasons: list[str], blocked: bool) -> str:
+    """What the finish reasons actually say happened."""
+    seen = {str(r).upper() for r in reasons}
+    if blocked or (seen & _REFUSAL_REASONS):
+        return "a refusal, not an empty success"
+    if "MAX_TOKENS" in seen:
+        return ("truncated before the image — the model's output ceiling had to "
+                "hold its thinking tokens and the image's, not a refusal")
+    return "no image part in the reply"
+
+
+def _image_from(payload: dict, what: str = "image",
+                model: ImageModel | None = None) -> bytes | None:
+    """The inline image bytes, or None WITH A LOG LINE saying why there are
+    none.
+
+    A refusal is the case this exists for. A blocked or declined generation
+    comes back HTTP 200, `finishReason: STOP`, and a candidate whose parts
+    carry text and no image — indistinguishable, to the code that used to be
+    here, from a transport that was never dialled: both returned a bare None
+    and the caller reported "no image credentials/output". So a safety refusal
+    read as a missing API key, and nothing named the finish reason.
+
+    The candidate's TEXT part is deliberately NOT logged. A refusal quotes the
+    prompt back, and this module never puts a prompt in a log line (see
+    _error_body). The finish reason, the block reason and the safety
+    categories carry no prompt and are what actually identify the incident.
+    """
+    payload = payload or {}
     for cand in payload.get("candidates", []):
         for part in cand.get("content", {}).get("parts", []):
             data = part.get("inlineData") or part.get("inline_data") or {}
             if str(data.get("mimeType") or data.get("mime_type", "")).startswith("image/"):
                 return base64.b64decode(data["data"])
+    reasons = [str(c.get("finishReason") or c.get("finish_reason") or "?")
+               for c in payload.get("candidates", [])] or ["(no candidates)"]
+    feedback = payload.get("promptFeedback") or payload.get("prompt_feedback") or {}
+    blocked = [str(r.get("category") or "?")
+               for c in payload.get("candidates", [])
+               for r in (c.get("safetyRatings") or c.get("safety_ratings") or [])
+               if r.get("blocked")]
+    block_reason = (feedback.get("blockReason")
+                    or feedback.get("block_reason") or "-")
+    logger.error("%s returned NO image (model %s): finish_reason=%s "
+                 "block_reason=%s blocked_categories=%s — %s",
+                 what, (model or current_image_model()).id, ",".join(reasons),
+                 block_reason, ",".join(blocked) or "-",
+                 _no_image_diagnosis(reasons, bool(blocked) or block_reason != "-"))
     return None
 
 
@@ -1082,6 +1414,55 @@ def scrub_all_text(ink: Image.Image, boxes: list[list[float]],
             # here — a stuck asset now costs 1 rescan instead of 3.
             break
     return ink, boxes
+
+
+# ── working resolution ───────────────────────────────────────────────────────
+# The model's DRAWING CANVAS and this pipeline's WORKING RESOLUTION are two
+# different numbers, and asking Pro for 2K is what forced them apart.
+#
+# 2K is free AT THE API — the same 1120 output tokens as 1K — and it is not
+# free after it. Nothing downstream of this line was ever sized for the result:
+# `to_ink` only crops to the ink, `ink.save(png)` writes the full-resolution
+# file, `annotate_regions` base64s that same file into every vision request,
+# `publish_generated` uploads it to the visual library verbatim, and
+# `render.py::_draw_raster` composites the WHOLE asset image every frame while
+# a trace is being revealed or the camera moves (its cache key includes the
+# reveal fraction and the camera, so it only helps a finished, static raster —
+# and the comment beside it calls that composite the single largest item in the
+# render phase). Today's assets come off a ~1 MP canvas; 2K is ~3.1 MP, so
+# leaving them at native size triples the pixels of the slowest loop we have,
+# to no visible benefit on a 720-tall board.
+#
+# So the model is asked for the best composition it will give us, and the
+# picture is brought down to a fixed long edge before anything else touches it.
+# The cap is generous — an asset fills at most ~700x520 world px (fit_scale),
+# so 1280 is still ~2x supersampling for the LANCZOS step the renderer does —
+# and it is one variable, so a print-quality master is an env change away.
+MAX_ASSET_EDGE_ENV = "MAX_ASSET_EDGE"
+MAX_ASSET_EDGE_DEFAULT = 1280
+
+
+def max_asset_edge() -> int:
+    """Longest side, in pixels, that a generated asset is carried at."""
+    return _env_int(MAX_ASSET_EDGE_ENV, MAX_ASSET_EDGE_DEFAULT)
+
+
+def to_working_size(img: Image.Image) -> Image.Image:
+    """Downscale a freshly generated image to the working long edge.
+
+    LANCZOS, and BEFORE `to_ink`/`to_color_art`: the flood fill in
+    `to_color_art` is a Python-level per-pixel queue, so this is also the
+    difference between a bounded pass and a 3 MP one. Never upscales.
+    """
+    edge = max_asset_edge()
+    longest = max(img.width, img.height)
+    if longest <= edge:
+        return img
+    scale = edge / float(longest)
+    size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
+    logger.info("asset arrived at %dx%d; working at %dx%d (%s=%d)",
+                img.width, img.height, size[0], size[1], MAX_ASSET_EDGE_ENV, edge)
+    return img.resize(size, Image.LANCZOS)
 
 
 # ── post-processing ──────────────────────────────────────────────────────────
@@ -1453,6 +1834,35 @@ def asset_lock(key: str):
         return _ASSET_LOCKS.setdefault(canonical_key(key), threading.RLock())
 
 
+def cache_dir_for(key: str, cache_dir: Path | None = None) -> Path:
+    """Where `key`'s cached PNG lives: its own canonical directory, or — when
+    that one is empty — an existing directory for the SAME WORD spelled the
+    other way.
+
+    `canonical_key` may not learn the spelling fold (its output is pinned
+    against the app and 684 published assets are filed under it), so the alias
+    happens HERE, on the read. Measured on the live Cells kit: part 1 asked
+    `levels_of_organization` and cached it; part 2 asked
+    `levels_of_organisation`, found nothing, was rate-limited and shipped a
+    scene with no diagram.
+
+    Only ever returns a directory that already HAS an asset; a miss returns
+    the requested key's own directory, so a generation still writes under the
+    key it was asked for and nothing is stored under an alias.
+    """
+    root = cache_dir or CACHE_DIR
+    primary = root / canonical_key(key)
+    if (primary / "asset.png").exists():
+        return primary
+    for alt in spelling_variants(key)[1:]:
+        candidate = root / canonical_key(alt)
+        if candidate != primary and (candidate / "asset.png").exists():
+            logger.info("asset %r reuses the cache of its other spelling (%s)",
+                        key, candidate.name)
+            return candidate
+    return primary
+
+
 def get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
                      allow_generate: bool = True) -> RasterAsset | None:
     """Per-key serialized: segments render in parallel threads, and a
@@ -1467,7 +1877,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
     # avatars are the one COLOUR tier: they are characters, not board ink,
     # and they are revealed rather than drawn
     is_color = key.startswith("avatar_")
-    cache = (cache_dir or CACHE_DIR) / canonical_key(key)
+    cache = cache_dir_for(key, cache_dir)
     png, meta = cache / "asset.png", cache / "meta.json"
     names = part_names_from_prompt(prompt)
     cached_fallback: RasterAsset | None = None   # baked-text cache, still usable
@@ -1561,10 +1971,18 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
         logger.info("asset %r was abandoned earlier this lesson; not retrying", key)
         return cached_fallback
     waiting = asset_deferred(key)
-    if waiting is not None:
+    if waiting is not None and not _wait_out_deferral(key, waiting):
         logger.info("asset %r is deferred for %.0fs more (rate limit); "
                     "returning without a retry ladder", key, waiting)
         return cached_fallback
+
+    # ONE resolution for this asset, shared by the request, the usage ledger
+    # and the meta.json below — the three places that must agree about what
+    # drew the picture. `generate` may run twice (the escalated no-text retry)
+    # and may fall through Vertex to AI Studio; every one of those is the same
+    # model at the same size, and the record says which one it was.
+    model = current_image_model()
+    aspect = AVATAR_ASPECT if is_color else BOARD_ASPECT
 
     def generate(extra: str = "") -> Image.Image | None:
         # the layer-groups tail addresses the VISION annotator, never the
@@ -1580,13 +1998,16 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
         gen_prompt = _re.sub(r"\s*name the layer groups exactly:[^.]*\.?",
                              "", prompt, flags=_re.I)
         suffix = _COLOR_SUFFIX if is_color else _STYLE_SUFFIX
-        raw_bytes = _vertex_call(gen_prompt + suffix + extra) or \
-            _aistudio_call(gen_prompt + suffix + extra)
+        raw_bytes = _vertex_call(gen_prompt + suffix + extra, model, aspect) or \
+            _aistudio_call(gen_prompt + suffix + extra, model, aspect)
         if raw_bytes is None:
             return None
         import io
         try:
-            src = Image.open(io.BytesIO(raw_bytes))
+            # the model's canvas, brought down to the working resolution the
+            # cache, the vision request, the library and the renderer are all
+            # sized for (see to_working_size)
+            src = to_working_size(Image.open(io.BytesIO(raw_bytes)))
             candidate = to_color_art(src) if is_color else to_ink(src)
         except Exception:
             logger.exception("un-decodable image for %r", key)
@@ -1650,7 +2071,8 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
         cache.mkdir(parents=True, exist_ok=True)
         ink.save(png)
         _write_meta(meta, {"key": key, "prompt": prompt,
-                           "model": IMAGE_MODEL,
+                           "model": model.id,
+                           "image_size": model.size or None,
                            "provenance": "generated",
                            "regions": ann["regions"],
                            "annotated_for": list(names),
@@ -1685,11 +2107,17 @@ def load_hand(key: str = "hand_pen", cache_dir: Path | None = None,
                   "above at a slight angle, fingers gripping the pen naturally, pen tip "
                   "pointing toward the lower left, isolated cut-out on a pure white "
                   "background, realistic, no shadows outside the hand, no text.")
-        raw = _vertex_call(prompt) or _aistudio_call(prompt)
+        # The pen ships bundled and is drawn here only on a container that
+        # somehow lacks it. Resolved and recorded the same way as every other
+        # asset, so the meta.json this writes names the model that drew THIS
+        # copy — the committed one says 2.5-flash-image because that is the
+        # truth about the committed one.
+        model = current_image_model()
+        raw = _vertex_call(prompt, model) or _aistudio_call(prompt, model)
         if raw is not None:
             import io
             try:
-                ink = to_ink(Image.open(io.BytesIO(raw)))
+                ink = to_ink(to_working_size(Image.open(io.BytesIO(raw))))
                 cache.mkdir(parents=True, exist_ok=True)
                 ink.save(png)
                 a = np.asarray(ink.getchannel("A"))
@@ -1700,7 +2128,8 @@ def load_hand(key: str = "hand_pen", cache_dir: Path | None = None,
                 # asking for the hand at once, or a segment child reading the
                 # cache the parent is warming, must never see half a document
                 _write_meta(meta, {"tip": [int(xs[tip_i]), int(ys[tip_i])],
-                                   "model": IMAGE_MODEL})
+                                   "model": model.id,
+                                   "image_size": model.size or None})
             except Exception:
                 logger.exception("hand asset post-process failed")
     if not png.exists():

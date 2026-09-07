@@ -618,6 +618,56 @@ def test_progress_is_reported_per_figure(tmp_path):
     assert progress == [5, 50, 95, 100]
 
 
+# ── the never-starve rule, DURING a figure ──────────────────────────────
+
+
+def test_the_engines_per_image_hook_is_armed_for_the_whole_job(tmp_path):
+    """``gate()`` is asked BETWEEN figures. The pool is held DURING one: the
+    raster ladder, an escalated no-text regeneration (a second full
+    generation), four HTTP attempts each honouring a Retry-After up to 60s, and
+    the vision calls. The engine's own per-call hook covers that window and
+    only the kit path ever armed one, so a teacher arriving one second after a
+    figure started waited behind all of it."""
+    sb = _sb()
+    fb = FakeBackend(tmp_path, sb, hits={"plant_cell": LIB_PLANT})
+    fb.renders["animal_cell"] = fb.rendered("animal_cell")
+    backend = fb.as_backend()
+    armed: list = []
+    backend.set_yield = armed.append
+    inner = backend.generate
+
+    def generate(key, prompt):
+        assert armed and armed[-1] is not None, "the hook must be live while a figure draws"
+        return inner(key, prompt)
+
+    backend.generate = generate
+    summary = run_figure_render_job(sb, _job(), backend=backend)
+    assert summary["generated"] == 1
+    assert armed[0] is not None and armed[-1] is None, "armed once, removed on the way out"
+
+
+def test_the_hook_is_removed_even_when_the_job_pauses(tmp_path):
+    """A hook left behind would make the NEXT job in this worker wait on a
+    probe built for a job that is over."""
+    sb = _sb(jobs=[_job(), _builder()])
+    fb = FakeBackend(tmp_path, sb)
+    backend = fb.as_backend()
+    armed: list = []
+    backend.set_yield = armed.append
+    assert run_figure_render_job(sb, _job(), backend=backend)["paused"] == PAUSED_BUILDERS
+    assert armed[-1] is None
+
+
+def test_a_backend_that_models_no_engine_arms_nothing(tmp_path):
+    """Every test fake sets no hook; that must stay a no-op rather than an
+    AttributeError on the production path's behalf."""
+    sb = _sb(figs=(PLANT,))
+    fb = FakeBackend(tmp_path, sb, hits={"plant_cell": LIB_PLANT})
+    backend = fb.as_backend()
+    assert backend.set_yield is None
+    assert run_figure_render_job(sb, _job(), backend=backend)["reused"] == 1
+
+
 def test_the_default_backend_is_built_lazily_and_only_when_a_figure_needs_it(monkeypatch, tmp_path):
     """Production imports the engine on demand; a job with nothing to render
     must never pay for it (and a test must never reach it)."""

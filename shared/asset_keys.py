@@ -284,6 +284,81 @@ def canonical_key(value: str) -> str:
     return "_".join(sorted(core_tokens(value))) or "asset"
 
 
+# ── one picture, spelled two ways, is not two assets ─────────────────────────
+# `canonical_key` above may NEVER learn this fold: its output is pinned
+# byte-for-byte against the app (catalogue_key_cases.json, sha in both repos)
+# and re-keying would orphan the 684 assets already published under it. So the
+# alias happens at LOOKUP instead — a key that misses is asked again in the
+# other orthography, and only the stored key stays as it was.
+#
+# Measured on the live Cells kit (2026-09-07): part 1 asked
+# `levels_of_organization` and part 2 asked `levels_of_organisation`. Two
+# canonical keys, two cache directories, one picture — part 1 hit its cache,
+# part 2 found nothing, was rate-limited, and shipped a scene with no diagram.
+#
+# `respell` above cannot serve here. It is one-directional and deliberately
+# broad (40+ rules), and a lookup key becomes a PATH: a word it rewrites
+# wrongly files an asset where nobody reads it, which is the exact failure
+# canonical_key was consolidated to end. This list is short and explicit.
+
+# Whole-token pairs, used wherever a morpheme rule would over-reach: "hem" ->
+# "haem" anywhere turns hemisphere into haemisphere, and "e" -> "oe" at the
+# start turns electron into oelectron.
+_SPELLING_WORDS: tuple[tuple[str, str], ...] = (
+    ("haemoglobin", "hemoglobin"),
+    ("oesophagus", "esophagus"),
+)
+
+# (British, American, where). "end" is anchored at the end of a TOKEN, so
+# `levels_of_organisation` folds on `organisation` alone; the plural forms come
+# first because the first matching rule is the only one applied.
+_SPELLING_MORPHEMES: tuple[tuple[str, str, str], ...] = (
+    ("isations", "izations", "end"),
+    ("isation", "ization", "end"),
+    ("yses", "yzes", "end"),
+    ("yse", "yze", "end"),
+    ("colour", "color", "any"),
+    ("centre", "center", "any"),
+    ("fibre", "fiber", "any"),
+)
+
+_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+
+
+def _swap_token(token: str, to_american: bool) -> str:
+    """One token in the other orthography, or the token unchanged."""
+    t = token.lower()
+    for br, us in _SPELLING_WORDS:
+        src, dst = (br, us) if to_american else (us, br)
+        if t == src:
+            return dst
+    for br, us, where in _SPELLING_MORPHEMES:
+        src, dst = (br, us) if to_american else (us, br)
+        if where == "any":
+            if src in t:
+                return t.replace(src, dst)
+        elif t.endswith(src) and len(t) > len(src):
+            return t[: len(t) - len(src)] + dst
+    return token
+
+
+def spelling_variants(key: str) -> list[str]:
+    """``key`` first, then the same key written in the other orthography.
+
+    The key itself is always element 0, so a caller retries with
+    ``spelling_variants(k)[1:]`` and a key this list does not cover comes back
+    as ``[key]`` — unchanged, and with nothing to retry.
+    """
+    raw = str(key or "")
+    out = [raw]
+    for to_american in (True, False):
+        alt = _TOKEN_RE.sub(
+            lambda m, us=to_american: _swap_token(m.group(0), us), raw)
+        if alt not in out:
+            out.append(alt)
+    return out
+
+
 def is_avatar_key(key: str) -> bool:
     """Avatar identity from the asset key alone.
 
