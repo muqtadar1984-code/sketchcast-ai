@@ -54,8 +54,13 @@ def admin() -> Client:
 # (topic_id / article_id) and likewise own no generation and no book.
 # topic_questions (Phase 3) drafts a topic's question bank from its approved
 # article into topic_questions — again from jobs.params, no generation.
+# topic_publish (Phase 4) uploads an APPROVED kit's already-rendered video
+# parts to YouTube from jobs.params.kit_id. It READS the presentation's
+# artifacts and writes topic_publications; the generation it reads from was
+# built, approved and finished long before, so relabelling it would overwrite
+# a reviewer's verdict with an upload's lifecycle.
 OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "topic_harvest", "topic_derive", "topic_article",
-                                "figure_render", "topic_questions"})
+                                "figure_render", "topic_questions", "topic_publish"})
 
 
 def generation_to_mirror(job: Optional[dict]) -> Optional[str]:
@@ -1243,6 +1248,22 @@ def download_book(sb: Client, storage_path: str, dest: str | Path) -> Path:
     data = _transfer_with_retry(
         f"download of {storage_path}",
         lambda: sb.storage.from_("uploads").download(storage_path),
+    )
+    dest.write_bytes(data)
+    return dest
+
+
+def download_artifact(sb: Client, storage_path: str, dest: str | Path) -> Path:
+    """The mirror of upload_artifact: read a generation's artifact back out of
+    the `artifacts` bucket. The catalogue's publish job needs the rendered
+    mp4 and its script.json again, minutes or days after the render, and it
+    needs them under the SAME transient-failure retry — a 200 MB video meets
+    the HTTP/2 StreamReset that lost a 30 MB PDF far more often."""
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    data = _transfer_with_retry(
+        f"download of {storage_path}",
+        lambda: sb.storage.from_("artifacts").download(storage_path),
     )
     dest.write_bytes(data)
     return dest
