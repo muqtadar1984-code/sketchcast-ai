@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from shared.claude_client import ClaudeClient
-from shared.gemini_client import GEMINI_PRICING, GeminiClient
+from shared.gemini_client import GeminiClient, pricing_for
 
 
 @pytest.fixture()
@@ -42,7 +42,11 @@ def test_thinking_tokens_are_billed_as_output(client):
     u = client.track_tokens(usage_response(prompt=20, answer=5_022, thoughts=1_917))
     assert u["output_tokens"] == 5_022 + 1_917, "thoughts must be folded into output"
 
-    in_rate, out_rate = GEMINI_PRICING["gemini-2.5-flash"]
+    # `pricing_for`, not the GEMINI_PRICING table: 2.5 Flash's rate lives in
+    # shared/text_models.REGISTRY now, and the registry is what the ledger
+    # actually costs a call at. Reading the table directly is how a test goes
+    # on passing while the rate it checks has stopped being the one billed.
+    in_rate, out_rate = pricing_for("gemini-2.5-flash")
     expected = (20 * in_rate + 6_939 * out_rate) / 1_000_000
     assert u["estimated_cost_usd"] == pytest.approx(round(expected, 6))
 
