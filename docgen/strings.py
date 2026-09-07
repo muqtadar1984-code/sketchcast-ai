@@ -442,6 +442,88 @@ _STRINGS: dict[str, dict[str, str]] = {
         "hi": "शिक्षक टिप्पणियाँ — उत्तर मार्गदर्शन",
         "ms-arab": "نوتا ݢورو — ڤندوان جواڤن",
     },
+
+    # ── Lesson plan teaching modes (catalogue kits, Phase 3 decision 11) ─────
+    # "Mode A — Full lesson": the letter comes from letters(lang), like sections.
+    "mode": {
+        "en": "Mode", "ms": "Mod", "ar": "النمط", "fr": "Mode",
+        "es": "Modalidad", "pt": "Modo", "te": "విధానం", "mr": "पद्धत",
+        "hi": "मोड", "ms-arab": "مود",
+    },
+    "mode_full_lesson": {
+        "en": "Full lesson", "ms": "Pelajaran penuh", "ar": "الدرس الكامل",
+        "fr": "Leçon complète", "es": "Clase completa", "pt": "Aula completa",
+        "te": "పూర్తి పాఠం", "mr": "संपूर्ण पाठ", "hi": "पूर्ण पाठ",
+        "ms-arab": "ڤلاجرن ڤنوه",
+    },
+    "mode_micro_clips": {
+        "en": "In-class micro-clips", "ms": "Klip pendek dalam kelas",
+        "ar": "مقاطع قصيرة داخل الصف", "fr": "Micro-extraits en classe",
+        "es": "Microclips en clase", "pt": "Microclipes em sala",
+        "te": "తరగతిలో చిన్న క్లిప్‌లు", "mr": "वर्गातील लघु क्लिप",
+        "hi": "कक्षा में लघु क्लिप", "ms-arab": "کليڤ ڤندق دالم کلس",
+    },
+    "mode_flipped": {
+        "en": "Flipped / pre-watch", "ms": "Terbalik / tonton dahulu",
+        "ar": "الصف المعكوس / مشاهدة مسبقة",
+        "fr": "Classe inversée / visionnage préalable",
+        "es": "Aula invertida / visionado previo",
+        "pt": "Sala invertida / pré-visualização",
+        "te": "ఫ్లిప్డ్ / ముందుగా చూడటం", "mr": "फ्लिप्ड / आधी पाहणे",
+        "hi": "फ़्लिप्ड / पहले देखें", "ms-arab": "ترباليق / تونتون دهولو",
+    },
+    "pre_watch": {
+        "en": "Before class", "ms": "Sebelum kelas", "ar": "قبل الحصة",
+        "fr": "Avant le cours", "es": "Antes de la clase", "pt": "Antes da aula",
+        "te": "తరగతికి ముందు", "mr": "वर्गापूर्वी", "hi": "कक्षा से पहले",
+        "ms-arab": "سبلوم کلس",
+    },
+
+    # ── Question-bank worksheet (composed sets, Phase 3 decision 9) ──────────
+    "sec_assertion_reason": {
+        "en": "Assertion and reason", "ms": "Pernyataan dan alasan",
+        "ar": "التوكيد والسبب", "fr": "Assertion et raison",
+        "es": "Afirmación y razón", "pt": "Afirmação e razão",
+        "te": "వాక్యం మరియు కారణం", "mr": "विधान आणि कारण",
+        "hi": "अभिकथन और कारण", "ms-arab": "ڤرنياتاءن دان الاسن",
+    },
+    "sec_numerical": {
+        "en": "Numerical", "ms": "Berangka", "ar": "مسائل حسابية",
+        "fr": "Numérique", "es": "Numérico", "pt": "Numérico",
+        "te": "సంఖ్యాత్మక", "mr": "संख्यात्मक", "hi": "संख्यात्मक",
+        "ms-arab": "برڠک",
+    },
+    "sec_diagram_label": {
+        "en": "Label the diagram", "ms": "Labelkan rajah",
+        "ar": "سمِّ أجزاء الرسم", "fr": "Légendez le schéma",
+        "es": "Rotula el diagrama", "pt": "Identifique o diagrama",
+        "te": "చిత్రానికి పేర్లు రాయండి", "mr": "आकृतीला नावे द्या",
+        "hi": "आरेख को नामांकित करें", "ms-arab": "لابيلکن راجه",
+    },
+    "marking_scheme": {
+        "en": "Marking scheme", "ms": "Skema pemarkahan", "ar": "مخطط التصحيح",
+        "fr": "Barème", "es": "Criterios de calificación",
+        "pt": "Critérios de correção", "te": "మార్కుల పథకం",
+        "mr": "गुणदान योजना", "hi": "अंकन योजना", "ms-arab": "سکيما ڤمرکهن",
+    },
+    "explanation": {
+        "en": "Explanation", "ms": "Penjelasan", "ar": "التفسير",
+        "fr": "Explication", "es": "Explicación", "pt": "Explicação",
+        "te": "వివరణ", "mr": "स्पष्टीकरण", "hi": "व्याख्या",
+        "ms-arab": "ڤنجلسن",
+    },
+    "total_marks": {
+        "en": "Total marks", "ms": "Jumlah markah", "ar": "مجموع الدرجات",
+        "fr": "Total des points", "es": "Puntos totales", "pt": "Total de pontos",
+        "te": "మొత్తం మార్కులు", "mr": "एकूण गुण", "hi": "कुल अंक",
+        "ms-arab": "جومله مرکه",
+    },
+    "n_questions": {  # {n} stays a WESTERN digit
+        "en": "{n} questions", "ms": "{n} soalan", "ar": "{n} سؤالًا",
+        "fr": "{n} questions", "es": "{n} preguntas", "pt": "{n} questões",
+        "te": "{n} ప్రశ్నలు", "mr": "{n} प्रश्न", "hi": "{n} प्रश्न",
+        "ms-arab": "{n} سوءالن",
+    },
 }
 
 

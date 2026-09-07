@@ -600,8 +600,10 @@ class TestP0AcceptanceIsWired:
 
     def test_a_failed_acceptance_stops_the_lesson(self):
         import inspect
-        from worker.process import process_generation
-        src = inspect.getsource(process_generation)
+        # The presentation loop lives in _build_from_analysis (the shared
+        # build half of process_generation, split out 2026-09-06).
+        from worker.process import _build_from_analysis
+        src = inspect.getsource(_build_from_analysis)
         assert "failed acceptance" in src
         assert src.index("_acceptance_report") < src.index('"video_mp4"'), \
             "acceptance must run BEFORE the video is recorded as an artifact"

@@ -90,8 +90,11 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     title = data.get("title") or f"{dx._t('doc_worksheet', language)} — {chapter_title}"
     subtitle = (f"{grade} · {subject}    |    {dx._t('difficulty', language)}: "
                 f"{dx.difficulty_label(p['difficulty'], language)}")
+    # Catalogue documents carry their curriculum block (decision 10); a
+    # textbook worksheet passes none and renders as before.
+    header_lines = p.get("curriculum_header")
     doc = dx.new_doc(title, subtitle, template=template, kind="worksheet",
-                     language=language)
+                     language=language, header_lines=header_lines)
     if data.get("instructions"):
         dx.instructions(doc, data["instructions"])
 
@@ -147,7 +150,8 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     # letters()/abjad sequence as the sheet's table. Panel numbering restarts
     # at 1 inside this file — it is its own document.
     key_doc = dx.new_doc(f"{title} — {dx._t('answer_key', language)}", subtitle,
-                         template=template, kind="worksheet", language=language)
+                         template=template, kind="worksheet", language=language,
+                         header_lines=header_lines)
     dx.para(key_doc, dx._t("teacher_only", language), italic=True)
     for sec_name, items in answers:
         dx.answer_section(key_doc, sec_name, items)

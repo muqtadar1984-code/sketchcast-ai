@@ -440,7 +440,9 @@ def bind_generation(fn, generation_id: str | None = None):
 def _new_bucket() -> dict:
     return {"calls": {"n": 0, "blocked": 0, "attempts": 0, "refunded": 0,
                       "aistudio_off_logged": False, "ceiling_logged": False},
-            "deferred": {}, "abandoned": set(), "touched": time.monotonic()}
+            "deferred": {}, "abandoned": set(), "touched": time.monotonic(),
+            # the never-starve hook (set_user_yield) and whether it gave up
+            "yield": None, "yield_gave_up": False, "yield_skipped": 0}
 
 
 def _bucket() -> dict:
@@ -475,6 +477,68 @@ def reset_image_budget(generation_id: str | None = None) -> None:
 
 def image_budget_state() -> dict:
     return dict(_lesson_calls())
+
+
+# -- yielding to real users (the never-starve rule, DURING a render) ---------
+# A catalogue KIT (worker/process.py's catalogue branch) renders for 30-60
+# minutes on the ~1 image/minute Vertex pool that every teacher's lesson also
+# draws from. The worker's claim-time gate keeps a kit from STARTING while a
+# user's job is live; this hook is the other half — a teacher who clicks
+# Generate mid-render must not find the pool spoken for. The kit registers a
+# callable per GENERATION (the same bucket the budget lives in, so a render
+# thread bound with `bind_generation` finds it) and every image generation of
+# that lesson asks it first. The callable blocks while a user builder is live
+# and returns False when it gave up waiting; a False here SKIPS the image —
+# the board degrades to the vector tier exactly as for any other failure —
+# and, sticky for the rest of the lesson, so a contended lesson does not wait
+# the whole cap again for every one of its thirty pictures. A user's own
+# lesson registers nothing and is never delayed by this.
+
+def set_user_yield(fn, generation_id: str | None = None) -> None:
+    """Register (or with None remove) this generation's yield hook:
+    ``fn(what: str) -> bool`` — True when the pool is clear to use, False
+    when the caller gave up waiting for it."""
+    gid = current_generation() if generation_id is None else str(generation_id)
+    with _IMAGE_BUDGET_LOCK:
+        b = _STATE.get(gid)
+        if b is None:
+            b = _STATE[gid] = _new_bucket()
+        b["yield"] = fn
+        b["yield_gave_up"] = False
+        b["touched"] = time.monotonic()
+
+
+def user_yield_state() -> dict:
+    with _IMAGE_BUDGET_LOCK:
+        b = _bucket()
+        return {"armed": b.get("yield") is not None, "gave_up": bool(b.get("yield_gave_up")),
+                "skipped": int(b.get("yield_skipped") or 0)}
+
+
+def _clear_to_generate(what: str) -> bool:
+    """Ask this generation's yield hook, if any, before an image generation."""
+    with _IMAGE_BUDGET_LOCK:
+        b = _bucket()
+        fn, gave_up = b.get("yield"), bool(b.get("yield_gave_up"))
+    if fn is None:
+        return True
+    if gave_up:
+        with _IMAGE_BUDGET_LOCK:
+            _bucket()["yield_skipped"] += 1
+        return False
+    try:
+        ok = bool(fn(what))
+    except Exception:  # noqa: BLE001 — a broken hook must not blank a board
+        logger.exception("user-yield hook failed for %s; generating", what)
+        return True
+    if not ok:
+        with _IMAGE_BUDGET_LOCK:
+            b = _bucket()
+            b["yield_gave_up"] = True
+            b["yield_skipped"] += 1
+        logger.error("%s: a user's job stayed live past the wait cap; this lesson makes no further image "
+                     "calls (its boards fall back to the vector tier)", what)
+    return ok
 
 
 def image_attempt_ceiling() -> int:
@@ -1519,6 +1583,10 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
         # model bakes exactly those labels into the art (measured: a cell
         # covered in 'membi'/'chloropsapts'/'mito!' gibberish)
         import re as _re
+        # the never-starve hook: a catalogue kit waits here while a teacher's
+        # job is live, and skips the picture if the teacher outlasts the cap
+        if not _clear_to_generate(f"image for {key!r}"):
+            return None
         _take_rate_limited()          # a stale 429 must not survive into this try
         gen_prompt = _re.sub(r"\s*name the layer groups exactly:[^.]*\.?",
                              "", prompt, flags=_re.I)

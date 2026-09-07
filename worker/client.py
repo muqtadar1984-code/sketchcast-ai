@@ -52,7 +52,10 @@ def admin() -> Client:
 # candidates, owns no generation and no book. topic_article and figure_render
 # (Phase 2b) write topic_articles / article_figures from jobs.params
 # (topic_id / article_id) and likewise own no generation and no book.
-OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "topic_harvest", "topic_derive", "topic_article", "figure_render"})
+# topic_questions (Phase 3) drafts a topic's question bank from its approved
+# article into topic_questions — again from jobs.params, no generation.
+OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "topic_harvest", "topic_derive", "topic_article",
+                                "figure_render", "topic_questions"})
 
 
 def generation_to_mirror(job: Optional[dict]) -> Optional[str]:
@@ -96,14 +99,74 @@ def mirror_generation_status(sb: Client, generation_id, status: str) -> None:
         )
 
 
-def claim_next_job(sb: Client, job_type=None, exclude_types=None) -> Optional[dict]:
+# The PostgREST filter for "not a catalogue job": the flag is absent on every
+# user job (params NULL or without the key) and JSON true on a catalogue one,
+# so a plain neq would also drop the NULLs — Postgres's NULL <> 'true' is NULL.
+_NOT_CATALOGUE_FILTER = "params->>catalogue.is.null,params->>catalogue.neq.true"
+
+# topic_kits.status values this module writes (catalogue Phase 3). Kept here —
+# and not read from catalogue.kit — because the crash-reaper below must stay
+# importable without the catalogue package's dependencies.
+KIT_GENERATING = "generating"
+KIT_FAILED = "failed"
+
+
+def is_catalogue_params(params: object) -> bool:
+    """``params.catalogue`` is JSON true (the app writes a boolean; through
+    PostgREST text paths it reads as "true"). The one reading of the flag
+    that needs nothing from the catalogue package; catalogue.kit.is_catalogue
+    is this function under its own name."""
+    flag = params.get("catalogue") if isinstance(params, dict) else None
+    return flag is True or str(flag or "").strip().lower() == "true"
+
+
+def kit_id_of(params: object) -> Optional[str]:
+    """The kit a catalogue job or generation belongs to, or None (a composed
+    worksheet, or a user's row)."""
+    if not is_catalogue_params(params):
+        return None
+    kit_id = str((params or {}).get("kit_id") or "").strip()
+    return kit_id or None
+
+
+def mark_kit_failed(sb: Client, kit_id: Optional[str], note: str) -> bool:
+    """``UPDATE topic_kits SET status='failed', notes=… WHERE id=kit AND
+    status='generating'``; True when the row moved. The guard is the point: a
+    kit the reviewer already rejected, or one already in review, must never
+    be relabelled by a worker failing late. Best-effort — a failure to record
+    a failure must not mask the failure. Every writer of a kit's failure
+    (catalogue.kit, run.py's failure path, the crash-reaper) goes through
+    here, so the row is written the same way whoever notices first; the
+    guard also makes a second notice a no-op, notes included."""
+    if not kit_id:
+        return False
+    try:
+        res = (sb.table("topic_kits").update({"status": KIT_FAILED, "notes": str(note or "")[:1000]})
+               .eq("id", kit_id).eq("status", KIT_GENERATING).execute())
+        return bool(getattr(res, "data", None))
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").error("kit %s: could not be marked failed: %s", kit_id, exc)
+        return False
+
+
+def claim_next_job(sb: Client, job_type=None, exclude_types=None,
+                   catalogue: Optional[bool] = None) -> Optional[dict]:
     """Atomically-ish claim the oldest queued job (sets it to processing).
     `job_type` may be a single type or a LIST of types — only those are
     considered; `exclude_types` is a collection of types NOT to consider
     (run.py's generic lane passes OBSERVER_JOB_TYPES, so a topic_harvest —
     cheap on quota, heavy on CPU and egress — is claimed only by its own last
     lane, when nothing else is queued). Lets the loop prioritise small/fast
-    work (support diagnoses, then documents) over long batch video renders."""
+    work (support diagnoses, then documents) over long batch video renders.
+
+    `catalogue` (Phase 3, 2026-09-06) splits the queue by WHO is waiting.
+    Migration 0115 stamps ``jobs.params.catalogue = true`` on every catalogue
+    generation job at insert. ``False`` claims only jobs WITHOUT the flag —
+    the user lanes pass it, so a kit's presentation can never be picked up
+    ahead of (or instead of) a teacher's; ``True`` claims only flagged jobs —
+    run.py's last lane, which also checks that no user builder is live and
+    that the off-peak window is open; ``None`` does not filter (the observer
+    lanes, whose jobs never carry the flag)."""
     q = sb.table("jobs").select("*").eq("status", "queued")
     if isinstance(job_type, (list, tuple, set, frozenset)):
         q = q.in_("type", list(job_type))
@@ -111,6 +174,10 @@ def claim_next_job(sb: Client, job_type=None, exclude_types=None) -> Optional[di
         q = q.eq("type", job_type)
     if exclude_types:
         q = q.not_.in_("type", list(exclude_types))
+    if catalogue is True:
+        q = q.eq("params->>catalogue", "true")
+    elif catalogue is False:
+        q = q.or_(_NOT_CATALOGUE_FILTER)
     res = q.order("created_at").limit(1).execute()
     if not res.data:
         return None
@@ -160,7 +227,7 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
         if older_than_minutes is not None else None
     )
     try:
-        q = sb.table("jobs").select("id,type,book_id,attempts,generation_id").eq("status", "processing")
+        q = sb.table("jobs").select("id,type,book_id,attempts,generation_id,params").eq("status", "processing")
         if cutoff:
             q = q.lt("updated_at", cutoff)
         rows = q.execute().data or []
@@ -180,15 +247,19 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
             # The .eq("status","processing") guard means a job another actor already
             # moved is skipped (returns no rows) — safe under any race.
             if att >= max_attempts:
-                sb.table("jobs").update({
-                    "status": "error",
-                    "error": f"Auto-failed after {att} attempts — the worker kept dying on this job.",
-                }).eq("id", j["id"]).eq("status", "processing").execute()
+                note = f"Auto-failed after {att} attempts — the worker kept dying on this job."
+                sb.table("jobs").update({"status": "error", "error": note}) \
+                    .eq("id", j["id"]).eq("status", "processing").execute()
                 # Mirror the failure onto the generation. Without this a
                 # poison-pill row sat in the Library forever AND kept its credit:
                 # credit_ledger_sync only voids on generations.status = 'error',
                 # which nothing here ever wrote.
                 mirror_generation_status(sb, owned_gen, "error")
+                # A catalogue KIT's row (0115 stamps jobs.params) must take its
+                # kit with it: the portal keeps Generate disabled while a kit
+                # reads 'generating', and only a 'failed' kit offers Retry.
+                if owned_gen:
+                    mark_kit_failed(sb, kit_id_of(j.get("params")), f"{j.get('type') or 'generation'}: {note}")
                 if j.get("type") == "index_book" and j.get("book_id"):
                     try:  # stop the UI's "Finding chapters…" spinner
                         sb.table("books").update({"status": "error"}).eq("id", j["book_id"]).execute()
@@ -634,6 +705,42 @@ def resolve_tier(sb: Client, owner_id: str) -> dict:
         return _out(override=override, paid=False,
                     error="+".join(f"{n}_unread" for n in unread))
     return _out(override=override, paid=False, error=None)
+
+
+def probe_catalogue_job_flags(sb: Client, limit: int = 200) -> Optional[int]:
+    """Boot-time: is every queued catalogue GENERATION job flagged on its own
+    row? The worker's lanes read ``jobs.params.catalogue`` — a copy migration
+    0115 makes ``create_job_for_generation()`` take from the generation at
+    insert. A kit row inserted before 0115 is applied carries no flag: the
+    user lanes claim it (the never-starve gate is bypassed for it),
+    ``builder_queued`` counts it as a user waiting, and its failure files a
+    console issue under the system account. Deploy order therefore matters
+    (apply 0115 before FEATURE_CATALOGUE_GENERATE is turned on), and this
+    probe says loudly, once, when it was not honoured. Returns the number of
+    unflagged catalogue jobs seen, or None when the probe could not run."""
+    log = logging.getLogger("worker")
+    try:
+        jobs = (sb.table("jobs").select("id,generation_id,params").eq("status", "queued")
+                .limit(limit).execute().data or [])
+        gen_ids = [j["generation_id"] for j in jobs if j.get("generation_id") and not is_catalogue_params(j.get("params"))]
+        if not gen_ids:
+            log.info("CATALOGUE FLAG CHECK OK: no queued generation job is missing its params.catalogue.")
+            return 0
+        gens = sb.table("generations").select("id,params").in_("id", gen_ids).execute().data or []
+        flagged = {str(g["id"]) for g in gens if is_catalogue_params(g.get("params"))}
+        unflagged = [j["id"] for j in jobs if str(j.get("generation_id")) in flagged]
+        if unflagged:
+            log.critical(
+                "CATALOGUE FLAG CHECK FAILED: %d queued job(s) belong to catalogue generations but carry no "
+                "jobs.params.catalogue (%s). Migration 0115 has not stamped them — the user lanes WILL claim "
+                "them and the never-starve gate is bypassed. Apply 0115, then requeue or re-create those rows.",
+                len(unflagged), ", ".join(unflagged[:5]))
+        else:
+            log.info("CATALOGUE FLAG CHECK OK: every queued catalogue generation job carries its flag.")
+        return len(unflagged)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("CATALOGUE FLAG CHECK inconclusive: %s: %r", type(exc).__name__, exc)
+        return None
 
 
 def probe_plan_tier(sb: Client) -> Optional[bool]:
@@ -1147,6 +1254,8 @@ _CONTENT_TYPES = {
     ".mp4": "video/mp4",
     ".pdf": "application/pdf",
     ".png": "image/png",
+    # script{suffix}.json (kind script_json) rides with every video part
+    ".json": "application/json",
 }
 
 

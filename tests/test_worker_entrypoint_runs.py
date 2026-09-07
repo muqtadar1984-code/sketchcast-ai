@@ -118,6 +118,39 @@ def test_process_generation_gets_past_its_setup():
     assert calls, "process_generation never reached its first db call"
 
 
+def test_the_book_path_never_imports_the_catalogue_package(monkeypatch):
+    """CALL it with the catalogue package made unimportable. process_generation
+    used to `from catalogue.kit import is_catalogue` for EVERY generation —
+    a 7 s cold import per teacher's lesson, and an import-time fault anywhere
+    in the catalogue would have failed every book generation before get_book.
+    The flag is read through the DB client; the package is imported only on
+    the catalogue branch."""
+    import sys
+    from worker import client as db
+    from worker import process
+
+    class _Stop(Exception):
+        pass
+
+    class _DB:
+        is_catalogue_params = staticmethod(db.is_catalogue_params)   # the real predicate
+
+        def get_generation(self, sb, gid):
+            return {"id": gid, "kind": "worksheet", "book_id": "b1", "owner_id": "u1", "params": {"part": 1}}
+
+        def get_book(self, sb, book_id):
+            raise _Stop("reached the book")
+
+        def __getattr__(self, name):
+            return lambda *a, **k: None
+
+    monkeypatch.setattr(process, "db", _DB())
+    for name in [m for m in sys.modules if m == "catalogue" or m.startswith("catalogue.")]:
+        monkeypatch.setitem(sys.modules, name, None)      # any import of the package now raises ImportError
+    with pytest.raises(_Stop):
+        process.process_generation(object(), {"id": "j1"}, "g1")
+
+
 def test_acceptance_report_is_callable_without_a_scene_engine():
     """Its own guard clause used os.getenv, above its try/except — so the
     'a validator bug must never destroy a lesson' net did not cover it."""
@@ -175,8 +208,10 @@ class TestAcceptanceGateIsCalibrated:
         complaint is answerable later); what it must never do is decide
         anything, so the check is that it never appears in a CONDITION."""
         import inspect
-        from worker.process import process_generation
-        src = inspect.getsource(process_generation)
+        # The acceptance gate lives in _build_from_analysis (the shared build
+        # half of process_generation, split out 2026-09-06 for the catalogue).
+        from worker.process import _build_from_analysis
+        src = inspect.getsource(_build_from_analysis)
         assert 'if not _accept["ship"]' in src
         for ln in src.splitlines():
             if '_accept["passed"]' not in ln:

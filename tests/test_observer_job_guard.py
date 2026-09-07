@@ -25,6 +25,10 @@ slip past these: every test here asks what was WRITTEN.
 
 from __future__ import annotations
 
+import json
+import logging
+import re
+
 import pytest
 
 from worker import client as db
@@ -98,6 +102,18 @@ class _Query:
         self.filters.append(("lt", col, val))
         return self
 
+    def or_(self, filters: str):
+        """postgrest's ``q.or_("a.is.null,a.neq.true")`` — ANY alternative
+        matches. claim_next_job(catalogue=False) needs it: "flag absent OR
+        not true" cannot be said with one plain filter (NULL <> 'true' is
+        NULL in Postgres, so a bare neq would drop every user job)."""
+        alts = []
+        for part in filters.split(","):
+            col, op, val = part.strip().split(".", 2)
+            alts.append((col, op, val))
+        self.filters.append(("or", None, alts))
+        return self
+
     def order(self, col, desc=False, **k):
         """postgrest's ``.order("created_at")`` — the claim's oldest-first
         rule is the database's, so the fake must sort or the lane tests
@@ -117,18 +133,44 @@ class _Query:
         self.limit_n, self._single = 1, True
         return self
 
+    @staticmethod
+    def _value(row, col):
+        """A column — or a PostgREST JSON path ``params->>catalogue`` (text,
+        as Postgres yields it: a JSON true reads "true")."""
+        if "->" not in col:
+            return row.get(col)
+        parts = [p for p in re.split(r"->>?", col) if p]
+        v = row.get(parts[0])
+        for p in parts[1:]:
+            v = v.get(p) if isinstance(v, dict) else None
+        if v is None:
+            return None
+        return json.dumps(v) if not isinstance(v, str) else v
+
+    def _one(self, row, kind, col, val):
+        v = self._value(row, col)
+        if kind == "eq":
+            return v == val
+        if kind == "neq":
+            # Postgres three-valued logic: NULL <> x is NULL, i.e. NOT a match.
+            return v is not None and v != val
+        if kind == "is":
+            return v is None if val in (None, "null") else v == val
+        if kind == "in":
+            return v in val
+        if kind == "not_in":
+            return v not in val
+        if kind == "lt":
+            return v is not None and v < val
+        raise AssertionError(kind)
+
     def _match(self, row):
         for kind, col, val in self.filters:
-            v = row.get(col)
-            if kind == "eq" and v != val:
-                return False
-            if kind == "neq" and v == val:
-                return False
-            if kind == "in" and v not in val:
-                return False
-            if kind == "not_in" and v in val:
-                return False
-            if kind == "lt" and not (v is not None and v < val):
+            if kind == "or":
+                if not any(self._one(row, op, c, v) for c, op, v in val):
+                    return False
+                continue
+            if not self._one(row, kind, col, val):
                 return False
         return True
 
@@ -745,3 +787,293 @@ def test_a_crashing_phase_2b_dispatch_never_writes_the_generation(monkeypatch, m
     assert sb.tables["jobs"][0]["status"] == "error"
     assert _gen_status(sb) == "done" and _gen_writes(sb) == []
     assert sb.tables.get("platform_issues", []) == []
+
+
+# ── Phase 3: catalogue KIT generations take the LAST lane, by FLAG ──────
+#
+# A kit's rows are ordinary builder types (presentation, deck, documents)
+# owned by the system account; migration 0115 stamps params.catalogue = true
+# on their job rows. The user lanes pass catalogue=False and can never see
+# them; run.py's last lane claims them only when no user builder is live
+# (catalogue.figures.builder_queued, which ignores the flagged ones) and the
+# off-peak window is open (catalogue.kit.catalogue_window_open).
+
+
+def _kit_job(job_id="job-kit", kind="presentation", status="queued", created_at="0", gen_id="gen-kit"):
+    return {"id": job_id, "type": kind, "status": status, "generation_id": gen_id, "book_id": None,
+            "params": {"catalogue": True, "topic_id": "t-1", "kit_id": "k-1"}, "attempts": 0,
+            "created_at": created_at, "updated_at": "0"}
+
+
+def _kit_sb(*jobs, gen_status="queued"):
+    sb = _fresh(gen_status, jobs=jobs)
+    sb.tables["generations"].append({"id": "gen-kit", "status": "queued", "kind": "presentation",
+                                     "owner_id": "sys", "book_id": None})
+    return sb
+
+
+def _kit_gen(sb):
+    return next(g for g in sb.tables["generations"] if g["id"] == "gen-kit")
+
+
+def test_user_lanes_never_claim_a_catalogue_flagged_job():
+    import worker.run as run
+
+    for kind, lane in (("activity", {"job_type": run.DOC_JOB_TYPES}),
+                       ("presentation", {"exclude_types": db.OBSERVER_JOB_TYPES})):
+        sb = _kit_sb(_kit_job(kind=kind))
+        assert db.claim_next_job(sb, catalogue=False, **lane) is None
+        assert db.claim_next_job(sb, job_type="support_diagnose", catalogue=False) is None
+        assert db.claim_next_job(sb, job_type=run.CATALOGUE_JOB_TYPES) is None, "not an observer type either"
+        assert sb.tables["jobs"][0]["status"] == "queued" and _kit_gen(sb)["status"] == "queued"
+        claimed = db.claim_next_job(sb, exclude_types=db.OBSERVER_JOB_TYPES, catalogue=True)
+        assert claimed and claimed["id"] == "job-kit"
+        assert _kit_gen(sb)["status"] == "processing", "a kit row is a BUILDER's: its claim is mirrored"
+
+
+def test_the_flag_filter_keeps_every_user_job_however_its_params_look():
+    # params NULL, params without the key, params.catalogue false: all users'
+    sb = _fresh("queued", jobs=[{**_builder("j1"), "params": None, "created_at": "1"},
+                                {**_builder("j2", "activity"), "params": {"part": 2}, "created_at": "2"},
+                                {**_builder("j3", "deck"), "params": {"catalogue": False}, "created_at": "3"}])
+    seen = []
+    while True:
+        j = db.claim_next_job(sb, catalogue=False)
+        if not j:
+            break
+        seen.append(j["id"])
+    assert seen == ["j1", "j2", "j3"]
+    assert db.claim_next_job(sb, catalogue=True) is None
+
+
+def test_a_user_builder_is_claimed_before_an_older_kit_job(monkeypatch):
+    import worker.run as run
+    import catalogue.kit as ck
+
+    sb = _kit_sb(_kit_job(created_at="0"), _builder("job-w", "worksheet"))
+    order = []
+    monkeypatch.setattr(run, "process_generation",
+                        lambda sb_, job, gen: (order.append(job["id"]), db.finish_job(sb_, job["id"], gen)))
+    monkeypatch.setattr(ck, "catalogue_window_open", lambda now=None, **kw: True)
+    monkeypatch.delenv("SUPPORT_AGENT_ENABLED", raising=False)
+    assert run.run_once(sb) is True and order == ["job-w"], "the teacher's worksheet first, though the kit is older"
+    assert run.run_once(sb) is True and order == ["job-w", "job-kit"]
+    assert run.run_once(sb) is False
+
+
+def test_the_kit_lane_needs_no_live_user_builder_and_an_open_window(monkeypatch):
+    import worker.run as run
+    import catalogue.kit as ck
+
+    sb = _kit_sb(_kit_job(), _builder("job-live", "presentation", status="processing"))
+    order = []
+    monkeypatch.setattr(run, "process_generation",
+                        lambda sb_, job, gen: (order.append(job["id"]), db.finish_job(sb_, job["id"], gen)))
+    monkeypatch.delenv("SUPPORT_AGENT_ENABLED", raising=False)
+    monkeypatch.setattr(ck, "catalogue_window_open", lambda now=None, **kw: True)
+    assert run.run_once(sb) is False, "a teacher's presentation is being built: the kit waits"
+    sb.tables["jobs"] = [j for j in sb.tables["jobs"] if j["id"] != "job-live"]
+    monkeypatch.setattr(ck, "catalogue_window_open", lambda now=None, **kw: False)
+    assert run.run_once(sb) is False, "outside the window the kit waits"
+    monkeypatch.setattr(ck, "catalogue_window_open", lambda now=None, **kw: True)
+    assert run.run_once(sb) is True and order == ["job-kit"]
+    assert _kit_gen(sb)["status"] == "done"
+
+
+def test_a_queued_kit_job_does_not_hold_another_kit_job_back(monkeypatch):
+    """builder_queued ignores the flag: two queued kit rows drain in order."""
+    import worker.run as run
+    import catalogue.kit as ck
+
+    sb = _kit_sb(_kit_job("job-k1", created_at="1"), _kit_job("job-k2", kind="activity", created_at="2"))
+    order = []
+    monkeypatch.setattr(run, "process_generation",
+                        lambda sb_, job, gen: (order.append(job["id"]), db.finish_job(sb_, job["id"], gen)))
+    monkeypatch.setattr(ck, "catalogue_window_open", lambda now=None, **kw: True)
+    monkeypatch.delenv("SUPPORT_AGENT_ENABLED", raising=False)
+    assert run.run_once(sb) is True and run.run_once(sb) is True and order == ["job-k1", "job-k2"]
+
+
+def test_builder_queued_ignores_catalogue_jobs_and_observers():
+    from catalogue.figures import builder_queued
+
+    sb = _kit_sb(_kit_job())
+    assert builder_queued(sb) is False, "a queued kit row is not a user waiting"
+    sb.tables["jobs"].append(_kit_job("job-k2", status="processing", created_at="2"))
+    assert builder_queued(sb) is False
+    sb.tables["jobs"].append(_harvest())
+    assert builder_queued(sb) is False, "observers never counted"
+    sb.tables["jobs"].append(_builder("job-u", "worksheet"))
+    assert builder_queued(sb) is True
+    sb.tables["jobs"][-1]["status"] = "processing"
+    assert builder_queued(sb) is True
+    sb.tables["jobs"][-1]["status"] = "done"
+    assert builder_queued(sb) is False
+
+
+def test_topic_questions_is_an_observer_dispatched_to_the_catalogue(monkeypatch):
+    """Called, not grepped: the last lane picks the job up and hands it to
+    catalogue.questions.run_questions_job (W2's module; a stand-in is
+    installed so this test does not depend on its presence)."""
+    import sys
+    import types
+    import worker.run as run
+
+    assert "topic_questions" in db.OBSERVER_JOB_TYPES
+    assert "topic_questions" in run.OBSERVER_JOB_TYPES and "topic_questions" in run.CATALOGUE_JOB_TYPES
+    assert db.generation_to_mirror({"type": "topic_questions", "generation_id": GEN}) is None
+    seen = []
+    mod = types.ModuleType("catalogue.questions")
+
+    def run_questions_job(sb_, job):
+        seen.append((job["id"], job["params"]["topic_id"]))
+        db.finish_job(sb_, job["id"])
+
+    mod.run_questions_job = run_questions_job
+    monkeypatch.setitem(sys.modules, "catalogue.questions", mod)
+    sb = _fresh("done", jobs=[{"id": "job-tq", "type": "topic_questions", "status": "queued", "generation_id": GEN,
+                               "book_id": None, "params": {"topic_id": "t-1", "language": "en"}, "attempts": 0,
+                               "created_at": "1", "updated_at": "0"}])
+    monkeypatch.setattr(run, "process_generation", lambda *a, **k: pytest.fail("not a builder"))
+    monkeypatch.delenv("SUPPORT_AGENT_ENABLED", raising=False)
+    assert run.run_once(sb) is True and seen == [("job-tq", "t-1")]
+    assert sb.tables["jobs"][0]["status"] == "done"
+    assert _gen_status(sb) == "done" and _gen_writes(sb) == [], "an observer: the generation it names is untouched"
+
+
+def test_a_failed_kit_job_files_no_support_issue(monkeypatch):
+    import worker.run as run
+    import catalogue.kit as ck
+
+    sb = _kit_sb(_kit_job())
+    monkeypatch.setenv("SUPPORT_AGENT_ENABLED", "1")
+    monkeypatch.setattr(ck, "catalogue_window_open", lambda now=None, **kw: True)
+
+    def _die(*a, **k):
+        raise RuntimeError("kit died")
+
+    monkeypatch.setattr(run, "process_generation", _die)
+    assert run.run_once(sb) is True
+    assert sb.tables["jobs"][0]["status"] == "error" and _kit_gen(sb)["status"] == "error"
+    assert sb.tables.get("platform_issues", []) == [], "the reviewer sees the kit row; no console issue for nobody"
+
+
+# ── Phase 3 review fixes: the window margin, and a kit failed from anywhere ──
+
+
+def _kit_row(status="generating"):
+    return {"id": "k-1", "topic_id": "t-1", "status": status, "notes": None,
+            "presentation_generation_id": "gen-kit", "doc_generation_ids": {}}
+
+
+def test_a_presentation_kit_waits_for_the_margin_but_a_document_does_not(monkeypatch):
+    """The lane asks the window twice: open NOW (any kind) and open for the
+    presentation margin too (a 30-60 minute render must not run into users'
+    hours). Near the window's end only documents and decks are claimed."""
+    import worker.run as run
+    import catalogue.kit as ck
+
+    sb = _kit_sb(_kit_job("job-pres", kind="presentation", created_at="1"),
+                 _kit_job("job-act", kind="activity", created_at="2", gen_id="gen-act"))
+    sb.tables["generations"].append({"id": "gen-act", "status": "queued", "kind": "activity", "owner_id": "sys",
+                                     "book_id": None})
+    order = []
+    monkeypatch.setattr(run, "process_generation",
+                        lambda sb_, job, gen: (order.append(job["id"]), db.finish_job(sb_, job["id"], gen)))
+    monkeypatch.delenv("SUPPORT_AGENT_ENABLED", raising=False)
+    # open now, but not for the presentation margin
+    monkeypatch.setattr(ck, "catalogue_window_open", lambda now=None, margin_minutes=0: margin_minutes == 0)
+    assert run.run_once(sb) is True and order == ["job-act"], "the older presentation is skipped near the window's end"
+    assert run.run_once(sb) is False, "and stays queued"
+    assert sb.tables["jobs"][0]["status"] == "queued" and _kit_gen(sb)["status"] == "queued"
+    # the margin fits: the presentation is claimed
+    monkeypatch.setattr(ck, "catalogue_window_open", lambda now=None, margin_minutes=0: True)
+    assert run.run_once(sb) is True and order == ["job-act", "job-pres"]
+
+
+def test_the_lane_passes_the_configured_presentation_margin(monkeypatch):
+    import worker.run as run
+    import catalogue.kit as ck
+
+    sb = _kit_sb(_kit_job())
+    asked = []
+    monkeypatch.setattr(ck, "catalogue_window_open",
+                        lambda now=None, margin_minutes=0: (asked.append(margin_minutes), True)[1])
+    monkeypatch.setenv("CATALOGUE_PRESENTATION_MARGIN_MIN", "45")
+    assert run._claim_catalogue_generation(sb) is not None
+    assert asked == [0, 45]
+
+
+def test_the_reaper_fails_the_kit_of_a_poison_pill_kit_job():
+    """A kit's presentation that kept crashing the worker is auto-failed after
+    three requeues, like any builder — and its kit goes 'failed' with it, or
+    the portal keeps Generate disabled on a kit that reads 'generating' and
+    offers no Retry."""
+    sb = _kit_sb(_kit_job(status="processing"))
+    sb.tables["jobs"][0]["attempts"] = 3
+    sb.tables["topic_kits"] = [_kit_row()]
+    assert db.requeue_stale_jobs(sb) == 0
+    assert sb.tables["jobs"][0]["status"] == "error" and _kit_gen(sb)["status"] == "error"
+    kit = sb.tables["topic_kits"][0]
+    assert kit["status"] == "failed" and "Auto-failed after 3 attempts" in kit["notes"] and kit["notes"].startswith("presentation:")
+
+
+def test_the_reaper_leaves_a_reviewed_kit_and_a_users_job_alone():
+    sb = _kit_sb(_kit_job(status="processing"), _builder("job-u", status="processing", attempts=3))
+    sb.tables["jobs"][0]["attempts"] = 3
+    sb.tables["topic_kits"] = [_kit_row(status="in_review")]
+    db.requeue_stale_jobs(sb)
+    assert sb.tables["topic_kits"][0]["status"] == "in_review", "guarded from generating only"
+    assert [j["status"] for j in sb.tables["jobs"]] == ["error", "error"]
+    assert db.kit_id_of({"catalogue": True, "kit_id": "k-9"}) == "k-9"
+    assert db.kit_id_of({"kit_id": "k-9"}) is None and db.kit_id_of(None) is None, "a user's row names no kit"
+
+
+def test_a_kit_job_failing_before_its_prelude_still_fails_its_kit(monkeypatch):
+    """process.py marks the kit failed when the build fails; a failure BEFORE
+    that (the generation row unreadable, taken down, the tier unresolvable)
+    used to leave the kit 'generating' forever. run.py's failure path now
+    writes it too — guarded, so a kit process.py already failed is untouched."""
+    import worker.run as run
+    import catalogue.kit as ck
+
+    sb = _kit_sb(_kit_job())
+    sb.tables["topic_kits"] = [_kit_row()]
+    monkeypatch.delenv("SUPPORT_AGENT_ENABLED", raising=False)
+    monkeypatch.setattr(ck, "catalogue_window_open", lambda now=None, **kw: True)
+
+    def _die(*a, **k):
+        raise RuntimeError("content removed")
+
+    monkeypatch.setattr(run, "process_generation", _die)
+    assert run.run_once(sb) is True
+    kit = sb.tables["topic_kits"][0]
+    assert kit["status"] == "failed" and kit["notes"] == "presentation failed: content removed"
+
+    # the tier-exhausted path is the same
+    sb = _kit_sb(_kit_job())
+    sb.tables["jobs"][0]["attempts"] = 3
+    sb.tables["topic_kits"] = [_kit_row()]
+
+    def _tier(*a, **k):
+        raise db.TransientTierError("rpc timed out")
+
+    monkeypatch.setattr(run, "process_generation", _tier)
+    assert run.run_once(sb) is True
+    assert sb.tables["topic_kits"][0]["status"] == "failed"
+    assert "plan tier unresolvable" in sb.tables["topic_kits"][0]["notes"]
+    assert sb.tables.get("platform_issues", []) == []
+
+
+def test_the_flag_probe_counts_queued_kit_jobs_that_0115_did_not_stamp(caplog):
+    """Deploy order: a kit row inserted before migration 0115 carries no
+    jobs.params.catalogue, and the user lanes would claim it. The boot probe
+    names those rows loudly; a stamped queue is a quiet OK."""
+    sb = _kit_sb(_kit_job())
+    assert db.probe_catalogue_job_flags(sb) == 0
+    sb.tables["generations"][-1]["params"] = {"catalogue": True, "topic_id": "t-1", "kit_id": "k-1"}
+    sb.tables["jobs"][0]["params"] = None                       # never stamped
+    sb.tables["jobs"].append(_builder("job-u"))                 # a user's row: params None, generation unflagged
+    caplog.set_level(logging.CRITICAL, logger="worker")
+    assert db.probe_catalogue_job_flags(sb) == 1
+    assert "CATALOGUE FLAG CHECK FAILED" in caplog.text and "job-kit" in caplog.text

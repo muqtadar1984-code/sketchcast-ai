@@ -669,7 +669,8 @@ def two_voice_dialogue(style: str | None) -> bool:
 def cast_avatars(effective_voice: str | None, grade, seed: str, *,
                  lang: str | None = "en", style: str = "socratic",
                  dialogue: bool | None = None,
-                 roster: list | None = None) -> dict:
+                 roster: list | None = None,
+                 student_voice: str | None = None) -> dict:
     """The two avatar KEYS one generation renders with — founder decision,
     2026-09-04: a random approved roster face, restricted only by the
     narration voice's gender, and the SAME face on every segment and part.
@@ -693,6 +694,11 @@ def cast_avatars(effective_voice: str | None, grade, seed: str, *,
                  unstated one falls back to two_voice_dialogue(style) — the
                  SAME predicate script_generator decides with, so the face
                  and the audio can only ever disagree by editing one place.
+                 `student_voice` (catalogue kits, 2026-09-06) names the
+                 registry voice that WILL read those lines — the premium
+                 student voice the kit chose as the other gender to the
+                 teacher's — and its gender casts the face; without it the
+                 age-band Edge voice decides, as before.
 
     Fallbacks live in shared.visual_library.pick_avatar: no face of that
     gender → any face of the role (logged); no roster face of the role, or
@@ -709,7 +715,9 @@ def cast_avatars(effective_voice: str | None, grade, seed: str, *,
     band = student_band_for_grade(grade)
     if dialogue is None:
         dialogue = two_voice_dialogue(style)
-    if dialogue:
+    if dialogue and student_voice:
+        s_gender = voice_gender(student_voice)
+    elif dialogue:
         s_gender = voice_gender(student_voice_for_band(band, lang or "en")
                                 or _free_voice_ref(lang))
     else:

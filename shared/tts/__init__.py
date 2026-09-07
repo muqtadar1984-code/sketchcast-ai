@@ -20,8 +20,8 @@ import os
 from pathlib import Path
 
 from . import cost
-from .registry import (AUTO_VOICE_ID, DEFAULT_VOICE_ID, PAID_TIERS, TTSVoice,
-                       default_premium_voice_id_for, default_voice,
+from .registry import (AUTO_VOICE_ID, DEFAULT_VOICE_ID, PAID_TIERS, STUDENT_ROLE,
+                       TTSVoice, default_premium_voice_id_for, default_voice,
                        default_voice_id_for, equivalent_voice_id, get_voice,
                        list_voices, premium_provider)
 from ..text_clean import strip_ssml
@@ -146,6 +146,15 @@ def pick_voice_id(requested: str | None, *, lang: str | None, allow_premium: boo
       a free Edge id in the wrong language, on a generation that did not set
       an explicit language → the free default for the language (stale
       pre-language params being regenerated; unchanged behaviour).
+      a STUDENT voice id  → treated as `auto`, with a warning. The youthful
+                          student voices (registry role "student") exist only
+                          for the second speaker of a dialogue and are hidden
+                          from every picker and every default; a crafted
+                          params.tts_voice naming one would otherwise have
+                          narrated a whole lesson in Leda's voice and cast
+                          the teacher's face from her gender. resolve_voice
+                          still accepts them — that is how the composer
+                          renders the student's own lines.
       anything else       → returned as-is; resolve_voice applies the gate.
 
     `provider` (a canary account's family) overrides TTS_PREMIUM_PROVIDER for
@@ -153,6 +162,10 @@ def pick_voice_id(requested: str | None, *, lang: str | None, allow_premium: boo
     """
     enabled = enabled_providers() if enabled is None else enabled
     req = (requested or "").strip()
+    v = get_voice(req) if req else None
+    if v is not None and v.role == STUDENT_ROLE:
+        logger.warning("narration voice %r is a student voice; it is not a narration option → auto", req)
+        req, v = "", None
     if not req or req == AUTO_VOICE_ID:
         if allow_premium:
             prem = default_premium_voice_id_for(lang, provider=provider)
@@ -160,7 +173,6 @@ def pick_voice_id(requested: str | None, *, lang: str | None, allow_premium: boo
             if pv is not None and pv.provider in enabled:
                 return pv.voice_id
         return default_voice_id_for(lang)
-    v = get_voice(req)
     spoken = "ms" if lang == "ms-arab" else (lang or "en")
     if (spoken != "en" and v is not None and v.provider == "edge"
             and v.lang != spoken and not explicit_language):

@@ -9,11 +9,13 @@ below; the presentation embeds one only while DECK_IN_PRESENTATION=1 (rollout).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import tempfile
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from supabase import Client
@@ -596,16 +598,1292 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
     return f"{book.get('title', 'Document')} · {unit_label} · Slide deck"
 
 
-def process_generation(sb: Client, job: dict, generation_id: str) -> None:
-    # Lazy imports shared by every generation kind.
+@dataclass
+class _Unit:
+    """What the prelude hands the shared build: the chapter to teach and how
+    it was reached. One shape for both sources — a BOOK (``_book_prelude``:
+    download → structure → pick → heal/OCR → verify → measure → narrow) and a
+    catalogue ARTICLE (``_catalogue_unit``: ``catalogue.kit.prepare``) — so
+    the build after the analysis is one function, not two copies."""
+
+    book: dict
+    book_id: str                  # the books row id, or the catalogue's synthetic id
+    client: object
+    chapter: dict
+    chapter_num: int
+    chapter_title: str
+    lesson_lang: str
+    lesson_dir: str
+    jawi: bool
+    is_cumulative: bool = False
+    part_ref: int | None = None
+    part_total: int = 1
+    forced_part_info: dict | None = None
+    part_chunk: dict | None = None
+    pk: dict | None = None
+    relocated_now: bool = False
+    pdf_path: Path | None = None
+    # Catalogue only: the article's parts, analysed verbatim (chunks_override),
+    # the depth node's level, and the Prepared record itself for the kit-
+    # specific steps (voices, recap/outro, timestamps).
+    chunks_override: list[dict] | None = None
+    level: str = DEFAULT_LEVEL
+    catalogue: object = None
+
+
+@dataclass
+class _Built:
+    """What the shared build returns to the orchestrator."""
+
+    client: object
+    title: str
+    # Catalogue presentations: [{part, chapters, clips, plan}] per rendered
+    # part, for topic_kits (catalogue.kit.after_generation). [] otherwise.
+    parts: list = field(default_factory=list)
+
+
+def _strip_local_paths(obj):
+    """A copy of a manifest with every worker-local file path removed (keys
+    ending in ``_path``). The script.json artifact travels with the video;
+    ``/tmp/…`` paths in it are noise to the reader and a leak of nothing
+    useful."""
+    if isinstance(obj, dict):
+        return {k: _strip_local_paths(v) for k, v in obj.items() if not str(k).endswith("_path")}
+    if isinstance(obj, list):
+        return [_strip_local_paths(v) for v in obj]
+    return obj
+
+
+def _upload_script_json(sb: Client, generation_id: str, tmp: str | Path, base: str, suffix: str,
+                        body: dict) -> bool:
+    """Decision 4 (Phase 3): ``{base}/script{suffix}.json`` (kind script_json)
+    for EVERY presentation part, catalogue or not, uploaded in the SAME block
+    as the part's mp4 so the 0095 refund rule sees one artifact set per part.
+    Best-effort: a lesson whose video rendered is never failed over its
+    transcript — the script is a companion, not the deliverable."""
+    try:
+        out = Path(tmp) / f"script{suffix}.json"
+        out.write_text(json.dumps(body, ensure_ascii=False, default=str), encoding="utf-8")
+        dest = f"{base}/script{suffix}.json"
+        db.upload_artifact(sb, str(out), dest)
+        db.add_artifact_row(sb, generation_id, "script_json", dest)
+        return True
+    except Exception as exc:  # noqa: BLE001 — companion artifact, never fatal
+        logger.warning("script_json not uploaded for %s%s: %s", generation_id, suffix, exc)
+        return False
+
+
+def _catalogue_doc_params(gen: dict, catalogue) -> dict:
+    """The params a catalogue DOCUMENT builder reads. Decision 10 says the
+    curriculum header is "composed by the worker from topic_curriculum_map"
+    when the params carry none — kit.prepare composes it into
+    ``Prepared.curriculum_header``, and this is where it reaches the
+    builders (both portal routes pass one today, so the fallback is for a
+    row that did not). Everything else travels untouched: the header key is
+    W2's to read, the rest are theirs too."""
+    params = dict(gen.get("params") or {})
+    if not params.get("curriculum_header"):
+        params["curriculum_header"] = list(getattr(catalogue, "curriculum_header", None) or [])
+    return params
+
+
+def _catalogue_unit(prepared, tmp: str | Path) -> _Unit:
+    """The catalogue's stand-in for the book prelude: nothing is downloaded,
+    structured, healed or measured — ``catalogue.kit.prepare`` already read
+    the approved article into a chapter and chunked it. Only the per-lesson
+    client (routed by the lesson's script) is created here, as the prelude
+    does for a book."""
+    from shared.languages import get_language
+    from shared.llm import client_for
+
+    lang = get_language(prepared.language)
+    chapter = prepared.chapter or {
+        "chapter_num": -1, "title": prepared.book.get("title") or "Topic", "start_page": 0,
+        "end_page": 0, "sections": [], "images": [], "key_boxes": [],
+    }
+    return _Unit(
+        book=dict(prepared.book), book_id=prepared.synthetic_book_id, client=client_for(lang.code),
+        chapter=chapter, chapter_num=int(chapter.get("chapter_num", -1)),
+        chapter_title=chapter.get("title") or prepared.book.get("title") or "Topic",
+        lesson_lang=lang.code, lesson_dir=lang.direction, jawi=lang.code == "ms-arab",
+        chunks_override=list(prepared.chunks) or None, level=prepared.level, catalogue=prepared,
+    )
+
+
+def _book_prelude(sb: Client, job_id: str, gen: dict, book: dict, tmp: str | Path) -> _Unit:
+    """The BOOK half of process_generation, moved verbatim (2026-09-06, so the
+    catalogue path could share everything after it): download → ingest →
+    pick the chapter (or combine chapters/units for a cumulative paper) →
+    heal / OCR → verify the chapter → persist the measured part map → narrow
+    to a single part (params.part) → resolve the lesson language. Returns
+    the _Unit the shared build consumes."""
     from agent1_ingestion.extractor import extract_pdf
     from agent1_ingestion.image_extractor import extract_images
     from agent1_ingestion.structurer import structure_book
+    from shared.llm import client_for
+
+    book_id = book["id"]
+    kind = gen.get("kind") or "presentation"
+    part_chunk: dict | None = None
+    pk: dict | None = None
+    pdf_path = db.download_book(sb, book["storage_path"], Path(tmp) / "book.pdf")
+    db.set_progress(sb, job_id, 10)
+
+    # Ingestion + analysis, routed by the BOOK's script (shared/model_routing).
+    # This has to route, not just authoring: measured, the Sonnet analysis
+    # DOMINATES a kit's cost — $2.08 against a modelled $1.15 — because each
+    # artifact makes 4-5 calls and only one of them is the authoring call.
+    # Moving authoring alone would shift almost none of the spend onto the
+    # GCP credits, which is the point of the exercise.
+    client = client_for(book.get("language"))
+
+    # Agent 1 — ingest. Chapter boundaries stored at indexing time are reused
+    # (known_chapters) so every generation splits the book identically without
+    # re-running detection; client+pdf_path enable the Claude fallback for
+    # books the heuristics can't read (see structure_book's cascade).
+    extraction = extract_pdf(str(pdf_path))
+    images = extract_images(str(pdf_path), book_id)
+    structured = structure_book(
+        book_id=book_id, title=book.get("title") or "Untitled",
+        author=book.get("author") or "Unknown", isbn=None, extraction=extraction, images=images,
+        pdf_path=str(pdf_path), client=client, known_chapters=book.get("chapters"),
+    ).model_dump()
+    chapter = _pick_chapter(structured.get("chapters", []), gen.get("chapter_ref"))
+    # Cumulative revision paper (worksheet/exam over a GROUP of chapters):
+    # merge the selected chapters into one synthetic chapter and generate the
+    # paper from it. Marked chapter_num = -1 so its analysis/grounding is
+    # never cached as a real chapter's.
+    # A cumulative EXAM (kind 'exam', 0062) merges a chosen set of covered
+    # {chapter, part} units — part-granular, so unticked parts are excluded.
+    _exam_scope = (gen.get("params") or {}).get("scope")
+    is_exam = kind == "exam" and isinstance(_exam_scope, list) and len(_exam_scope) > 0
+    _rev_chapters = (gen.get("params") or {}).get("chapters")
+    _rev_valid = (
+        [int(str(n).strip()) for n in _rev_chapters if str(n).strip().lstrip("-").isdigit()]
+        if kind in ("worksheet", "exam_paper") and isinstance(_rev_chapters, list) else []
+    )
+    # A cumulative unit has no single chapter to heal/OCR/verify or cache.
+    is_cumulative = is_exam or len(_rev_valid) >= 2
+    if is_exam:
+        chapter = _combine_units(structured.get("chapters", []), _exam_scope, sb, book_id)
+        if not chapter.get("sections"):
+            # Every scope unit resolved to no source text (e.g. a re-index
+            # shifted chapter numbering). Fail loud — never hand the model an
+            # empty chapter and let it hallucinate a whole exam.
+            raise RuntimeError(
+                "The selected chapters/parts have no source text to build an exam from. "
+                "Re-index the book, then rebuild the exam."
+            )
+    elif len(_rev_valid) >= 2:
+        chapter = _combine_chapters(structured.get("chapters", []), _rev_chapters, sb, book_id)
+    elif _rev_valid and not gen.get("chapter_ref"):
+        # A one-chapter revision paper (params.chapters=[N], no chapter_ref):
+        # generate from THAT chapter, not the book's first (defence-in-depth
+        # — the UI blocks combining a single chapter, but never trust it).
+        chapter = _pick_chapter(structured.get("chapters", []), str(_rev_valid[0]))
+    chapter_num = int(chapter.get("chapter_num", 0))
+    chapter_title = chapter.get("title") or f"Chapter {chapter_num}"
+
+    # Whether the title-vs-content check can validly apply here (see the
+    # helper's docstring — single/whole-book chapters would always fail it).
+    title_gate_applies = _title_gate_applies(
+        chapter_title, book.get("title"),
+        len(structured.get("chapters", [])), is_cumulative,
+    )
+
+    # Self-heal overlay (behind FEATURE_CHAPTER_HEAL, which the operator turns on
+    # only AFTER applying migration 0040 — the heal_* columns): a book indexed
+    # before the boundary fix may have wrong pages stored for this chapter. A
+    # per-chapter relocation override (persisted the first time we healed it)
+    # wins over the stored pages, so the fix is paid once. 'not_found' means an
+    # earlier relocation PROVED the topic isn't in this book — fail fast.
+    # Cumulative revision papers have no single chapter to heal/OCR — their
+    # text is already gathered from the per-chapter cache.
+    heal_on = _chapter_heal_enabled() and not is_cumulative
+    heal = db.get_chapter_heal(sb, book_id, chapter_num) if heal_on else None
+    # A stale 'not_found' verdict must not brick a chapter the gate no longer
+    # applies to (e.g. a whole-book chapter titled with the filename).
+    if heal and heal.get("status") == "not_found" and title_gate_applies:
+        raise RuntimeError(_chapter_check_error(chapter_title, "a different topic"))
+    healed_text = None
+    if heal and heal.get("status") == "ok" and heal.get("start_page") is not None:
+        chapter["start_page"] = int(heal["start_page"])
+        chapter["end_page"] = int(heal["end_page"])
+        healed_text = heal.get("source_text")
+
+    # Was the chapter's text read WHOLE? Only a complete read may become a
+    # stored part count — see _persist_measured_parts. Unknown (cached or
+    # heal-supplied text) counts as complete: the alternative is refusing to
+    # ever measure a chapter transcribed before this shipped.
+    ocr_complete = True
+
+    # Scanned book (no text layer) → the chapter has no content for the
+    # pipeline to teach from. Transcribe its pages with Claude vision once,
+    # up front, so every generation kind gets real chapter text.
+    if healed_text:
+        chapter["sections"] = [{
+            "section_title": "Content", "section_type": "body",
+            "content": healed_text, "page_num": chapter.get("start_page", 0),
+            "subsections": [],
+        }]
+    else:
+        section_chars = sum(
+            len(s.get("content") or "")
+            + sum(len(ss.get("content") or "") for ss in (s.get("subsections") or []))
+            for s in (chapter.get("sections") or [])
+        )
+        if section_chars < 200 and not is_cumulative:
+            # Scanned chapter: transcribe the pages with Claude vision ONCE and
+            # cache the text (chapter_grounding.source_text, keyed book+chapter).
+            # Every later generation of this chapter — any kind, any owner —
+            # reuses it instead of re-running the multi-call, ~minutes-long OCR.
+            ocr_text = db.get_chapter_source_text(sb, book_id, chapter_num)
+            if not ocr_text:
+                from agent1_ingestion.vision_chapters import (
+                    chapter_text_vision, transcribe_page_range)
+
+                _s = int(chapter.get("start_page", 0))
+                _e = int(chapter.get("end_page", 0))
+                # The chapter is read to its own end. The ONLY way it is not
+                # is the runaway guard, which cannot trip on a real chapter —
+                # so if it does, the chapter map is broken and the teacher is
+                # about to be taught from part of a book. Never silent: a
+                # partial read that looked complete is exactly how a
+                # six-artifact kit, exam included, once shipped from 19% of a
+                # 54-page chapter.
+                _read = transcribe_page_range(_s, _e)
+                if len(_read) < (_e - _s + 1):
+                    logger.error(
+                        "PARTIAL TRANSCRIPTION book=%s ch=%s: pages %d-%d requested, %d-%d read "
+                        "(%d of %d). The chapter map is almost certainly wrong — a real chapter "
+                        "is not this long. Everything past page %d is absent from every artifact "
+                        "generated for this chapter.",
+                        book_id, chapter_num, _s + 1, _e + 1, _read.start + 1, _read.stop,
+                        len(_read), _e - _s + 1, _read.stop,
+                    )
+                _report: dict = {}
+                ocr_text = chapter_text_vision(str(pdf_path), _s, _e, client, report=_report)
+                # The bounds check above catches the runaway clamp. It cannot
+                # catch the OTHER way this comes back short: on an API failure
+                # mid-loop the transcriber returns the chunks it already has
+                # rather than losing them, so a half-read chapter looks like a
+                # whole one. Only the transcriber knows, so it now says.
+                _done = int(_report.get("pages_done", 0))
+                _want = int(_report.get("pages_requested", 0))
+                if _want and _done < _want:
+                    ocr_complete = False
+                    logger.error(
+                        "PARTIAL TRANSCRIPTION book=%s ch=%s: %d of %d pages transcribed — "
+                        "the artifacts for this chapter will be built from part of it",
+                        book_id, chapter_num, _done, _want,
+                    )
+                if len(_read) < (_e - _s + 1):
+                    ocr_complete = False
+                if ocr_text:
+                    db.set_chapter_source_text(sb, book_id, chapter_num, ocr_text)
+            if ocr_text:
+                chapter["sections"] = [{
+                    "section_title": "Content", "section_type": "body",
+                    "content": ocr_text, "page_num": chapter.get("start_page", 0),
+                    "subsections": [],
+                }]
+                # Scanned books skip index-time language detection (no text
+                # layer) — the first OCR'd chapter fills the gap here.
+                if not book.get("language"):
+                    from shared.languages import detect_language
+
+                    _det = detect_language(ocr_text)
+                    if _det:
+                        db.set_book_language(sb, book_id, _det)
+                        book["language"] = _det  # this job resolves with it too
+
+    # Guard: the sliced text must actually belong to the requested chapter.
+    # On mismatch, SELF-HEAL — find the pages that actually teach this title,
+    # transcribe + strict-confirm them, generate from those, and persist the
+    # correction so it is paid once. Only a topic genuinely absent from the
+    # book fails loud (and is remembered, so it fails fast next time).
+    from agent1_ingestion.chapter_check import verify_chapter_content
+
+    relocated_now = False
+
+    def _sample_text() -> str:
+        return " ".join(
+            (s.get("content") or "") + " "
+            + " ".join(ss.get("content") or "" for ss in (s.get("subsections") or []))
+            for s in (chapter.get("sections") or [])
+        )
+
+    # A cumulative revision paper's title ("Revision — Chapters 1–3") names
+    # no single topic, and a whole-book/book-titled chapter has no
+    # chapter-specific topic either — the check applies only where a wrong
+    # boundary is possible (see title_gate_applies above). Skipping also
+    # saves the Claude call per paper on the synthetic labels.
+    ok, actual = (True, None) if not title_gate_applies else verify_chapter_content(chapter_title, _sample_text(), client)
+    if not ok:
+        # Without the flag/migration, keep the pre-heal behavior: fail loud.
+        if not heal_on:
+            raise RuntimeError(_chapter_check_error(chapter_title, actual))
+        result = {"status": "incomplete"}
+        try:
+            from agent1_ingestion.vision_chapters import relocate_chapter_for_generation
+
+            result = relocate_chapter_for_generation(
+                str(pdf_path), extraction, chapter, client,
+            )
+        except Exception as exc:  # noqa: BLE001 — relocation is best-effort
+            logger.warning("relocation failed for %s ch%s: %s", book_id, chapter_num, exc)
+        if result.get("status") == "ok":
+            relocated_now = True  # pages just moved — any cached analysis is stale
+            chapter["start_page"] = result["start_page"]
+            chapter["end_page"] = result["end_page"]
+            chapter["sections"] = [{
+                "section_title": "Content", "section_type": "body",
+                "content": result["source_text"],
+                "page_num": result["start_page"], "subsections": [],
+            }]
+            db.set_chapter_heal(
+                sb, book_id, chapter_num, result["start_page"],
+                result["end_page"], result["source_text"], "ok",
+            )
+            logger.info(
+                "self-healed chapter %s of book %s → pages %d-%d (%s)",
+                chapter_num, book_id, result["start_page"],
+                result["end_page"], result.get("actual_topic") or "",
+            )
+        elif result.get("status") == "absent":
+            # We searched properly and the topic isn't in the book — remember it
+            # so the next click fails fast instead of re-running a vision sweep.
+            db.set_chapter_heal(sb, book_id, chapter_num, None, None, None, "not_found")
+            raise RuntimeError(_chapter_check_error(chapter_title, actual))
+        else:
+            # Could NOT prove absence (vision outage, empty OCR, error). Fail
+            # loud but DO NOT persist — a transient blip must not brick a chapter
+            # that is actually present; the next run can recover.
+            raise RuntimeError(_chapter_check_error(chapter_title, actual))
+    db.set_progress(sb, job_id, 20)
+
+    # The chapter's text is final HERE and not before: the OCR block above
+    # is only one of three ways sections get filled — a persisted heal
+    # override installs its own text without ever entering it, and a
+    # relocation REPLACES both the text and the pages afterwards. Measuring
+    # at the OCR site therefore missed exactly the chapters whose estimates
+    # were worst, and could be stale for the third. Measuring here covers
+    # all three and cannot go stale.
+    if ocr_complete and not is_cumulative:
+        _persist_measured_parts(sb, book_id, chapter_num, chapter, book)
+
+
+    # ── ON-DEMAND SINGLE PART (params.part = k, 2026-07-18) ──────────────
+    # The part map is computed at INDEX time with the same chunker, so a
+    # teacher can generate Part 3's lesson (or worksheet, or exam…) alone.
+    # The chapter is narrowed to that part's text BEFORE analysis: every
+    # artifact of a part job is grounded on the part, and the chapter-level
+    # analysis cache/grounding is neither read nor written (it describes
+    # the WHOLE chapter; a part must not impersonate it).
+    part_ref: int | None = None
+    part_total = 1
+    forced_part_info: dict | None = None
+    _raw_part = (gen.get("params") or {}).get("part")
+    if _raw_part is not None:
+        try:
+            part_ref = int(_raw_part)
+        except (TypeError, ValueError):
+            raise RuntimeError(f"Invalid part {_raw_part!r} — expected a part number.")
+    if part_ref is not None:
+        from agent2_analysis.analyzer import build_chapter_parts
+
+        all_parts = build_chapter_parts(chapter)
+        part_total = len(all_parts)
+        if part_ref < 1 or part_ref > part_total:
+            raise RuntimeError(
+                f"'{chapter_title}' has {part_total} part(s) — part {part_ref} does not exist. "
+                "If the book's chapters changed, re-index it to refresh the part map."
+            )
+        pk = all_parts[part_ref - 1]
+        if part_total > 1:
+            forced_part_info = {
+                "part": part_ref,
+                "total": part_total,
+                "prev_sections": [t for p in all_parts[: part_ref - 1] for t in (p.get("section_titles") or [])],
+                "next_sections": (all_parts[part_ref].get("section_titles") or []) if part_ref < part_total else [],
+            }
+        # Narrowed chapter for docgen + image analysis; the ANALYSIS gets
+        # the chunk verbatim via chunks_override (re-chunking an at-budget
+        # chunk would split off a junk tail episode — review-caught).
+        part_chunk = dict(pk)
+        chapter = {
+            "chapter_num": chapter.get("chapter_num"),
+            "title": chapter.get("title"),
+            "sections": [{
+                "section_title": (pk.get("section_titles") or [chapter_title])[0],
+                "content": pk.get("text", ""),
+                "subsections": [],
+            }],
+            "key_boxes": [],
+            # The chapter's figures still feed the visual pipeline — a part
+            # lesson must not silently lose all image analysis.
+            "images": chapter.get("images", []),
+        }
+
+    # ── Lesson language (2026-07-18) ─────────────────────────────────────
+    # params.language (teacher's explicit choice) → books.language (detected
+    # at indexing) → English. One value drives the prompts (analysis,
+    # scripts, documents), the layout direction (Arabic = RTL) and the
+    # default narration voice.
+    from shared.languages import get_language
+
+    _lang_obj = get_language((gen.get("params") or {}).get("language") or book.get("language"))
+    lesson_lang = _lang_obj.code
+    lesson_dir = _lang_obj.direction
+
+    # Jawi (Malay in the Arabic script, RTL). Documents author it directly.
+    # The VIDEO is DUAL-SCRIPT: the slides/deck show Jawi (Noto Sans Arabic +
+    # the Arabic RTL layout), while the narration is spoken Malay — the
+    # script generator writes narration in Rumi (Malay TTS can't read the
+    # Arabic script) and the on-screen text in Jawi; the same Malay words in
+    # two scripts. The voice resolves to Malay (default_voice_id_for maps
+    # ms-arab → ms).
+    jawi = lesson_lang == "ms-arab"
+
+    return _Unit(
+        book=book, book_id=book_id, client=client, chapter=chapter, chapter_num=chapter_num,
+        chapter_title=chapter_title, lesson_lang=lesson_lang, lesson_dir=lesson_dir, jawi=jawi,
+        is_cumulative=is_cumulative, part_ref=part_ref, part_total=part_total,
+        forced_part_info=forced_part_info, part_chunk=part_chunk, pk=pk,
+        relocated_now=relocated_now, pdf_path=pdf_path,
+    )
+
+
+def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, unit: _Unit,
+                         tmp: str | Path, *, allow_premium: bool, tier_info: dict,
+                         canary_provider: str | None) -> _Built:
+    """Everything from the analysis onward, moved verbatim out of
+    process_generation (2026-09-06): analysis (cached per book chapter, never
+    for a part, a cumulative paper or a catalogue article), grounding,
+    branding, then the kind branches — presentation (part-major script →
+    slides → video → upload), the documents, the cumulative exam, the deck —
+    and the title. The orchestrator finishes the job afterwards.
+
+    ``unit.catalogue`` (a catalogue.kit.Prepared) switches on the kit-specific
+    steps and off every book-keyed side effect; the book path is byte-for-
+    byte the code that ran before the split."""
     from agent2_analysis.analyzer import run_full_analysis
-    from shared.claude_client import ClaudeClient
     from shared.llm import client_for
     from worker.branding import load_branding
 
+    job_id = job["id"]
+    owner_id = gen["owner_id"]
+    kind = gen.get("kind") or "presentation"
+    book, book_id, client = unit.book, unit.book_id, unit.client
+    chapter, chapter_num, chapter_title = unit.chapter, unit.chapter_num, unit.chapter_title
+    is_cumulative, relocated_now, pdf_path = unit.is_cumulative, unit.relocated_now, unit.pdf_path
+    part_ref, part_total, forced_part_info = unit.part_ref, unit.part_total, unit.forced_part_info
+    part_chunk, pk = unit.part_chunk, unit.pk
+    lesson_lang, lesson_dir, jawi = unit.lesson_lang, unit.lesson_dir, unit.jawi
+    catalogue = unit.catalogue
+    built_parts: list[dict] = []
+
+    if catalogue is not None and kind == "worksheet" and getattr(catalogue, "question_set_id", None):
+        # A COMPOSED worksheet (Phase 3, decision 9): the portal picked
+        # approved question-bank items for a blueprint and inserted this row
+        # with params.question_set_id. There is nothing to analyse — every
+        # item was reviewed one by one — so the model is never called; the
+        # composer renders the set (student DOCX + answer key) and uploads
+        # exactly as the document block below would. Its module is W2's:
+        # imported here, lazily, so this file needs nothing from it at load.
+        from catalogue.composer import render_question_set
+
+        branding = load_branding(sb, owner_id, Path(tmp))
+        base = f"{owner_id}/{generation_id}"
+        title = render_question_set(sb, {**gen, "params": _catalogue_doc_params(gen, catalogue)},
+                                    generation_id, Path(tmp), base, branding, lesson_lang)
+        db.set_progress(sb, job_id, 96)
+        db.set_generation_title(sb, generation_id, title)
+        return _Built(client=client, title=title, parts=[])
+
+    if catalogue is not None and getattr(catalogue, "chapter", None) is None:
+        # Only the composed branch above may run without an article chapter.
+        # Anything else reaching here would analyse an EMPTY stub chapter —
+        # model calls on nothing, then a docgen build — with every gate of
+        # decision 13 skipped (kit.prepare refuses the known shapes; this is
+        # the backstop for one it does not know).
+        raise RuntimeError(f"catalogue {kind} has no article chapter to build from")
+
+    # Agent 2 — analysis (shared by every kind). The FULL analysis is
+    # persisted per (book, chapter) in chapter_grounding.concepts, so the
+    # 2nd..Nth artifact of the same chapter REUSES it instead of paying the
+    # analysis call(s) again — the single biggest per-job cost (a full-kit
+    # chapter previously re-analysed 6 times). Reuse is refused for v1
+    # (pre-chunking) rows, immediately after a relocation in THIS job, and
+    # for single-part jobs (the cache describes the whole chapter).
+    # A catalogue article has no books row to cache under (decision 14): the
+    # cache is neither read here nor written below.
+    analysis = None if (relocated_now or part_ref is not None or is_cumulative
+                        or catalogue is not None) else db.get_chapter_analysis(sb, book_id, chapter_num)
+    if analysis is not None and (analysis.get("language") or "en") != lesson_lang:
+        # The cache is language-stamped: a Malay analysis must not ground an
+        # English lesson (or vice versa) — regenerate in the right language.
+        logger.info(
+            "generation %s: cached analysis is %s, lesson is %s — re-analysing",
+            generation_id, analysis.get("language") or "en", lesson_lang,
+        )
+        analysis = None
+    if analysis is not None:
+        logger.info("generation %s: reusing cached analysis for %s ch%s", generation_id, book_id, chapter_num)
+    else:
+        # Fresh multi-part analysis is the LONGEST phase — advance 20→43
+        # per chunk (and label the stage) so a 4-part chapter never looks
+        # "stuck at 20%".
+        def _analysis_tick(part: int, total: int) -> None:
+            db.set_progress(sb, job_id, 20 + round(23 * part / total))
+            if total > 1:
+                db.set_stage(sb, job_id, {"phase": "analysis", "part": part, "total": total, "part_pct": 100})
+
+        analysis = run_full_analysis(
+            # unit.level is DEFAULT_LEVEL for a book; a catalogue kit sets it
+            # from the depth node's grade (catalogue.kit.level_for_grade).
+            book_id=book_id, chapter_content=chapter, level=unit.level, client=client,
+            on_progress=_analysis_tick,
+            # Part jobs analyze THEIR chunk verbatim — never re-chunked. A
+            # catalogue kit likewise hands over its own parts, chunked with
+            # the longer YouTube budget (unit.chunks_override; None for a book).
+            chunks_override=[part_chunk] if part_ref is not None else unit.chunks_override,
+            language=lesson_lang,
+        ).model_dump()
+        analysis["language"] = lesson_lang  # stamps the cache (see reuse guard above)
+    db.set_progress(sb, job_id, 45)
+    # Analysis stage is over for every kind; the presentation loop writes
+    # its own per-part stages, doc kinds stay stage-less.
+    db.set_stage(sb, job_id, None)
+
+    # Persist chapter grounding for the AI Tutor — the concept analysis now
+    # (covers every kind); the narrated lesson's script is added below for
+    # the presentation kind. This is the tutor's curriculum fence. Best-effort.
+    # Part jobs skip it: their analysis covers ONE part, and writing it here
+    # would poison the whole-chapter cache and the tutor's fence. A catalogue
+    # kit has no book row for the fence to belong to.
+    if part_ref is None and not is_cumulative and catalogue is None:
+        db.set_chapter_grounding(sb, book_id, chapter_num, chapter_title, analysis)
+
+    # School branding (templates + derived accent/logo) — falls back to defaults.
+    branding = load_branding(sb, owner_id, Path(tmp))
+    base = f"{owner_id}/{generation_id}"
+
+    if kind == "presentation":
+        # Narrated deck + video — PART-MAJOR (2026-07-18): each part runs
+        # script → slides → video → upload END TO END before the next part
+        # starts. Part 1 is finished (and its artifacts uploaded) while
+        # Part 2's script is still being written, and the job's stage
+        # reads "part 2/4 · 35%" instead of one opaque global bar.
+        # Sequential on purpose — the per-chapter slide/video segment dirs
+        # are shared, so parts must not interleave. Part 1 keeps the legacy
+        # lesson.mp4 / deck.pptx names; later parts get _part{k} suffixes
+        # (the app sorts video artifacts by part number → Part 1 first).
+        from datetime import datetime
+        from agent3_scripts.script_generator import generate_episode_script, save_script
+        from agent5_slides.figures import (attach_figures_to_segments,
+                                           load_chapter_figures, textbook_figures_enabled)
+        from agent5_slides.slide_generator import generate_episode_slides
+        from agent6_animation.video_composer import compose_episode_videos
+        from agent8_render.renderer import render_final_video
+
+        # Rollout flag: the deck is becoming its own generation kind
+        # ('deck', _generate_deck). "1" (default) keeps embedding a deck in
+        # the presentation as before; "0" stops building/uploading it once
+        # the app queues deck rows. Delete the flag after "0" has been live.
+        _deck_in_presentation = os.getenv("DECK_IN_PRESENTATION", "1").strip() == "1"
+
+        params = gen.get("params") or {}
+        narration_style = params.get("narration_style") or "socratic"
+        tts_voice_requested = params.get("tts_voice")  # registry id, "auto", or None
+        # Catalogue kits (Phase 3): the params say "dialogue"; the style
+        # rendered is the ONE label two_voice_dialogue() recognises as
+        # two-voice ("conversational"), and the student's lines get their own
+        # premium voice — the other gender to the teacher's — instead of the
+        # free age-matched Edge voice a teacher's lesson uses.
+        student_voice: str | None = None
+        if catalogue is not None:
+            narration_style = catalogue.narration_style
+            student_voice = catalogue.student_voice
+
+        # The premium gate (`allow_premium`, `tier_info`) was resolved at
+        # the top of process_generation, before any expensive work. This
+        # used to be `_elevenlabs_enabled()`, a deployment flag: everyone
+        # or no one, never the account's plan. Now the account that
+        # GENERATES decides — and since 0105 the DATABASE decides for it:
+        # a paid plan, or a console comp at or above the threshold
+        # premium_voices_allowed() carries → premium; anyone else → free;
+        # students receive whatever their teacher produced.
+        from shared.tts import enabled_providers, pick_voice_id, resolve_voice
+
+        # The concrete voice this generation renders with. `auto` (or no
+        # pick) is the only route to a premium DEFAULT; an explicit id is
+        # honoured as sent and gated below. The stale-params remap for
+        # non-English books is unchanged.
+        tts_voice = pick_voice_id(
+            tts_voice_requested, lang=lesson_lang, allow_premium=allow_premium,
+            explicit_language=bool(params.get("language")),
+            provider=canary_provider)
+
+        # Avatar casting (founder, 2026-09-04): a RANDOM approved roster
+        # face, restricted only by the narration voice's gender; the
+        # student's age band from the book's grade (auto-detected at
+        # upload, teacher-editable) and, in a dialogue, the gender of the
+        # voice that reads the student's lines. Seeded by the CHAPTER, not
+        # the generation: each part of a chapter is its own generation, so
+        # a generation-id seed would put a different teacher in Part 1 and
+        # Part 2 of one lesson series. The book-and-chapter seed keeps one
+        # face across every part and every retry, while another chapter
+        # casts afresh. Cast from the RESOLVED voice —
+        # after the gate — so a downgraded premium pick casts the avatar
+        # of the voice that will actually speak. Cast ONCE, here, before
+        # the parts loop: the keys travel on every part's script.
+        from spike.scene_engine.whiteboard import cast_avatars, two_voice_dialogue
+        effective_voice = resolve_voice(tts_voice, allow_premium, lang=lesson_lang).voice_id
+        # `dialogue` is the SAME predicate the script generator will run
+        # with for this style: the student face follows the second voice
+        # exactly when that voice will read the student's lines.
+        cast_seed = f"{book_id}:{chapter_num}"
+        avatars = cast_avatars(effective_voice, book.get("grade"), cast_seed,
+                               lang=lesson_lang, style=narration_style,
+                               dialogue=two_voice_dialogue(narration_style),
+                               student_voice=student_voice)
+        logger.info("avatars cast for %s (seed %s): %s (voice %s)",
+                    generation_id, cast_seed, avatars, effective_voice)
+
+        episodes_plan = (analysis.get("episodes") or {}).get("episodes") or []
+        n_parts = max(len(episodes_plan), 1)
+        voice_report: dict = {}
+        uploaded_videos = 0
+        script_dicts: list[dict] = []
+        coverage_reports: list[dict] = []
+        ep_title = chapter_title
+
+        # Phase 3 (gated): detect + crop this chapter's real textbook figures
+        # ONCE, then hand each part the ones that best match its segments. The
+        # crops live under the job tmp — embedded into the deck + composited
+        # into the video before cleanup. Best-effort: never breaks a lesson.
+        chapter_figures: list[dict] = []
+        used_figures: set[int] = set()
+        _figures_on = textbook_figures_enabled()
+        logger.info("textbook figures flag: %s", _figures_on)  # is the env var live on THIS worker?
+        # A catalogue kit has no PDF to crop from; its figures are the
+        # article's rendered visual assets, reached through the library.
+        if _figures_on and catalogue is None:
+            try:
+                # Figures were detected at INDEX time (page ranges are reliable
+                # there; gen time has none) and stored on book.chapters — just
+                # crop them from the downloaded PDF here.
+                chapter_figures = load_chapter_figures(
+                    book, chapter_num, pdf_path, Path(tmp) / "figures"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("figure load failed: %s", exc)
+
+        for part_idx, episode in enumerate(episodes_plan, start=1):
+            # This part's slice of the overall bar: 45 → 96 split evenly.
+            span = 51.0 / n_parts
+            base_p = 45 + span * (part_idx - 1)
+            if catalogue is not None and part_idx > 1 and getattr(catalogue, "contention_probe", None) is not None:
+                # The never-starve rule's DURING half, at the one clean seam a
+                # multi-part render has: before the next part's first model
+                # call, wait while a job a real user is waiting on is live
+                # (the stage says why the bar stopped). A wait that outlives
+                # the cap fails the kit rather than render over a teacher —
+                # the portal's Retry re-runs it inside the window.
+                from catalogue.kit import PAUSED_FOR_USERS, yield_to_users
+
+                def _paused(elapsed: float, _part: int = part_idx) -> None:
+                    db.set_stage(sb, job_id, {"phase": "video", "part": _part, "total": n_parts, "part_pct": 0,
+                                              "paused": PAUSED_FOR_USERS, "waited": round(elapsed)})
+
+                if not yield_to_users(catalogue.contention_probe, on_wait=_paused):
+                    raise RuntimeError(
+                        f"a user's job stayed live longer than the kit may wait before part {part_idx}/{n_parts}; "
+                        "the render yields — retry inside the off-peak window")
+            db.set_stage(sb, job_id, {"phase": "video", "part": part_idx, "total": n_parts, "part_pct": 5})
+            db.set_progress(sb, job_id, round(base_p))
+
+            # Same part framing the chapter-level generator builds: recap
+            # what earlier parts covered, preview what the next part will.
+            # A single-part job carries its framing in forced_part_info
+            # (its analysis holds ONE episode, but the chapter has more).
+            part_info = forced_part_info
+            if part_info is None and n_parts > 1:
+                part_info = {
+                    "part": part_idx,
+                    "total": n_parts,
+                    "prev_sections": [
+                        s for e in episodes_plan[: part_idx - 1] for s in e.get("sections_covered", [])
+                    ],
+                    "next_sections": episodes_plan[part_idx].get("sections_covered", [])
+                    if part_idx < n_parts
+                    else [],
+                }
+            script = generate_episode_script(
+                episode, analysis, chapter_num, client, narration_style, part_info=part_info,
+                language=lesson_lang, avatars=avatars,
+                subject=book.get("subject"), curriculum=book.get("curriculum"),
+                learner_age=book.get("grade"),
+            )
+            script_dict = script.model_dump()
+
+            # ── Coverage gate (shared/coverage.py) ───────────────────────
+            # Until now nothing compared the reply back to the sections and
+            # concepts THIS episode was built from, so a script that taught
+            # a third of the part finished as a clean success. Measured here
+            # — after the script, before slides/TTS/render — so the retry
+            # below costs one script call and a hard failure wastes nothing
+            # that has been rendered.
+            report = _coverage_report(
+                analysis, episode, coverage.script_text(script_dict),
+                kind="presentation", model=client.model, part=part_idx, of=n_parts,
+                part_scoped=part_ref is not None,
+            )
+            if coverage.should_retry(report):
+                # Retry ONCE, naming what was dropped, and keep whichever
+                # draft measures higher — a retry can be worse, and the
+                # teacher should never get the worse of two scripts we paid
+                # for. Bounded by should_retry: the same bar as the hard
+                # failure below, so it only ever fires on a job that would
+                # otherwise have failed outright — and NEVER on a pooled
+                # part-scoped report, whose missed list is other parts'
+                # topics (a must_cover built from it orders the model to
+                # teach material this part does not contain — the harmful
+                # half of incident 8b79d4e0).
+                first = report
+                retry = generate_episode_script(
+                    episode, analysis, chapter_num, client, narration_style,
+                    part_info=part_info, language=lesson_lang,
+                    must_cover=first.get("missed") or [], avatars=avatars,
+                    subject=book.get("subject"), curriculum=book.get("curriculum"),
+                    learner_age=book.get("grade"),
+                )
+                retry_dict = retry.model_dump()
+                retry_report = _coverage_report(
+                    analysis, episode, coverage.script_text(retry_dict),
+                    kind="presentation", model=client.model, part=part_idx, of=n_parts,
+                    part_scoped=part_ref is not None,
+                )
+                if (retry_report.get("covered") or 0) > (first.get("covered") or 0):
+                    script, script_dict, report = retry, retry_dict, retry_report
+                # Both numbers are kept: whether naming the missed topics
+                # actually repairs a thin draft is itself a thing the
+                # founder will want to query after the model flip.
+                report["retried_from"] = first.get("covered")
+                if coverage.should_fail(report):
+                    coverage_reports.append(report)
+                    _record_coverage(sb, generation_id, coverage_reports)
+                    raise RuntimeError(
+                        f"lesson script covers only {report['addressed']} of "
+                        f"{report['topics']} topics this chapter's analysis "
+                        f"lists (part {part_idx}/{n_parts}, model {client.model}) "
+                        f"— never mentioned: {', '.join(report['missed'])}"
+                    )
+            coverage_reports.append(report)
+            save_script(script)
+            # Attach matched textbook figures to this part's segments (semantic
+            # match via the model, keyword fallback).
+            if chapter_figures:
+                attach_figures_to_segments(
+                    script_dict.get("segments", []), chapter_figures, used_figures, client
+                )
+            if catalogue is not None and n_parts > 1:
+                # Decision 3: every part but the first opens with a RECAP of
+                # what came before, every part but the last closes with a
+                # CONTINUATION outro — authored text, no model call, teacher
+                # only. Added AFTER the coverage gate (they teach nothing new
+                # and must not pad the measurement) and BEFORE the slides, so
+                # they are drawn, spoken and timed like any other segment.
+                from catalogue.kit import outro_segment, recap_segment
+
+                _segs = list(script_dict.get("segments") or [])
+                _pi = part_info or {}
+                if part_idx > 1:
+                    _segs.insert(0, recap_segment(part_idx, n_parts, _pi.get("prev_sections") or [], lesson_lang))
+                if part_idx < n_parts:
+                    _segs.append(outro_segment(part_idx, n_parts, _pi.get("next_sections") or [], lesson_lang))
+                script_dict["segments"] = _segs
+            script_dicts.append(script_dict)
+            if part_idx == 1:
+                ep_title = script_dict.get("episode_title") or chapter_title
+            db.set_stage(sb, job_id, {"phase": "video", "part": part_idx, "total": n_parts, "part_pct": 35})
+            db.set_progress(sb, job_id, round(base_p + 0.35 * span))
+
+            part_scripts = {
+                "book_id": book_id,
+                "chapter_num": chapter_num,
+                "chapter_title": chapter_title,
+                "total_episodes": 1,
+                "generated_at": datetime.now().isoformat(),
+                "episodes": [script_dict],
+                # the acceptance check reads this key; the compose and
+                # slide builders read only episodes/book_id/chapter_num/
+                # avatars, so an extra top-level key is inert to them
+                "visual_plan": script_dict.get("visual_plan"),
+            }
+            slides = generate_episode_slides(
+                script_data=part_scripts, branding=branding, direction=lesson_dir,
+                build_deck=_deck_in_presentation,
+            ).model_dump()
+
+            video = compose_episode_videos(
+                script_data=part_scripts, slide_manifest=slides, branding=branding,
+                tts_voice=tts_voice, allow_premium=allow_premium, voice_report=voice_report,
+                direction=lesson_dir, lang=lesson_lang, student_voice=student_voice,
+            ).model_dump()
+
+            final = render_final_video(video_manifest=video).model_dump()
+
+            # ACCEPTANCE. Until now this ran only in tests: the engine
+            # computed a full per-lesson quality audit on every render and
+            # nothing in production ever read it, so blank boards, silent
+            # lessons and text written over text all shipped while the
+            # report said PASSED — to a local driver script nobody ran.
+            # This is the one place that knows the lesson is finished and
+            # can still refuse it.
+            _accept = _acceptance_report(part_scripts, video)
+            if _accept is not None:
+                db.set_stage(sb, job_id, {"phase": "video", "part": part_idx,
+                                          "total": n_parts, "part_pct": 99,
+                                          "acceptance": _accept["summary"]})
+                # jobs.stage is cleared when the job finishes, so the
+                # acceptance summary evaporated the moment the lesson was
+                # done. Persist it (and the compiler's own report) on the
+                # generation so the next "the labels are missing" is
+                # answerable from the DB instead of from Railway logs that
+                # a redeploy has already thrown away.
+                for _ln in _accept.get("plan_report") or []:
+                    logger.info("visual plan: %s", _ln)
+                try:
+                    # Keyed by PART. A multi-part lesson writes this once
+                    # per part, and under one key each part overwrote the
+                    # last — so the part that failed is exactly the one
+                    # whose verdict you lost.
+                    db.merge_generation_params(sb, generation_id, {
+                        f"acceptance_part{part_idx}": {
+                            "part": part_idx,
+                            "passed": _accept["passed"],
+                            "ship": _accept["ship"],
+                            "summary": _accept["summary"],
+                        },
+                        f"visual_plan_report_part{part_idx}":
+                            (_accept.get("plan_report") or [])[:200],
+                    })
+                except Exception:  # noqa: BLE001 — telemetry, never fatal
+                    logger.warning("could not persist the acceptance report",
+                                   exc_info=True)
+                if not _accept["ship"]:
+                    raise RuntimeError(
+                        f"lesson failed acceptance: {_accept['summary']}")
+
+            suffix = "" if part_idx == 1 else f"_part{part_idx}"
+            # deck_path is None when DECK_IN_PRESENTATION=0 (build_deck
+            # above) — the deck is then the 'deck' generation's artifact.
+            deck_path = slides.get("deck_path")
+            if deck_path and Path(deck_path).exists():
+                db.upload_artifact(sb, deck_path, f"{base}/deck{suffix}.pptx")
+                db.add_artifact_row(sb, generation_id, "deck_pptx", f"{base}/deck{suffix}.pptx")
+            final_video = final.get("final_video_path")
+            if final_video and Path(final_video).exists():
+                db.upload_artifact(sb, final_video, f"{base}/lesson{suffix}.mp4")
+                db.add_artifact_row(sb, generation_id, "video_mp4", f"{base}/lesson{suffix}.mp4")
+                uploaded_videos += 1
+                # Decision 4: the part's script and its MEASURED manifest ride
+                # with the mp4, every presentation, in this same block.
+                _upload_script_json(sb, generation_id, tmp, base, suffix, {
+                    "part": part_idx, "of": n_parts, "language": lesson_lang, "voice": tts_voice,
+                    "student_voice": student_voice, "avatars": avatars, "script": script_dict,
+                    "video": _strip_local_paths(video),
+                })
+                if catalogue is not None:
+                    # Decision 5: chapter timestamps, teaching clips and the
+                    # part plan from the measured timeline — for topic_kits,
+                    # written by catalogue.kit.after_generation once the job
+                    # is done.
+                    from catalogue import timestamps as _ts
+
+                    _vsegs = video.get("segments") or []
+                    _total = float(video.get("total_duration_seconds")
+                                   or sum(_ts.segment_duration(s) for s in _vsegs if isinstance(s, dict)))
+                    _chapters = _ts.chapters_for_part(script_dict.get("segments") or [], _vsegs,
+                                                      section_ids=getattr(catalogue, "section_ids", None))
+                    built_parts.append({
+                        "part": part_idx, "chapters": _chapters,
+                        "clips": _ts.clips_for_part(_chapters, _total, part_idx),
+                        "plan": _ts.part_plan_entry(part_idx, episode.get("sections_covered") or [], _total),
+                    })
+            db.set_stage(sb, job_id, {"phase": "video", "part": part_idx, "total": n_parts, "part_pct": 100})
+            db.set_progress(sb, job_id, round(base_p + span))
+
+        if uploaded_videos == 0:
+            raise RuntimeError("no video parts were produced")
+        db.set_stage(sb, job_id, None)  # stage is per-part; clear it once all parts are done
+        _record_coverage(sb, generation_id, coverage_reports)
+
+        # Enrich the tutor grounding with the lesson's own narration text —
+        # the best source for answers that "sound like the lesson". Skipped
+        # for single-part jobs: the whole-chapter grounding is not theirs
+        # to overwrite (the assistant still answers from source_text) — and
+        # for catalogue kits, which have no book row to ground.
+        if part_ref is None and catalogue is None:
+            _script_text = " ".join(
+                (seg.get("text") or "")
+                for ep in script_dicts
+                for seg in (ep.get("segments") or [])
+            ).strip()
+            db.set_chapter_grounding(sb, book_id, chapter_num, chapter_title, analysis, _script_text)
+
+            # Warm the AI Tutor cache: pre-compute the questions a student is
+            # most likely to ask so the first "Ask Coach" is instant + $0.
+            # Gated (TUTOR_WARM_CACHE) and best-effort.
+            from worker.tutor_warm import warm_tutor_cache
+            warm_tutor_cache(sb, client, book_id, chapter_num, chapter_title, analysis, _script_text)
+
+        # Record the voice that ACTUALLY rendered so a silent premium→free
+        # downgrade (ElevenLabs not enabled/keyed on the worker, spend cap, or
+        # an API failure) is visible in the app — not discovered by listening.
+        if voice_report:
+            _used_list = list(voice_report.get("used") or [])
+            _stats = dict(voice_report.get("stats") or {})
+            # Durable, per-user, per-month ledger — the app's own
+            # (migration 0027). _record_tts_ledger explains the two traps
+            # the first shape fell into.
+            _over_cap, _ledger_key = _record_tts_ledger(sb, owner_id, voice_report, generation_id)
+            db.merge_generation_params(sb, generation_id, {
+                "tts_voice_used": (_used_list or [None])[0],
+                # the FULL list: a lesson that mixed voices was recorded
+                # as its alphabetically-first voice, hiding the mix
+                "tts_voices_used": _used_list,
+                "tts_stats": _stats,
+                "tts_preflight_downgrade": bool(voice_report.get("preflight_downgrade")),
+                "tts_over_cap": _over_cap,
+                "tts_ledger_key": _ledger_key,
+                "tts_downgrade_reasons": sorted(voice_report.get("reasons") or []),
+                "tts_voice_downgraded": bool(voice_report.get("downgraded")),
+                # The gate's inputs, so a downgrade can be explained from
+                # the row alone: what the app sent, what tier the account
+                # resolved to (or "error"), and whether premium was allowed.
+                "tts_voice_requested": tts_voice_requested,
+                "tts_voice_resolved": tts_voice,
+                # 'override' when the console comp decided it (the founder's
+                # account: plan_tier says trial, the override says unlimited);
+                # the error string when a read failed; else the plan tier.
+                # NB since 0105 an override here does NOT imply premium was
+                # allowed — read tts_premium_allowed for that.
+                "tts_tier_resolved": ("override" if tier_info.get("override")
+                                      else tier_info.get("error") or tier_info.get("tier") or "unknown"),
+                "tts_premium_allowed": bool(allow_premium),
+            })
+            if voice_report.get("downgraded"):
+                logger.warning(
+                    "generation %s: requested premium voice %r but rendered %s — "
+                    "tier=%s paid=%s premium=%s providers=%s.",
+                    generation_id, tts_voice, voice_report.get("used"),
+                    tier_info.get("tier"), tier_info.get("paid"),
+                    tier_info.get("premium"), sorted(enabled_providers()),
+                )
+        if catalogue is not None or student_voice:
+            # Decision 2: the STUDENT's voice is recorded like the teacher's.
+            # student_voice_fallback is true when the language has no premium
+            # student entry (decided in kit.prepare) OR the composer had to
+            # fall back at render time (gate, provider, cap) — either way the
+            # reviewer knows the second voice is not the one the kit chose.
+            _st = dict(voice_report.get("student") or {})
+            db.merge_generation_params(sb, generation_id, {
+                "student_voice_requested": student_voice,
+                "student_voice_used": list(_st.get("used") or []),
+                "student_voice_fallback": bool(_st.get("downgraded"))
+                or bool(getattr(catalogue, "student_voice_fallback", False)),
+                "student_voice_reasons": sorted(_st.get("reasons") or []),
+            })
+        if part_ref is not None:
+            # The chapter name and the part's position always travel
+            # together, plus the part's own section heading when it has a
+            # real one — this string is rendered verbatim by the parent
+            # portal, the three diary views and the staff console, so
+            # "Part 1" on its own tells those readers nothing.
+            title = (
+                f"{book.get('title', 'Lesson')} · "
+                f"{part_label(chapter_title, part_ref, part_total, pk.get('section_titles'))}"
+            )
+        else:
+            # Every chapter-level render reports its delivered part count,
+            # including 1 — app migration 0089 seeds the credit ledger from
+            # the book's part-map at insert, and the sync trigger can only
+            # correct that estimate (down as well as up) on a value the
+            # worker actually wrote. Nothing in the app reads this key.
+            db.merge_generation_params(sb, generation_id, {"video_parts": uploaded_videos})
+            if n_parts > 1:
+                title = f"{book.get('title', 'Lesson')} · {chapter_title} ({uploaded_videos} parts)"
+            else:
+                title = f"{book.get('title', 'Lesson')} · {ep_title}"
+
+    elif kind in ("lesson_plan", "activity", "exam_paper", "worksheet", "case_study"):
+        # Claude-authored teacher document → editable .docx.
+        from docgen import generate_document
+        from shared.claude_client import artifact_model
+
+        # Authoring runs on the cheaper artifact model (Haiku by default); the
+        # ingestion/analysis above stay on Sonnet. Fold its spend into the job so
+        # jobs.usage still reflects the full per-lesson cost.
+        # Jawi is the exception: Haiku's Jawi orthography is unreliable
+        # (verified 2026-07-19), so Jawi documents author on the stronger
+        # analysis model.
+        # Authoring, routed by the LESSON's script. Jawi keeps its exception:
+        # ms-arab routes to Claude on script, but Haiku's Jawi orthography is
+        # unreliable (verified 2026-07-19), so kind=None asks for the stronger
+        # general model instead of the per-kind Haiku default.
+        gen_client = client_for(lesson_lang, kind=None if jawi else kind)
+        out_path = generate_document(
+            kind=kind, book=book, chapter=chapter, analysis=analysis,
+            client=gen_client,
+            # a catalogue document gets the worker-composed curriculum header
+            # when its params carry none (decision 10); a book's params as-is
+            params=_catalogue_doc_params(gen, catalogue) if catalogue is not None else (gen.get("params") or {}),
+            out_dir=Path(tmp), template=branding.get("docx_template"),
+            language=lesson_lang,
+        )
+        # Student/teacher split (2026-08-18): exam_paper/worksheet/activity/
+        # case_study now return [student_document, answer_key] like the
+        # cumulative exam; lesson_plan still returns a single Path.
+        paths = out_path if isinstance(out_path, list) else [out_path]
+        for _k, _v in gen_client.session_usage.items():
+            client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
+
+        # ── Coverage: MEASURED and RECORDED for documents, never gated ────
+        # These five kinds are exactly the ones Stage 1 moves to Haiku, so
+        # they are the ones whose before/after numbers matter most — but a
+        # document is not a lesson and must not be judged like one. A
+        # 10-question worksheet cannot mention 23 concepts; its expected
+        # coverage is set by its own length, not by the chapter's size, and
+        # it differs again for a lesson plan (which does claim the whole
+        # chapter) and a case study (which is deliberately one scenario). No
+        # absolute threshold is defensible for them today because no
+        # baseline exists for any of them. What IS defensible is recording
+        # the number per kind and per model, which is precisely what the
+        # Sonnet-vs-Haiku comparison needs — a per-kind threshold becomes a
+        # one-line addition once a week of Sonnet rows is in the table.
+        # Episode is None: documents are generated per CHAPTER, never per
+        # part, so they are measured against the whole chapter's topics.
+        # Only the STUDENT document is measured (paths[0]) — same reasoning
+        # as the cumulative exam: the answer key restates the paper.
+        try:
+            _doc_report = _coverage_report(
+                analysis, None, coverage.docx_text(paths[0]),
+                kind=kind, model=gen_client.model,
+            )
+            _record_coverage(sb, generation_id, [_doc_report])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("coverage not recorded for %s: %s", kind, exc)
+
+        db.set_progress(sb, job_id, 90)
+        dest = f"{base}/{kind}.docx"
+        db.upload_artifact(sb, str(paths[0]), dest)
+        db.add_artifact_row(sb, generation_id, "docx", dest)
+        if len(paths) > 1:
+            key_dest = f"{base}/answer_key.docx"
+            db.upload_artifact(sb, str(paths[1]), key_dest)
+            # answer_key_docx artifact_kind exists since app migration 0062;
+            # a not-yet-applied migration must not fail the generation
+            # (mirrors the cumulative exam block below). The presence of
+            # this sibling row is the app's proof the student 'docx' above
+            # is key-free and safe to hand to a learner.
+            try:
+                db.add_artifact_row(sb, generation_id, "answer_key_docx", key_dest)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("answer_key_docx row skipped for %s: %s", generation_id, exc)
+
+        # Structured questions for the interactive quiz player (worksheet/exam).
+        # Additive + best-effort: a missing 'questions_json' enum value (migration
+        # not yet applied) must not fail the generation.
+        qpath = Path(tmp) / "questions.json"
+        if kind in ("worksheet", "exam_paper") and qpath.exists():
+            try:
+                qdest = f"{base}/{kind}_questions.json"
+                db.upload_artifact(sb, str(qpath), qdest)
+                db.add_artifact_row(sb, generation_id, "questions_json", qdest)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("questions_json upload skipped for %s: %s", generation_id, exc)
+
+        db.set_progress(sb, job_id, 96)
+        label = {
+            "lesson_plan": "Lesson plan", "activity": "Activities", "exam_paper": "Test paper",
+            "worksheet": "Worksheet", "case_study": "Case study",
+        }[kind]
+        # Same composer as the presentation path — a worksheet for part 3
+        # used to be titled "· Part 3" with no total and no heading, so
+        # part 1's and part 3's documents were indistinguishable.
+        _unit = (
+            part_label(chapter_title, part_ref, part_total, pk.get("section_titles"))
+            if part_ref is not None else chapter_title
+        )
+        title = f"{book.get('title', 'Document')} · {_unit} · {label}"
+        if catalogue is not None:
+            # The synthetic book IS the topic and the "chapter" is its
+            # article, so the unit would only repeat the title.
+            title = f"{book.get('title', 'Document')} · {label}"
+
+    elif kind == "exam":
+        # Cumulative exam (0062): one model call → TWO documents (the exam
+        # paper and a SEPARATE answer key), grounded on the chosen covered
+        # units (chapter = _combine_units above). The answer key is uploaded
+        # under its OWN artifact kind so it never rides a student's download.
+        from docgen import generate_document
+        from shared.claude_client import artifact_model
+
+        # Authoring, routed by the LESSON's script. Jawi keeps its exception:
+        # ms-arab routes to Claude on script, but Haiku's Jawi orthography is
+        # unreliable (verified 2026-07-19), so kind=None asks for the stronger
+        # general model instead of the per-kind Haiku default.
+        gen_client = client_for(lesson_lang, kind=None if jawi else kind)
+        out_paths = generate_document(
+            kind="exam", book=book, chapter=chapter, analysis=analysis,
+            client=gen_client, params=gen.get("params") or {}, out_dir=Path(tmp),
+            template=branding.get("docx_template"),
+            language=lesson_lang,
+        )
+        for _k, _v in gen_client.session_usage.items():
+            client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
+        db.set_progress(sb, job_id, 90)
+        paths = out_paths if isinstance(out_paths, list) else [out_paths]
+        # Recorded, not gated — same reasoning as the single-chapter
+        # documents above, and more so: a cumulative exam is measured
+        # against EVERY covered unit's topics, so a low number here is the
+        # exam being an exam, not the model being thin. Only the paper is
+        # measured; the answer key restates it.
+        try:
+            _record_coverage(sb, generation_id, [_coverage_report(
+                analysis, None, coverage.docx_text(paths[0]),
+                kind="exam", model=gen_client.model,
+            )])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("coverage not recorded for exam: %s", exc)
+        paper_dest = f"{base}/exam.docx"
+        db.upload_artifact(sb, str(paths[0]), paper_dest)
+        db.add_artifact_row(sb, generation_id, "docx", paper_dest)
+        if len(paths) > 1:
+            key_dest = f"{base}/exam_answer_key.docx"
+            db.upload_artifact(sb, str(paths[1]), key_dest)
+            # answer_key_docx is a new artifact_kind (app migration 0062); a
+            # not-yet-applied migration must not fail the exam.
+            try:
+                db.add_artifact_row(sb, generation_id, "answer_key_docx", key_dest)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("answer_key_docx row skipped for %s: %s", generation_id, exc)
+        db.set_progress(sb, job_id, 96)
+        _exam_title = str((gen.get("params") or {}).get("title") or "").strip()
+        title = f"{book.get('title', 'Document')} · {_exam_title or 'Exam'}"
+
+    elif kind == "deck":
+        # Slide deck as its OWN artifact (2026-09): one authoring call on
+        # the artifact model (ARTIFACT_MODEL_DECK / GEMINI_MODEL_DECK
+        # override per kind, like the documents), rendered through the
+        # same slide/deck code the presentation used. Jawi keeps the
+        # documents' exception (kind=None → the stronger general model).
+        # Free with its lesson — no ledger row; the DB guards it.
+        gen_client = client_for(lesson_lang, kind=None if jawi else "deck")
+        _unit = (
+            part_label(chapter_title, part_ref, part_total, pk.get("section_titles"))
+            if part_ref is not None else chapter_title
+        )
+        title = _generate_deck(
+            sb, job_id, generation_id, book, chapter, analysis, gen_client,
+            gen.get("params") or {}, branding, lesson_lang, lesson_dir, tmp, base, _unit,
+        )
+        for _k, _v in gen_client.session_usage.items():
+            client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
+
+    else:
+        raise RuntimeError(f"Unsupported generation kind: {kind}")
+
+    db.set_generation_title(sb, generation_id, title)
+
+    return _Built(client=client, title=title, parts=built_parts)
+
+
+def _set_user_yield(generation_id: str, fn) -> None:
+    """Hand the scene engine this generation's yield hook (None removes it).
+    Best-effort: the engine module is heavy and optional in tests."""
+    try:
+        from spike.scene_engine.raster_assets import set_user_yield
+        set_user_yield(fn, generation_id)
+    except Exception:  # noqa: BLE001 — the hook must never break the pipeline
+        pass
+
+
+def _process_catalogue(sb: Client, job: dict, generation_id: str, gen: dict, *,
+                       allow_premium: bool, tier_info: dict, canary_provider: str | None) -> None:
+    """The catalogue branch of process_generation (Phase 3): prepare from the
+    approved article instead of a book, run the shared build, and drive the
+    kit lifecycle. The ORDER is load-bearing (review finding, 2026-09-06):
+
+      1. ``prepare`` — refusals raise here, before any model call;
+      2. the build;
+      3. ``record_presentation`` (timestamps + the lesson_plan insert) while
+         this generation still reads 'processing', so a sibling thread that
+         finishes the kit's last document in the meantime cannot see "every
+         referenced generation done" with the plan missing;
+      4. ``finish_job`` — this row becomes 'done';
+      5. ``after_generation`` — the completion check, now that the kit
+         references everything it will ever reference.
+
+    On ANY failure — prepare() included: a malformed row or a topic that
+    vanished used to leave the kit 'generating' forever with Generate
+    disabled and no Retry — the kit is marked failed (guarded) BEFORE the
+    re-raise, so it reads ``failed`` by the time the job does. The kit id is
+    read from the params first for exactly that reason.
+
+    While the build runs, the never-starve rule's DURING half is armed: a
+    ``ContentionProbe`` (one queue read per ten seconds, however many render
+    threads ask) is handed to the scene engine, which waits before every
+    image generation while a user builder is live, and the presentation
+    loop polls it between parts."""
+    from catalogue import kit as catalogue_kit
+
+    job_id = job["id"]
+    kit_id = db.kit_id_of(gen.get("params") or {})
+    probe = catalogue_kit.ContentionProbe(sb)
+
+    def _yield_for_images(what: str) -> bool:
+        return catalogue_kit.yield_to_users(
+            probe, on_wait=lambda elapsed: logger.warning(
+                "%s: a user builder is live; %s waits (%.0fs so far)", generation_id, what, elapsed))
+
+    recorded = None
+    try:
+        prepared = catalogue_kit.prepare(sb, gen)
+        prepared.contention_probe = probe
+        _set_user_yield(generation_id, _yield_for_images)
+        with tempfile.TemporaryDirectory() as tmp:
+            unit = _catalogue_unit(prepared, tmp)
+            built = _build_from_analysis(
+                sb, job, generation_id, gen, unit, tmp, allow_premium=allow_premium,
+                tier_info=tier_info, canary_provider=canary_provider,
+            )
+        db.set_job_usage(sb, job_id, built.client.session_usage)
+        if (gen.get("kind") or "presentation") == "presentation":
+            recorded = catalogue_kit.record_presentation(
+                sb, gen, prepared.kit_id, {"kind": "presentation", "parts": built.parts})
+        db.finish_job(sb, job_id, generation_id)
+    except Exception as exc:
+        catalogue_kit.after_generation(sb, gen, kit_id,
+                                       {"status": "failed", "kind": gen.get("kind"), "error": str(exc)})
+        raise
+    finally:
+        _set_user_yield(generation_id, None)
+    logger.info("Catalogue generation %s (%s) done — %s", generation_id, gen.get("kind"),
+                built.client.session_usage)
+    catalogue_kit.after_generation(sb, gen, prepared.kit_id,
+                                   {"status": "done", "kind": gen.get("kind"), "parts": built.parts},
+                                   recorded=recorded)
+
+
+def process_generation(sb: Client, job: dict, generation_id: str) -> None:
+    """One generation, end to end: the shared setup and the premium gate, then
+    either the BOOK path (``_book_prelude`` → ``_build_from_analysis``) or,
+    for a catalogue kit row (``params.catalogue``), ``_process_catalogue``.
+    The heavy imports live in the two halves, next to the code that uses them."""
     # Label every model call made under this job so spend can be attributed
     # to a lesson. Without this the token log carried only counts and a
     # timestamp: "what did this generation cost" was unanswerable from our own
@@ -630,14 +1908,22 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     job_id = job["id"]
     db.set_generation_status(sb, generation_id, "processing")  # so the UI shows progress, not "queued"
     gen = db.get_generation(sb, generation_id)
-    book = db.get_book(sb, gen["book_id"])
+    # A catalogue kit generation (params.catalogue, Phase 3) has NO book:
+    # book_id is NULL by construction, and its source is the topic's
+    # approved article (catalogue/kit.py). The book prelude below is
+    # replaced by kit.prepare(); everything from the analysis on is shared.
+    # The flag is read through the DB client, not catalogue.kit: importing
+    # that package costs every teacher's lesson a 7 s cold import and would
+    # make an import-time fault in the catalogue fail every book generation
+    # before get_book. The book path must never need the catalogue package.
+    catalogue_run = db.is_catalogue_params(gen.get("params") or {})
+    book = None if catalogue_run else db.get_book(sb, gen["book_id"])
     # Console takedown racing a queued job: taken-down content must not be
     # (re)generated. Columns arrive with app migration 0015 — .get() is safe
     # either way.
-    if gen.get("removed_at") or book.get("removed_at"):
+    if gen.get("removed_at") or (book or {}).get("removed_at"):
         raise RuntimeError("content removed")
     owner_id = gen["owner_id"]
-    book_id = book["id"]
     kind = gen.get("kind") or "presentation"
 
     # PER-USER premium-voice gate, resolved HERE — before the download and the
@@ -695,916 +1981,18 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     # A requeued/re-run job must not show the dead run's part stage.
     db.set_stage(sb, job_id, None)
 
+    if catalogue_run:
+        _process_catalogue(sb, job, generation_id, gen, allow_premium=allow_premium,
+                           tier_info=tier_info, canary_provider=canary_provider)
+        return
+
     with tempfile.TemporaryDirectory() as tmp:
-        pdf_path = db.download_book(sb, book["storage_path"], Path(tmp) / "book.pdf")
-        db.set_progress(sb, job_id, 10)
-
-        # Ingestion + analysis, routed by the BOOK's script (shared/model_routing).
-        # This has to route, not just authoring: measured, the Sonnet analysis
-        # DOMINATES a kit's cost — $2.08 against a modelled $1.15 — because each
-        # artifact makes 4-5 calls and only one of them is the authoring call.
-        # Moving authoring alone would shift almost none of the spend onto the
-        # GCP credits, which is the point of the exercise.
-        client = client_for(book.get("language"))
-
-        # Agent 1 — ingest. Chapter boundaries stored at indexing time are reused
-        # (known_chapters) so every generation splits the book identically without
-        # re-running detection; client+pdf_path enable the Claude fallback for
-        # books the heuristics can't read (see structure_book's cascade).
-        extraction = extract_pdf(str(pdf_path))
-        images = extract_images(str(pdf_path), book_id)
-        structured = structure_book(
-            book_id=book_id, title=book.get("title") or "Untitled",
-            author=book.get("author") or "Unknown", isbn=None, extraction=extraction, images=images,
-            pdf_path=str(pdf_path), client=client, known_chapters=book.get("chapters"),
-        ).model_dump()
-        chapter = _pick_chapter(structured.get("chapters", []), gen.get("chapter_ref"))
-        # Cumulative revision paper (worksheet/exam over a GROUP of chapters):
-        # merge the selected chapters into one synthetic chapter and generate the
-        # paper from it. Marked chapter_num = -1 so its analysis/grounding is
-        # never cached as a real chapter's.
-        # A cumulative EXAM (kind 'exam', 0062) merges a chosen set of covered
-        # {chapter, part} units — part-granular, so unticked parts are excluded.
-        _exam_scope = (gen.get("params") or {}).get("scope")
-        is_exam = kind == "exam" and isinstance(_exam_scope, list) and len(_exam_scope) > 0
-        _rev_chapters = (gen.get("params") or {}).get("chapters")
-        _rev_valid = (
-            [int(str(n).strip()) for n in _rev_chapters if str(n).strip().lstrip("-").isdigit()]
-            if kind in ("worksheet", "exam_paper") and isinstance(_rev_chapters, list) else []
+        unit = _book_prelude(sb, job_id, gen, book, tmp)
+        built = _build_from_analysis(
+            sb, job, generation_id, gen, unit, tmp, allow_premium=allow_premium,
+            tier_info=tier_info, canary_provider=canary_provider,
         )
-        # A cumulative unit has no single chapter to heal/OCR/verify or cache.
-        is_cumulative = is_exam or len(_rev_valid) >= 2
-        if is_exam:
-            chapter = _combine_units(structured.get("chapters", []), _exam_scope, sb, book_id)
-            if not chapter.get("sections"):
-                # Every scope unit resolved to no source text (e.g. a re-index
-                # shifted chapter numbering). Fail loud — never hand the model an
-                # empty chapter and let it hallucinate a whole exam.
-                raise RuntimeError(
-                    "The selected chapters/parts have no source text to build an exam from. "
-                    "Re-index the book, then rebuild the exam."
-                )
-        elif len(_rev_valid) >= 2:
-            chapter = _combine_chapters(structured.get("chapters", []), _rev_chapters, sb, book_id)
-        elif _rev_valid and not gen.get("chapter_ref"):
-            # A one-chapter revision paper (params.chapters=[N], no chapter_ref):
-            # generate from THAT chapter, not the book's first (defence-in-depth
-            # — the UI blocks combining a single chapter, but never trust it).
-            chapter = _pick_chapter(structured.get("chapters", []), str(_rev_valid[0]))
-        chapter_num = int(chapter.get("chapter_num", 0))
-        chapter_title = chapter.get("title") or f"Chapter {chapter_num}"
-
-        # Whether the title-vs-content check can validly apply here (see the
-        # helper's docstring — single/whole-book chapters would always fail it).
-        title_gate_applies = _title_gate_applies(
-            chapter_title, book.get("title"),
-            len(structured.get("chapters", [])), is_cumulative,
-        )
-
-        # Self-heal overlay (behind FEATURE_CHAPTER_HEAL, which the operator turns on
-        # only AFTER applying migration 0040 — the heal_* columns): a book indexed
-        # before the boundary fix may have wrong pages stored for this chapter. A
-        # per-chapter relocation override (persisted the first time we healed it)
-        # wins over the stored pages, so the fix is paid once. 'not_found' means an
-        # earlier relocation PROVED the topic isn't in this book — fail fast.
-        # Cumulative revision papers have no single chapter to heal/OCR — their
-        # text is already gathered from the per-chapter cache.
-        heal_on = _chapter_heal_enabled() and not is_cumulative
-        heal = db.get_chapter_heal(sb, book_id, chapter_num) if heal_on else None
-        # A stale 'not_found' verdict must not brick a chapter the gate no longer
-        # applies to (e.g. a whole-book chapter titled with the filename).
-        if heal and heal.get("status") == "not_found" and title_gate_applies:
-            raise RuntimeError(_chapter_check_error(chapter_title, "a different topic"))
-        healed_text = None
-        if heal and heal.get("status") == "ok" and heal.get("start_page") is not None:
-            chapter["start_page"] = int(heal["start_page"])
-            chapter["end_page"] = int(heal["end_page"])
-            healed_text = heal.get("source_text")
-
-        # Was the chapter's text read WHOLE? Only a complete read may become a
-        # stored part count — see _persist_measured_parts. Unknown (cached or
-        # heal-supplied text) counts as complete: the alternative is refusing to
-        # ever measure a chapter transcribed before this shipped.
-        ocr_complete = True
-
-        # Scanned book (no text layer) → the chapter has no content for the
-        # pipeline to teach from. Transcribe its pages with Claude vision once,
-        # up front, so every generation kind gets real chapter text.
-        if healed_text:
-            chapter["sections"] = [{
-                "section_title": "Content", "section_type": "body",
-                "content": healed_text, "page_num": chapter.get("start_page", 0),
-                "subsections": [],
-            }]
-        else:
-            section_chars = sum(
-                len(s.get("content") or "")
-                + sum(len(ss.get("content") or "") for ss in (s.get("subsections") or []))
-                for s in (chapter.get("sections") or [])
-            )
-            if section_chars < 200 and not is_cumulative:
-                # Scanned chapter: transcribe the pages with Claude vision ONCE and
-                # cache the text (chapter_grounding.source_text, keyed book+chapter).
-                # Every later generation of this chapter — any kind, any owner —
-                # reuses it instead of re-running the multi-call, ~minutes-long OCR.
-                ocr_text = db.get_chapter_source_text(sb, book_id, chapter_num)
-                if not ocr_text:
-                    from agent1_ingestion.vision_chapters import (
-                        chapter_text_vision, transcribe_page_range)
-
-                    _s = int(chapter.get("start_page", 0))
-                    _e = int(chapter.get("end_page", 0))
-                    # The chapter is read to its own end. The ONLY way it is not
-                    # is the runaway guard, which cannot trip on a real chapter —
-                    # so if it does, the chapter map is broken and the teacher is
-                    # about to be taught from part of a book. Never silent: a
-                    # partial read that looked complete is exactly how a
-                    # six-artifact kit, exam included, once shipped from 19% of a
-                    # 54-page chapter.
-                    _read = transcribe_page_range(_s, _e)
-                    if len(_read) < (_e - _s + 1):
-                        logger.error(
-                            "PARTIAL TRANSCRIPTION book=%s ch=%s: pages %d-%d requested, %d-%d read "
-                            "(%d of %d). The chapter map is almost certainly wrong — a real chapter "
-                            "is not this long. Everything past page %d is absent from every artifact "
-                            "generated for this chapter.",
-                            book_id, chapter_num, _s + 1, _e + 1, _read.start + 1, _read.stop,
-                            len(_read), _e - _s + 1, _read.stop,
-                        )
-                    _report: dict = {}
-                    ocr_text = chapter_text_vision(str(pdf_path), _s, _e, client, report=_report)
-                    # The bounds check above catches the runaway clamp. It cannot
-                    # catch the OTHER way this comes back short: on an API failure
-                    # mid-loop the transcriber returns the chunks it already has
-                    # rather than losing them, so a half-read chapter looks like a
-                    # whole one. Only the transcriber knows, so it now says.
-                    _done = int(_report.get("pages_done", 0))
-                    _want = int(_report.get("pages_requested", 0))
-                    if _want and _done < _want:
-                        ocr_complete = False
-                        logger.error(
-                            "PARTIAL TRANSCRIPTION book=%s ch=%s: %d of %d pages transcribed — "
-                            "the artifacts for this chapter will be built from part of it",
-                            book_id, chapter_num, _done, _want,
-                        )
-                    if len(_read) < (_e - _s + 1):
-                        ocr_complete = False
-                    if ocr_text:
-                        db.set_chapter_source_text(sb, book_id, chapter_num, ocr_text)
-                if ocr_text:
-                    chapter["sections"] = [{
-                        "section_title": "Content", "section_type": "body",
-                        "content": ocr_text, "page_num": chapter.get("start_page", 0),
-                        "subsections": [],
-                    }]
-                    # Scanned books skip index-time language detection (no text
-                    # layer) — the first OCR'd chapter fills the gap here.
-                    if not book.get("language"):
-                        from shared.languages import detect_language
-
-                        _det = detect_language(ocr_text)
-                        if _det:
-                            db.set_book_language(sb, book_id, _det)
-                            book["language"] = _det  # this job resolves with it too
-
-        # Guard: the sliced text must actually belong to the requested chapter.
-        # On mismatch, SELF-HEAL — find the pages that actually teach this title,
-        # transcribe + strict-confirm them, generate from those, and persist the
-        # correction so it is paid once. Only a topic genuinely absent from the
-        # book fails loud (and is remembered, so it fails fast next time).
-        from agent1_ingestion.chapter_check import verify_chapter_content
-
-        relocated_now = False
-
-        def _sample_text() -> str:
-            return " ".join(
-                (s.get("content") or "") + " "
-                + " ".join(ss.get("content") or "" for ss in (s.get("subsections") or []))
-                for s in (chapter.get("sections") or [])
-            )
-
-        # A cumulative revision paper's title ("Revision — Chapters 1–3") names
-        # no single topic, and a whole-book/book-titled chapter has no
-        # chapter-specific topic either — the check applies only where a wrong
-        # boundary is possible (see title_gate_applies above). Skipping also
-        # saves the Claude call per paper on the synthetic labels.
-        ok, actual = (True, None) if not title_gate_applies else verify_chapter_content(chapter_title, _sample_text(), client)
-        if not ok:
-            # Without the flag/migration, keep the pre-heal behavior: fail loud.
-            if not heal_on:
-                raise RuntimeError(_chapter_check_error(chapter_title, actual))
-            result = {"status": "incomplete"}
-            try:
-                from agent1_ingestion.vision_chapters import relocate_chapter_for_generation
-
-                result = relocate_chapter_for_generation(
-                    str(pdf_path), extraction, chapter, client,
-                )
-            except Exception as exc:  # noqa: BLE001 — relocation is best-effort
-                logger.warning("relocation failed for %s ch%s: %s", book_id, chapter_num, exc)
-            if result.get("status") == "ok":
-                relocated_now = True  # pages just moved — any cached analysis is stale
-                chapter["start_page"] = result["start_page"]
-                chapter["end_page"] = result["end_page"]
-                chapter["sections"] = [{
-                    "section_title": "Content", "section_type": "body",
-                    "content": result["source_text"],
-                    "page_num": result["start_page"], "subsections": [],
-                }]
-                db.set_chapter_heal(
-                    sb, book_id, chapter_num, result["start_page"],
-                    result["end_page"], result["source_text"], "ok",
-                )
-                logger.info(
-                    "self-healed chapter %s of book %s → pages %d-%d (%s)",
-                    chapter_num, book_id, result["start_page"],
-                    result["end_page"], result.get("actual_topic") or "",
-                )
-            elif result.get("status") == "absent":
-                # We searched properly and the topic isn't in the book — remember it
-                # so the next click fails fast instead of re-running a vision sweep.
-                db.set_chapter_heal(sb, book_id, chapter_num, None, None, None, "not_found")
-                raise RuntimeError(_chapter_check_error(chapter_title, actual))
-            else:
-                # Could NOT prove absence (vision outage, empty OCR, error). Fail
-                # loud but DO NOT persist — a transient blip must not brick a chapter
-                # that is actually present; the next run can recover.
-                raise RuntimeError(_chapter_check_error(chapter_title, actual))
-        db.set_progress(sb, job_id, 20)
-
-        # The chapter's text is final HERE and not before: the OCR block above
-        # is only one of three ways sections get filled — a persisted heal
-        # override installs its own text without ever entering it, and a
-        # relocation REPLACES both the text and the pages afterwards. Measuring
-        # at the OCR site therefore missed exactly the chapters whose estimates
-        # were worst, and could be stale for the third. Measuring here covers
-        # all three and cannot go stale.
-        if ocr_complete and not is_cumulative:
-            _persist_measured_parts(sb, book_id, chapter_num, chapter, book)
-
-
-        # ── ON-DEMAND SINGLE PART (params.part = k, 2026-07-18) ──────────────
-        # The part map is computed at INDEX time with the same chunker, so a
-        # teacher can generate Part 3's lesson (or worksheet, or exam…) alone.
-        # The chapter is narrowed to that part's text BEFORE analysis: every
-        # artifact of a part job is grounded on the part, and the chapter-level
-        # analysis cache/grounding is neither read nor written (it describes
-        # the WHOLE chapter; a part must not impersonate it).
-        part_ref: int | None = None
-        part_total = 1
-        forced_part_info: dict | None = None
-        _raw_part = (gen.get("params") or {}).get("part")
-        if _raw_part is not None:
-            try:
-                part_ref = int(_raw_part)
-            except (TypeError, ValueError):
-                raise RuntimeError(f"Invalid part {_raw_part!r} — expected a part number.")
-        if part_ref is not None:
-            from agent2_analysis.analyzer import build_chapter_parts
-
-            all_parts = build_chapter_parts(chapter)
-            part_total = len(all_parts)
-            if part_ref < 1 or part_ref > part_total:
-                raise RuntimeError(
-                    f"'{chapter_title}' has {part_total} part(s) — part {part_ref} does not exist. "
-                    "If the book's chapters changed, re-index it to refresh the part map."
-                )
-            pk = all_parts[part_ref - 1]
-            if part_total > 1:
-                forced_part_info = {
-                    "part": part_ref,
-                    "total": part_total,
-                    "prev_sections": [t for p in all_parts[: part_ref - 1] for t in (p.get("section_titles") or [])],
-                    "next_sections": (all_parts[part_ref].get("section_titles") or []) if part_ref < part_total else [],
-                }
-            # Narrowed chapter for docgen + image analysis; the ANALYSIS gets
-            # the chunk verbatim via chunks_override (re-chunking an at-budget
-            # chunk would split off a junk tail episode — review-caught).
-            part_chunk = dict(pk)
-            chapter = {
-                "chapter_num": chapter.get("chapter_num"),
-                "title": chapter.get("title"),
-                "sections": [{
-                    "section_title": (pk.get("section_titles") or [chapter_title])[0],
-                    "content": pk.get("text", ""),
-                    "subsections": [],
-                }],
-                "key_boxes": [],
-                # The chapter's figures still feed the visual pipeline — a part
-                # lesson must not silently lose all image analysis.
-                "images": chapter.get("images", []),
-            }
-
-        # ── Lesson language (2026-07-18) ─────────────────────────────────────
-        # params.language (teacher's explicit choice) → books.language (detected
-        # at indexing) → English. One value drives the prompts (analysis,
-        # scripts, documents), the layout direction (Arabic = RTL) and the
-        # default narration voice.
-        from shared.languages import get_language
-
-        _lang_obj = get_language((gen.get("params") or {}).get("language") or book.get("language"))
-        lesson_lang = _lang_obj.code
-        lesson_dir = _lang_obj.direction
-
-        # Jawi (Malay in the Arabic script, RTL). Documents author it directly.
-        # The VIDEO is DUAL-SCRIPT: the slides/deck show Jawi (Noto Sans Arabic +
-        # the Arabic RTL layout), while the narration is spoken Malay — the
-        # script generator writes narration in Rumi (Malay TTS can't read the
-        # Arabic script) and the on-screen text in Jawi; the same Malay words in
-        # two scripts. The voice resolves to Malay (default_voice_id_for maps
-        # ms-arab → ms).
-        jawi = lesson_lang == "ms-arab"
-
-        # Agent 2 — analysis (shared by every kind). The FULL analysis is
-        # persisted per (book, chapter) in chapter_grounding.concepts, so the
-        # 2nd..Nth artifact of the same chapter REUSES it instead of paying the
-        # analysis call(s) again — the single biggest per-job cost (a full-kit
-        # chapter previously re-analysed 6 times). Reuse is refused for v1
-        # (pre-chunking) rows, immediately after a relocation in THIS job, and
-        # for single-part jobs (the cache describes the whole chapter).
-        analysis = None if (relocated_now or part_ref is not None or is_cumulative) else db.get_chapter_analysis(sb, book_id, chapter_num)
-        if analysis is not None and (analysis.get("language") or "en") != lesson_lang:
-            # The cache is language-stamped: a Malay analysis must not ground an
-            # English lesson (or vice versa) — regenerate in the right language.
-            logger.info(
-                "generation %s: cached analysis is %s, lesson is %s — re-analysing",
-                generation_id, analysis.get("language") or "en", lesson_lang,
-            )
-            analysis = None
-        if analysis is not None:
-            logger.info("generation %s: reusing cached analysis for %s ch%s", generation_id, book_id, chapter_num)
-        else:
-            # Fresh multi-part analysis is the LONGEST phase — advance 20→43
-            # per chunk (and label the stage) so a 4-part chapter never looks
-            # "stuck at 20%".
-            def _analysis_tick(part: int, total: int) -> None:
-                db.set_progress(sb, job_id, 20 + round(23 * part / total))
-                if total > 1:
-                    db.set_stage(sb, job_id, {"phase": "analysis", "part": part, "total": total, "part_pct": 100})
-
-            analysis = run_full_analysis(
-                book_id=book_id, chapter_content=chapter, level=DEFAULT_LEVEL, client=client,
-                on_progress=_analysis_tick,
-                # Part jobs analyze THEIR chunk verbatim — never re-chunked.
-                chunks_override=[part_chunk] if part_ref is not None else None,
-                language=lesson_lang,
-            ).model_dump()
-            analysis["language"] = lesson_lang  # stamps the cache (see reuse guard above)
-        db.set_progress(sb, job_id, 45)
-        # Analysis stage is over for every kind; the presentation loop writes
-        # its own per-part stages, doc kinds stay stage-less.
-        db.set_stage(sb, job_id, None)
-
-        # Persist chapter grounding for the AI Tutor — the concept analysis now
-        # (covers every kind); the narrated lesson's script is added below for
-        # the presentation kind. This is the tutor's curriculum fence. Best-effort.
-        # Part jobs skip it: their analysis covers ONE part, and writing it here
-        # would poison the whole-chapter cache and the tutor's fence.
-        if part_ref is None and not is_cumulative:
-            db.set_chapter_grounding(sb, book_id, chapter_num, chapter_title, analysis)
-
-        # School branding (templates + derived accent/logo) — falls back to defaults.
-        branding = load_branding(sb, owner_id, Path(tmp))
-        base = f"{owner_id}/{generation_id}"
-
-        if kind == "presentation":
-            # Narrated deck + video — PART-MAJOR (2026-07-18): each part runs
-            # script → slides → video → upload END TO END before the next part
-            # starts. Part 1 is finished (and its artifacts uploaded) while
-            # Part 2's script is still being written, and the job's stage
-            # reads "part 2/4 · 35%" instead of one opaque global bar.
-            # Sequential on purpose — the per-chapter slide/video segment dirs
-            # are shared, so parts must not interleave. Part 1 keeps the legacy
-            # lesson.mp4 / deck.pptx names; later parts get _part{k} suffixes
-            # (the app sorts video artifacts by part number → Part 1 first).
-            from datetime import datetime
-            from agent3_scripts.script_generator import generate_episode_script, save_script
-            from agent5_slides.figures import (attach_figures_to_segments,
-                                               load_chapter_figures, textbook_figures_enabled)
-            from agent5_slides.slide_generator import generate_episode_slides
-            from agent6_animation.video_composer import compose_episode_videos
-            from agent8_render.renderer import render_final_video
-
-            # Rollout flag: the deck is becoming its own generation kind
-            # ('deck', _generate_deck). "1" (default) keeps embedding a deck in
-            # the presentation as before; "0" stops building/uploading it once
-            # the app queues deck rows. Delete the flag after "0" has been live.
-            _deck_in_presentation = os.getenv("DECK_IN_PRESENTATION", "1").strip() == "1"
-
-            params = gen.get("params") or {}
-            narration_style = params.get("narration_style") or "socratic"
-            tts_voice_requested = params.get("tts_voice")  # registry id, "auto", or None
-
-            # The premium gate (`allow_premium`, `tier_info`) was resolved at
-            # the top of process_generation, before any expensive work. This
-            # used to be `_elevenlabs_enabled()`, a deployment flag: everyone
-            # or no one, never the account's plan. Now the account that
-            # GENERATES decides — and since 0105 the DATABASE decides for it:
-            # a paid plan, or a console comp at or above the threshold
-            # premium_voices_allowed() carries → premium; anyone else → free;
-            # students receive whatever their teacher produced.
-            from shared.tts import enabled_providers, pick_voice_id, resolve_voice
-
-            # The concrete voice this generation renders with. `auto` (or no
-            # pick) is the only route to a premium DEFAULT; an explicit id is
-            # honoured as sent and gated below. The stale-params remap for
-            # non-English books is unchanged.
-            tts_voice = pick_voice_id(
-                tts_voice_requested, lang=lesson_lang, allow_premium=allow_premium,
-                explicit_language=bool(params.get("language")),
-                provider=canary_provider)
-
-            # Avatar casting (founder, 2026-09-04): a RANDOM approved roster
-            # face, restricted only by the narration voice's gender; the
-            # student's age band from the book's grade (auto-detected at
-            # upload, teacher-editable) and, in a dialogue, the gender of the
-            # voice that reads the student's lines. Seeded by the CHAPTER, not
-            # the generation: each part of a chapter is its own generation, so
-            # a generation-id seed would put a different teacher in Part 1 and
-            # Part 2 of one lesson series. The book-and-chapter seed keeps one
-            # face across every part and every retry, while another chapter
-            # casts afresh. Cast from the RESOLVED voice —
-            # after the gate — so a downgraded premium pick casts the avatar
-            # of the voice that will actually speak. Cast ONCE, here, before
-            # the parts loop: the keys travel on every part's script.
-            from spike.scene_engine.whiteboard import cast_avatars, two_voice_dialogue
-            effective_voice = resolve_voice(tts_voice, allow_premium, lang=lesson_lang).voice_id
-            # `dialogue` is the SAME predicate the script generator will run
-            # with for this style: the student face follows the second voice
-            # exactly when that voice will read the student's lines.
-            cast_seed = f"{book_id}:{chapter_num}"
-            avatars = cast_avatars(effective_voice, book.get("grade"), cast_seed,
-                                   lang=lesson_lang, style=narration_style,
-                                   dialogue=two_voice_dialogue(narration_style))
-            logger.info("avatars cast for %s (seed %s): %s (voice %s)",
-                        generation_id, cast_seed, avatars, effective_voice)
-
-            episodes_plan = (analysis.get("episodes") or {}).get("episodes") or []
-            n_parts = max(len(episodes_plan), 1)
-            voice_report: dict = {}
-            uploaded_videos = 0
-            script_dicts: list[dict] = []
-            coverage_reports: list[dict] = []
-            ep_title = chapter_title
-
-            # Phase 3 (gated): detect + crop this chapter's real textbook figures
-            # ONCE, then hand each part the ones that best match its segments. The
-            # crops live under the job tmp — embedded into the deck + composited
-            # into the video before cleanup. Best-effort: never breaks a lesson.
-            chapter_figures: list[dict] = []
-            used_figures: set[int] = set()
-            _figures_on = textbook_figures_enabled()
-            logger.info("textbook figures flag: %s", _figures_on)  # is the env var live on THIS worker?
-            if _figures_on:
-                try:
-                    # Figures were detected at INDEX time (page ranges are reliable
-                    # there; gen time has none) and stored on book.chapters — just
-                    # crop them from the downloaded PDF here.
-                    chapter_figures = load_chapter_figures(
-                        book, chapter_num, pdf_path, Path(tmp) / "figures"
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("figure load failed: %s", exc)
-
-            for part_idx, episode in enumerate(episodes_plan, start=1):
-                # This part's slice of the overall bar: 45 → 96 split evenly.
-                span = 51.0 / n_parts
-                base_p = 45 + span * (part_idx - 1)
-                db.set_stage(sb, job_id, {"phase": "video", "part": part_idx, "total": n_parts, "part_pct": 5})
-                db.set_progress(sb, job_id, round(base_p))
-
-                # Same part framing the chapter-level generator builds: recap
-                # what earlier parts covered, preview what the next part will.
-                # A single-part job carries its framing in forced_part_info
-                # (its analysis holds ONE episode, but the chapter has more).
-                part_info = forced_part_info
-                if part_info is None and n_parts > 1:
-                    part_info = {
-                        "part": part_idx,
-                        "total": n_parts,
-                        "prev_sections": [
-                            s for e in episodes_plan[: part_idx - 1] for s in e.get("sections_covered", [])
-                        ],
-                        "next_sections": episodes_plan[part_idx].get("sections_covered", [])
-                        if part_idx < n_parts
-                        else [],
-                    }
-                script = generate_episode_script(
-                    episode, analysis, chapter_num, client, narration_style, part_info=part_info,
-                    language=lesson_lang, avatars=avatars,
-                    subject=book.get("subject"), curriculum=book.get("curriculum"),
-                    learner_age=book.get("grade"),
-                )
-                script_dict = script.model_dump()
-
-                # ── Coverage gate (shared/coverage.py) ───────────────────────
-                # Until now nothing compared the reply back to the sections and
-                # concepts THIS episode was built from, so a script that taught
-                # a third of the part finished as a clean success. Measured here
-                # — after the script, before slides/TTS/render — so the retry
-                # below costs one script call and a hard failure wastes nothing
-                # that has been rendered.
-                report = _coverage_report(
-                    analysis, episode, coverage.script_text(script_dict),
-                    kind="presentation", model=client.model, part=part_idx, of=n_parts,
-                    part_scoped=part_ref is not None,
-                )
-                if coverage.should_retry(report):
-                    # Retry ONCE, naming what was dropped, and keep whichever
-                    # draft measures higher — a retry can be worse, and the
-                    # teacher should never get the worse of two scripts we paid
-                    # for. Bounded by should_retry: the same bar as the hard
-                    # failure below, so it only ever fires on a job that would
-                    # otherwise have failed outright — and NEVER on a pooled
-                    # part-scoped report, whose missed list is other parts'
-                    # topics (a must_cover built from it orders the model to
-                    # teach material this part does not contain — the harmful
-                    # half of incident 8b79d4e0).
-                    first = report
-                    retry = generate_episode_script(
-                        episode, analysis, chapter_num, client, narration_style,
-                        part_info=part_info, language=lesson_lang,
-                        must_cover=first.get("missed") or [], avatars=avatars,
-                        subject=book.get("subject"), curriculum=book.get("curriculum"),
-                        learner_age=book.get("grade"),
-                    )
-                    retry_dict = retry.model_dump()
-                    retry_report = _coverage_report(
-                        analysis, episode, coverage.script_text(retry_dict),
-                        kind="presentation", model=client.model, part=part_idx, of=n_parts,
-                        part_scoped=part_ref is not None,
-                    )
-                    if (retry_report.get("covered") or 0) > (first.get("covered") or 0):
-                        script, script_dict, report = retry, retry_dict, retry_report
-                    # Both numbers are kept: whether naming the missed topics
-                    # actually repairs a thin draft is itself a thing the
-                    # founder will want to query after the model flip.
-                    report["retried_from"] = first.get("covered")
-                    if coverage.should_fail(report):
-                        coverage_reports.append(report)
-                        _record_coverage(sb, generation_id, coverage_reports)
-                        raise RuntimeError(
-                            f"lesson script covers only {report['addressed']} of "
-                            f"{report['topics']} topics this chapter's analysis "
-                            f"lists (part {part_idx}/{n_parts}, model {client.model}) "
-                            f"— never mentioned: {', '.join(report['missed'])}"
-                        )
-                coverage_reports.append(report)
-                save_script(script)
-                # Attach matched textbook figures to this part's segments (semantic
-                # match via the model, keyword fallback).
-                if chapter_figures:
-                    attach_figures_to_segments(
-                        script_dict.get("segments", []), chapter_figures, used_figures, client
-                    )
-                script_dicts.append(script_dict)
-                if part_idx == 1:
-                    ep_title = script_dict.get("episode_title") or chapter_title
-                db.set_stage(sb, job_id, {"phase": "video", "part": part_idx, "total": n_parts, "part_pct": 35})
-                db.set_progress(sb, job_id, round(base_p + 0.35 * span))
-
-                part_scripts = {
-                    "book_id": book_id,
-                    "chapter_num": chapter_num,
-                    "chapter_title": chapter_title,
-                    "total_episodes": 1,
-                    "generated_at": datetime.now().isoformat(),
-                    "episodes": [script_dict],
-                    # the acceptance check reads this key; the compose and
-                    # slide builders read only episodes/book_id/chapter_num/
-                    # avatars, so an extra top-level key is inert to them
-                    "visual_plan": script_dict.get("visual_plan"),
-                }
-                slides = generate_episode_slides(
-                    script_data=part_scripts, branding=branding, direction=lesson_dir,
-                    build_deck=_deck_in_presentation,
-                ).model_dump()
-
-                video = compose_episode_videos(
-                    script_data=part_scripts, slide_manifest=slides, branding=branding,
-                    tts_voice=tts_voice, allow_premium=allow_premium, voice_report=voice_report,
-                    direction=lesson_dir, lang=lesson_lang,
-                ).model_dump()
-
-                final = render_final_video(video_manifest=video).model_dump()
-
-                # ACCEPTANCE. Until now this ran only in tests: the engine
-                # computed a full per-lesson quality audit on every render and
-                # nothing in production ever read it, so blank boards, silent
-                # lessons and text written over text all shipped while the
-                # report said PASSED — to a local driver script nobody ran.
-                # This is the one place that knows the lesson is finished and
-                # can still refuse it.
-                _accept = _acceptance_report(part_scripts, video)
-                if _accept is not None:
-                    db.set_stage(sb, job_id, {"phase": "video", "part": part_idx,
-                                              "total": n_parts, "part_pct": 99,
-                                              "acceptance": _accept["summary"]})
-                    # jobs.stage is cleared when the job finishes, so the
-                    # acceptance summary evaporated the moment the lesson was
-                    # done. Persist it (and the compiler's own report) on the
-                    # generation so the next "the labels are missing" is
-                    # answerable from the DB instead of from Railway logs that
-                    # a redeploy has already thrown away.
-                    for _ln in _accept.get("plan_report") or []:
-                        logger.info("visual plan: %s", _ln)
-                    try:
-                        # Keyed by PART. A multi-part lesson writes this once
-                        # per part, and under one key each part overwrote the
-                        # last — so the part that failed is exactly the one
-                        # whose verdict you lost.
-                        db.merge_generation_params(sb, generation_id, {
-                            f"acceptance_part{part_idx}": {
-                                "part": part_idx,
-                                "passed": _accept["passed"],
-                                "ship": _accept["ship"],
-                                "summary": _accept["summary"],
-                            },
-                            f"visual_plan_report_part{part_idx}":
-                                (_accept.get("plan_report") or [])[:200],
-                        })
-                    except Exception:  # noqa: BLE001 — telemetry, never fatal
-                        logger.warning("could not persist the acceptance report",
-                                       exc_info=True)
-                    if not _accept["ship"]:
-                        raise RuntimeError(
-                            f"lesson failed acceptance: {_accept['summary']}")
-
-                suffix = "" if part_idx == 1 else f"_part{part_idx}"
-                # deck_path is None when DECK_IN_PRESENTATION=0 (build_deck
-                # above) — the deck is then the 'deck' generation's artifact.
-                deck_path = slides.get("deck_path")
-                if deck_path and Path(deck_path).exists():
-                    db.upload_artifact(sb, deck_path, f"{base}/deck{suffix}.pptx")
-                    db.add_artifact_row(sb, generation_id, "deck_pptx", f"{base}/deck{suffix}.pptx")
-                final_video = final.get("final_video_path")
-                if final_video and Path(final_video).exists():
-                    db.upload_artifact(sb, final_video, f"{base}/lesson{suffix}.mp4")
-                    db.add_artifact_row(sb, generation_id, "video_mp4", f"{base}/lesson{suffix}.mp4")
-                    uploaded_videos += 1
-                db.set_stage(sb, job_id, {"phase": "video", "part": part_idx, "total": n_parts, "part_pct": 100})
-                db.set_progress(sb, job_id, round(base_p + span))
-
-            if uploaded_videos == 0:
-                raise RuntimeError("no video parts were produced")
-            db.set_stage(sb, job_id, None)  # stage is per-part; clear it once all parts are done
-            _record_coverage(sb, generation_id, coverage_reports)
-
-            # Enrich the tutor grounding with the lesson's own narration text —
-            # the best source for answers that "sound like the lesson". Skipped
-            # for single-part jobs: the whole-chapter grounding is not theirs
-            # to overwrite (the assistant still answers from source_text).
-            if part_ref is None:
-                _script_text = " ".join(
-                    (seg.get("text") or "")
-                    for ep in script_dicts
-                    for seg in (ep.get("segments") or [])
-                ).strip()
-                db.set_chapter_grounding(sb, book_id, chapter_num, chapter_title, analysis, _script_text)
-
-                # Warm the AI Tutor cache: pre-compute the questions a student is
-                # most likely to ask so the first "Ask Coach" is instant + $0.
-                # Gated (TUTOR_WARM_CACHE) and best-effort.
-                from worker.tutor_warm import warm_tutor_cache
-                warm_tutor_cache(sb, client, book_id, chapter_num, chapter_title, analysis, _script_text)
-
-            # Record the voice that ACTUALLY rendered so a silent premium→free
-            # downgrade (ElevenLabs not enabled/keyed on the worker, spend cap, or
-            # an API failure) is visible in the app — not discovered by listening.
-            if voice_report:
-                _used_list = list(voice_report.get("used") or [])
-                _stats = dict(voice_report.get("stats") or {})
-                # Durable, per-user, per-month ledger — the app's own
-                # (migration 0027). _record_tts_ledger explains the two traps
-                # the first shape fell into.
-                _over_cap, _ledger_key = _record_tts_ledger(sb, owner_id, voice_report, generation_id)
-                db.merge_generation_params(sb, generation_id, {
-                    "tts_voice_used": (_used_list or [None])[0],
-                    # the FULL list: a lesson that mixed voices was recorded
-                    # as its alphabetically-first voice, hiding the mix
-                    "tts_voices_used": _used_list,
-                    "tts_stats": _stats,
-                    "tts_preflight_downgrade": bool(voice_report.get("preflight_downgrade")),
-                    "tts_over_cap": _over_cap,
-                    "tts_ledger_key": _ledger_key,
-                    "tts_downgrade_reasons": sorted(voice_report.get("reasons") or []),
-                    "tts_voice_downgraded": bool(voice_report.get("downgraded")),
-                    # The gate's inputs, so a downgrade can be explained from
-                    # the row alone: what the app sent, what tier the account
-                    # resolved to (or "error"), and whether premium was allowed.
-                    "tts_voice_requested": tts_voice_requested,
-                    "tts_voice_resolved": tts_voice,
-                    # 'override' when the console comp decided it (the founder's
-                    # account: plan_tier says trial, the override says unlimited);
-                    # the error string when a read failed; else the plan tier.
-                    # NB since 0105 an override here does NOT imply premium was
-                    # allowed — read tts_premium_allowed for that.
-                    "tts_tier_resolved": ("override" if tier_info.get("override")
-                                          else tier_info.get("error") or tier_info.get("tier") or "unknown"),
-                    "tts_premium_allowed": bool(allow_premium),
-                })
-                if voice_report.get("downgraded"):
-                    logger.warning(
-                        "generation %s: requested premium voice %r but rendered %s — "
-                        "tier=%s paid=%s premium=%s providers=%s.",
-                        generation_id, tts_voice, voice_report.get("used"),
-                        tier_info.get("tier"), tier_info.get("paid"),
-                        tier_info.get("premium"), sorted(enabled_providers()),
-                    )
-            if part_ref is not None:
-                # The chapter name and the part's position always travel
-                # together, plus the part's own section heading when it has a
-                # real one — this string is rendered verbatim by the parent
-                # portal, the three diary views and the staff console, so
-                # "Part 1" on its own tells those readers nothing.
-                title = (
-                    f"{book.get('title', 'Lesson')} · "
-                    f"{part_label(chapter_title, part_ref, part_total, pk.get('section_titles'))}"
-                )
-            else:
-                # Every chapter-level render reports its delivered part count,
-                # including 1 — app migration 0089 seeds the credit ledger from
-                # the book's part-map at insert, and the sync trigger can only
-                # correct that estimate (down as well as up) on a value the
-                # worker actually wrote. Nothing in the app reads this key.
-                db.merge_generation_params(sb, generation_id, {"video_parts": uploaded_videos})
-                if n_parts > 1:
-                    title = f"{book.get('title', 'Lesson')} · {chapter_title} ({uploaded_videos} parts)"
-                else:
-                    title = f"{book.get('title', 'Lesson')} · {ep_title}"
-
-        elif kind in ("lesson_plan", "activity", "exam_paper", "worksheet", "case_study"):
-            # Claude-authored teacher document → editable .docx.
-            from docgen import generate_document
-            from shared.claude_client import artifact_model
-
-            # Authoring runs on the cheaper artifact model (Haiku by default); the
-            # ingestion/analysis above stay on Sonnet. Fold its spend into the job so
-            # jobs.usage still reflects the full per-lesson cost.
-            # Jawi is the exception: Haiku's Jawi orthography is unreliable
-            # (verified 2026-07-19), so Jawi documents author on the stronger
-            # analysis model.
-            # Authoring, routed by the LESSON's script. Jawi keeps its exception:
-            # ms-arab routes to Claude on script, but Haiku's Jawi orthography is
-            # unreliable (verified 2026-07-19), so kind=None asks for the stronger
-            # general model instead of the per-kind Haiku default.
-            gen_client = client_for(lesson_lang, kind=None if jawi else kind)
-            out_path = generate_document(
-                kind=kind, book=book, chapter=chapter, analysis=analysis,
-                client=gen_client, params=gen.get("params") or {}, out_dir=Path(tmp),
-                template=branding.get("docx_template"),
-                language=lesson_lang,
-            )
-            # Student/teacher split (2026-08-18): exam_paper/worksheet/activity/
-            # case_study now return [student_document, answer_key] like the
-            # cumulative exam; lesson_plan still returns a single Path.
-            paths = out_path if isinstance(out_path, list) else [out_path]
-            for _k, _v in gen_client.session_usage.items():
-                client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
-
-            # ── Coverage: MEASURED and RECORDED for documents, never gated ────
-            # These five kinds are exactly the ones Stage 1 moves to Haiku, so
-            # they are the ones whose before/after numbers matter most — but a
-            # document is not a lesson and must not be judged like one. A
-            # 10-question worksheet cannot mention 23 concepts; its expected
-            # coverage is set by its own length, not by the chapter's size, and
-            # it differs again for a lesson plan (which does claim the whole
-            # chapter) and a case study (which is deliberately one scenario). No
-            # absolute threshold is defensible for them today because no
-            # baseline exists for any of them. What IS defensible is recording
-            # the number per kind and per model, which is precisely what the
-            # Sonnet-vs-Haiku comparison needs — a per-kind threshold becomes a
-            # one-line addition once a week of Sonnet rows is in the table.
-            # Episode is None: documents are generated per CHAPTER, never per
-            # part, so they are measured against the whole chapter's topics.
-            # Only the STUDENT document is measured (paths[0]) — same reasoning
-            # as the cumulative exam: the answer key restates the paper.
-            try:
-                _doc_report = _coverage_report(
-                    analysis, None, coverage.docx_text(paths[0]),
-                    kind=kind, model=gen_client.model,
-                )
-                _record_coverage(sb, generation_id, [_doc_report])
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("coverage not recorded for %s: %s", kind, exc)
-
-            db.set_progress(sb, job_id, 90)
-            dest = f"{base}/{kind}.docx"
-            db.upload_artifact(sb, str(paths[0]), dest)
-            db.add_artifact_row(sb, generation_id, "docx", dest)
-            if len(paths) > 1:
-                key_dest = f"{base}/answer_key.docx"
-                db.upload_artifact(sb, str(paths[1]), key_dest)
-                # answer_key_docx artifact_kind exists since app migration 0062;
-                # a not-yet-applied migration must not fail the generation
-                # (mirrors the cumulative exam block below). The presence of
-                # this sibling row is the app's proof the student 'docx' above
-                # is key-free and safe to hand to a learner.
-                try:
-                    db.add_artifact_row(sb, generation_id, "answer_key_docx", key_dest)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("answer_key_docx row skipped for %s: %s", generation_id, exc)
-
-            # Structured questions for the interactive quiz player (worksheet/exam).
-            # Additive + best-effort: a missing 'questions_json' enum value (migration
-            # not yet applied) must not fail the generation.
-            qpath = Path(tmp) / "questions.json"
-            if kind in ("worksheet", "exam_paper") and qpath.exists():
-                try:
-                    qdest = f"{base}/{kind}_questions.json"
-                    db.upload_artifact(sb, str(qpath), qdest)
-                    db.add_artifact_row(sb, generation_id, "questions_json", qdest)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("questions_json upload skipped for %s: %s", generation_id, exc)
-
-            db.set_progress(sb, job_id, 96)
-            label = {
-                "lesson_plan": "Lesson plan", "activity": "Activities", "exam_paper": "Test paper",
-                "worksheet": "Worksheet", "case_study": "Case study",
-            }[kind]
-            # Same composer as the presentation path — a worksheet for part 3
-            # used to be titled "· Part 3" with no total and no heading, so
-            # part 1's and part 3's documents were indistinguishable.
-            _unit = (
-                part_label(chapter_title, part_ref, part_total, pk.get("section_titles"))
-                if part_ref is not None else chapter_title
-            )
-            title = f"{book.get('title', 'Document')} · {_unit} · {label}"
-
-        elif kind == "exam":
-            # Cumulative exam (0062): one model call → TWO documents (the exam
-            # paper and a SEPARATE answer key), grounded on the chosen covered
-            # units (chapter = _combine_units above). The answer key is uploaded
-            # under its OWN artifact kind so it never rides a student's download.
-            from docgen import generate_document
-            from shared.claude_client import artifact_model
-
-            # Authoring, routed by the LESSON's script. Jawi keeps its exception:
-            # ms-arab routes to Claude on script, but Haiku's Jawi orthography is
-            # unreliable (verified 2026-07-19), so kind=None asks for the stronger
-            # general model instead of the per-kind Haiku default.
-            gen_client = client_for(lesson_lang, kind=None if jawi else kind)
-            out_paths = generate_document(
-                kind="exam", book=book, chapter=chapter, analysis=analysis,
-                client=gen_client, params=gen.get("params") or {}, out_dir=Path(tmp),
-                template=branding.get("docx_template"),
-                language=lesson_lang,
-            )
-            for _k, _v in gen_client.session_usage.items():
-                client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
-            db.set_progress(sb, job_id, 90)
-            paths = out_paths if isinstance(out_paths, list) else [out_paths]
-            # Recorded, not gated — same reasoning as the single-chapter
-            # documents above, and more so: a cumulative exam is measured
-            # against EVERY covered unit's topics, so a low number here is the
-            # exam being an exam, not the model being thin. Only the paper is
-            # measured; the answer key restates it.
-            try:
-                _record_coverage(sb, generation_id, [_coverage_report(
-                    analysis, None, coverage.docx_text(paths[0]),
-                    kind="exam", model=gen_client.model,
-                )])
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("coverage not recorded for exam: %s", exc)
-            paper_dest = f"{base}/exam.docx"
-            db.upload_artifact(sb, str(paths[0]), paper_dest)
-            db.add_artifact_row(sb, generation_id, "docx", paper_dest)
-            if len(paths) > 1:
-                key_dest = f"{base}/exam_answer_key.docx"
-                db.upload_artifact(sb, str(paths[1]), key_dest)
-                # answer_key_docx is a new artifact_kind (app migration 0062); a
-                # not-yet-applied migration must not fail the exam.
-                try:
-                    db.add_artifact_row(sb, generation_id, "answer_key_docx", key_dest)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("answer_key_docx row skipped for %s: %s", generation_id, exc)
-            db.set_progress(sb, job_id, 96)
-            _exam_title = str((gen.get("params") or {}).get("title") or "").strip()
-            title = f"{book.get('title', 'Document')} · {_exam_title or 'Exam'}"
-
-        elif kind == "deck":
-            # Slide deck as its OWN artifact (2026-09): one authoring call on
-            # the artifact model (ARTIFACT_MODEL_DECK / GEMINI_MODEL_DECK
-            # override per kind, like the documents), rendered through the
-            # same slide/deck code the presentation used. Jawi keeps the
-            # documents' exception (kind=None → the stronger general model).
-            # Free with its lesson — no ledger row; the DB guards it.
-            gen_client = client_for(lesson_lang, kind=None if jawi else "deck")
-            _unit = (
-                part_label(chapter_title, part_ref, part_total, pk.get("section_titles"))
-                if part_ref is not None else chapter_title
-            )
-            title = _generate_deck(
-                sb, job_id, generation_id, book, chapter, analysis, gen_client,
-                gen.get("params") or {}, branding, lesson_lang, lesson_dir, tmp, base, _unit,
-            )
-            for _k, _v in gen_client.session_usage.items():
-                client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
-
-        else:
-            raise RuntimeError(f"Unsupported generation kind: {kind}")
-
-        db.set_generation_title(sb, generation_id, title)
+    client = built.client
 
     # Attribute this job's Claude spend to the row (unit economics per lesson).
     db.set_job_usage(sb, job_id, client.session_usage)

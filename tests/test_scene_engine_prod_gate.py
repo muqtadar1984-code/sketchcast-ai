@@ -210,7 +210,9 @@ class TestAcceptanceReadsTheEpisodePlan:
         pipeline."""
         import inspect
         from worker import process
-        src = inspect.getsource(process.process_generation)
+        # part_scripts is built in the shared build half (_build_from_analysis,
+        # split out of process_generation 2026-09-06 for the catalogue path).
+        src = inspect.getsource(process._build_from_analysis)
         assert '"visual_plan": script_dict.get("visual_plan")' in src
 
 

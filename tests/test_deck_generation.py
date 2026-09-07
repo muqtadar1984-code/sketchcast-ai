@@ -430,8 +430,10 @@ class TestGenerateDeckHelper:
         """The observer/acceptance ordering pin (test_semantic_prompt) needs the
         video artifact recorded before any later branch mentions it; the deck
         branch must therefore sit after the presentation branch."""
-        from worker.process import process_generation
-        src = inspect.getsource(process_generation)
+        # The kind branches live in _build_from_analysis (the shared build
+        # half of process_generation, split out 2026-09-06 for the catalogue).
+        from worker.process import _build_from_analysis
+        src = inspect.getsource(_build_from_analysis)
         deck = src.index('elif kind == "deck":')
         assert src.index('if kind == "presentation":') < deck
         assert src.index('elif kind == "exam":') < deck
@@ -441,8 +443,8 @@ class TestGenerateDeckHelper:
     def test_the_presentation_keeps_its_deck_until_the_flag_flips(self, monkeypatch):
         """DECK_IN_PRESENTATION defaults to "1" (rollout step 1: worker first,
         presentations unchanged); "0" passes build_deck=False."""
-        from worker.process import process_generation
-        src = inspect.getsource(process_generation)
+        from worker.process import _build_from_analysis  # the presentation loop lives here
+        src = inspect.getsource(_build_from_analysis)
         assert 'os.getenv("DECK_IN_PRESENTATION", "1").strip() == "1"' in src
         assert "build_deck=_deck_in_presentation" in src
 

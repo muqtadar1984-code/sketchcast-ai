@@ -61,6 +61,12 @@ class TTSVoice:
     # non-English default, and Rachel) were missing from it and cast the male
     # teacher. A field cannot be forgotten the way a list entry can.
     gender: str = "f"      # "f" | "m"
+    # Who the voice is FOR. "narrator" voices are the ones a teacher may pick
+    # and `auto` may resolve to; "student" voices (catalogue Phase 3) read the
+    # student's lines in a two-voice dialogue and are hidden from every picker
+    # and every default — a youthful voice must never become a lesson's
+    # narrator because it sorted first in a pool.
+    role: str = "narrator"  # "narrator" | "student"
 
 
 # ── The registry ────────────────────────────────────────────────────────────
@@ -124,7 +130,36 @@ VOICES: list[TTSVoice] = [
     TTSVoice("g-mr-m",    "Achird — मराठी (premium)",             "google", "premium", "mr-IN-Chirp3-HD-Achird",   ("male",), "mr", gender="m"),
     TTSVoice("g-hi-f",    "Achernar — हिन्दी (premium)",           "google", "premium", "hi-IN-Chirp3-HD-Achernar", ("warm",), "hi"),
     TTSVoice("g-hi-m",    "Achird — हिन्दी (premium)",             "google", "premium", "hi-IN-Chirp3-HD-Achird",   ("male",), "hi", gender="m"),
+    # Student voices (catalogue Phase 3, 2026-09-06): the SECOND voice of a
+    # two-voice dialogue, the one that reads the student's lines. Chirp 3 HD
+    # ships the same 30 names in every locale; Leda (female) and Puck (male)
+    # are its youthful pair. role="student" keeps them out of list_voices()
+    # and out of every narration default — a kit's params name them
+    # explicitly (`student_voice`), the OTHER gender to the teacher's voice.
+    # Four locales for now (en, plus ar/fr/es for Phase 5's translations);
+    # a language without a student entry falls back to today's Edge student
+    # voice and the generation records student_voice_fallback.
+    TTSVoice("g-en-student-f", "Leda — student (premium)",  "google", "premium", "en-US-Chirp3-HD-Leda", ("youthful",), "en", role="student"),
+    TTSVoice("g-en-student-m", "Puck — student (premium)",  "google", "premium", "en-US-Chirp3-HD-Puck", ("youthful", "male"), "en", gender="m", role="student"),
+    TTSVoice("g-ar-student-f", "Leda — student, العربية (premium)",  "google", "premium", "ar-XA-Chirp3-HD-Leda", ("youthful",), "ar", role="student"),
+    TTSVoice("g-ar-student-m", "Puck — student, العربية (premium)",  "google", "premium", "ar-XA-Chirp3-HD-Puck", ("youthful", "male"), "ar", gender="m", role="student"),
+    TTSVoice("g-fr-student-f", "Leda — student, Français (premium)", "google", "premium", "fr-FR-Chirp3-HD-Leda", ("youthful",), "fr", role="student"),
+    TTSVoice("g-fr-student-m", "Puck — student, Français (premium)", "google", "premium", "fr-FR-Chirp3-HD-Puck", ("youthful", "male"), "fr", gender="m", role="student"),
+    TTSVoice("g-es-student-f", "Leda — student, Español (premium)",  "google", "premium", "es-ES-Chirp3-HD-Leda", ("youthful",), "es", role="student"),
+    TTSVoice("g-es-student-m", "Puck — student, Español (premium)",  "google", "premium", "es-ES-Chirp3-HD-Puck", ("youthful", "male"), "es", gender="m", role="student"),
 ]
+
+STUDENT_ROLE = "student"
+
+
+def student_voice_id_for(lang: str | None, gender: str) -> str | None:
+    """The premium STUDENT voice of `gender` for a language, or None when the
+    registry has none (the caller then keeps today's Edge student voice)."""
+    want = _spoken_lang(lang)
+    for v in VOICES:
+        if v.role == STUDENT_ROLE and v.lang == want and v.gender == gender:
+            return v.voice_id
+    return None
 
 DEFAULT_VOICE_ID = "edge-aria"  # the free English default — reproduces today's behaviour
 
@@ -165,7 +200,10 @@ def default_premium_voice_id_for(lang: str | None, gender: str = "f",
     if provider == "legacy":
         return None
     want = _spoken_lang(lang)
-    pool = [v for v in VOICES if v.provider == provider and v.tier == "premium"]
+    # Narrator voices only: a student voice is premium and per-language too,
+    # and without this filter Leda would be a candidate for `auto`.
+    pool = [v for v in VOICES if v.provider == provider and v.tier == "premium"
+            and v.role != STUDENT_ROLE]
     for exact_lang in (True, False):
         for v in pool:
             if (v.lang == want if exact_lang else v.lang == "*") and v.gender == gender:
@@ -195,8 +233,11 @@ def equivalent_voice_id(voice_id: str | None, provider: str,
     if v is None or v.tier != "premium":
         return None
     want = v.lang if v.lang != "*" else _spoken_lang(lang)
+    # Same role on both sides: a narrator remaps to a narrator, a student
+    # voice to a student voice (or nothing), never across.
     pool = [x for x in VOICES
-            if x.provider == provider and x.tier == "premium" and x.gender == v.gender]
+            if x.provider == provider and x.tier == "premium" and x.gender == v.gender
+            and x.role == v.role]
     for x in pool:
         if x.lang == want:
             return x.voice_id
@@ -215,5 +256,8 @@ def default_voice() -> TTSVoice:
 
 
 def list_voices(include_premium: bool = False) -> list[TTSVoice]:
-    """Voices offered to a caller. Premium voices are hidden unless allowed."""
-    return [v for v in VOICES if include_premium or v.tier == "free"]
+    """Voices offered to a caller. Premium voices are hidden unless allowed;
+    student voices are never offered — they are cast by the catalogue kit,
+    not picked by a teacher."""
+    return [v for v in VOICES
+            if (include_premium or v.tier == "free") and v.role != STUDENT_ROLE]
