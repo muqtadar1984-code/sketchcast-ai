@@ -37,7 +37,7 @@ from .partnames import norm_part, resolve_part, same_part
 from PIL import Image
 
 from shared.asset_keys import (KEY_NOISE, canonical_key, is_avatar_key,
-                               spelling_variants)
+                               lookup_variants)
 from shared.image_models import SCENE, ImageModel, nearest_aspect
 from shared.image_models import resolve as resolve_image_model
 from shared.text_models import VISION as TEXT_VISION
@@ -1882,10 +1882,10 @@ def cache_dir_for(key: str, cache_dir: Path | None = None) -> Path:
     primary = root / canonical_key(key)
     if (primary / "asset.png").exists():
         return primary
-    for alt in spelling_variants(key)[1:]:
+    for alt in lookup_variants(key)[1:]:
         candidate = root / canonical_key(alt)
         if candidate != primary and (candidate / "asset.png").exists():
-            logger.info("asset %r reuses the cache of its other spelling (%s)",
+            logger.info("asset %r reuses the cache of its variant (%s)",
                         key, candidate.name)
             return candidate
     return primary

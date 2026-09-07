@@ -45,6 +45,11 @@ GENERIC_NOISE = frozenset({
     "sketch", "art", "of", "the", "a", "an", "and",
 })
 SUBJECT_NOISE = frozenset({"cell", "cells"})
+# The ONE spelling a retained subject-noise token is written in. `core_tokens`
+# keeps the word when dropping it would leave a single token carrying the whole
+# identity, and a kept word has to fold its own plural or `plant_cell` and
+# `plant_cells` become two cache directories for one picture.
+SUBJECT_CANONICAL = "cell"
 KEY_NOISE = GENERIC_NOISE | SUBJECT_NOISE
 
 _SPLIT = re.compile(r"[^a-z0-9]+")
@@ -252,11 +257,48 @@ def core_tokens(value: str) -> set[str]:
     The fallback tests for a SUBJECT, while the set it returns keeps numerals:
     `stage_3` and `stage_2` are two pictures and must stay two cache entries,
     but `figure_3` has nothing but the number and so keeps "figure" too.
+
+    "cell" is dropped only while something ELSE still names the subject. The
+    rule is the one `cells_to_tissue` already established for the connective
+    "to" (TestTheConnectiveStillSeparatesTwoCacheEntries): a token may not be
+    folded away when folding it files a compound and a plain word in ONE cache
+    directory, because those are two different pictures. Measured on the live
+    library 2026-09-07 -- of 49 cell-keyed assets, the 10 that had folded held
+    an ANIMAL CELL cutaway under the bare key `factory` (from `cell_factory`),
+    a plant CELL under `plant`, and an animal CELL under `animal`. A topic
+    asking for a real factory, a real plant or a real animal would have been
+    served a cell diagram out of `_asset_dir`, which is `canonical_key` alone:
+    no score, no threshold, no guard. The same collapse also walks straight
+    through `_guard_refusal`, whose first clause passes any row whose
+    canonical key equals the query's -- "same cache identity, same picture, by
+    definition" -- so the fold made that definition false.
+
+    The survivors decide, not a dictionary. Where "cell" leaves TWO or more
+    tokens the compound still names itself (`red_blood_cell` -> blood_red,
+    `cell_membrane_selectivity` -> membrane_selectivity) and the fold is kept:
+    that is the measured saving, one chapter's ciliated_epithelium,
+    ciliated_epithelium_cells and ciliated_epithelium_diagram paid for three
+    times. Where it leaves ONE, that token is carrying the whole identity
+    alone and must not be silently equated with a picture OF it --
+    `palisade_cell` is a leaf cell and a palisade is a fence. The dedup those
+    single-token keys used to get is recovered at LOOKUP by `lookup_variants`,
+    where a miss costs a retry instead of the wrong picture.
     """
     toks = tokens(value)
     if not any(_names_a_subject(t) for t in toks):
         return set(toks)
-    return {t for t in toks if t not in KEY_NOISE}
+    kept = {t for t in toks if t not in KEY_NOISE}
+    if len(kept) < 2 and any(t in SUBJECT_NOISE for t in toks):
+        # Retained in ONE spelling. Keeping the word as written would split
+        # `Ciliated Cells Diagram` (cells_ciliated) from `ciliated_cell`
+        # (cell_ciliated) -- two cache directories for one picture, which is
+        # the paid regeneration this whole fold exists to prevent, arriving
+        # through the exemption. Caught by
+        # TestDeferralReplacesTheLadder::test_deferral_is_by_picture_not_by_
+        # spelling, which defers a plural and asks with a singular.
+        return {SUBJECT_CANONICAL if t in SUBJECT_NOISE else t
+                for t in toks if t not in GENERIC_NOISE}
+    return kept
 
 
 def all_noise(value: str) -> bool:
@@ -356,6 +398,73 @@ def spelling_variants(key: str) -> list[str]:
             lambda m, us=to_american: _swap_token(m.group(0), us), raw)
         if alt not in out:
             out.append(alt)
+    return out
+
+
+def lookup_variants(key: str) -> list[str]:
+    """``key`` first, then every other name the SAME picture may be filed under.
+
+    Two folds are recovered here rather than in `canonical_key`, for the same
+    reason and by the same route: a fold inside the canonical key merges two
+    cache directories permanently and cannot tell a compound from the plain
+    word it contains, while a fold here costs one extra lookup on a MISS and
+    can never serve the wrong picture, because whatever it finds was stored
+    under a key that really does exist.
+
+      * the other orthography (`spelling_variants`) -- `organisation` for a
+        stored `organization`;
+      * the cell-stripped form, for the single-token keys `core_tokens` stopped
+        folding on 2026-09-07. `ciliated_cell` is filed as `cell_ciliated`
+        now, so a library that still holds `ciliated` would be missed; asking
+        again without the word finds it.
+
+    ONE DIRECTION ONLY, and the asymmetry is the entire point. Stripping is
+    safe because the request said "cell" and the stored key did not: a cell
+    picture is a fair answer to a request for a cell. ADDING it would ask
+    `factory` for `cell_factory` and serve the animal-cell cutaway to the
+    Industrial Revolution -- the bug this change exists to close, walking back
+    in through the retry. So a key with no cell token gets no cell variant,
+    ever.
+
+    The key itself is always element 0, so a caller retries with
+    ``lookup_variants(k)[1:]`` and a key with nothing to vary comes back as
+    ``[key]``. Order is deliberate: exact first, spelling before the cell fold,
+    because a spelling variant is the same word and the cell fold is a weaker
+    claim about the same subject.
+    """
+    raw = str(key or "")
+    out: list[str] = []
+    # Deduped by CANONICAL key, not by spelling. Both callers turn a variant
+    # into `canonical_key(alt)` — a cache directory in the renderer, a fresh
+    # whole-library scan in `find` — so two variants that canonicalise to one
+    # key are one question asked twice. `cells_to_tissue` strips to
+    # `to_tissue` and `specialised_animal_cells_table` to
+    # `specialised_animal_table`, and both fold straight back onto their own
+    # primary: without this each would cost a redundant scan of the library on
+    # every miss.
+    # `raw` is element 0 unconditionally, even when it is empty: the contract
+    # above is that a caller can always slice [1:] off its own key.
+    out.append(raw)
+    seen: set[str] = {canonical_key(raw)}
+
+    def _add(candidate: str) -> None:
+        ck = canonical_key(candidate)
+        if candidate and ck not in seen:
+            seen.add(ck)
+            out.append(candidate)
+
+    for spelled in spelling_variants(raw)[1:]:
+        _add(spelled)
+    for base in list(out):
+        toks = tokens(base)
+        if not any(t in SUBJECT_NOISE for t in toks):
+            continue
+        stripped = [t for t in toks if t not in SUBJECT_NOISE]
+        # Only when something is LEFT to ask for: a bare "cells" stripped of
+        # "cells" is not a weaker question, it is no question at all.
+        if not stripped or not any(_names_a_subject(t) for t in stripped):
+            continue
+        _add("_".join(stripped))
     return out
 
 
