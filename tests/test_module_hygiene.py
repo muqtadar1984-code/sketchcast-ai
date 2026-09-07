@@ -37,6 +37,15 @@ MODULES = sorted(
         *ROOT.rglob("catalogue/**/*.py"),
         *ROOT.glob("agent6_animation/*.py"),
         *ROOT.glob("agent8_render/*.py"),
+        # spike/scene_engine is the renderer the worker imports on every
+        # lesson, so it belongs here as much as agent6 does. It was missing,
+        # and the omission cost exactly what this test exists to prevent:
+        # raster_assets.py carried TWO top-level `asset_lock` definitions
+        # (found 2026-09-07). Live behaviour was the second, correct one —
+        # keyed by canonical_key so two spellings of one picture share a lock
+        # — but an edit to the first would have been a silent no-op, the same
+        # trap as the 2026-09-03 client.py incident above.
+        *ROOT.rglob("spike/**/*.py"),
     ]
     if p.name != "__init__.py" or p.stat().st_size > 0
 )

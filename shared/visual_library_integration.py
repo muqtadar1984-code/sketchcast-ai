@@ -145,6 +145,68 @@ def _hydrate_local_library(key: str, prompt: str, cache: Path,
         return False
 
 
+def library_over_generated_cache_enabled() -> bool:
+    """Whether an approved LIBRARY asset outranks a cache entry an earlier
+    AI generation wrote for the same key.
+
+    Default ON. ``LIBRARY_OVER_GENERATED_CACHE=0`` restores the older
+    cache-first order without a deploy: the check costs one library lookup per
+    generated cache entry, and a lookup is a paged read of the approved table.
+    A cache entry the library already supplied is never re-checked, so the
+    cost falls away as the cache fills with library assets.
+    """
+    return os.getenv("LIBRARY_OVER_GENERATED_CACHE", "1").strip().lower() \
+        not in ("0", "false", "no", "off")
+
+
+def _cache_provenance(asset_dir: Path) -> str:
+    """What a cache entry says it IS — "generated", "visual_library", or ""
+    when nothing readable is there. raster_assets writes this on every save,
+    including when it replaces a hydrated asset in place."""
+    try:
+        md = json.loads((asset_dir / "meta.json").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return ""
+    return str(md.get("provenance") or "") if isinstance(md, dict) else ""
+
+
+def _refresh_from_library(key: str, prompt: str, cache: Path) -> dict[str, Any] | None:
+    """Replace a GENERATED cache entry with the library's approved asset for
+    the same key. Returns the hit when the cache now holds it, else None.
+
+    A cache entry is one model's first attempt, kept because it was first; an
+    approved library row has been reviewed and published for reuse. Measured
+    on the live Cells kit (2026-09-07): five diagrams resolved `local_cache`
+    with `asset_provenance: generated` and `library_asset_id: null` while
+    `visual_assets` held an approved row for every one of them — the avatars,
+    which have no cache entry on a fresh container, came from the library on
+    the same run, so the library path itself was working.
+
+    Only a DURABLE library row is taken. `find` also sees this worker's own
+    local index, whose rows ARE the generated cache entries (the bootstrap
+    registers every one of them) and which carry no `id`; refreshing a file
+    from itself would relabel a generated picture as a library hit and change
+    nothing else.
+    """
+    try:
+        from shared.visual_library import find, hydrate
+        hit = find(key, prompt, context(), asset_format="png")
+        if not hit or not hit.get("id") or not hit.get("storage_path"):
+            return None
+        # The scan above is the expensive part; hand it to hydrate rather than
+        # paying for the identical read again.
+        if hydrate(key, prompt, cache, context(), asset_format="png",
+                   replace=True, hit=hit) is None:
+            return None
+        logger.info("visual library: %s replaced a generated cache entry with "
+                    "%s (score %.2f)", key, hit.get("asset_key"),
+                    hit.get("match_score", 0))
+        return hit
+    except Exception as exc:  # noqa: BLE001 — reuse is an optimisation, never a failure
+        logger.debug("visual library refresh failed for %s: %s", key, exc)
+        return None
+
+
 def _library_outcome(hydrated: bool, provenance: str,
                      usable: bool) -> tuple[bool, str | None]:
     """What actually became of a file the library put into the cache.
@@ -207,10 +269,30 @@ def _patch() -> None:
                 allow_generate: bool):
         cache = cache_dir or ra.CACHE_DIR
         cache.mkdir(parents=True, exist_ok=True)
-        asset_dir = cache / ra.canonical_key(key)
+        # Asked of the renderer, which also answers with the directory of the
+        # SAME WORD spelled the other way — so the two halves of one decision
+        # can never disagree about which file is this key's cache entry.
+        asset_dir = ra.cache_dir_for(key, cache)
         png = asset_dir / "asset.png"
         existed_before = png.exists()
         avatar = is_avatar_key(key)
+
+        # A cache entry an earlier GENERATION wrote does not outrank the
+        # library's reviewed asset for the same key: refresh it. An entry the
+        # library already supplied keeps today's fast path and costs no
+        # lookup. See _refresh_from_library.
+        refreshed = None
+        if existed_before and not avatar and library_over_generated_cache_enabled() \
+                and _cache_provenance(asset_dir) == "generated":
+            refreshed = _refresh_from_library(key, prompt, cache)
+            if refreshed is not None:
+                # hydrate files under the REQUESTED key, which is not
+                # `asset_dir` when the entry came from the other spelling's
+                # directory. Re-ask rather than assume: everything below —
+                # the provenance read, `asset_used`, the publish guard — must
+                # look at the file the renderer is about to bind.
+                asset_dir = ra.cache_dir_for(key, cache)
+                png = asset_dir / "asset.png"
 
         # Scored BEFORE any lookup mutates the cache, and recorded whether or
         # not it clears the threshold — a near miss is the evidence that says
@@ -218,6 +300,9 @@ def _patch() -> None:
         # an identity, not a meaning, and the nearest educational visual (an
         # onion epidermis, measured) is noise in the decision log.
         match, score, source = (None, 0.0, "none")
+        if refreshed is not None:
+            match, score = refreshed, float(refreshed.get("match_score") or 0.0)
+            source = str(refreshed.get("match_source") or "remote")
         if not existed_before and not avatar:
             try:
                 match, score, source = best_match(key, prompt, context(),
@@ -244,13 +329,15 @@ def _patch() -> None:
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("visual library lookup failed for %s: %s", key, exc)
 
-        hydrated = (not existed_before) and png.exists()
+        hydrated = refreshed is not None or ((not existed_before) and png.exists())
         published = False
         result = original(key, prompt, cache, allow_generate)
 
         # A newly generated, validated asset is promoted into the reusable
         # library. We use the metadata written by raster_assets as the source
-        # of truth and never re-publish a library-hydrated file.
+        # of truth and never re-publish a library-hydrated file. A refreshed
+        # entry is `existed_before` and so is never re-published: it came FROM
+        # the library.
         if not existed_before and result is not None and png.exists():
             try:
                 md = json.loads((asset_dir / "meta.json").read_text(encoding="utf-8"))
@@ -280,17 +367,29 @@ def _patch() -> None:
         # hydrated asset in place and stamps it "generated".
         served_by_library, library_discarded = _library_outcome(
             hydrated, provenance, result is not None)
+        # `library_over_generated_cache` is its own outcome, not a "library
+        # hit": this line is the single source of truth for what happened to a
+        # request, and an operator counting reuse has to be able to see how
+        # much of it came from overruling a cache entry.
+        if existed_before and refreshed is None:
+            outcome = "local_cache"
+        elif served_by_library:
+            outcome = ("library_over_generated_cache" if refreshed is not None
+                       else "library_hit")
+        elif library_discarded:
+            outcome = f"library_asset_{library_discarded}"
+        elif provenance == "generated":
+            outcome = "generated"
+        elif not png.exists():
+            outcome = "failed"
+        else:
+            outcome = provenance
         log_decision({
             "tier": "raster",
             "requested_key": key,
             "canonical_key": ra.canonical_key(key),
             "requested_prompt": prompt[:300],
-            "outcome": ("local_cache" if existed_before
-                        else "library_hit" if served_by_library
-                        else f"library_asset_{library_discarded}"
-                        if library_discarded
-                        else "generated" if provenance == "generated"
-                        else "failed" if not png.exists() else provenance),
+            "outcome": outcome,
             "library_hit": bool(served_by_library),
             # Set only when the library DID hand over an asset and it did not
             # survive: 'regenerated' or 'unusable'. A reader counting reuse

@@ -31,7 +31,8 @@ from pathlib import Path
 from typing import Any
 
 from shared.asset_keys import (all_noise, canonical_key, core_tokens,
-                               distinguishes, is_avatar_key, same_word)
+                               distinguishes, is_avatar_key, same_word,
+                               spelling_variants)
 from shared.asset_keys import tokens as _tokens_of
 
 logger = logging.getLogger(__name__)
@@ -970,7 +971,38 @@ def find(key: str, prompt: str, context: dict[str, Any] | None = None,
     bytes would be a cache miss dressed as a hit — a file written where the
     caller does not look, which is a mistake this module has already made
     once.
+
+    A key that misses is asked ONCE MORE in the other orthography
+    (`spelling_variants`): the library itself holds `organization_hierarchy`
+    beside `fertilisation_oviduct`, and a request spelled the other way was a
+    paid regeneration of a picture already on the shelf. Only the LOOKUP is
+    aliased — nothing here changes a stored key, and the hit comes back
+    verbatim, so `hydrate` still files it under the key the CALLER asked for.
     """
+    hit = _find_one(key, prompt, context, min_score=min_score,
+                    asset_format=asset_format)
+    if hit is not None:
+        return hit
+    for alt in spelling_variants(key)[1:]:
+        # `explain=False`: the near-miss refusal for the original key is
+        # already in the log, and repeating it once per spelling would double
+        # the very line volume the guard was made quiet to control.
+        hit = _find_one(alt, prompt, context, min_score=min_score,
+                        asset_format=asset_format, explain=False)
+        if hit is not None:
+            logger.info("visual library: %s served from its other spelling "
+                        "%s <- %s (%s, score %.2f)", key, alt,
+                        hit.get("asset_key"), row_format(hit),
+                        hit.get("match_score", 0))
+            return hit
+    return None
+
+
+def _find_one(key: str, prompt: str, context: dict[str, Any] | None = None,
+              *, min_score: float | None = None,
+              asset_format: str | None = None,
+              explain: bool = True) -> dict[str, Any] | None:
+    """`find` for ONE spelling of a key. See `find` for the contract."""
     ctx = infer_context(key, prompt, context)
     threshold = float(os.getenv("VISUAL_LIBRARY_MIN_SCORE", "0.58")) if min_score is None else min_score
     # `guarded`: only rows whose OWN key shares a core token with the request
@@ -980,18 +1012,21 @@ def find(key: str, prompt: str, context: dict[str, Any] | None = None,
                                           guarded=True,
                                           asset_format=asset_format)
     if best is None or best_score < threshold:
-        near, near_score, _ = best_match(key, prompt, context, _ctx=ctx,
-                                         asset_format=asset_format)
         # One line per DECISION, carrying the score and the guard's own
         # reason. Hard-coding "the keys share no concept token" here was true
         # while that was the only way to be refused; the contrast rule refuses
         # pairs that share two, so a fixed reason would tell an operator the
         # opposite of what happened on the very line they grep.
-        if near is not None and near_score >= threshold:
-            why = _guard_refusal(key, near)
-            if why:
-                logger.info("visual library: refused %s <- %s (score %.2f) — "
-                            "%s", key, near.get("asset_key"), near_score, why)
+        # The unguarded scan exists ONLY for that line: a spelling retry skips
+        # both, so aliasing costs one scan rather than two.
+        if explain:
+            near, near_score, _ = best_match(key, prompt, context, _ctx=ctx,
+                                             asset_format=asset_format)
+            if near is not None and near_score >= threshold:
+                why = _guard_refusal(key, near)
+                if why:
+                    logger.info("visual library: refused %s <- %s (score %.2f) — "
+                                "%s", key, near.get("asset_key"), near_score, why)
         return None
     return {**best, "match_score": round(best_score, 4),
             "match_source": source, "context": ctx.__dict__}
@@ -1208,7 +1243,9 @@ def log_decision(record: dict[str, Any]) -> None:
 
 def hydrate(key: str, prompt: str, cache_dir: Path,
             context: dict[str, Any] | None = None,
-            *, asset_format: str | None = None) -> dict[str, Any] | None:
+            *, asset_format: str | None = None,
+            replace: bool = False,
+            hit: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Download a remote approved asset into the renderer's existing cache.
 
     Cached under the REQUESTED key, not the matched one. The caller looks for
@@ -1226,14 +1263,25 @@ def hydrate(key: str, prompt: str, cache_dir: Path,
     `asset_format` says which tier is asking. The bytes are written unchanged:
     an SVG is stored and served as markup, never rasterised to fit the older
     path.
+
+    `replace` overwrites a file that is already cached. The default stays
+    "cached wins" — the reason this exists is the one case where it should
+    not, an entry an earlier AI generation wrote that the library has since
+    been given a reviewed asset for (see the integration wrapper). Both writes
+    are atomic, so a concurrent reader sees the old file or the new one, never
+    a half of either.
+
+    `hit` is a row a caller has ALREADY found. Every lookup is a paged read of
+    the whole approved table, so a caller that scored the library to decide
+    whether to hydrate at all must not pay for the identical scan twice.
     """
-    hit = find(key, prompt, context, asset_format=asset_format)
+    hit = hit or find(key, prompt, context, asset_format=asset_format)
     if not hit:
         return None
     fmt = row_format(hit)
     target = _local_asset_path(cache_dir, key, fmt)
     meta = _local_meta_path(cache_dir, key, fmt)
-    if target.exists():
+    if target.exists() and not replace:
         return hit
     path = str(hit.get("storage_path") or "")
     sb = _sb()
