@@ -106,8 +106,8 @@ class TestCardTiming:
 class TestOnePenPerLesson:
     def test_a_segment_loader_never_generates(self, tmp_path, monkeypatch):
         from spike.scene_engine import raster_assets as ra
-        monkeypatch.setattr(ra, "_vertex_call", lambda p: (_ for _ in ()).throw(AssertionError("generated")))
-        monkeypatch.setattr(ra, "_aistudio_call", lambda p: (_ for _ in ()).throw(AssertionError("generated")))
+        monkeypatch.setattr(ra, "_vertex_call", lambda *a, **k: (_ for _ in ()).throw(AssertionError("generated")))
+        monkeypatch.setattr(ra, "_aistudio_call", lambda *a, **k: (_ for _ in ()).throw(AssertionError("generated")))
         # the production key is served from the bundle with zero model calls...
         assert ra.load_hand("hand_pen", tmp_path, allow_generate=False) is not None
         # ...and a key that is not shipped stays None rather than generating

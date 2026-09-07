@@ -32,8 +32,8 @@ def _no_live_calls(monkeypatch, tmp_path):
 def _transports(monkeypatch):
     """Both transports as recorders that produce nothing (the board degrades)."""
     calls = []
-    monkeypatch.setattr(ra, "_vertex_call", lambda prompt: (calls.append("vertex"), None)[1])
-    monkeypatch.setattr(ra, "_aistudio_call", lambda prompt: (calls.append("aistudio"), None)[1])
+    monkeypatch.setattr(ra, "_vertex_call", lambda *a, **k: (calls.append("vertex"), None)[1])
+    monkeypatch.setattr(ra, "_aistudio_call", lambda *a, **k: (calls.append("aistudio"), None)[1])
     return calls
 
 

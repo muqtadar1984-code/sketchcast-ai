@@ -536,8 +536,8 @@ class TestReviewRegressions:
         import io
         buf = io.BytesIO()
         black.save(buf, "PNG")
-        monkeypatch.setattr(ra, "_vertex_call", lambda p: buf.getvalue())
-        monkeypatch.setattr(ra, "_aistudio_call", lambda p: None)
+        monkeypatch.setattr(ra, "_vertex_call", lambda *a, **k: buf.getvalue())
+        monkeypatch.setattr(ra, "_aistudio_call", lambda *a, **k: None)
         assert ra.get_raster_asset("k", "prompt", tmp_path) is None
 
     def test_frames_twice_same_renderer_is_deterministic(self, tmp_path):

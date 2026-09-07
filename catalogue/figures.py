@@ -37,14 +37,24 @@ Per figure (``render_figure``), in order:
          builder on a sibling thread of a ``WORKER_CONCURRENCY > 1`` worker
          is real contention for the same image pool): the job stops with
          ``paused: builder jobs queued`` and finishes DONE with the remaining
-         figures still draft, so re-enqueueing it picks up where it left;
+         figures still draft, so re-enqueueing it picks up where it left.
+         That check is BETWEEN figures; the same question is also asked
+         before every image call the ladder makes INSIDE one, through the
+         engine's own hook (``_yielding_to_users`` below) — a figure that
+         started while the queue was empty must not hold the pool through a
+         second generation and two 60s Retry-After waits after a teacher
+         arrives;
        * this job's image budget holds: ``reset_image_budget(job_id)`` at the
          start, at most ``IMAGE_CALLS_PER_LESSON`` generations per job and
          never once the engine's own ``image_budget_exhausted`` says so —
          stop with ``paused: image budget spent``.
      The ladder is the engine's: ``get_svg_asset`` when ``SCENE_SVG_ASSETS=1``
      (text generation, no image quota, ``<g id>`` groups ARE the parts), else
-     ``get_raster_asset(allow_generate=True)``. Both module functions are the
+     ``get_raster_asset(allow_generate=True)`` — both under the FIGURE image
+     role (``shared/image_models.py``), because what this job draws is
+     approved once and then reused by every kit, document and translated
+     channel of the topic, which is a different bargain from the thirty
+     one-shot diagrams inside a single video. Both module functions are the
      visual-library wrapper's (shared/visual_library_integration), so a
      generated asset is normally published on the way out; the job then finds
      the row by CONTENT HASH of the cached file, and publishes it itself
@@ -89,6 +99,7 @@ import json
 import logging
 import os
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -274,12 +285,18 @@ class FigureBackend:
     publish: Callable[[str, str, Rendered, dict], bool]
     budget_exhausted: Callable[[], bool]
     reset_budget: Callable[[str], None]
+    # The never-starve rule's DURING half: hand the engine a
+    # ``fn(what) -> bool`` it asks before every image generation, or None to
+    # remove it. Optional, so a test backend that models no engine carries
+    # nothing; production always sets it (see ``default_backend``).
+    set_yield: Optional[Callable[[Optional[Callable[[str], bool]]], None]] = None
 
 
 def default_backend() -> FigureBackend:
     """The real engine, imported lazily: importing ``spike.scene_engine``
     installs the visual-library wrapper and indexes the local asset cache,
     which a test of this module's logic must never trigger."""
+    from shared import image_models as images
     from shared import visual_library as lib
     from shared import visual_library_integration as integration
     from spike.scene_engine import raster_assets as ra
@@ -293,12 +310,22 @@ def default_backend() -> FigureBackend:
         return None
 
     def generate(key: str, prompt: str) -> Optional[Rendered]:
-        if os.getenv("SCENE_SVG_ASSETS", "").strip() == "1":
-            asset = sa.get_svg_asset(key, prompt, None, True)
-            if asset is not None:
-                path = sa.svg_cache_dir(None, key) / "asset.svg"
-                return Rendered(path, "svg", list(asset.layer_ids()), _meta(path.parent))
-        asset = ra.get_raster_asset(key, prompt, None, True)
+        # THE FIGURE ROLE, and the only place it is claimed. What this job
+        # draws is not an incidental board diagram: a reviewer approves it
+        # once and then every kit built from the topic, every printed
+        # document and every translated channel shows that same picture, for
+        # as long as the topic exists. So it is drawn by the best model the
+        # profile offers, at the resolution that profile names, while the
+        # scene engine's own thirty-a-lesson diagrams keep whatever the
+        # `scene` role says (shared/image_models.py). Scoped to the call:
+        # nothing downstream of this block inherits it.
+        with ra.image_role(images.FIGURE):
+            if os.getenv("SCENE_SVG_ASSETS", "").strip() == "1":
+                asset = sa.get_svg_asset(key, prompt, None, True)
+                if asset is not None:
+                    path = sa.svg_cache_dir(None, key) / "asset.svg"
+                    return Rendered(path, "svg", list(asset.layer_ids()), _meta(path.parent))
+            asset = ra.get_raster_asset(key, prompt, None, True)
         if asset is not None and asset.trace:
             # Asked of the renderer rather than rebuilt from the key: the
             # ladder may have served this key from the cache of the SAME WORD
@@ -313,8 +340,12 @@ def default_backend() -> FigureBackend:
         return bool(lib.publish_generated(key, prompt, rendered.path, rendered.meta, context,
                                           asset_format=rendered.fmt))
 
+    # ``set_user_yield`` files the hook under the CURRENT generation bucket,
+    # which ``reset_budget(job_id)`` has just made this job's — so it is armed
+    # after that call, on that thread, and removed in a finally.
     return FigureBackend(set_context=integration.set_context, find=find, generate=generate, publish=publish,
-                         budget_exhausted=ra.image_budget_exhausted, reset_budget=ra.reset_image_budget)
+                         budget_exhausted=ra.image_budget_exhausted, reset_budget=ra.reset_image_budget,
+                         set_yield=ra.set_user_yield)
 
 
 def _meta(asset_dir: Path) -> dict:
@@ -480,6 +511,55 @@ def render_figure(sb, backend: FigureBackend, figure: dict, context: dict, gate:
     return "reused" if reused else "generated"
 
 
+@contextmanager
+def _yielding_to_users(sb, job_id: str, backend: FigureBackend):
+    """Arm the scene engine's per-image never-starve hook for this job.
+
+    ``gate()`` is asked once per figure, immediately before the ladder starts.
+    EVERYTHING after it ran unwatched: the raster ladder, the escalated no-text
+    regeneration (a second full generation), up to four HTTP attempts each with
+    a backoff that honours a server Retry-After up to 60s, and the vision
+    annotation calls. So a figure let through at 04:55 against an empty queue
+    could still hold the ~1 image/minute pool for minutes after a teacher
+    submitted at 04:56 — and on Pro, which is ~2.8x slower per unit of that
+    capacity, minutes is the realistic number rather than the theoretical one.
+
+    The machinery to stop it was already in the engine and already correct:
+    ``raster_assets._clear_to_generate`` asks this hook before every image
+    generation, makes the give-up sticky for the rest of the job and logs it.
+    Only the KIT path (``worker/process.py::_process_catalogue``) ever armed
+    one, so in the figure lane it returned True unconditionally. This registers
+    the same probe-backed wait the kit uses, and removes it on the way out so a
+    later job in this worker cannot inherit a dead hook.
+
+    A backend that models no engine (every test fake) sets nothing and this is
+    a no-op.
+    """
+    if backend.set_yield is None:
+        yield None
+        return
+    # Imported here, not at module scope: catalogue.kit pulls in the analyzer
+    # and the article loader, and this module is imported by run.py's cheap
+    # failure path.
+    from catalogue.kit import ContentionProbe, yield_to_users
+
+    # One queue read per ten seconds however many callers ask, and an
+    # unreadable queue answers "contended" — the safe way round: a figure
+    # waits, a teacher never does.
+    probe = ContentionProbe(sb)
+
+    def clear_to_generate(what: str) -> bool:
+        return yield_to_users(probe, on_wait=lambda elapsed: log.warning(
+            "figure job %s: a user builder is live; %s waits (%.0fs so far)",
+            job_id, what, elapsed))
+
+    backend.set_yield(clear_to_generate)
+    try:
+        yield probe
+    finally:
+        backend.set_yield(None)
+
+
 def render_figures(sb, job_id: str, params: dict, backend: Optional[FigureBackend] = None) -> dict:
     """The job proper; returns the summary also written to ``jobs.stage``."""
     article_id = params.get("article_id")
@@ -511,28 +591,30 @@ def render_figures(sb, job_id: str, params: dict, backend: Optional[FigureBacken
         if stage["generated"] >= cap or backend.budget_exhausted():
             raise _Pause(PAUSED_BUDGET)
 
-    for fig in figures:
-        try:
-            outcome = render_figure(sb, backend, fig, context, gate)
-            stage[outcome] += 1
-        except _Pause as pause:
-            stage["paused"] = pause.note
-            log.warning("figure job %s %s; %d figure(s) left draft for a re-run",
-                        job_id, pause.note, len(figures) - stage["done"])
-            break
-        except Exception as exc:  # noqa: BLE001 — the next figure still runs
-            detail = str(exc) if isinstance(exc, FigureRefused) else f"{type(exc).__name__}: {exc}"
-            msg = f"{fig.get('figure_key') or '?'}: {detail}"[:300]
-            errors.append(msg)
-            stage["failed"] += 1
+    # armed AFTER reset_budget, which is what made this job's bucket current
+    with _yielding_to_users(sb, job_id, backend):
+        for fig in figures:
             try:
-                mark_failed(sb, fig["id"], detail)
-            except Exception as exc2:  # noqa: BLE001
-                log.error("figure %s: could not record the failure: %s", fig.get("id"), exc2)
-            log.warning("figure failed — %s", msg)
-        stage["done"] += 1
-        db.set_stage(sb, job_id, dict(stage))
-        db.set_progress(sb, job_id, 5 + int(90 * stage["done"] / max(1, len(figures))))
+                outcome = render_figure(sb, backend, fig, context, gate)
+                stage[outcome] += 1
+            except _Pause as pause:
+                stage["paused"] = pause.note
+                log.warning("figure job %s %s; %d figure(s) left draft for a re-run",
+                            job_id, pause.note, len(figures) - stage["done"])
+                break
+            except Exception as exc:  # noqa: BLE001 — the next figure still runs
+                detail = str(exc) if isinstance(exc, FigureRefused) else f"{type(exc).__name__}: {exc}"
+                msg = f"{fig.get('figure_key') or '?'}: {detail}"[:300]
+                errors.append(msg)
+                stage["failed"] += 1
+                try:
+                    mark_failed(sb, fig["id"], detail)
+                except Exception as exc2:  # noqa: BLE001
+                    log.error("figure %s: could not record the failure: %s", fig.get("id"), exc2)
+                log.warning("figure failed — %s", msg)
+            stage["done"] += 1
+            db.set_stage(sb, job_id, dict(stage))
+            db.set_progress(sb, job_id, 5 + int(90 * stage["done"] / max(1, len(figures))))
 
     summary = {**stage, "step": "paused" if stage["paused"] else "done"}
     if errors:

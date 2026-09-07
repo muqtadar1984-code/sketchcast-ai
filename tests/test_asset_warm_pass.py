@@ -84,7 +84,7 @@ class TestDeferralReplacesTheLadder:
         err = requests.HTTPError(response=resp)
         calls = []
 
-        def vertex(_prompt):
+        def vertex(_prompt, *_a, **_kw):
             calls.append("vertex")
             ra._note_rate_limited(err)
             return None

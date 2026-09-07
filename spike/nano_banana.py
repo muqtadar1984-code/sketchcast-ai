@@ -7,13 +7,17 @@ import io
 import os
 from pathlib import Path
 
-DEFAULT_MODEL = "gemini-3-pro-image-preview"
+from shared.image_models import FLASH, PRO
+
+DEFAULT_MODEL = PRO
 # Tried in order; first one that returns an image wins. Pro is best for slides;
 # Flash is the cheaper Nano Banana. Both require billing/credits on the key.
-CANDIDATE_MODELS = [
-    "gemini-3-pro-image-preview",
-    "gemini-2.5-flash-image",
-]
+#
+# Taken from shared/image_models.py rather than spelled out again: this spike
+# named `gemini-3-pro-image-preview` (an id that stopped being the model's
+# name) and `gemini-2.5-flash-image` (an id that stops serving 2026-10-02), so
+# a second copy of the list is exactly how a rename gets missed.
+CANDIDATE_MODELS = [PRO, FLASH]
 
 DEFAULT_INSTRUCTION = (
     "You are designing a polished classroom lesson slide. Take this slide and "
