@@ -75,7 +75,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, time as dtime, timedelta, timezone
 from typing import Callable, Iterable, Optional
 
-from agent2_analysis.analyzer import NARRATION_WPM, build_chapter_parts
+from agent2_analysis.analyzer import (MAX_ANALYSIS_CHARS, MAX_PART_WORDS,
+                                      NARRATION_WPM, build_chapter_parts)
 from catalogue import timestamps as ts
 from catalogue.article import Mapping, load_article, load_mappings, load_topic, pick_depth_node
 from catalogue.harvest import clean_heading
@@ -165,6 +166,23 @@ def part_words_budget() -> int:
     """The words bound handed to build_chapter_parts: minutes × 130 wpm
     (2,210 at the default 17; 2,600 at the 20-minute ceiling)."""
     return part_target_minutes() * NARRATION_WPM
+
+
+def part_chars_budget() -> int:
+    """The CHARS bound, scaled to keep the words bound reachable.
+
+    Raising only the words budget did nothing: the chunker closes a part when
+    EITHER bound would overflow, and at the book's ratio (15,000 chars per
+    1,950 words) 2,210 words is about 17,000 characters — so the char ceiling
+    always bound first and the catalogue's 17-minute setting never decided
+    anything. Measured on the live Cells article, part 1 closed at 14,532
+    chars with 2,059 words, 151 short of a budget it could not reach.
+
+    Scaled from the book's own ratio rather than picked, so the two bounds
+    keep saying the same thing about length; the ratio is the model's context
+    per lesson-word and does not change because the lesson is longer.
+    """
+    return -(-part_words_budget() * MAX_ANALYSIS_CHARS // MAX_PART_WORDS)
 
 
 def _parse_hhmm(text: str) -> Optional[dtime]:
@@ -713,7 +731,9 @@ def prepare(sb, gen: dict) -> Prepared:
     if article is not None:
         figures = load_rendered_figures(sb, article_id) if article_id else []
         prepared.chapter = article_to_chapter(article, figures)
-        prepared.chunks = build_chapter_parts(prepared.chapter, max_words=part_words_budget())
+        prepared.chunks = build_chapter_parts(prepared.chapter,
+                                              max_words=part_words_budget(),
+                                              max_chars=part_chars_budget())
         prepared.section_ids = section_ids_by_heading(article)
     return prepared
 
@@ -969,6 +989,7 @@ def after_generation(sb, gen: dict, kit_id: Optional[str], outcome: dict,
 
 __all__ = ["CatalogueRefused", "ContentionProbe", "NARRATION_STYLE", "PAUSED_FOR_USERS", "Prepared",
            "after_generation", "catalogue_window_open", "curriculum_header_lines", "header_lines", "is_catalogue",
-           "level_for_grade", "mark_kit_failed", "outro_segment", "part_words_budget", "prepare",
+           "level_for_grade", "mark_kit_failed", "outro_segment", "part_chars_budget",
+           "part_words_budget", "prepare",
            "presentation_margin_minutes", "recap_segment", "record_presentation", "student_voice_for",
            "sync_kit_completion", "synthetic_book", "yield_to_users"]
