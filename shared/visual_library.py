@@ -1731,7 +1731,8 @@ def record_vision(asset_id: str, payload: dict[str, Any] | None) -> bool:
 def publish_generated(asset_key: str, prompt: str, asset_path: Path,
                       metadata: dict[str, Any] | None = None,
                       context: dict[str, Any] | None = None,
-                      *, asset_format: str | None = None) -> bool:
+                      *, asset_format: str | None = None,
+                      allow_additional_face: bool = False) -> bool:
     """Publish a newly generated, already-validated asset as a reusable one.
 
     The bytes go to Supabase Storage; metadata goes to Postgres. A matching
@@ -1844,11 +1845,22 @@ def publish_generated(asset_key: str, prompt: str, asset_path: Path,
     sb = _sb()
     if sb is None:
         return True
-    # One approved avatar per canonical key. A second face for the same
-    # teacher is not a new asset, it is a different teacher; the roster is
-    # looked up by key (find_avatar), so a duplicate would never be served
-    # and would only keep the library growing by one row per deploy.
-    if is_avatar_key(asset_key) and find_avatar(asset_key) is not None:
+    # One approved avatar per canonical key — for the RENDERER. CACHE_DIR
+    # lives inside the Railway container with no volume mounted, so every
+    # redeploy empties it and the next lesson redraws whatever avatar it
+    # needs. Without this the library would gain a face per deploy, forever.
+    #
+    # But the roster deliberately holds SEVERAL faces per key: `pick_avatar`
+    # draws one per generation by rendezvous hashing so different lessons cast
+    # visibly different teachers, and the live library has five
+    # `avatar_teacher_female` rows. The old comment here said a duplicate
+    # "would never be served", which `find_avatar` — one exact row, used for
+    # hydration — makes true of ITSELF and false of the roster. So the two
+    # cases are separated by intent rather than by accident: an incidental
+    # regeneration still refuses, and a deliberate roster addition says so.
+    # Curation tools pass the flag; nothing on the render path does.
+    if (is_avatar_key(asset_key) and not allow_additional_face
+            and find_avatar(asset_key) is not None):
         logger.info("visual library: avatar %s already published; not adding another", asset_key)
         return True
     try:
