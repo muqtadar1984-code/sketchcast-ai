@@ -22,10 +22,11 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import re
 import sys
 from pathlib import Path
+
+from shared.text_models import DIRECTOR
 
 from .director import SCENE_DIRECTION_SPEC, parse_scene_response
 from .encode import FPS, encode_scene
@@ -37,7 +38,11 @@ from .tts import narrate
 
 logger = logging.getLogger(__name__)
 
-DIRECTOR_MODEL = os.getenv("GEMINI_DIRECTOR_MODEL", "gemini-2.5-pro")
+# The director's model was a module-level `os.getenv("GEMINI_DIRECTOR_MODEL",
+# "gemini-2.5-pro")` read once at import; that literal stops serving on
+# 2026-10-20 and Google names Gemini 3.5 Flash as its successor. It now comes
+# from shared/text_models.py, resolved per call under the DIRECTOR role, and
+# GEMINI_DIRECTOR_MODEL still wins exactly as it did.
 OUT_DIR = Path(__file__).resolve().parent.parent / "out" / "directed"
 
 _TASK = """You are the visual director for SketchCast whiteboard lessons.
@@ -77,7 +82,11 @@ def direct_scene(topic: str, grade: str, subject: str,
         ask = prompt if attempt == 1 else (
             prompt + f"\nYour previous output failed validation with: {last_err}\n"
                      "Fix EXACTLY that and return the full corrected JSON.")
-        raw = _gen_text(ask, model=model or DIRECTOR_MODEL)
+        # `role=DIRECTOR` is what makes this a different call from the SVG
+        # tier's, even though both go through the same transport: a different
+        # model, and a thinking level chosen for a once-per-lesson call that
+        # decides the entire scene rather than for a throwaway diagram.
+        raw = _gen_text(ask, model=model, role=DIRECTOR)
         if raw is None:
             logger.error("director model unreachable")
             return None

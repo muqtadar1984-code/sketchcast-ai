@@ -40,6 +40,8 @@ from shared.asset_keys import (KEY_NOISE, canonical_key, is_avatar_key,
                                spelling_variants)
 from shared.image_models import SCENE, ImageModel, nearest_aspect
 from shared.image_models import resolve as resolve_image_model
+from shared.text_models import VISION as TEXT_VISION
+from shared.text_models import resolve as resolve_text_model
 
 from .trace import drawing_order
 
@@ -1068,12 +1070,38 @@ def _image_from(payload: dict, what: str = "image",
 
 
 def _vision_json(prompt: str, png_bytes: bytes) -> dict | None:
-    """One image + prompt -> parsed JSON, via the same Vertex-first transport."""
+    """One image + prompt -> parsed JSON, via the same Vertex-first transport.
+
+    The model id was `os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")`,
+    and that literal stops serving on 2026-10-20. It now comes from
+    shared/text_models.py, which also carries the reason this role is fussier
+    than the others: it DECLARES that it needs image input
+    (text_models.REQUIRES[VISION]), and an id the registry has facts about that
+    does not offer it is refused for this role. That check reaches exactly as
+    far as the registry does — an id nobody has added to it advertises nothing,
+    is honoured anyway, and is only complained about, so the declaration is a
+    guard against a bad DEFAULT, not a guarantee about every pin.
+
+    WHICH MATTERS HERE MORE THAN ANYWHERE ELSE, because this is the call that
+    fails quietly. A model that will not take the image part 400s, the Vertex
+    attempt is swallowed by `except Exception`, AI Studio 400s the same way,
+    and this returns None — so `annotate_regions` hands back regions={} and
+    text_boxes=[], every leader line loses its anchor, and `scrub_all_text`,
+    which is driven by those text boxes, erases nothing, shipping the model's
+    own baked-in labels inside the artwork. The lesson completes and looks
+    fine. GEMINI_VISION_MODEL still wins exactly as it did.
+
+    The body gains a thinkingConfig only when the resolved level says so; on
+    the `retiring` profile it stays the bare {"contents": ...} it is today.
+    """
+    vision = resolve_text_model(TEXT_VISION)
     img_part = {"inlineData": {"mimeType": "image/png",
                                "data": base64.b64encode(png_bytes).decode()}}
-    body = {"contents": [{"role": "user",
-                          "parts": [img_part, {"text": prompt}]}]}
-    vision_model = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
+    body: dict = {"contents": [{"role": "user",
+                                "parts": [img_part, {"text": prompt}]}]}
+    if vision.thinking_config:
+        body["generationConfig"] = {"thinkingConfig": vision.thinking_config}
+    vision_model = vision.id
 
     def call(url, headers):
         def _go():

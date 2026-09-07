@@ -17,6 +17,15 @@ generation: 5,022 answer tokens against 1,917 thinking tokens — a 38% surcharg
 on the tokens that dominate the bill (88% of SketchCast's per-generation cost is
 output). This client asks for deterministic small-output JSON and wants none of
 it, exactly as ClaudeClient sends thinking={"type": "disabled"}.
+
+HOW that suppression is spelled now depends on the model, which is why the
+model id and the thinking dialect are resolved TOGETHER by
+shared/text_models.py rather than hardcoded here. `thinkingBudget: 0` — the
+line this file carried for a year — is not supported on Gemini 3 at all, so an
+id swap alone would have kept working while silently paying for thinking again;
+on 3.x the same intent is `thinkingLevel: MINIMAL`, and sending both fields in
+one request is a documented 400. `_post` therefore asks the registry for the
+fragment instead of writing one.
 """
 
 from __future__ import annotations
@@ -29,6 +38,7 @@ from pathlib import Path
 
 import requests
 
+from shared import model_env, text_models
 from shared.claude_client import (
     ClaudeClient,
     _ensure_google_credentials,
@@ -39,12 +49,35 @@ from shared.claude_client import (
 # $/1M tokens, Vertex list price. Thinking tokens bill at the OUTPUT rate, so
 # track_tokens folds thoughtsTokenCount into output rather than counting it
 # separately — the bill does the same.
+#
+# NO LONGER THE FIRST PLACE LOOKED. This table hardcoded only the two 2.5
+# rates, so every id the October 2026 migration moves to would have been costed
+# at 2.5 Flash's price — silently, forever, in the ledger the financial model
+# is built from. `pricing_for` asks shared/text_models.REGISTRY first, where a
+# model's rate lives with the rest of its facts; this stays as the fallback for
+# ids that PREDATE the registry and are not worth an entry.
+#
+# WHICH IS WHY gemini-2.5-flash AND gemini-2.5-pro ARE NO LONGER HERE. They
+# were, with the same rates the registry now holds — and the registry wins, so
+# a future price change made in this table (the one an engineer finds first —
+# it is the module-level constant, and tests/test_gemini_client.py used to read
+# its rates directly) would have had NO effect on token_log.jsonl or on the
+# financial model built from it, and no test would have failed. Two tables
+# holding one fact, with the loser silent, is the second-source-of-truth shape
+# this migration otherwise avoided. A test asserts the two share no keys.
 GEMINI_PRICING = {
-    "gemini-2.5-flash": (0.30, 2.50),
-    "gemini-2.5-pro": (1.25, 10.00),
     "gemini-2.0-flash": (0.10, 0.40),
 }
 _DEFAULT_PRICING = (0.30, 2.50)
+
+
+def pricing_for(model: str) -> tuple[float, float]:
+    """($/1M input, $/1M output) for a model id: the registry, then the legacy
+    table above, then the default rate an unknown id has always been costed
+    at."""
+    return (text_models.pricing_for(model)
+            or GEMINI_PRICING.get(model, _DEFAULT_PRICING))
+
 
 _MEDIA = {
     "jpg": "image/jpeg", "jpeg": "image/jpeg",
@@ -53,12 +86,20 @@ _MEDIA = {
 
 
 def gemini_model(kind: str | None = None) -> str:
-    """Mirror of artifact_model(): global default, per-kind override."""
+    """Mirror of artifact_model(): global default, per-kind override.
+
+    Precedence is unchanged — `GEMINI_MODEL_<KIND>` beats `GEMINI_MODEL` beats
+    the default — so nothing an operator has set on Railway means anything
+    different. What moved is the DEFAULT: it is no longer a literal here but
+    shared/text_models.resolve(ARTIFACT), which reads GEMINI_MODEL itself and
+    then falls to the profile in force. The literal it replaced was
+    "gemini-2.5-flash", which stops serving on 2026-10-20.
+    """
     if kind:
         specific = os.getenv("GEMINI_MODEL_" + kind.upper())
         if specific:
             return specific
-    return os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    return text_models.resolve(text_models.ARTIFACT).id
 
 
 def _json_mode() -> bool:
@@ -133,6 +174,12 @@ def _access_token() -> str:
 # compare against 32000: a request AT 32000 therefore got NO retry at all,
 # and one at 30000 "doubled" to min(60000, 32000) — a 6% bump that truncated
 # again. Long lessons (conversational, multi-chapter visual plans) died on it.
+#
+# It is also every 3.x successor's ceiling (verified 2026-09-07 and recorded in
+# shared/text_models.REGISTRY), which is what makes the migration safe for the
+# 32,000 the script path asks for and the 64,000 the retry doubles it to. This
+# stays the retry's own ceiling; `_within_ceiling` is what stops a request
+# going over the CHOSEN model's, whatever that model turns out to be.
 MAX_OUTPUT_TOKENS = 65536
 
 
@@ -172,6 +219,14 @@ class GeminiClient:
         # A schema needs the mime type with it — Vertex rejects responseSchema
         # on a free-text reply — so the two travel together or not at all.
         schema_on = bool(response_schema) and json_on and _response_schema_enabled()
+        # The thinking suppression, in whichever dialect THIS model speaks.
+        # This used to be a literal {"thinkingBudget": 0}, which is the field
+        # Gemini 3 dropped: the guard would have gone on being sent and gone on
+        # being ignored, and the +38% surcharge it exists to prevent would have
+        # come back with nothing in any log to say so.
+        chosen = text_models.resolve(text_models.ARTIFACT, model_id=self.model)
+        thinking = chosen.thinking_config
+        max_tokens = self._within_ceiling(chosen, max_tokens)
         body = {
             "contents": [{"role": "user", "parts": parts}],
             "systemInstruction": {"parts": [{"text": system}]},
@@ -179,7 +234,7 @@ class GeminiClient:
                 "maxOutputTokens": max_tokens,
                 # See module docstring: thinking bills as output, +38% measured,
                 # and this workload gains nothing from it.
-                "thinkingConfig": {"thinkingBudget": 0},
+                **({"thinkingConfig": thinking} if thinking else {}),
                 # Ask for JSON. Two of the founder's lessons failed on
                 # 2026-09-04, and Sara Hamaydeh's on 2026-09-05, with COMPLETE
                 # replies whose JSON was malformed — asking is not constraining,
@@ -213,6 +268,41 @@ class GeminiClient:
             raise _SchemaRejected(res.text[:500])
         res.raise_for_status()
         return res.json()
+
+    @staticmethod
+    def _within_ceiling(chosen: text_models.TextModel, max_tokens: int) -> int:
+        """`max_tokens`, never above what this model will actually accept.
+
+        THE REGISTRY'S KNOWLEDGE HAS TO BE LOAD-BEARING OR IT IS A COMMENT.
+        maxOutputTokens above a model's published ceiling is a 400
+        INVALID_ARGUMENT, and `_call` catches only _RateLimited and
+        _SchemaRejected — so a `res.raise_for_status()` here propagates out of
+        `_call`, out of `analyze`, and FAILS the generation. It is not a
+        degradation anything downstream can absorb.
+
+        The callers that reach highest are the ones that earn the money:
+        agent3_scripts/script_generator.py asks for 32,000 on every lesson
+        script (30,000 non-conversational), catalogue/questions.py for 24,000,
+        and `analyze`'s truncation retry doubles whatever it was given to as
+        much as MAX_OUTPUT_TOKENS. Every current registry model tops out at
+        exactly 65,536, so this clamps nothing today; it is the guard that lets
+        a smaller-ceiling model be added to the registry without taking the
+        script path down on the deploy that adds it.
+
+        An id the registry has no entry for has no ceiling to clamp against and
+        is passed through untouched — the same choice `_model_id` makes about
+        honouring it at all.
+        """
+        ceiling = chosen.spec.max_output_tokens
+        if not ceiling or max_tokens <= ceiling:
+            return max_tokens
+        model_env.shout(logger,
+                        "max_tokens=%d is above %s's published output ceiling "
+                        "of %d, which Vertex answers with a 400; sending %d "
+                        "instead. A reply that needed the larger budget will "
+                        "come back truncated rather than not at all."
+                        % (max_tokens, chosen.id, ceiling, ceiling))
+        return ceiling
 
     def _call(self, parts: list[dict], system: str, max_tokens: int, retries: int,
               response_schema: dict | None = None, wants_json: bool = True) -> dict:
@@ -257,7 +347,7 @@ class GeminiClient:
         answer = int(u.get("candidatesTokenCount") or 0)
         thoughts = int(u.get("thoughtsTokenCount") or 0)
         out = answer + thoughts
-        in_rate, out_rate = GEMINI_PRICING.get(self.model, _DEFAULT_PRICING)
+        in_rate, out_rate = pricing_for(self.model)
         cost = (inp * in_rate + out * out_rate) / 1_000_000
         usage = {
             "input_tokens": inp,

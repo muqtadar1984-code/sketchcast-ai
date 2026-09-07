@@ -33,6 +33,8 @@ from pathlib import Path
 import requests
 
 from shared.asset_keys import canonical_key
+from shared.text_models import SVG, TextModel
+from shared.text_models import resolve as resolve_text_model
 
 from .geometry import Point, path_length, resample, roughen
 from .svg_validate import (SvgValidation, is_valid_group_id,
@@ -47,7 +49,11 @@ __all__ = [
     "svg_cache_dir", "svg_group_ids", "validate_svg_document",
 ]
 
-SVG_MODEL = os.getenv("GEMINI_SVG_MODEL", "gemini-2.5-flash")
+# The model id used to be a module-level `os.getenv("GEMINI_SVG_MODEL",
+# "gemini-2.5-flash")` read ONCE at import — so nothing could move it after the
+# module loaded, and the literal it defaulted to stops serving on 2026-10-20.
+# It now comes from shared/text_models.py, per call, and GEMINI_SVG_MODEL still
+# wins exactly as it did.
 CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "storage" / "scene_assets"
 NOMINAL_W = 800.0  # parsed assets normalize to this width, like authored ones
 
@@ -73,12 +79,34 @@ STRICT RULES:
 
 # ── generation transport (text) ──────────────────────────────────────────────
 
-def _gen_text(prompt: str, model: str | None = None) -> str | None:
+def _gen_text(prompt: str, model: TextModel | str | None = None,
+              *, role: str = SVG) -> str | None:
     """Text generation via the prod Gemini stack: Vertex first (credited),
     AI Studio key fallback (text runs on the free tier). Shared by the SVG
-    tier and the live director (direct.py)."""
-    model = model or SVG_MODEL
-    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+    tier and the live director (direct.py) — hence `role`, which is what
+    decides the model and the thinking level for the two callers separately.
+
+    `model` may be an already-resolved TextModel (the SVG tier resolves one so
+    it can record the id it actually used in the cache metadata), a bare id
+    string (direct.py's --model style override), or None.
+
+    THE BODY. This has always been a bare {"contents": [...]} with no
+    generationConfig, which means both callers have always run at whatever
+    thinking the model does by default. That is preserved exactly wherever the
+    resolved thinking level is UNSTATED — including the whole `retiring`
+    profile, so a rollback sends the byte-identical request it sends today.
+    Where a level IS stated, it is sent in the dialect that model speaks;
+    `TextModel.thinking_config` guarantees it is never both dialects at once,
+    which is a documented 400.
+    """
+    chosen = (model if isinstance(model, TextModel)
+              else resolve_text_model(role, model_id=model))
+    body: dict = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+    if chosen.thinking_config:
+        body["generationConfig"] = {"thinkingConfig": chosen.thinking_config}
+    # Named apart from the `model` parameter on purpose: from here down this is
+    # a bare id going into a URL, not the resolved object.
+    model_id = chosen.id
     project = os.getenv("VERTEX_PROJECT_ID", "").strip()
     if project:
         try:
@@ -93,25 +121,25 @@ def _gen_text(prompt: str, model: str | None = None) -> str | None:
             host = ("aiplatform.googleapis.com" if region == "global"
                     else f"{region}-aiplatform.googleapis.com")
             url = (f"https://{host}/v1/projects/{project}/locations/{region}"
-                   f"/publishers/google/models/{model}:generateContent")
+                   f"/publishers/google/models/{model_id}:generateContent")
             res = requests.post(url, headers={"Authorization": f"Bearer {creds.token}"},
                                 json=body, timeout=120)
             res.raise_for_status()
             return _text_from(res.json())
         except Exception as e:
-            logger.warning("Vertex SVG call failed (%s); trying AI Studio", e)
+            logger.warning("Vertex %s call failed (%s); trying AI Studio", role, e)
     key = os.getenv("GOOGLE_AI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     if not key:
         return None
     try:  # text models DO run on the free tier, unlike image models
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-               f"{model}:generateContent")
+               f"{model_id}:generateContent")
         res = requests.post(url, headers={"x-goog-api-key": key}, json=body,
                             timeout=120)
         res.raise_for_status()
         return _text_from(res.json())
     except Exception as e:
-        logger.warning("AI Studio SVG call failed: %s", e)
+        logger.warning("AI Studio %s call failed: %s", role, e)
         return None
 
 
@@ -373,7 +401,12 @@ def get_svg_asset(key: str, prompt: str, cache_dir: Path | None = None,
         logger.warning("cached SVG for %r no longer parses; regenerating", key)
     if not allow_generate:
         return None
-    text = _gen_text(f"Draw this as an educational diagram: {prompt}\n{_SVG_RULES}")
+    # Resolved HERE rather than inside _gen_text so the cache metadata below
+    # records the id this asset was actually drawn by, not the one a later
+    # reader's environment would resolve to.
+    model = resolve_text_model(SVG)
+    text = _gen_text(f"Draw this as an educational diagram: {prompt}\n{_SVG_RULES}",
+                     model=model)
     if not text:
         return None
     asset = parse_svg_asset(key, text)
@@ -388,7 +421,7 @@ def get_svg_asset(key: str, prompt: str, cache_dir: Path | None = None,
         # which machine generated it.
         svg_file.write_text(doc, encoding="utf-8", newline="\n")
         meta.write_text(json.dumps({"key": key, "prompt": prompt,
-                                    "model": SVG_MODEL,
+                                    "model": model.id,
                                     # "generated", spelled the same way the
                                     # raster tier spells it: the visual-library
                                     # wrapper publishes what it generated and

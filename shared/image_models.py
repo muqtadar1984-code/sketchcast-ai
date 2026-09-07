@@ -50,28 +50,32 @@ decides instead — never the premium default. A mistyped rollback lever must
 degrade to what the operator asked for, not escalate to the slowest and
 dearest model at the exact moment they were reaching for the cheap one.
 
-STILL UNMIGRATED, on this same family's retirement calendar and NOT covered by
-anything here. Each is env-overridable, so none is a hard break, but the set is
-four, not the one the build report named:
+THE OTHER FOUR IDS ARE NOW MIGRATED, in shared/text_models.py — a sibling, not
+an extension of this file, because a text model has no imageSize, no aspect
+ratio and no per-image price, and this module's binding constraint (a shared
+~1 image/minute pool) is not theirs. What the two share is the ENV CONTRACT and
+the loud-but-survivable fallback, and that lives in shared/model_env.py so the
+two registries cannot drift on it:
 
-    GEMINI_SVG_MODEL       spike/scene_engine/svg_assets.py    gemini-2.5-flash
-    GEMINI_VISION_MODEL    spike/scene_engine/raster_assets.py gemini-2.5-flash
-    GEMINI_MODEL           shared/gemini_client.py             gemini-2.5-flash
-    GEMINI_DIRECTOR_MODEL  spike/scene_engine/direct.py        gemini-2.5-pro
-
-GEMINI_SVG_MODEL is the one to fold in soonest: the SVG tier sits on the very
-figure ladder this module re-plumbed (catalogue/figures.py, SCENE_SVG_ASSETS).
+    GEMINI_SVG_MODEL       spike/scene_engine/svg_assets.py    -> text_models
+    GEMINI_VISION_MODEL    spike/scene_engine/raster_assets.py -> text_models
+    GEMINI_MODEL           shared/gemini_client.py             -> text_models
+    GEMINI_DIRECTOR_MODEL  spike/scene_engine/direct.py        -> text_models
 """
 
 from __future__ import annotations
 
 import logging
 import math
-import os
-import time
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
+
+from shared import model_env
+from shared.model_env import WARN_INTERVAL_DEFAULT as _WARN_INTERVAL_DEFAULT
+from shared.model_env import _WARNED
+from shared.model_env import env as _env
+from shared.model_env import warn_interval as _warn_interval
 
 logger = logging.getLogger(__name__)
 
@@ -289,49 +293,20 @@ class ImageModel:
         return round(tokens * self.spec.usd_per_million / 1_000_000, 6)
 
 
-# A misconfiguration is loud but not repeated forty times a lesson. It is also
-# not said ONCE PER PROCESS AND NEVER AGAIN: a Railway worker lives for days, so
-# a single line emitted at the first image call after a deploy has rolled out of
-# the log window long before anyone asks "what is this worker actually running?"
-# — and the answer the logs then give is silence, which reads as "nothing is
-# wrong" while a typo quietly decides every image call. So the same complaint
-# about the same value is repeated at most once per interval.
-#
-# Keyed by the formatted message, value = the monotonic second it was last said.
-# Cleared by tests.
-_WARNED: dict[str, float] = {}
+# A misconfiguration is loud but not repeated forty times a lesson, and not
+# said ONCE PER PROCESS AND NEVER AGAIN either. That contract, and the repeat
+# guard that implements it, now live in shared/model_env.py so the text
+# registry (shared/text_models.py) cannot drift from it. The names below are
+# unchanged and still mean what they meant; `IMAGE_MODEL_WARN_INTERVAL_S` is
+# still honoured.
 _WARN_INTERVAL_ENV = "IMAGE_MODEL_WARN_INTERVAL_S"
-_WARN_INTERVAL_DEFAULT = 900.0
-
-
-def _warn_interval() -> float:
-    """Seconds between repeats of one complaint. A junk value is the default,
-    never zero: this module's whole contract is that nothing here raises."""
-    raw = str(os.getenv(_WARN_INTERVAL_ENV, "") or "").strip()
-    if not raw:
-        return _WARN_INTERVAL_DEFAULT
-    try:
-        v = float(raw)
-    except (TypeError, ValueError):
-        return _WARN_INTERVAL_DEFAULT
-    return v if v > 0 else _WARN_INTERVAL_DEFAULT
 
 
 def _shout(message: str) -> None:
     """Say a misconfiguration, at most once per `_warn_interval()` seconds.
-    Pre-formatted rather than lazy so the same complaint about the same value
-    can be recognised as the same complaint; `logger.error` with no args does
-    no %-substitution of its own."""
-    now = time.monotonic()
-    said = _WARNED.get(message)
-    if said is not None and now - said < _warn_interval():
-        return
-    _WARNED[message] = now
-    logger.error(message)
-
-
-def _env(name: str) -> str:
-    return str(os.getenv(name, "") or "").strip()
+    Emitted on THIS module's logger so a log filter (and a test's
+    `caplog.set_level(..., logger=im.logger.name)`) can still name it."""
+    model_env.shout(logger, message)
 
 
 def normalize_role(role: str | None) -> str:
