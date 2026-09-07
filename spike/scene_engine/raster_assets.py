@@ -443,7 +443,10 @@ def _new_bucket() -> dict:
                       "aistudio_off_logged": False, "ceiling_logged": False},
             "deferred": {}, "abandoned": set(), "touched": time.monotonic(),
             # the never-starve hook (set_user_yield) and whether it gave up
-            "yield": None, "yield_gave_up": False, "yield_skipped": 0}
+            "yield": None, "yield_gave_up": False, "yield_skipped": 0,
+            # patient mode (set_patient_assets): a batch lesson waits a
+            # deferral out rather than shipping the board without the picture
+            "patient": None, "patience_spent": 0.0, "patience_waits": 0}
 
 
 def _bucket() -> dict:
@@ -540,6 +543,125 @@ def _clear_to_generate(what: str) -> bool:
         logger.error("%s: a user's job stayed live past the wait cap; this lesson makes no further image "
                      "calls (its boards fall back to the vector tier)", what)
     return ok
+
+
+# -- patient mode: waiting a deferral out instead of shipping a hole --------
+# A deferral is a NEGATIVE CACHE: the first caller to be 429'd records "not
+# this key, not yet", and every later caller in the lesson is told immediately
+# so eight render threads do not each burn a two-minute ladder on one picture.
+# For a teacher's lesson that is right — somebody is waiting, and a board that
+# falls back to the vector tier beats a lesson that stalls.
+#
+# For a CATALOGUE kit it is exactly wrong, and the pilot proved it: the Cells
+# kit failed acceptance with `unresolved_assets=4/11(rate_limited=4)` — four
+# pictures were not missing, they were merely not-yet, and nothing in a lesson
+# ever comes back for them. Nobody is waiting on a catalogue kit. It runs in
+# an off-peak lane, it is rebuilt only by a human clicking Retry, and a
+# reviewer's time is the scarcest thing we spend. So a catalogue lesson SLEEPS
+# out the deferral and then draws the picture.
+#
+# Three bounds, because patience must not become a stall:
+#   * a single wait is capped (CATALOGUE_ASSET_WAIT_MAX_S) — a deferral longer
+#     than that still gives up at once, as today;
+#   * the lesson has a total patience budget (CATALOGUE_ASSET_WAIT_BUDGET_S),
+#     after which it behaves exactly as an impatient lesson does;
+#   * the never-starve rule OUTRANKS patience. The yield hook is asked before
+#     the wait and on every tick of it, so a teacher's job arriving mid-sleep
+#     stops the waiting immediately. We must never hold the pool while a real
+#     user waits for it — that is the whole point of the off-peak lane.
+
+def set_patient_assets(on: bool, generation_id: str | None = None, *,
+                       max_wait: float | None = None,
+                       budget: float | None = None) -> None:
+    """Arm (or disarm) waiting-out-deferrals for ONE generation. Armed by the
+    catalogue branch beside the never-starve hook and removed with it."""
+    gid = current_generation() if generation_id is None else str(generation_id)
+    with _IMAGE_BUDGET_LOCK:
+        b = _STATE.get(gid)
+        if b is None:
+            b = _STATE[gid] = _new_bucket()
+        b["patient"] = None if not on else {
+            "max_wait": float(_env_int("CATALOGUE_ASSET_WAIT_MAX_S", 180)
+                              if max_wait is None else max_wait),
+            "budget": float(_env_int("CATALOGUE_ASSET_WAIT_BUDGET_S", 900)
+                            if budget is None else budget),
+        }
+        b["patience_spent"] = 0.0
+        b["patience_waits"] = 0
+        b["touched"] = time.monotonic()
+
+
+def patience_state() -> dict:
+    with _IMAGE_BUDGET_LOCK:
+        b = _bucket()
+        p = b.get("patient")
+        return {"armed": p is not None,
+                "max_wait": (p or {}).get("max_wait"),
+                "budget": (p or {}).get("budget"),
+                "spent": float(b.get("patience_spent") or 0.0),
+                "waits": int(b.get("patience_waits") or 0)}
+
+
+# Indirected so a test drives it without sleeping. Ticks are short so the
+# never-starve check runs often during a long wait.
+_PATIENCE_TICK_S = 2.0
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def _wait_out_deferral(key: str, waiting: float) -> bool:
+    """A deferred key, in patient mode: sleep until it may be tried again.
+
+    Returns True when the wait completed and the caller should go on to
+    generate, False when it should behave as an impatient lesson does (no
+    patience armed, the wait is longer than the cap, the budget is spent, or
+    a user's job arrived while we were waiting)."""
+    with _IMAGE_BUDGET_LOCK:
+        b = _bucket()
+        p = b.get("patient")
+        spent = float(b.get("patience_spent") or 0.0)
+    if p is None:
+        return False
+    if waiting > p["max_wait"]:
+        logger.info("asset %r is deferred for %.0fs, longer than the %.0fs a kit will wait; "
+                    "not waiting", key, waiting, p["max_wait"])
+        return False
+    left = p["budget"] - spent
+    if left <= 0:
+        logger.warning("asset %r is deferred and this lesson has spent its whole %.0fs patience "
+                       "budget; falling back to the vector tier as an ordinary lesson would",
+                       key, p["budget"])
+        return False
+    wait = min(waiting, left)
+    logger.info("asset %r is deferred for %.0fs — waiting it out (a kit has nobody waiting on it; "
+                "%.0fs of patience left)", key, wait, left)
+    waited = 0.0
+    while waited < wait:
+        # the never-starve rule outranks patience: a teacher's job arriving
+        # mid-sleep ends the wait, and _clear_to_generate has already made the
+        # give-up sticky for the rest of the lesson.
+        if not _clear_to_generate(f"waiting for {key!r}"):
+            logger.warning("asset %r: a user's job arrived while waiting; giving the pool back", key)
+            _account_patience(waited)
+            return False
+        tick = min(_PATIENCE_TICK_S, wait - waited)
+        _sleep(tick)
+        waited += tick
+    _account_patience(waited)
+    still = asset_deferred(key)
+    if still is not None:
+        logger.info("asset %r is still deferred after waiting %.0fs; not waiting again", key, waited)
+        return False
+    return True
+
+
+def _account_patience(waited: float) -> None:
+    with _IMAGE_BUDGET_LOCK:
+        b = _bucket()
+        b["patience_spent"] = float(b.get("patience_spent") or 0.0) + max(0.0, waited)
+        b["patience_waits"] = int(b.get("patience_waits") or 0) + 1
 
 
 def image_attempt_ceiling() -> int:
@@ -1602,7 +1724,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
         logger.info("asset %r was abandoned earlier this lesson; not retrying", key)
         return cached_fallback
     waiting = asset_deferred(key)
-    if waiting is not None:
+    if waiting is not None and not _wait_out_deferral(key, waiting):
         logger.info("asset %r is deferred for %.0fs more (rate limit); "
                     "returning without a retry ladder", key, waiting)
         return cached_fallback

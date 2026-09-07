@@ -1831,6 +1831,28 @@ def _set_user_yield(generation_id: str, fn) -> None:
         pass
 
 
+def _set_patient_assets(generation_id: str, on: bool) -> None:
+    """Let THIS generation wait a rate-limit deferral out instead of shipping
+    the board without its picture. Armed for catalogue kits only.
+
+    A deferral is a negative cache: the first 429 records "not this key, not
+    yet" and every later caller is told at once, so eight render threads do
+    not each burn a ladder on one picture. A teacher is waiting, so that is
+    right for a lesson. A catalogue kit has nobody waiting — it runs off-peak
+    and is rebuilt only by a human clicking Retry — and the pilot showed what
+    impatience costs there: `unresolved_assets=4/11(rate_limited=4)` failed
+    the whole video for four pictures that were merely not-yet.
+
+    Bounded per wait and per lesson, and the never-starve rule still outranks
+    it: the yield hook is asked on every tick, so a teacher's job arriving
+    mid-wait ends it. Best-effort, like the hook it sits beside."""
+    try:
+        from spike.scene_engine.raster_assets import set_patient_assets
+        set_patient_assets(on, generation_id)
+    except Exception:  # noqa: BLE001 — patience must never break the pipeline
+        pass
+
+
 def _process_catalogue(sb: Client, job: dict, generation_id: str, gen: dict, *,
                        allow_premium: bool, tier_info: dict, canary_provider: str | None) -> None:
     """The catalogue branch of process_generation (Phase 3): prepare from the
@@ -1874,6 +1896,7 @@ def _process_catalogue(sb: Client, job: dict, generation_id: str, gen: dict, *,
         prepared = catalogue_kit.prepare(sb, gen)
         prepared.contention_probe = probe
         _set_user_yield(generation_id, _yield_for_images)
+        _set_patient_assets(generation_id, True)
         with tempfile.TemporaryDirectory() as tmp:
             unit = _catalogue_unit(prepared, tmp)
             built = _build_from_analysis(
@@ -1891,6 +1914,7 @@ def _process_catalogue(sb: Client, job: dict, generation_id: str, gen: dict, *,
         raise
     finally:
         _set_user_yield(generation_id, None)
+        _set_patient_assets(generation_id, False)
     logger.info("Catalogue generation %s (%s) done — %s", generation_id, gen.get("kind"),
                 built.client.session_usage)
     catalogue_kit.after_generation(sb, gen, prepared.kit_id,
