@@ -275,6 +275,14 @@ def test_the_resolver_names_the_owner_and_only_the_owner():
         assert kind in db.OBSERVER_JOB_TYPES
         assert db.generation_to_mirror({"type": kind, "generation_id": None}) is None
         assert db.generation_to_mirror({"type": kind, "generation_id": GEN}) is None
+    # topic_publish (Phase 4) READS a finished presentation's artifacts and
+    # uploads them. That generation was built, approved by a human and
+    # finished long before; mirroring an upload's lifecycle onto it would
+    # overwrite the reviewer's verdict — exactly the September incident's
+    # shape, with an approval instead of a refund at stake.
+    assert "topic_publish" in db.OBSERVER_JOB_TYPES
+    assert db.generation_to_mirror({"type": "topic_publish", "generation_id": None}) is None
+    assert db.generation_to_mirror({"type": "topic_publish", "generation_id": GEN}) is None
 
 
 # ── the prod sequence, step by step ─────────────────────────────────────
@@ -939,6 +947,58 @@ def test_topic_questions_is_an_observer_dispatched_to_the_catalogue(monkeypatch)
     assert run.run_once(sb) is True and seen == [("job-tq", "t-1")]
     assert sb.tables["jobs"][0]["status"] == "done"
     assert _gen_status(sb) == "done" and _gen_writes(sb) == [], "an observer: the generation it names is untouched"
+
+
+def test_topic_publish_is_an_observer_dispatched_to_the_catalogue(monkeypatch):
+    """Called, not grepped: the last lane picks the job up and hands it to
+    catalogue.publish.run_publish_job. A publish costs no model or image
+    quota, but each part is several hundred MB of Supabase egress out and up
+    to YouTube — bandwidth a teacher's render wants — so it shares the lane
+    every builder outranks."""
+    import worker.run as run
+    import catalogue.publish as publish
+
+    assert "topic_publish" in db.OBSERVER_JOB_TYPES
+    assert "topic_publish" in run.OBSERVER_JOB_TYPES and "topic_publish" in run.CATALOGUE_JOB_TYPES
+    seen = []
+
+    def fake_publish(sb_, job):
+        seen.append((job["id"], job["params"]["kit_id"]))
+        db.finish_job(sb_, job["id"])
+
+    monkeypatch.setattr(publish, "run_publish_job", fake_publish)
+    sb = _fresh("done", jobs=[{"id": "job-tp", "type": "topic_publish", "status": "queued",
+                               "generation_id": GEN, "book_id": None,
+                               "params": {"kit_id": "kit-1", "language": "en"}, "attempts": 0,
+                               "created_at": "1", "updated_at": "0"}])
+    monkeypatch.setattr(run, "process_generation", lambda *a, **k: pytest.fail("not a builder"))
+    monkeypatch.delenv("SUPPORT_AGENT_ENABLED", raising=False)
+    assert run.run_once(sb) is True and seen == [("job-tp", "kit-1")]
+    assert sb.tables["jobs"][0]["status"] == "done"
+    assert _gen_status(sb) == "done" and _gen_writes(sb) == [], "an observer: the generation it reads is untouched"
+
+
+def test_a_queued_builder_is_claimed_before_a_publish(monkeypatch):
+    """The never-starve rule at CLAIM time: a teacher's worksheet outranks a
+    publish, however long the publish has waited."""
+    import worker.run as run
+    import catalogue.publish as publish
+
+    sb = _fresh("queued", jobs=[{"id": "job-tp", "type": "topic_publish", "status": "queued",
+                                 "generation_id": None, "book_id": None,
+                                 "params": {"kit_id": "kit-1"}, "attempts": 0,
+                                 "created_at": "0", "updated_at": "0"},
+                                _builder(job_id="job-b", kind="worksheet")])
+    order = []
+    monkeypatch.setattr(publish, "run_publish_job",
+                        lambda sb_, job: (order.append(job["type"]), db.finish_job(sb_, job["id"])))
+    monkeypatch.setattr(run, "process_generation",
+                        lambda sb_, job, gen: (order.append(job["type"]), db.finish_job(sb_, job["id"], gen)))
+    monkeypatch.delenv("SUPPORT_AGENT_ENABLED", raising=False)
+
+    assert run.run_once(sb) is True and order == ["worksheet"]
+    assert run.run_once(sb) is True and order == ["worksheet", "topic_publish"]
+    assert run.run_once(sb) is False
 
 
 def test_a_failed_kit_job_files_no_support_issue(monkeypatch):

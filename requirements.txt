@@ -26,3 +26,11 @@ openpyxl>=3.1        # school onboarding workbooks (tools/school_import)
 supabase>=2.0.0
 arabic-reshaper>=3.0
 python-bidi>=0.4.2
+# YouTube Data API v3 for the catalogue's topic_publish job (Phase 4). It is
+# imported LAZILY, in catalogue/publish.py's default_transport() and nowhere
+# else, so the module and its whole test suite run on a worker that has
+# neither credentials nor this package — but the worker that DOES publish
+# needs it in the image. google-auth is already here via anthropic[vertex];
+# google-auth-oauthlib is NOT declared: only scripts/youtube_oauth.py needs
+# it, and that runs on the operator's laptop, never on Railway.
+google-api-python-client>=2.100.0

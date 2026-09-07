@@ -11,4 +11,11 @@ backfill's rules) and the ``topic_derive`` observer job
 (``derive.run_derive_job``: a curriculum's objective clusters → the model
 proposes canonical topic NAMES, filed as grouped candidates a curator approves;
 one text call per cluster, in the worker's last lane).
+
+Phase 4 (2026-09-07): the ``topic_publish`` observer job
+(``publish.run_publish_job``: an APPROVED kit's rendered video parts → one
+private YouTube upload each, with the chapter timestamps and curriculum codes
+in the description). DARK behind ``FEATURE_CATALOGUE_PUBLISH``; credentials
+live in the environment and never in the database, and nothing can be public
+until the YouTube API compliance audit passes.
 """

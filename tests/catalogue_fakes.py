@@ -13,9 +13,14 @@ storage shim. Unique keys per table mirror migration 0112:
     topic_articles    (topic_id, language, version)          -- Phase 2b
     article_figures   (article_id, figure_key)               -- Phase 2b
     topic_questions   (topic_id, language, content_hash)     -- Phase 3
+    topic_publications (topic_kit_id, part, channel_language) -- Phase 4
 
 A violating INSERT raises with Postgres's 23505 text, which is what the real
 client surfaces (postgrest.APIError carries {"code": "23505", ...}).
+
+``FakeYouTube`` is the publish job's transport (catalogue.publish's four-call
+protocol). It records what would have been uploaded and NEVER touches the
+network — no test in this repository may.
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ UNIQUE = {
     "topic_articles": lambda r: (r.get("topic_id"), r.get("language"), r.get("version")),
     "article_figures": lambda r: (r.get("article_id"), r.get("figure_key")),
     "topic_questions": lambda r: (r.get("topic_id"), r.get("language"), r.get("content_hash")),
+    "topic_publications": lambda r: (r.get("topic_kit_id"), r.get("part"), r.get("channel_language")),
 }
 
 
@@ -293,7 +299,8 @@ class FakeSB:
         self.tables = {"jobs": [], "generations": [], "books": [], "topic_candidates": [],
                        "topic_aliases": [], "curricula": [], "curriculum_nodes": [],
                        "topics": [], "topic_curriculum_map": [], "topic_articles": [],
-                       "article_figures": [], "visual_assets": []}
+                       "article_figures": [], "visual_assets": [], "topic_kits": [],
+                       "topic_publications": [], "artifacts": []}
         self.log = []
         self.calls = []
         self.rpc_calls = []
@@ -322,3 +329,59 @@ class ExplodingSB:
 
     def __getattr__(self, name):
         raise AssertionError(f"the client was used ({name}) on a dry run")
+
+
+class FakeYouTube:
+    """catalogue.publish's ``YouTubeTransport``, in memory.
+
+    Records every call in ``uploads`` / ``captions`` / ``thumbnails`` /
+    ``playlist_adds`` and hands back deterministic ids. ``fail_on`` names the
+    methods that must raise ("insert_caption", "set_thumbnail", …) so a test
+    can prove a caption failure does not lose the video. Nothing here opens a
+    socket: the real transport is built only by ``default_transport``, which
+    needs credentials this suite never sets."""
+
+    def __init__(self, fail_on=(), video_ids=None):
+        self.fail_on = set(fail_on or ())
+        self.video_ids = list(video_ids or [])
+        self.uploads = []
+        self.captions = []
+        self.thumbnails = []
+        self.playlist_adds = []
+
+    def _maybe_fail(self, name):
+        if name in self.fail_on:
+            raise RuntimeError(f"{name} refused (fake)")
+
+    def upload_video(self, path, *, title, description, privacy, language, tags=None):
+        self._maybe_fail("upload_video")
+        vid = self.video_ids.pop(0) if self.video_ids else f"yt-{len(self.uploads) + 1}"
+        self.uploads.append({"path": str(path), "title": title, "description": description,
+                             "privacy": privacy, "language": language, "tags": list(tags or []),
+                             "video_id": vid, "bytes": _read_bytes(path)})
+        return vid
+
+    def set_thumbnail(self, video_id, path):
+        self._maybe_fail("set_thumbnail")
+        self.thumbnails.append({"video_id": video_id, "path": str(path)})
+
+    def insert_caption(self, video_id, path, *, language, name=""):
+        self._maybe_fail("insert_caption")
+        import pathlib
+
+        self.captions.append({"video_id": video_id, "language": language, "name": name,
+                              "srt": pathlib.Path(path).read_text(encoding="utf-8")})
+        return f"cap-{len(self.captions)}"
+
+    def add_to_playlist(self, video_id, playlist_id):
+        self._maybe_fail("add_to_playlist")
+        self.playlist_adds.append({"video_id": video_id, "playlist_id": playlist_id})
+
+
+def _read_bytes(path):
+    import pathlib
+
+    try:
+        return pathlib.Path(path).read_bytes()
+    except OSError:
+        return b""

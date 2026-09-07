@@ -65,10 +65,15 @@ DOC_JOB_TYPES = ["lesson_plan", "activity", "worksheet", "exam_paper", "case_stu
 # which is why it also re-checks the queue itself before every generation
 # (catalogue/figures.py, builder_queued) and pauses when a builder appears.
 # Phase 3 adds topic_questions (one text call drafting a topic's question
-# bank, plus one coverage top-up) to the same lane.
+# bank, plus one coverage top-up) to the same lane. Phase 4 adds topic_publish:
+# no model or image quota at all, but each part is several hundred MB of
+# Supabase egress out and up to YouTube, which is bandwidth a teacher's render
+# wants — so it takes the last lane too, and re-checks builder_queued between
+# parts the way figure_render does before every generation.
 OBSERVER_JOB_TYPES = ["support_diagnose", "topic_harvest", "topic_derive", "topic_article", "figure_render",
-                      "topic_questions"]
-CATALOGUE_JOB_TYPES = ["topic_harvest", "topic_derive", "topic_article", "figure_render", "topic_questions"]  # the last lane
+                      "topic_questions", "topic_publish"]
+CATALOGUE_JOB_TYPES = ["topic_harvest", "topic_derive", "topic_article", "figure_render", "topic_questions",
+                       "topic_publish"]  # the last lane
 
 
 def _claim_catalogue_generation(sb):
@@ -321,6 +326,10 @@ def run_once(sb) -> bool:
             from catalogue.questions import run_questions_job
 
             run_questions_job(sb, job)  # self-contained: finishes its own row, done or error
+        elif job_type == "topic_publish":
+            from catalogue.publish import run_publish_job
+
+            run_publish_job(sb, job)  # self-contained: finishes its own row, done or error
         else:
             process_generation(sb, job, gen_id)
     except db.TransientTierError as exc:
