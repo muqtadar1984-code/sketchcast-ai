@@ -1425,20 +1425,6 @@ _ASSET_LOCKS: dict[str, "threading.RLock"] = {}
 _LOCKS_GUARD = None  # created lazily so the module stays import-light
 
 
-def asset_lock(key: str) -> "threading.RLock":
-    """The per-key lock every reader and writer of `key`'s cache directory
-    holds. Re-entrant so the visual-library wrapper can hold it across its
-    hydration AND the wrapped get_raster_asset call, which takes it again:
-    hydration used to run outside it, and a parallel segment could open a
-    half-written face, call it corrupt and generate another (2026-09-04)."""
-    global _LOCKS_GUARD
-    import threading
-    if _LOCKS_GUARD is None:
-        _LOCKS_GUARD = threading.Lock()
-    with _LOCKS_GUARD:
-        return _ASSET_LOCKS.setdefault(key, threading.RLock())
-
-
 # The fold lives in shared/asset_keys.py because the visual library needs the
 # SAME answer: it had its own copy that kept "cell", so hydrate() filed every
 # downloaded *_cell picture at a path this module never reads, and the picture
@@ -1454,7 +1440,10 @@ def asset_lock(key: str):
     whole decision — look, hydrate, generate, publish, log. It used to sit
     inside this function only, so two render threads could both observe "not
     cached", both generate, and both log generated+published for one key
-    (ciliated_cell, 17:55:09 in fa8c0d7d).
+    (ciliated_cell, 17:55:09 in fa8c0d7d). Re-entrancy also covers hydration
+    followed by the wrapped get_raster_asset call, which takes the lock again:
+    hydration once ran outside it, and a parallel segment could open a
+    half-written face, judge it corrupt and generate another (2026-09-04).
     """
     global _LOCKS_GUARD
     import threading
