@@ -208,10 +208,29 @@ class BRaster:
         if self.mask is None:
             self.mask = Image.new("L", self.ink.size, 0)
         self._stamped = 0
+        self._completed = False
 
     def reveal_to(self, k: int) -> Optional[Point]:
         """Stamp trace points [stamped, k) into the mask; return the frontier
-        (asset coords). Monotonic — frames are rendered in time order."""
+        (asset coords). Monotonic — frames are rendered in time order.
+
+        COMPLETION MEANS COMPLETE. The stamps are a union of discs along a
+        walk, and the walk is capped (`drawing_order(max_points=3200)`), so
+        their union is never the whole picture: measured on the live roster,
+        3.0 % to 9.1 % of every avatar's opaque pixels fell between the discs
+        and were NEVER revealed — not "revealed late", never. They stayed
+        transparent for the length of the video and the white board showed
+        through, which is the dashed stitching the founder reported on
+        2026-09-08. It is not new; the pattern only became legible when the
+        redrawn characters started wearing stripes.
+
+        So the last step of a reveal is not another stamp: it is the whole
+        ink. The mask gates ink that carries its own alpha
+        (`Image.composite(ink, transparent, mask)`), so filling it shows
+        exactly the asset and nothing more. Nothing about the ANIMATION
+        changes — every frame before the end is stamped as before, and the
+        frontier the pen follows is unchanged.
+        """
         from PIL import ImageDraw as _ID
         k = min(k, len(self.trace))
         if k > self._stamped:
@@ -220,6 +239,9 @@ class BRaster:
             for p in self.trace[self._stamped:k]:
                 d.ellipse([p[0] - r, p[1] - r, p[0] + r, p[1] + r], fill=255)
             self._stamped = k
+        if k >= len(self.trace) and not self._completed:
+            self.mask.paste(255, (0, 0, self.mask.width, self.mask.height))
+            self._completed = True
         return self.trace[k - 1] if k > 0 else None
 
     def to_world(self, p: Point) -> Point:
@@ -1828,6 +1850,9 @@ class SceneRenderer:
             if b.raster is not None:
                 b.raster.mask = Image.new("L", b.raster.ink.size, 0)
                 b.raster._stamped = 0
+                # …and the completion latch with it, or a second pass would
+                # start already finished and skip the animation entirely.
+                b.raster._completed = False
                 b._raster_cache = None
         total = self.total_secs(audio_secs, fps)
         n = max(1, round(total * fps))

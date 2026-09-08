@@ -1,8 +1,11 @@
-"""The four render defects the founder saw on the first Google-voiced lesson
-(generation 669e84f0, 2026-09-04): the card slides lagging their narration,
-one lesson drawn with two different pens, a corner sketch cut off by the
-frame, and a teacher avatar regenerated on every deploy instead of taken from
-the library. Each class pins the mechanism the investigation found."""
+"""Render defects the founder saw in finished lessons, one class per
+mechanism the investigation found.
+
+The first four came from the first Google-voiced lesson (generation
+669e84f0, 2026-09-04): the card slides lagging their narration, one lesson
+drawn with two different pens, a corner sketch cut off by the frame, and a
+teacher avatar regenerated on every deploy instead of taken from the
+library. The fifth is the white stitching across the avatars (2026-09-08)."""
 
 from __future__ import annotations
 
@@ -464,3 +467,84 @@ class TestAvatarRoster:
         assert semantic in src
         assert src.index("hydrate_avatar(key, cache)") < src.index(semantic)
         assert "if not existed_before and not avatar:" in src, "avatars are not scored against diagrams"
+
+
+# ── 5. a finished reveal shows the WHOLE asset ──────────────────────────────
+
+class TestRevealCompletes:
+    """White dashes across the avatars, reported 2026-09-08.
+
+    A raster reveals by stamping discs along a drawing-order walk, and that
+    walk is capped at 3,200 points however big the picture is. The union of
+    the discs is therefore never quite the picture: measured on the live
+    roster, 3.0-9.1 % of each avatar's opaque pixels sat between the discs and
+    were never revealed AT ALL — transparent for the whole video, white board
+    showing through, in a regular dotted pattern that reads as stitching.
+
+    Old avatars had it too (one at 9.1 %). It became legible only when the
+    redrawn characters started wearing stripes and patterns, which is why it
+    survived this long.
+    """
+
+    def _asset(self, w=240, h=320):
+        """A filled figure with thin internal detail — a character, not line
+        art, which is the shape the stamps fail to cover."""
+        im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        d.ellipse([w * 0.30, h * 0.05, w * 0.70, h * 0.35], fill=(230, 190, 150, 255))
+        d.rounded_rectangle([w * 0.20, h * 0.33, w * 0.80, h * 0.95], 18,
+                            fill=(120, 90, 60, 255))
+        for i in range(6):   # stripes: the high-contrast detail that shows gaps
+            y = h * (0.40 + i * 0.09)
+            d.rectangle([w * 0.20, y, w * 0.80, y + h * 0.03], fill=(60, 120, 190, 255))
+        return im
+
+    def _bound(self, im):
+        from spike.scene_engine.render import BRaster
+        from spike.scene_engine.trace import drawing_order
+        alpha = np.asarray(im.getchannel("A"))
+        return BRaster(ink=im, trace=drawing_order(alpha), at=(0.0, 0.0),
+                       scale=1.0, stamp_r=max(4.0, im.width / 80.0)), alpha > 128
+
+    def _hidden(self, br, opaque):
+        shown = np.asarray(br.mask) > 0
+        return int(opaque.sum() - (opaque & shown).sum()) / int(opaque.sum())
+
+    def test_nothing_is_left_hidden_when_the_walk_ends(self):
+        im = self._asset()
+        br, opaque = self._bound(im)
+        br.reveal_to(len(br.trace))
+        assert self._hidden(br, opaque) == 0.0,             "a finished drawing must show every pixel of its asset"
+
+    def test_the_stamps_alone_would_not_have(self):
+        """The guard has to be proven to be doing something: without the
+        completion step the discs leave real gaps on this very asset."""
+        im = self._asset()
+        br, opaque = self._bound(im)
+        from PIL import ImageDraw as _ID
+        d = _ID.Draw(br.mask)
+        for (x, y) in br.trace:      # every stamp, and ONLY the stamps
+            d.ellipse([x - br.stamp_r, y - br.stamp_r,
+                       x + br.stamp_r, y + br.stamp_r], fill=255)
+        assert self._hidden(br, opaque) > 0.0,             "fixture no longer reproduces the gap the fix exists to close"
+
+    def test_but_the_animation_still_happens(self):
+        """Filling at the END must not fill at the START: a reveal that jumps
+        straight to complete is not a reveal, and the draw-on is the product."""
+        im = self._asset()
+        br, opaque = self._bound(im)
+        br.reveal_to(len(br.trace) // 2)
+        assert self._hidden(br, opaque) > 0.2, "half-drawn must still be half-hidden"
+
+    def test_a_second_pass_starts_blank_again(self):
+        """frames() resets the masks so a re-render animates; the completion
+        latch has to reset with them or the second pass shows everything from
+        frame one."""
+        im = self._asset()
+        br, opaque = self._bound(im)
+        br.reveal_to(len(br.trace))
+        br.mask = Image.new("L", im.size, 0)
+        br._stamped = 0
+        br._completed = False
+        br.reveal_to(len(br.trace) // 2)
+        assert self._hidden(br, opaque) > 0.2
