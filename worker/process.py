@@ -1068,7 +1068,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
     steps and off every book-keyed side effect; the book path is byte-for-
     byte the code that ran before the split."""
     from agent2_analysis.analyzer import run_full_analysis
-    from shared.llm import client_for
+    from shared.llm import analysis_client, client_for
     from worker.branding import load_branding
 
     job_id = job["id"]
@@ -1142,7 +1142,14 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         analysis = run_full_analysis(
             # unit.level is DEFAULT_LEVEL for a book; a catalogue kit sets it
             # from the depth node's grade (catalogue.kit.level_for_grade).
-            book_id=book_id, chapter_content=chapter, level=unit.level, client=client,
+            book_id=book_id, chapter_content=chapter, level=unit.level,
+            # Its OWN client, on the `analysis` role. The analyzer makes
+            # exactly one model call — the combined analysis — and on
+            # 2026-09-08 the artifact model returned it malformed, leaving a
+            # whole kit "grounded in nothing but the title". That role now
+            # names a model that can hold the call; everything else on this
+            # path keeps the cheaper artifact one. See shared/text_models.
+            client=analysis_client(lesson_lang),
             on_progress=_analysis_tick,
             # Part jobs analyze THEIR chunk verbatim — never re-chunked. A
             # catalogue kit likewise hands over its own parts, chunked with

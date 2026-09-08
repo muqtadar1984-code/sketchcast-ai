@@ -38,7 +38,9 @@ installs its own fake.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import logging
 from types import MappingProxyType
 
@@ -356,7 +358,7 @@ class TestTheCapabilityDeclarationIsEnforcedNotJustDeclared:
         Flash takes an image and returns structured output, so the rollback
         passes every role's declaration and moves every call."""
         monkeypatch.setenv(ENV_PIN, FLASH_2_5)
-        assert [resolve(r).id for r in ROLES] == [FLASH_2_5] * 4
+        assert [resolve(r).id for r in ROLES] == [FLASH_2_5] * len(ROLES)
 
 
 # ── the env variables an operator already set ────────────────────────────────
@@ -418,7 +420,7 @@ class TestTodaysVariablesStillWin:
         every call. A role variable is the more specific statement of intent,
         so it wins where it is set."""
         monkeypatch.setenv(ENV_PIN, FLASH_3_5)
-        assert [resolve(r).id for r in ROLES] == [FLASH_3_5] * 4
+        assert [resolve(r).id for r in ROLES] == [FLASH_3_5] * len(ROLES)
         monkeypatch.setenv("GEMINI_VISION_MODEL", FLASH_LITE_3_1)
         assert resolve(VISION).id == FLASH_LITE_3_1
         assert resolve(ARTIFACT).id == FLASH_3_5
@@ -825,3 +827,85 @@ def test_no_gemini_call_site_sends_a_sampling_parameter():
                        '"top_p"', '"top_k"',
                        '"frequencyPenalty"', '"presencePenalty"'):
             assert banned not in source, (module.__name__, banned)
+
+
+
+@contextlib.contextmanager
+def _profile(name: str):
+    """Resolve under one profile, restoring whatever was set before."""
+    before = os.environ.get(ENV_PROFILE)
+    os.environ[ENV_PROFILE] = name
+    try:
+        yield
+    finally:
+        if before is None:
+            os.environ.pop(ENV_PROFILE, None)
+        else:
+            os.environ[ENV_PROFILE] = before
+
+
+def _resolve(role: str, profile: str):
+    with _profile(profile):
+        return resolve(role)
+
+
+# ── the analysis is its own role ────────────────────────────────────────────
+
+class TestTheAnalysisRoleIsNotTheArtifactRole:
+    """Measured 2026-09-08, same article and code, one variable changed.
+
+    On `gemini-3.5-flash-lite` the combined analysis came back malformed and
+    the analyzer logged "combined analysis returned no concepts for a
+    2378-word chunk" — its own comment calls that the lesson being "grounded
+    in nothing but the title". The kit still completed and reached review
+    looking healthy: 12 segments, 4.8 minutes. On `gemini-2.5-flash` the same
+    article gave 38 concepts against 32, 38/38 coverage against 31/32, and 35
+    segments over 6.5 minutes.
+
+    So the role exists because of a measurement, and it is SEPARATE from
+    `artifact` because the two have opposite economics: one call per part
+    against every document of every kit.
+    """
+
+    def test_the_analysis_does_not_run_on_a_lite_model(self):
+        for profile in (tm.SUPPORTED, tm.ECONOMY):
+            chosen = _resolve(tm.ANALYSIS, profile)
+            assert "lite" not in chosen.id, \
+                f"{profile}: the analysis is the call that must not come back empty"
+
+    def test_and_it_never_pays_for_thinking(self):
+        """3.5 Flash defaults to MEDIUM thinking billed as output, and this
+        call asks for 16,000 tokens. MINIMAL is what keeps the fix affordable."""
+        for profile in (tm.SUPPORTED, tm.ECONOMY, tm.RETIRING):
+            assert _resolve(tm.ANALYSIS, profile).thinking_level == tm.MINIMAL, profile
+
+    def test_the_high_volume_role_did_not_follow_it_up_market(self):
+        """The point of splitting rather than moving `artifact`: documents are
+        the volume, and nothing measured says they need the dearer model."""
+        for profile in (tm.SUPPORTED, tm.ECONOMY):
+            assert _resolve(tm.ARTIFACT, profile).id != _resolve(tm.ANALYSIS, profile).id
+
+    def test_retiring_still_reproduces_the_old_behaviour_exactly(self):
+        """Before the split both came off one id. The rollback profile has to
+        keep saying that, or it stops being a rollback."""
+        assert _resolve(tm.ANALYSIS, tm.RETIRING).id == _resolve(tm.ARTIFACT, tm.RETIRING).id == "gemini-2.5-flash"
+
+    def test_a_per_role_pin_exists_for_it(self):
+        assert tm.ENV_MODEL[tm.ANALYSIS] == "GEMINI_ANALYSIS_MODEL"
+
+    def test_the_analysis_client_only_pins_on_the_gemini_path(self, monkeypatch):
+        """Routing belongs to the LANGUAGE. Handing a Gemini id to Claude for
+        an Arabic lesson would be a 404 at best."""
+        from shared import llm
+
+        seen = {}
+
+        def fake_client_for(language, *, model=None, kind=None):
+            seen[language] = model
+            return object()
+
+        monkeypatch.setattr(llm, "client_for", fake_client_for)
+        llm.analysis_client("en")
+        assert seen["en"] == resolve(tm.ANALYSIS).id
+        llm.analysis_client("ar")            # Arabic routes to Anthropic
+        assert seen["ar"] is None, "no Gemini id may reach another provider"

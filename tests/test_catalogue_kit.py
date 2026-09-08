@@ -690,7 +690,11 @@ def _worker_env(monkeypatch, sb):
 
     monkeypatch.setattr(db, "upload_artifact", _upload)
     monkeypatch.setattr("worker.branding.load_branding", lambda sb_, owner, out_dir: {})
-    monkeypatch.setattr("shared.llm.client_for", lambda lang, kind=None: _StubClient())
+    # Mirrors the real signature: `analysis_client` pins the analysis role's
+    # model through this, so a stub that cannot take `model` would fail the
+    # build for a reason that has nothing to do with the test.
+    monkeypatch.setattr("shared.llm.client_for",
+                        lambda lang, *, model=None, kind=None: _StubClient())
     analysis_calls: list[dict] = []
 
     def fake_analysis(**kw):
