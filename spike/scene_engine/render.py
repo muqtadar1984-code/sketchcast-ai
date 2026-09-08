@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import zlib
 from dataclasses import dataclass, field
 from typing import Callable, Iterator, Optional
@@ -194,6 +195,49 @@ class BLayer:
     id: str
     strokes: list[BStroke]
 
+
+def _without_unknown_qualifiers(available: list[str], layer: str) -> list[str]:
+    """An anchor's layer name, retried without words the ARTWORK never uses.
+
+    ANCHORS ONLY. `match_layer_ids` is the shared layer matcher — asset
+    subsetting, carried-state reveal and draw distribution all call it, and
+    "wall" meaning the same strokes everywhere is a property worth keeping.
+    This is the anchor's own last resort, so a looser reading can put an arrow
+    on a part without also changing which strokes get drawn.
+
+    The plan and the picture are written by two different calls, and the plan
+    qualifies a part the annotator named plainly. From the live Cells kit
+    (2026-09-08), where 14 anchors resolved to nothing and their labels fell
+    back to a stacked column of leader lines:
+
+        plant_central_vacuole  vs  "large central vacuole"   ->  no match
+        central_vacuole        vs  "large central vacuole"   ->  MATCHES
+        golgi_sacs             vs  "golgi apparatus"         ->  no match
+        golgi                  vs  "golgi apparatus"         ->  MATCHES
+
+    One extra word loses a match the rest of the name makes perfectly. So drop
+    it — but ONLY a word the artwork's whole vocabulary does not contain,
+    which is what makes this safe rather than a similarity score. A word the
+    picture DOES use somewhere is meaningful and is never discarded:
+    `nucleus_membrane` keeps both its words, because the artwork knows
+    "nucleus" and knows "cell membrane", and narrowing to "membrane" would put
+    a nuclear-membrane label on the cell membrane — the confident-arrow-on-the-
+    wrong-structure failure this file already carries scars from.
+
+    Ambiguity refuses too: a narrowed name matching more than one region has
+    identified a family, not a part. `vacuole` against "vacuole column" and
+    "large vacuole area" stays unresolved and the label keeps its leader line.
+    """
+    from .vector_assets import match_layer_ids
+
+    toks = [t for t in re.split(r"[^a-z0-9]+", str(layer).lower()) if t]
+    vocabulary = {t for a in available
+                  for t in re.split(r"[^a-z0-9]+", str(a).lower()) if t}
+    keep = [t for t in toks if t in vocabulary]
+    if not keep or len(keep) == len(toks):
+        return []                     # nothing droppable, or nothing left
+    hits = match_layer_ids(available, [" ".join(keep)])
+    return hits if len(hits) == 1 else []
 
 @dataclass
 class BRaster:
@@ -1253,7 +1297,9 @@ class SceneRenderer:
         from .vector_assets import match_layer_ids
         boxes: list[tuple] = []
         if b.raster is not None and b.raster.regions:
-            for k in match_layer_ids(list(b.raster.regions), [layer]):
+            names = list(b.raster.regions)
+            for k in (match_layer_ids(names, [layer])
+                      or _without_unknown_qualifiers(names, layer)):
                 for (x0, y0, x1, y1) in b.raster.regions[k]:
                     p0 = b.raster.to_world((x0, y0))
                     p1 = b.raster.to_world((x1, y1))
