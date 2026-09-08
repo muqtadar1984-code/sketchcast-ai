@@ -121,10 +121,27 @@ def _shout(message: str) -> None:
 # Anything that does not say which it is gets `artifact`: it is the general
 # path and the one whose env variable (GEMINI_MODEL) an operator already knows.
 ARTIFACT = "artifact"
+# The COMBINED ANALYSIS — concepts, difficulty and visual opportunities out of
+# a chapter's text, once per part. Split from `artifact` on 2026-09-08 after a
+# measured failure, not on principle: on gemini-3.5-flash-lite the reply came
+# back malformed and the analyzer logged "combined analysis returned no
+# concepts for a 2378-word chunk", which its own comment describes as the
+# lesson being "grounded in nothing but the title". The same kit on
+# gemini-2.5-flash found 38 concepts against 32, covered 38/38 instead of
+# 31/32, and rendered 35 segments instead of 12 — a 6.5-minute lesson instead
+# of a 4.8-minute one from identical source text.
+#
+# It gets its own role rather than moving `artifact` wholesale because the two
+# have opposite economics. This is ONE call per part; the artifact role is
+# every document of every kit, the high-volume path whose output tokens are
+# 88% of a generation's cost. Putting both on a model that costs 5x input and
+# 3.6x output to fix a failure in one of them would have been a large bill for
+# no measured gain on the other.
+ANALYSIS = "analysis"
 VISION = "vision"
 SVG = "svg"
 DIRECTOR = "director"
-ROLES = (ARTIFACT, VISION, SVG, DIRECTOR)
+ROLES = (ARTIFACT, ANALYSIS, VISION, SVG, DIRECTOR)
 
 # ── capabilities ─────────────────────────────────────────────────────────────
 # What a caller would BREAK without. Declared per role so a model that cannot
@@ -140,6 +157,10 @@ REQUIRES: Mapping[str, frozenset[str]] = MappingProxyType({
     # image parts; analyze() sends responseMimeType=application/json on every
     # call and a responseSchema behind GEMINI_RESPONSE_SCHEMA.
     ARTIFACT: frozenset({IMAGE_INPUT, STRUCTURED_OUTPUT}),
+    # Text in, strict JSON out — the concept list every downstream artifact is
+    # written from. Image input is NOT required: the analyzer hands this call
+    # one prompt built from the chapter's text.
+    ANALYSIS: frozenset({STRUCTURED_OUTPUT}),
     # One inline base64 PNG plus a text prompt. The reply is regex-extracted,
     # so the mime type is not needed — the image part is.
     VISION: frozenset({IMAGE_INPUT}),
@@ -421,6 +442,10 @@ PROFILES: Mapping[str, Mapping[str, tuple[str, str]]] = MappingProxyType({
         # level means a change to Google's default cannot quietly turn a
         # $2.50/1M workload into a thinking one.
         ARTIFACT: (FLASH_LITE_3_5, MINIMAL),
+        # The one role the Lite could not carry (see ANALYSIS above). MINIMAL
+        # is what keeps this affordable: 3.5 Flash defaults to MEDIUM thinking
+        # billed as output, and this call asks for 16,000 tokens.
+        ANALYSIS: (FLASH_3_5, MINIMAL),
         VISION: (FLASH_LITE_3_5, MINIMAL),
         SVG: (FLASH_LITE_3_5, MINIMAL),
         # UNSTATED on purpose. This is one call per lesson and it decides the
@@ -433,6 +458,9 @@ PROFILES: Mapping[str, Mapping[str, tuple[str, str]]] = MappingProxyType({
     RETIRING: MappingProxyType({
         # thinkingBudget 0 — the +38% cost guard, exactly as sent today.
         ARTIFACT: (FLASH_2_5, MINIMAL),
+        # Was the artifact model before the split, and stays it here: the
+        # point of this profile is to reproduce the old behaviour exactly.
+        ANALYSIS: (FLASH_2_5, MINIMAL),
         # No generationConfig at all, exactly as sent today.
         VISION: (FLASH_2_5, UNSTATED),
         SVG: (FLASH_2_5, UNSTATED),
@@ -440,6 +468,9 @@ PROFILES: Mapping[str, Mapping[str, tuple[str, str]]] = MappingProxyType({
     }),
     ECONOMY: MappingProxyType({
         ARTIFACT: (FLASH_LITE_3_1, MINIMAL),
+        # Even economising, not a Lite: a failed analysis is not a cheap
+        # lesson, it is a lesson about nothing.
+        ANALYSIS: (FLASH_3_5, MINIMAL),
         VISION: (FLASH_LITE_3_1, MINIMAL),
         SVG: (FLASH_LITE_3_1, MINIMAL),
         # The director stays on 3.5 Flash even here. It is one call per lesson
@@ -470,6 +501,7 @@ ENV_PIN = "GEMINI_TEXT_AND_VISION_MODEL"
 #: for its own role, so nothing an operator has set changes meaning.
 ENV_MODEL: Mapping[str, str] = MappingProxyType({
     ARTIFACT: "GEMINI_MODEL",
+    ANALYSIS: "GEMINI_ANALYSIS_MODEL",
     VISION: "GEMINI_VISION_MODEL",
     SVG: "GEMINI_SVG_MODEL",
     DIRECTOR: "GEMINI_DIRECTOR_MODEL",
@@ -477,6 +509,7 @@ ENV_MODEL: Mapping[str, str] = MappingProxyType({
 ENV_THINKING_PIN = "GEMINI_THINKING_LEVEL"
 ENV_THINKING: Mapping[str, str] = MappingProxyType({
     ARTIFACT: "GEMINI_THINKING_ARTIFACT",
+    ANALYSIS: "GEMINI_THINKING_ANALYSIS",
     VISION: "GEMINI_THINKING_VISION",
     SVG: "GEMINI_THINKING_SVG",
     DIRECTOR: "GEMINI_THINKING_DIRECTOR",

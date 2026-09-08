@@ -42,3 +42,26 @@ def client_for(language: str | None, *, model: str | None = None, kind: str | No
         )
 
     raise ValueError(f"unknown provider {provider!r} for language {language!r}")
+
+
+def analysis_client(language: str | None):
+    """The client for the COMBINED ANALYSIS — the one call that turns a
+    chapter's text into the concept list every artifact is written from.
+
+    Routes exactly like `client_for`, then pins the `analysis` role's model —
+    but ONLY on the Gemini path. The routing decision belongs to the language
+    (Arabic goes to Claude, Han scripts to Kimi) and a Gemini id handed to
+    another provider's client would be a 404 at best; the role names a Gemini
+    model, so it is Gemini's to apply.
+
+    Split out on 2026-09-08. The artifact model returned this call's JSON
+    malformed and the analyzer logged "combined analysis returned no concepts
+    for a 2378-word chunk" — a kit built, completed and reached review
+    "grounded in nothing but the title", 12 segments where the same article
+    gives 35. One call per part, so it can afford a model that holds it.
+    """
+    from shared import text_models
+
+    if provider_for(language) != GEMINI:
+        return client_for(language)
+    return client_for(language, model=text_models.resolve(text_models.ANALYSIS).id)
