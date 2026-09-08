@@ -1502,6 +1502,67 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
     else:
         work = [(st.segment_id, st) for st in ch.steps]
 
+    # ── an arrow may not point at a picture nobody draws ────────────────────
+    #
+    # The plan can name a target it never introduces. Nothing downstream
+    # noticed: the segment guard's `_place` flattens such an end to the
+    # element's PLANNED point, on the reasonable assumption that the picture
+    # arrives a step later ("not on the board YET"). When it never arrives the
+    # arrow keeps pointing at a coordinate where nothing is ever drawn.
+    #
+    # Live on the Cells kit (2026-09-08): three labels — Tissue, Organ System,
+    # Specialized Cells — wrote themselves and drew three arrows at
+    # `hierarchy`, an illustration in the chapter roster that no step ever
+    # drew. All three flattened to [600, 380] and converged on empty board for
+    # the last three segments of the video.
+    #
+    # The roster HAS the element, with its asset and its planned position, so
+    # the honest repair is to draw it: introduce it in the first step that
+    # points at it, and the ordinary machinery does the rest — it becomes an
+    # `intro_target` there, `_place` never fires, and the anchors resolve
+    # against real geometry instead of a guess.
+    #
+    # Only ever a DRAWABLE target: text and arrows are introduced by the steps
+    # that write them, and an arrow pointing at another arrow is a different
+    # defect that the sanitisation pass already refuses.
+    _introduced_ever: set[str] = set()
+    for _sid, _st in work:
+        if _st is None:
+            continue
+        for _a in _st.actions:
+            if _a.get("verb") in _INTRODUCERS:
+                _introduced_ever.update(t for t in expand(_a.get("target"))
+                                        if t in roster)
+    for _sid, _st in work:
+        if _st is None:
+            continue
+        _wants: list[str] = []
+        for _a in _st.actions:
+            if _a.get("verb") not in _INTRODUCERS:
+                continue
+            for _t in expand(_a.get("target")):
+                _arrow = roster.get(_t)
+                if not isinstance(_arrow, dict) or _arrow.get("type") != "arrow":
+                    continue
+                for _end in ("tail", "head"):
+                    _ref = _arrow.get(_end)
+                    if not (isinstance(_ref, dict) and isinstance(_ref.get("el"), str)):
+                        continue
+                    _tid = _ref["el"]
+                    _tgt = roster.get(_tid)
+                    if (_tid in _introduced_ever or not isinstance(_tgt, dict)
+                            or _tgt.get("type") in ("arrow", "text")
+                            or _tid in erased or _tid in _wants):
+                        continue
+                    _wants.append(_tid)
+        for _tid in _wants:
+            _st.actions.insert(0, {"verb": "draw", "target": _tid,
+                                   "at": {"sec": 0.0}})
+            _introduced_ever.add(_tid)
+            report.append(f"SEGMENT {_sid} | MATERIALISED {_tid} "
+                          f"({roster[_tid].get('type')}) — arrows pointed at "
+                          f"it and no step drew it")
+
     first = True
     for seg_id, st in work:
         if st is None:

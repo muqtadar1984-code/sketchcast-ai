@@ -442,10 +442,18 @@ PROFILES: Mapping[str, Mapping[str, tuple[str, str]]] = MappingProxyType({
         # level means a change to Google's default cannot quietly turn a
         # $2.50/1M workload into a thinking one.
         ARTIFACT: (FLASH_LITE_3_5, MINIMAL),
-        # The one role the Lite could not carry (see ANALYSIS above). MINIMAL
-        # is what keeps this affordable: 3.5 Flash defaults to MEDIUM thinking
-        # billed as output, and this call asks for 16,000 tokens.
-        ANALYSIS: (FLASH_3_5, MINIMAL),
+        # The one role the Lite could not carry (see ANALYSIS above), and the
+        # one role that THINKS. MINIMAL was the first attempt, to hold the
+        # cost down; it worked in the sense that nothing failed, but the
+        # measured output was a thin lesson — 29 concepts and 14 segments,
+        # against 38 and 35 from gemini-2.5-flash on the same article. Pulling
+        # a concept list out of a 2,378-word chunk is reasoning work, and this
+        # is the ONE call per part that everything downstream is written from.
+        #
+        # MEDIUM is STATED rather than left to the model's own default, which
+        # happens to be the same today. The default is Google's to change; the
+        # level is a statement about the CALL, and this call wants it.
+        ANALYSIS: (FLASH_3_5, MEDIUM),
         VISION: (FLASH_LITE_3_5, MINIMAL),
         SVG: (FLASH_LITE_3_5, MINIMAL),
         # UNSTATED on purpose. This is one call per lesson and it decides the
@@ -468,9 +476,9 @@ PROFILES: Mapping[str, Mapping[str, tuple[str, str]]] = MappingProxyType({
     }),
     ECONOMY: MappingProxyType({
         ARTIFACT: (FLASH_LITE_3_1, MINIMAL),
-        # Even economising, not a Lite: a failed analysis is not a cheap
-        # lesson, it is a lesson about nothing.
-        ANALYSIS: (FLASH_3_5, MINIMAL),
+        # Even economising, not a Lite and not thoughtless: a failed analysis
+        # is not a cheap lesson, it is a lesson about nothing.
+        ANALYSIS: (FLASH_3_5, MEDIUM),
         VISION: (FLASH_LITE_3_1, MINIMAL),
         SVG: (FLASH_LITE_3_1, MINIMAL),
         # The director stays on 3.5 Flash even here. It is one call per lesson

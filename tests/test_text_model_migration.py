@@ -873,11 +873,22 @@ class TestTheAnalysisRoleIsNotTheArtifactRole:
             assert "lite" not in chosen.id, \
                 f"{profile}: the analysis is the call that must not come back empty"
 
-    def test_and_it_never_pays_for_thinking(self):
-        """3.5 Flash defaults to MEDIUM thinking billed as output, and this
-        call asks for 16,000 tokens. MINIMAL is what keeps the fix affordable."""
-        for profile in (tm.SUPPORTED, tm.ECONOMY, tm.RETIRING):
-            assert _resolve(tm.ANALYSIS, profile).thinking_level == tm.MINIMAL, profile
+    def test_the_analysis_is_the_one_role_that_thinks(self):
+        """Measured 2026-09-08: at MINIMAL nothing FAILED, but the lesson came
+        out thin — 29 concepts and 14 segments, against 38 and 35 from
+        gemini-2.5-flash on the same article. Pulling a concept list out of a
+        2,378-word chunk is reasoning work.
+
+        Affordable only because it is ONE call per part. The high-volume roles
+        stay at MINIMAL, which is the whole reason this role was split out."""
+        for profile in (tm.SUPPORTED, tm.ECONOMY):
+            assert _resolve(tm.ANALYSIS, profile).thinking_level == tm.MEDIUM, profile
+            for role in (tm.ARTIFACT, tm.VISION, tm.SVG):
+                assert _resolve(role, profile).thinking_level == tm.MINIMAL, (profile, role)
+
+    def test_but_the_rollback_suppresses_it_exactly_as_before(self):
+        """`retiring` reproduces the pre-split request body, thinkingBudget 0."""
+        assert _resolve(tm.ANALYSIS, tm.RETIRING).thinking_level == tm.MINIMAL
 
     def test_the_high_volume_role_did_not_follow_it_up_market(self):
         """The point of splitting rather than moving `artifact`: documents are
