@@ -449,6 +449,33 @@ class TestPublishCoherence:
         assert vl.publish_generated(key, AVATAR_PROMPTS["avatar_teacher_female"], png) is True
         assert "upload" not in calls and "insert" not in calls
 
+    def test_but_a_curated_face_may_be_added_on_purpose(self, tmp_path):
+        """The refusal above exists because CACHE_DIR dies with every Railway
+        deploy, so the next lesson redraws its avatar and the library would
+        gain a face per deploy forever. It is NOT a rule that a key has one
+        face: `pick_avatar` draws among many so different lessons cast
+        different teachers, and the live library holds five
+        `avatar_teacher_female` rows. A roster tool says which it is."""
+        calls: dict = {}
+        vl._sb = lambda: _fake_sb(ROSTER, calls)
+        png = tmp_path / "face.png"
+        png.write_bytes(_png_bytes())
+        key = vl.face_key("avatar_teacher_female", FEMALE_TEACHERS[0]["id"])
+        assert vl.publish_generated(key, AVATAR_PROMPTS["avatar_teacher_female"],
+                                    png, allow_additional_face=True) is True
+        row = calls["insert"][0]
+        assert row["asset_key"] == "avatar_teacher_female", "the ROSTER key, not the face"
+        assert row["role"] == "teacher" and row["status"] == "approved"
+
+    def test_and_the_render_path_never_passes_that_flag(self):
+        """The opt-in is worth nothing if the incidental caller sets it."""
+        import inspect
+
+        import shared.visual_library_integration as vli
+        src = inspect.getsource(vli)
+        assert "allow_additional_face" not in src, \
+            "the renderer's publisher must keep taking the refusal"
+
     def test_a_generated_post_school_face_seeds_its_band_for_the_next_pick(self, tmp_path):
         """The generate path for a grade-13+ book publishes the age-matched
         face with its band on the row, and the next lesson in that band
