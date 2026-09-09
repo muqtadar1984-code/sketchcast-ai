@@ -765,6 +765,36 @@ def compose_episode_videos(
                     scene_dict=scene_dict, avatars=_avatars,
                 )
                 if not ok and attempt == "scene":
+                    # FIRST, retry the SAME scene once. Stepping straight down
+                    # answers an infrastructure fault by throwing away the
+                    # artwork, which cannot possibly fix it — and twice did
+                    # not. Two production runs lost a segment to
+                    # `Assertion 0 failed at src/fftools/ffmpeg_filter.c` with
+                    # rc=-6 (SIGABRT, so not the OOM killer), on a DIFFERENT
+                    # segment each time, with valid audio and a clean stream
+                    # mapping. A fault that moves between runs is not a
+                    # property of the scene; it is ffmpeg aborting under eight
+                    # concurrent encodes. The same scene encoded again is a
+                    # real retry; a blank whiteboard is a surrender.
+                    #
+                    # A genuine scene fault costs one cheap repeat here: a
+                    # scene that will not compile fails fast, long before any
+                    # frame is drawn.
+                    logger.warning("segment %s failed to render — retrying the "
+                                   "same scene once before degrading", seg_id)
+                    try:
+                        ok = _render_scene_segment(
+                            script_seg, text, audio_path,
+                            duration if audio_path else 0.0, out_mp4,
+                            direction, scene_dict=scene_dict,
+                            avatars=_avatars)
+                        if ok:
+                            logger.info("segment %s recovered on the second "
+                                        "attempt — the artwork is intact",
+                                        seg_id)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("scene retry failed for %s", seg_id)
+                if not ok and attempt == "scene":
                     # a planned scene that fails (parse or render) must step
                     # DOWN THE SAME visual language — an empty compiled scene
                     # once fell straight to the legacy renderer and failed

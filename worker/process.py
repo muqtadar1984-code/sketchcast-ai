@@ -1406,6 +1406,25 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                         f"lists (part {part_idx}/{n_parts}, model {client.model}) "
                         f"— never mentioned: {', '.join(report['missed'])}"
                     )
+            # DEPTH, checked in the same window and for the same reason.
+            # Coverage asks how many topics were named; this asks whether
+            # anything was said about them. A script can name 26 of 29 and
+            # still be a 2.4-minute video — measured twice in production, and
+            # both shipped, because breadth was the only question anyone asked.
+            #
+            # Deliberately after the retry: a thin draft may be replaced by a
+            # fuller one above, and it is the kept draft that is judged.
+            if coverage.is_thin(report):
+                coverage_reports.append(report)
+                _record_coverage(sb, generation_id, coverage_reports)
+                raise RuntimeError(
+                    f"lesson script is too thin to teach: {report['chars']} "
+                    f"characters across {report['topics']} topics "
+                    f"({report['chars_per_topic']} per topic, floor "
+                    f"{coverage._DEPTH_MIN_CHARS_PER_TOPIC}) "
+                    f"(part {part_idx}/{n_parts}, model {client.model}) — this "
+                    f"would render a video a fraction of its intended length"
+                )
             coverage_reports.append(report)
             save_script(script)
             # Attach matched textbook figures to this part's segments (semantic

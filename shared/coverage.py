@@ -137,6 +137,32 @@ _COVERAGE_MIN = 0.75
 # waste is one script call rather than a whole kit.
 _COVERAGE_FLOOR = 0.30
 
+
+# ── Depth ────────────────────────────────────────────────────────────────────
+# Coverage measures BREADTH — how many of the chapter's topics get mentioned.
+# It cannot see DEPTH, and a script can score well while saying almost nothing
+# about each thing it names. Measured by DOWNLOADING BOTH LIVE SCRIPTS and
+# running script_text over them — the same function this gate uses, so the
+# numbers below are the ones the threshold is compared against:
+#
+#     script_text   chars/topic   video      coverage   verdict
+#        6,363         219.4      5.9 min     1.000       ok
+#        3,132         108.0      2.4 min     0.897       ok      <- shipped
+#
+# Same article, same 29 analysed topics, same 11 segments, same settings, two
+# runs six hours apart. The 2.4-minute run named 26 of 29 topics and passed
+# every gate in this file, because a sentence per topic is still a mention.
+#
+# Nor is it an outlier. Of the five production presentations carrying tts_stats,
+# two are this tier (145.5 s and 142.6 s) and three are not (352.1 s, 365.1 s,
+# 499.2 s). Both thin ones shipped, because breadth was the only question
+# anyone asked.
+#
+# 140 sits ~30% above the measured broken tier and ~36% below the measured
+# healthy one. It is deliberately low: a floor for "a lesson that barely
+# happened", not an opinion about how long a good lesson should be.
+_DEPTH_MIN_CHARS_PER_TOPIC = 140
+
 # …but only when there are enough topics for the ratio to mean anything. With
 # 3 topics a single honest miss reads as 0.67 and two as 0.33 — a good short
 # lesson would trip the floor on rounding. At 6 the floor needs 5 of 6 topics
@@ -434,6 +460,10 @@ def measure(analysis: dict, episode: dict | None, produced_text: str, *,
 
     covered = len(addressed) / total
     out["covered"] = round(covered, 3)
+    # depth rides alongside breadth: same denominator, different question
+    out["chars"] = len(produced_text or "")
+    out["chars_per_topic"] = round(out["chars"] / total, 1)
+    out["thin"] = out["chars_per_topic"] < _DEPTH_MIN_CHARS_PER_TOPIC
     if covered < _COVERAGE_FLOOR:
         out["verdict"] = "floor"
     elif covered < _COVERAGE_MIN:
@@ -469,6 +499,37 @@ def should_fail(report: dict, mode: str | None = None) -> bool:
     if mode == "strict":
         return report["verdict"] in ("short", "floor")
     return report["verdict"] == "floor"
+
+
+def depth_gate_mode() -> str:
+    """``off`` | ``warn`` | ``strict`` (default).
+
+    Unlike COVERAGE_GATE this ships STRICT, and the difference is the evidence.
+    Coverage shipped as warn because production had 118 completed generations
+    and a coverage distribution for none of them. Depth ships strict because
+    the distribution is already in hand and the two tiers do not overlap: 97
+    and 104 chars/topic for the runs that produced 2.4-minute videos, 234+ for
+    the ones that did not. A floor at 140 cannot reach a healthy script.
+
+    The founder's standing rule decides the tie: a bad video is worse than no
+    video, and this is the cheapest possible place to refuse one — after the
+    script call, before a single character of TTS or a single frame.
+    """
+    mode = os.getenv("DEPTH_GATE", "").strip().lower()
+    return mode if mode in ("off", "warn", "strict") else "strict"
+
+
+def is_thin(report: dict, mode: str | None = None) -> bool:
+    """Whether this script says too little about the topics it names.
+
+    Shares every applicability guard with should_fail: an ungated report (too
+    few measurable topics) and a pooled part-scoped report are both exempt, so
+    a part-3 script is never judged against the whole chapter's concept list.
+    """
+    mode = mode or depth_gate_mode()
+    if mode in ("off", "warn") or not report.get("gated")             or not report.get("checked") or report.get("pooled"):
+        return False
+    return bool(report.get("thin"))
 
 
 def should_retry(report: dict, mode: str | None = None) -> bool:
