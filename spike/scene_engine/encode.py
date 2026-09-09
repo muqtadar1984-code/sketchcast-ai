@@ -65,6 +65,21 @@ def encode_args(total_secs: float, audio_path: str | None, out: Path,
 def encode_scene(frames: Iterator[Image.Image], total_secs: float,
                  audio_path: str | None, out: Path, fps: int = FPS) -> bool:
     out.parent.mkdir(parents=True, exist_ok=True)
+    # The one encoder input nothing else checks. ffmpeg opens its inputs
+    # BEFORE reading a byte of stdin, so a missing or empty audio file makes
+    # it exit at startup and the first frame write lands on a closed pipe —
+    # EPIPE, with the real reason only on ffmpeg's stderr. Callers upstream
+    # never verify the mp3 exists (shared/tts returns a path unchecked), so
+    # say so here rather than reporting a broken pipe.
+    if audio_path:
+        try:
+            asz = Path(audio_path).stat().st_size
+        except OSError:
+            asz = -1
+        if asz <= 0:
+            logger.error("scene encode for %s has a missing or empty audio "
+                         "input %s (size=%s) — ffmpeg will fail at input-open",
+                         out, audio_path, asz)
     cmd = encode_args(total_secs, audio_path, out, fps, ffmpeg_exe())
     # stderr goes to a FILE, not a pipe: ffmpeg chatters while we are still
     # writing frames, and a filled stderr pipe would block it from reading
@@ -73,21 +88,50 @@ def encode_scene(frames: Iterator[Image.Image], total_secs: float,
     with tempfile.TemporaryFile() as errf:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
                                 stdout=subprocess.DEVNULL, stderr=errf)
+        n_frames = n_bytes = 0
         try:
             for img in frames:
-                proc.stdin.write(img.tobytes())
+                raw = img.tobytes()
+                proc.stdin.write(raw)
+                n_frames += 1
+                n_bytes += len(raw)
             proc.stdin.close()
             rc = proc.wait(timeout=300)
         except Exception:
+            # ffmpeg's own stderr is the ONLY place the reason exists, and it
+            # lives in errf — which this branch used to drop on the floor when
+            # the `with` closed the temp file. A BrokenPipeError then said
+            # only "it died", indistinguishable between a bad argument, a
+            # missing input and the OOM killer. Collect the exit code too:
+            # -9 is the kernel, 1 is ffmpeg's own refusal.
             proc.kill()
-            logger.exception("scene encode failed for %s", out)
+            try:
+                rc = proc.wait(timeout=10)
+            except Exception:
+                rc = None
+            try:
+                errf.seek(0)
+                tail = errf.read()[-2000:].decode(errors="replace")
+            except Exception:
+                tail = "<stderr unavailable>"
+            logger.exception(
+                "scene encode failed for %s (rc=%s, frames_written=%d, "
+                "bytes=%d, audio=%s)\nffmpeg argv: %s\nffmpeg stderr: %s",
+                out, rc, n_frames, n_bytes, audio_path, cmd, tail)
             return False
         if rc != 0:
             errf.seek(0)
             logger.error("scene ffmpeg rc=%s: %s", rc,
                          errf.read()[-500:].decode(errors="replace"))
             return False
-    return out.exists() and out.stat().st_size > 0
+    if not (out.exists() and out.stat().st_size > 0):
+        # ffmpeg exited 0 having written nothing: silent until now, and
+        # indistinguishable downstream from a scene that would not compile
+        logger.error("scene encode for %s reported success but produced no "
+                     "output (frames_written=%d, audio=%s)", out, n_frames,
+                     audio_path)
+        return False
+    return True
 
 
 def concat_segments(segment_paths: Iterable[Path], out: Path) -> bool:
