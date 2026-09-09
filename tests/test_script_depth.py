@@ -24,7 +24,7 @@ HEALTHY_CHARS = 6363    # the 5.9-minute script, measured
 
 
 def _report(chars: int, topics: int = TOPICS, **over) -> dict:
-    r = {"gated": True, "checked": True, "pooled": False,
+    r = {"gated": True, "checked": True, "pooled": False, "verdict": "ok",
          "topics": topics, "chars": chars,
          "chars_per_topic": round(chars / topics, 1),
          "thin": (chars / topics) < coverage._DEPTH_MIN_CHARS_PER_TOPIC}
@@ -112,3 +112,46 @@ class TestDefaultMode:
             self, monkeypatch, val, want):
         monkeypatch.setenv("DEPTH_GATE", val)
         assert coverage.depth_gate_mode() == want
+
+
+class TestTheRetryRescuesAThinDraftInsteadOfRefusingIt:
+    """A gate that only refuses turns a 40%-unreliable script call into a
+    40%-unreliable product. The retry that already exists for breadth now
+    fires for depth too — before slides, TTS or a frame, so it is the cheapest
+    correction in the pipeline."""
+
+    def test_a_thin_draft_earns_the_retry(self):
+        assert coverage.should_retry(_report(THIN_CHARS), mode="strict")
+
+    def test_a_healthy_draft_does_not(self):
+        assert not coverage.should_retry(_report(HEALTHY_CHARS), mode="strict")
+
+    def test_a_pooled_thin_draft_still_never_retries(self):
+        """Its missed list is other parts' topics — incident 8b79d4e0."""
+        assert not coverage.should_retry(_report(THIN_CHARS, pooled=True),
+                                         mode="strict")
+
+    def test_depth_outranks_breadth_when_choosing_the_draft_to_keep(self):
+        """The trade that shipped the 2.4-minute video: it scored 0.897 while
+        teaching nothing. A fuller draft must win even if it names one topic
+        fewer."""
+        thin_but_broad = _report(THIN_CHARS, covered=0.95)
+        full_but_narrower = _report(HEALTHY_CHARS, covered=0.90)
+        assert coverage.better_draft(thin_but_broad, full_but_narrower)
+        assert not coverage.better_draft(full_but_narrower, thin_but_broad)
+
+    def test_between_two_equally_deep_drafts_coverage_decides(self):
+        a = _report(HEALTHY_CHARS, covered=0.90)
+        b = _report(HEALTHY_CHARS, covered=0.95)
+        assert coverage.better_draft(a, b)
+        assert not coverage.better_draft(b, a)
+
+    def test_the_depth_instruction_is_not_the_coverage_instruction(self):
+        """A thin draft told to 'cover' its missed topics returns a fourth
+        sentence. The two channels must say different things."""
+        import inspect
+
+        from agent3_scripts import script_generator
+        src = inspect.getsource(script_generator.generate_episode_script)
+        assert "expand_reason" in src
+        assert "MANDATORY COVERAGE" in src and "DEPTH" in src

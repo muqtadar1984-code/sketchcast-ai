@@ -245,6 +245,7 @@ def generate_episode_script(
     part_info: dict | None = None,
     language: str = "en",
     must_cover: list[str] | None = None,
+    expand_reason: str | None = None,
     avatars: dict | None = None,
     subject: str | None = None,
     curriculum: str | None = None,
@@ -286,6 +287,21 @@ def generate_episode_script(
         if k == n:
             part_lines.append("This is the FINAL part — close with the full chapter synthesis.")
         episode_context += "\n".join(part_lines)
+    if expand_reason:
+        # The depth channel, and it is a DIFFERENT instruction from
+        # must_cover. A thin draft is not one that skipped topics — it named
+        # them and said a sentence about each. Measured: 26 of 29 topics
+        # addressed, 0.897 coverage, 2.4 minutes of video. Telling that draft
+        # to "cover" the three it missed would produce a fourth sentence, not
+        # a lesson. So this asks for the thing that was actually absent.
+        episode_context += (
+            "\n\nDEPTH — a previous draft of this script was too thin to teach "
+            f"from ({expand_reason}). It named the topics and then moved on. "
+            "This draft must TEACH each one: explain the mechanism, say why it "
+            "matters, and give the concrete example or analogy a learner would "
+            "remember. Do NOT add topics or segments to pad the length — go "
+            "deeper on what is already there."
+        )
     if must_cover:
         # Capped at 12 so a collapsed first attempt (which can miss nearly every
         # topic) can't turn the retry's context into a list longer than the

@@ -496,9 +496,14 @@ def should_fail(report: dict, mode: str | None = None) -> bool:
         return False
     if report.get("pooled"):
         return False
+    # .get, not []: this runs inside the worker's script path, and a report
+    # shaped by a future caller without a verdict must not raise there — a
+    # quality gate that crashes the lesson it was measuring is worse than one
+    # that abstains.
+    verdict = report.get("verdict")
     if mode == "strict":
-        return report["verdict"] in ("short", "floor")
-    return report["verdict"] == "floor"
+        return verdict in ("short", "floor")
+    return verdict == "floor"
 
 
 def depth_gate_mode() -> str:
@@ -545,7 +550,27 @@ def should_retry(report: dict, mode: str | None = None) -> bool:
     to cover parts 1, 2 and 4. Kept here rather than inline in the worker so
     the decision is testable without importing worker.process.
     """
-    return should_fail(report, mode) and not report.get("pooled")
+    if report.get("pooled"):
+        return False
+    # A thin draft earns the same one retry a short one does. It is the more
+    # common failure of the two — of five production presentations, two were
+    # thin and none were short — and it is the cheaper to rescue, because the
+    # retry happens before slides, TTS or a single frame.
+    return should_fail(report, mode) or is_thin(report, mode)
+
+
+def better_draft(first: dict, second: dict) -> bool:
+    """Whether the retry should replace the first draft.
+
+    Depth outranks breadth, and the order matters: comparing `covered` alone
+    would keep a draft that names one more topic over one that actually
+    teaches, which is exactly the trade that produced a 2.4-minute video
+    scoring 0.897. A draft that is not thin beats one that is, whatever their
+    coverage; between two of the same thinness, more topics named wins.
+    """
+    if bool(first.get("thin")) != bool(second.get("thin")):
+        return bool(first.get("thin"))
+    return (second.get("covered") or 0) > (first.get("covered") or 0)
 
 
 def script_text(script: dict) -> str:

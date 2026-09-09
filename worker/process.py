@@ -1378,10 +1378,21 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                 # teach material this part does not contain — the harmful
                 # half of incident 8b79d4e0).
                 first = report
+                # Name the shortfall the draft actually had. A thin draft told
+                # to "cover" its three missed topics returns a fourth
+                # sentence; it needs to be told to teach, not to list.
+                _expand = None
+                if first.get("thin"):
+                    _expand = (f"{first.get('chars')} characters across "
+                               f"{first.get('topics')} topics — "
+                               f"{first.get('chars_per_topic')} per topic, "
+                               f"against a floor of "
+                               f"{coverage._DEPTH_MIN_CHARS_PER_TOPIC}")
                 retry = generate_episode_script(
                     episode, analysis, chapter_num, client, narration_style,
                     part_info=part_info, language=lesson_lang,
                     must_cover=first.get("missed") or [], avatars=avatars,
+                    expand_reason=_expand,
                     subject=book.get("subject"), curriculum=book.get("curriculum"),
                     learner_age=book.get("grade"),
                 )
@@ -1391,12 +1402,17 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                     kind="presentation", model=client.model, part=part_idx, of=n_parts,
                     part_scoped=part_ref is not None,
                 )
-                if (retry_report.get("covered") or 0) > (first.get("covered") or 0):
+                # Depth outranks breadth: comparing `covered` alone would
+                # keep a draft that names one more topic over one that
+                # actually teaches — the exact trade that shipped a
+                # 2.4-minute video scoring 0.897.
+                if coverage.better_draft(first, retry_report):
                     script, script_dict, report = retry, retry_dict, retry_report
                 # Both numbers are kept: whether naming the missed topics
                 # actually repairs a thin draft is itself a thing the
                 # founder will want to query after the model flip.
                 report["retried_from"] = first.get("covered")
+                report["retried_from_chars_per_topic"] = first.get("chars_per_topic")
                 if coverage.should_fail(report):
                     coverage_reports.append(report)
                     _record_coverage(sb, generation_id, coverage_reports)
