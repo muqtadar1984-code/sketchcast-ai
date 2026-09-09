@@ -1334,10 +1334,25 @@ def annotate_regions(ink: Image.Image, part_names: list[str]) -> dict:
                 regions[norm_part(name) or str(name).strip().lower()] = clean
     out["regions"] = regions
     missing = [n for n in part_names if norm_part(n) not in regions]
-    if missing and regions:
+    if missing:
         # focused re-ask for JUST the unboxed parts — the multiplexed
         # N-part question reliably drops one or two (a run once lost 3 of 7,
         # suppressing their arrows). A short list gets full attention.
+        #
+        # This used to require `and regions`, on the reading that a TOTAL miss
+        # means the picture has no boxable parts at all, so a second question
+        # would be wasted. The live Cells kit of 2026-09-09 disproved it:
+        # `organelle_city` was asked for four names, returned {} for every one,
+        # and was published to the library with group_count 0 — while the same
+        # call answered `plant_cell_diagram` (3 regions) and `hierarchy_ladder`
+        # (4) minutes apart on the same run. A total miss is the FLAKIEST
+        # outcome, not the most certain one, and it was the single case that
+        # never got the remedy this branch exists to provide.
+        #
+        # Convergence is unaffected: this still runs once, inside the one
+        # annotation pass, and the caller writes `annotated_for` afterwards
+        # either way — so a part vision genuinely cannot see is still never
+        # re-asked on a later load.
         data3 = _vision_json(
             "This is an unlabeled educational line diagram. Return ONLY "
             'JSON: {"regions": {"<part>": [[ymin,xmin,ymax,xmax], ...]}}. '
@@ -1889,6 +1904,81 @@ def cache_dir_for(key: str, cache_dir: Path | None = None) -> Path:
                         key, candidate.name)
             return candidate
     return primary
+
+
+def repair_asset_regions(key: str, wanted: list[str],
+                         cache_dir: Path | None = None) -> dict:
+    """Buy boxes for parts a CACHED picture was asked for and did not deliver.
+
+    The one case the annotation path cannot reach on its own. `annotated_for`
+    records the names ever ASKED, not the names FOUND, and it does so
+    deliberately: a part vision genuinely cannot see must count as answered or
+    every load re-buys it forever. The cost of that correctness is that a
+    TRANSIENT miss is latched with the same permanence as a real absence, and
+    `_lift_library_vision` re-seeds the same empty answer onto every fresh
+    container from the library row. Measured on the live Cells kit: four names
+    asked of `organelle_city`, `regions: {}` returned, published approved with
+    group_count 0 — while the same call answered two other assets on the same
+    run minutes apart.
+
+    So the latch stays, and this is the ONE authorised way past it: driven by a
+    plan that is actually pointing at the name, never by a load. That
+    distinction is the whole safety argument. A load says "I might need this
+    someday" and must be refused; a plan says "an arrow in this lesson lands
+    here", and there is no such thing as re-asking that forever, because a
+    lesson asks once.
+
+    Vision class only — one call, no image quota, so this cannot starve the
+    ~1/min image pool real users share. Returns the repair outcome for the
+    caller to log; it never raises.
+    """
+    from PIL import Image as _Image
+    out = {"key": key, "wanted": list(wanted), "found": [], "asked": False}
+    if not wanted:
+        return out
+    try:
+        with asset_lock(key):
+            cache = cache_dir_for(key, cache_dir)
+            png, meta = cache / "asset.png", cache / "meta.json"
+            if not png.exists():
+                return out                    # no picture: not our problem
+            ink = _Image.open(png).convert("RGBA")
+            md = {}
+            try:
+                md = json.loads(meta.read_text(encoding="utf-8"))
+            except Exception:                 # noqa: BLE001
+                md = {}
+            regions = dict(md.get("regions") or {})
+            # ask only for what is STILL unresolved under the renderer's own
+            # ladder — a name the matcher can already reach needs no box
+            from .anchor_match import resolves
+            missing = [w for w in wanted if not resolves(list(regions), w)]
+            if not missing:
+                return out
+            out["asked"] = True
+            ann = annotate_regions(ink, missing)
+            for k, boxes in (ann.get("regions") or {}).items():
+                if boxes and k not in regions:
+                    regions[k] = boxes
+                    out["found"].append(k)
+            asked_before = list(md.get("annotated_for") or [])
+            md["regions"] = regions
+            md["annotated_for"] = asked_before + [
+                w for w in missing if w not in asked_before]
+            # upstream FIRST, then local — the order the annotation path uses,
+            # so a repaired box converges for every future lesson rather than
+            # dying with this container's disk
+            try:
+                md["vision"] = _record_library_vision(
+                    md, ink.size, bool(md.get("baked_text")))
+            except Exception:                 # noqa: BLE001
+                logger.warning("region repair could not reach the library row "
+                               "for %r", key, exc_info=True)
+            _write_meta(meta, md)
+    except Exception:                         # noqa: BLE001
+        # a repair is an optimisation; it must never fail a lesson
+        logger.warning("region repair failed for %r", key, exc_info=True)
+    return out
 
 
 def get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,

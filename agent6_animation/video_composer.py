@@ -463,6 +463,69 @@ def _audio_duration(audio_path: str, ffmpeg: str) -> float:
     return 0.0
 
 
+def _anchor_repair_enabled() -> bool:
+    """Default ON. The pass is vision-class and bounded by the lesson's own
+    anchor count; ANCHOR_REPAIR=0 turns it off without a deploy."""
+    return str(os.getenv("ANCHOR_REPAIR", "1")).strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def _repair_anchor_regions(slide_segments, script_segments, pending_keys):
+    """Buy the boxes this lesson's arrows need and the artwork does not have.
+
+    Vision class only — one call per unrepaired asset, no image quota — so it
+    cannot starve the image pool real users share. Skips assets whose picture
+    never arrived (`pending_keys`): a missing image is a different fault with a
+    different owner, and annotating nothing would just waste the call.
+
+    Every failure is swallowed. A repair is an optimisation, and the standing
+    rule is that a cost optimisation must never fail a finished lesson.
+    """
+    if not _anchor_repair_enabled():
+        return
+    try:
+        from spike.scene_engine.anchor_repair import (plan_anchor_wants,
+                                                      scenes_of,
+                                                      unresolved_wants)
+        from spike.scene_engine.raster_assets import (cache_dir_for,
+                                                      repair_asset_regions)
+
+        wants = plan_anchor_wants(scenes_of(slide_segments, script_segments))
+        if not wants:
+            return
+
+        def _regions_of(key: str):
+            if key in (pending_keys or ()):
+                return None
+            meta = cache_dir_for(key) / "meta.json"
+            try:
+                return list((json.loads(meta.read_text(encoding="utf-8"))
+                             .get("regions") or {}))
+            except Exception:  # noqa: BLE001
+                return None
+
+        broken = unresolved_wants(wants, _regions_of)
+        if not broken:
+            logger.info("anchor pre-check: all %d anchored part(s) resolve",
+                        sum(len(v) for v in wants.values()))
+            return
+        logger.warning("anchor pre-check: %d asset(s) cannot answer the parts "
+                       "the plan points at: %s", len(broken),
+                       "; ".join(f"{k} -> {', '.join(v)}"
+                                 for k, v in list(broken.items())[:6]))
+        for key, missing in broken.items():
+            got = repair_asset_regions(key, missing)
+            if got.get("found"):
+                logger.info("ANCHOR REPAIR %s: recovered %s", key,
+                            ", ".join(got["found"]))
+            elif got.get("asked"):
+                logger.warning("ANCHOR REPAIR %s: vision still cannot find %s "
+                               "— the artwork does not carry these parts",
+                               key, ", ".join(missing))
+    except Exception:  # noqa: BLE001
+        logger.warning("anchor repair pass skipped", exc_info=True)
+
+
 def compose_episode_videos(
     script_data: dict,
     slide_manifest: dict,
@@ -837,6 +900,14 @@ def compose_episode_videos(
                 if _pending_keys:
                     logger.warning("still unresolved after the warm budget: %s",
                                    ", ".join(sorted(_pending_keys)[:12]))
+                # THE SEAM. Every picture is on disk with its regions written,
+                # and nothing downstream is paid yet — no frame rasterised, no
+                # TTS character bought. This is the only point where the plan's
+                # promise (the parts it points at) and the artwork's delivery
+                # (the regions it actually has) are both in hand and both still
+                # free to change. The check itself costs nothing.
+                _repair_anchor_regions(slide_segments, script_segments,
+                                       _pending_keys)
         except Exception as exc:  # noqa: BLE001 — a warm-up never fails a lesson
             logger.warning("lesson image warm pass skipped: %s", exc)
 
