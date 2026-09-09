@@ -287,6 +287,30 @@ def generate_episode_script(
         if k == n:
             part_lines.append("This is the FINAL part — close with the full chapter synthesis.")
         episode_context += "\n".join(part_lines)
+    _standalone = (not part_info
+                   or int(part_info.get("total", 1) or 1) <= 1
+                   or part_info.get("part") == part_info.get("total"))
+    if _standalone:
+        # NOTHING FOLLOWS THIS LESSON, so it must not promise that something
+        # does. Every narration style ends its structure with a `preview`
+        # phase worded as "tease the next episode" / "a breezy tease of what
+        # is next" -- and the part block above fires ONLY for multi-part
+        # chapters, so a standalone lesson was never told it was standalone
+        # and closed on a promise it could not keep. The founder watched four
+        # separate lessons do exactly that.
+        #
+        # The phase itself stays: closing on a forward-looking question is
+        # good teaching. What changes is where it points -- at the learner and
+        # this material, rather than at an episode that does not exist.
+        episode_context += (
+            "\n\nTHIS LESSON STANDS ALONE. There is no next episode. The "
+            "final `preview` phase must NOT tease, promise or refer to a "
+            "following lesson, part or video, and must not say that a topic "
+            "will be covered later. Close the topic instead: leave the "
+            "learner with a question to think about, something to notice in "
+            "the world around them, or a way to test themselves on what they "
+            "have just learned."
+        )
     if expand_reason:
         # The depth channel, and it is a DIFFERENT instruction from
         # must_cover. A thin draft is not one that skipped topics — it named

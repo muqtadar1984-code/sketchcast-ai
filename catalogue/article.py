@@ -159,7 +159,8 @@ ARTICLE_PROMPT = f"""TASK: write the complete explanation of this topic that a s
 
 RULES
 1. Teach at the depth of the DEPTH CURRICULUM named above and say why in "depth_rationale" (one or two sentences naming that curriculum).
-2. Length {WORDS_MIN}-{WORDS_MAX} words of body text across 4-8 sections. Each section has a short heading and a "body_md" in markdown: paragraphs, bullet lists, bold key terms, simple tables where they help. No images, no HTML, no links.
+1b. COVER THE TOPIC COMPLETELY at that depth. This is the only article on this topic and there is no later one: everything a learner at this depth should know must be here. Never defer material ("this will be covered later", "beyond the scope of this lesson", "in a future article") and never point forward to another lesson. Where the depth curriculum stops, stop -- but say everything up to it.
+2. Length {WORDS_MIN}-{WORDS_MAX} words of body text across 4-8 sections. {WORDS_MIN} is a FLOOR, not a suggestion: an article shorter than that has not taught the topic, and every lesson, deck, worksheet and question generated from it inherits the gap. Write to the top of the range when the topic supports it. Each section has a short heading and a "body_md" in markdown: paragraphs, bullet lists, bold key terms, simple tables where they help. No images, no HTML, no links.
 3. Address EVERY coverage-target statement in at least one section. For each section list the CODES it addresses in "covers". Use the codes exactly as written; never invent a code.
 4. Write the learning objectives of the article in "objectives" (ids "o1", "o2", ...), one sentence each, in the form a teacher would put on the board.
 5. Define every key term the body uses in "glossary" as {{term, definition}} - a definition is one or two plain sentences a learner can quote.
