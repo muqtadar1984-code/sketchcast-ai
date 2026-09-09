@@ -1068,7 +1068,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
     steps and off every book-keyed side effect; the book path is byte-for-
     byte the code that ran before the split."""
     from agent2_analysis.analyzer import run_full_analysis
-    from shared.llm import analysis_client, client_for
+    from shared.llm import analysis_client, client_for, script_client
     from worker.branding import load_branding
 
     job_id = job["id"]
@@ -1346,8 +1346,15 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                     if part_idx < n_parts
                     else [],
                 }
+            # The script gets the `script` role, not the general artifact
+            # client: this one call writes the narration, the dialogue, the
+            # slide text and the scene plan, and on the Lite its length was
+            # bimodal on identical input (219.4 vs 108.0 chars per analysed
+            # topic — a 5.9-minute lesson and a 2.4-minute one).
+            _script_client = script_client(lesson_lang)
             script = generate_episode_script(
-                episode, analysis, chapter_num, client, narration_style, part_info=part_info,
+                episode, analysis, chapter_num, _script_client, narration_style,
+                part_info=part_info,
                 language=lesson_lang, avatars=avatars,
                 subject=book.get("subject"), curriculum=book.get("curriculum"),
                 learner_age=book.get("grade"),
@@ -1363,7 +1370,8 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             # that has been rendered.
             report = _coverage_report(
                 analysis, episode, coverage.script_text(script_dict),
-                kind="presentation", model=client.model, part=part_idx, of=n_parts,
+                kind="presentation", model=_script_client.model, part=part_idx,
+                of=n_parts,
                 part_scoped=part_ref is not None,
             )
             if coverage.should_retry(report):
@@ -1389,7 +1397,8 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                                f"against a floor of "
                                f"{coverage._DEPTH_MIN_CHARS_PER_TOPIC}")
                 retry = generate_episode_script(
-                    episode, analysis, chapter_num, client, narration_style,
+                    episode, analysis, chapter_num, _script_client,
+                    narration_style,
                     part_info=part_info, language=lesson_lang,
                     must_cover=first.get("missed") or [], avatars=avatars,
                     expand_reason=_expand,
@@ -1399,7 +1408,8 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                 retry_dict = retry.model_dump()
                 retry_report = _coverage_report(
                     analysis, episode, coverage.script_text(retry_dict),
-                    kind="presentation", model=client.model, part=part_idx, of=n_parts,
+                    kind="presentation", model=_script_client.model, part=part_idx,
+                of=n_parts,
                     part_scoped=part_ref is not None,
                 )
                 # Depth outranks breadth: comparing `covered` alone would
@@ -1419,7 +1429,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                     raise RuntimeError(
                         f"lesson script covers only {report['addressed']} of "
                         f"{report['topics']} topics this chapter's analysis "
-                        f"lists (part {part_idx}/{n_parts}, model {client.model}) "
+                        f"lists (part {part_idx}/{n_parts}, model {_script_client.model}) "
                         f"— never mentioned: {', '.join(report['missed'])}"
                     )
             # DEPTH, checked in the same window and for the same reason.
@@ -1438,7 +1448,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                     f"characters across {report['topics']} topics "
                     f"({report['chars_per_topic']} per topic, floor "
                     f"{coverage._DEPTH_MIN_CHARS_PER_TOPIC}) "
-                    f"(part {part_idx}/{n_parts}, model {client.model}) — this "
+                    f"(part {part_idx}/{n_parts}, model {_script_client.model}) — this "
                     f"would render a video a fraction of its intended length"
                 )
             coverage_reports.append(report)

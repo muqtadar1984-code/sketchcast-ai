@@ -138,10 +138,32 @@ ARTIFACT = "artifact"
 # 3.6x output to fix a failure in one of them would have been a large bill for
 # no measured gain on the other.
 ANALYSIS = "analysis"
+# THE EPISODE SCRIPT — the entire narration of one video, once per part. Split
+# from `artifact` on 2026-09-09 for the same reason `analysis` was, and on the
+# same kind of evidence: measured output, not principle.
+#
+# The Lite's script length is BIMODAL on identical input. Same article, same
+# 29-30 analysed topics, same settings, measured with coverage.script_text:
+#
+#     6,363 chars   219.4 per topic   5.9 min video
+#     3,132 chars   108.0 per topic   2.4 min video
+#     3,279 chars   109.3 per topic   refused by the depth gate
+#
+# The thin ones are not short of TOPICS — the last one covered 30 of 30 after
+# its retry, a perfect 1.0 — they name every concept and say a sentence about
+# each. Writing a lesson someone can learn from is reasoning work, and this is
+# the call the whole video is: narration, dialogue, slide text and the scene
+# plan all come out of it.
+#
+# Its own role rather than moving `artifact`, for the economics the ANALYSIS
+# comment sets out: this is ONE call per part, while `artifact` is every
+# document of every kit and 88% of a generation's output tokens. Worksheets,
+# case studies and activities stay on the Lite.
+SCRIPT = "script"
 VISION = "vision"
 SVG = "svg"
 DIRECTOR = "director"
-ROLES = (ARTIFACT, ANALYSIS, VISION, SVG, DIRECTOR)
+ROLES = (ARTIFACT, ANALYSIS, SCRIPT, VISION, SVG, DIRECTOR)
 
 # ── capabilities ─────────────────────────────────────────────────────────────
 # What a caller would BREAK without. Declared per role so a model that cannot
@@ -161,6 +183,10 @@ REQUIRES: Mapping[str, frozenset[str]] = MappingProxyType({
     # written from. Image input is NOT required: the analyzer hands this call
     # one prompt built from the chapter's text.
     ANALYSIS: frozenset({STRUCTURED_OUTPUT}),
+    # The script comes back as strict JSON (segments, dialogue, slide text and
+    # the visual plan in one reply) and is parsed into EpisodeScript. Text in,
+    # so no image capability is needed.
+    SCRIPT: frozenset({STRUCTURED_OUTPUT}),
     # One inline base64 PNG plus a text prompt. The reply is regex-extracted,
     # so the mime type is not needed — the image part is.
     VISION: frozenset({IMAGE_INPUT}),
@@ -454,6 +480,11 @@ PROFILES: Mapping[str, Mapping[str, tuple[str, str]]] = MappingProxyType({
         # happens to be the same today. The default is Google's to change; the
         # level is a statement about the CALL, and this call wants it.
         ANALYSIS: (FLASH_3_5, MEDIUM),
+        # MEDIUM for the same reason analysis has it, and STATED for the same
+        # reason: the level is a claim about the CALL, not a bet on Google's
+        # default. A thin script is not a cheap lesson, it is a lesson that
+        # names its topics and teaches none of them.
+        SCRIPT: (FLASH_3_5, MEDIUM),
         VISION: (FLASH_LITE_3_5, MINIMAL),
         SVG: (FLASH_LITE_3_5, MINIMAL),
         # UNSTATED on purpose. This is one call per lesson and it decides the
@@ -469,6 +500,9 @@ PROFILES: Mapping[str, Mapping[str, tuple[str, str]]] = MappingProxyType({
         # Was the artifact model before the split, and stays it here: the
         # point of this profile is to reproduce the old behaviour exactly.
         ANALYSIS: (FLASH_2_5, MINIMAL),
+        # Was the artifact model before the split; this profile reproduces
+        # the old behaviour exactly, thin scripts included.
+        SCRIPT: (FLASH_2_5, MINIMAL),
         # No generationConfig at all, exactly as sent today.
         VISION: (FLASH_2_5, UNSTATED),
         SVG: (FLASH_2_5, UNSTATED),
@@ -479,6 +513,8 @@ PROFILES: Mapping[str, Mapping[str, tuple[str, str]]] = MappingProxyType({
         # Even economising, not a Lite and not thoughtless: a failed analysis
         # is not a cheap lesson, it is a lesson about nothing.
         ANALYSIS: (FLASH_3_5, MEDIUM),
+        # Economising does not reach this call either: the video IS the script.
+        SCRIPT: (FLASH_3_5, MEDIUM),
         VISION: (FLASH_LITE_3_1, MINIMAL),
         SVG: (FLASH_LITE_3_1, MINIMAL),
         # The director stays on 3.5 Flash even here. It is one call per lesson
@@ -510,6 +546,7 @@ ENV_PIN = "GEMINI_TEXT_AND_VISION_MODEL"
 ENV_MODEL: Mapping[str, str] = MappingProxyType({
     ARTIFACT: "GEMINI_MODEL",
     ANALYSIS: "GEMINI_ANALYSIS_MODEL",
+    SCRIPT: "GEMINI_SCRIPT_MODEL",
     VISION: "GEMINI_VISION_MODEL",
     SVG: "GEMINI_SVG_MODEL",
     DIRECTOR: "GEMINI_DIRECTOR_MODEL",
@@ -518,6 +555,7 @@ ENV_THINKING_PIN = "GEMINI_THINKING_LEVEL"
 ENV_THINKING: Mapping[str, str] = MappingProxyType({
     ARTIFACT: "GEMINI_THINKING_ARTIFACT",
     ANALYSIS: "GEMINI_THINKING_ANALYSIS",
+    SCRIPT: "GEMINI_THINKING_SCRIPT",
     VISION: "GEMINI_THINKING_VISION",
     SVG: "GEMINI_THINKING_SVG",
     DIRECTOR: "GEMINI_THINKING_DIRECTOR",
