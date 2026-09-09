@@ -161,6 +161,12 @@ def validate_visual_language(video_manifest: dict,
         "arrow_scene_drops": scene_drops,
         "unresolved_anchors": _pick("UNRESOLVED_ANCHOR")
         + _pick("UNRESOLVED_REGION") + _pick("ARROW_SUPPRESSED"),
+        # the same counter split by CAUSE, because the two need opposite
+        # fixes: "(regions=0)" means the annotation never landed and only a
+        # repair pass can help; anything else means the picture HAD names and
+        # the matcher did not reach them, which is fixable for free.
+        "unresolved_anchors_no_regions": [w for w in _pick("UNRESOLVED_ANCHOR")
+                                          if "(regions=0)" in w],
         "out_of_bounds_text": _pick("OUT_OF_BOUNDS_TEXT"),
         # text written over other text — the founder reported this twice and
         # both times the report said the lesson was clean, because nothing

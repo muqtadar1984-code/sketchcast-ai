@@ -98,6 +98,10 @@ from .pen import PenSprite, resolve_mode
 from .schema import (WORLD_H, WORLD_W, AnchorRef, ArrowElement, GroupElement,
                      IllustrationElement, ParticleGroupElement, Scene,
                      ShapeElement, TextElement)
+from .anchor_match import (  # noqa: F401  (re-exported below)
+    anchor_layer_hits,
+    without_unknown_qualifiers as _anchor_without_unknown_qualifiers,
+)
 from .timing import (CAPTION_PREFIX, TimedAction, animation_end,
                      compile_timeline, take_cue_losses)
 from .vector_assets import VectorAsset, vector_asset
@@ -196,48 +200,12 @@ class BLayer:
     strokes: list[BStroke]
 
 
-def _without_unknown_qualifiers(available: list[str], layer: str) -> list[str]:
-    """An anchor's layer name, retried without words the ARTWORK never uses.
+# Re-exported so `from .render import _without_unknown_qualifiers` keeps
+# working (tests/test_anchor_qualifiers.py pins that import path). The
+# definition and the rest of the anchor ladder live in anchor_match, which
+# both branches of _layer_instance_boxes now share.
+_without_unknown_qualifiers = _anchor_without_unknown_qualifiers
 
-    ANCHORS ONLY. `match_layer_ids` is the shared layer matcher — asset
-    subsetting, carried-state reveal and draw distribution all call it, and
-    "wall" meaning the same strokes everywhere is a property worth keeping.
-    This is the anchor's own last resort, so a looser reading can put an arrow
-    on a part without also changing which strokes get drawn.
-
-    The plan and the picture are written by two different calls, and the plan
-    qualifies a part the annotator named plainly. From the live Cells kit
-    (2026-09-08), where 14 anchors resolved to nothing and their labels fell
-    back to a stacked column of leader lines:
-
-        plant_central_vacuole  vs  "large central vacuole"   ->  no match
-        central_vacuole        vs  "large central vacuole"   ->  MATCHES
-        golgi_sacs             vs  "golgi apparatus"         ->  no match
-        golgi                  vs  "golgi apparatus"         ->  MATCHES
-
-    One extra word loses a match the rest of the name makes perfectly. So drop
-    it — but ONLY a word the artwork's whole vocabulary does not contain,
-    which is what makes this safe rather than a similarity score. A word the
-    picture DOES use somewhere is meaningful and is never discarded:
-    `nucleus_membrane` keeps both its words, because the artwork knows
-    "nucleus" and knows "cell membrane", and narrowing to "membrane" would put
-    a nuclear-membrane label on the cell membrane — the confident-arrow-on-the-
-    wrong-structure failure this file already carries scars from.
-
-    Ambiguity refuses too: a narrowed name matching more than one region has
-    identified a family, not a part. `vacuole` against "vacuole column" and
-    "large vacuole area" stays unresolved and the label keeps its leader line.
-    """
-    from .vector_assets import match_layer_ids
-
-    toks = [t for t in re.split(r"[^a-z0-9]+", str(layer).lower()) if t]
-    vocabulary = {t for a in available
-                  for t in re.split(r"[^a-z0-9]+", str(a).lower()) if t}
-    keep = [t for t in toks if t in vocabulary]
-    if not keep or len(keep) == len(toks):
-        return []                     # nothing droppable, or nothing left
-    hits = match_layer_ids(available, [" ".join(keep)])
-    return hits if len(hits) == 1 else []
 
 @dataclass
 class BRaster:
@@ -1294,18 +1262,25 @@ class SceneRenderer:
         vision-annotated region boxes (world coords); vector -> the bbox of
         each stroke in the matched layers (a chloroplast layer's three
         ellipses are three instances)."""
-        from .vector_assets import match_layer_ids
         boxes: list[tuple] = []
         if b.raster is not None and b.raster.regions:
             names = list(b.raster.regions)
-            for k in (match_layer_ids(names, [layer])
-                      or _without_unknown_qualifiers(names, layer)):
+            for k in anchor_layer_hits(names, layer):
                 for (x0, y0, x1, y1) in b.raster.regions[k]:
                     p0 = b.raster.to_world((x0, y0))
                     p1 = b.raster.to_world((x1, y1))
                     boxes.append((p0[0], p0[1], p1[0], p1[1]))
         elif b.layers:
             matched = self._matched_layers(b, [layer])
+            if not matched and not getattr(b, "placeholder", False):
+                # an SVG asset's <g id> groups ARE its parts, but the anchor
+                # tolerance only ever ran on the raster branch, so this path
+                # shipped without it by construction. _matched_layers itself
+                # stays untouched: _layer_flat_indices and _layer_strokes call
+                # it to decide which strokes get DRAWN. A placeholder is
+                # excluded because it already answers every request with all
+                # of itself.
+                matched = set(anchor_layer_hits([l.id for l in b.layers], layer))
             for l in b.layers:
                 if l.id in matched:
                     for st in l.strokes:
@@ -1356,10 +1331,18 @@ class SceneRenderer:
                     p = self._toward_boundary(box, toward)
                     return (p[0] + spec.dx, p[1] + spec.dy)
             else:
-                logger.warning("layer anchor %r.%r unresolved — falling back "
-                               "to element box", spec.el, spec.layer)
+                # name the vocabulary we had: "the artwork has no such
+                # region" and "the matcher lost a region it had" are one
+                # message today, and they need opposite fixes. regions=0 in
+                # particular says the annotation never landed at all.
+                known = (sorted(b.raster.regions) if b.raster is not None
+                         and b.raster.regions else [l.id for l in b.layers])
+                logger.warning("layer anchor %r.%r unresolved (regions=%d: %s)"
+                               " — falling back to element box", spec.el,
+                               spec.layer, len(known), ", ".join(known[:8]))
                 self._warn(
-                    f"UNRESOLVED_ANCHOR {spec.el}.{spec.layer}")
+                    f"UNRESOLVED_ANCHOR {spec.el}.{spec.layer} "
+                    f"(regions={len(known)})")
                 if toward is not None and spec.edge == "center":
                     # point at the ELEMENT's edge facing the label — a line
                     # stabbing the middle of the diagram reads as wrong
