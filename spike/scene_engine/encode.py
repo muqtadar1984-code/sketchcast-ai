@@ -54,6 +54,23 @@ def encode_args(total_secs: float, audio_path: str | None, out: Path,
     base += [
         "-map", "0:v", "-map", "1:a",
         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps),
+        # MEMORY, not speed. libx264 sizes its allocations from the thread
+        # count it picks, and left alone it picks ~1.5x the machine's cores —
+        # on a many-core container that is dozens of frame threads, each with
+        # its own reference and lookahead buffers, PER INSTANCE. Several
+        # encoders at once then exhausted the container and libx264 failed at
+        # init: "Error while opening encoder — maybe incorrect parameters such
+        # as bit_rate, rate, width or height", which is what an allocation
+        # failure looks like from the outside. It cost a segment on three
+        # separate production runs, each time a DIFFERENT segment, which is
+        # the signature of a resource fault rather than a bad scene.
+        #
+        # 2 frame threads is ample: a 720p whiteboard frame is mostly flat
+        # white and encodes far faster than realtime either way. sliced-threads
+        # off keeps each thread's working set to its own frame, and a short
+        # lookahead is the other large per-instance buffer.
+        "-threads", "2",
+        "-x264-params", "sliced-threads=0:rc-lookahead=20",
         "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
         "-movflags", "+faststart",
         "-t", f"{total_secs:.2f}",

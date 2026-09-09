@@ -410,6 +410,12 @@ def build_episode_prompt(
             'the persistent-whiteboard plan, exactly as in the example below '
             'and per VISUAL CONTINUITY. Do NOT attach visual keys to '
             'individual segments.\n'
+            'THE FIRST SEGMENT OF THE LESSON MUST DRAW SOMETHING, cued into '
+            'its opening words. A segment with no visual renders as a BLANK '
+            'BOARD for its whole duration, and a lesson that opens on a blank '
+            'board has lost the viewer before it starts. Give every segment a '
+            'visual action unless the board already shows exactly what the '
+            'words are about.\n'
             'Return the ENTIRE reply as MINIFIED JSON — one single line, no '
             'indentation, no spaces after separators. The reply is long and '
             'pretty-printing WILL truncate it mid-array.',
@@ -431,12 +437,12 @@ def build_episode_prompt(
        {"id": "ar_wall", "type": "arrow", "tail": {"el": "lbl_wall", "edge": "right"}, "head": [330, 250]}
      ],
      "steps": [
-       {"segment": 2, "decision": "NEW_VISUAL", "reason": "chapter opens the cell",
-        "actions": [{"verb": "draw", "target": "cell", "layers": ["wall"], "at": {"phrase": "words copied from segment 2's text"}}]},
-       {"segment": 3, "decision": "EXTEND", "reason": "membrane is PART_OF the cell",
+       {"segment": 1, "decision": "NEW_VISUAL", "reason": "chapter opens the cell",
+        "actions": [{"verb": "draw", "target": "cell", "layers": ["wall"], "at": {"phrase": "words from the FIRST sentence of segment 1"}}]},
+       {"segment": 2, "decision": "EXTEND", "reason": "membrane is PART_OF the cell",
         "actions": [{"verb": "draw", "target": "cell", "layers": ["membrane"]}, {"verb": "draw", "target": "ar_wall"}, {"verb": "write", "target": "lbl_wall"}],
         "key_point": "The cell wall gives the cell its shape"},
-       {"segment": 4, "decision": "FOCUS", "reason": "board already shows it",
+       {"segment": 3, "decision": "FOCUS", "reason": "board already shows it",
         "actions": [{"verb": "zoom", "target": "cell", "scale": 1.4}, {"verb": "circle", "target": "lbl_wall"}],
         "moment": {"role": "student", "text": "Why do plants need a wall?"}}
      ]}

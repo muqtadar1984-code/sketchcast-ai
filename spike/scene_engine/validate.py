@@ -133,6 +133,16 @@ def validate_visual_language(video_manifest: dict,
         "narration_segments": len(segs),
         "scene_segments": counts.get("scene", 0),
         "whiteboard_fallback_segments": counts.get("whiteboard", 0),
+        # HOW MANY SEGMENTS THE VIEWER WATCHES BEFORE ANYTHING IS DRAWN.
+        # The founder's report was "a minute or so in the start had no image",
+        # and every counter here said the lesson was clean: 15 of 17 segments
+        # carried a scene, 0 unresolved anchors, acceptance "clean". The two
+        # that did not happened to be s001 and s002 — a third of a minute each,
+        # at the only moment a viewer decides whether to keep watching.
+        # A ratio cannot see that; position is the whole point.
+        "blank_opening_segments": next(
+            (i for i, s_ in enumerate(segs)
+             if str(s_.get("renderer", "native")) == "scene"), len(segs)),
         "legacy_renderer_usage": counts.get("native", 0),
         "visual_chapters": stats.get("visual_chapters", 0),
         "unique_root_visuals": stats.get("root_visuals", 0),
