@@ -1378,10 +1378,21 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                 # teach material this part does not contain — the harmful
                 # half of incident 8b79d4e0).
                 first = report
+                # Name the shortfall the draft actually had. A thin draft told
+                # to "cover" its three missed topics returns a fourth
+                # sentence; it needs to be told to teach, not to list.
+                _expand = None
+                if first.get("thin"):
+                    _expand = (f"{first.get('chars')} characters across "
+                               f"{first.get('topics')} topics — "
+                               f"{first.get('chars_per_topic')} per topic, "
+                               f"against a floor of "
+                               f"{coverage._DEPTH_MIN_CHARS_PER_TOPIC}")
                 retry = generate_episode_script(
                     episode, analysis, chapter_num, client, narration_style,
                     part_info=part_info, language=lesson_lang,
                     must_cover=first.get("missed") or [], avatars=avatars,
+                    expand_reason=_expand,
                     subject=book.get("subject"), curriculum=book.get("curriculum"),
                     learner_age=book.get("grade"),
                 )
@@ -1391,12 +1402,17 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                     kind="presentation", model=client.model, part=part_idx, of=n_parts,
                     part_scoped=part_ref is not None,
                 )
-                if (retry_report.get("covered") or 0) > (first.get("covered") or 0):
+                # Depth outranks breadth: comparing `covered` alone would
+                # keep a draft that names one more topic over one that
+                # actually teaches — the exact trade that shipped a
+                # 2.4-minute video scoring 0.897.
+                if coverage.better_draft(first, retry_report):
                     script, script_dict, report = retry, retry_dict, retry_report
                 # Both numbers are kept: whether naming the missed topics
                 # actually repairs a thin draft is itself a thing the
                 # founder will want to query after the model flip.
                 report["retried_from"] = first.get("covered")
+                report["retried_from_chars_per_topic"] = first.get("chars_per_topic")
                 if coverage.should_fail(report):
                     coverage_reports.append(report)
                     _record_coverage(sb, generation_id, coverage_reports)
@@ -1406,6 +1422,25 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                         f"lists (part {part_idx}/{n_parts}, model {client.model}) "
                         f"— never mentioned: {', '.join(report['missed'])}"
                     )
+            # DEPTH, checked in the same window and for the same reason.
+            # Coverage asks how many topics were named; this asks whether
+            # anything was said about them. A script can name 26 of 29 and
+            # still be a 2.4-minute video — measured twice in production, and
+            # both shipped, because breadth was the only question anyone asked.
+            #
+            # Deliberately after the retry: a thin draft may be replaced by a
+            # fuller one above, and it is the kept draft that is judged.
+            if coverage.is_thin(report):
+                coverage_reports.append(report)
+                _record_coverage(sb, generation_id, coverage_reports)
+                raise RuntimeError(
+                    f"lesson script is too thin to teach: {report['chars']} "
+                    f"characters across {report['topics']} topics "
+                    f"({report['chars_per_topic']} per topic, floor "
+                    f"{coverage._DEPTH_MIN_CHARS_PER_TOPIC}) "
+                    f"(part {part_idx}/{n_parts}, model {client.model}) — this "
+                    f"would render a video a fraction of its intended length"
+                )
             coverage_reports.append(report)
             save_script(script)
             # Attach matched textbook figures to this part's segments (semantic
