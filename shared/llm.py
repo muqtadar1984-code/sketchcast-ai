@@ -44,6 +44,28 @@ def client_for(language: str | None, *, model: str | None = None, kind: str | No
     raise ValueError(f"unknown provider {provider!r} for language {language!r}")
 
 
+def script_client(language: str | None):
+    """The client for the EPISODE SCRIPT — the one call that writes a video.
+
+    Routes exactly like `client_for`, then pins the `script` role's model, and
+    ONLY on the Gemini path, for the reason `analysis_client` gives: routing
+    belongs to the language, and a Gemini id handed to Claude or Kimi is a 404
+    at best.
+
+    Split out on 2026-09-09. The artifact model's script length is bimodal on
+    identical input — 219.4 chars per analysed topic on one run and 108.0 on
+    the next, a 5.9-minute lesson and a 2.4-minute one from the same article.
+    The thin drafts are not missing topics; one covered 30 of 30 after its
+    retry and was still refused by the depth gate. One call per part, and the
+    call the entire video is made of, so it can afford a model that holds it.
+    """
+    from shared import text_models
+
+    if provider_for(language) != GEMINI:
+        return client_for(language)
+    return client_for(language, model=text_models.resolve(text_models.SCRIPT).id)
+
+
 def analysis_client(language: str | None):
     """The client for the COMBINED ANALYSIS — the one call that turns a
     chapter's text into the concept list every artifact is written from.
