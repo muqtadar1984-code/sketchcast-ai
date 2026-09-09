@@ -52,11 +52,24 @@ class TestTheFloorSeparatesTheTwoLiveRuns:
 class TestItSharesEveryGuardWithTheCoverageGate:
     """A depth failure must be no more eager to fire than a breadth failure."""
 
-    def test_a_pooled_part_scoped_report_never_fails(self):
-        """Its denominator is the whole chapter's concept list, so a part-3
-        script measuring thin is the gate failing, not the script."""
-        assert not coverage.is_thin(_report(THIN_CHARS, pooled=True),
-                                    mode="strict")
+    def test_a_pooled_report_is_scored_on_what_the_part_ACTUALLY_taught(self):
+        """The one guard depth does NOT share with breadth, and the reason is
+        the denominator rather than the principle.
+
+        Breadth must exempt a pooled report: its denominator is the whole
+        chapter's concept list, so a part-3 script "missing" parts 1, 2 and 4
+        is the gate being wrong (incident 8b79d4e0). Depth used to inherit
+        that exemption wholesale — which left every multi-part lesson, i.e.
+        what a real textbook chapter becomes and therefore what most teachers
+        and parents receive, with no depth protection at all.
+
+        measure() now scores a pooled report against the topics the part
+        addressed, so the ratio is honest and the exemption is unnecessary.
+        A pooled report with no addressed-ratio recorded still cannot fail."""
+        legacy = _report(THIN_CHARS, pooled=True)
+        legacy.pop("chars_per_addressed", None)
+        legacy["thin"] = False          # measure() would not have flagged it
+        assert not coverage.is_thin(legacy, mode="strict")
 
     def test_an_ungated_report_never_fails(self):
         assert not coverage.is_thin(_report(THIN_CHARS, gated=False),
@@ -155,3 +168,57 @@ class TestTheRetryRescuesAThinDraftInsteadOfRefusingIt:
         src = inspect.getsource(script_generator.generate_episode_script)
         assert "expand_reason" in src
         assert "MANDATORY COVERAGE" in src and "DEPTH" in src
+
+
+class TestMultiPartLessonsAreProtectedToo:
+    """A real textbook chapter becomes a MULTI-PART lesson, which is what most
+    teachers and parents actually receive. Those reports are `pooled` — their
+    denominator is the whole chapter's concept list — and until now the depth
+    gate exempted them outright, so the end-user path had no depth protection
+    at all while the catalogue had it.
+
+    Breadth must keep the exemption: a part-3 script has not covered parts 1,
+    2 and 4's topics and failing it for that is the gate being wrong (incident
+    8b79d4e0). Depth does not share the problem, because a pooled report is
+    scored against the topics the part ACTUALLY addressed.
+    """
+
+    def _part(self, chars, addressed, chapter_topics_n, **over):
+        r = {"gated": True, "checked": True, "pooled": True, "verdict": "pooled",
+             "topics": chapter_topics_n, "chars": chars,
+             "chars_per_topic": round(chars / chapter_topics_n, 1),
+             "chars_per_addressed": round(chars / max(1, addressed), 1)}
+        r["thin"] = r["chars_per_addressed"] < coverage._DEPTH_MIN_CHARS_PER_TOPIC
+        r.update(over)
+        return r
+
+    def test_a_thin_part_is_now_caught(self):
+        """One part of four: 1,100 characters over the 10 topics it taught is
+        110 each — thin by the same standard a whole-chapter lesson is held to."""
+        rep = self._part(chars=1100, addressed=10, chapter_topics_n=40)
+        assert rep["chars_per_addressed"] == 110.0
+        assert coverage.is_thin(rep, mode="strict")
+
+    def test_a_healthy_part_is_not_punished_for_being_a_part(self):
+        """The reason the exemption existed: 2,600 characters is a proper
+        quarter-lesson, but against the CHAPTER's 40 topics it reads as 65 per
+        topic and would look thin. Against its own 10, it is 260 and passes."""
+        rep = self._part(chars=2600, addressed=10, chapter_topics_n=40)
+        assert rep["chars_per_topic"] == 65.0        # the misleading number
+        assert rep["chars_per_addressed"] == 260.0   # the honest one
+        assert not coverage.is_thin(rep, mode="strict")
+
+    def test_breadth_still_exempts_pooled_reports(self):
+        """The incident guard must not move. A pooled report may fail on depth
+        and must still never fail on coverage."""
+        rep = self._part(chars=1100, addressed=10, chapter_topics_n=40,
+                         verdict="short")
+        assert coverage.is_thin(rep, mode="strict")
+        assert not coverage.should_fail(rep, mode="strict")
+
+    def test_a_whole_chapter_lesson_is_unchanged(self):
+        """Non-pooled reports keep scoring on chars_per_topic exactly as before."""
+        whole = _report(THIN_CHARS)
+        assert not whole.get("pooled")
+        assert coverage.is_thin(whole, mode="strict")
+        assert not coverage.is_thin(_report(HEALTHY_CHARS), mode="strict")

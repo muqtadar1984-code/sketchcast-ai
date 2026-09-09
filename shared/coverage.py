@@ -463,7 +463,19 @@ def measure(analysis: dict, episode: dict | None, produced_text: str, *,
     # depth rides alongside breadth: same denominator, different question
     out["chars"] = len(produced_text or "")
     out["chars_per_topic"] = round(out["chars"] / total, 1)
-    out["thin"] = out["chars_per_topic"] < _DEPTH_MIN_CHARS_PER_TOPIC
+    # ...and the same ratio over the topics the script ACTUALLY reached.
+    # For a whole-chapter job with full coverage these are the same number.
+    # They diverge on a chapter-PART job, whose denominator is the whole
+    # chapter's concept list (see _pooled_denominator): dividing one part's
+    # characters by four parts' topics understates depth roughly fourfold,
+    # which is why the pooled exemption exists at all. Against what the part
+    # actually taught, the ratio is honest again — and that is the only depth
+    # measure available to the multi-part lessons a teacher's own textbook
+    # chapter produces, which until now had no depth gate whatsoever.
+    addressed_n = max(1, len(addressed))
+    out["chars_per_addressed"] = round(out["chars"] / addressed_n, 1)
+    out["thin"] = (out["chars_per_addressed"] if pooled
+                   else out["chars_per_topic"]) < _DEPTH_MIN_CHARS_PER_TOPIC
     if covered < _COVERAGE_FLOOR:
         out["verdict"] = "floor"
     elif covered < _COVERAGE_MIN:
@@ -532,8 +544,17 @@ def is_thin(report: dict, mode: str | None = None) -> bool:
     a part-3 script is never judged against the whole chapter's concept list.
     """
     mode = mode or depth_gate_mode()
-    if mode in ("off", "warn") or not report.get("gated")             or not report.get("checked") or report.get("pooled"):
+    if mode in ("off", "warn") or not report.get("gated")             or not report.get("checked"):
         return False
+    # A POOLED report is NOT exempt here, and that is the one place depth
+    # parts company with breadth. Breadth must skip it: a part-3 script has
+    # not covered parts 1, 2 and 4, and failing it for that is the gate being
+    # wrong (incident 8b79d4e0). Depth has no such problem, because measure()
+    # scores a pooled report against the topics the part actually addressed
+    # rather than the chapter's whole list. Keeping the exemption here meant
+    # every multi-part lesson — which is what a real textbook chapter becomes,
+    # and therefore what most teachers and parents receive — shipped with no
+    # depth protection at all.
     return bool(report.get("thin"))
 
 
