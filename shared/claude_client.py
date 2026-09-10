@@ -222,6 +222,39 @@ def _backoff_seconds(attempt: int) -> float:
     return min(60.0, 2.0 ** (attempt + 1)) + random.uniform(0.0, 1.5)
 
 
+# The SDK REFUSES a non-streaming request whose predicted duration exceeds its
+# ten-minute HTTP timeout. anthropic/_base_client.py computes
+#
+#     expected_time = 3600 * max_tokens / 128_000
+#
+# and raises ValueError("Streaming is required …") when that passes 600 s — so
+# any non-streaming call above 21_333 output tokens dies. It is raised BEFORE
+# the request is sent, which makes it instant and total, not a timeout: the job
+# fails at 0 % having generated nothing and having billed nothing.
+#
+# Measured in prod 2026-09-09: a teacher's first kit. The six documents were
+# served by Gemini and arrived; the lesson VIDEO routes to Claude for Arabic
+# (shared/llm.client_for) and asks for 30_000 tokens on the semantic path, so
+# every attempt — three on each of two generations — died on this line within
+# seconds. Arabic video had been wholly unservable since SEMANTIC_PLAN went
+# back on, and nothing said so: the reply never reached our code.
+#
+# 20_000 keeps a margin under the SDK's 21_333 so a small change in its
+# constants cannot reopen the hole. It is only an optimisation, though — the
+# reactive fallback below is what makes the client CORRECT, since a model may
+# also declare its own lower `max_nonstreaming_tokens`, which no formula here
+# can predict.
+_NONSTREAMING_MAX_TOKENS = 20_000
+
+
+def _streaming_required(exc: BaseException) -> bool:
+    """The SDK's client-side refusal to make a long non-streaming request.
+
+    Matched on the message because the SDK raises a bare ValueError with no
+    distinguishing type or attribute."""
+    return isinstance(exc, ValueError) and "streaming is required" in str(exc).lower()
+
+
 def _get_api_key() -> str:
     """Read the API key from the environment.
 
@@ -1152,10 +1185,31 @@ class ClaudeClient:
         )
 
     def _call_messages(self, system: str, messages: list, max_tokens: int, retries: int):
+        """One call, streamed when the budget demands it.
+
+        The choice lives HERE rather than at the call sites because every public
+        method funnels through it: fixing it once covers analyze, the two vision
+        methods and transcribe_images, and a future caller inherits the fix
+        instead of having to remember it. Streaming changes nothing a caller can
+        observe — get_final_message() returns the same Message, so _first_text,
+        track_tokens and stop_reason all behave identically — it only keeps the
+        connection alive while the model works."""
+        if max_tokens > _NONSTREAMING_MAX_TOKENS:
+            return self._stream_messages(system=system, messages=messages,
+                                         max_tokens=max_tokens, retries=retries)
         for attempt in range(retries):
             try:
                 return self._create(system, messages, max_tokens)
             except Exception as exc:  # noqa: BLE001 — classified below
+                if _streaming_required(exc):
+                    # This model's own non-streaming ceiling is lower than the
+                    # formula above predicts. Nothing was sent, so switching
+                    # costs one wasted round trip and no tokens.
+                    logger.warning(
+                        "model refused a non-streaming call at max_tokens=%d; "
+                        "streaming instead", max_tokens)
+                    return self._stream_messages(system=system, messages=messages,
+                                                 max_tokens=max_tokens, retries=retries)
                 if not _is_transient(exc):
                     raise            # deterministic: retrying only burns money
                 wait = _backoff_seconds(attempt)
@@ -1163,8 +1217,14 @@ class ClaudeClient:
                                "%.1fs (%d/%d)", type(exc).__name__, wait,
                                attempt + 1, retries)
                 time.sleep(wait)
-        # Final attempt without catching
-        return self._create(system, messages, max_tokens)
+        # Final attempt, uncaught — except for the one error a retry cannot fix.
+        try:
+            return self._create(system, messages, max_tokens)
+        except Exception as exc:  # noqa: BLE001
+            if _streaming_required(exc):
+                return self._stream_messages(system=system, messages=messages,
+                                             max_tokens=max_tokens, retries=retries)
+            raise
 
     def _create_stream(self, system: str, messages: list, max_tokens: int):
         """One STREAMED API call — the truncation-retry path only. Streaming is

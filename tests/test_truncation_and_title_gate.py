@@ -145,14 +145,24 @@ def test_retry_budget_caps_at_32000(monkeypatch):
 def test_no_retry_when_already_at_cap(monkeypatch):
     # At 32000 there is no headroom — keep the loud downstream failure instead
     # of an infinite retry loop.
+    #
+    # Counted as TOTAL model calls rather than "did the streamed path run".
+    # Since 2026-09-09 a budget this large is streamed on the FIRST call too —
+    # the SDK refuses long non-streaming requests — so watching _create_stream
+    # alone can no longer tell a retry apart from the primary call. Both fakes
+    # return the truncated reply so the loud-fail claim is still exercised.
     c = _client(monkeypatch)
-    streamed = []
-    monkeypatch.setattr(c, "_create", lambda system, messages, max_tokens: _msg(TRUNCATED, "max_tokens"))
-    monkeypatch.setattr(c, "_create_stream", lambda system, messages, max_tokens: (
-        streamed.append(max_tokens), _msg(FULL, "end_turn"))[1])
+    calls = []
+
+    def truncated(system, messages, max_tokens):
+        calls.append(max_tokens)
+        return _msg(TRUNCATED, "max_tokens")
+
+    monkeypatch.setattr(c, "_create", truncated)
+    monkeypatch.setattr(c, "_create_stream", truncated)
 
     out = c.analyze("p", max_tokens=32000)
-    assert streamed == []
+    assert calls == [32000]           # exactly one call: no retry
     assert "raw_text" in out["data"]  # still the loud-fail path
 
 
