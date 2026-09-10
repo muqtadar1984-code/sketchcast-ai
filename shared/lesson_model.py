@@ -41,6 +41,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+# A word boundary, spelled out. Written as r"\b" it has now twice been
+# flattened to a literal backspace by a shell heredoc, and a regex with a
+# control character in it matches nothing and says nothing about why.
+_WORD = chr(92) + "b"
+
 SOURCE_ARTICLE = "article"
 SOURCE_ANALYSIS = "analysis"
 
@@ -69,10 +74,35 @@ class Figure:
         return bool(self.png and Path(self.png).exists()
                     and self.regions and self.w > 0 and self.h > 0)
 
+    # A part whose box is most of the frame is not a detail you can zoom to:
+    # it IS the frame. `cell membrane` spans [12,14,690,598] of a 704x613
+    # picture, so "cropping" to it returns the whole cell — a focus slide
+    # headed "cell membrane" showing the entire diagram, which teaches the
+    # reader nothing and looks like the crop silently failed. Same threshold
+    # the renderer uses to decide how to aim a leader at one.
+    ENCLOSER_AREA = 0.55
+
+    def encloses(self, part: str) -> bool:
+        boxes = part_boxes(self.regions, part)
+        if not boxes or not (self.w and self.h):
+            return False
+        biggest = max(abs((b[2] - b[0]) * (b[3] - b[1])) for b in boxes)
+        return biggest / (self.w * self.h) >= self.ENCLOSER_AREA
+
+    def zoomable(self) -> list[str]:
+        """Located parts small enough that a crop to them means something."""
+        return [p for p in self.located() if not self.encloses(p)]
+
     def located(self) -> list[str]:
-        """Declared parts the artwork can actually place."""
-        have = {str(k).strip().lower() for k in (self.regions or {})}
-        return [p for p in self.parts if str(p).strip().lower() in have]
+        """Declared parts the artwork can actually place.
+
+        Delegates to `part_boxes` rather than comparing names itself. It DID
+        compare them itself, with a plain case-fold, and so did the renderer —
+        two copies of one rule, and fixing the renderer's copy left this one
+        answering "no parts" for `climate_impact`, which silently cost that
+        figure its whole slide while the renderer was ready to draw it.
+        """
+        return [p for p in self.parts if part_boxes(self.regions, p)]
 
 
 @dataclass
@@ -106,6 +136,97 @@ class LessonModel:
 
     def figures_for(self, section: Section) -> list[Figure]:
         return [self.figures[k] for k in section.figure_keys if k in self.figures]
+
+    def definition_of(self, part: str) -> str:
+        """The article's own glossary entry for a part, if it wrote one."""
+        want = norm_part(part)
+        for term, meaning in self.glossary:
+            if norm_part(term) == want:
+                return meaning
+        return ""
+
+    def claims_about(self, part: str, limit: int = 3) -> list[str]:
+        """Claims that name this part, as whole words.
+
+        Whole words matter: a substring match on "orbit" would also pull in
+        "orbital", and on "sun" every "sunlight" in the article.
+        """
+        want = norm_part(part)
+        if not want:
+            return []
+        pat = re.compile(_WORD + re.escape(want) + _WORD, re.I)
+        out = [t for _sid, t in self.claims if pat.search(norm_part(t))]
+        return out[:limit]
+
+    def shared_parts(self) -> tuple[Optional[Figure], Optional[Figure], list[str]]:
+        """The two figures with the most parts in common, if that is worth a
+        slide. Below three shared parts a comparison teaches nothing — two
+        diagrams that both happen to contain a sun are not a contrast."""
+        figs = [f for f in self.figures.values() if f.annotatable]
+        best: tuple[float, Optional[Figure], Optional[Figure], list[str]] = (0, None, None, [])
+        for i, a in enumerate(figs):
+            for b in figs[i + 1:]:
+                bn = {norm_part(p) for p in b.located()}
+                common = [p for p in a.located() if norm_part(p) in bn]
+                if len(common) > best[0]:
+                    best = (len(common), a, b, common)
+        return (best[1], best[2], best[3]) if best[0] >= 3 else (None, None, [])
+
+
+# ── naming the same part twice ────────────────────────────────────────
+
+def norm_part(s: str) -> str:
+    """A part name with its separators levelled.
+
+    THE FIGURE AND THE ARTWORK ARE NAMED BY DIFFERENT HANDS. `spec.parts` is
+    written by the article author as identifiers — `axis_tilt`,
+    `incoming_radiation` — while the vision pass names what it SAW, in
+    English: `axis tilt`, `incoming radiation`. Measured on the live Weather
+    figures, a plain case-fold matched NONE of `climate_impact`'s five parts,
+    so that figure produced no slide at all and the other three would have
+    rendered one or two labels instead of five. Row counts agreed throughout
+    — five declared, five stored — because the counts were right and the join
+    was never tested.
+    """
+    return " ".join(str(s or "").replace("_", " ").replace("-", " ").lower().split())
+
+
+def part_boxes(regions: dict, part: str) -> list[tuple[float, float, float, float]]:
+    """Every stored instance of `part`, over three widening tiers.
+
+    Exact, then separator-levelled, then the shared `same_part` matcher (which
+    knows singular/plural). The last tier REFUSES an ambiguous hit: a name
+    that could be two different regions is not a name, and a leader drawn to
+    the wrong one of them is a confident arrow at the wrong structure — the
+    failure this whole path exists to avoid.
+    """
+    if not isinstance(regions, dict):
+        return []
+
+    def unpack(boxes):
+        out = []
+        for b in boxes or []:
+            if isinstance(b, (list, tuple)) and len(b) >= 4:
+                x0, y0, x1, y1 = (float(v) for v in b[:4])
+                out.append((min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)))
+        return out
+
+    raw = str(part or "").strip().lower()
+    want = norm_part(part)
+    if not want:
+        return []
+    for name, boxes in regions.items():
+        if str(name).strip().lower() == raw:
+            return unpack(boxes)
+    for name, boxes in regions.items():
+        if norm_part(name) == want:
+            return unpack(boxes)
+    try:
+        from spike.scene_engine.partnames import same_part
+    except Exception:                       # noqa: BLE001 — tiers 1-2 still stand
+        return []
+    hits = [b for n, b in regions.items() if same_part(want, norm_part(n))]
+    return unpack(hits[0]) if len(hits) == 1 else []
 
 
 # ── helpers ───────────────────────────────────────────────────────────

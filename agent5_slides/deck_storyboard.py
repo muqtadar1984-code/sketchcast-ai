@@ -33,6 +33,8 @@ MISCONCEPTIONS = "misconceptions"
 WORKED = "worked_example"
 GLOSSARY = "glossary"
 CHECK = "check"
+FOCUS = "focus"
+COMPARE = "compare"
 CLOSING = "closing"
 
 # Vertical room the label gutters have, in inches, on the standard content
@@ -57,6 +59,16 @@ _LEADER_CLUTTER = 12
 _MISCONCEPTIONS_PER_SLIDE = 4
 _GLOSSARY_PER_SLIDE = 8
 
+# A section that HAS a figure shows it beside its opening prose, at this width,
+# before the full labelled version gets a slide of its own. That is how a
+# textbook does it, and it costs nothing: the artwork already exists.
+_ILLUSTRATED_BODY_W_IN = 7.30
+# Focus slides zoom one part of a figure. Capped because a deck of zooms is a
+# deck with no lesson in it, and only offered where the ARTICLE supplies the
+# words — a crop with nothing to say beside it is decoration.
+_FOCUS_PER_FIGURE = 1
+_FOCUS_PER_DECK = 3
+
 
 @dataclass
 class Slide:
@@ -69,6 +81,9 @@ class Slide:
     items: list = field(default_factory=list)
     key_idea: str = ""
     figure: Optional[Figure] = None
+    figure_b: Optional[Figure] = None
+    illustration: Optional[Figure] = None
+    body_w_in: float = 0.0
     parts: list[str] = field(default_factory=list)
     section_id: str = ""
     continued: bool = False
@@ -127,7 +142,8 @@ def split_parts(fig: Figure, capacity: int) -> list[list[str]]:
     return [ordered[i:i + per] for i in range(0, len(ordered), per)]
 
 
-def _paginate(blocks: list[dict], budget_in: float) -> list[list[dict]]:
+def _paginate(blocks: list[dict], budget_in: float,
+              width_in: float = mx.CONTENT_W_IN) -> list[list[dict]]:
     """Break a section body across slides so that every page actually fits.
 
     Two rules beyond "fill until full", both learned from the rendered Cells
@@ -164,7 +180,7 @@ def _paginate(blocks: list[dict], budget_in: float) -> list[list[dict]]:
         while tail:
             sentence, sep, rest = tail.partition(". ")
             piece = sentence + (sep or "")
-            h = mx.text_height_in(head + piece, mx.CONTENT_W_IN, mx.BODY_PT)
+            h = mx.text_height_in(head + piece, width_in, mx.BODY_PT)
             if head and h > room:
                 break
             head, tail, used_h = head + piece, rest, h
@@ -176,7 +192,7 @@ def _paginate(blocks: list[dict], budget_in: float) -> list[list[dict]]:
     i, n = 0, len(blocks)
     while i < n:
         b = blocks[i]
-        h = mx.block_height_in(b)
+        h = mx.block_height_in(b, width_in)
 
         # A lead-in reserves room for what follows, so it can never be the last
         # thing on a page. How much room depends on whether the successor can
@@ -188,8 +204,8 @@ def _paginate(blocks: list[dict], budget_in: float) -> list[list[dict]]:
         need = h
         if leads_in(b) and i + 1 < n:
             nxt = blocks[i + 1]
-            need += (mx.list_item_height_in((nxt.get("items") or [""])[0])
-                     if nxt["kind"] == "list" else mx.block_height_in(nxt))
+            need += (mx.list_item_height_in((nxt.get("items") or [""])[0], width_in)
+                     if nxt["kind"] == "list" else mx.block_height_in(nxt, width_in))
         # ...but a list is never pre-flushed on its FULL height: it is about to
         # be split, and turning the page first is what put a lone lead-in and
         # five inches of white space on slide 5.
@@ -200,12 +216,12 @@ def _paginate(blocks: list[dict], budget_in: float) -> list[list[dict]]:
             items = list(b.get("items") or [])
             while items:
                 room = budget_in - used
-                if cur and room < mx.list_item_height_in(items[0]):
+                if cur and room < mx.list_item_height_in(items[0], width_in):
                     flush()
                     room = budget_in
                 take: list[str] = []
                 for it in items:
-                    ih = mx.list_item_height_in(it)
+                    ih = mx.list_item_height_in(it, width_in)
                     if take and ih > room:
                         break
                     take.append(it)
@@ -218,7 +234,7 @@ def _paginate(blocks: list[dict], budget_in: float) -> list[list[dict]]:
                 if len(items) - len(take) == 1 and len(take) > 1:
                     take.pop()
                 cur.append({"kind": "list", "items": take})
-                used += (sum(mx.list_item_height_in(x) for x in take)
+                used += (sum(mx.list_item_height_in(x, width_in) for x in take)
                          + mx.LIST_TAIL_IN)
                 items = items[len(take):]
             i += 1
@@ -235,8 +251,7 @@ def _paginate(blocks: list[dict], budget_in: float) -> list[list[dict]]:
                 if not head:                      # one unbreakable sentence
                     head, text = text, ""
                 cur.append({"kind": "para", "text": head})
-                used += mx.text_height_in(head, mx.CONTENT_W_IN,
-                                          mx.BODY_PT) + mx.PARA_GAP_IN
+                used += mx.text_height_in(head, width_in, mx.BODY_PT) + mx.PARA_GAP_IN
                 if text:
                     flush()
             i += 1
@@ -342,12 +357,26 @@ def storyboard(model: LessonModel, label_pt: float = 12.0) -> list[Slide]:
                          notes="Read these out, or write them on the board, before you start."))
 
     for sec in model.sections:
-        pages = _paginate(drop_restatement(_clean_blocks(sec.body_md), sec.key_idea),
-                          mx.BODY_H_IN - mx.key_idea_height_in(sec.key_idea))
+        body = drop_restatement(_clean_blocks(sec.body_md), sec.key_idea)
+        budget = mx.BODY_H_IN - mx.key_idea_height_in(sec.key_idea)
+        # A section that owns artwork shows it beside its OPENING prose. The
+        # first page is therefore measured against a narrower column and the
+        # rest against the full width — paginating everything narrow would
+        # leave the later, unillustrated pages needlessly cramped.
+        art = next((f for f in model.figures_for(sec) if f.annotatable), None)
+        if art:
+            first = _paginate(body, budget, _ILLUSTRATED_BODY_W_IN)[0]
+            rest = body[len(first):]
+            pages = [first] + ([] if not rest else _paginate(rest, mx.BODY_H_IN))
+        else:
+            pages = _paginate(body, budget)
         for i, blocks in enumerate(pages):
-            if not blocks and len(pages) == 1 and not sec.narration:
+            if not blocks and len(pages) == 1 and not sec.narration and not art:
                 continue                  # nothing to say and nothing to show
             out.append(Slide(kind=SECTION, kicker="", heading=sec.heading,
+                             illustration=art if i == 0 else None,
+                             body_w_in=_ILLUSTRATED_BODY_W_IN if (art and i == 0)
+                             else mx.CONTENT_W_IN,
                              # The key idea leads the section, so it belongs on
                              # the FIRST page only; repeating it above a
                              # continuation reads as the slide having restarted.
@@ -364,9 +393,60 @@ def storyboard(model: LessonModel, label_pt: float = 12.0) -> list[Slide]:
                                "you give the correction."))
 
     for i, (problem, solution) in enumerate(model.worked_examples, 1):
+        # The PROBLEM is not a heading. It was one, and a four-part classify
+        # question ran past the 120-character cap and was cut off mid-clause —
+        # a slide asking a question it does not finish asking. It goes in the
+        # band instead, which wraps and is sized to be read from the back.
         out.append(Slide(kind=WORKED, kicker="Worked example",
-                         heading=problem, blocks=_clean_blocks(solution),
-                         notes="Work through this on the board before showing the solution."))
+                         heading=(f"Worked example {i}" if len(model.worked_examples) > 1
+                                  else "Worked example"),
+                         key_idea=problem,
+                         blocks=_paginate(_clean_blocks(solution),
+                                          mx.BODY_H_IN
+                                          - mx.key_idea_height_in(problem))[0],
+                         notes="Work through this on the board before showing "
+                               "the solution."))
+
+    # Zoom on the parts the ARTICLE has words for. `Picture.crop_*` makes a
+    # focus view the same image with different crop fractions, so these cost
+    # no artwork at all — but a crop with nothing beside it is decoration, so
+    # a part with neither a glossary entry nor a claim does not get one.
+    focused = 0
+    for fig in model.figures.values():
+        if not fig.annotatable or focused >= _FOCUS_PER_DECK:
+            continue
+        made = 0
+        for part in fig.zoomable():
+            if made >= _FOCUS_PER_FIGURE or focused >= _FOCUS_PER_DECK:
+                break
+            definition = model.definition_of(part)
+            says = model.claims_about(part)
+            if not definition and len(says) < 2:
+                continue
+            body = ([{"kind": "para", "text": definition}] if definition else [])
+            if says:
+                body.append({"kind": "list", "items": says})
+            out.append(Slide(kind=FOCUS, kicker="Zoom in", heading=part,
+                             subtitle=fig.caption, figure=fig, parts=[part],
+                             blocks=body,
+                             notes=f"The same artwork as the {fig.key} diagram, "
+                                   f"cropped to the {part}. No new image was made."))
+            made += 1
+            focused += 1
+
+    a, b, common = model.shared_parts()
+    if a is not None and b is not None:
+        only_b = [p for p in b.located()
+                  if p.lower() not in {q.lower() for q in a.located()}]
+        # The captions are full sentences ("A typical animal cell showing key
+        # organelles."); two of them joined by "vs" is not a heading, it is a
+        # paragraph in bold. They already label their own picture below.
+        out.append(Slide(kind=COMPARE, kicker="Compare",
+                         heading="Side by side",
+                         figure=a, figure_b=b, items=only_b,
+                         subtitle=("Shared: " + ", ".join(common[:8])),
+                         notes="The contrast is a set difference over the two "
+                               "figures' declared parts."))
 
     # The check comes before the glossary: it is the last thing the class does,
     # and the glossary is a reference they keep.

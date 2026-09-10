@@ -48,22 +48,9 @@ _SPECK_AREA = 0.004
 
 # ─────────────────────────── geometry ────────────────────────────
 
-def _boxes(regions: dict, part: str) -> list[tuple[float, float, float, float]]:
-    """Every stored instance of `part`, tolerant of the case fold the pipeline
-    already lives with (`Golgi apparatus` declared, `golgi apparatus` stored)."""
-    if not isinstance(regions, dict):
-        return []
-    want = (part or "").strip().lower()
-    for name, boxes in regions.items():
-        if str(name).strip().lower() != want:
-            continue
-        out = []
-        for b in boxes or []:
-            if isinstance(b, (list, tuple)) and len(b) >= 4:
-                x0, y0, x1, y1 = (float(v) for v in b[:4])
-                out.append((min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)))
-        return out
-    return []
+# Name matching lives in `shared.lesson_model`, which the storyboard uses
+# too. Two copies of this rule is what lost `climate_impact` its slide.
+from shared.lesson_model import part_boxes as _boxes  # noqa: E402
 
 
 def _area_frac(box, w: float, h: float) -> float:

@@ -21,6 +21,7 @@ from pathlib import Path
 from . import annotated_figure as af
 from . import deck_storyboard as sb
 from . import metrics as mx
+from shared.lesson_model import part_boxes as _part_boxes
 from .theme import FAINT, GRAPHITE, INK, LINE, MIST, TEAL_DK, TEAL_MIST, WHITE
 
 logger = logging.getLogger(__name__)
@@ -134,7 +135,8 @@ def _table(s, x, y, w, header, rows, pt=mx.TABLE_PT, head_pt=12, first_col=0.34)
     return y + rh * n + mx.TABLE_GAP_IN * IN
 
 
-def _blocks(s, blocks, x=MARGIN, y=BODY_TOP, w=CONTENT_W):
+def _blocks(s, blocks, x=MARGIN, y=BODY_TOP, w=None):
+    w = CONTENT_W if w is None else w
     for b in blocks:
         if b["kind"] == "heading":
             af._textbox(s, x, y, w, 0.32 * IN, b["text"], mx.HEADING_PT,
@@ -228,8 +230,62 @@ def _section(prs, sl):
     s = _slide(prs)
     _chrome(s, sl)
     y = _key_idea(s, sl.key_idea) if sl.key_idea else BODY_TOP
-    end = _blocks(s, sl.blocks, y=y)
+    w = (sl.body_w_in or mx.CONTENT_W_IN) * IN
+    if sl.illustration is not None:
+        # The figure beside its own prose, UNLABELLED and small: the labelled
+        # version gets a slide of its own a moment later, and repeating the
+        # labels here would just be the same slide twice at two sizes.
+        fw = CONTENT_W - w - 0.35 * IN
+        af._fit(sl.illustration.w, sl.illustration.h, (0, 0, fw, BODY_BOTTOM - y))
+        px, py, pw, ph = af._fit(sl.illustration.w, sl.illustration.h,
+                                 (MARGIN + w + 0.35 * IN, y, fw, BODY_BOTTOM - y))
+        s.shapes.add_picture(str(sl.illustration.png), int(px), int(py),
+                             int(pw), int(ph))
+    end = _blocks(s, sl.blocks, y=y, w=w)
     return s, _overflow(end, sl)
+
+
+def _focus(prs, sl):
+    """One part of a figure, cropped from the SAME artwork, with the article's
+    own words beside it. No second image was generated for this."""
+    s = _slide(prs)
+    _chrome(s, sl)
+    fig = sl.figure
+    boxes = [b for p in sl.parts for b in _part_boxes(fig.regions, p)]
+    region = (min(b[0] for b in boxes), min(b[1] for b in boxes),
+              max(b[2] for b in boxes), max(b[3] for b in boxes))
+    af.add_focus_view(s, fig.png, region, fig.w, fig.h,
+                      frame=(MARGIN, BODY_TOP, 5.9 * IN, BODY_BOTTOM - BODY_TOP))
+    end = _blocks(s, sl.blocks, x=MARGIN + 6.3 * IN, y=BODY_TOP + 0.1 * IN,
+                  w=CONTENT_W - 6.3 * IN)
+    if sl.subtitle:
+        af._textbox(s, MARGIN, 6.72 * IN, CONTENT_W, 0.3 * IN,
+                    sl.subtitle, 11, _rgb(FAINT))
+    return s, _overflow(end, sl)
+
+
+def _compare(prs, sl):
+    """Two figures side by side, with the difference the DATA states."""
+    from pptx.enum.text import PP_ALIGN
+
+    s = _slide(prs)
+    _chrome(s, sl)
+    top, h = BODY_TOP + 0.30 * IN, 4.05 * IN
+    for fig, left in ((sl.figure, MARGIN), (sl.figure_b, 6.90 * IN)):
+        x, y, w, hh = af._fit(fig.w, fig.h, (left, top, 5.70 * IN, h))
+        s.shapes.add_picture(str(fig.png), int(x), int(y), int(w), int(hh))
+        af._textbox(s, left, BODY_TOP - 0.02 * IN, 5.70 * IN, 0.3 * IN,
+                    (fig.caption or fig.key)[:60], 12, _rgb(GRAPHITE),
+                    bold=True, align=PP_ALIGN.CENTER)
+    y = top + h + 0.18 * IN
+    if sl.items:
+        af._textbox(s, MARGIN, y, CONTENT_W, 0.34 * IN,
+                    "Only the second has:  " + ",  ".join(sl.items[:8]),
+                    15, _rgb(TEAL_DK), bold=True)
+        y += 0.36 * IN
+    if sl.subtitle:
+        af._textbox(s, MARGIN, y, CONTENT_W, 0.30 * IN, sl.subtitle, 11, _rgb(FAINT))
+    return s, []
 
 
 def _overflow(end_y: float, sl) -> list[str]:
@@ -296,7 +352,8 @@ def _misconceptions(prs, sl):
 def _worked(prs, sl):
     s = _slide(prs)
     _chrome(s, sl)
-    end = _blocks(s, sl.blocks, y=BODY_TOP + 0.1 * IN)
+    y = _key_idea(s, sl.key_idea) if sl.key_idea else BODY_TOP + 0.1 * IN
+    end = _blocks(s, sl.blocks, y=y)
     return s, _overflow(end, sl)
 
 
@@ -326,7 +383,9 @@ _RENDER = {
     sb.MISCONCEPTIONS: _misconceptions, sb.WORKED: _worked,
     sb.GLOSSARY: _glossary, sb.CLOSING: _closing,
 }
-_CHECKED = {sb.SECTION, sb.WORKED, sb.DIAGRAM, sb.CHECK}
+_CHECKED = {sb.SECTION, sb.WORKED, sb.DIAGRAM, sb.CHECK, sb.FOCUS, sb.COMPARE}
+_RENDER[sb.FOCUS] = _focus
+_RENDER[sb.COMPARE] = _compare
 
 
 def build(slides, out_path: str | Path, label_pt: float = 12.0) -> tuple[Path, list[str]]:
