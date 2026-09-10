@@ -203,6 +203,98 @@ def test_a_real_error_is_still_raised_not_streamed(monkeypatch):
     assert seen["stream"] == []
 
 
+# ── the streamed transport itself, after review 2026-09-10 ───────────────────
+#
+# _create_stream had `get_final_message()` INSIDE the `except TypeError: pass`
+# that exists to detect an SDK too old for the thinking parameter. anthropic
+# 0.112.0 raises reachable TypeErrors while accumulating the SSE events (e.g.
+# `content.text += event.delta.text` against a null delta), so such an error
+# was read as "SDK too old" and answered by silently re-issuing the ENTIRE
+# generation — with thinking no longer disabled, and the first attempt's
+# streamed output tokens billed by the provider but counted nowhere. Harmless
+# while this was the truncation-retry path; not harmless once the streaming
+# fix made it the primary transport for every call over the ceiling.
+
+
+class _Mgr:
+    def __init__(self, raiser):
+        self._raiser = raiser
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def get_final_message(self):
+        if self._raiser:
+            raise self._raiser
+        return _msg()
+
+
+def test_an_accumulation_typeerror_is_not_read_as_an_old_sdk(monkeypatch):
+    c = _client(monkeypatch)
+    calls = []
+
+    def stream(**kwargs):
+        calls.append(kwargs.get("thinking"))
+        # The SDK's own accumulator shape: a TypeError raised while consuming.
+        return _Mgr(TypeError("can only concatenate str (not \"NoneType\") to str"))
+
+    monkeypatch.setattr(c.client.messages, "stream", stream)
+
+    with pytest.raises(TypeError, match="concatenate"):
+        c._create_stream("sys", [{"role": "user", "content": "p"}], 30_000)
+
+    assert len(calls) == 1, (
+        f"the generation must not be re-issued; stream() was called {len(calls)}x"
+    )
+
+
+def test_a_genuinely_old_sdk_still_falls_back(monkeypatch):
+    """The behaviour the probe exists for must survive: a TypeError raised when
+    BINDING the kwargs (not while streaming) still retries without `thinking`."""
+    c = _client(monkeypatch)
+    calls = []
+
+    def stream(**kwargs):
+        calls.append(kwargs.get("thinking"))
+        if "thinking" in kwargs:
+            raise TypeError("unexpected keyword argument 'thinking'")
+        return _Mgr(None)
+
+    monkeypatch.setattr(c.client.messages, "stream", stream)
+
+    out = c._create_stream("sys", [{"role": "user", "content": "p"}], 30_000)
+
+    assert out.stop_reason == "end_turn"
+    assert calls == [{"type": "disabled"}, None], "probed, then retried bare"
+
+
+def test_the_streamed_retry_is_logged(monkeypatch, caplog):
+    """It used to retry in silence while the non-streaming loop logged. Three
+    overloads and ~16 s of backoff on a real lesson left nothing in the logs —
+    the same species of silence that hid the outage this file is about."""
+    c = _client(monkeypatch)
+    monkeypatch.setattr(cc.time, "sleep", lambda s: None)
+    attempts = {"n": 0}
+
+    def create_stream(system, messages, max_tokens):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise cc.RateLimitError.__new__(cc.RateLimitError)
+        return _msg()
+
+    monkeypatch.setattr(c, "_create_stream", create_stream)
+
+    with caplog.at_level("WARNING"):
+        out = c._stream_messages(system="s", messages=[], max_tokens=30_000, retries=3)
+
+    assert out.stop_reason == "end_turn"
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("streamed path" in m and "30000" in m for m in msgs), msgs
+
+
 def test_every_public_method_is_covered(monkeypatch, tmp_path):
     """The reason the fix sits in _call_messages. A vision call asked to return
     a long transcription would have hit exactly the same wall."""

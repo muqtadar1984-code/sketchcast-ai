@@ -232,12 +232,25 @@ def _backoff_seconds(attempt: int) -> float:
 # the request is sent, which makes it instant and total, not a timeout: the job
 # fails at 0 % having generated nothing and having billed nothing.
 #
-# Measured in prod 2026-09-09: a teacher's first kit. The six documents were
-# served by Gemini and arrived; the lesson VIDEO routes to Claude for Arabic
-# (shared/llm.client_for) and asks for 30_000 tokens on the semantic path, so
-# every attempt — three on each of two generations — died on this line within
-# seconds. Arabic video had been wholly unservable since SEMANTIC_PLAN went
-# back on, and nothing said so: the reply never reached our code.
+# Measured in prod 2026-09-09: a teacher's first kit. Her six documents
+# arrived and the lesson VIDEO died on this line on every one of six attempts,
+# across two generations, within seconds each time.
+#
+# The documents did NOT survive because a different provider served them —
+# corrected after review, 2026-09-10, because the original note here said so
+# and was wrong. shared/llm.client_for routes ar to Claude for EVERY artifact
+# kind, documents included (worker/process.py builds them with the same
+# client_for(lesson_lang, …)). They survived because every docgen budget is
+# 3_000–8_192, comfortably under the 21_333 ceiling, while the script call asks
+# for 30_000. The safety margin was the token budget, not the routing — and
+# misreading which one saved them is exactly the invisible-from-the-
+# majority-path mistake this whole comment exists to record.
+#
+# Arabic video had been wholly unservable since the long-reply budget went
+# live, and nothing said so: the reply never reached our code. The routed set
+# is wider than the one teacher who reported it — shared/model_routing sends
+# seven codes to Claude, of which ar and ms-arab (Jawi) are selectable lesson
+# languages, and catalogue/questions.py asks for 24_000, also over the ceiling.
 #
 # 20_000 keeps a margin under the SDK's 21_333 so a small change in its
 # constants cannot reopen the hole. It is only an optimisation, though — the
@@ -588,13 +601,17 @@ def _rebalance_json(text: str):
 # The Unicode look-alikes of the two structural delimiters. A model writing a
 # lesson IN Arabic or Chinese can slip into that script's punctuation and emit
 # one BETWEEN two JSON values, where only the ASCII character is legal.
+# Only SCRIPT VARIANTS OF THE SAME MARK. A fullwidth semicolon was in this
+# table and is not any more (review, 2026-09-10): a semicolon is a DIFFERENT
+# mark from a comma, so mapping it to one changes the punctuation rather than
+# merely its script, and nothing has ever measured it here. The ratio sign went
+# with it for the same reason — exotic, unmeasured, and a guess about intent,
+# which is the one thing this layer must never make.
 _UNICODE_DELIMITERS = {
-    "，": ",",   # ，FULLWIDTH COMMA
+    "，": ",",   # ，FULLWIDTH COMMA — the measured incident character
     "、": ",",   # 、IDEOGRAPHIC COMMA
     "،": ",",   # ،ARABIC COMMA
-    "；": ",",   # ；FULLWIDTH SEMICOLON (never legal in JSON either)
     "：": ":",   # ：FULLWIDTH COLON
-    "∶": ":",   # ∶RATIO
 }
 
 
@@ -642,6 +659,13 @@ def _ascii_json_punctuation(text: str):
             changed = True
             continue
         out.append(c)
+    if ins or esc:
+        # The walk ended INSIDE a string, so its notion of "outside" was never
+        # trustworthy and every swap it made is suspect. Refuse the whole
+        # rewrite rather than return a document whose prose may have been
+        # re-punctuated — the same refusal _substitute_closers makes, and for
+        # the same reason. Belt to the ordering above's braces.
+        return None
     return "".join(out) if changed else None
 
 
@@ -810,14 +834,6 @@ def _repair_json(text: str):
     # 0. a backslash that is not an escape (LaTeX, a percent sign, a path)
     fixed = _fix_bad_escapes(text)
     candidates.append(fixed)
-    # 0b. a delimiter written in the script the LESSON is in — an Arabic or
-    #     fullwidth comma standing between two values. Character-level like the
-    #     rule above, so it runs early and every later rule sees the corrected
-    #     text; a reply without one is unchanged.
-    ascii_punct = _ascii_json_punctuation(fixed)
-    if ascii_punct:
-        fixed = ascii_punct
-        candidates.append(fixed)
     # 1. SSML attribute quotes inside a JSON string. The first shape measured
     #    was <break time="0.3s"/>; the rule covers every SSML tag — prosody,
     #    emphasis, say-as, break strength — since a tag never legitimately sits
@@ -886,9 +902,39 @@ def _repair_json(text: str):
         return None
     fixed = escaped
     candidates.append(fixed)
+    # 2e. a delimiter written in the script the LESSON is in — an Arabic or
+    #     fullwidth comma standing between two values (the incident is in
+    #     _ascii_json_punctuation's docstring).
+    #
+    #     AFTER 2d, and a BRANCH rather than a replacement. Both were review
+    #     findings (2026-09-10, two lenses independently), and both come from
+    #     one fact: the swap is only safe where the walker's belief about
+    #     "inside a string" is TRUE, and _repair_json runs exclusively on
+    #     replies that already failed to parse — precisely the population where
+    #     a bare inner quote is likeliest. Placed before 2d, one stray quote
+    #     inverted the walk and every Arabic comma in the rest of the narration
+    #     was rewritten to ASCII: measured 8 of 8 on a reply that carried no
+    #     look-alike at all, so the rule did pure damage, and it was a
+    #     REGRESSION — the same reply salvaged with its punctuation intact
+    #     before this rule existed. Placed here, 2d has already normalised the
+    #     string boundaries, so the walk can be trusted.
+    #
+    #     Branching matters just as much: reassigning `fixed` meant every later
+    #     rule was built on the rewritten text and the only un-rewritten
+    #     candidate was the one that by construction does not parse, so the
+    #     richest-parse arbiter below could never choose the original reading.
+    #     A false positive therefore always won. Offering both readings puts
+    #     that decision back where every other repair in this function leaves
+    #     it.
+    punct = _ascii_json_punctuation(fixed)
+    bases = [fixed] + ([punct] if punct else [])
+    if punct:
+        candidates.append(punct)
     # 3. trailing commas
     decommaed = _re.sub(r",\s*([}\]])", r"\1", fixed)
     candidates.append(decommaed)
+    for base in bases[1:]:
+        candidates.append(_re.sub(r",\s*([}\]])", r"\1", base))
     # 3. mis-nested closers — TWO readings, both offered, richest parse wins:
     #    the model FORGOT a closer (_rebalance_json inserts the missing ones),
     #    or it wrote the WRONG closer character (_substitute_closers swaps it).
@@ -901,7 +947,7 @@ def _repair_json(text: str):
     #    chapter object early and stranded its remaining keys in the chapters
     #    array. Neither reading above can see it: the closer is present,
     #    matched and well-formed, just surplus.
-    for src in (fixed, decommaed):
+    for src in (fixed, decommaed, *bases[1:]):
         mended = _rebalance_json(src)
         if mended:
             candidates.append(mended)
@@ -1301,26 +1347,52 @@ class ClaudeClient:
         same Message shape, so _first_text/track_tokens work unchanged. Mirrors
         _create's thinking-disabled contract exactly (see that docstring)."""
         kwargs = dict(model=self._api_model, max_tokens=max_tokens, system=system, messages=messages)
+        # Only the CONSTRUCTION of the manager is probed for the thinking
+        # parameter, never the consumption of the stream. Review finding,
+        # 2026-09-10: with `get_final_message()` inside the try, ANY TypeError
+        # raised while the SDK accumulates the SSE events — and anthropic
+        # 0.112.0 has reachable ones, e.g. `content.text += event.delta.text`
+        # against a null delta — was read as "SDK too old for the param" and
+        # answered by silently re-issuing the ENTIRE generation, with thinking
+        # no longer disabled and the first attempt's streamed output tokens
+        # billed by the provider but counted nowhere. Harmless while this was
+        # the rare truncation-retry path; not harmless now that it is the
+        # primary transport for every call above _NONSTREAMING_MAX_TOKENS.
         try:
-            with self.client.messages.stream(**kwargs, thinking={"type": "disabled"}) as s:
-                return s.get_final_message()
+            manager = self.client.messages.stream(**kwargs, thinking={"type": "disabled"})
         except TypeError:
-            pass  # SDK too old for the param
+            manager = None  # SDK too old for the param
         except Exception as exc:  # noqa: BLE001 — model rejected the param
             if "thinking" not in str(exc).lower():
                 raise
+            manager = None
+        if manager is not None:
+            with manager as s:
+                return s.get_final_message()
         with self.client.messages.stream(**kwargs) as s:
             return s.get_final_message()
 
     def _stream_messages(self, system: str, messages: list, max_tokens: int, retries: int):
-        """_call_messages, but streamed — same RateLimitError backoff loop."""
+        """_call_messages, but streamed — same RateLimitError backoff loop.
+
+        Logs the way the non-streaming loop does. It used to retry in silence,
+        which mattered little while this path was reached only by the
+        truncation retry and matters a great deal now that every long call
+        takes it: three overloads and ~16 s of backoff on a teacher's lesson
+        left nothing in the logs to say so, which is the same species of
+        silence that let the streaming-ceiling outage run for nine days."""
         for attempt in range(retries):
             try:
                 return self._create_stream(system, messages, max_tokens)
             except Exception as exc:  # noqa: BLE001 — classified below
                 if not _is_transient(exc):
                     raise
-                time.sleep(_backoff_seconds(attempt))
+                wait = _backoff_seconds(attempt)
+                logger.warning("transient model failure on the streamed path "
+                               "(%s, max_tokens=%d); retrying in %.1fs (%d/%d)",
+                               type(exc).__name__, max_tokens, wait,
+                               attempt + 1, retries)
+                time.sleep(wait)
         return self._create_stream(system, messages, max_tokens)
 
     @staticmethod

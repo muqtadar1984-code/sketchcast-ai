@@ -130,8 +130,90 @@ def test_an_escaped_quote_does_not_break_string_tracking():
 
 
 def test_the_rule_composes_with_the_other_repairs():
-    """A reply with BOTH a fullwidth delimiter and a trailing comma — the rule
-    runs early precisely so later rules see corrected text."""
+    """A reply with BOTH a fullwidth delimiter and a trailing comma."""
     src = '{"a":[1,2,]' + FW + '"b":2}'
     out = _repair_json(src)
     assert out == {"a": [1, 2], "b": 2}
+
+
+# ── the desync, found by adversarial review 2026-09-10 ────────────────────────
+#
+# The first cut of this rule ran BEFORE _escape_inner_quotes and REPLACED the
+# working text instead of branching. _repair_json only ever runs on replies
+# that already failed to parse, which is exactly the population where a bare
+# inner quote is likeliest — and one bare quote inverts the walker's idea of
+# "inside a string" for the whole rest of the document. Every Arabic comma
+# after it was then rewritten to ASCII: measured 8 of 8 on a reply carrying no
+# look-alike at all, so the rule did pure damage. Worse, it was a REGRESSION —
+# the same reply salvaged with its punctuation intact before the rule existed —
+# and because candidate 0b reassigned the base text, the richest-parse arbiter
+# had no un-rewritten reading left to choose.
+
+
+def _desync_reply() -> str:
+    """A realistic malformed Arabic reply: one BARE inner quote (a measurement
+    in prose, `5" سم`), then ordinary Arabic commas in later narration."""
+    return (
+        '{"segments":[{"narration":"الطول 5" سم' + AR + ' وهذا"},'
+        '{"narration":"حمراء' + AR + ' صفراء' + AR + ' أخضر"}]}'
+    )
+
+
+def test_a_bare_inner_quote_does_not_cost_the_prose_its_punctuation():
+    src = _desync_reply()
+    assert src.count(AR) == 3
+    out = _repair_json(src)
+    assert out is not None, "the reply must still be salvaged"
+    narrations = [s["narration"] for s in out["segments"]]
+    assert sum(n.count(AR) for n in narrations) == 3, (
+        f"every Arabic comma must survive; got {narrations}"
+    )
+    assert sum(n.count(",") for n in narrations) == 0, (
+        f"no Arabic comma may become an ASCII one; got {narrations}"
+    )
+
+
+def test_the_walker_refuses_when_its_own_walk_ends_inside_a_string():
+    """If the walk finishes mid-string its notion of 'outside' was never
+    trustworthy, so every swap it made is suspect and the whole rewrite is
+    withdrawn — the same refusal _substitute_closers makes."""
+    assert _ascii_json_punctuation('{"a":"x' + AR + 'y') is None
+    assert _ascii_json_punctuation('{"a":1' + FW + '"b":"unterminated') is None
+
+
+def test_the_unrewritten_reading_is_still_offered():
+    """The rule BRANCHES: reassigning the base text meant a false positive
+    always won, because the only candidate carrying the original punctuation
+    was the one that by construction does not parse."""
+    import inspect
+
+    from shared import claude_client as cc
+
+    src = inspect.getsource(cc._repair_json)
+    assert "bases = [fixed]" in src, "the un-rewritten reading must stay a base"
+    assert "fixed = ascii_punct" not in src, "the rule must not replace the base text"
+    # …and it must sit after the inner-quote repair, not before it.
+    assert src.index("_escape_inner_quotes") < src.index("_ascii_json_punctuation")
+
+
+def test_the_table_holds_only_script_variants_of_the_same_mark():
+    """A fullwidth SEMICOLON mapped to a comma changes the mark, not just its
+    script — a guess about intent, which this layer must never make. It and the
+    ratio sign were dropped after review; neither was ever measured."""
+    from shared.claude_client import _UNICODE_DELIMITERS
+
+    assert "；" not in _UNICODE_DELIMITERS
+    assert "∶" not in _UNICODE_DELIMITERS
+    for ch, ascii_ in _UNICODE_DELIMITERS.items():
+        assert ascii_ in ",:", f"{ch!r} maps to {ascii_!r}"
+
+
+def test_every_entry_in_the_table_is_actually_exercised():
+    """The earlier version of this file hand-listed four of six entries, so two
+    shipped untested. Iterate the table itself so it cannot under-cover again."""
+    from shared.claude_client import _UNICODE_DELIMITERS
+
+    for ch, ascii_ in _UNICODE_DELIMITERS.items():
+        src = ('{"a":1' + ch + '"b":2}') if ascii_ == "," else ('{"a"' + ch + '1}')
+        fixed = _ascii_json_punctuation(src)
+        assert fixed is not None and json.loads(fixed), f"{ch!r} not repaired"
