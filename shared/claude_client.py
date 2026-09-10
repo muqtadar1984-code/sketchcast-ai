@@ -585,6 +585,66 @@ def _rebalance_json(text: str):
     return "".join(out)
 
 
+# The Unicode look-alikes of the two structural delimiters. A model writing a
+# lesson IN Arabic or Chinese can slip into that script's punctuation and emit
+# one BETWEEN two JSON values, where only the ASCII character is legal.
+_UNICODE_DELIMITERS = {
+    "，": ",",   # ，FULLWIDTH COMMA
+    "、": ",",   # 、IDEOGRAPHIC COMMA
+    "،": ",",   # ،ARABIC COMMA
+    "；": ",",   # ；FULLWIDTH SEMICOLON (never legal in JSON either)
+    "：": ":",   # ：FULLWIDTH COLON
+    "∶": ":",   # ∶RATIO
+}
+
+
+def _ascii_json_punctuation(text: str):
+    """Swap a Unicode comma/colon look-alike that sits OUTSIDE a string for the
+    ASCII delimiter it is standing in for.
+
+    Measured 2026-09-10 (gen 1307931a, an Arabic KG2 lesson, char 12,468 of
+    21,052 on 12,425 output tokens against a 30,000 cap the provider never
+    called truncated):
+
+        …"cue":"الْإِجَّاصُ أَصْفَرُ أَيْضاً"}]}]}，{"id":"chapter_2",…
+                                                 ^ U+FF0C, not U+002C
+
+    json.loads reports `Expecting ',' delimiter` at a position that visibly HAS
+    a comma, which is why this reads as a mystery rather than a typo.
+
+    ONLY outside a string, which is what makes the rewrite decidable rather
+    than a guess: between two values none of these characters is ever valid
+    JSON, so there is nothing to lose — while INSIDE a string an Arabic comma
+    is ordinary prose this lesson is full of, and rewriting it would put words
+    in the teacher's mouth. Returns the corrected source, or None when the
+    reply contained no such character."""
+    out, changed = [], False
+    ins = esc = False
+    for c in text:
+        if esc:
+            out.append(c)
+            esc = False
+            continue
+        if ins:
+            out.append(c)
+            if c == "\\":
+                esc = True
+            elif c == '"':
+                ins = False
+            continue
+        if c == '"':
+            ins = True
+            out.append(c)
+            continue
+        swap = _UNICODE_DELIMITERS.get(c)
+        if swap is not None:
+            out.append(swap)
+            changed = True
+            continue
+        out.append(c)
+    return "".join(out) if changed else None
+
+
 def _substitute_closers(text: str):
     """The OTHER reading of a mis-nested closer: the model wrote the wrong
     bracket CHARACTER for the structure it was closing — `]` for `}`.
@@ -750,6 +810,14 @@ def _repair_json(text: str):
     # 0. a backslash that is not an escape (LaTeX, a percent sign, a path)
     fixed = _fix_bad_escapes(text)
     candidates.append(fixed)
+    # 0b. a delimiter written in the script the LESSON is in — an Arabic or
+    #     fullwidth comma standing between two values. Character-level like the
+    #     rule above, so it runs early and every later rule sees the corrected
+    #     text; a reply without one is unchanged.
+    ascii_punct = _ascii_json_punctuation(fixed)
+    if ascii_punct:
+        fixed = ascii_punct
+        candidates.append(fixed)
     # 1. SSML attribute quotes inside a JSON string. The first shape measured
     #    was <break time="0.3s"/>; the rule covers every SSML tag — prosody,
     #    emphasis, say-as, break strength — since a tag never legitimately sits
