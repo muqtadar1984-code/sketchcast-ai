@@ -28,14 +28,22 @@ BODY_PT = 15.0
 LIST_PT = 15.0
 HEADING_PT = 16.0
 KEY_IDEA_PT = 20.0
-TABLE_PT = 12.0
+# Everything that was 12pt is 16pt: table cells, diagram labels, captions.
+# The founder's call, and the right one for a projected slide — 12pt Calibri
+# is legible on a laptop and a smear from the back of a classroom. Body
+# prose at 15pt and above was left where it was.
+TABLE_PT = 16.0
+TABLE_HEAD_PT = 16.0
+LABEL_PT = 16.0
+CAPTION_PT = 16.0
+CELL_PAD_IN = 0.10
 
 LINE = 1.25                    # line height as a multiple of the point size
 PARA_GAP_IN = 0.14
 LIST_GAP_IN = 0.09
 LIST_TAIL_IN = 0.06
 HEADING_H_IN = 0.42
-TABLE_ROW_IN = 0.34
+TABLE_ROW_MIN_IN = 0.40
 TABLE_GAP_IN = 0.16
 KEY_IDEA_PAD_IN = 0.42
 KEY_IDEA_GAP_IN = 0.26
@@ -76,8 +84,35 @@ def block_height_in(block: dict, width_in: float = CONTENT_W_IN) -> float:
                 for it in (block.get("items") or []))
         return h + LIST_TAIL_IN
     if kind == "table":
-        return TABLE_ROW_IN * (1 + len(block.get("rows") or [])) + TABLE_GAP_IN
+        return table_height_in(block.get("header") or [], block.get("rows") or [],
+                               width_in) + TABLE_GAP_IN
     return 0.3
+
+
+def table_row_height_in(cells, col_widths_in, pt: float = TABLE_PT) -> float:
+    """The tallest wrapped cell in the row, plus padding.
+
+    A fixed row height was fine at 12pt with short cells. At 16pt a
+    misconception's correction wraps to four lines, and PowerPoint grows the
+    row to fit while the storyboard still believed it was 0.34in tall — the
+    overflow check would have passed a table running off the slide.
+    """
+    tallest = max((text_height_in(str(c), max(0.5, w - 2 * CELL_PAD_IN), pt)
+                   for c, w in zip(cells, col_widths_in)), default=0.0)
+    return max(TABLE_ROW_MIN_IN, tallest + 2 * CELL_PAD_IN)
+
+
+def table_col_widths_in(n_cols: int, width_in: float, first_col: float = 0.34) -> list[float]:
+    if n_cols == 2:
+        return [width_in * first_col, width_in * (1 - first_col)]
+    return [width_in / max(1, n_cols)] * max(1, n_cols)
+
+
+def table_height_in(header, rows, width_in: float = CONTENT_W_IN,
+                    first_col: float = 0.34, pt: float = TABLE_PT) -> float:
+    cols = table_col_widths_in(len(header), width_in, first_col)
+    return (table_row_height_in(header, cols, TABLE_HEAD_PT)
+            + sum(table_row_height_in(r, cols, pt) for r in rows))
 
 
 def list_item_height_in(item: str, width_in: float = CONTENT_W_IN) -> float:

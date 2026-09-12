@@ -20,8 +20,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Optional
 
-from shared.lesson_model import (Figure, LessonModel, Section, parse_body,
-                                 strip_emphasis)
+from shared.lesson_model import (Figure, LessonModel, Section, display_part,
+                                 parse_body, strip_emphasis)
 
 from . import metrics as mx
 
@@ -55,9 +55,6 @@ _LEADER_CLUTTER = 12
 # inches through `metrics`, which the renderer imports too — see that module
 # for why one shared estimate matters more than a good one.
 
-# Rows a misconception pair and a glossary row occupy in their tables.
-_MISCONCEPTIONS_PER_SLIDE = 4
-_GLOSSARY_PER_SLIDE = 8
 
 # A section that HAS a figure shows it beside its opening prose, at this width,
 # before the full labelled version gets a slide of its own. That is how a
@@ -68,6 +65,8 @@ _ILLUSTRATED_BODY_W_IN = 7.30
 # words — a crop with nothing to say beside it is decoration.
 _FOCUS_PER_FIGURE = 1
 _FOCUS_PER_DECK = 3
+# A list item longer than this is a paragraph wearing a bullet.
+_POINT_MAX_CHARS = 140
 
 
 @dataclass
@@ -89,7 +88,7 @@ class Slide:
     continued: bool = False
 
 
-def labels_per_slide(label_pt: float = 12.0, gutter_in: float = _GUTTER_IN) -> int:
+def labels_per_slide(label_pt: float = mx.LABEL_PT, gutter_in: float = _GUTTER_IN) -> int:
     """How many labels a diagram slide can carry legibly, both gutters.
 
     Two limits, and the smaller wins.
@@ -320,6 +319,60 @@ def drop_restatement(blocks: list[dict], key_idea: str) -> list[dict]:
     return out
 
 
+def section_content(sec: Section) -> tuple[list[dict], str]:
+    """What the section's slide shows, and what its notes say.
+
+    The slide shows POINTS: the article's own claims for the section, plus
+    any list or table the prose already contained (those are point-form by
+    nature — a table is a summary, a list is one). The paragraphs go to the
+    speaker notes, whole, so the teacher has the full text under the slide
+    rather than on it. A section with no claims and no structure falls back
+    to its prose, with the key-idea restatement removed, because a slide
+    that is only a heading is worse than one with a paragraph.
+    """
+    blocks = _clean_blocks(sec.body_md)
+    tables = [b for b in blocks if b["kind"] == "table"]
+    lists = [b for b in blocks if b["kind"] == "list"]
+    # A list whose items are paragraphs is prose in disguise. The Cells
+    # article's organelle list — "Cell membrane (Plasma membrane): This outer
+    # boundary of the cell is a selectively permeable barrier that..." — went
+    # up verbatim as bullets and filled two slides with the same definitions
+    # the glossary slides already carry. Short items are points and stay;
+    # long ones join the prose in the notes.
+    short_lists = [b for b in lists
+                   if max((len(it) for it in b["items"]), default=0) <= _POINT_MAX_CHARS]
+    prose_bits = [b["text"] for b in blocks if b["kind"] == "para"]
+    prose_bits += ["; ".join(b["items"]) for b in lists if b not in short_lists]
+    notes = sec.narration or "\n\n".join(prose_bits)
+    if sec.points:
+        return ([{"kind": "list", "items": list(sec.points)}] + short_lists + tables), notes
+    if short_lists or tables:
+        return short_lists + tables, notes
+    return drop_restatement(blocks, sec.key_idea), sec.narration
+
+
+def _table_pages(pairs, header, first_col: float, budget_in: float) -> list[list]:
+    """Split table rows across slides by MEASURED height, not a row count.
+
+    Eight glossary rows per slide was fine at 12pt. At 16pt a definition
+    wraps to three lines and eight of them are a foot of table on a slide
+    with five inches of room; the row count has to give way to the ruler.
+    """
+    cols = mx.table_col_widths_in(len(header), mx.CONTENT_W_IN, first_col)
+    head = mx.table_row_height_in(header, cols, mx.TABLE_HEAD_PT)
+    pages, cur, used = [], [], head
+    for pair in pairs:
+        h = mx.table_row_height_in(list(pair), cols)
+        if cur and used + h > budget_in:
+            pages.append(cur)
+            cur, used = [], head
+        cur.append(pair)
+        used += h
+    if cur:
+        pages.append(cur)
+    return pages
+
+
 def _chunk(seq, n):
     return [seq[i:i + n] for i in range(0, len(seq), n)] or []
 
@@ -343,7 +396,7 @@ def _diagram_slides(model: LessonModel, sec: Section, capacity: int) -> list[Sli
     return slides
 
 
-def storyboard(model: LessonModel, label_pt: float = 12.0) -> list[Slide]:
+def storyboard(model: LessonModel, label_pt: float = mx.LABEL_PT) -> list[Slide]:
     """The whole deck, in order. Every list that is empty simply omits its
     slide — a teacher's deck is SHORTER than a catalogue one, not hollower."""
     capacity = labels_per_slide(label_pt)
@@ -357,7 +410,7 @@ def storyboard(model: LessonModel, label_pt: float = 12.0) -> list[Slide]:
                          notes="Read these out, or write them on the board, before you start."))
 
     for sec in model.sections:
-        body = drop_restatement(_clean_blocks(sec.body_md), sec.key_idea)
+        body, notes = section_content(sec)
         budget = mx.BODY_H_IN - mx.key_idea_height_in(sec.key_idea)
         # A section that owns artwork shows it beside its OPENING prose. The
         # first page is therefore measured against a narrower column and the
@@ -382,10 +435,11 @@ def storyboard(model: LessonModel, label_pt: float = 12.0) -> list[Slide]:
                              # continuation reads as the slide having restarted.
                              key_idea=sec.key_idea if i == 0 else "",
                              blocks=blocks, section_id=sec.id, continued=i > 0,
-                             notes=sec.narration))
+                             notes=notes))
         out.extend(_diagram_slides(model, sec, capacity))
 
-    for group in _chunk(model.misconceptions, _MISCONCEPTIONS_PER_SLIDE):
+    for group in _table_pages(model.misconceptions, ["Learners often think", "In fact"],
+                              0.40, mx.BODY_H_IN - 0.1 - mx.TABLE_GAP_IN):
         out.append(Slide(kind=MISCONCEPTIONS, kicker="Watch out for",
                          heading="Common misunderstandings", items=group,
                          continued=len(out) and out[-1].kind == MISCONCEPTIONS,
@@ -426,7 +480,7 @@ def storyboard(model: LessonModel, label_pt: float = 12.0) -> list[Slide]:
             body = ([{"kind": "para", "text": definition}] if definition else [])
             if says:
                 body.append({"kind": "list", "items": says})
-            out.append(Slide(kind=FOCUS, kicker="Zoom in", heading=part,
+            out.append(Slide(kind=FOCUS, kicker="Zoom in", heading=display_part(part),
                              subtitle=fig.caption, figure=fig, parts=[part],
                              blocks=body,
                              notes=f"The same artwork as the {fig.key} diagram, "
@@ -457,9 +511,11 @@ def storyboard(model: LessonModel, label_pt: float = 12.0) -> list[Slide]:
             out.append(Slide(kind=CHECK, kicker="Check", heading="Name each structure",
                              figure=check, parts=asked[0],
                              notes="Answers: " + "; ".join(
-                                 f"{n}. {p}" for n, p in enumerate(asked[0], 1))))
+                                 f"{n}. {display_part(p)}"
+                                 for n, p in enumerate(asked[0], 1))))
 
-    for group in _chunk(model.glossary, _GLOSSARY_PER_SLIDE):
+    for group in _table_pages(model.glossary, ["Term", "Meaning"],
+                              0.26, mx.BODY_H_IN - 0.1 - mx.TABLE_GAP_IN):
         out.append(Slide(kind=GLOSSARY, kicker="Key terms", heading="Words to know",
                          items=group,
                          continued=len(out) and out[-1].kind == GLOSSARY))

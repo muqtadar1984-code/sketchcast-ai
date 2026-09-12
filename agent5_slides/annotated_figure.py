@@ -50,7 +50,7 @@ _SPECK_AREA = 0.004
 
 # Name matching lives in `shared.lesson_model`, which the storyboard uses
 # too. Two copies of this rule is what lost `climate_impact` its slide.
-from shared.lesson_model import part_boxes as _boxes  # noqa: E402
+from shared.lesson_model import display_part, part_boxes as _boxes  # noqa: E402
 
 
 def _area_frac(box, w: float, h: float) -> float:
@@ -374,7 +374,10 @@ def add_annotated_figure(slide, png: str | Path, geo: list[dict], img_w: float,
         col = sorted([g for g in geo if g["side"] == side], key=_target_cy)
         if not col:
             continue
-        texts = [(label_text or (lambda g: g["part"]))(g) for g in col]
+        # Parts are matched as declared (`thirty_year_calendar`) and SHOWN as
+        # words: the identifier went up verbatim on the Weather deck, and a
+        # teacher should not have to read snake_case off a projected slide.
+        texts = [(label_text or (lambda g: display_part(g["part"])))(g) for g in col]
         heights = [_text_height(t, gut_w, label_pt) for t in texts]
         desired = [py + _target_cy(g) * sy - hh / 2 for g, hh in zip(col, heights)]
         ys = _distribute(desired, heights, ft, ft + fh, 0.07 * EMU_IN)

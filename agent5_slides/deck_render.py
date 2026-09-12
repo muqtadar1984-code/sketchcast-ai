@@ -91,7 +91,8 @@ def _bullets(s, x, y, w, items, pt=mx.LIST_PT):
     return y + mx.LIST_TAIL_IN * IN
 
 
-def _table(s, x, y, w, header, rows, pt=mx.TABLE_PT, head_pt=12, first_col=0.34):
+def _table(s, x, y, w, header, rows, pt=mx.TABLE_PT, head_pt=mx.TABLE_HEAD_PT,
+           first_col=0.34):
     """A NATIVE PowerPoint table.
 
     The single biggest editability win in a body: a table is exactly the thing
@@ -101,12 +102,19 @@ def _table(s, x, y, w, header, rows, pt=mx.TABLE_PT, head_pt=12, first_col=0.34)
     from pptx.util import Pt
 
     n = len(rows) + 1
-    rh = mx.TABLE_ROW_IN * IN
-    shape = s.shapes.add_table(n, len(header), int(x), int(y), int(w), int(rh * n))
+    cols_in = mx.table_col_widths_in(len(header), w / IN, first_col)
+    heights = [mx.table_row_height_in(header, cols_in, head_pt)] + \
+              [mx.table_row_height_in(r, cols_in, pt) for r in rows]
+    total = sum(heights) * IN
+    shape = s.shapes.add_table(n, len(header), int(x), int(y), int(w), int(total))
     tbl = shape.table
-    if len(header) == 2:
-        tbl.columns[0].width = int(w * first_col)
-        tbl.columns[1].width = int(w - w * first_col)
+    for c, cw in enumerate(cols_in):
+        tbl.columns[c].width = int(cw * IN)
+    # Row heights are SET to the measured value rather than left for
+    # PowerPoint to grow on open, so what the overflow check measured is
+    # what the file says.
+    for i, h in enumerate(heights):
+        tbl.rows[i].height = int(h * IN)
     for c, text in enumerate(header):
         cell = tbl.cell(0, c)
         cell.text = ""
@@ -132,7 +140,7 @@ def _table(s, x, y, w, header, rows, pt=mx.TABLE_PT, head_pt=12, first_col=0.34)
             r.font.color.rgb = _rgb(INK)
             cell.fill.solid()
             cell.fill.fore_color.rgb = _rgb(WHITE if i % 2 else MIST)
-    return y + rh * n + mx.TABLE_GAP_IN * IN
+    return y + total + mx.TABLE_GAP_IN * IN
 
 
 def _blocks(s, blocks, x=MARGIN, y=BODY_TOP, w=None):
@@ -275,7 +283,7 @@ def _compare(prs, sl):
         x, y, w, hh = af._fit(fig.w, fig.h, (left, top, 5.70 * IN, h))
         s.shapes.add_picture(str(fig.png), int(x), int(y), int(w), int(hh))
         af._textbox(s, left, BODY_TOP - 0.02 * IN, 5.70 * IN, 0.3 * IN,
-                    (fig.caption or fig.key)[:60], 12, _rgb(GRAPHITE),
+                    (fig.caption or fig.key)[:60], mx.CAPTION_PT, _rgb(GRAPHITE),
                     bold=True, align=PP_ALIGN.CENTER)
     y = top + h + 0.18 * IN
     if sl.items:
@@ -304,7 +312,7 @@ def _overflow(end_y: float, sl) -> list[str]:
     return [f"body overflows the slide by {over:.2f}in ({sl.heading[:40]!r})"]
 
 
-def _diagram(prs, sl, label_pt=12.0):
+def _diagram(prs, sl, label_pt=mx.LABEL_PT):
     s = _slide(prs)
     _chrome(s, sl)
     fig = sl.figure
@@ -343,10 +351,10 @@ def _check(prs, sl, label_pt=14.0):
 def _misconceptions(prs, sl):
     s = _slide(prs)
     _chrome(s, sl)
-    _table(s, MARGIN, BODY_TOP + 0.1 * IN, CONTENT_W,
-           ["Learners often think", "In fact"],
-           [[a, b] for a, b in sl.items], pt=13, first_col=0.40)
-    return s
+    end = _table(s, MARGIN, BODY_TOP + 0.1 * IN, CONTENT_W,
+                 ["Learners often think", "In fact"],
+                 [[a, b] for a, b in sl.items], first_col=0.40)
+    return s, _overflow(end, sl)
 
 
 def _worked(prs, sl):
@@ -360,9 +368,9 @@ def _worked(prs, sl):
 def _glossary(prs, sl):
     s = _slide(prs)
     _chrome(s, sl)
-    _table(s, MARGIN, BODY_TOP + 0.1 * IN, CONTENT_W, ["Term", "Meaning"],
-           [[a, b] for a, b in sl.items], pt=12, first_col=0.26)
-    return s
+    end = _table(s, MARGIN, BODY_TOP + 0.1 * IN, CONTENT_W, ["Term", "Meaning"],
+                 [[a, b] for a, b in sl.items], first_col=0.26)
+    return s, _overflow(end, sl)
 
 
 def _closing(prs, sl):
@@ -383,12 +391,13 @@ _RENDER = {
     sb.MISCONCEPTIONS: _misconceptions, sb.WORKED: _worked,
     sb.GLOSSARY: _glossary, sb.CLOSING: _closing,
 }
-_CHECKED = {sb.SECTION, sb.WORKED, sb.DIAGRAM, sb.CHECK, sb.FOCUS, sb.COMPARE}
+_CHECKED = {sb.SECTION, sb.WORKED, sb.DIAGRAM, sb.CHECK, sb.FOCUS, sb.COMPARE,
+            sb.MISCONCEPTIONS, sb.GLOSSARY}
 _RENDER[sb.FOCUS] = _focus
 _RENDER[sb.COMPARE] = _compare
 
 
-def build(slides, out_path: str | Path, label_pt: float = 12.0) -> tuple[Path, list[str]]:
+def build(slides, out_path: str | Path, label_pt: float = mx.LABEL_PT) -> tuple[Path, list[str]]:
     """Render a storyboard. Returns the path and every geometry fault found.
 
     Faults are RETURNED rather than raised: the caller decides whether a deck

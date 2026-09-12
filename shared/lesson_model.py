@@ -119,6 +119,13 @@ class Section:
     # looked at them. Empty on the teacher path, where the slide simply has
     # no key-idea band rather than a fabricated one.
     key_idea: str = ""
+    # What the slide SHOWS. The prose is what the article says; the points are
+    # what a class should take from it, and a slide is for the second. From
+    # the article these are its own `claims` for the section — one sentence
+    # each, written to be precise because questions are generated from them —
+    # so no summarising call is made and nothing on the slide was invented.
+    # The prose is not lost: it becomes the speaker notes.
+    points: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -189,6 +196,13 @@ def norm_part(s: str) -> str:
     was never tested.
     """
     return " ".join(str(s or "").replace("_", " ").replace("-", " ").lower().split())
+
+
+def display_part(part: str) -> str:
+    """A part name as a slide should show it: `thirty_year_calendar` becomes
+    `thirty year calendar`. Case is left alone — `Golgi apparatus` is spelled
+    that way on purpose."""
+    return " ".join(str(part or "").replace("_", " ").replace("-", " ").split())
 
 
 def part_boxes(regions: dict, part: str) -> list[tuple[float, float, float, float]]:
@@ -277,10 +291,12 @@ def from_article(article: dict, figure_rows: list[dict] | None = None,
         if isinstance(c, dict) and _text(c.get("text")):
             m.claims.append((str(c.get("section_id") or ""), _text(c.get("text"))))
     for sec in m.sections:
-        first = next((t for sid, t in m.claims if sid == sec.id), "")
+        mine = [t for sid, t in m.claims if sid == sec.id]
+        first = mine[0] if mine else ""
         # A claim longer than a breath is a paragraph that lost its full stop;
         # it belongs in the body, not in 20pt across the top of the slide.
         sec.key_idea = first if first and len(first) <= 150 else ""
+        sec.points = [t for t in mine if t != sec.key_idea]
 
     m.glossary = _pairs(article.get("glossary"), "term", "definition")
     m.misconceptions = _pairs(article.get("misconceptions"), "misconception", "correction")
@@ -334,10 +350,8 @@ def from_analysis(analysis: dict, script: dict) -> LessonModel:
         m.sections.append(Section(
             id=str(seg.get("segment_id") or f"s{i:03d}"),
             heading=heading,
-            # The points ARE the chapter's own prose, one sentence each. They
-            # become paragraphs on the deck rather than bullets; the storyboard
-            # decides that, not this module.
-            body_md="\n\n".join(pts),
+            # `slide_points` already ARE the points; the narration is the prose.
+            points=pts,
             narration=narration,
         ))
 
