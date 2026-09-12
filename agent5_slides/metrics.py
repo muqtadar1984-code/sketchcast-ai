@@ -24,14 +24,15 @@ BODY_TOP_IN = 1.45
 BODY_BOTTOM_IN = 6.62
 BODY_H_IN = BODY_BOTTOM_IN - BODY_TOP_IN
 
-BODY_PT = 15.0
-LIST_PT = 15.0
+# 16pt is the floor for anything a class reads: body, points, table cells,
+# diagram labels, captions. The founder's call, and the right one for a
+# projected slide — 12pt Calibri is legible on a laptop and a smear from the
+# back of a classroom. Pagination derives from these numbers, so raising one
+# makes the deck longer, never fuller.
+BODY_PT = 16.0
+LIST_PT = 16.0
 HEADING_PT = 16.0
 KEY_IDEA_PT = 20.0
-# Everything that was 12pt is 16pt: table cells, diagram labels, captions.
-# The founder's call, and the right one for a projected slide — 12pt Calibri
-# is legible on a laptop and a smear from the back of a classroom. Body
-# prose at 15pt and above was left where it was.
 TABLE_PT = 16.0
 TABLE_HEAD_PT = 16.0
 LABEL_PT = 16.0
