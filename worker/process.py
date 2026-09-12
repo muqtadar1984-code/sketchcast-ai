@@ -533,9 +533,17 @@ def _combine_units(all_chapters: list[dict], scope: list, sb: Client, book_id: s
 
 def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chapter: dict,
                    analysis: dict, client, params: dict, branding: dict, lesson_lang: str,
-                   lesson_dir: str, tmp: str | Path, base: str, unit_label: str) -> str:
+                   lesson_dir: str, tmp: str | Path, base: str, unit_label: str,
+                   catalogue=None) -> str:
     """The 'deck' generation kind: author the slides, render them, build the
     .pptx, upload it. Returns the generation title.
+
+    Two renderers, chosen by ``deck_generator.use_storyboard``. The storyboard
+    path (2026-09, ships ON, ``DECK_STORYBOARD=0`` rolls back) builds every
+    slide from real text objects: a catalogue kit from its ARTICLE with no
+    authoring call at all, a book chapter from the analysis plus the one
+    authored script it always made. The legacy path renders a PNG per slide
+    and still serves a school that uploaded its own .pptx template.
 
     Module-level (not inline in process_generation) so it is testable with a
     fake Supabase and a stub client — the shared prelude (download, ingest,
@@ -546,8 +554,24 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
     Unlike the presentation's embedded deck ("deck is a bonus"), here the deck
     IS the artifact: no file means the job fails, never 'done' without it.
     """
+    from agent5_slides import deck_generator as dg
     from agent5_slides.deck_notes import author_deck_slides
     from agent5_slides.slide_generator import generate_episode_slides
+
+    storyboard = dg.use_storyboard(branding)
+    article = getattr(catalogue, "article", None) if catalogue is not None else None
+    if storyboard and article:
+        # The article IS the lesson: no model is asked to write slides from
+        # it, so there is no slides_spec and no coverage to measure against.
+        model = dg.model_from_article(sb, article, Path(tmp) / "deck")
+        deck_path = str(dg.build_lesson_deck(model, Path(tmp) / "deck" / "deck.pptx",
+                                             direction=lesson_dir))
+        db.set_progress(sb, job_id, 90)
+        dest = f"{base}/deck.pptx"
+        db.upload_artifact(sb, deck_path, dest)
+        db.add_artifact_row(sb, generation_id, "deck_pptx", dest)
+        db.set_progress(sb, job_id, 96)
+        return f"{book.get('title', 'Document')} · {unit_label} · Slide deck"
 
     slides_spec = author_deck_slides(book, chapter, analysis, client, params or {}, lesson_lang)
     book_id = book.get("id") or "unknown"
@@ -568,11 +592,18 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
     # deck_required: a build_episode_deck failure (template, font, RTL pass)
     # reaches jobs.error with its own message instead of being swallowed
     # into the generic "produced no file" below.
-    manifest = generate_episode_slides(
-        script_data=deck_script, branding=branding, direction=lesson_dir,
-        out_dir=Path(tmp) / "deck", deck_required=True,
-    ).model_dump()
-    deck_path = manifest.get("deck_path")
+    if storyboard:
+        # Book path: the analysis fills the glossary, the authored script
+        # fills the sections, and every word on the slide is a text object.
+        model = dg.model_from_script(analysis, deck_script)
+        deck_path = str(dg.build_lesson_deck(model, Path(tmp) / "deck" / "deck.pptx",
+                                             direction=lesson_dir))
+    else:
+        manifest = generate_episode_slides(
+            script_data=deck_script, branding=branding, direction=lesson_dir,
+            out_dir=Path(tmp) / "deck", deck_required=True,
+        ).model_dump()
+        deck_path = manifest.get("deck_path")
     if not deck_path or not Path(deck_path).exists():
         raise RuntimeError("deck build produced no file")
 
@@ -1861,6 +1892,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         title = _generate_deck(
             sb, job_id, generation_id, book, chapter, analysis, gen_client,
             gen.get("params") or {}, branding, lesson_lang, lesson_dir, tmp, base, _unit,
+            catalogue=catalogue,
         )
         for _k, _v in gen_client.session_usage.items():
             client.session_usage[_k] = client.session_usage.get(_k, 0) + _v

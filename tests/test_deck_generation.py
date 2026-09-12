@@ -344,6 +344,10 @@ def _worker_env(monkeypatch):
     from worker import client as db
     from worker import process
 
+    # These tests pin the LEGACY renderer (a PNG per slide via
+    # generate_episode_slides). The storyboard path ships on by default and
+    # has its own tests in test_deck_generator.py.
+    monkeypatch.setenv("DECK_STORYBOARD", "0")
     sb = FakeSB()
     sb.tables["generations"] = [{"id": "gen-1", "status": "processing", "kind": "deck",
                                  "owner_id": "u1", "book_id": "book-1", "params": {}}]
