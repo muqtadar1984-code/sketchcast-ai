@@ -266,6 +266,14 @@ class TestMarkdownOnlyAsFarAsASlideNeeds:
         assert parse_body("- one\n- two")[0]["items"] == ["one", "two"]
         assert parse_body("1. one\n2. two")[0]["items"] == ["one", "two"]
 
+    def test_an_enumeration_on_one_line_is_a_sentence_not_a_list(self):
+        """A live worked example: "1. Cell wall, 2. Cell membrane, 3.
+        Cytoplasm" rendered as a bullet reading "Cell wall, 2. Cell
+        membrane…" with its own "1." eaten."""
+        blocks = parse_body("1. Cell wall, 2. Cell membrane, 3. Cytoplasm, 4. Vacuole.")
+        assert [b["kind"] for b in blocks] == ["para"]
+        assert blocks[0]["text"].startswith("1. Cell wall")
+
     def test_blank_lines_separate_paragraphs(self):
         assert [b["kind"] for b in parse_body("First para.\n\nSecond para.")] == ["para", "para"]
 
