@@ -332,6 +332,19 @@ def run_once(sb) -> bool:
             run_publish_job(sb, job)  # self-contained: finishes its own row, done or error
         else:
             process_generation(sb, job, gen_id)
+    except db.DeferredJob as exc:
+        # The job asked to run later (a deck whose lesson video is still
+        # rendering). Back to the queue with a wake-up time; no attempt is
+        # spent, nothing is failed, and the generation reads `queued` again
+        # so the dashboard does not show a build that is not happening.
+        if db.defer_job(sb, job, exc.seconds, exc.note):
+            try:
+                db.set_generation_status(sb, gen_id, "queued")
+            except Exception:  # noqa: BLE001
+                pass
+            log.info("Job %s deferred %ds: %s", job["id"], exc.seconds, exc.note)
+        else:
+            log.warning("Job %s asked to defer but the row had moved; left as is", job["id"])
     except db.TransientTierError as exc:
         # The account's plan could not be read right now, though the RPC is
         # known good. Rendering FREE would hand a paying customer the wrong

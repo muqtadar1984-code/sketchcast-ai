@@ -292,3 +292,37 @@ class TestFigureReadiness:
         f = _fig(3)
         f.parts = f.parts + ["a part nobody drew"]
         assert "a part nobody drew" not in f.located()
+
+
+class TestADiagramSlideTitle:
+    """The Materials deck titled a slide "A comparison of the three states of
+    matter showing three containers side-by-side representing solid, liquid,
+    and gas par" — a library row's description sentence, clipped by the
+    renderer at 120 characters, mid-word. A short caption names a slide; a
+    long one is a subtitle under the section's own heading."""
+
+    def _deck(self, caption: str):
+        f = _fig(3, key="states")
+        f.png = __import__("pathlib").Path(__file__)
+        f.caption = caption
+        sec = Section(id="s1", heading="The Mystery of Materials", body_md="Prose.", figure_keys=["states"])
+        m = LessonModel(title="Materials", sections=[sec], figures={"states": f})
+        return [s for s in storyboard(m) if s.kind == DIAGRAM]
+
+    def test_a_short_caption_is_the_title(self):
+        (s,) = self._deck("The three states of matter")
+        assert s.heading == "The three states of matter"
+        assert s.kicker == "The Mystery of Materials"
+        assert s.subtitle == "", "a subtitle that repeats the title is noise"
+
+    def test_a_long_caption_becomes_the_subtitle(self):
+        long = ("A comparison of the three states of matter showing three containers "
+                "side-by-side representing solid, liquid, and gas particle arrangements.")
+        (s,) = self._deck(long)
+        assert s.heading == "The Mystery of Materials"
+        assert s.subtitle == long
+        assert s.kicker == "", "the kicker would repeat the title"
+
+    def test_no_caption_at_all_still_has_a_title(self):
+        (s,) = self._deck("")
+        assert s.heading == "The Mystery of Materials" and s.subtitle == ""

@@ -44,6 +44,9 @@ def _env(monkeypatch):
     from worker import client as db
     from worker import process
 
+    # The picture ladder searches the REAL library and may generate: a test of
+    # the wiring must never reach a network or an image model.
+    monkeypatch.setenv("DECK_IMAGES", "0")
     sb = FakeSB()
     sb.tables["generations"] = [{"id": "gen-1", "status": "processing", "kind": "deck",
                                  "owner_id": "u1", "book_id": "book-1", "params": {}}]

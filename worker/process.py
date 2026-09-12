@@ -531,10 +531,145 @@ def _combine_units(all_chapters: list[dict], scope: list, sb: Client, book_id: s
     }
 
 
+DECK_WAIT_POLL_SECONDS = int(os.getenv("DECK_WAIT_POLL_SECONDS", "60"))
+DECK_WAIT_MAX_SECONDS = int(os.getenv("DECK_WAIT_MAX_SECONDS", "2700"))
+
+
+def _sibling_presentation(sb: Client, gen: dict) -> Optional[dict]:
+    """The presentation generation this deck belongs beside, or None.
+
+    A catalogue deck names its kit, and the kit names its presentation. A
+    book deck was inserted in the same click as its lesson: same owner, book
+    and chapter, the same `part`, within a few hours."""
+    params = gen.get("params") if isinstance(gen.get("params"), dict) else {}
+    try:
+        if params.get("catalogue") and params.get("kit_id"):
+            kit = (sb.table("topic_kits").select("presentation_generation_id")
+                   .eq("id", str(params["kit_id"])).limit(1).execute())
+            rows = getattr(kit, "data", None) or []
+            pid = rows[0].get("presentation_generation_id") if rows else None
+            if not pid:
+                return None
+            res = (sb.table("generations").select("id,status,params,created_at")
+                   .eq("id", str(pid)).limit(1).execute())
+            rows = getattr(res, "data", None) or []
+            return rows[0] if rows else None
+        if not gen.get("book_id") or not gen.get("owner_id"):
+            return None
+        q = (sb.table("generations").select("id,status,params,created_at")
+             .eq("kind", "presentation").eq("owner_id", str(gen["owner_id"]))
+             .eq("book_id", str(gen["book_id"])))
+        if gen.get("chapter_ref") is not None:
+            q = q.eq("chapter_ref", str(gen["chapter_ref"]))
+        rows = getattr(q.order("created_at", desc=True).limit(20).execute(), "data", None) or []
+        want_part = params.get("part")
+        mine = str(gen.get("created_at") or "")[:19]
+        for r in rows:
+            rp = r.get("params") if isinstance(r.get("params"), dict) else {}
+            if rp.get("part") != want_part:
+                continue
+            theirs = str(r.get("created_at") or "")[:19]
+            if mine and theirs and abs(_epoch(mine) - _epoch(theirs)) > 6 * 3600:
+                continue
+            return r
+    except Exception as exc:  # noqa: BLE001 — a sibling we cannot read is a sibling we do not wait for
+        logger.warning("deck %s: sibling presentation lookup failed: %s", gen.get("id"), exc)
+    return None
+
+
+def _sibling_deck(sb: Client, gen: dict) -> Optional[dict]:
+    """The deck generation inserted beside this book PRESENTATION, or None.
+    Same owner, book, chapter and `part`, within a few hours — the mirror of
+    `_sibling_presentation` for the other direction."""
+    params = gen.get("params") if isinstance(gen.get("params"), dict) else {}
+    if not gen.get("book_id") or not gen.get("owner_id"):
+        return None
+    try:
+        q = (sb.table("generations").select("id,status,params,created_at")
+             .eq("kind", "deck").eq("owner_id", str(gen["owner_id"])).eq("book_id", str(gen["book_id"])))
+        if gen.get("chapter_ref") is not None:
+            q = q.eq("chapter_ref", str(gen["chapter_ref"]))
+        rows = getattr(q.order("created_at", desc=True).limit(20).execute(), "data", None) or []
+        mine = str(gen.get("created_at") or "")[:19]
+        for r in rows:
+            rp = r.get("params") if isinstance(r.get("params"), dict) else {}
+            if rp.get("part") != params.get("part"):
+                continue
+            theirs = str(r.get("created_at") or "")[:19]
+            if mine and theirs and abs(_epoch(mine) - _epoch(theirs)) > 6 * 3600:
+                continue
+            return r
+    except Exception as exc:  # noqa: BLE001 — unreadable means "assume none", so the lesson keeps its deck
+        logger.warning("presentation %s: sibling deck lookup failed: %s", gen.get("id"), exc)
+    return None
+
+
+def _epoch(stamp: str) -> float:
+    from datetime import datetime, timezone
+    try:
+        return datetime.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        try:
+            return datetime.strptime(stamp[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            return 0.0
+
+
+def _wait_for_sibling_presentation(sb: Client, job: dict, gen: dict) -> None:
+    sib = _sibling_presentation(sb, gen)
+    if not sib or str(sib.get("status") or "") not in ("queued", "processing"):
+        return
+    waited = db.deferred_seconds(job)
+    if waited >= DECK_WAIT_MAX_SECONDS:
+        logger.warning("deck %s: waited %.0fs for video %s (%s); building without its pictures",
+                       gen.get("id"), waited, sib.get("id"), sib.get("status"))
+        return
+    raise db.DeferredJob(DECK_WAIT_POLL_SECONDS,
+                         f"waiting for the lesson video {str(sib.get('id'))[:8]} ({sib.get('status')})")
+
+
+def _sibling_video_segments(sb: Client, gen: dict) -> list[dict]:
+    """The rendered video's segments (with the scene each one drew), from
+    the sibling presentation's script_json artifacts, in part order. Empty
+    when there is no finished sibling."""
+    sib = _sibling_presentation(sb, gen)
+    if not sib or str(sib.get("status") or "") != "done":
+        return []
+    try:
+        res = (sb.table("artifacts").select("storage_path").eq("generation_id", str(sib["id"]))
+               .eq("kind", "script_json").execute())
+        paths = sorted(str(r.get("storage_path") or "") for r in (getattr(res, "data", None) or []))
+        segments: list[dict] = []
+        for path in paths:
+            body = json.loads(sb.storage.from_("artifacts").download(path))
+            segments.extend(_find_segments(body) or [])
+        return segments
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("deck %s: could not read the video script (%s); no video pictures", gen.get("id"), exc)
+        return []
+
+
+def _find_segments(o):
+    if isinstance(o, dict):
+        if isinstance(o.get("segments"), list):
+            return o["segments"]
+        for v in o.values():
+            got = _find_segments(v)
+            if got:
+                return got
+    if isinstance(o, list):
+        for v in o:
+            got = _find_segments(v)
+            if got:
+                return got
+    return None
+
+
 def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chapter: dict,
                    analysis: dict, client, params: dict, branding: dict, lesson_lang: str,
                    lesson_dir: str, tmp: str | Path, base: str, unit_label: str,
-                   catalogue=None) -> str:
+                   catalogue=None, video_segments: Optional[list] = None,
+                   art_context: Optional[dict] = None) -> str:
     """The 'deck' generation kind: author the slides, render them, build the
     .pptx, upload it. Returns the generation title.
 
@@ -554,6 +689,7 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
     Unlike the presentation's embedded deck ("deck is a bonus"), here the deck
     IS the artifact: no file means the job fails, never 'done' without it.
     """
+    from agent5_slides import deck_art
     from agent5_slides import deck_generator as dg
     from agent5_slides.deck_notes import author_deck
     from agent5_slides.slide_generator import generate_episode_slides
@@ -564,6 +700,8 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
         # The article IS the lesson: no model is asked to write slides from
         # it, so there is no slides_spec and no coverage to measure against.
         model = dg.model_from_article(sb, article, Path(tmp) / "deck")
+        deck_art.decorate(model, sb=sb, tmp=Path(tmp) / "deck", video_segments=video_segments,
+                          context=art_context or {}, job_id=job_id, exclude_job_id=job_id)
         deck_path = str(dg.build_lesson_deck(model, Path(tmp) / "deck" / "deck.pptx",
                                              direction=lesson_dir, branding=branding))
         db.set_progress(sb, job_id, 90)
@@ -597,6 +735,9 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
         # Book path: the analysis fills the glossary, the authored script
         # fills the sections, and every word on the slide is a text object.
         model = dg.model_from_script(analysis, deck_script, authored, language=lesson_lang)
+        deck_art.decorate(model, sb=sb, tmp=Path(tmp) / "deck", video_segments=video_segments,
+                          context=art_context or deck_art.book_context(book, unit_label, analysis),
+                          job_id=job_id, exclude_job_id=job_id)
         deck_path = str(dg.build_lesson_deck(model, Path(tmp) / "deck" / "deck.pptx",
                                              direction=lesson_dir, branding=branding))
     else:
@@ -1231,6 +1372,11 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         # the presentation as before; "0" stops building/uploading it once
         # the app queues deck rows. Delete the flag after "0" has been live.
         _deck_in_presentation = os.getenv("DECK_IN_PRESENTATION", "1").strip() == "1"
+        from agent5_slides import deck_generator as _dg
+        # On the storyboard path the embedded deck is built AFTER the video
+        # renders (below), from the pictures the video drew; the legacy path
+        # still builds it in generate_episode_slides.
+        _deck_storyboard = _dg.storyboard_enabled()
 
         params = gen.get("params") or {}
         narration_style = params.get("narration_style") or "socratic"
@@ -1527,7 +1673,8 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             }
             slides = generate_episode_slides(
                 script_data=part_scripts, branding=branding, direction=lesson_dir,
-                build_deck=_deck_in_presentation, analysis=analysis, language=lesson_lang,
+                build_deck=_deck_in_presentation and not _deck_storyboard,
+                analysis=analysis, language=lesson_lang,
             ).model_dump()
 
             video = compose_episode_videos(
@@ -1537,6 +1684,32 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             ).model_dump()
 
             final = render_final_video(video_manifest=video).model_dump()
+
+            # The deck beside the video, built from the scene the video just
+            # drew: every illustration is a library row by now, so the slides
+            # carry the same pictures the class watched appear. Bonus
+            # semantics: a fault here costs the deck, never the lesson.
+            _embedded_deck = None
+            # Only when nothing else will make this lesson's deck: a catalogue
+            # kit has its own deck generation, and so does a book lesson whose
+            # click inserted one — both now run AFTER this video and take the
+            # same pictures. Two decks for one lesson is the old duplication
+            # wearing a new format.
+            if _deck_in_presentation and _deck_storyboard and catalogue is None \
+                    and _sibling_deck(sb, gen) is None:
+                try:
+                    from agent5_slides import deck_art as _deck_art
+                    _dm = _dg.model_from_script(analysis, part_scripts, language=lesson_lang)
+                    _deck_art.decorate(_dm, sb=sb, tmp=Path(tmp) / f"deck_art_{part_idx}",
+                                       video_segments=script_dict.get("segments") or [], exact=True,
+                                       context=(_deck_art.book_context(book, chapter_title, analysis)),
+                                       job_id=job_id, allow_generate=False)
+                    _sfx = "" if part_idx == 1 else f"_part{part_idx}"
+                    _embedded_deck = str(_dg.build_lesson_deck(
+                        _dm, Path(tmp) / "deck" / f"episode_deck{_sfx}.pptx",
+                        direction=lesson_dir, branding=branding))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("embedded deck not built for part %s: %s", part_idx, exc)
 
             # ACCEPTANCE. Until now this ran only in tests: the engine
             # computed a full per-lesson quality audit on every render and
@@ -1583,7 +1756,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             suffix = "" if part_idx == 1 else f"_part{part_idx}"
             # deck_path is None when DECK_IN_PRESENTATION=0 (build_deck
             # above) — the deck is then the 'deck' generation's artifact.
-            deck_path = slides.get("deck_path")
+            deck_path = slides.get("deck_path") or _embedded_deck
             if deck_path and Path(deck_path).exists():
                 db.upload_artifact(sb, deck_path, f"{base}/deck{suffix}.pptx")
                 db.add_artifact_row(sb, generation_id, "deck_pptx", f"{base}/deck{suffix}.pptx")
@@ -1890,10 +2063,17 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             part_label(chapter_title, part_ref, part_total, pk.get("section_titles"))
             if part_ref is not None else chapter_title
         )
+        _video_segs = _sibling_video_segments(sb, gen)
+        if catalogue is not None and getattr(catalogue, "article", None):
+            from catalogue.figures import library_context as _lib_ctx
+            _art_ctx = _lib_ctx(sb, catalogue.article)
+        else:
+            from agent5_slides.deck_art import book_context as _book_ctx
+            _art_ctx = _book_ctx(book, chapter_title, analysis)
         title = _generate_deck(
             sb, job_id, generation_id, book, chapter, analysis, gen_client,
             gen.get("params") or {}, branding, lesson_lang, lesson_dir, tmp, base, _unit,
-            catalogue=catalogue,
+            catalogue=catalogue, video_segments=_video_segs, art_context=_art_ctx,
         )
         for _k, _v in gen_client.session_usage.items():
             client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
@@ -2036,6 +2216,13 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     job_id = job["id"]
     db.set_generation_status(sb, generation_id, "processing")  # so the UI shows progress, not "queued"
     gen = db.get_generation(sb, generation_id)
+    if str(job.get("type") or "") == "deck":
+        # The deck is the LAST artifact of a lesson: it is built from the
+        # pictures the video drew, so it waits for the video. Raises
+        # DeferredJob (run.py requeues it) while the sibling presentation is
+        # live; proceeds without it after DECK_WAIT_MAX_SECONDS or when there
+        # is no sibling at all.
+        _wait_for_sibling_presentation(sb, job, gen)
     # A catalogue kit generation (params.catalogue, Phase 3) has NO book:
     # book_id is NULL by construction, and its source is the topic's
     # approved article (catalogue/kit.py). The book prelude below is
