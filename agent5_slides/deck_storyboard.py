@@ -503,8 +503,13 @@ def storyboard(model: LessonModel, label_pt: float = mx.LABEL_PT) -> list[Slide]
         body = body + v_blocks
         # A quiz or a diagram segment often has nothing but its heading and
         # narration: the visual slide IS the section, and a plain slide before
-        # it would be a heading over the spoken text twice.
-        if v_slides and not sec.points and not v_blocks and not _clean_blocks(sec.body_md):
+        # it would be a heading over the spoken text twice. On the video and
+        # book routes the body IS the narration (no points are authored), so
+        # "nothing but narration" is the common case, not the empty one —
+        # the first live teacher deck paired every diagram, quiz and recap
+        # with a slide of the words the teacher was about to say.
+        only_narration = not sec.body_md or sec.body_md == sec.narration
+        if v_slides and not sec.points and not v_blocks and only_narration:
             body = []
         budget = mx.BODY_H_IN - mx.key_idea_height_in(key_idea)
         # A section that owns artwork shows it beside its OPENING prose. The

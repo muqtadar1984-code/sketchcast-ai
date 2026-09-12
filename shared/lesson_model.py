@@ -400,6 +400,7 @@ def from_analysis(analysis: dict, script: dict,
 
 _BULLET = re.compile(r"^\s*[-*+]\s+(.*)$")
 _NUMBERED = re.compile(r"^\s*\d+[.)]\s+(.*)$")
+_INLINE_ENUM = re.compile(r"[,;]\s*\d+[.)]\s")       # ", 2. " later on the same line
 _HEADING = re.compile(r"^\s*#{1,6}\s+(.*)$")
 _TABLE_SEP = re.compile(r"^\s*\|?[\s:|-]+\|[\s:|-]*$")
 
@@ -452,7 +453,11 @@ def parse_body(body_md: str) -> list[dict]:
                 blocks.append({"kind": "table", "header": rows[0], "rows": rows[1:]})
             continue
         b = _BULLET.match(line) or _NUMBERED.match(line)
-        if b:
+        # "1. Cell wall, 2. Cell membrane, 3. Cytoplasm" on ONE line is a
+        # sentence that happens to count, not a list whose first item is
+        # "Cell wall, 2. Cell membrane…". The first live teacher deck rendered
+        # exactly that as a bullet with its "1." missing.
+        if b and not (_NUMBERED.match(line) and _INLINE_ENUM.search(b.group(1))):
             flush_para()
             items.append(_text(b.group(1)))
             i += 1
