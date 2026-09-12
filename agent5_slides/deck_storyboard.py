@@ -17,6 +17,7 @@ and every one of them is a better slide than a bullet.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -465,6 +466,9 @@ def _chunk(seq, n):
     return [seq[i:i + n] for i in range(0, len(seq), n)] or []
 
 
+_CAPTION_TITLE_MAX = 60   # characters; longer captions are subtitles, not titles
+
+
 def _diagram_slides(model: LessonModel, sec: Section, capacity: int) -> list[Slide]:
     slides: list[Slide] = []
     lang = model.language
@@ -472,11 +476,18 @@ def _diagram_slides(model: LessonModel, sec: Section, capacity: int) -> list[Sli
         if not fig.annotatable:
             continue                      # a plain picture; the body slide keeps it
         groups = split_parts(fig, capacity)
+        # A short caption ("The water cycle") is the slide's title; a long
+        # one (a library row's description sentence) is a subtitle, and the
+        # section heading takes the title — the renderer clips a heading at
+        # 120 characters, mid-word, and a title that ends in "gas par" is
+        # exactly the artifact a teacher will not present.
+        cap = (fig.caption or "").strip()
+        head = cap if cap and len(cap) <= _CAPTION_TITLE_MAX else sec.heading
         for i, parts in enumerate(groups):
             slides.append(Slide(
-                kind=DIAGRAM, kicker=sec.heading if i == 0 else "",
-                heading=fig.caption or sec.heading,
-                subtitle=fig.caption if i == 0 else "",
+                kind=DIAGRAM, kicker=(sec.heading if (i == 0 and head != sec.heading) else ""),
+                heading=head,
+                subtitle=cap if (i == 0 and cap != head) else "",
                 figure=fig, parts=parts, section_id=sec.id, continued=i > 0,
                 notes=(f"{fig.caption}\n\n{T(lang, 'labelled_here')} " + ", ".join(display_part(p) for p in parts)),
             ))
@@ -516,7 +527,9 @@ def storyboard(model: LessonModel, label_pt: float = mx.LABEL_PT) -> list[Slide]
         # first page is therefore measured against a narrower column and the
         # rest against the full width — paginating everything narrow would
         # leave the later, unillustrated pages needlessly cramped.
-        art = next((f for f in model.figures_for(sec) if f.annotatable), None)
+        # Any picture with a file illustrates the section; only one with
+        # measured regions also earns the labelled diagram slide that follows.
+        art = next((f for f in model.figures_for(sec) if f.png and Path(str(f.png)).exists()), None)
         if art:
             first = _paginate(body, budget, _ILLUSTRATED_BODY_W_IN)[0]
             rest = body[len(first):]

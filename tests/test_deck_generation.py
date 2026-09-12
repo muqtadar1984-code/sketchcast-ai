@@ -356,6 +356,7 @@ def _worker_env(monkeypatch):
     # generate_episode_slides). The storyboard path ships on by default and
     # has its own tests in test_deck_generator.py.
     monkeypatch.setenv("DECK_STORYBOARD", "0")
+    monkeypatch.setenv("DECK_IMAGES", "0")       # never a real library search or generation in a test
     sb = FakeSB()
     sb.tables["generations"] = [{"id": "gen-1", "status": "processing", "kind": "deck",
                                  "owner_id": "u1", "book_id": "book-1", "params": {}}]

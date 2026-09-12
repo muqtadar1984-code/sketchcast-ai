@@ -109,6 +109,53 @@ def mirror_generation_status(sb: Client, generation_id, status: str) -> None:
 # so a plain neq would also drop the NULLs — Postgres's NULL <> 'true' is NULL.
 _NOT_CATALOGUE_FILTER = "params->>catalogue.is.null,params->>catalogue.neq.true"
 
+
+def _stamp(dt: datetime) -> str:
+    """One fixed-width UTC format, so PostgREST's TEXT comparison of
+    ``params->>deferred_until`` orders the way time does."""
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+
+
+class DeferredJob(Exception):
+    """Raised by a builder that must run LATER — the deck job while its
+    lesson's video is still rendering. Not a failure and not an attempt:
+    run.py puts the row back in the queue with ``params.deferred_until``,
+    and ``claim_next_job`` cannot see it until then."""
+
+    def __init__(self, seconds: int, note: str):
+        super().__init__(note)
+        self.seconds = max(15, int(seconds))
+        self.note = note
+
+
+def defer_job(sb: Client, job: dict, seconds: int, note: str) -> bool:
+    """queued again, invisible to the claim for `seconds`, attempts untouched.
+    ``deferred_since`` is set once, so the waiter can bound how long it has
+    been waiting in total. Guarded on `processing`: if the reaper or the
+    console moved the row meanwhile, we do not overwrite them."""
+    now = datetime.now(timezone.utc)
+    params = dict(job.get("params") or {}) if isinstance(job.get("params"), dict) else {}
+    params.setdefault("deferred_since", _stamp(now))
+    params["deferred_until"] = _stamp(now + timedelta(seconds=seconds))
+    params["deferred_note"] = note[:200]
+    upd = (sb.table("jobs")
+           .update({"status": "queued", "progress": 0, "params": params,
+                    "stage": {"phase": "waiting", "note": note[:200]}})
+           .eq("id", job["id"]).eq("status", "processing").execute())
+    return bool(getattr(upd, "data", None))
+
+
+def deferred_seconds(job: dict) -> float:
+    """How long this job has been waiting in total (0 if never deferred)."""
+    since = ((job.get("params") or {}) if isinstance(job.get("params"), dict) else {}).get("deferred_since")
+    if not since:
+        return 0.0
+    try:
+        t = datetime.strptime(str(since), "%Y-%m-%dT%H:%M:%S.%f+00:00").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return 0.0
+    return max(0.0, (datetime.now(timezone.utc) - t).total_seconds())
+
 # topic_kits.status values this module writes (catalogue Phase 3). Kept here —
 # and not read from catalogue.kit — because the crash-reaper below must stay
 # importable without the catalogue package's dependencies.
@@ -183,6 +230,10 @@ def claim_next_job(sb: Client, job_type=None, exclude_types=None,
         q = q.eq("params->>catalogue", "true")
     elif catalogue is False:
         q = q.or_(_NOT_CATALOGUE_FILTER)
+    # A job that asked to run LATER (defer_job) is invisible until then. Text
+    # comparison on a fixed-width UTC stamp; a second `or` param ANDs with
+    # the catalogue one in PostgREST.
+    q = q.or_("params->>deferred_until.is.null,params->>deferred_until.lt." + _stamp(datetime.now(timezone.utc)))
     res = q.order("created_at").limit(1).execute()
     if not res.data:
         return None
