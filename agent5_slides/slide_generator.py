@@ -68,6 +68,8 @@ def generate_episode_slides(
     out_dir: Path | None = None,
     build_deck: bool = True,
     deck_required: bool = False,
+    analysis: Optional[dict] = None,
+    language: Optional[str] = None,
 ) -> SlideManifest:
     """Render one chapter-content slide PNG per segment + a combined editable deck.
 
@@ -175,8 +177,20 @@ def generate_episode_slides(
     if build_deck:
         try:
             deck_file = slide_dir / f"episode_{episode_num}_deck.pptx"
-            build_episode_deck(deck_slides, deck_file, episode_title=episode_title,
-                               template=_pptx_template, accent=_accent, direction=direction)
+            from . import deck_generator as dg
+            if dg.use_storyboard(_b):
+                # The deck a teacher downloads beside the video: MOST teachers
+                # get their deck from here (measured: 14 of the last 33
+                # lessons carried one, only 6 had a deck generation of their
+                # own), so the storyboard has to serve this route or the old
+                # format lives on for the majority. The video script's
+                # segments give the sections, the analysis gives the glossary,
+                # and a geometry fault is a missing deck rather than a bad one.
+                model = dg.model_from_script(analysis or {}, script_data, language=language)
+                dg.build_lesson_deck(model, deck_file, direction=direction, branding=_b)
+            else:
+                build_episode_deck(deck_slides, deck_file, episode_title=episode_title,
+                                   template=_pptx_template, accent=_accent, direction=direction)
             deck_path = str(deck_file)
             for s in manifest_segments:
                 s.slide_path = deck_path

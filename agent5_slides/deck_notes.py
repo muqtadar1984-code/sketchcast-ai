@@ -98,11 +98,23 @@ CONTENT LAYOUTS — fill the slide instead of a few thin bullets:
 Optional "caption": one short line under a structural diagram.
 Only fall back to plain "points" when NONE of the above fits — and never twice in a row.
 
+=== LESSON EXTRAS (top level, beside "slides") ===
+- "objectives": 3-6 learning objectives, one sentence each, in the form a teacher writes on
+  the board ("Describe how...", "Explain why...").
+- "misconceptions": 2-5 objects {"misconception": what learners wrongly believe,
+  "correction": the correct idea and its reason}, drawn from THIS chapter's content.
+- "worked_examples": 0-2 objects {"problem": a short problem or question from the chapter,
+  "solution": its step-by-step solution in plain prose}. An empty list where the subject has none.
+
 === OUTPUT FORMAT ===
 Return ONLY valid JSON — no preamble, no markdown fences, no explanation. The shape, as an
 abbreviated 5-slide example (yours has exactly {n} slides; "visual" is null on a plain-points
 slide, and every visual carries its "kind"):
-{"title": "...", "slides": [
+{"title": "...",
+ "objectives": ["Explain how supply and demand set a price."],
+ "misconceptions": [{"misconception": "Prices only ever go up.", "correction": "Prices fall when supply outgrows demand."}],
+ "worked_examples": [{"problem": "Demand doubles and supply is fixed. What happens to price?", "solution": "..."}],
+ "slides": [
   {"heading": "Why do prices change?", "points": ["Prices move when demand and supply shift"],
    "visual": null,
    "notes": "60-120 words a teacher says while this slide is up."},
@@ -185,6 +197,44 @@ def _normalise_slide(i: int, raw) -> dict | None:
     }
 
 
+def author_deck(book: dict, chapter: dict, analysis: dict, client, params: dict,
+                language: str | None = "en") -> dict:
+    """The one authoring call, whole: ``{"slides", "title", "objectives",
+    "misconceptions", "worked_examples"}``. The slides are script-shaped
+    segments; the extras feed the storyboard's objectives, misconception and
+    worked-example slides so a teacher's deck carries the same kinds a
+    catalogue deck does. Missing extras are empty lists, never a failure —
+    the slides are the artifact."""
+    n = clamp_slides((params or {}).get("num_slides", DEFAULT_SLIDES))
+    grounding = chapter_grounding(book, chapter, analysis)
+    prompt = build_deck_prompt(n, language)
+    data = client.analyze(prompt, max_tokens=8192, cache_prefix=grounding).get("data") or {}
+    if not isinstance(data, dict):
+        data = {}
+    raw_slides = data.get("slides")
+    if not isinstance(raw_slides, list):
+        raw_slides = []
+    slides: list[dict] = []
+    for raw in raw_slides:
+        seg = _normalise_slide(len(slides) + 1, raw)
+        if seg is not None:
+            slides.append(seg)
+    if len(slides) < MIN_SURVIVING:
+        raise RuntimeError(f"deck authoring returned {len(slides)} slides")
+    title = str(data.get("title") or "").strip()
+    logger.info("deck authored: %d slides (asked %d)%s", len(slides), n,
+                f" — {title}" if title else "")
+
+    def _list(key):
+        v = data.get(key)
+        return v if isinstance(v, list) else []
+
+    return {"slides": slides, "title": title,
+            "objectives": [str(o).strip() for o in _list("objectives") if str(o or "").strip()][:8],
+            "misconceptions": [m for m in _list("misconceptions") if isinstance(m, dict)][:6],
+            "worked_examples": [w for w in _list("worked_examples") if isinstance(w, dict)][:3]}
+
+
 def author_deck_slides(book: dict, chapter: dict, analysis: dict, client, params: dict,
                        language: str | None = "en") -> list[dict]:
     """Author the deck's slides for one chapter (or part) and return them as
@@ -196,21 +246,4 @@ def author_deck_slides(book: dict, chapter: dict, analysis: dict, client, params
     usable: a deck is the whole artifact of its job, so a thin reply must fail
     the job rather than ship two slides.
     """
-    n = clamp_slides((params or {}).get("num_slides", DEFAULT_SLIDES))
-    grounding = chapter_grounding(book, chapter, analysis)
-    prompt = build_deck_prompt(n, language)
-    data = client.analyze(prompt, max_tokens=8192, cache_prefix=grounding).get("data") or {}
-    raw_slides = data.get("slides") if isinstance(data, dict) else None
-    if not isinstance(raw_slides, list):
-        raw_slides = []
-    slides: list[dict] = []
-    for raw in raw_slides:
-        seg = _normalise_slide(len(slides) + 1, raw)
-        if seg is not None:
-            slides.append(seg)
-    if len(slides) < MIN_SURVIVING:
-        raise RuntimeError(f"deck authoring returned {len(slides)} slides")
-    title = str(data.get("title") or "").strip() if isinstance(data, dict) else ""
-    logger.info("deck authored: %d slides (asked %d)%s", len(slides), n,
-                f" — {title}" if title else "")
-    return slides
+    return author_deck(book, chapter, analysis, client, params, language)["slides"]

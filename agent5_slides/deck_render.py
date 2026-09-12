@@ -26,6 +26,33 @@ from .theme import FAINT, GRAPHITE, INK, LINE, MIST, TEAL_DK, TEAL_MIST, WHITE
 
 logger = logging.getLogger(__name__)
 
+# The accent, settable per build: a school that uploaded a template has a
+# colour, and every teal dot, band and table header on the deck takes it.
+_ACCENT = {"rgb": TEAL_DK, "mist": TEAL_MIST, "templated": False, "logo": None, "rtl": False}
+
+
+def _acc():
+    return _rgb(_ACCENT["rgb"])
+
+
+def _acc_mist():
+    return _rgb(_ACCENT["mist"])
+
+
+def set_branding(branding: dict | None) -> None:
+    b = branding or {}
+    rgb = b.get("accent_rgb")
+    if isinstance(rgb, (list, tuple)) and len(rgb) == 3:
+        r, g, bl = (int(max(0, min(255, v))) for v in rgb)
+        _ACCENT["rgb"] = (r, g, bl)
+        # The tint is the accent blended 85% towards white — legible under
+        # 20pt bold ink whatever the school's colour is.
+        _ACCENT["mist"] = tuple(int(255 - (255 - c) * 0.15) for c in (r, g, bl))
+    else:
+        _ACCENT["rgb"], _ACCENT["mist"] = TEAL_DK, TEAL_MIST
+    _ACCENT["logo"] = b.get("logo_path") if b.get("logo_path") and Path(str(b.get("logo_path"))).exists() else None
+    _ACCENT["templated"] = False
+
 IN = af.EMU_IN
 # Geometry lives in `metrics`, in inches, because the STORYBOARD paginates
 # against the same numbers. Redefining any of them here reopens the gap that
@@ -42,10 +69,20 @@ def _rgb(t):
 
 
 def _slide(prs, bg=WHITE):
-    s = prs.slides.add_slide(prs.slide_layouts[6])
-    f = s.background.fill
-    f.solid()
-    f.fore_color.rgb = _rgb(bg)
+    layouts = prs.slide_layouts
+    s = prs.slides.add_slide(layouts[6] if len(layouts) > 6 else layouts[-1])
+    # On a school template the content slides keep the template's own
+    # background — that is what the school uploaded it for. Our dark title
+    # and closing slides are ours either way.
+    if not (_ACCENT["templated"] and bg == WHITE):
+        f = s.background.fill
+        f.solid()
+        f.fore_color.rgb = _rgb(bg)
+    if bg == WHITE and _ACCENT["logo"]:
+        try:
+            s.shapes.add_picture(str(_ACCENT["logo"]), int(11.95 * IN), int(6.85 * IN), height=int(0.45 * IN))
+        except Exception as exc:  # noqa: BLE001 — a logo is decoration
+            logger.warning("logo not placed: %s", exc)
     return s
 
 
@@ -54,11 +91,11 @@ def _chrome(s, sl):
     y = 0.42 * IN
     if sl.kicker:
         af._textbox(s, MARGIN, y, CONTENT_W, 0.26 * IN,
-                    sl.kicker.upper(), 11, _rgb(TEAL_DK), bold=True)
+                    sl.kicker.upper(), 11, _acc(), bold=True)
         y += 0.30 * IN
-    head = sl.heading + ("  (continued)" if sl.continued else "")
+    head = sl.heading
     af._textbox(s, MARGIN, y, CONTENT_W, 0.55 * IN,
-                head[:120], 26 if len(head) < 60 else 21, _rgb(INK), bold=True)
+                head[:120], 26 if mx.text_width_em(head) < 30 else 21, _rgb(INK), bold=True)
 
 
 def _height(text: str, w: float, pt: float) -> float:
@@ -82,7 +119,7 @@ def _bullets(s, x, y, w, items, pt=mx.LIST_PT):
         o = s.shapes.add_shape(MSO_SHAPE.OVAL, int(x + 0.05 * IN),
                                int(y + pt * 0.42 * (IN / 72)), int(d), int(d))
         o.fill.solid()
-        o.fill.fore_color.rgb = _rgb(TEAL_DK)
+        o.fill.fore_color.rgb = _acc()
         o.line.fill.background()
         o.shadow.inherit = False
         af._textbox(s, x + mx.BULLET_INDENT_IN * IN, y,
@@ -126,7 +163,7 @@ def _table(s, x, y, w, header, rows, pt=mx.TABLE_PT, head_pt=mx.TABLE_HEAD_PT,
         r.font.name = "Calibri"
         r.font.color.rgb = _rgb(WHITE)
         cell.fill.solid()
-        cell.fill.fore_color.rgb = _rgb(TEAL_DK)
+        cell.fill.fore_color.rgb = _acc()
     for i, row in enumerate(rows, 1):
         for c in range(len(header)):
             cell = tbl.cell(i, c)
@@ -148,7 +185,7 @@ def _blocks(s, blocks, x=MARGIN, y=BODY_TOP, w=None):
     for b in blocks:
         if b["kind"] == "heading":
             af._textbox(s, x, y, w, 0.32 * IN, b["text"], mx.HEADING_PT,
-                        _rgb(TEAL_DK), bold=True)
+                        _acc(), bold=True)
             y += mx.HEADING_H_IN * IN
         elif b["kind"] == "para":
             y = _para(s, x, y, w, b["text"])
@@ -167,7 +204,7 @@ def _title(prs, sl):
                 sl.heading, 44, _rgb(WHITE), bold=True)
     if sl.subtitle:
         af._textbox(s, 1.0 * IN, 3.45 * IN, 11.3 * IN, 0.4 * IN,
-                    sl.subtitle, 18, _rgb(TEAL_DK))
+                    sl.subtitle, 18, _acc())
     af._textbox(s, 1.0 * IN, 6.7 * IN, 11.3 * IN, 0.3 * IN,
                 "SketchCast AI", 11, _rgb(FAINT))
     return s
@@ -185,7 +222,7 @@ def _objectives(prs, sl):
         d = 0.42 * IN
         o = s.shapes.add_shape(MSO_SHAPE.OVAL, int(MARGIN), int(y), int(d), int(d))
         o.fill.solid()
-        o.fill.fore_color.rgb = _rgb(TEAL_MIST)
+        o.fill.fore_color.rgb = _acc_mist()
         o.line.fill.background()
         o.shadow.inherit = False
         tf = o.text_frame
@@ -198,7 +235,7 @@ def _objectives(prs, sl):
         r.font.size = Pt(14)
         r.font.bold = True
         r.font.name = "Calibri"
-        r.font.color.rgb = _rgb(TEAL_DK)
+        r.font.color.rgb = _acc()
         h = _height(text, CONTENT_W - 0.75 * IN, 17)
         af._textbox(s, MARGIN + 0.68 * IN, y + 0.04 * IN,
                     CONTENT_W - 0.75 * IN, h, text, 17, _rgb(INK))
@@ -221,7 +258,7 @@ def _key_idea(s, text, y=BODY_TOP):
     box = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, int(MARGIN), int(y),
                              int(CONTENT_W), int(th + mx.KEY_IDEA_PAD_IN * IN))
     box.fill.solid()
-    box.fill.fore_color.rgb = _rgb(TEAL_MIST)
+    box.fill.fore_color.rgb = _acc_mist()
     box.line.fill.background()
     box.shadow.inherit = False
     box.text_frame.text = ""
@@ -288,8 +325,8 @@ def _compare(prs, sl):
     y = top + h + 0.18 * IN
     if sl.items:
         af._textbox(s, MARGIN, y, CONTENT_W, 0.34 * IN,
-                    "Only the second has:  " + ",  ".join(sl.items[:8]),
-                    15, _rgb(TEAL_DK), bold=True)
+                    (sl.label or "Only the second has:") + "  " + ",  ".join(sl.items[:8]),
+                    15, _acc(), bold=True)
         y += 0.36 * IN
     if sl.subtitle:
         af._textbox(s, MARGIN, y, CONTENT_W, 0.30 * IN, sl.subtitle, 11, _rgb(FAINT))
@@ -351,8 +388,8 @@ def _check(prs, sl, label_pt=14.0):
 def _misconceptions(prs, sl):
     s = _slide(prs)
     _chrome(s, sl)
-    end = _table(s, MARGIN, BODY_TOP + 0.1 * IN, CONTENT_W,
-                 ["Learners often think", "In fact"],
+    header = sl.label.split("|") if sl.label else ["Learners often think", "In fact"]
+    end = _table(s, MARGIN, BODY_TOP + 0.1 * IN, CONTENT_W, header,
                  [[a, b] for a, b in sl.items], first_col=0.40)
     return s, _overflow(end, sl)
 
@@ -368,7 +405,8 @@ def _worked(prs, sl):
 def _glossary(prs, sl):
     s = _slide(prs)
     _chrome(s, sl)
-    end = _table(s, MARGIN, BODY_TOP + 0.1 * IN, CONTENT_W, ["Term", "Meaning"],
+    header = sl.label.split("|") if sl.label else ["Term", "Meaning"]
+    end = _table(s, MARGIN, BODY_TOP + 0.1 * IN, CONTENT_W, header,
                  [[a, b] for a, b in sl.items], first_col=0.26)
     return s, _overflow(end, sl)
 
@@ -376,12 +414,177 @@ def _glossary(prs, sl):
 def _closing(prs, sl):
     s = _slide(prs, INK)
     af._textbox(s, 1.0 * IN, 2.45 * IN, 11.3 * IN, 0.8 * IN,
-                "Ready to teach.", 34, _rgb(WHITE), bold=True)
+                sl.heading, 34, _rgb(WHITE), bold=True)          # "Ready to teach.", localised
     af._textbox(s, 1.0 * IN, 3.35 * IN, 11.3 * IN, 0.4 * IN,
-                sl.heading, 18, _rgb(TEAL_DK))
+                sl.subtitle, 18, _acc())                          # the lesson title
     af._textbox(s, 1.0 * IN, 3.95 * IN, 11.3 * IN, 0.4 * IN,
-                sl.subtitle, 13, _rgb(FAINT))
+                sl.label, 13, _rgb(FAINT))
     return s
+
+
+def _quiz(prs, sl):
+    """A comprehension check: the question as the heading, the options as
+    lettered native boxes, the answer in the speaker notes only — the
+    projected slide must not give it away."""
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.enum.text import MSO_ANCHOR
+
+    s = _slide(prs)
+    _chrome(s, sl)
+    y = BODY_TOP + 0.25 * IN
+    for i, opt in enumerate(sl.items[:4]):
+        letter = "ABCD"[i]
+        h = max(0.62 * IN, _height(opt, CONTENT_W - 1.2 * IN, 18) + 0.3 * IN)
+        box = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, int(MARGIN), int(y), int(CONTENT_W), int(h))
+        box.fill.solid()
+        box.fill.fore_color.rgb = _rgb(MIST)
+        box.line.color.rgb = _rgb(LINE)
+        box.shadow.inherit = False
+        box.text_frame.text = ""
+        af._textbox(s, MARGIN + 0.25 * IN, y, 0.6 * IN, h, letter, 18, _acc(), bold=True,
+                    anchor=MSO_ANCHOR.MIDDLE)
+        af._textbox(s, MARGIN + 0.9 * IN, y, CONTENT_W - 1.2 * IN, h, opt, 18, _rgb(INK),
+                    anchor=MSO_ANCHOR.MIDDLE)
+        y += h + 0.18 * IN
+    return s, _overflow(y, sl)
+
+
+def _arrow(s, x1, y1, x2, y2, elbow=False):
+    """A connector with an arrowhead. python-pptx has no arrowhead API; the
+    OOXML `a:tailEnd` on the line is what PowerPoint reads."""
+    from pptx.enum.shapes import MSO_CONNECTOR
+    from pptx.oxml.ns import qn
+    from pptx.util import Pt
+
+    c = s.shapes.add_connector(MSO_CONNECTOR.ELBOW if elbow else MSO_CONNECTOR.STRAIGHT,
+                               int(x1), int(y1), int(x2), int(y2))
+    c.line.color.rgb = _rgb(GRAPHITE)
+    c.line.width = Pt(1.5)
+    ln = c.line._get_or_add_ln()  # noqa: SLF001
+    tail = ln.makeelement(qn("a:tailEnd"), {"type": "triangle", "w": "med", "len": "med"})
+    ln.append(tail)
+    return c
+
+
+def _node(s, x, y, w, h, text, pt=16):
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+
+    box = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, int(x), int(y), int(w), int(h))
+    box.fill.solid()
+    box.fill.fore_color.rgb = _acc_mist()
+    box.line.color.rgb = _acc()
+    box.shadow.inherit = False
+    box.text_frame.text = ""
+    af._textbox(s, x + 0.08 * IN, y, w - 0.16 * IN, h, text, pt, _rgb(INK), bold=True,
+                align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+    return box
+
+
+def _shapes(prs, sl):
+    """flow / cycle / hierarchy as NATIVE shapes and connectors.
+
+    The legacy renderer drew these with PIL into the slide PNG; the labels
+    are instructional text, so here every node is a shape a teacher can
+    retype and every arrow a connector they can drag.
+    """
+    import math
+
+    s = _slide(prs)
+    _chrome(s, sl)
+    kind = (sl.visual or {}).get("kind")
+    nodes = list(sl.items)[:5]
+    n = len(nodes)
+    top, bottom = BODY_TOP + 0.3 * IN, BODY_BOTTOM - (0.5 * IN if sl.subtitle else 0.1 * IN)
+    if kind == "flow":
+        gap = 0.55 * IN
+        w = (CONTENT_W - gap * (n - 1)) / n
+        h = min(1.5 * IN, (bottom - top))
+        y = top + (bottom - top - h) / 2
+        xs = [MARGIN + i * (w + gap) for i in range(n)]
+        # A process reads in the direction the script does: in an Arabic or
+        # Jawi deck the first step sits at the RIGHT and the arrows point left.
+        if _ACCENT["rtl"]:
+            xs = list(reversed(xs))
+        for x, t in zip(xs, nodes):
+            _node(s, x, y, w, h, t)
+        for i in range(n - 1):
+            if _ACCENT["rtl"]:
+                _arrow(s, xs[i], y + h / 2, xs[i + 1] + w, y + h / 2)
+            else:
+                _arrow(s, xs[i] + w, y + h / 2, xs[i + 1], y + h / 2)
+    elif kind == "cycle":
+        cx, cy = MARGIN + CONTENT_W / 2, (top + bottom) / 2
+        w, h = 2.4 * IN, 1.0 * IN
+        r = min((bottom - top) / 2 - h / 2, 3.6 * IN)
+        pts = []
+        for i, t in enumerate(nodes):
+            a = -math.pi / 2 + 2 * math.pi * i / n
+            x, y = cx + r * math.cos(a) - w / 2, cy + r * math.sin(a) - h / 2
+            _node(s, x, y, w, h, t)
+            pts.append((x + w / 2, y + h / 2, a))
+        for i in range(n):
+            x1, y1, a1 = pts[i]
+            x2, y2, a2 = pts[(i + 1) % n]
+            # leave the boxes: start/end on the ring, just outside each box
+            ox1, oy1 = cx + (r + 0.05 * IN) * math.cos(a1 + 0.35), cy + (r + 0.05 * IN) * math.sin(a1 + 0.35)
+            ox2, oy2 = cx + (r + 0.05 * IN) * math.cos(a2 - 0.35), cy + (r + 0.05 * IN) * math.sin(a2 - 0.35)
+            _arrow(s, ox1, oy1, ox2, oy2)
+    else:  # hierarchy: root above, children in a row below
+        root, kids = nodes[0], nodes[1:]
+        rw, rh = 3.4 * IN, 1.0 * IN
+        rx, ry = MARGIN + (CONTENT_W - rw) / 2, top
+        _node(s, rx, ry, rw, rh, root)
+        if kids:
+            gap = 0.4 * IN
+            kw = min(3.0 * IN, (CONTENT_W - gap * (len(kids) - 1)) / len(kids))
+            total = kw * len(kids) + gap * (len(kids) - 1)
+            kx0 = MARGIN + (CONTENT_W - total) / 2
+            ky = ry + rh + 1.3 * IN
+            for i, t in enumerate(kids):
+                kx = kx0 + i * (kw + gap)
+                _node(s, kx, ky, kw, rh, t)
+                _arrow(s, rx + rw / 2, ry + rh, kx + kw / 2, ky, elbow=True)
+    if sl.subtitle:
+        af._textbox(s, MARGIN, BODY_BOTTOM - 0.3 * IN, CONTENT_W, 0.3 * IN, sl.subtitle, 13, _rgb(GRAPHITE))
+    return s, []
+
+
+def _icons(prs, sl):
+    """Icon tiles: the glyph is a small raster (illustrative artwork is
+    allowed to be), the label under it is native text."""
+    import tempfile
+
+    from PIL import Image, ImageDraw
+    from pptx.enum.text import PP_ALIGN
+
+    from .diagram_builder import draw_icon
+
+    s = _slide(prs)
+    _chrome(s, sl)
+    items = list(sl.items)[:6]
+    n = len(items)
+    cols = n if n <= 3 else 3
+    rows = 1 if n <= 3 else 2
+    tw = CONTENT_W / cols
+    th = (BODY_BOTTOM - BODY_TOP - (0.4 * IN if sl.subtitle else 0)) / rows
+    size = int(min(1.6 * IN, th * 0.5))
+    tmp = Path(tempfile.mkdtemp(prefix="deck_icons_"))
+    for i, (icon, label) in enumerate(items):
+        cx = MARGIN + (i % cols) * tw + tw / 2
+        ty = BODY_TOP + (i // cols) * th + 0.15 * IN
+        img = Image.new("RGB", (256, 256), (255, 255, 255))
+        d = ImageDraw.Draw(img)
+        d.ellipse([8, 8, 248, 248], fill=_ACCENT["mist"])
+        draw_icon(d, icon, 128, 128, 128, accent=_ACCENT["rgb"])
+        png = tmp / f"icon_{i}.png"
+        img.save(str(png))
+        s.shapes.add_picture(str(png), int(cx - size / 2), int(ty), int(size), int(size))
+        af._textbox(s, cx - tw / 2 + 0.1 * IN, ty + size + 0.15 * IN, tw - 0.2 * IN, 0.7 * IN,
+                    label, 16, _rgb(INK), bold=True, align=PP_ALIGN.CENTER)
+    if sl.subtitle:
+        af._textbox(s, MARGIN, BODY_BOTTOM - 0.3 * IN, CONTENT_W, 0.3 * IN, sl.subtitle, 13, _rgb(GRAPHITE))
+    return s, []
 
 
 # Kinds whose renderer already returns (slide, faults); the rest return a
@@ -392,22 +595,61 @@ _RENDER = {
     sb.GLOSSARY: _glossary, sb.CLOSING: _closing,
 }
 _CHECKED = {sb.SECTION, sb.WORKED, sb.DIAGRAM, sb.CHECK, sb.FOCUS, sb.COMPARE,
-            sb.MISCONCEPTIONS, sb.GLOSSARY}
+            sb.MISCONCEPTIONS, sb.GLOSSARY, sb.QUIZ, sb.SHAPES, sb.ICONS}
+_RENDER[sb.QUIZ] = _quiz
+_RENDER[sb.SHAPES] = _shapes
+_RENDER[sb.ICONS] = _icons
+_RENDER[sb.TAKEAWAYS] = _objectives
 _RENDER[sb.FOCUS] = _focus
 _RENDER[sb.COMPARE] = _compare
 
 
-def build(slides, out_path: str | Path, label_pt: float = mx.LABEL_PT) -> tuple[Path, list[str]]:
+def _base(branding: dict | None):
+    """The Presentation to build on: the school's template when it is a
+    16:9 file, else a blank one.
+
+    A template brings its masters, fonts and backgrounds; our shapes go on
+    top. A 4:3 template cannot host this geometry — every inch here assumes
+    13.333 x 7.5 — so it falls back to the blank base with the school's
+    accent and logo still applied, rather than to the legacy renderer. A
+    template's own slides are removed: they are the school's sample deck,
+    not this lesson.
+    """
+    from pptx import Presentation
+
+    tpl = (branding or {}).get("pptx_template")
+    if tpl and Path(str(tpl)).exists():
+        try:
+            prs = Presentation(str(tpl))
+            ratio = prs.slide_width / max(1, prs.slide_height)
+            if abs(ratio - 16 / 9) < 0.03:
+                sldIdLst = prs.slides._sldIdLst  # noqa: SLF001
+                for sldId in list(sldIdLst):
+                    prs.part.drop_rel(sldId.rId)
+                    sldIdLst.remove(sldId)
+                prs.slide_width, prs.slide_height = af.SLIDE_W, af.SLIDE_H
+                _ACCENT["templated"] = True
+                return prs
+            logger.warning("school template is %.2f:1, not 16:9 — using the blank base with its colours",
+                           ratio)
+        except Exception as exc:  # noqa: BLE001 — a bad template must not cost the deck
+            logger.warning("school template unusable (%s); using the blank base", exc)
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = af.SLIDE_W, af.SLIDE_H
+    return prs
+
+
+def build(slides, out_path: str | Path, label_pt: float = mx.LABEL_PT,
+          branding: dict | None = None, direction: str = "ltr") -> tuple[Path, list[str]]:
     """Render a storyboard. Returns the path and every geometry fault found.
 
     Faults are RETURNED rather than raised: the caller decides whether a deck
     with one crowded diagram is worse than no deck, and that is a judgement
     about the artifact, not about the geometry.
     """
-    from pptx import Presentation
-
-    prs = Presentation()
-    prs.slide_width, prs.slide_height = af.SLIDE_W, af.SLIDE_H
+    set_branding(branding)
+    _ACCENT["rtl"] = direction == "rtl"
+    prs = _base(branding)
     faults: list[str] = []
     for i, sl in enumerate(slides, 1):
         try:

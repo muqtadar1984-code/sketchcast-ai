@@ -212,7 +212,9 @@ class TestDeckPrompt:
     def test_asks_for_a_deck_with_the_legacy_catalogue(self):
         p = build_deck_prompt(10, "en")
         assert "Produce exactly 10 slides in teaching order" in p
-        assert '{"title": "...", "slides": [' in p
+        assert '"slides": [' in p
+        # The same call now authors the lesson extras the storyboard renders.
+        assert '"objectives"' in p and '"misconceptions"' in p and '"worked_examples"' in p
         for fmt in ("flow", "cycle", "hierarchy", "compare", "icons", "definition", "quiz", "takeaways"):
             assert f'"{fmt}"' in p
         assert "ANTI-MONOTONY RULE" in p and "caption" in p
@@ -239,8 +241,11 @@ class TestDeckPrompt:
         must all be shown, so no format is demonstrated only by prose."""
         from agent3_scripts.script_generator import _parse_slide_visual
         p = deck_notes.PROMPT.replace("{n}", "10")
-        example = json.loads(p[p.index('{"title": "...", "slides": ['):].strip())
-        assert set(example) == {"title", "slides"} and len(example["slides"]) == 5
+        example = json.loads(p[p.index('{"title": "...",'):].strip())
+        assert set(example) == {"title", "objectives", "misconceptions", "worked_examples", "slides"}
+        assert len(example["slides"]) == 5
+        assert set(example["misconceptions"][0]) == {"misconception", "correction"}
+        assert set(example["worked_examples"][0]) == {"problem", "solution"}
         kinds = []
         for s in example["slides"]:
             assert set(s) == {"heading", "points", "visual", "notes"}
@@ -276,7 +281,8 @@ class TestDeckPrompt:
 
 
 class TestGenerateEpisodeSlidesForADeck:
-    def test_writes_the_deck_in_out_dir_with_the_notes_per_slide(self, tmp_path):
+    def test_writes_the_deck_in_out_dir_with_the_notes_per_slide(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("DECK_STORYBOARD", "0")     # pins the LEGACY embedded deck
         segs = _segments(4)
         manifest = generate_episode_slides(script_data=_deck_script(segs), out_dir=tmp_path).model_dump()
         deck = tmp_path / "episode_1_deck.pptx"
@@ -322,6 +328,8 @@ class TestGenerateEpisodeSlidesForADeck:
         error re-raised, so support triage sees the python-pptx/template cause
         rather than the generic 'produced no file'."""
         from agent5_slides import slide_generator as sg
+
+        monkeypatch.setenv("DECK_STORYBOARD", "0")     # pins the LEGACY embedded deck
 
         def _boom(*a, **k):
             raise ValueError("template has no Title Slide layout")

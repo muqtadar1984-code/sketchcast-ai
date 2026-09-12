@@ -24,6 +24,7 @@ from shared.lesson_model import (Figure, LessonModel, Section, display_part,
                                  parse_body, strip_emphasis)
 
 from . import metrics as mx
+from .deck_strings import T
 
 TITLE = "title"
 OBJECTIVES = "objectives"
@@ -35,6 +36,10 @@ GLOSSARY = "glossary"
 CHECK = "check"
 FOCUS = "focus"
 COMPARE = "compare"
+QUIZ = "quiz"
+TAKEAWAYS = "takeaways"
+SHAPES = "shapes"          # flow / cycle / hierarchy, drawn as native shapes
+ICONS = "icons"
 CLOSING = "closing"
 
 # Vertical room the label gutters have, in inches, on the standard content
@@ -65,8 +70,10 @@ _ILLUSTRATED_BODY_W_IN = 7.30
 # words — a crop with nothing to say beside it is decoration.
 _FOCUS_PER_FIGURE = 1
 _FOCUS_PER_DECK = 3
-# A list item longer than this is a paragraph wearing a bullet.
-_POINT_MAX_CHARS = 140
+# A list item wider than this is a paragraph wearing a bullet. In em, not
+# characters: 140 Latin characters is one idea, 140 Devanagari characters is
+# a paragraph and 140 ideographs is a page.
+_POINT_MAX_EM = 140 * 0.48
 
 
 @dataclass
@@ -86,6 +93,69 @@ class Slide:
     parts: list[str] = field(default_factory=list)
     section_id: str = ""
     continued: bool = False
+    visual: Optional[dict] = None
+    label: str = ""
+
+
+def _t(v) -> str:
+    return " ".join(str(v or "").split())
+
+
+def visual_slides(sec: Section, notes: str, lang: str = "en") -> tuple[str, list[dict], list[Slide]]:
+    """What a section's authored visual contributes: a key idea, extra body
+    blocks, and slides of its own.
+
+    definition -> the term's meaning becomes the key-idea band
+    compare    -> a native two-column table joins the body
+    quiz       -> a check slide (options native, answer in the notes)
+    takeaways  -> a numbered recap slide
+    flow/cycle/hierarchy -> a slide of native shapes and connectors
+    icons      -> a slide of small icon tiles with native labels
+
+    A visual that fails its own minimum (a flow with one node, a quiz with
+    one option) contributes nothing — the same refusal the video path makes,
+    rather than drawing something that teaches a hole.
+    """
+    vis = sec.visual or {}
+    kind = _t(vis.get("kind")).lower()
+    caption = _t(vis.get("caption"))
+    nodes = [_t(n) for n in (vis.get("nodes") or []) if _t(n)]
+    key_idea, blocks, slides = "", [], []
+    if kind == "definition" and _t(vis.get("body")):
+        key_idea = _t(vis.get("body"))
+    elif kind == "compare":
+        groups = [g for g in (vis.get("groups") or []) if isinstance(g, dict)][:2]
+        cols = [[_t(i) for i in (g.get("items") or []) if _t(i)] for g in groups]
+        if len(groups) == 2 and all(cols):
+            n = max(len(c) for c in cols)
+            blocks.append({"kind": "table",
+                           "header": [_t(g.get("heading")) or f"Option {i + 1}"
+                                      for i, g in enumerate(groups)],
+                           "rows": [[cols[0][r] if r < len(cols[0]) else "",
+                                     cols[1][r] if r < len(cols[1]) else ""] for r in range(n)]})
+    elif kind == "quiz":
+        options = [_t(o) for o in (vis.get("options") or []) if _t(o)][:4]
+        ans = vis.get("answer")
+        if len(options) >= 2:
+            right = options[ans] if isinstance(ans, int) and 0 <= ans < len(options) else ""
+            slides.append(Slide(kind=QUIZ, kicker=T(lang, "check"), heading=sec.heading,
+                                items=options, section_id=sec.id,
+                                notes=(f"{T(lang, 'answer')}: {right}" if right else T(lang, "answer_not_given"))
+                                      + (f"\n\n{notes}" if notes else "")))
+    elif kind == "takeaways" and len(nodes) >= 2:
+        slides.append(Slide(kind=TAKEAWAYS, kicker=T(lang, "remember"), heading=sec.heading,
+                            items=nodes, section_id=sec.id, notes=notes))
+    elif kind in ("flow", "cycle", "hierarchy") and len(nodes) >= 2:
+        slides.append(Slide(kind=SHAPES, heading=sec.heading, items=nodes,
+                            subtitle=caption, section_id=sec.id, notes=notes,
+                            visual={"kind": kind}))
+    elif kind == "icons":
+        items = [(_t(i.get("icon")), _t(i.get("label"))) for i in (vis.get("items") or [])
+                 if isinstance(i, dict) and _t(i.get("label"))][:6]
+        if len(items) >= 2:
+            slides.append(Slide(kind=ICONS, heading=sec.heading, items=items,
+                                subtitle=caption, section_id=sec.id, notes=notes))
+    return key_idea, blocks, slides
 
 
 def labels_per_slide(label_pt: float = mx.LABEL_PT, gutter_in: float = _GUTTER_IN) -> int:
@@ -141,6 +211,24 @@ def split_parts(fig: Figure, capacity: int) -> list[list[str]]:
     return [ordered[i:i + per] for i in range(0, len(ordered), per)]
 
 
+# Sentence ends, by script: the Latin full stop, the Arabic question mark,
+# the Devanagari danda, the CJK ideographic full stop (which takes no space).
+_SENTENCE_ENDS = (". ", "؟ ", "। ", "。", "！", "？")
+
+
+def _split_sentence(text: str) -> tuple[str, str, str]:
+    """The first sentence of `text`, its terminator, and the rest."""
+    best = None
+    for end in _SENTENCE_ENDS:
+        i = text.find(end)
+        if i >= 0 and (best is None or i < best[0]):
+            best = (i, end)
+    if best is None:
+        return text, "", ""
+    i, end = best
+    return text[:i], end, text[i + len(end):]
+
+
 def _paginate(blocks: list[dict], budget_in: float,
               width_in: float = mx.CONTENT_W_IN) -> list[list[dict]]:
     """Break a section body across slides so that every page actually fits.
@@ -177,7 +265,7 @@ def _paginate(blocks: list[dict], budget_in: float,
         """
         head, tail, used_h = "", text, 0.0
         while tail:
-            sentence, sep, rest = tail.partition(". ")
+            sentence, sep, rest = _split_sentence(tail)
             piece = sentence + (sep or "")
             h = mx.text_height_in(head + piece, width_in, mx.BODY_PT)
             if head and h > room:
@@ -340,7 +428,7 @@ def section_content(sec: Section) -> tuple[list[dict], str]:
     # the glossary slides already carry. Short items are points and stay;
     # long ones join the prose in the notes.
     short_lists = [b for b in lists
-                   if max((len(it) for it in b["items"]), default=0) <= _POINT_MAX_CHARS]
+                   if max((mx.text_width_em(it) for it in b["items"]), default=0) <= _POINT_MAX_EM]
     prose_bits = [b["text"] for b in blocks if b["kind"] == "para"]
     prose_bits += ["; ".join(b["items"]) for b in lists if b not in short_lists]
     notes = sec.narration or "\n\n".join(prose_bits)
@@ -379,6 +467,7 @@ def _chunk(seq, n):
 
 def _diagram_slides(model: LessonModel, sec: Section, capacity: int) -> list[Slide]:
     slides: list[Slide] = []
+    lang = model.language
     for fig in model.figures_for(sec):
         if not fig.annotatable:
             continue                      # a plain picture; the body slide keeps it
@@ -389,9 +478,7 @@ def _diagram_slides(model: LessonModel, sec: Section, capacity: int) -> list[Sli
                 heading=fig.caption or sec.heading,
                 subtitle=fig.caption if i == 0 else "",
                 figure=fig, parts=parts, section_id=sec.id, continued=i > 0,
-                notes=(f"{fig.caption}\n\nLabelled here: " + ", ".join(parts)
-                       + (f"\n(Part {i + 1} of {len(groups)} — the remaining labels "
-                          f"are on the next slide.)" if len(groups) > 1 else "")),
+                notes=(f"{fig.caption}\n\n{T(lang, 'labelled_here')} " + ", ".join(display_part(p) for p in parts)),
             ))
     return slides
 
@@ -400,18 +487,26 @@ def storyboard(model: LessonModel, label_pt: float = mx.LABEL_PT) -> list[Slide]
     """The whole deck, in order. Every list that is empty simply omits its
     slide — a teacher's deck is SHORTER than a catalogue one, not hollower."""
     capacity = labels_per_slide(label_pt)
+    lang = model.language
     out: list[Slide] = [Slide(kind=TITLE, heading=model.title or "Lesson",
                               subtitle=model.subtitle)]
 
     if model.objectives:
-        out.append(Slide(kind=OBJECTIVES, kicker="Objectives",
-                         heading="By the end of this lesson",
-                         items=list(model.objectives),
-                         notes="Read these out, or write them on the board, before you start."))
+        out.append(Slide(kind=OBJECTIVES, kicker=T(lang, "objectives"),
+                         heading=T(lang, "by_end"),
+                         items=list(model.objectives)))
 
     for sec in model.sections:
         body, notes = section_content(sec)
-        budget = mx.BODY_H_IN - mx.key_idea_height_in(sec.key_idea)
+        v_key, v_blocks, v_slides = visual_slides(sec, notes, lang)
+        key_idea = sec.key_idea or v_key
+        body = body + v_blocks
+        # A quiz or a diagram segment often has nothing but its heading and
+        # narration: the visual slide IS the section, and a plain slide before
+        # it would be a heading over the spoken text twice.
+        if v_slides and not sec.points and not v_blocks and not _clean_blocks(sec.body_md):
+            body = []
+        budget = mx.BODY_H_IN - mx.key_idea_height_in(key_idea)
         # A section that owns artwork shows it beside its OPENING prose. The
         # first page is therefore measured against a narrower column and the
         # rest against the full width — paginating everything narrow would
@@ -424,42 +519,42 @@ def storyboard(model: LessonModel, label_pt: float = mx.LABEL_PT) -> list[Slide]
         else:
             pages = _paginate(body, budget)
         for i, blocks in enumerate(pages):
-            if not blocks and len(pages) == 1 and not sec.narration and not art:
+            if not blocks and len(pages) == 1 and not art and (v_slides or not sec.narration):
                 continue                  # nothing to say and nothing to show
-            out.append(Slide(kind=SECTION, kicker="", heading=sec.heading,
+            out.append(Slide(kind=SECTION, kicker="",
+                             heading=sec.heading + (f"  {T(lang, 'continued')}" if i > 0 else ""),
                              illustration=art if i == 0 else None,
                              body_w_in=_ILLUSTRATED_BODY_W_IN if (art and i == 0)
                              else mx.CONTENT_W_IN,
                              # The key idea leads the section, so it belongs on
                              # the FIRST page only; repeating it above a
                              # continuation reads as the slide having restarted.
-                             key_idea=sec.key_idea if i == 0 else "",
+                             key_idea=key_idea if i == 0 else "",
                              blocks=blocks, section_id=sec.id, continued=i > 0,
                              notes=notes))
+        out.extend(v_slides)
         out.extend(_diagram_slides(model, sec, capacity))
 
-    for group in _table_pages(model.misconceptions, ["Learners often think", "In fact"],
+    mis_header = [T(lang, "learners_think"), T(lang, "in_fact")]
+    for group in _table_pages(model.misconceptions, mis_header,
                               0.40, mx.BODY_H_IN - 0.1 - mx.TABLE_GAP_IN):
-        out.append(Slide(kind=MISCONCEPTIONS, kicker="Watch out for",
-                         heading="Common misunderstandings", items=group,
-                         continued=len(out) and out[-1].kind == MISCONCEPTIONS,
-                         notes="Ask the class which of these they believed before "
-                               "you give the correction."))
+        cont = bool(out) and out[-1].kind == MISCONCEPTIONS
+        out.append(Slide(kind=MISCONCEPTIONS, kicker=T(lang, "watch_out"),
+                         heading=T(lang, "misunderstandings") + (f"  {T(lang, 'continued')}" if cont else ""),
+                         items=group, label="|".join(mis_header)))
 
     for i, (problem, solution) in enumerate(model.worked_examples, 1):
         # The PROBLEM is not a heading. It was one, and a four-part classify
         # question ran past the 120-character cap and was cut off mid-clause —
         # a slide asking a question it does not finish asking. It goes in the
         # band instead, which wraps and is sized to be read from the back.
-        out.append(Slide(kind=WORKED, kicker="Worked example",
-                         heading=(f"Worked example {i}" if len(model.worked_examples) > 1
-                                  else "Worked example"),
+        out.append(Slide(kind=WORKED, kicker=T(lang, "worked_example"),
+                         heading=(T(lang, "worked_example_n", n=i) if len(model.worked_examples) > 1
+                                  else T(lang, "worked_example")),
                          key_idea=problem,
                          blocks=_paginate(_clean_blocks(solution),
                                           mx.BODY_H_IN
-                                          - mx.key_idea_height_in(problem))[0],
-                         notes="Work through this on the board before showing "
-                               "the solution."))
+                                          - mx.key_idea_height_in(problem))[0]))
 
     # Zoom on the parts the ARTICLE has words for. `Picture.crop_*` makes a
     # focus view the same image with different crop fractions, so these cost
@@ -480,11 +575,9 @@ def storyboard(model: LessonModel, label_pt: float = mx.LABEL_PT) -> list[Slide]
             body = ([{"kind": "para", "text": definition}] if definition else [])
             if says:
                 body.append({"kind": "list", "items": says})
-            out.append(Slide(kind=FOCUS, kicker="Zoom in", heading=display_part(part),
+            out.append(Slide(kind=FOCUS, kicker=T(lang, "zoom_in"), heading=display_part(part),
                              subtitle=fig.caption, figure=fig, parts=[part],
-                             blocks=body,
-                             notes=f"The same artwork as the {fig.key} diagram, "
-                                   f"cropped to the {part}. No new image was made."))
+                             blocks=body))
             made += 1
             focused += 1
 
@@ -495,12 +588,11 @@ def storyboard(model: LessonModel, label_pt: float = mx.LABEL_PT) -> list[Slide]
         # The captions are full sentences ("A typical animal cell showing key
         # organelles."); two of them joined by "vs" is not a heading, it is a
         # paragraph in bold. They already label their own picture below.
-        out.append(Slide(kind=COMPARE, kicker="Compare",
-                         heading="Side by side",
-                         figure=a, figure_b=b, items=only_b,
-                         subtitle=("Shared: " + ", ".join(common[:8])),
-                         notes="The contrast is a set difference over the two "
-                               "figures' declared parts."))
+        out.append(Slide(kind=COMPARE, kicker=T(lang, "compare"),
+                         heading=T(lang, "side_by_side"),
+                         figure=a, figure_b=b, items=[display_part(p) for p in only_b],
+                         label=T(lang, "only_second_has"),
+                         subtitle=(T(lang, "shared") + " " + ", ".join(display_part(p) for p in common[:8]))))
 
     # The check comes before the glossary: it is the last thing the class does,
     # and the glossary is a reference they keep.
@@ -508,20 +600,22 @@ def storyboard(model: LessonModel, label_pt: float = mx.LABEL_PT) -> list[Slide]
     if check:
         asked = split_parts(check, capacity)
         if asked:
-            out.append(Slide(kind=CHECK, kicker="Check", heading="Name each structure",
+            out.append(Slide(kind=CHECK, kicker=T(lang, "check"), heading=T(lang, "name_each"),
                              figure=check, parts=asked[0],
-                             notes="Answers: " + "; ".join(
+                             notes=T(lang, "answers") + " " + "; ".join(
                                  f"{n}. {display_part(p)}"
                                  for n, p in enumerate(asked[0], 1))))
 
-    for group in _table_pages(model.glossary, ["Term", "Meaning"],
+    gl_header = [T(lang, "term"), T(lang, "meaning")]
+    for group in _table_pages(model.glossary, gl_header,
                               0.26, mx.BODY_H_IN - 0.1 - mx.TABLE_GAP_IN):
-        out.append(Slide(kind=GLOSSARY, kicker="Key terms", heading="Words to know",
-                         items=group,
-                         continued=len(out) and out[-1].kind == GLOSSARY))
+        cont = bool(out) and out[-1].kind == GLOSSARY
+        out.append(Slide(kind=GLOSSARY, kicker=T(lang, "key_terms"),
+                         heading=T(lang, "words_to_know") + (f"  {T(lang, 'continued')}" if cont else ""),
+                         items=group, label="|".join(gl_header)))
 
-    out.append(Slide(kind=CLOSING, heading=model.title or "Lesson",
-                     subtitle="Every slide's speaker notes carry the narration."))
+    out.append(Slide(kind=CLOSING, heading=T(lang, "ready"), subtitle=model.title or "Lesson",
+                     label=T(lang, "notes_line")))
     return out
 
 

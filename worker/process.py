@@ -555,7 +555,7 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
     IS the artifact: no file means the job fails, never 'done' without it.
     """
     from agent5_slides import deck_generator as dg
-    from agent5_slides.deck_notes import author_deck_slides
+    from agent5_slides.deck_notes import author_deck
     from agent5_slides.slide_generator import generate_episode_slides
 
     storyboard = dg.use_storyboard(branding)
@@ -565,7 +565,7 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
         # it, so there is no slides_spec and no coverage to measure against.
         model = dg.model_from_article(sb, article, Path(tmp) / "deck")
         deck_path = str(dg.build_lesson_deck(model, Path(tmp) / "deck" / "deck.pptx",
-                                             direction=lesson_dir))
+                                             direction=lesson_dir, branding=branding))
         db.set_progress(sb, job_id, 90)
         dest = f"{base}/deck.pptx"
         db.upload_artifact(sb, deck_path, dest)
@@ -573,7 +573,8 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
         db.set_progress(sb, job_id, 96)
         return f"{book.get('title', 'Document')} · {unit_label} · Slide deck"
 
-    slides_spec = author_deck_slides(book, chapter, analysis, client, params or {}, lesson_lang)
+    authored = author_deck(book, chapter, analysis, client, params or {}, lesson_lang)
+    slides_spec = authored["slides"]
     book_id = book.get("id") or "unknown"
     chapter_num = int(chapter.get("chapter_num") or 0)
     deck_script = {
@@ -595,9 +596,9 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
     if storyboard:
         # Book path: the analysis fills the glossary, the authored script
         # fills the sections, and every word on the slide is a text object.
-        model = dg.model_from_script(analysis, deck_script)
+        model = dg.model_from_script(analysis, deck_script, authored, language=lesson_lang)
         deck_path = str(dg.build_lesson_deck(model, Path(tmp) / "deck" / "deck.pptx",
-                                             direction=lesson_dir))
+                                             direction=lesson_dir, branding=branding))
     else:
         manifest = generate_episode_slides(
             script_data=deck_script, branding=branding, direction=lesson_dir,
@@ -1526,7 +1527,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             }
             slides = generate_episode_slides(
                 script_data=part_scripts, branding=branding, direction=lesson_dir,
-                build_deck=_deck_in_presentation,
+                build_deck=_deck_in_presentation, analysis=analysis, language=lesson_lang,
             ).model_dump()
 
             video = compose_episode_videos(

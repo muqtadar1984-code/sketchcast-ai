@@ -145,11 +145,11 @@ def _anchor_ladder(spans: list[tuple[float, float]],
 
 
 def _text_height(label: str, width_emu: float, pt: float) -> float:
-    """Enough room for the wrapped label. Calibri averages ~0.48em per glyph;
-    erring generous costs a little whitespace, erring tight costs an overlap."""
-    chars_per_line = max(8, int((width_emu / EMU_IN * 72) / (pt * 0.48)))
-    lines = max(1, math.ceil(len(label) / chars_per_line))
-    return lines * pt * 1.22 * (EMU_IN / 72) + 0.06 * EMU_IN
+    """Enough room for the wrapped label, through the shared script-aware
+    metric — a second Latin-only estimate here is how two Telugu labels end
+    up stacked while the validator, using the same wrong number, agrees."""
+    from .metrics import text_height_in
+    return text_height_in(label, width_emu / EMU_IN, pt) * EMU_IN + 0.06 * EMU_IN
 
 
 def _assign_sides(geo: list[dict], w: float) -> None:
