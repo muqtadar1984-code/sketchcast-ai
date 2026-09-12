@@ -50,16 +50,52 @@ KEY_IDEA_PAD_IN = 0.42
 KEY_IDEA_GAP_IN = 0.26
 BULLET_INDENT_IN = 0.30
 
-# Calibri averages a little under half an em per character. Erring GENEROUS is
-# deliberate and asymmetric: over-estimating costs whitespace, under-estimating
-# costs text off the bottom of a slide a teacher is projecting.
-_EM = 0.48
+# Average glyph advance per SCRIPT, in em. Calibri averages a little under
+# half an em per Latin character; that number was the whole estimate, and it
+# is wrong for most of the lessons this product actually ships. Seven of the
+# last thirty-three lessons were Arabic; Hindi, Marathi and Telugu are
+# selectable; a Chinese line is TWICE as wide as the same character count in
+# English. Measuring every script at 0.48em under-counts the lines a Telugu
+# definition wraps to and puts the last row of the glossary below the edge of
+# the slide — and the overflow check, built on the same number, agrees it fits.
+#
+# Erring GENEROUS is deliberate and asymmetric: over-estimating costs
+# whitespace, under-estimating costs text a class cannot see.
+_EM_LATIN = 0.48
+_EM_BY_SCRIPT = (
+    ((0x0600, 0x06FF), 0.52),   # Arabic (also Jawi)
+    ((0x0750, 0x077F), 0.52),
+    ((0x0900, 0x097F), 0.58),   # Devanagari — Hindi, Marathi
+    ((0x0C00, 0x0C7F), 0.64),   # Telugu
+    ((0x0B80, 0x0BFF), 0.62),   # Tamil
+    ((0x3000, 0x30FF), 1.00),   # CJK punctuation, kana
+    ((0x4E00, 0x9FFF), 1.00),   # CJK ideographs
+    ((0xAC00, 0xD7AF), 1.00),   # Hangul
+    ((0xFF00, 0xFFEF), 1.00),   # fullwidth forms
+)
+
+
+def _em(ch: str) -> float:
+    o = ord(ch)
+    if o < 0x0250:
+        return 0.30 if ch == " " else _EM_LATIN
+    if 0x0300 <= o <= 0x036F or 0x064B <= o <= 0x065F or 0x093A <= o <= 0x094F:
+        return 0.0                    # combining marks and vowel signs: no advance
+    for (lo, hi), em in _EM_BY_SCRIPT:
+        if lo <= o <= hi:
+            return em
+    return _EM_LATIN
+
+
+def text_width_em(text: str) -> float:
+    """Advance width of `text` in em, script by script."""
+    return sum(_em(c) for c in (text or ""))
 
 
 def text_height_in(text: str, width_in: float, pt: float) -> float:
     """Height of `text` wrapped into `width_in` at `pt`."""
-    chars_per_line = max(8, int((width_in * 72) / (pt * _EM)))
-    lines = max(1, math.ceil(len(text or "") / chars_per_line))
+    ems_per_line = max(4.0, (width_in * 72) / pt)
+    lines = max(1, math.ceil(text_width_em(text) / ems_per_line))
     return lines * pt * LINE / 72.0
 
 

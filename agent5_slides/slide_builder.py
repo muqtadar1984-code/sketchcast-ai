@@ -415,17 +415,28 @@ def _mirror_deck_rtl(pptx_path: Path) -> None:
     from pptx import Presentation
     from pptx.enum.text import PP_ALIGN
 
+    def mirror(tf) -> None:
+        for p in tf.paragraphs:
+            # Centred paragraphs (number badges, title slides) stay centred.
+            if p.alignment != PP_ALIGN.CENTER:
+                p.alignment = PP_ALIGN.RIGHT
+            # python-pptx has no first-class rtl API — set the OOXML attr.
+            p._p.get_or_add_pPr().set("rtl", "1")  # noqa: SLF001
+
     prs = Presentation(str(pptx_path))
     for slide in prs.slides:
         for shape in slide.shapes:
-            if not getattr(shape, "has_text_frame", False):
-                continue
-            for p in shape.text_frame.paragraphs:
-                # Centred paragraphs (number badges, title slides) stay centred.
-                if p.alignment != PP_ALIGN.CENTER:
-                    p.alignment = PP_ALIGN.RIGHT
-                # python-pptx has no first-class rtl API — set the OOXML attr.
-                p._p.get_or_add_pPr().set("rtl", "1")  # noqa: SLF001
+            if getattr(shape, "has_text_frame", False):
+                mirror(shape.text_frame)
+            # A table is a GraphicFrame: no text_frame of its own, and the
+            # legacy deck never had one to worry about. The storyboard deck
+            # carries a glossary and a misconceptions table on every lesson,
+            # which an Arabic class would otherwise read left-aligned in a
+            # left-to-right cell.
+            if getattr(shape, "has_table", False):
+                for row in shape.table.rows:
+                    for cell in row.cells:
+                        mirror(cell.text_frame)
     prs.save(str(pptx_path))
 
 

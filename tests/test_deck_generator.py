@@ -69,12 +69,56 @@ class TestWhichRenderer:
         monkeypatch.setenv("DECK_STORYBOARD", "0")
         assert not dg.use_storyboard({})
 
-    def test_a_school_template_keeps_the_legacy_renderer(self, monkeypatch):
-        """A school that uploaded a .pptx expects to see its theme, and this
-        renderer cannot inherit one yet."""
+    def test_a_school_template_does_not_send_the_job_back_to_legacy(self, monkeypatch):
+        """Four schools have uploaded a .pptx. They are users too: the
+        storyboard builds ON their template rather than handing them the old
+        PNG deck."""
         monkeypatch.delenv("DECK_STORYBOARD", raising=False)
-        assert not dg.use_storyboard({"pptx_template": "/tmp/school.pptx"})
+        assert dg.use_storyboard({"pptx_template": "/tmp/school.pptx"})
         assert dg.use_storyboard({"pptx_template": None, "accent_rgb": (1, 2, 3)})
+
+
+def _template(path: Path, width_in: float, height_in: float) -> Path:
+    from pptx.util import Inches
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(width_in), Inches(height_in)
+    prs.slides.add_slide(prs.slide_layouts[0]).shapes.title.text = "School sample slide"
+    prs.save(str(path))
+    return path
+
+
+class TestSchoolTemplates:
+    def test_a_16_9_template_is_the_base_and_its_sample_slides_are_dropped(self, tmp_path):
+        from agent5_slides import deck_render
+        tpl = _template(tmp_path / "school.pptx", 13.333, 7.5)
+        deck_render.set_branding({"pptx_template": str(tpl), "accent_rgb": (200, 30, 30)})
+        prs = deck_render._base({"pptx_template": str(tpl)})
+        assert len(prs.slides) == 0, "the school's sample slide is not this lesson"
+        assert deck_render._ACCENT["templated"] is True
+        assert deck_render._ACCENT["rgb"] == (200, 30, 30)
+
+    def test_a_4_3_template_falls_back_to_the_blank_base_with_the_colours(self, tmp_path):
+        from agent5_slides import deck_render
+        tpl = _template(tmp_path / "old.pptx", 10, 7.5)
+        deck_render.set_branding({"pptx_template": str(tpl), "accent_rgb": (10, 20, 30)})
+        prs = deck_render._base({"pptx_template": str(tpl)})
+        assert deck_render._ACCENT["templated"] is False
+        assert prs.slide_width == deck_render.af.SLIDE_W
+        assert deck_render._ACCENT["rgb"] == (10, 20, 30)
+
+    def test_a_whole_deck_builds_on_a_template(self, tmp_path):
+        from agent5_slides import deck_render
+        from agent5_slides.deck_storyboard import storyboard
+        tpl = _template(tmp_path / "school.pptx", 13.333, 7.5)
+        model = dg.from_article(ARTICLE, [])
+        path, faults = deck_render.build(storyboard(model), tmp_path / "deck.pptx",
+                                         branding={"pptx_template": str(tpl), "accent_rgb": (200, 30, 30)})
+        assert faults == []
+        prs = Presentation(str(path))
+        assert len(prs.slides) > 3
+        assert not any(sh.has_text_frame and "School sample slide" in sh.text_frame.text
+                       for s in prs.slides for sh in s.shapes)
+        deck_render.set_branding(None)      # never leak a school's colour into the next test
 
 
 class TestTheCataloguePath:

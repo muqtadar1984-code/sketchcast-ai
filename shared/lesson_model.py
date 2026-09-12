@@ -126,6 +126,13 @@ class Section:
     # so no summarising call is made and nothing on the slide was invented.
     # The prose is not lost: it becomes the speaker notes.
     points: list[str] = field(default_factory=list)
+    # The on-screen FORMAT the authoring call chose for this section — a
+    # `SlideVisual` as a dict: flow / cycle / hierarchy / compare / icons /
+    # definition / quiz / takeaways. The legacy renderer drew these into the
+    # slide PNG; dropping them would hand teachers a deck with FEWER diagrams
+    # than the one this replaces. The storyboard turns each into a native
+    # slide, so every label in them is editable.
+    visual: Optional[dict] = None
 
 
 @dataclass
@@ -140,6 +147,7 @@ class LessonModel:
     figures: dict[str, Figure] = field(default_factory=dict)
     claims: list[tuple[str, str]] = field(default_factory=list)   # (section_id, text)
     source: str = SOURCE_ARTICLE
+    language: str = "en"
 
     def figures_for(self, section: Section) -> list[Figure]:
         return [self.figures[k] for k in section.figure_keys if k in self.figures]
@@ -273,6 +281,7 @@ def from_article(article: dict, figure_rows: list[dict] | None = None,
     """
     m = LessonModel(source=SOURCE_ARTICLE)
     m.title = _text(article.get("title"))
+    m.language = _text(article.get("language")).lower() or "en"
     m.objectives = [_text(o.get("text")) for o in (article.get("objectives") or [])
                     if isinstance(o, dict) and _text(o.get("text"))]
     for s in article.get("sections") or []:
@@ -323,7 +332,8 @@ def from_article(article: dict, figure_rows: list[dict] | None = None,
 
 # ── the teacher / parent path ─────────────────────────────────────────
 
-def from_analysis(analysis: dict, script: dict) -> LessonModel:
+def from_analysis(analysis: dict, script: dict,
+                  extras: Optional[dict] = None, language: Optional[str] = None) -> LessonModel:
     """Build the model from a chapter analysis and its script.
 
     Sections come from the SCRIPT rather than from
@@ -336,6 +346,7 @@ def from_analysis(analysis: dict, script: dict) -> LessonModel:
     in the chapter, and the deck has been throwing all of it away.
     """
     m = LessonModel(source=SOURCE_ANALYSIS)
+    m.language = _text(language or script.get("language")).lower() or "en"
     episodes = script.get("episodes") if isinstance(script.get("episodes"), list) else None
     ep = (episodes or [script])[0] if (episodes or script) else {}
     m.title = _text(ep.get("episode_title"))
@@ -347,13 +358,30 @@ def from_analysis(analysis: dict, script: dict) -> LessonModel:
         heading = _text(seg.get("slide_heading")) or m.title
         narration = _text(strip_ssml(str(seg.get("text") or "")))
         pts = [_text(p) for p in (seg.get("slide_points") or []) if _text(p)]
+        visual = seg.get("slide_visual") if isinstance(seg.get("slide_visual"), dict) else None
         m.sections.append(Section(
             id=str(seg.get("segment_id") or f"s{i:03d}"),
             heading=heading,
-            # `slide_points` already ARE the points; the narration is the prose.
+            # `slide_points` already ARE the points. A VIDEO segment carries
+            # none (measured: 0 of 15, 9 and 11 segments on the three most
+            # recent teacher lessons — the semantic script prompt does not
+            # ask), so its narration is the only text there is and becomes
+            # the slide's prose, exactly as the legacy renderer's fallback
+            # text did. Editable now, and still the speaker notes.
             points=pts,
+            body_md="" if pts else narration,
             narration=narration,
+            visual=visual,
         ))
+
+    # AUTHORED extras, not inferred ones. The deck's own authoring call is
+    # grounded on the chapter and asked for these by name, which is a
+    # different thing from turning a concept's name into an objective: the
+    # model read the chapter and wrote them, the way it writes the slides.
+    ex = extras if isinstance(extras, dict) else {}
+    m.objectives = [_text(o) for o in (ex.get("objectives") or []) if _text(o)][:8]
+    m.misconceptions = _pairs(ex.get("misconceptions"), "misconception", "correction")[:6]
+    m.worked_examples = _pairs(ex.get("worked_examples"), "problem", "solution")[:3]
 
     seen: set[str] = set()
     for c in ((analysis.get("concepts") or {}).get("concepts")
