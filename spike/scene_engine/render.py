@@ -1076,7 +1076,18 @@ class SceneRenderer:
                 moved = True
                 break
             if not moved:
-                self._warn(f"SKETCH_OVER_TEXT {eid}")
+                # No corner is free: both hold words. A sketch drawn across a
+                # label is a worse board than no sketch — the founder's rule
+                # for every degraded frame — so the doodle is dropped: no
+                # strokes, no raster, a point for a box. Its draw action
+                # no-ops exactly as an unresolved asset's does. Measured on
+                # Heat Transfer's radiation chapter: a saw drawn over
+                # "Good Absorber / Emitter" for the closing 20 seconds.
+                b.layers = []
+                b.raster = None
+                b.box = (cx, cy, cx, cy)
+                self._flat[eid] = []
+                self._warn(f"SKETCH_DROPPED_OVER_TEXT {eid}")
 
     def _keep_text_off_art(self) -> None:
         """No board text is drawn over the picture. Path-independent.

@@ -714,7 +714,13 @@ class TestReviewFindings:
         assert b2.after is not None and b2.after.el == "eq_a"
 
     # ── 8: an arrow ahead of its picture ────────────────────────────────
-    def test_8_an_arrow_to_a_picture_drawn_next_step_flattens_and_rides_on(self):
+    def test_8_an_arrow_ahead_of_its_picture_now_finds_the_picture_already_drawn(self):
+        """Originally: an arrow drawn a step before its picture FLATTENED to a
+        point and re-anchored when the picture arrived. Since 2026-09-13 an
+        opening step that draws no picture is given the chapter's picture
+        first (the founder's blank-board fix), so the arrow's target is on
+        the board in the same step and nothing has to flatten. The flatten
+        path still exists for a later step that runs ahead of a picture."""
         raw = {"chapters": [self._chapter([
             {"segment": 3, "decision": "NEW_VISUAL",
              "actions": [{"verb": "write", "target": "lbl_wall"},
@@ -722,22 +728,15 @@ class TestReviewFindings:
             {"segment": 4, "decision": "EXTEND",
              "actions": [{"verb": "draw", "target": "cell"}]}])]}
         scenes, _, report = _compile(raw)
+        assert any("OPENING STEP DRAWS cell" in ln for ln in report), report
+        acts3 = [(a["verb"], a["target"]) for a in scenes["s003"]["actions"]]
+        assert acts3.index(("draw", "cell")) < acts3.index(("draw", "arr_wall")),             "the picture is drawn before the arrow that points at it"
         s3 = next(e for e in scenes["s003"]["elements"] if e["id"] == "arr_wall")
-        assert s3["head"] == [640.0, 360.0]
+        assert s3["head"]["el"] == "cell" and s3["head"].get("layer") == "cell wall"
         assert s3["tail"]["el"] == "lbl_wall"
-        assert not any(e["id"] == "cell" for e in scenes["s003"]["elements"])
-        s4 = next(e for e in scenes["s004"]["elements"] if e["id"] == "arr_wall")
-        # Once the picture is on the board the head re-anchors to it — and
-        # since the labelling work it also carries the PART it names, read
-        # from the label's own text, so the arrow lands on the cell wall
-        # rather than the middle of the cell. The layer is an addition to
-        # this expectation, not a change of it.
-        assert s4["head"]["el"] == "cell"
-        assert s4["head"]["edge"] == "center"
-        assert s4["head"].get("layer") == "cell wall"
+        assert any(e["id"] == "cell" for e in scenes["s003"]["elements"])
+        assert not any("FLATTENED arr_wall" in ln for ln in report), report
         assert not any("DROPPED" in ln for ln in report), report
-        assert any(ln.startswith("SEGMENT s003 | FLATTENED arr_wall.head 'cell'")
-                   for ln in report)
         for sid in ("s003", "s004"):
             assert parse_scene_response(scenes[sid], _NARR[sid]) is not None
 
