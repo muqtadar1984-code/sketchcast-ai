@@ -537,6 +537,17 @@ def _table_pages(pairs, header, first_col: float, budget_in: float) -> list[list
     return pages
 
 
+# The check slide's answer column: one 16pt blank per part on a fixed pitch
+# (deck_render._check). Eleven parts drew eleven leaders and TEN blanks.
+CHECK_BLANK_TOP_IN = 0.25
+CHECK_BLANK_PITCH_IN = 0.58
+
+
+def check_blanks() -> int:
+    """How many numbered blanks the check slide's column holds."""
+    return max(1, int((mx.BODY_H_IN - CHECK_BLANK_TOP_IN) // CHECK_BLANK_PITCH_IN))
+
+
 def _chunk(seq, n):
     return [seq[i:i + n] for i in range(0, len(seq), n)] or []
 
@@ -691,7 +702,7 @@ def storyboard(model: LessonModel, label_pt: float = mx.LABEL_PT) -> list[Slide]
     # and the glossary is a reference they keep.
     check = next((f for f in model.figures.values() if f.annotatable), None)
     if check:
-        asked = split_parts(check, capacity)
+        asked = split_parts(check, min(capacity, check_blanks()))
         if asked:
             out.append(Slide(kind=CHECK, kicker=T(lang, "check"), heading=T(lang, "name_each"),
                              figure=check, parts=asked[0],

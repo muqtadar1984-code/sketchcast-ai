@@ -377,11 +377,14 @@ def _check(prs, sl, label_pt=14.0):
         frame=(1.6 * IN, BODY_TOP, 5.2 * IN, BODY_BOTTOM - BODY_TOP),
         label_pt=label_pt, label_text=af.numbers_only, gutter=0.42 * IN)
     faults = af.validate(rep, label_pt=label_pt)
-    y = BODY_TOP + 0.25 * IN
+    y = BODY_TOP + sb.CHECK_BLANK_TOP_IN * IN
     for n in range(1, len(geo) + 1):
+        if y + 0.34 * IN > BODY_BOTTOM:
+            faults.append(f"check slide: blank {n} of {len(geo)} falls below the body")
+            break
         af._textbox(s, 7.9 * IN, y, 4.8 * IN, 0.34 * IN,
                     f"{n}.  ______________________", 16, _rgb(INK))
-        y += 0.58 * IN
+        y += sb.CHECK_BLANK_PITCH_IN * IN
     return s, faults
 
 

@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Optional
 
 from shared.asset_keys import canonical_key, is_avatar_key
-from shared.lesson_model import Figure, LessonModel, Section
+from shared.lesson_model import SOURCE_ARTICLE, Figure, LessonModel, Section
 
 logger = logging.getLogger(__name__)
 
@@ -374,6 +374,12 @@ def generate_figures(model: LessonModel, sb, tmp: Path, context: dict, job_id: s
             if pictured(model, sec):
                 continue          # a figure it shares was drawn a moment ago
             declared = declared_figure(model, sec)
+            if declared is None and model.source == SOURCE_ARTICLE:
+                # The article planned its diagrams; a section it left without
+                # one gets no picture invented from its glossary terms ("a
+                # whiteboard diagram of Hypotheses and Scientific Theories,
+                # showing matter, hypothesis, theory, particle" — live).
+                continue
             key = (declared.key if declared else "") or _key_for(sec)
             if not key:
                 continue
@@ -404,6 +410,13 @@ def generate_figures(model: LessonModel, sb, tmp: Path, context: dict, job_id: s
                                    key, row.get("storage_path"))
                 if fig is None:
                     continue
+                if declared is not None:
+                    # The labels are the parts the ARTICLE asked for. The
+                    # annotator names every region it can see — eleven on a
+                    # five-part particle diagram (live) — and a slide that
+                    # labels "weak bond" and "empty space" beside "solid" is
+                    # not the diagram the section planned.
+                    fig.parts = list(declared.parts) or fig.parts
                 if declared is not None and declared.key != fig.key:
                     # The drawn picture replaces the request for it — in
                     # every section that made the request, so a figure two
