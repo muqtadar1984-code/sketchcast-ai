@@ -214,7 +214,7 @@ def split_parts(fig: Figure, capacity: int) -> list[list[str]]:
 
 # Sentence ends, by script: the Latin full stop, the Arabic question mark,
 # the Devanagari danda, the CJK ideographic full stop (which takes no space).
-_SENTENCE_ENDS = (". ", "؟ ", "। ", "。", "！", "？")
+_SENTENCE_ENDS = (". ", "? ", "! ", "؟ ", "। ", "。", "！", "？")
 
 
 def _split_sentence(text: str) -> tuple[str, str, str]:
@@ -415,9 +415,11 @@ def section_content(sec: Section) -> tuple[list[dict], str]:
     any list or table the prose already contained (those are point-form by
     nature — a table is a summary, a list is one). The paragraphs go to the
     speaker notes, whole, so the teacher has the full text under the slide
-    rather than on it. A section with no claims and no structure falls back
-    to its prose, with the key-idea restatement removed, because a slide
-    that is only a heading is worse than one with a paragraph.
+    rather than on it. A section with no claims and no structure gets short
+    sentences DISTILLED from its prose (`distil_points`) — never the
+    paragraph itself. The founder's Materials deck (2026-09-12) printed five
+    slides of narration this way; a teacher reads the notes, a class reads
+    points.
     """
     blocks = _clean_blocks(sec.body_md)
     tables = [b for b in blocks if b["kind"] == "table"]
@@ -437,7 +439,80 @@ def section_content(sec: Section) -> tuple[list[dict], str]:
         return ([{"kind": "list", "items": list(sec.points)}] + short_lists + tables), notes
     if short_lists or tables:
         return short_lists + tables, notes
-    return drop_restatement(blocks, sec.key_idea), sec.narration
+    points = distil_points(drop_restatement(blocks, sec.key_idea))
+    return ([{"kind": "list", "items": points}] if points else []), notes
+
+
+_DISTIL_MAX = 3
+# "small sentences only" (founder): about 14 words of Latin text.
+_DISTIL_MAX_EM = 90 * 0.48
+_DISTIL_MIN_WORDS = 3
+
+
+def distil_points(blocks: list[dict], limit: int = _DISTIL_MAX) -> list[str]:
+    """Short sentences from prose, in order, as points: a sentence a class
+    can read in one breath (at most `_DISTIL_MAX_EM` wide) is a point as it
+    stands; a longer one is cut at its first clause break when that leaves
+    a readable head, else skipped; an interjection ("Spot on!") is not a
+    point. Never the whole paragraph."""
+    out: list[str] = []
+    first = ""
+    for b in blocks:
+        if b.get("kind") != "para":
+            continue
+        rest = b.get("text") or ""
+        while rest.strip() and len(out) < limit:
+            head, end, rest = _split_sentence(rest.strip())
+            head = head.strip()
+            if not head:
+                continue
+            sentence = head + (end.strip() if end else "")
+            first = first or sentence
+            if len(head.split()) < _DISTIL_MIN_WORDS:
+                continue
+            if mx.text_width_em(sentence) <= _DISTIL_MAX_EM:
+                out.append(sentence)
+                continue
+            clause = _first_clause(head)
+            if clause and mx.text_width_em(clause) <= _DISTIL_MAX_EM:
+                out.append(clause)
+        if len(out) >= limit:
+            break
+    if not out and first:
+        # Nothing short enough and nothing to cut at: the first sentence,
+        # clipped on a word — a slide with one line beats a slide with none.
+        out.append(_clip(first, _DISTIL_MAX_EM))
+    return out
+
+
+def _clip(sentence: str, max_em: float) -> str:
+    if mx.text_width_em(sentence) <= max_em:
+        return sentence
+    words = sentence.split()
+    kept: list[str] = []
+    for w in words:
+        if mx.text_width_em(" ".join(kept + [w]) + "…") > max_em:
+            break
+        kept.append(w)
+    return (" ".join(kept) + "…") if kept else sentence
+
+
+# Punctuated breaks first (the writer marked the clause), bare conjunctions
+# only when there is none.
+_CLAUSE_BREAKS = ((", which ", ", because ", ", so ", ", but ", ", and ", "; ", ": ", ", "),
+                  (" because ", " which ", " so that ", " while ", " where ", " when ", " and "))
+
+
+def _first_clause(sentence: str) -> str:
+    for group in _CLAUSE_BREAKS:
+        best = None
+        for br in group:
+            i = sentence.find(br)
+            if i > 12 and (best is None or i < best):
+                best = i
+        if best:
+            return sentence[:best].strip()
+    return ""
 
 
 def _table_pages(pairs, header, first_col: float, budget_in: float) -> list[list]:

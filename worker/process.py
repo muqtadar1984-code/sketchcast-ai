@@ -711,6 +711,37 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
         db.set_progress(sb, job_id, 96)
         return f"{book.get('title', 'Document')} · {unit_label} · Slide deck"
 
+    if storyboard:
+        # Book path (2026-09-12): the chapter part is authored as an ARTICLE
+        # — the catalogue deck's own shape — so the slides carry claims,
+        # glossary, misconceptions, worked examples and figure specs, and
+        # the prose is the teacher's notes. Never a paragraph on a slide.
+        from agent5_slides.deck_article import author_article, coverage_segments
+        article = author_article(book, chapter, analysis, client, params or {}, lesson_lang,
+                                 title=unit_label)
+        model = dg.model_from_book_article(article)
+        deck_art.decorate(model, sb=sb, tmp=Path(tmp) / "deck", video_segments=video_segments,
+                          context=art_context or deck_art.book_context(book, unit_label, analysis),
+                          job_id=job_id, exclude_job_id=job_id)
+        deck_path = str(dg.build_lesson_deck(model, Path(tmp) / "deck" / "deck.pptx",
+                                             direction=lesson_dir, branding=branding))
+        if not Path(deck_path).exists():
+            raise RuntimeError("deck build produced no file")
+        try:
+            _record_coverage(sb, generation_id, [_coverage_report(
+                analysis, None, coverage.script_text({"segments": coverage_segments(article)}),
+                kind="deck", model=str(getattr(client, "model", "") or ""),
+            )])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("coverage not recorded for deck: %s", exc)
+        db.set_progress(sb, job_id, 90)
+        dest = f"{base}/deck.pptx"
+        db.upload_artifact(sb, deck_path, dest)
+        db.add_artifact_row(sb, generation_id, "deck_pptx", dest)
+        db.set_progress(sb, job_id, 96)
+        return f"{book.get('title', 'Document')} · {unit_label} · Slide deck"
+
+    # Legacy renderer (DECK_STORYBOARD=0): slides authored as slides.
     authored = author_deck(book, chapter, analysis, client, params or {}, lesson_lang)
     slides_spec = authored["slides"]
     book_id = book.get("id") or "unknown"
@@ -731,21 +762,11 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
     # deck_required: a build_episode_deck failure (template, font, RTL pass)
     # reaches jobs.error with its own message instead of being swallowed
     # into the generic "produced no file" below.
-    if storyboard:
-        # Book path: the analysis fills the glossary, the authored script
-        # fills the sections, and every word on the slide is a text object.
-        model = dg.model_from_script(analysis, deck_script, authored, language=lesson_lang)
-        deck_art.decorate(model, sb=sb, tmp=Path(tmp) / "deck", video_segments=video_segments,
-                          context=art_context or deck_art.book_context(book, unit_label, analysis),
-                          job_id=job_id, exclude_job_id=job_id)
-        deck_path = str(dg.build_lesson_deck(model, Path(tmp) / "deck" / "deck.pptx",
-                                             direction=lesson_dir, branding=branding))
-    else:
-        manifest = generate_episode_slides(
-            script_data=deck_script, branding=branding, direction=lesson_dir,
-            out_dir=Path(tmp) / "deck", deck_required=True,
-        ).model_dump()
-        deck_path = manifest.get("deck_path")
+    manifest = generate_episode_slides(
+        script_data=deck_script, branding=branding, direction=lesson_dir,
+        out_dir=Path(tmp) / "deck", deck_required=True,
+    ).model_dump()
+    deck_path = manifest.get("deck_path")
     if not deck_path or not Path(deck_path).exists():
         raise RuntimeError("deck build produced no file")
 

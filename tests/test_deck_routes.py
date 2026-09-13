@@ -72,14 +72,18 @@ class TestTheDeckBesideTheVideo:
         # The video still gets its PNGs — the deck change must not touch it.
         assert len(list(tmp_path.glob("*_slide.png"))) == 4
 
-    def test_the_narration_becomes_the_slide_prose_when_there_are_no_points(self, monkeypatch, tmp_path):
+    def test_the_narration_is_distilled_to_points_when_there_are_no_points(self, monkeypatch, tmp_path):
         """The semantic script prompt does not write slide_points; the legacy
-        renderer showed the narration as fallback text. So does this, and it
-        is editable now."""
+        renderer showed the narration as fallback text. The storyboard shows
+        short sentences distilled from it — never the paragraph (founder,
+        2026-09-12)."""
         monkeypatch.delenv("DECK_STORYBOARD", raising=False)
         model = dg.model_from_script(ANALYSIS_WITH_DEFS, _video_script())
         assert model.sections[0].points == []
         assert "built from cells" in model.sections[0].body_md
+        from agent5_slides.deck_storyboard import section_content
+        blocks, notes = section_content(model.sections[0])
+        assert all(b["kind"] != "para" for b in blocks) and "built from cells" in notes
         kinds = summarise(storyboard(model))
         assert kinds.get(SHAPES) == 1 and kinds.get(QUIZ) == 1 and kinds.get(TAKEAWAYS) == 1
 

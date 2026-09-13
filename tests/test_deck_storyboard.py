@@ -202,7 +202,9 @@ class TestWhatTheDeckContains:
 
     def test_the_key_idea_leads_a_section_and_is_not_repeated_on_its_continuation(self):
         m = self._model()
-        m.sections[0].body_md = "Prose. " * 400
+        # Prose never paginates any more (it is distilled to points); a long
+        # LIST still does.
+        m.sections[0].body_md = "\n".join(f"- Point {i} about the matter in hand" for i in range(60))
         secs = [s for s in storyboard(m) if s.kind == SECTION]
         assert len(secs) > 1
         assert secs[0].key_idea and not any(s.key_idea for s in secs[1:])

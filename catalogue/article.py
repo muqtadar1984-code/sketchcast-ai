@@ -609,9 +609,12 @@ def _validate_named(raw: object, fields: tuple[str, ...], prefix: str, what: str
     return out
 
 
-def validate_article(raw: object, coverage_codes: list[str], fallback_title: str) -> Article:
+def validate_article(raw: object, coverage_codes: list[str], fallback_title: str,
+                     words_floor: int = WORDS_FLOOR) -> Article:
     """The rules in the module docstring, applied in order. Pure. Raises
-    ``ArticleInvalid`` when the reply cannot become an article."""
+    ``ArticleInvalid`` when the reply cannot become an article. ``words_floor``
+    is the catalogue's unless the caller teaches a smaller unit (a book
+    chapter PART is authored to the same shape at a shorter length)."""
     if not isinstance(raw, dict):
         raise ArticleInvalid("model reply is not a JSON object")
     for name in REQUIRED_ARRAYS:
@@ -625,8 +628,8 @@ def validate_article(raw: object, coverage_codes: list[str], fallback_title: str
     if len(sections) > MAX_SECTIONS:
         raise ArticleInvalid(f"{len(sections)} sections; at most {MAX_SECTIONS} make one article")
     words = word_count(sections)
-    if words < WORDS_FLOOR:
-        raise ArticleInvalid(f"only {words} words of body text; at least {WORDS_FLOOR} needed")
+    if words < words_floor:
+        raise ArticleInvalid(f"only {words} words of body text; at least {words_floor} needed")
 
     figures = _validate_figures(raw["figures"], repairs)
     declared = {f["figure_key"] for f in figures}
