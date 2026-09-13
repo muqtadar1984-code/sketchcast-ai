@@ -200,3 +200,44 @@ class TestBookContext:
         ctx = deck_art.book_context({"subject": "Science", "grade": "Year 7"}, "Matter",
                                     {"concepts": {"concepts": [{"name": "particle"}, {"name": ""}]}})
         assert ctx == {"subject": "Science", "grade": "Year 7", "topic": "Matter", "concepts": ["particle"]}
+
+
+class TestAPictureWithoutAFrameStillHasASize:
+    """The first Structure of the Atom deck (2026-09-13) failed on two section
+    slides with ZeroDivisionError: a library picture with no vision frame came
+    through as w = h = 0 and the section renderer's `_fit` divided by it."""
+
+    @staticmethod
+    def _real_png(w=640, h=400):
+        import io
+
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGBA", (w, h), (0, 0, 0, 0)).save(buf, format="PNG")
+        return buf.getvalue()
+
+    def test_the_size_comes_from_the_file_when_the_row_has_no_frame(self, tmp_path):
+        sb = _SB({}, {"generated/x.png": self._real_png(640, 400)})
+        fig = deck_art.figure_from_row(sb, _row("x"), tmp_path)
+        assert (fig.w, fig.h) == (640.0, 400.0)
+        assert not fig.annotatable and fig.parts == [], "still an illustration, not a diagram"
+
+    def test_an_unreadable_file_keeps_the_picture_and_leaves_the_size_to_the_renderer(self, tmp_path):
+        """The fixture PNG elsewhere in this file is header bytes only; that
+        must not become a lost picture — `_fit` fills the frame for it."""
+        sb = _SB({}, {"generated/x.png": PNG})
+        fig = deck_art.figure_from_row(sb, _row("x"), tmp_path)
+        assert fig is not None and fig.png.exists()
+        assert (fig.w, fig.h) == (0.0, 0.0) and fig.parts == []
+
+    def test_a_measured_frame_is_preferred_over_the_file(self, tmp_path):
+        sb = _SB({}, {"generated/y.png": PNG})
+        fig = deck_art.figure_from_row(sb, _row("y", {"solid": [[1, 1, 9, 9]]}, w=1000, h=800), tmp_path)
+        assert (fig.w, fig.h) == (1000.0, 800.0)
+
+    def test_the_section_renderer_survives_a_sizeless_picture_anyway(self):
+        from agent5_slides import annotated_figure as af
+        assert af._fit(0, 0, (10, 20, 300, 200)) == (10, 20, 300, 200)
+        assert af._fit(0, 100, (10, 20, 300, 200)) == (10, 20, 300, 200)
+        x, y, w, h = af._fit(200, 100, (0, 0, 300, 300))
+        assert (w, h) == (300, 150) and (x, y) == (0, 75), "a real size still fits by aspect"
