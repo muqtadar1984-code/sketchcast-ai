@@ -53,7 +53,9 @@ def _row(key, regions=None, w=1000, h=800, desc="A diagram of something. More.")
 
 
 def _model(n=4):
-    m = LessonModel(title="Matter")
+    # A script-shaped deck (the video/teacher-notes routes): sections are
+    # narration, no article planned any figure, so the ladder may invent.
+    m = LessonModel(title="Matter", source="analysis")
     heads = ["What is matter?", "Three states of matter", "Particles in a gas", "Melting and freezing"]
     for i in range(n):
         m.sections.append(Section(id=f"s{i}", heading=heads[i], narration=f"Narration {i}."))

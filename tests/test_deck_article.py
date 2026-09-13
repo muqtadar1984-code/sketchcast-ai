@@ -145,8 +145,8 @@ class TestTheBookPathIsTheCataloguePath:
             key="particle_states", caption=caption, png=png, regions={"solid": [[0, 0, 1, 1]]}, w=10, h=10,
             parts=["solid"]))
         n = deck_art.generate_figures(model, object(), tmp_path, {}, "job-1", 2, "job-1")
-        assert n == 2, "the declared figure once (two sections share it), then one from a heading"
-        assert [p.split(":")[0] for p in prompts] == ["particle_states", "compressing_matter"]
+        assert n == 1, "the declared figure once (two sections share it); nothing invented for the third"
+        assert [p.split(":")[0] for p in prompts] == ["particle_states"]
         assert "solid, liquid, gas" in prompts[0], prompts
         assert deck_art.pictured(model, model.sections[0]) and deck_art.pictured(model, model.sections[1])
         assert model.sections[0].figure_keys == ["particle_states"]
@@ -205,7 +205,7 @@ class TestAGeneratedPictureIsPlaced:
         """Live, 2026-09-13: two pictures were generated and published for the
         Materials deck and NEITHER landed — the content-hash lookup's row had
         no storage_path, so figure_from_row returned None, silently."""
-        model = from_article({**ARTICLE_REPLY, "language": "en"}, [], art=None)
+        model = from_article({**ARTICLE_REPLY, "language": "en"}, ARTICLE_REPLY["figures"], art=None)
         png = tmp_path / "art" / "particle_state.png"
         png.parent.mkdir(parents=True)
         png.write_bytes(b"png")
@@ -277,3 +277,66 @@ class TestAGeneratedPictureIsPlaced:
         fig = Figure(key="compression_comparison", caption="a syringe of gas particles squeezed together", png=png)
         n = deck_art.place_video_figures(model, [(1, "compression_comparison")], {"compression_comparison": fig}, 3, False, 4)
         assert n == 1 and model.sections[2].figure_keys == ["compression_comparison"], "two words (gas, particles) beat one"
+
+
+class TestAGeneratedDiagramIsTheOneTheArticlePlanned:
+    def _gen(self, monkeypatch, tmp_path, model, regions):
+        png = tmp_path / "art" / "p.png"
+        png.parent.mkdir(parents=True, exist_ok=True)
+        png.write_bytes(b"png")
+        asked: list[str] = []
+
+        class _Backend:
+            set_yield = None
+
+            def set_context(self, **kw):
+                pass
+
+            def budget_exhausted(self):
+                return False
+
+            def generate(self, key, prompt):
+                asked.append(key)
+                return object()
+
+            def publish(self, *a):
+                pass
+
+        monkeypatch.setattr(deck_art, "_backend", lambda: _Backend())
+        monkeypatch.setattr(deck_art, "user_builders_live", lambda sb, ex: False)
+        import catalogue.figures as cf
+        monkeypatch.setattr(cf, "lookup_asset", lambda sb, r: {"asset_key": "particle_states", "storage_path": "x"})
+        monkeypatch.setattr(deck_art, "figure_from_row", lambda sb, row, tmp, caption="": Figure(
+            key="particle_states", caption=caption, png=png, regions=regions, w=10, h=10,
+            parts=list(regions)))
+        n = deck_art.generate_figures(model, object(), tmp_path, {}, "job-1", 4, "job-1")
+        return n, asked
+
+    def test_the_labels_are_the_parts_the_article_asked_for(self, monkeypatch, tmp_path):
+        model = from_article({**ARTICLE_REPLY, "language": "en"}, ARTICLE_REPLY["figures"], art=None)
+        regions = {k: [[0, 0, 1, 1]] for k in ("solid", "liquid", "gas", "weak bond", "empty space",
+                                             "solid particle", "fixed pattern", "vibration")}
+        n, asked = self._gen(monkeypatch, tmp_path, model, regions)
+        assert n == 1
+        fig = model.figures["particle_states"]
+        assert fig.parts == ["solid", "liquid", "gas"], "the article's parts, not every region the annotator saw"
+        assert fig.located() == ["solid", "liquid", "gas"]
+
+    def test_an_article_section_without_a_planned_figure_gets_no_invented_one(self, monkeypatch, tmp_path):
+        model = from_article({**ARTICLE_REPLY, "language": "en"}, ARTICLE_REPLY["figures"], art=None)
+        n, asked = self._gen(monkeypatch, tmp_path, model, {"solid": [[0, 0, 1, 1]]})
+        assert asked == ["particle_states"], "only the planned figure; 'Compressing matter' invents nothing"
+        assert not model.sections[2].figure_keys
+
+
+class TestTheCheckSlideFitsItsBlanks:
+    def test_it_asks_no_more_than_the_column_holds(self, tmp_path):
+        from agent5_slides.deck_storyboard import CHECK, check_blanks
+        from tests.test_deck_storyboard import _fig
+        f = _fig(14)
+        f.png = Path(__file__)
+        sec = Section(id="s1", heading="H", body_md="Prose.", figure_keys=["f"])
+        m = LessonModel(title="T", sections=[sec], figures={"f": f})
+        (chk,) = [s for s in storyboard(m) if s.kind == CHECK]
+        assert 1 <= check_blanks() <= 12
+        assert len(chk.parts) <= check_blanks()
