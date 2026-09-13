@@ -1510,6 +1510,29 @@ def to_working_size(img: Image.Image) -> Image.Image:
 
 # ── post-processing ──────────────────────────────────────────────────────────
 
+# The cut below which a pixel is ink, on a WHITE page. A page that is not
+# white — the potassium atom in the periodic-table render (2026-09-13) came
+# back on light grey, lum ~195 — left every paper pixel a little under the
+# cut, and the picture carried its rectangle onto the board as a grey box.
+# The page's own brightness is read off the border, which a drawing rarely
+# reaches, and the cut moves down with it. A dark border (art to the edge)
+# is not paper and leaves the cut alone.
+_INK_CUT_WHITE = 215
+_PAPER_MARGIN = 25          # the cut sits this far below the page brightness
+_PAPER_MIN_LUM = 150        # darker than this is drawing, not paper
+
+
+def _ink_threshold(lum: np.ndarray) -> int:
+    h, w = lum.shape
+    b = max(1, min(h, w) // 40)
+    border = np.concatenate([lum[:b].ravel(), lum[-b:].ravel(),
+                             lum[:, :b].ravel(), lum[:, -b:].ravel()])
+    paper = int(np.median(border)) if border.size else 255
+    if paper < _PAPER_MIN_LUM:
+        return _INK_CUT_WHITE
+    return min(_INK_CUT_WHITE, paper - _PAPER_MARGIN)
+
+
 def to_ink(raw: Image.Image) -> Image.Image:
     """White background -> transparency; keep dark strokes with soft edges.
     alpha = how far below near-white each pixel's luminance sits."""
@@ -1518,7 +1541,7 @@ def to_ink(raw: Image.Image) -> Image.Image:
     # EVERY pixel as ink (a pure-white image scored 100% coverage)
     arr = np.asarray(rgb).astype(np.int32)
     lum = (arr[..., 0] * 299 + arr[..., 1] * 587 + arr[..., 2] * 114) // 1000
-    alpha = np.clip((215 - lum) * 2.1, 0, 255).astype(np.uint8)
+    alpha = np.clip((_ink_threshold(lum) - lum) * 2.1, 0, 255).astype(np.uint8)
     out = np.dstack([np.asarray(rgb), alpha])
     img = Image.fromarray(out, "RGBA")
     # crop to content + a small margin so placement math means the drawing
