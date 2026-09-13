@@ -53,19 +53,24 @@ class CameraTrack:
 
     def __init__(self, timed: list[TimedAction],
                  focus_center: dict[int, Point] | None = None,
-                 start: CameraState | None = None):
+                 start: CameraState | None = None,
+                 scale_cap: dict[int, float] | None = None):
         """`focus_center` maps timeline index -> resolved center for zoom
         actions whose center came from a target element's bbox (the renderer
         resolves geometry; the camera only interpolates). `start` is the state
-        carried in from the previous segment (visual continuity)."""
+        carried in from the previous segment (visual continuity). `scale_cap`
+        maps timeline index -> the largest zoom that keeps the target inside
+        the frame; the renderer measures it, the camera obeys it."""
         focus_center = focus_center or {}
+        scale_cap = scale_cap or {}
         state = (start or CameraState()).clamped()
         self._keys: list[_Key] = [_Key(0.0, state, "linear")]
         for i, ta in enumerate(timed):
             a = ta.action
             if a.verb == "zoom":
                 c = a.center or focus_center.get(i) or (state.cx, state.cy)
-                state = CameraState(c[0], c[1], a.scale).clamped()
+                s = min(float(a.scale), float(scale_cap.get(i, a.scale)))
+                state = CameraState(c[0], c[1], max(1.0, s)).clamped()
             elif a.verb == "pan":
                 state = CameraState(a.center[0], a.center[1], state.scale).clamped()
             elif a.verb == "camera_reset":

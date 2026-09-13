@@ -147,6 +147,12 @@ RULES:
   pen stopped.
 - FOCUS/CONTINUE steps cost nothing: zoom/highlight/circle what exists.
   Zooms use "target" (an element id), never coordinates.
+- An asset is a DRAWING of a thing, a structure or a process — never a
+  table, chart, grid, list, timeline of words or text panel. An image model
+  asked for a "particle table" draws an empty grid and the board opens on
+  ruled lines with nothing in them. Values, names and comparisons are text
+  elements written beside a drawing; if a concept has nothing to draw, draw
+  the concrete thing it is about (the atom, the metal rod, the beaker).
 - cue phrases are copied VERBATIM from that step's OWN segment "text".
 - caps: at most 5 chapters; 12 elements and 10 steps per chapter; 6 actions
   per step. Segments not listed in any step simply keep the current board.

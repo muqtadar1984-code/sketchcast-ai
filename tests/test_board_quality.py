@@ -364,3 +364,71 @@ class TestAnEmptyOpeningStepDrawsThePicture:
         for sid in ("s001", "s002"):
             Scene.model_validate(scenes[sid])
         assert scenes["s001"]["fresh_board"] is True and scenes["s002"]["fresh_board"] is False
+
+
+# ── 4. a zoom never crops what it is pointing at ─────────────────────────────
+
+class TestAZoomNeverCropsItsTarget:
+    """Structure of the Atom, 2026-09-13: `zoom 1.6` on a diagram that already
+    filled the board, held through two CONTINUE segments — 50 s of the
+    gold-foil picture running off every edge. The renderer measures the
+    target's ink and caps the zoom at what still fits."""
+
+    def _camera_end_scale(self, big_scale: float, zoom: float):
+        from spike.scene_engine.render import SceneRenderer
+        scene = Scene.model_validate({
+            "id": "z", "narration": "we zoom in on the nucleus of the gold atom",
+            "elements": [
+                {"id": "pic", "type": "illustration", "asset": "disc", "at": [600, 380], "scale": big_scale},
+            ],
+            "actions": [
+                {"verb": "draw", "target": "pic", "duration": 1.0},
+                {"verb": "zoom", "target": "pic", "scale": zoom, "duration": 1.0},
+            ],
+        })
+        r = SceneRenderer(scene, asset_resolver=lambda k: ("raster", _disc_asset()))
+        r.compile(8.0)
+        return r, r.cam.state_at(8.0).scale
+
+    def test_a_zoom_on_a_board_filling_picture_is_clamped(self):
+        r, s = self._camera_end_scale(big_scale=3.0, zoom=1.6)
+        assert s < 1.6, "the zoom did not run at the director's 1.6x"
+        assert any(w.startswith("ZOOM_CLAMPED pic 1.60->") for w in r._warned), r._warned
+
+    def test_the_clamped_target_still_fits_the_frame(self):
+        from spike.scene_engine.schema import WORLD_H, WORLD_W
+        r, s = self._camera_end_scale(big_scale=3.0, zoom=1.6)
+        ink = r._ink_box(r.bound["pic"]) or r.bound["pic"].box
+        assert (ink[2] - ink[0]) * s <= WORLD_W and (ink[3] - ink[1]) * s <= WORLD_H
+
+    def test_a_zoom_on_a_small_picture_runs_as_directed(self):
+        r, s = self._camera_end_scale(big_scale=0.8, zoom=1.6)
+        assert s == pytest.approx(1.6)
+        assert not any(w.startswith("ZOOM_CLAMPED") for w in r._warned)
+
+    def test_the_camera_obeys_a_cap_and_never_zooms_out(self):
+        from spike.scene_engine.camera import CameraTrack
+        from spike.scene_engine.schema import Scene as _S
+        from spike.scene_engine import timing as T
+        scene = _S.model_validate({
+            "id": "c", "narration": "x",
+            "elements": [{"id": "t", "type": "text", "text": "x", "at": [600, 380]}],
+            "actions": [{"verb": "zoom", "target": "t", "scale": 2.0, "duration": 1.0}],
+        })
+        tl = T.compile_timeline(scene, 5.0)
+        i = next(k for k, ta in enumerate(tl) if ta.action.verb == "zoom")
+        assert CameraTrack(tl, {i: (600, 380)}, scale_cap={i: 1.3}).state_at(5.0).scale == pytest.approx(1.3)
+        assert CameraTrack(tl, {i: (600, 380)}, scale_cap={i: 0.5}).state_at(5.0).scale == pytest.approx(1.0), \
+            "a cap below 1 means no zoom, never a zoom OUT"
+        assert CameraTrack(tl, {i: (600, 380)}).state_at(5.0).scale == pytest.approx(2.0)
+
+
+# ── 5. the director is told what an illustration is ──────────────────────────
+
+class TestTheDirectorIsToldNotToAskForTables:
+    def test_the_prompt_forbids_tables_as_assets(self):
+        import inspect
+
+        from spike.scene_engine import director
+        src = inspect.getsource(director)
+        assert "never a\n  table, chart, grid" in src or "never a table, chart, grid" in src.replace("\n  ", " ")

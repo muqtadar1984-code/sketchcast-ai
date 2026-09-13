@@ -91,6 +91,10 @@ def _hand_font(bold: bool, size: int, sample: str):
         return None
 
 from .camera import CameraState, CameraTrack
+
+# A zoom onto an element may enlarge it to this fraction of the frame and no
+# further: the target stays whole with a little air around it.
+_ZOOM_FIT_MARGIN = 0.92
 from .geometry import (Point, bbox, cut_at_fraction, ease, ellipse_path,
                        path_length, underline_path)
 from .paper import PALETTE, make_background, role_color
@@ -1594,6 +1598,7 @@ class SceneRenderer:
         self._enforce_dependencies()
         focus: dict[int, Point] = {}
         hud = self._hud_element_ids()
+        caps: dict[int, float] = {}
         for i, ta in enumerate(self.timeline):
             a = ta.action
             if a.verb != "zoom" or a.center is not None:
@@ -1607,8 +1612,23 @@ class SceneRenderer:
             # through to the follow rule frames the next board action.
             if (a.target in self.bound and a.target not in hud
                     and a.target not in self._dropped):
-                x0, y0, x1, y1 = self.bound[a.target].box
+                b = self.bound[a.target]
+                x0, y0, x1, y1 = b.box
                 focus[i] = ((x0 + x1) / 2, (y0 + y1) / 2)
+                # A zoom DIRECTS ATTENTION; it must not crop the thing it is
+                # directing attention to. Structure of the Atom (2026-09-13):
+                # a 1.6x zoom on a diagram that already filled the board,
+                # held through two CONTINUE segments — 50 s of gold atoms
+                # running off every edge of the frame. Measure the target's
+                # INK and cap the zoom at what still fits, with a margin.
+                ink = self._ink_box(b) or b.box
+                bw = max(1.0, ink[2] - ink[0])
+                bh = max(1.0, ink[3] - ink[1])
+                fit = min(WORLD_W / bw, WORLD_H / bh) * _ZOOM_FIT_MARGIN
+                if float(a.scale) > fit:
+                    caps[i] = max(1.0, fit)
+                    self._warn(f"ZOOM_CLAMPED {a.target} {float(a.scale):.2f}->"
+                               f"{caps[i]:.2f} (target fills the frame)")
             elif getattr(a, "follow", True):
                 fp = self._next_action_focus(i)
                 if fp is not None:
@@ -1619,7 +1639,7 @@ class SceneRenderer:
             start = CameraState(float(cs.get("cx", WORLD_W / 2)),
                                 float(cs.get("cy", WORLD_H / 2)),
                                 float(cs.get("scale", 1.0)))
-        self.cam = CameraTrack(self.timeline, focus, start=start)
+        self.cam = CameraTrack(self.timeline, focus, start=start, scale_cap=caps)
         return self.timeline
 
     def _enforce_dependencies(self) -> None:
