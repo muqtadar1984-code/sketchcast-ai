@@ -257,6 +257,43 @@ def claim_next_job(sb: Client, job_type=None, exclude_types=None,
     return claimed
 
 
+def requeue_job(sb: Client, job: dict, *, bump_attempts: bool) -> bool:
+    """ONE writer for "this job goes back to the queue".
+
+    Three callers, one shape, so the job row and its generation can never
+    disagree about what "queued" means: the startup and windowed reapers (a
+    dead worker's orphan — the attempt is spent), run.py's tier-outage retry
+    (the same), and a graceful shutdown (the job is fine, the WORKER is
+    leaving — no attempt is spent, or a deploy would cost every in-flight
+    lesson one of its three lives).
+
+    Guarded twice. ``status = 'processing'`` is the reaper's guard: a row the
+    console or another actor already moved is left alone. ``attempts = <what
+    this caller last read>`` is a fence against the rolling-deploy race of
+    2026-09-13 13:56 UTC: the NEW container's boot reap requeued a job the OLD
+    container still held, the old container re-claimed it fifteen seconds
+    before Railway removed it, and the job sat 'processing' with no worker
+    until the 15-minute reaper. Every reaper requeue bumps ``attempts``, so a
+    row a peer has reaped-and-reclaimed carries a different count than the
+    one this caller holds — the old container's shutdown requeue cannot pull
+    a job out from under the container now building it. (``attempts`` is
+    ``int not null default 0`` since app migration 0041, so the fence always
+    has a value to match.)
+
+    Returns True when the row was moved. Mirrors 'queued' onto the generation
+    the job OWNS — generation_to_mirror, never an observer's report target."""
+    att = int(job.get("attempts") or 0)
+    payload = {"status": "queued", "progress": 0}
+    if bump_attempts:
+        payload["attempts"] = att + 1
+    upd = (sb.table("jobs").update(payload)
+           .eq("id", job["id"]).eq("status", "processing").eq("attempts", att).execute())
+    if not getattr(upd, "data", None):
+        return False
+    mirror_generation_status(sb, generation_to_mirror(job), "queued")
+    return True
+
+
 def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max_attempts: int = 3,
                        exclude_ids: Optional[set] = None) -> int:
     """Return orphaned 'processing' jobs to 'queued' so a live worker re-runs them.
@@ -323,13 +360,12 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
                         pass
                 failed += 1
             else:
-                upd = sb.table("jobs").update(
-                    {"status": "queued", "progress": 0, "attempts": att + 1}
-                ).eq("id", j["id"]).eq("status", "processing").execute()
-                if upd.data:
-                    # Back in the queue, so the row must not stay "being built" —
-                    # a stuck 'processing' would leave the ✕ inert forever.
-                    mirror_generation_status(sb, owned_gen, "queued")
+                # The one requeue writer (requeue_job): status + attempts
+                # guards, the attempt spent, and the row's generation back to
+                # 'queued' — a stuck 'processing' would leave the ✕ inert
+                # forever. Resolves the generation through the same rule as
+                # owned_gen above (generation_to_mirror).
+                if requeue_job(sb, j, bump_attempts=True):
                     requeued += 1
         if failed:
             logging.getLogger("worker").error(

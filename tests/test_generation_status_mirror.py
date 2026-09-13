@@ -62,9 +62,18 @@ def test_claiming_a_job_marks_its_generation_processing():
 
 def test_a_requeued_job_goes_back_to_queued():
     """A crash-recovered job must not leave its generation stuck 'processing' —
-    that would make the ✕ inert forever and strand the row."""
+    that would make the ✕ inert forever and strand the row. Since the
+    2026-09-13 graceful-shutdown change the reaper's requeue edge is the
+    shared writer `requeue_job` (the shutdown path and run.py's tier-outage
+    retry use the same one), and the mirror lives there."""
     body = _body("requeue_stale_jobs")
-    assert 'mirror_generation_status(sb, owned_gen, "queued")' in body
+    assert "requeue_job(sb, j, bump_attempts=True)" in body
+    helper = _body("requeue_job")
+    assert 'mirror_generation_status(sb, generation_to_mirror(job), "queued")' in helper
+    # The row must have MOVED before its generation is relabelled.
+    assert helper.index("if not getattr(upd") < helper.index("mirror_generation_status")
+    # Both guards: the reaper's status guard and the attempts fence.
+    assert '.eq("status", "processing").eq("attempts", att)' in helper
 
 
 def test_a_poison_pill_marks_its_generation_error():
@@ -149,9 +158,11 @@ def test_finish_job_still_writes_the_terminal_status():
 
 def test_every_lifecycle_edge_is_covered():
     """queued -> processing -> done/error, with the crash paths returning it."""
-    assert SRC.count("mirror_generation_status(") == 4  # 1 def + 3 call sites
+    # 1 def + 3 call sites: the claim ('processing'), the shared requeue
+    # writer ('queued' — reapers, shutdown, tier retry), the poison pill ('error').
+    assert SRC.count("mirror_generation_status(") == 4
     for word in ('"processing"', '"queued"', '"error"'):
         assert f"mirror_generation_status(sb, " in SRC and word in SRC
     # …and every call site names its generation through the ownership rule.
     calls = re.findall(r"mirror_generation_status\(sb, (\w+(?:\([^)]*\))?), ", SRC)
-    assert sorted(calls) == ["generation_to_mirror(claimed)", "owned_gen", "owned_gen"], calls
+    assert sorted(calls) == ["generation_to_mirror(claimed)", "generation_to_mirror(job)", "owned_gen"], calls
