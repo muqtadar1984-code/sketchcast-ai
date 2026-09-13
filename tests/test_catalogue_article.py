@@ -11,6 +11,7 @@ records every write. No network, no model, no live Supabase.
 from __future__ import annotations
 
 import copy
+import json
 
 import pytest
 
@@ -873,3 +874,57 @@ def test_build_article_prompt_is_pure_and_names_the_depth_curriculum():
     odd = article.Mapping(node={"id": "n-x", "grade": "Upper Secondary", "code": "X"}, curriculum=CAM)
     assert article.pick_depth_node(TOPIC, mappings + [odd])["id"] == "n-cb1"
     assert article.pick_depth_node(TOPIC, [odd])["id"] == "n-x"
+
+
+# ── reply shapes measured on 2026-09-13, through the job ─────────────────
+
+
+def _raw_text(doc: dict, before: str, after: str) -> dict:
+    """The client's ``raw_text`` wrapper — what reaches the validator when
+    the reply will not parse — around ``doc`` with ONE slip in its JSON."""
+    text = json.dumps(doc, indent=2)
+    assert text.count(before) >= 1
+    return {"raw_text": text.replace(before, after, 1)}
+
+
+def test_a_key_that_lost_its_opening_quote_is_mended_and_the_article_written_in_one_call():
+    # Three of twenty article jobs failed this way (07:49 UTC): ``covers": [``
+    # and ``spec": {`` and ``- "parts": [``, each once in a complete reply.
+    for before, after in (('"covers": ', 'covers": '), ('"spec": ', 'spec": '), ('"parts": ', '- "parts": ')):
+        sb, model = _sb(), FakeModel(_raw_text(GOOD, before, after))
+        summary = run_article_job(sb, _job(), client=model)
+        assert len(model.calls) == 1, "mended at the fault, not asked again"
+        (row,) = _articles(sb)
+        assert row["sections"][0]["covers"] == ["7Bs.01", "cbse:9:U2:01"] and len(_figures(sb)) == 2
+        assert len(summary["repairs"]) == 1 and "at char" in summary["repairs"][0], summary["repairs"]
+        assert "reply_retries" not in summary and _job_row(sb)["status"] == "done"
+
+
+def test_a_refused_reply_is_asked_once_more_with_the_same_prompt_and_the_second_reply_ships():
+    bad = {k: v for k, v in GOOD.items() if k != "sections"}
+    replies = iter([bad, GOOD])
+    sb, model = _sb(), FakeModel(lambda prompt: next(replies))
+    summary = run_article_job(sb, _job(), client=model)
+    assert len(model.calls) == 2 and model.calls[0]["prompt"] == model.calls[1]["prompt"]
+    assert len(_articles(sb)) == 1 and _job_row(sb)["status"] == "done"
+    assert summary["reply_retries"] == ["article t-cell: ArticleInvalid: model reply has no 'sections' list"]
+    assert _job_row(sb)["usage"]["calls"] == 2, "both calls were paid for and both are recorded"
+
+
+def test_two_unreadable_replies_fail_the_job_with_the_decoder_s_reason_not_a_missing_list():
+    # A refusal in prose: the client's wrapper around text that is not JSON
+    # anywhere, twice. (A reply severed after a comma reads the same way.)
+    sb, model = _sb(), FakeModel({"raw_text": "Sorry, I cannot write this article."})
+    assert run_article_job(sb, _job(), client=model) is None
+    assert len(model.calls) == 2, "once more, never a loop"
+    job = _job_row(sb)
+    assert job["status"] == "error" and _articles(sb) == []
+    assert job["error"].startswith("ArticleInvalid: model reply is not JSON: Expecting value at line 1 col 1 (char 0 of 35)")
+    assert "no 'objectives' list" not in job["error"]
+    assert job["usage"]["calls"] == 2
+
+
+def test_a_transport_error_is_not_retried_by_the_reply_gate():
+    sb, model = _sb(), FakeModel(RuntimeError("503 upstream"))
+    assert run_article_job(sb, _job(), client=model) is None
+    assert len(model.calls) == 1 and "503 upstream" in _job_row(sb)["error"]

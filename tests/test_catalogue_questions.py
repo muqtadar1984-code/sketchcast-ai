@@ -10,6 +10,7 @@ content_hash) index on topic_questions and records every write.
 from __future__ import annotations
 
 import copy
+import json
 
 from catalogue import questions
 from catalogue.key import canonical_key
@@ -653,3 +654,63 @@ def test_a_failing_top_up_call_fails_the_job_but_keeps_the_first_write():
     model = FakeModel([thin, RuntimeError("quota")])
     assert run_questions_job(sb, _job(), client=model) is None
     assert len(_bank(sb)) == 6 and _job_row(sb)["status"] == "error"
+
+
+# ── reply shapes measured on 2026-09-13, through the job ─────────────────
+
+
+def _pair_inside_options(doc: dict) -> dict:
+    """The client's ``raw_text`` wrapper around ``doc`` with a
+    ``"misconception_ref"`` pair written between the first options array's
+    last element and its ``]`` — the 02:11 UTC failure, char 7334 of 29010."""
+    text = json.dumps(doc, indent=2)
+    last = '{\n          "key": "D",\n          "text": "Mitochondrion"\n        }'
+    assert text.count(last) >= 1
+    return {"raw_text": text.replace(last, last + ',\n        "misconception_ref": "m3"', 1)}
+
+
+def test_a_pair_written_inside_an_options_array_is_dropped_and_the_bank_written_in_one_call():
+    sb, model = _sb(), FakeModel(_pair_inside_options(GOOD))
+    summary = run_questions_job(sb, _job(), client=model)
+    assert len(model.calls) == 1 and _job_row(sb)["status"] == "done"
+    assert len(_bank(sb)) == 10 and [o["key"] for o in _bank(sb)[0]["options"]] == ["A", "B", "C", "D"]
+    assert any(r.startswith("stray pair 'misconception_ref' dropped from an array") for r in summary["repairs"])
+    assert "reply_retries" not in summary
+
+
+def test_a_refused_reply_is_asked_once_more_and_the_second_reply_is_the_bank():
+    sb, model = _sb(), FakeModel([{"questions": []}, GOOD])
+    summary = run_questions_job(sb, _job(), client=model)
+    assert len(model.calls) == 2 and model.calls[0]["prompt"] == model.calls[1]["prompt"]
+    assert len(_bank(sb)) == 10 and _job_row(sb)["status"] == "done"
+    assert summary["reply_retries"] == ["questions t-cell: QuestionsInvalid: model reply has no 'items' list"]
+
+
+def test_a_reply_with_no_usable_item_is_also_asked_once_more():
+    sb, model = _sb(), FakeModel([{"items": [{"item_type": "mcq"}]}, GOOD])
+    run_questions_job(sb, _job(), client=model)
+    assert len(model.calls) == 2 and _job_row(sb)["status"] == "done"
+    assert _job_row(sb)["stage"]["reply_retries"][0].startswith("questions t-cell: QuestionsInvalid: no usable item")
+
+
+def test_two_unreadable_replies_fail_the_job_with_the_decoder_s_reason():
+    # Severed after a comma, twice: the shared salvage refuses to close a
+    # reply that stopped mid-thought, and nothing in it is a known slip.
+    sb, model = _sb(), FakeModel({"raw_text": '{"items": [{"item_type": "mcq",'})
+    assert run_questions_job(sb, _job(), client=model) is None
+    assert len(model.calls) == 2 and _bank(sb) == []
+    job = _job_row(sb)
+    assert job["error"].startswith("QuestionsInvalid: model reply is not JSON: Expecting property name enclosed in "
+                                   "double quotes at line 1 col 32 (char 31 of 31)")
+    assert "no 'items' list" not in job["error"]
+
+
+def test_a_refused_top_up_reply_is_asked_once_more_too():
+    sb = _sb()
+    thin = {"items": [it for it in GOOD["items"] if it["objective_ref"] != "o3"]}
+    model = FakeModel([thin, "not json at all", GOOD])
+    summary = run_questions_job(sb, _job(), client=model)
+    assert len(model.calls) == 3, "the bank call, the top-up, and the top-up asked once more"
+    assert _job_row(sb)["status"] == "done"
+    assert summary["reply_retries"] == ["questions top-up t-cell: QuestionsInvalid: model reply is not JSON: "
+                                        "Expecting value at line 1 col 1 (char 0 of 15): …not json at all…"]
