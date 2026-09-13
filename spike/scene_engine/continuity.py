@@ -1292,11 +1292,63 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             if not (isinstance(tail, dict) and isinstance(tail.get("el"), str)):
                 lbl = next((lid for lid, le in labels.items()
                             if _label_part(lid, le) == part), None)
+                if lbl is None:
+                    # An arrow with NO label anywhere on the board. The
+                    # director gave it a bare tail point, so the renderer
+                    # drew a line from empty space to the picture — the
+                    # founder's Heat Transfer thermos: two leaders into the
+                    # flask and not a word at either origin. An arrow says
+                    # "this is called ..."; without the words it says
+                    # nothing. Synthesize the label from the part the arrow
+                    # names, written just before the arrow is drawn, and
+                    # point the tail at it. Same column and pitch as the
+                    # labels synthesized from narration above.
+                    lid = "lbl_auto_" + _norm_name(part).replace(" ", "_")
+                    draw_step = next(
+                        (s_ for s_ in ch.steps
+                         if any(a_.get("verb") == "draw" and a_.get("target") == eid
+                                for a_ in s_.actions)), None)
+                    if lid not in roster and draw_step is not None:
+                        roster[lid] = {"id": lid, "type": "text",
+                                       "text": part.replace("_", " ").strip().title(),
+                                       "at": [95.0, _top + 78.0 * stack],
+                                       "role": "label", "anchor": "lt"}
+                        labels[lid] = roster[lid]
+                        idx = next(i_ for i_, a_ in enumerate(draw_step.actions)
+                                   if a_.get("verb") == "draw" and a_.get("target") == eid)
+                        w_act: dict = {"verb": "write", "target": lid}
+                        cue = draw_step.actions[idx].get("at")
+                        if isinstance(cue, dict):
+                            w_act["at"] = dict(cue)   # the words land with the line
+                        draw_step.actions.insert(idx, w_act)
+                        stack += 1
+                        lbl = lid
+                        report.append(f"CHAPTER {ch.concept} | SYNTHESIZED {lid} "
+                                      f"(label for {eid})")
                 if lbl is not None:
                     at = _pt(labels[lbl].get("at")) or root_at
                     side = "right" if at[0] < root_at[0] else "left"
                     e["tail"] = {"el": lbl, "edge": side,
                                  "dx": 6.0 if side == "right" else -6.0}
+                    # The words before the line. When the label and the
+                    # arrow are introduced in the same step, the label's
+                    # `write` must not trail the arrow's `draw` — a
+                    # narration-synthesized label is APPENDED to its step,
+                    # so it did, and the leader ran from an empty spot until
+                    # the words caught up. Move the write in front and let
+                    # it share the arrow's cue if it has none of its own.
+                    for s_ in ch.steps:
+                        acts_ = s_.actions
+                        di = next((i_ for i_, a_ in enumerate(acts_)
+                                   if a_.get("verb") == "draw" and a_.get("target") == eid), None)
+                        wi = next((i_ for i_, a_ in enumerate(acts_)
+                                   if a_.get("verb") == "write" and a_.get("target") == lbl), None)
+                        if di is not None and wi is not None and wi > di:
+                            w_ = acts_.pop(wi)
+                            if not w_.get("at") and isinstance(acts_[di].get("at"), dict):
+                                w_["at"] = dict(acts_[di]["at"])
+                            acts_.insert(di, w_)
+                        break
             roster[eid] = e
             report.append(f"CHAPTER {ch.concept} | ANCHORED {eid} -> "
                           f"{root_id}.{part}")
@@ -1776,6 +1828,12 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             moment_note = f" | HUMAN_TEACHING_MOMENT (student: {m_text!r})"
         scenes[seg_id] = {"id": f"vc_{seg_id}", "compiled": True, "scene_type": "process",
                           "narration": narrations.get(seg_id, ""),
+                          # the board this scene opens on is EMPTY: the
+                          # lesson's first chapter, or a boundary whose
+                          # previous board is fading out. timing.py pulls the
+                          # first drawing forward on such a scene so the voice
+                          # never runs over a blank board (FIRST_INK_SECS).
+                          "fresh_board": bool(first and (boundary or not prev_board)),
                           "camera_start": dict(cam),
                           "elements": elements,
                           "actions": boundary_actions + step_actions}

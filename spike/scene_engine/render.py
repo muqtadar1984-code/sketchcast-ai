@@ -416,6 +416,12 @@ class SceneRenderer:
         # rendered across the diagram for nine segments. This runs on every
         # non-overlay text, whatever its role and however many there are.
         self._keep_text_off_art()
+        # PASS 1.7: a corner sketch never covers a label. Its slot was chosen
+        # at plan time against the ILLUSTRATIONS on the board — the labels
+        # did not exist yet — so a sketch could land on a label the director
+        # had placed in the same corner. The label is content; the sketch
+        # yields: it moves to a free margin slot, or is reported.
+        self._move_sketches_off_text()
         self._audit_text_overlaps()
         self._audit_text_over_art()
 
@@ -999,6 +1005,79 @@ class SceneRenderer:
             for box in g():
                 yield box
 
+    def _hud_sketches(self) -> list[tuple[str, "Bound"]]:
+        """The bound corner sketches: screen-fixed (`hud`) illustrations that
+        resolved to a picture. An unresolved one has a zero box and nothing to
+        collide with."""
+        return [(eid, b) for eid, b in self.bound.items()
+                if isinstance(b.element, IllustrationElement) and b.box
+                and bool(getattr(b.element, "hud", False))
+                and eid not in self._unresolved_ills
+                and (b.box[2] > b.box[0] and b.box[3] > b.box[1])]
+
+    def _translate(self, b: "Bound", dx: float, dy: float) -> None:
+        """Move a bound element by (dx, dy) in world space: the raster's
+        centre, every vector stroke, the box, and the flat stroke list the
+        frame loop reads."""
+        if b.raster is not None:
+            b.raster.at = (b.raster.at[0] + dx, b.raster.at[1] + dy)
+        for layer in b.layers:
+            for st in layer.strokes:
+                st.pts = [(p[0] + dx, p[1] + dy) for p in st.pts]
+        b.box = (b.box[0] + dx, b.box[1] + dy, b.box[2] + dx, b.box[3] + dy)
+        self._flat[b.element.id] = [st for layer in b.layers for st in layer.strokes]
+
+    def _move_sketches_off_text(self) -> None:
+        """A corner sketch that lands on a label moves to a free margin slot.
+
+        Measured (Heat Transfer, 2026-09-13): the director put two labels in
+        the top-right corner, the sketch pass — which measures only the
+        ILLUSTRATIONS on the board — then put a coffee-cup sketch in the
+        same corner, and the cup was drawn across "Temperature: Average
+        Energy". The words are the content; the sketch is decoration. The
+        sketch keeps its size and tries each margin slot in turn against the
+        texts, the picture, the avatars and the other pictures; if none is
+        free it stays and says so, so the acceptance report can see it.
+        """
+        from .whiteboard import _MARGIN_SLOTS
+
+        texts = [b.box for eid, b in self.bound.items()
+                 if b.text is not None and b.box and not _is_overlay(eid)]
+        if not texts:
+            return
+        art = self._root_art_box()
+        for eid, b in self._hud_sketches():
+            if not self._hits(b.box, texts):
+                continue
+            others = list(self._avatar_zones) + texts
+            if art is not None:
+                others.append(art)
+            # other pictures as INK, not canvas: a generated illustration's
+            # square canvas carries a wide transparent margin that reaches
+            # into the corner slots, and measuring against it left no slot
+            # free on a board whose picture was nowhere near the corners
+            others += [self._ink_box(ob) or ob.box for oid, ob in self.bound.items()
+                       if oid != eid and isinstance(ob.element, IllustrationElement)
+                       and ob.box and not _is_overlay(oid)
+                       and oid not in self._unresolved_ills]
+            w = b.box[2] - b.box[0]
+            h = b.box[3] - b.box[1]
+            cx = (b.box[0] + b.box[2]) / 2
+            cy = (b.box[1] + b.box[3]) / 2
+            moved = False
+            for sx, sy, _scale in _MARGIN_SLOTS:
+                cand = (sx - w / 2, sy - h / 2, sx + w / 2, sy + h / 2)
+                if cand[0] < 0 or cand[1] < 0 or cand[2] > WORLD_W or cand[3] > WORLD_H:
+                    continue
+                if self._hits(cand, others):
+                    continue
+                self._translate(b, sx - cx, sy - cy)
+                self._warn(f"SKETCH_MOVED_OFF_TEXT {eid}")
+                moved = True
+                break
+            if not moved:
+                self._warn(f"SKETCH_OVER_TEXT {eid}")
+
     def _keep_text_off_art(self) -> None:
         """No board text is drawn over the picture. Path-independent.
 
@@ -1025,6 +1104,10 @@ class SceneRenderer:
         occupied += [b.box for eid, b in self.bound.items()
                      if b.text is not None and b.box
                      and not _is_overlay(eid) and _is_title(b)]
+        # the corner sketches hold their slots too: a label moved off the art
+        # must not be moved onto a sketch (and then have the sketch moved off
+        # it — the two passes would chase each other around the margins)
+        occupied += [b.box for eid, b in self._hud_sketches()]
         pending: list[tuple] = []
         for eid, b in texts:
             if self._overlap_frac(b.box, art) <= 0.15:
@@ -1452,6 +1535,13 @@ class SceneRenderer:
         # That must reach the report, not just a log line.
         for _loss in take_cue_losses():
             self._warn(f"CUE_UNRESOLVED {_loss}")
+        # A fresh board's first drawing was pulled forward so the voice did
+        # not run over a blank board (timing.FIRST_INK_SECS). Recorded, so a
+        # lesson where this fires on every chapter can be seen for what it is:
+        # a director cueing its pictures late.
+        from .timing import take_ink_pulls
+        for _pull in take_ink_pulls():
+            self._warn(f"FIRST_INK_PULLED {_pull}")
         from .timing import CAPTION_PREFIX
         if audio_secs <= 0:
             # a silent scene has no speech to caption — cue-less captions

@@ -148,6 +148,42 @@ def take_cue_losses() -> list[str]:
     return out
 
 
+# ── the first ink on a fresh board ───────────────────────────────────────────
+# At a chapter boundary the previous board fades out from 0.15 s and is gone
+# by about 1.05 s. The new board's first `draw` then waits for the director's
+# cue phrase — which is wherever in the narration the model chose to mention
+# the object. Measured on the first catalogue lessons (Heat Transfer,
+# 2026-09-13): 0:00–0:45 of speech bubbles before the bathtub was drawn, and
+# blank stretches of 12–20 s at three later chapter openings. The founder
+# read every one of them as "images missing".
+#
+# The board is a whiteboard: a teacher starts drawing as they start talking
+# about a thing, not after. So on a fresh board the first real drawing —
+# a `draw` of something that is not a carried-over element and not a corner
+# sketch — begins no later than this, whatever its cue said. Later cues are
+# untouched; the order clamp below keeps everything after it in sequence.
+FIRST_INK_SECS = 1.3
+_INK_PULLS: list[str] = []
+
+
+def _is_first_ink(action: Action) -> bool:
+    """Is this the drawing that ends a blank board? A title or a caption is
+    text, not a picture; a `prev__*` element is the OLD board on its way
+    out; a `sk_*` corner sketch is decoration in the margin, and a board
+    whose only early ink is a corner sketch still reads as blank."""
+    if getattr(action, "verb", None) != "draw":
+        return False
+    tgt = str(getattr(action, "target", "") or "")
+    return bool(tgt) and not tgt.startswith(("prev__", "sk_", "__"))
+
+
+def take_ink_pulls() -> list[str]:
+    """Drain the first-ink pulls recorded since the last call."""
+    out = list(_INK_PULLS)
+    _INK_PULLS.clear()
+    return out
+
+
 def compile_timeline(scene: Scene, audio_secs: float,
                      workloads: dict[int, float] | None = None,
                      words: list[dict] | None = None) -> list[TimedAction]:
@@ -162,6 +198,11 @@ def compile_timeline(scene: Scene, audio_secs: float,
     timeline: list[TimedAction] = []
     cursor = 0.15  # settle beat before the first mark
     last_board_start = None
+    # A FRESH board (the lesson's first, or one whose predecessor is fading
+    # out right now) must not sit blank while the voice talks. The compiler
+    # marks such scenes; the first real drawing on them is pulled forward.
+    fresh = bool(getattr(scene, "fresh_board", False))
+    first_ink_done = not fresh
     for i, action in enumerate(scene.actions):
         dur = natural_duration(action, workloads.get(i, 0.0))
         start = None
@@ -184,6 +225,12 @@ def compile_timeline(scene: Scene, audio_secs: float,
         if start is None:
             start = cursor + (_GAP if timeline else 0.0)
         start = max(start, cursor - 1e-9) if action.at is None else max(start, 0.0)
+        if not first_ink_done and _is_first_ink(action):
+            first_ink_done = True
+            if start > FIRST_INK_SECS:
+                _INK_PULLS.append(f"{getattr(action, 'target', '')}: "
+                                  f"{start:.1f}s -> {FIRST_INK_SECS:.1f}s")
+                start = FIRST_INK_SECS
         if _is_caption(action):
             # speech captions are a PARALLEL track: they neither obey the
             # board's teaching order nor push it around
