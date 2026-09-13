@@ -411,7 +411,7 @@ def is_catalogue_job(job: Optional[dict]) -> bool:
     return db.is_catalogue_params((job or {}).get("params"))
 
 
-def builder_queued(sb) -> bool:
+def builder_queued(sb, exclude_job_id: Optional[str] = None) -> bool:
     """Whether any job a REAL USER is waiting on is LIVE — queued or
     processing — of a type that is not an observer (presentations, decks,
     documents, index_book, exams). THE never-starve gate: a generation call
@@ -426,10 +426,16 @@ def builder_queued(sb) -> bool:
     ``or=(...is.null,...neq.true)`` is the only way to say "flag absent or
     false" in one filter, and reading a bounded page of live builders and
     filtering it is exact for any queue this worker has ever seen (the live
-    set is a handful of rows) while staying honest with every fake client."""
+    set is a handful of rows) while staying honest with every fake client.
+
+    ``exclude_job_id`` is the CALLER's own job. A user's deck job is a
+    builder by type and is 'processing' while it asks — counting it made
+    the first live deck to reach the generate rung wait on itself for the
+    whole yield limit (2026-09-12, 30 minutes for one picture)."""
     res = (sb.table("jobs").select("id,type,status,params").in_("status", list(BUILDER_LIVE_STATUSES))
            .not_.in_("type", sorted(db.OBSERVER_JOB_TYPES)).limit(BUILDER_PROBE_LIMIT).execute())
-    return any(not is_catalogue_job(r) for r in _rows(res))
+    return any(not is_catalogue_job(r) and str(r.get("id")) != str(exclude_job_id or "")
+               for r in _rows(res))
 
 
 def lookup_asset(sb, rendered: Rendered) -> Optional[dict]:
@@ -512,7 +518,7 @@ def render_figure(sb, backend: FigureBackend, figure: dict, context: dict, gate:
 
 
 @contextmanager
-def _yielding_to_users(sb, job_id: str, backend: FigureBackend):
+def _yielding_to_users(sb, job_id: str, backend: FigureBackend, exclude_job_id: Optional[str] = None):
     """Arm the scene engine's per-image never-starve hook for this job.
 
     ``gate()`` is asked once per figure, immediately before the ladder starts.
@@ -546,7 +552,7 @@ def _yielding_to_users(sb, job_id: str, backend: FigureBackend):
     # One queue read per ten seconds however many callers ask, and an
     # unreadable queue answers "contended" — the safe way round: a figure
     # waits, a teacher never does.
-    probe = ContentionProbe(sb)
+    probe = ContentionProbe(sb, exclude_job_id=exclude_job_id)
 
     def clear_to_generate(what: str) -> bool:
         return yield_to_users(probe, on_wait=lambda elapsed: log.warning(

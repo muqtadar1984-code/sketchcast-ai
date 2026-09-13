@@ -536,10 +536,14 @@ class ContentionProbe:
     read the queue says "contended" (the safe answer: a kit waits, a teacher
     never does)."""
 
-    def __init__(self, sb, ttl: Optional[float] = None, reader: Optional[Callable[[object], bool]] = None):
+    def __init__(self, sb, ttl: Optional[float] = None, reader: Optional[Callable[[object], bool]] = None,
+                 exclude_job_id: Optional[str] = None):
         self._sb = sb
         self._ttl = max(0.0, float(PROBE_TTL_S if ttl is None else ttl))
         self._reader = reader
+        # The asking job itself, never a "user waiting" (a user's deck is a
+        # live builder while it asks). Only the default reader honours it.
+        self.exclude_job_id = exclude_job_id
         self._lock = threading.Lock()
         self._at: Optional[float] = None
         self._value = False
@@ -547,8 +551,12 @@ class ContentionProbe:
 
     def _read(self) -> bool:
         if self._reader is None:
-            from catalogue.figures import builder_queued
-            self._reader = builder_queued
+            from catalogue import figures as _figures
+            exclude = self.exclude_job_id
+            # Without an exclusion the reader IS builder_queued (tests patch it
+            # with one-argument fakes); with one, the kwarg is passed through.
+            self._reader = ((lambda sb: _figures.builder_queued(sb, exclude_job_id=exclude))
+                            if exclude else _figures.builder_queued)
         return bool(self._reader(self._sb))
 
     def __call__(self) -> bool:
