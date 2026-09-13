@@ -1137,3 +1137,31 @@ def test_the_flag_probe_counts_queued_kit_jobs_that_0115_did_not_stamp(caplog):
     caplog.set_level(logging.CRITICAL, logger="worker")
     assert db.probe_catalogue_job_flags(sb) == 1
     assert "CATALOGUE FLAG CHECK FAILED" in caplog.text and "job-kit" in caplog.text
+
+
+def test_builder_queued_never_counts_the_asking_job():
+    """The first live user deck to reach the generate rung waited 30 minutes
+    on ITSELF: a deck is a builder by type and 'processing' while it asks."""
+    from catalogue.figures import builder_queued
+
+    sb = _kit_sb(_builder("job-deck", "deck"))
+    sb.tables["jobs"][-1]["status"] = "processing"
+    assert builder_queued(sb) is True, "someone else's view of it: a user is waiting"
+    assert builder_queued(sb, exclude_job_id="job-deck") is False, "its own view: nobody but me"
+    sb.tables["jobs"].append(_builder("job-u", "worksheet"))
+    assert builder_queued(sb, exclude_job_id="job-deck") is True, "another person's lesson still wins"
+
+
+def test_the_figure_hook_excludes_the_job_that_arms_it():
+    from catalogue.figures import _yielding_to_users
+
+    class _Backend:
+        hook = None
+
+        def set_yield(self, fn):
+            self.hook = fn
+
+    with _yielding_to_users(object(), "job-deck", _Backend(), exclude_job_id="job-deck") as probe:
+        assert probe.exclude_job_id == "job-deck"
+    with _yielding_to_users(object(), "job-k", _Backend()) as probe:
+        assert probe.exclude_job_id is None, "the kit path is unchanged"

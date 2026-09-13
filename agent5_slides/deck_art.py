@@ -324,7 +324,7 @@ def generate_figures(model: LessonModel, sb, tmp: Path, context: dict, job_id: s
     except Exception:  # noqa: BLE001
         pass
     placed = 0
-    with _yielding_to_users(sb, job_id, backend):
+    with _yielding_to_users(sb, job_id, backend, exclude_job_id=exclude_job_id):
         for sec in wanted:
             if placed >= budget:
                 break
