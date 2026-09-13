@@ -89,7 +89,7 @@ def test_every_module_attribute_used_is_actually_imported():
     assert not offenders, "\n".join(offenders)
 
 
-def test_process_generation_gets_past_its_setup():
+def test_process_generation_gets_past_its_setup(monkeypatch):
     """CALL it. The label block at the top used os.getenv with os unimported;
     a source-substring test could never see that."""
     from worker import process
@@ -109,7 +109,10 @@ def test_process_generation_gets_past_its_setup():
     class _Stop(Exception):
         pass
 
-    process.db = _DB()
+    # Through monkeypatch, so the stub is RESTORED: a bare assignment left
+    # every later test in the session calling a db whose deferred_seconds
+    # returned None (tests/test_deck_sequencing.py failed after this file).
+    monkeypatch.setattr(process, "db", _DB())
     with pytest.raises(Exception) as exc:
         process.process_generation(object(), {"id": "j1"}, "g1")
     # It must NOT be a NameError/AttributeError from module setup — reaching

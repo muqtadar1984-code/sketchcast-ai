@@ -131,18 +131,18 @@ class DeferredJob(Exception):
 def defer_job(sb: Client, job: dict, seconds: int, note: str) -> bool:
     """queued again, invisible to the claim for `seconds`, attempts untouched.
     ``deferred_since`` is set once, so the waiter can bound how long it has
-    been waiting in total. Guarded on `processing`: if the reaper or the
-    console moved the row meanwhile, we do not overwrite them."""
+    been waiting in total. Written through requeue_job — the one requeue
+    writer — so it carries the same guards (status, and the attempts fence:
+    a peer container that reaped and re-claimed this row while we waited
+    must not have it pulled back) and the same generation mirror ('queued':
+    the dashboard must not show a build that is not happening)."""
     now = datetime.now(timezone.utc)
     params = dict(job.get("params") or {}) if isinstance(job.get("params"), dict) else {}
     params.setdefault("deferred_since", _stamp(now))
     params["deferred_until"] = _stamp(now + timedelta(seconds=seconds))
     params["deferred_note"] = note[:200]
-    upd = (sb.table("jobs")
-           .update({"status": "queued", "progress": 0, "params": params,
-                    "stage": {"phase": "waiting", "note": note[:200]}})
-           .eq("id", job["id"]).eq("status", "processing").execute())
-    return bool(getattr(upd, "data", None))
+    extra = {"params": params, "stage": {"phase": "waiting", "note": note[:200]}}
+    return requeue_job(sb, job, bump_attempts=False, extra=extra)
 
 
 def deferred_seconds(job: dict) -> float:
@@ -257,14 +257,55 @@ def claim_next_job(sb: Client, job_type=None, exclude_types=None,
     return claimed
 
 
+def requeue_job(sb: Client, job: dict, *, bump_attempts: bool, extra: Optional[dict] = None) -> bool:
+    """ONE writer for "this job goes back to the queue".
+
+    Four callers, one shape, so the job row and its generation can never
+    disagree about what "queued" means: the startup and windowed reapers (a
+    dead worker's orphan — the attempt is spent), run.py's tier-outage retry
+    (the same), a graceful shutdown (the job is fine, the WORKER is leaving —
+    no attempt is spent, or a deploy would cost every in-flight lesson one of
+    its three lives), and defer_job (a deck waiting for its video: no attempt,
+    and ``extra`` carries the wake-up stamp and the 'waiting' stage).
+
+    Guarded twice. ``status = 'processing'`` is the reaper's guard: a row the
+    console or another actor already moved is left alone. ``attempts = <what
+    this caller last read>`` is a fence against the rolling-deploy race of
+    2026-09-13 13:56 UTC: the NEW container's boot reap requeued a job the OLD
+    container still held, the old container re-claimed it fifteen seconds
+    before Railway removed it, and the job sat 'processing' with no worker
+    until the 15-minute reaper. Every reaper requeue bumps ``attempts``, so a
+    row a peer has reaped-and-reclaimed carries a different count than the
+    one this caller holds — the old container's shutdown requeue cannot pull
+    a job out from under the container now building it. (``attempts`` is
+    ``int not null default 0`` since app migration 0041, so the fence always
+    has a value to match.)
+
+    Returns True when the row was moved. Mirrors 'queued' onto the generation
+    the job OWNS — generation_to_mirror, never an observer's report target."""
+    att = int(job.get("attempts") or 0)
+    payload = {"status": "queued", "progress": 0, **(extra or {})}
+    if bump_attempts:
+        payload["attempts"] = att + 1
+    upd = (sb.table("jobs").update(payload)
+           .eq("id", job["id"]).eq("status", "processing").eq("attempts", att).execute())
+    if not getattr(upd, "data", None):
+        return False
+    mirror_generation_status(sb, generation_to_mirror(job), "queued")
+    return True
+
+
 def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max_attempts: int = 3,
                        exclude_ids: Optional[set] = None) -> int:
     """Return orphaned 'processing' jobs to 'queued' so a live worker re-runs them.
 
     ``claim_next_job`` only ever claims 'queued' rows, so a job the worker was
     running when it died (a deploy, crash or OOM) is stranded in 'processing'
-    forever — the book sits at "Finding chapters…" / a generation freezes. This is
-    a SINGLE-worker service, so:
+    forever — the book sits at "Finding chapters…" / a generation freezes. One
+    replica runs at a time (a rolling deploy overlaps two for the drain window:
+    the departing one hands its own work back — run.py release_held_jobs — and
+    requeue_job's attempts fence keeps the pair from pulling one job back and
+    forth), so:
 
     * at STARTUP, every 'processing' job is orphaned (nothing else is running it) —
       call with ``older_than_minutes=None`` to reap them all and recover instantly;
@@ -275,9 +316,10 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
     ``max_attempts`` times is marked 'error' instead of requeued, so a poison-pill
     job that keeps hard-crashing the worker can't loop forever and block the queue.
 
-    Returns the number requeued. Best-effort — never raises. (Scaling past one
-    replica would require gating the startup reap-all, or a peer's in-flight job
-    could be requeued.)"""
+    Returns the number requeued. Best-effort — never raises. (During a deploy's
+    overlap the startup reap-all CAN requeue a job the departing replica is
+    still rendering; both then build it until the old one exits. A lease or
+    ownership column on jobs would close that — the next step past the fence.)"""
     cutoff = (
         (datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)).isoformat()
         if older_than_minutes is not None else None
@@ -323,13 +365,12 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
                         pass
                 failed += 1
             else:
-                upd = sb.table("jobs").update(
-                    {"status": "queued", "progress": 0, "attempts": att + 1}
-                ).eq("id", j["id"]).eq("status", "processing").execute()
-                if upd.data:
-                    # Back in the queue, so the row must not stay "being built" —
-                    # a stuck 'processing' would leave the ✕ inert forever.
-                    mirror_generation_status(sb, owned_gen, "queued")
+                # The one requeue writer (requeue_job): status + attempts
+                # guards, the attempt spent, and the row's generation back to
+                # 'queued' — a stuck 'processing' would leave the ✕ inert
+                # forever. Resolves the generation through the same rule as
+                # owned_gen above (generation_to_mirror).
+                if requeue_job(sb, j, bump_attempts=True):
                     requeued += 1
         if failed:
             logging.getLogger("worker").error(
@@ -369,8 +410,29 @@ def requeue_stale_sketches(sb: Client, older_than_minutes: Optional[int] = None)
         return 0
 
 
+def requeue_sketch(sb: Client, sketch: dict) -> bool:
+    """A graceful shutdown's hand-back for the tutor sketch this process holds
+    (claimed FIRST every poll, so a deploy mid-render is the likely case).
+    Guarded on 'processing' like the reaper. No attempts fence: the sketch
+    queue has no counter, and a sketch is a seconds-long idempotent render,
+    so a peer that reaped and re-claimed it merely renders it once more.
+    Best-effort — never raises."""
+    try:
+        upd = (sb.table("tutor_sketch")
+               .update({"status": "queued", "updated_at": datetime.now(timezone.utc).isoformat()})
+               .eq("id", sketch["id"]).eq("status", "processing").execute())
+        return bool(getattr(upd, "data", None))
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning("sketch %s not requeued: %s", sketch.get("id"), exc)
+        return False
+
+
 def set_progress(sb: Client, job_id: str, progress: int) -> None:
-    sb.table("jobs").update({"progress": progress}).eq("id", job_id).execute()
+    """Guarded on 'processing': a row a reaper or a departing worker has
+    already handed back to the queue must not read "62% built" with nobody
+    building it — a non-zero progress on a queued row is exactly what made
+    credit_ledger_void_unconsumed refuse a teacher's refund (2026-08-25)."""
+    sb.table("jobs").update({"progress": progress}).eq("id", job_id).eq("status", "processing").execute()
 
 
 def set_book_language(sb: Client, book_id: str, language: Optional[str]) -> None:
