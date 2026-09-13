@@ -158,6 +158,9 @@ def figure_from_row(sb, row: dict, tmp: Path, caption: str = "") -> Optional[Fig
 
 # ── placing pictures on sections ──────────────────────────────────────
 
+_THIN_SECTION_TOKENS = 25
+
+
 def _tokens(text: str) -> set[str]:
     return {t for t in re.findall(r"[a-z]{3,}", (text or "").lower()) if t not in _STOP}
 
@@ -226,9 +229,17 @@ def place_video_figures(model: LessonModel, seg_keys: list[tuple[int, str]],
             scored = sorted(free, key=lambda s: -len(fw & _tokens(_section_text(s))))
             if scored and fw & _tokens(_section_text(scored[0])):
                 sec = scored[0]
-            else:
+            elif all(len(_tokens(_section_text(s))) < _THIN_SECTION_TOKENS for s in free):
+                # Bare headings (a script-shaped deck): position is the only
+                # evidence there is.
                 pos = int(round(seg_i / max(1, n_segments - 1) * (len(model.sections) - 1)))
                 sec = min(free, key=lambda s: abs(model.sections.index(s) - pos))
+            else:
+                # Sections with real text that share NO word with the
+                # picture: the syringes went under "Hypotheses and Theories"
+                # by position (live, 2026-09-13). No picture beats the wrong one.
+                logger.info("deck art: video picture %s matches no section; not placed", key)
+                continue
         if sec is None:
             continue
         _attach(model, sec, fig)

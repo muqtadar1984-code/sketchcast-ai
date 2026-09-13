@@ -237,3 +237,25 @@ class TestAGeneratedPictureIsPlaced:
         n = deck_art.generate_figures(model, object(), tmp_path, {}, "job-1", 1, "job-1")
         assert n == 1 and fetched == [["particle_state"]]
         assert deck_art.pictured(model, model.sections[0])
+
+
+    def test_a_picture_that_matches_no_section_is_not_placed_by_position(self, tmp_path):
+        """Live: the syringe diagram landed under "Hypotheses and Theories" —
+        the position fallback, meant for bare script headings, over sections
+        that had plenty of text and none of the picture's words."""
+        png = tmp_path / "compression.png"
+        png.write_bytes(b"png")
+        model = from_article({**ARTICLE_REPLY, "language": "en"}, [], art=None)
+        for s in model.sections:
+            s.figure_keys = []
+        fig = Figure(key="tide_chart", caption="a chart of tides against the moon phases", png=png)
+        n = deck_art.place_video_figures(model, [(1, "tide_chart")], {"tide_chart": fig}, 3, False, 4)
+        assert n == 0 and not any(s.figure_keys for s in model.sections)
+
+    def test_bare_headings_still_take_a_picture_by_position(self, tmp_path):
+        png = tmp_path / "x.png"
+        png.write_bytes(b"png")
+        model = LessonModel(title="L", sections=[Section(id=f"s{i}", heading=f"Slide {i}") for i in range(3)])
+        fig = Figure(key="tide_chart", caption="tides", png=png)
+        assert deck_art.place_video_figures(model, [(2, "tide_chart")], {"tide_chart": fig}, 3, False, 4) == 1
+        assert model.sections[2].figure_keys == ["tide_chart"]
