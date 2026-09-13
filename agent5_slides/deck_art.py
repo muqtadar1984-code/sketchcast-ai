@@ -377,8 +377,17 @@ def generate_figures(model: LessonModel, sb, tmp: Path, context: dict, job_id: s
                     backend.publish(key, prompt, rendered, dict(context))
                     row = lookup_asset(sb, rendered)
                 if row is None:
+                    logger.warning("deck art: %s was generated but its library row was not found", key)
                     continue
+                if not row.get("storage_path"):
+                    # The first live run generated two pictures and placed
+                    # neither: the hash lookup's projection had no path.
+                    row = rows_for_keys(sb, [str(row.get("asset_key") or key)]).get(
+                        str(row.get("asset_key") or key)) or row
                 fig = figure_from_row(sb, row, tmp, caption=caption)
+                if fig is None:
+                    logger.warning("deck art: %s was generated but could not be fetched (%s)",
+                                   key, row.get("storage_path"))
                 if fig is None:
                     continue
                 if declared is not None and declared.key != fig.key:

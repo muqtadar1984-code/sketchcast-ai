@@ -198,3 +198,42 @@ class TestTheVideosPicturesRespectTheArticlesPlans:
         assert n == 1
         assert "state_cycles" in model.sections[3].figure_keys, "the bare section, not the planned one"
         assert model.sections[1].figure_keys == ["particle_states"]
+
+
+class TestAGeneratedPictureIsPlaced:
+    def test_a_hash_lookup_without_a_path_is_refetched_by_key(self, monkeypatch, tmp_path):
+        """Live, 2026-09-13: two pictures were generated and published for the
+        Materials deck and NEITHER landed — the content-hash lookup's row had
+        no storage_path, so figure_from_row returned None, silently."""
+        model = from_article({**ARTICLE_REPLY, "language": "en"}, [], art=None)
+        png = tmp_path / "art" / "particle_state.png"
+        png.parent.mkdir(parents=True)
+        png.write_bytes(b"png")
+
+        class _Backend:
+            set_yield = None
+
+            def set_context(self, **kw):
+                pass
+
+            def budget_exhausted(self):
+                return False
+
+            def generate(self, key, prompt):
+                return object()
+
+            def publish(self, *a):
+                pass
+
+        fetched: list[list[str]] = []
+        monkeypatch.setattr(deck_art, "_backend", lambda: _Backend())
+        monkeypatch.setattr(deck_art, "user_builders_live", lambda sb, ex: False)
+        import catalogue.figures as cf
+        monkeypatch.setattr(cf, "lookup_asset", lambda sb, r: {"id": "a1", "asset_key": "particle_state"})
+        monkeypatch.setattr(deck_art, "rows_for_keys", lambda sb, keys: (fetched.append(list(keys)) or
+                            {"particle_state": {"asset_key": "particle_state", "storage_path": "x/y.png"}}))
+        monkeypatch.setattr(deck_art, "figure_from_row", lambda sb, row, tmp, caption="": (
+            Figure(key=row["asset_key"], caption=caption, png=png) if row.get("storage_path") else None))
+        n = deck_art.generate_figures(model, object(), tmp_path, {}, "job-1", 1, "job-1")
+        assert n == 1 and fetched == [["particle_state"]]
+        assert deck_art.pictured(model, model.sections[0])
