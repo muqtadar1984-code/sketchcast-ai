@@ -576,6 +576,46 @@ def strip_layer_tail(text: str) -> str:
     return _LAYER_TAIL.sub("", str(text or ""))
 
 
+# ── a table is not a picture ─────────────────────────────────────────────────
+# An image model asked for a "particle table" draws an empty ruled grid, and
+# the lesson opens on lines with nothing in them (Structure of the Atom,
+# 2026-09-13: `particle_table` was generated once, published as approved, and
+# served again by the library on the next render). The director is told an
+# asset is a DRAWING, never a table — but the shelf still held one, and the
+# shelf does not read the director's prompt. So the library refuses tabular
+# rows on BOTH doors: never served, never published.
+#
+# Whole-word match over the key and the stored description (layer tail
+# stripped: "name the layer groups: header row" is the annotator's, not the
+# picture's). Deliberately NARROW: "grid" (the power grid), "matrix" (the
+# extracellular matrix) and "panel" (a solar panel) all name things a lesson
+# genuinely draws. And a few tables are objects, not data: the periodic
+# table, the water table — those phrases are exempt.
+_TABULAR_TOKENS = frozenset({"table", "tables", "chart", "charts",
+                             "spreadsheet", "tabular"})
+_TABULAR_EXEMPT_PHRASES = ("periodic table", "water table", "table salt",
+                           "table tennis")
+
+
+def is_tabular_asset(key: str, description: str | None = None) -> bool:
+    """True when the key or the description says the picture is a table or
+    a chart — the artwork the image model cannot draw."""
+    text = " ".join(re.findall(
+        r"[a-z]+", (str(key or "") + " " +
+                    strip_layer_tail(description or "")).lower()))
+    for phrase in _TABULAR_EXEMPT_PHRASES:
+        text = text.replace(phrase, " ")
+    return bool(set(text.split()) & _TABULAR_TOKENS)
+
+
+def row_is_tabular(row: dict[str, Any] | None) -> bool:
+    if not row:
+        return False
+    return is_tabular_asset(
+        str(row.get("asset_key") or row.get("canonical_key") or ""),
+        str(row.get("description") or ""))
+
+
 # ── a match must be ABOUT the thing that was asked for ───────────────────────
 # Scoring is a bag of tokens over key + description, so "ciliated_cell" scored
 # 1.23 against red_blood_cell (shared: cell, blood-vessel prose, the boilerplate
@@ -1212,6 +1252,18 @@ def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
         if want_format is not None:
             candidates = [r for r in candidates
                           if row_format(r) == want_format]
+        # a table on the shelf is refused BEFORE scoring, guarded or not:
+        # the unguarded scan exists to record near-misses as evidence, and
+        # a grid of empty cells is not evidence of anything
+        kept = []
+        for r in candidates:
+            if row_is_tabular(r):
+                logger.info("visual library: refusing %s for %s — a table, "
+                            "chart or grid is not a picture",
+                            r.get("asset_key"), key)
+                continue
+            kept.append(r)
+        candidates = kept
         return [r for r in candidates if key_guard_ok(key, r)] if guarded \
             else candidates
 
@@ -1758,6 +1810,11 @@ def publish_generated(asset_key: str, prompt: str, asset_path: Path,
     # not a roster identity: what gets published — when it gets published at
     # all — is the roster key, so the duplicate check below sees the family.
     asset_key = base_avatar_key(str(asset_key))
+    if is_tabular_asset(asset_key, prompt):
+        logger.warning("visual library: refusing to publish %s — a table, "
+                       "chart or grid is not a picture and would be served "
+                       "again as one", asset_key)
+        return False
     fmt = normalize_format(asset_format
                            or (metadata or {}).get("asset_format")
                            or asset_path.suffix)

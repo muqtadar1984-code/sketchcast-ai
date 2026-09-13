@@ -137,6 +137,12 @@ RULES:
   "layers": ["nucleus"]}) — NEVER as separate illustration elements per part:
   independently generated images DO NOT compose, they stack into a tangle.
   Labels, arrows, particles and shapes may be added freely.
+- THE LESSON OPENS ON A DRAWING: the FIRST chapter declares an illustration
+  and its FIRST step draws it, cued in segment 1 or 2. A title, a definition
+  or a list is written BESIDE that drawing — never alone on a blank board
+  while the teacher talks for half a minute. If the introduction has no
+  natural picture, open with the thing the lesson is about (the atom, the
+  cell, the beaker) and write the title next to it.
 - reason in PART_OF / SAME_STRUCTURE / CAUSE_EFFECT terms: the nucleus is
   PART_OF the cell, so discussing it CONTINUES the cell visual — never redraws.
 - elements are declared ONCE per chapter with stable ids; steps only reference

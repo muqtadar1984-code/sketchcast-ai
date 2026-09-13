@@ -432,3 +432,107 @@ class TestTheDirectorIsToldNotToAskForTables:
         from spike.scene_engine import director
         src = inspect.getsource(director)
         assert "never a\n  table, chart, grid" in src or "never a table, chart, grid" in src.replace("\n  ", " ")
+
+
+# ── 6. the lesson never opens on a board with nothing drawn ──────────────────
+
+class TestATextOnlyOpeningChapterIsFoldedIntoTheNext:
+    """Structure of the Atom, 2026-09-13: the director's first chapter was a
+    title and two lines, no illustration — 36 s of words on a blank board
+    before the atom in chapter two. The opening chapter folds into the next
+    one, whose picture the opening-step injection then draws on step one."""
+
+    _NARR = {"s001": "what is everything made of", "s002": "every object is atoms",
+             "s003": "look at the atom", "s004": "the nucleus sits in the middle"}
+
+    def _plan(self, first_has_picture=False, second_has_picture=True,
+              collide=False):
+        first_els = [{"id": "ttl", "type": "text", "text": "Matter", "at": [600, 60],
+                      "role": "title"},
+                     {"id": "l1", "type": "text", "text": "everything is atoms",
+                      "at": [600, 300], "role": "term"}]
+        if first_has_picture:
+            first_els.append({"id": "rod", "type": "illustration",
+                              "asset": "metal_rod", "at": [600, 380]})
+        lbl = "ttl" if collide else "lbl_n"
+        second_els = [{"id": "atom", "type": "illustration", "asset": "atom",
+                       "at": [600, 380]},
+                      {"id": lbl, "type": "text", "text": "nucleus",
+                       "at": [600, 60], "role": "label"}]
+        if not second_has_picture:
+            second_els = second_els[1:]
+        first_actions = [{"verb": "write", "target": "ttl"}]
+        if first_has_picture:
+            first_actions.append({"verb": "draw", "target": "rod"})
+        third_actions = ([{"verb": "draw", "target": "atom"}] if second_has_picture
+                         else [{"verb": "write", "target": lbl}])
+        return parse_visual_plan({"chapters": [
+            {"concept": "matter",
+             "assets": {"metal_rod": "a metal rod"} if first_has_picture else {},
+             "elements": first_els,
+             "steps": [
+                 {"segment": 1, "decision": "NEW_VISUAL", "actions": first_actions},
+                 {"segment": 2, "decision": "EXTEND",
+                  "actions": [{"verb": "write", "target": "l1"}]},
+             ]},
+            {"concept": "the_atom", "transition": "clear_and_redraw",
+             "assets": {"atom": "an atom. Name the layer groups exactly: nucleus, shell"},
+             "elements": second_els,
+             "steps": [
+                 {"segment": 3, "decision": "NEW_VISUAL", "actions": third_actions},
+                 {"segment": 4, "decision": "EXTEND",
+                  "actions": [{"verb": "write", "target": lbl}]},
+             ]},
+        ]})
+
+    def test_the_first_segment_draws_the_next_chapter_s_picture(self):
+        plan = self._plan()
+        scenes, _, report = compile_plan(plan, self._NARR)
+        assert any("| FOLDED into the_atom" in r for r in report), report
+        s1 = scenes["s001"]
+        verbs = [(a["verb"], a["target"]) for a in s1["actions"]]
+        assert ("draw", "atom") in verbs, verbs
+        assert ("write", "ttl") in verbs, "the title is still written"
+        assert verbs.index(("draw", "atom")) < verbs.index(("write", "ttl"))
+        assert len(plan.chapters) == 1
+
+    def test_the_title_and_the_picture_share_one_board(self):
+        scenes, _, _ = compile_plan(self._plan(), self._NARR)
+        ids = {e["id"] for e in scenes["s003"]["elements"]}
+        assert {"atom", "ttl", "l1"} <= ids, ids
+        assert not any(i.startswith("prev__") for i in ids), "no wipe between them"
+
+    def test_an_opening_chapter_with_its_own_picture_is_left_alone(self):
+        plan = self._plan(first_has_picture=True)
+        _, _, report = compile_plan(plan, self._NARR)
+        assert not any("FOLDED" in r for r in report)
+        assert len(plan.chapters) == 2
+
+    def test_a_colliding_text_id_is_renamed_and_its_action_follows(self):
+        plan = self._plan(collide=True)
+        scenes, _, report = compile_plan(plan, self._NARR)
+        s1 = scenes["s001"]
+        assert ("write", "c1_ttl") in [(a["verb"], a["target"]) for a in s1["actions"]]
+        assert {e["id"] for e in s1["elements"]} >= {"c1_ttl", "atom"}
+        # the later chapter's "ttl" (the nucleus label) is the one that keeps the id
+        ttl = next(e for e in scenes["s004"]["elements"] if e["id"] == "ttl")
+        assert ttl["text"] == "nucleus"
+
+    def test_a_plan_with_no_art_anywhere_is_reported_not_repaired(self):
+        plan = self._plan(second_has_picture=False)
+        _, _, report = compile_plan(plan, self._NARR)
+        assert any(r.startswith("PLAN | NO ART") for r in report), report
+        assert len(plan.chapters) == 2
+
+    def test_the_folded_scenes_are_schema_valid(self):
+        scenes, _, _ = compile_plan(self._plan(collide=True), self._NARR)
+        for sc in scenes.values():
+            Scene.model_validate(sc)
+
+
+class TestTheDirectorIsToldToOpenOnADrawing:
+    def test_the_prompt_requires_a_picture_in_the_first_chapter(self):
+        import inspect
+
+        from spike.scene_engine import director
+        assert "THE LESSON OPENS ON A DRAWING" in inspect.getsource(director)

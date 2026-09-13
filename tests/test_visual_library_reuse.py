@@ -1130,3 +1130,65 @@ class TestWhyDidXNotMatchYIsAnswerableFromTheLog:
                 "asset_key": "composite_volcano_cross_section",
                 "canonical_key": "composite_cross_section_volcano"}) is True
         assert not any("denies" in r.getMessage() for r in caplog.records)
+
+
+# ── a table is not a picture ─────────────────────────────────────────────────
+
+_PARTICLE_TABLE = {
+    "asset_key": "particle_table", "canonical_key": "particle_table",
+    "description": ("A table of the three subatomic particles with their "
+                    "charge and mass. Name the layer groups exactly: header, "
+                    "proton, neutron, electron."),
+    "subject": "chemistry", "grade": "k12", "curriculum": "generic",
+    "topic": "structure of the atom", "concepts": ["atom"],
+    "status": "approved", "asset_type": "visual",
+    "local_cache_path": "/tmp/particle_table.png",
+}
+
+
+class TestATableIsNeverServedOrPublished:
+    """Structure of the Atom, 2026-09-13: the image model drew an empty ruled
+    grid for `particle_table`, it was published as approved, and the next
+    render opened on it. The director is told never to ask for one; the
+    shelf did not read the prompt."""
+
+    @pytest.mark.parametrize("key,desc", [
+        ("particle_table", "A table of subatomic particles"),
+        ("comparison_chart", "A chart comparing conduction and convection"),
+        ("atom", "A bar chart of the masses of the particles"),
+        ("data_tables", ""),
+    ])
+    def test_the_predicate_names_a_table(self, key, desc):
+        assert vl.is_tabular_asset(key, desc) is True
+
+    @pytest.mark.parametrize("key,desc", [
+        ("periodic_table", "The periodic table with groups and periods"),
+        ("water_table", "Groundwater, the water table and an aquifer"),
+        ("power_grid", "The national grid from power station to home"),
+        ("solar_panel", "A solar panel on a roof"),
+        ("plant_cell", "A plant cell. Name the layer groups exactly: table, grid"),
+        ("plant_cell", "A plant cell with a wall and a nucleus"),
+    ])
+    def test_a_thing_a_lesson_draws_is_not_a_table(self, key, desc):
+        assert vl.is_tabular_asset(key, desc) is False
+
+    def test_a_stored_table_is_not_served_even_at_score_zero(
+            self, tmp_path, monkeypatch):
+        _library(monkeypatch, tmp_path, _PARTICLE_TABLE)
+        prompt = "A table of the three subatomic particles and their charges"
+        assert vl.find("particle_table", prompt, min_score=0.0) is None
+        row, score, _ = vl.best_match("particle_table", prompt)
+        assert row is None and score == 0.0, "not even as near-miss evidence"
+
+    def test_a_neighbouring_picture_is_still_served(self, tmp_path, monkeypatch):
+        _library(monkeypatch, tmp_path, _PARTICLE_TABLE, _RED_BLOOD_CELL)
+        hit = vl.find("red_blood_cell", _RED_BLOOD_CELL["description"])
+        assert hit is not None and hit["asset_key"] == "red_blood_cell"
+
+    def test_a_table_is_refused_at_the_publish_door(self, tmp_path, monkeypatch):
+        _library(monkeypatch, tmp_path)
+        png = tmp_path / "particle_table.png"
+        png.write_bytes(bytes([0x89]) + b"PNG" + bytes([13, 10, 26, 10]) + bytes(64))
+        assert vl.publish_generated("particle_table",
+                                    "A table of subatomic particles", png) is False
+        assert vl._local_candidates() == [], "nothing was filed"
