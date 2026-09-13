@@ -259,3 +259,21 @@ class TestAGeneratedPictureIsPlaced:
         fig = Figure(key="tide_chart", caption="tides", png=png)
         assert deck_art.place_video_figures(model, [(2, "tide_chart")], {"tide_chart": fig}, 3, False, 4) == 1
         assert model.sections[2].figure_keys == ["tide_chart"]
+
+    def test_one_shared_word_does_not_place_a_picture(self, tmp_path):
+        """Live: "particles" alone put the syringe diagram under "Scientific
+        Explanations and Particle Theory"."""
+        png = tmp_path / "syringe.png"
+        png.write_bytes(b"png")
+        model = from_article({**ARTICLE_REPLY, "language": "en"}, [], art=None)
+        for s in model.sections:
+            s.figure_keys = []
+        model.sections[0].points = ["Everything is made of matter."]       # no 'particles' here
+        model.sections[0].body_md = "Everything you can see is matter, and matter comes in three states."
+        model.sections[1].points = ["All matter is made of tiny particles."]
+        model.sections[1].body_md = "A hypothesis is a testable suggestion; a theory is a tested hypothesis."
+        model.sections[2].points = ["Only gases can be compressed."]
+        model.sections[2].body_md = "Gases can be squeezed because their particles are far apart."
+        fig = Figure(key="compression_comparison", caption="a syringe of gas particles squeezed together", png=png)
+        n = deck_art.place_video_figures(model, [(1, "compression_comparison")], {"compression_comparison": fig}, 3, False, 4)
+        assert n == 1 and model.sections[2].figure_keys == ["compression_comparison"], "two words (gas, particles) beat one"
