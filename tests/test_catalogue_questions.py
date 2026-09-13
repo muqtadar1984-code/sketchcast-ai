@@ -654,6 +654,7 @@ def test_a_failing_top_up_call_fails_the_job_but_keeps_the_first_write():
     model = FakeModel([thin, RuntimeError("quota")])
     assert run_questions_job(sb, _job(), client=model) is None
     assert len(_bank(sb)) == 6 and _job_row(sb)["status"] == "error"
+    assert _job_row(sb)["usage"]["calls"] == 1, "the bank call was paid for; a failed top-up still records it"
 
 
 # ── reply shapes measured on 2026-09-13, through the job ─────────────────
@@ -702,6 +703,9 @@ def test_two_unreadable_replies_fail_the_job_with_the_decoder_s_reason():
     job = _job_row(sb)
     assert job["error"].startswith("QuestionsInvalid: model reply is not JSON: Expecting property name enclosed in "
                                    "double quotes at line 1 col 32 (char 31 of 31)")
+    # The 02:11 UTC failure left jobs.usage NULL: usage was written only
+    # after the top-up. Both refused calls were paid for and both are recorded.
+    assert job["usage"]["calls"] == 2
     assert "no 'items' list" not in job["error"]
 
 
