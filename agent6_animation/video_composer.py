@@ -463,6 +463,12 @@ def _audio_duration(audio_path: str, ffmpeg: str) -> float:
     return 0.0
 
 
+class _GateRefusal(Exception):
+    """Control flow only: leaves the warm pass's try block without buying
+    anything further for a lesson the image gate is about to refuse. Never
+    escapes compose_episode_videos; ImagesIncomplete is what the caller sees."""
+
+
 def _anchor_repair_enabled() -> bool:
     """Default ON. The pass is vision-class and bounded by the lesson's own
     anchor count; ANCHOR_REPAIR=0 turns it off without a deploy."""
@@ -899,28 +905,54 @@ def compose_episode_videos(
     # seconds after the segment that needed it stopped waiting.
     _per_segment: list[list[tuple[str, str]]] = [[] for _ in slide_segments]
     _pending_keys: list[str] = []
+    # THE IMAGE GATE. Until now a picture still missing when the warm pass
+    # gave up became a placeholder in the frame, and the acceptance report
+    # tolerated up to n//4 of those — so a lesson with one blank board always
+    # shipped. The founder's rule is the reverse: a bad video is worse than
+    # no video. Under `strict` (the default) the pass waits longer, gives a
+    # non-rate-limit failure one more turn, and a picture still missing at
+    # the end fails the lesson HERE, where refusing costs nothing — no frame
+    # rasterised, no TTS character bought, no vision box bought for a lesson
+    # about to be refused. The refusal names every missing key and its cause
+    # in the resolver's own vocabulary, so a re-run can act on it.
+    # IMAGE_GATE=warn logs what strict would have refused and renders as
+    # before; that is the rollback, and it needs no deploy.
+    _gate_mode = "off"
+    _gate_missing: dict[str, str] = {}
+    _gate_total = 0
+    _gate_fault: Exception | None = None
     if _scene_flag():
         try:
             from spike.scene_engine.asset_warm import (collect_lesson_assets,
+                                                       gate_budget_secs,
+                                                       image_gate_mode,
+                                                       missing_pictures,
+                                                       one_more_turn,
                                                        segment_asset_keys,
                                                        warm_lesson_assets)
             from spike.scene_engine.raster_assets import (asset_deferred,
                                                          get_raster_asset)
             from spike.scene_engine.whiteboard import AVATAR_PROMPTS
+            _gate_mode = image_gate_mode()
             _per_segment = segment_asset_keys(slide_segments, script_segments,
                                               AVATAR_PROMPTS)
             _entries = collect_lesson_assets(_per_segment)
+            _gate_total = len(_entries)
             if _entries:
                 def _warm_fetch(key: str, prompt: str):
                     got = get_raster_asset(key, prompt)
                     if got is not None:
                         return True, None
                     # a rate limit earns another turn; anything else does not
+                    # -- unless the gate is strict, which grants exactly one
                     return False, asset_deferred(key)
                 def _warm_progress(done: int, total: int) -> None:
                     if progress_callback:
                         progress_callback(done, total, "images")
-                _warm = warm_lesson_assets(_entries, fetch=_warm_fetch,
+                _fetch = (one_more_turn(_warm_fetch) if _gate_mode == "strict"
+                          else _warm_fetch)
+                _warm = warm_lesson_assets(_entries, fetch=_fetch,
+                                           budget_secs=gate_budget_secs(_gate_mode),
                                            on_progress=_warm_progress)
                 _pending_keys = _warm["pending"]
                 logger.info("lesson image warm pass: %d/%d ready, %d pending "
@@ -930,6 +962,18 @@ def compose_episode_videos(
                 if _pending_keys:
                     logger.warning("still unresolved after the warm budget: %s",
                                    ", ".join(sorted(_pending_keys)[:12]))
+                if _gate_mode != "off":
+                    _gate_missing = missing_pictures(_entries, _warm)
+                if _gate_missing and _gate_mode == "strict":
+                    # refused below, outside this try: nothing after this
+                    # point may be bought for a lesson that will not ship
+                    raise _GateRefusal()
+                if _gate_missing:
+                    logger.warning("IMAGE_GATE=warn: strict would have refused "
+                                   "this lesson — %d/%d picture(s) missing: %s",
+                                   len(_gate_missing), len(_entries),
+                                   ", ".join(f"{k}={r}" for k, r in
+                                             sorted(_gate_missing.items())[:12]))
                 # THE SEAM. Every picture is on disk with its regions written,
                 # and nothing downstream is paid yet — no frame rasterised, no
                 # TTS character bought. This is the only point where the plan's
@@ -938,8 +982,23 @@ def compose_episode_videos(
                 # free to change. The check itself costs nothing.
                 _repair_anchor_regions(slide_segments, script_segments,
                                        _pending_keys)
+        except _GateRefusal:
+            pass
         except Exception as exc:  # noqa: BLE001 — a warm-up never fails a lesson
             logger.warning("lesson image warm pass skipped: %s", exc)
+            _gate_fault = exc
+    if _gate_mode == "strict":
+        # Raised OUTSIDE the warm pass's own except, which exists so that a
+        # warm-up fault never fails a lesson. A strict gate cannot honour
+        # that: a lesson whose pictures were never checked is exactly the
+        # lesson it exists to refuse. Both refusals carry the cause.
+        from spike.scene_engine.asset_warm import ImagesIncomplete
+        if _gate_missing:
+            raise ImagesIncomplete(_gate_missing, _gate_total)
+        if _gate_fault is not None:
+            raise ImagesIncomplete(
+                {"<warm pass>": f"failed: {type(_gate_fault).__name__}"},
+                max(1, _gate_total)) from _gate_fault
 
     # with a process pool the thread count must not cap the pool: a thread
     # blocks on its child's future, so simultaneous renders = min(threads,
