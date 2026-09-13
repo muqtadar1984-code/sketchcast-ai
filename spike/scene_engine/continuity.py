@@ -140,6 +140,32 @@ def _narration_ngrams(text: str) -> list[str]:
             + [" ".join(w[i:i + 3]) for i in range(len(w) - 2)])
 
 
+# A part name that says WHERE, not WHAT. The periodic-table render
+# (2026-09-13) named its layer groups left_side, right_side, rows, columns and
+# staircase; the narration said all of them, so the synthesiser wrote "Left
+# Side", "Right Side", "Rows" and "Columns" down the margin and armed an arrow
+# for each — four leader lines converging on one corner of an empty grid,
+# naming nothing a student would need to know. A positional name is still a
+# fine ANCHOR for an arrow the director declared; it is never worth a label
+# of its own.
+_POSITIONAL_WORDS = frozenset({
+    "left", "right", "top", "bottom", "upper", "lower", "middle", "centre",
+    "center", "central", "side", "sides", "row", "rows", "column", "columns",
+    "front", "back", "inner", "outer", "edge", "edges", "corner", "corners",
+    "half", "halves", "section", "sections", "part", "parts", "area", "areas",
+    "region", "regions", "zone", "zones", "background", "border", "outline",
+    "layer", "layers", "grid", "line", "lines", "and", "of", "the",
+})
+
+
+def _is_positional(part: str) -> bool:
+    """True when every word of the part name is a position or layout word:
+    'left side', 'rows', 'upper half' — but not 'outer electron' or 'left
+    ventricle', which name a thing by where it is."""
+    words = _norm_name(part).split()
+    return bool(words) and all(w in _POSITIONAL_WORDS for w in words)
+
+
 def _narration_names(name: str, narration: str) -> bool:
     """Does this narration NAME this part?
 
@@ -1355,6 +1381,10 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         stack = 0
         for part in part_names:
             if part in covered:
+                continue
+            if _is_positional(part):
+                report.append(f"CHAPTER {ch.concept} | NOT LABELLED {part!r} "
+                              f"(a position, not a part)")
                 continue
             target_step = next(
                 (s for s in ch.steps

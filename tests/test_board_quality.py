@@ -536,3 +536,86 @@ class TestTheDirectorIsToldToOpenOnADrawing:
 
         from spike.scene_engine import director
         assert "THE LESSON OPENS ON A DRAWING" in inspect.getsource(director)
+
+
+# ── 7. a position is not a part, and a grey page is still a page ─────────────
+
+class TestAPositionalPartNameIsNeverLabelled:
+    """Periodic table, 2026-09-13: the layer groups were left_side, right_side,
+    rows, columns, staircase; the narration named them all, so four labels
+    saying WHERE went down the margin with four arrows converging on one
+    corner of the grid."""
+
+    _NARR = {"s001": "the periodic table has metals on the left side and "
+                     "non metals on the right side, in rows and columns, "
+                     "split by the metalloid staircase"}
+
+    def _plan(self):
+        return parse_visual_plan({"chapters": [
+            {"concept": "periodic_table_structure",
+             "assets": {"periodic_table_grid": "A block layout of the periodic table. "
+                        "Name the layer groups exactly: left_side, right_side, "
+                        "rows, columns, staircase"},
+             "elements": [
+                 {"id": "table_grid", "type": "illustration",
+                  "asset": "periodic_table_grid", "at": [600, 380]},
+             ],
+             "steps": [
+                 {"segment": 1, "decision": "NEW_VISUAL",
+                  "actions": [{"verb": "draw", "target": "table_grid"}]},
+             ]}]})
+
+    def test_positions_are_skipped_and_the_thing_is_still_labelled(self):
+        scenes, _, report = compile_plan(self._plan(), self._NARR)
+        ids = {e["id"] for e in scenes["s001"]["elements"]}
+        assert "lbl_auto_staircase" in ids, report
+        for pos in ("left_side", "right_side", "rows", "columns"):
+            assert f"lbl_auto_{pos}" not in ids, (pos, sorted(ids))
+        skipped = [r for r in report if "NOT LABELLED" in r]
+        assert len(skipped) == 4, skipped
+
+    @pytest.mark.parametrize("name", ["left side", "right_side", "rows", "columns",
+                                      "upper half", "top", "background", "outline"])
+    def test_what_counts_as_a_position(self, name):
+        from spike.scene_engine.continuity import _is_positional
+        assert _is_positional(name) is True
+
+    @pytest.mark.parametrize("name", ["outer electron", "left ventricle",
+                                      "nucleus", "staircase", "top soil", ""])
+    def test_a_thing_named_by_where_it_is_is_still_a_thing(self, name):
+        from spike.scene_engine.continuity import _is_positional
+        assert _is_positional(name) is False
+
+
+class TestAGreyPageIsCutLikeAWhiteOne:
+    """The potassium atom came back on a light grey page (lum ~195); every
+    paper pixel sat just under the white cut and the board showed a grey
+    rectangle behind the drawing."""
+
+    @staticmethod
+    def _page(bg: int, stroke: int = 20):
+        a = np.full((200, 300, 3), bg, np.uint8)
+        a[80:120, 100:200] = stroke
+        return Image.fromarray(a, "RGB")
+
+    @pytest.mark.parametrize("bg", [255, 235, 210, 195, 175])
+    def test_the_page_goes_and_the_stroke_stays(self, bg):
+        from spike.scene_engine.raster_assets import to_ink
+        img = to_ink(self._page(bg))
+        alpha = np.asarray(img.getchannel("A"))
+        assert alpha.max() == 255
+        # cropped to the stroke plus its 12 px pad: no page survived the cut
+        assert img.size == (100 + 24, 40 + 24 - 1) or img.size[0] <= 124, img.size
+        assert int(alpha[0, 0]) == 0
+
+    def test_a_white_page_cuts_exactly_as_before(self):
+        from spike.scene_engine.raster_assets import _ink_threshold
+        lum = np.full((100, 100), 255, np.int32)
+        assert _ink_threshold(lum) == 215
+
+    def test_art_to_the_edge_is_not_mistaken_for_a_dark_page(self):
+        from spike.scene_engine.raster_assets import _ink_threshold, to_ink
+        lum = np.full((100, 100), 90, np.int32)
+        assert _ink_threshold(lum) == 215, "a dark border is drawing, not paper"
+        img = to_ink(self._page(120, stroke=120))
+        assert np.asarray(img.getchannel("A")).min() > 150, "nothing was cut away"
