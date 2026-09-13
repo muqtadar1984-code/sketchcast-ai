@@ -159,6 +159,9 @@ def figure_from_row(sb, row: dict, tmp: Path, caption: str = "") -> Optional[Fig
 # ── placing pictures on sections ──────────────────────────────────────
 
 _THIN_SECTION_TOKENS = 25
+# One shared word is a coincidence: "particles" put the syringe diagram under
+# "Scientific Explanations and Particle Theory" (live, 2026-09-13).
+_MATCH_MIN_TOKENS = 2
 
 
 def _tokens(text: str) -> set[str]:
@@ -227,7 +230,7 @@ def place_video_figures(model: LessonModel, seg_keys: list[tuple[int, str]],
             free = bare or free
             fw = _tokens(key.replace("_", " ") + " " + fig.caption)
             scored = sorted(free, key=lambda s: -len(fw & _tokens(_section_text(s))))
-            if scored and fw & _tokens(_section_text(scored[0])):
+            if scored and len(fw & _tokens(_section_text(scored[0]))) >= _MATCH_MIN_TOKENS:
                 sec = scored[0]
             elif all(len(_tokens(_section_text(s))) < _THIN_SECTION_TOKENS for s in free):
                 # Bare headings (a script-shaped deck): position is the only
