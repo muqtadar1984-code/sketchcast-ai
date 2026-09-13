@@ -35,6 +35,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("worker")
 
 POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "5"))
+# On SIGTERM, how long to let in-flight work FINISH before handing back what
+# is still held (see _serve). Must sit inside Railway's drain — railway.json
+# sets deploy.drainingSeconds = 30 — with room for the hand-back's round trips.
+SHUTDOWN_GRACE_SECONDS = float(os.getenv("SHUTDOWN_GRACE_SECONDS", "20"))
 # How many jobs to run at once in this single process. 1 = the old serial
 # behaviour. Size the Railway instance's vCPU/RAM for the number of concurrent
 # VIDEO renders you set (docs are light; videos are the heavy ones).
@@ -132,13 +136,16 @@ def _fail_catalogue_kit(sb, job: dict, error: str) -> None:
     db.mark_kit_failed(sb, db.kit_id_of(job.get("params")),
                        f"{job.get('type') or 'generation'} failed: {_evidence(error, 900)}")
 
-# Jobs this process is ACTIVELY running, by id — the claimed ROW, not just the
+# Work this process is ACTIVELY running, by id — the claimed ROW, not just the
 # id, because a graceful shutdown hands each one back (release_held_jobs) and
-# that requeue is fenced on the row's `attempts`. The crash-reaper must never
-# requeue these — with concurrency, a live 'processing' row is not an orphan.
-# (Sketches are seconds-long, far under the stale window, so they aren't tracked.)
+# a job's requeue is fenced on the row's `attempts`. The crash-reaper must
+# never requeue a held job — with concurrency, a live 'processing' row is not
+# an orphan. Sketches are held too: they are claimed FIRST every poll, so a
+# deploy mid-render is the likely case, and the new container's boot reap of
+# sketches has already run by the time the old one is signalled.
 _inflight_lock = threading.Lock()
 _inflight_jobs: dict[str, dict] = {}
+_inflight_sketches: dict[str, dict] = {}
 
 # Set by SIGTERM / SIGINT (install_signal_handlers). Railway's teardown order
 # is: the NEW deployment goes active, THEN the old container is sent SIGTERM
@@ -150,8 +157,10 @@ _inflight_jobs: dict[str, dict] = {}
 # 13:56 UTC deploy that day the old container outlived the new one's boot by
 # ~15 s: the new container's boot reap requeued the job the old one still
 # held, the old one RE-CLAIMED it, and was removed with it — 'processing', no
-# worker, until the 15-minute reaper. The work here is two guarded UPDATEs
-# per held job, seconds at most, well inside the 30 s.
+# worker, until the 15-minute reaper. The drain is spent as: up to
+# SHUTDOWN_GRACE_SECONDS letting in-flight work finish on its own (a document
+# seconds from done is not re-bought by the next container), then two guarded
+# UPDATEs per row still held — well inside the 30 s.
 _shutdown = threading.Event()
 
 
@@ -175,14 +184,47 @@ def _held_jobs() -> list[dict]:
         return list(_inflight_jobs.values())
 
 
+def _sketch_add(sketch: dict) -> None:
+    with _inflight_lock:
+        _inflight_sketches[sketch["id"]] = sketch
+
+
+def _sketch_remove(sketch_id: str) -> None:
+    with _inflight_lock:
+        _inflight_sketches.pop(sketch_id, None)
+
+
+def _held_sketches() -> list[dict]:
+    with _inflight_lock:
+        return list(_inflight_sketches.values())
+
+
+def _holding_work() -> bool:
+    with _inflight_lock:
+        return bool(_inflight_jobs or _inflight_sketches)
+
+
+def _exit_now(signum=None, frame=None) -> None:
+    """The SECOND signal: the operator wants out now (double Ctrl-C). Nothing
+    here takes a lock, so it cannot deadlock against the first handler; the
+    rows still held are the next container's boot reap to recover."""
+    os._exit(1)
+
+
 def request_shutdown(signum=None, frame=None) -> None:
     """The signal handler — sets the flag and nothing else (a handler must
     not touch the database). From here on run_once claims nothing, the
     worker threads fall out of their loops, and the main thread wakes from
-    its reaper wait to release every held job (_serve)."""
+    its reaper wait to let in-flight work finish and release the rest
+    (_serve). A repeat of the same signal exits at once: Event.set() takes a
+    plain Lock, so a second handler re-entering it mid-set would otherwise
+    hang the main thread before anything was released."""
+    if signum is not None:
+        signal.signal(signum, _exit_now)
     if not _shutdown.is_set():
-        log.warning("Shutdown requested (signal %s): no new claims; releasing held jobs",
-                    signum if signum is not None else "programmatic")
+        log.warning("Shutdown requested (signal %s): no new claims; in-flight work may finish "
+                    "for up to %ss, then what is still held is released",
+                    signum if signum is not None else "programmatic", SHUTDOWN_GRACE_SECONDS)
     _shutdown.set()
 
 
@@ -194,13 +236,14 @@ def install_signal_handlers() -> None:
 
 
 def release_held_jobs(sb) -> int:
-    """Every job this process holds goes back to 'queued' — attempts KEPT
-    (the job did nothing wrong; the worker is leaving), its generation
-    mirrored 'queued' — through db.requeue_job, the same helper the boot and
-    windowed reapers use, so the job/generation pair can never disagree. A
-    row the new container has already reaped and re-claimed is left alone
-    (the helper's attempts fence). Best-effort per job: one failure must not
-    strand the rest. Returns how many were released."""
+    """Everything this process still holds goes back to 'queued'. Jobs:
+    attempts KEPT (the job did nothing wrong; the worker is leaving), the
+    generation mirrored 'queued' — through db.requeue_job, the same helper
+    the boot and windowed reapers use, so the job/generation pair can never
+    disagree; a row the new container has already reaped and re-claimed is
+    left alone (the helper's attempts fence). Sketches: db.requeue_sketch.
+    Best-effort per row: one failure must not strand the rest. Returns how
+    many were released."""
     released = 0
     for job in _held_jobs():
         try:
@@ -212,6 +255,12 @@ def release_held_jobs(sb) -> int:
                 log.warning("Shutdown: job %s had already moved (reaped or re-claimed); left as is", job["id"])
         except Exception as exc:  # noqa: BLE001
             log.error("Shutdown: job %s could not be requeued: %s", job["id"], exc)
+    for sketch in _held_sketches():
+        if db.requeue_sketch(sb, sketch):
+            released += 1
+            log.warning("Shutdown: tutor sketch %s back in the queue", sketch["id"])
+        else:
+            log.warning("Shutdown: sketch %s had already moved; left as is", sketch["id"])
     return released
 
 
@@ -333,7 +382,13 @@ def run_once(sb) -> bool:
         return False  # leaving: anything claimed now would only be handed straight back
     sketch = db.claim_next_sketch(sb)
     if sketch:
+        if _shutdown.is_set():
+            # The signal landed inside the claim: nothing else knows this
+            # process holds it, so it is handed straight back here.
+            db.requeue_sketch(sb, sketch)
+            return False
         log.info("Claimed tutor sketch %s (book=%s)", sketch["id"], sketch.get("book_id"))
+        _sketch_add(sketch)
         try:
             from worker.tutor_sketch import render_sketch
 
@@ -344,6 +399,8 @@ def run_once(sb) -> bool:
                 db.set_sketch_error(sb, sketch["id"], str(exc))
             except Exception:  # noqa: BLE001
                 pass
+        finally:
+            _sketch_remove(sketch["id"])
         return True
 
     # catalogue=False on the user lanes: a kit's rows are the same builder
@@ -356,6 +413,16 @@ def run_once(sb) -> bool:
         or _claim_catalogue_generation(sb)                          # kits: no live user builder + off-peak
     )
     if not job:
+        return False
+    if _shutdown.is_set():
+        # Claimed in the gap between the check above and the row moving: the
+        # signal landed mid-claim. Nothing else knows this process holds it
+        # (it is not in-flight yet), so it is handed straight back here —
+        # attempt kept — before any work starts.
+        try:
+            db.requeue_job(sb, job, bump_attempts=False)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Job %s claimed during shutdown could not be requeued: %s", job["id"], exc)
         return False
     job_type = job.get("type")
     gen_id = job.get("generation_id")
@@ -400,12 +467,9 @@ def run_once(sb) -> bool:
         # The job asked to run later (a deck whose lesson video is still
         # rendering). Back to the queue with a wake-up time; no attempt is
         # spent, nothing is failed, and the generation reads `queued` again
-        # so the dashboard does not show a build that is not happening.
+        # (defer_job mirrors it through the one requeue writer) so the
+        # dashboard does not show a build that is not happening.
         if db.defer_job(sb, job, exc.seconds, exc.note):
-            try:
-                db.set_generation_status(sb, gen_id, "queued")
-            except Exception:  # noqa: BLE001
-                pass
             log.info("Job %s deferred %ds: %s", job["id"], exc.seconds, exc.note)
         else:
             log.warning("Job %s asked to defer but the row had moved; left as is", job["id"])
@@ -552,23 +616,28 @@ def main() -> None:
         threading.Thread(target=_worker_loop, args=(i,), daemon=True, name=f"worker-{i}").start()
 
     _serve(sb, stale_min)
-    # The worker threads are daemons, mid-render or mid-poll. They must NOT get
-    # to finish: their rows are queued for the next container now, and a
-    # finish_job from here would mark a job 'done' that nobody else built —
-    # or 'processing' again through a late progress write. A plain return
-    # would also let the render process pool's exit hook wait on them.
+    # Whatever is still running after the grace is a daemon thread mid-render
+    # whose row has just been handed back. It must NOT get to finish: a
+    # finish_job from here would mark a job 'done' that the next container is
+    # about to build. A plain return would also let the render process pool's
+    # exit hook wait on it.
     logging.shutdown()
     os._exit(0)
 
 
-def _serve(sb, stale_min: int, reap_every: float = 60) -> None:
+def _serve(sb, stale_min: int, reap_every: float = 60, grace: float | None = None) -> None:
     """Main thread = the windowed crash-reaper, until a shutdown is requested.
 
     The reaper EXCLUDES the jobs this process is actively running (in-flight),
     so a long render is never requeued and double-run; only a genuinely
     orphaned 'processing' row (a failed finish_job write, an old row) is
-    recovered. Runs while the queue is busy. On shutdown it releases every
-    held job and returns; the caller ends the process."""
+    recovered. Runs while the queue is busy.
+
+    On shutdown: wait up to `grace` seconds (SHUTDOWN_GRACE_SECONDS) for the
+    in-flight work to finish by itself — the threads already refuse new
+    claims, and a job that finishes leaves the held set, so it is never
+    handed back — then release what is still held and return; the caller
+    ends the process."""
     while not _shutdown.wait(reap_every):
         try:
             r = db.requeue_stale_jobs(sb, older_than_minutes=stale_min, exclude_ids=_inflight_snapshot())
@@ -577,8 +646,12 @@ def _serve(sb, stale_min: int, reap_every: float = 60) -> None:
                 log.warning("Reaper: requeued %d stale job(s) (>%sm in 'processing', not in-flight)", r, stale_min)
         except Exception as exc:  # noqa: BLE001
             log.error("Reaper error: %s", exc)
+    budget = SHUTDOWN_GRACE_SECONDS if grace is None else grace
+    deadline = time.monotonic() + budget
+    while _holding_work() and time.monotonic() < deadline:
+        time.sleep(0.2)
     n = release_held_jobs(sb)
-    log.warning("Shutdown: %d job(s) released to the queue; exiting", n)
+    log.warning("Shutdown: %d row(s) released to the queue after a %.0fs grace; exiting", n, budget)
 
 
 if __name__ == "__main__":

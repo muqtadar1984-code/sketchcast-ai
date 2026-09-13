@@ -36,7 +36,7 @@ class TestDeferPrimitive:
 
     def test_deferred_since_is_set_once(self):
         sb = FakeSB()
-        sb.tables["jobs"] = [{"id": "j1", "type": "deck", "status": "processing", "params": {}}]
+        sb.tables["jobs"] = [{"id": "j1", "type": "deck", "status": "processing", "attempts": 0, "params": {}}]
         db.defer_job(sb, sb.tables["jobs"][0], 60, "first")
         first = sb.tables["jobs"][0]["params"]["deferred_since"]
         sb.tables["jobs"][0]["status"] = "processing"
@@ -45,7 +45,7 @@ class TestDeferPrimitive:
 
     def test_a_row_that_moved_is_not_overwritten(self):
         sb = FakeSB()
-        sb.tables["jobs"] = [{"id": "j1", "type": "deck", "status": "error", "params": {}}]
+        sb.tables["jobs"] = [{"id": "j1", "type": "deck", "status": "error", "attempts": 0, "params": {}}]
         assert not db.defer_job(sb, sb.tables["jobs"][0], 60, "x")
         assert sb.tables["jobs"][0]["status"] == "error"
 

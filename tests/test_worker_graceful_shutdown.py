@@ -25,30 +25,50 @@ from __future__ import annotations
 
 import inspect
 import signal
+import sys
 import threading
 import time
+import types
 
 import pytest
 
 import worker.run as run
-from tests.test_observer_job_guard import _builder, _fresh, _gen_status, _gen_writes, _support
+from tests.test_observer_job_guard import BOOK, _builder, _fresh, _gen_status, _gen_writes, _support
 from worker import client as db
+
+
+def _clear():
+    run._shutdown.clear()
+    with run._inflight_lock:
+        run._inflight_jobs.clear()
+        run._inflight_sketches.clear()
 
 
 @pytest.fixture(autouse=True)
 def _clean_worker_state(monkeypatch):
-    """The shutdown flag and the in-flight table are process globals."""
+    """The shutdown flag and the in-flight tables are process globals, and a
+    real request_shutdown(signum) re-points that signal at the hard exit."""
     monkeypatch.delenv("SUPPORT_AGENT_ENABLED", raising=False)
     # Lane 6 imports the catalogue package (visual library and all); an
     # empty queue in these tests must not reach it.
     monkeypatch.setattr(run, "_claim_catalogue_generation", lambda sb: None)
-    run._shutdown.clear()
-    with run._inflight_lock:
-        run._inflight_jobs.clear()
+    saved = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    _clear()
     yield
-    run._shutdown.clear()
-    with run._inflight_lock:
-        run._inflight_jobs.clear()
+    _clear()
+    for sig, handler in saved.items():
+        signal.signal(sig, handler)
+
+
+def _sketch_renderer(monkeypatch, render):
+    """run_once imports worker.tutor_sketch lazily; stand in for the module
+    so no renderer dependency is loaded."""
+    monkeypatch.setitem(sys.modules, "worker.tutor_sketch", types.SimpleNamespace(render_sketch=render))
+
+
+def _with_sketch(sb, sketch_id="sk-1", status="queued"):
+    sb.tables["tutor_sketch"] = [{"id": sketch_id, "status": status, "book_id": BOOK, "created_at": "1"}]
+    return sb
 
 
 def _user_claim(sb):
@@ -144,9 +164,17 @@ def test_an_idle_worker_thread_wakes_from_its_poll_sleep(monkeypatch):
     sb = _fresh("queued", jobs=[])
     monkeypatch.setattr(db, "admin", lambda: sb)
     monkeypatch.setattr(run, "POLL_SECONDS", 30)
+    polled, real = threading.Event(), run.run_once
+
+    def once(sb_):  # the loop's first empty poll — the next line is the sleep
+        r = real(sb_)
+        polled.set()
+        return r
+
+    monkeypatch.setattr(run, "run_once", once)
     t = threading.Thread(target=run._worker_loop, args=(0,), daemon=True)
     t.start()
-    time.sleep(0.2)  # into the sleep
+    assert polled.wait(3), "the loop never polled"
     run.request_shutdown()
     t.join(3)
     assert not t.is_alive(), "still asleep — the shutdown did not cut the poll wait short"
@@ -235,14 +263,17 @@ def test_every_requeue_goes_through_the_one_helper():
     assert "requeue_job(sb, j, bump_attempts=True)" in inspect.getsource(db.requeue_stale_jobs)
     assert "db.requeue_job(sb, job, bump_attempts=False)" in inspect.getsource(run.release_held_jobs)
     assert "db.requeue_job(sb, job, bump_attempts=True)" in inspect.getsource(run.run_once)
+    assert "db.requeue_job(sb, job, bump_attempts=False)" in inspect.getsource(run.run_once), (
+        "a job claimed as the signal lands is handed back through the same writer"
+    )
     # No hand-rolled requeue UPDATE left in run.py (the support-job INSERT
     # of a new 'queued' row is a different thing and stays).
     assert 'update({"status": "queued"' not in inspect.getsource(run)
-    body = inspect.getsource(db.requeue_job)
-    assert 'mirror_generation_status(sb, generation_to_mirror(job), "queued")' in body
-    assert body.index("if not getattr(upd") < body.index("mirror_generation_status"), (
-        "the generation is relabelled only when the job row actually moved"
-    )
+    # The deck's defer is the fourth caller, not a fourth writer.
+    assert "requeue_job(sb, job, bump_attempts=False, extra=" in inspect.getsource(db.defer_job)
+    assert 'update({"status": "queued"' not in inspect.getsource(db.defer_job)
+    # (The helper's own body — mirror after the row moved, both guards — is
+    # pinned where the mirror rule lives: tests/test_generation_status_mirror.py.)
 
 
 def test_a_tier_outage_requeue_still_spends_the_attempt_and_mirrors_queued(monkeypatch):
@@ -282,10 +313,11 @@ def test_sigterm_and_sigint_are_wired_to_the_graceful_path(monkeypatch):
 
 def test_the_main_thread_wakes_from_its_reaper_wait_and_releases():
     """_serve sits in a 60 s reaper wait; a signal must cut it short, release
-    the held jobs, and return so main can exit — inside the drain window."""
+    the held jobs, and return so main can exit — inside the drain window.
+    grace=0: the held row never finishes (nothing is rendering it here)."""
     sb = _fresh("processing", jobs=[_builder("job-p", "presentation", "processing")])
     run._inflight_add(dict(sb.tables["jobs"][0]))
-    t = threading.Thread(target=run._serve, args=(sb, 15), kwargs={"reap_every": 60}, daemon=True)
+    t = threading.Thread(target=run._serve, args=(sb, 15), kwargs={"reap_every": 60, "grace": 0}, daemon=True)
     t.start()
     time.sleep(0.2)  # into the wait
     run.request_shutdown(signal.SIGTERM, None)
@@ -300,3 +332,169 @@ def test_main_exits_hard_after_the_release():
     exit hook wait on them past the drain window."""
     src = inspect.getsource(run.main)
     assert src.index("_serve(sb, stale_min)") < src.index("os._exit(0)")
+
+
+def test_a_second_signal_exits_at_once_instead_of_deadlocking(monkeypatch):
+    """Event.set() takes a plain Lock; a second handled signal re-entering it
+    mid-set would hang the main thread before anything was released. The
+    first signal re-points that signal at a lock-free hard exit."""
+    installed, exits = {}, []
+    monkeypatch.setattr(run.signal, "signal", lambda sig, h: installed.__setitem__(sig, h))
+    monkeypatch.setattr(run.os, "_exit", lambda code: exits.append(code))
+    run.request_shutdown(signal.SIGTERM, None)
+    assert run._shutdown.is_set() and installed[signal.SIGTERM] is run._exit_now
+    installed[signal.SIGTERM](signal.SIGTERM, None)
+    assert exits == [1]
+
+
+# ── the gap between the check and the claim ─────────────────────────────
+
+
+def test_a_job_claimed_as_the_signal_lands_is_handed_straight_back(monkeypatch):
+    """run_once checks the flag, then claims — a round trip. A signal in that
+    gap used to leave the row 'processing' with no one holding it: not yet
+    in-flight, so the release never saw it, and the process was gone."""
+    sb = _fresh("queued", jobs=[_builder("job-p", "presentation", attempts=2)])
+    real = db.claim_next_job
+
+    def claim_then_signal(sb_, *a, **k):
+        row = real(sb_, *a, **k)
+        if row:
+            run.request_shutdown()  # lands while the claim's UPDATE is in flight
+        return row
+
+    monkeypatch.setattr(db, "claim_next_job", claim_then_signal)
+    monkeypatch.setattr(run, "process_generation", lambda *a, **k: pytest.fail("must not start work"))
+    assert run.run_once(sb) is False
+    row = sb.tables["jobs"][0]
+    assert row["status"] == "queued" and row["attempts"] == 2, "handed back, attempt kept"
+    assert _gen_status(sb) == "queued"
+    assert run._inflight_snapshot() == set()
+
+
+def test_a_sketch_claimed_as_the_signal_lands_is_handed_straight_back(monkeypatch):
+    sb = _with_sketch(_fresh("done", jobs=[]))
+    real = db.claim_next_sketch
+
+    def claim_then_signal(sb_):
+        row = real(sb_)
+        if row:
+            run.request_shutdown()
+        return row
+
+    monkeypatch.setattr(db, "claim_next_sketch", claim_then_signal)
+    _sketch_renderer(monkeypatch, lambda *a: pytest.fail("must not render"))
+    assert run.run_once(sb) is False
+    assert sb.tables["tutor_sketch"][0]["status"] == "queued"
+
+
+# ── the sketch lane is held and released like a job ─────────────────────
+
+
+def test_a_sketch_held_mid_render_is_requeued_on_shutdown(monkeypatch):
+    """Sketches are claimed FIRST every poll, so a deploy mid-render is the
+    likely case; and the new container's boot reap of sketches has already
+    run by the time the old one is signalled, so nothing else would recover
+    it for STALE_JOB_MINUTES — a student watching a frozen coach doodle."""
+    sb = _with_sketch(_fresh("done", jobs=[]))
+    started, release = threading.Event(), threading.Event()
+
+    def rendering(sb_, sketch):
+        started.set()
+        release.wait(5)
+
+    _sketch_renderer(monkeypatch, rendering)
+    t = threading.Thread(target=run.run_once, args=(sb,), daemon=True)
+    t.start()
+    assert started.wait(5)
+    assert sb.tables["tutor_sketch"][0]["status"] == "processing"
+    run.request_shutdown(signal.SIGTERM, None)
+    assert run.release_held_jobs(sb) == 1
+    assert sb.tables["tutor_sketch"][0]["status"] == "queued"
+    release.set()
+    t.join(5)
+    assert run._held_sketches() == []
+
+
+# ── the drain window is used, not just bought ───────────────────────────
+
+
+def test_the_grace_lets_a_job_that_is_about_to_finish_finish(monkeypatch):
+    """A worksheet two seconds from done must not be thrown away and re-bought
+    by the next container: _serve waits (bounded) for in-flight work, and a
+    job that finishes leaves the held set, so it is never handed back."""
+    sb = _fresh("queued", jobs=[_builder("job-w", "worksheet")])
+    started = threading.Event()
+
+    def nearly_done(sb_, job, gen_id):
+        started.set()
+        time.sleep(0.3)
+        db.finish_job(sb_, job["id"], gen_id)
+
+    monkeypatch.setattr(run, "process_generation", nearly_done)
+    t = threading.Thread(target=run.run_once, args=(sb,), daemon=True)
+    t.start()
+    assert started.wait(3)
+    run.request_shutdown()
+    run._serve(sb, 15, reap_every=60, grace=5)
+    t.join(5)
+    assert sb.tables["jobs"][0]["status"] == "done" and _gen_status(sb) == "done"
+    assert not [e for e in sb.log if e[1] == "jobs" and e[2].get("status") == "queued"], "never handed back"
+
+
+def test_the_grace_is_bounded_and_the_rest_is_released(monkeypatch):
+    sb = _fresh("queued", jobs=[_builder("job-p", "presentation")])
+    started, release = threading.Event(), threading.Event()
+
+    def long_render(sb_, job, gen_id):
+        started.set()
+        release.wait(5)
+
+    monkeypatch.setattr(run, "process_generation", long_render)
+    t = threading.Thread(target=run.run_once, args=(sb,), daemon=True)
+    t.start()
+    assert started.wait(3)
+    run.request_shutdown()
+    t0 = time.monotonic()
+    run._serve(sb, 15, reap_every=60, grace=0.4)
+    assert 0.3 < time.monotonic() - t0 < 3, "waited the grace, then gave up"
+    assert sb.tables["jobs"][0]["status"] == "queued" and _gen_status(sb) == "queued"
+    release.set()
+    t.join(5)
+
+
+# ── the writers that race the release ───────────────────────────────────
+
+
+def test_progress_never_lands_on_a_row_that_was_handed_back():
+    """set_progress is guarded on 'processing': a late progress write from a
+    departing thread must not put "62% built" on a queued row — non-zero
+    progress on a queued row is what refuses the teacher's refund."""
+    queued = _fresh("queued", jobs=[_builder("job-p", "presentation")])
+    db.set_progress(queued, "job-p", 62)
+    assert queued.tables["jobs"][0].get("progress", 0) == 0
+
+    live = _fresh("processing", jobs=[_builder("job-p", "presentation", "processing")])
+    db.set_progress(live, "job-p", 62)
+    assert live.tables["jobs"][0]["progress"] == 62
+
+
+def test_a_deferred_deck_goes_through_the_helper_fenced_and_mirrored():
+    """defer_job was the fourth 'back to queued' writer, with a status guard
+    only and its generation mirrored separately. Now it is the helper's
+    fourth caller: same fence, same mirror, plus its wake-up stamp."""
+    sb = _fresh("processing", jobs=[{**_builder("job-d", "deck", "processing"), "params": {"part": 1}}])
+    assert db.defer_job(sb, sb.tables["jobs"][0], 60, "waiting for the video")
+    row = sb.tables["jobs"][0]
+    assert row["status"] == "queued" and row["attempts"] == 0 and row["progress"] == 0
+    assert row["stage"]["phase"] == "waiting" and row["params"]["deferred_until"] and row["params"]["part"] == 1
+    assert _gen_status(sb) == "queued", "the dashboard must not show a build that is not happening"
+
+    # The mirrored race, on this edge: the peer reaped and re-claimed the row
+    # while this container was waiting for the video.
+    sb = _fresh("processing", jobs=[_builder("job-d", "deck", "processing")])
+    old = dict(sb.tables["jobs"][0])
+    assert db.requeue_stale_jobs(sb) == 1 and _user_claim(sb)["id"] == "job-d"
+    assert not db.defer_job(sb, old, 60, "x")
+    assert sb.tables["jobs"][0]["status"] == "processing" and "stage" not in sb.tables["jobs"][0]
+    assert _gen_status(sb) == "processing"
