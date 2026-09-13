@@ -193,6 +193,91 @@ def _duration(path: Path, ffmpeg: str) -> float:
     return int(h) * 3600 + int(mnt) * 60 + float(s)
 
 
+# ── the silence at the two ends of a Chirp clip ─────────────────────────────
+# Measured on the first live catalogue lessons (2026-09-13, Heat Transfer):
+# every sentence clip Chirp returns carries about half a second of silence
+# at its edges — the gaps between consecutive sentences in the finished audio
+# were 0.48, 0.50, 0.51, 0.54, 0.53 s, and the very first clip opened with
+# 0.48 s before a word was spoken. Interpolating words across the WHOLE clip
+# spread them over that silence too, so every word inside a sentence was
+# stamped up to half a second away from where it was actually said, and the
+# drawing it cued fired late against the voice. The founder heard it as "a
+# second or so of lag".
+#
+# One ffmpeg pass per clip finds the leading and trailing silence; the words
+# are then spread over the SPOKEN span only. No network, no new dependency,
+# ~50 ms per sentence.
+_SIL_DB = -35          # anything quieter than this is silence
+_SIL_MIN_SECS = 0.12   # shorter dips are breath, not a gap
+# A silence starting/ending within this of an edge IS the edge. Not tighter:
+# an MP3's container duration runs ~60 ms past the last decoded sample
+# (encoder padding), so a tail silence ffmpeg reports as ending at 2.00 s
+# sits in a clip whose Duration reads 2.06 — measured on a synthetic clip
+# with the worker's own ffmpeg. A 50 ms tolerance missed every real tail.
+_SIL_EDGE_TOL = 0.15
+_SIL_KEEP_SECS = 0.2   # never trim a clip down to less speech than this
+_SIL_RE = re.compile(r"silence_(start|end):\s*([\d.]+)")
+
+
+def _silence_edges(stderr: str, duration: float) -> tuple[float, float]:
+    """``(lead, tail)`` seconds of silence at the start and end of a clip,
+    read from ffmpeg ``silencedetect`` output. Interior pauses are ignored —
+    they belong to the sentence. A clip that is silence end to end, or so
+    short that trimming would leave under ``_SIL_KEEP_SECS`` of speech, is
+    returned untouched: a wrong guess here is worse than the old behaviour.
+
+    ffmpeg logs ``silence_end`` at end of file for a silence that runs to it
+    (v7 does); older builds leave the last ``silence_start`` open. Both forms
+    are handled."""
+    events = [(k, float(v)) for k, v in _SIL_RE.findall(stderr or "")]
+    if not events or duration <= 0:
+        return 0.0, 0.0
+    lead = 0.0
+    if events[0][0] == "start" and events[0][1] <= _SIL_EDGE_TOL:
+        if len(events) >= 2 and events[1][0] == "end":
+            lead = events[1][1]
+        else:
+            return 0.0, 0.0            # one silence, never ends: the whole clip
+    tail = 0.0
+    if events[-1][0] == "start":
+        tail = max(0.0, duration - events[-1][1])
+    elif (len(events) >= 2 and events[-2][0] == "start"
+          and duration - events[-1][1] <= _SIL_EDGE_TOL):
+        tail = max(0.0, duration - events[-2][1])
+    if lead + tail > duration - _SIL_KEEP_SECS:
+        return 0.0, 0.0
+    return round(lead, 4), round(tail, 4)
+
+
+def _spoken_span(path: Path, ffmpeg: str, duration: float) -> tuple[float, float]:
+    """``(lead, tail)`` for one clip on disk; ``(0, 0)`` whenever the
+    measurement cannot be made — the caller then behaves exactly as before."""
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-hide_banner", "-nostats", "-i", str(path),
+             "-af", f"silencedetect=n={_SIL_DB}dB:d={_SIL_MIN_SECS}", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=60)
+    except Exception as exc:  # noqa: BLE001 — a failed measurement is not a failed lesson
+        logger.debug("silencedetect failed for %s: %s", path, exc)
+        return 0.0, 0.0
+    return _silence_edges(proc.stderr or "", duration)
+
+
+def _opening_pause_secs(piece: str) -> float:
+    """Seconds of ``<break>`` declared BEFORE the first word. interpolate_words
+    already shifts the first word past a declared opening pause, and Chirp
+    renders that pause as real silence, so the measured lead would count it a
+    second time. Only the lead beyond what was declared is silence we did not
+    ask for."""
+    from ..chunks import _timing_tokens
+    secs = 0.0
+    for kind, val in _timing_tokens(piece):
+        if kind == "w":
+            break
+        secs += float(val)
+    return secs
+
+
 def _estimate_secs(piece: str) -> float:
     """When ffmpeg cannot read a clip's duration: ~2.7 words a second. Better
     than 0.0, which collapsed the sentence to an instant and pulled every
@@ -306,13 +391,15 @@ def synthesize(text: str, out_path: Path, ref_voice: str,
     dropped = 0
     estimated = 0
     billable = 0
+    trimmed = 0.0
     try:
         clip_paths: list[Path] = []
         for i, ((audio, tps), piece, (ssml, first_mark, n_words)) in enumerate(zip(results, pieces, ssmls)):
             p = tmpdir / f"c{i:04d}.mp3"
             p.write_bytes(audio)
             clip_paths.append(p)
-            dur = _duration(p, ffmpeg)
+            measured = _duration(p, ffmpeg)
+            dur = measured
             if dur <= 0.0:
                 dur = _estimate_secs(piece)
                 estimated += 1
@@ -326,7 +413,12 @@ def synthesize(text: str, out_path: Path, ref_voice: str,
                                                 chunk_duration=dur, mark_offset=first_mark)
                     dropped += miss
                 else:
-                    ws = interpolate_words(piece, cursor, dur)
+                    # Chirp: spread the words over the SPOKEN span, not the
+                    # clip. An estimated duration has no file worth measuring.
+                    lead, tail = _spoken_span(p, ffmpeg, dur) if measured > 0 else (0.0, 0.0)
+                    lead = max(0.0, lead - _opening_pause_secs(piece))
+                    trimmed += lead + tail
+                    ws = interpolate_words(piece, cursor + lead, max(0.0, dur - lead - tail))
                 words.extend(ws)
             cursor += dur
         _concat(clip_paths, out_path, ffmpeg)
@@ -344,4 +436,5 @@ def synthesize(text: str, out_path: Path, ref_voice: str,
         logger.warning("Google TTS: %d mark(s) returned no timepoint; interpolated", dropped)
     return {"provider": "google", "family": fam, "requests": len(pieces), "chars": billable,
             "timepoints": sum(len(t) for _, t in results), "marks_dropped": dropped,
-            "duration_estimated": estimated, "audio_secs": round(cursor, 3)}
+            "duration_estimated": estimated, "audio_secs": round(cursor, 3),
+            "silence_trimmed": round(trimmed, 3)}
