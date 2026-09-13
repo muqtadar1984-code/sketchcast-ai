@@ -56,7 +56,12 @@ class TestAnArrowTargetIsAlwaysDrawn:
         scenes, _assets, report = compile_plan(_plan(draw_the_picture=False), _NARR)
         assert "hierarchy" in _ids(scenes["s001"]), \
             "the arrow's target has to be on the board it points into"
-        assert any("MATERIALISED hierarchy" in line for line in report), report
+        # Since #74 the opening-step injection draws the chapter's picture on
+        # step one, so the orphan never reaches the materialiser; either
+        # repair puts the arrow's target on the board, and that is the claim.
+        assert any("MATERIALISED hierarchy" in line
+                   or "OPENING STEP DRAWS hierarchy" in line
+                   for line in report), report
 
     def test_and_the_end_is_never_flattened_to_a_planned_point(self):
         """The symptom, stated as the thing that must not appear: a flattened
@@ -76,7 +81,8 @@ class TestAnArrowTargetIsAlwaysDrawn:
         arrow anchored to another arrow is a different defect, and the
         sanitisation pass owns it. Only the illustration is materialised."""
         scenes, _assets, report = compile_plan(_plan(draw_the_picture=False), _NARR)
-        made = [l for l in report if "MATERIALISED" in l]
+        made = [l for l in report
+                if "MATERIALISED" in l or "OPENING STEP DRAWS" in l]
         assert len(made) == 1 and "hierarchy" in made[0], made
         # the label is introduced by its own write, exactly as before
         assert "lbl_tissue" in _ids(scenes["s001"])

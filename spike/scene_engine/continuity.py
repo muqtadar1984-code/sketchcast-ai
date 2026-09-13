@@ -654,6 +654,83 @@ def _chain_camera(cam: dict, actions: list[dict], elements: list[dict]) -> dict:
 
 # ── the compiler ─────────────────────────────────────────────────────────────
 
+def _has_picture(ch: VisualChapter) -> bool:
+    return any(e.get("type") == "illustration"
+               and not str(e.get("id", "")).startswith("__")
+               for e in ch.elements)
+
+
+def _fold_text_only_opening(plan: VisualPlan, report: list[str]) -> None:
+    """A lesson never opens on a board with nothing drawn.
+
+    Structure of the Atom (2026-09-13): the director's first chapter was a
+    title and two lines of text, no illustration — 36 seconds of a blank
+    board with words on it before the first picture, which lived in chapter
+    two. The prompt now asks for a drawing in the opening chapter; this is
+    the guarantee when the director does not listen. The text-only opening
+    is FOLDED into the chapter that follows: that chapter absorbs its
+    elements, assets and steps and starts on the lesson's first segment, and
+    the opening-step injection in _compile_chapter then draws its picture
+    on step one, beside the title. A text id both chapters declare is kept
+    as the second chapter's; the first chapter's copy is renamed `c1_<id>`
+    and its actions follow it.
+
+    Only the FIRST chapter is folded, and only into a neighbour that has a
+    picture: a later text-only chapter is a deliberate wipe to words the
+    teacher chose, and if no chapter has a picture at all there is nothing
+    to pull forward — that is reported, not repaired.
+    """
+    chs = plan.chapters
+    if not chs or _has_picture(chs[0]):
+        return
+    if not any(_has_picture(c) for c in chs):
+        report.append("PLAN | NO ART: no chapter declares an illustration — "
+                      "the whole lesson renders as text")
+        return
+    if len(chs) < 2 or not _has_picture(chs[1]):
+        report.append(f"CHAPTER {chs[0].concept} | OPENING IS TEXT-ONLY and "
+                      f"the next chapter has no picture to pull forward")
+        return
+    first, second = chs[0], chs[1]
+    taken = {e["id"] for e in second.elements}
+    rename = {e["id"]: "c1_" + e["id"] for e in first.elements
+              if e["id"] in taken}
+    moved = []
+    for e in first.elements:
+        e = dict(e)
+        e["id"] = rename.get(e["id"], e["id"])
+        if isinstance(e.get("children"), list):     # a group names its members
+            e["children"] = [rename.get(c, c) for c in e["children"]]
+        moved.append(e)
+    steps_by_sid: dict[str, PlanStep] = {}
+    order: list[str] = []
+    for st in first.steps:
+        for a in st.actions:
+            for k, v in list(a.items()):
+                if isinstance(v, str) and v in rename:
+                    a[k] = rename[v]
+        steps_by_sid[st.segment_id] = st
+        order.append(st.segment_id)
+    for st in second.steps:
+        sid = st.segment_id
+        if sid in steps_by_sid:      # same segment planned twice: text first
+            steps_by_sid[sid].actions.extend(st.actions)
+            if st.key_point and not steps_by_sid[sid].key_point:
+                steps_by_sid[sid].key_point = st.key_point
+        else:
+            steps_by_sid[sid] = st
+            order.append(sid)
+    second.elements = moved + list(second.elements)
+    second.steps = [steps_by_sid[sid] for sid in order]
+    second.assets = {**first.assets, **second.assets}
+    second.transition = first.transition
+    plan.chapters = chs[1:]
+    report.append(f"CHAPTER {first.concept} | FOLDED into {second.concept}: "
+                  f"the opening chapter had no picture, so the lesson now "
+                  f"starts on {second.concept}'s board"
+                  + (f" (renamed {sorted(rename.values())})" if rename else ""))
+
+
 def compile_plan(plan: VisualPlan, narrations: dict[str, str],
                  all_segments: list[str] | None = None,
                  skip_hold: set[str] | None = None,
@@ -691,6 +768,7 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
     assets_seen: dict[str, str] = {}
     cam = dict(_DEFAULT_CAM)
 
+    _fold_text_only_opening(plan, report)
     for ch in plan.chapters:
         try:
             prev_board, cam = _compile_chapter(
