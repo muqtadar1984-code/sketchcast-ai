@@ -395,6 +395,9 @@ def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
             student_note = {"requested": student_voice, "used": stud_ref, "downgraded": True,
                             "reasons": ["gate" if not allow_premium else "provider_disabled"]}
     starts, cursor, parts = [], 0.0, []
+    # (line text, clip, start, duration) per spoken line — what the segment's
+    # words.json is assembled from once every clip has been measured
+    spoken: list[tuple[str, Path, float, float]] = []
     used_voice, downgraded = teacher.voice_id, False
     reasons: set[str] = set()
     for i, d in enumerate(dialogue):
@@ -404,11 +407,21 @@ def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
         if not line:
             continue
         f = vid_dir / f"{seg_id}_dl{i}.mp3"
+        # Every provider that can say WHEN each word was spoken writes it
+        # beside the line's clip; the segment's words.json is assembled from
+        # these below. Until 2026-09-13 dialogue asked for no boundaries at
+        # all, so the drawing cues of every two-voice lesson were timed by
+        # character proportion across the whole segment — a model blind to
+        # speaker changes and to the half-second Chirp leaves after every
+        # sentence. Captions were exact (they use the line starts); the ink
+        # was not, and the founder heard it as a second of lag.
+        wjson = f.with_suffix(".words.json")
+        wjson.unlink(missing_ok=True)
         if str(d.get("who")) == "student":
             if student_premium:
                 sr: dict = {}
                 synthesize(line, f, voice_id=student_premium, allow_premium=allow_premium,
-                           report=sr, lang=lang)
+                           report=sr, lang=lang, boundaries_out=wjson)
                 if sr.get("downgraded") and student_note is not None:
                     # a mid-segment provider failure lands on the free voice
                     # of the student's gender — say so, once, on the row
@@ -419,14 +432,14 @@ def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
                 if report is not None:
                     _fold_stats(report, sr)
             else:
-                edge_tts.synthesize(line, f, stud_ref)
+                edge_tts.synthesize(line, f, stud_ref, boundaries_out=wjson)
         else:
             r: dict = {}
             # The REQUESTED id goes in, not the resolved one: resolving here
             # first made a gate downgrade look like a free pick, so the row
             # never said the lesson was downgraded.
             synthesize(line, f, voice_id=tts_voice or teacher.voice_id, allow_premium=allow_premium,
-                       report=r, lang=lang)
+                       report=r, lang=lang, boundaries_out=wjson)
             used_voice = r.get("used") or used_voice
             downgraded = downgraded or bool(r.get("downgraded"))
             if r.get("reason"):
@@ -434,7 +447,9 @@ def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
             if report is not None:
                 _fold_stats(report, r)
         starts.append(cursor)
-        cursor += _audio_duration(str(f), ffmpeg)
+        dur = _audio_duration(str(f), ffmpeg)
+        spoken.append((line, f, cursor, dur))
+        cursor += dur
         parts.append(f)
     if not parts:
         raise RuntimeError("dialogue had no speakable lines")
@@ -445,12 +460,51 @@ def _synth_dialogue(dialogue: list, mp3, vid_dir, seg_id: str,
                     str(lst), "-c", "copy", str(mp3)], capture_output=True)
     if not Path(str(mp3)).exists() or Path(str(mp3)).stat().st_size == 0:
         raise RuntimeError("dialogue concat produced no audio")
+    merged = _merge_line_words(spoken)
+    if merged:
+        try:
+            Path(str(mp3)).with_suffix(".words.json").write_text(
+                json.dumps(merged, ensure_ascii=False), encoding="utf-8")
+        except OSError as exc:
+            logger.warning("dialogue words.json not written for %s: %s", seg_id, exc)
     if report is not None:
         report.update({"used": used_voice, "downgraded": downgraded,
                        "reasons": sorted(reasons)})
         if student_note is not None:
             report["student"] = student_note
     return starts
+
+
+def _merge_line_words(spoken: list[tuple[str, Path, float, float]]) -> list[dict]:
+    """One words.json for a dialogue segment from its lines' clips.
+
+    Each line was synthesised on its own and measured, so its START is exact.
+    A line whose provider wrote word boundaries contributes them shifted by
+    that start; a line without (a provider that cannot say, a write that
+    failed) is spread by character proportion across its own measured clip —
+    still bounded by the right start and end, which is the thing the old
+    whole-segment estimate never was. Monotonic by construction, because the
+    lines are consumed in playback order and each stays inside its clip."""
+    from shared.tts.chunks import interpolate_words
+
+    out: list[dict] = []
+    for line, clip, start, dur in spoken:
+        ws: list[dict] = []
+        wj = Path(str(clip)).with_suffix(".words.json")
+        if wj.exists():
+            try:
+                raw = json.loads(wj.read_text(encoding="utf-8"))
+                ws = [{"t": round(float(w["t"]) + start, 4), "w": str(w["w"])}
+                      for w in raw if isinstance(w, dict) and "t" in w and "w" in w]
+            except Exception:  # noqa: BLE001 — fall through to the proportional estimate
+                ws = []
+        if not ws:
+            ws = interpolate_words(line, start, max(0.0, float(dur)))
+        # a boundary past the clip's end is the provider's rounding, not a
+        # word spoken in the next line
+        end = start + max(0.0, float(dur))
+        out.extend({"t": min(w["t"], round(end, 4)), "w": w["w"]} for w in ws)
+    return out
 
 
 def _audio_duration(audio_path: str, ffmpeg: str) -> float:
