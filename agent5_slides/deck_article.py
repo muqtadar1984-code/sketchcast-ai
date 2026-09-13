@@ -42,7 +42,7 @@ PROMPT = f"""TASK: from the chapter above, write the complete explanation a stro
 
 RULES
 1. Teach at the depth of the chapter above: the same ideas, the same level, the same terms the book uses. Say in "depth_rationale" (one sentence) what the chapter covers and for whom.
-2. Length {WORDS_MIN}-{WORDS_MAX} words of body text across 3-8 sections, following the chapter's order. Each section has a SHORT heading (under 8 words) and a "body_md" in markdown: paragraphs, bullet lists, bold key terms, simple tables where they help. No images, no HTML, no links. The body is the teacher's notes; it is never shown on a slide.
+2. Length {WORDS_MIN}-{WORDS_MAX} words of body text across 3-8 sections, following the chapter's order. COVER THE WHOLE CHAPTER TEXT ABOVE, first topic to last: every heading and every idea it teaches gets a section or a claim, and the last topics are covered as fully as the first. A chapter idea that is missing from the article is missing from the deck. Each section has a SHORT heading (under 8 words) and a "body_md" in markdown: paragraphs, bullet lists, bold key terms, simple tables where they help. No images, no HTML, no links. The body is the teacher's notes; it is never shown on a slide.
 3. Write the learning objectives in "objectives" (ids "o1", "o2", ...), 2-5 of them, one sentence each, in the form a teacher would put on the board.
 4. Define every key term the chapter uses in "glossary" as {{term, definition}} — a definition is one plain sentence a learner can quote (under 25 words).
 5. Give 2-5 common misconceptions in "misconceptions" (ids "m1", ...), each as {{misconception, correction}}: what learners wrongly believe, and the correct idea with its reason.

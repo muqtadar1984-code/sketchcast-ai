@@ -445,7 +445,8 @@ def lookup_asset(sb, rendered: Rendered) -> Optional[dict]:
         digest = content_hash(rendered.path)
     except OSError as exc:
         raise RuntimeError(f"rendered asset unreadable: {exc}") from exc
-    rows = _rows(sb.table("visual_assets").select("id,asset_key,group_ids,vision,asset_format,status")
+    rows = _rows(sb.table("visual_assets")
+                 .select("id,asset_key,group_ids,vision,asset_format,status,storage_path,description")
                  .eq("content_hash", digest).limit(1).execute())
     return rows[0] if rows else None
 

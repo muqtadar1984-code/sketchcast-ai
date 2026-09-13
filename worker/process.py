@@ -539,8 +539,11 @@ def _sibling_presentation(sb: Client, gen: dict) -> Optional[dict]:
     """The presentation generation this deck belongs beside, or None.
 
     A catalogue deck names its kit, and the kit names its presentation. A
-    book deck was inserted in the same click as its lesson: same owner, book
-    and chapter, the same `part`, within a few hours."""
+    book deck belongs to the lesson of the same owner, book, chapter and
+    `part` — the most recent one, however old: a deck regenerated a week
+    after the lesson still wants that lesson's pictures (the first live
+    regeneration, 6 h 40 min after its video, got none under a 6-hour
+    window)."""
     params = gen.get("params") if isinstance(gen.get("params"), dict) else {}
     try:
         if params.get("catalogue") and params.get("kit_id"):
@@ -563,13 +566,9 @@ def _sibling_presentation(sb: Client, gen: dict) -> Optional[dict]:
             q = q.eq("chapter_ref", str(gen["chapter_ref"]))
         rows = getattr(q.order("created_at", desc=True).limit(20).execute(), "data", None) or []
         want_part = params.get("part")
-        mine = str(gen.get("created_at") or "")[:19]
         for r in rows:
             rp = r.get("params") if isinstance(r.get("params"), dict) else {}
             if rp.get("part") != want_part:
-                continue
-            theirs = str(r.get("created_at") or "")[:19]
-            if mine and theirs and abs(_epoch(mine) - _epoch(theirs)) > 6 * 3600:
                 continue
             return r
     except Exception as exc:  # noqa: BLE001 — a sibling we cannot read is a sibling we do not wait for

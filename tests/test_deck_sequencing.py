@@ -98,12 +98,16 @@ class TestFindingTheSibling:
         sib = process._sibling_presentation(sb, self._gen())
         assert sib and sib["id"] == "p3"
 
-    def test_a_lesson_from_last_week_is_not_this_decks_sibling(self):
+    def test_a_lesson_from_last_week_is_still_this_decks_sibling(self):
+        """A deck regenerated later belongs to the same lesson unit and wants
+        its video's pictures. The first live regeneration (6 h 40 min after
+        the video) got none under a 6-hour window."""
         sb = FakeSB()
         sb.tables["generations"] = [
             {"id": "old", "kind": "presentation", "owner_id": "u1", "book_id": "b1", "chapter_ref": "0",
              "created_at": "2026-09-01T10:00:00+00:00", "params": {"part": 3}, "status": "done"}]
-        assert process._sibling_presentation(sb, self._gen()) is None
+        sib = process._sibling_presentation(sb, self._gen())
+        assert sib and sib["id"] == "old"
 
     def test_a_catalogue_deck_asks_its_kit(self):
         sb = FakeSB()
