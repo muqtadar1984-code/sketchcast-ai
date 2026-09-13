@@ -29,10 +29,135 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
-from .raster_assets import (bind_generation, canonical_key, defer_asset,
+from .raster_assets import (asset_abandoned, asset_deferred, bind_generation,
+                            canonical_key, defer_asset, image_budget_exhausted,
                             model_call_concurrency)
 
 logger = logging.getLogger(__name__)
+
+# ── the image gate ───────────────────────────────────────────────────────────
+# The warm pass above made the lesson ASK for every picture once, up front. It
+# did not make the lesson WAIT for the answer: what was still pending at the
+# deadline was deferred and the render went ahead, and a segment whose picture
+# never came shipped a placeholder, which the acceptance report tolerates up to
+# n//4 of the lesson — so one blank board always passed. The founder's rule is
+# the other way round: a bad video is worse than no video. The gate is that
+# rule at the one seam where refusing costs nothing — no frame rasterised, no
+# TTS character bought.
+#
+# strict (default): the pass waits longer (warm budget + IMAGE_GATE_WAIT_SECS),
+#   a failure that was not a rate limit earns exactly one more turn, and a
+#   picture still missing at the end FAILS the lesson with a named, counted
+#   reason per key. Nothing downstream runs.
+# warn: measure and log exactly what strict would have refused; render as
+#   before. The rollback, one variable, no deploy.
+# off: the warm pass behaves as it did before the gate existed.
+DEFAULT_GATE_WAIT_SECS = 300.0
+# a non-rate-limit failure's second turn: soon, but not in the same breath
+GATE_RETRY_SOON_SECS = 5.0
+
+
+class ImagesIncomplete(RuntimeError):
+    """The lesson planned pictures it could not get, and refused to render
+    without them. `missing` maps each asset key to the reason the resolver
+    would have reported for it — the same vocabulary as ASSET_UNRESOLVED
+    (rate_limited, budget_exhausted, generation_failed), so a re-run can read
+    the cause off the job error and act on it rather than roll the dice."""
+
+    def __init__(self, missing: dict, total: int):
+        self.missing = dict(missing)
+        self.total = int(total)
+        by_reason: dict[str, list[str]] = {}
+        for key, reason in sorted(self.missing.items()):
+            by_reason.setdefault(reason, []).append(key)
+        parts = [f"{r}={len(ks)} ({', '.join(ks[:6])}{'…' if len(ks) > 6 else ''})"
+                 for r, ks in sorted(by_reason.items())]
+        super().__init__(
+            f"images incomplete: {len(self.missing)}/{self.total} planned "
+            f"picture(s) never arrived — {'; '.join(parts)}. Nothing was "
+            f"rendered; IMAGE_GATE=warn ships the lesson with placeholders "
+            f"instead.")
+
+
+def image_gate_mode() -> str:
+    import os
+    v = str(os.getenv("IMAGE_GATE", "") or "").strip().lower()
+    if v in ("off", "warn", "strict"):
+        return v
+    if v:
+        logger.warning("IMAGE_GATE=%r is not off/warn/strict; using strict", v)
+    return "strict"
+
+
+def gate_wait_secs() -> float:
+    import os
+    try:
+        v = float(str(os.getenv("IMAGE_GATE_WAIT_SECS", "") or "").strip()
+                  or DEFAULT_GATE_WAIT_SECS)
+    except (TypeError, ValueError):
+        logger.warning("IMAGE_GATE_WAIT_SECS is not a number; using %.0f",
+                       DEFAULT_GATE_WAIT_SECS)
+        return DEFAULT_GATE_WAIT_SECS
+    return v if v > 0 else DEFAULT_GATE_WAIT_SECS
+
+
+def gate_budget_secs(mode: str | None = None) -> float:
+    """How long the warm pass may run under this gate mode. Only strict buys
+    the extra wait: warn must measure what strict would have done to the SAME
+    lesson, so it cannot change how long the lesson looked."""
+    mode = mode or image_gate_mode()
+    return warm_budget_secs() + (gate_wait_secs() if mode == "strict" else 0.0)
+
+
+def one_more_turn(fetch):
+    """Wrap a warm-pass `fetch` so a failure that was NOT a rate limit earns
+    exactly one more turn.
+
+    The plain pass drops such a key after one attempt, which was right when a
+    miss cost a placeholder: a second try was one more paid call for a maybe.
+    Under a gate that FAILS the lesson on a miss, one more call is cheap
+    against re-running the whole video. Still only one — a key that fails
+    twice in a row is telling us something, and a key the lesson has already
+    abandoned, or that our own budget refused, will not change by asking again.
+    """
+    second_chance_given: set[str] = set()
+
+    def fetch_twice(key: str, prompt: str):
+        ok, retry_after = fetch(key, prompt)
+        if ok or retry_after is not None:
+            return ok, retry_after
+        ck = canonical_key(key)
+        if (ck in second_chance_given or asset_abandoned(key)
+                or image_budget_exhausted()):
+            return False, None
+        second_chance_given.add(ck)
+        logger.info("image gate: %s failed once for a reason that was not a "
+                    "rate limit; one more turn", key)
+        return False, GATE_RETRY_SOON_SECS
+    return fetch_twice
+
+
+def missing_pictures(entries, warm_result) -> dict[str, str]:
+    """Every planned picture the pass did not land, each with the reason the
+    resolver would have given a segment that asked for it now.
+
+    The vocabulary is `make_resolver`'s, on purpose: `rate_limited` when the
+    key is deferred or abandoned (a provider refused it), `budget_exhausted`
+    when OUR ceiling did, `generation_failed` otherwise. An acceptance report
+    and a gate refusal must name the same cause for the same miss.
+    """
+    ready = {canonical_key(k) for k in (warm_result or {}).get("ready") or ()}
+    out: dict[str, str] = {}
+    for key, _prompt in entries:
+        if canonical_key(key) in ready:
+            continue
+        if asset_abandoned(key) or asset_deferred(key) is not None:
+            out[key] = "rate_limited"
+        elif image_budget_exhausted():
+            out[key] = "budget_exhausted"
+        else:
+            out[key] = "generation_failed"
+    return out
 
 # fa8c0d7d composed in 281 s and this pass overlaps nothing today, so the
 # default is deliberately smaller than a compose: a lesson that cannot get its
