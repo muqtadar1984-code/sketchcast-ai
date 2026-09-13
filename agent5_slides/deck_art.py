@@ -147,9 +147,24 @@ def figure_from_row(sb, row: dict, tmp: Path, caption: str = "") -> Optional[Fig
         vision = vl.row_vision(row) or {}
         regions = vision.get("regions") if isinstance(vision.get("regions"), dict) else {}
         w, h = float(vision.get("w") or 0), float(vision.get("h") or 0)
+        # A row with no vision frame is still a PICTURE with a size. Leaving
+        # w = h = 0 made the section slide's `_fit` divide by zero — the first
+        # Structure of the Atom deck failed on slides 6 and 9 for a picture
+        # the library had never annotated. The regions stay empty (nothing to
+        # label), but the aspect ratio comes from the file on disk.
+        if not (w > 0 and h > 0):
+            regions = {}
+            try:
+                from PIL import Image
+                with Image.open(png) as im:
+                    w, h = float(im.width), float(im.height)
+            except Exception as exc:  # noqa: BLE001 — an unreadable size is not a lost picture
+                # the renderer's `_fit` fills the frame for a sizeless picture
+                logger.debug("deck art: %s has no readable size (%s)", key, exc)
+                w, h = 0.0, 0.0
         fig = Figure(key=key, caption=_caption(row, caption), png=png,
-                     regions=regions if (regions and w and h) else {}, w=w, h=h,
-                     parts=list(regions.keys()) if (regions and w and h) else [])
+                     regions=regions if regions else {}, w=w, h=h,
+                     parts=list(regions.keys()) if regions else [])
         return fig
     except Exception as exc:  # noqa: BLE001
         logger.warning("deck art: %s unavailable (%s)", key, exc)

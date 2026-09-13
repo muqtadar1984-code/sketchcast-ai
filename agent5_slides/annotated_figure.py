@@ -321,8 +321,14 @@ def _leader(slide, x1, y1, x2, y2, color):
 
 
 def _fit(img_w: float, img_h: float, box) -> tuple[float, float, float, float]:
-    """Largest same-aspect rectangle inside `box` (l, t, w, h), centred."""
+    """Largest same-aspect rectangle inside `box` (l, t, w, h), centred.
+
+    A picture whose size is unknown (0 or negative on either axis) fills the
+    box: a guess at its shape is better than the ZeroDivisionError that took
+    two section slides — and the whole deck — down on 2026-09-13."""
     l, t, bw, bh = box
+    if not (img_w > 0 and img_h > 0):
+        return l, t, bw, bh
     s = min(bw / img_w, bh / img_h)
     w, h = img_w * s, img_h * s
     return l + (bw - w) / 2, t + (bh - h) / 2, w, h
