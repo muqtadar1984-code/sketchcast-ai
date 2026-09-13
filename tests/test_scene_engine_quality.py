@@ -590,6 +590,33 @@ class TestRoundTwoRegressions:
         scenes, _, report = compile_plan(plan, {"s001": "a", "s002": "b"},
                                          all_segments=["s001", "s002"],
                                          skip_hold=set())
+        # Until 2026-09-13 this opening was SKIPPED (whiteboard fallback) and
+        # the segment played over a title and speech bubbles — the founder's
+        # "images missing". The chapter has a picture; the opening now draws
+        # it, and the empty-scene skip is reserved for a chapter with nothing
+        # to draw at all (below).
+        assert "s001" in scenes
+        assert any(a["verb"] == "draw" and a["target"] == "i1"
+                   for a in scenes["s001"]["actions"])
+        assert any("OPENING STEP DRAWS i1" in ln for ln in report)
+        assert not any("SKIPPED empty scene" in ln for ln in report)
+        assert "s002" in scenes
+
+    def test_an_opening_with_nothing_to_draw_is_still_skipped(self):
+        raw = {"chapters": [{
+            "concept": "c", "transition": "clear_and_redraw",
+            "elements": [{"id": "t", "type": "text", "text": "hello", "at": [600, 300]}],
+            "steps": [
+                {"segment": 1, "decision": "NEW_VISUAL",
+                 "actions": [{"verb": "draw", "target": "ghost"}]},   # dropped
+                {"segment": 2, "decision": "EXTEND",
+                 "actions": [{"verb": "write", "target": "t"}]},
+            ],
+        }]}
+        plan = parse_visual_plan(raw)
+        scenes, _, report = compile_plan(plan, {"s001": "a", "s002": "b"},
+                                         all_segments=["s001", "s002"],
+                                         skip_hold=set())
         assert "s001" not in scenes            # whiteboard fallback instead
         assert any("SKIPPED empty scene" in ln for ln in report)
         assert "s002" in scenes

@@ -1058,6 +1058,26 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
     def expand(tgt) -> list[str]:
         return ([tgt] + _group_children(roster, tgt)) if tgt else []
 
+    # AN OPENING STEP THAT DRAWS NO PICTURE leaves the board blank for the
+    # whole segment — and an opening step that introduces NOTHING is dropped
+    # as an empty scene, so the segment plays over a title and speech bubbles.
+    # Heat Transfer (2026-09-13, third render): 50 seconds of that before the
+    # bathtub, because the director put the chapter's first draw in step two.
+    # The picture exists in the plan; the teacher simply starts with it. Its
+    # draw is inserted at the front of the first step BEFORE the draw counts
+    # below are taken, so the slice arithmetic sees it as the first of N
+    # draws rather than an extra one. A carry chapter is exempt: its board is
+    # not blank, it is the previous chapter's.
+    if ch.steps and ills and ills[0] in roster \
+            and not (prev_board and ch.transition == "carry"):
+        _open = ch.steps[0]
+        if not any(a.get("verb") == "draw"
+                   and roster.get(a.get("target"), {}).get("type") == "illustration"
+                   for a in _open.actions):
+            _open.actions.insert(0, {"verb": "draw", "target": ills[0]})
+            report.append(f"CHAPTER {ch.concept} | OPENING STEP DRAWS {ills[0]} "
+                          f"(the director's first step drew no picture)")
+
     for st in ch.steps:
         for a in st.actions:
             if a.get("verb") == "draw" and a.get("target") in roster and \

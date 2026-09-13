@@ -287,7 +287,7 @@ class TestASketchNeverCoversALabel:
         assert lbl.box[0] >= 900, "the label is still in the right-hand column"
         assert sk.box[2] < 400, "the sketch went to the far side"
 
-    def test_a_board_with_no_free_slot_says_so_instead_of_covering_the_words(self):
+    def test_a_board_with_no_free_slot_drops_the_sketch_instead_of_covering_the_words(self):
         from spike.scene_engine.render import SceneRenderer
         scene = Scene.model_validate({
             "id": "z", "narration": "two labels, two corners",
@@ -302,4 +302,65 @@ class TestASketchNeverCoversALabel:
         })
         r = SceneRenderer(scene, asset_resolver=lambda k: ("raster", _disc_asset()))
         r.compile(6.0)
-        assert any(w.startswith("SKETCH_OVER_TEXT sk_z_0") for w in r._warned), r._warned
+        assert any(w.startswith("SKETCH_DROPPED_OVER_TEXT sk_z_0") for w in r._warned), r._warned
+        sk = r.bound["sk_z_0"]
+        assert sk.raster is None and sk.layers == [] and r._flat["sk_z_0"] == [],             "dropped means nothing is drawn — not drawn somewhere else"
+        assert sk.box[0] == sk.box[2] and sk.box[1] == sk.box[3]
+        # and the frame loop survives a draw action on the dropped sketch
+        last = None
+        for last in r.frames(6.0):
+            pass
+        assert last is not None
+
+
+# ── 1b. an opening step that draws no picture ────────────────────────────────
+
+class TestAnEmptyOpeningStepDrawsThePicture:
+    """Heat Transfer, third render: the director's first step introduced
+    nothing, so the compiler dropped it as an empty scene and the segment
+    played 50 s over a title and speech bubbles. The chapter HAD a picture —
+    it was drawn in step two. The teacher now starts with it."""
+
+    def _plan(self, first_actions):
+        return parse_visual_plan({"chapters": [
+            {"concept": "temperature_and_thermal_energy",
+             "assets": {"plant_cell": "a plant cell. Name the layer groups exactly: wall, nucleus"},
+             "elements": [
+                 {"id": "cell", "type": "illustration", "asset": "plant_cell", "at": [600, 380]},
+                 {"id": "ttl", "type": "text", "text": "Hot Spoon", "at": [600, 60], "role": "title"},
+             ],
+             "steps": [
+                 {"segment": 1, "decision": "NEW_VISUAL", "actions": first_actions},
+                 {"segment": 2, "decision": "EXTEND",
+                  "actions": [{"verb": "draw", "target": "cell"}]},
+             ]}]})
+
+    _NARR = {"s001": "have you ever noticed a hot spoon", "s002": "now look at the cell"}
+
+    def test_an_empty_first_step_gets_the_chapter_s_picture(self):
+        scenes, _, report = compile_plan(self._plan([]), self._NARR)
+        assert "s001" in scenes, report
+        verbs = [(a["verb"], a["target"]) for a in scenes["s001"]["actions"]]
+        assert ("draw", "cell") in verbs
+        assert any("OPENING STEP DRAWS cell" in l for l in report)
+        assert not any("SKIPPED empty scene" in l for l in report)
+
+    def test_a_first_step_that_only_writes_the_title_also_gets_it(self):
+        scenes, _, report = compile_plan(self._plan([{"verb": "write", "target": "ttl"}]),
+                                         self._NARR)
+        verbs = [(a["verb"], a["target"]) for a in scenes["s001"]["actions"]]
+        assert verbs.index(("draw", "cell")) < verbs.index(("write", "ttl")), \
+            "the picture comes first; the title follows"
+
+    def test_a_first_step_that_already_draws_is_left_alone(self):
+        scenes, _, report = compile_plan(self._plan([{"verb": "draw", "target": "cell"}]),
+                                         self._NARR)
+        draws = [a for a in scenes["s001"]["actions"] if a["verb"] == "draw" and a["target"] == "cell"]
+        assert len(draws) == 1
+        assert not any("OPENING STEP DRAWS" in l for l in report)
+
+    def test_the_second_step_still_compiles_and_validates(self):
+        scenes, _, _ = compile_plan(self._plan([]), self._NARR)
+        for sid in ("s001", "s002"):
+            Scene.model_validate(scenes[sid])
+        assert scenes["s001"]["fresh_board"] is True and scenes["s002"]["fresh_board"] is False
