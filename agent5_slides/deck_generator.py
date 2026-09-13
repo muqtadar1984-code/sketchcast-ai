@@ -98,6 +98,12 @@ def model_from_article(sb, article: dict, tmp: Path) -> LessonModel:
 
 # ── the book source ───────────────────────────────────────────────────
 
+def model_from_book_article(article: dict) -> LessonModel:
+    """A book chapter authored as an article (`deck_article.author_article`):
+    the figures are its own specs, undrawn — `deck_art` draws or finds them."""
+    return from_article(article, article.get("figures") or [], art=None)
+
+
 def model_from_script(analysis: dict, deck_script: dict,
                       extras: Optional[dict] = None, language: Optional[str] = None) -> LessonModel:
     return from_analysis(analysis, deck_script, extras, language)

@@ -175,6 +175,21 @@ def _attach(model: LessonModel, sec: Section, fig: Figure) -> None:
         sec.figure_keys.append(fig.key)
 
 
+def pictured(model: LessonModel, sec: Section) -> bool:
+    """Does the section already have a picture ON DISK? An article declares
+    figures before any is drawn (a key, a caption, the parts) — a declared
+    figure without artwork is a request for a picture, not a picture."""
+    return any(f.png and Path(str(f.png)).exists() for f in model.figures_for(sec))
+
+
+def declared_figure(model: LessonModel, sec: Section) -> Optional[Figure]:
+    """The section's own figure spec, still undrawn, if the article wrote one."""
+    for f in model.figures_for(sec):
+        if not (f.png and Path(str(f.png)).exists()):
+            return f
+    return None
+
+
 def place_video_figures(model: LessonModel, seg_keys: list[tuple[int, str]],
                         figures: dict[str, Figure], n_segments: int,
                         exact: bool, budget: int) -> int:
@@ -196,12 +211,17 @@ def place_video_figures(model: LessonModel, seg_keys: list[tuple[int, str]],
             continue
         sec: Optional[Section] = None
         if exact:
-            if seg_i < len(model.sections) and not model.sections[seg_i].figure_keys:
+            if seg_i < len(model.sections) and not pictured(model, model.sections[seg_i]):
                 sec = model.sections[seg_i]
         else:
-            free = [s for s in model.sections if not s.figure_keys]
+            free = [s for s in model.sections if not pictured(model, s)]
             if not free:
                 break
+            # A section that asked for its own diagram (an article figure,
+            # still undrawn) keeps the slot for it; the video's picture goes
+            # to a section with nothing planned, when there is one.
+            bare = [s for s in free if not s.figure_keys]
+            free = bare or free
             fw = _tokens(key.replace("_", " ") + " " + fig.caption)
             scored = sorted(free, key=lambda s: -len(fw & _tokens(_section_text(s))))
             if scored and fw & _tokens(_section_text(scored[0])):
@@ -222,7 +242,7 @@ def place_textbook_figures(model: LessonModel, figs: list[tuple[int, dict]], bud
         if placed >= budget or seg_i >= len(model.sections):
             break
         sec = model.sections[seg_i]
-        if sec.figure_keys:
+        if pictured(model, sec):
             continue
         key = f"textbook_{seg_i + 1}"
         _attach(model, sec, Figure(key=key, caption=f.get("caption") or sec.heading,
@@ -244,7 +264,7 @@ def library_figures(model: LessonModel, sb, tmp: Path, context: dict, budget: in
     for sec in model.sections:
         if placed >= budget:
             break
-        if sec.figure_keys:
+        if pictured(model, sec):
             continue
         key = _key_for(sec)
         if not key:
@@ -313,10 +333,13 @@ def generate_figures(model: LessonModel, sb, tmp: Path, context: dict, job_id: s
 
     if budget <= 0:
         return 0
-    wanted = [s for s in model.sections if not s.figure_keys]
-    # Diagram-shaped sections first: a flow or a comparison is the section
-    # that most needs a picture and has the labels to make it a diagram.
-    wanted.sort(key=lambda s: 0 if (s.visual or {}).get("kind") in ("flow", "cycle", "hierarchy", "compare") else 1)
+    wanted = [s for s in model.sections if not pictured(model, s)]
+    # Sections whose article DECLARED a figure first (the spec names the
+    # parts to label), then diagram-shaped ones: a flow or a comparison is
+    # the section that most needs a picture and has the labels to make it a
+    # diagram.
+    wanted.sort(key=lambda s: (0 if declared_figure(model, s) is not None else
+                               1 if (s.visual or {}).get("kind") in ("flow", "cycle", "hierarchy", "compare") else 2))
     backend = _backend()
     ctx = {k: context.get(k) for k in ("curriculum", "subject", "grade", "topic") if context.get(k)}
     try:
@@ -334,11 +357,16 @@ def generate_figures(model: LessonModel, sb, tmp: Path, context: dict, job_id: s
             if user_builders_live(sb, exclude_job_id):
                 logger.info("deck art: a user builder is live; not generating (%d done)", placed)
                 break
-            key = _key_for(sec)
+            if pictured(model, sec):
+                continue          # a figure it shares was drawn a moment ago
+            declared = declared_figure(model, sec)
+            key = (declared.key if declared else "") or _key_for(sec)
             if not key:
                 continue
-            spec = {"caption": sec.heading, "spec": {"subject": sec.heading, "parts": _parts_for(model, sec),
-                                                     "style": "whiteboard diagram", "notes": ""}}
+            caption = (declared.caption if declared else "") or sec.heading
+            spec = {"caption": caption,
+                    "spec": {"subject": caption, "parts": (declared.parts if declared else []) or _parts_for(model, sec),
+                             "style": "whiteboard diagram", "notes": ""}}
             prompt = figure_prompt(spec)
             try:
                 rendered = backend.generate(key, prompt)
@@ -350,9 +378,16 @@ def generate_figures(model: LessonModel, sb, tmp: Path, context: dict, job_id: s
                     row = lookup_asset(sb, rendered)
                 if row is None:
                     continue
-                fig = figure_from_row(sb, row, tmp, caption=sec.heading)
+                fig = figure_from_row(sb, row, tmp, caption=caption)
                 if fig is None:
                     continue
+                if declared is not None and declared.key != fig.key:
+                    # The drawn picture replaces the request for it — in
+                    # every section that made the request, so a figure two
+                    # sections share is drawn once.
+                    for s in model.sections:
+                        s.figure_keys = [fig.key if k == declared.key else k for k in s.figure_keys]
+                    model.figures.pop(declared.key, None)
                 _attach(model, sec, fig)
                 placed += 1
             except Exception as exc:  # noqa: BLE001 — a picture, not the deck

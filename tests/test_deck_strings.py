@@ -66,7 +66,9 @@ class TestItReachesTheSlides:
         assert model.language == "te"
 
     def test_a_continued_page_says_so_in_the_lesson_language(self):
-        model = dg.model_from_script({}, _video_script({"n1": "इस पाठ में। " * 400}), language="hi")
+        # Prose is distilled to points now; a long LIST still paginates.
+        model = dg.model_from_script({}, _video_script(), language="hi")
+        model.sections[0].body_md = "\n".join("- इस पाठ में एक बात" for _ in range(60))
         secs = [s for s in storyboard(model) if s.kind == "section" and s.section_id == "s001"]
         assert len(secs) > 1
         assert secs[1].heading.endswith(T("hi", "continued"))
