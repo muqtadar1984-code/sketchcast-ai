@@ -86,3 +86,51 @@ class TestAnArrowTargetIsAlwaysDrawn:
         assert len(made) == 1 and "hierarchy" in made[0], made
         # the label is introduced by its own write, exactly as before
         assert "lbl_tissue" in _ids(scenes["s001"])
+
+
+
+class TestAnArrowsWordsAreWrittenBeforeTheArrow:
+    """Joints, 2026-09-14: arr_joint_cavity's tail was lbl_joint, a label
+    the director declared and never wrote. The tail flattened to the words'
+    planned point on every board — three segments of a bare stroke out of
+    the top-left corner into the diagram."""
+
+    _NARR = {"s001": "the joint cavity holds synovial fluid",
+             "s002": "and ligaments hold the bones together"}
+
+    def _plan(self, write_the_label_later: bool):
+        steps = [
+            {"segment": 1, "decision": "NEW_VISUAL",
+             "actions": [{"verb": "draw", "target": "joint"},
+                         {"verb": "draw", "target": "arr_cavity"}]},
+            {"segment": 2, "decision": "FOCUS", "actions": []},
+        ]
+        if write_the_label_later:
+            steps[1]["actions"].append({"verb": "write", "target": "lbl_joint"})
+        return parse_visual_plan({"chapters": [{
+            "concept": "joint_anatomy",
+            "assets": {"joint_cross_section": "a synovial joint. Name the layer groups exactly: cavity"},
+            "elements": [
+                {"id": "joint", "type": "illustration", "asset": "joint_cross_section",
+                 "at": [600, 380]},
+                {"id": "lbl_joint", "type": "text", "text": "Joint cavity", "at": [95, 140],
+                 "role": "label"},
+                {"id": "arr_cavity", "type": "arrow",
+                 "tail": {"el": "lbl_joint"}, "head": {"el": "joint", "layer": "cavity"}},
+            ],
+            "steps": steps,
+        }]})
+
+    def test_a_label_nobody_writes_is_written_before_its_arrow(self):
+        scenes, _, report = compile_plan(self._plan(False), _NARR | self._NARR)
+        acts = [(a["verb"], a["target"]) for a in scenes["s001"]["actions"]]
+        assert ("write", "lbl_joint") in acts, report
+        assert acts.index(("write", "lbl_joint")) < acts.index(("draw", "arr_cavity"))
+        assert not [l for l in report if "FLATTENED" in l and "lbl_joint" in l], report
+        assert any("MATERIALISED lbl_joint (text)" in l for l in report), report
+
+    def test_a_label_written_in_a_later_step_is_left_to_that_step(self):
+        scenes, _, report = compile_plan(self._plan(True), _NARR | self._NARR)
+        acts1 = [(a["verb"], a["target"]) for a in scenes["s001"]["actions"]]
+        assert ("write", "lbl_joint") not in acts1
+        assert not [l for l in report if "MATERIALISED lbl_joint" in l], report
