@@ -619,3 +619,92 @@ class TestAGreyPageIsCutLikeAWhiteOne:
         assert _ink_threshold(lum) == 215, "a dark border is drawing, not paper"
         img = to_ink(self._page(120, stroke=120))
         assert np.asarray(img.getchannel("A")).min() > 150, "nothing was cut away"
+
+
+# ── 8. every segment belongs to a chapter ────────────────────────────────────
+
+class TestEverySegmentBelongsToAChapter:
+    """Joints, second render (2026-09-14): steps on segments 3-6 and 9-10 of
+    twelve. The hook, the two segments between the pulley and the arm, and
+    the two closing segments fell to the whiteboard fallback — five title
+    cards in a lesson whose pictures were all there."""
+
+    _ALL = [f"s{i:03d}" for i in range(1, 9)]
+    _NARR = {"s001": "have you ever wondered how your arm bends",
+             "s002": "if our skeleton were one solid bone",
+             "s003": "a joint is where two bones meet",
+             "s004": "cartilage keeps them from grinding",
+             "s005": "because muscles can only pull they work in pairs",
+             "s006": "here is a puzzle for you",
+             "s007": "to bend your arm the biceps contracts",
+             "s008": "next time you run feel your muscles"}
+
+    def _plan(self):
+        return parse_visual_plan({"chapters": [
+            {"concept": "joint_structure",
+             "assets": {"joint": "a synovial joint. Name the layer groups exactly: cartilage"},
+             "elements": [
+                 {"id": "joint", "type": "illustration", "asset": "joint", "at": [600, 380]},
+                 {"id": "lbl_c", "type": "text", "text": "Cartilage", "at": [95, 140],
+                  "role": "label"}],
+             "steps": [
+                 {"segment": 3, "decision": "NEW_VISUAL",
+                  "actions": [{"verb": "draw", "target": "joint"}]},
+                 {"segment": 4, "decision": "EXTEND",
+                  "actions": [{"verb": "write", "target": "lbl_c"}]}]},
+            {"concept": "muscle_pairs", "transition": "clear_and_redraw",
+             "assets": {"arm": "a bent arm. Name the layer groups exactly: biceps"},
+             "elements": [
+                 {"id": "arm", "type": "illustration", "asset": "arm", "at": [600, 380]}],
+             "steps": [
+                 {"segment": 7, "decision": "NEW_VISUAL",
+                  "actions": [{"verb": "draw", "target": "arm"}]}]},
+        ]})
+
+    def _compile(self, skip_hold=None):
+        return compile_plan(self._plan(), self._NARR, all_segments=self._ALL,
+                            skip_hold=skip_hold)
+
+    def test_the_hook_opens_on_the_first_chapter_s_picture(self):
+        scenes, _, report = self._compile()
+        assert "s001" in scenes, sorted(scenes)
+        assert any(a.get("verb") == "draw" and a.get("target") == "joint"
+                   for a in scenes["s001"]["actions"]), scenes["s001"]["actions"]
+        assert any("OPENING PULLED s003 -> s001" in r for r in report), report
+        # the segment the step was written for now simply holds the board
+        assert "s003" in scenes and "joint" in {e["id"] for e in scenes["s003"]["elements"]}
+
+    def test_the_segments_between_two_chapters_hold_the_earlier_board(self):
+        scenes, _, _ = self._compile()
+        for sid in ("s005", "s006"):
+            assert sid in scenes, sid
+            ids = {e["id"] for e in scenes[sid]["elements"]}
+            assert "joint" in ids and "arm" not in ids, (sid, ids)
+
+    def test_the_closing_segment_holds_the_last_board(self):
+        scenes, _, _ = self._compile()
+        assert "s008" in scenes
+        assert "arm" in {e["id"] for e in scenes["s008"]["elements"]}
+
+    def test_a_question_hook_still_keeps_its_own_visual(self):
+        scenes, _, _ = self._compile(skip_hold={"s006"})
+        assert "s006" not in scenes
+        assert "s005" in scenes
+
+    def test_every_segment_is_covered_and_valid(self):
+        scenes, _, _ = self._compile()
+        assert set(scenes) == set(self._ALL), sorted(set(self._ALL) - set(scenes))
+        for sc in scenes.values():
+            Scene.model_validate(sc)
+
+    def test_without_a_segment_list_the_old_span_rule_stands(self):
+        scenes, _, report = compile_plan(self._plan(), self._NARR)
+        assert "s001" not in scenes and not any("OPENING PULLED" in r for r in report)
+
+
+class TestTheDirectorIsToldEverySegmentHasAChapter:
+    def test_the_prompt_says_so(self):
+        import inspect
+
+        from spike.scene_engine import director
+        assert "EVERY SEGMENT BELONGS TO A CHAPTER" in inspect.getsource(director)
