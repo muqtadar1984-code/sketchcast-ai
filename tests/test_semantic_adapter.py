@@ -622,3 +622,160 @@ class TestASentenceIsNotALabel:
         els = {e["id"]: e for e in plan["chapters"][0]["elements"]}
         assert els["lbl_hyp"]["at"][0] == 95.0 and \
             els["lbl_hyp"]["role"] == "label"
+
+
+# ── a step belongs to the segment its cues are spoken in ─────────────────────
+
+_JOINTS_NARR = {
+    "s001": "Have you ever wondered how your arm can wave hello?",
+    "s002": "You already know that our skeleton gives us shape and protection.",
+    "s003": ("A joint is just any place in your body where two or more bones meet. "
+             "Their ends are covered in a smooth, slippery layer of cartilage. "
+             "Ligaments are tough, stretchy straps holding the bones together."),
+    "s004": "Think of a ball-and-socket joint like your shoulder or hip.",
+    "s005": "Hinge joints, like your elbow and knee, work like a standard door hinge.",
+    "s006": "Here is the golden rule of muscles: muscles can only pull, they can never push.",
+    "s007": "Because muscles can only pull, they work in pairs called antagonistic pairs.",
+    "s008": "To bend your arm the biceps contracts while the triceps relaxes.",
+    "s009": "Here is a puzzle for you: what happens when you hold your arm still?",
+    "s010": "If you guessed that they are both working, you are right!",
+    "s011": "Next time you run, jump, or play a video game, feel your muscles.",
+}
+
+
+def _joints_plan():
+    """The live shape: 11 segments, steps numbered as if each dialogue line
+    were a segment — 1..3 are all s003, 4 is s004, 6 is s006, 9 is s008 and
+    the last two run past the end of the script."""
+    return {"chapters": [
+        {"id": "joint_anatomy", "concept": "joint_anatomy", "transition": "clear_and_redraw",
+         "assets": {"joint_cross_section": "A synovial joint cross-section"},
+         "semantic_regions": ["cartilage_layer", "ligament_band"],
+         "elements": [
+             {"id": "joint_img", "type": "illustration", "asset": "joint_cross_section",
+              "role": "root_visual"},
+             {"id": "lbl_cartilage", "type": "text", "text": "Cartilage", "role": "label"},
+             {"id": "lbl_ligament", "type": "text", "text": "Ligament", "role": "label"},
+         ],
+         "steps": [
+             {"segment": 1, "decision": "NEW_VISUAL", "actions": [
+                 {"verb": "DRAW", "target": {"element": "joint_img"},
+                  "cue": "place in your body where two or more bones meet"}]},
+             {"segment": 2, "decision": "EXTEND", "actions": [
+                 {"verb": "WRITE", "target": {"element": "lbl_cartilage"},
+                  "cue": "smooth, slippery layer"}]},
+             {"segment": 3, "decision": "EXTEND", "actions": [
+                 {"verb": "WRITE", "target": {"element": "lbl_ligament"},
+                  "cue": "stretchy straps holding the bones together"}]},
+             {"segment": 4, "decision": "FOCUS", "actions": [
+                 {"verb": "HIGHLIGHT", "target": {"element": "joint_img"},
+                  "cue": "shoulder or hip"}]},
+         ]},
+        {"id": "muscle_pull_rule", "concept": "muscle_pull_rule", "transition": "clear_and_redraw",
+         "assets": {"rope_pull": "A hand pulling a rope tied to a box"},
+         "elements": [
+             {"id": "rope_img", "type": "illustration", "asset": "rope_pull",
+              "role": "root_visual"},
+             {"id": "lbl_pull", "type": "text", "text": "Muscles can only PULL",
+              "role": "label"},
+         ],
+         "steps": [
+             {"segment": 6, "decision": "NEW_VISUAL", "actions": [
+                 {"verb": "DRAW", "target": {"element": "rope_img"},
+                  "cue": "muscles can only pull, they can never push"}]},
+             {"segment": 7, "decision": "FOCUS", "actions": [
+                 {"verb": "HIGHLIGHT", "target": {"element": "rope_img"}}]},
+         ]},
+        {"id": "antagonistic_action", "concept": "antagonistic_action",
+         "transition": "clear_and_redraw",
+         "assets": {"biceps_triceps": "A bent arm with biceps and triceps"},
+         "elements": [
+             {"id": "arm_img", "type": "illustration", "asset": "biceps_triceps",
+              "role": "root_visual"},
+         ],
+         "steps": [
+             {"segment": 13, "decision": "NEW_VISUAL", "actions": [
+                 {"verb": "DRAW", "target": {"element": "arm_img"},
+                  "cue": "the biceps contracts while the triceps relaxes"}]},
+             {"segment": 14, "decision": "FOCUS", "actions": [
+                 {"verb": "HIGHLIGHT", "target": {"element": "arm_img"}}]},
+             {"segment": 18, "decision": "FOCUS", "actions": [
+                 {"verb": "HIGHLIGHT", "target": {"element": "arm_img"},
+                  "cue": "they are both working"}]},
+         ]},
+    ]}
+
+
+def _segments_of(adapted, concept):
+    ch = next(c for c in adapted["chapters"] if c["concept"] == concept)
+    return [st["segment"] for st in ch["steps"]]
+
+
+class TestAStepFollowsItsCueNotItsNumber:
+    """Joints and Antagonistic Muscles, 2026-09-14: 11 segments, 18 planned
+    steps numbered by dialogue line. Steps 12–18 — the chapter the topic is
+    about — were dropped silently and every earlier step sat on the wrong
+    narration. The compiled plan was valid throughout."""
+
+    def test_the_lost_chapter_comes_back_on_the_segments_that_speak_it(self):
+        adapted, issues = adapt_semantic_plan(_joints_plan(), _JOINTS_NARR)
+        assert _segments_of(adapted, "antagonistic_action") == [8, 8, 10], adapted
+        codes = [i["code"] for i in issues]
+        assert "STEP_MOVED_TO_ITS_CUE" in codes
+        assert "STEP_FOLLOWS_ITS_NEIGHBOUR" in codes, "the uncued step 14 followed 13"
+
+    def test_three_lines_of_one_segment_collapse_onto_it(self):
+        adapted, _ = adapt_semantic_plan(_joints_plan(), _JOINTS_NARR)
+        segs = _segments_of(adapted, "joint_anatomy")
+        # steps 1..3 all speak in s003; step 4 speaks in s004
+        assert segs == [3, 3, 3, 4] or segs == [3, 4], segs
+
+    def test_the_rope_is_drawn_where_the_rule_is_spoken(self):
+        adapted, _ = adapt_semantic_plan(_joints_plan(), _JOINTS_NARR)
+        assert _segments_of(adapted, "muscle_pull_rule")[0] == 6
+        # and no cue is reported missing for a step that moved
+        _, issues = adapt_semantic_plan(_joints_plan(), _JOINTS_NARR)
+        missing = [i for i in issues if i["code"] == "CUE_NOT_IN_NARRATION"]
+        assert not missing, missing
+
+    def test_the_model_s_number_is_kept_for_the_record(self):
+        raw = _joints_plan()
+        adapt_semantic_plan(raw, _JOINTS_NARR)
+        st = raw["chapters"][2]["steps"][0]
+        assert st["segment_as_written"] == 13 and st["segment"] == 8
+
+    def test_a_sound_plan_is_not_touched(self):
+        raw = _plan()
+        narr = {"s001": "Here is a right-angled triangle. The hypotenuse is the longest side.",
+                "s002": "The base sits at the bottom."}
+        adapted, issues = adapt_semantic_plan(raw, narr)
+        assert _segments_of(adapted, "triangle_sides") == [1, 2]
+        assert not [i for i in issues if i["code"].startswith("STEP_")]
+
+    def test_one_stray_step_moves_but_its_uncued_neighbours_stay(self):
+        """A single misnumbered step on an otherwise sound plan is not
+        evidence that every uncued step is wrong too."""
+        raw = _plan()
+        raw["chapters"][0]["steps"].append(
+            {"segment": 1, "decision": "FOCUS",
+             "actions": [{"verb": "HIGHLIGHT", "target": {"element": "tri"},
+                          "cue": "sits at the bottom"}]})
+        raw["chapters"][0]["steps"].append(
+            {"segment": 1, "decision": "FOCUS",
+             "actions": [{"verb": "PULSE", "target": {"element": "tri"}}]})
+        narr = {"s001": "Here is a right-angled triangle. The hypotenuse is the longest side.",
+                "s002": "The base sits at the bottom."}
+        adapted, issues = adapt_semantic_plan(raw, narr)
+        segs = _segments_of(adapted, "triangle_sides")
+        assert 2 in segs and segs.count(1) >= 1, segs
+        assert not [i for i in issues if i["code"] == "STEP_FOLLOWS_ITS_NEIGHBOUR"]
+
+    def test_the_whole_lesson_compiles_and_validates_after_the_move(self):
+        adapted, _ = adapt_semantic_plan(_joints_plan(), _JOINTS_NARR)
+        plan = parse_visual_plan(adapted)
+        scenes, _, report = compile_plan(plan, _JOINTS_NARR)
+        assert "s008" in scenes and any(
+            a.get("target") == "arm_img" and a["verb"] == "draw"
+            for a in scenes["s008"]["actions"]), report
+        for sc in scenes.values():
+            Scene.model_validate(sc)

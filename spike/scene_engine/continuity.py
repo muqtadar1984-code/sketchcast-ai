@@ -1730,18 +1730,28 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                         continue
                     _tid = _ref["el"]
                     _tgt = roster.get(_tid)
-                    if (_tid in _introduced_ever or not isinstance(_tgt, dict)
-                            or _tgt.get("type") in ("arrow", "text")
+                    if (_tid in _introduced_ever or _tid in introduced
+                            or not isinstance(_tgt, dict)
+                            or _tgt.get("type") == "arrow"
                             or _tid in erased or _tid in _wants):
                         continue
+                    # A TEXT end is normally written by its own step and
+                    # the arrow simply arrives first ("not on the board
+                    # yet"). A text no step in the chapter ever writes is a
+                    # different thing: the arrow's tail flattens to the
+                    # words' planned point on every board and draws a bare
+                    # line out of the margin — Joints 2026-09-14, lbl_joint,
+                    # three segments of a stroke from the top-left corner
+                    # into the diagram.
                     _wants.append(_tid)
         for _tid in _wants:
-            _st.actions.insert(0, {"verb": "draw", "target": _tid,
+            _verb = "write" if roster[_tid].get("type") == "text" else "draw"
+            _st.actions.insert(0, {"verb": _verb, "target": _tid,
                                    "at": {"sec": 0.0}})
             _introduced_ever.add(_tid)
             report.append(f"SEGMENT {_sid} | MATERIALISED {_tid} "
                           f"({roster[_tid].get('type')}) — arrows pointed at "
-                          f"it and no step drew it")
+                          f"it and no step {'wrote' if _verb == 'write' else 'drew'} it")
 
     first = True
     for seg_id, st in work:

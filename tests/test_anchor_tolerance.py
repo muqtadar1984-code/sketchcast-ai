@@ -520,11 +520,17 @@ class TestReviewFindings:
         scenes, _, report = _compile(raw)
         prev = next(e for e in scenes["s004"]["elements"]
                     if e["id"] == "prev__arr_wall")
-        assert prev["tail"] == [101.0, 140.0]           # sealed at carry-out
+        # The label nobody wrote is now WRITTEN before its arrow (the
+        # materialiser, 2026-09-14), so the carried tail stays bound to the
+        # carried label. Either way the claim is the same: it is never the
+        # new chapter's `lbl_wall_leaf`.
+        tail = prev["tail"]
+        assert tail == [101.0, 140.0] or tail.get("el") == "prev__lbl_wall", tail
         assert prev["head"]["el"] == "prev__cell"
         assert not any("REANCHORED prev__" in ln for ln in report), report
-        assert any(ln.startswith("CHAPTER cell | CARRY-OUT | FLATTENED "
-                                 "arr_wall.tail 'lbl_wall'") for ln in report), report
+        assert not any("lbl_wall_leaf" in ln and "prev__arr_wall" in ln
+                       for ln in report), report
+        assert any("MATERIALISED lbl_wall (text)" in ln for ln in report), report
         assert parse_scene_response(scenes["s004"], _NARR["s004"]) is not None
 
     def test_2_the_resolver_itself_refuses_to_rebind_a_carried_ref(self):

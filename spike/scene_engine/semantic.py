@@ -142,6 +142,7 @@ def adapt_semantic_plan(raw: dict, narrations: dict[str, str] | None = None,
             raise AdapterError(ctx.issues)
         return {"chapters": []}, ctx.issues
 
+    _reindex_steps_by_cue(raw, narrations, ctx)
     chapters = []
     ci = 0
     for craw in raw["chapters"]:
@@ -193,6 +194,123 @@ def _draw_targets(step, by_asset: dict | None = None) -> list:
         if isinstance(tid, str) and tid:
             out.append(tid)
     return out
+
+
+def _sid_of(seg) -> str:
+    return f"s{seg:03d}" if isinstance(seg, int) else str(seg or "")
+
+
+def _step_cues(st: dict) -> list[str]:
+    out = []
+    for a in st.get("actions") or []:
+        if isinstance(a, dict) and isinstance(a.get("cue"), str):
+            c = " ".join(a["cue"].split()).lower()
+            if len(c) >= 8:        # a one-word cue is in every segment
+                out.append(c)
+    return out
+
+
+def _reindex_steps_by_cue(raw: dict, narrations: dict[str, str],
+                          ctx: _Ctx) -> None:
+    """A step belongs to the segment its cues are spoken in, whatever number
+    the model wrote on it.
+
+    Joints and Antagonistic Muscles (2026-09-14): the script had 11 segments
+    and the model planned 18 steps, numbering the dialogue LINES of the
+    explore segments as if each were a segment. Every cue was verbatim — in
+    a segment other than the one the step named. Steps 12–18, the whole
+    antagonistic-pair chapter the topic is about, referenced segments that
+    did not exist and were dropped without a word; steps 1–11 landed on the
+    wrong narration, so the rope was drawn under the hinge and the hinge
+    under the ball. The compiled plan was valid throughout.
+
+    Repair, in evidence order: a step whose cues all sit outside its own
+    segment and agree on exactly one other segment moves there. Once the
+    numbering is shown to be skewed (any step moved, or any index past the
+    last segment), a step with no usable cue takes the segment of its nearest
+    cued neighbour in the same chapter — the model wrote the steps in
+    teaching order even when it numbered them wrong. A step nothing can
+    place stays where it was; the range check downstream drops it as today.
+    Mutates `raw` in place; the model's number is kept as `segment_as_written`.
+    """
+    if not narrations:
+        return
+    order = list(narrations.keys())
+    text = {sid: (narrations[sid] or "").lower() for sid in order}
+    index_of = {sid: i for i, sid in enumerate(order)}
+
+    def _home(st: dict) -> str | None:
+        """The one segment the step's cues point at, or None."""
+        cues = _step_cues(st)
+        if not cues:
+            return None
+        homes = None
+        for c in cues:
+            here = {sid for sid in order if c in text[sid]}
+            if not here:
+                continue
+            homes = here if homes is None else (homes & here or homes)
+        if homes and len(homes) == 1:
+            return next(iter(homes))
+        return None
+
+    moved = 0
+    skewed = False          # any index past the last segment
+    all_steps: list[tuple[dict, dict]] = []
+    for craw in raw.get("chapters") or []:
+        if not isinstance(craw, dict):
+            continue
+        for st in craw.get("steps") or []:
+            if not isinstance(st, dict):
+                continue
+            all_steps.append((craw, st))
+            sid = _sid_of(st.get("segment"))
+            if sid not in index_of:
+                skewed = True
+            home = _home(st)
+            if home is None or home == sid:
+                continue
+            if sid in index_of and any(c in text[sid] for c in _step_cues(st)):
+                continue           # its own segment says some of it: keep
+            st["segment_as_written"] = st.get("segment")
+            st["segment"] = index_of[home] + 1
+            moved += 1
+            ctx.note("STEP_MOVED_TO_ITS_CUE",
+                     f"{craw.get('concept') or craw.get('id')}: step written "
+                     f"as {sid or '?'} speaks in {home}")
+    # `broad`: the numbering as a whole is untrustworthy — an index past
+    # the end, or two steps already shown to be elsewhere. One moved step
+    # on an otherwise sound plan re-places nothing that has no cue.
+    broad = skewed or moved >= 2
+    if not (skewed or moved):
+        return
+    # uncued steps follow their cued neighbours, chapter by chapter
+    for craw in raw.get("chapters") or []:
+        if not isinstance(craw, dict):
+            continue
+        steps = [st for st in (craw.get("steps") or []) if isinstance(st, dict)]
+        anchored = [i for i, st in enumerate(steps)
+                    if "segment_as_written" in st
+                    or (_step_cues(st) and _home(st) == _sid_of(st.get("segment")))]
+        if not anchored:
+            continue
+        for i, st in enumerate(steps):
+            if i in anchored:
+                continue
+            sid = _sid_of(st.get("segment"))
+            if sid in index_of and not broad:
+                continue
+            before = [j for j in anchored if j < i]
+            after = [j for j in anchored if j > i]
+            ref = steps[before[-1]] if before else steps[after[0]]
+            if _sid_of(ref.get("segment")) == sid:
+                continue
+            st["segment_as_written"] = st.get("segment")
+            st["segment"] = ref.get("segment")
+            ctx.note("STEP_FOLLOWS_ITS_NEIGHBOUR",
+                     f"{craw.get('concept') or craw.get('id')}: uncued step "
+                     f"written as {sid or '?'} placed with "
+                     f"{_sid_of(ref.get('segment'))}")
 
 
 def _split_on_new_root(craw, ctx: _Ctx) -> list[dict]:
