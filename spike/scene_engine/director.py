@@ -137,6 +137,11 @@ RULES:
   "layers": ["nucleus"]}) — NEVER as separate illustration elements per part:
   independently generated images DO NOT compose, they stack into a tangle.
   Labels, arrows, particles and shapes may be added freely.
+- EVERY SEGMENT BELONGS TO A CHAPTER: the first chapter begins at segment 1
+  and each chapter runs until the next one begins — a segment no step names
+  keeps the board as it stands. Never leave the hook, a summary or a closing
+  segment outside every chapter: they are spoken over the board that is
+  already there.
 - THE LESSON OPENS ON A DRAWING: the FIRST chapter declares an illustration
   and its FIRST step draws it, cued in segment 1 or 2. A title, a definition
   or a list is written BESIDE that drawing — never alone on a blank board

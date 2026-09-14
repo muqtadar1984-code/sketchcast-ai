@@ -757,6 +757,61 @@ def _fold_text_only_opening(plan: VisualPlan, report: list[str]) -> None:
                   + (f" (renamed {sorted(rename.values())})" if rename else ""))
 
 
+def _chapter_bounds(plan: VisualPlan, all_segments: list[str] | None,
+                    report: list[str]) -> list[tuple[int, int] | None] | None:
+    """Every segment belongs to a chapter.
+
+    A chapter used to span from its first planned step to its last, and a
+    segment no step named fell to the whiteboard fallback: a title card.
+    Joints (2026-09-14, second render): the director planned steps on
+    segments 3-6 and 9-10 of twelve, so the lesson opened on thirty seconds
+    of "How Our Bodies Move" and "The Need for Movement", showed a "Working
+    in Pairs" card between the pulley and the arm, and closed on a "Summary"
+    card while the narration summarised the arm still worth looking at —
+    five of twelve segments with nothing drawn, in a lesson whose pictures
+    were all there.
+
+    Bounds per chapter, as indices into `all_segments`: a chapter runs from
+    its first planned step up to the segment before the NEXT chapter's first
+    step, and the last chapter runs to the end of the lesson — the board
+    holds through every segment in between. The first planned chapter also
+    starts on the lesson's FIRST segment: its opening step is pulled there
+    (the picture is what the opening-step injection then draws under the
+    hook), and the segment it was written for becomes a hold.
+    `None` entries are chapters whose steps name no known segment.
+    """
+    if not all_segments:
+        return None
+    idx = {sid: i for i, sid in enumerate(all_segments)}
+    firsts: list[int | None] = []
+    for ch in plan.chapters:
+        stepped = sorted(idx[st.segment_id] for st in ch.steps
+                         if st.segment_id in idx)
+        firsts.append(stepped[0] if stepped else None)
+    out: list[tuple[int, int] | None] = []
+    pulled = False
+    for i, ch in enumerate(plan.chapters):
+        lo = firsts[i]
+        if lo is None:
+            out.append(None)
+            continue
+        if not pulled:
+            pulled = True
+            if lo > 0:
+                st0 = min((st for st in ch.steps if st.segment_id in idx),
+                          key=lambda st: idx[st.segment_id])
+                was = st0.segment_id
+                st0.segment = all_segments[0]
+                report.append(f"CHAPTER {ch.concept} | OPENING PULLED {was} -> "
+                              f"{all_segments[0]} (no chapter planned the "
+                              f"lesson's first {lo} segment(s))")
+                lo = 0
+        later = [f for f in firsts[i + 1:] if f is not None and f > lo]
+        hi = min(later) if later else len(all_segments)
+        out.append((lo, hi))
+    return out
+
+
 def compile_plan(plan: VisualPlan, narrations: dict[str, str],
                  all_segments: list[str] | None = None,
                  skip_hold: set[str] | None = None,
@@ -795,12 +850,14 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
     cam = dict(_DEFAULT_CAM)
 
     _fold_text_only_opening(plan, report)
-    for ch in plan.chapters:
+    bounds = _chapter_bounds(plan, all_segments, report)
+    for i, ch in enumerate(plan.chapters):
         try:
             prev_board, cam = _compile_chapter(
                 ch, narrations, all_segments, skip_hold or set(),
                 prev_board, assets_seen, cam, scenes, assets_by_seg, report,
-                avatars=avatars, style=style)
+                avatars=avatars, style=style,
+                span_bounds=bounds[i] if bounds else None)
         except Exception:
             logger.exception("chapter %r failed to compile; skipping it", ch.concept)
             report.append(f"CHAPTER {ch.concept} | COMPILE FAILED — skipped, "
@@ -1000,7 +1057,8 @@ def _drop_sentence_text(ch: VisualChapter, roster: dict, narrations: dict,
 
 def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                      prev_board, assets_seen, cam, scenes, assets_by_seg,
-                     report, avatars=None, style="socratic"):
+                     report, avatars=None, style="socratic",
+                     span_bounds: tuple[int, int] | None = None):
     roster = {e["id"]: e for e in ch.elements}
     # BEFORE anything reads the roster: a sentence masquerading as a label is
     # neither a label nor a part name, and it must not seed either.
@@ -1670,10 +1728,15 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
     # work order: plan steps + HOLD entries for unplanned span segments
     step_by_id = {st.segment_id: st for st in ch.steps}
     if all_segments:
-        stepped = [sid for sid in all_segments if sid in step_by_id]
-        span = (all_segments[all_segments.index(stepped[0]):
-                             all_segments.index(stepped[-1]) + 1]
-                if stepped else [])
+        if span_bounds is not None:
+            # every segment belongs to a chapter: the board holds until the
+            # next chapter begins (see _chapter_bounds)
+            span = all_segments[span_bounds[0]:span_bounds[1]]
+        else:
+            stepped = [sid for sid in all_segments if sid in step_by_id]
+            span = (all_segments[all_segments.index(stepped[0]):
+                                 all_segments.index(stepped[-1]) + 1]
+                    if stepped else [])
         work = [(sid, step_by_id.get(sid)) for sid in span
                 if sid in step_by_id or sid not in skip_hold]
         known = {w[0] for w in work}

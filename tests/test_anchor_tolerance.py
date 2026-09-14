@@ -735,7 +735,11 @@ class TestReviewFindings:
              "actions": [{"verb": "draw", "target": "cell"}]}])]}
         scenes, _, report = _compile(raw)
         assert any("OPENING STEP DRAWS cell" in ln for ln in report), report
-        acts3 = [(a["verb"], a["target"]) for a in scenes["s003"]["actions"]]
+        # since 2026-09-14 the first chapter's opening step is pulled to the
+        # lesson's first segment (every segment belongs to a chapter), so the
+        # step written for s003 plays on s001
+        assert any("OPENING PULLED s003 -> s001" in ln for ln in report), report
+        acts3 = [(a["verb"], a.get("target")) for a in scenes["s001"]["actions"]]
         assert acts3.index(("draw", "cell")) < acts3.index(("draw", "arr_wall")),             "the picture is drawn before the arrow that points at it"
         s3 = next(e for e in scenes["s003"]["elements"] if e["id"] == "arr_wall")
         assert s3["head"]["el"] == "cell" and s3["head"].get("layer") == "cell wall"
@@ -1068,11 +1072,12 @@ class TestThirdReviewFindings:
         r = validate_visual_language(self._manifest(),
                                      {"plan": plan.model_dump(),
                                       "report": report})
-        # s003 and s004 both flatten arr_wall.tail: one arrow, one entry
+        # the opening step is pulled to s001 and the board holds through
+        # s002-s004, so four boards flatten arr_wall.tail: one arrow, one entry
         assert len([ln for ln in report
-                    if "| FLATTENED arr_wall.tail" in ln]) == 2
+                    if "| FLATTENED arr_wall.tail" in ln]) == 4
         assert len(r["arrows_flattened"]) == 1
-        assert r["arrows_flattened"][0].startswith("SEGMENT s003 | FLATTENED")
+        assert r["arrows_flattened"][0].startswith("SEGMENT s001 | FLATTENED")
 
     # ── 5: a morph names its destination in `into`, not `target` ─────────
     def test_5_a_morph_into_a_dropped_arrow_goes_with_it(self):
