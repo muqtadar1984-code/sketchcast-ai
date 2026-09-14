@@ -111,6 +111,7 @@ from typing import Iterable, Optional
 
 from catalogue.harvest import clean_heading
 from catalogue.key import canonical_key
+from catalogue.reply import ask_validated, reply_fault, unwrap_reply
 from shared.llm import client_for
 from worker import client as db
 
@@ -615,12 +616,19 @@ def validate_article(raw: object, coverage_codes: list[str], fallback_title: str
     ``ArticleInvalid`` when the reply cannot become an article. ``words_floor``
     is the catalogue's unless the caller teaches a smaller unit (a book
     chapter PART is authored to the same shape at a shorter length)."""
+    # The reply as the model meant it: a slip in its JSON mended at the
+    # decoder's fault position, a wrapper key opened — and when it still is
+    # not JSON, the decoder's reason, not "has no 'objectives' list" (which
+    # is what the client's raw_text wrapper used to read as).
+    raw, repairs = unwrap_reply(raw, REQUIRED_ARRAYS[0])
+    fault = reply_fault(raw)
+    if fault:
+        raise ArticleInvalid(f"model reply is not JSON: {fault}")
     if not isinstance(raw, dict):
         raise ArticleInvalid("model reply is not a JSON object")
     for name in REQUIRED_ARRAYS:
         if not isinstance(raw.get(name), list):
             raise ArticleInvalid(f"model reply has no '{name}' list")
-    repairs: list[str] = []
 
     sections, id_map = _validate_sections(raw["sections"], repairs)
     if len(sections) < MIN_SECTIONS:
@@ -897,15 +905,29 @@ def author_article(sb, job_id: str, params: dict, client=None) -> dict:
         client = client_for(language)
     prompt = build_article_prompt(topic, language, mappings, depth_node, depth_curriculum, prerequisites,
                                   previous=previous, hints=hints, revise=source is not None)
-    raw = ask_model(client, prompt)
-    usage = getattr(client, "session_usage", None)
-    if isinstance(usage, dict) and usage.get("calls"):
-        db.set_job_usage(sb, job_id, usage)
+    title = clean_heading(topic.get("title")) or "Untitled"
 
-    stage["step"] = "validate"
-    db.set_stage(sb, job_id, dict(stage))
-    db.set_progress(sb, job_id, 80)
-    article = validate_article(raw, codes, clean_heading(topic.get("title")) or "Untitled")
+    def ask():
+        if stage.get("reply_retries"):
+            stage["step"] = "author"  # the second call, after a refused reply
+            db.set_stage(sb, job_id, dict(stage))
+        return ask_model(client, prompt)
+
+    def validate(raw):
+        stage["step"] = "validate"
+        db.set_stage(sb, job_id, dict(stage))
+        db.set_progress(sb, job_id, 80)
+        return validate_article(raw, codes, title)
+
+    # One refused reply earns one more call with the same prompt (the slips
+    # measured were one dropped quote in 19k chars — a re-run always passed).
+    # Usage is recorded whatever happens: both calls were paid for.
+    try:
+        article = ask_validated(ask, validate, invalid=ArticleInvalid, what=f"article {topic_id}", stage=stage)
+    finally:
+        usage = getattr(client, "session_usage", None)
+        if isinstance(usage, dict) and usage.get("calls"):
+            db.set_job_usage(sb, job_id, usage)
 
     stage["step"] = "write"
     db.set_stage(sb, job_id, dict(stage))
