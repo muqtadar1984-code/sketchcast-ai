@@ -778,6 +778,14 @@ def compose_episode_videos(
                 seg_report: dict = {}
                 # word boundaries feed frame-accurate cue timing (scene engine)
                 bnd = mp3.with_suffix(".words.json") if _scene_flag() else None
+                # vid_dir is reused across generations of the same chapter,
+                # and a provider that writes no words (ElevenLabs; a Chirp
+                # clip whose duration could not be read) leaves an EARLIER
+                # run's table in place — cues were then resolved against a
+                # different audio file. The dialogue path already unlinks;
+                # this path did not.
+                if bnd is not None:
+                    bnd.unlink(missing_ok=True)
                 # `text` still feeds the deck and the on-frame fallback, where
                 # a printed blank is fine; only the SPOKEN copy drops it.
                 # The two spoken copies are NOT the same function: the plain

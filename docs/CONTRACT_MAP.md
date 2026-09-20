@@ -51,6 +51,18 @@ joining the lines, so `text` and `dialogue` can never disagree.
 | adapter | verified against that segment's narration → `at.phrase`; else `CUE_NOT_IN_NARRATION` and the action keeps sequence order |
 | render | resolved against measured TTS word boundaries |
 
+**Where the word boundaries come from (2026-09-20):** Google's classic
+voices return a timepoint per `<mark>`; Chirp 3 HD ignores marks, so each
+sentence is one request and its clip is measured — the sentence's first
+word is exact, and its clauses are anchored on the interior pauses
+silencedetect finds (`interpolate_words_by_pauses`); only the words inside
+a clause are a character-proportion guess. With no words.json at all (a
+provider that writes none) the cue falls to character proportion at the
+phrase's START. And the clip never outlasts the voice: `fit_to_audio` runs
+last in `SceneRenderer.compile`, `total_secs` caps the clip at the audio
+plus 0.2 s, and the acceptance gate refuses a rendered segment more than
+1.5 s past its narration (`clip_duration_seconds` is probed from the MP4).
+
 **Risk that remains:** a failed cue *degrades* rather than fails. The visual
 still appears, just not when the words are said — the failure is invisible in
 the artifact and visible only in a frame. `HUMAN_TEACHING_MOMENT` **drops its

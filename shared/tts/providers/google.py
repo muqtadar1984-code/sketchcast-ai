@@ -41,8 +41,9 @@ import threading
 import time
 from pathlib import Path
 
-from ..chunks import (billable_chars, chunks, family, interpolate_words, language_code,
-                      ssml_for, words_from_marks, words_of)
+from ..chunks import (billable_chars, chunks, clauses_of, family, interpolate_words,
+                      interpolate_words_by_pauses, language_code, ssml_for,
+                      words_from_marks, words_of)
 
 logger = logging.getLogger("shared.tts.google")
 
@@ -249,9 +250,34 @@ def _silence_edges(stderr: str, duration: float) -> tuple[float, float]:
     return round(lead, 4), round(tail, 4)
 
 
-def _spoken_span(path: Path, ffmpeg: str, duration: float) -> tuple[float, float]:
-    """``(lead, tail)`` for one clip on disk; ``(0, 0)`` whenever the
-    measurement cannot be made — the caller then behaves exactly as before."""
+def _interior_pauses(stderr: str, duration: float, lead: float, tail: float) -> list[tuple[float, float]]:
+    """The silences strictly INSIDE the spoken span — ``(start, end)`` in
+    clip seconds, in order — from the same silencedetect output. These are
+    where Chirp breathed at a comma or a dash; interpolate_words_by_pauses
+    anchors the sentence's clauses on them. The edge silences (``lead``,
+    ``tail``) are excluded, as is anything touching an edge. Never raises."""
+    events = [(k, float(v)) for k, v in _SIL_RE.findall(stderr or "")]
+    if not events or duration <= 0:
+        return []
+    spoken_end = duration - tail
+    out: list[tuple[float, float]] = []
+    open_at: float | None = None
+    for kind, t in events:
+        if kind == "start":
+            open_at = t
+        elif kind == "end" and open_at is not None:
+            a, b = open_at, t
+            open_at = None
+            if a > lead + _SIL_EDGE_TOL and b < spoken_end - _SIL_EDGE_TOL and b > a:
+                out.append((round(a, 4), round(b, 4)))
+    return out
+
+
+def _spoken_layout(path: Path, ffmpeg: str, duration: float
+                   ) -> tuple[float, float, list[tuple[float, float]]]:
+    """``(lead, tail, interior pauses)`` for one clip on disk; ``(0, 0, [])``
+    whenever the measurement cannot be made — the caller then behaves
+    exactly as before. One ffmpeg pass serves both."""
     try:
         proc = subprocess.run(
             [ffmpeg, "-hide_banner", "-nostats", "-i", str(path),
@@ -259,8 +285,17 @@ def _spoken_span(path: Path, ffmpeg: str, duration: float) -> tuple[float, float
             capture_output=True, text=True, timeout=60)
     except Exception as exc:  # noqa: BLE001 — a failed measurement is not a failed lesson
         logger.debug("silencedetect failed for %s: %s", path, exc)
-        return 0.0, 0.0
-    return _silence_edges(proc.stderr or "", duration)
+        return 0.0, 0.0, []
+    err = proc.stderr or ""
+    lead, tail = _silence_edges(err, duration)
+    return lead, tail, _interior_pauses(err, duration, lead, tail)
+
+
+def _spoken_span(path: Path, ffmpeg: str, duration: float) -> tuple[float, float]:
+    """``(lead, tail)`` for one clip on disk; ``(0, 0)`` whenever the
+    measurement cannot be made — the caller then behaves exactly as before."""
+    lead, tail, _ = _spoken_layout(path, ffmpeg, duration)
+    return lead, tail
 
 
 def _opening_pause_secs(piece: str) -> float:
@@ -392,6 +427,7 @@ def synthesize(text: str, out_path: Path, ref_voice: str,
     estimated = 0
     billable = 0
     trimmed = 0.0
+    anchored = 0      # multi-clause sentences whose clauses were pause-anchored
     try:
         clip_paths: list[Path] = []
         for i, ((audio, tps), piece, (ssml, first_mark, n_words)) in enumerate(zip(results, pieces, ssmls)):
@@ -414,11 +450,19 @@ def synthesize(text: str, out_path: Path, ref_voice: str,
                     dropped += miss
                 else:
                     # Chirp: spread the words over the SPOKEN span, not the
-                    # clip. An estimated duration has no file worth measuring.
-                    lead, tail = _spoken_span(p, ffmpeg, dur) if measured > 0 else (0.0, 0.0)
+                    # clip — clause by clause, anchored on the pauses the
+                    # voice made at its punctuation (chunks.
+                    # interpolate_words_by_pauses). An estimated duration has
+                    # no file worth measuring.
+                    lead, tail, pauses = (_spoken_layout(p, ffmpeg, dur)
+                                          if measured > 0 else (0.0, 0.0, []))
                     lead = max(0.0, lead - _opening_pause_secs(piece))
                     trimmed += lead + tail
-                    ws = interpolate_words(piece, cursor + lead, max(0.0, dur - lead - tail))
+                    span = max(0.0, dur - lead - tail)
+                    rel = [(a - lead, b - lead) for a, b in pauses]
+                    ws = interpolate_words_by_pauses(piece, cursor + lead, span, rel)
+                    if len(clauses_of(piece)) > 1 and len(rel) >= len(clauses_of(piece)) - 1:
+                        anchored += 1
                 words.extend(ws)
             cursor += dur
         _concat(clip_paths, out_path, ffmpeg)
@@ -437,4 +481,4 @@ def synthesize(text: str, out_path: Path, ref_voice: str,
     return {"provider": "google", "family": fam, "requests": len(pieces), "chars": billable,
             "timepoints": sum(len(t) for _, t in results), "marks_dropped": dropped,
             "duration_estimated": estimated, "audio_secs": round(cursor, 3),
-            "silence_trimmed": round(trimmed, 3)}
+            "silence_trimmed": round(trimmed, 3), "clause_anchored": anchored}

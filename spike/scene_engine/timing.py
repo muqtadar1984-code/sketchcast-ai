@@ -111,8 +111,12 @@ def resolve_cue(cue: Cue, narration: str, audio_secs: float,
         i = hay.find(needle)
         if i < 0 or not narration:
             return None
-        mid = (i + len(needle) / 2) / len(narration)
-        return max(0.0, mid * audio_secs + off)
+        # The phrase's START, by character proportion. This was its
+        # MIDPOINT, which put every no-words cue half a phrase late by
+        # construction — on a ten-word cue phrase, a second after the
+        # teacher began saying it. A drawing starts as its words start.
+        at = i / len(narration)
+        return max(0.0, at * audio_secs + off)
     return None
 
 
