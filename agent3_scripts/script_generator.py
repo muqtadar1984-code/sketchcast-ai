@@ -545,7 +545,8 @@ def generate_episode_script(
                 # segments completely silent.
                 plain_text = " ".join(d["line"] for d in clean_dlg)
                 el_text = plain_text
-            if len(clean_dlg) >= 2 and two_voice_dialogue(style):
+            if (len(clean_dlg) >= 2 and two_voice_dialogue(style)
+                    and any(d["who"] == "student" for d in clean_dlg)):
                 # ...but TWO-VOICE playback still needs an actual exchange:
                 # per-line voices and per-speaker bubbles. One line stays
                 # single-narrator, which is a downgrade, not a silence.
@@ -556,6 +557,12 @@ def generate_episode_script(
                 # avatar cast (whiteboard.two_voice_dialogue): the student
                 # face follows the second voice exactly when this branch
                 # gives that voice lines to read.
+                #
+                # And an exchange has a STUDENT in it. `>= 2` alone let two
+                # teacher lines through as "two-voice": the student voice was
+                # resolved, the student was seated on every scene, and never
+                # said a word (catalogue kit, 2026-09-20). A teacher monologue
+                # is single-narrator whatever the style asked for.
                 dialogue = clean_dlg
 
         segments.append(ScriptSegment(
@@ -696,10 +703,16 @@ def generate_episode_script(
                         if s.type == SegmentType.question_hook
                         or (s.slide_visual is not None
                             and getattr(s.slide_visual, "kind", None) == "quiz")}
+                # The board seats the student where the student SPEAKS —
+                # decided from the segments' surviving dialogue, never from
+                # the style label alone (a monologue in a two-voice style
+                # once seated a mute student for a whole lesson).
+                two_voice_sids = {s.segment_id for s in segments if s.dialogue}
                 compiled, assets_by_seg, report = compile_plan(
                     plan, narrations,
                     all_segments=[s.segment_id for s in segments],
-                    skip_hold=skip, avatars=avatars, style=style)
+                    skip_hold=skip, avatars=avatars, style=style,
+                    two_voice_segments=two_voice_sids)
                 for s in segments:
                     if s.segment_id in compiled:
                         s.scene = compiled[s.segment_id]

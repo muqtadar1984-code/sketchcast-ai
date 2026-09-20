@@ -78,6 +78,18 @@ Every segment MUST contain a "dialogue" array. Dialogue is the SINGLE SOURCE OF 
 Set "text": "" and "elevenlabs_text": "" — the dialogue is the narration and must never be written twice.
 Speakers are "teacher" and "student". The teacher carries the explanation. A segment may be teacher-only; use the student only for a genuine question, a likely misconception, an observation, a challenge or an "aha" moment — never merely to alternate voices, and never in a style that does not call for it."""
 
+# The two-voice style. Everything above still holds — the student is never
+# a metronome — but for THIS style the student is a real participant, and
+# the lesson is rendered with a second voice and a student on the board. A
+# conversational kit whose model reply was a monologue shipped a student
+# avatar that never spoke a word (catalogue, 2026-09-20): the general rule
+# "a segment may be teacher-only" read, for this style, as "every segment
+# may be". So the style gets its own interaction model, stated once, after
+# the general rule so it wins.
+_DIALOGUE_TWO_VOICE = """=== TWO-VOICE CONVERSATION (this style) ===
+This lesson is a CONVERSATION between the teacher and ONE student who is on the board throughout and has a voice of their own: a curious learner at the supplied level who asks what they would not know yet, voices the misconception a real learner holds, checks their understanding in their own words, and reacts when something clicks.
+Every teaching segment carries BOTH speakers — at least one "student" line and at least one "teacher" line, 2 to 6 turns, in a natural order. Student lines are short (a question, a guess, a reaction), never a second explanation; the teacher's lines carry the content. No filler turns ("Okay.", "I see.") and no mechanical alternation: a student line must move the explanation forward. Never write a segment the student is not part of."""
+
 _TIMING = """=== TIMING ===
 The generated TTS audio is the timing authority. Do NOT output estimated durations, absolute timestamps, frame numbers or animation durations.
 Visual actions carry a "cue": a phrase copied VERBATIM from a dialogue line in the SAME segment. The engine finds when those words are actually spoken.
@@ -275,6 +287,12 @@ def build_semantic_prompt(style: str, chapter_title: str, difficulty_level: str,
     """The full semantic director prompt for one episode."""
     style = normalize_style(style)
     available = "; ".join(f"{k} ({v['desc']})" for k, v in STYLE_META.items())
+    # The predicate is SHARED with script_generator (the two-voice gate) and
+    # continuity (who is on the board): the prompt asks for a conversation
+    # exactly when the render will give the student a voice.
+    from spike.scene_engine.whiteboard import two_voice_dialogue
+    dialogue_block = (_DIALOGUE + "\n\n" + _DIALOGUE_TWO_VOICE
+                      if two_voice_dialogue(style) else _DIALOGUE)
     parts = [
         _ROLE,
         _INPUT.format(subject=subject or "(infer from the source content)",
@@ -287,7 +305,7 @@ def build_semantic_prompt(style: str, chapter_title: str, difficulty_level: str,
                       target_duration=target_duration,
                       episode_context=episode_context),
         _LEARNER, _STYLE_SYSTEM, _PHILOSOPHY, _SUBJECT_AGNOSTIC, _STRUCTURE,
-        _DIALOGUE, _TIMING, _PLAN_TRUTH, _CONTINUITY, _ASSETS, _TARGETS,
+        dialogue_block, _TIMING, _PLAN_TRUTH, _CONTINUITY, _ASSETS, _TARGETS,
         _SCHEMAS, _DEPENDENCIES, _LABELS_CAMERA, _CAPS,
         _EXAMPLE, _FINAL,
     ]

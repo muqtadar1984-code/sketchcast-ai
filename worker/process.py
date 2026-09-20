@@ -109,6 +109,12 @@ def _record_coverage(sb: Client, generation_id: str, reports: list[dict]) -> Non
     db.merge_generation_params(sb, generation_id, patch)
 
 
+# One segment's clip may run this far past its narration before the lesson
+# is refused. The renderer's own slack is 0.2 s plus frame rounding, and the
+# validator notes anything over 0.5 s; this is where noting becomes refusing.
+TAIL_OVERRUN_BLOCKING_SECS = 1.5
+
+
 def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
     """Run the visual-language acceptance check on a finished lesson.
 
@@ -166,6 +172,16 @@ def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
             blocking.append("no_scenes_produced")
         # Proportional: one blank board among thirty is a blemish worth
         # reporting; a third of the lesson blank is a broken lesson.
+        # A picture playing to silence is a defect the viewer meets head-on.
+        # The renderer fits every board to its voice (timing.fit_to_audio)
+        # and cuts what will not fit, so an overrun past this is a bug in the
+        # render, not a stylistic choice — and it is refused rather than
+        # shipped and explained afterwards.
+        _over = report.get("tail_overruns") or []
+        _worst = max((float(str(o).rsplit("+", 1)[-1].rstrip("s") or 0)
+                      for o in _over), default=0.0)
+        if _worst > TAIL_OVERRUN_BLOCKING_SECS:
+            blocking.append(f"tail_overrun={_worst:.1f}s")
         for key in ("unresolved_assets", "legacy_renderer_usage"):
             v = report.get(key)
             count = len(v) if isinstance(v, list) else int(v or 0)
@@ -179,7 +195,8 @@ def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
 
         noted = [k for k in ("no_scenes_produced", "mostly_silent")
                  if report.get(k)]
-        for k in ("unresolved_assets", "silent_segments", "overlapping_text"):
+        for k in ("unresolved_assets", "silent_segments", "overlapping_text",
+                  "tail_overruns"):
             if report.get(k):
                 why = ""
                 if k == "unresolved_assets":

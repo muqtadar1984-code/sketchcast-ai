@@ -271,6 +271,62 @@ def interpolate_words(sentence: str, start: float, duration: float) -> list[dict
     return out
 
 
+def clauses_of(sentence: str) -> list[str]:
+    """The sentence at its clause punctuation (commas, semicolons, colons,
+    dashes — the same boundaries _split_oversize cuts at), in order."""
+    return [c for c in _CLAUSE_RE.split(sentence) if c.strip()]
+
+
+def interpolate_words_by_pauses(sentence: str, start: float, duration: float,
+                                pauses: list[tuple[float, float]]) -> list[dict]:
+    """words.json entries for one measured Chirp clip, anchored on the
+    pauses the voice ACTUALLY made.
+
+    Chirp gives no word marks, so interpolate_words spreads a sentence's
+    words over its spoken span by character proportion — exact at the
+    sentence's first word and a guess everywhere else, drifting a second
+    or more inside a long sentence. But Chirp does pause at clause
+    punctuation, and silencedetect finds those pauses for free. When the
+    clip holds at least as many interior pauses as the sentence has clause
+    boundaries, the longest of them are taken as those boundaries (in time
+    order) and each clause's words are spread over ITS span only: every
+    clause opening is then measured, not guessed, and the guess inside a
+    clause is over a few words rather than thirty.
+
+    ``pauses`` are ``(start, end)`` seconds RELATIVE to ``start`` (the
+    spoken span's first instant), interior only — the caller has already
+    trimmed the edge silence. Any doubt (fewer pauses than boundaries, a
+    pause outside the span, a clause with no words) falls back to the plain
+    proportion, so a wrong anchor can never be worse than no anchor."""
+    clauses = clauses_of(sentence)
+    need = len(clauses) - 1
+    duration = max(0.0, float(duration))
+    if need < 1 or len(pauses) < need or duration <= 0:
+        return interpolate_words(sentence, start, duration)
+    inside = [(float(a), float(b)) for a, b in pauses
+              if 0.0 < float(a) < float(b) <= duration + 1e-6]
+    if len(inside) < need:
+        return interpolate_words(sentence, start, duration)
+    chosen = sorted(sorted(inside, key=lambda ab: ab[1] - ab[0], reverse=True)[:need])
+    bounds: list[tuple[float, float]] = []
+    at = 0.0
+    for a, b in chosen:
+        bounds.append((at, a))
+        at = b
+    bounds.append((at, duration))
+    if any(hi - lo <= 0.0 for lo, hi in bounds):
+        return interpolate_words(sentence, start, duration)
+    out: list[dict] = []
+    for clause, (lo, hi) in zip(clauses, bounds):
+        ws = interpolate_words(clause, start + lo, hi - lo)
+        if not ws:
+            return interpolate_words(sentence, start, duration)
+        out.extend(ws)
+    if any(b["t"] < a["t"] for a, b in zip(out, out[1:])):
+        return interpolate_words(sentence, start, duration)
+    return out
+
+
 def words_from_marks(chunk_text: str, timepoints: list[dict], *, chunk_start: float,
                      chunk_duration: float, mark_offset: int = 0) -> tuple[list[dict], int]:
     """words.json entries for a marked chunk from the timepoints Google

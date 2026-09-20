@@ -18,7 +18,7 @@ STYLE_META = {
     "direct_explainer": {"label": "Direct explainer", "desc": "Clear, straightforward teaching with minimal questioning."},
     "storytelling": {"label": "Storytelling", "desc": "Wraps the concept in a narrative through-line."},
     "exam_focused": {"label": "Exam focused", "desc": "Revision framing — key points and common mistakes."},
-    "conversational": {"label": "Conversational", "desc": "Casual, friendly, plain-language tone."},
+    "conversational": {"label": "Conversational", "desc": "Two voices: the teacher explains, a student on the board asks, doubts and reacts."},
 }
 
 

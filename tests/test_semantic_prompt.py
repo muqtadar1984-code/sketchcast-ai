@@ -179,12 +179,21 @@ class TestNoRegressions:
 
         This is a creep guard, not a physical limit. Raise it again only to
         buy something equally concrete, and say what.
+
+        Raised to 1.6 (2026-09-20) for the TWO-VOICE CONVERSATION block, which
+        only the conversational prompt carries (~810 chars). Measured cause:
+        the first catalogue kit rendered a student avatar that never spoke —
+        the general narration rule ("a segment may be teacher-only; use the
+        student only for a genuine question") was all the model had for a
+        style whose whole point is the exchange, and it wrote a monologue.
+        The other four styles are unchanged in length.
         """
         legacy = build_episode_prompt(
             "conversational", chapter_title="Rivers and Erosion",
             difficulty_level="Grade 7", target_duration="6.0",
             episode_context="<sections>")
-        assert len(_p()) < len(legacy) * 1.45
+        assert len(_p()) < len(legacy) * 1.6
+        assert len(_p("socratic")) < len(legacy) * 1.46, "the block is conversational-only"
 
 
 class TestFlagWiring:
@@ -536,12 +545,31 @@ class TestSingleLineDialogueIsNotSilence:
             assert s.text.strip(), f"{s.segment_id} came out silent"
         assert out.segments[0].text == "Cells group into tissues."
 
+    @staticmethod
+    def _exchange(teacher, student):
+        return {"type": "explore", "text": "", "elevenlabs_text": "",
+                "dialogue": [{"who": "teacher", "line": teacher},
+                             {"who": "student", "line": student}],
+                "slide_heading": "H", "slide_points": []}
+
     def test_two_lines_still_drive_two_voice_dialogue(self):
-        out = self._run([self._seg(["A.", "B."]), self._seg(["C.", "D."]),
-                         self._seg(["E.", "F."])])
+        out = self._run([self._exchange("A.", "B?"), self._exchange("C.", "D?"),
+                         self._exchange("E.", "F?")])
         assert out.segments[0].dialogue is not None
         assert len(out.segments[0].dialogue) == 2
+        assert out.segments[0].text == "A. B?"
+
+    def test_two_teacher_lines_are_a_monologue_not_an_exchange(self):
+        """The mute student (catalogue kit, 2026-09-20): two TEACHER lines
+        passed the `>= 2` gate as two-voice, the student voice was resolved,
+        the student was seated on every scene, and never said a word. An
+        exchange has a student in it; a monologue narrates singly, and the
+        words are still all there."""
+        out = self._run([self._seg(["A.", "B."]), self._exchange("C.", "D?"),
+                         self._exchange("E.", "F?")])
+        assert out.segments[0].dialogue is None
         assert out.segments[0].text == "A. B."
+        assert out.segments[1].dialogue is not None
 
     def test_one_line_does_not_claim_a_two_voice_exchange(self):
         out = self._run([self._seg(["Only one."]), self._seg(["X.", "Y."]),
@@ -667,6 +695,9 @@ class TestP05Blockers:
         raw = [self._seg(["Cells form tissues.", "Tissues form organs."]),
                self._seg(["Organs form systems."]),
                self._seg(["Systems form an organism."])]
+        # an EXCHANGE on the first segment: two-voice needs a student line
+        # (a two-line teacher monologue is narrated singly since 2026-09-20)
+        raw[0]["dialogue"][1]["who"] = "student"
 
         class _Stub:
             def analyze(self, **kw):

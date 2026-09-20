@@ -90,7 +90,10 @@ def _stub(monkeypatch, tmp_path, durations, spans):
     durs = list(durations)
     monkeypatch.setattr(G, "_duration", lambda p, f: durs.pop(0) if durs else 1.0)
     sp = list(spans)
-    monkeypatch.setattr(G, "_spoken_span", lambda p, f, d: sp.pop(0) if sp else (0.0, 0.0))
+    # synthesize reads the layout probe (edges + interior pauses, 2026-09-20);
+    # these stubs describe edges only, so no clause is anchored
+    monkeypatch.setattr(G, "_spoken_layout",
+                        lambda p, f, d: (*(sp.pop(0) if sp else (0.0, 0.0)), []))
     monkeypatch.setattr(G, "_concat", lambda parts, out, f: out.write_bytes(b"x"))
     return calls
 
@@ -130,7 +133,7 @@ class TestChirpWordsCoverTheSpokenSpanOnly:
         """No readable clip, no file worth running silencedetect on."""
         asked = []
         _stub(monkeypatch, tmp_path, durations=[0.0], spans=[])
-        monkeypatch.setattr(G, "_spoken_span", lambda p, f, d: asked.append(p) or (0.0, 0.0))
+        monkeypatch.setattr(G, "_spoken_layout", lambda p, f, d: asked.append(p) or (0.0, 0.0, []))
         G.synthesize("Some words here.", tmp_path / "d.mp3",
                      "en-US-Chirp3-HD-Achernar", boundaries_out=tmp_path / "d.words.json")
         assert asked == []
@@ -138,7 +141,7 @@ class TestChirpWordsCoverTheSpokenSpanOnly:
     def test_the_classic_marks_path_is_untouched(self, tmp_path, monkeypatch):
         asked = []
         _stub(monkeypatch, tmp_path, durations=[2.0], spans=[])
-        monkeypatch.setattr(G, "_spoken_span", lambda p, f, d: asked.append(p) or (0.0, 0.0))
+        monkeypatch.setattr(G, "_spoken_layout", lambda p, f, d: asked.append(p) or (0.0, 0.0, []))
         G.synthesize("Two words.", tmp_path / "e.mp3", "ms-MY-Wavenet-A",
                      boundaries_out=tmp_path / "e.words.json")
         assert asked == [], "WaveNet has exact per-word marks; nothing to trim"

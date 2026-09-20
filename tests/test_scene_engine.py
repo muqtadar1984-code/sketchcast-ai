@@ -121,11 +121,13 @@ class TestSchema:
 # ── timing ───────────────────────────────────────────────────────────────────
 
 class TestTiming:
-    def test_phrase_cue_resolves_at_char_midpoint(self):
+    def test_phrase_cue_resolves_where_the_phrase_starts(self):
+        # by character proportion when no word boundaries exist — at the
+        # phrase's START, not its midpoint (which was half a phrase late)
         n = "aaaa blocks zzzz"
         t = resolve_cue(Cue(phrase="blocks"), n, 16.0)
-        mid = (n.find("blocks") + 3) / len(n)
-        assert t == pytest.approx(mid * 16.0)
+        at = n.find("blocks") / len(n)
+        assert t == pytest.approx(at * 16.0)
 
     def test_unknown_phrase_returns_none(self):
         assert resolve_cue(Cue(phrase="nope"), "abc", 10.0) is None

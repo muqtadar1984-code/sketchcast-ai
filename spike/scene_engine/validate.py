@@ -245,11 +245,48 @@ def validate_visual_language(video_manifest: dict,
     report["mostly_silent"] = (
         len(report["silent_segments"]) > max(1, len(segs) // 4)
         if segs else False)
+    # ...and a lesson whose pictures outlast its voice. Each manifest row
+    # carries the audio length the composer meant and the clip length it
+    # made (clip_duration_seconds, probed from the MP4); the difference is
+    # seconds of board with nobody speaking. The first catalogue kit shipped
+    # with the narration finished while the board was still drawing, and
+    # this report said "clean" because nothing here had ever looked at the
+    # file. A row without a probe (0.0) is unknown, not clean, and is
+    # simply not counted.
+    report["tail_overruns"] = tail_overruns(segs)
+    report["tail_overrun_secs"] = round(sum(
+        float(s.get("clip_duration_seconds") or 0.0)
+        - float(s.get("audio_duration_seconds") or 0.0)
+        for s in segs
+        if float(s.get("clip_duration_seconds") or 0.0) > 0
+        and float(s.get("audio_duration_seconds") or 0.0) > 0
+        and float(s.get("clip_duration_seconds") or 0.0)
+        > float(s.get("audio_duration_seconds") or 0.0)), 2)
     report["passed"] = (report["legacy_renderer_usage"] == 0
                         and not report["no_scenes_produced"]
                         and not report["mostly_silent"]
                         and not report["unresolved_assets"])
     return report
+
+
+# A clip may keep a breath past its voice (timing.TAIL_SLACK_SECS plus the
+# frame-grid rounding); more than this is a picture playing to silence.
+TAIL_OVERRUN_TOLERANCE_SECS = 0.5
+
+
+def tail_overruns(segs: list, tolerance: float = TAIL_OVERRUN_TOLERANCE_SECS) -> list[str]:
+    """Segments whose rendered clip runs more than `tolerance` seconds past
+    their narration — "s007: +3.4s" — from the manifest rows alone."""
+    out: list[str] = []
+    for s in segs:
+        clip = float(s.get("clip_duration_seconds") or 0.0)
+        audio = float(s.get("audio_duration_seconds") or 0.0)
+        if clip <= 0 or audio <= 0:
+            continue
+        over = clip - audio
+        if over > tolerance:
+            out.append(f"{s.get('segment_id', '?')}: +{over:.1f}s")
+    return out
 
 
 def _unlabelled_root_chapters(plan: dict, plan_report: list) -> list[str]:

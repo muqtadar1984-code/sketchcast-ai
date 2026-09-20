@@ -111,8 +111,12 @@ def resolve_cue(cue: Cue, narration: str, audio_secs: float,
         i = hay.find(needle)
         if i < 0 or not narration:
             return None
-        mid = (i + len(needle) / 2) / len(narration)
-        return max(0.0, mid * audio_secs + off)
+        # The phrase's START, by character proportion. This was its
+        # MIDPOINT, which put every no-words cue half a phrase late by
+        # construction — on a ten-word cue phrase, a second after the
+        # teacher began saying it. A drawing starts as its words start.
+        at = i / len(narration)
+        return max(0.0, at * audio_secs + off)
     return None
 
 
@@ -297,3 +301,62 @@ def animation_end(timeline: list[TimedAction]) -> float:
     (dead-air seams in the concatenated lesson)."""
     return max((t.end for t in timeline if not _is_caption(t.action)),
                default=0.0)
+
+
+# ── the tail: the board never outlasts the voice ─────────────────────────────
+# compile_timeline's compression above is not the last word on the clip's
+# length. Two things happen AFTER it that can only push actions later:
+# dependency enforcement (an annotation waits for its introducer to finish)
+# and caption-fade repair. And the compression itself never moves a cue —
+# so a fraction-cued bullet card, or a director's cue late in the narration
+# plus the draw time behind it, ends past the audio however hard the
+# durations are squeezed. The encoder then sets the clip to the ANIMATION's
+# end: the voice stops and the pictures keep coming. Measured on the first
+# catalogue kit (Food Chains, 2026-09-20): the narration ended while the
+# board was still drawing. A viewer reads that as the video being broken.
+#
+# So the renderer runs this once more, LAST, after every pass that can move
+# an action. It is a uniform time-warp of the board track (captions are a
+# parallel speech track and stay glued to the voice): every start and every
+# duration is scaled toward t=0 by the same factor, cues included. A cue is
+# an anchor for the pace-preserving compression above; here, when honouring
+# it would put the picture after the voice, a drawing that lands a little
+# early beats one that lands in silence. The warp is floored so a grossly
+# overloaded scene is not played at cartoon speed — past the floor the clip
+# is cut at the audio instead (SceneRenderer.total_secs), and the overrun is
+# reported either way.
+_FIT_FLOOR = 0.5
+# Breathing room a clip may keep past the voice: the last stroke settling,
+# never a second picture.
+TAIL_SLACK_SECS = 0.2
+_TAIL_FITS: list[str] = []
+
+
+def fit_to_audio(timeline: list[TimedAction], audio_secs: float,
+                 min_hold: float) -> list[TimedAction]:
+    """Warp the board track so its animation ends `min_hold` before the
+    narration does. Identity when it already does, or when there is no
+    narration to fit (a silent scene is paced by its animation)."""
+    if audio_secs <= 0 or not timeline:
+        return timeline
+    end = animation_end(timeline)
+    budget = audio_secs - min_hold
+    if budget <= 0.5 or end <= budget + 1e-6:
+        return timeline
+    f = max(_FIT_FLOOR, budget / end)
+    out: list[TimedAction] = []
+    for t in timeline:
+        if _is_caption(t.action):
+            out.append(t)
+            continue
+        out.append(TimedAction(t.action, t.start * f, t.duration * f))
+    _TAIL_FITS.append(f"{end:.1f}s -> {animation_end(out):.1f}s "
+                      f"(audio {audio_secs:.1f}s, x{f:.2f})")
+    return out
+
+
+def take_tail_fits() -> list[str]:
+    """Drain the tail fits recorded since the last call."""
+    out = list(_TAIL_FITS)
+    _TAIL_FITS.clear()
+    return out

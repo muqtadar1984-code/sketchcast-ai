@@ -32,12 +32,17 @@ substituted · **dropped** discarded (loudly = an issue code, quietly = not)
 |---|---|
 | director | one array per segment, `{who, line}` |
 | salvage | four of the five measured malformations were in THIS object; repaired |
-| script_generator | words harvested for every style; two-voice kept only for `conversational` |
+| script_generator | words harvested for every style; two-voice kept only for `conversational`, and only when a `student` line survived — two teacher lines are a monologue |
 | composer | per-line TTS, measured offsets drive per-speaker bubbles |
 
 **Was broken:** harvested only at ≥2 lines and only for one style — a silent
-lesson. Both fixed. **Still true:** `text` is derived by joining the lines, so
-`text` and `dialogue` can never disagree.
+lesson. Both fixed. Then (2026-09-20) two TEACHER lines counted as two-voice:
+the student was seated on every scene and never spoke. The gate now needs a
+student line, the board seats the student only where one survived
+(`compile_plan(two_voice_segments=…)`), and the semantic prompt states the
+two-voice interaction model for the conversational style instead of the
+general "a segment may be teacher-only". **Still true:** `text` is derived by
+joining the lines, so `text` and `dialogue` can never disagree.
 
 ## cue (the join between speech and picture)
 | boundary | what happens |
@@ -45,6 +50,18 @@ lesson. Both fixed. **Still true:** `text` is derived by joining the lines, so
 | director | a phrase copied verbatim from its own segment |
 | adapter | verified against that segment's narration → `at.phrase`; else `CUE_NOT_IN_NARRATION` and the action keeps sequence order |
 | render | resolved against measured TTS word boundaries |
+
+**Where the word boundaries come from (2026-09-20):** Google's classic
+voices return a timepoint per `<mark>`; Chirp 3 HD ignores marks, so each
+sentence is one request and its clip is measured — the sentence's first
+word is exact, and its clauses are anchored on the interior pauses
+silencedetect finds (`interpolate_words_by_pauses`); only the words inside
+a clause are a character-proportion guess. With no words.json at all (a
+provider that writes none) the cue falls to character proportion at the
+phrase's START. And the clip never outlasts the voice: `fit_to_audio` runs
+last in `SceneRenderer.compile`, `total_secs` caps the clip at the audio
+plus 0.2 s, and the acceptance gate refuses a rendered segment more than
+1.5 s past its narration (`clip_duration_seconds` is probed from the MP4).
 
 **Risk that remains:** a failed cue *degrades* rather than fails. The visual
 still appears, just not when the words are said — the failure is invisible in
