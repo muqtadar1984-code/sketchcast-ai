@@ -86,7 +86,10 @@ def render_final_video(
 
         if video_path and Path(video_path).exists():
             valid_paths.append(Path(video_path).resolve())
-            total_duration += float(seg.get("audio_duration_seconds", 0) or 0)
+            # the CLIP's length where the composer probed it — the total is
+            # the video's length, not the narration's
+            total_duration += float(seg.get("clip_duration_seconds") or 0
+                                    or seg.get("audio_duration_seconds", 0) or 0)
         else:
             logger.warning("No video file for segment %s", seg_id)
             missing.append(seg_id)

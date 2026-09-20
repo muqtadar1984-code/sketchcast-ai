@@ -1596,6 +1596,15 @@ class SceneRenderer:
                 if t.action.target in self._dropped else t
                 for t in self.timeline]
         self._enforce_dependencies()
+        # LAST: nothing after this moves an action. Dependency enforcement
+        # above only ever pushes later, and compile_timeline's compression
+        # never moves a cue, so this is where the board is finally made to
+        # end before the voice does (timing.fit_to_audio explains why).
+        from .timing import fit_to_audio, take_tail_fits
+        self.timeline = fit_to_audio(self.timeline, audio_secs,
+                                     self.scene.min_hold)
+        for _fit in take_tail_fits():
+            self._warn(f"TAIL_FIT {_fit}")
         focus: dict[int, Point] = {}
         hud = self._hud_element_ids()
         caps: dict[int, float] = {}
@@ -1761,14 +1770,25 @@ class SceneRenderer:
         return None
 
     def total_secs(self, audio_secs: float, fps: int = 24) -> float:
-        """Audit fact 3: clip = max(audio, animation + 0.2); silent scenes get
-        animation + hold. Quantized UP to the frame grid so the frame count
-        and the encoder's explicit -t agree exactly — a fractional mismatch
-        would leave ffmpeg's stdin pipe with unread frames (EPIPE) or starve
-        it. Set with -t downstream, never -shortest."""
+        """Audit fact 3: clip = the audio, plus at most TAIL_SLACK_SECS of
+        settling; silent scenes get animation + hold. Quantized UP to the
+        frame grid so the frame count and the encoder's explicit -t agree
+        exactly — a fractional mismatch would leave ffmpeg's stdin pipe with
+        unread frames (EPIPE) or starve it. Set with -t downstream, never
+        -shortest.
+
+        This used to be max(audio, animation + 0.2): whatever the board
+        needed, the clip ran that long, and the voice stopped while the
+        pictures went on. compile() now fits the board to the voice
+        (timing.fit_to_audio); what is still over after the floor is CUT at
+        the audio, and reported, rather than shipped as dead air."""
+        from .timing import TAIL_SLACK_SECS
         anim = animation_end(self.timeline)
         if audio_secs > 0:
-            raw = max(audio_secs, anim + 0.2)
+            raw = max(audio_secs, min(anim + 0.2, audio_secs + TAIL_SLACK_SECS))
+            if anim > audio_secs + TAIL_SLACK_SECS + 1e-6:
+                self._warn(f"TAIL_CUT board ends {anim:.1f}s, audio "
+                           f"{audio_secs:.1f}s — clip cut at the voice")
         else:
             raw = anim + max(self.scene.min_hold, 1.2)
         return math.ceil(raw * fps) / fps

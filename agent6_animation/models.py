@@ -16,6 +16,11 @@ class VideoSegment(BaseModel):
     video_path: Optional[str] = None         # Per-segment MP4 (SpeedPaint + audio)
     slide_image_path: Optional[str] = None   # Source slide PNG
     audio_duration_seconds: float = 0.0
+    # The rendered MP4's own length, probed from the file after encoding.
+    # The audio length above is what the composer MEANT; this is what it
+    # MADE. The difference is the tail: seconds of board with no voice.
+    # 0.0 when the probe could not read the file (never fails a segment).
+    clip_duration_seconds: float = 0.0
     visual_action: Optional[str] = None      # DRAW_START, DRAW_CONTINUE, GHOST_ONLY
     # which visual system produced this segment: "scene" (planned whiteboard),
     # "whiteboard" (whiteboard-native fallback), or "native" (legacy slides —

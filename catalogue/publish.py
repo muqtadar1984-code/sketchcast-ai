@@ -395,6 +395,11 @@ def caption_cues(script: dict) -> list[dict]:
             continue
         dur = vseg.get("audio_duration_seconds")
         dur = float(dur) if isinstance(dur, (int, float)) and dur > 0 else 0.0
+        # The NEXT segment starts where this CLIP ends, which is the video's
+        # clock; the sentences are spread over the narration only. A clip
+        # that ran past its voice used to shift every later cue early.
+        clip = vseg.get("clip_duration_seconds")
+        step = float(clip) if isinstance(clip, (int, float)) and clip > dur else dur
         text = texts.get(str(vseg.get("segment_id")), "")
         pieces = [p for p in (sentences(text) if text else []) if _s(p)]
         if pieces and dur > 0:
@@ -408,7 +413,7 @@ def caption_cues(script: dict) -> list[dict]:
             # Absorb the rounding into the last cue so cue ends never drift
             # past the segment they belong to.
             cues[-1]["end"] = round(t + dur, 3)
-        t += dur
+        t += step
     return cues
 
 

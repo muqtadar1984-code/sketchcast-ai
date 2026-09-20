@@ -884,6 +884,21 @@ def compose_episode_videos(
             logger.error("native renderer failed to build segment %s", seg_id)
             return None
 
+        # Probe what was actually made. Nothing downstream ever measured the
+        # MP4 — every "total duration" was a sum of AUDIO lengths — so a clip
+        # that ran past its narration was invisible to the acceptance check
+        # and to the chapter marks alike. The same ffmpeg -i parse that
+        # measures the mp3 reads the container's duration here; a failed
+        # read is 0.0 and the acceptance check treats it as unknown.
+        try:
+            clip_secs = _audio_duration(str(out_mp4), ffmpeg) if audio_path else 0.0
+        except Exception:  # noqa: BLE001 — telemetry, never a lost segment
+            clip_secs = 0.0
+        if audio_path and clip_secs > duration + 1.0:
+            logger.warning("segment %s: clip runs %.1fs past its narration "
+                           "(%.1fs audio, %.1fs video)", seg_id,
+                           clip_secs - duration, duration, clip_secs)
+
         return {
             "index": i,
             "used": used,
@@ -899,6 +914,7 @@ def compose_episode_videos(
                 video_path=str(out_mp4),
                 slide_image_path=slide_seg.get("slide_image_path"),
                 audio_duration_seconds=round(duration, 2),
+                clip_duration_seconds=round(clip_secs, 2),
                 visual_action=slide_seg.get("visual_action", "GHOST_ONLY"),
                 renderer=renderer,
                 scene_audit=list(script_seg.get("scene_audit") or []),

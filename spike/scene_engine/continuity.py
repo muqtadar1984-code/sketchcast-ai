@@ -817,6 +817,7 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
                  skip_hold: set[str] | None = None,
                  avatars: dict | None = None,
                  style: str = "socratic",
+                 two_voice_segments: set[str] | None = None,
                  ) -> tuple[dict[str, dict], dict[str, dict[str, str]], list[str]]:
     """VisualPlan -> (scene dict per segment_id, scene_assets per segment_id,
     debug report lines).
@@ -875,6 +876,18 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
                              teacher_element, two_voice_dialogue)
     teach_key = (avatars or {}).get("teacher", "avatar_teacher")
     stud_key = (avatars or {}).get("student", "avatar_student")
+    # A permanent speaker has to SPEAK. The style label says the lesson is
+    # meant to be two-voice; `two_voice_segments` says which segments
+    # actually kept a student line through script_generator's gate. A
+    # lesson where that set is empty — the model wrote a monologue in a
+    # conversational style — seats nobody: a student who never speaks is a
+    # broken promise on every frame (catalogue kit, 2026-09-20). Callers
+    # that do not know (tests, drivers) pass None and the label decides,
+    # as before.
+    seat_student = two_voice_segments is None or bool(two_voice_segments)
+    if two_voice_dialogue(style) and not seat_student:
+        report.append("STUDENT NOT SEATED | two-voice style, but no segment "
+                      "kept a student line — teacher narrates alone")
     # which sentences the stream should BOLD, per segment: the model's
     # key_points and teacher-role moments, snapped to real narration; plus
     # the importance scorer's pick where the model marked nothing
@@ -885,7 +898,7 @@ def compile_plan(plan: VisualPlan, narrations: dict[str, str],
             assets_by_seg.setdefault(sid, {})
             assets_by_seg[sid] = {**assets_by_seg[sid],
                                   teach_key: avatar_prompt(teach_key)}
-        if two_voice_dialogue(style):
+        if two_voice_dialogue(style) and seat_student:
             # the student is a PERMANENT speaker too; the caption stream is
             # injected at COMPOSE time, once per-line audio offsets exist
             if not any(e.get("id") == STUDENT_ID for e in sc["elements"]):

@@ -51,9 +51,15 @@ def _s(value: object) -> str:
 
 
 def segment_duration(seg: dict) -> float:
-    """A manifest segment's length in seconds. The composer writes
-    ``audio_duration_seconds``; ``duration`` is accepted for hand-built
-    manifests and older dumps."""
+    """A manifest segment's length in seconds — the RENDERED clip's when the
+    composer probed it (``clip_duration_seconds``, 2026-09-20), else the
+    narration's ``audio_duration_seconds``; ``duration`` is accepted for
+    hand-built manifests and older dumps. Chapter marks and clip windows
+    are positions in the video, so a clip that ran past its voice must
+    count for what it is, or every mark after it drifts."""
+    clip = seg.get("clip_duration_seconds")
+    if isinstance(clip, (int, float)) and clip > 0:
+        return float(clip)
     for key in ("audio_duration_seconds", "duration"):
         v = seg.get(key)
         if isinstance(v, (int, float)) and v >= 0:
