@@ -89,6 +89,7 @@ from typing import Iterable, Optional
 from catalogue.composer import largest_remainder
 from catalogue.harvest import clean_heading
 from catalogue.key import canonical_key
+from catalogue.reply import ask_validated, reply_fault, unwrap_reply
 from shared.llm import client_for
 from worker import client as db
 
@@ -749,12 +750,18 @@ def validate_items(raw: object, article: dict, max_rows: Optional[int] = None) -
     ``max_rows`` caps what is accepted — the rest is recorded as rejected
     ("over target"), so a reply that ignored the counts (or followed an
     instruction hidden in the article text) cannot flood the bank."""
+    # A slip in the reply's JSON mended at the decoder's fault position, a
+    # wrapper key opened — and when it still is not JSON, the decoder's
+    # reason rather than "has no 'items' list".
+    raw, repairs = unwrap_reply(raw, "items")
+    fault = reply_fault(raw)
+    if fault:
+        raise QuestionsInvalid(f"model reply is not JSON: {fault}")
     items = raw.get("items") if isinstance(raw, dict) else raw
     if not isinstance(items, list):
         raise QuestionsInvalid("model reply has no 'items' list")
     rows: list[dict] = []
     rejected: list[str] = []
-    repairs: list[str] = []
     seen: set[str] = set()
     over = 0
     for item in items:
@@ -939,60 +946,81 @@ def author_questions(sb, job_id: str, params: dict, client=None) -> dict:
     db.set_progress(sb, job_id, 15)
     if client is None:
         client = client_for(language)
-    raw = ask_model(client, build_questions_prompt(topic, article, figures, language, mix, hints=hints))
+    # Every model call this job pays for is recorded whatever happens next —
+    # a refused reply, a second refusal, a failed write. The 02:11 UTC failure
+    # on 2026-09-13 left jobs.usage NULL because this ran only after the top-up.
+    try:
+        prompt = build_questions_prompt(topic, article, figures, language, mix, hints=hints)
 
-    stage["step"] = "validate"
-    db.set_stage(sb, job_id, dict(stage))
-    db.set_progress(sb, job_id, 60)
-    rows, rejected, repairs = validate_items(raw, article_ctx, max_rows=REPLY_CAP_FACTOR * target)
-    if not rows:
-        raise QuestionsInvalid(f"no usable item in the reply; {len(rejected)} rejected: {'; '.join(rejected[:5])}")
-    prepared, dup_known = _prepare(rows, topic_id, article_id, language, known)
+        def ask():
+            if stage.get("reply_retries"):
+                stage["step"] = "author"  # the second call, after a refused reply
+                db.set_stage(sb, job_id, dict(stage))
+            return ask_model(client, prompt)
 
-    stage["step"] = "write"
-    db.set_stage(sb, job_id, dict(stage))
-    # Only the rows THIS insert landed count from here on: a row that lost
-    # the 23505 race exists in the bank, but the other replica wrote it, and
-    # coverage / the top-up decision below are about this job's own work.
-    written_rows, race_rows = write_items(sb, prepared)
-    written = len(written_rows)
-    duplicates = dup_known + len(race_rows)
-    db.set_progress(sb, job_id, 75)
+        def validate(raw):
+            stage["step"] = "validate"
+            db.set_stage(sb, job_id, dict(stage))
+            db.set_progress(sb, job_id, 60)
+            rows, rejected, repairs = validate_items(raw, article_ctx, max_rows=REPLY_CAP_FACTOR * target)
+            if not rows:
+                raise QuestionsInvalid(f"no usable item in the reply; {len(rejected)} rejected: {'; '.join(rejected[:5])}")
+            return rows, rejected, repairs
 
-    # Coverage top-up: ONE more call for the objectives this job left thin.
-    coverage = coverage_of(article, written_rows)
-    focus = under_covered(article, coverage)
-    topup: Optional[dict] = None
-    if focus:
-        stage.update({"step": "topup", "topup_objectives": sorted(focus)})
+        # One refused reply earns one more call with the same prompt: the slip
+        # measured was a pair written inside an array, in 29k chars of otherwise
+        # good JSON, and the re-run passed.
+        rows, rejected, repairs = ask_validated(ask, validate, invalid=QuestionsInvalid,
+                                                what=f"questions {topic_id}", stage=stage)
+        prepared, dup_known = _prepare(rows, topic_id, article_id, language, known)
+
+        stage["step"] = "write"
         db.set_stage(sb, job_id, dict(stage))
-        # Half objective, half subjective per objective: the reviewer sees
-        # both kinds against the thin objective, not eight true/false items.
-        n = TOPUP_PER_OBJECTIVE * len(focus)
-        topup_mix = {"mcq": (n + 1) // 2, "short_answer": n // 2}
-        raw2 = ask_model(client, build_questions_prompt(topic, article, figures, language, topup_mix,
-                                                        hints=hints, focus=focus))
-        rows2, rejected2, repairs2 = validate_items(raw2, article_ctx, max_rows=REPLY_CAP_FACTOR * n)
-        prepared2, dup2_known = _prepare(rows2, topic_id, article_id, language, known)
-        written_rows2, race_rows2 = write_items(sb, prepared2)
-        written_rows.extend(written_rows2)
-        written += len(written_rows2)
-        duplicates += dup2_known + len(race_rows2)
-        rejected.extend(rejected2)
-        repairs.extend(repairs2)
-        coverage = coverage_of(article, written_rows)
-        topup = {"objectives": sorted(focus), "requested": n, "written": len(written_rows2),
-                 "duplicates": dup2_known + len(race_rows2), "rejected": len(rejected2)}
-    usage = getattr(client, "session_usage", None)
-    if isinstance(usage, dict) and usage.get("calls"):
-        db.set_job_usage(sb, job_id, usage)
-    db.set_progress(sb, job_id, 95)
+        # Only the rows THIS insert landed count from here on: a row that lost
+        # the 23505 race exists in the bank, but the other replica wrote it, and
+        # coverage / the top-up decision below are about this job's own work.
+        written_rows, race_rows = write_items(sb, prepared)
+        written = len(written_rows)
+        duplicates = dup_known + len(race_rows)
+        db.set_progress(sb, job_id, 75)
 
-    stage.pop("topup_objectives", None)
-    stage.update({"step": "done", "written": written, "duplicates": duplicates, "rejected": rejected[:60],
-                  "repairs": repairs[:60], "coverage": coverage, "topup": topup,
-                  "still_under": sorted(under_covered(article, coverage))})
-    return stage
+        # Coverage top-up: ONE more call for the objectives this job left thin.
+        coverage = coverage_of(article, written_rows)
+        focus = under_covered(article, coverage)
+        topup: Optional[dict] = None
+        if focus:
+            stage.update({"step": "topup", "topup_objectives": sorted(focus)})
+            db.set_stage(sb, job_id, dict(stage))
+            # Half objective, half subjective per objective: the reviewer sees
+            # both kinds against the thin objective, not eight true/false items.
+            n = TOPUP_PER_OBJECTIVE * len(focus)
+            topup_mix = {"mcq": (n + 1) // 2, "short_answer": n // 2}
+            prompt2 = build_questions_prompt(topic, article, figures, language, topup_mix, hints=hints, focus=focus)
+            rows2, rejected2, repairs2 = ask_validated(
+                lambda: ask_model(client, prompt2),
+                lambda raw2: validate_items(raw2, article_ctx, max_rows=REPLY_CAP_FACTOR * n),
+                invalid=QuestionsInvalid, what=f"questions top-up {topic_id}", stage=stage)
+            prepared2, dup2_known = _prepare(rows2, topic_id, article_id, language, known)
+            written_rows2, race_rows2 = write_items(sb, prepared2)
+            written_rows.extend(written_rows2)
+            written += len(written_rows2)
+            duplicates += dup2_known + len(race_rows2)
+            rejected.extend(rejected2)
+            repairs.extend(repairs2)
+            coverage = coverage_of(article, written_rows)
+            topup = {"objectives": sorted(focus), "requested": n, "written": len(written_rows2),
+                     "duplicates": dup2_known + len(race_rows2), "rejected": len(rejected2)}
+        db.set_progress(sb, job_id, 95)
+
+        stage.pop("topup_objectives", None)
+        stage.update({"step": "done", "written": written, "duplicates": duplicates, "rejected": rejected[:60],
+                      "repairs": repairs[:60], "coverage": coverage, "topup": topup,
+                      "still_under": sorted(under_covered(article, coverage))})
+        return stage
+    finally:
+        usage = getattr(client, "session_usage", None)
+        if isinstance(usage, dict) and usage.get("calls"):
+            db.set_job_usage(sb, job_id, usage)
 
 
 def run_questions_job(sb, job: dict, client=None) -> Optional[dict]:
