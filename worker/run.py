@@ -655,6 +655,14 @@ def _serve(sb, stale_min: int, reap_every: float = 60, grace: float | None = Non
             maybe_poll(sb)
         except Exception as exc:  # noqa: BLE001 — never the reaper's problem
             log.error("YouTube stats tick error: %s", exc)
+        # So does the website-traffic poll (catalogue/cloudflare_stats.py):
+        # Cloudflare's daily figures for sketchcast.app, hourly, dark
+        # without CLOUDFLARE_API_TOKEN / CLOUDFLARE_ZONE_ID.
+        try:
+            from catalogue.cloudflare_stats import maybe_poll as maybe_poll_cloudflare
+            maybe_poll_cloudflare(sb)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Cloudflare stats tick error: %s", exc)
     budget = SHUTDOWN_GRACE_SECONDS if grace is None else grace
     deadline = time.monotonic() + budget
     while _holding_work() and time.monotonic() < deadline:
