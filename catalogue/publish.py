@@ -91,10 +91,10 @@ import os
 import re
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Protocol, runtime_checkable
+from typing import Iterable, Optional, Protocol, runtime_checkable
 
 from catalogue.harvest import clean_heading
 from worker import client as db
@@ -120,6 +120,7 @@ DEFAULT_PRIVACY = PRIVACY_PRIVATE
 
 VIDEO_KIND = "video_mp4"
 SCRIPT_KIND = "script_json"
+THUMBNAIL_KIND = "thumbnail_png"   # app migration 0121
 ARTIFACT_BUCKET = "artifacts"
 
 MAX_PARTS_ENV = "YOUTUBE_MAX_PARTS_PER_RUN"
@@ -285,15 +286,8 @@ def chapter_lines(chapters: list[dict]) -> list[str]:
     """``["0:00 Introduction", …]`` or NOTHING. YouTube needs the first entry
     at 0:00 and at least three entries; a list that fails either is ignored in
     full, so posting it would only be noise in the description."""
-    lines: list[str] = []
-    for c in chapters or []:
-        label = _s(c.get("label"))
-        if not label:
-            continue
-        lines.append(f"{hhmmss(c.get('t'))} {label}")
-    if len(lines) < MIN_CHAPTERS or not lines[0].startswith("0:00 "):
-        return []
-    return lines
+    from catalogue.youtube_meta import chapter_lines as _chapter_lines
+    return _chapter_lines(chapters, hhmmss)
 
 
 def topic_link(topic: dict, part: int = 1) -> str:
@@ -305,60 +299,35 @@ def topic_link(topic: dict, part: int = 1) -> str:
     return LINK_BASE + "/?" + "&".join(f"{k}={v}" for k, v in params.items())
 
 
-def build_title(topic_title: object, part: int, total: int) -> str:
-    """``"<Topic>"`` for a single part, ``"<Topic> — Part k of N"`` for many.
-
-    Over YouTube's 100 characters the TOPIC is cut, never the part label: the
-    label is what puts the parts in order for a viewer, and a truncated
-    "…Part 2 of" would lose the ordering the whole multi-part shape exists
-    for."""
-    title = clean_heading(topic_title) or "Topic"
-    if int(total) <= 1:
-        return title[:TITLE_MAX].strip()
-    suffix = f" — Part {int(part)} of {int(total)}"
-    room = TITLE_MAX - len(suffix)
-    return (title[:room].strip() if len(title) > room else title) + suffix
+def build_title(topic_title: object, part: int, total: int, *, meta: Optional[dict] = None,
+                key_terms: Iterable[str] = (), audience: str = "") -> str:
+    """``<Topic> Explained | <key terms> | <audience>`` (``— Part k of N`` for a
+    multi-part kit) — the stored ``youtube_meta.title`` when the library holds
+    one, else composed; a bare topic when there are neither terms nor an
+    audience. The composer (catalogue.youtube_meta.compose_title) is mirrored
+    by the portal's preview, and it is what keeps the part label under
+    YouTube's 100 characters."""
+    from catalogue.youtube_meta import compose_title
+    return compose_title(topic_title, meta=meta, key_terms=key_terms, audience=audience, part=part, total=total)
 
 
 def build_description(topic: dict, header_lines: list[str], chapters: list[dict], part: int, total: int,
-                      *, next_title: Optional[str] = None) -> str:
-    """The description YouTube shows, composed from what the reviewer already
-    approved. Pure, so the portal can preview exactly this (B2 mirrors it).
-
-    Order: the summary, the curriculum codes (the same lines every document's
-    header carries — one alignment statement, one implementation), the chapter
-    timestamps, the pointer to the next part, and the link back."""
-    title = clean_heading(topic.get("title")) or "This topic"
-    blocks: list[list[str]] = []
-
-    summary = clean_heading(topic.get("summary"))
-    blocks.append([summary or f"{title} — a SketchCast lesson."])
-
-    codes = [_s(line) for line in (header_lines or []) if _s(line)]
-    if codes:
-        blocks.append(["Curriculum alignment:", *codes])
-
-    lines = chapter_lines(chapters)
-    if lines:
-        blocks.append(["Chapters:", *lines])
-
-    if int(total) > 1:
-        # The next part by NAME, not by link: the parts are uploaded in order,
-        # so when part k's description is written part k+1 has no video id yet.
-        # A viewer searching the channel for the title finds it; a dead link
-        # would be worse than a name.
-        line = f"Part {int(part)} of {int(total)}."
-        blocks.append([f"{line} Next: {_s(next_title)}" if next_title else line])
-
-    blocks.append([f"Worksheets, lesson plans and the full topic: {topic_link(topic, part)}"])
-
-    text = "\n\n".join("\n".join(b) for b in blocks)
-    if len(text) <= DESCRIPTION_MAX:
-        return text
-    # Cut from the END and on a line boundary: the summary and the codes are
-    # what a viewer reads first, and half a timestamp line is worse than none.
-    cut = text[:DESCRIPTION_MAX]
-    return cut[:cut.rfind("\n")].rstrip() if "\n" in cut else cut.rstrip()
+                      *, next_title: Optional[str] = None, meta: Optional[dict] = None,
+                      boards: Iterable[tuple[str, str]] = ()) -> str:
+    """The description YouTube shows — ONE structure for every video
+    (catalogue.youtube_meta): the hook paragraph (the stored intro, else the
+    summary), "Aligned to" + the curriculum lines every document carries,
+    "Chapters" + the measured timestamps, the key terms, the part pointer,
+    the SketchCast line with the UTM link, and the hashtags. Pure, so the
+    portal previews exactly this."""
+    from catalogue.youtube_meta import (chapter_lines as _chapter_lines, compose_description,
+                                        effective_hashtags, effective_terms)
+    terms = effective_terms(meta, topic.get("summary"))
+    return compose_description(
+        topic_title=topic.get("title"), summary=topic.get("summary"), meta=meta, header_lines=header_lines,
+        chapter_lines_=_chapter_lines(chapters, hhmmss), key_terms=terms,
+        hashtags=effective_hashtags(meta, terms, boards, topic.get("subject")),
+        part=part, total=total, next_title=next_title, link=topic_link(topic, part))
 
 
 def srt_time(seconds: object) -> str:
@@ -673,6 +642,12 @@ class Target:
     privacy: str
     header_lines: list[str]
     parts: list[dict]
+    # (curriculum name, grade) per mapped curriculum — the title's audience
+    # block and the default hashtags (catalogue.youtube_meta).
+    boards: list = field(default_factory=list)
+    # topic_kits.youtube_meta, cleaned: the words the reviewer saw (or edited)
+    # in the library. None means every block takes its deterministic default.
+    meta: Optional[dict] = None
 
 
 def check_privacy(requested: object) -> str:
@@ -746,11 +721,14 @@ def load_target(sb, params: dict) -> Target:
             f"kit {kit_id} has video parts {', '.join(str(n) for n in numbers)}, not a run of 1..N; "
             "re-render the presentation before publishing")
 
-    from catalogue.kit import curriculum_header_lines
+    from catalogue.article import load_mappings
+    from catalogue.kit import header_lines as _header_lines
+    from catalogue.youtube_meta import boards_of, clean_meta
 
-    header = curriculum_header_lines(sb, _s(kit.get("topic_id")))
+    mappings = load_mappings(sb, _s(kit.get("topic_id")))
     return Target(kit=kit, topic=topic, article=article, language=language, privacy=privacy,
-                  header_lines=header, parts=parts)
+                  header_lines=_header_lines(mappings), parts=parts, boards=boards_of(mappings),
+                  meta=clean_meta(kit.get("youtube_meta")))
 
 
 # ── the thumbnail (local, no image quota) ──────────────────────────────
@@ -795,6 +773,27 @@ def build_thumbnail(topic: dict, part: int, total: int, out_path: Path) -> Optio
         return None
 
 
+def thumbnail_name(part: int) -> str:
+    """``thumb.png`` for part 1, ``thumb_part2.png`` … — beside ``lesson.mp4``."""
+    return "thumb.png" if int(part) == 1 else f"thumb_part{int(part)}.png"
+
+
+def stored_thumbnail(sb, gen_id: str, part: int, work: Path) -> Optional[Path]:
+    """The thumbnail artifact the video build stored for this part (kind
+    thumbnail_png), downloaded; None when there is none or the download
+    fails — the caller then draws one, as it always did."""
+    try:
+        if not gen_id:
+            return None
+        for row in load_artifacts(sb, gen_id, THUMBNAIL_KIND):
+            path = _s(row.get("storage_path"))
+            if path.rsplit("/", 1)[-1] == thumbnail_name(part):
+                return download_artifact(sb, path, work / f"stored_thumb_part{int(part)}.png")
+    except Exception as exc:  # noqa: BLE001 — best-effort, like the drawing
+        log.warning("publish: stored thumbnail for part %s not used (%s: %s)", part, type(exc).__name__, exc)
+    return None
+
+
 # ── one part ───────────────────────────────────────────────────────────
 
 
@@ -825,11 +824,16 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
     kit, topic = target.kit, target.topic
     gen_id = _s(kit.get("presentation_generation_id"))
 
+    from catalogue.youtube_meta import audience_tag, effective_terms
+
     local = download_artifact(sb, part["storage_path"], work / f"lesson_part{idx}.mp4")
-    title = build_title(topic.get("title"), idx, total)
-    next_title = build_title(topic.get("title"), idx + 1, total) if idx < total else None
+    terms = effective_terms(target.meta, topic.get("summary"))
+    audience = audience_tag(target.boards, topic.get("subject"))
+    title = build_title(topic.get("title"), idx, total, meta=target.meta, key_terms=terms, audience=audience)
+    next_title = (build_title(topic.get("title"), idx + 1, total, meta=target.meta, key_terms=terms, audience=audience)
+                  if idx < total else None)
     description = build_description(topic, target.header_lines, chapters_of(kit.get("chapters"), idx),
-                                    idx, total, next_title=next_title)
+                                    idx, total, next_title=next_title, meta=target.meta, boards=target.boards)
     video_id = _s(transport.upload_video(local, title=title, description=description,
                                          privacy=target.privacy, language=target.language,
                                          tags=[t for t in [clean_heading(topic.get("subject"))] if t]))
@@ -855,7 +859,11 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
         log.warning("publish: kit %s part %d captions failed: %s", kit.get("id"), idx, exc)
 
     try:
-        thumb = build_thumbnail(topic, idx, total, work / f"thumb_part{idx}.png")
+        # The thumbnail the library SHOWED the reviewer — drawn when the video
+        # finished and stored beside it (kind thumbnail_png, the same
+        # ``thumb{suffix}.png`` name) — else drawn now, as before.
+        thumb = stored_thumbnail(sb, gen_id, idx, work) or \
+            build_thumbnail(topic, idx, total, work / f"thumb_part{idx}.png")
         if thumb is not None:
             transport.set_thumbnail(video_id, thumb)
             row["thumbnail_set"] = True

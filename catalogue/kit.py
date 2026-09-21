@@ -949,6 +949,12 @@ def record_presentation(sb, gen: dict, kit_id: Optional[str], outcome: dict) -> 
         if parts:
             write_timestamps(sb, kit, parts)
             result["timestamps"] = True
+            # The YouTube words (title, hook, key terms, hashtags) from the
+            # narration the video was just cut from — stored on the kit for
+            # the library's publish block to show and edit. Best-effort
+            # inside: a fault there is a log line, never a failed kit.
+            from catalogue.youtube_meta import write_for_kit
+            result["youtube_meta"] = write_for_kit(sb, kit, parts) is not None
         result["lesson_plan"] = insert_lesson_plan(sb, gen, kit)
     except Exception as exc:  # noqa: BLE001
         log.exception("kit %s lifecycle failed after presentation", kit_id)

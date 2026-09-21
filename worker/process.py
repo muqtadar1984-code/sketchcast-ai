@@ -1821,11 +1821,29 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                                    or sum(_ts.segment_duration(s) for s in _vsegs if isinstance(s, dict)))
                     _chapters = _ts.chapters_for_part(script_dict.get("segments") or [], _vsegs,
                                                       section_ids=getattr(catalogue, "section_ids", None))
+                    from catalogue import youtube_meta as _ym
+
                     built_parts.append({
                         "part": part_idx, "chapters": _chapters,
                         "clips": _ts.clips_for_part(_chapters, _total, part_idx),
                         "plan": _ts.part_plan_entry(part_idx, episode.get("sections_covered") or [], _total),
+                        # the words the YouTube metadata is written from
+                        "narration": _ym.narration_excerpt(script_dict),
                     })
+                    # The thumbnail, drawn NOW and stored beside the video
+                    # (kind thumbnail_png, app 0121) so the library shows the
+                    # reviewer the card that will go up; the publish reuses
+                    # it. Best-effort: a video without a card is still a video.
+                    try:
+                        from catalogue.publish import build_thumbnail, thumbnail_name
+
+                        _thumb = build_thumbnail(getattr(catalogue, "topic", None) or {}, part_idx, n_parts,
+                                                 Path(tmp) / thumbnail_name(part_idx))
+                        if _thumb is not None:
+                            db.upload_artifact(sb, _thumb, f"{base}/{thumbnail_name(part_idx)}")
+                            db.add_artifact_row(sb, generation_id, "thumbnail_png", f"{base}/{thumbnail_name(part_idx)}")
+                    except Exception as _exc:  # noqa: BLE001
+                        logger.warning("thumbnail for part %d not stored: %s", part_idx, _exc)
             db.set_stage(sb, job_id, {"phase": "video", "part": part_idx, "total": n_parts, "part_pct": 100})
             db.set_progress(sb, job_id, round(base_p + span))
 
