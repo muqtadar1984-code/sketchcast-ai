@@ -646,6 +646,15 @@ def _serve(sb, stale_min: int, reap_every: float = 60, grace: float | None = Non
                 log.warning("Reaper: requeued %d stale job(s) (>%sm in 'processing', not in-flight)", r, stale_min)
         except Exception as exc:  # noqa: BLE001
             log.error("Reaper error: %s", exc)
+        # The YouTube statistics poll rides the same tick (catalogue/
+        # youtube_stats.py decides whether one is due; hourly by default,
+        # dark without channel credentials). Imported lazily so the loop
+        # stays importable without the catalogue package's dependencies.
+        try:
+            from catalogue.youtube_stats import maybe_poll
+            maybe_poll(sb)
+        except Exception as exc:  # noqa: BLE001 — never the reaper's problem
+            log.error("YouTube stats tick error: %s", exc)
     budget = SHUTDOWN_GRACE_SECONDS if grace is None else grace
     deadline = time.monotonic() + budget
     while _holding_work() and time.monotonic() < deadline:

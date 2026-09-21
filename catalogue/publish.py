@@ -514,11 +514,26 @@ def default_transport(language: str) -> YouTubeTransport:
     must import (and its whole test suite must run) on a worker that has no
     YouTube credentials and, until the founder deploys Phase 4, no client
     library either."""
+    service = build_youtube_service(language)
+    try:
+        from googleapiclient.http import MediaFileUpload
+    except ImportError as exc:  # pragma: no cover — production dependency
+        raise PublishRefused(
+            "the YouTube client library is not installed on this worker "
+            f"(google-api-python-client): {exc}") from exc
+    return _GoogleTransport(service, MediaFileUpload)
+
+
+def build_youtube_service(language: str):
+    """The authenticated YouTube Data API v3 service for one channel — the
+    publish transport's and the stats poller's (catalogue/youtube_stats.py)
+    one shared credential edge. The refresh token's scopes (upload +
+    force-ssl) cover both writing videos and reading the channel's own
+    statistics, so the poller needs no second consent."""
     creds = read_credentials(language)
     try:
         from google.oauth2.credentials import Credentials as OAuthCredentials
         from googleapiclient.discovery import build
-        from googleapiclient.http import MediaFileUpload
     except ImportError as exc:  # pragma: no cover — production dependency
         raise PublishRefused(
             "the YouTube client library is not installed on this worker "
@@ -533,8 +548,7 @@ def default_transport(language: str) -> YouTubeTransport:
         scopes=["https://www.googleapis.com/auth/youtube.upload",
                 "https://www.googleapis.com/auth/youtube.force-ssl"],
     )
-    service = build("youtube", "v3", credentials=oauth, cache_discovery=False)
-    return _GoogleTransport(service, MediaFileUpload)
+    return build("youtube", "v3", credentials=oauth, cache_discovery=False)
 
 
 class _GoogleTransport:
