@@ -883,8 +883,11 @@ class TestProcessCatalogue:
         assert compose_calls == [{"student_voice": "g-en-student-m", "tts_voice": "g-en-f", "lang": "en"}] * 2
         # decision 4: script.json beside every mp4, in the same block
         rows = [(r["kind"], r["storage_path"]) for r in sb.tables["artifacts"]]
+        # …and the thumbnail card the library will show, stored with each part
         assert rows == [("video_mp4", "sys/gen-p/lesson.mp4"), ("script_json", "sys/gen-p/script.json"),
-                        ("video_mp4", "sys/gen-p/lesson_part2.mp4"), ("script_json", "sys/gen-p/script_part2.json")]
+                        ("thumbnail_png", "sys/gen-p/thumb.png"),
+                        ("video_mp4", "sys/gen-p/lesson_part2.mp4"), ("script_json", "sys/gen-p/script_part2.json"),
+                        ("thumbnail_png", "sys/gen-p/thumb_part2.png")]
         body = json.loads(next(raw for _, d, raw in uploads if d.endswith("script_part2.json")).decode("utf-8"))
         assert (body["part"], body["of"], body["language"], body["voice"], body["student_voice"]) == (2, 2, "en", "g-en-f", "g-en-student-m")
         assert body["script"]["segments"][0]["segment_id"] == "recap" and set(body["avatars"]) == {"teacher", "student"}

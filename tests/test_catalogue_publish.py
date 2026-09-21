@@ -263,8 +263,9 @@ def test_a_multi_part_kit_uploads_its_parts_in_order(monkeypatch):
     summary = P.run_publish_job(sb, _job(), transport=yt)
     assert summary["published"] == [1, 2, 3]
     assert [u["bytes"] for u in yt.uploads] == [b"mp4-part-1", b"mp4-part-2", b"mp4-part-3"]
-    assert [u["title"] for u in yt.uploads] == ["Cells — Part 1 of 3", "Cells — Part 2 of 3",
-                                                "Cells — Part 3 of 3"]
+    assert [u["title"] for u in yt.uploads] == ["Cells Explained | Cambridge Stage 7 Biology — Part 1 of 3",
+                                                "Cells Explained | Cambridge Stage 7 Biology — Part 2 of 3",
+                                                "Cells Explained | Cambridge Stage 7 Biology — Part 3 of 3"]
     assert sorted(_pubs(sb)) == [1, 2, 3]
     assert _job_row(sb)["status"] == "done"
 
@@ -279,11 +280,46 @@ def test_a_kit_missing_a_middle_part_is_refused():
     assert "not a run of 1..N" in _job_row(sb)["error"]
 
 
-def test_a_single_part_kit_is_titled_with_the_topic_alone():
+def test_a_single_part_kit_is_titled_topic_terms_audience():
+    """One structure for every video (catalogue.youtube_meta): the topic,
+    then the key terms, then the audience block a teacher searches for. This
+    kit's summary enumerates no terms, so the middle block is absent."""
     sb = _sb(parts=(1,))
     yt = FakeYouTube()
     P.run_publish_job(sb, _job(), transport=yt)
-    assert yt.uploads[0]["title"] == "Cells"
+    assert yt.uploads[0]["title"] == "Cells Explained | Cambridge Stage 7 Biology"
+
+
+def test_the_stored_words_win_the_title_the_intro_the_terms_and_the_tags():
+    """What the reviewer saw and edited in the library (topic_kits.youtube_meta)
+    is what goes up — and a blank field falls back to its default."""
+    sb = _sb(parts=(1,))
+    sb.tables["topic_kits"][0]["youtube_meta"] = {
+        "title": "Cells for Beginners | Membrane, Nucleus | Cambridge Stage 7 Biology",
+        "intro": "What is a cell? A teacher and a student work through it.",
+        "key_terms": ["cell membrane", "nucleus"], "hashtags": ["Cells", "SketchCast"], "source": "edited"}
+    yt = FakeYouTube()
+    P.run_publish_job(sb, _job(), transport=yt)
+    up = yt.uploads[0]
+    assert up["title"] == "Cells for Beginners | Membrane, Nucleus | Cambridge Stage 7 Biology"
+    blocks = up["description"].split("\n\n")
+    assert blocks[0] == "What is a cell? A teacher and a student work through it."
+    assert "Key terms: cell membrane, nucleus." in blocks
+    assert blocks[-1] == "#Cells #SketchCast"
+    assert "Every living thing is made of cells." not in up["description"]
+
+
+def test_a_stored_thumbnail_is_uploaded_instead_of_a_freshly_drawn_one():
+    """The card the library SHOWED the reviewer (kind thumbnail_png beside the
+    video) is the card that goes up."""
+    sb = _sb(parts=(1,))
+    sb.tables["artifacts"].append({"generation_id": GEN, "kind": "thumbnail_png", "storage_path": f"{OWNER}/{GEN}/thumb.png"})
+    sb.files[("artifacts", f"{OWNER}/{GEN}/thumb.png")] = b"png-from-the-library"
+    yt = FakeYouTube()
+    P.run_publish_job(sb, _job(), transport=yt)
+    assert len(yt.thumbnails) == 1
+    assert pathlib.Path(yt.thumbnails[0]["path"]).name == "stored_thumb_part1.png"
+    assert _pubs(sb)[1]["thumbnail_set"] is True
 
 
 def test_a_long_title_keeps_its_part_label():
@@ -329,7 +365,7 @@ def test_a_multi_part_description_points_at_the_next_part_and_the_last_does_not(
     sb = _sb(parts=(1, 2))
     yt = FakeYouTube()
     P.run_publish_job(sb, _job(), transport=yt)
-    assert "Next: Cells — Part 2 of 2" in yt.uploads[0]["description"]
+    assert "Next: Cells Explained | Cambridge Stage 7 Biology — Part 2 of 2" in yt.uploads[0]["description"]
     assert "Next:" not in yt.uploads[1]["description"]
     assert "Part 2 of 2." in yt.uploads[1]["description"]
 
