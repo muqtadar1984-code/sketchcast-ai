@@ -1276,17 +1276,10 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                 str(seg_assets.get(str(roster[root_id].get("asset") or ""), "")))
         except Exception:  # noqa: BLE001 — auto-anchoring is best-effort
             part_names = []
-    if root_id and not part_names:
-        # The prompt never named its parts. Three further sources, in order of
-        # how much they are worth trusting. Until this existed, a chapter whose
-        # asset prompt merely DESCRIBED the cell ("with a cell wall, cell
-        # membrane, nucleus, chloroplasts, and cytoplasm") produced no part
-        # names at all, and the whole labelling pass below — gated on
-        # `part_names` — was skipped: the founder's Cells Part 2 drew an
-        # unlabelled plant cell for six and a half minutes.
-        akey = str(roster[root_id].get("asset") or "")
-        prompt0 = ch.assets.get(akey, "")
-
+    akey = str(roster[root_id].get("asset") or "") if root_id else ""
+    prompt0 = ch.assets.get(akey, "") if root_id else ""
+    cand_text: list[str] = []
+    if root_id:
         def _narrated(names: list[str]) -> list[str]:
             """Only names the chapter actually SAYS. The vision annotator is
             paid per name and a junk name costs a wrong region as well as a
@@ -1298,8 +1291,10 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
 
         # (ii) the TEXT of the chapter's own short labels — 'Nucleus' on an
         # element called lbl1 says what the picture must contain even though
-        # its id says nothing at all
-        cand_text: list[str] = []
+        # its id says nothing at all. Computed for BOTH branches below: it is
+        # the tail's second source when the prompt named nothing, and the
+        # tail's supplement when the prompt named parts but not the things
+        # the labels are about.
         for eid, e in roster.items():
             if e.get("type") != "text":
                 continue
@@ -1312,6 +1307,15 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             if n and n not in cand_text:
                 cand_text.append(n)
         cand_text = _narrated(cand_text)
+
+    if root_id and not part_names:
+        # The prompt never named its parts. Three further sources, in order of
+        # how much they are worth trusting. Until this existed, a chapter whose
+        # asset prompt merely DESCRIBED the cell ("with a cell wall, cell
+        # membrane, nucleus, chloroplasts, and cytoplasm") produced no part
+        # names at all, and the whole labelling pass below — gated on
+        # `part_names` — was skipped: the founder's Cells Part 2 drew an
+        # unlabelled plant cell for six and a half minutes.
 
         # (iii) element IDS (existing tier). Noisy — an id is a programmer's
         # name, not a part name — so it keeps its >= 2 corroboration rule and
@@ -1355,6 +1359,40 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
             report.append(f"CHAPTER {ch.concept} | PART NAMES from {source}: "
                           f"{cand}")
             break
+    elif root_id and part_names and cand_text and prompt0:
+        # The prompt DID name its parts — and tier (ii) therefore never ran,
+        # so a label about something the tail did not list had no region to
+        # anchor to. Founder's "Plant and Animal Cells Compared" (2026-09-21):
+        # the director drew one two-cell picture, named its layer groups
+        # nucleoid_region and nucleus_region, and wrote the labels
+        # "Prokaryote" and "Eukaryote" over it. Neither label matched a
+        # part, neither got a leader line, and the renderer's column layout
+        # put the first arrowless label in the RIGHT column and the second
+        # on the LEFT — "Eukaryote" over the bacterium, "Prokaryote" over the
+        # eukaryote, whatever the words said. The earlier kit that morning
+        # did the same with "Prokaryote" against bacterium_dna /
+        # eukaryote_nucleus. A picture can be labelled at more than one
+        # level (its SUBJECTS as well as their parts), so the label texts the
+        # tail does not already cover JOIN it: the annotator then locates
+        # "prokaryote" and "eukaryote" as regions and the synthesis below
+        # arms each label with a leader to its own cell, exactly as it did
+        # for plant_side / animal_side in the same lesson.
+        from .vector_assets import match_layer_ids as _mli
+        extra = [n for n in cand_text
+                 if not _mli(part_names, [n]) and n not in part_names]
+        extra = extra[:max(0, 12 - len(part_names))]   # the tail's own cap
+        if extra:
+            import re as _re
+            tail = ", ".join(list(part_names) + extra)
+            ch.assets[akey] = _re.sub(
+                r"(name the layer groups exactly:\s*)([^.\n]+)",
+                lambda m: m.group(1) + tail, prompt0, count=1,
+                flags=_re.IGNORECASE)
+            seg_assets[akey] = ch.assets[akey]
+            assets_seen[akey] = ch.assets[akey]
+            part_names = list(part_names) + extra
+            report.append(f"CHAPTER {ch.concept} | PART NAMES from label text "
+                          f"JOIN the prompt's: {extra}")
 
     # ── anchor tolerance ────────────────────────────────────────────────
     # An anchor whose `el` names no roster element (the founder's "Cells":

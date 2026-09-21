@@ -974,6 +974,62 @@ class TestPartNamesFromLabelText:
                  and str(e.get("role") or "") == "label"]
         assert sorted(texts) == ["cell wall", "nucleus"], texts
 
+    def _two_cells(self, tail="nucleoid_region, nucleus_region"):
+        """Founder's "Plant and Animal Cells Compared" (2026-09-21): one
+        picture of two cells whose prompt names the PARTS, and two labels
+        that name the SUBJECTS. Tier (ii) used to be skipped whenever the
+        prompt had a tail, so the labels matched nothing, got no leader and
+        the column layout put "Prokaryote" on the eukaryote's side."""
+        raw = _plan_raw()
+        ch = raw["chapters"][0]
+        ch["assets"]["plant_cell"] = (
+            "A pill-shaped prokaryotic cell with loose DNA beside a larger "
+            "round eukaryotic cell with a nucleus. Name the layer groups "
+            f"exactly: {tail}.")
+        ch["elements"] = [e for e in ch["elements"] if e["id"] == "cell"]
+        ch["elements"] += [
+            {"id": "lbl_prok", "type": "text", "text": "Prokaryote",
+             "at": [90, 120], "role": "label"},
+            {"id": "lbl_euk", "type": "text", "text": "Eukaryote",
+             "at": [1100, 120], "role": "label"}]
+        for st in ch["steps"]:
+            st["actions"] = [a for a in st["actions"]
+                             if a.get("target") == "cell"]
+        ch["steps"][1]["actions"] += [{"verb": "write", "target": "lbl_prok"},
+                                      {"verb": "write", "target": "lbl_euk"}]
+        narr = {"s001": "Every living thing is built out of cells.",
+                "s002": "A prokaryote is a studio flat; a eukaryote is a "
+                        "mansion with a nucleus.",
+                "s003": "look closer"}
+        return compile_plan(parse_visual_plan(raw), narr,
+                            all_segments=["s001", "s002", "s003"],
+                            skip_hold=set())
+
+    def test_label_text_joins_a_tail_the_prompt_already_has(self):
+        scenes, assets, report = self._two_cells()
+        line = next(ln for ln in report
+                    if "PART NAMES from label text JOIN" in ln)
+        assert "prokaryote" in line and "eukaryote" in line, line
+        tail = part_names_from_prompt(assets["s002"]["plant_cell"])
+        assert tail == ["nucleoid_region", "nucleus_region",
+                        "prokaryote", "eukaryote"], tail
+        # exactly ONE tail in the prompt, extended in place
+        assert assets["s002"]["plant_cell"].lower().count(
+            "name the layer groups exactly") == 1
+        # and each label now gets a leader line to its OWN cell
+        assert any("SYNTHESIZED arr_auto_lbl_prok -> cell.prokaryote" in ln
+                   for ln in report), report
+        assert any("SYNTHESIZED arr_auto_lbl_euk -> cell.eukaryote" in ln
+                   for ln in report), report
+
+    def test_a_label_the_tail_already_covers_is_not_added_twice(self):
+        _, assets, report = self._two_cells(tail="prokaryote, nucleus_region")
+        line = next(ln for ln in report
+                    if "PART NAMES from label text JOIN" in ln)
+        assert "eukaryote" in line and "prokaryote" not in line, line
+        assert part_names_from_prompt(assets["s002"]["plant_cell"]) == \
+            ["prokaryote", "nucleus_region", "eukaryote"]
+
     def test_the_directors_own_label_is_the_one_that_gets_the_leader(self):
         """The point of not cloning: the leader must arm the label the
         director declared, not a duplicate made to carry it. The lookup that
