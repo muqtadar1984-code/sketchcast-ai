@@ -1378,8 +1378,23 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         # arms each label with a leader to its own cell, exactly as it did
         # for plant_side / animal_side in the same lesson.
         from .vector_assets import match_layer_ids as _mli
+        # A label the director already ARMED (an arrow's tail names it) is
+        # placed by that arrow; its text is a second name for the region the
+        # arrow points at, not a part the annotator must find. Founder's
+        # "Specialised Cells" (2026-09-22): lbl_palisade → arr_palisade_column
+        # → region palisade_column, and joining "palisade cell" as a part
+        # produced a second "Palisade Cell" label on the same column.
+        _armed_texts: set[str] = set()
+        for _e in roster.values():
+            if _e.get("type") != "arrow" or not isinstance(_e.get("tail"), dict):
+                continue
+            _lbl = roster.get(str(_e["tail"].get("el") or ""))
+            if _lbl and _lbl.get("type") == "text":
+                _t = _part_name_candidate(str(_lbl.get("text") or ""))
+                if _t:
+                    _armed_texts.add(_t)
         extra = [n for n in cand_text
-                 if not _mli(part_names, [n]) and n not in part_names]
+                 if not _mli(part_names, [n]) and n not in part_names and n not in _armed_texts]
         extra = extra[:max(0, 12 - len(part_names))]   # the tail's own cap
         if extra:
             import re as _re
@@ -1475,8 +1490,21 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
         # a full plant cell with NO labels or arrows at all. Synthesize the
         # label (left column, written in the step whose OWN narration first
         # names the part) — the arrow-synthesis pass below then arms it.
-        covered = {p for lid, le in labels.items()
-                   for p in [_label_part(lid, le)] if p}
+        # EVERY part a label names, by id AND by text — not the first that
+        # resolves. _label_part is id-first, and an id that resolves to one
+        # region ("palisade" → palisade_column) hid the text's own part
+        # ("palisade cell", joined from that same label) so the synthesiser
+        # wrote "Palisade Cell" a second time on the same column (founder's
+        # "Specialised Cells", 2026-09-22).
+        covered: set[str] = set()
+        for lid, le in labels.items():
+            p_id = _match_part(_guess_part_name(lid))
+            if p_id:
+                covered.add(p_id)
+            if str(le.get("role") or "label") in ("label", "term"):
+                p_text = _match_part(_part_name_candidate(str(le.get("text") or "")) or "")
+                if p_text:
+                    covered.add(p_text)
         # Start BELOW whatever already occupies the left column. The semantic
         # adapter lays declared labels out on this same column and pitch, so
         # starting at the top wrote synthesized labels exactly on top of them

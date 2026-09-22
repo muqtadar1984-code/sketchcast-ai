@@ -1022,6 +1022,43 @@ class TestPartNamesFromLabelText:
         assert any("SYNTHESIZED arr_auto_lbl_euk -> cell.eukaryote" in ln
                    for ln in report), report
 
+    def _armed_label(self):
+        """Founder's "Specialised Cells" (2026-09-22): the director's own label
+        "Palisade Cell" with an arrow to the region palisade_column, on a
+        prompt that names palisade_column. Its text must not become a second
+        part, and the synthesiser must not write "Palisade Cell" again."""
+        raw = _plan_raw()
+        ch = raw["chapters"][0]
+        ch["assets"]["plant_cell"] = ("A leaf section with a palisade column and a root hair extension. "
+                                      "Name the layer groups exactly: palisade_column, root_hair_extension.")
+        ch["elements"] = [e for e in ch["elements"] if e["id"] == "cell"]
+        ch["elements"] += [
+            {"id": "lbl_palisade", "type": "text", "text": "Palisade Cell", "at": [90, 120], "role": "label"},
+            {"id": "arr_palisade_column", "type": "arrow", "tail": {"el": "lbl_palisade", "edge": "right"},
+             "head": {"el": "cell", "layer": "palisade_column", "edge": "center"}},
+        ]
+        for st in ch["steps"]:
+            st["actions"] = [a for a in st["actions"] if a.get("target") == "cell"]
+        ch["steps"][1]["actions"] += [{"verb": "write", "target": "lbl_palisade"},
+                                      {"verb": "draw", "target": "arr_palisade_column"}]
+        narr = {"s001": "A leaf is built of specialised cells.",
+                "s002": "The palisade cell is tall so light passes through many chloroplasts.",
+                "s003": "look closer"}
+        return compile_plan(parse_visual_plan(raw), narr, all_segments=["s001", "s002", "s003"], skip_hold=set())
+
+    def test_an_armed_labels_text_is_not_joined_as_a_second_part(self):
+        _, assets, report = self._armed_label()
+        assert not any("PART NAMES from label text JOIN" in ln for ln in report), report
+        assert part_names_from_prompt(assets["s002"]["plant_cell"]) == ["palisade_column", "root_hair_extension"]
+
+    def test_the_same_thing_is_never_labelled_twice(self):
+        scenes, _, report = self._armed_label()
+        assert not any("SYNTHESIZED lbl_auto_palisade" in ln for ln in report), report
+        for sid, sc in scenes.items():
+            texts = [" ".join(str(e.get("text") or "").split()).lower() for e in sc["elements"]
+                     if e.get("type") == "text" and str(e.get("role") or "") == "label"]
+            assert texts.count("palisade cell") <= 1, (sid, texts)
+
     def test_a_label_the_tail_already_covers_is_not_added_twice(self):
         _, assets, report = self._two_cells(tail="prokaryote, nucleus_region")
         line = next(ln for ln in report
