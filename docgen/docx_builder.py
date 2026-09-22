@@ -230,13 +230,35 @@ def _cs_font_for(ctx: _Ctx) -> str:
     return table.get(ctx.lang) or fallback.get(ctx.lang) or ctx.style.body_font
 
 
+# Characters XML 1.0 cannot carry. python-docx refuses them at add_run time
+# ("All strings must be XML compatible: Unicode or ASCII, no NULL bytes or
+# control characters"), which took a teacher's whole lesson plan down on
+# 2026-09-21 (platform issue 2cfc1585): the chapter excerpt the model was
+# grounded on — or its reply — carried a form feed, the page-break character
+# PDF text extraction leaves behind. Tab, newline and carriage return are
+# fine; a form feed becomes a newline (it IS a page break) and everything
+# else in the range simply goes. Lone surrogates and the two non-characters
+# go too.
+_XML_UNSAFE = re.compile("[\x00-\x08\x0b\x0e-\x1f\ufffe\uffff]|[\ud800-\udfff]")
+
+
+def xml_safe(text) -> str:
+    """The text as Word will accept it — see _XML_UNSAFE. None-safe."""
+    if text is None:
+        return ""
+    s = str(text)
+    if "\x0c" in s:
+        s = s.replace("\x0c", "\n")
+    return _XML_UNSAFE.sub("", s)
+
+
 def _run(p, text: str, ctx: _Ctx, *, size: float | None = None,
          font: str | None = None, bold: bool = False, italic: bool = False,
          color: str | None = None, small_caps: bool = False,
          spacing: float | None = None, caps: bool = False,
          rtl: bool | None = None):
     """Add a run with the style's fonts + complex-script (cs) handling."""
-    run = p.add_run(text)
+    run = p.add_run(xml_safe(text))
     f = font or ctx.style.body_font
     sz = size if size is not None else ctx.style.body_size
     run.font.name = f
@@ -891,9 +913,9 @@ def bullets(doc: Document, items: Iterable[str]) -> None:
     for it in items:
         if str(it).strip():
             if bullet_style is not None:
-                p = doc.add_paragraph(str(it), style=bullet_style)
+                p = doc.add_paragraph(xml_safe(it), style=bullet_style)
             else:
-                p = doc.add_paragraph(f"• {it}")
+                p = doc.add_paragraph(f"• {xml_safe(it)}")
                 p.paragraph_format.left_indent = Pt(18)
             p.paragraph_format.space_after = Pt(3)
             for run in p.runs:
