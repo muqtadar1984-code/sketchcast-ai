@@ -308,6 +308,32 @@ def _evidence(error, limit: int = _EVIDENCE_CHARS) -> str:
     return text[:head] + marker + text[len(text) - (keep - head):]
 
 
+def _failure_snapshot(sb, gen_id: str, gen_d: dict, job: dict) -> dict:
+    """The ids and names a failed generation had at the moment it failed —
+    generation, book (id and title), chapter, kind, language, job — as
+    plain values for `platform_issues.context`. Best-effort: a book that
+    cannot be read simply has no title."""
+    params = gen_d.get("params") if isinstance(gen_d.get("params"), dict) else {}
+    snap = {
+        "generation_id": gen_id,
+        "job_id": job.get("id"),
+        "job_type": job.get("type"),
+        "kind": gen_d.get("kind"),
+        "book_id": gen_d.get("book_id"),
+        "chapter": gen_d.get("chapter_ref"),
+        "language": params.get("language"),
+    }
+    try:
+        if gen_d.get("book_id"):
+            book = sb.table("books").select("title").eq("id", gen_d["book_id"]).maybe_single().execute()
+            book_d = getattr(book, "data", None) or {}
+            if book_d.get("title"):
+                snap["book_title"] = str(book_d["title"])[:200]
+    except Exception:  # noqa: BLE001 — the snapshot is a convenience, never a gate
+        pass
+    return {k: v for k, v in snap.items() if v not in (None, "")}
+
+
 def _auto_file_support_issue(sb, job: dict, error: str) -> None:
     """A failed job auto-triggers the support agent: file a console issue for
     the content owner and queue a diagnosis job. Never for support jobs
@@ -317,10 +343,18 @@ def _auto_file_support_issue(sb, job: dict, error: str) -> None:
         gen_id = job.get("generation_id")
         if not gen_id:
             return  # index failures already surface on the book row
-        gen = sb.table("generations").select("owner_id, book_id, kind").eq("id", gen_id).maybe_single().execute()
+        gen = (sb.table("generations").select("owner_id, book_id, kind, chapter_ref, params")
+               .eq("id", gen_id).maybe_single().execute())
         gen_d = getattr(gen, "data", None)
         if not gen_d:
             return
+        # A SNAPSHOT of what failed, kept in `context` where no cascade can
+        # reach it. The row's generation_id / book_id columns are foreign
+        # keys ON DELETE SET NULL (0020), so a reporter who deletes the book
+        # (or the failed lesson) after reporting leaves the console with a
+        # job id that no longer exists and nothing else — issue 2cfc1585
+        # (2026-09-21) was diagnosed with no book, no chapter and no kind.
+        snapshot = _failure_snapshot(sb, gen_id, gen_d, job)
         open_q = (
             sb.table("platform_issues")
             .select("id")
@@ -346,7 +380,7 @@ def _auto_file_support_issue(sb, job: dict, error: str) -> None:
                     "job_id": job["id"],
                     # The whole point of this row: the reporter is waiting
                     # and a human (or the diagnosis agent) reads this line.
-                    "context": {"error": _evidence(error)},
+                    "context": {"error": _evidence(error), **snapshot},
                 }
             )
             .execute()
