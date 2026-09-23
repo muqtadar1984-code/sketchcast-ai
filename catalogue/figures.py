@@ -101,6 +101,7 @@ import os
 import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -127,6 +128,15 @@ BUILDER_LIVE_STATUSES = ("queued", "processing")
 # any real queue depth (production idles at 0-5 live jobs); it exists so a
 # runaway queue cannot make the probe unbounded.
 BUILDER_PROBE_LIMIT = 200
+# A 'processing' builder whose row has not been written for this long is
+# STALLED, not live: every phase of a build writes progress or stage within
+# minutes (the longest silent stretch is an image call's 429 backoff, ~30
+# min), and jobs_touch stamps updated_at on each write. A job hung inside its
+# own thread never reaches the reaper (in-flight rows are excluded from it),
+# so without this a single hung render held the never-starve gate shut for
+# the whole day (2026-09-23 a11344e5: last write 11:00, gate shut at 14:00).
+BUILDER_STALL_ENV = "BUILDER_STALL_MINUTES"
+BUILDER_STALL_DEFAULT = 90
 PROVENANCE_LIBRARY = "visual_library"
 # raster_assets reads the same variable (default 24) for the engine's own
 # per-generation budget; this job caps its generation COUNT at the same number
@@ -411,6 +421,34 @@ def is_catalogue_job(job: Optional[dict]) -> bool:
     return db.is_catalogue_params((job or {}).get("params"))
 
 
+def builder_stall_seconds() -> float:
+    """``BUILDER_STALL_MINUTES`` (default 90), in seconds."""
+    try:
+        v = int(str(os.getenv(BUILDER_STALL_ENV, "") or "").strip() or BUILDER_STALL_DEFAULT)
+        return float(v if v > 0 else BUILDER_STALL_DEFAULT) * 60.0
+    except (TypeError, ValueError):
+        return float(BUILDER_STALL_DEFAULT) * 60.0
+
+
+def builder_stalled(row: dict, now: Optional[datetime] = None) -> bool:
+    """A 'processing' row not written for ``builder_stall_seconds()``. A
+    queued row is never stalled (nothing is meant to be writing it), and a
+    row whose ``updated_at`` cannot be read is taken as live — the gate errs
+    on the side of the user."""
+    if str(row.get("status") or "") != "processing":
+        return False
+    raw = row.get("updated_at")
+    if not raw:
+        return False
+    try:
+        stamp = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return ((now or datetime.now(timezone.utc)) - stamp).total_seconds() > builder_stall_seconds()
+
+
 def builder_queued(sb, exclude_job_id: Optional[str] = None) -> bool:
     """Whether any job a REAL USER is waiting on is LIVE — queued or
     processing — of a type that is not an observer (presentations, decks,
@@ -431,10 +469,14 @@ def builder_queued(sb, exclude_job_id: Optional[str] = None) -> bool:
     ``exclude_job_id`` is the CALLER's own job. A user's deck job is a
     builder by type and is 'processing' while it asks — counting it made
     the first live deck to reach the generate rung wait on itself for the
-    whole yield limit (2026-09-12, 30 minutes for one picture)."""
-    res = (sb.table("jobs").select("id,type,status,params").in_("status", list(BUILDER_LIVE_STATUSES))
+    whole yield limit (2026-09-12, 30 minutes for one picture).
+
+    A processing row that has STALLED (``builder_stalled``) is not counted
+    either: nobody is served by holding the gate for a build that stopped."""
+    res = (sb.table("jobs").select("id,type,status,params,updated_at").in_("status", list(BUILDER_LIVE_STATUSES))
            .not_.in_("type", sorted(db.OBSERVER_JOB_TYPES)).limit(BUILDER_PROBE_LIMIT).execute())
     return any(not is_catalogue_job(r) and str(r.get("id")) != str(exclude_job_id or "")
+               and not builder_stalled(r)
                for r in _rows(res))
 
 
@@ -660,7 +702,8 @@ def run_figure_render_job(sb, job: dict, backend: Optional[FigureBackend] = None
 
 __all__ = [
     "JOB_TYPE", "STATUS_DRAFT", "STATUS_RENDERED", "LAYER_TAIL", "NO_TEXT_RULE", "PAUSED_BUILDERS",
-    "PAUSED_BUDGET", "BUILDER_LIVE_STATUSES", "PROVENANCE_LIBRARY", "FORMATS_LIBRARY_FIRST", "max_generations",
+    "PAUSED_BUDGET", "BUILDER_LIVE_STATUSES", "BUILDER_STALL_ENV", "BUILDER_STALL_DEFAULT",
+    "builder_stall_seconds", "builder_stalled", "PROVENANCE_LIBRARY", "FORMATS_LIBRARY_FIRST", "max_generations",
     "asset_key_for", "spec_parts", "figure_prompt", "reconcile_labels", "content_hash", "served_by_library",
     "missing_parts", "curriculum_family", "Rendered", "FigureBackend", "FigureRefused",
     "default_backend", "load_article", "load_figures", "library_context", "builder_queued", "lookup_asset",

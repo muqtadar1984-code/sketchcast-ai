@@ -592,10 +592,12 @@ def test_the_cap_default_is_five_and_survives_nonsense(monkeypatch):
 # ── the never-starve rule, between parts ───────────────────────────────
 
 
-def test_a_builder_arriving_mid_run_pauses_the_publish(monkeypatch):
+def test_a_builder_arriving_mid_run_sends_the_publish_back_to_the_queue(monkeypatch):
     """Each part is several hundred MB of Supabase egress — bandwidth a
-    teacher's render wants. The run stops DONE with the rest deferred, the
-    same shape catalogue.figures pauses with."""
+    teacher's render wants. The run does not finish "paused" for a reviewer
+    to click again: it raises DeferredJob (run.py requeues it with a wake-up
+    time) and the re-run skips the part already up — so a kit that "says
+    queued" posts by itself once the teacher's build is through."""
     monkeypatch.setenv(P.MAX_PARTS_ENV, "10")
     sb = _sb(parts=(1, 2, 3))
     seen = {"n": 0}
@@ -606,12 +608,54 @@ def test_a_builder_arriving_mid_run_pauses_the_publish(monkeypatch):
 
     monkeypatch.setattr(P, "builders_are_queued", probe)
     yt = FakeYouTube()
+    with pytest.raises(db.DeferredJob) as exc:
+        P.run_publish_job(sb, _job(), transport=yt)
+    assert exc.value.seconds == P.PUBLISH_WAIT_SECONDS and exc.value.note == P.WAITING_BUILDERS
+    assert len(yt.uploads) == 1 and _pubs(sb)[1]["youtube_video_id"]
+    assert _job_row(sb)["status"] == "processing", "run.py, not this module, moves the row back"
+
+    # the teacher's build is through: the re-run finishes the rest
+    monkeypatch.setattr(P, "builders_are_queued", lambda sb: False)
     summary = P.run_publish_job(sb, _job(), transport=yt)
+    assert summary["already"] == [1] and summary["published"] == [2, 3] and summary["step"] == "done"
+    assert len(yt.uploads) == 3
+
+
+def test_a_publish_that_has_waited_the_whole_bound_finishes_paused(monkeypatch):
+    """The wait is bounded (YOUTUBE_PUBLISH_MAX_WAIT_MINUTES): a job that
+    has been going back to the queue for longer than that finishes DONE with
+    the rest deferred and the note saying why — the old shape — so an endless
+    "queued" cannot hide a worker that is stuck."""
+    monkeypatch.setenv(P.MAX_PARTS_ENV, "10")
+    monkeypatch.setenv(P.PUBLISH_MAX_WAIT_ENV, "60")
+    sb = _sb(parts=(1, 2, 3))
+    seen = {"n": 0}
+
+    def probe(_sb):
+        seen["n"] += 1
+        return seen["n"] > 1
+
+    monkeypatch.setattr(P, "builders_are_queued", probe)
+    yt = FakeYouTube()
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(minutes=61)).strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+    summary = P.run_publish_job(sb, _job(deferred_since=since), transport=yt)
     assert summary["published"] == [1] and summary["deferred"] == [2, 3]
     assert summary["paused"] == P.PAUSED_BUILDERS and summary["step"] == "paused"
     assert P.PAUSED_BUILDERS in summary["note"]
     assert len(yt.uploads) == 1
     assert _job_row(sb)["status"] == "done", "a pause is a finished run"
+
+
+def test_max_publish_wait_reads_minutes_and_falls_back(monkeypatch):
+    monkeypatch.delenv(P.PUBLISH_MAX_WAIT_ENV, raising=False)
+    assert P.max_publish_wait() == P.PUBLISH_MAX_WAIT_DEFAULT * 60
+    monkeypatch.setenv(P.PUBLISH_MAX_WAIT_ENV, "30")
+    assert P.max_publish_wait() == 30 * 60
+    monkeypatch.setenv(P.PUBLISH_MAX_WAIT_ENV, "soon")
+    assert P.max_publish_wait() == P.PUBLISH_MAX_WAIT_DEFAULT * 60
+    monkeypatch.setenv(P.PUBLISH_MAX_WAIT_ENV, "-5")
+    assert P.max_publish_wait() == P.PUBLISH_MAX_WAIT_DEFAULT * 60
 
 
 def test_the_probe_is_the_figure_jobs_own_definition():

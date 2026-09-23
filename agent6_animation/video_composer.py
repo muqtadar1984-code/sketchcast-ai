@@ -31,6 +31,7 @@ import time
 import uuid
 from concurrent.futures import (CancelledError, ProcessPoolExecutor, ThreadPoolExecutor,
                                 as_completed)
+from concurrent.futures import TimeoutError as FutureTimeout
 from concurrent.futures.process import BrokenProcessPool
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,6 +72,17 @@ try:
     _RENDER_PROCESSES = max(0, int(os.getenv("RENDER_PROCESSES", "0")))
 except ValueError:
     _RENDER_PROCESSES = 0
+
+# How long a segment thread waits for its child's result. A child that hangs
+# (a stuck pipe, a lock, a renderer that never returns) used to hang the
+# thread forever: the job stayed 'processing' with no writes, invisible to
+# the reaper because it was in-flight, and held the never-starve gate shut
+# (2026-09-23, a11344e5: three hours and counting). The longest honest render
+# is minutes, so the default is generous.
+try:
+    _SEGMENT_TIMEOUT = max(60, int(os.getenv("RENDER_SEGMENT_TIMEOUT_SECS", "1800")))
+except ValueError:
+    _SEGMENT_TIMEOUT = 1800
 
 _POOL: Optional[ProcessPoolExecutor] = None
 _POOL_LOCK = threading.Lock()
@@ -121,6 +133,28 @@ def _reset_pool(broken: object) -> None:
         broken.shutdown(wait=False, cancel_futures=True)  # type: ignore[attr-defined]
     except Exception:  # noqa: BLE001 — a broken executor may refuse
         pass
+
+
+def _kill_pool(stuck: object) -> None:
+    """A child that gave no answer within the timeout is not waited for. A
+    ProcessPoolExecutor has no public way to abandon one task, and a
+    shutdown(wait=False) would leave the hung child holding its slot and its
+    memory for the life of the worker — so THAT executor's processes are
+    killed and it is retired the way a broken one is. Sibling futures on it
+    fail with BrokenProcessPool and take the in-process path; the next render
+    builds a fresh pool."""
+    procs = getattr(stuck, "_processes", None) or {}
+    try:
+        procs = list(procs.values())
+    except Exception:  # noqa: BLE001 — not a dict-like: nothing to kill
+        procs = []
+    for proc in procs:
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001 — already gone
+            pass
+    _reset_pool(stuck)
+
 
 STORAGE_DIR = Path(__file__).resolve().parent.parent / "storage"
 VIDEO_DIR = STORAGE_DIR / "video_segments"
@@ -270,7 +304,17 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
                     _reset_pool(ex)
                     ex = _pool()
                     fut = ex.submit(render_segment_in_child, payload)
-                ok, warnings = fut.result()
+                ok, warnings = fut.result(timeout=_SEGMENT_TIMEOUT)
+            except FutureTimeout:
+                # Not rendered in-process either: a scene that hangs a child
+                # may hang this thread the same way, and an unbounded thread
+                # is the failure being removed. The segment falls back to the
+                # native renderer below the catch-all, and the summary counts
+                # it — a visible hole beats a silent hang.
+                logger.error("render child gave no result for %s in %ds; killing that pool "
+                             "and failing the segment", script_seg.get("segment_id"), _SEGMENT_TIMEOUT)
+                _kill_pool(ex)
+                return False
             except (BrokenProcessPool, CancelledError):
                 # an OOM-killed child breaks the whole pool (every pending
                 # future fails; a future a reset cancelled is CancelledError):
