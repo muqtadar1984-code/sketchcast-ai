@@ -131,6 +131,17 @@ CLIENT_ID_ENV = "YOUTUBE_CLIENT_ID"
 CLIENT_SECRET_ENV = "YOUTUBE_CLIENT_SECRET"
 
 PAUSED_BUILDERS = "paused: builder jobs queued"
+# A run that finds a teacher's build live does not finish "paused" for a
+# reviewer to click again (2026-09-23: Specialised Cells "queued" twice and
+# posted nothing while one hung presentation held the gate). It goes BACK TO
+# THE QUEUE and asks again in PUBLISH_WAIT_SECONDS — the same DeferredJob a
+# deck uses while its video renders. The wait is bounded: after
+# YOUTUBE_PUBLISH_MAX_WAIT_MINUTES in total the run finishes paused with the
+# parts left, as before, so an endless "queued" cannot hide a stuck worker.
+WAITING_BUILDERS = "waiting: a teacher's build is live"
+PUBLISH_WAIT_SECONDS = 120
+PUBLISH_MAX_WAIT_ENV = "YOUTUBE_PUBLISH_MAX_WAIT_MINUTES"
+PUBLISH_MAX_WAIT_DEFAULT = 12 * 60
 
 # YouTube's own limits. A title over 100 characters and a description over
 # 5000 are rejected by videos.insert, so both are cut HERE, where the cut can
@@ -190,6 +201,17 @@ def max_parts_per_run() -> int:
         return v if v > 0 else MAX_PARTS_DEFAULT
     except (TypeError, ValueError):
         return MAX_PARTS_DEFAULT
+
+
+def max_publish_wait() -> float:
+    """``YOUTUBE_PUBLISH_MAX_WAIT_MINUTES`` (default 12 hours), in seconds: how
+    long one publish job may keep going back to the queue for a teacher's
+    build before it finishes paused instead."""
+    try:
+        v = int(str(os.getenv(PUBLISH_MAX_WAIT_ENV, "") or "").strip() or PUBLISH_MAX_WAIT_DEFAULT)
+        return float(v if v > 0 else PUBLISH_MAX_WAIT_DEFAULT) * 60.0
+    except (TypeError, ValueError):
+        return float(PUBLISH_MAX_WAIT_DEFAULT) * 60.0
 
 
 def refresh_token_env(language: str) -> str:
@@ -900,9 +922,13 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
 # ── the job ────────────────────────────────────────────────────────────
 
 
-def publish_kit(sb, job_id: str, params: dict, transport: Optional[YouTubeTransport] = None) -> dict:
+def publish_kit(sb, job_id: str, params: dict, transport: Optional[YouTubeTransport] = None, *,
+                waited: float = 0.0) -> dict:
     """The run proper; returns the summary also written to ``jobs.stage``.
-    Raises on a refusal or a failure (the entry point records it)."""
+    Raises on a refusal or a failure (the entry point records it), and
+    ``db.DeferredJob`` when a teacher's build is live and this job has waited
+    less than ``max_publish_wait()`` in total (``waited``: seconds so far,
+    from ``db.deferred_seconds``) — run.py puts it back in the queue."""
     target = load_target(sb, params)
     kit_id = _s(target.kit.get("id"))
     total = len(target.parts)
@@ -939,6 +965,10 @@ def publish_kit(sb, job_id: str, params: dict, transport: Optional[YouTubeTransp
                 stage["deferred"].append(idx)
                 continue
             if builders_are_queued(sb):
+                if waited < max_publish_wait():
+                    # The parts already up are recorded (topic_publications),
+                    # so the re-run skips them and finishes the rest.
+                    raise db.DeferredJob(PUBLISH_WAIT_SECONDS, WAITING_BUILDERS)
                 raise _Pause(PAUSED_BUILDERS)
             try:
                 row = publish_part(sb, transport, target, part, total, work)
@@ -989,13 +1019,15 @@ def _clean(work: Path) -> None:
 
 def run_publish_job(sb, job: dict, transport: Optional[YouTubeTransport] = None) -> Optional[dict]:
     """Entry point for run.py. Self-contained: finishes the job row itself
-    (done with the summary in ``stage``; error with the message) and never
-    raises. ``transport`` is for tests; production builds the real one from
-    the environment. Returns the summary, or None when nothing could run."""
+    (done with the summary in ``stage``; error with the message) and raises
+    only ``db.DeferredJob`` — the one outcome that is not a finish: run.py
+    puts the row back in the queue with its wake-up time. ``transport`` is
+    for tests; production builds the real one from the environment. Returns
+    the summary, or None when nothing could run."""
     job_id = job["id"]
     try:
         params = job.get("params") if isinstance(job.get("params"), dict) else {}
-        summary = publish_kit(sb, job_id, params, transport=transport)
+        summary = publish_kit(sb, job_id, params, transport=transport, waited=db.deferred_seconds(job))
         db.set_stage(sb, job_id, summary)
         if summary.get("failed"):
             first = (summary.get("errors") or ["?"])[0]
@@ -1007,6 +1039,9 @@ def run_publish_job(sb, job: dict, transport: Optional[YouTubeTransport] = None)
             db.finish_job(sb, job_id)  # no generation: an observer job owns none
             log.info("publish %s: %s", summary.get("kit_id"), summary)
         return summary
+    except db.DeferredJob as exc:
+        log.info("publish job %s waits %ds: %s", job_id, exc.seconds, exc.note)
+        raise
     except PublishRefused as exc:
         # A refusal is not a crash: the message stands on its own, with no
         # exception-type prefix, because the reviewer reads it in the portal.
@@ -1028,7 +1063,8 @@ def run_publish_job(sb, job: dict, transport: Optional[YouTubeTransport] = None)
 __all__ = [
     "JOB_TYPE", "DEFAULT_LANGUAGE", "FEATURE_FLAG", "AUDIT_FLAG", "KIT_APPROVED", "ARTICLE_APPROVED",
     "BANK_NONE", "PRIVACY_PRIVATE", "PRIVACY_UNLISTED", "PRIVACY_PUBLIC", "PRIVACY_VALUES", "DEFAULT_PRIVACY",
-    "VIDEO_KIND", "SCRIPT_KIND", "MAX_PARTS_ENV", "MAX_PARTS_DEFAULT", "PAUSED_BUILDERS", "TITLE_MAX",
+    "VIDEO_KIND", "SCRIPT_KIND", "MAX_PARTS_ENV", "MAX_PARTS_DEFAULT", "PAUSED_BUILDERS", "WAITING_BUILDERS", "PUBLISH_WAIT_SECONDS",
+    "PUBLISH_MAX_WAIT_ENV", "PUBLISH_MAX_WAIT_DEFAULT", "max_publish_wait", "TITLE_MAX",
     "DESCRIPTION_MAX", "MIN_CHAPTERS", "LINK_BASE", "PublishRefused", "Credentials", "Target",
     "YouTubeTransport", "publish_enabled", "audit_passed", "max_parts_per_run", "refresh_token_env",
     "playlists_env", "configured_playlists", "part_number", "script_part_number", "ordered_parts", "hhmmss",

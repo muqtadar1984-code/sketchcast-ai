@@ -121,6 +121,7 @@ class _FakeExec:
         self._exc = exc
         self._at_submit = at_submit
         self.down = False
+        self.timeout = None
 
     def _raise(self):
         if self._exc is None:
@@ -135,7 +136,8 @@ class _FakeExec:
         outer = self
 
         class F:
-            def result(self_):
+            def result(self_, timeout=None):
+                outer.timeout = timeout
                 outer._raise()
                 return True, []
         return F()
@@ -242,6 +244,52 @@ class TestComposerDispatch:
         assert ok is True and len(calls) == 1
         assert vc._POOL is replacement
         assert broken.down and not replacement.down
+
+    def test_a_child_that_never_answers_is_killed_and_the_segment_fails(self, tmp_path, monkeypatch):
+        """result() is bounded by RENDER_SEGMENT_TIMEOUT_SECS. On the timeout
+        the executor's processes are killed, THAT executor is retired, and the
+        segment returns False (native fallback) — NOT rendered in-process,
+        which could hang this thread the same way. A hung child used to hold
+        a job 'processing' for hours with nothing able to reap it."""
+        from concurrent.futures import TimeoutError as FutureTimeout
+        calls = []
+        self._stub_encode(monkeypatch, calls)
+        monkeypatch.setattr(vc, "_RENDER_PROCESSES", 2)
+        monkeypatch.setattr(vc, "_SEGMENT_TIMEOUT", 7)
+
+        class _Proc:
+            def __init__(self):
+                self.killed = False
+
+            def kill(self):
+                self.killed = True
+
+        stuck = _FakeExec(FutureTimeout())
+        stuck._processes = {1: _Proc(), 2: _Proc()}
+        monkeypatch.setattr(vc, "_POOL", stuck)
+        monkeypatch.setattr(vc, "_pool", lambda: stuck)
+        seg = {"segment_id": "s001", "scene": dict(_SCENE)}
+        ok = vc._render_scene_segment(seg, "some narration", None, 0.0,
+                                      tmp_path / "o.mp4", "ltr")
+        assert ok is False
+        assert calls == []                              # no in-process retry
+        assert stuck.timeout == 7
+        assert all(p.killed for p in stuck._processes.values())
+        assert vc._POOL is None and stuck.down
+
+    def test_the_segment_timeout_is_read_from_the_environment(self, monkeypatch):
+        import importlib
+        monkeypatch.setenv("RENDER_SEGMENT_TIMEOUT_SECS", "900")
+        mod = importlib.reload(vc)
+        try:
+            assert mod._SEGMENT_TIMEOUT == 900
+            monkeypatch.setenv("RENDER_SEGMENT_TIMEOUT_SECS", "5")
+            assert importlib.reload(vc)._SEGMENT_TIMEOUT == 60, "never below a minute"
+            monkeypatch.setenv("RENDER_SEGMENT_TIMEOUT_SECS", "later")
+            assert importlib.reload(vc)._SEGMENT_TIMEOUT == 1800
+        finally:
+            monkeypatch.delenv("RENDER_SEGMENT_TIMEOUT_SECS", raising=False)
+            importlib.reload(vc)
 
     def test_a_cancelled_future_falls_back_in_process(self, tmp_path, monkeypatch):
         """A future another thread's reset cancelled raises CancelledError,

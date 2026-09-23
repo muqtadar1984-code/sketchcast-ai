@@ -919,6 +919,36 @@ def test_builder_queued_ignores_catalogue_jobs_and_observers():
     assert builder_queued(sb) is False
 
 
+def test_builder_queued_ignores_a_processing_row_that_stalled(monkeypatch):
+    """A builder hung inside its own thread never reaches the reaper (in-flight
+    rows are excluded), so a 'processing' row nobody has written for
+    BUILDER_STALL_MINUTES is NOT a user the gate can help — counting it held
+    the gate shut for a whole day (2026-09-23). Queued rows and rows whose
+    stamp cannot be read stay live: the gate errs towards the user."""
+    from datetime import datetime, timedelta, timezone
+    from catalogue.figures import builder_queued, builder_stalled
+
+    monkeypatch.setenv("BUILDER_STALL_MINUTES", "90")
+    now = datetime.now(timezone.utc)
+    fresh = (now - timedelta(minutes=5)).isoformat()
+    old = (now - timedelta(minutes=91)).isoformat()
+    sb = _kit_sb()
+    sb.tables["jobs"].append({**_builder("job-u", "presentation", status="processing"), "updated_at": old})
+    assert builder_stalled(sb.tables["jobs"][-1]) is True
+    assert builder_queued(sb) is False, "three hours of silence is not a teacher waiting"
+    sb.tables["jobs"][-1]["updated_at"] = fresh
+    assert builder_queued(sb) is True
+    sb.tables["jobs"][-1]["updated_at"] = old.replace("+00:00", "Z")
+    assert builder_queued(sb) is False, "a Z suffix is the same stamp"
+    sb.tables["jobs"][-1]["status"] = "queued"
+    assert builder_queued(sb) is True, "a queued row is never stalled: nothing writes it yet"
+    sb.tables["jobs"][-1]["status"] = "processing"
+    sb.tables["jobs"][-1]["updated_at"] = "not a date"
+    assert builder_queued(sb) is True, "an unreadable stamp is taken as live"
+    sb.tables["jobs"][-1]["updated_at"] = None
+    assert builder_queued(sb) is True
+
+
 def test_topic_questions_is_an_observer_dispatched_to_the_catalogue(monkeypatch):
     """Called, not grepped: the last lane picks the job up and hands it to
     catalogue.questions.run_questions_job (W2's module; a stand-in is
