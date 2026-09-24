@@ -203,4 +203,9 @@ def test_a_wipe_takes_the_notes_and_leaders_with_the_lines():
     from spike.scene_engine.render import SceneRenderer
     r = SceneRenderer(parse_scene_response(scene, scene["narration"]))
     r.compile(60.0)
-    assert not any(w.startswith("TEXT_OVERLAP") for w in r.audit()["warnings"]), r.audit()["warnings"]
+    # the audit measures boxes without regard to time, so an erased note under
+    # a later one still counts; what must not happen is two LIVE notes overlapping
+    erased = set(grp["children"])
+    live_overlaps = [w for w in r.audit()["warnings"] if w.startswith("TEXT_OVERLAP")
+                     and not (set(w.split()[1].split("+")) & erased)]
+    assert not live_overlaps, live_overlaps
