@@ -158,6 +158,18 @@ def test_the_working_must_start_from_the_problem():
     assert any(c.name == "chain start" and c.ok is False for c in rep.checks)
 
 
+def test_try_it_steps_are_verified_like_an_example():
+    good = TryIt(problem="2x - 4 = 10", answer=["x = 7"],
+                 steps=[Step(operation="add 4 to both sides", before=["2x - 4 = 10"], after=["2x = 14"], speech="add"),
+                        Step(operation="divide by 2", before=["2x = 14"], after=["x = 7"], speech="divide")])
+    assert verify_try_it(good).ok is True
+    bad = TryIt(problem="2x - 4 = 10", answer=["x = 7"],
+                steps=[Step(operation="add 4 to both sides", before=["2x - 4 = 10"], after=["2x = 6"], speech="add"),
+                       Step(operation="divide by 2", before=["2x = 6"], after=["x = 7"], speech="divide")])
+    c = verify_try_it(bad)
+    assert c.ok is False and "step 1" in c.detail
+
+
 def test_try_it_and_lesson_roll_up():
     ok = verify_try_it(TryIt(problem="2x - 4 = 10", answer=["x = 7"]))
     assert ok.ok is True

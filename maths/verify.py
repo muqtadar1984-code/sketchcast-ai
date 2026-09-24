@@ -413,16 +413,38 @@ def verify_example(ex: WorkedExample) -> ExampleReport:
     return rep
 
 
-def verify_try_it(t: TryIt) -> Check:
+def try_it_example(t: TryIt) -> WorkedExample | None:
+    """The try-it as a worked example — what the board solves after the
+    pause, and what the verifier checks. None without a problem."""
     if not t.problem or not t.answer:
+        return None
+    rels, _err = _parse([t.problem], "the try-it problem")
+    givens = [t.problem]
+    if rels is None and t.steps and t.steps[0].kind == "setup" and t.steps[0].after:
+        givens = list(t.steps[0].after)      # a word problem: the working starts at its equation
+        rels, _err = _parse(givens, "the try-it equation")
+    expression = bool(rels) and rels[0].is_expression
+    target = ", ".join(sorted(str(s) for s in rels[0].free_symbols)) if rels else "x"
+    return WorkedExample(label="the try-it question", problem=t.problem, givens=givens, final_answer=t.answer,
+                         task="simplify" if expression else "solve", target=target or "x",
+                         intro_speech=t.solution_speech, steps=list(t.steps) or [Step(kind="setup")],
+                         answer_speech=t.answer_speech)
+
+
+def verify_try_it(t: TryIt) -> Check:
+    """The try-it's answer, and — when the model gave them — its steps,
+    checked exactly as an example's are."""
+    ex = try_it_example(t)
+    if ex is None:
         return Check("try it", None, "no try-it question")
-    rels, err = _parse([t.problem], "the try-it problem")
+    rels, err = _parse(ex.givens, "the try-it problem")
     if rels is None:
         return Check("try it", None, err)
-    ex = WorkedExample(label="try it", problem=t.problem, givens=[t.problem], final_answer=t.answer,
-                       task="solve" if not rels[0].is_expression else "simplify",
-                       target=", ".join(sorted(str(s) for s in rels[0].free_symbols)) or "x",
-                       steps=[Step(kind="setup")])
+    if t.steps:
+        rep = verify_example(ex)
+        if rep.status != "verified":
+            return Check("try it", False, "; ".join(rep.reasons)[:400])
+        return Check("try it", True, f"{len(t.steps)} step(s) verified")
     variables = _variables(ex, rels)
     c = _check_answer(ex, rels, variables)
     return Check("try it", c.ok, c.detail)

@@ -615,18 +615,26 @@ def recap_segment(lesson: Lesson, seg_id: str) -> dict:
         acts.append({"verb": "write", "target": f"wb_p{i}"})
     cels, _ = card_elements(lesson.method, present=True)
     els += cels
-    acts.append({"verb": "circle", "target": "card_box", "at": {"frac": 0.9}})
+    # a pulse, not a circle: the ellipse around a 5-line card crossed its frame
+    acts.append({"verb": "pulse", "target": "card_box", "times": 2, "duration": 1.2, "at": {"frac": 0.9}})
     seg["scene"] = {"id": f"mr_{seg_id}", "compiled": True, "scene_type": "generic", "narration": seg["text"],
                     "elements": els, "actions": acts}
     return seg
 
 
+TRY_IT_HOLD_SECS = 3.0
+
+
 def try_it_segment(lesson: Lesson, seg_id: str) -> Optional[dict]:
+    """The learner's own go: the problem, the invitation, then the whole
+    video holds for TRY_IT_HOLD_SECS of silence before the solution segment
+    (founder direction 2026-09-24: pause everything, then solve it too)."""
     t = lesson.try_it
     if not t.problem:
         return None
     lines = [Line(line=say(t.speech) or f"Try this one yourself: {t.problem}. Pause the video and work it out.")]
-    seg = _segment(seg_id, "question_hook", lines, heading="Try it", points=[t.problem], pause=True)
+    seg = _segment(seg_id, "question_hook", lines, heading="Try it", points=[t.problem], pause=True,
+                   hold=TRY_IT_HOLD_SECS)
     els: list[dict] = [{"id": "wb_h", "type": "text", "text": "Try it", "role": "title", "size": 44,
                         "at": [WORLD_W / 2, 120], "anchor": "mt"}]
     acts: list[dict] = [{"verb": "write", "target": "wb_h"}]
@@ -637,11 +645,46 @@ def try_it_segment(lesson: Lesson, seg_id: str) -> Optional[dict]:
         els.append({"id": "q", "type": "text", "text": _short(t.problem, 70), "size": 28,
                     "at": [WORLD_W / 2, 220], "anchor": "mt"})
     acts.append({"verb": "write", "target": "q", "at": {"frac": 0.25}})
+    # under the caption band (bubbles run to ~446), between the avatars —
+    # at 330 it sat in the band and was relocated to the top corner
     els.append({"id": "pause", "type": "text", "text": "Pause the video and try it", "size": 24, "color": "muted",
-                "at": [WORLD_W / 2, 330], "anchor": "mt"})
+                "at": [WORLD_W / 2, 470], "anchor": "mt"})
     acts.append({"verb": "write", "target": "pause", "at": {"frac": 0.7}})
     acts.append({"verb": "underline", "target": "wb_h"})
     seg["scene"] = {"id": f"mt_{seg_id}", "compiled": True, "scene_type": "generic", "narration": seg["text"],
+                    "elements": els, "actions": acts}
+    return seg
+
+
+def try_it_solution_segment(lesson: Lesson, seg_id: str) -> Optional[dict]:
+    """After the pause: the try-it worked on the algebra board like any
+    example, with the method card, notes and the answer underline."""
+    from maths.verify import try_it_example
+    ex = try_it_example(lesson.try_it)
+    if ex is None or not lesson.try_it.steps:
+        return None
+    scene, lines = example_scene(ex, lesson.method, seg_id, has_card=bool(lesson.method.steps))
+    seg = _segment(seg_id, "explore", lines, heading=_short(f"Try it: {ex.problem}", 60),
+                   points=[_short(x, 64) for st in ex.steps for x in st.after[:1]][:4])
+    seg["scene"] = scene
+    return seg
+
+
+def closing_segment(lesson: Lesson, seg_id: str) -> dict:
+    """The sign-off: the topic on the board, the card still pinned, the
+    teacher hoping the learner now understands it better."""
+    text = say(lesson.closing) or (f"I hope you now have a better understanding of {lesson.topic}. "
+                                   "Try a few more on your own, and see you in the next lesson.")
+    lines = [Line(line=text)]
+    seg = _segment(seg_id, "preview", lines, heading=_short(lesson.topic, 60), points=[])
+    els: list[dict] = [{"id": "wb_h", "type": "text", "text": _short(lesson.topic, 60), "role": "title",
+                        "size": 40, "at": [60, 44], "anchor": "lt"}]
+    acts: list[dict] = [{"verb": "write", "target": "wb_h"}, {"verb": "underline", "target": "wb_h"}]
+    cels, _ = card_elements(lesson.method, present=True)
+    els += cels
+    if cels:
+        acts.append({"verb": "pulse", "target": "card_box", "times": 2, "duration": 1.2, "at": {"frac": 0.55}})
+    seg["scene"] = {"id": f"mz_{seg_id}", "compiled": True, "scene_type": "generic", "narration": seg["text"],
                     "elements": els, "actions": acts}
     return seg
 
@@ -656,7 +699,7 @@ def example_segment(ex: WorkedExample, lesson: Lesson, seg_id: str) -> dict:
 
 
 def _segment(seg_id: str, seg_type: str, lines: list[Line], *, heading: str, points: list[str],
-             pause: bool = False) -> dict:
+             pause: bool = False, hold: float = 0.0) -> dict:
     text = " ".join(l.line for l in lines if l.line)
     # ALWAYS dialogue, student line or not: per-line audio gives every
     # caption a measured start and keeps the avatars on the board. A
@@ -667,7 +710,8 @@ def _segment(seg_id: str, seg_type: str, lines: list[Line], *, heading: str, poi
     return {"segment_id": seg_id, "type": seg_type, "text": text, "elevenlabs_text": text,
             "dialogue": dialogue or None, "slide_heading": heading,
             "slide_points": points, "pause_for_question": pause, "no_sketches": True,
-            "estimated_duration_seconds": max(5, int(round(len(text) / 14.0)))}
+            "hold_secs": float(hold or 0.0),
+            "estimated_duration_seconds": max(5, int(round(len(text) / 14.0)) + int(round(hold or 0)))}
 
 
 def compile_lesson(lesson: Lesson, avatars: dict | None = None) -> list[dict]:
@@ -682,8 +726,15 @@ def compile_lesson(lesson: Lesson, avatars: dict | None = None) -> list[dict]:
     t = try_it_segment(lesson, f"s{n:03d}")
     if t is not None:
         segs.append(t)
+        n += 1
+        sol = try_it_solution_segment(lesson, f"s{n:03d}")
+        if sol is not None:
+            segs.append(sol)
+            n += 1
+    segs.append(closing_segment(lesson, f"s{n:03d}"))
     return segs
 
 
 __all__ = ["say", "example_scene", "example_segment", "hook_segment", "concept_segment", "recap_segment",
-           "try_it_segment", "compile_lesson", "card_elements", "method_step_for"]
+           "try_it_segment", "try_it_solution_segment", "closing_segment", "compile_lesson", "card_elements",
+           "method_step_for"]

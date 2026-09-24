@@ -97,6 +97,10 @@ class ScriptSegment(BaseModel):
     # rejected by sanitization) the segment falls back to single-narrator.
     dialogue: Optional[List[dict]] = None
     pause_for_question: bool = False
+    # Seconds of silence appended to the segment's audio, the board holding
+    # its last frame — the maths try-it's "pause and try it" beat. The
+    # composer pads the clip; nothing else reads it.
+    hold_secs: float = 0.0
     estimated_duration_seconds: int
 
 
