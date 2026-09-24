@@ -38,16 +38,37 @@ def _clean(s) -> str:
     return " ".join(str(s or "").split())
 
 
+def _as_text(v) -> str:
+    """A text field the model wrote as something else: a dialogue object
+    ({"who": "student", "line": "..."} for student_question — production,
+    2026-09-24), a list of lines, a number. The words are kept."""
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, dict):
+        for k in ("line", "text", "speech", "value"):
+            if isinstance(v.get(k), str):
+                return v[k]
+        return " ".join(str(x) for x in v.values() if isinstance(x, str))
+    if isinstance(v, (list, tuple)):
+        return " ".join(_as_text(x) for x in v if x)
+    return str(v)
+
+
 def _as_list(v):
     """A state field the model wrote as one string instead of a list
     (production, 2026-09-24: `"from_state": "(z - 3)/5 = (z - 5)/3"` with the
-    Vertex schema flag off). One line is a one-line state; None is empty."""
+    Vertex schema flag off). One line is a one-line state; None is empty; an
+    object in the list is its text."""
     if v is None:
         return []
     if isinstance(v, str):
         return [v]
     if isinstance(v, (list, tuple)):
-        return list(v)
+        return [x if isinstance(x, str) else _as_text(x) for x in v]
+    if isinstance(v, dict):
+        return [_as_text(v)]
     return [str(v)]
 
 
@@ -73,6 +94,16 @@ class Line(BaseModel):
     who: Literal["teacher", "student"] = "teacher"
     line: str = ""
 
+    @field_validator("who", mode="before")
+    @classmethod
+    def _who(cls, v):
+        return v if v in ("teacher", "student") else "teacher"
+
+    @field_validator("line", mode="before")
+    @classmethod
+    def _text(cls, v):
+        return _as_text(v)
+
     @field_validator("line")
     @classmethod
     def _trim(cls, v: str) -> str:
@@ -95,6 +126,11 @@ class Step(BaseModel):
     speech: str = ""
     #: an optional student reaction or question after the step
     student: str = ""
+
+    @field_validator("operation", "explanation", "speech", "student", mode="before")
+    @classmethod
+    def _text(cls, v):
+        return _as_text(v)
 
     @field_validator("operation", "explanation", "speech", "student")
     @classmethod
@@ -138,6 +174,11 @@ class Mistake(BaseModel):
     def _states(cls, v: list) -> list[str]:
         return [_clean(x)[:_MAX_LINE] for x in (v or []) if _clean(x)][:_MAX_STATE]
 
+    @field_validator("operation", "why_wrong", "speech", mode="before")
+    @classmethod
+    def _text(cls, v):
+        return _as_text(v)
+
     @field_validator("operation", "why_wrong", "speech")
     @classmethod
     def _trim(cls, v: str) -> str:
@@ -163,6 +204,12 @@ class WorkedExample(BaseModel):
     final_answer: list[str] = Field(default_factory=list)
     answer_speech: str = ""
     common_mistake: Optional[Mistake] = None
+
+    @field_validator("label", "problem", "target", "intro_speech", "student_question", "answer_speech",
+                     mode="before")
+    @classmethod
+    def _text(cls, v):
+        return _as_text(v)
 
     @field_validator("label", "problem", "target", "intro_speech", "student_question", "answer_speech")
     @classmethod
@@ -225,6 +272,11 @@ class MethodCard(BaseModel):
     title: str = "METHOD"
     steps: list[str] = Field(default_factory=list)
 
+    @field_validator("title", mode="before")
+    @classmethod
+    def _text(cls, v):
+        return _as_text(v) or "METHOD"
+
     @field_validator("steps", mode="before")
     @classmethod
     def _listify(cls, v):
@@ -243,6 +295,11 @@ class TryIt(BaseModel):
     answer: list[str] = Field(default_factory=list)
     speech: str = ""
 
+    @field_validator("problem", "speech", mode="before")
+    @classmethod
+    def _text(cls, v):
+        return _as_text(v)
+
     @field_validator("answer", mode="before")
     @classmethod
     def _listify(cls, v):
@@ -256,6 +313,12 @@ class Lesson(BaseModel):
 
     topic: str = ""
     level: str = ""
+
+    @field_validator("topic", "level", mode="before")
+    @classmethod
+    def _text(cls, v):
+        return _as_text(v)
+
     hook: list[Line] = Field(default_factory=list)
     concept: list[Line] = Field(default_factory=list)
     #: two or three short board points written during the concept

@@ -28,6 +28,24 @@ from mathsvc.safety import MathError, MathInputError, _parse, validate_text
 from maths.tokens import normalise  # noqa: E402  (sympy-free, shared with the typesetter)
 
 _REL_RE = re.compile(r"(<=|>=|!=|==|=|<|>)")
+# "Solve: 3x + 5 = 20", "Solve for x: ...", "Find x if ...", "Simplify ..." —
+# the task verb a model puts in front of a problem. Production, 2026-09-24:
+# "Solve 4z = 16" parsed with `Solve` as a SYMBOL (mathsvc allows long
+# names for word problems) and the try-it was dropped as wrong.
+_VERB_RE = re.compile(
+    r"^\s*(?:solve|simplify|expand|factori[sz]e|evaluate|find|calculate|work\s+out|determine)\b"
+    r"(?:\s+(?:for|the\s+value\s+of))?(?:\s+[a-z](?:\s*,\s*[a-z])*)?(?:\s+(?:if|when|where|given))?\s*:?\s*",
+    re.IGNORECASE,
+)
+
+
+def strip_task_verb(text: str) -> str:
+    """The notation without a leading task verb, when one is there."""
+    s = str(text or "")
+    m = _VERB_RE.match(s)
+    if m and m.end() < len(s):
+        return s[m.end():].strip()
+    return s
 
 
 @dataclass(frozen=True)
@@ -80,7 +98,7 @@ def _side(text: str, *, where: str) -> sp.Expr:
 
 def parse_relation(text: str) -> Relation:
     """``3x + 5 = 20`` -> Relation(3x+5, "=", 20); ``2x - 1`` -> a bare expression."""
-    raw = normalise(text)
+    raw = normalise(strip_task_verb(text))
     if not raw:
         raise NotationError("empty line")
     if "!=" in raw or "==" in raw:
@@ -118,4 +136,4 @@ def is_notation(text: str) -> bool:
 
 
 __all__ = ["normalise", "Relation", "NotationError", "parse_relation", "parse_state",
-           "symbols_named", "is_notation"]
+           "symbols_named", "is_notation", "strip_task_verb"]

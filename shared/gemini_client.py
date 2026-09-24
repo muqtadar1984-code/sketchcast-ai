@@ -213,14 +213,21 @@ class GeminiClient:
         )
 
     def _post(self, parts: list[dict], system: str, max_tokens: int,
-              response_schema: dict | None = None, wants_json: bool = True) -> dict:
+              response_schema: dict | None = None, wants_json: bool = True,
+              strict_schema: bool = False) -> dict:
         # `wants_json` is the CALLER's contract, not a preference: a caller
         # that returns the reply as prose (transcribe_images) must not ask for
         # a JSON mime type. The env flag is the second gate.
         json_on = wants_json and _json_mode()
         # A schema needs the mime type with it — Vertex rejects responseSchema
         # on a free-text reply — so the two travel together or not at all.
-        schema_on = bool(response_schema) and json_on and _response_schema_enabled()
+        # `strict_schema` is the caller's own opt-in: constrained decoding for
+        # THIS call whatever the global flag says. The maths lesson uses it —
+        # its payload is closed (every property nameable), and with the flag
+        # off the model bent the shape twice on the first two production runs
+        # (a state as a bare string; a dialogue object where a string
+        # belongs). Still dropped once on a 400, like any schema.
+        schema_on = bool(response_schema) and json_on and (strict_schema or _response_schema_enabled())
         # The thinking suppression, in whichever dialect THIS model speaks.
         # This used to be a literal {"thinkingBudget": 0}, which is the field
         # Gemini 3 dropped: the guard would have gone on being sent and gone on
@@ -315,10 +322,11 @@ class GeminiClient:
         return ceiling
 
     def _call(self, parts: list[dict], system: str, max_tokens: int, retries: int,
-              response_schema: dict | None = None, wants_json: bool = True) -> dict:
+              response_schema: dict | None = None, wants_json: bool = True,
+              strict_schema: bool = False) -> dict:
         for attempt in range(retries):
             try:
-                return self._post(parts, system, max_tokens, response_schema, wants_json)
+                return self._post(parts, system, max_tokens, response_schema, wants_json, strict_schema)
             except _RateLimited:
                 time.sleep(2 ** (attempt + 1))
             except _Transient as exc:
@@ -329,7 +337,7 @@ class GeminiClient:
             except _SchemaRejected as exc:
                 logger.error("Vertex rejected responseSchema, retrying unconstrained: %s", exc)
                 response_schema = None
-        return self._post(parts, system, max_tokens, response_schema, wants_json)
+        return self._post(parts, system, max_tokens, response_schema, wants_json, strict_schema)
 
     # ── response shaping ──────────────────────────────────────────────
 
@@ -389,14 +397,16 @@ class GeminiClient:
         retries: int = 3,
         cache_prefix: str | None = None,
         response_schema: dict | None = None,
+        strict_schema: bool = False,
     ) -> dict:
         """Text prompt in, parsed JSON out.
 
         `response_schema` is a Vertex responseSchema (the OpenAPI 3.0 subset)
         for callers whose payload is CLOSED — every property nameable up
-        front. It is sent only when GEMINI_RESPONSE_SCHEMA is on, and dropped
+        front. It is sent only when GEMINI_RESPONSE_SCHEMA is on — or when
+        the caller says `strict_schema=True` for this call — and dropped
         for one retry if Vertex rejects it, so a schema can never take a
-        caller down. ClaudeClient.analyze accepts and ignores it, so
+        caller down. ClaudeClient.analyze accepts and ignores both, so
         process.py can keep holding either object.
 
         `cache_prefix` is accepted for interface compatibility and simply
@@ -406,7 +416,8 @@ class GeminiClient:
         known cost gap against the Claude path, not an oversight.
         """
         parts = ([{"text": cache_prefix}] if cache_prefix else []) + [{"text": prompt}]
-        response = self._call(parts, system, max_tokens, retries, response_schema)
+        response = self._call(parts, system, max_tokens, retries, response_schema,
+                              strict_schema=strict_schema)
         usage = self.track_tokens(response)
         parsed = ClaudeClient._extract_json(self._text(response))
 
@@ -421,7 +432,7 @@ class GeminiClient:
             # aggregates stay consistent with jobs.usage.
             response = self._call(parts, system,
                                   min(max_tokens * 2, MAX_OUTPUT_TOKENS), retries,
-                                  response_schema)
+                                  response_schema, strict_schema=strict_schema)
             usage = _merge_usage(usage, self.track_tokens(response))
             parsed = ClaudeClient._extract_json(self._text(response))
 
