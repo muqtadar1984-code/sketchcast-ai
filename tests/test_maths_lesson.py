@@ -165,7 +165,10 @@ def test_the_script_has_the_blueprint_shape_and_renders():
     kinds = {e["type"] for e in ex1.scene["elements"]}
     assert "math" in kinds and "arrow" in kinds and "text" in kinds
     verbs = [a["verb"] for a in ex1.scene["actions"]]
-    assert verbs.count("write") >= 4 and "fade" in verbs and "underline" in verbs and "highlight" in verbs
+    assert verbs.count("write") >= 4 and "fade" in verbs and "underline" in verbs
+    marker = [e for e in ex1.scene["elements"] if e.get("color") == "marker"]
+    assert marker and any(a["verb"] == "draw" and a["target"] == marker[0]["id"] for a in ex1.scene["actions"])
+    assert all(s.dialogue for s in script.segments), "every maths segment is per-line dialogue"
     mistake_seg = script.segments[4]
     assert any(a["verb"] == "draw" and a["target"].startswith("strike") for a in mistake_seg.scene["actions"])
     dump = json.loads(script.model_dump_json())
@@ -209,3 +212,102 @@ def test_a_wipe_takes_the_notes_and_leaders_with_the_lines():
     live_overlaps = [w for w in r.audit()["warnings"] if w.startswith("TEXT_OVERLAP")
                      and not (set(w.split()[1].split("+")) & erased)]
     assert not live_overlaps, live_overlaps
+
+
+def _long_example(problem="x + 100 = 200", n=9, check=True, mistake=False):
+    from maths.schema import Mistake, Step, WorkedExample
+    steps = []
+    state = [problem] if "=" in problem else ["x + 100 = 200"]
+    for k in range(n):
+        nxt = [f"x + {100 - (k + 1) * 10} = {200 - (k + 1) * 10}"] if k < n - 1 else ["x = 100"]
+        steps.append(Step(operation="subtract 10 from both sides", before=state, after=nxt,
+                          speech=f"Step number {k + 1}: subtract ten from both sides of the equation."))
+        state = nxt
+    if check:
+        steps.append(Step(kind="check", operation="substitute", before=state, after=["100 + 100 = 200"],
+                          speech="Now we check by substituting one hundred back in."))
+    m = Mistake(from_state=[problem], wrong_state=["x = 300"], operation="add 100", why_wrong="wrong direction",
+                speech="A common mistake is to add one hundred instead of subtracting.") if mistake else None
+    return WorkedExample(label="Long", task="solve", problem=problem, givens=["x + 100 = 200"], target="x",
+                         steps=steps, final_answer=["x = 100"], answer_speech="So the answer is x equals one hundred.",
+                         common_mistake=m)
+
+
+def _compiled(scene):
+    from spike.scene_engine.director import parse_scene_response
+    from spike.scene_engine.render import SceneRenderer
+    r = SceneRenderer(parse_scene_response(scene, scene["narration"]))
+    r.compile(80.0)
+    return r
+
+
+def test_the_answer_is_written_again_when_the_check_wipes_the_column():
+    """Maths demo 2026-09-24: the check line wiped the column and the answer
+    underline was drawn where the wiped row had been — a squiggle under
+    nothing while the teacher said the answer."""
+    from maths.board import example_scene
+    from maths.schema import MethodCard
+    scene, _ = example_scene(_long_example(), MethodCard(steps=["Move constants", "Check"]), "s9")
+    wipes = [a for a in scene["actions"] if a["verb"] == "erase"]
+    assert wipes
+    erased = {c for a in wipes for c in next(e for e in scene["elements"] if e["id"] == a["target"])["children"]}
+    underlines = [a for a in scene["actions"] if a["verb"] == "underline"]
+    assert underlines and not any(a["target"] in erased for a in underlines)
+    by_id = {e["id"]: e for e in scene["elements"]}
+    assert by_id[underlines[-1]["target"]]["expr"] == "x = 100"
+    # the answer sits above the check line, both live after the wipe
+    check = next(e for e in scene["elements"] if e.get("expr") == "100 + 100 = 200")
+    assert by_id[underlines[-1]["target"]]["at"][1] < check["at"][1]
+    assert not any(w.startswith("CUE_UNRESOLVED") for w in _compiled(scene).audit()["warnings"])
+
+
+def test_a_wipe_restarts_below_a_word_problem():
+    """The first line after a wipe sat on the word problem's second line."""
+    from maths.board import example_scene
+    from maths.schema import MethodCard
+    ex = _long_example(problem="The sum of two consecutive numbers is 201 and we need the smaller number of the two.")
+    scene, _ = example_scene(ex, MethodCard(steps=["Move constants"]), "s9")
+    q1 = next(e for e in scene["elements"] if e["id"] == "q1")
+    rows = [e for e in scene["elements"] if e["type"] == "math" and e["id"].startswith("w")]
+    assert min(e["at"][1] for e in rows) >= q1["at"][1] + 46
+    warns = _compiled(scene).audit()["warnings"]
+    assert not any(w.startswith("TEXT_OVERLAP") and "q1" in w for w in warns), warns
+
+
+def test_the_card_highlight_moves_instead_of_piling_up():
+    from maths.board import example_scene
+    from maths.schema import MethodCard, Step, WorkedExample
+    steps = [Step(operation="subtract 5 from both sides", before=["3x + 5 = 20"], after=["3x = 15"],
+                  speech="First subtract five from both sides."),
+             Step(operation="divide both sides by 3", before=["3x = 15"], after=["x = 5"],
+                  speech="Then divide both sides by three.")]
+    ex = WorkedExample(label="E", task="solve", problem="3x + 5 = 20", givens=["3x + 5 = 20"], target="x",
+                       steps=steps, final_answer=["x = 5"], answer_speech="So x is five.")
+    scene, _ = example_scene(ex, MethodCard(steps=["Move the constants", "Divide by the coefficient"]), "s3")
+    hl = [e for e in scene["elements"] if e.get("color") == "marker"]
+    assert len(hl) == 2
+    acts = scene["actions"]
+    i_first = next(i for i, a in enumerate(acts) if a["verb"] == "draw" and a["target"] == hl[0]["id"])
+    i_fade = next(i for i, a in enumerate(acts) if a["verb"] == "fade" and a["target"] == hl[0]["id"])
+    i_second = next(i for i, a in enumerate(acts) if a["verb"] == "draw" and a["target"] == hl[1]["id"])
+    assert i_first < i_fade < i_second
+    assert not any(a["verb"] == "highlight" for a in acts)
+    # the marker covers the whole card line, with room to spare
+    from maths.board import CARD_X, _M, CARD_LINE_SIZE
+    line = next(e for e in scene["elements"] if e["id"] == "card_1")
+    assert hl[1]["points"][1][0] >= CARD_X + _M.text_width(line["text"], CARD_LINE_SIZE)
+
+
+def test_abbreviated_sides_are_spoken_as_words():
+    from maths.board import say
+    assert say("Substitute back to verify that L.H.S. = R.H.S.") == \
+        "Substitute back to verify that the left-hand side equals the right-hand side."
+    assert say("Check the LHS equals the RHS. Then stop.") == "Check the left-hand side equals the right-hand side. Then stop."
+    assert say("The L.H.S. is 4.") == "The left-hand side is 4."
+
+
+def test_a_teacher_only_segment_is_still_dialogue():
+    from maths.board import _segment
+    from maths.schema import Line
+    seg = _segment("s3", "explore", [Line(line="One."), Line(line="Two.")], heading="h", points=[])
+    assert seg["dialogue"] == [{"who": "teacher", "line": "One."}, {"who": "teacher", "line": "Two."}]

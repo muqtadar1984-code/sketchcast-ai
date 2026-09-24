@@ -213,8 +213,11 @@ class ShapeElement(_ElementBase):
     center: Optional[Point] = None                  # ellipse
     rx: Optional[float] = None
     ry: Optional[float] = None
-    width: float = Field(default=3.0, ge=0.5, le=20.0)
-    color: Literal["ink", "muted", "accent"] = "ink"
+    width: float = Field(default=3.0, ge=0.5, le=30.0)
+    # "marker": the translucent highlighter, as an ELEMENT — unlike the
+    # highlight verb's decoration it can be faded and erased, so a board can
+    # move a highlight from one line to the next (the maths method card)
+    color: Literal["ink", "muted", "accent", "marker"] = "ink"
     closed: bool = False
     # False = outline only; True = translucent accent wash; "paper" = opaque
     # board-colored fill (speech bubbles occlude the busy board behind them)
