@@ -178,3 +178,29 @@ def test_the_prompt_carries_the_ladder_the_notation_rules_and_the_level():
     for needle in ("simplest", "medium", "difficult", "extremely difficult", "common_mistake", "LINEAR notation",
                    "sqrt(", "Year 10", "GCSE", "KEY CONCEPTS TO TEACH", "try_it", "method"):
         assert needle in p, needle
+
+
+def test_a_wipe_takes_the_notes_and_leaders_with_the_lines():
+    """Production 2026-09-24: after the column filled and was wiped, the next
+    notes were written over the old ones (TEXT_OVERLAP n2+n15)."""
+    from maths.board import example_scene
+    from maths.schema import MethodCard, Step, WorkedExample
+    steps = []
+    state = ["x + 100 = 200"]
+    for k in range(9):
+        nxt = [f"x + {100 - (k + 1) * 10} = {200 - (k + 1) * 10}"]
+        steps.append(Step(operation=f"subtract 10 from both sides", before=state, after=nxt,
+                          speech=f"Step number {k + 1}: subtract ten from both sides of the equation."))
+        state = nxt
+    ex = WorkedExample(label="Long", task="solve", problem="x + 100 = 200", givens=["x + 100 = 200"], target="x",
+                       steps=steps, final_answer=["x = 100"], answer_speech="So x is one hundred.")
+    scene, _lines = example_scene(ex, MethodCard(steps=["Move constants"]), "s9")
+    wipes = [a for a in scene["actions"] if a["verb"] == "erase"]
+    assert wipes, "nine lines do not fit the column"
+    grp = next(e for e in scene["elements"] if e["id"] == wipes[0]["target"])
+    assert any(c.startswith("n") for c in grp["children"]) and any(c.startswith("w") for c in grp["children"])
+    from spike.scene_engine.director import parse_scene_response
+    from spike.scene_engine.render import SceneRenderer
+    r = SceneRenderer(parse_scene_response(scene, scene["narration"]))
+    r.compile(60.0)
+    assert not any(w.startswith("TEXT_OVERLAP") for w in r.audit()["warnings"]), r.audit()["warnings"]

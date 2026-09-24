@@ -222,6 +222,7 @@ class _Board:
     elements: list[dict] = field(default_factory=list)
     actions: list[dict] = field(default_factory=list)
     rows: list[_Row] = field(default_factory=list)      # visible working lines
+    annotations: list[str] = field(default_factory=list)  # notes and leaders on those lines
     next_y: float = FIRST_ROW_Y
     n: int = 0
     state_no: int = 0
@@ -264,7 +265,7 @@ def _problem_elements(ex: WorkedExample, board: _Board, cue: Optional[dict]) -> 
         board.elements.append({"id": f"q{i}", "type": "text", "text": ln, "role": "title", "size": 27,
                                "at": [Q_AT[0], y], "anchor": "lt"})
         board.actions.append({"verb": "write", "target": f"q{i}", **({"at": cue} if cue and i == 0 else {})})
-        y += 36
+        y += 46   # the handwriting face runs ~44 px tall at this size (TEXT_OVERLAP q0+q1)
     board.next_y = y + 14
 
 
@@ -275,10 +276,15 @@ def _add_state(board: _Board, state: list[str], cue: Optional[dict], color: str 
     lays = [(x, _layout(x, LINE_SIZE)) for x in state[:4]]
     needed = sum(max(l.h if l else LINE_SIZE, MIN_ROW_H) + ROW_GAP for _x, l in lays)
     if board.next_y + needed > WORK_BOTTOM and board.rows:
+        # the notes and leaders go with the lines they annotate — a wipe
+        # that left them behind wrote the next example's notes over them
+        # (production, 2026-09-24: TEXT_OVERLAP n2+n15)
         grp = board.uid("wipe")
-        board.elements.append({"id": grp, "type": "group", "children": [r.eid for r in board.rows]})
+        board.elements.append({"id": grp, "type": "group",
+                               "children": [r.eid for r in board.rows] + list(board.annotations)})
         board.actions.append({"verb": "erase", "target": grp, "duration": 0.9, **({"at": cue} if cue else {})})
         board.rows = []
+        board.annotations = []
         board.next_y = FIRST_ROW_Y
         cue = None  # the writes follow the wipe
     elif dim_previous and board.rows:
@@ -352,6 +358,7 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
     board.elements.append({"id": nid, "type": "text", "text": note, "size": size, "color": "muted",
                            "role": "caption", "at": [x, y], "anchor": "lm"})
     board.actions.append({"verb": "write", "target": nid})
+    board.annotations.append(nid)
     if target is None:
         return
     found = _term_in(op_text, target)
@@ -367,6 +374,7 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
                            "tail": {"el": nid, "edge": "left", "dx": -4},
                            "head": [ox + (box[0] + box[2]) / 2, oy + box[3] + 3]})
     board.actions.append({"verb": "draw", "target": aid, "duration": 0.6})
+    board.annotations.append(aid)
 
 
 def _highlight_method(board: _Board, step: Step, method, cue: Optional[dict], has_card: bool) -> None:
