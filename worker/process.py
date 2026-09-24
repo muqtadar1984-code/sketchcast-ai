@@ -2051,6 +2051,9 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             _maths_lesson = _maths_lesson_for_document(sb, gen, tmp)
             logger.info("maths %s for %s: sibling lesson %s", kind, generation_id,
                         "found" if _maths_lesson else "not found")
+        # the maths keywords travel only on the maths path, so a stub of
+        # generate_document with the original signature keeps working
+        _doc_kw = {"maths": True, "maths_lesson": _maths_lesson} if _doc_profile.maths else {}
         out_path = generate_document(
             kind=kind, book=book, chapter=chapter, analysis=analysis,
             client=gen_client,
@@ -2058,8 +2061,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             # when its params carry none (decision 10); a book's params as-is
             params=_catalogue_doc_params(gen, catalogue) if catalogue is not None else (gen.get("params") or {}),
             out_dir=Path(tmp), template=branding.get("docx_template"),
-            language=lesson_lang,
-            maths=_doc_profile.maths, maths_lesson=_maths_lesson,
+            language=lesson_lang, **_doc_kw,
         )
         # Student/teacher split (2026-08-18): exam_paper/worksheet/activity/
         # case_study now return [student_document, answer_key] like the
