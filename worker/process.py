@@ -593,6 +593,41 @@ def _sibling_presentation(sb: Client, gen: dict) -> Optional[dict]:
     return None
 
 
+def _maths_lesson_for_document(sb: Client, gen: dict, tmp: str | Path):
+    """The structured lesson of the maths VIDEO this document belongs beside
+    (same owner, book, chapter and part), read back out of its script_json
+    artifact, or None. Best-effort: a worksheet without a sibling lesson is
+    built from the chapter alone, never failed."""
+    try:
+        from maths.schema import parse_lesson
+
+        sib = _sibling_presentation(sb, gen)
+        if not sib or sib.get("status") != "done":
+            return None
+        params = gen.get("params") if isinstance(gen.get("params"), dict) else {}
+        part = params.get("part")
+        suffix = "" if not part or int(part) == 1 else f"_part{int(part)}"
+        res = (sb.table("artifacts").select("storage_path").eq("generation_id", str(sib["id"]))
+               .eq("kind", "script_json").execute())
+        rows = getattr(res, "data", None) or []
+        want = [r for r in rows if str(r.get("storage_path", "")).endswith(f"script{suffix}.json")] or rows
+        if not want:
+            return None
+        dest = Path(tmp) / "sibling_script.json"
+        db.download_artifact(sb, str(want[0]["storage_path"]), dest)
+        body = json.loads(dest.read_text(encoding="utf-8"))
+        eps = body.get("episodes") or []
+        first = eps[0] if eps and isinstance(eps[0], dict) else body
+        record = (first.get("maths") or {}).get("lesson") if isinstance(first, dict) else None
+        if not record:
+            return None
+        lesson = parse_lesson(record)
+        return lesson if lesson.examples else None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("maths lesson for document %s not read: %s", gen.get("id"), exc)
+        return None
+
+
 def _sibling_deck(sb: Client, gen: dict) -> Optional[dict]:
     """The deck generation inserted beside this book PRESENTATION, or None.
     Same owner, book, chapter and `part`, within a few hours — the mirror of
@@ -2005,6 +2040,17 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         # unreliable (verified 2026-07-19), so kind=None asks for the stronger
         # general model instead of the per-kind Haiku default.
         gen_client = client_for(lesson_lang, kind=None if jawi else kind)
+        # The subject profile for a DOCUMENT: a maths worksheet or test paper
+        # is a verified question ladder with the working in its answer key
+        # (docgen.maths_worksheet), built beside the maths video's own lesson
+        # when one exists. The other kinds are shared.
+        from shared import subject_profile as _sp
+        _doc_profile = _sp.resolve(book.get("subject"), params=gen.get("params") or {})
+        _maths_lesson = None
+        if _doc_profile.maths and kind in ("worksheet", "exam_paper"):
+            _maths_lesson = _maths_lesson_for_document(sb, gen, tmp)
+            logger.info("maths %s for %s: sibling lesson %s", kind, generation_id,
+                        "found" if _maths_lesson else "not found")
         out_path = generate_document(
             kind=kind, book=book, chapter=chapter, analysis=analysis,
             client=gen_client,
@@ -2013,6 +2059,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             params=_catalogue_doc_params(gen, catalogue) if catalogue is not None else (gen.get("params") or {}),
             out_dir=Path(tmp), template=branding.get("docx_template"),
             language=lesson_lang,
+            maths=_doc_profile.maths, maths_lesson=_maths_lesson,
         )
         # Student/teacher split (2026-08-18): exam_paper/worksheet/activity/
         # case_study now return [student_document, answer_key] like the

@@ -32,15 +32,27 @@ def generate_document(
     out_dir: Path,
     template: str | None = None,
     language: str = "en",
+    maths_lesson=None,
+    maths: bool = False,
 ) -> Path | list[Path]:
     """Build the .docx for `kind` and return its path (or paths). `template` =
     optional school .docx whose styles/header/footer/logo the document
-    inherits."""
+    inherits.
+
+    ``maths`` (the subject profile, resolved by the worker) sends a worksheet
+    or test paper to docgen.maths_worksheet — a verified question ladder with
+    the working in the answer key — and ``maths_lesson`` is the sibling
+    video's structured lesson when there is one."""
     from shared.languages import prompt_directive
 
     directive = prompt_directive(language)
     if directive:
         client = _DirectiveClient(client, directive)
+    if maths and kind in ("worksheet", "exam_paper"):
+        from docgen.maths_worksheet import build as build_maths
+
+        return build_maths(book, chapter, analysis, client, params or {}, out_dir, template,
+                           language=language, kind=kind, maths_lesson=maths_lesson)
     builders = {
         "lesson_plan": "docgen.lesson_plan",
         "activity": "docgen.activity",
