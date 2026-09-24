@@ -201,3 +201,34 @@ def test_a_reply_with_bare_strings_where_lists_belong_still_parses():
     assert lesson.examples[1].difficulty == 4 and lesson.examples[1].common_mistake is None
     assert lesson.try_it.answer == ["x = 4"]
     assert verify_example(ex).status == "verified"
+
+
+def test_a_task_verb_in_front_of_the_problem_is_not_a_symbol():
+    """Production, 2026-09-24: "Solve 4z = 16" parsed with Solve as a symbol
+    and the try-it was dropped as wrong."""
+    from maths.notation import parse_relation, strip_task_verb
+    assert strip_task_verb("Solve 4z = 16") == "4z = 16"
+    assert strip_task_verb("Solve for x: 2x + 1 = 7") == "2x + 1 = 7"
+    assert strip_task_verb("Find x if 3x = 9") == "3x = 9"
+    assert strip_task_verb("Simplify: 2x + 3x") == "2x + 3x"
+    assert strip_task_verb("solve") == "solve"
+    assert str(parse_relation("Solve 4z = 16").as_sympy()) == "Eq(4*z, 16)"
+    assert verify_try_it(TryIt(problem="Solve 4z = 16", answer=["z = 4"])).ok is True
+
+
+def test_text_fields_written_as_objects_or_lists_keep_their_words():
+    """Production, 2026-09-24: student_question came back as
+    {"who": "student", "line": "..."}."""
+    from maths.schema import parse_example, Line
+    ex = parse_example({"label": {"text": "Example 2"}, "difficulty": 2, "task": "solve", "problem": "x + 1 = 2",
+                        "givens": ["x + 1 = 2"], "target": "x",
+                        "student_question": {"who": "student", "line": "Do we subtract first, or add four first?"},
+                        "intro_speech": ["Two lines", "joined"],
+                        "steps": [{"kind": "transform", "operation": {"text": "subtract 1"}, "before": ["x + 1 = 2"],
+                                   "after": [{"line": "x = 1"}], "speech": {"who": "teacher", "line": "Subtract one."}}],
+                        "final_answer": {"line": "x = 1"}, "answer_speech": 7})
+    assert ex.label == "Example 2" and ex.student_question.startswith("Do we subtract")
+    assert ex.intro_speech == "Two lines joined" and ex.steps[0].operation == "subtract 1"
+    assert ex.steps[0].after == ["x = 1"] and ex.final_answer == ["x = 1"] and ex.answer_speech == "7"
+    assert Line.model_validate({"who": "narrator", "line": {"text": "hi"}}).who == "teacher"
+    assert verify_example(ex).status == "verified"

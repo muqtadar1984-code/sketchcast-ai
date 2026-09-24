@@ -1049,10 +1049,11 @@ class ClaudeClient:
         retries: int = 3,
         cache_prefix: str | None = None,
         response_schema: dict | None = None,
+        strict_schema: bool = False,
     ) -> dict:
         """Send a text prompt, return parsed JSON dict.
 
-        `response_schema` is accepted and IGNORED, for the same reason
+        `response_schema` (and `strict_schema`) is accepted and IGNORED, for the same reason
         `cache_prefix` is accepted by GeminiClient and not implemented:
         worker/process.py holds either object without knowing which, so a
         keyword one of them understands must not raise on the other.

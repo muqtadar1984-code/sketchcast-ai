@@ -40,7 +40,7 @@ class FakeClient:
     def __init__(self):
         self.calls = []
 
-    def analyze(self, prompt, system="", max_tokens=0, retries=3, cache_prefix=None, response_schema=None):
+    def analyze(self, prompt, system="", max_tokens=0, retries=3, cache_prefix=None, response_schema=None, **kw):
         self.calls.append(prompt)
         qs = [_q(GOOD_EX1, 1), _q(GOOD_EX1, 1, "2x + 3 = 11"), _q(FIXED_EX2, 2), Q_BAD, _q(EX3, 3), Q_WORD,
               _q(EX3, 4, "7x - 4 = 3x + 12")]

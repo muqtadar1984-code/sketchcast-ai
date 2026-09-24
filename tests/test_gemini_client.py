@@ -397,3 +397,33 @@ def test_the_script_call_names_no_schema():
         "if this changes, _response_schema_enabled's reasoning must change with it"
     assert "additionalProperties" in inspect.getsource(script_generator), \
         "the reason must travel with the call site"
+
+
+def test_strict_schema_sends_the_schema_for_that_call_without_the_flag(client, monkeypatch):
+    """The maths lesson's opt-in: its payload is closed, and the global flag
+    stays off for every other caller."""
+    monkeypatch.delenv("GEMINI_RESPONSE_SCHEMA", raising=False)
+    monkeypatch.delenv("GEMINI_JSON_MODE", raising=False)
+    bodies = []
+
+    class _Res:
+        status_code = 200
+        text = "{}"
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return usage_response(text='{"ok": true}')
+
+    def post(url, headers=None, json=None, timeout=None):
+        bodies.append(json)
+        return _Res()
+
+    monkeypatch.setattr("shared.gemini_client.requests.post", post)
+    monkeypatch.setattr("shared.gemini_client._access_token", lambda: "tok")
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]}
+    client.analyze("hello", response_schema=schema)
+    assert "responseSchema" not in bodies[-1]["generationConfig"], "flag off: no schema"
+    client.analyze("hello", response_schema=schema, strict_schema=True)
+    assert bodies[-1]["generationConfig"]["responseSchema"] == schema

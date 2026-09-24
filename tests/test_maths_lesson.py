@@ -91,7 +91,7 @@ class FakeClient:
         self.fail_regen = fail_regen
         self.calls: list[dict] = []
 
-    def analyze(self, prompt, system="", max_tokens=0, retries=3, cache_prefix=None, response_schema=None):
+    def analyze(self, prompt, system="", max_tokens=0, retries=3, cache_prefix=None, response_schema=None, **kw):
         self.calls.append({"prompt": prompt, "schema": response_schema, "max_tokens": max_tokens})
         if "REJECTED" in prompt:
             data = copy.deepcopy(BAD_EX2) if self.fail_regen else self.fixed

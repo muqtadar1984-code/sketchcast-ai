@@ -128,7 +128,10 @@ def build_regen_prompt(*, topic: str, level: str | None, language: str, example:
 
 
 def _analyze(client, prompt: str, schema: dict, max_tokens: int) -> dict:
-    result = client.analyze(prompt=prompt, system=_SYSTEM, max_tokens=max_tokens, response_schema=schema)
+    # constrained decoding for THIS call (the payload is closed): the two
+    # first production runs bent the shape without it
+    result = client.analyze(prompt=prompt, system=_SYSTEM, max_tokens=max_tokens, response_schema=schema,
+                            strict_schema=True)
     if result.get("truncated"):
         raise RuntimeError("the maths lesson reply was cut off at the output cap; nothing parsed from it is complete")
     data = result.get("data", result)
