@@ -174,6 +174,28 @@ class TextElement(_ElementBase):
         return v.strip()[:80]
 
 
+class MathElement(_ElementBase):
+    """A typeset expression or equation — the board content of a maths
+    lesson. ``expr`` is the linear notation the verifier checked
+    (maths.notation); the renderer lays it out with maths.typeset (stacked
+    fractions, raised powers, radicals) in the handwriting face, writes it on
+    progressively like any handwritten line, and lets an arrow anchor to a
+    term by name: AnchorRef(el=..., sub="5x"). Text the typesetter cannot read
+    binds as a plain text element rather than failing the scene."""
+    type: Literal["math"] = "math"
+    expr: str
+    at: Point
+    size: float = Field(default=34.0, ge=10.0, le=72.0)
+    color: Literal["ink", "muted", "accent"] = "ink"
+    anchor: Literal["lt", "mt", "rt", "lm", "mm", "rm"] = "lt"
+    role: Literal["line", "title"] = "line"
+
+    @field_validator("expr")
+    @classmethod
+    def _short(cls, v: str) -> str:
+        return " ".join(v.split())[:200]
+
+
 class ArrowElement(_ElementBase):
     type: Literal["arrow"] = "arrow"
     tail: PointSpec
@@ -232,7 +254,7 @@ class GroupElement(_ElementBase):
 
 
 Element = Annotated[
-    Union[IllustrationElement, TextElement, ArrowElement, ShapeElement,
+    Union[IllustrationElement, TextElement, MathElement, ArrowElement, ShapeElement,
           ParticleGroupElement, GroupElement],
     Field(discriminator="type"),
 ]

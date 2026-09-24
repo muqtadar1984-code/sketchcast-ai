@@ -1428,6 +1428,17 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             narration_style = catalogue.narration_style
             student_voice = catalogue.student_voice
 
+        # The SUBJECT PROFILE (shared/subject_profile): resolved ONCE here and
+        # read at three seams below — the script (maths.lesson instead of
+        # agent3), the figures (no textbook crops on an algebra board) and the
+        # style (a maths lesson is a teacher-student dialogue by design, so
+        # the student is cast and voiced). Everything else is shared.
+        from shared import subject_profile as _sp
+        profile = _sp.resolve(book.get("subject"), params=params)
+        if profile.worked_examples:
+            narration_style = "conversational"
+            logger.info("subject profile for %s: maths/%s", generation_id, profile.lesson_mode)
+
         # The premium gate (`allow_premium`, `tier_info`) was resolved at
         # the top of process_generation, before any expensive work. This
         # used to be `_elevenlabs_enabled()`, a deployment flag: everyone
@@ -1567,110 +1578,138 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             # bimodal on identical input (219.4 vs 108.0 chars per analysed
             # topic — a 5.9-minute lesson and a 2.4-minute one).
             _script_client = script_client(lesson_lang)
-            script = generate_episode_script(
-                episode, analysis, chapter_num, _script_client, narration_style,
-                part_info=part_info,
-                language=lesson_lang, avatars=avatars,
-                subject=book.get("subject"), curriculum=book.get("curriculum"),
-                learner_age=book.get("grade"),
-            )
-            script_dict = script.model_dump()
+            if profile.worked_examples:
+                # Maths: the lesson is generated AS STRUCTURE, verified step
+                # by step with SymPy, and compiled onto the algebra board
+                # (maths.lesson). Verification is this path's coverage gate:
+                # an example that cannot be proved is regenerated or dropped,
+                # and a lesson with too few proved examples fails loudly.
+                from maths.lesson import generate_maths_script
 
-            # ── Coverage gate (shared/coverage.py) ───────────────────────
-            # Until now nothing compared the reply back to the sections and
-            # concepts THIS episode was built from, so a script that taught
-            # a third of the part finished as a clean success. Measured here
-            # — after the script, before slides/TTS/render — so the retry
-            # below costs one script call and a hard failure wastes nothing
-            # that has been rendered.
-            report = _coverage_report(
-                analysis, episode, coverage.script_text(script_dict),
-                kind="presentation", model=_script_client.model, part=part_idx,
-                of=n_parts,
-                part_scoped=part_ref is not None,
-            )
-            if coverage.should_retry(report):
-                # Retry ONCE, naming what was dropped, and keep whichever
-                # draft measures higher — a retry can be worse, and the
-                # teacher should never get the worse of two scripts we paid
-                # for. Bounded by should_retry: the same bar as the hard
-                # failure below, so it only ever fires on a job that would
-                # otherwise have failed outright — and NEVER on a pooled
-                # part-scoped report, whose missed list is other parts'
-                # topics (a must_cover built from it orders the model to
-                # teach material this part does not contain — the harmful
-                # half of incident 8b79d4e0).
-                first = report
-                # Name the shortfall the draft actually had. A thin draft told
-                # to "cover" its three missed topics returns a fourth
-                # sentence; it needs to be told to teach, not to list.
-                _expand = None
-                if first.get("thin"):
-                    _expand = (f"{first.get('chars')} characters across "
-                               f"{first.get('topics')} topics — "
-                               f"{first.get('chars_per_topic')} per topic, "
-                               f"against a floor of "
-                               f"{coverage._DEPTH_MIN_CHARS_PER_TOPIC}")
-                retry = generate_episode_script(
-                    episode, analysis, chapter_num, _script_client,
-                    narration_style,
-                    part_info=part_info, language=lesson_lang,
-                    must_cover=first.get("missed") or [], avatars=avatars,
-                    expand_reason=_expand,
+                script = generate_maths_script(
+                    episode, analysis, chapter_num, _script_client, language=lesson_lang,
+                    avatars=avatars, subject=book.get("subject"), curriculum=book.get("curriculum"),
+                    learner_age=book.get("grade"), part_info=part_info, book_id=book_id,
+                )
+                script_dict = script.model_dump()
+                _maths = script_dict.get("maths") or {}
+                _mv = _maths.get("verification") or {}
+                report = {"kind": "presentation", "model": _script_client.model, "part": part_idx,
+                          "of": n_parts, "gated": False, "profile": "maths",
+                          "maths_verification": _mv.get("status"),
+                          "examples": len((_maths.get("lesson") or {}).get("examples") or []),
+                          "dropped": len(_mv.get("dropped") or [])}
+                coverage_reports.append(report)
+                db.merge_generation_params(sb, generation_id, {f"maths_part{part_idx}": {
+                    "topic": (_maths.get("lesson") or {}).get("topic"), "status": _mv.get("status"),
+                    "examples": report["examples"], "dropped": _mv.get("dropped") or [],
+                    "try_it": (_mv.get("try_it") or {}).get("ok")}})
+                save_script(script)
+            else:
+                script = generate_episode_script(
+                    episode, analysis, chapter_num, _script_client, narration_style,
+                    part_info=part_info,
+                    language=lesson_lang, avatars=avatars,
                     subject=book.get("subject"), curriculum=book.get("curriculum"),
                     learner_age=book.get("grade"),
                 )
-                retry_dict = retry.model_dump()
-                retry_report = _coverage_report(
-                    analysis, episode, coverage.script_text(retry_dict),
+                script_dict = script.model_dump()
+
+                # ── Coverage gate (shared/coverage.py) ───────────────────────
+                # Until now nothing compared the reply back to the sections and
+                # concepts THIS episode was built from, so a script that taught
+                # a third of the part finished as a clean success. Measured here
+                # — after the script, before slides/TTS/render — so the retry
+                # below costs one script call and a hard failure wastes nothing
+                # that has been rendered.
+                report = _coverage_report(
+                    analysis, episode, coverage.script_text(script_dict),
                     kind="presentation", model=_script_client.model, part=part_idx,
-                of=n_parts,
+                    of=n_parts,
                     part_scoped=part_ref is not None,
                 )
-                # Depth outranks breadth: comparing `covered` alone would
-                # keep a draft that names one more topic over one that
-                # actually teaches — the exact trade that shipped a
-                # 2.4-minute video scoring 0.897.
-                if coverage.better_draft(first, retry_report):
-                    script, script_dict, report = retry, retry_dict, retry_report
-                # Both numbers are kept: whether naming the missed topics
-                # actually repairs a thin draft is itself a thing the
-                # founder will want to query after the model flip.
-                report["retried_from"] = first.get("covered")
-                report["retried_from_chars_per_topic"] = first.get("chars_per_topic")
-                if coverage.should_fail(report):
+                if coverage.should_retry(report):
+                    # Retry ONCE, naming what was dropped, and keep whichever
+                    # draft measures higher — a retry can be worse, and the
+                    # teacher should never get the worse of two scripts we paid
+                    # for. Bounded by should_retry: the same bar as the hard
+                    # failure below, so it only ever fires on a job that would
+                    # otherwise have failed outright — and NEVER on a pooled
+                    # part-scoped report, whose missed list is other parts'
+                    # topics (a must_cover built from it orders the model to
+                    # teach material this part does not contain — the harmful
+                    # half of incident 8b79d4e0).
+                    first = report
+                    # Name the shortfall the draft actually had. A thin draft told
+                    # to "cover" its three missed topics returns a fourth
+                    # sentence; it needs to be told to teach, not to list.
+                    _expand = None
+                    if first.get("thin"):
+                        _expand = (f"{first.get('chars')} characters across "
+                                   f"{first.get('topics')} topics — "
+                                   f"{first.get('chars_per_topic')} per topic, "
+                                   f"against a floor of "
+                                   f"{coverage._DEPTH_MIN_CHARS_PER_TOPIC}")
+                    retry = generate_episode_script(
+                        episode, analysis, chapter_num, _script_client,
+                        narration_style,
+                        part_info=part_info, language=lesson_lang,
+                        must_cover=first.get("missed") or [], avatars=avatars,
+                        expand_reason=_expand,
+                        subject=book.get("subject"), curriculum=book.get("curriculum"),
+                        learner_age=book.get("grade"),
+                    )
+                    retry_dict = retry.model_dump()
+                    retry_report = _coverage_report(
+                        analysis, episode, coverage.script_text(retry_dict),
+                        kind="presentation", model=_script_client.model, part=part_idx,
+                    of=n_parts,
+                        part_scoped=part_ref is not None,
+                    )
+                    # Depth outranks breadth: comparing `covered` alone would
+                    # keep a draft that names one more topic over one that
+                    # actually teaches — the exact trade that shipped a
+                    # 2.4-minute video scoring 0.897.
+                    if coverage.better_draft(first, retry_report):
+                        script, script_dict, report = retry, retry_dict, retry_report
+                    # Both numbers are kept: whether naming the missed topics
+                    # actually repairs a thin draft is itself a thing the
+                    # founder will want to query after the model flip.
+                    report["retried_from"] = first.get("covered")
+                    report["retried_from_chars_per_topic"] = first.get("chars_per_topic")
+                    if coverage.should_fail(report):
+                        coverage_reports.append(report)
+                        _record_coverage(sb, generation_id, coverage_reports)
+                        raise RuntimeError(
+                            f"lesson script covers only {report['addressed']} of "
+                            f"{report['topics']} topics this chapter's analysis "
+                            f"lists (part {part_idx}/{n_parts}, model {_script_client.model}) "
+                            f"— never mentioned: {', '.join(report['missed'])}"
+                        )
+                # DEPTH, checked in the same window and for the same reason.
+                # Coverage asks how many topics were named; this asks whether
+                # anything was said about them. A script can name 26 of 29 and
+                # still be a 2.4-minute video — measured twice in production, and
+                # both shipped, because breadth was the only question anyone asked.
+                #
+                # Deliberately after the retry: a thin draft may be replaced by a
+                # fuller one above, and it is the kept draft that is judged.
+                if coverage.is_thin(report):
                     coverage_reports.append(report)
                     _record_coverage(sb, generation_id, coverage_reports)
                     raise RuntimeError(
-                        f"lesson script covers only {report['addressed']} of "
-                        f"{report['topics']} topics this chapter's analysis "
-                        f"lists (part {part_idx}/{n_parts}, model {_script_client.model}) "
-                        f"— never mentioned: {', '.join(report['missed'])}"
+                        f"lesson script is too thin to teach: {report['chars']} "
+                        f"characters across {report['topics']} topics "
+                        f"({report['chars_per_topic']} per topic, floor "
+                        f"{coverage._DEPTH_MIN_CHARS_PER_TOPIC}) "
+                        f"(part {part_idx}/{n_parts}, model {_script_client.model}) — this "
+                        f"would render a video a fraction of its intended length"
                     )
-            # DEPTH, checked in the same window and for the same reason.
-            # Coverage asks how many topics were named; this asks whether
-            # anything was said about them. A script can name 26 of 29 and
-            # still be a 2.4-minute video — measured twice in production, and
-            # both shipped, because breadth was the only question anyone asked.
-            #
-            # Deliberately after the retry: a thin draft may be replaced by a
-            # fuller one above, and it is the kept draft that is judged.
-            if coverage.is_thin(report):
                 coverage_reports.append(report)
-                _record_coverage(sb, generation_id, coverage_reports)
-                raise RuntimeError(
-                    f"lesson script is too thin to teach: {report['chars']} "
-                    f"characters across {report['topics']} topics "
-                    f"({report['chars_per_topic']} per topic, floor "
-                    f"{coverage._DEPTH_MIN_CHARS_PER_TOPIC}) "
-                    f"(part {part_idx}/{n_parts}, model {_script_client.model}) — this "
-                    f"would render a video a fraction of its intended length"
-                )
-            coverage_reports.append(report)
-            save_script(script)
+                save_script(script)
             # Attach matched textbook figures to this part's segments (semantic
             # match via the model, keyword fallback).
-            if chapter_figures:
+            if chapter_figures and not profile.maths:
                 attach_figures_to_segments(
                     script_dict.get("segments", []), chapter_figures, used_figures, client
                 )

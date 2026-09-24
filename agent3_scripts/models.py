@@ -120,6 +120,10 @@ class EpisodeScript(BaseModel):
     # <asset key>} — teacher matches the narration voice, student matches the
     # book's grade band (gender seeded per generation).
     avatars: Optional[dict] = None
+    # Maths profile (maths.lesson): the structured lesson the segments were
+    # compiled from and its SymPy verification report — the record the
+    # worksheet and the answer key derive from, and what the console shows.
+    maths: Optional[dict] = None
     total_estimated_duration_seconds: int
     question_hook_count: int
 
