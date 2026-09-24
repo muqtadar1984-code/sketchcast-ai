@@ -168,3 +168,36 @@ def test_try_it_and_lesson_roll_up():
     assert rep["status"] == "verified" and rep["examples"][0]["status"] == "verified"
     lesson.examples[0].final_answer = ["x = 1"]
     assert verify_lesson(lesson)["status"] == "failed"
+
+
+def test_a_reply_with_bare_strings_where_lists_belong_still_parses():
+    """Production, 2026-09-24: with the Vertex schema flag off the model wrote
+    `"from_state": "(z - 3)/5 = (z - 5)/3"`. A one-line state is a one-line
+    list; the lesson must parse, not fail the generation."""
+    from maths.schema import parse_lesson
+    lesson = parse_lesson({
+        "topic": "t", "hook": "Just a string hook.", "concept": ["one", {"who": "student", "line": "why?"}],
+        "concept_points": "single point", "method": {"title": "M", "steps": "only step"},
+        "examples": [{"label": "Example 1", "difficulty": "2", "task": "solve", "problem": "3x + 5 = 20",
+                      "givens": "3x + 5 = 20", "target": "x", "intro_speech": "hi",
+                      "steps": [{"kind": "transform", "operation": "subtract 5", "before": "3x + 5 = 20",
+                                 "after": "3x = 15", "speech": "s"}, "junk",
+                                {"kind": "transform", "operation": "divide by 3", "before": "3x = 15",
+                                 "after": "x = 5", "speech": "s"}],
+                      "final_answer": "x = 5", "answer_speech": "a",
+                      "common_mistake": {"from_state": "3x + 5 = 20", "wrong_state": "3x = 25",
+                                         "why_wrong": "sign", "speech": "m"}},
+                     "not an example",
+                     {"label": "Example 2", "difficulty": 9, "task": "solve", "problem": "x = 1", "givens": ["x = 1"],
+                      "target": "x", "steps": [], "final_answer": [], "common_mistake": {}}],
+        "recap": "done", "try_it": {"problem": "2x = 8", "answer": "x = 4", "speech": "try"},
+    })
+    assert lesson.hook[0].who == "teacher" and lesson.concept[1].who == "student"
+    assert lesson.concept_points == ["single point"] and lesson.method.steps == ["only step"]
+    ex = lesson.examples[0]
+    assert ex.difficulty == 2 and ex.givens == ["3x + 5 = 20"] and ex.final_answer == ["x = 5"]
+    assert len(ex.steps) == 2 and ex.steps[0].before == ["3x + 5 = 20"]
+    assert ex.common_mistake is not None and ex.common_mistake.wrong_state == ["3x = 25"]
+    assert lesson.examples[1].difficulty == 4 and lesson.examples[1].common_mistake is None
+    assert lesson.try_it.answer == ["x = 4"]
+    assert verify_example(ex).status == "verified"

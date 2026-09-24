@@ -38,6 +38,34 @@ def _clean(s) -> str:
     return " ".join(str(s or "").split())
 
 
+def _as_list(v):
+    """A state field the model wrote as one string instead of a list
+    (production, 2026-09-24: `"from_state": "(z - 3)/5 = (z - 5)/3"` with the
+    Vertex schema flag off). One line is a one-line state; None is empty."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v]
+    if isinstance(v, (list, tuple)):
+        return list(v)
+    return [str(v)]
+
+
+def _as_lines(v):
+    """Dialogue the model wrote as plain strings becomes teacher lines."""
+    if isinstance(v, str):
+        return [{"who": "teacher", "line": v}]
+    if not isinstance(v, (list, tuple)):
+        return []
+    out = []
+    for item in v:
+        if isinstance(item, str):
+            out.append({"who": "teacher", "line": item})
+        elif isinstance(item, (dict, Line)):
+            out.append(item)
+    return out
+
+
 class Line(BaseModel):
     """One spoken line of the two-voice dialogue."""
     model_config = ConfigDict(extra="ignore")
@@ -73,6 +101,11 @@ class Step(BaseModel):
     def _trim(cls, v: str) -> str:
         return _clean(v)[:_MAX_LINE]
 
+    @field_validator("before", "after", mode="before")
+    @classmethod
+    def _listify(cls, v):
+        return _as_list(v)
+
     @field_validator("before", "after")
     @classmethod
     def _states(cls, v: list) -> list[str]:
@@ -94,6 +127,11 @@ class Mistake(BaseModel):
     operation: str = ""
     why_wrong: str = ""
     speech: str = ""
+
+    @field_validator("from_state", "wrong_state", mode="before")
+    @classmethod
+    def _listify(cls, v):
+        return _as_list(v)
 
     @field_validator("from_state", "wrong_state")
     @classmethod
@@ -131,10 +169,36 @@ class WorkedExample(BaseModel):
     def _trim(cls, v: str) -> str:
         return _clean(v)[:_MAX_LINE]
 
+    @field_validator("givens", "final_answer", mode="before")
+    @classmethod
+    def _listify(cls, v):
+        return _as_list(v)
+
     @field_validator("givens", "final_answer")
     @classmethod
     def _states(cls, v: list) -> list[str]:
         return [_clean(x)[:_MAX_LINE] for x in (v or []) if _clean(x)][:_MAX_STATE]
+
+    @field_validator("difficulty", mode="before")
+    @classmethod
+    def _difficulty(cls, v):
+        try:
+            return max(1, min(4, int(str(v).strip()[:1])))
+        except (TypeError, ValueError):
+            return 1
+
+    @field_validator("common_mistake", mode="before")
+    @classmethod
+    def _mistake(cls, v):
+        # an empty object or a bare string is "no mistake shown"
+        if isinstance(v, Mistake):
+            return v
+        return v if isinstance(v, dict) and (v.get("from_state") or v.get("wrong_state")) else None
+
+    @field_validator("steps", mode="before")
+    @classmethod
+    def _dict_steps(cls, v):
+        return [x for x in (v or []) if isinstance(x, (dict, Step))] if isinstance(v, (list, tuple)) else []
 
     @field_validator("steps")
     @classmethod
@@ -161,6 +225,11 @@ class MethodCard(BaseModel):
     title: str = "METHOD"
     steps: list[str] = Field(default_factory=list)
 
+    @field_validator("steps", mode="before")
+    @classmethod
+    def _listify(cls, v):
+        return _as_list(v)
+
     @field_validator("steps")
     @classmethod
     def _short(cls, v: list) -> list[str]:
@@ -173,6 +242,11 @@ class TryIt(BaseModel):
     problem: str = ""
     answer: list[str] = Field(default_factory=list)
     speech: str = ""
+
+    @field_validator("answer", mode="before")
+    @classmethod
+    def _listify(cls, v):
+        return _as_list(v)
 
 
 class Lesson(BaseModel):
@@ -192,10 +266,25 @@ class Lesson(BaseModel):
     misconceptions: list[str] = Field(default_factory=list)
     try_it: TryIt = Field(default_factory=TryIt)
 
+    @field_validator("hook", "concept", "recap", mode="before")
+    @classmethod
+    def _lines(cls, v):
+        return _as_lines(v)
+
+    @field_validator("concept_points", "misconceptions", mode="before")
+    @classmethod
+    def _listify(cls, v):
+        return _as_list(v)
+
     @field_validator("concept_points", "misconceptions")
     @classmethod
     def _points(cls, v: list) -> list[str]:
         return [_clean(x)[:90] for x in (v or []) if _clean(x)][:3]
+
+    @field_validator("examples", mode="before")
+    @classmethod
+    def _dict_examples(cls, v):
+        return [x for x in (v or []) if isinstance(x, (dict, WorkedExample))] if isinstance(v, (list, tuple)) else []
 
     @field_validator("examples")
     @classmethod
