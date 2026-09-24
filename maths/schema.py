@@ -289,13 +289,19 @@ class MethodCard(BaseModel):
 
 
 class TryIt(BaseModel):
+    """The problem the learner pauses on, and its worked solution: after the
+    pause the teacher goes through it on the board, so the steps are
+    verified like any example's (founder direction 2026-09-24)."""
     model_config = ConfigDict(extra="ignore")
 
     problem: str = ""
     answer: list[str] = Field(default_factory=list)
-    speech: str = ""
+    speech: str = ""            # the teacher setting the problem
+    solution_speech: str = ""   # the teacher resuming after the pause
+    steps: list[Step] = Field(default_factory=list)
+    answer_speech: str = ""
 
-    @field_validator("problem", "speech", mode="before")
+    @field_validator("problem", "speech", "solution_speech", "answer_speech", mode="before")
     @classmethod
     def _text(cls, v):
         return _as_text(v)
@@ -304,6 +310,11 @@ class TryIt(BaseModel):
     @classmethod
     def _listify(cls, v):
         return _as_list(v)
+
+    @field_validator("steps", mode="before")
+    @classmethod
+    def _dict_steps(cls, v):
+        return [x for x in (v or []) if isinstance(x, (dict, Step))] if isinstance(v, list) else []
 
 
 class Lesson(BaseModel):
@@ -328,6 +339,13 @@ class Lesson(BaseModel):
     recap: list[Line] = Field(default_factory=list)
     misconceptions: list[str] = Field(default_factory=list)
     try_it: TryIt = Field(default_factory=TryIt)
+    #: the teacher's sign-off after the try-it solution
+    closing: str = ""
+
+    @field_validator("closing", mode="before")
+    @classmethod
+    def _closing(cls, v):
+        return _as_text(v)
 
     @field_validator("hook", "concept", "recap", mode="before")
     @classmethod
@@ -401,10 +419,14 @@ LESSON_SCHEMA = {"type": "object", "properties": {
                "required": ["title", "steps"]},
     "examples": {"type": "array", "items": EXAMPLE_SCHEMA},
     "recap": _lines(), "misconceptions": _strs(),
-    "try_it": {"type": "object", "properties": {"problem": _str(), "answer": _strs(), "speech": _str()},
-               "required": ["problem", "answer", "speech"]}},
+    "try_it": {"type": "object", "properties": {"problem": _str(), "answer": _strs(), "speech": _str(),
+                                                "solution_speech": _str(),
+                                                "steps": {"type": "array", "items": STEP_SCHEMA},
+                                                "answer_speech": _str()},
+               "required": ["problem", "answer", "speech", "steps", "answer_speech"]},
+    "closing": _str()},
     "required": ["topic", "hook", "concept", "concept_points", "method", "examples", "recap",
-                 "try_it"]}
+                 "try_it", "closing"]}
 
 
 def parse_lesson(data) -> Lesson:

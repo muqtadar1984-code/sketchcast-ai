@@ -75,7 +75,15 @@ LESSON = {
     "examples": [GOOD_EX1, BAD_EX2, EX3],
     "recap": [{"who": "teacher", "line": "Undo in reverse, keep the balance, and always check your answer."}],
     "misconceptions": ["Moving a term across changes its sign", "Divide every term, not just one"],
-    "try_it": {"problem": "4x + 3 = 19", "answer": ["x = 4"], "speech": "Try this one: four x plus three equals nineteen. Pause and solve it."},
+    "try_it": {"problem": "4x + 3 = 19", "answer": ["x = 4"], "speech": "Try this one: four x plus three equals nineteen. Pause and solve it.",
+               "solution_speech": "Let us compare our working.",
+               "steps": [
+                   {"kind": "transform", "operation": "subtract 3 from both sides", "before": ["4x + 3 = 19"], "after": ["4x = 16"],
+                    "explanation": "subtract 3 from both sides", "speech": "Subtract three from both sides: four x equals sixteen."},
+                   {"kind": "transform", "operation": "divide both sides by 4", "before": ["4x = 16"], "after": ["x = 4"],
+                    "explanation": "divide by 4", "speech": "Divide both sides by four: x equals four."}],
+               "answer_speech": "So x equals four. Did you get the same?"},
+    "closing": "I hope you now have a better understanding of linear equations. Practise a few more and see you next time.",
 }
 
 
@@ -132,6 +140,29 @@ def test_too_few_verified_examples_fails_loudly():
     assert "0 of 2" in str(exc.value) and "Example 2" in str(exc.value)
 
 
+def test_wrong_try_it_steps_are_dropped_with_the_question_and_the_closing_stays():
+    """The solution is taught on the board, so its steps are verified like an
+    example's; a try-it that fails is left out with its solution, and the
+    lesson still ends with the sign-off."""
+    bad = copy.deepcopy(LESSON)
+    bad["try_it"]["steps"][0]["after"] = ["4x = 22"]
+    c = FakeClient(lesson=bad)
+    lesson, report = L.verified_lesson(c, topic="Linear equations", subject="Mathematics", level="Class 8",
+                                       curriculum=None, language="en", episode_context="")
+    assert lesson.try_it.problem == "" and report["status"] == "verified"
+    from maths.board import compile_lesson
+    types = [s["type"] for s in compile_lesson(lesson)]
+    assert types[-2:] == ["synthesis", "preview"] and "question_hook" not in types
+
+
+def test_the_closing_falls_back_to_the_topic_when_the_model_gave_none():
+    from maths.board import closing_segment
+    from maths.schema import Lesson, MethodCard
+    seg = closing_segment(Lesson(topic="Linear equations", method=MethodCard(steps=["Move constants"])), "s9")
+    assert seg["type"] == "preview" and "better understanding of Linear equations" in seg["text"]
+    assert any(e["id"] == "card_box" for e in seg["scene"]["elements"])
+
+
 def test_a_wrong_try_it_is_dropped_not_taught():
     bad = copy.deepcopy(LESSON)
     bad["try_it"]["answer"] = ["x = 5"]
@@ -148,9 +179,18 @@ def test_the_script_has_the_blueprint_shape_and_renders():
                                      avatars={"teacher": "avatar_teacher", "student": "avatar_student"},
                                      subject="Mathematics", learner_age="Class 8", book_id="bk")
     types = [s.type.value for s in script.segments]
-    assert types == ["hook", "explore", "explore", "explore", "explore", "synthesis", "question_hook"]
+    assert types == ["hook", "explore", "explore", "explore", "explore", "synthesis", "question_hook",
+                     "explore", "preview"]
     assert script.maths["verification"]["status"] == "verified"
-    assert script.segments[-1].pause_for_question
+    try_it, solution, closing = script.segments[-3:]
+    assert try_it.pause_for_question and try_it.hold_secs == 3.0
+    assert solution.hold_secs == 0.0 and closing.hold_secs == 0.0
+    # the solution is the try-it worked like an example: its states written, the answer underlined
+    exprs = [e.get("expr") for e in solution.scene["elements"] if e["type"] == "math"]
+    assert "4x = 16" in exprs and "x = 4" in exprs
+    assert any(a["verb"] == "underline" for a in solution.scene["actions"])
+    assert "compare our working" in solution.text and "x equals four" in solution.text
+    assert closing.text.startswith("I hope you now have a better understanding")
     ex1 = script.segments[2]
     assert ex1.dialogue and any(d["who"] == "student" for d in ex1.dialogue), "two voices in a worked example"
     for s in script.segments:

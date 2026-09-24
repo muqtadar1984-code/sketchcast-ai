@@ -29,7 +29,8 @@ A maths lesson is generated **as structure** (`maths/schema.py`), never as
 prose that is later mined for its mathematics:
 
 ```
-Lesson: hook -> concept (+ method card) -> examples 1..4 -> recap -> try-it
+Lesson: hook -> concept (+ method card) -> examples 1..4 -> recap
+        -> try-it (3 s silent hold) -> try-it solution -> closing
 WorkedExample: problem, givens, target, steps[], final_answer, common_mistake
 Step: kind (transform | setup | check), operation, before[], after[], speech
 ```

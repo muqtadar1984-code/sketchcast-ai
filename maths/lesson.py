@@ -82,12 +82,13 @@ _LADDER = """=== THE LESSON (fixed blueprint — do not reorder) ===
    Every example: 'label' ("Example 1"), 'task' (solve | solve_system | solve_inequality | simplify | expand | factorise | evaluate), 'problem' (as the student reads it: notation, or the word problem in words), 'givens' (the equations or expression the working starts from, in notation), 'target' ("x", "x, y" or "expression"), 'intro_speech' (the teacher introducing the example, in words), optional 'student_question', the 'steps', 'final_answer' (one relation or expression per string), 'answer_speech'.
    Examples 1-3 stay clean and progressive: no wrong routes there.
 4. recap: 2-4 spoken lines restating the method, and 'misconceptions': 1-3 board points naming the mistakes students make most (at most ten words each).
-5. try_it: one problem for the student to pause on, with its 'answer' (notation) and 'speech' (the teacher setting it, in words).
+5. try_it: one problem for the student to pause on (difficulty like example 2): 'problem', 'answer' (notation), 'speech' (the teacher setting it and telling the learner to pause the video and try it, in words), then — because the video resumes by solving it on the board — 'solution_speech' (one sentence resuming after the pause, e.g. inviting the learner to compare their working), 'steps' (2-4 steps in exactly the format of an example's steps) and 'answer_speech'.
+6. closing: one or two spoken sentences ending the lesson: the teacher hopes the learner now understands {topic} better and encourages a little practice.
 Keep every spoken line natural, in {language}, for a learner of {level}. The whole lesson should run 8-12 minutes when spoken."""
 
 _OUTPUT = """=== OUTPUT ===
-Return one JSON object with exactly these keys: topic, level, hook, concept, concept_points, method, examples, recap, misconceptions, try_it.
-hook/concept/recap are arrays of {{"who": "teacher"|"student", "line": "..."}}. method is {{"title": "...", "steps": [...]}}. examples is the array described above. try_it is {{"problem": "...", "answer": ["..."], "speech": "..."}}.
+Return one JSON object with exactly these keys: topic, level, hook, concept, concept_points, method, examples, recap, misconceptions, try_it, closing.
+hook/concept/recap are arrays of {{"who": "teacher"|"student", "line": "..."}}. method is {{"title": "...", "steps": [...]}}. examples is the array described above. try_it is {{"problem": "...", "answer": ["..."], "speech": "...", "solution_speech": "...", "steps": [...], "answer_speech": "..."}}. closing is a string.
 Minified JSON. No trailing commas. No comments."""
 
 
@@ -104,7 +105,7 @@ def build_prompt(*, topic: str, subject: str | None, level: str | None, curricul
             f"CURRICULUM: {curriculum or 'not specified'}\nLANGUAGE OF NARRATION: {lang}\n\n"
             f"{episode_context}\n")
     body = _LADDER.format(n_examples=n_examples, difficulty_note=_difficulty_note(lvl),
-                          language=lang, level=lvl)
+                          language=lang, level=lvl, topic=topic)
     return "\n\n".join([head, _NOTATION_RULES, _STEP_RULES, body, _OUTPUT])
 
 
@@ -211,6 +212,7 @@ def to_episode_script(lesson: Lesson, report: dict, *, book_id: str, chapter_num
             elevenlabs_text=s["elevenlabs_text"], dialogue=s.get("dialogue"),
             slide_heading=s.get("slide_heading", ""), slide_points=s.get("slide_points") or [],
             pause_for_question=bool(s.get("pause_for_question")), scene=s.get("scene"),
+            hold_secs=float(s.get("hold_secs") or 0.0),
             estimated_duration_seconds=int(s.get("estimated_duration_seconds") or 8),
         ))
     total = sum(s.estimated_duration_seconds for s in segments)

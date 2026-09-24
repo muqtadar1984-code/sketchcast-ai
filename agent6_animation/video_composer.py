@@ -191,6 +191,9 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
 
         scene_dict = scene_dict or script_seg.get("scene")
         starts = script_seg.get("_dialogue_starts")
+        # a held segment's captions end with the SPEECH, not the silence
+        speech_secs = max(0.5, audio_secs - float(script_seg.get("hold_secs") or 0.0)) \
+            if audio_secs > 0 else audio_secs
         if scene_dict and script_seg.get("dialogue") and starts:
             # conversational captions join HERE, once real per-line audio
             # offsets exist — each line's bubble beside ITS speaker, at its
@@ -212,7 +215,7 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
             nb_els, nb_acts = narration_stream(
                 narration, uid=str(script_seg.get("segment_id", "seg")),
                 dialogue=script_seg["dialogue"], line_starts=starts,
-                total_secs=audio_secs)
+                total_secs=speech_secs)
             scene_dict["elements"].extend(nb_els)
             scene_dict["actions"] = scene_dict["actions"] + nb_acts
         elif scene_dict and narration and audio_path and not any(
@@ -551,6 +554,26 @@ def _merge_line_words(spoken: list[tuple[str, Path, float, float]]) -> list[dict
     return out
 
 
+def _pad_silence(audio_path: str, secs: float, ffmpeg: str) -> bool:
+    """Append `secs` of silence to an audio file IN PLACE (the words.json
+    beside it stays valid: every boundary is earlier than the pad). The
+    board holds its last frame through it — a maths try-it's "pause and
+    try it" beat. False, file untouched, when ffmpeg cannot."""
+    if secs <= 0:
+        return False
+    src = Path(audio_path)
+    tmp = src.with_name(src.stem + "_held" + src.suffix)
+    proc = subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-i", str(src),
+                           "-af", f"apad=pad_dur={secs:.2f}", "-c:a", "libmp3lame", "-q:a", "4", str(tmp)],
+                          capture_output=True, text=True)
+    if proc.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
+        logger.warning("hold: could not pad %s by %.1fs: %s", src.name, secs, (proc.stderr or "")[-200:])
+        tmp.unlink(missing_ok=True)
+        return False
+    os.replace(tmp, src)
+    return True
+
+
 def _audio_duration(audio_path: str, ffmpeg: str) -> float:
     """Read an audio file's duration (seconds) by parsing ffmpeg output."""
     proc = subprocess.run([ffmpeg, "-i", audio_path], capture_output=True, text=True)
@@ -850,6 +873,9 @@ def compose_episode_videos(
             except Exception as exc:  # noqa: BLE001 — a TTS hiccup must not kill the video
                 logger.error("TTS failed for %s: %s", seg_id, exc)
                 audio_path = None
+        hold = float(script_seg.get("hold_secs") or 0.0)
+        if audio_path and hold > 0 and _pad_silence(audio_path, hold, ffmpeg):
+            duration = _audio_duration(audio_path, ffmpeg) or (duration + hold)
 
         # 2a. Scene engine (feature-gated): ONE visual language. A planned
         # scene renders as directed; a segment WITHOUT one gets a

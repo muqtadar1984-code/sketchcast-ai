@@ -131,3 +131,21 @@ def test_breaks_reach_the_provider_boundary(monkeypatch, tmp_path):
         "restoring breaks must not bring worksheet blanks back into speech")
     assert "<break" not in call["text"], "the plain copy is for Edge — no tags"
     assert "blank" in call["text"]
+
+
+def test_a_held_segment_gets_its_silence_appended_in_place(tmp_path):
+    """The maths try-it holds the whole video for three silent seconds after
+    the teacher sets the problem; the pad goes onto the segment's own audio
+    so the board simply keeps its last frame."""
+    import subprocess
+    from agent6_animation.video_composer import _audio_duration, _ffmpeg_exe, _pad_silence
+    ff = _ffmpeg_exe()
+    mp3 = tmp_path / "s008_audio.mp3"
+    subprocess.run([ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+                    "-t", "1.0", "-q:a", "9", str(mp3)], check=True)
+    before = _audio_duration(str(mp3), ff)
+    assert _pad_silence(str(mp3), 3.0, ff)
+    after = _audio_duration(str(mp3), ff)
+    assert after - before > 2.7, (before, after)
+    assert not (tmp_path / "s008_audio_held.mp3").exists()
+    assert _pad_silence(str(mp3), 0.0, ff) is False
