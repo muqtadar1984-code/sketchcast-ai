@@ -311,3 +311,52 @@ def test_a_teacher_only_segment_is_still_dialogue():
     from maths.schema import Line
     seg = _segment("s3", "explore", [Line(line="One."), Line(line="Two.")], heading="h", points=[])
     assert seg["dialogue"] == [{"who": "teacher", "line": "One."}, {"who": "teacher", "line": "Two."}]
+
+
+def _five_step_scene():
+    from maths.board import example_scene
+    from maths.schema import MethodCard, Step, WorkedExample
+    from spike.scene_engine.whiteboard import narration_stream, student_element, teacher_element
+    steps = [Step(operation="subtract n from both sides", before=["5n - 17 = n + 40"], after=["4n - 17 = 40"],
+                  speech="We transpose the positive n from the right side to the left side, where it becomes subtraction."),
+             Step(operation="add 17 to both sides", before=["4n - 17 = 40"], after=["4n = 57"],
+                  speech="Now add seventeen to both sides of the equation to move the constant across.")]
+    ex = WorkedExample(label="Example 3", task="solve", problem="5n - 17 = n + 40", givens=["5n - 17 = n + 40"],
+                       target="n", steps=steps, final_answer=["n = 57/4"], answer_speech="So n is fifty-seven over four.",
+                       intro_speech="Here is a number puzzle that we turn into an equation before solving it.")
+    method = MethodCard(title="Solving Linear Equations", steps=["Write down the equation", "Isolate the variable term",
+                                                                  "Perform inverse operations", "Find the variable value",
+                                                                  "Check your answer"])
+    scene, lines = example_scene(ex, method, "s005")
+    d = [{"who": l.who, "line": l.line} for l in lines]
+    scene["elements"] += [teacher_element(), student_element()]
+    els, acts = narration_stream(scene["narration"], uid="s005", dialogue=d,
+                                 line_starts=[5.0 * i for i in range(len(d))], total_secs=5.0 * len(d))
+    scene["elements"] += els
+    scene["actions"] += acts
+    return scene
+
+
+def test_a_five_line_card_keeps_its_last_line_under_a_tall_caption():
+    """Maths demo 2026-09-24: '5. Check your answer' was lettered above the
+    card's title — the caption keep-out, taken from a bubble's first text
+    line, landed on the card's last line and the collision pass stacked it
+    to the top row."""
+    scene = _five_step_scene()
+    box = next(e for e in scene["elements"] if e["id"] == "card_box")
+    assert max(p[1] for p in box["points"]) <= 270, "the frame clears the tallest bubble"
+    r = _compiled(scene)
+    authored = {e["id"]: e["at"][1] for e in scene["elements"] if e["id"].startswith("card_") and "at" in e}
+    for k in range(5):
+        assert abs(r.bound[f"card_{k}"].box[1] - authored[f"card_{k}"]) < 1.0, (k, r.audit()["warnings"])
+    assert not any(w.startswith("LABEL_MOVED") for w in r.audit()["warnings"]), r.audit()["warnings"]
+
+
+def test_the_recap_heading_matches_its_points():
+    from maths.board import recap_segment
+    from maths.schema import Lesson, MethodCard
+    lesson = Lesson(topic="Linear equations", method=MethodCard(steps=["Move constants"]),
+                    misconceptions=["Forgetting to change the sign of a term during transposition."])
+    seg = recap_segment(lesson, "s006")
+    assert seg["slide_heading"] == "Common mistakes"
+    assert next(e for e in seg["scene"]["elements"] if e["id"] == "wb_h")["text"] == "Common mistakes"

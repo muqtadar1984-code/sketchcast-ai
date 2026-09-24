@@ -388,14 +388,36 @@ class SceneRenderer:
         # after all the existing collision logic had run. It is a fixed,
         # always-occupied region, so it belongs in the same keep-out list the
         # avatars already use.
+        # The bubbles' OWN outlines when the scene carries them (the stream
+        # builds up to 560x172, and its text lines sit up to 42px above the
+        # centre): reserving the constants around the first text line put
+        # the keep-out on a method card's last line, which the collision
+        # pass then stacked up over the card's title (maths demo,
+        # 2026-09-24). One union per speaker position.
+        outlines: dict[int, tuple] = {}
         for e in scene.elements:
             eid = str(getattr(e, "id", ""))
-            if eid.startswith(CAPTION_PREFIX) and getattr(e, "at", None):
-                cx, cy = e.at
-                self._avatar_zones.append(
-                    (cx - _CAPTION_HALF_W, cy - _CAPTION_HALF_H,
-                     cx + _CAPTION_HALF_W, cy + _CAPTION_HALF_H))
-                break        # one panel per speaker position is enough
+            pts = getattr(e, "points", None)
+            if not (eid.startswith(CAPTION_PREFIX) and getattr(e, "type", "") == "shape"
+                    and pts and not eid.endswith("_tail")):
+                continue
+            xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+            box = (min(xs), min(ys), max(xs), max(ys))
+            key = int(round((box[0] + box[2]) / 2.0 / 100.0))
+            prev = outlines.get(key)
+            outlines[key] = box if prev is None else (min(prev[0], box[0]), min(prev[1], box[1]),
+                                                       max(prev[2], box[2]), max(prev[3], box[3]))
+        for x0, y0, x1, y1 in outlines.values():
+            self._avatar_zones.append((x0 - 6.0, y0 - 6.0, x1 + 6.0, y1 + 6.0))
+        if not outlines:
+            for e in scene.elements:
+                eid = str(getattr(e, "id", ""))
+                if eid.startswith(CAPTION_PREFIX) and getattr(e, "at", None):
+                    cx, cy = e.at
+                    self._avatar_zones.append(
+                        (cx - _CAPTION_HALF_W, cy - _CAPTION_HALF_H,
+                         cx + _CAPTION_HALF_W, cy + _CAPTION_HALF_H))
+                    break        # one panel per speaker position is enough
         self._bind()
 
     def _warn(self, msg: str) -> None:
