@@ -924,8 +924,8 @@ class TestMarkerLayerCrop:
         def full_canvas(self, frame, strokes, w, h):
             marker = PILImage.new("RGBA", (w, h), (0, 0, 0, 0))
             md = PILDraw.Draw(marker)
-            for spts, width in strokes:
-                self._polyline(md, spts, width, PALETTE["marker"] + (110,))
+            for spts, width, a in strokes:
+                self._polyline(md, spts, width, PALETTE["marker"] + (int(110 * a),))
             frame.paste(marker, (0, 0), marker)
         monkeypatch.setattr(SceneRenderer, "_paste_marker", full_canvas)
         r2 = SceneRenderer(s)

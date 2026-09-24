@@ -2197,6 +2197,9 @@ class SceneRenderer:
             return (sp[0] * SS, sp[1] * SS)
 
         style = self.scene.style
+        # highlighter strokes (marker-coloured elements and highlight
+        # decorations) are pasted once, translucent, after the ink
+        marker_strokes: list[tuple[list[Point], int, float]] = []
         for el in self.scene.elements:
             b, s = self.bound[el.id], st[el.id]
             if not s.visible or s.opacity <= 0.01 or s.erase >= 0.999:
@@ -2211,6 +2214,12 @@ class SceneRenderer:
                     continue
                 pts = stx.pts if frac >= 1.0 else cut_at_fraction(stx.pts, frac)
                 spts = [W2S(p, s.offset, ecam) for p in pts]
+                if stx.color == "marker":
+                    # a highlighter element: the translucent layer, with the
+                    # element's own fade/erase so it can leave the board
+                    marker_strokes.append(
+                        (spts, max(1, round(stx.width * ecam.scale * SS)), alpha))
+                    continue
                 col = role_color(stx.color, style.ink, style.accent) + (int(255 * alpha),)
                 if stx.fill and frac >= 1.0 and len(spts) > 2:
                     # paper fill is near-opaque (it exists to OCCLUDE the busy
@@ -2228,10 +2237,18 @@ class SceneRenderer:
         # decorations (circle/underline/highlight) reveal like strokes — through
         # the camera of the element they decorate, so a circle around a
         # screen-fixed sketch does not fly off with the zoom while the sketch stays
-        marker_strokes: list[tuple[list[Point], int]] = []
         for i, ta in enumerate(self.timeline):
             if i not in self.deco or t < ta.start:
                 continue
+            # a decoration goes with what it decorates: an underline under a
+            # line the board has since wiped was a teal squiggle under
+            # nothing (maths demo, 2026-09-24)
+            tstate = st.get(getattr(ta.action, "target", None))
+            dalpha = 1.0
+            if tstate is not None:
+                if not tstate.visible or tstate.opacity <= 0.01 or tstate.erase >= 0.999:
+                    continue
+                dalpha = tstate.opacity * (1.0 - tstate.erase)
             p = ease(ta.action.easing, min(1.0, (t - ta.start) / max(1e-9, ta.duration)))
             dcam = cam_hud if getattr(ta.action, "target", None) in hud_ids else cam
             for stx in self.deco[i]:
@@ -2239,9 +2256,9 @@ class SceneRenderer:
                 spts = [W2S(q, c=dcam) for q in pts]
                 if stx.color == "marker":
                     marker_strokes.append(
-                        (spts, max(1, round(stx.width * dcam.scale * SS))))
+                        (spts, max(1, round(stx.width * dcam.scale * SS)), dalpha))
                 else:
-                    col = role_color(stx.color, style.ink, style.accent) + (255,)
+                    col = role_color(stx.color, style.ink, style.accent) + (int(255 * dalpha),)
                     self._polyline(d, spts, max(1, round(stx.width * dcam.scale * SS)), col)
         if marker_strokes:
             self._paste_marker(frame, marker_strokes, w, h)
@@ -2273,7 +2290,7 @@ class SceneRenderer:
         return frame.reduce(SS)
 
     def _paste_marker(self, frame: Image.Image,
-                      strokes: list[tuple[list[Point], int]], w: int, h: int) -> None:
+                      strokes: list[tuple[list[Point], int, float]], w: int, h: int) -> None:
         """The translucent highlighter layer, alpha-blended over the frame.
 
         Drawn into an RGBA the size of the strokes' bounding box (padded by
@@ -2283,10 +2300,11 @@ class SceneRenderer:
         of the scene. The per-pixel blend is identical — an integer offset of
         the stroke points is an exact translation — and only the fully
         transparent area is skipped."""
-        pts = [p for spts, _ in strokes for p in spts]
+        strokes = [(spts, width, a) for spts, width, a in strokes if a > 0.01]
+        pts = [p for spts, _w, _a in strokes for p in spts]
         if not pts:
             return
-        pad = max(width for _, width in strokes) // 2 + 2
+        pad = max(width for _, width, _a in strokes) // 2 + 2
         x0 = max(0, int(math.floor(min(p[0] for p in pts))) - pad)
         y0 = max(0, int(math.floor(min(p[1] for p in pts))) - pad)
         x1 = min(w, int(math.ceil(max(p[0] for p in pts))) + pad + 1)
@@ -2295,9 +2313,9 @@ class SceneRenderer:
             return                              # entirely off-canvas
         marker = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
         md = ImageDraw.Draw(marker)
-        for spts, width in strokes:
+        for spts, width, a in strokes:
             self._polyline(md, [(px - x0, py - y0) for px, py in spts], width,
-                           PALETTE["marker"] + (110,))
+                           PALETTE["marker"] + (int(110 * a),))
         frame.paste(marker, (x0, y0), marker)
 
     # frontier of an in-flight action, world coords

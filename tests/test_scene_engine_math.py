@@ -91,3 +91,29 @@ def test_math_survives_highlight_underline_and_fade():
     r = SceneRenderer(sc)
     r.compile(5.0)
     assert list(r.frames(5.0, 4))
+
+
+def test_a_decoration_leaves_with_the_element_it_decorates():
+    """An underline under a line the board has since erased must not stay
+    (maths demo 2026-09-24: a squiggle under nothing after a wipe)."""
+    r = SceneRenderer(_scene(extra_actions=[
+        {"verb": "underline", "target": "q", "at": {"frac": 0.3}},
+        {"verb": "erase", "target": "q", "at": {"frac": 0.7}, "duration": 0.4}]))
+    r.compile(8.0)
+    x0, y0, x1, y1 = r.bound["q"].box
+    under = (x0 - 8, y1 + 2, x1 + 8, y1 + 16)
+    assert _ink(_frame_at(r, 4.5, 8.0), under) > 0, "underline drawn"
+    assert _ink(_frame_at(r, 7.6, 8.0), under) == 0, "gone with the line"
+
+
+def test_a_marker_shape_is_translucent_and_fades():
+    hl = {"id": "hl", "type": "shape", "shape": "line", "width": 26, "color": "marker",
+          "points": [[80, 100], [300, 100]]}
+    r = SceneRenderer(_scene(extra_elements=[hl], extra_actions=[
+        {"verb": "draw", "target": "hl", "at": {"frac": 0.2}, "duration": 0.5},
+        {"verb": "fade", "target": "hl", "to": 0.0, "at": {"frac": 0.8}, "duration": 0.2}]))
+    r.compile(8.0)
+    px = _frame_at(r, 4.0, 8.0).convert("RGB").getpixel((150, 100))
+    assert px[0] > 200 and px[2] < 200, px          # yellow wash
+    assert px[2] > 60, "translucent, not the solid marker colour"
+    assert _frame_at(r, 7.8, 8.0).convert("RGB").getpixel((150, 100))[2] > 200, "faded away"

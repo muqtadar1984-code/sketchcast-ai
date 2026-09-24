@@ -41,6 +41,10 @@ LINE_X = 60.0
 LINE_SIZE = 36.0
 FIRST_ROW_Y = 118.0
 ROW_GAP = 20.0
+# under the question, room for the first line's note (they sit in the gap
+# above their line): a word problem's 14 px put the note on its second
+# line (TEXT_OVERLAP q1+n3, the demo's consecutive-numbers example)
+PROBLEM_GAP = 34.0
 MIN_ROW_H = LINE_SIZE * 1.08   # ink height alone packs "x = 5" under "3x = 15"
 WORK_BOTTOM = 452.0          # the avatars start at ~460
 NOTE_SIZE = 23.0
@@ -105,10 +109,39 @@ def _layout(expr: str, size: float) -> Optional[Layout]:
 # ── speech helpers ──────────────────────────────────────────────────────
 
 
+_SIDES_RE = re.compile(r"\b([LR])\.?H\.?S(\.)?(?=\s*=\s*[LR]\.?H\.?S|\W|$)", re.I)
+_SIDES_EQ_RE = re.compile(r"\b([LR])\.?H\.?S\.?\s*=\s*([LR])\.?H\.?S(\.)?(?=\W|$)", re.I)
+
+
+def _side(letter: str, before: str = "") -> str:
+    side = "left-hand side" if letter.upper() == "L" else "right-hand side"
+    # "the LHS" already has its article
+    return side if re.search(r"\bthe\s*$", before, re.I) else f"the {side}"
+
+
+def _expand_sides(text: str) -> str:
+    """"L.H.S." spoken and captioned as words: the caption splitter cut a
+    recap sentence at the abbreviation's full stop ("...verify that L.H.S."
+    | "equals R.H.S.")."""
+    def eq(m):
+        return (f"{_side(m.group(1), m.string[:m.start()])} equals {_side(m.group(2))}"
+                f"{m.group(3) or ''}")
+
+    def one(m):
+        dot = m.group(2) or ""
+        # keep a full stop that ends the sentence, drop the abbreviation's
+        rest = m.string[m.end():]
+        ends = not rest.strip() or rest.lstrip()[:1].isupper()
+        return _side(m.group(1), m.string[:m.start()]) + (dot if dot and ends else "")
+
+    text = _SIDES_EQ_RE.sub(eq, text)
+    return _SIDES_RE.sub(one, text)
+
+
 def say(text: str) -> str:
     """A spoken line as the voice should receive it: no SSML, notation in
     words, whitespace tidy."""
-    return " ".join(speakable_maths(strip_ssml(str(text or ""))).split())
+    return " ".join(speakable_maths(_expand_sides(strip_ssml(str(text or "")))).split())
 
 
 def _cue(speech: str, narration: str, words: int = 5) -> Optional[dict]:
@@ -145,10 +178,10 @@ def card_elements(method, present: bool) -> tuple[list[dict], list[dict]]:
         {"id": "card_title", "type": "text", "text": _short(method.title or "METHOD", 22),
          "role": "term", "color": "accent", "size": CARD_TITLE_SIZE, "at": [CARD_X, CARD_Y], "anchor": "lt"},
     ]
-    for i, line in enumerate(lines):
-        els.append({"id": f"card_{i}", "type": "text", "text": _short(f"{i + 1}. {line}", 34),
-                    "size": CARD_LINE_SIZE, "at": [CARD_X, CARD_Y + CARD_TITLE_SIZE + 16 + CARD_PITCH * i],
-                    "anchor": "lt"})
+    for i, _line in enumerate(lines):
+        text, y = _card_line(method, i)
+        els.append({"id": f"card_{i}", "type": "text", "text": text,
+                    "size": CARD_LINE_SIZE, "at": [CARD_X, y], "anchor": "lt"})
     acts: list[dict] = []
     if not present:
         acts.append({"verb": "draw", "target": "card_box", "at": {"frac": 0.5}})
@@ -156,6 +189,12 @@ def card_elements(method, present: bool) -> tuple[list[dict], list[dict]]:
         for i in range(len(lines)):
             acts.append({"verb": "write", "target": f"card_{i}", "at": {"frac": min(0.92, 0.58 + 0.08 * i)}})
     return els, acts
+
+
+def _card_line(method, i: int) -> tuple[str, float]:
+    """The card's i-th line as written, and its top."""
+    return (_short(f"{i + 1}. {method.steps[i]}", 34),
+            CARD_Y + CARD_TITLE_SIZE + 16 + CARD_PITCH * i)
 
 
 def _stem(w: str) -> str:
@@ -224,10 +263,13 @@ class _Board:
     rows: list[_Row] = field(default_factory=list)      # visible working lines
     annotations: list[str] = field(default_factory=list)  # notes and leaders on those lines
     wiped: bool = False                                    # the last state started a fresh column
+    carried: list = field(default_factory=list)            # rows re-written after a wipe (the answer)
+    top_y: float = FIRST_ROW_Y                             # under the question, where a wipe restarts
     next_y: float = FIRST_ROW_Y
+    note_x: float = 0.0                                    # the notes' column since the last wipe
     n: int = 0
     state_no: int = 0
-    highlighted: set = field(default_factory=set)
+    highlight: Optional[tuple[int, str]] = None            # (card line, marker element) in use
     question: Optional["_Row"] = None      # the pinned problem, when it is notation
 
     def uid(self, prefix: str) -> str:
@@ -244,7 +286,8 @@ def _problem_elements(ex: WorkedExample, board: _Board, cue: Optional[dict]) -> 
         board.elements.append({"id": "q", "type": "math", "expr": problem, "at": list(Q_AT),
                                "size": Q_SIZE, "role": "title"})
         board.actions.append({"verb": "write", "target": "q", **({"at": cue} if cue else {})})
-        board.next_y = max(FIRST_ROW_Y, Q_AT[1] + max(lay.h, Q_SIZE * 1.1) + 30)
+        board.next_y = max(FIRST_ROW_Y, Q_AT[1] + max(lay.h, Q_SIZE * 1.1) + PROBLEM_GAP)
+        board.top_y = board.next_y
         board.question = _Row("q", problem, Q_AT[1], lay, -1)
         return
     # a word problem
@@ -267,16 +310,23 @@ def _problem_elements(ex: WorkedExample, board: _Board, cue: Optional[dict]) -> 
                                "at": [Q_AT[0], y], "anchor": "lt"})
         board.actions.append({"verb": "write", "target": f"q{i}", **({"at": cue} if cue and i == 0 else {})})
         y += 46   # the handwriting face runs ~44 px tall at this size (TEXT_OVERLAP q0+q1)
-    board.next_y = y + 14
+    # a wipe restarts HERE, not at the notation-question row: the first line
+    # after a wipe once sat on the word problem's second line (maths demo)
+    board.next_y = y - 2 + PROBLEM_GAP   # the last line's ink ends ~2 px above y
+    board.top_y = board.next_y
 
 
 def _add_state(board: _Board, state: list[str], cue: Optional[dict], color: str = "ink",
-               dim_previous: bool = True) -> list[_Row]:
+               dim_previous: bool = True, carry: Optional[list[str]] = None) -> list[_Row]:
     """Write the lines of a state on the next rows; dim what came before;
-    wipe the column first when the state would not fit."""
+    wipe the column first when the state would not fit. ``carry`` names
+    lines (the final answer) to write again at the top after such a wipe,
+    the way a teacher keeps the result on the board while checking it —
+    the answer underline once landed where the wiped row had been."""
     lays = [(x, _layout(x, LINE_SIZE)) for x in state[:4]]
     needed = sum(max(l.h if l else LINE_SIZE, MIN_ROW_H) + ROW_GAP for _x, l in lays)
     board.wiped = False
+    board.carried = []
     if board.next_y + needed > WORK_BOTTOM and board.rows:
         # the notes and leaders go with the lines they annotate — a wipe
         # that left them behind wrote the next example's notes over them
@@ -287,9 +337,13 @@ def _add_state(board: _Board, state: list[str], cue: Optional[dict], color: str 
         board.actions.append({"verb": "erase", "target": grp, "duration": 0.9, **({"at": cue} if cue else {})})
         board.rows = []
         board.annotations = []
-        board.next_y = FIRST_ROW_Y
+        board.next_y = board.top_y
+        board.note_x = 0.0
         board.wiped = True
         cue = None  # the writes follow the wipe
+        if carry:
+            board.carried = _add_state(board, carry, None, dim_previous=False)
+            board.wiped = True
     elif dim_previous and board.rows:
         prev = [r for r in board.rows if r.state_index == board.state_no - 1]
         for r in prev:
@@ -352,7 +406,10 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
     if target is not None and target.y < row.y:
         right = max(right, target.lay.w if target.eid != "q" else 0.0)
         y = (target.y + target.lay.h + row.y) / 2.0
-    x = LINE_X + right + NOTE_GAP
+    # one column for the notes of a column of working — they zigzagged with
+    # each line's width
+    x = max(LINE_X + right + NOTE_GAP, board.note_x)
+    board.note_x = x
     size = NOTE_SIZE
     w = _M.text_width(note, size)
     while x + w > NOTE_RIGHT and size > 18:
@@ -384,15 +441,29 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
     board.annotations.append(aid)
 
 
+HL_WIDTH = 26.0
+
+
 def _highlight_method(board: _Board, step: Step, method, cue: Optional[dict], has_card: bool) -> None:
+    """Move the card's highlight to the line this step uses. A marker
+    ELEMENT, not the highlight verb: the verb's decoration never leaves, so
+    by example 4 every line was yellow at once (maths demo, 2026-09-24)."""
     if not has_card:
         return
     k = method_step_for(step, method)
-    if k is None or k in board.highlighted:
+    if k is None or (board.highlight is not None and board.highlight[0] == k):
         return
-    board.highlighted.add(k)
-    board.actions.append({"verb": "highlight", "target": f"card_{k}", "duration": 0.7,
-                          **({"at": cue} if cue else {})})
+    text, y = _card_line(method, k)
+    w = _M.text_width(text, CARD_LINE_SIZE)
+    ym = y + CARD_LINE_SIZE * 0.62
+    hid = board.uid("hl")
+    board.elements.append({"id": hid, "type": "shape", "shape": "line", "width": HL_WIDTH, "color": "marker",
+                           "points": [[CARD_X - 8, ym], [CARD_X + w + 10, ym]]})
+    at = {"at": cue} if cue else {}
+    if board.highlight is not None:
+        board.actions.append({"verb": "fade", "target": board.highlight[1], "to": 0.0, "duration": 0.3, **at})
+    board.actions.append({"verb": "draw", "target": hid, "duration": 0.7, **at})
+    board.highlight = (k, hid)
 
 
 def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = True) -> tuple[dict, list[Line]]:
@@ -438,7 +509,10 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
         if not st.after:
             continue
         if st.kind == "check":
-            rows = _add_state(board, st.after[:1], cue, color="muted", dim_previous=False)
+            rows = _add_state(board, st.after[:1], cue, color="muted", dim_previous=False,
+                              carry=[r.expr for r in last_rows])
+            if board.carried:
+                last_rows = board.carried
             if rows:
                 _add_note(board, rows[0], "check", None, "")
             continue
@@ -460,7 +534,11 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
     m = ex.common_mistake
     if m is not None and m.wrong_state and mistake_speech:
         mcue = _cue(mistake_speech, narration)
-        rows = _add_state(board, m.wrong_state[:1], mcue, color="muted", dim_previous=False)
+        rows = _add_state(board, m.wrong_state[:1], mcue, color="muted", dim_previous=False,
+                          carry=[r.expr for r in last_rows])
+        for r in board.carried:
+            # the answer written again after the wipe keeps its underline
+            board.actions.append({"verb": "underline", "target": r.eid})
         if rows:
             r = rows[0]
             sid = board.uid("strike")
@@ -570,10 +648,14 @@ def example_segment(ex: WorkedExample, lesson: Lesson, seg_id: str) -> dict:
 def _segment(seg_id: str, seg_type: str, lines: list[Line], *, heading: str, points: list[str],
              pause: bool = False) -> dict:
     text = " ".join(l.line for l in lines if l.line)
+    # ALWAYS dialogue, student line or not: per-line audio gives every
+    # caption a measured start and keeps the avatars on the board. A
+    # teacher-only example fell to the single-voice stream, where phrase
+    # cues in maths narration (numbers repeat) let two captions overlap and
+    # the avatars vanished (maths demo, 2026-09-24).
     dialogue = [{"who": l.who, "line": l.line} for l in lines if l.line]
-    two_voice = len(dialogue) >= 2 and any(d["who"] == "student" for d in dialogue)
     return {"segment_id": seg_id, "type": seg_type, "text": text, "elevenlabs_text": text,
-            "dialogue": dialogue if two_voice else None, "slide_heading": heading,
+            "dialogue": dialogue or None, "slide_heading": heading,
             "slide_points": points, "pause_for_question": pause, "no_sketches": True,
             "estimated_duration_seconds": max(5, int(round(len(text) / 14.0)))}
 
