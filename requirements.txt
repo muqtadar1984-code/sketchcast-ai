@@ -15,6 +15,10 @@ anthropic[vertex]>=0.20.0   # [vertex] pulls google-auth for the Vertex AI backe
 # unreachable streamlit bundle -- the obvious cleanup -- would have stopped the
 # video renderer in production. Declared explicitly so that deletion is safe.
 numpy>=1.24
+# Step-level verification of maths lessons (maths/verify.py) runs SymPy IN
+# the worker, through mathsvc's constrained parser — no network hop inside a
+# video render. The tutor's calculator service keeps its own requirements.
+sympy>=1.12
 requests>=2.31.0            # Gemini-on-Vertex client (shared/gemini_client.py)
 pillow>=10.0.0
 elevenlabs>=1.0.0
