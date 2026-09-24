@@ -40,7 +40,9 @@ import requests
 
 from shared import model_env, text_models
 from shared.claude_client import (
+    _RETRY_STATUS,
     ClaudeClient,
+    _backoff_seconds,
     _ensure_google_credentials,
     _merge_usage,
     logger,
@@ -258,6 +260,14 @@ class GeminiClient:
         )
         if res.status_code == 429:
             raise _RateLimited(res.text)
+        if res.status_code in _RETRY_STATUS:
+            # Vertex answers a one-off 500 while the same model serves the
+            # sibling jobs fine (2026-09-22 21:34: a teacher's worksheet and
+            # case study, fifteen such in four bursts that day, none on any
+            # other day of the fortnight). The Claude path has retried these
+            # statuses with backoff for a year; this path let the FIRST one
+            # fail the generation. Same list, same backoff, same jitter.
+            raise _Transient(res.status_code, res.text[:300])
         if schema_on and res.status_code == 400:
             # Vertex rejects a schema it cannot express (a keyword outside the
             # OpenAPI subset, a nesting depth, a model that does not support
@@ -311,6 +321,11 @@ class GeminiClient:
                 return self._post(parts, system, max_tokens, response_schema, wants_json)
             except _RateLimited:
                 time.sleep(2 ** (attempt + 1))
+            except _Transient as exc:
+                wait = _backoff_seconds(attempt)
+                logger.warning("transient Vertex failure (HTTP %d); retrying in %.1fs (%d/%d): %s",
+                               exc.status, wait, attempt + 1, retries, exc.body)
+                time.sleep(wait)
             except _SchemaRejected as exc:
                 logger.error("Vertex rejected responseSchema, retrying unconstrained: %s", exc)
                 response_schema = None
@@ -510,6 +525,18 @@ class GeminiClient:
 
 class _RateLimited(Exception):
     """429 from Vertex — retried with backoff, mirroring RateLimitError."""
+
+
+class _Transient(requests.HTTPError):
+    """A status in claude_client._RETRY_STATUS (500/502/503/504 and kin) from
+    Vertex — retried with the Claude client's jittered backoff. An HTTPError
+    on purpose: the last attempt lets it through unchanged, so a caller that
+    read `500 Server Error` off jobs.error yesterday reads the same shape."""
+
+    def __init__(self, status: int, body: str):
+        super().__init__(f"{status} Server Error: transient Vertex failure ({body})")
+        self.status = status
+        self.body = body
 
 
 class _SchemaRejected(Exception):
