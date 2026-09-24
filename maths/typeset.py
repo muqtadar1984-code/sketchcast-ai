@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol
 
-from maths.tokens import FUNCTIONS, Tok, TokenError, tokenize
+from maths.tokens import FUNCTIONS, Tok, TokenError, normalise, tokenize
 
 Point = tuple[float, float]
 
@@ -186,7 +186,6 @@ class Layout:
 
 
 def _norm(s: str) -> str:
-    from maths.notation import normalise
     return normalise(s).replace(" ", "").replace("**", "^")
 
 
@@ -231,6 +230,10 @@ class _Brack(_Node):
     inner: _Node
 
 
+def _unwrap(n: _Node) -> _Node:
+    return n.inner if isinstance(n, _Brack) else n
+
+
 class _Parser:
     def __init__(self, toks: list[Tok]):
         self.t = toks
@@ -268,7 +271,10 @@ class _Parser:
             nxt = self.peek()
             if p.text == "/":
                 left = items[0] if len(items) == 1 else _Row(items)
-                items = [_Frac(left, self.unary())]
+                # a bracket that IS the whole numerator or denominator is
+                # the author's linear-notation grouping, not a bracket a
+                # textbook would print over a stacked fraction
+                items = [_Frac(_unwrap(left), _unwrap(self.unary()))]
                 last_kind = "frac"
                 continue
             right = self.unary()

@@ -79,6 +79,23 @@ def ascii_punct(s: str) -> str:
     return "".join(_PUNCT_ASCII.get(c, c) for c in s)
 
 
+# The glyphs beyond general punctuation that Caveat DOES carry and a maths
+# line needs (probed 2026-09-24: − × ÷ ² ³ ≤ ≥ ≠ · present; √ π θ absent).
+# _hand_font's guard drops any line with a char past U+2014 to the sans
+# face; a maths run is routed by THIS set instead, so "3x − 5" keeps one
+# handwriting face and only a π falls back.
+_CAVEAT_MATHS = frozenset("−×÷²³≤≥≠·")
+
+
+def _hand_face(size: int):
+    if not _HAND_TTF.exists():
+        return None
+    try:
+        return ImageFont.truetype(str(_HAND_TTF), size)
+    except Exception:
+        return None
+
+
 def _hand_font(bold: bool, size: int, sample: str):
     if not _HAND_TTF.exists() or any(ord(c) > 0x2014 for c in sample):
         return None
@@ -100,8 +117,11 @@ from .geometry import (Point, bbox, cut_at_fraction, ease, ellipse_path,
 from .paper import PALETTE, make_background, role_color
 from .pen import PenSprite, resolve_mode
 from .schema import (WORLD_H, WORLD_W, AnchorRef, ArrowElement, GroupElement,
-                     IllustrationElement, ParticleGroupElement, Scene,
+                     IllustrationElement, MathElement, ParticleGroupElement, Scene,
                      ShapeElement, TextElement)
+from maths.typeset import Layout as MathLayout
+from maths.typeset import typeset as typeset_math
+from maths.tokens import TokenError as MathTokenError
 from .anchor_match import (  # noqa: F401  (re-exported below)
     anchor_layer_hits,
     without_unknown_qualifiers as _anchor_without_unknown_qualifiers,
@@ -282,11 +302,21 @@ class BText:
 
 
 @dataclass
+class BMath:
+    """A typeset equation: the layout (runs and strokes relative to its own
+    top-left) and where that corner sits on the board."""
+    layout: MathLayout
+    origin: Point
+    color: str
+
+
+@dataclass
 class Bound:
     element: object
     layers: list[BLayer] = field(default_factory=list)
     raster: Optional[BRaster] = None
     text: Optional[BText] = None
+    math: Optional[BMath] = None
     spawn: list[Point] = field(default_factory=list)   # particles
     box: tuple[float, float, float, float] = (0, 0, 0, 0)
     introduced: bool = False  # True => starts hidden until its intro action
@@ -389,6 +419,8 @@ class SceneRenderer:
                 self._bind_illustration(el, b)
             elif isinstance(el, TextElement):
                 self._bind_text(el, b, rtl_scene)
+            elif isinstance(el, MathElement):
+                self._bind_math(el, b, rtl_scene)
             elif isinstance(el, ArrowElement):
                 deferred_arrows.append(el)
             elif isinstance(el, ShapeElement):
@@ -561,6 +593,8 @@ class SceneRenderer:
                     self.workloads[i] = sum(st.length for st in self._flat[a.target])
             elif a.verb == "write" and tgt and tgt.text:
                 self.workloads[i] = float(len(tgt.text.display))
+            elif a.verb == "write" and tgt and tgt.math:
+                self.workloads[i] = float(tgt.math.layout.units)
             elif a.verb == "circle" and tgt:
                 x0, y0, x1, y1 = self._emphasis_box(tgt, a)
                 pts = ellipse_path((x0 + x1) / 2, (y0 + y1) / 2,
@@ -771,11 +805,73 @@ class SceneRenderer:
         self._text_boxes.append((x0, y0, x0 + w, y0 + h))
         b.box = (x0, y0, x0 + w, y0 + h)
 
+    def _math_font(self, size: float, sample: str):
+        """The face a maths run is drawn with: the handwriting face whenever
+        every glyph exists in it, the sans face otherwise. One cache with the
+        text fonts, keyed apart. Used for MEASURING at bind and DRAWING per
+        frame, so layout and ink agree."""
+        size = max(6, int(size) // 2 * 2)
+        hand = (self.scene.style.font == "hand"
+                and all(ord(c) < 0x7F or c in _CAVEAT_MATHS for c in sample))
+        key = ("math", hand, size, sample[:4])
+        if key not in self._fonts:
+            if len(self._fonts) > 256:
+                self._fonts.clear()
+            f = _hand_face(int(size * _HAND_SIZE_COMP)) if hand else None
+            self._fonts[key] = f if f is not None else _font(False, size, sample)
+        return self._fonts[key]
+
+    def _bind_math(self, el: MathElement, b: Bound, rtl_scene: bool) -> None:
+        """Lay the expression out with the renderer's own fonts. Notation the
+        typesetter cannot read binds as plain text — a line the student can
+        still read beats a hole on the board."""
+        # a Measurer over the renderer's own faces, chosen PER RUN (a π
+        # falls back to sans, the digits around it stay handwritten)
+        class _M:
+            def measure(_m, text: str, size: float):
+                f = self._math_font(size, text)
+                try:
+                    w = float(f.getlength(text))
+                    asc, _desc = f.getmetrics()
+                    x0, y0, x1, y1 = f.getbbox(text)
+                    return (w, float(asc), float(y0) - asc, float(y1) - asc)
+                except Exception:
+                    return (len(text) * size * 0.55, size * 0.8, -size * 0.7, size * 0.2)
+        try:
+            lay = typeset_math(el.expr, float(el.size), _M())
+        except (MathTokenError, Exception) as exc:  # noqa: BLE001
+            self._warn(f"MATH_UNREADABLE {el.id} ({exc})")
+            fallback = TextElement(id=el.id, text=el.expr, at=el.at, size=el.size,
+                                   color=el.color, anchor=el.anchor,
+                                   role="title" if el.role == "title" else "label")
+            self._bind_text(fallback, b, rtl_scene)
+            return
+        ax, ay = el.at
+        w, h = lay.w, lay.h
+        x0 = ax - (w if el.anchor[0] == "r" else w / 2 if el.anchor[0] == "m" else 0)
+        y0 = ay - (h / 2 if el.anchor[1] == "m" else 0)
+        SAFE_L, SAFE_R, SAFE_T, SAFE_B = 24.0, WORLD_W - 24.0, 22.0, WORLD_H - 46.0
+        if x0 + w > SAFE_R:
+            self._warn(f"OUT_OF_BOUNDS_MATH {el.id}")
+            x0 = SAFE_R - w
+        x0 = max(SAFE_L, x0)
+        y0 = min(max(SAFE_T, y0), SAFE_B - h)
+        b.math = BMath(lay, (x0, y0), el.color)
+        b.box = (x0, y0, x0 + w, y0 + h)
+        self._text_boxes.append(b.box)
+
     def _sub_box(self, b: Bound, sub: str) -> tuple[float, float, float, float] | None:
         """The bound box of a SUBSTRING of a text element, measured with the
         element's actual font (prefix-vs-prefix so kerning is included).
         Shaped (bidi) text falls back to the whole box — substring positions
-        are not meaningful in visual order."""
+        are not meaningful in visual order. A maths element resolves the
+        term by notation through its layout."""
+        if b.math is not None:
+            box = b.math.layout.find(sub)
+            if box is None:
+                return None
+            ox, oy = b.math.origin
+            return (ox + box[0], oy + box[1], ox + box[2], oy + box[3])
         tx = b.text
         if tx is None or tx.shaped:
             return None
@@ -2124,6 +2220,8 @@ class SceneRenderer:
                 self._polyline(d, spts, max(1, round(stx.width * ecam.scale * SS * s.pulse)), col)
             if b.text is not None and s.text_frac > 0:
                 self._draw_text(d, b, s, ecam, alpha)
+            if b.math is not None and s.text_frac > 0:
+                self._draw_math(d, b, s, ecam, alpha)
             if b.spawn:
                 self._draw_particles(d, b, s, ecam, alpha, el)
 
@@ -2231,6 +2329,17 @@ class SceneRenderer:
             x0, y0, x1, y1 = b.box
             x = x1 - p * (x1 - x0) if b.text.shaped else x0 + p * (x1 - x0)
             return (x, y1 - 4)
+        if a.verb == "write" and b.math is not None:
+            lay, (ox, oy) = b.math.layout, b.math.origin
+            vis = lay.visible(p)
+            if not vis:
+                return (ox, oy + lay.baseline)
+            kind, k, portion = vis[-1]
+            if kind == "run":
+                r = lay.runs[k]
+                return (ox + r.x + portion * lay._run_w(r), oy + r.baseline - 2)
+            pt = cut_at_fraction(lay.strokes[k].pts, portion)[-1]
+            return (ox + pt[0], oy + pt[1])
         if a.verb == "erase":
             x0, y0, x1, y1 = b.box
             return (x0 + p * (x1 - x0), (y0 + y1) / 2)
@@ -2272,6 +2381,34 @@ class SceneRenderer:
                 shown_w = (k / n) * tx.w * cam.scale * SS
             pos_x = (cam.to_screen((x1 + s.offset[0], y0))[0]) * SS - shown_w
         d.text((pos_x, sy * SS), shown, fill=col + (int(255 * alpha),), font=f)
+
+    def _draw_math(self, d: ImageDraw.ImageDraw, b: Bound, s: _ElState,
+                   cam: CameraState, alpha: float) -> None:
+        """The typeset runs and strokes on the board, revealed in write order
+        to text_frac like a handwritten line."""
+        bm = b.math
+        lay = bm.layout
+        ox, oy = bm.origin
+        col = role_color(bm.color, self.scene.style.ink, self.scene.style.accent)
+        a8 = int(255 * alpha)
+        for kind, k, portion in lay.visible(s.text_frac):
+            if kind == "run":
+                r = lay.runs[k]
+                text = r.text if portion >= 1.0 else r.text[:max(1, round(portion * len(r.text)))]
+                f = self._math_font(r.size * cam.scale * SS, r.text)
+                try:
+                    asc, _ = f.getmetrics()
+                except Exception:
+                    asc = r.size * cam.scale * SS * 0.8
+                sx, sy = cam.to_screen((ox + r.x + s.offset[0], oy + r.baseline + s.offset[1]))
+                d.text((sx * SS, sy * SS - asc), text, fill=col + (a8,), font=f)
+            else:
+                st = lay.strokes[k]
+                pts = [(ox + x + s.offset[0], oy + y + s.offset[1]) for x, y in st.pts]
+                if portion < 1.0:
+                    pts = cut_at_fraction(pts, portion)
+                spts = [tuple(v * SS for v in cam.to_screen(p)) for p in pts]
+                self._polyline(d, spts, max(1, round(st.width * cam.scale * SS * s.pulse)), col + (a8,))
 
     def _draw_particles(self, d: ImageDraw.ImageDraw, b: Bound, s: _ElState,
                         cam: CameraState, alpha: float, el) -> None:

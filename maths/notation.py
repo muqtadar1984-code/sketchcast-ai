@@ -25,26 +25,9 @@ import sympy as sp
 
 from mathsvc.safety import MathError, MathInputError, _parse, validate_text
 
-_UNICODE = {
-    "−": "-", "–": "-", "—": "-", "×": "*", "·": "*", "÷": "/", "⁄": "/",
-    "²": "^2", "³": "^3", "√": "sqrt", "≤": "<=", "≥": ">=", "≠": "!=",
-    " ": " ", "π": "pi",
-}
+from maths.tokens import normalise  # noqa: E402  (sympy-free, shared with the typesetter)
+
 _REL_RE = re.compile(r"(<=|>=|!=|==|=|<|>)")
-# `sqrt x` (no bracket) → sqrt(x); `sqrt(...)` untouched
-_SQRT_BARE_RE = re.compile(r"sqrt\s+([A-Za-z0-9.]+)")
-# a decimal comma the model might write in some locales: 3,5 → 3.5 (only digit,digit)
-_DEC_COMMA_RE = re.compile(r"(?<=\d),(?=\d)")
-
-
-def normalise(text: str) -> str:
-    """Fold notation the model may emit into the ASCII the parser accepts."""
-    s = str(text or "")
-    for k, v in _UNICODE.items():
-        s = s.replace(k, v)
-    s = _DEC_COMMA_RE.sub(".", s)
-    s = _SQRT_BARE_RE.sub(r"sqrt(\1)", s)
-    return " ".join(s.split())
 
 
 @dataclass(frozen=True)

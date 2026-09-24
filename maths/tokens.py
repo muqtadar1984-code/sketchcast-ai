@@ -11,7 +11,26 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from maths.notation import normalise
+# Unicode the model may reach for, folded to the ASCII the parsers accept.
+# Lives HERE, sympy-free, because the renderer's child processes import the
+# typesetter and must not pay for SymPy on every spawn.
+_UNICODE = {
+    "−": "-", "–": "-", "—": "-", "×": "*", "·": "*", "÷": "/", "⁄": "/",
+    "²": "^2", "³": "^3", "√": "sqrt", "≤": "<=", "≥": ">=", "≠": "!=",
+    "\u00a0": " ", "π": "pi",
+}
+_SQRT_BARE_RE = re.compile(r"sqrt\s+([A-Za-z0-9.]+)")
+_DEC_COMMA_RE = re.compile(r"(?<=\d),(?=\d)")
+
+
+def normalise(text) -> str:
+    """Fold notation the model may emit into the ASCII the parsers accept."""
+    s = str(text or "")
+    for k, v in _UNICODE.items():
+        s = s.replace(k, v)
+    s = _DEC_COMMA_RE.sub(".", s)
+    s = _SQRT_BARE_RE.sub(r"sqrt(\1)", s)
+    return " ".join(s.split())
 
 _TOKEN_RE = re.compile(r"\s*(?:(\d+\.\d+|\d+\.|\.\d+|\d+)|([A-Za-z][A-Za-z0-9_]*)|(<=|>=|!=|==|[=<>])|([-+*/^])|(\()|(\)))")
 
@@ -102,4 +121,4 @@ def split_relation(tokens: list[Tok]) -> tuple[list[Tok], Tok | None, list[Tok]]
     return tokens[:k], tokens[k], tokens[k + 1:]
 
 
-__all__ = ["Tok", "TokenError", "tokenize", "split_relation", "FUNCTIONS", "CONSTANTS"]
+__all__ = ["Tok", "TokenError", "tokenize", "split_relation", "FUNCTIONS", "CONSTANTS", "normalise"]

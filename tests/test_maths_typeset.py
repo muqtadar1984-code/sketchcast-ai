@@ -31,8 +31,9 @@ def test_a_linear_equation_is_one_row_of_runs(m):
 def test_a_fraction_stacks_around_a_bar(m):
     lay = typeset("(x + 1)/2", 36, m)
     assert len(lay.strokes) == 1, "the fraction bar"
+    assert "(" not in _runs(lay), "the grouping bracket is not printed over a stacked fraction"
     bar_y = lay.strokes[0].pts[0][1]
-    num = [r for r in lay.runs if r.text in ("x", "+", "1", "(", ")")]
+    num = [r for r in lay.runs if r.text in ("x", "+", "1")]
     den = [r for r in lay.runs if r.text == "2"]
     assert all(r.baseline < bar_y for r in num) and all(r.baseline > bar_y for r in den)
     assert lay.h > 36 * 1.6, "taller than one line"
