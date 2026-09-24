@@ -1871,6 +1871,25 @@ class TestP1LayoutConstraints:
                    for z in zones), \
             f"the caption panel is not a keep-out region: {zones}"
 
+    def test_the_keep_out_is_the_bubbles_own_outline_when_there_is_one(self):
+        """The stream's three-line bubble is 172px tall; the constants reserve
+        124 around its first text line. Reserve what will be drawn."""
+        from spike.scene_engine.render import SceneRenderer
+        from spike.scene_engine.schema import Scene
+        from spike.scene_engine.whiteboard import narration_stream
+        text = ("We transpose the positive n from the right side to the left side, "
+                "where it becomes subtraction of the same term.")
+        els, acts = narration_stream(text, uid="s1", dialogue=[{"who": "teacher", "line": text}],
+                                     line_starts=[0.0], total_secs=6.0)
+        outline = next(e for e in els if e["type"] == "shape" and not e["id"].endswith("_tail"))
+        scene = Scene.model_validate({"id": "cap", "narration": text, "elements": els +
+                                      [{"id": "lbl", "type": "text", "text": "x", "at": [95, 140]}],
+                                      "actions": acts + [{"verb": "write", "target": "lbl"}]})
+        r = SceneRenderer(scene)
+        y0 = min(p[1] for p in outline["points"])
+        y1 = max(p[1] for p in outline["points"])
+        assert any(z[1] <= y0 and z[3] >= y1 for z in r._avatar_zones), (y0, y1, r._avatar_zones)
+
     def test_label_relayout_no_longer_requires_arrows(self):
         """The prompt tells the director to prefer pointing over arrows; the
         de-collision layout only ran WHEN arrows existed. We asked for no

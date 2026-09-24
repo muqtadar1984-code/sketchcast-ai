@@ -56,6 +56,10 @@ CARD_W = 372.0
 CARD_TITLE_SIZE = 24.0
 CARD_LINE_SIZE = 21.0
 CARD_PITCH = 38.0
+# five lines at the full pitch ran the card's frame into the tallest speech
+# bubble (top at ~274); the pitch tightens so the frame stays above it
+CARD_PITCH_5 = 33.0
+CARD_BOTTOM_MAX = 270.0
 DIM = 0.42
 MAX_NOTE_CHARS = 44
 # the model's notation is capped at 200 chars, a board line at this
@@ -170,7 +174,7 @@ def card_elements(method, present: bool) -> tuple[list[dict], list[dict]]:
     lines = list(method.steps)[:5]
     if not lines:
         return [], []
-    h = 20 + CARD_TITLE_SIZE + 12 + CARD_PITCH * len(lines) + 8
+    h = 20 + CARD_TITLE_SIZE + 12 + _card_pitch(len(lines)) * len(lines) + 8
     x0, y0, x1, y1 = CARD_X - 16, CARD_Y - 12, CARD_X - 16 + CARD_W, CARD_Y - 12 + h
     els: list[dict] = [
         {"id": "card_box", "type": "shape", "shape": "path", "closed": True, "width": 2.6,
@@ -191,10 +195,14 @@ def card_elements(method, present: bool) -> tuple[list[dict], list[dict]]:
     return els, acts
 
 
+def _card_pitch(n_lines: int) -> float:
+    return CARD_PITCH if n_lines <= 4 else CARD_PITCH_5
+
+
 def _card_line(method, i: int) -> tuple[str, float]:
     """The card's i-th line as written, and its top."""
-    return (_short(f"{i + 1}. {method.steps[i]}", 34),
-            CARD_Y + CARD_TITLE_SIZE + 16 + CARD_PITCH * i)
+    pitch = _card_pitch(len(list(method.steps)[:5]))
+    return (_short(f"{i + 1}. {method.steps[i]}", 34), CARD_Y + CARD_TITLE_SIZE + 16 + pitch * i)
 
 
 def _stem(w: str) -> str:
@@ -592,8 +600,10 @@ def concept_segment(lesson: Lesson, seg_id: str) -> dict:
 def recap_segment(lesson: Lesson, seg_id: str) -> dict:
     lines = _dialogue_lines(lesson.recap) or [Line(line="Let us recap the method.")]
     points = [_short(p, 64) for p in lesson.misconceptions][:3]
-    seg = _segment(seg_id, "synthesis", lines, heading="Remember", points=points)
-    els: list[dict] = [{"id": "wb_h", "type": "text", "text": "Remember", "role": "title", "size": 40,
+    # the points name mistakes ("Forgetting to change the sign"), so the
+    # heading says so — "Remember" over them read as an instruction to forget
+    seg = _segment(seg_id, "synthesis", lines, heading="Common mistakes", points=points)
+    els: list[dict] = [{"id": "wb_h", "type": "text", "text": "Common mistakes", "role": "title", "size": 40,
                         "at": [60, 44], "anchor": "lt"}]
     acts: list[dict] = [{"verb": "write", "target": "wb_h"}]
     for i, p in enumerate(points):
