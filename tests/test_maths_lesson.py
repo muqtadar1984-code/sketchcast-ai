@@ -400,3 +400,49 @@ def test_the_recap_heading_matches_its_points():
     seg = recap_segment(lesson, "s006")
     assert seg["slide_heading"] == "Common mistakes"
     assert next(e for e in seg["scene"]["elements"] if e["id"] == "wb_h")["text"] == "Common mistakes"
+
+
+def test_board_text_is_never_relocated_by_the_caption_keep_out():
+    """Production 2026-09-24 (overlapping_text=9): notes under the caption
+    band were moved off it and stacked up over the word problem."""
+    from maths.board import example_scene
+    from maths.schema import MethodCard, Step, WorkedExample
+    from spike.scene_engine.whiteboard import narration_stream, student_element, teacher_element
+    long_line = "(2x - 3)/3 - (x - 5)/2 = 4"
+    steps = [Step(operation="multiply both sides by 6", before=[long_line], after=["2(2x - 3) - 3(x - 5) = 24"],
+                  speech="Multiply every term by six, the lowest common multiple of the denominators."),
+             Step(operation="expand the brackets", before=["2(2x - 3) - 3(x - 5) = 24"], after=["4x - 6 - 3x + 15 = 24"],
+                  speech="Expand both brackets carefully, watching the signs."),
+             Step(operation="collect like terms", before=["4x - 6 - 3x + 15 = 24"], after=["x + 9 = 24"],
+                  speech="Collect the x terms and the numbers."),
+             Step(operation="subtract 9 from both sides", before=["x + 9 = 24"], after=["x = 15"],
+                  speech="Subtract nine from both sides to finish.")]
+    ex = WorkedExample(label="Example 4", task="solve", problem=long_line, givens=[long_line], target="x",
+                       steps=steps, final_answer=["x = 15"], answer_speech="So x equals fifteen.",
+                       intro_speech="A harder one with fractions on both sides now.")
+    scene, lines = example_scene(ex, MethodCard(steps=["Clear fractions", "Expand", "Collect", "Solve"]), "s006")
+    assert all(e.get("fixed") for e in scene["elements"] if e["type"] == "text")
+    d = [{"who": l.who, "line": l.line} for l in lines]
+    scene["elements"] += [teacher_element(), student_element()]
+    els, acts = narration_stream(scene["narration"], uid="s006", dialogue=d,
+                                 line_starts=[6.0 * i for i in range(len(d))], total_secs=6.0 * len(d))
+    scene["elements"] += els
+    scene["actions"] += acts
+    r = _compiled(scene)
+    warns = r.audit()["warnings"]
+    assert not any(w.startswith("LABEL_MOVED") for w in warns), warns
+    for e in scene["elements"]:
+        if e["type"] == "text" and e["id"].startswith("n"):
+            assert abs(r.bound[e["id"]].box[1] + (r.bound[e["id"]].box[3] - r.bound[e["id"]].box[1]) / 2 - e["at"][1]) < 2.0
+
+
+def test_an_unverifiable_try_it_is_dropped_too():
+    """Production 2026-09-24: a word-problem try-it whose text is not
+    notation reached the board with try_it recorded as null."""
+    bad = copy.deepcopy(LESSON)
+    bad["try_it"] = {"problem": "A number doubled is fourteen. Find it.", "answer": ["n = 7"],
+                     "speech": "Try this one.", "steps": [], "answer_speech": "n is seven."}
+    c = FakeClient(lesson=bad)
+    lesson, report = L.verified_lesson(c, topic="Linear equations", subject="Mathematics", level="Class 8",
+                                       curriculum=None, language="en", episode_context="")
+    assert lesson.try_it.problem == "" and any(x.startswith("try-it") for x in report["dropped"])

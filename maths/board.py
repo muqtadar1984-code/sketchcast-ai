@@ -164,6 +164,16 @@ def _short(text: str, cap: int) -> str:
     return t if len(t) <= cap else t[:cap - 1].rstrip() + "…"
 
 
+def _pin_text(elements: list[dict]) -> list[dict]:
+    """Every text the board placed stays where it was placed: the renderer's
+    caption keep-out once moved a note off the band and stacked it up over
+    the question (TEXT_OVERLAP q0+n12, maths demo 2026-09-24)."""
+    for e in elements:
+        if e.get("type") == "text":
+            e.setdefault("fixed", True)
+    return elements
+
+
 # ── the method card ─────────────────────────────────────────────────────
 
 
@@ -555,7 +565,7 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
             board.actions.append({"verb": "draw", "target": sid, "duration": 0.5})
             _add_note(board, r, f"not allowed: {_short(m.why_wrong or m.operation, 30)}", None, "")
     scene = {"id": f"mx_{seg_id}", "compiled": True, "scene_type": "worked_example",
-             "narration": narration, "elements": board.elements, "actions": board.actions,
+             "narration": narration, "elements": _pin_text(board.elements), "actions": board.actions,
              "min_hold": 1.0}
     return scene, lines
 
@@ -593,7 +603,7 @@ def concept_segment(lesson: Lesson, seg_id: str) -> dict:
     els += cels
     acts += cacts
     seg["scene"] = {"id": f"mc_{seg_id}", "compiled": True, "scene_type": "generic", "narration": narration,
-                    "elements": els, "actions": acts}
+                    "elements": _pin_text(els), "actions": acts}
     return seg
 
 
@@ -618,7 +628,7 @@ def recap_segment(lesson: Lesson, seg_id: str) -> dict:
     # a pulse, not a circle: the ellipse around a 5-line card crossed its frame
     acts.append({"verb": "pulse", "target": "card_box", "times": 2, "duration": 1.2, "at": {"frac": 0.9}})
     seg["scene"] = {"id": f"mr_{seg_id}", "compiled": True, "scene_type": "generic", "narration": seg["text"],
-                    "elements": els, "actions": acts}
+                    "elements": _pin_text(els), "actions": acts}
     return seg
 
 
@@ -652,7 +662,7 @@ def try_it_segment(lesson: Lesson, seg_id: str) -> Optional[dict]:
     acts.append({"verb": "write", "target": "pause", "at": {"frac": 0.7}})
     acts.append({"verb": "underline", "target": "wb_h"})
     seg["scene"] = {"id": f"mt_{seg_id}", "compiled": True, "scene_type": "generic", "narration": seg["text"],
-                    "elements": els, "actions": acts}
+                    "elements": _pin_text(els), "actions": acts}
     return seg
 
 
@@ -685,7 +695,7 @@ def closing_segment(lesson: Lesson, seg_id: str) -> dict:
     if cels:
         acts.append({"verb": "pulse", "target": "card_box", "times": 2, "duration": 1.2, "at": {"frac": 0.55}})
     seg["scene"] = {"id": f"mz_{seg_id}", "compiled": True, "scene_type": "generic", "narration": seg["text"],
-                    "elements": els, "actions": acts}
+                    "elements": _pin_text(els), "actions": acts}
     return seg
 
 
