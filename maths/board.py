@@ -222,6 +222,8 @@ class _Board:
     elements: list[dict] = field(default_factory=list)
     actions: list[dict] = field(default_factory=list)
     rows: list[_Row] = field(default_factory=list)      # visible working lines
+    annotations: list[str] = field(default_factory=list)  # notes and leaders on those lines
+    wiped: bool = False                                    # the last state started a fresh column
     next_y: float = FIRST_ROW_Y
     n: int = 0
     state_no: int = 0
@@ -264,7 +266,7 @@ def _problem_elements(ex: WorkedExample, board: _Board, cue: Optional[dict]) -> 
         board.elements.append({"id": f"q{i}", "type": "text", "text": ln, "role": "title", "size": 27,
                                "at": [Q_AT[0], y], "anchor": "lt"})
         board.actions.append({"verb": "write", "target": f"q{i}", **({"at": cue} if cue and i == 0 else {})})
-        y += 36
+        y += 46   # the handwriting face runs ~44 px tall at this size (TEXT_OVERLAP q0+q1)
     board.next_y = y + 14
 
 
@@ -274,12 +276,19 @@ def _add_state(board: _Board, state: list[str], cue: Optional[dict], color: str 
     wipe the column first when the state would not fit."""
     lays = [(x, _layout(x, LINE_SIZE)) for x in state[:4]]
     needed = sum(max(l.h if l else LINE_SIZE, MIN_ROW_H) + ROW_GAP for _x, l in lays)
+    board.wiped = False
     if board.next_y + needed > WORK_BOTTOM and board.rows:
+        # the notes and leaders go with the lines they annotate — a wipe
+        # that left them behind wrote the next example's notes over them
+        # (production, 2026-09-24: TEXT_OVERLAP n2+n15)
         grp = board.uid("wipe")
-        board.elements.append({"id": grp, "type": "group", "children": [r.eid for r in board.rows]})
+        board.elements.append({"id": grp, "type": "group",
+                               "children": [r.eid for r in board.rows] + list(board.annotations)})
         board.actions.append({"verb": "erase", "target": grp, "duration": 0.9, **({"at": cue} if cue else {})})
         board.rows = []
+        board.annotations = []
         board.next_y = FIRST_ROW_Y
+        board.wiped = True
         cue = None  # the writes follow the wipe
     elif dim_previous and board.rows:
         prev = [r for r in board.rows if r.state_index == board.state_no - 1]
@@ -335,7 +344,11 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
     if not note:
         return
     right = row.lay.w
-    y = row.y + row.lay.baseline * 0.9
+    # in the gap above the new line: between it and the line it came from,
+    # or just above it when that line is gone (a wipe) or was never one (a
+    # check, a mistake). A note ON a line collided with the next line's
+    # between-note (TEXT_OVERLAP n14+n16).
+    y = row.y - ROW_GAP * 0.5
     if target is not None and target.y < row.y:
         right = max(right, target.lay.w if target.eid != "q" else 0.0)
         y = (target.y + target.lay.h + row.y) / 2.0
@@ -352,6 +365,7 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
     board.elements.append({"id": nid, "type": "text", "text": note, "size": size, "color": "muted",
                            "role": "caption", "at": [x, y], "anchor": "lm"})
     board.actions.append({"verb": "write", "target": nid})
+    board.annotations.append(nid)
     if target is None:
         return
     found = _term_in(op_text, target)
@@ -367,6 +381,7 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
                            "tail": {"el": nid, "edge": "left", "dx": -4},
                            "head": [ox + (box[0] + box[2]) / 2, oy + box[3] + 3]})
     board.actions.append({"verb": "draw", "target": aid, "duration": 0.6})
+    board.annotations.append(aid)
 
 
 def _highlight_method(board: _Board, step: Step, method, cue: Optional[dict], has_card: bool) -> None:
@@ -431,8 +446,10 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
         rows = _add_state(board, st.after, cue)
         if rows:
             note = st.note if st.kind == "transform" else (st.note or "set up")
-            _add_note(board, rows[0], note, prev_state_rows[0] if prev_state_rows else None,
-                      f"{st.operation} {st.explanation}")
+            # after a wipe the line this step came from is gone: the note
+            # sits beside the new line and no leader points at nothing
+            target = prev_state_rows[0] if prev_state_rows and not board.wiped else None
+            _add_note(board, rows[0], note, target, f"{st.operation} {st.explanation}")
         prev_state_rows = rows
         last_rows = rows or last_rows
     if last_rows:
