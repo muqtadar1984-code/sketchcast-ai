@@ -260,6 +260,68 @@ def test_a_schema_vertex_rejects_falls_back_instead_of_failing_the_job(client, m
         "the rest of the config survives the fallback"
 
 
+def _flaky_post(monkeypatch, statuses, sleeps):
+    """requests.post that answers `statuses` in order (a status, or a dict for
+    a good reply) and records every sleep instead of waiting."""
+    seen = {"n": 0}
+
+    class _Res:
+        def __init__(self, status):
+            self.status_code = status
+            self.text = f"http {status}"
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"raise_for_status {self.status_code}")
+
+        def json(self):
+            return usage_response(text='{"ok": true}')
+
+    def post(*a, **k):
+        item = statuses[min(seen["n"], len(statuses) - 1)]
+        seen["n"] += 1
+        return _Res(item)
+
+    monkeypatch.setattr("shared.gemini_client.requests.post", post)
+    monkeypatch.setattr("shared.gemini_client._access_token", lambda: "tok")
+    monkeypatch.setattr("shared.gemini_client.time.sleep", lambda s: sleeps.append(s))
+    return seen
+
+
+def test_a_one_off_500_is_retried_with_backoff_not_failed(client, monkeypatch):
+    """22 Sep 2026 21:34 UTC: Vertex 500'd one worksheet request while the
+    same model served the sibling jobs in the same minute. The job failed on
+    the first attempt with nothing retried. A transient status now gets the
+    Claude client's backoff, and the reply from the next attempt is used."""
+    sleeps: list = []
+    seen = _flaky_post(monkeypatch, [500, 200], sleeps)
+    out = client.analyze("hello")
+    assert out["data"] == {"ok": True}
+    assert seen["n"] == 2 and len(sleeps) == 1
+    assert 2.0 <= sleeps[0] <= 5.5, "the Claude client's jittered backoff, attempt 0"
+
+
+@pytest.mark.parametrize("status", [502, 503, 504])
+def test_every_transient_status_the_claude_path_retries_is_retried_here(client, monkeypatch, status):
+    sleeps: list = []
+    seen = _flaky_post(monkeypatch, [status, status, 200], sleeps)
+    assert client.analyze("hello")["data"] == {"ok": True}
+    assert seen["n"] == 3 and len(sleeps) == 2
+
+
+def test_a_500_on_every_attempt_still_fails_with_the_status_in_the_message(client, monkeypatch):
+    """Bounded: `retries` backoffs, then one final attempt, then the error —
+    an HTTPError whose message starts with the status, the shape jobs.error
+    has always carried for this failure."""
+    import requests as _rq
+    sleeps: list = []
+    seen = _flaky_post(monkeypatch, [500], sleeps)
+    with pytest.raises(_rq.HTTPError) as exc:
+        client.analyze("hello", retries=3)
+    assert seen["n"] == 4 and len(sleeps) == 3
+    assert str(exc.value).startswith("500 Server Error")
+
+
 def test_a_400_without_a_schema_is_still_an_error(client, monkeypatch):
     """The fallback is scoped to the schema. An ordinary 400 must keep
     raising, or a broken prompt would look like a model that returned nothing."""
