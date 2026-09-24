@@ -154,30 +154,42 @@ class Layout:
 
     def find(self, sub: str) -> Optional[tuple[float, float, float, float]]:
         """The box of a term named in notation ("5x", "x^2", "(x + 2)"):
-        matched against the runs in write order, spaces ignored."""
+        the first match in write order, spaces ignored."""
+        hits = self.find_all(sub)
+        return hits[0][0] if hits else None
+
+    def find_all(self, sub: str) -> list[tuple[tuple[float, float, float, float], bool]]:
+        """Every match of ``sub`` as (box, standalone): standalone means the
+        matched runs are not glued to a variable — the 5 of "3x + 5", not
+        the 5 of "5x" — so a caller can prefer the constant term."""
         want = _norm(sub)
         if not want:
-            return None
+            return []
         runs = [self.runs[i] for kind, i in self.order() if kind == "run"]
         texts = [_norm(r.src or r.text) for r in runs]
         joined = "".join(texts)
+        out = []
         k = joined.find(want)
-        if k < 0:
-            return None
-        # which runs cover [k, k + len(want))
-        pos = 0
-        hit: list[Run] = []
-        for r, t in zip(runs, texts):
-            if pos + len(t) > k and pos < k + len(want):
-                hit.append(r)
-            pos += len(t)
-        if not hit:
-            return None
-        x0 = min(r.x for r in hit)
-        x1 = max(r.x + self._run_w(r) for r in hit)
-        y0 = min(r.baseline - r.size * 0.75 for r in hit)
-        y1 = max(r.baseline + r.size * 0.25 for r in hit)
-        return (x0, y0, x1, y1)
+        while k >= 0:
+            pos = 0
+            hit: list[int] = []
+            for j, t in enumerate(texts):
+                if pos + len(t) > k and pos < k + len(want):
+                    hit.append(j)
+                pos += len(t)
+            if hit:
+                rs = [runs[j] for j in hit]
+                x0 = min(r.x for r in rs)
+                x1 = max(r.x + self._run_w(r) for r in rs)
+                y0 = min(r.baseline - r.size * 0.75 for r in rs)
+                y1 = max(r.baseline + r.size * 0.25 for r in rs)
+                nxt = runs[hit[-1] + 1] if hit[-1] + 1 < len(runs) else None
+                prev = runs[hit[0] - 1] if hit[0] > 0 else None
+                glued = ((nxt is not None and nxt.text[:1].isalpha() and nxt.role == "ink")
+                         or (prev is not None and prev.text[-1:].isalnum() and prev.role == "ink"))
+                out.append(((x0, y0, x1, y1), not glued))
+            k = joined.find(want, k + 1)
+        return out
 
     _widths: dict = field(default_factory=dict, repr=False)
 

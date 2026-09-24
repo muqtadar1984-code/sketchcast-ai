@@ -33,11 +33,16 @@ def _short(text: str, cap: int = _MAX_POINT_CHARS) -> str:
 
 
 def build_whiteboard_scene(segment: dict,
-                           avatars: dict | None = None) -> dict | None:
+                           avatars: dict | None = None,
+                           sketches: bool = True) -> dict | None:
     """A sceneless segment as a whiteboard moment. `avatars` casts the
     persistent teacher (and, when the segment carries dialogue, the student).
     Never returns None any more — the teacher + narration stream make even a
-    contentless segment a real card."""
+    contentless segment a real card.
+
+    `sketches=False` keeps the narration-driven corner sketches off the card:
+    the maths profile's lexicon switch (shared.subject_profile), where "root"
+    is not a plant and "table" is not furniture."""
     heading = _short(segment.get("slide_heading") or "", 60)
     visual = segment.get("slide_visual") or {}
     kind = visual.get("kind") if isinstance(visual, dict) else None
@@ -70,7 +75,8 @@ def build_whiteboard_scene(segment: dict,
                  "compiled": True, "scene_type": "generic",
                  "narration": segment.get("text") or "",
                  "elements": elements, "actions": actions}
-        _add_sketches(segment, scene, heading_taken=False)
+        if sketches:
+            _add_sketches(segment, scene, heading_taken=False)
         return scene
 
     elements: list[dict] = []
@@ -107,7 +113,8 @@ def build_whiteboard_scene(segment: dict,
              "scene_type": "generic",
              "narration": segment.get("text") or "",
              "elements": elements, "actions": actions}
-    _add_sketches(segment, scene, heading_taken=bool(heading or points))
+    if sketches:
+        _add_sketches(segment, scene, heading_taken=bool(heading or points))
     if heading:
         # The underline is appended LAST, and on a card with points it is
         # NOT cued: it simply follows the last bullet. It used to be cued at
