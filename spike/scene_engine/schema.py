@@ -166,6 +166,11 @@ class TextElement(_ElementBase):
     direction: Literal["ltr", "rtl"] = "ltr"
     anchor: Literal["lt", "mt", "rt", "lm", "mm", "rm"] = "lm"
     after: Optional[After] = None     # chain x behind another element + gap
+    # Placed by a compiler that owns the board's geometry (the algebra
+    # board): the renderer's keep-out passes never move it. A note moved
+    # off the caption band was stacked up over the question (maths demo,
+    # 2026-09-24); a bubble passing over a note is the lesser evil.
+    fixed: bool = False
 
     @field_validator("text")
     @classmethod

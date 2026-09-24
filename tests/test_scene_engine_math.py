@@ -117,3 +117,17 @@ def test_a_marker_shape_is_translucent_and_fades():
     assert px[0] > 200 and px[2] < 200, px          # yellow wash
     assert px[2] > 60, "translucent, not the solid marker colour"
     assert _frame_at(r, 7.8, 8.0).convert("RGB").getpixel((150, 100))[2] > 200, "faded away"
+
+
+def test_a_fixed_text_stays_under_the_caption_band():
+    from spike.scene_engine.schema import Scene
+    els = [{"id": "__nb_0", "type": "text", "text": "cap", "at": [970, 360], "role": "caption"},
+           {"id": "free", "type": "text", "text": "moves", "at": [900, 350]},
+           {"id": "pinned", "type": "text", "text": "stays", "at": [900, 400], "fixed": True}]
+    r = SceneRenderer(Scene.model_validate({"id": "f", "narration": "cap", "elements": els,
+                                            "actions": [{"verb": "write", "target": "free"},
+                                                        {"verb": "write", "target": "pinned"}]}))
+    r.compile(4.0)
+    assert r.bound["free"].box[1] < 300, "an unpinned label is moved off the band"
+    b = r.bound["pinned"].box
+    assert abs((b[1] + b[3]) / 2 - 400) < 2.0, "a fixed label keeps its place"

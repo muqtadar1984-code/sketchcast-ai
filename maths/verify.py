@@ -420,9 +420,14 @@ def try_it_example(t: TryIt) -> WorkedExample | None:
         return None
     rels, _err = _parse([t.problem], "the try-it problem")
     givens = [t.problem]
-    if rels is None and t.steps and t.steps[0].kind == "setup" and t.steps[0].after:
-        givens = list(t.steps[0].after)      # a word problem: the working starts at its equation
-        rels, _err = _parse(givens, "the try-it equation")
+    if rels is None and t.steps:
+        # a word problem: the working starts at its equation — the setup
+        # step's result, or the state the first step transforms
+        first = t.steps[0]
+        start = list(first.after) if first.kind == "setup" and first.after else list(first.before)
+        if start:
+            givens = start
+            rels, _err = _parse(givens, "the try-it equation")
     expression = bool(rels) and rels[0].is_expression
     target = ", ".join(sorted(str(s) for s in rels[0].free_symbols)) if rels else "x"
     return WorkedExample(label="the try-it question", problem=t.problem, givens=givens, final_answer=t.answer,

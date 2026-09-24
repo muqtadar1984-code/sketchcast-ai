@@ -808,7 +808,7 @@ class SceneRenderer:
             x0 = SAFE_R - w
         x0 = max(SAFE_L, x0)
         y0 = min(max(SAFE_T, y0), SAFE_B - h)
-        if self._avatar_zones and not _is_overlay(el.id):
+        if self._avatar_zones and not _is_overlay(el.id) and not getattr(el, "fixed", False):
             moved = False
             for zx0, zy0, zx1, zy1 in self._avatar_zones:
                 if x0 < zx1 and x0 + w > zx0 and y0 < zy1 and y0 + h > zy0:

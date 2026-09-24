@@ -244,3 +244,9 @@ def test_text_fields_written_as_objects_or_lists_keep_their_words():
     assert ex.steps[0].after == ["x = 1"] and ex.final_answer == ["x = 1"] and ex.answer_speech == "7"
     assert Line.model_validate({"who": "narrator", "line": {"text": "hi"}}).who == "teacher"
     assert verify_example(ex).status == "verified"
+
+
+def test_a_word_problem_try_it_is_verified_from_its_first_step():
+    t = TryIt(problem="A number doubled is fourteen. Find it.", answer=["n = 7"],
+              steps=[Step(operation="divide both sides by 2", before=["2n = 14"], after=["n = 7"], speech="halve")])
+    assert verify_try_it(t).ok is True

@@ -190,9 +190,13 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
         ex.label = ex.label or f"Example {i}"
     lesson.examples = kept
     t = verify_try_it(lesson.try_it)
-    if t.ok is False:
+    # the try-it is TAUGHT on the board after the pause, so "could not be
+    # verified" is as fatal as "wrong" — a try-it the verifier cannot read
+    # once reached the board unchecked (recorded as try_it null)
+    if lesson.try_it.problem and t.ok is not True:
         logger.warning("maths try-it dropped: %s", t.detail)
         lesson.try_it = TryIt()
+        dropped.append(f"try-it: {t.detail[:300]}")
     report = verify_lesson(lesson)
     report["dropped"] = dropped
     report["history"] = history
