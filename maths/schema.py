@@ -61,7 +61,7 @@ def _as_lines(v):
     for item in v:
         if isinstance(item, str):
             out.append({"who": "teacher", "line": item})
-        elif isinstance(item, dict):
+        elif isinstance(item, (dict, Line)):
             out.append(item)
     return out
 
@@ -191,12 +191,14 @@ class WorkedExample(BaseModel):
     @classmethod
     def _mistake(cls, v):
         # an empty object or a bare string is "no mistake shown"
+        if isinstance(v, Mistake):
+            return v
         return v if isinstance(v, dict) and (v.get("from_state") or v.get("wrong_state")) else None
 
     @field_validator("steps", mode="before")
     @classmethod
     def _dict_steps(cls, v):
-        return [x for x in (v or []) if isinstance(x, dict)] if isinstance(v, (list, tuple)) else []
+        return [x for x in (v or []) if isinstance(x, (dict, Step))] if isinstance(v, (list, tuple)) else []
 
     @field_validator("steps")
     @classmethod
@@ -282,7 +284,7 @@ class Lesson(BaseModel):
     @field_validator("examples", mode="before")
     @classmethod
     def _dict_examples(cls, v):
-        return [x for x in (v or []) if isinstance(x, dict)] if isinstance(v, (list, tuple)) else []
+        return [x for x in (v or []) if isinstance(x, (dict, WorkedExample))] if isinstance(v, (list, tuple)) else []
 
     @field_validator("examples")
     @classmethod
