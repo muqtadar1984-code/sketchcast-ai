@@ -1270,17 +1270,55 @@ def part_names_from_description(prompt: str,
     return out
 
 
-def annotate_regions(ink: Image.Image, part_names: list[str]) -> dict:
+_LAYER_TAIL_RE = re.compile(r"\s*name the layer groups exactly:[^.\n]*\.?",
+                            re.IGNORECASE)
+
+# How many times a picture may answer "none of these parts" before the names
+# are latched as asked anyway. One re-ask is the remedy; forever is the bug.
+MAX_REGION_MISSES = 2
+
+
+def asset_description(prompt: str | None) -> str:
+    """The picture's own description: the asset prompt without the layer-group
+    tail (which addresses the annotator, not the reader) and without the
+    style suffix. This is what the vision pass is told the drawing IS."""
+    text = _LAYER_TAIL_RE.sub("", str(prompt or "")).strip()
+    return " ".join(text.split())[:700]
+
+
+def _description_block(description: str | None) -> str:
+    if not description:
+        return ""
+    return ("The drawing was generated from this description — use it to tell "
+            "the parts apart by their SHAPE and POSITION, since nothing in the "
+            "image is labelled: \"" + description + "\"\n")
+
+
+def annotate_regions(ink: Image.Image, part_names: list[str],
+                     description: str | None = None) -> dict:
     """Vision pass over a generated illustration: named part bounding boxes
     (multiple boxes per name for repeated structures) + a text-presence
     verdict. Returns {"regions": {name: [[x0,y0,x1,y1] px, ...]}, "has_text":
-    bool}; empty regions on any failure — callers degrade gracefully."""
+    bool}; empty regions on any failure — callers degrade gracefully.
+
+    `description` is the asset's own prompt (layer tail stripped). Without it
+    the annotator was shown a wordless drawing and a list of names and asked
+    to match them by name alone. For a plant cell that works — the names are
+    the shapes. For the States of Matter kit (2026-09-25) it did not: the
+    parts were `melting_path`, `freezing_path`, `evaporation_path`,
+    `sublimation_path` on a triangle of three shapes joined by arrows, vision
+    returned no box for any of them, and every label's leader line ran to the
+    edge of the picture. The description ("solid at the lower left, liquid at
+    the lower right, gas at the top, arrows between them") is what lets the
+    annotator tell one unlabelled arrow from another.
+    """
     out = {"regions": {}, "has_text": False, "text_boxes": []}
     import io as _io
     buf = _io.BytesIO()
     ink_on_white = Image.new("RGB", ink.size, (255, 255, 255))
     ink_on_white.paste(ink, (0, 0), ink)
     ink_on_white.save(buf, "PNG")
+    desc = _description_block(asset_description(description))
     prompt = (
         "This is an unlabeled educational line diagram. Return ONLY JSON:\n"
         '{"has_text": <true if ANY letters/words/numbers appear in the '
@@ -1290,10 +1328,12 @@ def annotate_regions(ink: Image.Image, part_names: list[str]) -> dict:
         "numbers, labels) in the image — INCLUDING small, faint, partial or "
         "lowercase caption words near or under the artwork; empty list only "
         "if the image is truly wordless.\n"
-        "Boxes are normalized 0-1000. "
+        "Boxes are normalized 0-1000. " + desc
         + ("For each of these part names, give a box around EACH visible "
            "instance of that part (a name may have several boxes, e.g. "
-           "three mitochondria): " + ", ".join(part_names)
+           "three mitochondria). A name written as one_to_other or "
+           "one_other_arrow means the arrow or path running from the first "
+           "thing to the second: box that arrow. " + ", ".join(part_names)
            if part_names else 'Leave "regions" as an empty object.'))
     data = _vision_json(prompt, buf.getvalue())
     if not isinstance(data, dict):
@@ -1356,8 +1396,8 @@ def annotate_regions(ink: Image.Image, part_names: list[str]) -> dict:
         data3 = _vision_json(
             "This is an unlabeled educational line diagram. Return ONLY "
             'JSON: {"regions": {"<part>": [[ymin,xmin,ymax,xmax], ...]}}. '
-            "Boxes normalized 0-1000. Give a box around EACH visible "
-            "instance of: " + ", ".join(missing) +
+            "Boxes normalized 0-1000. " + desc +
+            "Give a box around EACH visible instance of: " + ", ".join(missing) +
             '. Use an empty list only for a part truly not shown.',
             buf.getvalue())
         if isinstance(data3, dict) and isinstance(data3.get("regions"), dict):
@@ -1682,6 +1722,20 @@ def _lift_library_vision(md: dict, size: tuple[int, int]) -> None:
         return
     if not v.get("annotated_for") and not v.get("regions"):
         return
+    if v.get("annotated_for") and not any(
+            boxes for boxes in (v.get("regions") or {}).values()):
+        # Asked for N parts, found none. That is not an annotation to be
+        # seeded from, it is the question still open: the live row
+        # `transition_triangle` (States of Matter, 2026-09-25) carried four
+        # names and no box, and seeding it meant no container ever asked
+        # again while every label pointed at the picture's edge. Refusing
+        # here makes the load re-ask — now with the description — and
+        # _record_library_vision writes back whatever it finds.
+        logger.info("library row was asked for %d part(s) of %r and found "
+                    "none — re-asking rather than seeding the miss",
+                    len(v.get("annotated_for") or []),
+                    md.get("key") or md.get("asset_key"))
+        return
     if v.get("baked_text"):
         # A row that admits its bytes carry words does NOT get to skip the
         # pass: the text_boxes are what scrubbing needs, and they are not in
@@ -1789,6 +1843,37 @@ def _write_meta(meta: Path, md: dict) -> None:
             raise
     except OSError:
         pass
+
+
+def _latch_after_miss(md: dict, asked_now: list[str], found: dict) -> list[str]:
+    """Which of the names just asked are recorded as ANSWERED.
+
+    All of them when vision boxed at least one — a part it could not see
+    beside one it could is a real absence, and re-asking it forever is the
+    bug `annotated_for` exists to prevent. None of them on a TOTAL miss,
+    until the picture has missed MAX_REGION_MISSES times: a total miss is the
+    flakiest outcome, not the most certain one (organelle_city, Cells kit,
+    2026-09-09: four names, {} returned, the same call answering two other
+    assets minutes apart), and latching it published a picture no label
+    could ever point into. The miss count lives in the local meta as
+    `region_misses`, so the re-ask is bounded per container.
+    """
+    if not asked_now:
+        return []
+    if any(found.get(k) for k in found):
+        md.pop("region_misses", None)
+        return list(asked_now)
+    misses = int(md.get("region_misses") or 0) + 1
+    md["region_misses"] = misses
+    if misses >= MAX_REGION_MISSES:
+        logger.warning("asset %r: vision found none of %s (miss %d of %d) — "
+                       "recording them as asked", md.get("key"),
+                       ", ".join(asked_now), misses, MAX_REGION_MISSES)
+        return list(asked_now)
+    logger.warning("asset %r: vision found none of %s — leaving them open "
+                   "so the next load asks again", md.get("key"),
+                   ", ".join(asked_now))
+    return []
 
 
 def _unasked_names(names, asked) -> list[str]:
@@ -1979,7 +2064,8 @@ def repair_asset_regions(key: str, wanted: list[str],
             if not missing:
                 return out
             out["asked"] = True
-            ann = annotate_regions(ink, missing)
+            ann = annotate_regions(ink, missing, md.get("prompt")
+                                   or md.get("description"))
             for k, boxes in (ann.get("regions") or {}).items():
                 if boxes and k not in regions:
                     regions[k] = boxes
@@ -1987,7 +2073,8 @@ def repair_asset_regions(key: str, wanted: list[str],
             asked_before = list(md.get("annotated_for") or [])
             md["regions"] = regions
             md["annotated_for"] = asked_before + [
-                w for w in missing if w not in asked_before]
+                w for w in _latch_after_miss(md, missing, ann.get("regions") or {})
+                if w not in asked_before]
             # upstream FIRST, then local — the order the annotation path uses,
             # so a repaired box converges for every future lesson rather than
             # dying with this container's disk
@@ -2064,9 +2151,14 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
                 # the parts a later prompt learned to name (the compiler
                 # appends a layer-group tail when it merges per-part handles
                 # into the root).
-                ann = annotate_regions(ink, unasked)
+                # told what the PICTURE is: the prompt it was generated from,
+                # or the library row's description — the lesson's own prompt
+                # only when neither is recorded
+                ann = annotate_regions(ink, unasked, md.get("prompt")
+                                       or md.get("description") or prompt)
                 fresh_keys = set(ann["regions"] or {})
-                md["annotated_for"] = asked + list(dict.fromkeys(unasked))
+                md["annotated_for"] = asked + list(dict.fromkeys(
+                    _latch_after_miss(md, unasked, ann["regions"] or {})))
                 md["regions"] = {**(md.get("regions") or {}),
                                  **(ann["regions"] or {})}
                 md["baked_text"] = ann["has_text"]
@@ -2179,7 +2271,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
             return cached_fallback
         logger.warning("no image credentials/output for %r — vector fallback", key)
         return None
-    ann = annotate_regions(ink, names)
+    ann = annotate_regions(ink, names, prompt)
     if ann.get("text_boxes"):
         # baked labels duplicate and contradict the engine's own labels —
         # scrub-and-RESCAN until wordless (vision under-reports per call: a
@@ -2198,7 +2290,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
         retry = generate(" CRITICAL: the image must contain ZERO letters, "
                          "words, numbers or labels of any kind.")
         if retry is not None:
-            ann2 = annotate_regions(retry, names)
+            ann2 = annotate_regions(retry, names, prompt)
             if ann2["has_text"] and ann2.get("text_boxes"):
                 ink, left = scrub_all_text(retry, ann2["text_boxes"])
                 ann2["has_text"] = bool(left)
@@ -2208,15 +2300,20 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
             else:
                 logger.warning("retry for %r still has text — keeping first, "
                                "flagged for validation", key)
+    # A fresh picture asked for N parts that vision boxed none of is NOT
+    # recorded as annotated: the names stay open, the library publish below
+    # refuses it, and the next load asks again with the description.
+    md_new: dict = {"key": key}
+    answered = _latch_after_miss(md_new, list(names), ann["regions"] or {})
     try:  # cache persistence is best-effort — never fail a good asset over IO
         cache.mkdir(parents=True, exist_ok=True)
         ink.save(png)
-        _write_meta(meta, {"key": key, "prompt": prompt,
+        _write_meta(meta, {**md_new, "prompt": prompt,
                            "model": model.id,
                            "image_size": model.size or None,
                            "provenance": "generated",
                            "regions": ann["regions"],
-                           "annotated_for": list(names),
+                           "annotated_for": answered,
                            "baked_text": ann["has_text"],
                            # The same annotation in the library's own shape,
                            # so the publish that follows a generation hands
@@ -2224,7 +2321,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
                            # it describes. The 378 diagrams still to be
                            # commissioned therefore cost nothing extra: they
                            # are annotated on the way in.
-                           "vision": _vision_doc(ann, names, ink.size)})
+                           "vision": _vision_doc(ann, answered, ink.size)})
     except OSError:
         logger.exception("could not cache asset %r (continuing uncached)", key)
     return _finish(key, ink, ann["regions"], ann["has_text"])

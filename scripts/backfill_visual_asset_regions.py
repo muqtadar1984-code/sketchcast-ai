@@ -176,7 +176,7 @@ def main() -> int:
         try:
             blob = sb.storage.from_(vl.BUCKET).download(r["storage_path"])
             ink = Image.open(io.BytesIO(blob)).convert("RGBA")
-            ann = annotate_regions(ink, names)
+            ann = annotate_regions(ink, names, r.get("description"))
             regions = ann.get("regions") or {}
             payload = vl.vision_payload(regions, list(names),
                                         bool(ann.get("has_text")),

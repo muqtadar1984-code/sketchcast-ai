@@ -107,9 +107,9 @@ def rig(tmp_path, monkeypatch):
 
     real_annotate = ra.annotate_regions
 
-    def counted_annotate(ink, names):
+    def counted_annotate(ink, names, *a):
         counts.bump("annotate_regions")
-        return real_annotate(ink, names)
+        return real_annotate(ink, names, *a)
 
     monkeypatch.setattr(ra, "annotate_regions", counted_annotate)
 
