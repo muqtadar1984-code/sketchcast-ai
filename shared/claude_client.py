@@ -887,6 +887,19 @@ def _repair_json(text: str):
     fixed = _re.sub(r'"who"\s*:\s*("(?:teacher|student)")\s*:\s*(?=")',
                     r'"who": \1, "line": ', fixed)
     candidates.append(fixed)
+    # 2c'. a stray quote in front of an object or array that sits where a
+    #      VALUE goes: `..."cue":"Equilateral"},"{"verb":"WRITE"...` — a
+    #      teacher's presentation (gen e28277e7, 2026-09-25) failed on this
+    #      one character at char 5,659 of an otherwise complete 8,297-char
+    #      reply. Decidable: after `,` `[` or `:` a string may start, but a
+    #      string whose first character is `{` or `[` and whose SECOND is `"`
+    #      is not a string the model writes, it is an object/array with a
+    #      quote in front. A genuine one-character string "{" is followed by
+    #      `,` `}` `]` or `:`, never by `"`, so it does not match.
+    #      BEFORE 2d, whose string walker would take the stray quote as a
+    #      string boundary and misread everything after it.
+    fixed = _re.sub(r'([,\[:]\s*)"(\s*[{\[]\s*)(?=")', r'\1\2', fixed)
+    candidates.append(fixed)
     # 2d. bare quotes inside a string ('called the "powerhouses" of the cell')
     escaped = _escape_inner_quotes(fixed)
     if escaped is None:

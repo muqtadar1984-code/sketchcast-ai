@@ -442,3 +442,23 @@ class TestSuperfluousCloser:
         payload = {"segments": [{"type": "hook"}],
                    "visual_plan": {"chapters": [{"id": "c1", "assets": {"k": "v"}}]}}
         assert X(json.dumps(payload)) == payload
+
+
+class TestStrayQuoteBeforeAnObject:
+    """A teacher's presentation (gen e28277e7, 2026-09-25) failed on ONE
+    character at char 5,659 of a complete 8,297-char reply: a quote in front
+    of an object inside an actions array — `..."cue":"Equilateral"},"{"verb"`."""
+
+    def test_the_measured_shape_is_repaired(self):
+        bad = ('{"segments":[' + seg("a") + ',"' + seg("b") + '],"visual_plan":{"chapters":[{"actions":['
+               '{"verb":"WRITE","cue":"Equilateral"},"{"verb":"WRITE","cue":"Isosceles"}]}]}}')
+        out = X(bad)
+        assert ok(out) and [s["text"] for s in out["segments"]] == ["a", "b"]
+        assert [a["cue"] for a in out["visual_plan"]["chapters"][0]["actions"]] == ["Equilateral", "Isosceles"]
+
+    def test_a_genuine_one_character_bracket_string_is_left_alone(self):
+        legit = ('{"segments":[{"type":"hook","text":"{","elevenlabs_text":"[","slide_heading":"H",'
+                 '"slide_points":["{","[x]"]}]}')
+        out = X(legit)
+        assert out["segments"][0]["text"] == "{" and out["segments"][0]["slide_points"] == ["{", "[x]"]
+        assert _repair_json(legit) == json.loads(legit)

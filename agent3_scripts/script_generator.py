@@ -427,6 +427,21 @@ def generate_episode_script(
     result = client.analyze(prompt=prompt, system=system, max_tokens=max_out)
 
     data = result.get("data", result)
+    # An UNPARSEABLE reply (the client hands back {"raw_text": ...} once its
+    # salvage gives up) is asked for once more before the lesson fails: the
+    # slip that broke it is one stray character the model rarely repeats,
+    # and a whole kit's video died on exactly that (gen e28277e7,
+    # 2026-09-25) with every sibling document fine. One re-ask, never a
+    # loop; the tokens of both replies are summed for the error message.
+    if isinstance(data, dict) and "raw_text" in data and not data.get("segments"):
+        logger.warning("script reply for episode %s was unparseable JSON (%d chars); asking once more",
+                       episode.get("episode_num", 1), len(str(data.get("raw_text") or "")))
+        first = dict(result.get("usage") or {})
+        result = client.analyze(prompt=prompt, system=system, max_tokens=max_out)
+        usage = dict(result.get("usage") or {})
+        usage["output_tokens"] = int(usage.get("output_tokens") or 0) + int(first.get("output_tokens") or 0)
+        result = {**result, "usage": usage}
+        data = result.get("data", result)
     # Truncation is decided HERE, not in the JSON salvage: a reply cut off
     # exactly at an element boundary is structurally indistinguishable from a
     # complete one, so a parser left to guess would either fail every lesson

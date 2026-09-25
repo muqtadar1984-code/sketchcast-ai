@@ -35,7 +35,9 @@ _INTERNAL_ERROR_RE = re.compile(
     r"\b(?:AttributeError|TypeError|KeyError|IndexError|NameError|ValueError|"
     r"ZeroDivisionError|AssertionError|RecursionError|UnboundLocalError)\b|"
     r"Traceback \(most recent call last\)|unsupported operand type|"
-    r"takes \d+ positional arguments? but|missing \d+ required positional",
+    r"takes \d+ positional arguments? but|missing \d+ required positional|"
+    # a model reply the pipeline could not read is ours to fix, not the book's
+    r"produced no segments|malformed JSON|JSON fault|unparseable",
 )
 _INTERNAL_USER_MSG = (
     "Something went wrong on our side while generating this — nothing is wrong with "

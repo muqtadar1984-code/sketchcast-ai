@@ -572,3 +572,10 @@ def test_a_content_error_still_goes_to_the_model(monkeypatch):
     assert dg.internal_error(bundle) == ""
     out = dg.diagnose(MockClient(), bundle)
     assert calls and out["recommended_action"] == "user_fix"
+
+
+def test_an_unreadable_model_reply_is_a_pipeline_error_too():
+    from support_agent import diagnose as dg
+    err = ("Script generation produced no segments for episode 1: 8297 chars, output_tokens=1965 billed "
+           "across attempts (cap 30000), provider did NOT report truncation — so this is malformed JSON")
+    assert dg.internal_error({"recent_jobs": [{"status": "error", "error": err}]}).startswith("Script generation")
