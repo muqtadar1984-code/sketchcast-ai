@@ -481,3 +481,52 @@ def test_the_board_speaks_and_writes_in_the_lesson_language():
     hi = compile_lesson(lesson, language="hi")
     assert {s["type"]: s for s in hi}["question_hook"]["slide_heading"] == "अब आप कीजिए"
     assert compile_lesson(lesson, language="xx")[-1]["text"].startswith("I hope you now have")
+
+
+_SCRIPTS = {
+    "ar": dict(topic="المعادلات الخطية في متغير واحد", title="طريقة الحل",
+               steps=["اكتب المعادلة", "اعزل الحد المتغير", "نفّذ العمليات العكسية", "أوجد قيمة المتغير", "تحقق من إجابتك"],
+               points=["المعادلة ميزان: ما نفعله بطرف نفعله بالطرف الآخر", "نتراجع عن العمليات بالترتيب العكسي", "نتحقق بالتعويض"],
+               problem="أوجد عددًا إذا ضُرب في 5 وطُرح 17 من الناتج كانت النتيجة 40 أكثر من العدد نفسه."),
+    "hi": dict(topic="एक चर वाले रैखिक समीकरण", title="हल की विधि",
+               steps=["समीकरण लिखिए", "चर पद को अलग कीजिए", "विपरीत संक्रियाएँ कीजिए", "चर का मान ज्ञात कीजिए", "उत्तर की जाँच कीजिए"],
+               points=["समीकरण एक तुला है: जो एक पक्ष में करें वही दूसरे में करें", "संक्रियाओं को उल्टे क्रम में हटाइए", "उत्तर को वापस रखकर जाँचिए"],
+               problem="एक संख्या ज्ञात कीजिए जिसे 5 से गुणा करके गुणनफल में से 17 घटाने पर परिणाम उस संख्या से 40 अधिक हो।"),
+    "te": dict(topic="ఒక చరరాశిలో రేఖీయ సమీకరణాలు", title="పద్ధతి",
+               steps=["సమీకరణం రాయండి", "చరరాశి పదాన్ని వేరు చేయండి", "విలోమ ప్రక్రియలు చేయండి", "చరరాశి విలువ కనుగొనండి", "జవాబు సరిచూడండి"],
+               points=["సమీకరణం ఒక త్రాసు: ఒక వైపు చేసినది మరో వైపు చేయాలి", "ప్రక్రియలను వ్యతిరేక క్రమంలో తొలగించండి", "జవాబును తిరిగి ప్రతిక్షేపించి సరిచూడండి"],
+               problem="ఒక సంఖ్యను 5తో గుణించి లబ్ధం నుండి 17 తీసివేస్తే ఫలితం ఆ సంఖ్య కంటే 40 ఎక్కువ. ఆ సంఖ్యను కనుగొనండి."),
+}
+
+
+def test_tall_and_wide_scripts_keep_the_board_free_of_overlaps():
+    """Production ar/hi demos 2026-09-25 (52 and 12 overlaps): Arabic runs
+    43 px tall at the card's size against a 33 px pitch, Devanagari a third
+    wider than the handwriting face. Geometry is measured with the
+    renderer's own faces now, shaped Arabic included."""
+    from maths.board import CARD_X, compile_lesson
+    from maths.schema import Lesson, MethodCard, Step, WorkedExample
+    from spike.scene_engine.director import parse_scene_response
+    from spike.scene_engine.render import SceneRenderer
+    for lang, c in _SCRIPTS.items():
+        steps = [Step(kind="setup", operation="write the equation", before=[], after=["5n - 17 = n + 40"], speech="s"),
+                 Step(operation="subtract n from both sides", before=["5n - 17 = n + 40"], after=["4n - 17 = 40"], speech="x"),
+                 Step(operation="add 17 to both sides", before=["4n - 17 = 40"], after=["4n = 57"], speech="y")]
+        ex = WorkedExample(label="Example 3", task="solve", problem=c["problem"], givens=["5n - 17 = n + 40"], target="n",
+                           steps=steps, final_answer=["n = 57/4"], answer_speech="z", intro_speech="intro")
+        lesson = Lesson(topic=c["topic"], method=MethodCard(title=c["title"], steps=c["steps"]),
+                        concept_points=c["points"], misconceptions=c["points"][:2], examples=[ex])
+        for s in compile_lesson(lesson, language=lang):
+            if s["segment_id"] == "s001":
+                continue
+            r = SceneRenderer(parse_scene_response(s["scene"], s["text"]))
+            r.compile(20.0)
+            live = [w for w in r.audit()["warnings"] if w.startswith("TEXT_OVERLAP")]
+            assert not live, (lang, s["segment_id"], live)
+            box = next((e for e in s["scene"]["elements"] if e["id"] == "card_box"), None)
+            if box:
+                assert max(p[1] for p in box["points"]) <= 276, (lang, s["segment_id"])
+            for eid in ("wb_p0", "wb_p1", "wb_p2", "q0", "q1", "wb_h"):
+                b = r.bound.get(eid)
+                if b is not None and b.text is not None:
+                    assert b.box[2] <= CARD_X - 16, (lang, s["segment_id"], eid, b.box)
