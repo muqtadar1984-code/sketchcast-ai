@@ -234,8 +234,7 @@ def _paginate(blocks: list[dict], budget_in: float,
               width_in: float = mx.CONTENT_W_IN) -> list[list[dict]]:
     """Break a section body across slides so that every page actually fits.
 
-    Two rules beyond "fill until full", both learned from the rendered Cells
-    deck:
+    Three rules beyond "fill until full", each learned from a rendered deck:
 
     A LIST IS NOT ATOMIC. Treating one as a single block put nine organelle
     definitions on one slide and ran the last three off the bottom edge. A
@@ -245,16 +244,47 @@ def _paginate(blocks: list[dict], budget_in: float,
     cells:" is not a paragraph, it is the first line of the list below it,
     and breaking after it produced a page holding one colon and five inches
     of white space. A block ending in a colon is kept with its successor.
+
+    A TABLE IS NOT ATOMIC EITHER. It was: "a table cannot split at all",
+    so a summary table taller than the page was placed whole and the Blood
+    deck's four-row component table (three columns, beside a figure, at
+    16pt) ran 1.74in past the bottom edge and failed the whole kit. A table
+    splits between rows with its header repeated on every page, never
+    leaving a single row stranded — exactly what the glossary and
+    misconception tables already did (`_table_pages`).
+    """
+    return _paginate_ex(blocks, budget_in, width_in)[0]
+
+
+def _paginate_ex(blocks: list[dict], budget_in: float,
+                 width_in: float = mx.CONTENT_W_IN, max_pages: int | None = None,
+                 defer_tables: bool = False) -> tuple[list[list[dict]], list[dict]]:
+    """`_paginate`, stopping after `max_pages` pages: returns the pages and
+    the blocks NOT yet placed, with a list, paragraph or table that was
+    partly placed returned as its unplaced remainder. The illustrated first
+    page of a section is measured against a narrower column than the rest,
+    so the storyboard paginates ONE page narrow and the leftover wide; it
+    used to slice the body by the number of blocks on that page, and a list
+    split across the boundary lost every item after the split.
+
+    `defer_tables`: a table that does not fit whole in the room left is not
+    split here but pushed to the next page (only sensible with max_pages —
+    the illustrated column is 7.3in, and three columns split across it
+    are a cramped table on the one page that also carries a picture).
     """
     pages: list[list[dict]] = []
     cur: list[dict] = []
     used = 0.0
+    queue = list(blocks)
 
     def flush():
         nonlocal cur, used
         if cur:
             pages.append(cur)
         cur, used = [], 0.0
+
+    def full() -> bool:
+        return max_pages is not None and len(pages) >= max_pages
 
     def split_para(text: str, room: float) -> tuple[str, str]:
         """Break one paragraph at a sentence boundary near `room`.
@@ -277,79 +307,116 @@ def _paginate(blocks: list[dict], budget_in: float,
     def leads_in(b: dict) -> bool:
         return b["kind"] in ("para", "heading") and (b.get("text") or "").rstrip().endswith(":")
 
-    i, n = 0, len(blocks)
-    while i < n:
-        b = blocks[i]
+    def first_unit_in(b: dict) -> float:
+        """The least of a block that must follow a lead-in onto its page: a
+        list's first item, a table's header and first row (the rest of
+        either flows on), any other block whole."""
+        if b["kind"] == "list":
+            return mx.list_item_height_in((b.get("items") or [""])[0], width_in)
+        if b["kind"] == "table":
+            header, rows = b.get("header") or [], b.get("rows") or []
+            return mx.table_height_in(header, rows[:1], width_in) + mx.TABLE_GAP_IN
+        return mx.block_height_in(b, width_in)
+
+    while queue and not full():
+        b = queue[0]
         h = mx.block_height_in(b, width_in)
 
         # A lead-in reserves room for what follows, so it can never be the last
-        # thing on a page. How much room depends on whether the successor can
-        # be broken: a list only needs its FIRST item to fit, because the rest
-        # will flow onto the next page anyway, while a table cannot split at
-        # all and has to be reserved whole. Reserving a nominal inch for the
-        # table left "Differences between plant and animal cells:" stranded at
-        # the foot of a page with its table overleaf.
+        # thing on a page. Only the successor's FIRST unit is reserved when it
+        # can be broken; reserving a nominal inch for a table left
+        # "Differences between plant and animal cells:" stranded at the foot
+        # of a page with its table overleaf.
         need = h
-        if leads_in(b) and i + 1 < n:
-            nxt = blocks[i + 1]
-            need += (mx.list_item_height_in((nxt.get("items") or [""])[0], width_in)
-                     if nxt["kind"] == "list" else mx.block_height_in(nxt, width_in))
+        if leads_in(b) and len(queue) > 1:
+            need += first_unit_in(queue[1])
         # ...but a list is never pre-flushed on its FULL height: it is about to
         # be split, and turning the page first is what put a lone lead-in and
-        # five inches of white space on slide 5.
-        if cur and b["kind"] != "list" and used + need > budget_in:
+        # five inches of white space on slide 5. Nor is a table, for the same
+        # reason.
+        if cur and b["kind"] not in ("list", "table") and used + need > budget_in:
             flush()
+            continue
 
         if b["kind"] == "list" and used + h > budget_in:
             items = list(b.get("items") or [])
-            while items:
-                room = budget_in - used
-                if cur and room < mx.list_item_height_in(items[0], width_in):
-                    flush()
-                    room = budget_in
-                take: list[str] = []
-                for it in items:
-                    ih = mx.list_item_height_in(it, width_in)
-                    if take and ih > room:
-                        break
-                    take.append(it)
-                    room -= ih
-                # A lone orphan on the next page reads as a mistake — but
-                # PULLING IT BACK is how you overflow the very page you were
-                # protecting: eight items filled 4.88in of 5.17in and the
-                # ninth made it 5.49in. Push one FORWARD instead, so the last
-                # page carries two and every page still fits.
-                if len(items) - len(take) == 1 and len(take) > 1:
-                    take.pop()
-                cur.append({"kind": "list", "items": take})
-                used += (sum(mx.list_item_height_in(x, width_in) for x in take)
-                         + mx.LIST_TAIL_IN)
-                items = items[len(take):]
-            i += 1
+            room = budget_in - used
+            if cur and room < mx.list_item_height_in(items[0], width_in):
+                flush()
+                continue
+            take: list[str] = []
+            for it in items:
+                ih = mx.list_item_height_in(it, width_in)
+                if take and ih > room:
+                    break
+                take.append(it)
+                room -= ih
+            # A lone orphan on the next page reads as a mistake — but
+            # PULLING IT BACK is how you overflow the very page you were
+            # protecting: eight items filled 4.88in of 5.17in and the
+            # ninth made it 5.49in. Push one FORWARD instead, so the last
+            # page carries two and every page still fits.
+            if len(items) - len(take) == 1 and len(take) > 1:
+                take.pop()
+            cur.append({**b, "items": take})
+            used += (sum(mx.list_item_height_in(x, width_in) for x in take)
+                     + mx.LIST_TAIL_IN)
+            queue.pop(0)
+            if items[len(take):]:
+                queue.insert(0, {**b, "items": items[len(take):]})
             continue
 
         if b["kind"] == "para" and h > budget_in:
-            text = b.get("text") or ""
-            while text:
-                room = budget_in - used - mx.PARA_GAP_IN
-                if cur and room < 0.6:
-                    flush()
-                    room = budget_in - mx.PARA_GAP_IN
-                head, text = split_para(text, room)
-                if not head:                      # one unbreakable sentence
-                    head, text = text, ""
-                cur.append({"kind": "para", "text": head})
-                used += mx.text_height_in(head, width_in, mx.BODY_PT) + mx.PARA_GAP_IN
-                if text:
-                    flush()
-            i += 1
+            room = budget_in - used - mx.PARA_GAP_IN
+            if cur and room < 0.6:
+                flush()
+                continue
+            head, text = split_para(b.get("text") or "", room)
+            if not head:                      # one unbreakable sentence
+                head, text = text, ""
+            cur.append({**b, "text": head})
+            used += mx.text_height_in(head, width_in, mx.BODY_PT) + mx.PARA_GAP_IN
+            queue.pop(0)
+            if text:
+                queue.insert(0, {**b, "text": text})
+                flush()
+            continue
+
+        if b["kind"] == "table" and used + h > budget_in:
+            header, rows = list(b.get("header") or []), list(b.get("rows") or [])
+            if defer_tables:
+                if cur:
+                    flush()                   # whole, on the next (wide) page
+                    continue
+                pages.append([])              # the picture alone; table overleaf
+                break
+            cols = mx.table_col_widths_in(len(header), width_in)
+            head_h = mx.table_row_height_in(header, cols, mx.TABLE_HEAD_PT)
+            room = budget_in - used - mx.TABLE_GAP_IN - head_h
+            if cur and rows and room < mx.table_row_height_in(rows[0], cols):
+                flush()
+                continue
+            take: list = []
+            for r in rows:
+                rh = mx.table_row_height_in(r, cols)
+                if take and rh > room:
+                    break
+                take.append(r)
+                room -= rh
+            if len(rows) - len(take) == 1 and len(take) > 1:
+                take.pop()                    # never one row alone overleaf
+            cur.append({**b, "rows": take})
+            used += mx.table_height_in(header, take, width_in) + mx.TABLE_GAP_IN
+            queue.pop(0)
+            if rows[len(take):]:
+                queue.insert(0, {**b, "rows": rows[len(take):]})
             continue
 
         cur.append(b)
         used += h
-        i += 1
+        queue.pop(0)
     flush()
-    return pages or [[]]
+    return (pages or [[]]), queue
 
 
 def _clean_blocks(body_md: str) -> list[dict]:
@@ -617,8 +684,14 @@ def storyboard(model: LessonModel, label_pt: float = mx.LABEL_PT) -> list[Slide]
         # measured regions also earns the labelled diagram slide that follows.
         art = next((f for f in model.figures_for(sec) if f.png and Path(str(f.png)).exists()), None)
         if art:
-            first = _paginate(body, budget, _ILLUSTRATED_BODY_W_IN)[0]
-            rest = body[len(first):]
+            # ONE page narrow, the leftover wide — and the leftover is what
+            # `_paginate_ex` says is unplaced, never `body[len(first):]`: a
+            # list split across the boundary counted as one block and lost
+            # every item after the split. A table that does not fit beside
+            # the picture goes whole onto the next, full-width page rather
+            # than being split across a 7.3in column.
+            (first, *_), rest = _paginate_ex(body, budget, _ILLUSTRATED_BODY_W_IN,
+                                             max_pages=1, defer_tables=True)
             pages = [first] + ([] if not rest else _paginate(rest, mx.BODY_H_IN))
         else:
             pages = _paginate(body, budget)
