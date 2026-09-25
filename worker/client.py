@@ -145,6 +145,49 @@ def defer_job(sb: Client, job: dict, seconds: int, note: str) -> bool:
     return requeue_job(sb, job, bump_attempts=False, extra=extra)
 
 
+# A model quota refusal is not the job's fault and not a bug: Vertex answered
+# 429 RESOURCE_EXHAUSTED to the FIRST model call of two consecutive catalogue
+# videos (2026-09-25 19:12 and 19:15, three and a half minutes apart, the
+# box otherwise idle), the client's own retry budget (2+4+8 s) ran out, and
+# each job went to `error` with the kit marked failed — for a condition that
+# clears on its own. Such a job WAITS instead: back in the queue, invisible
+# for RATE_LIMIT_DEFER_SECONDS, no attempt spent, until it has waited
+# RATE_LIMIT_MAX_WAIT_SECONDS in total; only then is the refusal a failure.
+RATE_LIMIT_DEFER_SECONDS = int(os.getenv("RATE_LIMIT_DEFER_SECONDS", "180"))
+RATE_LIMIT_MAX_WAIT_SECONDS = int(os.getenv("RATE_LIMIT_MAX_WAIT_SECONDS", "1800"))
+_RATE_LIMIT_CLASSES = ("_RateLimited", "RateLimitError", "ResourceExhausted")
+_RATE_LIMIT_MARKS = ("RESOURCE_EXHAUSTED", '"code": 429', "429 Too Many", "rate limit", "rate_limit")
+
+
+def is_rate_limited(exc: BaseException) -> bool:
+    """A model provider refusing on quota: Vertex's _RateLimited, Anthropic's
+    RateLimitError, or either's text in a wrapped error."""
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if type(cur).__name__ in _RATE_LIMIT_CLASSES:
+            return True
+        text = str(cur)
+        if any(m.lower() in text.lower() for m in _RATE_LIMIT_MARKS):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def rate_limit_deferral(job: dict, exc: BaseException) -> "DeferredJob | None":
+    """The wait a quota refusal earns this job, or None when the exception is
+    not one, or the job has already waited its whole budget."""
+    if not is_rate_limited(exc):
+        return None
+    waited = deferred_seconds(job)
+    if waited >= RATE_LIMIT_MAX_WAIT_SECONDS:
+        return None
+    return DeferredJob(RATE_LIMIT_DEFER_SECONDS,
+                       f"model quota exhausted; waiting (waited {waited:.0f}s of "
+                       f"{RATE_LIMIT_MAX_WAIT_SECONDS}s)")
+
+
 def deferred_seconds(job: dict) -> float:
     """How long this job has been waiting in total (0 if never deferred)."""
     since = ((job.get("params") or {}) if isinstance(job.get("params"), dict) else {}).get("deferred_since")

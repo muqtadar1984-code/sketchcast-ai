@@ -2345,7 +2345,17 @@ def _process_catalogue(sb: Client, job: dict, generation_id: str, gen: dict, *,
             recorded = catalogue_kit.record_presentation(
                 sb, gen, prepared.kit_id, {"kind": "presentation", "parts": built.parts})
         db.finish_job(sb, job_id, generation_id)
+    except db.DeferredJob:
+        raise                                 # a wait is not a failure
     except Exception as exc:
+        # A model quota refusal is a wait too (worker.client.rate_limit_deferral):
+        # the kit stays `generating` and run.py puts the job back with a wake-up
+        # time. Two consecutive videos of one kit went `failed` on Vertex 429s
+        # three minutes apart (2026-09-25) with nothing wrong in them.
+        wait = db.rate_limit_deferral(job, exc)
+        if wait is not None:
+            logger.warning("catalogue generation %s: %s", generation_id, wait.note)
+            raise wait from exc
         catalogue_kit.after_generation(sb, gen, kit_id,
                                        {"status": "failed", "kind": gen.get("kind"), "error": str(exc)})
         raise

@@ -594,6 +594,14 @@ def run_once(sb) -> bool:
             except Exception as exc2:  # noqa: BLE001
                 log.error("Job %s requeue failed: %s", job["id"], exc2)
     except Exception as exc:  # noqa: BLE001
+        # A model quota refusal that outlived the client's own retries is a
+        # wait, not a failure — the same deferral a deck takes while its video
+        # renders. The catalogue branch translates it before its kit is marked
+        # failed (process._process_catalogue); this is the book path's turn.
+        wait = db.rate_limit_deferral(job, exc)
+        if wait is not None and db.defer_job(sb, job, wait.seconds, wait.note):
+            log.warning("Job %s deferred %ds on a model rate limit: %s", job["id"], wait.seconds, wait.note)
+            return True                       # the finally below releases the slot
         log.error("Job %s failed: %s", job["id"], exc)
         log.error(traceback.format_exc())
         try:
