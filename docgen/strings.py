@@ -527,6 +527,148 @@ _STRINGS: dict[str, dict[str, str]] = {
 }
 
 
+# ── the maths worksheet / exam paper (docgen/maths_worksheet.py) ─────────
+_STRINGS.update({
+    "ws_warm_up": {
+        "en": "Warm-up", "ms": "Pemanasan", "ar": "تمهيد", "fr": "Échauffement", "es": "Calentamiento",
+        "pt": "Aquecimento", "hi": "वार्म-अप", "mr": "सराव सुरुवात", "te": "ప్రారంభం", "ms-arab": "ڤمانسن",
+    },
+    "ws_practice": {
+        "en": "Practice", "ms": "Latihan", "ar": "تدريب", "fr": "Entraînement", "es": "Práctica",
+        "pt": "Prática", "hi": "अभ्यास", "mr": "सराव", "te": "అభ్యాసం", "ms-arab": "لاتيهن",
+    },
+    "ws_challenge": {
+        "en": "Challenge", "ms": "Cabaran", "ar": "تحدٍّ", "fr": "Défi", "es": "Desafío", "pt": "Desafio",
+        "hi": "चुनौती", "mr": "आव्हान", "te": "సవాలు", "ms-arab": "چابرن",
+    },
+    "ws_stretch": {
+        "en": "Stretch", "ms": "Lanjutan", "ar": "تعمّق", "fr": "Pour aller plus loin", "es": "Ampliación",
+        "pt": "Aprofundamento", "hi": "विस्तार", "mr": "विस्तार", "te": "విస్తరణ", "ms-arab": "لنجوتن",
+    },
+    "difficulty_1": {
+        "en": "simplest", "ms": "paling mudah", "ar": "الأبسط", "fr": "le plus simple", "es": "el más sencillo",
+        "pt": "o mais simples", "hi": "सबसे आसान", "mr": "सर्वात सोपे", "te": "అత్యంత సులభం", "ms-arab": "ڤاليڠ موده",
+    },
+    "difficulty_2": {
+        "en": "medium", "ms": "sederhana", "ar": "متوسط", "fr": "moyen", "es": "medio", "pt": "médio",
+        "hi": "मध्यम", "mr": "मध्यम", "te": "మధ్యస్థం", "ms-arab": "سدرهان",
+    },
+    "difficulty_3": {
+        "en": "difficult", "ms": "sukar", "ar": "صعب", "fr": "difficile", "es": "difícil", "pt": "difícil",
+        "hi": "कठिन", "mr": "कठीण", "te": "కష్టం", "ms-arab": "سوکر",
+    },
+    "difficulty_4": {
+        "en": "extremely difficult", "ms": "amat sukar", "ar": "صعب جدًا", "fr": "très difficile",
+        "es": "muy difícil", "pt": "muito difícil", "hi": "बहुत कठिन", "mr": "अतिशय कठीण", "te": "చాలా కష్టం",
+        "ms-arab": "امت سوکر",
+    },
+    "verb_solve": {
+        "en": "Solve", "ms": "Selesaikan", "ar": "حلّ", "fr": "Résoudre", "es": "Resuelve", "pt": "Resolva",
+        "hi": "हल कीजिए", "mr": "सोडवा", "te": "పరిష్కరించండి", "ms-arab": "سلسايکن",
+    },
+    "verb_simplify": {
+        "en": "Simplify", "ms": "Permudahkan", "ar": "بسّط", "fr": "Simplifier", "es": "Simplifica",
+        "pt": "Simplifique", "hi": "सरल कीजिए", "mr": "सोपे करा", "te": "సూక్ష్మీకరించండి", "ms-arab": "ڤرمودهکن",
+    },
+    "verb_expand": {
+        "en": "Expand", "ms": "Kembangkan", "ar": "فكّ", "fr": "Développer", "es": "Desarrolla", "pt": "Expanda",
+        "hi": "विस्तार कीजिए", "mr": "विस्तार करा", "te": "విస్తరించండి", "ms-arab": "کمبڠکن",
+    },
+    "verb_factorise": {
+        "en": "Factorise", "ms": "Faktorkan", "ar": "حلّل", "fr": "Factoriser", "es": "Factoriza", "pt": "Fatore",
+        "hi": "गुणनखंड कीजिए", "mr": "अवयव पाडा", "te": "కారణాంకాలుగా విభజించండి", "ms-arab": "فکتورکن",
+    },
+    "verb_evaluate": {
+        "en": "Evaluate", "ms": "Nilaikan", "ar": "احسب", "fr": "Calculer", "es": "Calcula", "pt": "Calcule",
+        "hi": "मान ज्ञात कीजिए", "mr": "किंमत काढा", "te": "విలువ కనుగొనండి", "ms-arab": "نيلايکن",
+    },
+    "ws_instructions": {
+        "en": "Show your working for every question. Questions get harder as you go; "
+              "check each answer by substituting it back.",
+        "ms": "Tunjukkan jalan kerja bagi setiap soalan. Soalan semakin sukar; "
+              "semak setiap jawapan dengan menggantikannya semula.",
+        "ar": "اكتب خطوات الحل لكل سؤال. تزداد الأسئلة صعوبة تدريجيًا؛ تحقق من كل إجابة بالتعويض.",
+        "fr": "Rédigez vos calculs pour chaque question. Les questions deviennent plus difficiles ; "
+              "vérifiez chaque réponse en la substituant.",
+        "es": "Muestra tu procedimiento en cada pregunta. Las preguntas se vuelven más difíciles; "
+              "comprueba cada respuesta sustituyéndola.",
+        "pt": "Mostre o seu raciocínio em cada questão. As questões ficam mais difíceis; "
+              "verifique cada resposta substituindo-a.",
+        "hi": "हर प्रश्न का हल विस्तार से लिखिए। प्रश्न धीरे-धीरे कठिन होते जाते हैं; "
+              "हर उत्तर को वापस रखकर जाँचिए।",
+        "mr": "प्रत्येक प्रश्नाची रीत लिहा. प्रश्न हळूहळू कठीण होत जातात; "
+              "प्रत्येक उत्तर परत ठेवून पडताळा.",
+        "te": "ప్రతి ప్రశ్నకు మీ పని చూపండి. ప్రశ్నలు క్రమంగా కష్టమవుతాయి; "
+              "ప్రతి జవాబును తిరిగి ప్రతిక్షేపించి సరిచూడండి.",
+        "ms-arab": "تونجوقکن جالن کرجا باݢي ستياڤ سوءالن. سوءالن سماکين سوکر؛ "
+                   "سيمق ستياڤ جواڤن دڠن مڠݢنتيکنڽ سمولا.",
+    },
+    "exam_instructions": {
+        "en": "Answer all questions. Marks are shown in brackets. Show full working — "
+              "method marks are awarded for correct steps.",
+        "ms": "Jawab semua soalan. Markah ditunjukkan dalam kurungan. Tunjukkan jalan kerja penuh — "
+              "markah kaedah diberi untuk langkah yang betul.",
+        "ar": "أجب عن جميع الأسئلة. الدرجات موضحة بين قوسين. اكتب الحل كاملًا — "
+              "تُمنح درجات الطريقة للخطوات الصحيحة.",
+        "fr": "Répondez à toutes les questions. Les points sont indiqués entre crochets. Rédigez tous vos "
+              "calculs — des points de méthode sont attribués aux étapes correctes.",
+        "es": "Responde todas las preguntas. Los puntos se indican entre corchetes. Muestra todo el "
+              "procedimiento: se otorgan puntos de método por los pasos correctos.",
+        "pt": "Responda a todas as questões. Os pontos estão entre colchetes. Mostre todo o raciocínio — "
+              "pontos de método são atribuídos aos passos corretos.",
+        "hi": "सभी प्रश्नों के उत्तर दीजिए। अंक कोष्ठक में दिए गए हैं। पूरा हल लिखिए — "
+              "सही चरणों के लिए विधि के अंक दिए जाते हैं।",
+        "mr": "सर्व प्रश्न सोडवा. गुण कंसात दिले आहेत. पूर्ण रीत लिहा — "
+              "योग्य पायऱ्यांसाठी पद्धतीचे गुण दिले जातात.",
+        "te": "అన్ని ప్రశ్నలకు జవాబు రాయండి. మార్కులు బ్రాకెట్లలో ఉన్నాయి. పూర్తి పని చూపండి — "
+              "సరైన దశలకు పద్ధతి మార్కులు ఇవ్వబడతాయి.",
+        "ms-arab": "جواب سموا سوءالن. مرکه دتونجوقکن دالم کوروڠن. تونجوقکن جالن کرجا ڤنوه — "
+                   "مرکه قاعده دبري اونتوق لڠکه يڠ بتول.",
+    },
+    "cas_note": {
+        "en": "Every solution below was checked step by step by a computer algebra system.",
+        "ms": "Setiap penyelesaian di bawah telah disemak langkah demi langkah oleh sistem algebra komputer.",
+        "ar": "تم التحقق من كل حل أدناه خطوة بخطوة بواسطة نظام جبر حاسوبي.",
+        "fr": "Chaque solution ci-dessous a été vérifiée étape par étape par un système de calcul formel.",
+        "es": "Cada solución a continuación fue comprobada paso a paso por un sistema de álgebra computacional.",
+        "pt": "Cada solução abaixo foi verificada passo a passo por um sistema de álgebra computacional.",
+        "hi": "नीचे दिए गए हर हल की कंप्यूटर बीजगणित प्रणाली द्वारा चरण-दर-चरण जाँच की गई है।",
+        "mr": "खालील प्रत्येक उत्तर संगणकीय बीजगणित प्रणालीद्वारे पायरी-पायरीने तपासले आहे.",
+        "te": "క్రింది ప్రతి పరిష్కారాన్ని కంప్యూటర్ బీజగణిత వ్యవస్థ దశలవారీగా సరిచూసింది.",
+        "ms-arab": "ستياڤ ڤڽلسايان دباوه تله دسيمق لڠکه دمي لڠکه اوليه سيستم الجبر کومڤوتر.",
+    },
+    "ws_total_marks": {
+        "en": "Total: {n} marks", "ms": "Jumlah: {n} markah", "ar": "المجموع: {n} درجة", "fr": "Total : {n} points",
+        "es": "Total: {n} puntos", "pt": "Total: {n} pontos", "hi": "कुल: {n} अंक", "mr": "एकूण: {n} गुण",
+        "te": "మొత్తం: {n} మార్కులు", "ms-arab": "جومله: {n} مرکه",
+    },
+    "marks_scheme": {
+        "en": " — {m} marks: {method} for the method, 1 for the answer",
+        "ms": " — {m} markah: {method} untuk kaedah, 1 untuk jawapan",
+        "ar": " — {m} درجة: {method} للطريقة، 1 للإجابة",
+        "fr": " — {m} points : {method} pour la méthode, 1 pour la réponse",
+        "es": " — {m} puntos: {method} por el método, 1 por la respuesta",
+        "pt": " — {m} pontos: {method} pelo método, 1 pela resposta",
+        "hi": " — {m} अंक: विधि के लिए {method}, उत्तर के लिए 1",
+        "mr": " — {m} गुण: पद्धतीसाठी {method}, उत्तरासाठी 1",
+        "te": " — {m} మార్కులు: పద్ధతికి {method}, జవాబుకు 1",
+        "ms-arab": " — {m} مرکه: {method} اونتوق قاعده، 1 اونتوق جواڤن",
+    },
+    "sol_check": {
+        "en": "Check", "ms": "Semak", "ar": "تحقق", "fr": "Vérification", "es": "Comprobación", "pt": "Verificação",
+        "hi": "जाँच", "mr": "पडताळणी", "te": "సరిచూడు", "ms-arab": "سيمق",
+    },
+    "sol_answer": {
+        "en": "Answer", "ms": "Jawapan", "ar": "الإجابة", "fr": "Réponse", "es": "Respuesta", "pt": "Resposta",
+        "hi": "उत्तर", "mr": "उत्तर", "te": "జవాబు", "ms-arab": "جواڤن",
+    },
+    "sol_or": {
+        "en": "or", "ms": "atau", "ar": "أو", "fr": "ou", "es": "o", "pt": "ou", "hi": "या", "mr": "किंवा",
+        "te": "లేదా", "ms-arab": "اتاو",
+    },
+})
+
+
 def _t(key: str, lang: str) -> str:
     table = _STRINGS[key]
     return table.get((lang or "en").strip().lower()) or table["en"]

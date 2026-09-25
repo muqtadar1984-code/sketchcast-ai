@@ -446,3 +446,38 @@ def test_an_unverifiable_try_it_is_dropped_too():
     lesson, report = L.verified_lesson(c, topic="Linear equations", subject="Mathematics", level="Class 8",
                                        curriculum=None, language="en", episode_context="")
     assert lesson.try_it.problem == "" and any(x.startswith("try-it") for x in report["dropped"])
+
+
+def test_the_board_speaks_and_writes_in_the_lesson_language():
+    """Founder ask 2026-09-24: the maths profile for every lesson language.
+    The board's fixed strings and fallbacks follow the language; the
+    scenes still compile with Arabic and Hindi text on them."""
+    from maths.board import compile_lesson, say
+    from maths.schema import Lesson, MethodCard, TryIt, Step
+    from spike.scene_engine.director import parse_scene_response
+    from spike.scene_engine.render import SceneRenderer
+    steps = [Step(operation="subtract 3 from both sides", before=["4x + 3 = 19"], after=["4x = 16"], speech="اطرح ثلاثة."),
+             Step(operation="divide both sides by 4", before=["4x = 16"], after=["x = 4"], speech="اقسم على أربعة.")]
+    lesson = Lesson(topic="المعادلات الخطية", method=MethodCard(steps=["انقل الثوابت", "اقسم على المعامل"]),
+                    try_it=TryIt(problem="4x + 3 = 19", answer=["x = 4"], speech="جرّب هذه.", steps=steps,
+                                 answer_speech="إذن x يساوي أربعة."))
+    segs = compile_lesson(lesson, language="ar")
+    by_type = {s["type"]: s for s in segs}
+    assert by_type["question_hook"]["slide_heading"] == "جرّب بنفسك"
+    pause = next(e for e in by_type["question_hook"]["scene"]["elements"] if e["id"] == "pause")
+    assert pause["text"] == "أوقف الفيديو وجرّب"
+    assert by_type["synthesis"]["slide_heading"] == "أخطاء شائعة"
+    assert by_type["preview"]["text"].startswith("أرجو أن تكون قد فهمت المعادلات الخطية")
+    card = next(e for e in by_type["preview"]["scene"]["elements"] if e["id"] == "card_title")
+    assert card["text"] == "الطريقة"
+    sol = [s for s in segs if s["type"] == "explore"][-1]
+    assert sol["text"].startswith("هيا نحلّها معًا.")
+    for s in segs[1:]:
+        sc = parse_scene_response(s["scene"], s["text"])
+        assert sc is not None, s["segment_id"]
+        SceneRenderer(sc).compile(20.0)
+    # notation that slips into a spoken line is said in the lesson's words
+    assert say("تحقق أن L.H.S. = R.H.S.", "ar") == "تحقق أن الطرف الأيسر يساوي الطرف الأيمن."
+    hi = compile_lesson(lesson, language="hi")
+    assert {s["type"]: s for s in hi}["question_hook"]["slide_heading"] == "अब आप कीजिए"
+    assert compile_lesson(lesson, language="xx")[-1]["text"].startswith("I hope you now have")

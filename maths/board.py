@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from agent5_slides.slide_builder import _font
+from maths.i18n import board_text as _bt, norm_lang, words_for
 from maths.schema import Lesson, Line, Mistake, Step, WorkedExample
 from maths.speech import speakable_maths
 from maths.tokens import TokenError, normalise
@@ -117,35 +118,39 @@ _SIDES_RE = re.compile(r"\b([LR])\.?H\.?S(\.)?(?=\s*=\s*[LR]\.?H\.?S|\W|$)", re.
 _SIDES_EQ_RE = re.compile(r"\b([LR])\.?H\.?S\.?\s*=\s*([LR])\.?H\.?S(\.)?(?=\W|$)", re.I)
 
 
-def _side(letter: str, before: str = "") -> str:
-    side = "left-hand side" if letter.upper() == "L" else "right-hand side"
-    # "the LHS" already has its article
-    return side if re.search(r"\bthe\s*$", before, re.I) else f"the {side}"
+def _side(letter: str, before: str, W: dict) -> str:
+    side = W["lhs"] if letter.upper() == "L" else W["rhs"]
+    # "the LHS" already has its article (English only)
+    if re.search(r"\bthe\s*$", before, re.I) and side.startswith("the "):
+        return side[4:]
+    return side
 
 
-def _expand_sides(text: str) -> str:
-    """"L.H.S." spoken and captioned as words: the caption splitter cut a
-    recap sentence at the abbreviation's full stop ("...verify that L.H.S."
-    | "equals R.H.S.")."""
+def _expand_sides(text: str, lang: str = "en") -> str:
+    """"L.H.S." spoken and captioned as words, in the lesson language: the
+    caption splitter cut a recap sentence at the abbreviation's full stop
+    ("...verify that L.H.S." | "equals R.H.S.")."""
+    W = words_for(lang)
+
     def eq(m):
-        return (f"{_side(m.group(1), m.string[:m.start()])} equals {_side(m.group(2))}"
-                f"{m.group(3) or ''}")
+        return (W["rel_eq"].format(l=_side(m.group(1), m.string[:m.start()], W), r=_side(m.group(2), "", W))
+                + (m.group(3) or ""))
 
     def one(m):
         dot = m.group(2) or ""
         # keep a full stop that ends the sentence, drop the abbreviation's
         rest = m.string[m.end():]
         ends = not rest.strip() or rest.lstrip()[:1].isupper()
-        return _side(m.group(1), m.string[:m.start()]) + (dot if dot and ends else "")
+        return _side(m.group(1), m.string[:m.start()], W) + (dot if dot and ends else "")
 
     text = _SIDES_EQ_RE.sub(eq, text)
     return _SIDES_RE.sub(one, text)
 
 
-def say(text: str) -> str:
+def say(text: str, lang: str = "en") -> str:
     """A spoken line as the voice should receive it: no SSML, notation in
-    words, whitespace tidy."""
-    return " ".join(speakable_maths(_expand_sides(strip_ssml(str(text or "")))).split())
+    words (the lesson language's), whitespace tidy."""
+    return " ".join(speakable_maths(_expand_sides(strip_ssml(str(text or "")), lang), lang).split())
 
 
 def _cue(speech: str, narration: str, words: int = 5) -> Optional[dict]:
@@ -177,7 +182,7 @@ def _pin_text(elements: list[dict]) -> list[dict]:
 # ── the method card ─────────────────────────────────────────────────────
 
 
-def card_elements(method, present: bool) -> tuple[list[dict], list[dict]]:
+def card_elements(method, present: bool, lang: str = "en") -> tuple[list[dict], list[dict]]:
     """The pinned card: a hand-drawn frame, its title and its lines. With
     ``present`` the card is on the board from t=0 (every scene after the
     concept); otherwise the returned actions write it in."""
@@ -189,7 +194,7 @@ def card_elements(method, present: bool) -> tuple[list[dict], list[dict]]:
     els: list[dict] = [
         {"id": "card_box", "type": "shape", "shape": "path", "closed": True, "width": 2.6,
          "color": "muted", "points": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]},
-        {"id": "card_title", "type": "text", "text": _short(method.title or "METHOD", 22),
+        {"id": "card_title", "type": "text", "text": _short(method.title or _bt("method", lang), 22),
          "role": "term", "color": "accent", "size": CARD_TITLE_SIZE, "at": [CARD_X, CARD_Y], "anchor": "lt"},
     ]
     for i, _line in enumerate(lines):
@@ -484,39 +489,41 @@ def _highlight_method(board: _Board, step: Step, method, cue: Optional[dict], ha
     board.highlight = (k, hid)
 
 
-def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = True) -> tuple[dict, list[Line]]:
+def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = True,
+                  lang: str = "en") -> tuple[dict, list[Line]]:
     """One worked example as a scene plus its dialogue. The scene carries
     the card (present from t=0) and writes the question, the working, the
     notes, the answer underline and, when there is one, the mistake."""
     lines: list[Line] = []
 
     def teacher(t: str):
-        s = say(t)
+        s = say(t, lang)
         if s:
             lines.append(Line(who="teacher", line=s))
 
     def student(t: str):
-        s = say(t)
+        s = say(t, lang)
         if s:
             lines.append(Line(who="student", line=s))
 
-    teacher(ex.intro_speech or f"Here is {ex.label or 'the next example'}: {ex.problem}.")
+    teacher(ex.intro_speech or _bt("example_intro", lang, label=ex.label or _bt("next_example", lang),
+                                   problem=ex.problem))
     student(ex.student_question)
     step_speech: list[str] = []
     for st in ex.steps:
-        s = say(st.speech) or say(st.operation)
+        s = say(st.speech, lang) or say(st.operation, lang)
         step_speech.append(s)
         if s:
             lines.append(Line(who="teacher", line=s))
         student(st.student)
     teacher(ex.answer_speech)
-    mistake_speech = say(ex.common_mistake.speech) if ex.common_mistake else ""
+    mistake_speech = say(ex.common_mistake.speech, lang) if ex.common_mistake else ""
     if mistake_speech:
         lines.append(Line(who="teacher", line=mistake_speech))
     narration = " ".join(l.line for l in lines)
 
     board = _Board()
-    els, _acts = card_elements(method, present=True)
+    els, _acts = card_elements(method, present=True, lang=lang)
     board.elements.extend(els)
     _problem_elements(ex, board, _cue(lines[0].line if lines else "", narration))
 
@@ -532,12 +539,12 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
             if board.carried:
                 last_rows = board.carried
             if rows:
-                _add_note(board, rows[0], "check", None, "")
+                _add_note(board, rows[0], _bt("check", lang), None, "")
             continue
         _highlight_method(board, st, method, cue, has_card)
         rows = _add_state(board, st.after, cue)
         if rows:
-            note = st.note if st.kind == "transform" else (st.note or "set up")
+            note = st.note if st.kind == "transform" else (st.note or _bt("set_up", lang))
             # after a wipe the line this step came from is gone: the note
             # sits beside the new line and no leader points at nothing
             target = prev_state_rows[0] if prev_state_rows and not board.wiped else None
@@ -545,7 +552,7 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
         prev_state_rows = rows
         last_rows = rows or last_rows
     if last_rows:
-        acue = _cue(say(ex.answer_speech), narration)
+        acue = _cue(say(ex.answer_speech, lang), narration)
         for r in last_rows:
             board.actions.append({"verb": "underline", "target": r.eid, **({"at": acue} if acue else {})})
             acue = None
@@ -563,7 +570,7 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
             board.elements.append({"id": sid, "type": "shape", "shape": "line", "width": 3.6, "color": "accent",
                                    "points": [[LINE_X - 6, r.y + r.lay.h * 0.55], [LINE_X + r.lay.w + 6, r.y + r.lay.h * 0.45]]})
             board.actions.append({"verb": "draw", "target": sid, "duration": 0.5})
-            _add_note(board, r, f"not allowed: {_short(m.why_wrong or m.operation, 30)}", None, "")
+            _add_note(board, r, _bt("not_allowed", lang, why=_short(m.why_wrong or m.operation, 30)), None, "")
     scene = {"id": f"mx_{seg_id}", "compiled": True, "scene_type": "worked_example",
              "narration": narration, "elements": _pin_text(board.elements), "actions": board.actions,
              "min_hold": 1.0}
@@ -573,19 +580,19 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
 # ── the other cards ─────────────────────────────────────────────────────
 
 
-def _dialogue_lines(items: list[Line]) -> list[Line]:
-    return [Line(who=l.who, line=say(l.line)) for l in items if say(l.line)]
+def _dialogue_lines(items: list[Line], lang: str = "en") -> list[Line]:
+    return [Line(who=l.who, line=say(l.line, lang)) for l in items if say(l.line, lang)]
 
 
-def hook_segment(lesson: Lesson, seg_id: str, avatars: dict | None) -> dict:
-    lines = _dialogue_lines(lesson.hook) or [Line(line=f"Today we learn {lesson.topic}.")]
+def hook_segment(lesson: Lesson, seg_id: str, avatars: dict | None, lang: str = "en") -> dict:
+    lines = _dialogue_lines(lesson.hook, lang) or [Line(line=_bt("today", lang, topic=lesson.topic))]
     seg = _segment(seg_id, "hook", lines, heading=_short(lesson.topic, 60), points=[])
     seg["scene"] = build_whiteboard_scene(seg, avatars=avatars, sketches=False)
     return seg
 
 
-def concept_segment(lesson: Lesson, seg_id: str) -> dict:
-    lines = _dialogue_lines(lesson.concept) or [Line(line="Here is the method we will use.")]
+def concept_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
+    lines = _dialogue_lines(lesson.concept, lang) or [Line(line=_bt("method_intro", lang))]
     points = [_short(p, 64) for p in lesson.concept_points][:3]
     seg = _segment(seg_id, "explore", lines, heading=_short(lesson.topic, 60), points=points)
     narration = seg["text"]
@@ -599,7 +606,7 @@ def concept_segment(lesson: Lesson, seg_id: str) -> dict:
                     "at": [110, 124 + 58 * i], "anchor": "lt"})
         acts.append({"verb": "draw", "target": f"wb_d{i}", "at": {"frac": min(0.45, 0.08 + 0.14 * i)}})
         acts.append({"verb": "write", "target": f"wb_p{i}"})
-    cels, cacts = card_elements(lesson.method, present=False)
+    cels, cacts = card_elements(lesson.method, present=False, lang=lang)
     els += cels
     acts += cacts
     seg["scene"] = {"id": f"mc_{seg_id}", "compiled": True, "scene_type": "generic", "narration": narration,
@@ -607,13 +614,14 @@ def concept_segment(lesson: Lesson, seg_id: str) -> dict:
     return seg
 
 
-def recap_segment(lesson: Lesson, seg_id: str) -> dict:
-    lines = _dialogue_lines(lesson.recap) or [Line(line="Let us recap the method.")]
+def recap_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
+    lines = _dialogue_lines(lesson.recap, lang) or [Line(line=_bt("recap_intro", lang))]
     points = [_short(p, 64) for p in lesson.misconceptions][:3]
     # the points name mistakes ("Forgetting to change the sign"), so the
     # heading says so — "Remember" over them read as an instruction to forget
-    seg = _segment(seg_id, "synthesis", lines, heading="Common mistakes", points=points)
-    els: list[dict] = [{"id": "wb_h", "type": "text", "text": "Common mistakes", "role": "title", "size": 40,
+    heading = _bt("common_mistakes", lang)
+    seg = _segment(seg_id, "synthesis", lines, heading=heading, points=points)
+    els: list[dict] = [{"id": "wb_h", "type": "text", "text": heading, "role": "title", "size": 40,
                         "at": [60, 44], "anchor": "lt"}]
     acts: list[dict] = [{"verb": "write", "target": "wb_h"}]
     for i, p in enumerate(points):
@@ -623,7 +631,7 @@ def recap_segment(lesson: Lesson, seg_id: str) -> dict:
                     "at": [110, 124 + 58 * i], "anchor": "lt"})
         acts.append({"verb": "draw", "target": f"wb_d{i}", "at": {"frac": min(0.75, 0.15 + 0.22 * i)}})
         acts.append({"verb": "write", "target": f"wb_p{i}"})
-    cels, _ = card_elements(lesson.method, present=True)
+    cels, _ = card_elements(lesson.method, present=True, lang=lang)
     els += cels
     # a pulse, not a circle: the ellipse around a 5-line card crossed its frame
     acts.append({"verb": "pulse", "target": "card_box", "times": 2, "duration": 1.2, "at": {"frac": 0.9}})
@@ -635,17 +643,18 @@ def recap_segment(lesson: Lesson, seg_id: str) -> dict:
 TRY_IT_HOLD_SECS = 3.0
 
 
-def try_it_segment(lesson: Lesson, seg_id: str) -> Optional[dict]:
+def try_it_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> Optional[dict]:
     """The learner's own go: the problem, the invitation, then the whole
     video holds for TRY_IT_HOLD_SECS of silence before the solution segment
     (founder direction 2026-09-24: pause everything, then solve it too)."""
     t = lesson.try_it
     if not t.problem:
         return None
-    lines = [Line(line=say(t.speech) or f"Try this one yourself: {t.problem}. Pause the video and work it out.")]
-    seg = _segment(seg_id, "question_hook", lines, heading="Try it", points=[t.problem], pause=True,
+    lines = [Line(line=say(t.speech, lang) or say(_bt("try_it_speech", lang, problem=t.problem), lang))]
+    heading = _bt("try_it", lang)
+    seg = _segment(seg_id, "question_hook", lines, heading=heading, points=[t.problem], pause=True,
                    hold=TRY_IT_HOLD_SECS)
-    els: list[dict] = [{"id": "wb_h", "type": "text", "text": "Try it", "role": "title", "size": 44,
+    els: list[dict] = [{"id": "wb_h", "type": "text", "text": heading, "role": "title", "size": 44,
                         "at": [WORLD_W / 2, 120], "anchor": "mt"}]
     acts: list[dict] = [{"verb": "write", "target": "wb_h"}]
     if _layout(t.problem, 44) is not None and len(t.problem) <= MAX_LINE_CHARS:
@@ -657,7 +666,7 @@ def try_it_segment(lesson: Lesson, seg_id: str) -> Optional[dict]:
     acts.append({"verb": "write", "target": "q", "at": {"frac": 0.25}})
     # under the caption band (bubbles run to ~446), between the avatars —
     # at 330 it sat in the band and was relocated to the top corner
-    els.append({"id": "pause", "type": "text", "text": "Pause the video and try it", "size": 24, "color": "muted",
+    els.append({"id": "pause", "type": "text", "text": _bt("pause_line", lang), "size": 24, "color": "muted",
                 "at": [WORLD_W / 2, 470], "anchor": "mt"})
     acts.append({"verb": "write", "target": "pause", "at": {"frac": 0.7}})
     acts.append({"verb": "underline", "target": "wb_h"})
@@ -666,31 +675,32 @@ def try_it_segment(lesson: Lesson, seg_id: str) -> Optional[dict]:
     return seg
 
 
-def try_it_solution_segment(lesson: Lesson, seg_id: str) -> Optional[dict]:
+def try_it_solution_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> Optional[dict]:
     """After the pause: the try-it worked on the algebra board like any
     example, with the method card, notes and the answer underline."""
     from maths.verify import try_it_example
     ex = try_it_example(lesson.try_it)
     if ex is None or not lesson.try_it.steps:
         return None
-    scene, lines = example_scene(ex, lesson.method, seg_id, has_card=bool(lesson.method.steps))
-    seg = _segment(seg_id, "explore", lines, heading=_short(f"Try it: {ex.problem}", 60),
+    ex.label = _bt("try_it_label", lang)
+    ex.intro_speech = ex.intro_speech or _bt("solution_intro", lang)
+    scene, lines = example_scene(ex, lesson.method, seg_id, has_card=bool(lesson.method.steps), lang=lang)
+    seg = _segment(seg_id, "explore", lines, heading=_short(f"{_bt('try_it', lang)}: {ex.problem}", 60),
                    points=[_short(x, 64) for st in ex.steps for x in st.after[:1]][:4])
     seg["scene"] = scene
     return seg
 
 
-def closing_segment(lesson: Lesson, seg_id: str) -> dict:
+def closing_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
     """The sign-off: the topic on the board, the card still pinned, the
     teacher hoping the learner now understands it better."""
-    text = say(lesson.closing) or (f"I hope you now have a better understanding of {lesson.topic}. "
-                                   "Try a few more on your own, and see you in the next lesson.")
+    text = say(lesson.closing, lang) or _bt("closing", lang, topic=lesson.topic)
     lines = [Line(line=text)]
     seg = _segment(seg_id, "preview", lines, heading=_short(lesson.topic, 60), points=[])
     els: list[dict] = [{"id": "wb_h", "type": "text", "text": _short(lesson.topic, 60), "role": "title",
                         "size": 40, "at": [60, 44], "anchor": "lt"}]
     acts: list[dict] = [{"verb": "write", "target": "wb_h"}, {"verb": "underline", "target": "wb_h"}]
-    cels, _ = card_elements(lesson.method, present=True)
+    cels, _ = card_elements(lesson.method, present=True, lang=lang)
     els += cels
     if cels:
         acts.append({"verb": "pulse", "target": "card_box", "times": 2, "duration": 1.2, "at": {"frac": 0.55}})
@@ -699,8 +709,8 @@ def closing_segment(lesson: Lesson, seg_id: str) -> dict:
     return seg
 
 
-def example_segment(ex: WorkedExample, lesson: Lesson, seg_id: str) -> dict:
-    scene, lines = example_scene(ex, lesson.method, seg_id, has_card=bool(lesson.method.steps))
+def example_segment(ex: WorkedExample, lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
+    scene, lines = example_scene(ex, lesson.method, seg_id, has_card=bool(lesson.method.steps), lang=lang)
     heading = _short(f"{ex.label or 'Example'}: {ex.problem}", 60)
     points = [_short(x, 64) for st in ex.steps for x in st.after[:1]][:4]
     seg = _segment(seg_id, "explore", lines, heading=heading, points=points)
@@ -724,24 +734,26 @@ def _segment(seg_id: str, seg_type: str, lines: list[Line], *, heading: str, poi
             "estimated_duration_seconds": max(5, int(round(len(text) / 14.0)) + int(round(hold or 0)))}
 
 
-def compile_lesson(lesson: Lesson, avatars: dict | None = None) -> list[dict]:
-    """The whole lesson as script segments, in the blueprint's order."""
-    segs: list[dict] = [hook_segment(lesson, "s001", avatars), concept_segment(lesson, "s002")]
+def compile_lesson(lesson: Lesson, avatars: dict | None = None, language: str = "en") -> list[dict]:
+    """The whole lesson as script segments, in the blueprint's order, with
+    the board's own words in the lesson language."""
+    lang = norm_lang(language)
+    segs: list[dict] = [hook_segment(lesson, "s001", avatars, lang), concept_segment(lesson, "s002", lang)]
     n = 3
     for ex in lesson.examples:
-        segs.append(example_segment(ex, lesson, f"s{n:03d}"))
+        segs.append(example_segment(ex, lesson, f"s{n:03d}", lang))
         n += 1
-    segs.append(recap_segment(lesson, f"s{n:03d}"))
+    segs.append(recap_segment(lesson, f"s{n:03d}", lang))
     n += 1
-    t = try_it_segment(lesson, f"s{n:03d}")
+    t = try_it_segment(lesson, f"s{n:03d}", lang)
     if t is not None:
         segs.append(t)
         n += 1
-        sol = try_it_solution_segment(lesson, f"s{n:03d}")
+        sol = try_it_solution_segment(lesson, f"s{n:03d}", lang)
         if sol is not None:
             segs.append(sol)
             n += 1
-    segs.append(closing_segment(lesson, f"s{n:03d}"))
+    segs.append(closing_segment(lesson, f"s{n:03d}", lang))
     return segs
 
 

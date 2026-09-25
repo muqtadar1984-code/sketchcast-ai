@@ -108,9 +108,11 @@ def question_ladder(client, *, topic: str, level: str | None, language: str, n: 
     return out, {"asked": asked, "verified": len(out), "rejected": rejected, "wanted": counts}
 
 
-def worked_solution(ex: WorkedExample, pretty) -> list[str]:
+def worked_solution(ex: WorkedExample, pretty, *, check: str = "Check", answer: str = "Answer",
+                    or_word: str = "or") -> list[str]:
     """The answer key's lines for one question: each step's result with
-    its operation, then the answer. ``pretty`` prints notation."""
+    its operation, then the answer. ``pretty`` prints notation; the three
+    labels arrive in the document's language."""
     lines: list[str] = []
     for st in ex.steps:
         if not st.after:
@@ -118,14 +120,14 @@ def worked_solution(ex: WorkedExample, pretty) -> list[str]:
         state = "; ".join(pretty(x) for x in st.after)
         note = st.note
         if st.kind == "check":
-            lines.append(f"Check: {state}")
+            lines.append(f"{check}: {state}")
         elif note:
             lines.append(f"{state}   ({note})")
         else:
             lines.append(state)
-    answer = " or ".join(pretty(a) for a in ex.final_answer) if ex.task != "solve_system" \
+    final = f" {or_word} ".join(pretty(a) for a in ex.final_answer) if ex.task != "solve_system" \
         else ", ".join(pretty(a) for a in ex.final_answer)
-    lines.append(f"Answer: {answer}")
+    lines.append(f"{answer}: {final}")
     return lines
 
 

@@ -91,3 +91,19 @@ def test_problem_text_gets_its_verb():
     assert _problem_text(WorkedExample(task="expand", problem="(x + 2)(x + 3)")) == "Expand: (x + 2)(x + 3)"
     assert _problem_text(WorkedExample(task="solve", problem="Find x if 3x + 5 = 20")) == "Find x if 3x + 5 = 20"
     assert _problem_text(WorkedExample(task="solve", problem="A train travels 60 km in 40 minutes. Find its speed in km per hour.")).startswith("A train")
+
+
+def test_the_worksheet_words_follow_the_document_language():
+    from docgen import docx_builder as dx
+    from docgen.maths_worksheet import _problem_text
+    from maths.schema import WorkedExample
+    ex = WorkedExample(task="solve", problem="3x + 5 = 20", givens=["3x + 5 = 20"], target="x", final_answer=["x = 5"])
+    assert _problem_text(ex, "ar").startswith("حلّ: ")
+    assert _problem_text(ex, "hi").startswith("हल कीजिए: ")
+    assert _problem_text(ex, "en").startswith("Solve: ")
+    assert dx._t("ws_warm_up", "ar") == "تمهيد" and dx._t("ws_total_marks", "hi").format(n=20) == "कुल: 20 अंक"
+    for lang in ("en", "ms", "ms-arab", "ar", "fr", "es", "pt", "hi", "mr", "te"):
+        for key in ("ws_warm_up", "ws_practice", "ws_challenge", "ws_stretch", "difficulty_1", "difficulty_4",
+                    "verb_solve", "verb_factorise", "ws_instructions", "exam_instructions", "cas_note",
+                    "ws_total_marks", "marks_scheme", "sol_check", "sol_answer", "sol_or"):
+            assert dx._t(key, lang), (key, lang)

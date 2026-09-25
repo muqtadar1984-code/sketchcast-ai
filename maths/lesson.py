@@ -208,7 +208,7 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
 
 def to_episode_script(lesson: Lesson, report: dict, *, book_id: str, chapter_num: int, episode_num: int,
                       title: str, avatars: dict | None, language: str) -> EpisodeScript:
-    segs = board.compile_lesson(lesson, avatars)
+    segs = board.compile_lesson(lesson, avatars, language=language)
     segments: list[ScriptSegment] = []
     for s in segs:
         segments.append(ScriptSegment(

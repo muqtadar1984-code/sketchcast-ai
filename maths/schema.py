@@ -269,7 +269,7 @@ class MethodCard(BaseModel):
     short lines, the step being used highlighted as each example proceeds."""
     model_config = ConfigDict(extra="ignore")
 
-    title: str = "METHOD"
+    title: str = ""     # the board falls back to the lesson language's word for "method"
     steps: list[str] = Field(default_factory=list)
 
     @field_validator("title", mode="before")

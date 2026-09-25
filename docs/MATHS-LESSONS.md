@@ -18,6 +18,14 @@ three things switch on it:
 Ingestion, chapter analysis, TTS, encoding, upload, publishing and the
 non-maths document builders are shared and untouched.
 
+**Languages.** The profile follows the lesson language (the ten the app
+offers). The model writes every spoken line in that language; the board's
+own words (the "check" note, the try-it invitation, the closing, the card's
+default title), the spoken form of any notation that slips into speech
+("x^2" -> "x تربيع" / "x का वर्ग"), and the worksheet's section names and
+labels come from `maths/i18n.py` and `docgen/strings.py`, English being the
+reference and the fallback for an unknown code.
+
 **Gates.** `FEATURE_MATHS_LESSONS=1` turns the profile on for every
 generation whose book or topic subject reads as mathematics.
 `params.subject_profile = "maths"` pins one generation onto the path (the
