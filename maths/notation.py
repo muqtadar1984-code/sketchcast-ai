@@ -33,7 +33,8 @@ _REL_RE = re.compile(r"(<=|>=|!=|==|=|<|>)")
 # "Solve 4z = 16" parsed with `Solve` as a SYMBOL (mathsvc allows long
 # names for word problems) and the try-it was dropped as wrong.
 _VERB_RE = re.compile(
-    r"^\s*(?:solve|simplify|expand|factori[sz]e|evaluate|find|calculate|work\s+out|determine)\b"
+    r"^\s*(?:solve|simplify|expand|factori[sz]e|evaluate|find|calculate|work\s+out|determine|"
+    r"estimate|approximate|round(?:\s+off)?)\b"
     r"(?:\s+(?:for|the\s+value\s+of))?(?:\s+[a-z](?:\s*,\s*[a-z])*)?(?:\s+(?:if|when|where|given))?\s*:?\s*",
     re.IGNORECASE,
 )

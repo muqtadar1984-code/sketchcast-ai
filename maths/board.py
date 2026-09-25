@@ -623,7 +623,7 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
         _highlight_method(board, st, method, cue, has_card, lang)
         rows = _add_state(board, st.after, cue)
         if rows:
-            note = st.note if st.kind == "transform" else (st.note or _bt("set_up", lang))
+            note = st.note if st.kind in ("transform", "round") else (st.note or _bt("set_up", lang))
             # after a wipe the line this step came from is gone: the note
             # sits beside the new line and no leader points at nothing
             target = prev_state_rows[0] if prev_state_rows and not board.wiped else None

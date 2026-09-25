@@ -311,3 +311,83 @@ def test_a_list_of_numbers_is_reported_not_a_crash():
     rep = verify_example(ex)               # dropped, never raised
     assert rep.status == "failed"
     assert any("could not be read" in c.detail for c in rep.checks)
+
+
+# ── rounding and estimation ───────────────────────────────────────────────
+
+
+def _round_ex(before, after, precision, answer, task="round", extra_steps=()):
+    steps = [Step(kind="round", operation="round", precision=precision, before=[before], after=[after], speech="r")]
+    steps += list(extra_steps)
+    return WorkedExample(label="r", task=task, problem=before, givens=[before], target="expression",
+                         steps=steps, final_answer=[answer])
+
+
+def test_rounding_to_a_stated_unit_verifies_and_a_wrong_rounding_fails():
+    assert verify_example(_round_ex("17173", "17000", "1000", "17000")).status == "verified"
+    assert verify_example(_round_ex("17,173", "17,000", "nearest thousand", "17000")).status == "verified"
+    assert verify_example(_round_ex("17500", "18000", "1000", "18000")).status == "verified"   # half up
+    assert verify_example(_round_ex("3.14159", "3.14", "2 dp", "3.14")).status == "verified"
+    assert verify_example(_round_ex("0.004567", "0.0046", "2 sf", "0.0046")).status == "verified"
+    assert verify_example(_round_ex("-2.5", "-3", "1", "-3")).status == "verified"           # away from zero
+    rep = verify_example(_round_ex("17173", "18000", "1000", "18000"))
+    assert rep.status == "failed"
+    assert any("rounded to 1000 is 17000, not 18000" in c.detail for c in rep.failures)
+    rep = verify_example(_round_ex("7583", "7500", "100", "7500"))                           # truncation
+    assert rep.status == "failed"
+
+
+def test_a_rounding_step_may_not_change_the_shape_of_the_line():
+    rep = verify_example(_round_ex("x = 17173", "17000", "1000", "17000"))
+    assert rep.status == "failed" and any("numbers rounded" in c.detail for c in rep.failures)
+    ex = WorkedExample(label="r", task="round", problem="x = 17173", givens=["x = 17173"], target="x",
+                       steps=[Step(kind="round", precision="1000", before=["x = 17173"], after=["x = 17000"], speech="r")],
+                       final_answer=["x = 17000"])
+    assert verify_example(ex).status == "verified"
+
+
+def test_without_a_stated_precision_any_power_of_ten_is_accepted_but_not_a_truncation():
+    assert verify_example(_round_ex("7583", "8000", "", "8000")).status == "verified"
+    assert verify_example(_round_ex("7583", "7580", "", "7580")).status == "verified"
+    rep = verify_example(_round_ex("7583", "7500", "", "7500"))
+    assert rep.status == "failed" and any("not a rounding" in c.detail for c in rep.failures)
+    rep = verify_example(_round_ex("7583", "8000", "nearest banana", "8000"))
+    assert rep.status == "failed"                                              # unreadable precision is unverified
+
+
+def test_an_estimate_rounds_first_then_works_the_rounded_expression():
+    """7583 + 3421 ≈ 8000 + 3000 = 11000: the old equivalence check called
+    the rounding wrong and the answer wrong (it is not 11004)."""
+    work = Step(operation="add", before=["8000 + 3000"], after=["11000"], speech="a")
+    ex = _round_ex("7583 + 3421", "8000 + 3000", "1 sf", "11000", task="estimate", extra_steps=[work])
+    rep = verify_example(ex)
+    assert rep.status == "verified", [c.detail for c in rep.failures] + [c.detail for c in rep.unverified]
+    # the exact value is NOT the estimate's answer
+    ex.final_answer = ["11004"]
+    rep = verify_example(ex)
+    assert rep.status == "failed" and any("not the last line" in c.detail for c in rep.failures)
+    # a slip in the arithmetic after the rounding is still caught
+    bad = Step(operation="add", before=["8000 + 3000"], after=["12000"], speech="a")
+    ex = _round_ex("7583 + 3421", "8000 + 3000", "1 sf", "12000", task="estimate", extra_steps=[bad])
+    assert verify_example(ex).status == "failed"
+    # rounding one term but not the other, to the stated precision
+    ex = _round_ex("7500 + 83", "7500 + 100", "100", "7600", task="estimate",
+                   extra_steps=[Step(operation="add", before=["7500 + 100"], after=["7600"], speech="a")])
+    assert verify_example(ex).status == "verified"
+
+
+def test_a_rounding_task_without_a_round_step_is_refused():
+    ex = WorkedExample(label="r", task="round", problem="17173", givens=["17173"], target="expression",
+                       steps=[Step(operation="round", before=["17173"], after=["17000"], speech="r")],
+                       final_answer=["17000"])
+    rep = verify_example(ex)
+    assert rep.status == "failed"
+    assert any("kind 'round'" in c.detail for c in rep.failures) or any(c.ok is False for c in rep.checks)
+
+
+def test_a_try_it_with_a_rounding_step_is_verified_as_an_estimate():
+    t = TryIt(problem="Estimate 4,912 + 2,087", answer=["7000"], speech="s", solution_speech="r",
+              steps=[Step(kind="round", precision="1 sf", before=["4912 + 2087"], after=["5000 + 2000"], speech="a"),
+                     Step(operation="add", before=["5000 + 2000"], after=["7000"], speech="b")],
+              answer_speech="z")
+    assert verify_try_it(t).ok is True

@@ -22,11 +22,11 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-StepKind = Literal["transform", "setup", "check"]
+StepKind = Literal["transform", "setup", "check", "round"]
 Task = Literal["solve", "solve_system", "solve_inequality", "simplify", "expand",
-               "factorise", "evaluate"]
+               "factorise", "evaluate", "round", "estimate"]
 TASKS: tuple[str, ...] = ("solve", "solve_system", "solve_inequality", "simplify", "expand",
-                          "factorise", "evaluate")
+                          "factorise", "evaluate", "round", "estimate")
 DIFFICULTY_NAMES = {1: "simplest", 2: "medium", 3: "difficult", 4: "extremely difficult"}
 
 _MAX_LINE = 400
@@ -116,6 +116,9 @@ class Step(BaseModel):
     kind: StepKind = "transform"
     #: what was done, in words a board annotation can carry: "subtract 5 from both sides"
     operation: str = ""
+    #: kind "round" only — what the numbers were rounded to, machine-readable:
+    #: a unit ("1000", "0.01", "nearest hundred"), "2 dp" or "2 sf"
+    precision: str = ""
     #: the state this step starts from and the state it produces — relations
     #: or expressions in linear notation, one per line of working
     before: list[str] = Field(default_factory=list)
@@ -127,12 +130,12 @@ class Step(BaseModel):
     #: an optional student reaction or question after the step
     student: str = ""
 
-    @field_validator("operation", "explanation", "speech", "student", mode="before")
+    @field_validator("operation", "precision", "explanation", "speech", "student", mode="before")
     @classmethod
     def _text(cls, v):
         return _as_text(v)
 
-    @field_validator("operation", "explanation", "speech", "student")
+    @field_validator("operation", "precision", "explanation", "speech", "student")
     @classmethod
     def _trim(cls, v: str) -> str:
         return _clean(v)[:_MAX_LINE]
@@ -391,8 +394,8 @@ def _lines() -> dict:
 
 
 STEP_SCHEMA = {"type": "object", "properties": {
-    "kind": {"type": "string", "enum": ["transform", "setup", "check"]},
-    "operation": _str(), "before": _strs(), "after": _strs(),
+    "kind": {"type": "string", "enum": ["transform", "setup", "check", "round"]},
+    "operation": _str(), "precision": _str(), "before": _strs(), "after": _strs(),
     "explanation": _str(), "speech": _str(), "student": _str()},
     "required": ["kind", "operation", "before", "after", "speech"]}
 

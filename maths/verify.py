@@ -18,6 +18,16 @@ Semantics of a state (a list of lines):
                               TOGETHER and the set is that of the system
   * a mix of kinds          — not verifiable
 
+ROUNDING IS NOT EQUIVALENCE. A step of kind "round" (tasks round and
+estimate, founder direction 2026-09-25 after a Grade 6 place-value chapter
+had every example dropped) keeps the SHAPE of each line and replaces
+numbers by their roundings: token for token the same, and every number that
+changed is the old one rounded half away from zero to the step's stated
+precision (a unit like 1000 or 0.01, "2 dp", "2 sf"), or to some power of
+ten or 1-4 significant figures when none is stated. The answer of such a
+task is the value the verified rounding steps reach, never the exact value
+of the problem — 7583 + 3421 estimated as 8000 + 3000 is 11000.
+
 The common mistake is verified the other way round: SymPy must show the
 wrong route really changes the meaning, or a valid method would be taught as
 an error. Every SymPy call runs under mathsvc's hard timeout — a hung
@@ -26,18 +36,22 @@ verification is worse than an unverified one.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
+from fractions import Fraction
 from typing import Callable, Optional
 
 import sympy as sp
 
 from maths.notation import NotationError, Relation, parse_state, symbols_named
 from maths.schema import Lesson, Step, TryIt, WorkedExample
+from maths.tokens import TokenError, tokenize
 from mathsvc.safety import MathError, MathTimeoutError, run_with_timeout
 
 SOLVE_TASKS = ("solve", "solve_system", "solve_inequality")
 EXPRESSION_TASKS = ("simplify", "expand", "factorise", "evaluate")
+ROUND_TASKS = ("round", "estimate")
 _TIMEOUT = 5.0
 
 
@@ -256,6 +270,123 @@ def _parse(lines: list[str], what: str) -> tuple[Optional[list[Relation]], str]:
         return None, f"{what} could not be read: {exc}"
 
 
+# ── rounding and estimation ──────────────────────────────────────────────
+
+_SF_RE = re.compile(r"^\s*(\d+)\s*(?:s\.?\s*f\.?|sig(?:nificant)?\.?\s*fig(?:ure)?s?\.?)\s*$", re.I)
+_DP_RE = re.compile(r"^\s*(\d+)\s*(?:d\.?\s*p\.?|decimal\s*places?)\s*$", re.I)
+_NEAREST_RE = re.compile(r"^\s*(?:to\s+)?(?:the\s+)?nearest\s+", re.I)
+_UNIT_WORDS = {
+    "crore": Fraction(10_000_000), "million": Fraction(1_000_000), "lakh": Fraction(100_000),
+    "ten thousand": Fraction(10_000), "thousand": Fraction(1000), "hundred": Fraction(100),
+    "ten": Fraction(10), "unit": Fraction(1), "one": Fraction(1), "whole number": Fraction(1),
+    "whole": Fraction(1), "integer": Fraction(1), "tenth": Fraction(1, 10),
+    "hundredth": Fraction(1, 100), "thousandth": Fraction(1, 1000),
+}
+
+
+def _precision(text: str) -> Optional[tuple[str, object]]:
+    """``("unit", Fraction)`` for "1000", "0.01", "nearest hundred", "2 dp";
+    ``("sf", n)`` for "2 sf"; None when there is nothing readable."""
+    t = str(text or "").strip().lower().rstrip(".")
+    if not t:
+        return None
+    m = _SF_RE.match(t)
+    if m:
+        return ("sf", max(1, int(m.group(1))))
+    m = _DP_RE.match(t)
+    if m:
+        return ("unit", Fraction(1, 10 ** int(m.group(1))))
+    t = _NEAREST_RE.sub("", t)
+    words = re.sub(r"[^a-z ]", " ", t).split()
+    key = " ".join(words)
+    for w in (key, key.rstrip("s"), key[:-2] if key.endswith("es") else key):
+        if w in _UNIT_WORDS:
+            return ("unit", _UNIT_WORDS[w])
+    try:
+        unit = Fraction(t.replace(",", ""))
+    except (ValueError, ZeroDivisionError):
+        return None
+    return ("unit", unit) if unit > 0 else None
+
+
+def _round_to(x: Fraction, unit: Fraction) -> Fraction:
+    """School rounding: half away from zero, exact."""
+    q = abs(x) / unit
+    n = math.floor(q + Fraction(1, 2))
+    return (n if x >= 0 else -n) * unit
+
+
+def _magnitude(x: Fraction) -> int:
+    """e with 10^e <= |x| < 10^(e+1), exactly."""
+    y, e = abs(x), 0
+    if y >= 1:
+        while y >= 10:
+            y, e = y / 10, e + 1
+    else:
+        while y < 1:
+            y, e = y * 10, e - 1
+    return e
+
+
+def _round_sf(x: Fraction, n: int) -> Fraction:
+    if x == 0:
+        return x
+    return _round_to(x, Fraction(10) ** (_magnitude(x) - n + 1))
+
+
+def _is_some_rounding(b: Fraction, a: Fraction) -> bool:
+    """Is ``a`` ``b`` rounded to SOME power of ten or to 1-4 significant
+    figures? Truncation (7583 -> 7500) is not rounding and is refused."""
+    for k in range(-6, 10):
+        if _round_to(b, Fraction(10) ** k) == a:
+            return True
+    return any(_round_sf(b, n) == a for n in (1, 2, 3, 4))
+
+
+def _num(text: str) -> Fraction:
+    return Fraction(text.rstrip(".") or "0")
+
+
+def _fmt_num(q: Fraction) -> str:
+    if q.denominator == 1:
+        return str(q.numerator)
+    return f"{float(q):.10g}"
+
+
+def _check_round_step(name: str, st: Step) -> Check:
+    """Every line keeps its shape, token for token; every number that
+    changed is the old one rounded to the step's precision."""
+    if len(st.before) != len(st.after) or not st.after:
+        return Check(name, None, f"{len(st.before)} line(s) became {len(st.after)}")
+    spec = _precision(st.precision)
+    if st.precision and spec is None:
+        return Check(name, None, f"could not read the precision {st.precision!r}")
+    pairs: list[tuple[str, str]] = []
+    for b_text, a_text in zip(st.before, st.after):
+        try:
+            tb, ta = tokenize(b_text), tokenize(a_text)
+        except TokenError as exc:
+            return Check(name, None, f"could not read the line: {exc}")
+        if len(tb) != len(ta) or any(x.kind != y.kind or (x.kind != "NUM" and x.text != y.text)
+                                     for x, y in zip(tb, ta)):
+            return Check(name, False, f"{a_text!r} is not {b_text!r} with its numbers rounded")
+        pairs += [(x.text, y.text) for x, y in zip(tb, ta) if x.kind == "NUM"]
+    changed = 0
+    for bt, at in pairs:
+        b, a = _num(bt), _num(at)
+        if a == b:
+            continue
+        changed += 1
+        if spec is not None:
+            want = _round_to(b, spec[1]) if spec[0] == "unit" else _round_sf(b, spec[1])
+            if a != want:
+                return Check(name, False, f"{bt} rounded to {st.precision} is {_fmt_num(want)}, not {at}")
+        elif not _is_some_rounding(b, a):
+            return Check(name, False, f"{at} is not a rounding of {bt}")
+    how = f"to {st.precision}" if st.precision else "each to a power of ten or a few significant figures"
+    return Check(name, True, f"{changed} number(s) rounded {how}")
+
+
 # ── the checks ───────────────────────────────────────────────────────────
 
 
@@ -282,6 +413,9 @@ def _check_step(i: int, st: Step, ex: WorkedExample, variables: list[sp.Symbol])
     name = f"step {i + 1}"
     if st.kind == "setup":
         return Check(name, None, "setup: not a transformation")
+    if st.kind == "round":
+        c = _check_round_step(name, st)
+        return Check(name, c.ok, f"{st.operation}: {c.detail}" if st.operation else c.detail)
     after, err = _parse(st.after, "the line after")
     if after is None:
         return Check(name, None, err) if st.kind != "check" else Check(name, None, err)
@@ -342,6 +476,27 @@ def _check_answer(ex: WorkedExample, givens: Optional[list[Relation]], variables
         return Check("answer", False, "no final answer")
     if givens is None:
         return Check("answer", None, "the problem could not be read")
+    if ex.task in ROUND_TASKS:
+        # The answer is what the verified rounding steps reach, not the
+        # problem's exact value: the steps carry the proof, the chain ties
+        # them to the problem, and here the answer must be the last line.
+        if not any(s.kind == "round" for s in ex.steps):
+            return Check("answer", False, "a rounding task needs a step of kind 'round'")
+        ans, err = _parse(answers, "the final answer")
+        if ans is None:
+            return Check("answer", None, err)
+        if any(r.is_expression and r.free_symbols for r in ans):
+            return Check("answer", False, "the answer must be a number")
+        last = next((s for s in reversed(ex.steps) if s.kind in ("transform", "round") and s.after), None)
+        if last is None:
+            return Check("answer", False, "no working reaches the answer")
+        a, err = _parse(last.after, "the last line")
+        if a is None:
+            return Check("answer", None, err)
+        ok, detail = _states_equivalent(a, ans, variables, _mode(ex))
+        if ok:
+            return Check("answer", True, "the answer is what the rounding reaches")
+        return Check("answer", ok, f"the answer is not the last line's value: {detail}")
     if ex.task in SOLVE_TASKS:
         ans, err = _parse(answers, "the final answer")
         if ans is None:
@@ -384,7 +539,7 @@ def _check_answer(ex: WorkedExample, givens: Optional[list[Relation]], variables
 
 
 def _check_last_step(ex: WorkedExample, variables) -> Optional[Check]:
-    last = next((s for s in reversed(ex.steps) if s.kind == "transform" and s.after), None)
+    last = next((s for s in reversed(ex.steps) if s.kind in ("transform", "round") and s.after), None)
     answers = _split_answers(ex.final_answer)
     if last is None or not answers:
         return None
@@ -433,7 +588,7 @@ def verify_example(ex: WorkedExample) -> ExampleReport:
     if mistake is not None:
         rep.checks.append(mistake)
     transforms_unverified = [c for c in rep.checks if c.ok is None and c.name.startswith("step")
-                             and ex.steps[int(c.name.split()[1]) - 1].kind == "transform"]
+                             and ex.steps[int(c.name.split()[1]) - 1].kind in ("transform", "round")]
     answer_unverified = [c for c in rep.checks if c.ok is None and c.name == "answer"]
     if rep.failures or transforms_unverified or answer_unverified or not ex.steps:
         rep.status = "failed"
@@ -457,8 +612,10 @@ def try_it_example(t: TryIt) -> WorkedExample | None:
             rels, _err = _parse(givens, "the try-it equation")
     expression = bool(rels) and rels[0].is_expression
     target = ", ".join(sorted(str(s) for s in rels[0].free_symbols)) if rels else "x"
+    rounding = any(s.kind == "round" for s in t.steps)
     return WorkedExample(label="the try-it question", problem=t.problem, givens=givens, final_answer=t.answer,
-                         task="simplify" if expression else "solve", target=target or "x",
+                         task="estimate" if rounding else "simplify" if expression else "solve",
+                         target=target or "x",
                          intro_speech=t.solution_speech, steps=list(t.steps) or [Step(kind="setup")],
                          answer_speech=t.answer_speech)
 
@@ -494,4 +651,4 @@ def verify_lesson(lesson: Lesson) -> dict:
 
 
 __all__ = ["Check", "ExampleReport", "verify_example", "verify_try_it", "verify_lesson",
-           "SOLVE_TASKS", "EXPRESSION_TASKS"]
+           "SOLVE_TASKS", "EXPRESSION_TASKS", "ROUND_TASKS"]
