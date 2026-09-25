@@ -296,3 +296,10 @@ def test_unsolvable_equation_falls_back_cleanly():
     # sympy.solve raises NotImplementedError for mixed transcendental equations;
     # the student must see a clean message, not a guess.
     clean_error({"op": "solve", "expr": "tan(x) = x"})
+
+
+def test_a_comma_list_is_rejected_cleanly():
+    """"1, 2" is a Python tuple to SymPy's parser; the size guard used to
+    raise AttributeError through the service instead of a child-safe error."""
+    error = clean_error({"op": "simplify", "expr": "1, 2"})
+    assert "one expression" in error

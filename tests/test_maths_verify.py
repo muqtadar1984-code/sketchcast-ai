@@ -277,3 +277,37 @@ def test_a_two_unknown_word_problem_under_task_solve_is_verified_as_a_system():
     bad = ex.model_copy(deep=True)
     bad.steps[1].after = ["x = 60", "x = y - 40"]
     assert verify_example(bad).status == "failed"
+
+
+def test_digit_grouped_numbers_are_integers_not_decimals():
+    """Production, 2026-09-25 (Grade 6, large numbers): "58,672" was read as
+    58.672 and "1,00,000" as 0 by the decimal-comma rule, so every place-value
+    example verified as wrong; "17173, 8000" parsed as a Python tuple and the
+    size guard's AttributeError took four document jobs down."""
+    from maths.tokens import normalise
+    assert normalise("58,672 + 57,875") == "58672 + 57875"
+    assert normalise("1,00,000") == "100000"          # Indian grouping
+    assert normalise("12,34,567") == "1234567"
+    assert normalise("1,234.5") == "1234.5"
+    assert normalise("3,14") == "3.14"                 # a decimal comma stays one
+    assert normalise("0,5") == "0.5"
+
+    ex = WorkedExample(label="e", task="evaluate", problem="58,672 + 57,875", givens=["58,672 + 57,875"],
+                       target="expression",
+                       steps=[Step(operation="add", before=["58,672 + 57,875"], after=["1,16,547"], speech="Add.")],
+                       final_answer=["1,16,547"])
+    rep = verify_example(ex)
+    assert rep.status == "verified", [c.detail for c in rep.failures]
+
+
+def test_a_list_of_numbers_is_reported_not_a_crash():
+    import pytest
+    from maths.notation import NotationError, parse_relation
+    with pytest.raises(NotationError, match="one expression"):
+        parse_relation("17173, 8000")
+    ex = WorkedExample(label="r", task="evaluate", problem="17173, 8000", givens=["17173, 8000"], target="expression",
+                       steps=[Step(operation="round each", before=["17173, 8000"], after=["17000, 8000"], speech="Round.")],
+                       final_answer=["17000, 8000"])
+    rep = verify_example(ex)               # dropped, never raised
+    assert rep.status == "failed"
+    assert any("could not be read" in c.detail for c in rep.checks)

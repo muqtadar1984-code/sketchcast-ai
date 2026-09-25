@@ -4,6 +4,7 @@ the chapter validation gate as a concrete signal for wrong-content cases."""
 from __future__ import annotations
 
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,38 @@ CATEGORIES = [
 ]
 
 ACTIONS = ["retry_transient", "user_fix", "reindex_regenerate", "escalate", "none"]
+
+# A job error that is a Python exception's text is a BUG in the pipeline, not
+# a property of the teacher's book. Production, 2026-09-25: four maths
+# documents died on "'tuple' object has no attribute 'is_Symbol'", and the
+# model diagnosed a camera scan with no text layer, told the teacher to rescan,
+# and the gate's reindex path ran for nothing. Such an error goes straight to
+# staff, in the words that fit, with no model call and no PDF advice.
+_INTERNAL_ERROR_RE = re.compile(
+    r"object has no attribute|object is not (?:subscriptable|iterable|callable)|"
+    r"\b(?:AttributeError|TypeError|KeyError|IndexError|NameError|ValueError|"
+    r"ZeroDivisionError|AssertionError|RecursionError|UnboundLocalError)\b|"
+    r"Traceback \(most recent call last\)|unsupported operand type|"
+    r"takes \d+ positional arguments? but|missing \d+ required positional",
+)
+_INTERNAL_USER_MSG = (
+    "Something went wrong on our side while generating this — nothing is wrong with "
+    "your book. The SketchCast team has been notified and will get it generated for you."
+)
+
+
+def internal_error(bundle: dict) -> str:
+    """The job's error text when it reads as a pipeline exception, else ''."""
+    jobs = bundle.get("recent_jobs") or []
+    errors = [str(j.get("error") or "") for j in jobs if isinstance(j, dict)]
+    issue = bundle.get("issue") or {}
+    ctx = issue.get("context") if isinstance(issue, dict) else None
+    if isinstance(ctx, dict) and ctx.get("error"):
+        errors.insert(0, str(ctx["error"]))
+    for err in errors:
+        if err and _INTERNAL_ERROR_RE.search(err):
+            return err[:300]
+    return ""
 
 
 def _gate_signals(bundle: dict, client) -> dict:
@@ -58,6 +91,16 @@ def _gate_signals(bundle: dict, client) -> dict:
 def diagnose(client, bundle: dict) -> dict:
     """Returns {category, confidence, user_message, staff_note,
     recommended_action} — validated against the known vocabularies."""
+    bug = internal_error(bundle)
+    if bug:
+        return {
+            "category": "unknown",
+            "confidence": 1.0,
+            "user_message": _INTERNAL_USER_MSG,
+            "staff_note": f"pipeline exception, not a content problem: {bug}",
+            "recommended_action": "escalate",
+            "gate_signals": {},
+        }
     signals = _gate_signals(bundle, client)
 
     prompt = (
