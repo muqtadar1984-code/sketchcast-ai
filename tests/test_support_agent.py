@@ -16,6 +16,7 @@
 All DB access is stubbed; no network, no Claude calls.
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -572,3 +573,78 @@ def test_a_content_error_still_goes_to_the_model(monkeypatch):
     assert dg.internal_error(bundle) == ""
     out = dg.diagnose(MockClient(), bundle)
     assert calls and out["recommended_action"] == "user_fix"
+
+
+def test_an_unreadable_model_reply_is_a_pipeline_error_too():
+    from support_agent import diagnose as dg
+    err = ("Script generation produced no segments for episode 1: 8297 chars, output_tokens=1965 billed "
+           "across attempts (cap 30000), provider did NOT report truncation — so this is malformed JSON")
+    assert dg.internal_error({"recent_jobs": [{"status": "error", "error": err}]}).startswith("Script generation")
+
+
+# ── a scanned book is not an empty book ───────────────────────────────────────
+
+_SCAN_BOOK = {"id": "b-scan", "title": "Class 6.1 To 6.4", "storage_path": "u/scan.pdf", "status": "ready",
+              "chapters": [{"num": 0, "title": "Class 6.1 To 6.4", "start_page": 0, "end_page": 4}],
+              "health": {"band": "fair", "score": 61,
+                         "facts": {"pages": 5, "chapters": 1, "has_text_layer": False, "text_readable": True}}}
+
+
+def _no_extraction(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("the PDF must not be extracted on this path")
+    monkeypatch.setattr("worker.client.download_book", lambda *a, **k: Path("/nonexistent.pdf"))
+    monkeypatch.setattr("agent1_ingestion.extractor.extract_pdf", boom)
+
+
+def test_a_cached_transcription_is_the_source_for_a_scanned_chapter(monkeypatch, tmp_path):
+    from support_agent.bundle import _chapter_source_text
+    _no_extraction(monkeypatch)
+    sb = FakeSB({"chapter_grounding": [{"source_text": "Large numbers. Place value up to crores. 58,672 is ..."}]})
+    text, meta = _chapter_source_text(sb, _SCAN_BOOK, "0", tmp_path)
+    assert text.startswith("Large numbers. Place value")
+    assert meta["source"] == "cached_transcription" and meta["scanned"] is True
+    assert meta["stored_chapter"]["title"] == "Class 6.1 To 6.4"
+
+
+def test_a_scanned_chapter_without_a_transcription_reads_as_nothing_not_as_noise(monkeypatch, tmp_path):
+    """The failure of 2026-09-25: the text-layer extraction of a camera scan
+    is scanner noise; handed to the gate it reads as 'No readable content,
+    only scanner artifacts' and the model tells the teacher to rescan a
+    book the pipeline generated from perfectly well."""
+    from support_agent import diagnose as dg
+    from support_agent.bundle import _chapter_source_text, _health_summary
+    from types import SimpleNamespace
+    monkeypatch.setattr("worker.client.download_book", lambda *a, **k: Path("/nonexistent.pdf"))
+    monkeypatch.setattr("agent1_ingestion.extractor.extract_pdf",
+                        lambda path: SimpleNamespace(items=[SimpleNamespace(text="|| ~~ .. ,, || scanner")],
+                                                     total_pages=5))
+    monkeypatch.setattr("agent1_ingestion.structurer.structure_book",
+                        lambda **k: (_ for _ in ()).throw(AssertionError("noise must not be sliced")))
+    sb = FakeSB({"chapter_grounding": []})
+    text, meta = _chapter_source_text(sb, _SCAN_BOOK, "0", tmp_path)
+    assert text == "" and meta["scanned"] is True and meta["source"] == "none"
+    assert "not evidence" in meta["note"]
+    # the gate stays silent, so nothing forces the reindex path
+    bundle = {"chapters": _SCAN_BOOK["chapters"], "generation": {"chapter_ref": "0"},
+              "source_text": text, "source_meta": meta, "book": {"health": _health_summary(_SCAN_BOOK)}}
+    signals = dg._gate_signals(bundle, client=object())
+    assert "source_matches_title" not in signals
+    # and the model is told what it is looking at
+    prompt = dg._compact(bundle)
+    assert "'scanned': True" in prompt and "text_readable" in prompt
+
+
+def test_a_book_with_a_text_layer_is_still_sliced(monkeypatch, tmp_path):
+    from support_agent.bundle import _chapter_source_text
+    from types import SimpleNamespace
+    book = {**_SCAN_BOOK, "health": {"facts": {"has_text_layer": True, "text_readable": True}}}
+    monkeypatch.setattr("worker.client.download_book", lambda *a, **k: Path("/nonexistent.pdf"))
+    monkeypatch.setattr("agent1_ingestion.extractor.extract_pdf",
+                        lambda path: SimpleNamespace(items=[SimpleNamespace(text="x" * 300)], total_pages=5))
+    monkeypatch.setattr("agent1_ingestion.structurer.structure_book",
+                        lambda **k: SimpleNamespace(model_dump=lambda: {"chapters": [
+                            {"chapter_num": 0, "sections": [{"content": "Real chapter prose.", "subsections": []}]}]}))
+    sb = FakeSB({"chapter_grounding": []})
+    text, meta = _chapter_source_text(sb, book, "0", tmp_path)
+    assert text == "Real chapter prose." and meta["source"] == "text_layer" and meta["scanned"] is False

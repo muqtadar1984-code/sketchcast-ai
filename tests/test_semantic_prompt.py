@@ -881,3 +881,47 @@ class TestP5DependenciesAreDeclared:
                     if alias.get(mod, mod).lower() not in req:
                         missing.add(mod)
         assert not missing, f"imported in production but undeclared: {sorted(missing)}"
+
+
+class TestAnUnparseableReplyIsAskedForOnceMore:
+    """gen e28277e7 (2026-09-25): a complete 8,297-char reply with one stray
+    quote failed the whole video while every sibling document was fine. The
+    client's salvage now covers that character; and whatever the next slip
+    is, the generator asks ONCE more before it gives up."""
+
+    def _seg(self, line):
+        return {"type": "explore", "text": "", "elevenlabs_text": "",
+                "dialogue": [{"who": "teacher", "line": line}], "slide_heading": "H", "slide_points": []}
+
+    def test_second_reply_is_used_and_tokens_are_summed(self):
+        from agent3_scripts.script_generator import generate_episode_script
+        calls = []
+        good = [self._seg("Tissues group into organs."), self._seg("Organs form systems.")]
+
+        class _Stub:
+            def analyze(self, **kw):
+                calls.append(kw)
+                if len(calls) == 1:
+                    return {"data": {"raw_text": '{"segments":[{"type":"hook"'}, "usage": {"output_tokens": 1965},
+                            "truncated": False}
+                return {"data": {"segments": good}, "usage": {"output_tokens": 2100}, "truncated": False}
+
+        out = generate_episode_script({"episode_num": 1, "title": "T", "sections": []},
+                                      {"chapter_title": "T"}, 1, _Stub(), narration_style="conversational")
+        assert len(calls) == 2 and len(out.segments) == 2
+
+    def test_a_second_unparseable_reply_fails_loudly_with_both_token_counts(self):
+        import pytest
+        from agent3_scripts.script_generator import generate_episode_script
+        calls = []
+
+        class _Stub:
+            def analyze(self, **kw):
+                calls.append(kw)
+                return {"data": {"raw_text": '{"segments":[{"type":"hook"'}, "usage": {"output_tokens": 1000},
+                        "truncated": False}
+
+        with pytest.raises(RuntimeError, match="produced no segments.*output_tokens=2000"):
+            generate_episode_script({"episode_num": 1, "title": "T", "sections": []},
+                                    {"chapter_title": "T"}, 1, _Stub(), narration_style="conversational")
+        assert len(calls) == 2, "one re-ask, never a loop"

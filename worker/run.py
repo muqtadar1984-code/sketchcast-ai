@@ -37,8 +37,17 @@ log = logging.getLogger("worker")
 POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "5"))
 # On SIGTERM, how long to let in-flight work FINISH before handing back what
 # is still held (see _serve). Must sit inside Railway's drain — railway.json
-# sets deploy.drainingSeconds = 30 — with room for the hand-back's round trips.
-SHUTDOWN_GRACE_SECONDS = float(os.getenv("SHUTDOWN_GRACE_SECONDS", "20"))
+# sets deploy.drainingSeconds = 2700 — with room for the hand-back's round
+# trips. Forty minutes: longer than any render measured (a presentation
+# averages 12 minutes queue to done, the slowest deck 42), so a deploy no
+# longer kills what is in flight — the departing container finishes its
+# renders while the new one takes the queue. Until 2026-09-25 this was 20 s
+# inside a 30 s drain, and every fix waited for an empty queue.
+SHUTDOWN_GRACE_SECONDS = float(os.getenv("SHUTDOWN_GRACE_SECONDS", "2400"))
+# How often the holder touches its rows (db.heartbeat_jobs) so a peer's
+# reaper can tell a live render from an orphan. STALE_JOB_MINUTES (default 5)
+# is the reaper's window: ten missed beats.
+HEARTBEAT_SECONDS = float(os.getenv("HEARTBEAT_SECONDS", "30"))
 # How many jobs to run at once in this single process. 1 = the old serial
 # behaviour. Size the Railway instance's vCPU/RAM for the number of concurrent
 # VIDEO renders you set (docs are light; videos are the heavy ones).
@@ -202,6 +211,28 @@ def _held_sketches() -> list[dict]:
 def _holding_work() -> bool:
     with _inflight_lock:
         return bool(_inflight_jobs or _inflight_sketches)
+
+
+# The heartbeat outlives the shutdown request on purpose: during the drain
+# the departing container is exactly the one whose rows must keep reading
+# alive, or the new container's windowed reaper takes them mid-render. Its
+# own event, never _shutdown; it stops when the process does.
+_heartbeat_stop = threading.Event()
+
+
+def heartbeat_once(sb) -> int:
+    """One beat: every job this process holds gets its updated_at touched."""
+    ids = _inflight_snapshot()
+    return db.heartbeat_jobs(sb, ids) if ids else 0
+
+
+def _heartbeat_loop(sb, every: float | None = None) -> None:
+    period = HEARTBEAT_SECONDS if every is None else every
+    while not _heartbeat_stop.wait(period):
+        try:
+            heartbeat_once(sb)
+        except Exception as exc:  # noqa: BLE001 — a beat may fail; the next one comes
+            log.warning("Heartbeat error: %s", exc)
 
 
 def _exit_now(signum=None, frame=None) -> None:
@@ -630,20 +661,27 @@ def main() -> None:
     # path: no new claims, held jobs handed back, then exit — see _shutdown.
     install_signal_handlers()
 
-    # Reaper (startup): a worker restart (deploy / crash / OOM) leaves the job(s)
-    # it was running stranded in 'processing', and claims only ever pick 'queued'.
-    # Nothing is in flight yet at startup, so every 'processing' row is orphaned —
-    # requeue them all for instant recovery. (During a ROLLING deploy the prior
-    # run is still alive for the drain window; its own shutdown path releases
-    # what it holds, and the attempts fence in db.requeue_job keeps the two from
-    # pulling one job back and forth.)
-    rj, rs = db.requeue_stale_jobs(sb), db.requeue_stale_sketches(sb)
+    stale_min = int(os.getenv("STALE_JOB_MINUTES", "5"))
+    # Reaper (startup), WINDOWED. A crash or OOM leaves the jobs it was running
+    # stranded in 'processing', and claims only ever pick 'queued' — but during
+    # a ROLLING deploy the prior container is still alive for the drain window
+    # (forty minutes, long enough to finish its renders) and heartbeating the
+    # rows it holds. A row touched within the window is a live render on the
+    # other side, not an orphan; one older than that has no holder and is
+    # requeued. The reap-all this replaced took the departing container's job
+    # from under it on 2026-09-13 and made every later deploy wait for an
+    # empty queue.
+    rj, rs = (db.requeue_stale_jobs(sb, older_than_minutes=stale_min),
+              db.requeue_stale_sketches(sb, older_than_minutes=stale_min))
     if rj or rs:
         log.warning("Reaper: requeued %d job(s) + %d sketch(es) left 'processing' by a prior run", rj, rs)
 
-    stale_min = int(os.getenv("STALE_JOB_MINUTES", "15"))
-    log.info("Worker started; concurrency=%d, polling every %ss (stale reaper %sm)",
-             WORKER_CONCURRENCY, POLL_SECONDS, stale_min)
+    log.info("Worker started; concurrency=%d, polling every %ss (stale reaper %sm, heartbeat %ss, "
+             "shutdown grace %ss)", WORKER_CONCURRENCY, POLL_SECONDS, stale_min, HEARTBEAT_SECONDS,
+             SHUTDOWN_GRACE_SECONDS)
+
+    # The heartbeat: its own client, its own event, alive through the drain.
+    threading.Thread(target=_heartbeat_loop, args=(db.admin(),), daemon=True, name="heartbeat").start()
 
     # Worker threads do the claiming + processing.
     for i in range(WORKER_CONCURRENCY):

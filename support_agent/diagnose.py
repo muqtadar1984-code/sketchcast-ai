@@ -35,7 +35,9 @@ _INTERNAL_ERROR_RE = re.compile(
     r"\b(?:AttributeError|TypeError|KeyError|IndexError|NameError|ValueError|"
     r"ZeroDivisionError|AssertionError|RecursionError|UnboundLocalError)\b|"
     r"Traceback \(most recent call last\)|unsupported operand type|"
-    r"takes \d+ positional arguments? but|missing \d+ required positional",
+    r"takes \d+ positional arguments? but|missing \d+ required positional|"
+    # a model reply the pipeline could not read is ours to fix, not the book's
+    r"produced no segments|malformed JSON|JSON fault|unparseable",
 )
 _INTERNAL_USER_MSG = (
     "Something went wrong on our side while generating this — nothing is wrong with "
@@ -113,7 +115,11 @@ def diagnose(client, bundle: dict) -> dict:
         "scanned_low_confidence / chapter_out_of_range → user_fix (tell them exactly "
         "what to do, e.g. the valid chapter range or 'upload a clearer scan'); "
         "wrong_chapter_detection / wrong_chapter_slicing → reindex_regenerate; "
-        "generation_drift or anything you are not confident about → escalate.\n\n"
+        "generation_drift or anything you are not confident about → escalate.\n"
+        "A scanned book (source_meta.scanned true, source_text empty) is NOT an unreadable book: its pages "
+        "are photographs the pipeline transcribes with vision at generation time; book.health.facts says "
+        "whether they were readable. Never diagnose scanned_low_confidence or corrupt_pdf from an empty "
+        "source_text alone.\n\n"
         "user_message: 2-3 plain sentences for a teacher/parent — honest, no jargon, "
         "never promise something the action doesn't do.\n"
         "staff_note: 1-2 technical sentences for SketchCast staff.\n\n"

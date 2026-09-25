@@ -316,10 +316,10 @@ def requeue_stale_jobs(sb: Client, older_than_minutes: Optional[int] = None, max
     ``max_attempts`` times is marked 'error' instead of requeued, so a poison-pill
     job that keeps hard-crashing the worker can't loop forever and block the queue.
 
-    Returns the number requeued. Best-effort — never raises. (During a deploy's
-    overlap the startup reap-all CAN requeue a job the departing replica is
-    still rendering; both then build it until the old one exits. A lease or
-    ownership column on jobs would close that — the next step past the fence.)"""
+    Returns the number requeued. Best-effort — never raises. Since the
+    holder heartbeats its rows (``heartbeat_jobs``), the boot reap is
+    WINDOWED too: a row with a fresh ``updated_at`` belongs to the departing
+    container, still rendering through its drain, and is left alone."""
     cutoff = (
         (datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)).isoformat()
         if older_than_minutes is not None else None
@@ -425,6 +425,35 @@ def requeue_sketch(sb: Client, sketch: dict) -> bool:
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("worker").warning("sketch %s not requeued: %s", sketch.get("id"), exc)
         return False
+
+
+def heartbeat_jobs(sb: Client, job_ids) -> int:
+    """Touch ``updated_at`` on every job THIS process is still building, so a
+    peer container's reaper can tell a live render from an orphan.
+
+    The stale reaper's only evidence is ``updated_at`` (the jobs_touch
+    trigger bumps it on any UPDATE), and a video's own writes come minutes
+    apart. Before this, a rolling deploy had to choose between a boot reap
+    that requeued whatever the departing container still held (the
+    2026-09-13 incident) and a drain short enough that nothing ran on both
+    sides — 30 seconds, which is why every deploy killed the renders in
+    flight and every fix waited for an empty queue (2026-09-25, four times
+    in one afternoon). A heartbeat every HEARTBEAT_SECONDS from the holder
+    lets the boot reap be WINDOWED like the running one, and the drain be
+    as long as a render. Guarded on 'processing': a row a reaper or the
+    console has moved is not touched. Returns how many rows were touched;
+    best-effort, never raises."""
+    n = 0
+    stamp = datetime.now(timezone.utc).isoformat()
+    for job_id in list(job_ids):
+        try:
+            upd = (sb.table("jobs").update({"updated_at": stamp})
+                   .eq("id", job_id).eq("status", "processing").execute())
+            if getattr(upd, "data", None):
+                n += 1
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("worker").warning("heartbeat for job %s failed: %s", job_id, exc)
+    return n
 
 
 def set_progress(sb: Client, job_id: str, progress: int) -> None:

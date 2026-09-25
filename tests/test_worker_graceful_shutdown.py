@@ -24,6 +24,7 @@ tests/test_observer_job_guard.py (every write is recorded):
 from __future__ import annotations
 
 import inspect
+import os
 import signal
 import sys
 import threading
@@ -303,7 +304,7 @@ def test_sigterm_and_sigint_are_wired_to_the_graceful_path(monkeypatch):
 
     src = inspect.getsource(run.main)
     assert "install_signal_handlers()" in src
-    assert src.index("install_signal_handlers()") < src.index("requeue_stale_jobs(sb)"), (
+    assert src.index("install_signal_handlers()") < src.index("requeue_stale_jobs(sb"), (
         "handlers go in before the boot reap: a SIGTERM during boot must take the graceful path too"
     )
     assert src.index('"--once"') < src.index("install_signal_handlers()"), (
@@ -498,3 +499,76 @@ def test_a_deferred_deck_goes_through_the_helper_fenced_and_mirrored():
     assert not db.defer_job(sb, old, 60, "x")
     assert sb.tables["jobs"][0]["status"] == "processing" and "stage" not in sb.tables["jobs"][0]
     assert _gen_status(sb) == "processing"
+
+
+# ── the drain is as long as a render: heartbeat + windowed boot reap ─────
+
+
+@pytest.fixture(autouse=True)
+def _heartbeat_state():
+    run._heartbeat_stop.clear()
+    yield
+    run._heartbeat_stop.set()
+    run._heartbeat_stop.clear()
+
+
+def test_the_heartbeat_touches_every_held_job_and_nothing_else():
+    from datetime import datetime, timedelta, timezone
+    old = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    sb = _fresh("processing", jobs=[{**_builder("job-a", "presentation", "processing"), "updated_at": old},
+                                    {**_builder("job-b", "worksheet", "processing"), "updated_at": old}])
+    run._inflight_add(dict(sb.tables["jobs"][0]))          # only job-a is ours
+    assert run.heartbeat_once(sb) == 1
+    a, b = sb.tables["jobs"]
+    assert a["updated_at"] != old and b["updated_at"] == old
+    # a windowed reaper now sees job-a as alive and job-b as the orphan it is
+    assert db.requeue_stale_jobs(sb, older_than_minutes=5) == 1
+    assert a["status"] == "processing" and b["status"] == "queued"
+
+
+def test_a_held_row_the_reaper_already_moved_is_not_revived_by_the_heartbeat():
+    sb = _fresh("queued", jobs=[_builder("job-a", "presentation", "queued")])
+    run._inflight_add({**sb.tables["jobs"][0], "status": "processing"})
+    assert run.heartbeat_once(sb) == 0
+    assert sb.tables["jobs"][0]["status"] == "queued"
+
+
+def test_the_heartbeat_keeps_beating_through_the_drain(monkeypatch):
+    """The departing container is exactly the one whose rows must keep
+    reading alive: its beat runs on its own event, not the shutdown flag."""
+    sb = _fresh("processing", jobs=[_builder("job-a", "presentation", "processing")])
+    run._inflight_add(dict(sb.tables["jobs"][0]))
+    t = threading.Thread(target=run._heartbeat_loop, args=(sb,), kwargs={"every": 0.03}, daemon=True)
+    t.start()
+    run.request_shutdown()
+    time.sleep(0.2)
+    beats = [e for e in sb.log if e[1] == "jobs" and "updated_at" in e[2]]
+    assert len(beats) >= 3, "the beat stopped when the shutdown was requested"
+    run._heartbeat_stop.set()
+    t.join(2)
+    assert not t.is_alive()
+
+
+def test_the_boot_reap_is_windowed_and_the_incident_no_longer_reproduces():
+    """2026-09-13: the new container's reap-all took the job the old one was
+    still rendering. Now the old one heartbeats it and the boot reap is
+    windowed, so the job stays with its holder through the drain."""
+    src = inspect.getsource(run.main)
+    assert "requeue_stale_jobs(sb, older_than_minutes=stale_min)" in src
+    assert "requeue_stale_sketches(sb, older_than_minutes=stale_min)" in src
+    assert src.index("_heartbeat_loop") < src.index("_serve(sb, stale_min)")
+    sb = _fresh("processing", jobs=[_builder("job-a", "presentation", "processing")])
+    run._inflight_add(dict(sb.tables["jobs"][0]))
+    run.heartbeat_once(sb)                                  # the old container, mid-render
+    assert db.requeue_stale_jobs(sb, older_than_minutes=5) == 0   # the new container's boot reap
+    assert sb.tables["jobs"][0]["status"] == "processing"
+
+
+def test_the_drain_outlasts_the_grace_and_the_grace_outlasts_a_render():
+    import json
+    from pathlib import Path
+    drain = json.loads((Path(run.__file__).resolve().parent.parent / "railway.json").read_text())["deploy"]["drainingSeconds"]
+    assert float(drain) >= run.SHUTDOWN_GRACE_SECONDS + 60, "the hand-back needs room inside the drain"
+    assert run.SHUTDOWN_GRACE_SECONDS >= 1800, "shorter than the slowest render measured (42 min deck, 2026-09)"
+    assert run.HEARTBEAT_SECONDS * 4 <= int(os.environ.get("STALE_JOB_MINUTES", "5")) * 60, \
+        "the reaper's window must allow several missed beats"
