@@ -250,3 +250,30 @@ def test_a_word_problem_try_it_is_verified_from_its_first_step():
     t = TryIt(problem="A number doubled is fourteen. Find it.", answer=["n = 7"],
               steps=[Step(operation="divide both sides by 2", before=["2n = 14"], after=["n = 7"], speech="halve")])
     assert verify_try_it(t).ok is True
+
+
+def test_a_two_unknown_word_problem_under_task_solve_is_verified_as_a_system():
+    """Hindi demo 2026-09-25: the model's correct solution of a two-unknown
+    word problem (task "solve", target "x") was dropped because its two
+    equations were read as alternatives."""
+    steps = [Step(kind="setup", operation="write the equations", before=[], after=["x = 180 - y", "x = y - 40"],
+                  speech="s"),
+             Step(operation="substitute y in first equation", before=["x = 180 - y", "x = y - 40"],
+                  after=["x = 70", "x = y - 40"], speech="a"),
+             Step(operation="substitute x value into y", before=["x = 70", "x = y - 40"], after=["x = 70", "y = 110"],
+                  speech="b")]
+    ex = WorkedExample(label="Example 3", task="solve", problem="Two numbers add to 180 and differ by 40.",
+                       givens=["x = 180 - y", "x = y - 40"], target="x", steps=steps,
+                       final_answer=["x = 70", "y = 110"], answer_speech="z")
+    rep = verify_example(ex)
+    assert rep.status == "verified", [c.detail for c in rep.failures]
+    # a quadratic's two cases are still alternatives, not a system
+    quad = WorkedExample(label="Q", task="solve", problem="x^2 - 5x + 6 = 0", givens=["x^2 - 5x + 6 = 0"], target="x",
+                         steps=[Step(operation="factorise", before=["x^2 - 5x + 6 = 0"], after=["(x - 2)(x - 3) = 0"], speech="f"),
+                                Step(operation="each factor is zero", before=["(x - 2)(x - 3) = 0"], after=["x = 2", "x = 3"], speech="g")],
+                         final_answer=["x = 2", "x = 3"], answer_speech="z")
+    assert verify_example(quad).status == "verified"
+    # and a wrong system step is still caught
+    bad = ex.model_copy(deep=True)
+    bad.steps[1].after = ["x = 60", "x = y - 40"]
+    assert verify_example(bad).status == "failed"
