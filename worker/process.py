@@ -76,6 +76,24 @@ def _coverage_report(analysis: dict, episode: dict | None, text: str, *,
     return report
 
 
+def _cleanup_run_dirs(book_id: str, chapter_num, run_id: str) -> None:
+    """Remove a generation's own video working directories once its lesson
+    is uploaded. Since 2026-09-25 each run renders under
+    <book>/chapter_<n>/<generation id> (two runs of one chapter used to
+    share a directory and delete each other's segments); without this
+    every run would leave its segments on the volume."""
+    import shutil
+    try:
+        from agent6_animation.video_composer import VIDEO_DIR
+        from agent8_render.renderer import FINAL_DIR
+    except Exception:  # noqa: BLE001
+        return
+    for base in (VIDEO_DIR, FINAL_DIR):
+        d = Path(base) / str(book_id) / f"chapter_{chapter_num}" / str(run_id)
+        if str(run_id) and d.exists():
+            shutil.rmtree(d, ignore_errors=True)
+
+
 def _record_coverage(sb: Client, generation_id: str, reports: list[dict]) -> None:
     """Persist a job's coverage reports to ``generations.params.coverage``.
 
@@ -1777,6 +1795,8 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                 "total_episodes": 1,
                 "generated_at": datetime.now().isoformat(),
                 "episodes": [script_dict],
+                # this run's own working directory (agent6/agent8 models)
+                "run_id": str(generation_id),
                 # the acceptance check reads this key; the compose and
                 # slide builders read only episodes/book_id/chapter_num/
                 # avatars, so an extra top-level key is inert to them
@@ -1932,6 +1952,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         if uploaded_videos == 0:
             raise RuntimeError("no video parts were produced")
         db.set_stage(sb, job_id, None)  # stage is per-part; clear it once all parts are done
+        _cleanup_run_dirs(book_id, chapter_num, generation_id)
         _record_coverage(sb, generation_id, coverage_reports)
 
         # Enrich the tutor grounding with the lesson's own narration text —

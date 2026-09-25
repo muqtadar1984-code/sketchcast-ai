@@ -40,6 +40,10 @@ class VideoManifest(BaseModel):
     chapter_num: int
     episode_num: int = 1
     generated_at: str = ""
+    # the generation this run belongs to: its working directory is its own
+    # (two generations of one chapter once shared a directory and deleted
+    # each other's segments mid-concat — Hindi demo, 2026-09-25)
+    run_id: str = ""
     total_segments: int = 0
     video_segments_count: int = 0
     total_duration_seconds: float = 0.0

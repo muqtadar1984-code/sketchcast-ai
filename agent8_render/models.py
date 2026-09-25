@@ -14,6 +14,7 @@ class FinalVideoManifest(BaseModel):
     chapter_num: int
     episode_num: int = 1
     generated_at: str = ""
+    run_id: str = ""            # see VideoManifest.run_id
     final_video_path: str = ""
     total_duration_seconds: float = 0.0
     total_segments: int = 0
