@@ -193,9 +193,30 @@ def _fmt_solutions(s) -> str:
     return str(s)
 
 
+def _is_system(rels: list[Relation]) -> bool:
+    """Two or more equations in two or more unknowns: the lines hold
+    TOGETHER whatever the task says. A word problem with two unknowns
+    arrives as task "solve" (its target is one letter), and reading its
+    two equations as alternatives failed every step of a correct solution
+    (Hindi demo, 2026-09-25: "x = 180 - y; x = y - 40" -> "x = 70; x = y -
+    40" judged WRONG, the example dropped)."""
+    if len(rels) < 2 or not all(r.is_equation for r in rels):
+        return False
+    free: set = set()
+    for r in rels:
+        free |= r.free_symbols
+    return len(free) >= 2
+
+
+def _state_mode(rels: list[Relation], default: str) -> str:
+    return "all" if _is_system(rels) else default
+
+
 def _states_equivalent(before: list[Relation], after: list[Relation], variables: list[sp.Symbol],
                        mode: str) -> tuple[Optional[bool], str]:
-    """(verdict, detail) for "does `after` mean what `before` meant"."""
+    """(verdict, detail) for "does `after` mean what `before` meant".
+    ``mode`` is the example's default ("all" for a declared system, "any"
+    otherwise); a state that IS a system is read as one regardless."""
     kb, ka = _kinds(before), _kinds(after)
     if kb != ka or kb in ("mixed", "empty"):
         return None, f"the lines change kind ({kb} -> {ka})"
@@ -207,8 +228,8 @@ def _states_equivalent(before: list[Relation], after: list[Relation], variables:
                 return False, f"{b.text!r} is not equivalent to {a.text!r}"
         return True, "equivalent expressions"
     try:
-        sb = _timed(_solution_set, before, variables, mode)
-        sa = _timed(_solution_set, after, variables, mode)
+        sb = _timed(_solution_set, before, variables, _state_mode(before, mode))
+        sa = _timed(_solution_set, after, variables, _state_mode(after, mode))
     except MathTimeoutError:
         return None, "SymPy timed out"
     except Exception as exc:  # noqa: BLE001 — solve refused; try the weaker test
@@ -240,6 +261,12 @@ def _parse(lines: list[str], what: str) -> tuple[Optional[list[Relation]], str]:
 
 def _variables(ex: WorkedExample, givens: Optional[list[Relation]]) -> list[sp.Symbol]:
     if ex.task in SOLVE_TASKS:
+        if givens and _is_system(givens):
+            # every unknown of a system, whatever the target names
+            free: set = set()
+            for r in givens:
+                free |= r.free_symbols
+            return sorted(free, key=str)
         return symbols_named(ex.variables)
     free: set = set()
     for r in givens or []:
@@ -323,7 +350,7 @@ def _check_answer(ex: WorkedExample, givens: Optional[list[Relation]], variables
             return Check("answer", False, "a solution must name the unknown: write x = 5")
         try:
             expected = _timed(_solution_set, givens, variables, "all")
-            actual = _timed(_solution_set, ans, variables, _mode(ex))
+            actual = _timed(_solution_set, ans, variables, _state_mode(ans, _mode(ex)))
         except MathTimeoutError:
             return Check("answer", None, "SymPy timed out")
         except Exception as exc:  # noqa: BLE001
