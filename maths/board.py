@@ -32,7 +32,8 @@ from maths.tokens import TokenError, normalise
 from maths.typeset import Layout, typeset
 from shared.text_clean import strip_ssml
 from shared.text_shaping import contains_arabic, display_text
-from spike.scene_engine.render import _CAVEAT_MATHS, _HAND_SIZE_COMP, _hand_face, _hand_font, ascii_punct
+from spike.scene_engine.render import (_CAVEAT_MATHS, _HAND_SIZE_COMP, _hand_face, _hand_font, _script_runs,
+                                       ascii_punct)
 from spike.scene_engine.schema import WORLD_W
 from spike.scene_engine.whiteboard import build_whiteboard_scene
 
@@ -113,16 +114,21 @@ class _Measurer:
         # string to Caveat (32) — the difference was every card overlap
         shaped = contains_arabic(text)
         disp = display_text(text, rtl_base=True) if shaped else ascii_punct(text)
-        key = ("text", bold, size_i, disp[:8])
-        f = self._cache.get(key)
-        if f is None:
-            f = _hand_font(bold, int(size_i * _HAND_SIZE_COMP), disp) or _font(bold, size_i, disp)
-            self._cache[key] = f
-        try:
-            asc, desc = f.getmetrics()
-            return float(f.getlength(disp)), float(asc + desc)
-        except Exception:  # noqa: BLE001
-            return len(text) * size * 0.6, size * 1.3
+        w, h = 0.0, 0.0
+        for run in _script_runs(disp):
+            key = ("text", bold, size_i, run[:8])
+            f = self._cache.get(key)
+            if f is None:
+                f = _hand_font(bold, int(size_i * _HAND_SIZE_COMP), run) or _font(bold, size_i, run)
+                self._cache[key] = f
+            try:
+                asc, desc = f.getmetrics()
+                w += float(f.getlength(run))
+                h = max(h, float(asc + desc))
+            except Exception:  # noqa: BLE001
+                w += len(run) * size * 0.6
+                h = max(h, size * 1.3)
+        return w, h
 
 
 _M = _Measurer()

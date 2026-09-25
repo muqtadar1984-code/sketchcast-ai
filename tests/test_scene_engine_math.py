@@ -131,3 +131,43 @@ def test_a_fixed_text_stays_under_the_caption_band():
     assert r.bound["free"].box[1] < 300, "an unpinned label is moved off the band"
     b = r.bound["pinned"].box
     assert abs((b[1] + b[3]) / 2 - 400) < 2.0, "a fixed label keeps its place"
+
+
+def test_the_handwriting_face_is_used_only_for_text_it_can_draw():
+    """Devanagari and Telugu sit below U+2014, so the old threshold sent
+    them to the handwriting face, which has no such glyphs: boxes on every
+    Hindi board."""
+    from spike.scene_engine.render import _hand_font
+    assert _hand_font(False, 40, "sketchcast.app") is not None
+    assert _hand_font(False, 40, "Résumé — café") is not None
+    assert _hand_font(False, 40, "SketchCast AI से बनाया गया") is None
+    assert _hand_font(False, 40, "से बनाया गया") is None
+    assert _hand_font(False, 40, "పద్ధతి") is None
+    assert _hand_font(False, 40, "اعزل الحد") is None
+    from spike.scene_engine.schema import Scene
+    r = SceneRenderer(Scene.model_validate({"id": "t", "narration": "x", "elements": [
+        {"id": "a", "type": "text", "text": "SketchCast AI से बनाया गया", "at": [60, 150], "role": "title", "size": 40, "anchor": "lt"}],
+        "actions": [{"verb": "write", "target": "a"}]}))
+    r.compile(4.0)
+    tx = r.bound["a"].text
+    assert "Devanagari" in r._font_for(tx.bold, int(tx.size), tx.display).path
+
+
+def test_mixed_script_text_draws_each_run_with_its_own_face():
+    """The Noto faces carry no Latin and the hand face no Devanagari: a
+    string with both drew boxes for one half. Each run gets its face."""
+    from spike.scene_engine.render import _script_runs
+    from spike.scene_engine.schema import Scene
+    assert _script_runs("SketchCast AI से बनाया गया") == ["SketchCast AI ", "से बनाया गया"]
+    assert _script_runs("sketchcast.app पर जाइए।") == ["sketchcast.app ", "पर जाइए।"]
+    assert _script_runs("only latin 123") == ["only latin 123"]
+    r = SceneRenderer(Scene.model_validate({"id": "t", "narration": "x", "elements": [
+        {"id": "a", "type": "text", "text": "SketchCast AI से बनाया गया", "at": [60, 150], "role": "title", "size": 40, "anchor": "lt"}],
+        "actions": [{"verb": "write", "target": "a", "duration": 1.0}]}))
+    r.compile(3.0)
+    tx = r.bound["a"].text
+    assert len(tx.runs) == 2
+    x0, y0, x1, y1 = r.bound["a"].box
+    fr = _frame_at(r, 2.8, 3.0)
+    mid = (x0 + x1) / 2
+    assert _ink(fr, (x0, y0, mid, y1)) > 0 and _ink(fr, (mid, y0, x1, y1)) > 0, "both halves drawn"

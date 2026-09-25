@@ -286,6 +286,10 @@ def compose_description(*, topic_title: object, summary: object, meta: Optional[
         line = f"Part {int(part)} of {int(total)}."
         blocks.append([f"{line} Next: {_s(next_title)}" if next_title else line])
 
+    # the end screen's ask, in the description too (founder direction
+    # 2026-09-25): where most clicks come from
+    from shared.outro import DESCRIPTION_CTA
+    blocks.append([DESCRIPTION_CTA])
     blocks.append([SKETCHCAST_LINE, link])
 
     tags = [t for t in (hashtags or []) if t]

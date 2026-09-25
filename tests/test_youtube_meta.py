@@ -99,8 +99,10 @@ class TestDescription:
         assert blocks[1] == "Aligned to\nCBSE Science (Class 6-10) · Class 9 · Cell - Basic Unit of life"
         assert blocks[2] == "Chapters\n0:00 Intro\n0:32 Two cells\n1:30 Wrap up"
         assert blocks[3].startswith("Key terms: cell membrane, cytoplasm, nucleus")
-        assert blocks[4] == Y.SKETCHCAST_LINE + "\nhttps://sketchcast.app/?utm_source=youtube"
-        assert blocks[5].startswith("#CellMembrane #Cytoplasm") and blocks[5].endswith("#Science #SketchCast")
+        from shared.outro import DESCRIPTION_CTA
+        assert blocks[4] == DESCRIPTION_CTA
+        assert blocks[5] == Y.SKETCHCAST_LINE + "\nhttps://sketchcast.app/?utm_source=youtube"
+        assert blocks[6].startswith("#CellMembrane #Cytoplasm") and blocks[6].endswith("#Science #SketchCast")
 
     def test_the_stored_intro_terms_and_tags_replace_the_defaults(self):
         meta = {"intro": "What do a plant cell and an animal cell share?", "key_terms": ["nucleus"], "hashtags": ["Cells"]}

@@ -1788,8 +1788,16 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                 analysis=analysis, language=lesson_lang,
             ).model_dump()
 
+            # The end screen (founder direction 2026-09-25): the call to
+            # action on a catalogue lesson bound for YouTube, a short
+            # "Made with SketchCast AI" on a school's own, none when the
+            # params say so. On the VIDEO's copies only — the deck and the
+            # documents keep the lesson's own segments.
+            from shared import outro as _outro
+            _video_scripts, _video_slides = _outro.with_outro(
+                part_scripts, slides, _outro.outro_kind(params), lesson_lang)
             video = compose_episode_videos(
-                script_data=part_scripts, slide_manifest=slides, branding=branding,
+                script_data=_video_scripts, slide_manifest=_video_slides, branding=branding,
                 tts_voice=tts_voice, allow_premium=allow_premium, voice_report=voice_report,
                 direction=lesson_dir, lang=lesson_lang, student_voice=student_voice,
             ).model_dump()
@@ -1829,7 +1837,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             # report said PASSED — to a local driver script nobody ran.
             # This is the one place that knows the lesson is finished and
             # can still refuse it.
-            _accept = _acceptance_report(part_scripts, video)
+            _accept = _acceptance_report(_video_scripts, video)
             if _accept is not None:
                 db.set_stage(sb, job_id, {"phase": "video", "part": part_idx,
                                           "total": n_parts, "part_pct": 99,

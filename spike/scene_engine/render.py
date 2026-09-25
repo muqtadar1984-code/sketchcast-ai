@@ -96,8 +96,71 @@ def _hand_face(size: int):
         return None
 
 
+_HAND_CMAP: frozenset | None = None
+
+
+def _hand_covers(sample: str) -> bool:
+    """Whether the handwriting face has a glyph for every character of
+    ``sample``. This used to be ``ord(c) <= 0x2014``, which let Devanagari
+    (U+0900), Telugu (U+0C00) and unshaped Arabic (U+0600) through to a
+    face that has none of them — every Hindi label and caption drew as
+    boxes (the Hindi maths demo, 2026-09-25). Arabic only escaped because
+    it is shaped into presentation forms (U+FB50+) first."""
+    global _HAND_CMAP
+    if _HAND_CMAP is None:
+        try:
+            from fontTools.ttLib import TTFont
+            _HAND_CMAP = frozenset(TTFont(str(_HAND_TTF)).getBestCmap().keys())
+        except Exception:  # noqa: BLE001
+            _HAND_CMAP = frozenset(range(0x20, 0x250)) | frozenset(range(0x2000, 0x2070))
+    # the 0x2014 ceiling stays: smart punctuation is folded to ASCII
+    # before the face is chosen (ascii_punct), and a line that still
+    # carries it must not slip into the hand face as a mixed-typeface bubble
+    return all((ord(c) in _HAND_CMAP and ord(c) <= 0x2014) or c.isspace() for c in sample)
+
+
+def _script_runs(disp: str) -> list[str]:
+    """A display string split into runs the handwriting face can draw and
+    runs it cannot ("SketchCast AI से बनाया गया" -> two runs). Neutral
+    characters (spaces, digits, punctuation) join the run they follow. One
+    run when the whole string is one kind — the common case."""
+    runs: list[str] = []
+    kind: bool | None = None
+    cur = ""
+    for c in disp:
+        if not c.isalpha():
+            cur += c
+            continue
+        k = _hand_covers(c)
+        if kind is None or k == kind:
+            cur += c
+            kind = k
+        else:
+            runs.append(cur)
+            cur, kind = c, k
+    if cur:
+        runs.append(cur)
+    return runs if len(runs) > 1 else [disp]
+
+
+def _face_class(sample: str) -> str:
+    """Which face family a sample needs — the cache key for _font_for.
+    Mirrors agent5_slides.slide_builder._font's script choice."""
+    if _hand_covers(sample):
+        return "hand"
+    for c in sample:
+        o = ord(c)
+        if 0x0900 <= o <= 0x097F:
+            return "deva"
+        if 0x0C00 <= o <= 0x0C7F:
+            return "telu"
+        if 0x0600 <= o <= 0x06FF or 0x0750 <= o <= 0x077F or 0xFB50 <= o <= 0xFEFF:
+            return "arab"
+    return "other"
+
+
 def _hand_font(bold: bool, size: int, sample: str):
-    if not _HAND_TTF.exists() or any(ord(c) > 0x2014 for c in sample):
+    if not _HAND_TTF.exists() or not _hand_covers(sample):
         return None
     try:
         f = ImageFont.truetype(str(_HAND_TTF), size)
@@ -299,6 +362,11 @@ class BText:
     anchor: str
     w: float                  # measured at nominal size (world px)
     h: float
+    # mixed-script text: the display split into runs, each drawn with the
+    # face that has its glyphs (the Noto faces carry no Latin, the hand
+    # face no Devanagari/Telugu/Arabic — "SketchCast AI से बनाया गया" drew
+    # boxes for one half whichever face was chosen)
+    runs: tuple = ()
 
 
 @dataclass
@@ -753,15 +821,24 @@ class SceneRenderer:
         text = el.text if shaped else ascii_punct(el.text)
         disp = display_text(text, rtl_base=rtl) if shaped else text
         bold = el.role in ("title", "term")
-        f = self._font_for(bold, int(el.size), disp)
+        runs = _script_runs(disp)
         try:
-            w = f.getlength(disp)
-            asc, desc = f.getmetrics()
-            h = asc + desc
+            if len(runs) > 1:
+                w, h = 0.0, 0.0
+                for run in runs:
+                    rf = self._font_for(bold, int(el.size), run)
+                    w += rf.getlength(run)
+                    asc, desc = rf.getmetrics()
+                    h = max(h, asc + desc)
+            else:
+                f = self._font_for(bold, int(el.size), disp)
+                w = f.getlength(disp)
+                asc, desc = f.getmetrics()
+                h = asc + desc
         except Exception:
             w, h = len(disp) * el.size * 0.6, el.size * 1.3
         b.text = BText(disp, el.at, el.size, el.color, bold, rtl, shaped,
-                       el.anchor, w, h)
+                       el.anchor, w, h, tuple(runs) if len(runs) > 1 else ())
         ax, ay = el.at
         x0 = ax - (w if el.anchor[0] == "r" else w / 2 if el.anchor[0] == "m" else 0)
         y0 = ay - (h if el.anchor[1] == "b" else h / 2 if el.anchor[1] == "m" else 0)
@@ -1649,7 +1726,10 @@ class SceneRenderer:
         # allocate a FreeType face per frame; cap guards a runaway cache
         size = max(6, int(size) // 2 * 2)
         hand = self.scene.style.font == "hand"
-        key = (hand, bold, size, sample[:8])
+        # keyed by the face the sample NEEDS, not its first eight characters:
+        # "SketchCast AI " and "SketchCast AI से…" share a prefix and were
+        # served the same (hand) face
+        key = (hand, bold, size, _face_class(sample))
         if key not in self._fonts:
             if len(self._fonts) > 256:
                 self._fonts.clear()
@@ -2409,10 +2489,40 @@ class SceneRenderer:
             return
         shown = tx.display[n - k:] if tx.shaped else tx.display[:k]
         size = max(6, int(tx.size * cam.scale * SS))
-        f = self._font_for(tx.bold, size, tx.display)
         x0, y0, x1, y1 = b.box
         sx, sy = cam.to_screen((x0 + s.offset[0], y0 + s.offset[1]))
         col = role_color(tx.color, self.scene.style.ink, self.scene.style.accent)
+        fill = col + (int(255 * alpha),)
+        if tx.runs:
+            # the shown part of each run, each with its own face, laid left
+            # to right on a common baseline
+            pieces: list[tuple[str, object]] = []
+            start = n - k if tx.shaped else 0
+            end = n if tx.shaped else k
+            pos = 0
+            for run in tx.runs:
+                lo, hi = max(start, pos), min(end, pos + len(run))
+                if hi > lo:
+                    pieces.append((run[lo - pos:hi - pos], self._font_for(tx.bold, size, run)))
+                pos += len(run)
+            widths = []
+            ascs = []
+            for piece, pf in pieces:
+                try:
+                    widths.append(pf.getlength(piece))
+                    ascs.append(pf.getmetrics()[0])
+                except Exception:
+                    widths.append(len(piece) * size * 0.6)
+                    ascs.append(size * 0.8)
+            pos_x = sx * SS
+            if tx.shaped:
+                pos_x = (cam.to_screen((x1 + s.offset[0], y0))[0]) * SS - sum(widths)
+            top = max(ascs) if ascs else 0
+            for (piece, pf), pw, pa in zip(pieces, widths, ascs):
+                d.text((pos_x, sy * SS + (top - pa)), piece, fill=fill, font=pf)
+                pos_x += pw
+            return
+        f = self._font_for(tx.bold, size, tx.display)
         pos_x = sx * SS
         if tx.shaped:  # right edge stays fixed; text grows leftward
             try:
@@ -2420,7 +2530,7 @@ class SceneRenderer:
             except Exception:
                 shown_w = (k / n) * tx.w * cam.scale * SS
             pos_x = (cam.to_screen((x1 + s.offset[0], y0))[0]) * SS - shown_w
-        d.text((pos_x, sy * SS), shown, fill=col + (int(255 * alpha),), font=f)
+        d.text((pos_x, sy * SS), shown, fill=fill, font=f)
 
     def _draw_math(self, d: ImageDraw.ImageDraw, b: Bound, s: _ElState,
                    cam: CameraState, alpha: float) -> None:
