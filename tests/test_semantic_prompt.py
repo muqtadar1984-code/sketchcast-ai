@@ -187,13 +187,21 @@ class TestNoRegressions:
         student only for a genuine question") was all the model had for a
         style whose whole point is the exchange, and it wrote a monologue.
         The other four styles are unchanged in length.
+
+        Raised to 1.65 / 1.55 (2026-09-25) for the GENERATED VISUAL ASSETS
+        rule that a semantic region is a visible PART, never a process, and
+        that an arrow is named by its two ends (~540 chars, every style).
+        Measured cause: the States of Matter kit declared `melting_path`,
+        `freezing_path`, `evaporation_path`, `sublimation_path` on an
+        unlabelled triangle of three shapes, vision boxed none of them, and
+        all four labels' leader lines ran to the edge of the picture.
         """
         legacy = build_episode_prompt(
             "conversational", chapter_title="Rivers and Erosion",
             difficulty_level="Grade 7", target_duration="6.0",
             episode_context="<sections>")
-        assert len(_p()) < len(legacy) * 1.6
-        assert len(_p("socratic")) < len(legacy) * 1.46, "the block is conversational-only"
+        assert len(_p()) < len(legacy) * 1.65
+        assert len(_p("socratic")) < len(legacy) * 1.55, "the block is conversational-only"
 
 
 class TestFlagWiring:

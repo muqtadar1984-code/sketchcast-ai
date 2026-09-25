@@ -114,7 +114,8 @@ A chapter is defined BY its root visual: a different main visual is a NEW CHAPTE
 
 _ASSETS = """=== GENERATED VISUAL ASSETS ===
 When a generated asset is needed, describe it so that important structures are visually distinguishable and clear at video resolution. Avoid clutter and decorative detail. The image must contain NO labels, NO arrows, NO captions, NO embedded text of any kind (the engine adds labels separately).
-Do NOT ask the image generator for machine-readable layers. Instead list the semantic regions that should exist in "semantic_regions" — the engine's vision system finds their real geometry afterwards.
+Do NOT ask the image generator for machine-readable layers. Instead list the semantic regions that should exist in "semantic_regions" — the engine's vision system finds their real geometry afterwards, in a picture with NO words on it, so a region must be something a viewer could point at from its SHAPE or POSITION alone.
+Name the THINGS in the picture (solid_block, liquid_beaker, gas_cloud; outer_bank; hypotenuse), never a process, change or relation (not "melting", not "erosion"). An arrow or path that matters is a region named by its two ends (solid_to_liquid_arrow) and only if the description draws exactly that arrow. Say in the asset description WHERE each region sits (left, right, top, between), so the picture and the regions agree.
 Every asset and element id you reference MUST be one you declared here, never an id from the lesson input — a plan referencing a source id is discarded entirely."""
 
 _TARGETS = """=== SEMANTIC TARGETS (NO PIXELS) ===
@@ -122,7 +123,7 @@ Reference things semantically, never by position:
   {"element": "river"}                                  an element you declared
   {"asset": "river_valley", "region": "outer_bank"}     a region inside a visual
   {"element": "river", "region": "outer_bank"}          both
-Region names come from the actual lesson (a triangle has "hypotenuse"; a map has "france"; a graph has "equilibrium_point").
+Region names come from the actual lesson (a triangle has "hypotenuse"; a map has "france"; a graph has "equilibrium_point") and name a visible part, never what happens to it.
 NEVER output a numeric coordinate array for a target (no two-number position arrays, no widths, no heights), and never estimate where something is. The engine resolves target geometry, arrow endpoints, arrow routing, label placement, collision avoidance and hand paths.
 (Stated in words, not shown: this model imitates any JSON it is given.)"""
 
@@ -250,7 +251,7 @@ Return the ENTIRE reply as MINIFIED JSON — one line, no indentation. Pretty-pr
         "id": "chapter_2",
         "concept": "meander_becomes_oxbow_lake",
         "transition": "clear_and_redraw",
-        "assets": {"oxbow_stages": "Three stages of one river bend tightening until cut off, side by side, from above"},
+        "assets": {"oxbow_stages": "Three stages of one river bend, side by side from left to right, seen from above: a gentle bend, a tight loop, and the loop cut off as a separate lake"},
         "semantic_regions": ["stage_one", "cut_off_loop"],
         "elements": [
           {"id": "stages", "type": "illustration", "asset": "oxbow_stages", "role": "root_visual"},

@@ -305,7 +305,7 @@ class TestTheReadPathDoesNotReAskWhatTheRowAlreadyKnows:
         calls: list = []
         monkeypatch.setattr(
             ra, "annotate_regions",
-            lambda ink, names: calls.append(list(names)) or
+            lambda ink, names, *_: calls.append(list(names)) or
             {"regions": {}, "has_text": True, "text_boxes": [[0, 0, 5, 5]]})
 
         ra._get_raster_asset("plant_cell", PROMPT, cache, allow_generate=False)
@@ -324,7 +324,7 @@ class TestTheReadPathDoesNotReAskWhatTheRowAlreadyKnows:
         calls: list = []
         monkeypatch.setattr(
             ra, "annotate_regions",
-            lambda ink, names: calls.append(list(names)) or
+            lambda ink, names, *_: calls.append(list(names)) or
             {"regions": {"nucleus": [[1, 1, 2, 2]]}, "has_text": False,
              "text_boxes": []})
 
@@ -363,7 +363,7 @@ class TestTheAnnotationAccumulatesInsteadOfThrashing:
         asked: list = []
         monkeypatch.setattr(
             ra, "annotate_regions",
-            lambda ink, names: asked.append(list(names)) or
+            lambda ink, names, *_: asked.append(list(names)) or
             {"regions": {"membrane": [[1, 2, 3, 4]]}, "has_text": False,
              "text_boxes": []})
 
@@ -423,7 +423,7 @@ class TestTheRowLearnsFromTheRenderThatBoundIt:
     def test_a_fresh_annotation_is_written_back_to_the_row_it_came_from(
             self, library, tmp_path, monkeypatch):
         seen: dict = {}
-        self._bind(tmp_path, monkeypatch, seen, lambda ink, names: {
+        self._bind(tmp_path, monkeypatch, seen, lambda ink, names, *_: {
             "regions": {"nucleus": [[10, 20, 30, 40]], "membrane": []},
             "has_text": False, "text_boxes": []})
 
@@ -440,7 +440,7 @@ class TestTheRowLearnsFromTheRenderThatBoundIt:
         valid for both copies, but the object in storage still carries the
         words, so the row must not be told the asset is clean."""
         seen: dict = {}
-        _, cache = self._bind(tmp_path, monkeypatch, seen, lambda ink, names: {
+        _, cache = self._bind(tmp_path, monkeypatch, seen, lambda ink, names, *_: {
             "regions": {"nucleus": [[10, 20, 30, 40]]}, "has_text": True,
             "text_boxes": [[0, 0, 5, 5]]})
 
@@ -461,7 +461,7 @@ class TestTheRowLearnsFromTheRenderThatBoundIt:
         (d / "asset.png").write_bytes(_png_bytes(640, 480))
         (d / "meta.json").write_text(json.dumps({"provenance": "generated"}),
                                      encoding="utf-8")
-        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names: {
+        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names, *_: {
             "regions": {"nucleus": [[1, 2, 3, 4]]}, "has_text": False,
             "text_boxes": []})
 
@@ -730,7 +730,7 @@ class TestTheRendererSeesThisPromptsPartsAndNoOthers:
             "annotated_for": ["nucleus", "nuclear membrane"],
             "regions": {"nucleus": [[1, 1, 2, 2]],
                         "nuclear membrane": [[3, 3, 4, 4]]}})
-        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names: {
+        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names, *_: {
             # vision boxes cytoplasm and cannot see the plasma membrane
             "regions": {"cytoplasm": [[5, 5, 6, 6]]}, "has_text": False,
             "text_boxes": []})
@@ -759,7 +759,7 @@ class TestTheRendererSeesThisPromptsPartsAndNoOthers:
             "provenance": "generated", "baked_text": False,
             "annotated_for": ["vacuole"],
             "regions": {"sap vacuole": [[1, 1, 2, 2]]}})
-        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names: {
+        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names, *_: {
             "regions": {}, "has_text": False, "text_boxes": []})
 
         asset = ra._get_raster_asset(
@@ -799,7 +799,7 @@ class TestASpellingVariantIsNotAFreshQuestion:
             "regions": {stored: [[1, 1, 2, 2]]}})
         calls: list = []
         monkeypatch.setattr(ra, "annotate_regions",
-                            lambda ink, names: calls.append(list(names)) or
+                            lambda ink, names, *_: calls.append(list(names)) or
                             {"regions": {}, "has_text": False,
                              "text_boxes": []})
 
@@ -827,7 +827,7 @@ class TestASpellingVariantIsNotAFreshQuestion:
             "regions": {"nuclear membrane": [[1, 1, 2, 2]]}})
         calls: list = []
         monkeypatch.setattr(ra, "annotate_regions",
-                            lambda ink, names: calls.append(list(names)) or
+                            lambda ink, names, *_: calls.append(list(names)) or
                             {"regions": {"membrane": [[3, 3, 4, 4]]},
                              "has_text": False, "text_boxes": []})
 
@@ -863,7 +863,7 @@ class TestASecondPassOverScrubbedPixelsCannotDeclareTheRowClean:
         assert vl.hydrate("plant_cell", PROMPT, cache, asset_format="png")
 
         # pass 1: the downloaded bytes carry a word; it is scrubbed locally
-        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names: {
+        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names, *_: {
             "regions": {"nucleus": [[10, 20, 30, 40]]}, "has_text": True,
             "text_boxes": [[0, 0, 5, 5]]})
         ra._get_raster_asset("plant_cell", PROMPT, cache, allow_generate=False)
@@ -871,7 +871,7 @@ class TestASecondPassOverScrubbedPixelsCannotDeclareTheRowClean:
 
         # pass 2: a different lesson, a new part name, and `ink` is now the
         # SCRUBBED local copy — so vision honestly reports no text
-        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names: {
+        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names, *_: {
             "regions": {"vacuole": [[1, 2, 3, 4]]}, "has_text": False,
             "text_boxes": []})
         ra._get_raster_asset(
@@ -901,12 +901,12 @@ class TestASecondPassOverScrubbedPixelsCannotDeclareTheRowClean:
             {"provenance": "visual_library", "library_asset_id": "row-1"}),
             encoding="utf-8")
 
-        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names: {
+        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names, *_: {
             "regions": {"nucleus": [[10, 20, 30, 40]]}, "has_text": True,
             "text_boxes": [[0, 0, 5, 5]]})
         ra._get_raster_asset("plant_cell", PROMPT, cache, allow_generate=False)
 
-        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names: {
+        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names, *_: {
             "regions": {"vacuole": [[1, 2, 3, 4]]}, "has_text": False,
             "text_boxes": []})
         ra._get_raster_asset(
@@ -942,7 +942,7 @@ class TestTheFilesThatTwoWritersShareGoInAtomically:
         (d / "asset.png").write_bytes(_png_bytes(640, 480))
         (d / "meta.json").write_text(json.dumps(
             {"provenance": "generated"}), encoding="utf-8")
-        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names: {
+        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names, *_: {
             "regions": {"nucleus": [[1, 2, 3, 4]]}, "has_text": False,
             "text_boxes": []})
 
@@ -995,7 +995,7 @@ class TestHydrateNormalisesWhatTheRowHappensToHold:
                                                              match_score=1.0))
         cache = tmp_path / "cache"
         assert vl.hydrate("plant_cell", PROMPT, cache, asset_format="png")
-        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names: {
+        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names, *_: {
             "regions": {}, "has_text": False, "text_boxes": []})
 
         asset = ra._get_raster_asset("plant_cell", PROMPT, cache,

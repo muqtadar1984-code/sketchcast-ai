@@ -345,8 +345,7 @@ def _patch() -> None:
                 md = {}
             if md.get("provenance") == "generated" and not md.get("baked_text"):
                 try:
-                    publish_generated(key, prompt, png, md, context())
-                    published = True
+                    published = bool(publish_generated(key, prompt, png, md, context()))
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("visual library publish failed for %s: %s", key, exc)
 

@@ -576,6 +576,19 @@ def strip_layer_tail(text: str) -> str:
     return _LAYER_TAIL.sub("", str(text or ""))
 
 
+_LAYER_NAMES = re.compile(r"name the layer groups exactly:\s*([^.\n]+)", re.I)
+
+
+def prompt_part_names(prompt: str | None) -> list[str]:
+    """The names the tail asks the annotator for — the same reading
+    raster_assets.part_names_from_prompt makes, so the publish gate judges an
+    asset by the question its prompt actually posed."""
+    m = _LAYER_NAMES.search(str(prompt or ""))
+    if not m:
+        return []
+    return [n.strip().strip("\"'") for n in m.group(1).split(",") if n.strip()][:12]
+
+
 # ── a table is not a picture ─────────────────────────────────────────────────
 # An image model asked for a "particle table" draws an empty ruled grid, and
 # the lesson opens on lines with nothing in them (Structure of the Atom,
@@ -1844,6 +1857,25 @@ def publish_generated(asset_key: str, prompt: str, asset_path: Path,
                                            md.get("annotated_for")),
                                 bool(md.get("baked_text")), w, h)
         group_ids = vision_group_ids(vision)
+        # The names the picture was asked for: latched in annotated_for, or
+        # still OPEN after an unlatched total miss (raster_assets leaves
+        # annotated_for empty and counts the miss). A meta that carries
+        # neither was never asked at all — the cache migration over a file
+        # that predates annotation — and is published without a payload.
+        asked = list(vision["annotated_for"]) or (
+            prompt_part_names(prompt) if md.get("region_misses") else [])
+        if asked and not group_ids:
+            # Asked for N parts and vision boxed NONE of them. That picture
+            # is not "renderer validated": no label a lesson writes can ever
+            # point into it. The live row `transition_triangle` (States of
+            # Matter, 2026-09-25) was published exactly so — four names, no
+            # box, quality renderer_validated — and served again with every
+            # leader line running to the picture's edge. The render that
+            # produced it keeps its local copy; the library does not take it.
+            logger.warning("visual library: refusing to publish %s — asked "
+                           "for %d part(s) (%s) and vision found none",
+                           asset_key, len(asked), ", ".join(asked[:8]))
+            return False
         if not vision["regions"] and not vision["annotated_for"]:
             # Nothing was ever asked of vision for this asset (a hand sprite,
             # a prompt with no part names, the one-shot cache migration over a
