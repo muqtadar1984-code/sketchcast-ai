@@ -40,7 +40,7 @@ prose that is later mined for its mathematics:
 Lesson: hook -> concept (+ method card) -> examples 1..4 -> recap
         -> try-it (3 s silent hold) -> try-it solution -> closing
 WorkedExample: problem, givens, target, steps[], final_answer, common_mistake
-Step: kind (transform | setup | check), operation, before[], after[], speech
+Step: kind (transform | setup | check | round), operation, precision, before[], after[], speech
 ```
 
 States (`before`, `after`) are **lists** of relations in one linear
@@ -65,6 +65,17 @@ against the problem with form checks (expanded, factorised, a value), and
 the common mistake confirmed **wrong**. A transform SymPy cannot establish
 fails the example exactly like a wrong one; a `setup` step is the one kind
 allowed to be unverifiable.
+
+**Rounding is not equivalence.** The tasks `round` and `estimate` (Grade 6
+place value, estimation) use a step of kind `round`: `after` is `before`
+with its numbers replaced by their roundings and nothing else changed
+(`7583 + 3421` -> `8000 + 3000`, `x = 17173` -> `x = 17000`), checked token
+for token, and every changed number must be the old one rounded half away
+from zero to the step's `precision` — a unit (`1000`, `0.01`, `nearest
+hundred`), `2 dp` or `1 sf` — or, with no precision stated, to some power of
+ten or 1-4 significant figures (truncation is refused). The answer of such a
+task is the value the verified rounding steps reach, never the exact value
+of the problem. Everything after the rounding is ordinary `transform`.
 
 `maths/lesson.py` regenerates only the failing example, with the verifier's
 reasons, up to twice; an example still failing is dropped when at least two

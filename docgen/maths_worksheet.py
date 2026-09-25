@@ -54,7 +54,7 @@ def _n(params: dict, kind: str) -> int:
 
 _VERB = {"simplify": "verb_simplify", "expand": "verb_expand", "factorise": "verb_factorise",
          "evaluate": "verb_evaluate", "solve": "verb_solve", "solve_system": "verb_solve",
-         "solve_inequality": "verb_solve"}   # strings keys
+         "solve_inequality": "verb_solve", "round": "verb_round", "estimate": "verb_estimate"}   # strings keys
 
 
 def _problem_text(ex, language: str = "en") -> str:

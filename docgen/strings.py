@@ -582,6 +582,14 @@ _STRINGS.update({
         "en": "Evaluate", "ms": "Nilaikan", "ar": "احسب", "fr": "Calculer", "es": "Calcula", "pt": "Calcule",
         "hi": "मान ज्ञात कीजिए", "mr": "किंमत काढा", "te": "విలువ కనుగొనండి", "ms-arab": "نيلايکن",
     },
+    "verb_round": {
+        "en": "Round", "ms": "Bundarkan", "ar": "قرّب", "fr": "Arrondir", "es": "Redondea", "pt": "Arredonde",
+        "hi": "पूर्णांकित कीजिए", "mr": "पूर्णांकित करा", "te": "సమీప విలువకు మార్చండి", "ms-arab": "بوندرکن",
+    },
+    "verb_estimate": {
+        "en": "Estimate", "ms": "Anggarkan", "ar": "قدّر", "fr": "Estimer", "es": "Estima", "pt": "Estime",
+        "hi": "अनुमान लगाइए", "mr": "अंदाज करा", "te": "అంచనా వేయండి", "ms-arab": "اڠݢرکن",
+    },
     "ws_instructions": {
         "en": "Show your working for every question. Questions get harder as you go; "
               "check each answer by substituting it back.",
