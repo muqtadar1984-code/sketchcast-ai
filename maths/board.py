@@ -31,7 +31,8 @@ from maths.speech import speakable_maths
 from maths.tokens import TokenError, normalise
 from maths.typeset import Layout, typeset
 from shared.text_clean import strip_ssml
-from spike.scene_engine.render import _CAVEAT_MATHS, _HAND_SIZE_COMP, _hand_face
+from shared.text_shaping import contains_arabic, display_text
+from spike.scene_engine.render import _CAVEAT_MATHS, _HAND_SIZE_COMP, _hand_face, _hand_font, ascii_punct
 from spike.scene_engine.schema import WORLD_W
 from spike.scene_engine.whiteboard import build_whiteboard_scene
 
@@ -100,8 +101,65 @@ class _Measurer:
     def text_width(self, text: str, size: float) -> float:
         return self.measure(text, size)[0]
 
+    def text_box(self, text: str, size: float, bold: bool = False) -> tuple[float, float]:
+        """(width, height) of a TEXT element as render._bind_text will
+        measure it: the handwriting face when it covers the text, else the
+        brand/Noto stack — Arabic runs 43 px tall where Latin runs 32 at
+        the card's size, and Devanagari a third wider (production ar/hi
+        demos, 2026-09-25: 52 and 12 overlaps from fixed pitches)."""
+        size_i = max(6, int(size) // 2 * 2)
+        # the renderer measures the SHAPED string: Arabic in presentation
+        # forms routes to Noto Sans Arabic (43 px tall at 20), the raw
+        # string to Caveat (32) — the difference was every card overlap
+        shaped = contains_arabic(text)
+        disp = display_text(text, rtl_base=True) if shaped else ascii_punct(text)
+        key = ("text", bold, size_i, disp[:8])
+        f = self._cache.get(key)
+        if f is None:
+            f = _hand_font(bold, int(size_i * _HAND_SIZE_COMP), disp) or _font(bold, size_i, disp)
+            self._cache[key] = f
+        try:
+            asc, desc = f.getmetrics()
+            return float(f.getlength(disp)), float(asc + desc)
+        except Exception:  # noqa: BLE001
+            return len(text) * size * 0.6, size * 1.3
+
 
 _M = _Measurer()
+
+
+def _fit_text(text: str, size: float, max_w: float, *, bold: bool = False, min_size: float = 18.0,
+              cap: int | None = None) -> tuple[str, float]:
+    """Shrink, then shorten, a text so its measured width fits ``max_w``."""
+    t = _short(text, cap) if cap else " ".join(str(text or "").split())
+    w, _h = _M.text_box(t, size, bold)
+    while w > max_w and size > min_size:
+        size = max(min_size, size - 1.5)
+        w, _h = _M.text_box(t, size, bold)
+    if w > max_w and len(t) > 8:
+        t = _short(t, max(8, int(len(t) * max_w / w) - 1))
+    return t, size
+
+
+def _wrap_text(text: str, size: float, max_w: float, max_lines: int, *, bold: bool = False) -> list[str]:
+    """Greedy wrap by MEASURED width; the last kept line is shortened when
+    words remain."""
+    words = " ".join(str(text or "").split()).split()
+    lines: list[str] = []
+    cur = ""
+    for w in words:
+        cand = f"{cur} {w}".strip()
+        if cur and _M.text_box(cand, size, bold)[0] > max_w:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = cand
+    if cur:
+        lines.append(cur)
+    if len(lines) > max_lines:
+        rest = " ".join(lines[max_lines - 1:])
+        lines = lines[:max_lines - 1] + [_fit_text(rest, size, max_w, bold=bold, min_size=size)[0]]
+    return lines
 
 
 def _layout(expr: str, size: float) -> Optional[Layout]:
@@ -189,18 +247,18 @@ def card_elements(method, present: bool, lang: str = "en") -> tuple[list[dict], 
     lines = list(method.steps)[:5]
     if not lines:
         return [], []
-    h = 20 + CARD_TITLE_SIZE + 12 + _card_pitch(len(lines)) * len(lines) + 8
-    x0, y0, x1, y1 = CARD_X - 16, CARD_Y - 12, CARD_X - 16 + CARD_W, CARD_Y - 12 + h
+    g = _card_geometry(method, lang)
+    x0, y0, x1, y1 = CARD_X - 16, CARD_Y - 12, CARD_X - 16 + CARD_W, g["bottom"]
     els: list[dict] = [
         {"id": "card_box", "type": "shape", "shape": "path", "closed": True, "width": 2.6,
          "color": "muted", "points": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]},
-        {"id": "card_title", "type": "text", "text": _short(method.title or _bt("method", lang), 22),
-         "role": "term", "color": "accent", "size": CARD_TITLE_SIZE, "at": [CARD_X, CARD_Y], "anchor": "lt"},
+        {"id": "card_title", "type": "text", "text": g["title"],
+         "role": "term", "color": "accent", "size": g["title_size"], "at": [CARD_X, CARD_Y], "anchor": "lt"},
     ]
     for i, _line in enumerate(lines):
-        text, y = _card_line(method, i)
+        text, y, size = _card_line(method, i, lang)
         els.append({"id": f"card_{i}", "type": "text", "text": text,
-                    "size": CARD_LINE_SIZE, "at": [CARD_X, y], "anchor": "lt"})
+                    "size": size, "at": [CARD_X, y], "anchor": "lt"})
     acts: list[dict] = []
     if not present:
         acts.append({"verb": "draw", "target": "card_box", "at": {"frac": 0.5}})
@@ -214,10 +272,33 @@ def _card_pitch(n_lines: int) -> float:
     return CARD_PITCH if n_lines <= 4 else CARD_PITCH_5
 
 
-def _card_line(method, i: int) -> tuple[str, float]:
-    """The card's i-th line as written, and its top."""
-    pitch = _card_pitch(len(list(method.steps)[:5]))
-    return (_short(f"{i + 1}. {method.steps[i]}", 34), CARD_Y + CARD_TITLE_SIZE + 16 + pitch * i)
+def _card_geometry(method, lang: str = "en") -> dict:
+    """Where the card's title and lines go, from the MEASURED heights of
+    the faces that will draw them; sizes step down until the frame ends
+    above the caption band (CARD_BOTTOM_MAX)."""
+    steps = list(method.steps)[:5]
+    title_size, line_size = CARD_TITLE_SIZE, CARD_LINE_SIZE
+    max_w = CARD_W - 16 - 8
+    while True:
+        title, title_size = _fit_text(method.title or _bt("method", lang), title_size, max_w, bold=True,
+                                      min_size=16.0, cap=22)
+        texts = [_fit_text(f"{i + 1}. {s}", line_size, max_w, min_size=15.0, cap=34)[0] for i, s in enumerate(steps)]
+        title_h = _M.text_box(title, title_size, True)[1]
+        line_h = max((_M.text_box(t, line_size)[1] for t in texts), default=line_size * 1.3)
+        pitch = max(_card_pitch(len(steps)), line_h + 4.0)
+        first = CARD_Y + title_h + 8.0
+        bottom = first + pitch * len(steps) + 6.0
+        if bottom <= CARD_BOTTOM_MAX or line_size <= 15.0:
+            return {"title": title, "title_size": title_size, "line_size": line_size, "texts": texts,
+                    "first": first, "pitch": pitch, "bottom": bottom}
+        line_size = max(15.0, line_size - 1.0)
+        title_size = max(16.0, title_size - 1.0)
+
+
+def _card_line(method, i: int, lang: str = "en") -> tuple[str, float, float]:
+    """The card's i-th line as written, its top, and its size."""
+    g = _card_geometry(method, lang)
+    return g["texts"][i], g["first"] + g["pitch"] * i, g["line_size"]
 
 
 def _stem(w: str) -> str:
@@ -313,26 +394,17 @@ def _problem_elements(ex: WorkedExample, board: _Board, cue: Optional[dict]) -> 
         board.top_y = board.next_y
         board.question = _Row("q", problem, Q_AT[1], lay, -1)
         return
-    # a word problem
-    words = " ".join(problem.split())
-    lines, cur = [], ""
-    for w in words.split():
-        if len(cur) + len(w) + 1 > 62 and cur:
-            lines.append(cur)
-            cur = w
-        else:
-            cur = f"{cur} {w}".strip()
-    if cur:
-        lines.append(cur)
-    lines = lines[:2]
-    if len(lines) == 2 and len(words) > len(lines[0]) + len(lines[1]) + 1:
-        lines[1] = _short(lines[1], 60)
+    # a word problem: wrapped by measured width up to the card, pitched by
+    # the face's measured height (a Hindi line ran under the card, an
+    # Arabic pair overlapped at the Latin pitch — ar/hi demos 2026-09-25)
+    lines = _wrap_text(problem, 27, CARD_X - 16 - 24 - Q_AT[0], 2, bold=True)
+    line_h = max((_M.text_box(ln, 27, True)[1] for ln in lines), default=42.0)
     y = Q_AT[1]
     for i, ln in enumerate(lines):
         board.elements.append({"id": f"q{i}", "type": "text", "text": ln, "role": "title", "size": 27,
                                "at": [Q_AT[0], y], "anchor": "lt"})
         board.actions.append({"verb": "write", "target": f"q{i}", **({"at": cue} if cue and i == 0 else {})})
-        y += 46   # the handwriting face runs ~44 px tall at this size (TEXT_OVERLAP q0+q1)
+        y += line_h + 4.0
     # a wipe restarts HERE, not at the notation-question row: the first line
     # after a wipe once sat on the word problem's second line (maths demo)
     board.next_y = y - 2 + PROBLEM_GAP   # the last line's ink ends ~2 px above y
@@ -467,7 +539,8 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
 HL_WIDTH = 26.0
 
 
-def _highlight_method(board: _Board, step: Step, method, cue: Optional[dict], has_card: bool) -> None:
+def _highlight_method(board: _Board, step: Step, method, cue: Optional[dict], has_card: bool,
+                      lang: str = "en") -> None:
     """Move the card's highlight to the line this step uses. A marker
     ELEMENT, not the highlight verb: the verb's decoration never leaves, so
     by example 4 every line was yellow at once (maths demo, 2026-09-24)."""
@@ -476,9 +549,9 @@ def _highlight_method(board: _Board, step: Step, method, cue: Optional[dict], ha
     k = method_step_for(step, method)
     if k is None or (board.highlight is not None and board.highlight[0] == k):
         return
-    text, y = _card_line(method, k)
-    w = _M.text_width(text, CARD_LINE_SIZE)
-    ym = y + CARD_LINE_SIZE * 0.62
+    text, y, size = _card_line(method, k, lang)
+    w, h = _M.text_box(text, size)
+    ym = y + h * 0.55
     hid = board.uid("hl")
     board.elements.append({"id": hid, "type": "shape", "shape": "line", "width": HL_WIDTH, "color": "marker",
                            "points": [[CARD_X - 8, ym], [CARD_X + w + 10, ym]]})
@@ -541,7 +614,7 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
             if rows:
                 _add_note(board, rows[0], _bt("check", lang), None, "")
             continue
-        _highlight_method(board, st, method, cue, has_card)
+        _highlight_method(board, st, method, cue, has_card, lang)
         rows = _add_state(board, st.after, cue)
         if rows:
             note = st.note if st.kind == "transform" else (st.note or _bt("set_up", lang))
@@ -591,19 +664,35 @@ def hook_segment(lesson: Lesson, seg_id: str, avatars: dict | None, lang: str = 
     return seg
 
 
+def _point_rows(points: list[str], heading: str) -> list[tuple[str, float, float]]:
+    """The board points under a heading: (text, top, size) each, starting
+    below the heading's MEASURED height, pitched by their own, and no
+    wider than the gap before the card (Hindi points ran into it)."""
+    top = 44.0 + _M.text_box(heading, 40, True)[1] + 16.0
+    max_w = CARD_X - 16 - 24 - 110
+    rows: list[tuple[str, float, float]] = []
+    y = max(124.0, top)
+    for p in points:
+        text, size = _fit_text(p, 27, max_w, min_size=20.0, cap=64)
+        rows.append((text, y, size))
+        y += max(58.0, _M.text_box(text, size)[1] + 16.0)
+    return rows
+
+
 def concept_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
     lines = _dialogue_lines(lesson.concept, lang) or [Line(line=_bt("method_intro", lang))]
     points = [_short(p, 64) for p in lesson.concept_points][:3]
     seg = _segment(seg_id, "explore", lines, heading=_short(lesson.topic, 60), points=points)
     narration = seg["text"]
-    els: list[dict] = [{"id": "wb_h", "type": "text", "text": _short(lesson.topic, 60), "role": "title",
-                        "size": 40, "at": [60, 44], "anchor": "lt"}]
+    _ht, _hs = _fit_text(lesson.topic, 40, CARD_X - 16 - 24 - 60, bold=True, min_size=26.0, cap=60)
+    els: list[dict] = [{"id": "wb_h", "type": "text", "text": _ht, "role": "title",
+                        "size": _hs, "at": [60, 44], "anchor": "lt"}]
     acts: list[dict] = [{"verb": "write", "target": "wb_h"}, {"verb": "underline", "target": "wb_h"}]
-    for i, p in enumerate(points):
+    for i, (p, y, size) in enumerate(_point_rows(points, els[0]["text"])):
         els.append({"id": f"wb_d{i}", "type": "shape", "shape": "line", "width": 4.0, "color": "accent",
-                    "points": [[64, 150 + 58 * i], [92, 146 + 58 * i]]})
-        els.append({"id": f"wb_p{i}", "type": "text", "text": p, "size": 27, "role": "caption",
-                    "at": [110, 124 + 58 * i], "anchor": "lt"})
+                    "points": [[64, y + 26], [92, y + 22]]})
+        els.append({"id": f"wb_p{i}", "type": "text", "text": p, "size": size, "role": "caption",
+                    "at": [110, y], "anchor": "lt"})
         acts.append({"verb": "draw", "target": f"wb_d{i}", "at": {"frac": min(0.45, 0.08 + 0.14 * i)}})
         acts.append({"verb": "write", "target": f"wb_p{i}"})
     cels, cacts = card_elements(lesson.method, present=False, lang=lang)
@@ -624,11 +713,11 @@ def recap_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
     els: list[dict] = [{"id": "wb_h", "type": "text", "text": heading, "role": "title", "size": 40,
                         "at": [60, 44], "anchor": "lt"}]
     acts: list[dict] = [{"verb": "write", "target": "wb_h"}]
-    for i, p in enumerate(points):
+    for i, (p, y, size) in enumerate(_point_rows(points, els[0]["text"])):
         els.append({"id": f"wb_d{i}", "type": "shape", "shape": "line", "width": 4.0, "color": "accent",
-                    "points": [[64, 150 + 58 * i], [92, 146 + 58 * i]]})
-        els.append({"id": f"wb_p{i}", "type": "text", "text": p, "size": 27, "role": "caption",
-                    "at": [110, 124 + 58 * i], "anchor": "lt"})
+                    "points": [[64, y + 26], [92, y + 22]]})
+        els.append({"id": f"wb_p{i}", "type": "text", "text": p, "size": size, "role": "caption",
+                    "at": [110, y], "anchor": "lt"})
         acts.append({"verb": "draw", "target": f"wb_d{i}", "at": {"frac": min(0.75, 0.15 + 0.22 * i)}})
         acts.append({"verb": "write", "target": f"wb_p{i}"})
     cels, _ = card_elements(lesson.method, present=True, lang=lang)
@@ -661,7 +750,8 @@ def try_it_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> Optional[di
         els.append({"id": "q", "type": "math", "expr": t.problem, "at": [WORLD_W / 2, 220], "size": 44,
                     "anchor": "mt", "role": "title"})
     else:
-        els.append({"id": "q", "type": "text", "text": _short(t.problem, 70), "size": 28,
+        _qt, _qs = _fit_text(t.problem, 28, WORLD_W - 140, min_size=20.0, cap=90)
+        els.append({"id": "q", "type": "text", "text": _qt, "size": _qs,
                     "at": [WORLD_W / 2, 220], "anchor": "mt"})
     acts.append({"verb": "write", "target": "q", "at": {"frac": 0.25}})
     # under the caption band (bubbles run to ~446), between the avatars —
@@ -697,8 +787,9 @@ def closing_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
     text = say(lesson.closing, lang) or _bt("closing", lang, topic=lesson.topic)
     lines = [Line(line=text)]
     seg = _segment(seg_id, "preview", lines, heading=_short(lesson.topic, 60), points=[])
-    els: list[dict] = [{"id": "wb_h", "type": "text", "text": _short(lesson.topic, 60), "role": "title",
-                        "size": 40, "at": [60, 44], "anchor": "lt"}]
+    _ht, _hs = _fit_text(lesson.topic, 40, CARD_X - 16 - 24 - 60, bold=True, min_size=26.0, cap=60)
+    els: list[dict] = [{"id": "wb_h", "type": "text", "text": _ht, "role": "title",
+                        "size": _hs, "at": [60, 44], "anchor": "lt"}]
     acts: list[dict] = [{"verb": "write", "target": "wb_h"}, {"verb": "underline", "target": "wb_h"}]
     cels, _ = card_elements(lesson.method, present=True, lang=lang)
     els += cels
