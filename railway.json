@@ -1,6 +1,6 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "deploy": {
-    "drainingSeconds": 30
+    "drainingSeconds": 2700
   }
 }
