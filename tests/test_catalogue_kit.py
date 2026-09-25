@@ -892,7 +892,10 @@ class TestProcessCatalogue:
         assert (body["part"], body["of"], body["language"], body["voice"], body["student_voice"]) == (2, 2, "en", "g-en-f", "g-en-student-m")
         assert body["script"]["segments"][0]["segment_id"] == "recap" and set(body["avatars"]) == {"teacher", "student"}
         assert "video_path" not in json.dumps(body["video"]) and "audio_path" not in json.dumps(body["video"])
-        assert len(body["video"]["segments"]) == 4
+        # the four lesson segments plus the end screen (a catalogue kit is
+        # bound for YouTube: the call to action)
+        assert len(body["video"]["segments"]) == 5
+        assert body["video"]["segments"][-1]["segment_id"] == "s990"
         # decision 5: measured timestamps on the kit, one record per part
         k = _kit(sb)
         assert [c["part"] for c in k["chapters"]] == [1, 2]
@@ -901,8 +904,10 @@ class TestProcessCatalogue:
         assert [c["t"] for c in p1] == [0, 50, 100, 150] and p1[-1]["label"].startswith("Next")
         assert k["chapters"][1]["chapters"][0]["label"].startswith("Recap")
         assert k["clips"] and all(120 <= c["end"] - c["start"] <= 240 and c["part"] in (1, 2) for c in k["clips"])
-        assert k["part_plan"] == [{"part": 1, "sections": ["What a cell is", "Structures common to all cells"], "minutes": 3.3},
-                                  {"part": 2, "sections": ["Plant cells"], "minutes": 3.3}]
+        # measured on the published video, which ends on the call to action
+        # (five 50 s segments per part, not four)
+        assert k["part_plan"] == [{"part": 1, "sections": ["What a cell is", "Structures common to all cells"], "minutes": 4.2},
+                                  {"part": 2, "sections": ["Plant cells"], "minutes": 4.2}]
         # decision 6: the lesson plan exists now, citing the clips; the kit waits for it
         lp = next(g for g in sb.tables["generations"] if g["kind"] == "lesson_plan")
         assert lp["params"]["clips"] == k["clips"] and lp["params"]["lesson_modes"] is True

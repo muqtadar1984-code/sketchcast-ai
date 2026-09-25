@@ -38,3 +38,4 @@ python-bidi>=0.4.2
 # google-auth-oauthlib is NOT declared: only scripts/youtube_oauth.py needs
 # it, and that runs on the operator's laptop, never on Railway.
 google-api-python-client>=2.100.0
+fonttools>=4.40
