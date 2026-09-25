@@ -689,6 +689,14 @@ def _serve(sb, stale_min: int, reap_every: float = 60, grace: float | None = Non
             maybe_poll(sb)
         except Exception as exc:  # noqa: BLE001 — never the reaper's problem
             log.error("YouTube stats tick error: %s", exc)
+        # Once per boot: the end screen's ask into the descriptions of the
+        # videos posted before it existed (catalogue/youtube_backfill.py).
+        # Idempotent, so a boot where every description has it costs one read.
+        try:
+            from catalogue.youtube_backfill import maybe_backfill
+            maybe_backfill(sb)
+        except Exception as exc:  # noqa: BLE001
+            log.error("YouTube CTA backfill tick error: %s", exc)
         # So does the website-traffic poll (catalogue/cloudflare_stats.py):
         # Cloudflare's daily figures for sketchcast.app, hourly, dark
         # without CLOUDFLARE_API_TOKEN / CLOUDFLARE_ZONE_ID.
