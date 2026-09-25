@@ -648,3 +648,89 @@ def test_a_book_with_a_text_layer_is_still_sliced(monkeypatch, tmp_path):
     sb = FakeSB({"chapter_grounding": []})
     text, meta = _chapter_source_text(sb, book, "0", tmp_path)
     assert text == "Real chapter prose." and meta["source"] == "text_layer" and meta["scanned"] is False
+
+
+# ── every resolution reaches the client ──────────────────────────────────────
+
+def test_the_resolution_email_says_what_was_done_and_invites_a_reply():
+    text = actions.resolution_text("worksheet", "The checker misread 58,672 as a decimal; fixed and regenerated.")
+    assert text.startswith("Hi,\n\nThe problem with your worksheet on SketchCast has been addressed.")
+    assert "misread 58,672" in text
+    assert "reply to this email" in text and text.endswith("SketchCast AI")
+
+
+def test_notify_owner_replies_to_a_person_not_to_noreply(monkeypatch):
+    monkeypatch.setenv("RESEND_API_KEY", "test-key")
+    monkeypatch.setenv("SUPPORT_STAFF_EMAIL", "team@example.com")
+    import requests
+    sent = {}
+    monkeypatch.setattr(requests, "post", lambda url, headers=None, json=None, timeout=None: sent.update(json) or SimpleNamespace(status_code=200))
+
+    class SB:
+        class auth:
+            class admin:
+                @staticmethod
+                def get_user_by_id(uid):
+                    return SimpleNamespace(user=SimpleNamespace(email="teacher@example.com" if uid == "u1" else "kid@students.sketchcast.app"))
+
+    assert actions.notify_owner(SB(), "u1", "Subject", "Body") is True
+    assert sent["to"] == ["teacher@example.com"] and sent["reply_to"] == "team@example.com"
+    assert sent["from"].endswith("<noreply@sketchcast.app>")
+    sent.clear()
+    assert actions.notify_owner(SB(), "student-1", "Subject", "Body") is False and not sent
+
+
+class _AgentSB(FakeSB):
+    """generations / books answer a single row, as maybe_single() does."""
+
+    def __init__(self, gen):
+        super().__init__({"platform_issues": [], "platform_audit_log": []})
+        self._gen = gen
+
+    def table(self, name):
+        q = _Q(self, name)
+        if name == "generations":
+            q.execute = lambda: SimpleNamespace(data=self._gen)  # type: ignore[method-assign]
+        elif name == "books":
+            q.execute = lambda: SimpleNamespace(data=None)  # type: ignore[method-assign]
+        return q
+
+
+def _drive(monkeypatch, action, *, outcome="requeued"):
+    pytest.importorskip("supabase")
+    from support_agent import agent as agent_mod
+    mails = []
+    monkeypatch.setattr(agent_mod, "assemble_bundle", lambda sb, issue: {"chapters": []})
+    monkeypatch.setattr(agent_mod, "diagnose", lambda client, bundle: {
+        "category": "transient_error" if action == "retry_transient" else "corrupt_pdf", "confidence": 0.9,
+        "user_message": "Please upload a text PDF of the same pages.", "staff_note": "s",
+        "recommended_action": action, "gate_signals": {}})
+    monkeypatch.setattr(agent_mod, "retry_transient", lambda sb, gen: outcome)
+    monkeypatch.setattr(agent_mod, "notify_owner", lambda sb, owner, subject, text: mails.append((owner, subject, text)) or True)
+    monkeypatch.setattr(agent_mod, "notify_staff", lambda issue, reason: None)
+    gen = {"id": "g1", "kind": "exam_paper", "owner_id": "u1", "book_id": None, "status": "error"}
+    sb = _AgentSB(gen)
+    issue = {"id": "iss-9", "category": "generation_failed", "generation_id": "g1", "reporter_id": "u1"}
+    agent_mod._run(sb, {"id": "j1"}, issue, client=None)
+    return sb, mails
+
+
+def test_a_self_heal_retry_tells_the_owner(monkeypatch):
+    sb, mails = _drive(monkeypatch, "retry_transient")
+    assert [m[0] for m in mails] == ["u1"]
+    assert "rebuilding your test paper" in mails[0][1]
+    assert "queued it again" in mails[0][2] and "reply to this email" in mails[0][2]
+    assert any(t == "platform_issues" and r.get("status") == "resolved" for t, r in sb.updates)
+
+
+def test_a_user_fix_reaches_the_owner_with_the_advice(monkeypatch):
+    sb, mails = _drive(monkeypatch, "user_fix")
+    assert len(mails) == 1 and mails[0][0] == "u1"
+    assert "test paper" in mails[0][1]
+    assert "Please upload a text PDF" in mails[0][2] and "reply to this email" in mails[0][2]
+
+
+def test_a_refused_retry_escalates_and_does_not_claim_a_fix(monkeypatch):
+    sb, mails = _drive(monkeypatch, "retry_transient", outcome="retry_cap_reached")
+    assert mails == []
+    assert any(t == "platform_issues" and r.get("agent_action") == "escalated" for t, r in sb.updates)
