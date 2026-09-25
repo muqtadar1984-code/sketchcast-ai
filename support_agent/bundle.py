@@ -108,12 +108,30 @@ def _pptx_text(path: Path, limit: int) -> str:
         return ""
 
 
+_SCANNED_NOTE = ("a scanned book: the pages are photographs that the pipeline transcribes with vision at "
+                 "generation time, and no transcription is cached for this chapter, so its text cannot be "
+                 "read here. The absence of text HERE is not evidence that the book is unreadable — "
+                 "book.health.facts says whether the pages were readable.")
+
+
 def _chapter_source_text(sb, book: dict, chapter_ref: str | None, tmp: Path) -> tuple[str, dict]:
     """The requested chapter's source text (first N chars) + its stored def.
-    Heuristics only (client=None) — this must stay cheap; the model judges."""
+
+    Three sources, in order:
+      1. the chapter's CACHED vision transcription (chapter_grounding.
+         source_text — what the pipeline itself generated from);
+      2. the PDF's text layer, extracted and sliced here (client=None: this
+         must stay cheap, the model judges);
+      3. nothing, honestly: a scanned book with no cached transcription.
+         The text-layer extraction of a camera scan is scanner noise, and
+         handing that to the gate produced "No readable content, only
+         scanner artifacts" on FOUR pipeline bugs in one afternoon
+         (2026-09-25) — the model then told teachers to rescan books the
+         pipeline had read perfectly well. Returned as "" with
+         meta["scanned"] = True so the gate stays silent and the model is
+         told why.
+    """
     from worker import client as db
-    from agent1_ingestion.extractor import extract_pdf
-    from agent1_ingestion.structurer import structure_book
 
     chapters = book.get("chapters") or []
     want = None
@@ -122,9 +140,34 @@ def _chapter_source_text(sb, book: dict, chapter_ref: str | None, tmp: Path) -> 
     except ValueError:
         pass
     cdef = next((c for c in chapters if int(c.get("num", -1)) == want), None)
+    facts = ((book.get("health") or {}).get("facts") or {}) if isinstance(book.get("health"), dict) else {}
+    meta = {
+        "requested_chapter_ref": chapter_ref,
+        "stored_chapter": {k: cdef.get(k) for k in ("num", "title", "start_page", "end_page")} if cdef else None,
+        "detected_chapter_count": len(chapters),
+        "has_text_layer": facts.get("has_text_layer"),
+        "text_readable": facts.get("text_readable"),
+    }
+
+    cached = db.get_chapter_source_text(sb, book["id"], want if want is not None else 0)
+    if cached and cached.strip():
+        meta.update({"source": "cached_transcription", "scanned": facts.get("has_text_layer") is False,
+                     "total_pages": facts.get("pages")})
+        return " ".join(str(cached).split())[:_SOURCE_SNIPPET_CHARS], meta
+
+    from agent1_ingestion.extractor import extract_pdf
+    from agent1_ingestion.structurer import structure_book
 
     pdf_path = db.download_book(sb, book["storage_path"], tmp / "book.pdf")
     extraction = extract_pdf(str(pdf_path))
+    layer_chars = sum(len(i.text or "") for i in extraction.items)
+    meta["total_pages"] = extraction.total_pages
+    if meta["has_text_layer"] is None:
+        meta["has_text_layer"] = layer_chars >= 200
+    if meta["has_text_layer"] is False:
+        meta.update({"source": "none", "scanned": True, "note": _SCANNED_NOTE})
+        return "", meta
+
     structured = structure_book(
         book_id=book["id"], title=book.get("title") or "?", author="?", isbn=None,
         extraction=extraction, images=[], pdf_path=str(pdf_path), client=None,
@@ -139,14 +182,20 @@ def _chapter_source_text(sb, book: dict, chapter_ref: str | None, tmp: Path) -> 
         + " ".join(ss.get("content") or "" for ss in (s.get("subsections") or []))
         for s in (pick.get("sections") or [])
     )
-    meta = {
-        "requested_chapter_ref": chapter_ref,
-        "stored_chapter": {k: cdef.get(k) for k in ("num", "title", "start_page", "end_page")} if cdef else None,
-        "detected_chapter_count": len(chapters),
-        "total_pages": extraction.total_pages,
-        "has_text_layer": sum(len(i.text or "") for i in extraction.items) >= 200,
-    }
+    meta.update({"source": "text_layer", "scanned": False})
     return " ".join(text.split())[:_SOURCE_SNIPPET_CHARS], meta
+
+
+def _health_summary(book: dict) -> dict | None:
+    """What the index measured about the pages — readable, a text layer, how
+    many — so a diagnosis never has to infer it from a slice it cannot see."""
+    h = book.get("health")
+    if not isinstance(h, dict):
+        return None
+    facts = h.get("facts") if isinstance(h.get("facts"), dict) else {}
+    return {"band": h.get("band"), "score": h.get("score"),
+            "facts": {k: facts.get(k) for k in ("pages", "chapters", "has_text_layer", "text_readable",
+                                                "text_coverage", "doc_type") if k in facts}}
 
 
 def assemble_bundle(sb, issue: dict) -> dict:
@@ -168,7 +217,8 @@ def assemble_bundle(sb, issue: dict) -> dict:
     bundle: dict = {
         "issue": {k: issue.get(k) for k in ("id", "category", "title", "description", "trigger_source")},
         "generation": {k: (gen or {}).get(k) for k in ("id", "kind", "chapter_ref", "status", "title")} if gen else None,
-        "book": {k: (book or {}).get(k) for k in ("id", "title", "status")} if book else None,
+        "book": ({**{k: (book or {}).get(k) for k in ("id", "title", "status")},
+                  "health": _health_summary(book)} if book else None),
         "chapters": [
             {k: c.get(k) for k in ("num", "title", "start_page", "end_page")}
             for c in ((book or {}).get("chapters") or [])
