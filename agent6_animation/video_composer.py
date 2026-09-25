@@ -696,7 +696,15 @@ def compose_episode_videos(
     script_id = episode.get("script_id", script_data.get("script_id", str(uuid.uuid4())))
     episode_title = episode.get("episode_title") or "SketchCast AI"
 
-    vid_dir = VIDEO_DIR / book_id / f"chapter_{chapter_num}"
+    # One working directory PER GENERATION. Keyed by book and chapter alone,
+    # two generations of the same chapter running at once (two languages,
+    # two users) wrote into one directory: the second's fresh start deleted
+    # the first's segments while its final concat read them ("Impossible
+    # to open s001_video.mp4", Hindi demo 2026-09-25). The worker cleans a
+    # run's directory once its lesson is uploaded.
+    run_id = str(script_data.get("run_id") or "").strip()
+    vid_dir = VIDEO_DIR / book_id / f"chapter_{chapter_num}" / run_id if run_id \
+        else VIDEO_DIR / book_id / f"chapter_{chapter_num}"
     vid_dir.mkdir(parents=True, exist_ok=True)
     _t_compose = time.perf_counter()
 
@@ -1272,6 +1280,7 @@ def compose_episode_videos(
         chapter_num=chapter_num,
         episode_num=episode_num,
         generated_at=datetime.now(timezone.utc).isoformat(),
+        run_id=run_id,
         total_segments=total,
         video_segments_count=vid_count,
         total_duration_seconds=round(total_duration, 2),

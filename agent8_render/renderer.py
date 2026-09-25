@@ -67,7 +67,9 @@ def render_final_video(
     episode_num = video_manifest.get("episode_num", 1)
     script_id = video_manifest.get("script_id", "")
 
-    final_dir = FINAL_DIR / book_id / f"chapter_{chapter_num}"
+    run_id = str(video_manifest.get("run_id") or "").strip()
+    final_dir = FINAL_DIR / book_id / f"chapter_{chapter_num}" / run_id if run_id \
+        else FINAL_DIR / book_id / f"chapter_{chapter_num}"
     final_dir.mkdir(parents=True, exist_ok=True)
 
     segments = video_manifest.get("segments", [])
@@ -154,6 +156,7 @@ def render_final_video(
         chapter_num=chapter_num,
         episode_num=episode_num,
         generated_at=datetime.now(timezone.utc).isoformat(),
+        run_id=run_id,
         final_video_path=str(output_path),
         total_duration_seconds=round(total_duration, 2),
         total_segments=len(valid_paths),
