@@ -56,6 +56,16 @@ HEARTBEAT_SECONDS = float(os.getenv("HEARTBEAT_SECONDS", "30"))
 # every job thread here, so total render CPU is bounded by the pool size and
 # concurrent lessons queue behind each other on it.
 WORKER_CONCURRENCY = max(1, int(os.getenv("WORKER_CONCURRENCY", "1")))
+# How many VIDEO renders (presentation jobs) this process runs at once. The
+# claim is first-come, so with sixteen threads sixteen videos could hold
+# every slot while a worksheet that takes forty seconds waits behind them —
+# and each video's render pool (RENDER_WORKERS) competes for the same cores,
+# so the sixteen would all crawl. Above the cap a thread still claims
+# everything else (documents, decks, index_book, observers); a video waits
+# for a video slot. Sized with RENDER_WORKERS against the box: 4 x 8 render
+# workers on 24 cores (2026-09-25).
+MAX_VIDEO_JOBS = max(1, int(os.getenv("MAX_VIDEO_JOBS", "4")))
+VIDEO_JOB_TYPES = ["presentation"]
 
 # Documents (papers / plans / activities / case studies / exams) are fast — one
 # model call + a .docx — so they jump AHEAD of long video renders, the same
@@ -121,9 +131,9 @@ def _claim_catalogue_generation(sb):
 
     if not catalogue_window_open() or builder_queued(sb):
         return None
-    if catalogue_window_open(margin_minutes=presentation_margin_minutes()):
+    if catalogue_window_open(margin_minutes=presentation_margin_minutes()) and not _video_slots_full():
         return db.claim_next_job(sb, exclude_types=OBSERVER_JOB_TYPES, catalogue=True)
-    return db.claim_next_job(sb, exclude_types=[*OBSERVER_JOB_TYPES, "presentation"], catalogue=True)
+    return db.claim_next_job(sb, exclude_types=[*OBSERVER_JOB_TYPES, *VIDEO_JOB_TYPES], catalogue=True)
 
 
 def _is_catalogue_job(job: dict | None) -> bool:
@@ -206,6 +216,21 @@ def _sketch_remove(sketch_id: str) -> None:
 def _held_sketches() -> list[dict]:
     with _inflight_lock:
         return list(_inflight_sketches.values())
+
+
+def _videos_in_flight() -> int:
+    with _inflight_lock:
+        return sum(1 for j in _inflight_jobs.values() if j.get("type") in VIDEO_JOB_TYPES)
+
+
+def _video_slots_full() -> bool:
+    """Every video slot is taken: this thread claims anything but a video."""
+    return _videos_in_flight() >= MAX_VIDEO_JOBS
+
+
+def _user_builder_exclusions() -> list[str]:
+    """What the generic user lane must NOT claim right now."""
+    return [*OBSERVER_JOB_TYPES, *(VIDEO_JOB_TYPES if _video_slots_full() else [])]
 
 
 def _holding_work() -> bool:
@@ -434,7 +459,8 @@ def run_once(sb) -> bool:
       1. AI-Tutor sketches — a student is waiting live; tiny SVG→MP4.
       2. Support diagnoses — a reporter is watching an issue's status.
       3. Documents — a teacher's papers/plans; one model call + a .docx.
-      4. Everything else — video lessons (presentation), index_book.
+      4. Everything else — video lessons (presentation, at most
+         MAX_VIDEO_JOBS at once in this process), index_book.
       5. Catalogue observers — topic harvests (download + CPU), topic
          derives (one text call per sub-strand), topic articles (one text
          call), figure renders (image calls, self-pausing) and question
@@ -473,7 +499,7 @@ def run_once(sb) -> bool:
     job = (
         db.claim_next_job(sb, job_type="support_diagnose", catalogue=False)
         or db.claim_next_job(sb, job_type=DOC_JOB_TYPES, catalogue=False)
-        or db.claim_next_job(sb, exclude_types=OBSERVER_JOB_TYPES, catalogue=False)  # every user builder
+        or db.claim_next_job(sb, exclude_types=_user_builder_exclusions(), catalogue=False)  # every user builder, videos capped
         or db.claim_next_job(sb, job_type=CATALOGUE_JOB_TYPES)      # harvest / derive / …: only when nothing else waits
         or _claim_catalogue_generation(sb)                          # kits: no live user builder + off-peak
     )

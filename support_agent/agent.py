@@ -14,7 +14,8 @@ import logging
 from shared.claude_client import ClaudeClient
 from worker import client as db
 
-from support_agent.actions import notify_owner, notify_staff, reindex_and_regenerate, retry_transient
+from support_agent.actions import (notify_owner, notify_staff, reindex_and_regenerate, resolution_text,
+                                   retry_transient)
 from support_agent.bundle import ScopeViolation, assemble_bundle
 from support_agent.diagnose import DIAGNOSIS_MODEL, diagnose
 
@@ -151,6 +152,10 @@ def _run(sb, job: dict, issue: dict, client) -> None:
                 },
             )
             _audit(sb, issue, "self_heal_retry", {"outcome": outcome})
+            notify_owner(sb, gen["owner_id"], f"SketchCast is rebuilding your {_what(gen, issue)}",
+                         resolution_text(_what(gen, issue),
+                                         "It failed on a temporary error on our side, so we have queued it "
+                                         "again. It will appear in your library when it finishes."))
         else:
             # not_failed / assigned_blocked / retry_cap_reached — all human
             # territory; a retry would overwrite content in place.
@@ -170,6 +175,10 @@ def _run(sb, job: dict, issue: dict, client) -> None:
             },
         )
         _audit(sb, issue, "user_fix", {"message": dx["user_message"][:300]})
+        owner = (gen or {}).get("owner_id") or issue.get("reporter_id")
+        if owner:
+            notify_owner(sb, owner, f"About your {_what(gen, issue)} on SketchCast",
+                         resolution_text(_what(gen, issue), dx["user_message"]))
         return
 
     if action == "reindex_regenerate" and gen and book:
@@ -207,6 +216,16 @@ def _run(sb, job: dict, issue: dict, client) -> None:
 
     # escalate / none / missing refs
     _escalate(sb, issue, user_dx, dx["staff_note"] or "no safe automatic action")
+
+
+def _what(gen: dict | None, issue: dict) -> str:
+    """"worksheet", "lesson video", "test paper" — the thing the owner asked
+    for, in their words, for a subject line and a first sentence."""
+    kind = str((gen or {}).get("kind") or "")
+    names = {"presentation": "lesson video", "exam_paper": "test paper", "lesson_plan": "lesson plan",
+             "case_study": "case study", "deck": "slide deck", "worksheet": "worksheet",
+             "activity": "activities", "index_book": "book"}
+    return names.get(kind, kind or str(issue.get("category") or "request").replace("_", " "))
 
 
 def _escalate(sb, issue: dict, user_dx: dict, staff_reason: str) -> None:

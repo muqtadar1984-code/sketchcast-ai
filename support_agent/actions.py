@@ -187,17 +187,35 @@ def notify_staff(issue: dict, reason: str) -> None:
         logger.warning("staff notify failed for issue %s: %s", issue.get("id"), exc)
 
 
-def notify_owner(sb, owner_id: str, subject: str, text: str) -> None:
-    """Best-effort Resend email to the content owner (worker-side)."""
+REPLY_LINE = ("If you face any issue with it, or anything else, just reply to this email and we will "
+              "take it up again.")
+
+
+def resolution_text(what: str, note: str) -> str:
+    """The body of every "your issue is resolved" email, worker and console
+    alike: what was wrong in one line, what was done, and an invitation to
+    reply — the founder's direction (2026-09-25) is that every resolution
+    reaches the client and that a reply reopens it."""
+    lines = ["Hi,", "", f"The problem with your {what} on SketchCast has been addressed."]
+    if note:
+        lines += ["", note.strip()]
+    lines += ["", REPLY_LINE, "", "Thanks for using SketchCast.", "", "SketchCast AI"]
+    return "\n".join(lines)
+
+
+def notify_owner(sb, owner_id: str, subject: str, text: str) -> bool:
+    """Best-effort Resend email to the content owner (worker-side). Replies
+    go to the support mailbox (SUPPORT_STAFF_EMAIL), never to noreply: the
+    email invites one. Returns True when a send was attempted."""
     key = os.getenv("RESEND_API_KEY")
     if not key:
         logger.warning("owner notify skipped: RESEND_API_KEY not set")
-        return
+        return False
     try:
         r = sb.auth.admin.get_user_by_id(owner_id)
         email = getattr(getattr(r, "user", None), "email", None)
         if not email or email.endswith("@students.sketchcast.app"):
-            return
+            return False
         import requests
 
         requests.post(
@@ -206,10 +224,13 @@ def notify_owner(sb, owner_id: str, subject: str, text: str) -> None:
             json={
                 "from": "SketchCast AI <noreply@sketchcast.app>",
                 "to": [email],
+                "reply_to": os.getenv("SUPPORT_STAFF_EMAIL", "muqtadar.quraishi@sketchcast.app"),
                 "subject": subject,
                 "text": text,
             },
             timeout=15,
         )
+        return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("owner notify failed: %s", exc)
+        return False
