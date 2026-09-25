@@ -53,3 +53,28 @@ def test_plain_numbers_and_lone_letters_are_not_notation():
 def test_a_power_written_with_a_caret_inside_prose():
     assert speakable_maths("Remember that x^2 means x times x.") == "Remember that x squared means x times x."
     assert speakable_maths("So (x+2)(x+3) = 0.") == "So x plus 2 times x plus 3 equals 0."
+
+
+def test_notation_is_spoken_in_the_lesson_language():
+    from maths.speech import speakable_maths, spoken
+    assert spoken("x^2 + 3/4 = 1", "ar") == "x تربيع زائد ثلاثة أرباع يساوي 1"
+    assert spoken("2x - 1 = 7", "hi") == "2 x घटा 1 बराबर 7"
+    assert spoken("(x + 1)^2", "fr") == "x plus 1, le tout au carré"
+    assert spoken("(x + 1)^2", "hi") == "x जमा 1, का वर्ग"
+    assert spoken("x < 5", "mr") == "x, 5 पेक्षा लहान आहे"
+    assert spoken("sqrt(x + 1)", "es") == "raíz cuadrada de x plus 1".replace("plus", "más")
+    assert speakable_maths("अब 2x + 1 = 7 को हल करें।", "hi") == "अब 2 x जमा 1 बराबर 7 को हल करें।"
+    assert spoken("x^2 + 1", "xx") == "x squared plus 1", "unknown language -> English"
+
+
+def test_every_language_has_every_word():
+    from maths.i18n import LANGS, WORDS, BOARD, words_for
+    for lang in LANGS:
+        w = words_for(lang)
+        for key in ("plus", "minus", "times", "neg", "frac", "sq", "cube", "pow", "rel_eq", "rel_lt",
+                    "sqrt", "func", "lhs", "rhs"):
+            assert key in w and "{" not in w[key].replace("{x}", "").replace("{b}", "").replace("{e}", "") \
+                .replace("{n}", "").replace("{d}", "").replace("{l}", "").replace("{r}", "").replace("{f}", ""), (lang, key)
+        for key, table in BOARD.items():
+            assert table.get(lang), (lang, key)
+    assert set(WORDS) == set(LANGS)

@@ -32,7 +32,7 @@ from maths.schema import DIFFICULTY_NAMES, Lesson
 
 logger = logging.getLogger("worker")
 
-_SECTION = {1: "Warm-up", 2: "Practice", 3: "Challenge", 4: "Stretch"}
+_SECTION = {1: "ws_warm_up", 2: "ws_practice", 3: "ws_challenge", 4: "ws_stretch"}   # strings keys
 _LINES = {1: 3, 2: 4, 3: 6, 4: 8}
 _MARKS = {1: 2, 2: 3, 3: 4, 4: 6}
 _DEFAULT_N = {"worksheet": 10, "exam_paper": 8}
@@ -52,20 +52,21 @@ def _n(params: dict, kind: str) -> int:
         return _DEFAULT_N[kind]
 
 
-_VERB = {"simplify": "Simplify", "expand": "Expand", "factorise": "Factorise", "evaluate": "Evaluate",
-         "solve": "Solve", "solve_system": "Solve", "solve_inequality": "Solve"}
+_VERB = {"simplify": "verb_simplify", "expand": "verb_expand", "factorise": "verb_factorise",
+         "evaluate": "verb_evaluate", "solve": "verb_solve", "solve_system": "verb_solve",
+         "solve_inequality": "verb_solve"}   # strings keys
 
 
-def _problem_text(ex) -> str:
+def _problem_text(ex, language: str = "en") -> str:
     """The printed question: a word problem as written; bare notation with
-    the task as its verb ("Solve: 3x + 5 = 20")."""
+    the task as its verb ("Solve: 3x + 5 = 20"), in the document's language."""
     p = pretty(ex.problem) if ex.problem else "; ".join(pretty(g) for g in ex.givens)
     try:
         tokenize(ex.problem or ex.givens[0] if ex.givens else ex.problem)
         is_notation = True
     except (TokenError, IndexError):
         is_notation = False
-    verb = _VERB.get(ex.task, "")
+    verb = dx._t(_VERB[ex.task], language) if ex.task in _VERB else ""
     if is_notation and verb and not p.lower().startswith((verb.lower(), "find")):
         return f"{verb}: {p}"
     return p
@@ -93,16 +94,13 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     subtitle = f"{grade} · {subject}"
     header_lines = p.get("curriculum_header")
     doc = dx.new_doc(title, subtitle, template=template, kind=doc_kind, language=language, header_lines=header_lines)
-    instructions = ("Show your working for every question. Questions get harder as you go; "
-                    "check each answer by substituting it back." if kind == "worksheet" else
-                    "Answer all questions. Marks are shown in brackets. Show full working — "
-                    "method marks are awarded for correct steps.")
+    instructions = dx._t("ws_instructions" if kind == "worksheet" else "exam_instructions", language)
     dx.instructions(doc, instructions)
 
     key_doc = dx.new_doc(f"{title} — {dx._t('answer_key', language)}", subtitle, template=template,
                          kind=doc_kind, language=language, header_lines=header_lines)
     dx.para(key_doc, dx._t("teacher_only", language), italic=True)
-    dx.para(key_doc, "Every solution below was checked step by step by a computer algebra system.", italic=True)
+    dx.para(key_doc, dx._t("cas_note", language), italic=True)
 
     number = 0
     total_marks = 0
@@ -113,12 +111,12 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         items = by_level.get(level) or []
         if not items:
             continue
-        name = f"{_SECTION[level]} — {DIFFICULTY_NAMES[level]}"
+        name = f"{dx._t(_SECTION[level], language)} — {dx._t(f'difficulty_{level}', language)}"
         dx.heading(doc, name, 1)
         key_items: list[str] = []
         for ex in items:
             number += 1
-            text = _problem_text(ex)
+            text = _problem_text(ex, language)
             if kind == "exam_paper":
                 marks = _MARKS[level]
                 total_marks += marks
@@ -126,15 +124,16 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
             else:
                 dx.question(doc, f"{number}. {text}", first=(number == 1))
             dx.writing_lines(doc, _LINES[level])
-            sol = worked_solution(ex, pretty)
+            sol = worked_solution(ex, pretty, check=dx._t("sol_check", language),
+                                  answer=dx._t("sol_answer", language), or_word=dx._t("sol_or", language))
             if kind == "exam_paper":
-                scheme = f" — {_MARKS[level]} marks: {max(1, _MARKS[level] - 1)} for the method, 1 for the answer"
+                scheme = dx._t("marks_scheme", language).format(m=_MARKS[level], method=max(1, _MARKS[level] - 1))
                 key_items.append("\n".join(sol) + scheme)
             else:
                 key_items.append("\n".join(sol))
         dx.answer_section(key_doc, name, key_items)
     if kind == "exam_paper":
-        dx.para(doc, f"Total: {total_marks} marks", bold=True)
+        dx.para(doc, dx._t("ws_total_marks", language).format(n=total_marks), bold=True)
         dx.end_of_paper(doc)
 
     # the quiz player's structured questions (best-effort, like the science worksheet)

@@ -16,25 +16,21 @@ from __future__ import annotations
 
 import re
 
+from maths.i18n import words_for
 from maths.tokens import FUNCTIONS, Tok, TokenError, tokenize
 
-_REL_WORDS = {"=": "equals", "<": "is less than", "<=": "is less than or equal to",
-              ">": "is greater than", ">=": "is greater than or equal to",
-              "!=": "is not equal to", "==": "equals"}
-_SMALL_FRACTIONS = {("1", "2"): "a half", ("1", "3"): "a third", ("2", "3"): "two thirds",
-                    ("1", "4"): "a quarter", ("3", "4"): "three quarters", ("1", "5"): "a fifth",
-                    ("1", "10"): "a tenth"}
-_FUNC_WORDS = {"sqrt": "the square root of", "abs": "the absolute value of", "sin": "sine of",
-               "cos": "cosine of", "tan": "tan of", "log": "log of", "ln": "the natural log of",
-               "exp": "e to the power of"}
+_REL_KEYS = {"=": "rel_eq", "<": "rel_lt", "<=": "rel_le", ">": "rel_gt", ">=": "rel_ge",
+             "!=": "rel_ne", "==": "rel_eq"}
 
 
 class _P:
-    """Recursive descent over the token list, yielding words."""
+    """Recursive descent over the token list, yielding words — the lesson
+    language's words (maths.i18n.WORDS), English being the reference."""
 
-    def __init__(self, toks: list[Tok]):
+    def __init__(self, toks: list[Tok], words: dict | None = None):
         self.t = toks
         self.i = 0
+        self.W = words or words_for("en")
 
     def peek(self) -> Tok | None:
         return self.t[self.i] if self.i < len(self.t) else None
@@ -49,7 +45,9 @@ class _P:
         out = self.sum()
         while (p := self.peek()) and p.kind == "REL":
             self.take()
-            out += f" {_REL_WORDS.get(p.text, p.text)} " + self.sum()
+            key = _REL_KEYS.get(p.text)
+            right = self.sum()
+            out = self.W[key].format(l=out, r=right) if key else f"{out} {p.text} {right}"
         return out
 
     # sum := term ((+|-) term)*
@@ -57,7 +55,7 @@ class _P:
         parts = [self.term()]
         while (p := self.peek()) and p.kind == "OP" and p.text in "+-":
             self.take()
-            parts.append("plus" if p.text == "+" else "minus")
+            parts.append(self.W["plus"] if p.text == "+" else self.W["minus"])
             parts.append(self.term())
         return " ".join(parts)
 
@@ -76,15 +74,16 @@ class _P:
                 prev_simple = num_simple = False
                 continue
             right = self.unary()
+            times = self.W["times"]
             if p.kind == "IMPLICIT" and nxt is not None and nxt.kind == "LP":
                 # 2(x + 1), (x+1)(x+2): a spoken "times" keeps the grouping audible
-                out = f"{out} times {right}"
+                out = f"{out} {times} {right}"
             elif p.kind == "IMPLICIT":
                 out = f"{out} {right}"                       # 3x, xy
             elif nxt is not None and nxt.kind == "NUM" and prev_simple:
-                out = f"{out} times {right}"                # 2 * 3
+                out = f"{out} {times} {right}"                # 2 * 3
             else:
-                out = f"{out} times {right}"
+                out = f"{out} {times} {right}"
             prev_simple = False
         return out
 
@@ -96,20 +95,22 @@ class _P:
         if num_simple and num_tok is not None and num_tok.kind == "NUM" and simple_den \
                 and den_toks[0].kind == "NUM":
             key = (num_tok.text, den_toks[0].text)
-            if key in _SMALL_FRACTIONS:
-                return _SMALL_FRACTIONS[key]
+            small = self.W.get("fractions") or {}
+            if key in small:
+                return small[key]
+        frac = self.W["frac"]
         if simple_den and num_simple:
-            return f"{num_words} over {den_words}"
+            return frac.format(n=num_words, d=den_words)
         if simple_den:
-            return f"{num_words}, over {den_words}"
-        return f"{num_words}, over {den_words},"
+            return frac.format(n=num_words + ",", d=den_words)
+        return frac.format(n=num_words + ",", d=den_words) + ","
 
     # unary := '-' unary | power
     def unary(self) -> str:
         p = self.peek()
         if p is not None and p.kind == "OP" and p.text == "-":
             self.take()
-            return "negative " + self.unary()
+            return self.W["neg"].format(x=self.unary())
         if p is not None and p.kind == "OP" and p.text == "+":
             self.take()
             return self.unary()
@@ -126,13 +127,17 @@ class _P:
             e_start = self.i
             exp = self.unary()
             e_toks = self.t[e_start:self.i]
-            bracketed = base_toks and base_toks[0].kind == "LP"
-            joiner = ", all " if bracketed else " "
-            if len(e_toks) == 1 and e_toks[0].kind == "NUM" and e_toks[0].text == "2":
-                return f"{base}{joiner}squared"
-            if len(e_toks) == 1 and e_toks[0].kind == "NUM" and e_toks[0].text == "3":
-                return f"{base}{joiner}cubed"
-            return f"{base}{joiner}to the power of {exp}"
+            bracketed = bool(base_toks) and base_toks[0].kind == "LP"
+            one_num = len(e_toks) == 1 and e_toks[0].kind == "NUM"
+            key = "sq" if one_num and e_toks[0].text == "2" else \
+                "cube" if one_num and e_toks[0].text == "3" else "pow"
+            tpl = self.W.get(key + "_all") if bracketed else None
+            if tpl is None:
+                # no "all squared" idiom in this language: set the base off
+                tpl = self.W[key]
+                if bracketed:
+                    base = base + ","
+            return tpl.format(b=base, e=exp)
         return base
 
     # atom := NUM | NAME | NAME '(' relation ')' | '(' relation ')'
@@ -150,7 +155,8 @@ class _P:
                 self.take()
                 inner = self.relation()
                 self._close()
-                return f"{_FUNC_WORDS.get(p.text, p.text + ' of')} {inner},"
+                tpl = self.W.get(p.text) or self.W["func"]
+                return tpl.format(x=inner, f=p.text) + ","
             if p.text == "pi":
                 return "pi"
             return p.text
@@ -175,13 +181,14 @@ def _tidy(s: str) -> str:
     return s.strip(" ,")
 
 
-def spoken(notation: str) -> str:
-    """One expression or relation as words. Raises TokenError on text that
-    is not notation — callers that are unsure use speakable_maths."""
+def spoken(notation: str, lang: str = "en") -> str:
+    """One expression or relation as words, in the lesson language. Raises
+    TokenError on text that is not notation — callers that are unsure use
+    speakable_maths."""
     toks = tokenize(notation)
     if not toks:
         return ""
-    p = _P(toks)
+    p = _P(toks, words_for(lang))
     out = p.relation()
     if p.peek() is not None:
         raise TokenError(f"trailing {p.peek().text!r}")
@@ -206,7 +213,7 @@ def _is_mathy(word: str) -> bool:
     return bool(_MATHY.match(w))
 
 
-def speakable_maths(text: str) -> str:
+def speakable_maths(text: str, lang: str = "en") -> str:
     """Prose with every notation span replaced by its spoken form.
 
     A span is a run of mathy words that contains an operator, a power, a
@@ -236,7 +243,7 @@ def speakable_maths(text: str) -> str:
         core = raw.strip()
         if _HAS_OP.search(core) and any(ch.isalnum() for ch in core):
             try:
-                said = spoken(core)
+                said = spoken(core, lang)
             except (TokenError, Exception):  # noqa: BLE001 — leave prose alone
                 said = None
             if said:
