@@ -328,3 +328,110 @@ class TestADiagramSlideTitle:
     def test_no_caption_at_all_still_has_a_title(self):
         (s,) = self._deck("")
         assert s.heading == "The Mystery of Materials" and s.subtitle == ""
+
+
+class TestATableSplitsAcrossSlides:
+    """The Blood kit (2026-09-25): "Summary of Blood Components and
+    Interactions" is a three-column, four-row table beside a figure. Paginated
+    against the 7.3in illustrated column at 16pt it stood taller than the
+    page, and "a table cannot split at all" placed it whole: 1.74in below the
+    bottom edge, the deck refused, the whole kit failed."""
+
+    BLOOD_MD = (
+        "The components of blood operate not in isolation, but as an integrated system where the "
+        "liquid matrix and the various cell types support one another. A structured overview helps "
+        "clarify the distinct roles played by each constituent.\n\n"
+        "| Component | Primary Form or Structure | Main Functions in the Body |\n"
+        "| :--- | :--- | :--- |\n"
+        "| **Plasma** | Pale yellow liquid (mostly water) | Transports blood cells, dissolved nutrients, "
+        "carbon dioxide, hormones, and heat |\n"
+        "| **Red Blood Cells** | Biconcave discs without a nucleus, rich in haemoglobin | Transports oxygen "
+        "from the lungs to respiring tissues |\n"
+        "| **White Blood Cells** | Larger nucleated cells | Protects the body against pathogens through "
+        "phagocytosis and antibody production |\n"
+        "| **Platelets** | Small cell fragments | Assists in blood clotting to prevent excessive bleeding "
+        "at wound sites |\n\n"
+        "Each of these parts contributes to the overall homeostasis of the organism.")
+
+    def _table(self):
+        from agent5_slides.deck_storyboard import _clean_blocks
+        (t,) = [b for b in _clean_blocks(self.BLOOD_MD) if b["kind"] == "table"]
+        return t
+
+    def _fits(self, pages, width, budget=mx.BODY_H_IN):
+        for pg in pages:
+            assert sum(mx.block_height_in(b, width) for b in pg) <= budget + 0.01, pg
+
+    def test_the_live_table_is_taller_than_the_illustrated_page(self):
+        from agent5_slides.deck_storyboard import _ILLUSTRATED_BODY_W_IN
+        assert mx.block_height_in(self._table(), _ILLUSTRATED_BODY_W_IN) > mx.BODY_H_IN
+
+    def test_a_tall_table_splits_between_rows_with_its_header_on_every_page(self):
+        from agent5_slides.deck_storyboard import _ILLUSTRATED_BODY_W_IN as W
+        t = self._table()
+        pages = _paginate([t], mx.BODY_H_IN, W)
+        assert len(pages) > 1
+        self._fits(pages, W)
+        for pg in pages:
+            (b,) = pg
+            assert b["kind"] == "table" and b["header"] == t["header"]
+            assert len(b["rows"]) >= 2, "never one row alone on a page"
+        assert [r for pg in pages for r in pg[0]["rows"]] == t["rows"], "every row, in order, once"
+
+    def test_a_table_that_fits_is_not_split(self):
+        t = {"kind": "table", "header": ["a", "b"], "rows": [["x", "y"]] * 3}
+        assert _paginate([{"kind": "para", "text": "Lead."}, t], mx.BODY_H_IN) == [[{"kind": "para", "text": "Lead."}, t]]
+
+    def test_a_lead_in_reserves_only_the_header_and_first_row(self):
+        """A lead-in used to reserve the WHOLE table, which can now be taller
+        than a page: the lead-in would flush forever. It keeps the header and
+        the first row, and the rows flow on."""
+        from agent5_slides.deck_storyboard import _ILLUSTRATED_BODY_W_IN as W
+        blocks = [{"kind": "para", "text": "Filler. " * 60},
+                  {"kind": "para", "text": "The components in one view:"},
+                  self._table()]
+        pages = _paginate(blocks, mx.BODY_H_IN, W)
+        self._fits(pages, W)
+        for pg in pages:
+            assert not (pg[-1].get("text") or "").endswith(":"), "lead-in stranded"
+        assert [r for pg in pages for b in pg if b["kind"] == "table" for r in b["rows"]] == self._table()["rows"]
+
+    def test_beside_a_picture_the_table_goes_whole_onto_the_next_wide_page(self):
+        from agent5_slides.deck_storyboard import _paginate_ex, _ILLUSTRATED_BODY_W_IN as W
+        (first, *more), rest = _paginate_ex([self._table()], mx.BODY_H_IN, W, max_pages=1, defer_tables=True)
+        assert first == [] and not more
+        assert rest == [self._table()]
+        wide = _paginate(rest, mx.BODY_H_IN)
+        assert len(wide) == 1, "at full width the four rows fit on one slide"
+        self._fits(wide, mx.CONTENT_W_IN)
+
+    def test_a_list_split_at_the_illustrated_boundary_loses_no_item(self):
+        """`rest = body[len(first):]` sliced by BLOCK count: a list split across
+        the boundary counted as one block and every item after the split
+        vanished from the deck."""
+        from agent5_slides.deck_storyboard import _paginate_ex, _ILLUSTRATED_BODY_W_IN as W
+        long = "Rough endoplasmic reticulum, studded with ribosomes, folds and ships the proteins a cell exports."
+        items = [f"{i}: {long}" for i in range(14)]
+        (first,), rest = _paginate_ex([{"kind": "list", "items": items}], mx.BODY_H_IN, W, max_pages=1)
+        assert 0 < len(first[0]["items"]) < 14
+        assert first[0]["items"] + rest[0]["items"] == items
+
+    def test_the_blood_section_renders_with_no_geometry_fault(self, tmp_path):
+        """End to end through the real renderer's overflow check — the check
+        that failed the kit."""
+        from PIL import Image
+        from agent5_slides import deck_render
+        png = tmp_path / "blood.png"
+        Image.new("RGB", (1000, 800), "white").save(png)
+        f = Figure(key="blood", caption="Blood", parts=[], regions={}, w=1000, h=800)
+        f.png = png
+        sec = Section(id="s1", heading="Summary of Blood Components and Interactions",
+                      body_md=self.BLOOD_MD, figure_keys=["blood"])
+        m = LessonModel(title="Blood", sections=[sec], figures={"blood": f})
+        slides = storyboard(m)
+        sections = [s for s in slides if s.kind == SECTION]
+        assert sections[0].illustration is not None
+        assert all(b["kind"] != "table" for b in sections[0].blocks), "no cramped table beside the picture"
+        assert any(b["kind"] == "table" for s in sections[1:] for b in s.blocks)
+        _path, faults = deck_render.build(slides, tmp_path / "deck.pptx")
+        assert faults == []
