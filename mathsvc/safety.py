@@ -232,12 +232,18 @@ def _parse(text: str, local_dict: Optional[Mapping[str, Any]] = None) -> sp.Basi
         log.info("parse rejected %r: %s", text[:80], type(exc).__name__)
         raise MathInputError("I could not read that expression — please check it and try again.") from exc
 
+    # "17173, 8000" parses as a Python TUPLE, not a SymPy tree: the size
+    # guards below would raise AttributeError, which is not a MathError, and
+    # took a worksheet job down with it (2026-09-25). One expression per line.
+    if not isinstance(skeleton, sp.Basic):
+        raise MathInputError("Please write one expression — I found a list separated by commas.")
+
     # Guards run on the UNEVALUATED tree, before any bignum can form.
     _estimate_numeric_bits(skeleton)
     _reject_absurd_degree(skeleton)
 
     try:
-        return parse_expr(
+        result = parse_expr(
             text,
             local_dict=ld,
             global_dict=dict(_MATH_GLOBALS),
@@ -249,6 +255,9 @@ def _parse(text: str, local_dict: Optional[Mapping[str, Any]] = None) -> sp.Basi
     except Exception as exc:
         log.info("parse rejected %r: %s", text[:80], type(exc).__name__)
         raise MathInputError("I could not read that expression — please check it and try again.") from exc
+    if not isinstance(result, sp.Basic):
+        raise MathInputError("Please write one expression — I found a list separated by commas.")
+    return result
 
 
 def parse_expression(text: Any, *, field: str = "expression") -> sp.Expr:

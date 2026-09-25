@@ -21,6 +21,15 @@ _UNICODE = {
 }
 _SQRT_BARE_RE = re.compile(r"sqrt\s+([A-Za-z0-9.]+)")
 _DEC_COMMA_RE = re.compile(r"(?<=\d),(?=\d)")
+# A DIGIT-GROUPED integer, Western (58,672 / 1,234,567) or Indian
+# (1,00,000 / 12,34,567), optionally with a decimal part. Production,
+# 2026-09-25, a Grade 6 "large numbers" chapter: the decimal-comma rule below
+# read "58,672" as 58.672 and "1,00,000" as "1.00.000" (which SymPy makes 0),
+# so every worked example on place value verified as wrong. Groups of three
+# (or two-then-three) after a short leading group are separators, not a
+# decimal point; "3,14" and "0,5" still are.
+_GROUPED_INT_RE = re.compile(
+    r"(?<![\w.])(\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})+,\d{3})(?=(?:\.\d+)?(?![\w,]))")
 
 
 def normalise(text) -> str:
@@ -28,6 +37,7 @@ def normalise(text) -> str:
     s = str(text or "")
     for k, v in _UNICODE.items():
         s = s.replace(k, v)
+    s = _GROUPED_INT_RE.sub(lambda m: m.group(1).replace(",", ""), s)
     s = _DEC_COMMA_RE.sub(".", s)
     s = _SQRT_BARE_RE.sub(r"sqrt(\1)", s)
     return " ".join(s.split())

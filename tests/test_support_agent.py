@@ -532,3 +532,43 @@ def test_sibling_deck_lookup_failure_is_best_effort():
         def table(self, name):
             raise RuntimeError("db down")
     assert _sibling_deck_artifact(Broken(), _lesson()) is None
+
+
+# ── an internal error is a bug, never the teacher's PDF ──────────────────────
+
+def test_a_pipeline_exception_escalates_without_a_model_call(monkeypatch):
+    """Production, 2026-09-25: four maths documents died on "'tuple' object has
+    no attribute 'is_Symbol'"; the model diagnosed a camera scan, wrote a
+    "please rescan" message, and the reindex path ran for nothing."""
+    from support_agent import diagnose as dg
+
+    class MockClient:
+        def analyze(self, prompt, max_tokens=0, **k):
+            raise AssertionError("no model call for a code error")
+
+    monkeypatch.setattr(dg, "_gate_signals", lambda bundle, client: (_ for _ in ()).throw(AssertionError("no gate")))
+    bundle = {"chapters": [], "issue": {"context": {"error": "'tuple' object has no attribute 'is_Symbol'"}},
+              "recent_jobs": [{"status": "error", "error": "'tuple' object has no attribute 'is_Symbol'"}]}
+    out = dg.diagnose(MockClient(), bundle)
+    assert out["recommended_action"] == "escalate"
+    assert out["category"] == "unknown"
+    assert "is_Symbol" in out["staff_note"]
+    assert "rescan" not in out["user_message"].lower()
+    assert "nothing is wrong with your book" in out["user_message"]
+
+
+def test_a_content_error_still_goes_to_the_model(monkeypatch):
+    from support_agent import diagnose as dg
+    calls = []
+
+    class MockClient:
+        def analyze(self, prompt, max_tokens=0, **k):
+            calls.append(prompt)
+            return {"data": {"category": "corrupt_pdf", "confidence": 0.9,
+                             "recommended_action": "user_fix", "user_message": "u", "staff_note": "s"}}
+
+    monkeypatch.setattr(dg, "_gate_signals", lambda bundle, client: {})
+    bundle = {"chapters": [], "recent_jobs": [{"status": "error", "error": "No readable text in the PDF"}]}
+    assert dg.internal_error(bundle) == ""
+    out = dg.diagnose(MockClient(), bundle)
+    assert calls and out["recommended_action"] == "user_fix"
