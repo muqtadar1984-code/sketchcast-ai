@@ -176,11 +176,22 @@ class TestThePrompt:
         prompt = self._ask(min_minutes=5.0, length_shortfall=measured)
         assert "THE PREVIOUS DRAFT'S SEGMENTS, in order" in prompt
         assert "1. [hook] Why do you breathe faster when you run?" in prompt
-        assert "2. [explore] Cells release energy from glucose." in prompt
-        assert "KEEPING every one of these segments" in prompt
+        assert "2. [explore] teacher: Cells release energy from glucose." in prompt, "speakers travel with the lines"
+        assert "KEEPING every one of these segments" in prompt and "same SPEAKER on every line" in prompt
         add = lesson_length.segments_to_add(measured)
         assert add == -(-(6500 - measured["chars"]) // 450) + 1
         assert f"ADD at least {add} NEW teaching segments of at least 450 characters" in prompt
+
+    def test_the_kept_segments_carry_their_speakers(self):
+        """Aerobic Respiration, 18:33 UTC: the first extension re-ask handed
+        the lines back flattened and the model re-dealt them — student
+        questions spoken by the teacher and the teacher's explanations by
+        the student."""
+        draft = {"segments": [{"type": "explore", "text": "Why does it need oxygen? Because glucose burns slowly.",
+                               "dialogue": [{"who": "student", "line": "Why does it need oxygen?"},
+                                            {"who": "teacher", "line": "Because glucose burns slowly."}]}]}
+        (seg,) = lesson_length.segment_texts(draft)
+        assert seg["text"] == "student: Why does it need oxygen? / teacher: Because glucose burns slowly."
 
     def test_segment_arithmetic(self):
         assert lesson_length.min_segments(5.0) == 13

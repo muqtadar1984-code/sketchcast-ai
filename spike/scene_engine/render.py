@@ -2006,18 +2006,36 @@ class SceneRenderer:
                 out.add(e.id)
         return out
 
+    # A caption above or below the picture belongs to it within this
+    # vertical gap (the caption row sits right under the art); a label
+    # BESIDE the picture belongs to it at any distance — the label layout
+    # seats arrowless labels in the margin columns at the board's edges.
+    _NEAR_Y = WORLD_H * 0.2
+
     def _annotated_extent(self, target: str, ink: tuple) -> tuple:
         """The picture WITH its labels: the ink box widened to every label an
-        arrow ties to this element (the arrow's tail is that label) and the
-        arrows themselves. Dropped elements and screen-fixed overlays are not
-        part of it; a picture with no labels is its ink alone."""
+        arrow ties to this element (the arrow's tail is that label), the
+        arrows themselves, and every label or caption seated NEAR the ink
+        that no arrow ties to a different element. Dropped elements and
+        screen-fixed overlays are not part of it; a picture with no labels
+        is its ink alone.
+
+        The second rule is Aerobic Respiration (2026-09-26, kit b9bf7f29):
+        "Breathing" and "Circulatory" were written beside their pictures
+        with no leader line — the director names a side of a split picture
+        without pointing — so the arrow rule did not know them, and the
+        zoom pushed them out of the frame exactly as it had the States of
+        Matter labels before the arrow rule existed."""
         x0, y0, x1, y1 = ink
         hud = self._hud_element_ids()
+        tied_elsewhere: set[str] = set()
         for eid, ab in self.bound.items():
             el = ab.element
             if not isinstance(el, ArrowElement) or eid in self._dropped or eid in hud:
                 continue
             if not (isinstance(el.head, AnchorRef) and el.head.el == target):
+                if isinstance(el.tail, AnchorRef) and isinstance(el.head, AnchorRef):
+                    tied_elsewhere.add(el.tail.el)
                 continue
             boxes = []
             if ab.box and ab.box[2] > ab.box[0] and ab.box[3] > ab.box[1]:
@@ -2031,6 +2049,23 @@ class SceneRenderer:
             for bx in boxes:
                 x0, y0 = min(x0, bx[0]), min(y0, bx[1])
                 x1, y1 = max(x1, bx[2]), max(y1, bx[3])
+        ix0, iy0, ix1, iy1 = ink
+        for eid, tb in self.bound.items():
+            if (tb.text is None or not tb.box or eid == target or eid in self._dropped
+                    or eid in hud or eid in tied_elsewhere or _is_overlay(eid)):
+                continue
+            if str(getattr(tb.element, "role", "") or "") not in ("label", "caption"):
+                continue
+            bx = tb.box
+            if not (bx[2] > bx[0] and bx[3] > bx[1]):
+                continue
+            beside = bx[1] <= iy1 and bx[3] >= iy0                       # shares the picture's rows
+            stacked = (bx[0] <= ix1 and bx[2] >= ix0                     # shares its columns…
+                       and bx[3] >= iy0 - self._NEAR_Y and bx[1] <= iy1 + self._NEAR_Y)  # …close above or below
+            if not (beside or stacked):
+                continue
+            x0, y0 = min(x0, bx[0]), min(y0, bx[1])
+            x1, y1 = max(x1, bx[2]), max(y1, bx[3])
         return (x0, y0, x1, y1)
 
     def _next_action_focus(self, i: int) -> Point | None:

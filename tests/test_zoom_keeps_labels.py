@@ -17,10 +17,26 @@ from spike.scene_engine.schema import WORLD_H, WORLD_W, Scene
 from tests.test_board_quality import _disc_asset
 
 
-def _scene(labels: bool, zoom: float = 1.6, pic_scale: float = 1.2) -> Scene:
+def _scene(labels: bool, zoom: float = 1.6, pic_scale: float = 1.2, loose: str | None = None,
+           other: bool = False) -> Scene:
     elements = [{"id": "pic", "type": "illustration", "asset": "disc",
                  "at": [600, 380], "scale": pic_scale}]
     actions = [{"verb": "draw", "target": "pic", "duration": 1.0}]
+    if loose:
+        # a label written beside the picture with NO leader line
+        elements.append({"id": "lbl_loose", "type": "text", "text": "Breathing", "at": [40, 380],
+                         "role": loose, "anchor": "lt"})
+        actions.append({"verb": "write", "target": "lbl_loose"})
+    if other:
+        # a second picture far to the right, with its own arrow-tied label
+        elements += [{"id": "pic2", "type": "illustration", "asset": "disc", "at": [1180, 640], "scale": 0.3},
+                     {"id": "lbl_other", "type": "text", "text": "Elsewhere", "at": [1020, 700],
+                      "role": "label", "anchor": "lt"},
+                     {"id": "ar_other", "type": "arrow", "curve": 0,
+                      "tail": {"el": "lbl_other", "edge": "right", "dx": 6},
+                      "head": {"el": "pic2", "edge": "left"}}]
+        actions += [{"verb": "draw", "target": "pic2"}, {"verb": "write", "target": "lbl_other"},
+                    {"verb": "draw", "target": "ar_other"}]
     if labels:
         elements += [
             {"id": "lbl_l", "type": "text", "text": "Freezing", "at": [40, 380],
@@ -85,6 +101,33 @@ class TestTheLabelsStayInTheFrame:
         full = r._annotated_extent("pic", ink)
         r._dropped.update({"ar_l", "lbl_l", "ar_r", "lbl_r"})
         assert r._annotated_extent("pic", ink) == tuple(ink) != full
+
+
+class TestALabelWithNoLeaderStaysToo:
+    """Aerobic Respiration (2026-09-26, kit b9bf7f29): "Breathing" was
+    written beside a split picture with no arrow — the director names a
+    side without pointing — and the zoom pushed it out of the frame. A
+    label or caption seated near the picture is part of it whether or not
+    a leader ties it."""
+
+    @pytest.mark.parametrize("role", ["label", "caption"])
+    def test_an_arrowless_label_beside_the_picture_holds_the_zoom_back(self, role):
+        # 2.2x: the picture alone would fit, the picture with a label at the
+        # board's edge cannot
+        r, cam = _render(False, loose=role, zoom=2.2)
+        assert cam.scale < 2.2
+        assert any(w.startswith("ZOOM_CLAMPED_FOR_LABELS pic 2.20->") for w in r._warned), r._warned
+        assert _in_frame(r.bound["lbl_loose"].box, cam)
+        r_alone, cam_alone = _render(False, zoom=2.2)
+        assert cam_alone.scale > cam.scale, "the same picture without the label zooms further"
+
+    def test_a_label_tied_to_another_picture_is_not_this_pictures(self):
+        # pic2 and its label sit within the band but belong to pic2: the
+        # zoom on pic is not held back for them
+        r_alone, cam_alone = _render(False, zoom=2.2)
+        r, cam = _render(False, other=True, zoom=2.2)
+        assert cam.scale == pytest.approx(cam_alone.scale)
+        assert not any(w.startswith("ZOOM_CLAMPED_FOR_LABELS") for w in r._warned), r._warned
 
 
 class TestTheGateCountsIt:
