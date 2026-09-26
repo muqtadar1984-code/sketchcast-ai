@@ -28,6 +28,17 @@ ten or 1-4 significant figures when none is stated. The answer of such a
 task is the value the verified rounding steps reach, never the exact value
 of the problem — 7583 + 3421 estimated as 8000 + 3000 is 11000.
 
+DATA TASKS (mean, median, mode, range; 2026-09-26, after a Grade 7
+statistics chapter failed every worksheet and exam question because a comma
+list could only be a refusal): the givens are ONE data list, "4, 8, 6, 10,
+12". A transform from a data state to an expression is verified as the
+task's statistic of that data — (4 + 8 + 6 + 10 + 12)/5 for the mean, 12 -
+4 for the range, the middle value(s) for the median, the commonest value(s)
+for the mode — and a transform from a data state to a data state must keep
+the same numbers (sorting, for the median) or, for the mode, name exactly
+the modes. From there the working is expressions, checked as always, and
+the answer is the statistic's exact value.
+
 The common mistake is verified the other way round: SymPy must show the
 wrong route really changes the meaning, or a valid method would be taught as
 an error. Every SymPy call runs under mathsvc's hard timeout — a hung
@@ -45,7 +56,7 @@ from typing import Callable, Optional
 import sympy as sp
 
 from maths.notation import NotationError, Relation, parse_state, symbols_named
-from maths.schema import Lesson, Step, TryIt, WorkedExample
+from maths.schema import DATA_TASKS, Lesson, Step, TryIt, WorkedExample
 from maths.tokens import TokenError, tokenize
 from mathsvc.safety import MathError, MathTimeoutError, run_with_timeout
 
@@ -134,6 +145,10 @@ def _split_answers(entries: list[str]) -> list[str]:
 def _kinds(rels: list[Relation]) -> str:
     if not rels:
         return "empty"
+    if all(r.is_data for r in rels):
+        return "data"
+    if any(r.is_data for r in rels):
+        return "mixed"
     if all(r.is_expression for r in rels):
         return "expressions"
     if all(not r.is_expression for r in rels):
@@ -226,12 +241,150 @@ def _state_mode(rels: list[Relation], default: str) -> str:
     return "all" if _is_system(rels) else default
 
 
+# ── data lists: mean, median, mode, range ────────────────────────────────
+
+
+def _canon(v):
+    """A data value as an exact rational where it can be one, so 2.5 and
+    5/2 count as the same value and sort together."""
+    try:
+        return sp.nsimplify(v, rational=True)
+    except Exception:  # noqa: BLE001
+        return v
+
+
+def _modes(data: tuple) -> list:
+    """The value(s) with the highest count, in first-seen order; empty when
+    every value occurs equally often (no mode)."""
+    counts: dict = {}
+    order: list = []
+    for v in data:
+        c = _canon(v)
+        if c not in counts:
+            counts[c] = 0
+            order.append(c)
+        counts[c] += 1
+    if not counts:
+        return []
+    top = max(counts.values())
+    if top == 1 or len(set(counts.values())) == 1:
+        return []
+    return [c for c in order if counts[c] == top]
+
+
+def _statistic(task: str, data: tuple):
+    """The exact value of ``task`` over ``data`` — a SymPy number, or for
+    the mode a LIST of values (several modes, or none)."""
+    vals = [_canon(v) for v in data]
+    if task == "mean":
+        return sp.Add(*vals) / len(vals)
+    if task == "median":
+        srt = sorted(vals, key=lambda v: float(v))
+        n = len(srt)
+        return srt[n // 2] if n % 2 else (srt[n // 2 - 1] + srt[n // 2]) / 2
+    if task == "range":
+        return max(vals, key=lambda v: float(v)) - min(vals, key=lambda v: float(v))
+    if task == "mode":
+        return _modes(data)
+    raise ValueError(f"{task} is not a data task")
+
+
+def _multiset(data: tuple) -> list:
+    return sorted((_canon(v) for v in data), key=lambda v: float(v))
+
+
+def _value_line(r: Relation):
+    """The value a line states: a bare expression, or the right side of an
+    equation whose left side is a single name ("mean = 40/5", "x̄ = 8").
+    None for anything else."""
+    if r.is_data:
+        return None
+    if r.is_expression:
+        return r.lhs
+    if r.is_equation and isinstance(r.lhs, sp.Symbol) and not r.rhs.free_symbols:
+        return r.rhs
+    return None
+
+
+def _values_of(rels: list[Relation]) -> Optional[list]:
+    """Every value a state names: one data line's items, or one value per
+    expression/equation line. None when a line names no value."""
+    if len(rels) == 1 and rels[0].is_data:
+        return [_canon(v) for v in rels[0].data]
+    out = []
+    for r in rels:
+        v = _value_line(r)
+        if v is None:
+            return None
+        out.append(v)
+    return out
+
+
+def _same_values(a: list, b: list) -> bool:
+    """The same values, in any order, each matched once."""
+    if len(a) != len(b):
+        return False
+    left = list(b)
+    for x in a:
+        hit = next((i for i, y in enumerate(left) if _equal_values(x, y)), None)
+        if hit is None:
+            return False
+        left.pop(hit)
+    return True
+
+
+def _fmt_stat(v) -> str:
+    if isinstance(v, list):
+        return ", ".join(str(x) for x in v) if v else "no mode"
+    return str(v)
+
+
+def _data_step(before: list[Relation], after: list[Relation], task: Optional[str]) -> tuple[Optional[bool], str]:
+    """(verdict, detail) for a step whose ``before`` is a data list."""
+    if len(before) != 1:
+        return None, "a data state is one list"
+    data = before[0].data
+    ka = _kinds(after)
+    if ka == "data":
+        if len(after) != 1:
+            return None, "a data state is one list"
+        if _multiset(data) == _multiset(after[0].data):
+            return True, "the same data, reordered"
+        if task == "mode":
+            want = _modes(data)
+            if want and _same_values([_canon(v) for v in after[0].data], want):
+                return True, f"the mode(s): {_fmt_stat(want)}"
+            return False, f"the mode of {before[0].text!r} is {_fmt_stat(want)}, not {after[0].text!r}"
+        return False, f"{after[0].text!r} is not the same data as {before[0].text!r}"
+    if task not in DATA_TASKS:
+        return None, f"a data list is only worked in a mean/median/mode/range task, not {task!r}"
+    values = _values_of(after)
+    if values is None:
+        return None, f"could not read a value from {'; '.join(r.text for r in after)!r}"
+    want = _statistic(task, data)
+    if task == "mode":
+        if not want:
+            return False, f"{before[0].text!r} has no mode: every value occurs equally often"
+        if _same_values(values, want):
+            return True, f"the mode(s): {_fmt_stat(want)}"
+        return False, f"the mode of {before[0].text!r} is {_fmt_stat(want)}, not {_fmt_stat(values)}"
+    if len(values) != 1:
+        return False, f"the {task} is one value, not {len(values)}"
+    if _timed(_equal_values, values[0], want):
+        return True, f"the {task} of the data: {_fmt_stat(want)}"
+    return False, f"the {task} of {before[0].text!r} is {_fmt_stat(want)}, not {after[0].text!r}"
+
+
 def _states_equivalent(before: list[Relation], after: list[Relation], variables: list[sp.Symbol],
-                       mode: str) -> tuple[Optional[bool], str]:
+                       mode: str, task: Optional[str] = None) -> tuple[Optional[bool], str]:
     """(verdict, detail) for "does `after` mean what `before` meant".
     ``mode`` is the example's default ("all" for a declared system, "any"
-    otherwise); a state that IS a system is read as one regardless."""
+    otherwise); a state that IS a system is read as one regardless.
+    ``task`` matters only when ``before`` is a data list: what `after`
+    must be is then the task's statistic of it (_data_step)."""
     kb, ka = _kinds(before), _kinds(after)
+    if kb == "data":
+        return _data_step(before, after, task)
     if kb != ka or kb in ("mixed", "empty"):
         return None, f"the lines change kind ({kb} -> {ka})"
     if kb == "expressions":
@@ -432,7 +585,7 @@ def _check_step(i: int, st: Step, ex: WorkedExample, variables: list[sp.Symbol])
     before, err = _parse(st.before, "the line before")
     if before is None:
         return Check(name, None, err)
-    ok, detail = _states_equivalent(before, after, variables, _mode(ex))
+    ok, detail = _states_equivalent(before, after, variables, _mode(ex), ex.task)
     return Check(name, ok, f"{st.operation}: {detail}" if st.operation else detail)
 
 
@@ -449,7 +602,7 @@ def _check_chain(ex: WorkedExample, givens: Optional[list[Relation]], variables)
         if b is None:
             out.append(Check("chain start", None, err))
         else:
-            ok, detail = _states_equivalent(givens, b, variables, _mode(ex))
+            ok, detail = _states_equivalent(givens, b, variables, _mode(ex), ex.task)
             out.append(Check("chain start", ok, "the working starts from the problem" if ok
                              else f"the working does not start from the problem: {detail}"))
     prev: Optional[list[str]] = None
@@ -461,7 +614,7 @@ def _check_chain(ex: WorkedExample, givens: Optional[list[Relation]], variables)
                 if a is None or b is None:
                     out.append(Check(f"chain {i + 1}", None, e1 or e2))
                 else:
-                    ok, detail = _states_equivalent(a, b, variables, _mode(ex))
+                    ok, detail = _states_equivalent(a, b, variables, _mode(ex), ex.task)
                     if not ok:
                         out.append(Check(f"chain {i + 1}", ok,
                                          f"step {i + 1} does not start where step {i} ended: {detail}"))
@@ -476,6 +629,19 @@ def _check_answer(ex: WorkedExample, givens: Optional[list[Relation]], variables
         return Check("answer", False, "no final answer")
     if givens is None:
         return Check("answer", None, "the problem could not be read")
+    if ex.task in DATA_TASKS:
+        # The answer is the statistic of the data, exactly — a data task's
+        # givens are the list, and nothing in the working can change what
+        # its mean is.
+        if len(givens) != 1 or not givens[0].is_data:
+            return Check("answer", None, f"a {ex.task} task needs a data list as its givens: write 4, 8, 6, 10, 12")
+        ans, err = _parse(answers, "the final answer")
+        if ans is None:
+            return Check("answer", None, err)
+        ok, detail = _data_step(givens, ans, ex.task)
+        if ok is None:
+            return Check("answer", None, detail)
+        return Check("answer", ok, "answer verified: " + detail if ok else detail)
     if ex.task in ROUND_TASKS:
         # The answer is what the verified rounding steps reach, not the
         # problem's exact value: the steps carry the proof, the chain ties
@@ -549,7 +715,17 @@ def _check_last_step(ex: WorkedExample, variables) -> Optional[Check]:
         return Check("chain end", None, e1 or e2)
     if ex.task in SOLVE_TASKS and any(r.is_expression for r in b):
         return None  # the answer check already reports this
-    ok, detail = _states_equivalent(a, b, variables, _mode(ex))
+    if ex.task in DATA_TASKS:
+        # "8", "mean = 8" and "40/5" all state the same value; the modes may
+        # be a short data list. Values, not states.
+        va, vb = _values_of(a), _values_of(b)
+        if va is None or vb is None:
+            return Check("chain end", None, "could not read a value from the last line or the answer")
+        if _same_values(va, vb):
+            return Check("chain end", True, "the last line gives the answer")
+        return Check("chain end", False, f"the last line does not give the stated answer: "
+                                          f"{_fmt_stat(va)} vs {_fmt_stat(vb)}")
+    ok, detail = _states_equivalent(a, b, variables, _mode(ex), ex.task)
     if ok:
         return Check("chain end", True, "the last line gives the answer")
     return Check("chain end", ok, f"the last line does not give the stated answer: {detail}")
@@ -563,7 +739,7 @@ def _check_mistake(ex: WorkedExample, variables) -> Optional[Check]:
     b, e2 = _parse(m.wrong_state, "the mistake's result")
     if a is None or b is None:
         return Check("mistake", None, e1 or e2)
-    ok, detail = _states_equivalent(a, b, variables, _mode(ex))
+    ok, detail = _states_equivalent(a, b, variables, _mode(ex), ex.task)
     if ok is True:
         return Check("mistake", False, "the 'mistake' is actually a valid step — it must not be taught as wrong")
     if ok is False:
@@ -613,8 +789,13 @@ def try_it_example(t: TryIt) -> WorkedExample | None:
     expression = bool(rels) and rels[0].is_expression
     target = ", ".join(sorted(str(s) for s in rels[0].free_symbols)) if rels else "x"
     rounding = any(s.kind == "round" for s in t.steps)
+    data_task = None
+    if rels and rels[0].is_data:
+        # the statistic the words ask for; mean when they name none
+        words = (t.problem or "").lower()
+        data_task = next((k for k in ("median", "mode", "range", "mean") if k in words), "mean")
     return WorkedExample(label="the try-it question", problem=t.problem, givens=givens, final_answer=t.answer,
-                         task="estimate" if rounding else "simplify" if expression else "solve",
+                         task=data_task or ("estimate" if rounding else "simplify" if expression else "solve"),
                          target=target or "x",
                          intro_speech=t.solution_speech, steps=list(t.steps) or [Step(kind="setup")],
                          answer_speech=t.answer_speech)
@@ -651,4 +832,4 @@ def verify_lesson(lesson: Lesson) -> dict:
 
 
 __all__ = ["Check", "ExampleReport", "verify_example", "verify_try_it", "verify_lesson",
-           "SOLVE_TASKS", "EXPRESSION_TASKS", "ROUND_TASKS"]
+           "SOLVE_TASKS", "EXPRESSION_TASKS", "ROUND_TASKS", "DATA_TASKS"]
