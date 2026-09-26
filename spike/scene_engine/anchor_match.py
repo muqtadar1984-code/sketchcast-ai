@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["without_unknown_qualifiers", "by_token_subset", "anchor_layer_hits"]
+__all__ = ["without_unknown_qualifiers", "by_token_subset", "by_process_endpoints",
+           "anchor_layer_hits", "process_endpoints"]
 
 
 def _tokens(s: str) -> list[str]:
@@ -119,8 +120,84 @@ def by_token_subset(available: list[str], layer: str) -> list[str]:
     return hits if len(hits) == 1 else []
 
 
+# A process label names what HAPPENS between two parts, and the picture can
+# only ever show the arrow between them. States of Matter (2026-09-25): the
+# director named solid, liquid and gas, the annotator boxed the three
+# arrow pairs between them, and the labels "Evaporative Cooling" and
+# "Sublimation" — synthesized from the narration — still fell to the edge of
+# the picture, because no region is called "evaporative cooling". The word
+# stem maps to its two ends; a region naming both ends is the arrow. Stems,
+# not words, so "evaporative", "evaporation" and "evaporates" all read alike.
+_PROCESS_ENDPOINTS: tuple[tuple[str, str, str], ...] = (
+    # (stem, from, to) — longer stems first so "desublim" wins over "sublim"
+    ("desublim", "gas", "solid"),
+    ("deposit", "gas", "solid"),
+    ("solidif", "liquid", "solid"),
+    ("freez", "liquid", "solid"),
+    ("fusion", "solid", "liquid"),
+    ("melt", "solid", "liquid"),
+    ("evaporat", "liquid", "gas"),
+    ("vaporis", "liquid", "gas"),
+    ("vaporiz", "liquid", "gas"),
+    ("boil", "liquid", "gas"),
+    ("condens", "gas", "liquid"),
+    ("sublim", "solid", "gas"),
+)
+_ENDPOINT_WORDS: dict[str, frozenset[str]] = {
+    "solid": frozenset({"solid", "solids", "ice"}),
+    "liquid": frozenset({"liquid", "liquids", "water"}),
+    "gas": frozenset({"gas", "gases", "gaseous", "vapour", "vapor", "steam"}),
+}
+_ARROW_WORDS = frozenset({"arrow", "arrows", "path", "paths", "transition",
+                          "transitions", "change", "changes", "link", "edge"})
+
+
+def process_endpoints(layer: str) -> tuple[str, str] | None:
+    """(from, to) for a label that names a phase change, else None."""
+    for t in _tokens(layer):
+        for stem, a, b in _PROCESS_ENDPOINTS:
+            if t.startswith(stem):
+                return (a, b)
+    return None
+
+
+def by_process_endpoints(available: list[str], layer: str) -> list[str]:
+    """A process anchor resolved to the ARROW between its two ends.
+
+    Fires only for a name carrying a phase-change stem, and only onto a
+    region whose own words name BOTH ends — "liquid gas arrows" for
+    "evaporative cooling", "solid gas arrows" for "sublimation". Of several
+    such regions the one whose word order runs from → to wins (the repair
+    pass writes "solid to gas arrow" beside "gas to solid arrow"), then the
+    one that calls itself an arrow or path. Two equally good candidates are
+    a family, not a part, and are refused like every other rung.
+    """
+    ends = process_endpoints(layer)
+    if not ends:
+        return []
+    src, dst = ends
+    scored: list[tuple[int, str]] = []
+    for a in available:
+        at = _tokens(a)
+        si = next((i for i, t in enumerate(at) if t in _ENDPOINT_WORDS[src]), None)
+        di = next((i for i, t in enumerate(at) if t in _ENDPOINT_WORDS[dst]), None)
+        if si is None or di is None:
+            continue
+        # an explicit "solid TO gas" outranks the bare pair "solid gas", which
+        # outranks the reversed pair; calling itself an arrow breaks ties
+        explicit = si < di and any(t in ("to", "into") for t in at[si + 1:di])
+        score = ((4 if explicit else 0) + (2 if si < di else 0)
+                 + (1 if any(t in _ARROW_WORDS for t in at) else 0))
+        scored.append((score, a))
+    if not scored:
+        return []
+    best = max(sc for sc, _ in scored)
+    hits = [a for sc, a in scored if sc == best]
+    return hits if len(hits) == 1 else []
+
+
 def anchor_layer_hits(available: list[str], layer: str) -> list[str]:
-    """THE anchor ladder: the shared matcher, then the two anchor-only rungs.
+    """THE anchor ladder: the shared matcher, then the anchor-only rungs.
 
     One definition, so the raster and vector branches of
     `_layer_instance_boxes` can never drift apart — they did, and an SVG asset
@@ -130,7 +207,10 @@ def anchor_layer_hits(available: list[str], layer: str) -> list[str]:
     from .vector_assets import match_layer_ids
     return (match_layer_ids(available, [layer])
             or without_unknown_qualifiers(available, layer)
-            or by_token_subset(available, layer))
+            or by_token_subset(available, layer)
+            # after the name rungs: a process word is only read as "the arrow
+            # between its ends" once no region carries the name itself
+            or by_process_endpoints(available, layer))
 
 
 def resolves(available: list[str], layer: str) -> bool:
