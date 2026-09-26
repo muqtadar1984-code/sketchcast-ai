@@ -220,3 +220,34 @@ def test_the_incident_worksheet_now_prints_its_statistics_questions(tmp_path):
     assert "Find the mode of the data: 3, 7, 3, 5, 2, 3, 9." in sheet
     assert "WRONG" not in sheet, "an unverified question is never printed"
     assert "(4 + 8 + 6 + 10 + 12)/5" in key and "2, 3, 3, 3, 5, 7, 9" in key and "Answer: 12.5" in key
+
+
+def test_every_rejected_question_is_logged_with_its_reason(caplog):
+    """The ladder used to log counts alone — "20 asked, 6 verified, 14
+    rejected" — so a run could not say whether the model slipped or the
+    verifier has another gap. Now each rejection is a log line of its own."""
+    import logging
+    from maths.questions import question_ladder
+
+    good = {"label": "Q", "difficulty": 1, "task": "mean", "problem": "Find the mean of 4, 8", "givens": ["4, 8"],
+            "target": "mean", "steps": [{"kind": "transform", "operation": "mean", "before": ["4, 8"], "after": ["(4 + 8)/2"],
+                                         "speech": "s"}, {"kind": "transform", "operation": "work out", "before": ["(4 + 8)/2"],
+                                                          "after": ["6"], "speech": "s"}],
+            "final_answer": ["6"], "intro_speech": "", "answer_speech": ""}
+    bad = {**good, "problem": "Find the mean of 4, 8 wrongly", "final_answer": ["7"]}
+
+    class Client:
+        model = "fake"
+
+        def analyze(self, prompt, system="", max_tokens=0, **kw):
+            return {"data": {"questions": [copy.deepcopy(good), copy.deepcopy(bad)]}, "usage": {}, "truncated": False}
+
+    with caplog.at_level(logging.INFO, logger="worker"):
+        questions, report = question_ladder(Client(), topic="Mean", level="Grade 7", language="en", n=1, rounds=1)
+    assert len(questions) == 1 and report["rejected"]
+    lines = [r.getMessage() for r in caplog.records if "maths question rejected" in r.getMessage()]
+    assert len(lines) == 1
+    assert "round 1, difficulty 1, task mean" in lines[0] and "Find the mean of 4, 8 wrongly" in lines[0]
+    assert "answer: WRONG" in lines[0] and "is 6, not" in lines[0]
+    summary = [r.getMessage() for r in caplog.records if "maths question ladder for" in r.getMessage()]
+    assert summary and "1 rejected (reasons logged above)" in summary[0]

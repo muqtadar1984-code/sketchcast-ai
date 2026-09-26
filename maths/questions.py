@@ -87,7 +87,15 @@ def question_ladder(client, *, topic: str, level: str | None, language: str, n: 
             asked += 1
             rep = verify_example(ex)
             if rep.status != "verified":
-                rejected.append(f"{ex.problem[:60]}: {'; '.join(rep.reasons)[:200]}")
+                # Logged one by one, at the moment of rejection: the ladder
+                # used to report counts alone, so a run that rejected 14 of
+                # 20 (Mean 8 Class 7.1, 2026-09-26, after the data tasks
+                # shipped) said nothing about WHY — a model slip and a gap in
+                # the verifier look identical as a number.
+                reason = "; ".join(rep.reasons)[:300]
+                logger.info("maths question rejected (round %d, difficulty %s, task %s): %r — %s",
+                            _round + 1, ex.difficulty, ex.task, ex.problem[:80], reason)
+                rejected.append(f"{ex.problem[:60]}: {reason[:200]}")
                 continue
             d = int(ex.difficulty)
             if len(kept[d]) < counts[d]:
@@ -104,7 +112,8 @@ def question_ladder(client, *, topic: str, level: str | None, language: str, n: 
         for i, ex in enumerate(kept[d], 1):
             ex.label = f"Q{len(out) + 1}"
             out.append(ex)
-    logger.info("maths question ladder for %r: %d asked, %d verified, %d rejected", topic, asked, len(out), len(rejected))
+    logger.info("maths question ladder for %r: %d asked, %d verified, %d rejected (%s)", topic, asked, len(out),
+                len(rejected), "reasons logged above" if rejected else "nothing rejected")
     return out, {"asked": asked, "verified": len(out), "rejected": rejected, "wanted": counts}
 
 
