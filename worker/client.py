@@ -60,7 +60,7 @@ def admin() -> Client:
 # built, approved and finished long before, so relabelling it would overwrite
 # a reviewer's verdict with an upload's lifecycle.
 OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "topic_harvest", "topic_derive", "topic_article",
-                                "figure_render", "topic_questions", "topic_publish"})
+                                "figure_render", "topic_questions", "topic_publish", "topic_supersede"})
 
 
 def generation_to_mirror(job: Optional[dict]) -> Optional[str]:
