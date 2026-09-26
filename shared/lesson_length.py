@@ -99,12 +99,24 @@ def segments_to_add(measured: dict) -> int:
 
 def segment_texts(script: dict) -> list[dict]:
     """``[{type, text}]`` — each segment's spoken words, for a re-ask that
-    keeps them. Title cards and empty segments are left out."""
+    keeps them, WITH their speakers: a two-voice segment reads
+    "teacher: … / student: …". The first extension re-ask (Aerobic
+    Respiration, 2026-09-26 18:33 UTC) handed the lines back flattened,
+    and the model re-dealt them — student questions spoken by the teacher,
+    the teacher's explanations by the student. Title cards and empty
+    segments are left out."""
     out: list[dict] = []
     for seg in (script or {}).get("segments") or []:
         if not isinstance(seg, dict):
             continue
-        text = spoken_text({"segments": [seg]})
+        lines = [ln for ln in (seg.get("dialogue") or []) if isinstance(ln, dict)]
+        spoken = [(str(ln.get("who") or "teacher").strip().lower(), str(ln.get("line") or ln.get("text") or "").strip())
+                  for ln in lines]
+        spoken = [(who, line) for who, line in spoken if line]
+        if spoken:
+            text = " / ".join(f"{who}: {line}" for who, line in spoken)
+        else:
+            text = spoken_text({"segments": [seg]})
         if text:
             out.append({"type": str(seg.get("type") or "explore"), "text": text})
     return out
@@ -192,7 +204,8 @@ def shortfall_block(measured: dict) -> str:
     return head + (
         f"\n\nTHE PREVIOUS DRAFT'S SEGMENTS, in order (their spoken words):\n{listing}\n\n"
         f"Write the lesson again KEEPING every one of these segments — same order, same "
-        f"teaching, wording may be polished but never shortened — and ADD at least {add} "
+        f"teaching, same SPEAKER on every line (a line marked student: stays the student's, "
+        f"teacher: the teacher's), wording may be polished but never shortened — and ADD at least {add} "
         f"NEW teaching segments of at least {MIN_SEGMENT_CHARS} characters of dialogue each, "
         f"placed where they belong in the arc (not appended as a list at the end). Each new "
         f"segment teaches something the draft passed over: a mechanism it only named, a "
