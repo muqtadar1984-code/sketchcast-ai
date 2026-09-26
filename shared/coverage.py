@@ -593,15 +593,42 @@ def should_retry(report: dict, mode: str | None = None) -> bool:
     return report.get("verdict") in ("short", "floor") or is_thin(report, mode)
 
 
+def under_length(report: dict) -> bool:
+    """Whether the spoken script measured under the length floor
+    (shared/lesson_length.py, recorded on the report as ``length``). The
+    floor is a separate question from coverage — a draft can name every
+    topic, say enough about each, and still run three minutes of a nine-
+    minute lesson (Aerobic Respiration, 2026-09-26) — so it earns the retry
+    on its own, and it is not subject to the coverage gate's mode: a floor
+    the founder set is not a measurement being trialled.
+    """
+    length = report.get("length")
+    return bool(isinstance(length, dict) and length.get("under"))
+
+
+def wants_retry(report: dict, mode: str | None = None) -> bool:
+    """should_retry OR the length floor — the one predicate the worker's
+    retry loop asks. Pooled reports are excluded from the coverage half only
+    (their missed list is other parts' topics); the length of a pooled part
+    is still that part's own length."""
+    return should_retry(report, mode) or under_length(report)
+
+
 def better_draft(first: dict, second: dict) -> bool:
     """Whether the retry should replace the first draft.
 
-    Depth outranks breadth, and the order matters: comparing `covered` alone
-    would keep a draft that names one more topic over one that actually
-    teaches, which is exactly the trade that produced a 2.4-minute video
-    scoring 0.897. A draft that is not thin beats one that is, whatever their
-    coverage; between two of the same thinness, more topics named wins.
+    Length first, then depth, then breadth, and the order matters: comparing
+    `covered` alone would keep a draft that names one more topic over one
+    that actually teaches, which is exactly the trade that produced a
+    2.4-minute video scoring 0.897. A draft over the length floor beats one
+    under it; between two under it, the longer wins; a draft that is not thin
+    beats one that is, whatever their coverage; between two of the same
+    thinness, more topics named wins.
     """
+    if under_length(first) != under_length(second):
+        return under_length(first)
+    if under_length(first) and under_length(second):
+        return (second["length"].get("chars") or 0) > (first["length"].get("chars") or 0)
     if bool(first.get("thin")) != bool(second.get("thin")):
         return bool(first.get("thin"))
     return (second.get("covered") or 0) > (first.get("covered") or 0)

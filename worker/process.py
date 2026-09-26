@@ -27,7 +27,7 @@ from . import client as db
 # live in shared/book_metadata.py so the app (src/utils/book.ts) has one thing
 # to mirror: the two copies drifted apart on 2026-07-12 and the worker's title
 # gate has rejected 100% of production books ever since.
-from shared import coverage
+from shared import coverage, lesson_length
 from shared.book_metadata import (clean_title_fallback as _clean_title_fallback,
                                   looks_like_filename as _looks_like_filename,
                                   pick_book_title, sanitise_author)
@@ -73,6 +73,25 @@ def _coverage_report(analysis: dict, episode: dict | None, text: str, *,
         report.get("addressed"), report.get("topics"), report.get("covered"),
         report.get("verdict"), model, ", ".join(report.get("missed") or []) or "nothing",
     )
+    return report
+
+
+def _with_length(report: dict, script_dict: dict, minutes: float) -> dict:
+    """Attach the spoken-length measurement (shared/lesson_length.py) to a
+    coverage report when a floor applies. Never raises: like the coverage
+    measurement, a bug here must not cost a lesson — an unmeasured script
+    simply carries no ``length`` and the floor abstains."""
+    if not minutes or minutes <= 0:
+        return report
+    try:
+        report["length"] = lesson_length.measure(script_dict, minutes)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("lesson length not measured: %s", exc)
+        return report
+    log = logger.warning if report["length"].get("under") else logger.info
+    log("lesson length%s: %s",
+        f" part {report['part']}/{report.get('of')}" if report.get("part") is not None else "",
+        lesson_length.summary(report["length"]))
     return report
 
 
@@ -1585,6 +1604,11 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             except Exception as exc:  # noqa: BLE001 — a missing figure never fails a kit
                 logger.warning("catalogue artwork load failed: %s", exc)
 
+        # The spoken-length floor (shared/lesson_length.py) is the catalogue's:
+        # a YouTube lesson runs at least LESSON_MIN_MINUTES. A teacher's
+        # chapter PART is as long as its text — a 300-word tail part must not
+        # be padded to five minutes — so for a book job the floor is off.
+        _min_minutes = lesson_length.min_minutes() if catalogue is not None else 0.0
         for part_idx, episode in enumerate(episodes_plan, start=1):
             # This part's slice of the overall bar: 45 → 96 split evenly.
             span = 51.0 / n_parts
@@ -1665,6 +1689,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                     language=lesson_lang, avatars=avatars,
                     subject=book.get("subject"), curriculum=book.get("curriculum"),
                     learner_age=book.get("grade"),
+                    min_minutes=_min_minutes or None,
                 )
                 script_dict = script.model_dump()
 
@@ -1681,55 +1706,79 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                     of=n_parts,
                     part_scoped=part_ref is not None,
                 )
-                if coverage.should_retry(report):
-                    # Retry ONCE, naming what was dropped, and keep whichever
-                    # draft measures higher — a retry can be worse, and the
-                    # teacher should never get the worse of two scripts we paid
-                    # for. Bounded by should_retry: the same bar as the hard
-                    # failure below, so it only ever fires on a job that would
-                    # otherwise have failed outright — and NEVER on a pooled
-                    # part-scoped report, whose missed list is other parts'
-                    # topics (a must_cover built from it orders the model to
-                    # teach material this part does not contain — the harmful
-                    # half of incident 8b79d4e0).
-                    first = report
+                _with_length(report, script_dict, _min_minutes)
+                # Retry, naming what was dropped, and keep whichever draft
+                # measures higher — a retry can be worse, and the teacher
+                # should never get the worse of two scripts we paid for.
+                # Bounded by wants_retry: the coverage half fires on the
+                # same bar as the hard failure below, so it only ever fires
+                # on a job that would otherwise have failed outright — and
+                # NEVER on a pooled part-scoped report, whose missed list is
+                # other parts' topics (a must_cover built from it orders the
+                # model to teach material this part does not contain — the
+                # harmful half of incident 8b79d4e0). The length half
+                # (catalogue only) fires whenever the spoken script is under
+                # the floor, and may spend one call more: a draft at three
+                # minutes of a five-minute floor has been seen to need two.
+                first = report
+                _retries = 0
+                _max_retries = (lesson_length.MAX_LENGTH_RETRIES
+                                if coverage.under_length(report) else 1)
+                while _retries < _max_retries and coverage.wants_retry(report):
+                    _retries += 1
                     # Name the shortfall the draft actually had. A thin draft told
                     # to "cover" its three missed topics returns a fourth
                     # sentence; it needs to be told to teach, not to list.
                     _expand = None
-                    if first.get("thin"):
-                        _expand = (f"{first.get('chars')} characters across "
-                                   f"{first.get('topics')} topics — "
-                                   f"{first.get('chars_per_topic')} per topic, "
+                    if report.get("thin"):
+                        _expand = (f"{report.get('chars')} characters across "
+                                   f"{report.get('topics')} topics — "
+                                   f"{report.get('chars_per_topic')} per topic, "
                                    f"against a floor of "
                                    f"{coverage._DEPTH_MIN_CHARS_PER_TOPIC}")
+                    # A pooled report's missed list is other parts' topics
+                    # (above); only its length may send it round again.
+                    _must_cover = [] if report.get("pooled") else (report.get("missed") or [])
+                    _shortfall = report.get("length") if coverage.under_length(report) else None
+                    if _shortfall:
+                        logger.warning(
+                            "lesson script under the length floor (part %d/%d, try %d/%d): %s",
+                            part_idx, n_parts, _retries, _max_retries, lesson_length.summary(_shortfall),
+                        )
                     retry = generate_episode_script(
                         episode, analysis, chapter_num, _script_client,
                         narration_style,
                         part_info=part_info, language=lesson_lang,
-                        must_cover=first.get("missed") or [], avatars=avatars,
+                        must_cover=_must_cover, avatars=avatars,
                         expand_reason=_expand,
                         subject=book.get("subject"), curriculum=book.get("curriculum"),
                         learner_age=book.get("grade"),
+                        min_minutes=_min_minutes or None,
+                        length_shortfall=_shortfall,
                     )
                     retry_dict = retry.model_dump()
                     retry_report = _coverage_report(
                         analysis, episode, coverage.script_text(retry_dict),
                         kind="presentation", model=_script_client.model, part=part_idx,
-                    of=n_parts,
+                        of=n_parts,
                         part_scoped=part_ref is not None,
                     )
-                    # Depth outranks breadth: comparing `covered` alone would
-                    # keep a draft that names one more topic over one that
-                    # actually teaches — the exact trade that shipped a
-                    # 2.4-minute video scoring 0.897.
-                    if coverage.better_draft(first, retry_report):
+                    _with_length(retry_report, retry_dict, _min_minutes)
+                    # Length, then depth, then breadth: comparing `covered`
+                    # alone would keep a draft that names one more topic over
+                    # one that actually teaches — the exact trade that
+                    # shipped a 2.4-minute video scoring 0.897.
+                    if coverage.better_draft(report, retry_report):
                         script, script_dict, report = retry, retry_dict, retry_report
+                if _retries:
                     # Both numbers are kept: whether naming the missed topics
                     # actually repairs a thin draft is itself a thing the
                     # founder will want to query after the model flip.
                     report["retried_from"] = first.get("covered")
                     report["retried_from_chars_per_topic"] = first.get("chars_per_topic")
+                    report["retries"] = _retries
+                    if isinstance(first.get("length"), dict):
+                        report["retried_from_chars"] = first["length"].get("chars")
                     if coverage.should_fail(report):
                         coverage_reports.append(report)
                         _record_coverage(sb, generation_id, coverage_reports)
@@ -1757,6 +1806,19 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                         f"{coverage._DEPTH_MIN_CHARS_PER_TOPIC}) "
                         f"(part {part_idx}/{n_parts}, model {_script_client.model}) — this "
                         f"would render a video a fraction of its intended length"
+                    )
+                # LENGTH, last and for the catalogue only: the founder's floor
+                # for a YouTube lesson. A draft still under it after the
+                # retries above is refused here — after the script calls,
+                # before a character of TTS or a frame — because a bad video
+                # is worse than no video, and the portal's Retry re-runs it.
+                if coverage.under_length(report):
+                    coverage_reports.append(report)
+                    _record_coverage(sb, generation_id, coverage_reports)
+                    raise RuntimeError(
+                        f"lesson script is too short: {lesson_length.summary(report['length'])} "
+                        f"after {report.get('retries', 0)} re-ask(s) "
+                        f"(part {part_idx}/{n_parts}, model {_script_client.model})"
                     )
                 coverage_reports.append(report)
                 save_script(script)
@@ -1988,7 +2050,22 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             # (migration 0027). _record_tts_ledger explains the two traps
             # the first shape fell into.
             _over_cap, _ledger_key = _record_tts_ledger(sb, owner_id, voice_report, generation_id)
+            # The floor, measured on the AUDIO this time. The script gate
+            # above judged characters at the fastest observed voice rate, so
+            # this should never fire; when it does, the rate table in
+            # shared/lesson_length.py is what needs updating, and the row
+            # says so rather than the founder discovering it on YouTube.
+            _audio = float(_stats.get("audio_secs") or 0.0)
+            if _min_minutes > 0 and _audio and _audio < _min_minutes * 60.0:
+                logger.warning(
+                    "lesson audio is %.1fs against a floor of %.0fs — CHARS_PER_MINUTE "
+                    "in shared/lesson_length.py underestimates this voice",
+                    _audio, _min_minutes * 60.0,
+                )
             db.merge_generation_params(sb, generation_id, {
+                **({"lesson_length": {"min_minutes": _min_minutes, "audio_secs": round(_audio, 1),
+                                      "ok": _audio >= _min_minutes * 60.0}}
+                   if _min_minutes > 0 and _audio else {}),
                 "tts_voice_used": (_used_list or [None])[0],
                 # the FULL list: a lesson that mixed voices was recorded
                 # as its alphabetically-first voice, hiding the mix

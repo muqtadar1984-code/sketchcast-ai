@@ -67,34 +67,41 @@ def _sb(topic=TOPIC, nodes=NODES, maps=MAPS, jobs=None, articles=(), figures=())
 
 # ── the fake model ──────────────────────────────────────────────────────
 
-# Four bodies of ~100 words each: comfortably over the WORDS_FLOOR (300) even
-# when a test drops one of them, and free of the markup the validator strips.
+# Four bodies of ~260 words each: over the WORDS_MIN (1000) floor the job
+# enforces, still over it when a test drops one of them (the three left are
+# ~780 — under WORDS_MIN, so such a test re-asks; see _sb's FakeModel), and
+# free of the markup the validator strips. Each body is a first paragraph the
+# older assertions quote and a second that carries the length.
 BODY_1 = ("Every living organism is built from **cells**. A cell is the smallest unit that carries out the "
           "processes of life: it takes in nutrients, releases energy from them, grows, responds to its "
           "surroundings and eventually divides to make new cells. Some organisms, such as bacteria and yeast, "
           "consist of a single cell that does everything the organism needs; a human body contains trillions "
           "of cells of many different kinds, each suited to its job. Cells are far too small to see unaided, "
           "so their study began only when microscopes could magnify thin slices of cork, drops of pond water "
-          "and scrapings from the inside of a cheek.")
+          "and scrapings from the inside of a cheek."
+          "Looking at a cell through a microscope for the first time, a learner sees a faint outline with a darker spot inside it, and it is worth pausing on what that outline means. The boundary marks the edge of a tiny working unit that keeps its inside different from its outside: more sugar here, less salt there, the right amount of water to stay firm. Everything the organism does at a large scale, such as running, growing taller or healing a cut, is the sum of what its cells do at a small scale. A cut heals because cells near the wound divide and fill the gap; a child grows because cells divide faster than they die; a runner tires because muscle cells run short of the energy they release from glucose. Historically the idea took time to settle. Robert Hooke named the cell in 1665 after the small rooms he saw in cork, but it was nearly two centuries before biologists agreed that every organism is made of cells and that every cell comes from an existing cell. That second point matters as much as the first: cells are not assembled from non-living material; they are always the descendants of other cells, which is why a bacterium can double in twenty minutes while a broken watch never repairs itself.")
 BODY_2 = ("The **cell membrane** is a thin, flexible boundary that controls what enters and leaves the cell, "
           "letting water and small molecules through while keeping larger ones out. The **nucleus** holds the "
           "genetic material and directs the cell's activities, including when it divides. The **cytoplasm** is "
           "the jelly-like fluid in which the chemical reactions of life take place and in which the other "
           "structures are suspended. **Mitochondria** release energy from glucose by respiration; a muscle "
           "cell, which works hard, contains many more of them than a skin cell does. Every one of these "
-          "structures is present in both plant and animal cells.")
+          "structures is present in both plant and animal cells."
+          "Each of these structures can be understood by asking what would go wrong without it. A cell with a damaged membrane cannot hold its contents in or keep harmful substances out, and it soon dies; this is how some disinfectants work, by dissolving the membranes of bacteria. A cell whose nucleus is removed can survive for a while on the instructions already copied into its cytoplasm, but it cannot make new proteins for long and cannot divide, so it fails at the first repair it needs. The cytoplasm is easy to dismiss as filler, yet it is where sugars are broken down in the first steps of respiration and where proteins are assembled, and its water content decides whether the cell is plump or shrivelled. The mitochondria are the clearest case of structure matching need: a sperm cell packs them tightly around the base of its tail because swimming is expensive, while a fat storage cell has few because it does little work. Under a school microscope only the nucleus and the boundary are usually visible; the mitochondria are far too small and need an electron microscope, which is why they were the last of these four structures to be described.")
 BODY_3 = ("Plant cells have three structures that animal cells lack. A rigid **cell wall** of cellulose "
           "surrounds the membrane and gives the cell a fixed, roughly rectangular shape, which is why plant "
           "tissue holds itself up without a skeleton. **Chloroplasts** contain the green pigment chlorophyll "
           "and carry out photosynthesis, so they are found in leaf cells but not in root cells, which never "
           "see light. A large central **sap vacuole** stores water and dissolved substances and presses "
-          "outward on the wall, keeping the cell firm; a wilting plant is one whose vacuoles have lost water.")
+          "outward on the wall, keeping the cell firm; a wilting plant is one whose vacuoles have lost water."
+          "The three plant-only structures also explain everyday observations. Celery left in fresh water becomes crisp because its cells take in water, their vacuoles swell and press against the walls, and the whole stalk stiffens; celery left in salty water goes limp because water leaves the vacuoles instead. The wall is not alive in the way the membrane is: it is a mesh of cellulose fibres laid down outside the cell, strong under tension like rope, which is why a tree trunk can carry tonnes of branches yet bends in the wind without snapping. Chloroplasts are green only because chlorophyll absorbs red and blue light and reflects green; in autumn the chlorophyll breaks down and the yellow and orange pigments that were there all along show through. A leaf cell may hold fifty or more chloroplasts, and they move within the cytoplasm to face the light. Onion epidermis, the classic specimen for a first plant slide, has no chloroplasts at all because it grows underground, which surprises learners who expect every plant cell to be green and is a useful reminder that structure follows the job a cell actually does.")
 BODY_4 = ("Cells of the same kind working together form a tissue, such as muscle; several tissues form an "
           "organ, such as the heart; and organs that share a task form an organ system, such as the "
           "circulatory system. Comparing cell types shows how structure suits function: a root hair cell has "
           "a long extension that increases the surface for absorbing water, a red blood cell has no nucleus, "
           "which leaves room for haemoglobin, and a nerve cell is drawn out into a long fibre that carries "
-          "signals from one end of the body to the other.")
+          "signals from one end of the body to the other."
+          "This hierarchy is the reason biology can be studied at several scales at once. A doctor examining a heart is thinking about an organ; a physiologist studying why it beats is thinking about cardiac muscle tissue; a geneticist asking why one patient's heart is weak is thinking about the cells and the instructions inside them. The same logic runs through plants: leaf tissue is made of photosynthesising cells, several tissues make the leaf, and leaves, stem and roots form the shoot and root systems that keep the plant fed and anchored. Specialised cells are made by ordinary cell division followed by a change in shape and contents that suits the cell to one task, and once specialised most cells cannot go back. A ciliated cell lining the windpipe grows tiny hairs that sweep mucus and dust upward; a palisade cell in a leaf becomes tall and narrow so that many fit side by side under the upper surface, each packed with chloroplasts. In every case the question to ask is the same one that runs through the whole topic: what does this cell have to do, and what shape and contents let it do that well?")
 
 GOOD = {
     "title": "Cells: the basic unit of life",
@@ -235,7 +242,7 @@ def test_the_prompt_carries_the_depth_the_coverage_target_verbatim_the_prerequis
     assert "Cambridge Lower Secondary Science 0893 (code cambridge_ls_science_0893) - grade/stage 7" in prompt
     assert "cbse:9:U2:01: Cell - Basic Unit of life (partial coverage)" in prompt
     assert prompt.rstrip().endswith(ARTICLE_PROMPT.rstrip())
-    for phrase in ("900-1600 words", "4-8 sections", "3-6 common misconceptions", "1-3 worked examples", "2-5 figures",
+    for phrase in ("1000-1600 words", "4-8 sections", "3-6 common misconceptions", "1-3 worked examples", "2-5 figures",
                    "Never quote or paraphrase a textbook", "British English", "No first person", '"covers"',
                    "Name the layer" if False else '"figure_keys"'):
         assert phrase in prompt, phrase
@@ -313,10 +320,14 @@ def test_word_count_is_computed_from_the_bodies_not_taken_from_the_reply():
     bad["word_count"] = 5000
     body = ("**one** two, three-four (five)! " * 25).strip()       # 125 words a section
     bad["sections"] = [{"id": f"s{i}", "heading": f"H{i}", "body_md": body} for i in range(1, 4)]
-    sb = _sb()
-    run_article_job(sb, _job(), client=FakeModel(bad))
-    assert _articles(sb)[0]["word_count"] == 375
+    assert validate_article(bad, CODES, "Cells").word_count == 375, "the reply's 5000 is ignored"
     assert word_count([{"body_md": "a b\n\n- c\n- d"}]) == 4 and word_count([]) == 0
+    # …and the job stores the computed number, not the reply's.
+    good = copy.deepcopy(GOOD)
+    good["word_count"] = 5000
+    sb = _sb()
+    run_article_job(sb, _job(), client=FakeModel(good))
+    assert _articles(sb)[0]["word_count"] == _good_words()
 
 
 def test_a_dropped_section_re_issues_ids_and_claims_follow_the_model_s_ids():
@@ -398,9 +409,10 @@ def test_figure_labels_are_the_catalogue_key_of_each_part():
 
 
 def test_a_stub_reply_under_the_word_floor_errors_the_job_and_writes_nothing():
-    """The prompt asks for 900 words; twenty words a section is a refusal or a
+    """The prompt asks for 1000 words; twenty words a section is a refusal or a
     truncation dressed as an article, and a reviewer must not be asked to
-    read it."""
+    read it — nor is it worth the length re-ask (that is for a real article
+    that came up short)."""
     bad = copy.deepcopy(GOOD)
     for s in bad["sections"]:
         s["body_md"] = " ".join(["word"] * 20)
@@ -873,3 +885,88 @@ def test_build_article_prompt_is_pure_and_names_the_depth_curriculum():
     odd = article.Mapping(node={"id": "n-x", "grade": "Upper Secondary", "code": "X"}, curriculum=CAM)
     assert article.pick_depth_node(TOPIC, mappings + [odd])["id"] == "n-cb1"
     assert article.pick_depth_node(TOPIC, [odd])["id"] == "n-x"
+
+
+# ── the word floor: 1,000 words, one named re-ask ───────────────────────
+
+
+def _short(words_per_section: int = 150):
+    """A real-looking reply under WORDS_MIN but over WORDS_FLOOR."""
+    bad = copy.deepcopy(GOOD)
+    for i, s in enumerate(bad["sections"]):
+        s["body_md"] = " ".join(f"cell{i}word{j}" for j in range(words_per_section))
+    return bad
+
+
+def test_the_prompt_asks_for_the_floor_and_the_floor_is_a_thousand_words():
+    from catalogue.article import LENGTH_RETRIES, WORDS_MIN
+    assert WORDS_MIN == 1000 and LENGTH_RETRIES == 1
+    assert f"Length {WORDS_MIN}-1600 words" in ARTICLE_PROMPT and f"{WORDS_MIN} is a FLOOR" in ARTICLE_PROMPT
+    assert _good_words() >= WORDS_MIN, "the fixture itself must clear the floor"
+
+
+def test_a_short_reply_is_asked_again_with_the_shortfall_named_and_the_longer_one_is_kept():
+    """Aerobic Respiration, 2026-09-26: a 610-word article became a three-
+    minute video. The floor is enforced where the article is written."""
+    replies = [_short(150), GOOD]
+    model = FakeModel(lambda prompt: replies.pop(0))
+    sb = _sb()
+    summary = run_article_job(sb, _job(), client=model)
+
+    assert len(model.calls) == 2, "the draft and one re-ask"
+    first, second = (c["prompt"] for c in model.calls)
+    assert "LENGTH —" not in first
+    assert second.startswith(first), "the same task, with the shortfall appended"
+    assert "had only 600 words of body text" in second and "The floor is 1000 words" in second
+    assert second.endswith("keep the same JSON shape.")
+    (row,) = _articles(sb)
+    assert row["word_count"] == _good_words() and row["title"] == GOOD["title"]
+    assert summary["repairs"] == [f"re-asked for length: 600 -> {_good_words()} words"]
+    assert summary["word_count"] == _good_words()
+    assert _job_row(sb)["status"] == "done"
+    assert any(st and st.get("step") == "lengthen" for st in
+               (e[2].get("stage") for e in sb.writes("jobs") if e[0] == "update")), "the stage said why it paused"
+
+
+def test_two_short_replies_fail_the_job_and_write_nothing():
+    replies = [_short(150), _short(200)]
+    model = FakeModel(lambda prompt: replies.pop(0))
+    sb = _sb()
+    assert run_article_job(sb, _job(), client=model) is None
+    assert len(model.calls) == 2 and _articles(sb) == [] and _figures(sb) == []
+    job = _job_row(sb)
+    assert job["status"] == "error"
+    assert "only 800 words of body text after 1 re-ask(s); the floor is 1000" in job["error"]
+
+
+def test_a_re_ask_that_comes_back_worse_or_unusable_does_not_replace_the_draft():
+    from catalogue.article import lengthen_if_short
+    first = validate_article(_short(200), CODES, "Cells")          # 800 words
+    # worse: shorter than the draft
+    model = FakeModel(_short(100))
+    with pytest.raises(ArticleInvalid, match="only 800 words of body text after 1 re-ask"):
+        lengthen_if_short(model, "PROMPT", first, CODES, "Cells")
+    assert first.repairs[-1] == "re-asked for length: 400 words, no longer than 800"
+    assert model.calls[0]["prompt"].startswith("PROMPT\n\nLENGTH —")
+    # unusable: the validator refuses the retry reply, the draft stands
+    first = validate_article(_short(200), CODES, "Cells")
+    model = FakeModel({"not": "an article"})
+    with pytest.raises(ArticleInvalid, match="only 800 words"):
+        lengthen_if_short(model, "PROMPT", first, CODES, "Cells")
+    assert len(model.calls) == 1
+    # over the floor already: no call at all
+    good = validate_article(GOOD, CODES, "Cells")
+    model = FakeModel()
+    assert lengthen_if_short(model, "PROMPT", good, CODES, "Cells") is good and model.calls == []
+
+
+def test_a_stub_under_the_hard_floor_is_not_worth_a_re_ask():
+    """WORDS_FLOOR (300) is a refusal or a truncation; the re-ask is for a
+    real article that came up short, not for a reply with no article in it."""
+    bad = copy.deepcopy(GOOD)
+    for s in bad["sections"]:
+        s["body_md"] = " ".join(["word"] * 20)
+    model = FakeModel(bad)
+    sb = _sb()
+    assert run_article_job(sb, _job(), client=model) is None
+    assert len(model.calls) == 1 and "at least 300" in _job_row(sb)["error"]

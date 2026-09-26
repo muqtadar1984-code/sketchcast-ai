@@ -767,6 +767,10 @@ def _presentation_fakes(monkeypatch, tmp_path) -> dict:
     monkeypatch.setattr("shared.coverage.measure", lambda *a, **k: {"verdict": "ok", "covered": 1.0, "addressed": 2,
                                                                   "topics": 2, "missed": []})
     monkeypatch.setattr("shared.coverage.should_retry", lambda *a, **k: False)
+    # The spoken-length floor (shared/lesson_length) is off for these fakes:
+    # three 25-character segments are not a five-minute lesson, and the floor
+    # has its own tests below (TestTheLengthFloor).
+    monkeypatch.setenv("LESSON_MIN_MINUTES", "0")
     return {"scripts": scripts, "slide_inputs": slide_inputs, "compose_calls": compose_calls, "renders": renders}
 
 
@@ -1152,3 +1156,62 @@ class TestRepointLessonPlan:
             res = kit.after_generation(sb, _gen("gen-p", "done"), "kit-1", {"status": "done", "kind": "presentation", "parts": PARTS})
         assert _kit(sb)["doc_generation_ids"]["lesson_plan"] == res["lesson_plan"]
         assert any("apply app migration 0115" in r.getMessage() for r in caplog.records)
+
+
+class TestTheLengthFloor:
+    """A catalogue lesson runs at least LESSON_MIN_MINUTES (Aerobic
+    Respiration, 2026-09-26: a 9-minute target, a 3-minute video, every gate
+    green). The floor is measured on the spoken script before TTS; a draft
+    under it is asked for again, twice, with the shortfall named, and one
+    still under it fails the kit rather than rendering."""
+
+    def test_a_short_script_is_re_asked_twice_then_refused_before_any_render(self, monkeypatch, tmp_path):
+        sb = _sb(statuses={"gen-p": "processing"})
+        sb.tables["jobs"] = [_job("job-p", "gen-p", "presentation")]
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+        fx = _presentation_fakes(monkeypatch, tmp_path)
+        monkeypatch.setenv("LESSON_MIN_MINUTES", "5")   # the fakes' 75 characters are ~3 seconds
+        seen_kw: list[dict] = []
+        import agent3_scripts.script_generator as sg
+        fake_script = sg.generate_episode_script     # the harness's fake, installed above
+
+        def spying_script(*a, **kw):
+            seen_kw.append(kw)
+            return fake_script(*a, **kw)
+
+        monkeypatch.setattr(sg, "generate_episode_script", spying_script)
+
+        with pytest.raises(RuntimeError, match=r"too short: 80 spoken characters .* floor of 5 min .* after 2 re-ask\(s\)") as exc:
+            process.process_generation(sb, sb.tables["jobs"][0], "gen-p")
+
+        assert len(fx["scripts"]) == 3, "the first draft and MAX_LENGTH_RETRIES re-asks, part 1 only"
+        assert fx["renders"] == [] and fx["compose_calls"] == [], "refused before TTS or a frame"
+        assert seen_kw[0]["min_minutes"] == 5.0 and seen_kw[0].get("length_shortfall") is None
+        assert seen_kw[1]["length_shortfall"]["under"] is True and seen_kw[1]["length_shortfall"]["min_chars"] == 6500
+        assert seen_kw[2]["min_minutes"] == 5.0 and seen_kw[2]["length_shortfall"]["chars"] == seen_kw[1]["length_shortfall"]["chars"]
+        assert _kit(sb)["status"] == "failed" and "too short" in _kit(sb)["notes"]
+        gen = next(g for g in sb.tables["generations"] if g["id"] == "gen-p")
+        length = gen["params"]["coverage"][0]["length"]
+        assert length["under"] is True and length["min_minutes"] == 5.0 and gen["params"]["coverage"][0]["retries"] == 2
+
+    def test_a_script_over_the_floor_renders_and_the_floor_is_on_by_default_for_a_kit(self, monkeypatch, tmp_path):
+        sb = _sb(statuses={"gen-p": "processing"})
+        sb.tables["jobs"] = [_job("job-p", "gen-p", "presentation")]
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+        fx = _presentation_fakes(monkeypatch, tmp_path)
+        # A floor the fakes clear: 0.001 min is 1.3 characters. The default
+        # (5 minutes) is what a real kit gets — asserted through the module,
+        # since a kit with a 6,500-character fake script is a slow test.
+        monkeypatch.setenv("LESSON_MIN_MINUTES", "0.001")
+        from shared import lesson_length
+        monkeypatch.delenv("LESSON_MIN_MINUTES")
+        assert lesson_length.min_minutes() == 5.0
+        monkeypatch.setenv("LESSON_MIN_MINUTES", "0.001")
+
+        process.process_generation(sb, sb.tables["jobs"][0], "gen-p")
+
+        assert len(fx["scripts"]) == 2 and len(fx["renders"]) == 2, "one draft per part, both rendered"
+        gen = next(g for g in sb.tables["generations"] if g["id"] == "gen-p")
+        reports = gen["params"]["coverage"]
+        assert [r["length"]["under"] for r in reports] == [False, False]
+        assert all("retries" not in r for r in reports)

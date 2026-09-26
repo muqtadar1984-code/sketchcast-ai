@@ -78,7 +78,7 @@ from typing import Callable, Iterable, Optional
 from agent2_analysis.analyzer import (MAX_ANALYSIS_CHARS, MAX_PART_WORDS,
                                       NARRATION_WPM, build_chapter_parts)
 from catalogue import timestamps as ts
-from catalogue.article import Mapping, load_article, load_mappings, load_topic, pick_depth_node
+from catalogue.article import WORDS_MIN, Mapping, load_article, load_mappings, load_topic, pick_depth_node
 from catalogue.harvest import clean_heading
 from catalogue.loader import article_to_chapter, section_ids_by_heading
 from catalogue.node_kind import node_kind
@@ -706,6 +706,14 @@ def prepare(sb, gen: dict) -> Prepared:
             mark_kit_failed(sb, kit_id, f"article {article_id} is {status or 'unreviewed'}, not approved")
             raise CatalogueRefused(f"article {article_id} is {status or 'unreviewed'}, not approved — "
                                    "a kit is built only from an approved article")
+        # The article floor (catalogue.article.WORDS_MIN) is enforced where
+        # articles are written; an approved article from before it is still
+        # built from — the lesson's own length floor (shared/lesson_length)
+        # guards the video — but the log says the article is the short one.
+        _words = int(article.get("word_count") or 0)
+        if _words and _words < WORDS_MIN:
+            log.warning("kit %s: article %s has %d words of body text, under the %d-word floor — "
+                        "regenerate the article for a fuller lesson", kit_id, article_id, _words, WORDS_MIN)
 
     mappings = load_mappings(sb, topic_id)
     # The article's depth node wins when it names one (it was approved with
