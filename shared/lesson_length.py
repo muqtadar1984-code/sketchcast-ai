@@ -51,6 +51,16 @@ _CHARS_PER_WORD = 6
 # single character of TTS or a single frame.
 MAX_LENGTH_RETRIES = 2
 
+# What one teaching segment of dialogue is worth, measured on the shipped
+# kits: 9-11 segments of 400-550 characters. The prompt turns the floor
+# into a segment count with this, and a re-ask into "add N segments" — a
+# model told only "be longer" rewrote 4,176 characters as 4,900 twice
+# (Aerobic Respiration, 2026-09-26, 14:07 UTC) and the kit failed; a model
+# told which segments to keep and how many to add has something to count.
+SEGMENT_CHARS = 500
+# …and the least a new segment may carry to count as teaching.
+MIN_SEGMENT_CHARS = 450
+
 
 def min_minutes() -> float:
     """The floor in minutes; 0.0 when the rule is off."""
@@ -71,6 +81,33 @@ def min_chars(minutes: float) -> int:
 
 def min_words(minutes: float) -> int:
     return int(round(min_chars(minutes) / _CHARS_PER_WORD))
+
+
+def min_segments(minutes: float) -> int:
+    """The teaching segments a ``minutes``-long lesson needs at SEGMENT_CHARS
+    each — 13 for five minutes."""
+    need = min_chars(minutes)
+    return max(1, -(-need // SEGMENT_CHARS)) if need else 0
+
+
+def segments_to_add(measured: dict) -> int:
+    """How many new segments close the measured shortfall, one over so the
+    re-ask lands past the floor rather than on it; at least two."""
+    short = max(0, int(measured.get("min_chars") or 0) - int(measured.get("chars") or 0))
+    return max(2, -(-short // MIN_SEGMENT_CHARS) + 1)
+
+
+def segment_texts(script: dict) -> list[dict]:
+    """``[{type, text}]`` — each segment's spoken words, for a re-ask that
+    keeps them. Title cards and empty segments are left out."""
+    out: list[dict] = []
+    for seg in (script or {}).get("segments") or []:
+        if not isinstance(seg, dict):
+            continue
+        text = spoken_text({"segments": [seg]})
+        if text:
+            out.append({"type": str(seg.get("type") or "explore"), "text": text})
+    return out
 
 
 def spoken_text(script: dict) -> str:
@@ -111,30 +148,57 @@ def measure(script: dict, minutes: float | None = None) -> dict:
 
 def prompt_block(minutes: float) -> str:
     """The instruction that puts the floor in front of the script model. Stated
-    in words AND characters: a model asked for minutes alone wrote three of
-    nine (the incident above); one told how many words that is can count."""
+    in words, characters AND segments: a model asked for minutes alone wrote
+    three of nine (the incident above); one told how many words that is can
+    count, and one told how many segments has a structure to fill."""
     return (
         f"\n\nMINIMUM LENGTH — this lesson must run at least {minutes:g} minutes "
         f"when spoken. On this pipeline's voices that is at least "
         f"{min_words(minutes):,} words of dialogue ({min_chars(minutes):,} "
-        f"characters) across all segments. A shorter script is REJECTED and "
+        f"characters) across all segments. In practice: at least "
+        f"{min_segments(minutes)} teaching segments, each carrying at least "
+        f"{MIN_SEGMENT_CHARS} characters (about {MIN_SEGMENT_CHARS // 6} words) of "
+        f"dialogue. The length floor, not the visuals, sets the number of segments — "
+        f"several segments may share one board. A shorter script is REJECTED and "
         f"regenerated. Reach the length by teaching, never by filler: for each "
         f"concept explain the mechanism, why it matters, a worked example or "
-        f"analogy, and the misconception a learner holds and its correction. "
-        f"Use as many teaching segments as the length needs."
+        f"analogy, and the misconception a learner holds and its correction."
     )
 
 
 def shortfall_block(measured: dict) -> str:
-    """The retry instruction: what the last draft measured against the floor."""
-    return (
+    """The retry instruction: what the last draft measured against the floor,
+    and — when the draft's segments are supplied (``segments``, from
+    segment_texts) — the draft itself, to KEEP and EXTEND rather than
+    rewrite. A rewrite drifts back to the model's habitual length; an
+    extension has a fixed base and a number of segments to add."""
+    head = (
         f"\n\nLENGTH — a previous draft of this script ran about "
         f"{measured.get('est_minutes', 0):g} minutes when spoken "
         f"({measured.get('chars', 0):,} characters of dialogue) against a floor of "
         f"{measured.get('min_minutes', 0):g} minutes ({measured.get('min_chars', 0):,} "
-        f"characters). It was rejected for length. This draft MUST reach the "
-        f"floor: teach every concept more fully and add the teaching segments "
-        f"the extra minutes need. Do not shorten anything that was already there."
+        f"characters). It was rejected for length."
+    )
+    segs = [s for s in (measured.get("segments") or []) if isinstance(s, dict) and s.get("text")]
+    add = segments_to_add(measured)
+    if not segs:
+        return head + (
+            f" This draft MUST reach the floor: keep everything the previous draft taught "
+            f"and add at least {add} further teaching segments of at least "
+            f"{MIN_SEGMENT_CHARS} characters of dialogue each, placed where they belong "
+            f"in the arc. Do not shorten anything."
+        )
+    listing = "\n".join(f"  {i + 1}. [{s['type']}] {s['text']}" for i, s in enumerate(segs))
+    return head + (
+        f"\n\nTHE PREVIOUS DRAFT'S SEGMENTS, in order (their spoken words):\n{listing}\n\n"
+        f"Write the lesson again KEEPING every one of these segments — same order, same "
+        f"teaching, wording may be polished but never shortened — and ADD at least {add} "
+        f"NEW teaching segments of at least {MIN_SEGMENT_CHARS} characters of dialogue each, "
+        f"placed where they belong in the arc (not appended as a list at the end). Each new "
+        f"segment teaches something the draft passed over: a mechanism it only named, a "
+        f"worked example, a misconception and its correction, a topic from KEY CONCEPTS TO "
+        f"TEACH it skipped. Give every new segment its own visual plan entry, or let it "
+        f"CONTINUE the board of the segment before it."
     )
 
 
