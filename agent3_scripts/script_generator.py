@@ -250,8 +250,15 @@ def generate_episode_script(
     subject: str | None = None,
     curriculum: str | None = None,
     learner_age: str | None = None,
+    min_minutes: float | None = None,
+    length_shortfall: dict | None = None,
 ) -> EpisodeScript:
     """Generate a complete episode script via Claude in the chosen narration style.
+
+    ``min_minutes`` is the spoken-length floor (shared/lesson_length.py): the
+    prompt states it in minutes, words and characters, and the target
+    duration is raised to meet it. ``length_shortfall`` is that rule's retry
+    channel — the previous draft's measurement, named back to the model.
 
     ``narration_style`` changes persona/arc/tone only — the emitted segment schema
     (and thus slide/video rendering) is identical for every style.
@@ -336,6 +343,15 @@ def generate_episode_script(
             + "; ".join(str(t) for t in must_cover[:12])
             + ".\nTeach them where they belong in the arc — do not append a list at the end."
         )
+    if min_minutes and min_minutes > 0:
+        # The length floor, in units the model can count (Aerobic Respiration,
+        # 2026-09-26: told "9.0 minutes" it wrote three). The shortfall block
+        # is the retry: what the last draft measured, against the floor.
+        from shared.lesson_length import prompt_block, shortfall_block
+
+        episode_context += prompt_block(min_minutes)
+        if length_shortfall:
+            episode_context += shortfall_block(length_shortfall)
     from shared.languages import prompt_directive
 
     if language == "ms-arab":
@@ -360,6 +376,10 @@ def generate_episode_script(
     # oversized target makes Claude's reply overrun max_tokens, truncating the
     # JSON and silently yielding zero segments.
     target_duration = min(12.0, float(episode.get("estimated_duration_minutes", 5) or 5))
+    if min_minutes and min_minutes > 0:
+        # A target under the floor would contradict it on the next line of
+        # the prompt; one minute over so the floor is not the target.
+        target_duration = min(12.0, max(target_duration, float(min_minutes) + 1.0))
 
     _semantic = os.getenv("SEMANTIC_PLAN", "").strip() == "1"
     _chapter_title = analysis.get("chapter_title", f"Chapter {chapter_num}")

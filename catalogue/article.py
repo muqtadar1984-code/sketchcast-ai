@@ -81,8 +81,12 @@ The reply is VALIDATED in code (``validate_article``), never trusted:
     where a string belongs is treated as absent, never ``str()``-ed);
   * ``word_count`` is computed from the (stripped) section bodies, never
     taken from the reply; fewer than ``WORDS_FLOOR`` (300) words fails the
-    job — the prompt asks for 900, and a 200-word reply is a refusal or a
-    truncation, not an article.
+    job — a 200-word reply is a refusal or a truncation, not an article;
+  * fewer than ``WORDS_MIN`` (1000) words is a short article: the model is
+    asked once more (``LENGTH_RETRIES``) with the shortfall named, the longer
+    of the two replies is kept, and one still under the floor fails the job
+    (``author_article``, not the pure validator — the deck-article path
+    shares the validator and authors to its own length).
   Every repair is listed in the summary (``repairs``) so a reviewer can see
   what the model got wrong.
 
@@ -129,10 +133,19 @@ MAX_FIGURES = 8
 # The vision annotator reads at most 12 part names off a prompt tail
 # (raster_assets.part_names_from_prompt); a spec naming more would lose them.
 MAX_PARTS_PER_FIGURE = 12
-WORDS_MIN, WORDS_MAX = 900, 1600
+# The founder's floor for a catalogue article (2026-09-26): 1,000 words of
+# body text. Every lesson, deck, worksheet and question is generated from the
+# article, and a 600-word article became a three-minute video. WORDS_MIN is
+# both what the prompt asks for and what author_article enforces — a reply
+# under it is asked for again once, with the measured shortfall named, and a
+# second reply still under it fails the job.
+WORDS_MIN, WORDS_MAX = 1000, 1600
 # Below this the reply is a refusal, a truncation or a stub — never an
-# article a reviewer should be asked to read. A third of the asked minimum.
+# article a reviewer should be asked to read, and not worth a second call.
+# (validate_article's floor; the deck-article path authors to it too.)
 WORDS_FLOOR = 300
+# Further authoring calls a reply between WORDS_FLOOR and WORDS_MIN may earn.
+LENGTH_RETRIES = 1
 # Reviewer notes are stored on the row and put in the prompt verbatim; a cap
 # keeps a pasted document out of both.
 HINTS_MAX_CHARS = 4000
@@ -699,6 +712,52 @@ def validate_article(raw: object, coverage_codes: list[str], fallback_title: str
     )
 
 
+def length_note(words: int, words_min: int = WORDS_MIN) -> str:
+    """The re-ask: the previous reply's measured length against the floor,
+    appended to the SAME prompt so nothing else about the task changes."""
+    return (
+        f"\n\nLENGTH — the previous reply to this task had only {words} words of body text across its "
+        f"sections. The floor is {words_min} words, and that reply was rejected for length. Write the "
+        f"article again, complete, with at least {words_min} words of body text (aim for "
+        f"{WORDS_MAX}): go deeper on every section — the mechanism, why it matters, a worked case, "
+        f"the misconception and its correction — and add the sections the topic needs. Keep every "
+        f"other rule above, and keep the same JSON shape."
+    )
+
+
+def lengthen_if_short(client, prompt: str, article: "Article", coverage_codes: list[str],
+                      fallback_title: str, words_min: int = WORDS_MIN,
+                      retries: int = LENGTH_RETRIES, on_retry=None) -> "Article":
+    """Enforce WORDS_MIN on a validated article. A reply under the floor
+    earns ``retries`` further calls, each with the shortfall named; the longest
+    valid reply is kept, and one still under the floor raises ArticleInvalid.
+    An invalid retry reply (the validator refuses it) counts as a spent try
+    and the previous best stands. Pure apart from the model calls."""
+    best = article
+    tried = 0
+    while best.word_count < words_min and tried < retries:
+        tried += 1
+        if on_retry is not None:
+            on_retry()
+        log.warning("article: %d words of body text against a floor of %d — asking again (%d/%d)",
+                    best.word_count, words_min, tried, retries)
+        raw = ask_model(client, prompt + length_note(best.word_count, words_min))
+        try:
+            again = validate_article(raw, coverage_codes, fallback_title)
+        except ArticleInvalid as exc:
+            log.warning("article: the re-ask for length was unusable (%s); keeping the previous reply", exc)
+            continue
+        if again.word_count > best.word_count:
+            again.repairs.append(f"re-asked for length: {best.word_count} -> {again.word_count} words")
+            best = again
+        else:
+            best.repairs.append(f"re-asked for length: {again.word_count} words, no longer than {best.word_count}")
+    if best.word_count < words_min:
+        raise ArticleInvalid(
+            f"only {best.word_count} words of body text after {tried} re-ask(s); the floor is {words_min}")
+    return best
+
+
 # ── database edges ─────────────────────────────────────────────────────
 
 
@@ -898,14 +957,17 @@ def author_article(sb, job_id: str, params: dict, client=None) -> dict:
     prompt = build_article_prompt(topic, language, mappings, depth_node, depth_curriculum, prerequisites,
                                   previous=previous, hints=hints, revise=source is not None)
     raw = ask_model(client, prompt)
-    usage = getattr(client, "session_usage", None)
-    if isinstance(usage, dict) and usage.get("calls"):
-        db.set_job_usage(sb, job_id, usage)
 
     stage["step"] = "validate"
     db.set_stage(sb, job_id, dict(stage))
     db.set_progress(sb, job_id, 80)
     article = validate_article(raw, codes, clean_heading(topic.get("title")) or "Untitled")
+    article = lengthen_if_short(client, prompt, article, codes, clean_heading(topic.get("title")) or "Untitled",
+                                on_retry=lambda: db.set_stage(sb, job_id, {**stage, "step": "lengthen"}))
+    # Recorded once, after the re-ask the length floor may have spent.
+    usage = getattr(client, "session_usage", None)
+    if isinstance(usage, dict) and usage.get("calls"):
+        db.set_job_usage(sb, job_id, usage)
 
     stage["step"] = "write"
     db.set_stage(sb, job_id, dict(stage))
@@ -960,7 +1022,8 @@ def run_article_job(sb, job: dict, client=None) -> Optional[dict]:
 
 __all__ = [
     "JOB_TYPE", "DEFAULT_LANGUAGE", "MIN_SECTIONS", "MAX_SECTIONS", "MAX_FIGURES", "MAX_PARTS_PER_FIGURE",
-    "MAX_TOKENS", "WORDS_FLOOR", "HINTS_MAX_CHARS", "VERSION_RETRIES", "STEP_FIGURES", "TERMINAL_STEPS",
+    "MAX_TOKENS", "WORDS_FLOOR", "WORDS_MIN", "WORDS_MAX", "LENGTH_RETRIES", "length_note",
+    "lengthen_if_short", "HINTS_MAX_CHARS", "VERSION_RETRIES", "STEP_FIGURES", "TERMINAL_STEPS",
     "SYSTEM_PROMPT", "ARTICLE_PROMPT", "RESPONSE_SCHEMA", "REQUIRED_ARRAYS", "ArticleInvalid", "Mapping",
     "Article", "pick_depth_node", "load_topic", "load_mappings", "load_prerequisite_titles", "load_versions",
     "load_article", "coverage_block", "build_article_prompt", "ask_model", "strip_markup", "word_count",
