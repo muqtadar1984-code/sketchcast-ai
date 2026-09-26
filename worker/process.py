@@ -1739,7 +1739,10 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                     # A pooled report's missed list is other parts' topics
                     # (above); only its length may send it round again.
                     _must_cover = [] if report.get("pooled") else (report.get("missed") or [])
-                    _shortfall = report.get("length") if coverage.under_length(report) else None
+                    # The re-ask KEEPS the draft's segments and adds to them:
+                    # a rewrite drifts back to the model's habitual length.
+                    _shortfall = ({**report["length"], "segments": lesson_length.segment_texts(script_dict)}
+                                  if coverage.under_length(report) else None)
                     if _shortfall:
                         logger.warning(
                             "lesson script under the length floor (part %d/%d, try %d/%d): %s",

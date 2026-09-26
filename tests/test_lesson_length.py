@@ -150,11 +150,43 @@ class TestThePrompt:
         assert "TARGET DURATION: 6.0 minutes" in self._ask(min_minutes=5.0)
         assert "TARGET DURATION: 3.0 minutes" in self._ask()
 
+    def test_the_floor_is_also_a_segment_count(self):
+        prompt = self._ask(min_minutes=5.0)
+        assert "at least 13 teaching segments, each carrying at least 450 characters" in prompt
+        assert "The length floor, not the visuals, sets the number of segments" in prompt
+
     def test_the_retry_names_the_measured_shortfall(self):
         shortfall = lesson_length.measure(_script(3494), 5.0)
         prompt = self._ask(min_minutes=5.0, length_shortfall=shortfall)
         assert "LENGTH — a previous draft of this script ran about 2.69 minutes" in prompt
         assert "3,494 characters" in prompt and "floor of 5 minutes (6,500 characters)" in prompt
+        # 6500 - 3494 = 3006 short: 7 segments of 450, one over
+        assert "add at least 8 further teaching segments" in prompt
+
+    def test_the_retry_keeps_the_previous_segments_and_says_how_many_to_add(self):
+        """Aerobic Respiration, 14:07 UTC: told only to be longer, the model
+        rewrote 4,176 characters as 4,900, then 4,746, and the kit failed. The
+        re-ask now hands the draft back to KEEP and says how many segments to
+        ADD."""
+        draft = {"segments": [{"type": "hook", "text": "Why do you breathe faster when you run?"},
+                              {"type": "explore", "text": "", "dialogue": [{"who": "teacher", "line": "Cells release energy from glucose."}]},
+                              {"type": "title", "text": ""}]}
+        measured = {**lesson_length.measure(draft, 5.0), "segments": lesson_length.segment_texts(draft)}
+        assert [s["type"] for s in measured["segments"]] == ["hook", "explore"], "the empty title card is left out"
+        prompt = self._ask(min_minutes=5.0, length_shortfall=measured)
+        assert "THE PREVIOUS DRAFT'S SEGMENTS, in order" in prompt
+        assert "1. [hook] Why do you breathe faster when you run?" in prompt
+        assert "2. [explore] Cells release energy from glucose." in prompt
+        assert "KEEPING every one of these segments" in prompt
+        add = lesson_length.segments_to_add(measured)
+        assert add == -(-(6500 - measured["chars"]) // 450) + 1
+        assert f"ADD at least {add} NEW teaching segments of at least 450 characters" in prompt
+
+    def test_segment_arithmetic(self):
+        assert lesson_length.min_segments(5.0) == 13
+        assert lesson_length.min_segments(0.0) == 0
+        assert lesson_length.segments_to_add({"min_chars": 6500, "chars": 6400}) == 2, "never fewer than two"
+        assert lesson_length.segments_to_add({"min_chars": 6500, "chars": 4176}) == 7
 
     def test_no_floor_leaves_the_prompt_untouched(self):
         prompt = self._ask()
