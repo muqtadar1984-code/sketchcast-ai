@@ -192,6 +192,9 @@ def validate_visual_language(video_manifest: dict,
         # a label whose part could not be located: it gets a leader to the
         # picture's edge rather than a confident line to the wrong structure
         "anchor_edge_fallbacks": _pick("ANCHOR_EDGE_FALLBACK"),
+        # an engine-synthesized label whose part is not in the picture was
+        # re-seated as a caption under it, its invented arrow retired
+        "labels_captioned": _pick("LABEL_CAPTIONED"),
         # a planned illustration that never rendered takes its labels and
         # arrows with it, instead of laying them over a DIFFERENT diagram
         "orphaned_by_unresolved_asset": _pick("ORPHANED_BY_UNRESOLVED_ASSET"),

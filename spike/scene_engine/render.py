@@ -561,6 +561,10 @@ class SceneRenderer:
             if isinstance(el.head, AnchorRef) and el.head.layer:
                 tb = self.bound.get(el.head.el)
                 if tb is not None and \
+                        not self._layer_instance_boxes(tb, el.head.layer) \
+                        and self._caption_instead_of_leader(el, tb):
+                    continue
+                if tb is not None and \
                         not self._layer_instance_boxes(tb, el.head.layer):
                     # The named part cannot be located in the art. The old
                     # behaviour was to SUPPRESS the arrow whenever the asset
@@ -1051,6 +1055,61 @@ class SceneRenderer:
                     continue
                 self._drop_element(end.el, owner)
         return kept
+
+    def _caption_instead_of_leader(self, el, picture: "Bound") -> bool:
+        """An ENGINE-SYNTHESIZED label whose part is not in the picture is
+        re-seated as a caption under the picture, and its arrow is dropped.
+
+        The edge leader below is the right answer for an arrow the DIRECTOR
+        asked for: the label was placed in a margin column on purpose, and a
+        line to the picture's edge says which picture it belongs to. It is
+        the wrong answer for an arrow the engine invented — continuity
+        synthesizes one for every label written onto a picture, naming the
+        part after the label's text — because a leader that cannot find its
+        part draws attention to a line, not to a structure. States of Matter
+        (2026-09-25): "Evaporative Cooling" and "Sublimation" each got a
+        leader to the edge of the phase triangle, four times over.
+
+        The label moves to the first free row directly BELOW the picture
+        (the caption slot, centred on it), so it still reads as a statement
+        about that picture, and the invented arrow draws nothing. Only when
+        no such row is free does the arrow keep the edge leader. Returns
+        True when the arrow was retired.
+        """
+        if not str(el.id).startswith("arr_auto_"):
+            return False
+        if not isinstance(el.tail, AnchorRef):
+            return False
+        lb = self.bound.get(el.tail.el)
+        if lb is None or lb.text is None or not lb.box:
+            return False
+        art = self._ink_box(picture) or picture.box
+        if not art or art[2] <= art[0] or art[3] <= art[1]:
+            return False
+        occupied = list(self._avatar_zones)
+        occupied += [ob.box for oid, ob in self.bound.items()
+                     if oid != el.tail.el and ob.box and not _is_overlay(oid)
+                     and (ob.text is not None or isinstance(ob.element, IllustrationElement))
+                     and (ob.box[2] > ob.box[0] and ob.box[3] > ob.box[1])]
+        w = lb.box[2] - lb.box[0]
+        h = lb.box[3] - lb.box[1]
+        SAFE_L, SAFE_R, SAFE_B = 24.0, WORLD_W - 24.0, WORLD_H - 46.0
+        x0 = min(max(SAFE_L, (art[0] + art[2]) / 2 - w / 2), SAFE_R - w)
+        y = art[3] + 12.0
+        while y + h <= SAFE_B:
+            box = (x0, y, x0 + w, y + h)
+            if not self._hits(box, occupied):
+                lb.box = box
+                b = self.bound[el.id]
+                b.layers = []
+                self._flat[el.id] = []
+                b.box = (0.0, 0.0, 0.0, 0.0)
+                self._dropped.add(el.id)
+                self._warn(f"LABEL_CAPTIONED {el.tail.el} "
+                           f"({el.head.el}.{el.head.layer} not in the picture)")
+                return True
+            y += h + 10.0
+        return False
 
     def _drop_element(self, eid: str, because: str) -> None:
         b = self.bound.get(eid)
