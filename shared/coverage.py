@@ -573,11 +573,24 @@ def should_retry(report: dict, mode: str | None = None) -> bool:
     """
     if report.get("pooled"):
         return False
-    # A thin draft earns the same one retry a short one does. It is the more
-    # common failure of the two — of five production presentations, two were
-    # thin and none were short — and it is the cheaper to rescue, because the
-    # retry happens before slides, TTS or a single frame.
-    return should_fail(report, mode) or is_thin(report, mode)
+    mode = mode or gate_mode()
+    if mode == "off" or not report.get("gated") or not report.get("checked"):
+        return False
+    # A SHORT draft earns the retry in every mode, not only in strict. The
+    # retry used to share should_fail's bar, so under the default warn mode a
+    # draft at 0.737 — "short", five of nineteen topics never mentioned —
+    # shipped as a 3-minute video of a 4-minute lesson (States of Matter,
+    # 2026-09-26, twice in one morning) while the gate wrote "short" in the
+    # log and nothing acted on it. Whether a short draft may FAIL the job is
+    # still the mode's decision; whether it is worth one more script call,
+    # naming what was dropped, is not: that call is the cheapest thing in the
+    # pipeline, and better_draft keeps the first draft if the second is worse.
+    #
+    # A thin draft earns the same one retry. It is the more common failure of
+    # the two — of five production presentations, two were thin — and it is
+    # the cheaper to rescue, because the retry happens before slides, TTS or
+    # a single frame.
+    return report.get("verdict") in ("short", "floor") or is_thin(report, mode)
 
 
 def better_draft(first: dict, second: dict) -> bool:

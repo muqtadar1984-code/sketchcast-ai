@@ -148,6 +148,39 @@ class TestDropsAThirdOfTheSections:
         assert should_fail(report, "warn") is False
         assert should_fail(report, "strict") is True
 
+    def test_a_short_draft_earns_the_one_retry_in_every_mode_that_measures(self):
+        """States of Matter, 2026-09-26: a 0.737 draft — "short", five of
+        nineteen topics never mentioned — shipped as a 3-minute video of a
+        4-minute lesson, twice in one morning, because the retry shared
+        should_fail's bar and warn does not fail a short draft. Whether it
+        FAILS is the mode's call; whether it is worth one more script call
+        naming what was dropped is not."""
+        from shared.coverage import should_retry
+        analysis = _analysis(TOPICS)
+        report = measure(analysis, analysis["episodes"]["episodes"][0], script_text(THIN_SCRIPT))
+        assert report["verdict"] == "short"
+        assert should_retry(report, "warn") is True
+        assert should_retry(report, "strict") is True
+        assert should_retry(report, "off") is False, "a gate that is off asks for nothing"
+        assert should_fail(report, "warn") is False, "the retry does not make warn strict"
+
+    def test_a_pooled_or_ungated_short_report_still_earns_no_retry(self):
+        from shared.coverage import should_retry
+        analysis = _analysis(TOPICS)
+        report = measure(analysis, analysis["episodes"]["episodes"][0], script_text(THIN_SCRIPT))
+        assert should_retry({**report, "pooled": True, "verdict": "pooled"}, "warn") is False
+        assert should_retry({**report, "gated": False}, "warn") is False
+        assert should_retry({**report, "checked": False}, "warn") is False
+
+    def test_a_full_draft_earns_no_retry(self):
+        from shared.coverage import is_thin, should_retry
+        analysis = _analysis(TOPICS)
+        report = measure(analysis, analysis["episodes"]["episodes"][0], script_text(FULL_SCRIPT))
+        assert report["verdict"] == "ok"
+        # breadth asks for nothing; only the depth rule (its own mode) can
+        assert should_retry(report, "warn") is is_thin(report, "warn")
+        assert should_retry({**report, "thin": False}, "warn") is False
+
     def test_a_collapsed_script_hits_the_floor_in_every_mode(self):
         # Below 0.30 seven topics in ten are never mentioned — not thinning,
         # a script that is not about this chapter. Same class as the
