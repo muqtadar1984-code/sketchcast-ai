@@ -175,6 +175,8 @@ from .camera import CameraState, CameraTrack
 # A zoom onto an element may enlarge it to this fraction of the frame and no
 # further: the target stays whole with a little air around it.
 _ZOOM_FIT_MARGIN = 0.92
+# A zoom capped below this is not a focus, it is a jitter: skipped outright.
+_ZOOM_MIN_WORTH = 1.08
 from .geometry import (Point, bbox, cut_at_fraction, ease, ellipse_path,
                        path_length, underline_path)
 from .paper import PALETTE, make_background, role_color
@@ -1879,22 +1881,39 @@ class SceneRenderer:
             if (a.target in self.bound and a.target not in hud
                     and a.target not in self._dropped):
                 b = self.bound[a.target]
-                x0, y0, x1, y1 = b.box
-                focus[i] = ((x0 + x1) / 2, (y0 + y1) / 2)
                 # A zoom DIRECTS ATTENTION; it must not crop the thing it is
                 # directing attention to. Structure of the Atom (2026-09-13):
                 # a 1.6x zoom on a diagram that already filled the board,
                 # held through two CONTINUE segments — 50 s of gold atoms
                 # running off every edge of the frame. Measure the target's
                 # INK and cap the zoom at what still fits, with a margin.
+                #
+                # And not the ink alone. States of Matter (2026-09-26): a
+                # 1.4x zoom on the phase chart kept the chart in frame and
+                # pushed its labels — laid out in the margin columns either
+                # side of it — off both edges, leaving their leader lines
+                # entering the frame from nowhere. A labelled picture is the
+                # picture WITH its labels: the extent measured is the ink
+                # plus every label an arrow ties to it, and the camera
+                # centres on that extent rather than on the picture.
                 ink = self._ink_box(b) or b.box
-                bw = max(1.0, ink[2] - ink[0])
-                bh = max(1.0, ink[3] - ink[1])
+                extent = self._annotated_extent(a.target, ink)
+                focus[i] = ((extent[0] + extent[2]) / 2, (extent[1] + extent[3]) / 2)
+                bw = max(1.0, extent[2] - extent[0])
+                bh = max(1.0, extent[3] - extent[1])
                 fit = min(WORLD_W / bw, WORLD_H / bh) * _ZOOM_FIT_MARGIN
                 if float(a.scale) > fit:
                     caps[i] = max(1.0, fit)
-                    self._warn(f"ZOOM_CLAMPED {a.target} {float(a.scale):.2f}->"
-                               f"{caps[i]:.2f} (target fills the frame)")
+                    if caps[i] < _ZOOM_MIN_WORTH:
+                        # a 1.03x zoom is a jitter, not a focus
+                        caps[i] = 1.0
+                    if extent != tuple(ink):
+                        self._warn(f"ZOOM_CLAMPED_FOR_LABELS {a.target} "
+                                   f"{float(a.scale):.2f}->{caps[i]:.2f} "
+                                   f"(labels would leave the frame)")
+                    else:
+                        self._warn(f"ZOOM_CLAMPED {a.target} {float(a.scale):.2f}->"
+                                   f"{caps[i]:.2f} (target fills the frame)")
             elif getattr(a, "follow", True):
                 fp = self._next_action_focus(i)
                 if fp is not None:
@@ -1986,6 +2005,33 @@ class SceneRenderer:
                     or bool(getattr(e, "hud", False))):
                 out.add(e.id)
         return out
+
+    def _annotated_extent(self, target: str, ink: tuple) -> tuple:
+        """The picture WITH its labels: the ink box widened to every label an
+        arrow ties to this element (the arrow's tail is that label) and the
+        arrows themselves. Dropped elements and screen-fixed overlays are not
+        part of it; a picture with no labels is its ink alone."""
+        x0, y0, x1, y1 = ink
+        hud = self._hud_element_ids()
+        for eid, ab in self.bound.items():
+            el = ab.element
+            if not isinstance(el, ArrowElement) or eid in self._dropped or eid in hud:
+                continue
+            if not (isinstance(el.head, AnchorRef) and el.head.el == target):
+                continue
+            boxes = []
+            if ab.box and ab.box[2] > ab.box[0] and ab.box[3] > ab.box[1]:
+                boxes.append(ab.box)
+            if isinstance(el.tail, AnchorRef):
+                lb = self.bound.get(el.tail.el)
+                if (lb is not None and lb.text is not None and lb.box
+                        and el.tail.el not in self._dropped and el.tail.el not in hud
+                        and lb.box[2] > lb.box[0] and lb.box[3] > lb.box[1]):
+                    boxes.append(lb.box)
+            for bx in boxes:
+                x0, y0 = min(x0, bx[0]), min(y0, bx[1])
+                x1, y1 = max(x1, bx[2]), max(y1, bx[3])
+        return (x0, y0, x1, y1)
 
     def _next_action_focus(self, i: int) -> Point | None:
         """Where the next draw/write after timeline index i will put ink —

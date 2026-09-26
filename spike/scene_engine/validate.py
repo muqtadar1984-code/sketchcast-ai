@@ -195,6 +195,9 @@ def validate_visual_language(video_manifest: dict,
         # an engine-synthesized label whose part is not in the picture was
         # re-seated as a caption under it, its invented arrow retired
         "labels_captioned": _pick("LABEL_CAPTIONED"),
+        # a zoom held back so the target's LABELS stay in frame with it — the
+        # picture fitted, the words in the margin columns did not
+        "zooms_clamped_for_labels": _pick("ZOOM_CLAMPED_FOR_LABELS"),
         # a planned illustration that never rendered takes its labels and
         # arrows with it, instead of laying them over a DIFFERENT diagram
         "orphaned_by_unresolved_asset": _pick("ORPHANED_BY_UNRESOLVED_ASSET"),
