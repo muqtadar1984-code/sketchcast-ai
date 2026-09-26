@@ -24,9 +24,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 StepKind = Literal["transform", "setup", "check", "round"]
 Task = Literal["solve", "solve_system", "solve_inequality", "simplify", "expand",
-               "factorise", "evaluate", "round", "estimate"]
+               "factorise", "evaluate", "round", "estimate", "mean", "median", "mode", "range"]
+# The four DATA tasks (mean, median, mode, range) take a data list as their
+# givens — "4, 8, 6, 10, 12" — and are verified against the statistic of
+# that list (maths.verify). Added 2026-09-26 after a Grade 7 statistics
+# chapter failed every worksheet and exam question: a comma list could
+# only ever be a refusal.
 TASKS: tuple[str, ...] = ("solve", "solve_system", "solve_inequality", "simplify", "expand",
-                          "factorise", "evaluate", "round", "estimate")
+                          "factorise", "evaluate", "round", "estimate", "mean", "median", "mode", "range")
+DATA_TASKS: tuple[str, ...] = ("mean", "median", "mode", "range")
 DIFFICULTY_NAMES = {1: "simplest", 2: "medium", 3: "difficult", 4: "extremely difficult"}
 
 _MAX_LINE = 400
@@ -447,5 +453,5 @@ def parse_example(data) -> WorkedExample:
 
 
 __all__ = ["Line", "Step", "Mistake", "WorkedExample", "MethodCard", "TryIt", "Lesson",
-           "TASKS", "DIFFICULTY_NAMES", "STEP_SCHEMA", "EXAMPLE_SCHEMA", "LESSON_SCHEMA",
+           "TASKS", "DATA_TASKS", "DIFFICULTY_NAMES", "STEP_SCHEMA", "EXAMPLE_SCHEMA", "LESSON_SCHEMA",
            "parse_lesson", "parse_example"]

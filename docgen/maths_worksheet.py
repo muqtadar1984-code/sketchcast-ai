@@ -28,7 +28,15 @@ from docgen import docx_builder as dx
 from maths.pretty import pretty
 from maths.tokens import TokenError, tokenize
 from maths.questions import question_ladder, worked_solution
-from maths.schema import DIFFICULTY_NAMES, Lesson
+from maths.schema import DATA_TASKS, DIFFICULTY_NAMES, Lesson
+
+
+def is_data_list(text: str) -> bool:
+    from maths.notation import is_notation, parse_relation
+    try:
+        return is_notation(text) and parse_relation(text).is_data
+    except Exception:  # noqa: BLE001
+        return False
 
 logger = logging.getLogger("worker")
 
@@ -54,7 +62,8 @@ def _n(params: dict, kind: str) -> int:
 
 _VERB = {"simplify": "verb_simplify", "expand": "verb_expand", "factorise": "verb_factorise",
          "evaluate": "verb_evaluate", "solve": "verb_solve", "solve_system": "verb_solve",
-         "solve_inequality": "verb_solve", "round": "verb_round", "estimate": "verb_estimate"}   # strings keys
+         "solve_inequality": "verb_solve", "round": "verb_round", "estimate": "verb_estimate",
+         "mean": "verb_mean", "median": "verb_median", "mode": "verb_mode", "range": "verb_range"}   # strings keys
 
 
 def _problem_text(ex, language: str = "en") -> str:
@@ -66,6 +75,10 @@ def _problem_text(ex, language: str = "en") -> str:
         is_notation = True
     except (TokenError, IndexError):
         is_notation = False
+    if not is_notation and ex.task in DATA_TASKS and not ex.problem and ex.givens:
+        # a bare data list is the question once its verb is in front:
+        # "Find the mean of: 4, 8, 6, 10, 12"
+        is_notation = is_data_list(ex.givens[0])
     verb = dx._t(_VERB[ex.task], language) if ex.task in _VERB else ""
     if is_notation and verb and not p.lower().startswith((verb.lower(), "find")):
         return f"{verb}: {p}"

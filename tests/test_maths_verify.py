@@ -300,17 +300,22 @@ def test_digit_grouped_numbers_are_integers_not_decimals():
     assert rep.status == "verified", [c.detail for c in rep.failures]
 
 
-def test_a_list_of_numbers_is_reported_not_a_crash():
+def test_a_list_of_numbers_is_data_and_never_a_crash():
+    """Once a refusal ("Please write one expression"); since 2026-09-26 a
+    comma list is a DATA LIST (tests/test_maths_data_tasks.py). Under a
+    task that is not a data task it still fails cleanly — the step changes
+    the data, the answer is not an expression — and never raises."""
     import pytest
     from maths.notation import NotationError, parse_relation
+    assert parse_relation("17173, 8000").data == (17173, 8000)
     with pytest.raises(NotationError, match="one expression"):
-        parse_relation("17173, 8000")
+        parse_relation("(17173, 8000)")     # a bracketed tuple is still not an expression
     ex = WorkedExample(label="r", task="evaluate", problem="17173, 8000", givens=["17173, 8000"], target="expression",
                        steps=[Step(operation="round each", before=["17173, 8000"], after=["17000, 8000"], speech="Round.")],
                        final_answer=["17000, 8000"])
     rep = verify_example(ex)               # dropped, never raised
     assert rep.status == "failed"
-    assert any("could not be read" in c.detail for c in rep.checks)
+    assert any("is not the same data as" in c.detail for c in rep.failures)
 
 
 # ── rounding and estimation ───────────────────────────────────────────────

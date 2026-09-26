@@ -590,6 +590,27 @@ _STRINGS.update({
         "en": "Estimate", "ms": "Anggarkan", "ar": "قدّر", "fr": "Estimer", "es": "Estima", "pt": "Estime",
         "hi": "अनुमान लगाइए", "mr": "अंदाज करा", "te": "అంచనా వేయండి", "ms-arab": "اڠݢرکن",
     },
+    # the data tasks (maths.schema.DATA_TASKS): the verb in front of a bare data list
+    "verb_mean": {
+        "en": "Find the mean of", "ms": "Cari min bagi", "ar": "أوجد الوسط الحسابي لـ", "fr": "Calculer la moyenne de",
+        "es": "Halla la media de", "pt": "Calcule a média de", "hi": "माध्य ज्ञात कीजिए", "mr": "मध्य काढा",
+        "te": "సగటు కనుగొనండి", "ms-arab": "چاري مين باݢي",
+    },
+    "verb_median": {
+        "en": "Find the median of", "ms": "Cari median bagi", "ar": "أوجد الوسيط لـ", "fr": "Calculer la médiane de",
+        "es": "Halla la mediana de", "pt": "Calcule a mediana de", "hi": "माध्यिका ज्ञात कीजिए", "mr": "मध्यगा काढा",
+        "te": "మధ్యగతం కనుగొనండి", "ms-arab": "چاري ميدين باݢي",
+    },
+    "verb_mode": {
+        "en": "Find the mode of", "ms": "Cari mod bagi", "ar": "أوجد المنوال لـ", "fr": "Calculer le mode de",
+        "es": "Halla la moda de", "pt": "Calcule a moda de", "hi": "बहुलक ज्ञात कीजिए", "mr": "बहुलक काढा",
+        "te": "బాహుళకం కనుగొనండి", "ms-arab": "چاري مود باݢي",
+    },
+    "verb_range": {
+        "en": "Find the range of", "ms": "Cari julat bagi", "ar": "أوجد المدى لـ", "fr": "Calculer l'étendue de",
+        "es": "Halla el rango de", "pt": "Calcule a amplitude de", "hi": "परिसर ज्ञात कीजिए", "mr": "व्याप्ती काढा",
+        "te": "వ్యాప్తి కనుగొనండి", "ms-arab": "چاري جولت باݢي",
+    },
     "ws_instructions": {
         "en": "Show your working for every question. Questions get harder as you go; "
               "check each answer by substituting it back.",
