@@ -58,6 +58,20 @@ _LABEL_X = 95.0
 _CAPTION_AT = [640.0, 626.0]
 _LABEL_TOP = 140.0
 _LABEL_STEP = 78.0
+# A chapter with NO picture (a word equation, a list of terms) is laid out in
+# ROWS, not the label column: the texts one step writes form one row, spread
+# across the band left of the speech bubble, rows stacked from the top; a
+# row with as many items as the row above sits under it item for item
+# (formulas under their words). Aerobic Respiration (2026-09-26): the
+# equation's five words went down the label column as a list, its three
+# formulas were captions and shared one slot, and the board was otherwise
+# empty for fifty seconds.
+_ROWS_X0, _ROWS_X1 = 95.0, 715.0          # the bubble sits right of 730
+_ROWS_TOP, _ROWS_FLOOR = 170.0, 500.0     # above the avatars' zone
+_ROWS_PITCH = 90.0
+_ROWS_GAP = 30.0
+_ROWS_SIZE, _ROWS_SIZE_SMALL = 27, 22
+_CHAR_W = 0.52                            # px per character per pt of size (Caveat, measured)
 # The student avatar's keep-out zone starts here, and the renderer pushes any
 # label that reaches it UPWARD into the labels already above. With seven
 # organelle labels on a 78px pitch the column ran to y=608, the last three were
@@ -545,8 +559,81 @@ def _chapter(craw, ci: int, narrations: dict, ctx: _Ctx) -> dict | None:
                                    root_id, label_for_region, len(elements),
                                    by_asset, sentences=sentences)
     elements.extend(extra_elements)
+    if root_id is None:
+        _layout_text_only(elements, steps, ctx, concept)
     return {"concept": concept, "transition": transition, "assets": assets,
             "elements": elements, "steps": steps}
+
+
+def _text_width(text: str, size: float) -> float:
+    return max(12.0, len(text) * _CHAR_W * size)
+
+
+def _layout_text_only(elements: list[dict], steps: list[dict], ctx: "_Ctx", concept: str) -> None:
+    """Rows for a chapter with no picture (see _ROWS_* above). The texts one
+    step WRITEs, in order, are one row; texts no step writes make a last
+    row. A row wider than the band drops to the small size, and one still
+    wider is split. A row with the same count as the row above is seated
+    under it item for item, so formulas sit under their words."""
+    texts = {e["id"]: e for e in elements
+             if e.get("type") == "text" and e.get("role") in ("label", "caption")}
+    if not texts:
+        return
+    rows: list[list[str]] = []
+    placed: set[str] = set()
+    for st in steps:
+        row = [a["target"] for a in (st.get("actions") or [])
+               if a.get("verb") == "write" and a.get("target") in texts and a["target"] not in placed]
+        if row:
+            rows.append(row)
+            placed.update(row)
+    rest = [eid for eid in texts if eid not in placed]
+    if rest:
+        rows.append(rest)
+    band = _ROWS_X1 - _ROWS_X0
+    # size and splitting, row by row
+    fitted: list[tuple[list[str], int]] = []
+    for row in rows:
+        size = _ROWS_SIZE
+        if sum(_text_width(texts[i]["text"], size) for i in row) + _ROWS_GAP * (len(row) - 1) > band:
+            size = _ROWS_SIZE_SMALL
+        cur: list[str] = []
+        for eid in row:
+            trial = cur + [eid]
+            if cur and (sum(_text_width(texts[i]["text"], size) for i in trial)
+                        + _ROWS_GAP * (len(trial) - 1) > band):
+                fitted.append((cur, size))
+                cur = [eid]
+            else:
+                cur = trial
+        if cur:
+            fitted.append((cur, size))
+    pitch = _ROWS_PITCH
+    if len(fitted) > 1:
+        pitch = min(_ROWS_PITCH, max(44.0, (_ROWS_FLOOR - _ROWS_TOP) / (len(fitted) - 1)))
+    prev: list[tuple[float, float]] | None = None    # (x, width) per item of the row above
+    for r, (row, size) in enumerate(fitted):
+        y = _ROWS_TOP + pitch * r
+        widths = [_text_width(texts[i]["text"], size) for i in row]
+        total = sum(widths) + _ROWS_GAP * (len(row) - 1)
+        x = _ROWS_X0 + max(0.0, (band - total) / 2)
+        slots: list[tuple[float, float]] = []
+        for i, (eid, w) in enumerate(zip(row, widths)):
+            if prev is not None and len(prev) == len(row):
+                px, pw = prev[i]
+                xi = max(_ROWS_X0, min(px + (pw - w) / 2, _ROWS_X1 - w))
+            else:
+                xi = x
+                x += w + _ROWS_GAP
+            el = texts[eid]
+            el["at"] = [round(xi, 1), round(y, 1)]
+            el["anchor"] = "lt"
+            el["size"] = size
+            el["role"] = "label"
+            slots.append((xi, w))
+        prev = slots
+    ctx.note("TEXT_ONLY_ROWS",
+             f"{concept}: no picture — {len(texts)} texts laid out in {len(fitted)} row(s)")
 
 
 def _root_asset_key(craw: dict, assets: dict) -> str | None:
@@ -573,6 +660,7 @@ def _elements(craw: dict, ctx: _Ctx, concept: str):
     label_for_region: dict[str, str] = {}
     sentences: dict[str, str] = {}
     label_i = 0
+    caption_i = 0
     # the pitch depends on HOW MANY labels there are, so count before placing
     _n_labels = sum(
         1 for e in (craw.get("elements") or [])
@@ -583,7 +671,9 @@ def _elements(craw: dict, ctx: _Ctx, concept: str):
         and isinstance(e.get("id"), str)
         and not e["id"].startswith("__"))
     _pitch = _label_pitch(_n_labels)
-    if _n_labels > LABEL_COLUMN_CAPACITY:
+    _has_picture = any(isinstance(e, dict) and str(e.get("type") or "").lower() == "illustration"
+                       for e in (craw.get("elements") or []))
+    if _n_labels > LABEL_COLUMN_CAPACITY and _has_picture:
         # Beyond this the starting column reaches the avatar and the renderer
         # pushes the overflow back up into labels already placed, where it can
         # run out of room and clamp two labels onto one spot (measured: both
@@ -641,9 +731,13 @@ def _elements(craw: dict, ctx: _Ctx, concept: str):
                 sentences[eid] = text
                 continue
             elif kind == "caption":
+                # a second caption stacks ABOVE the first: three formulas
+                # declared as captions once shared the one slot and drew
+                # over each other (2026-09-26)
                 el = {"id": eid, "type": "text", "text": text,
                       "role": "caption", "size": 24, "anchor": "mt",
-                      "at": list(_CAPTION_AT)}
+                      "at": [_CAPTION_AT[0], _CAPTION_AT[1] - 34.0 * caption_i]}
+                caption_i += 1
             else:
                 el = {"id": eid, "type": "text", "text": text, "role": "label",
                       "size": 27, "anchor": "lt",

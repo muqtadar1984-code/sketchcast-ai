@@ -278,3 +278,30 @@ class TestVisualLanguageReportNotesTheLabelDefects:
         from spike.scene_engine.validate import format_report
         text = format_report(self._report(["TEXT_OVER_ART t"]))
         assert "Text Over Art" in text
+
+
+class TestOverlappingTextBlocksTheShip:
+    """Text written over text was counted and shipped: the word equation of
+    aerobic respiration went out with its three formulas drawn on one spot,
+    12 overlaps in the report and "passed" beside them (2026-09-26). It now
+    joins the proportional gate with the other defects a viewer meets head
+    on: more overlaps than a quarter of the segments refuses the lesson."""
+
+    def _accept(self, monkeypatch, overlaps: int, segments: int):
+        from worker import process
+        monkeypatch.setenv("VIDEO_ENGINE", "scene")
+        audits = [[f"TEXT_OVERLAP a{i}+b{i}"] if i < overlaps else [] for i in range(segments)]
+        manifest = {"segments": [{"segment_id": f"s{i:03d}", "renderer": "scene", "audio_path": "a.mp3",
+                                  "scene_audit": audits[i]} for i in range(segments)]}
+        return process._acceptance_report({"episodes": [{"visual_plan": {"plan": {"chapters": []}, "stats": {}, "report": []}}]},
+                                          manifest)
+
+    def test_twelve_overlaps_in_seventeen_segments_are_refused(self, monkeypatch):
+        out = self._accept(monkeypatch, overlaps=12, segments=17)
+        assert out is not None and out["ship"] is False
+        assert "overlapping_text=12/17" in out["summary"]
+
+    def test_one_overlap_is_reported_but_ships(self, monkeypatch):
+        out = self._accept(monkeypatch, overlaps=1, segments=17)
+        assert out is not None and out["ship"] is True
+        assert "overlapping_text=1" in out["summary"]

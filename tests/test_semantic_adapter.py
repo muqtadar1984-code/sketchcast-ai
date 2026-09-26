@@ -779,3 +779,104 @@ class TestAStepFollowsItsCueNotItsNumber:
             for a in scenes["s008"]["actions"]), report
         for sc in scenes.values():
             Scene.model_validate(sc)
+
+
+class TestATextOnlyChapterIsLaidOutInRows:
+    """Aerobic Respiration (2026-09-26, gen 757c2f60): the director wrote the
+    word equation as text with no picture. The label column listed its
+    words down the left edge, the three formulas were captions and shared
+    the one caption slot (12 overlaps in the gate's report, shipped), and
+    the board was otherwise empty for fifty seconds. A chapter with no
+    picture is now laid out in ROWS: the texts one step writes are a row,
+    and a row with as many items as the row above sits under it item for
+    item."""
+
+    NARR = {"s001": "Glucose plus oxygen gives carbon dioxide, water and energy.",
+            "s002": "In symbols, C6H12O6 plus six O2 gives six CO2 and six H2O."}
+
+    def _plan(self, words, syms, sym_role="label"):
+        els = [{"id": f"w{i}", "type": "text", "text": t, "role": "label"} for i, t in enumerate(words)]
+        els += [{"id": f"f{i}", "type": "text", "text": t, "role": sym_role} for i, t in enumerate(syms)]
+        return {"chapters": [{
+            "id": "eq", "concept": "respiration_equation", "transition": "clear_and_redraw",
+            "assets": {}, "semantic_regions": [], "elements": els,
+            "steps": [
+                {"segment": 1, "decision": "CLEAR_AND_REDRAW", "reason": "words", "actions": [
+                    {"verb": "WRITE", "target": {"element": f"w{i}"}, "cue": "Glucose plus oxygen"} for i in range(len(words))]},
+                {"segment": 2, "decision": "EXTEND", "reason": "symbols", "actions": [
+                    {"verb": "WRITE", "target": {"element": f"f{i}"}, "cue": "In symbols"} for i in range(len(syms))]},
+            ]}]}
+
+    def _els(self, plan):
+        return {e["id"]: e for e in plan["chapters"][0]["elements"] if e.get("type") == "text"}
+
+    def test_the_words_of_one_step_form_a_row_and_the_formulas_sit_under_them(self):
+        from spike.scene_engine.semantic import _ROWS_TOP, _ROWS_X0, _ROWS_X1
+        plan, issues = adapt_semantic_plan(
+            self._plan(["Glucose + Oxygen", "→", "Carbon dioxide + Water + Energy"],
+                       ["C6H12O6 + 6O2", "→", "6CO2 + 6H2O + energy (ATP)"]), self.NARR)
+        els = self._els(plan)
+        assert [i["code"] for i in issues] == ["TEXT_ONLY_ROWS"]
+        assert els["w0"]["at"][1] == els["w1"]["at"][1] == els["w2"]["at"][1] == _ROWS_TOP, "one row"
+        assert els["w0"]["at"][0] < els["w1"]["at"][0] < els["w2"]["at"][0], "in writing order, left to right"
+        assert els["f0"]["at"][1] == els["f1"]["at"][1] == els["f2"]["at"][1] > _ROWS_TOP, "a second row below"
+        # the arrow of the symbol row sits under the arrow of the word row
+        assert abs(els["f1"]["at"][0] - els["w1"]["at"][0]) < 2.0
+        assert all(_ROWS_X0 <= e["at"][0] and e["at"][0] < _ROWS_X1 for e in els.values()), "inside the band"
+        assert all(e["role"] == "label" and e["anchor"] == "lt" for e in els.values())
+
+    def test_a_wide_row_takes_the_small_size_before_it_splits(self):
+        from spike.scene_engine.semantic import _ROWS_SIZE, _ROWS_SIZE_SMALL
+        plan, _ = adapt_semantic_plan(self._plan(["Glucose + Oxygen", "→", "Carbon dioxide + Water + Energy"], ["CO2"]), self.NARR)
+        els = self._els(plan)
+        assert els["w0"]["size"] == _ROWS_SIZE_SMALL and els["f0"]["size"] == _ROWS_SIZE
+        assert len({els[k]["at"][1] for k in ("w0", "w1", "w2")}) == 1, "still one row"
+
+    def test_captions_in_a_text_only_chapter_join_the_rows_instead_of_sharing_one_slot(self):
+        plan, _ = adapt_semantic_plan(self._plan(["Glucose", "Carbon Dioxide", "Energy (ATP)"],
+                                                 ["C6H12O6", "6O2", "6CO2"], sym_role="caption"), self.NARR)
+        els = self._els(plan)
+        xs = {els[k]["at"][0] for k in ("f0", "f1", "f2")}
+        assert len(xs) == 3, "three formulas, three places"
+        assert all(els[k]["role"] == "label" for k in ("f0", "f1", "f2"))
+
+    def test_texts_no_step_writes_make_a_last_row(self):
+        p = self._plan(["Glucose"], ["C6H12O6"])
+        p["chapters"][0]["elements"].append({"id": "stray", "type": "text", "text": "Water", "role": "label"})
+        plan, _ = adapt_semantic_plan(p, self.NARR)
+        els = self._els(plan)
+        assert els["stray"]["at"][1] > els["f0"]["at"][1] > els["w0"]["at"][1]
+
+    def test_many_labels_without_a_picture_are_rows_not_an_overflowing_column(self):
+        p = self._plan([f"Term {i}" for i in range(6)], [f"T{i}" for i in range(6)])
+        plan, issues = adapt_semantic_plan(p, self.NARR)
+        assert not [i for i in issues if i["code"] == "LABEL_COLUMN_OVERFLOW"]
+        els = self._els(plan)
+        assert len({round(e["at"][1]) for e in els.values()}) >= 2
+
+    def test_a_chapter_with_a_picture_keeps_the_label_column(self):
+        plan, _ = adapt_semantic_plan(_plan(), NARR, strict=True)
+        els = {e["id"]: e for e in plan["chapters"][0]["elements"]}
+        assert els["lbl_hyp"]["at"][0] == 95.0
+
+
+class TestCaptionsStack:
+    def test_a_second_caption_sits_above_the_first(self):
+        from spike.scene_engine.semantic import _CAPTION_AT
+        p = _plan()
+        p["chapters"][0]["elements"] += [
+            {"id": "cap1", "type": "text", "text": "The three sides of a triangle", "role": "caption"},
+            {"id": "cap2", "type": "text", "text": "Right angle at the corner", "role": "caption"}]
+        plan, _ = adapt_semantic_plan(p, NARR)
+        els = {e["id"]: e for e in plan["chapters"][0]["elements"]}
+        assert els["cap1"]["at"] == list(_CAPTION_AT)
+        assert els["cap2"]["at"][0] == _CAPTION_AT[0] and els["cap2"]["at"][1] == _CAPTION_AT[1] - 34.0
+
+
+class TestAnEquationSideIsALabel:
+    def test_the_signs_of_an_equation_are_not_words(self):
+        from spike.scene_engine.continuity import _classify_text
+        assert _classify_text({"role": "label", "text": "Carbon dioxide + Water + Energy"}) == "label"
+        assert _classify_text({"role": "label", "text": "6CO2 + 6H2O + energy (ATP)"}) == "label"
+        assert _classify_text({"role": "label", "text": "→"}) == "label"
+        assert _classify_text({"role": "label", "text": "Glucose reacts with oxygen to release energy"}) == "sentence"

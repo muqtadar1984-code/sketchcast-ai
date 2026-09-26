@@ -153,7 +153,9 @@ Never reference an object before it exists: DRAW the object, then WRITE its labe
 _LABELS_CAMERA = """=== LABELS, ARROWS, CAMERA ===
 Labels are short NAMES, not on every object: text longer than 5 words is DISCARDED — mark an important sentence with key_point.
 A label written onto a picture is unfinished without a leader line: whenever you WRITE a label onto a visual, add an ARROW in the SAME step from that label to the semantic region it names. Use POINT, CIRCLE, HIGHLIGHT or ZOOM to emphasise something the board already shows.
-Use camera movement only when it improves comprehension, with a semantic target — never to create motion."""
+Use camera movement only when it improves comprehension, with a semantic target — never to create motion.
+An EQUATION (word or symbol) is THREE text elements written in ONE step: the left side, an arrow "→", the right side ("Glucose + Oxygen", "→", "Carbon dioxide + Water + Energy") — every term of the equation is in it, none left for the narration. Its symbol form is three more elements of the same shape written in a later step; the engine seats them under the words.
+A chapter with no illustration is laid out by the engine in rows: the texts one step writes form one row, in order."""
 
 _CAPS = """=== HARD LIMITS (the reply is long; exceeding these truncates it) ===
 At most 5 visual chapters. At most 12 elements and 10 steps per chapter. At most 6 actions per step.

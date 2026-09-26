@@ -219,7 +219,12 @@ def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
                       for o in _over), default=0.0)
         if _worst > TAIL_OVERRUN_BLOCKING_SECS:
             blocking.append(f"tail_overrun={_worst:.1f}s")
-        for key in ("unresolved_assets", "legacy_renderer_usage"):
+        # Text written over text joins the proportional gate. It was counted
+        # and shipped: the word equation of aerobic respiration went out with
+        # its three formulas drawn on one spot, 12 overlaps in the report and
+        # "passed" beside them (2026-09-26). Of the 30 lessons before it,
+        # three carried more overlaps than a quarter of their segments.
+        for key in ("unresolved_assets", "legacy_renderer_usage", "overlapping_text"):
             v = report.get(key)
             count = len(v) if isinstance(v, list) else int(v or 0)
             if count > tolerance:
