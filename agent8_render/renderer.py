@@ -146,6 +146,28 @@ def render_final_video(
                 f"ffmpeg concat failed: {(proc.stderr or '')[-1000:]}"
             )
 
+    # The file is READ BACK before anyone is told it exists. A container
+    # concat wrote but cannot decode, or whose length is not the manifest's,
+    # is retried once as a full re-encode and refused if that fails too — a
+    # reviewer's phone is not the first thing that should open it.
+    from .probe import check_final_video
+    try:
+        probe = check_final_video(output_path, total_duration)
+    except RuntimeError as first:
+        logger.warning("final video failed its probe after stream-copy concat (%s); "
+                       "re-encoding once", first)
+        reencode_cmd = base + [
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:a", "aac", "-r", "24", "-movflags", "+faststart",
+            str(output_path),
+        ]
+        proc = subprocess.run(reencode_cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg concat re-encode failed after a bad probe ({first}): "
+                               f"{(proc.stderr or '')[-800:]}") from first
+        probe = check_final_video(output_path, total_duration)
+    logger.info("Final video probed (%s): %s", probe.tool, probe.summary())
+
     if progress_callback:
         progress_callback(total, total, "done")
 
