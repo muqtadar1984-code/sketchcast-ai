@@ -204,6 +204,8 @@ _INSTRUCTION_VERBS = {"compare", "discuss", "write", "draw", "look", "think",
 _LABEL_MAX_WORDS = 5
 _LABEL_MAX_CHARS = 32
 _CAPTION_MAX_CHARS = 60
+# operator tokens between the terms of an equation (see _classify_text)
+_EQUATION_SIGNS = {"+", "-", "−", "=", "→", "->", "⟶", "×", "÷", "⇌"}
 # a statement this short is a line of board text somebody meant; it belongs
 # under the picture as a caption, not in the bin. Only a genuinely long
 # unspoken instruction is worth deleting.
@@ -303,7 +305,11 @@ def _classify_text(e: dict) -> str:
     if role == "title":
         return "title"
     text = " ".join(str(e.get("text") or "").split())
-    words = text.split()
+    # The signs of an equation are not words: "Carbon dioxide + Water +
+    # Energy" is three terms, not a six-word sentence. Read as a sentence it
+    # was dropped from the board and the word equation of aerobic
+    # respiration shipped with three of its five terms (2026-09-26).
+    words = [w for w in text.split() if w not in _EQUATION_SIGNS]
     # A full stop is a statement's mark — but a ONE-word text that carries one
     # is an abbreviation or a numbered tag ('Nucleus.', '1.'), and a question
     # or exclamation mark on a short text is a socratic prompt ('Why?', 'What
