@@ -97,7 +97,7 @@ DOC_JOB_TYPES = ["lesson_plan", "activity", "worksheet", "exam_paper", "case_stu
 OBSERVER_JOB_TYPES = ["support_diagnose", "topic_harvest", "topic_derive", "topic_article", "figure_render",
                       "topic_questions", "topic_publish"]
 CATALOGUE_JOB_TYPES = ["topic_harvest", "topic_derive", "topic_article", "figure_render", "topic_questions",
-                       "topic_publish"]  # the last lane
+                       "topic_publish", "topic_supersede"]  # the last lane
 
 
 def _claim_catalogue_generation(sb):
@@ -552,6 +552,10 @@ def run_once(sb) -> bool:
             from catalogue.publish import run_publish_job
 
             run_publish_job(sb, job)  # self-contained: finishes its own row, done or error
+        elif job_type == "topic_supersede":
+            from catalogue.supersede import run_supersede_job
+
+            run_supersede_job(sb, job)  # self-contained: finishes its own row, done or error
         else:
             process_generation(sb, job, gen_id)
     except db.DeferredJob as exc:
@@ -731,6 +735,16 @@ def main() -> None:
     os._exit(0)
 
 
+def _record_video_format(sb) -> None:
+    """Once per boot: the video format version this worker renders, for the
+    portal's outdated-video notice (shared/video_format.py). Never raises."""
+    try:
+        from shared.video_format import record_current
+        record_current(sb)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("video format version not recorded: %s", exc)
+
+
 def _serve(sb, stale_min: int, reap_every: float = 60, grace: float | None = None) -> None:
     """Main thread = the windowed crash-reaper, until a shutdown is requested.
 
@@ -744,6 +758,7 @@ def _serve(sb, stale_min: int, reap_every: float = 60, grace: float | None = Non
     claims, and a job that finishes leaves the held set, so it is never
     handed back — then release what is still held and return; the caller
     ends the process."""
+    _record_video_format(sb)
     while not _shutdown.wait(reap_every):
         try:
             r = db.requeue_stale_jobs(sb, older_than_minutes=stale_min, exclude_ids=_inflight_snapshot())

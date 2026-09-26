@@ -630,8 +630,30 @@ def load_publications(sb, kit_id: str, language: str) -> dict[int, dict]:
 def write_publication(sb, row: dict) -> None:
     """One ``topic_publications`` row, keyed by the 0112 unique constraint. An
     upsert so a retry of a part that failed updates its row instead of losing
-    the 23505 race with itself."""
-    sb.table("topic_publications").upsert(row, on_conflict="topic_kit_id,part,channel_language").execute()
+    the 23505 race with itself. A database without app migration 0122 refuses
+    ``format_version``; the row is then written without it rather than the
+    video going up unrecorded."""
+    try:
+        sb.table("topic_publications").upsert(row, on_conflict="topic_kit_id,part,channel_language").execute()
+    except Exception as exc:  # noqa: BLE001
+        if "format_version" not in row or "format_version" not in str(exc):
+            raise
+        log.warning("topic_publications has no format_version column yet (apply app migration 0122); "
+                    "writing the row without it")
+        slim = {k: v for k, v in row.items() if k != "format_version"}
+        sb.table("topic_publications").upsert(slim, on_conflict="topic_kit_id,part,channel_language").execute()
+
+
+def generation_format_version(sb, generation_id: str) -> int:
+    """The format version stamped on the presentation when it rendered
+    (shared/video_format.py), or 1 — a video rendered before the stamp
+    existed is, by definition, an older format."""
+    try:
+        rows = _rows(sb.table("generations").select("params").eq("id", generation_id).limit(1).execute())
+        params = (rows[0].get("params") if rows and isinstance(rows[0].get("params"), dict) else {}) or {}
+        return max(1, int(params.get("format_version") or 1))
+    except Exception:  # noqa: BLE001
+        return 1
 
 
 def builders_are_queued(sb) -> bool:
@@ -866,7 +888,10 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
     row = {"topic_kit_id": kit.get("id"), "part": idx, "channel_language": target.language,
            "youtube_video_id": video_id, "privacy": target.privacy, "playlist_ids": [],
            "captions_uploaded": [], "thumbnail_set": False,
-           "published_at": datetime.now(timezone.utc).isoformat(), "error": None}
+           "published_at": datetime.now(timezone.utc).isoformat(), "error": None,
+           # which generation of the pipeline drew it (shared/video_format.py):
+           # the portal's outdated-video notice compares this with the current
+           "format_version": generation_format_version(sb, gen_id)}
     notes: list[str] = []
 
     try:
@@ -1071,6 +1096,6 @@ __all__ = [
     "chapters_of", "chapter_lines", "topic_link", "build_title", "build_description", "srt_time",
     "caption_cues", "build_srt", "playlist_keys", "resolve_playlists", "read_credentials",
     "default_transport", "load_kit", "load_topic", "load_article", "load_artifacts", "load_publications",
-    "write_publication", "builders_are_queued", "download_artifact", "check_privacy", "load_target",
+    "write_publication", "generation_format_version", "builders_are_queued", "download_artifact", "check_privacy", "load_target",
     "build_thumbnail", "caption_file", "publish_part", "publish_kit", "run_publish_job",
 ]
