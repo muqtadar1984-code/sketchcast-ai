@@ -126,11 +126,7 @@ _BOARD_COLOUR_SUFFIX = (
 # cache directory, never a library candidate. The suffix is on the key, so
 # every layer keyed by the key (the lock, the cache, the deferral map, the
 # library wrapper) tells the two apart without learning a new argument.
-COLOUR_KEY_SUFFIX = "__colour"
-
-
-def is_colour_key(key: str) -> bool:
-    return str(key or "").endswith(COLOUR_KEY_SUFFIX)
+from .colour import COLOUR_KEY_SUFFIX, is_colour_key  # noqa: E402  (the library shares them)
 
 
 def is_board_key(key: str) -> bool:

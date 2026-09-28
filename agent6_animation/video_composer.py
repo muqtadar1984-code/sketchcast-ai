@@ -286,10 +286,16 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
             from spike.scene_engine import raster_assets as _ra
             _rl = [k for k in prompts
                    if _ra.asset_deferred(k) is not None or _ra.asset_abandoned(k)]
+            # Board colour: the child inherits neither the pins nor this
+            # thread's context, and a plain key in a colour lesson reads the
+            # ink cache (or, worse, fills it from the colour one — measured
+            # on the first phase-2 demo). Hand it the answers.
+            from spike.scene_engine import colour as _colour
             payload = {"scene": scene_dict, "narration": narration, "prompts": prompts,
                        "words": words, "audio_path": str(audio_path) if audio_path else None,
                        "audio_secs": float(audio_secs), "out_mp4": str(out_mp4),
-                       "direction": direction, "rate_limited": _rl}
+                       "direction": direction, "rate_limited": _rl,
+                       "board_colour": list(_colour.answers())}
             from spike.scene_engine.segment_worker import render_segment_in_child
             ex: Optional[ProcessPoolExecutor] = None
             try:

@@ -409,3 +409,82 @@ class TestThePictures:
     def test_the_format_changelog_names_the_pictures(self):
         from shared import video_format as VF
         assert "pictures switch" in VF.FORMAT_CHANGES[3]
+
+
+class TestTheLeaksTheFirstPhase2DemoFound:
+    """Measured 2026-09-28 on the first phase-2 demo (gen dfd97734): the
+    parent generated `sieve_and_settling__colour`, but the render CHILD
+    PROCESS asked for `sieve_and_settling` (it inherits no pin), and the
+    local library filled the plain key from the colour directory at score
+    1.40 — a coloured picture in the ink cache for every later lesson on
+    that container. Two fixes: the child answers as the parent did, and the
+    library never indexes, matches or hydrates a colour key."""
+
+    def test_the_composer_hands_the_child_the_answers(self):
+        from pathlib import Path
+        import agent6_animation.video_composer as vc
+        src = Path(vc.__file__).read_text(encoding="utf-8")
+        i = src.index('"board_colour": list(_colour.answers())')
+        assert src.index("render_segment_in_child", i) > i, "in the payload the child is sent"
+
+    def test_the_child_renders_under_the_parents_answers_and_releases_them(self, tmp_path, monkeypatch):
+        from spike.scene_engine import segment_worker as sw
+        from tests.test_render_pool import _payload
+        import spike.scene_engine.encode as enc
+        monkeypatch.delenv(colour.FLAG, raising=False)
+        monkeypatch.delenv(colour.PICTURES_FLAG, raising=False)
+        seen: dict = {}
+
+        def fake_encode(frames, total, audio, out, fps):
+            seen["during"] = colour.answers()      # read while the frames are drawn
+            for _ in frames:
+                pass
+            return True
+        monkeypatch.setattr(enc, "encode_scene", fake_encode)
+        ok, _ = sw.render_segment_in_child(_payload(tmp_path, board_colour=[True, True]))
+        assert ok is True
+        assert seen["during"] == (True, True)
+        assert colour.answers() == (False, False), "released after the call"
+        # a parent that answered no pins the child to no, whatever its flags say
+        monkeypatch.setenv(colour.PICTURES_FLAG, "1")
+        sw.render_segment_in_child(_payload(tmp_path, board_colour=[False, False]))
+        assert seen["during"] == (False, False)
+        # a payload from before phase 2 leaves the child's own flags to decide
+        sw.render_segment_in_child(_payload(tmp_path))
+        assert seen["during"] == (False, True)
+        assert sw.pins_for_child({"board_colour": "yes"}) == (None, None)
+
+    def test_the_library_index_refuses_a_colour_key(self, tmp_path, monkeypatch):
+        import shared.visual_library as vl
+        written: list = []
+        monkeypatch.setattr(vl, "_local_candidates", lambda: [])
+        monkeypatch.setattr(vl, "_write_local_index", lambda rows: written.append(rows))
+        vl.register_local({"asset_key": "plant_cell__colour", "canonical_key": "cell_colour_plant"})
+        assert written == [], "a coloured picture is never a library row"
+        vl.register_local({"asset_key": "plant_cell", "canonical_key": "cell_plant"})
+        assert written and written[0][0]["asset_key"] == "plant_cell"
+
+    def test_the_bootstrap_skips_a_colour_directory(self, tmp_path, monkeypatch):
+        import json
+        import shared.visual_library as vl
+        import shared.visual_library_integration as vli
+        from spike.scene_engine import raster_assets as ra
+        for key in ("plant_cell", "plant_cell__colour"):
+            d = tmp_path / ra.canonical_key(key)
+            d.mkdir()
+            (d / "asset.png").write_bytes(b"png")
+            (d / "meta.json").write_text(json.dumps({"key": key, "provenance": "generated", "prompt": "a cell"}))
+        rows: list = []
+        monkeypatch.setattr(ra, "CACHE_DIR", tmp_path)
+        monkeypatch.setattr(vl, "register_local", lambda row: rows.append(row["asset_key"]))
+        vli._bootstrap_existing_cache(ra)
+        assert rows == ["plant_cell"]
+
+    def test_a_local_hit_on_a_colour_key_is_refused(self, tmp_path, monkeypatch):
+        import shared.visual_library as vl
+        import shared.visual_library_integration as vli
+        src = tmp_path / "src.png"
+        src.write_bytes(b"png")
+        monkeypatch.setattr(vl, "find", lambda *a, **k: {"asset_key": "sk_cone__colour", "local_cache_path": str(src), "match_score": 1.4})
+        assert vli._hydrate_local_library("sk_cone", "A simple cone", tmp_path / "cache") is False
+        assert not list((tmp_path / "cache").glob("**/asset.png")) if (tmp_path / "cache").exists() else True

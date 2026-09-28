@@ -53,6 +53,24 @@ PARAM_KEY = "board_colour"
 PICTURES_FLAG = "FEATURE_BOARD_COLOUR_PICTURES"
 PICTURES_PARAM = "board_colour_pictures"
 
+# A coloured board picture is fetched, cached and locked under
+# <key>__colour (raster_assets.colour_key). The suffix is defined HERE so
+# the visual library — which must never index, match or hydrate such a key
+# — can recognise one without importing the renderer.
+COLOUR_KEY_SUFFIX = "__colour"
+
+
+def is_colour_key(key: object) -> bool:
+    return str(key or "").endswith(COLOUR_KEY_SUFFIX)
+
+
+def answers() -> tuple[bool, bool]:
+    """What this thread answers for both switches — to hand a render CHILD
+    PROCESS, which inherits neither the pins nor a parent thread's context
+    (segment_worker). Restored there as pins, so the child answers exactly
+    as the parent did, whatever its own environment says."""
+    return (enabled(), pictures_enabled())
+
 # None: not pinned, the flag decides. True/False: this generation's answer.
 _PIN: contextvars.ContextVar[bool | None] = contextvars.ContextVar("board_colour_pin", default=None)
 _PICTURES_PIN: contextvars.ContextVar[bool | None] = contextvars.ContextVar("board_colour_pictures_pin", default=None)
@@ -172,7 +190,7 @@ def colour_equation_row(row: list[str], texts: dict[str, dict]) -> bool:
     return True
 
 
-__all__ = ["FLAG", "PARAM_KEY", "PICTURES_FLAG", "PICTURES_PARAM", "ACCENT", "ACCENT2", "INK",
-           "EQUATION_SIGNS", "enabled", "pictures_enabled", "set_pin", "reset_pin",
-           "pin_from_params", "snapshot", "restore", "release", "arrow_colour", "tint_arrow",
-           "colour_equation_row"]
+__all__ = ["FLAG", "PARAM_KEY", "PICTURES_FLAG", "PICTURES_PARAM", "COLOUR_KEY_SUFFIX", "ACCENT",
+           "ACCENT2", "INK", "EQUATION_SIGNS", "enabled", "pictures_enabled", "is_colour_key",
+           "answers", "set_pin", "reset_pin", "pin_from_params", "snapshot", "restore", "release",
+           "arrow_colour", "tint_arrow", "colour_equation_row"]

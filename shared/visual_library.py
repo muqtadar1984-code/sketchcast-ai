@@ -1036,7 +1036,16 @@ def _index_identity(row: dict[str, Any]) -> tuple[str, str]:
 
 
 def register_local(row: dict[str, Any]) -> None:
-    """Register metadata locally; safe to call from every generation."""
+    """Register metadata locally; safe to call from every generation.
+
+    A coloured board picture (board colour phase 2: <key>__colour) is never
+    a library row. Measured 2026-09-28 on the first phase-2 demo: the
+    bootstrap indexed the demo's coloured pictures, and the render child's
+    plain-key requests matched them at score 1.40 — a coloured picture
+    hydrated into the ink cache for every later lesson on that container."""
+    from spike.scene_engine.colour import is_colour_key
+    if is_colour_key(row.get("asset_key")) or is_colour_key(row.get("canonical_key")):
+        return
     rows = _local_candidates()
     ident = _index_identity(row)
     rows = [r for r in rows if _index_identity(r) != ident]
