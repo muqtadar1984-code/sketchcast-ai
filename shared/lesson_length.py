@@ -60,6 +60,11 @@ MAX_LENGTH_RETRIES = 2
 SEGMENT_CHARS = 500
 # …and the least a new segment may carry to count as teaching.
 MIN_SEGMENT_CHARS = 450
+# What the prompt calls a usual segment. Guidance, not a rule: the gate
+# checks the whole-lesson total, and a per-segment minimum stated as a rule
+# had the model padding short segments rather than teaching in them.
+SEGMENT_CHARS_LOW = 350
+SEGMENT_CHARS_HIGH = 650
 
 
 def min_minutes() -> float:
@@ -88,6 +93,13 @@ def min_segments(minutes: float) -> int:
     each — 13 for five minutes."""
     need = min_chars(minutes)
     return max(1, -(-need // SEGMENT_CHARS)) if need else 0
+
+
+def chars_short(measured: dict) -> int:
+    """The characters the measured draft is under the floor, plus one usual
+    segment so the re-ask lands past the floor rather than on it."""
+    short = max(0, int(measured.get("min_chars") or 0) - int(measured.get("chars") or 0))
+    return short + SEGMENT_CHARS
 
 
 def segments_to_add(measured: dict) -> int:
@@ -164,17 +176,18 @@ def prompt_block(minutes: float) -> str:
     three of nine (the incident above); one told how many words that is can
     count, and one told how many segments has a structure to fill."""
     return (
-        f"\n\nMINIMUM LENGTH — this lesson must run at least {minutes:g} minutes "
+        f"\n\nMINIMUM LENGTH (hard requirement) — this lesson must run at least {minutes:g} minutes "
         f"when spoken. On this pipeline's voices that is at least "
         f"{min_words(minutes):,} words of dialogue ({min_chars(minutes):,} "
-        f"characters) across all segments. In practice: at least "
-        f"{min_segments(minutes)} teaching segments, each carrying at least "
-        f"{MIN_SEGMENT_CHARS} characters (about {MIN_SEGMENT_CHARS // 6} words) of "
-        f"dialogue. The length floor, not the visuals, sets the number of segments — "
-        f"several segments may share one board. A shorter script is REJECTED and "
-        f"regenerated. Reach the length by teaching, never by filler: for each "
-        f"concept explain the mechanism, why it matters, a worked example or "
-        f"analogy, and the misconception a learner holds and its correction."
+        f"characters) across all segments. In practice that is around "
+        f"{min_segments(minutes)} teaching segments; a segment usually carries roughly "
+        f"{SEGMENT_CHARS_LOW} to {SEGMENT_CHARS_HIGH} characters of dialogue, and one that "
+        f"carries less is fine when its teaching is complete. The whole-lesson total is "
+        f"what is checked: a shorter script is REJECTED and regenerated. Never pad a "
+        f"segment to hit a size. The length floor, not the visuals, sets the number of "
+        f"segments — several segments may share one board. Reach the length by teaching, "
+        f"never by filler: for each concept explain the mechanism, why it matters, a "
+        f"worked example or analogy, and the misconception a learner holds and its correction."
     )
 
 
@@ -193,11 +206,15 @@ def shortfall_block(measured: dict) -> str:
     )
     segs = [s for s in (measured.get("segments") or []) if isinstance(s, dict) and s.get("text")]
     add = segments_to_add(measured)
+    # The shortfall in characters, said alongside the count: N segments of
+    # the usual size close it, N short ones do not, and the count alone
+    # left that to chance once per-segment size became guidance.
+    short = chars_short(measured)
     if not segs:
         return head + (
             f" This draft MUST reach the floor: keep everything the previous draft taught "
-            f"and add at least {add} further teaching segments of at least "
-            f"{MIN_SEGMENT_CHARS} characters of dialogue each, placed where they belong "
+            f"and add at least {add} further teaching segments carrying at least "
+            f"{short:,} characters of dialogue between them, placed where they belong "
             f"in the arc. Do not shorten anything."
         )
     listing = "\n".join(f"  {i + 1}. [{s['type']}] {s['text']}" for i, s in enumerate(segs))
@@ -206,7 +223,7 @@ def shortfall_block(measured: dict) -> str:
         f"Write the lesson again KEEPING every one of these segments — same order, same "
         f"teaching, same SPEAKER on every line (a line marked student: stays the student's, "
         f"teacher: the teacher's), wording may be polished but never shortened — and ADD at least {add} "
-        f"NEW teaching segments of at least {MIN_SEGMENT_CHARS} characters of dialogue each, "
+        f"NEW teaching segments carrying at least {short:,} characters of dialogue between them, "
         f"placed where they belong in the arc (not appended as a list at the end). Each new "
         f"segment teaches something the draft passed over: a mechanism it only named, a "
         f"worked example, a misconception and its correction, a topic from KEY CONCEPTS TO "

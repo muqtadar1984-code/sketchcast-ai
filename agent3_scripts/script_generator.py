@@ -236,6 +236,129 @@ def _build_episode_context(episode: dict, analysis: dict) -> str:
     return "\n".join(lines)
 
 
+# The most source text the semantic prompt carries. A catalogue article at
+# the 1,000-word floor is ~7,000 characters and travels whole; a long book
+# part is cut here with a note, and its sections and concepts (which the
+# coverage gate measures against) still name everything it must teach.
+SOURCE_TEXT_CAP = 16_000
+
+
+def _episode_sections(episode: dict, source_sections: list[dict] | None) -> list[dict]:
+    """The source sections THIS episode teaches from: those whose title the
+    analyser listed under ``sections_covered``, or all of them when the
+    titles do not match (a scanned chapter arrives as one "Content"
+    section; a catalogue article's part is one chunk)."""
+    secs = [s for s in (source_sections or []) if isinstance(s, dict)]
+    wanted = {str(t).strip().lower() for t in (episode.get("sections_covered") or []) if str(t).strip()}
+    picked = [s for s in secs if str(s.get("section_title") or "").strip().lower() in wanted]
+    return picked or secs
+
+
+def _section_text(section: dict) -> str:
+    parts = [str(section.get("content") or "").strip()]
+    for sub in section.get("subsections") or []:
+        if not isinstance(sub, dict):
+            continue
+        title = str(sub.get("title") or sub.get("section_title") or "").strip()
+        body = str(sub.get("content") or "").strip()
+        if body:
+            parts.append(f"{title}\n{body}" if title else body)
+    return "\n\n".join(p for p in parts if p)
+
+
+def _build_semantic_context(episode: dict, analysis: dict,
+                            source_sections: list[dict] | None = None) -> str:
+    """The lesson input for the SEMANTIC director prompt.
+
+    What it drops from ``_build_episode_context``: the episode title line,
+    the duration and "Word count" lines (the length is stated once, by
+    shared/lesson_length.prompt_block, and a source word count anchored
+    the model's drafts to the article's length rather than the floor's),
+    the visual opportunities' legacy fields (trigger text, sketch elements,
+    "use these for visual_request prompts" — a field the semantic contract
+    does not have) and the Socratic wording of the teaching notes.
+
+    What it adds: the SOURCE ARTICLE itself. Until 2026-09-28 the director
+    never saw the text it was teaching from — only section titles and
+    one-line concept definitions — and taught from those.
+    """
+    lines = [
+        "SECTIONS TO COVER, in order: " + (", ".join(
+            str(t) for t in episode.get("sections_covered", []) if str(t).strip()) or "(the whole source)"),
+        "",
+    ]
+
+    secs = _episode_sections(episode, source_sections)
+    body_parts: list[str] = []
+    for s in secs:
+        text = _section_text(s)
+        if not text:
+            continue
+        title = str(s.get("section_title") or "").strip()
+        body_parts.append(f"## {title}\n{text}" if title else text)
+    body = "\n\n".join(body_parts).strip()
+    if body:
+        lines.append("SOURCE ARTICLE (the content to teach):")
+        if len(body) > SOURCE_TEXT_CAP:
+            cut = body.rfind("\n", 0, SOURCE_TEXT_CAP)
+            body = body[: cut if cut > SOURCE_TEXT_CAP // 2 else SOURCE_TEXT_CAP].rstrip()
+            body += "\n[The source continues; the sections and key concepts below name everything this lesson must teach.]"
+        lines.append(body)
+        lines.append("")
+
+    ep_concept_names = set(episode.get("key_concepts_introduced", []))
+    all_concepts = analysis.get("concepts", {}).get("concepts", [])
+    relevant_concepts = [
+        c for c in all_concepts
+        if c.get("concept_id") in ep_concept_names
+        or c.get("name") in ep_concept_names
+        or any(name in c.get("name", "") for name in ep_concept_names)
+    ]
+    if relevant_concepts:
+        lines.append("KEY CONCEPTS TO TEACH (in order of introduction):")
+        for c in relevant_concepts:
+            importance = c.get("importance", "supporting")
+            lines.append(f"  [{importance.upper()}] {c['name']}: {c.get('definition', '')}")
+            related = c.get("related_concepts", [])
+            if related:
+                lines.append(f"    Related: {', '.join(related)}")
+        lines.append("")
+
+    prereqs = analysis.get("concepts", {}).get("prerequisites", [])
+    if prereqs:
+        lines.append("PRIOR KNOWLEDGE TO BUILD ON:")
+        for p in prereqs:
+            lines.append(f"  - {p.get('topic', '')} (grade: {p.get('assumed_grade', '')})")
+        lines.append("")
+
+    teaching_notes = []
+    for d in analysis.get("difficulty_assessments", []):
+        analogies = d.get("suggested_analogies", [])
+        if analogies:
+            teaching_notes.append(f"  Analogies for '{d.get('section_title', '')}': {', '.join(analogies)}")
+        vocab = d.get("vocabulary_load", "")
+        if vocab:
+            teaching_notes.append(f"  Vocabulary load: {vocab}")
+        pacing = d.get("recommended_pacing", "")
+        if pacing:
+            teaching_notes.append(f"  Pacing advice: {pacing}")
+    if teaching_notes:
+        lines.append("TEACHING NOTES:")
+        lines.extend(teaching_notes)
+        lines.append("")
+
+    ep_visual_ids = set(episode.get("visual_opportunities_in_episode", []))
+    relevant_visuals = [v for v in analysis.get("visual_opportunities", [])
+                        if v.get("opportunity_id") in ep_visual_ids]
+    if relevant_visuals:
+        lines.append("SUGGESTED VISUALS (suggestions only; declare your own assets):")
+        for v in relevant_visuals:
+            lines.append(f"  - {v.get('title', '')}: {v.get('description', '')}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def generate_episode_script(
     episode: dict,
     analysis: dict,
@@ -252,8 +375,15 @@ def generate_episode_script(
     learner_age: str | None = None,
     min_minutes: float | None = None,
     length_shortfall: dict | None = None,
+    source_sections: list[dict] | None = None,
 ) -> EpisodeScript:
     """Generate a complete episode script via Claude in the chosen narration style.
+
+    ``source_sections`` is the chapter's (or article's) text, as the
+    ``sections`` list the analyser chunked — [{section_title, content,
+    subsections}]. The SEMANTIC prompt teaches from it
+    (_build_semantic_context); the legacy prompt never saw it and still
+    does not.
 
     ``min_minutes`` is the spoken-length floor (shared/lesson_length.py): the
     prompt states it in minutes, words and characters, and the target
@@ -274,7 +404,9 @@ def generate_episode_script(
     which topics were dropped is worth the second call.
     """
     style = normalize_style(narration_style)
-    episode_context = _build_episode_context(episode, analysis)
+    _semantic = os.getenv("SEMANTIC_PLAN", "").strip() == "1"
+    episode_context = (_build_semantic_context(episode, analysis, source_sections)
+                       if _semantic else _build_episode_context(episode, analysis))
     if part_info and part_info.get("total", 1) > 1:
         k, n = part_info["part"], part_info["total"]
         part_lines = [
@@ -381,7 +513,6 @@ def generate_episode_script(
         # the prompt; one minute over so the floor is not the target.
         target_duration = min(12.0, max(target_duration, float(min_minutes) + 1.0))
 
-    _semantic = os.getenv("SEMANTIC_PLAN", "").strip() == "1"
     _chapter_title = analysis.get("chapter_title", f"Chapter {chapter_num}")
     _level = analysis.get("difficulty_level_requested",
                           "middle_school").replace("_", " ").title()
