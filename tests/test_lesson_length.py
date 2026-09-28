@@ -152,16 +152,29 @@ class TestThePrompt:
 
     def test_the_floor_is_also_a_segment_count(self):
         prompt = self._ask(min_minutes=5.0)
-        assert "at least 13 teaching segments, each carrying at least 450 characters" in prompt
+        assert "around 13 teaching segments" in prompt
         assert "The length floor, not the visuals, sets the number of segments" in prompt
+
+    def test_the_whole_lesson_is_hard_and_the_segment_size_is_guidance(self):
+        """The reviewer's point (2026-09-28): a per-segment minimum stated
+        as a rule had the model padding short segments. The gate only ever
+        checked the whole-lesson total, so the prompt now says so."""
+        prompt = self._ask(min_minutes=5.0)
+        assert "MINIMUM LENGTH (hard requirement)" in prompt
+        assert "roughly 350 to 650 characters of dialogue" in prompt
+        assert "The whole-lesson total is what is checked" in prompt
+        assert "Never pad a segment to hit a size" in prompt
+        assert "each carrying at least" not in prompt
 
     def test_the_retry_names_the_measured_shortfall(self):
         shortfall = lesson_length.measure(_script(3494), 5.0)
         prompt = self._ask(min_minutes=5.0, length_shortfall=shortfall)
         assert "LENGTH — a previous draft of this script ran about 2.69 minutes" in prompt
         assert "3,494 characters" in prompt and "floor of 5 minutes (6,500 characters)" in prompt
-        # 6500 - 3494 = 3006 short: 7 segments of 450, one over
-        assert "add at least 8 further teaching segments" in prompt
+        # 6500 - 3494 = 3006 short: 7 segments of 450, one over — and the
+        # characters themselves, plus one usual segment, so N short
+        # segments cannot satisfy the count and still miss the floor
+        assert "add at least 8 further teaching segments carrying at least 3,506 characters" in prompt
 
     def test_the_retry_keeps_the_previous_segments_and_says_how_many_to_add(self):
         """Aerobic Respiration, 14:07 UTC: told only to be longer, the model
@@ -180,7 +193,9 @@ class TestThePrompt:
         assert "KEEPING every one of these segments" in prompt and "same SPEAKER on every line" in prompt
         add = lesson_length.segments_to_add(measured)
         assert add == -(-(6500 - measured["chars"]) // 450) + 1
-        assert f"ADD at least {add} NEW teaching segments of at least 450 characters" in prompt
+        short = lesson_length.chars_short(measured)
+        assert short == 6500 - measured["chars"] + 500
+        assert f"ADD at least {add} NEW teaching segments carrying at least {short:,} characters" in prompt
 
     def test_the_kept_segments_carry_their_speakers(self):
         """Aerobic Respiration, 18:33 UTC: the first extension re-ask handed

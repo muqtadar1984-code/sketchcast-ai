@@ -1695,6 +1695,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                     subject=book.get("subject"), curriculum=book.get("curriculum"),
                     learner_age=book.get("grade"),
                     min_minutes=_min_minutes or None,
+                    source_sections=chapter.get("sections"),
                 )
                 script_dict = script.model_dump()
 
@@ -1763,6 +1764,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                         learner_age=book.get("grade"),
                         min_minutes=_min_minutes or None,
                         length_shortfall=_shortfall,
+                        source_sections=chapter.get("sections"),
                     )
                     retry_dict = retry.model_dump()
                     retry_report = _coverage_report(

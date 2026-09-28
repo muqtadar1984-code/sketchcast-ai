@@ -115,7 +115,33 @@ class TestContract:
         assert ch["transition"] == "clear_and_redraw"
         arrow = next(e for e in ch["elements"] if e.get("type") == "arrow")
         assert arrow["head"]["layer"] == "outer_bank"
-        assert ch["steps"][0].get("moment", {}).get("role") == "student"
+        # the CONTINUE step's key_point reaches the engine as the step's own
+        # (continuity snaps it to the narration; it is verbatim, so it holds)
+        kp = ch["steps"][2].get("key_point")
+        assert kp and kp in narr["s003"], "the example's key_point is not a verbatim line"
+
+    def test_the_example_models_the_rules_the_prose_states(self):
+        """Measured on thirty lessons (2026-09-28): 61 leader arrows and 32
+        labels synthesised by the engine, 18 chapters with no regions, 11
+        openings on words alone. This model copies the example, so the
+        example has to do each of those things right."""
+        example = _example(_p())
+        chapters = example["visual_plan"]["chapters"]
+        first_actions = chapters[0]["steps"][0]["actions"]
+        assert first_actions[0]["verb"] == "DRAW", "the opening step must draw the picture"
+        for ch in chapters:
+            assert ch["semantic_regions"], f"{ch['id']} declares no regions"
+            labels = {e["id"] for e in ch["elements"] if e.get("role") == "label"}
+            for st in ch["steps"]:
+                verbs = [a["verb"] for a in st["actions"]]
+                wrote = [a for a in st["actions"]
+                         if a["verb"] == "WRITE" and a["target"].get("element") in labels]
+                assert not wrote or "ARROW" in verbs, \
+                    f"{ch['id']} segment {st['segment']} writes a label with no ARROW"
+                assert len(st["reason"].split()) <= 12, "the reason cap is modelled"
+        assert not any(a["verb"] == "HUMAN_TEACHING_MOMENT"
+                       for ch in chapters for st in ch["steps"] for a in st["actions"]), \
+            "the two-voice example must not model the set-piece verb"
 
 
 class TestNoRegressions:
@@ -136,7 +162,11 @@ class TestNoRegressions:
         p = _p().lower()
         assert "not permanently visible" not in p
         assert "drawn by the same hand" not in p
-        assert "the engine decides which avatar appears" in p
+        # the set-piece verb is offered to the styles whose student is not a
+        # permanent speaker, and withdrawn from the one whose student is
+        assert "the engine decides which avatar appears" in _p("socratic").lower()
+        assert "human_teaching_moment" not in _p().lower().replace("do not output human_teaching_moment", "")
+        assert "do not output HUMAN_TEACHING_MOMENT" in _p()
 
     def test_every_style_builds_and_names_itself(self):
         for s in NARRATION_STYLES:
@@ -144,7 +174,6 @@ class TestNoRegressions:
                 s, chapter_title="T", difficulty_level="Grade 9",
                 target_duration="6.0", episode_context="ctx")
             assert f"NARRATION STYLE: {s}" in p
-            assert "AVAILABLE NARRATION STYLES" in p
             assert "dialogue" in p.lower()
 
     def test_learner_profile_is_threaded(self):
@@ -195,13 +224,174 @@ class TestNoRegressions:
         `freezing_path`, `evaporation_path`, `sublimation_path` on an
         unlabelled triangle of three shapes, vision boxed none of them, and
         all four labels' leader lines ran to the edge of the picture.
+
+        LOWERED to 1.55 / 1.5 (2026-09-28) by the prompt revision: the
+        style list, the PLAN-TRUTH block, the separate dependencies block
+        and the duplicated duration statements went; CONTENT FIDELITY,
+        STUDENT KNOWLEDGE, BOARD PERSISTENCE, NARRATION–VISUAL DEPENDENCE
+        and the key_point definition came in. Measured 1.515 / 1.455.
         """
         legacy = build_episode_prompt(
             "conversational", chapter_title="Rivers and Erosion",
             difficulty_level="Grade 7", target_duration="6.0",
             episode_context="<sections>")
-        assert len(_p()) < len(legacy) * 1.65
-        assert len(_p("socratic")) < len(legacy) * 1.55, "the block is conversational-only"
+        assert len(_p()) < len(legacy) * 1.55
+        assert len(_p("socratic")) < len(legacy) * 1.5, "the block is conversational-only"
+
+
+class TestTheRevision:
+    """2026-09-28: the rules the review added, and the contradictions it
+    removed. Prose is weak with this model, so each rule is also modelled
+    by the example (TestContract) — these pin the words."""
+
+    def test_the_director_is_told_to_teach_from_the_article_not_read_it(self):
+        p = _p()
+        assert "=== CONTENT FIDELITY ===" in p
+        assert "never read the article aloud" in p
+        assert "never mirror it paragraph by paragraph" in p
+        assert "SOURCE ARTICLE" in p
+
+    def test_the_student_knows_only_what_was_taught(self):
+        for style in NARRATION_STYLES:
+            p = _p(style)
+            assert "STUDENT KNOWLEDGE:" in p, style
+            assert "If a student line could be spoken by the teacher, rewrite it" in p, style
+
+    def test_board_persistence_replaces_the_segment_count(self):
+        p = _p()
+        assert "BOARD PERSISTENCE:" in p
+        assert "NARRATION–VISUAL DEPENDENCE:" in p
+        assert "Typically three or more segments share one board" in p
+        # the old count was a rule the adapter never enforced, and it
+        # contradicted the length floor's "at least 13 segments"
+        assert "EARN its board" not in p
+        assert "at least three segments" not in p
+        assert "Do NOT split the lesson into extra segments" not in p
+        assert "not for maximum animation, assets, segments" not in p
+
+    def test_key_point_is_defined_as_the_engine_renders_it(self):
+        p = _p()
+        assert "KEY POINT:" in p
+        assert "emphasis metadata, not a board element" in p
+        assert "copied verbatim from that segment's dialogue" in p
+        assert '"key_point": "optional: one verbatim dialogue sentence"' in p
+
+    def test_the_opening_rule_is_stated_without_refusing(self):
+        p = _p()
+        assert "the first visual step DRAWS the root picture during the hook" in p
+        assert "Do not begin with a title-only or text-only board" in p
+        assert "refused" not in p.lower()
+
+    def test_the_closing_bracket_literal_is_gone(self):
+        """The `]}]}}` line addressed unbalanced brackets in COMPLETE
+        replies; token-cap truncation is the salvage's job. A plain validity
+        sentence says the same without teaching a suffix to copy."""
+        p = _p()
+        assert "]}]}}" not in p.replace("\n}", "")[p.index("=== BEFORE RETURNING"):]
+        assert "exactly one MINIFIED JSON object, every array and object closed" in p
+
+    def test_the_legacy_context_fields_are_not_asked_for(self):
+        p = _p()
+        for phrase in ("visual_request", "AVAILABLE NARRATION STYLES",
+                       "Word count", "HUMAN_TEACHING_MOMENT: {"):
+            assert phrase not in p, phrase
+
+
+class TestTheSemanticContext:
+    """The lesson input the semantic prompt is built from — with the source
+    text in it, and without the legacy prompt's fields."""
+
+    ANALYSIS = {
+        "chapter_title": "Rivers",
+        "concepts": {"concepts": [{"concept_id": "c1", "name": "Erosion",
+                                   "definition": "Wearing away of the bank",
+                                   "importance": "core"}],
+                     "prerequisites": [{"topic": "Water flows downhill", "assumed_grade": "5"}]},
+        "visual_opportunities": [{"opportunity_id": "v1", "title": "A bend",
+                                  "description": "one bend from above",
+                                  "trigger_text": "where the river bends",
+                                  "sketch_elements": ["bank", "water"]}],
+        "difficulty_assessments": [{"section_title": "Erosion",
+                                    "suggested_analogies": ["sandpaper"],
+                                    "vocabulary_load": "low"}],
+        "episodes": {"episodes": [{"episode_num": 1, "title": "Rivers",
+                                   "sections_covered": ["Erosion"],
+                                   "key_concepts_introduced": ["c1"],
+                                   "visual_opportunities_in_episode": ["v1"],
+                                   "estimated_word_count": 1170,
+                                   "estimated_duration_minutes": 9.0}]},
+    }
+    SECTIONS = [
+        {"section_title": "Erosion", "content": "Fast water on the outer bank wears it away.",
+         "subsections": [{"title": "Deposition", "content": "Slow water drops its load."}]},
+        {"section_title": "Oxbow lakes", "content": "The loop is cut off.", "subsections": []},
+    ]
+
+    def _ctx(self, sections=SECTIONS, episode=None):
+        from agent3_scripts.script_generator import _build_semantic_context
+        ep = episode or self.ANALYSIS["episodes"]["episodes"][0]
+        return _build_semantic_context(ep, self.ANALYSIS, sections)
+
+    def test_the_article_body_is_in_the_context(self):
+        ctx = self._ctx()
+        assert "SOURCE ARTICLE (the content to teach):" in ctx
+        assert "## Erosion\nFast water on the outer bank wears it away." in ctx
+        assert "Deposition\nSlow water drops its load." in ctx, "subsections travel too"
+
+    def test_only_this_episodes_sections_are_sent(self):
+        ctx = self._ctx()
+        assert "The loop is cut off." not in ctx, "another part's section"
+        # titles that do not match (a scanned chapter is one 'Content'
+        # section) send everything rather than nothing
+        ctx = self._ctx(sections=[{"section_title": "Content", "content": "All of it.", "subsections": []}])
+        assert "All of it." in ctx
+
+    def test_the_legacy_fields_are_gone_and_the_gate_inputs_stay(self):
+        ctx = self._ctx()
+        for gone in ("Word count", "Target duration", "VISUAL OPPORTUNITIES",
+                     "Trigger text", "Sketch elements", "visual_request", "Socratic"):
+            assert gone not in ctx, gone
+        assert "SECTIONS TO COVER, in order: Erosion" in ctx
+        assert "KEY CONCEPTS TO TEACH" in ctx and "[CORE] Erosion" in ctx
+        assert "PRIOR KNOWLEDGE TO BUILD ON" in ctx
+        assert "SUGGESTED VISUALS (suggestions only; declare your own assets):" in ctx
+        assert "  - A bend: one bend from above" in ctx
+        assert "TEACHING NOTES:" in ctx and "sandpaper" in ctx
+
+    def test_a_long_source_is_cut_with_a_note(self):
+        from agent3_scripts.script_generator import SOURCE_TEXT_CAP
+        long = [{"section_title": "Erosion", "content": "word " * (SOURCE_TEXT_CAP // 2), "subsections": []}]
+        ctx = self._ctx(sections=long)
+        assert "[The source continues;" in ctx
+        assert len(ctx) < SOURCE_TEXT_CAP + 2000
+
+    def test_no_sections_means_no_article_block(self):
+        assert "SOURCE ARTICLE" not in self._ctx(sections=None)
+
+    def test_the_semantic_path_uses_it_and_the_legacy_path_does_not(self, monkeypatch):
+        from agent3_scripts.script_generator import generate_episode_script
+
+        seen = {}
+
+        class _Stub:
+            model = "stub"
+
+            def analyze(self, prompt, system=None, max_tokens=0, **kw):
+                seen["prompt"] = prompt
+                return {"data": {"segments": [{"type": t, "text": "Fast water erodes the outer bank."}
+                                              for t in ("hook", "explore", "synthesis")]}}
+
+        ep = self.ANALYSIS["episodes"]["episodes"][0]
+        monkeypatch.setenv("SEMANTIC_PLAN", "1")
+        generate_episode_script(ep, self.ANALYSIS, 1, _Stub(), "conversational",
+                                source_sections=self.SECTIONS)
+        assert "SOURCE ARTICLE" in seen["prompt"]
+        assert "Word count: 1,170" not in seen["prompt"]
+        monkeypatch.delenv("SEMANTIC_PLAN")
+        generate_episode_script(ep, self.ANALYSIS, 1, _Stub(), "conversational",
+                                source_sections=self.SECTIONS)
+        assert "SOURCE ARTICLE" not in seen["prompt"]
+        assert "Word count: 1,170" in seen["prompt"], "the legacy prompt is untouched"
 
 
 class TestFlagWiring:
