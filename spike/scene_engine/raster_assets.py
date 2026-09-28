@@ -106,20 +106,25 @@ _STYLE_SUFFIX = (
 )
 
 # Board colour, phase 2 (spike/scene_engine/colour.pictures_enabled): the
-# same whiteboard drawing with a RESTRAINED palette — flat fills only where
-# colour tells the parts apart, most of the picture left white — so the
-# board keeps its hand-drawn identity and never becomes clipart. The
-# no-text clauses are the ink suffix's, verbatim: they matter more than the
-# medium. Asked only for a key that carries COLOUR_KEY_SUFFIX, which is
-# what keeps a coloured picture out of the ink cache and the ink library.
+# same whiteboard drawing with FLAT COLOUR FILLS — every distinct part in its
+# own bold, clearly visible colour, like a crayon-coloured textbook diagram —
+# so the board keeps its hand-drawn identity and never becomes clipart. The
+# first phase 2 demo asked for a "restrained palette, most of the picture
+# white" and the founder could not see the colour (2026-09-28); phase 3 asks
+# for the fills outright and lets the engine decide WHEN they appear (the
+# wash, split_colour_layers below). The no-text clauses are the ink suffix's,
+# verbatim: they matter more than the medium. Asked only for a key that
+# carries COLOUR_KEY_SUFFIX, which is what keeps a coloured picture out of
+# the ink cache and the ink library.
 _BOARD_COLOUR_SUFFIX = (
     " Hand-drawn educational whiteboard illustration: clean dark ink outlines, "
-    "and a small restrained palette of flat colour fills used only where colour "
-    "helps tell the parts apart — most of the picture stays white, no gradients, "
-    "no shading, no photorealism, pure white background. ABSOLUTELY NO TEXT OF "
-    "ANY KIND anywhere in the image: no letters, no words, no labels, no numbers, "
-    "no captions, no arrows pointing at parts — the diagram is UNLABELED (labels "
-    "are added separately by software). No watermark."
+    "with every distinct part filled in with its own bold, flat, clearly visible "
+    "colour, like a crayon-coloured diagram in a school textbook — a small palette "
+    "of strong colours, no gradients, no shading, no photorealism, pure white "
+    "background. ABSOLUTELY NO TEXT OF ANY KIND anywhere in the image: no letters, "
+    "no words, no labels, no numbers, no captions, no arrows pointing at parts — "
+    "the diagram is UNLABELED (labels are added separately by software). No "
+    "watermark."
 )
 
 # A coloured board picture is a DIFFERENT asset from the ink one: its own
@@ -158,6 +163,13 @@ class RasterAsset:
     # narration-ordered drawing on generated art.
     regions: dict[str, list[list[float]]] = None
     baked_text: bool = False    # vision saw text in the art (validation warns)
+    # Board colour, phase 3: a coloured picture arrives as TWO layers. `ink`
+    # is then only its dark outlines — what the pen draws, what the trace
+    # follows — and `wash` is the whole coloured cutout, which the renderer
+    # fades in UNDER the lines once a part's outline is complete
+    # (render.SceneRenderer._draw_raster). None for every ink asset: the
+    # benchmark renders exactly as before.
+    wash: Image.Image | None = None
 
     def __post_init__(self):
         if self.regions is None:
@@ -1711,14 +1723,51 @@ def scrub_text(ink: Image.Image, text_boxes: list[list[float]],
     return out
 
 
+# Board colour, phase 3 — the split of a coloured cutout into the LINES the
+# pen draws and the WASH that follows them. A pixel is line where it is dark
+# AND unsaturated: a luminance cut alone read every red fill (lum ~96) as
+# ink, since a strong fill is as dark as a stroke. Soft on both axes so an
+# anti-aliased stroke edge keeps its feather.
+_LINE_LUM = 140            # darker than this can be a stroke
+_LINE_CHROMA_LO = 50       # below this spread of RGB a dark pixel is a stroke…
+_LINE_CHROMA_HI = 90       # …above it, a dark fill; between, a blend
+# A picture whose outlines carry less than this share of its opaque pixels
+# has no lines to draw (a blob with no dark edge): it keeps the phase 2
+# behaviour — the whole cutout is the ink and there is no wash.
+_MIN_LINE_SHARE = 0.01
+
+
+def split_colour_layers(cutout: Image.Image) -> tuple[Image.Image, Image.Image | None]:
+    """``(lines, wash)`` for a coloured cutout (to_color_art output): the
+    dark outlines with the ink cut's soft alpha, and the whole cutout to
+    fade in under them. ``wash`` is None when the picture has no outlines
+    worth drawing — then ``lines`` is the cutout itself."""
+    rgba = cutout.convert("RGBA")
+    arr = np.asarray(rgba).astype(np.int32)
+    rgb, a = arr[..., :3], arr[..., 3]
+    lum = (rgb[..., 0] * 299 + rgb[..., 1] * 587 + rgb[..., 2] * 114) // 1000
+    chroma = rgb.max(axis=-1) - rgb.min(axis=-1)
+    dark = np.clip((_LINE_LUM - lum) * 2.1, 0, 255)
+    grey = np.clip((_LINE_CHROMA_HI - chroma) * (255.0 / (_LINE_CHROMA_HI - _LINE_CHROMA_LO)), 0, 255)
+    line_a = np.minimum(a, (dark * grey) // 255).astype(np.uint8)
+    opaque = int((a > 128).sum())
+    if opaque == 0 or (line_a > 128).sum() < _MIN_LINE_SHARE * opaque:
+        return rgba, None
+    lines = Image.fromarray(np.dstack([rgb.astype(np.uint8), line_a]), "RGBA")
+    return lines, rgba
+
+
 def _finish(key: str, ink: Image.Image, regions: dict | None = None,
             baked_text: bool = False) -> RasterAsset:
+    wash = None
+    if is_colour_key(key):
+        ink, wash = split_colour_layers(ink)
     alpha = np.asarray(ink.getchannel("A"))
     trace = drawing_order(alpha)
     return RasterAsset(key=key, ink=ink, trace=trace,
                        stamp_r=max(4.0, ink.width / 80.0),
                        world_scale=fit_scale(ink.width, ink.height),
-                       regions=regions or {}, baked_text=baked_text)
+                       regions=regions or {}, baked_text=baked_text, wash=wash)
 
 
 # ── the annotation is an ASSET, not a per-deploy expense ─────────────────────
