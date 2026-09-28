@@ -201,6 +201,92 @@ SS = 2  # supersample factor: PIL lines are not antialiased; 2x + box reduce is
 _INTRODUCERS = {"draw", "write", "reveal"}
 _PEN_VERBS = {"draw", "write", "erase", "circle", "underline", "highlight"}
 
+# Board colour, phase 3 — the WASH. A coloured picture (raster_assets
+# .split_colour_layers) is two layers: the dark outlines the pen draws and
+# the whole coloured cutout, which fades in under them over WASH_SECS once a
+# part's outline is complete — the whole picture when it is drawn in one, a
+# named part when the drawing is narration-ordered (region spans), so the
+# colour of the nucleus arrives right after the nucleus is outlined, not
+# before it and not at the end of the lesson. The units' boundaries are
+# feathered by the stamp radius so a part's colour has no hard box edge.
+# An ink asset has no wash and renders exactly as before.
+WASH_SECS = 0.8
+
+
+def _ease_inverse(name: str, y: float) -> float:
+    """The t in [0, 1] at which ease(name, t) first reaches y — bisection,
+    every easing here is monotonic."""
+    y = min(1.0, max(0.0, y))
+    if y <= 0.0:
+        return 0.0
+    if y >= 1.0:
+        return 1.0
+    lo, hi = 0.0, 1.0
+    for _ in range(30):
+        mid = (lo + hi) / 2
+        if ease(name, mid) < y:
+            lo = mid
+        else:
+            hi = mid
+    return hi
+
+
+def _wash_units(spans: dict) -> list[tuple[str, float]]:
+    """The wash units of a raster and the trace fraction at which each one's
+    outline is complete: the base (the outline and every part nobody
+    narrates) first, then each narrated part in drawing order. A picture
+    drawn without named parts is one unit, complete at the end."""
+    ordered = sorted((n for n in spans if n != "__base"), key=lambda n: spans[n][0])
+    if not ordered:
+        return [("__base", 1.0)]
+    base_hi = spans.get("__base", (0.0, 0.0))[1]
+    if base_hi <= 0.0:
+        # the base rides inside the first part's span (_region_ordered_trace)
+        base_hi = spans[ordered[0]][1]
+    return [("__base", base_hi)] + [(n, spans[n][1]) for n in ordered]
+
+
+def _wash_owner(lines: "Image.Image", regions: dict,
+                units: list[tuple[str, float]]) -> "Image.Image":
+    """An L image over the asset naming each pixel's wash unit (its index in
+    ``units``): the smallest region box containing it, else the base —
+    the same rule that buckets the trace — EXCEPT that a box is a vision
+    box, not the part: it holds the fill AROUND the part too. So within
+    each box everything reachable from the box's border without crossing
+    a line (the outlines, ``lines``' alpha) stays with the owner it had:
+    a part claims only what its own outline encloses. Without this an
+    undrawn part showed as a white rectangle cut out of its neighbour's
+    colour."""
+    import numpy as _np
+    from PIL import ImageDraw as _ID, ImageFilter as _IF
+    w, h = lines.size
+    owner = _np.zeros((h, w), dtype=_np.uint8)
+    # the walls the flood must not cross: line pixels, closed by one pixel
+    # so an anti-aliased outline has no gap for the flood to slip through
+    wall = _np.asarray(lines.getchannel("A").filter(_IF.MaxFilter(3))) > 100
+    boxes = []
+    for idx, (name, _hi) in enumerate(units):
+        if name == "__base" or idx > 255:
+            continue
+        for (x0, y0, x1, y1) in regions.get(name, []):
+            boxes.append(((x1 - x0) * (y1 - y0), idx, (x0, y0, x1, y1)))
+    for _area, idx, (x0, y0, x1, y1) in sorted(boxes, key=lambda b: -b[0]):
+        xa, ya = max(0, int(x0)), max(0, int(y0))
+        xb, yb = min(w, int(x1) + 1), min(h, int(y1) + 1)
+        if xb <= xa or yb <= ya:
+            continue
+        # a 1-px free margin joins every border pixel to one flood seed
+        crop = _np.zeros((yb - ya + 2, xb - xa + 2), dtype=_np.uint8)
+        crop[1:-1, 1:-1] = _np.where(wall[ya:yb, xa:xb], 255, 0)
+        # .copy(): an image over a numpy buffer is READ-ONLY and floodfill
+        # silently fills nothing on it (Pillow 12)
+        img = Image.fromarray(crop, "L").copy()
+        _ID.floodfill(img, (0, 0), 128)
+        outside = _np.asarray(img)[1:-1, 1:-1] == 128
+        before = owner[ya:yb, xa:xb]
+        owner[ya:yb, xa:xb] = _np.where(outside, before, idx)
+    return Image.fromarray(owner, "L")
+
 
 def _is_overlay(eid) -> bool:
     """HUD/overlay ids (captions, avatars, moments) — never board content."""
@@ -304,6 +390,11 @@ class BRaster:
     scale: float              # asset px -> world px
     stamp_r: float            # reveal stamp radius, asset px
     mask: "Image.Image" = None  # persistent monotonic reveal mask (L)
+    # phase 3 (WASH_SECS): the coloured cutout under the lines, the unit
+    # each pixel washes with, and the units' completion fractions
+    wash: "Image.Image | None" = None
+    wash_owner: "Image.Image | None" = None
+    wash_units: list = field(default_factory=list)
 
     def __post_init__(self):
         if self.mask is None:
@@ -408,6 +499,7 @@ class _ElState:
     pulse: float = 1.0
     erase: float = 0.0
     visible: bool = True
+    wash: tuple = ()          # phase 3: per wash unit, 0..1 faded in
 
 
 # ── the renderer ─────────────────────────────────────────────────────────────
@@ -800,6 +892,12 @@ class SceneRenderer:
             b.raster.regions = regions
             b.raster.region_spans = spans
             b.raster.pre_frac = pre_frac
+            wash = getattr(asset, "wash", None)
+            if wash is not None and wash.size == asset.ink.size:
+                b.raster.wash = wash
+                b.raster.wash_units = _wash_units(spans)
+                b.raster.wash_owner = _wash_owner(asset.ink, regions,
+                                                  b.raster.wash_units)
             b.raster.baked_text = bool(getattr(asset, "baked_text", False))
             w2 = asset.ink.width * b.raster.scale / 2
             h2 = asset.ink.height * b.raster.scale / 2
@@ -1943,7 +2041,48 @@ class SceneRenderer:
                                 float(cs.get("cy", WORLD_H / 2)),
                                 float(cs.get("scale", 1.0)))
         self.cam = CameraTrack(self.timeline, focus, start=start, scale_cap=caps)
+        self._wash_ready = self._wash_schedule()
         return self.timeline
+
+    def _wash_schedule(self) -> dict[str, list[float]]:
+        """For every raster with a wash: when each wash unit's outline is
+        complete, from the timeline — the moment a draw's slice reaches the
+        unit's fraction (easing inverted), a reveal's or a morph's start,
+        or before the clip for a picture that is on the board at t=0 (the
+        carry from an earlier segment, which arrives already coloured).
+        ``inf`` for a unit this scene never completes."""
+        out: dict[str, list[float]] = {}
+        inf = float("inf")
+        for eid, b in self.bound.items():
+            ra = b.raster
+            if ra is None or ra.wash is None:
+                continue
+            el = b.element
+            partial = (isinstance(el, IllustrationElement)
+                       and (el.drawn_layers or el.drawn_frac > 0 or el.drawn_regions))
+            if partial:
+                f0 = max(el.drawn_frac, getattr(ra, "pre_frac", 0.0))
+            elif not b.introduced:
+                f0 = 1.0
+            else:
+                f0 = 0.0
+            ready = [(-WASH_SECS if f0 >= hi - 1e-9 else inf) for _n, hi in ra.wash_units]
+            for i, ta in enumerate(self.timeline):
+                a = ta.action
+                if a.verb == "draw" and eid in self._expand(a.target):
+                    lo, w = self._raster_slice(b, a) or self._draw_slices.get(i) or (0.0, 1.0)
+                    for j, (_n, hi) in enumerate(ra.wash_units):
+                        if ready[j] < inf or hi > lo + w + 1e-9:
+                            continue
+                        p = (hi - lo) / w if w > 1e-9 else 0.0
+                        ready[j] = ta.start + ta.duration * _ease_inverse(a.easing, p)
+                elif (a.verb == "reveal" and eid in self._expand(a.target)) or \
+                        (a.verb == "morph" and getattr(a, "into", None) == eid):
+                    for j in range(len(ready)):
+                        if ready[j] == inf:
+                            ready[j] = ta.start
+            out[eid] = ready
+        return out
 
     def _enforce_dependencies(self) -> None:
         """§13: an annotation never precedes its prerequisite. Within a scene,
@@ -2246,6 +2385,8 @@ class SceneRenderer:
                         st[a.into].reveal[idx] = 1.0
                     if self.bound[a.into].raster is not None:
                         st[a.into].raster_frac = 1.0
+        for eid, ready in getattr(self, "_wash_ready", {}).items():
+            st[eid].wash = tuple(min(1.0, max(0.0, (t - r) / WASH_SECS)) for r in ready)
         return st
 
     def _expand(self, target: str | None) -> list[str]:
@@ -2422,6 +2563,9 @@ class SceneRenderer:
             end = self._motion_end(ta)
             if end - ta.start > 1e-9 and ta.start <= t < end:
                 return None                      # something is animating
+        for ready in getattr(self, "_wash_ready", {}).values():
+            if any(r <= t < r + WASH_SECS for r in ready):
+                return None                      # a colour wash is fading in
         return (tuple(t >= ta.start for ta in tl),
                 tuple(ta.start <= t < ta.end + 0.08
                       for ta in tl if ta.action.verb in _PEN_VERBS),
@@ -2733,12 +2877,36 @@ class SceneRenderer:
             else:
                 d.ellipse([x - r, y - r, x + r, y + r], fill=col + (a8,))
 
+    @staticmethod
+    def _wash_under(ra: BRaster, ink: Image.Image, wash: tuple) -> Image.Image:
+        """The coloured cutout, each wash unit at its own fade, composited
+        UNDER the revealed lines. A uniform fade needs no owner lookup; a
+        mixed one is feathered by the stamp radius so no part's colour
+        ends on a box edge."""
+        from PIL import ImageChops as _IC, ImageFilter as _IF
+        levels = [int(round(255 * min(1.0, max(0.0, p)))) for p in wash]
+        if len(set(levels)) == 1 or ra.wash_owner is None:
+            wm = Image.new("L", ra.wash.size, levels[0] if levels else 0)
+        else:
+            lut = [0] * 256
+            for i, v in enumerate(levels[:256]):
+                lut[i] = v
+            wm = ra.wash_owner.point(lut).filter(_IF.GaussianBlur(max(1.0, ra.stamp_r)))
+        # scale the ALPHA only: Image.composite against transparent black
+        # blends the colour channels toward black as well, and a half-faded
+        # wash came out as mud
+        layer = ra.wash.copy()
+        layer.putalpha(_IC.multiply(ra.wash.getchannel("A"), wm))
+        layer.alpha_composite(ink)
+        return layer
+
     def _draw_raster(self, frame: Image.Image, b: Bound, s: _ElState,
                      cam: CameraState, alpha: float) -> None:
         ra = b.raster
         k = int(s.raster_frac * len(ra.trace))
         ra.reveal_to(k)
-        if k <= 0:
+        wash = s.wash if ra.wash is not None else ()
+        if k <= 0 and not any(wash):
             return
         # The composite + alpha + cropped affine below depend only on
         # (k, alpha, pulse, camera) — all constant for a static raster, and
@@ -2746,7 +2914,7 @@ class SceneRenderer:
         # Keep the last result on the Bound and paste it straight back on a
         # hit (exact: same inputs, same bytes). Keyed on the exact floats, not
         # rounded ones, so a hit can only ever be a bit-identical repeat.
-        ckey = (k, alpha, s.pulse, cam)
+        ckey = (k, alpha, s.pulse, cam, wash)
         hit = b._raster_cache
         if hit is not None and hit[0] == ckey:
             if hit[1] is not None:
@@ -2754,6 +2922,8 @@ class SceneRenderer:
                 frame.paste(out, (bx0, by0), out)
             return
         ink = Image.composite(ra.ink, Image.new("RGBA", ra.ink.size, (0, 0, 0, 0)), ra.mask)
+        if any(wash):
+            ink = self._wash_under(ra, ink, wash)
         if alpha < 0.999:
             a = ink.getchannel("A").point(lambda v: int(v * alpha))
             ink.putalpha(a)

@@ -342,9 +342,11 @@ class TestThePictures:
         assert (ra.cache_dir_for("plant_cell__colour", tmp_path) / "asset.png").exists()
         assert not (ra.cache_dir_for("plant_cell", tmp_path) / "asset.png").exists(), "the ink entry is a different asset"
         assert ra.cache_dir_for("plant_cell__colour", tmp_path) != ra.cache_dir_for("plant_cell", tmp_path)
-        assert "restrained palette" in seen["prompt"] and "no color fill" not in seen["prompt"]
+        assert "bold, flat, clearly visible" in seen["prompt"] and "no color fill" not in seen["prompt"]
         assert "ABSOLUTELY NO TEXT OF ANY KIND" in seen["prompt"], "the no-text clause travels with every style"
-        assert self._red_pixels(asset.ink) > 1000, "the cutout keeps the fill"
+        # phase 3: the fill is kept in the WASH; the lines the pen draws stay dark
+        assert asset.wash is not None and self._red_pixels(asset.wash) > 1000, "the cutout keeps the fill"
+        assert self._red_pixels(asset.ink) == 0, "the pen draws the outlines, not the fill"
         assert asset.trace, "a filled picture still has a drawing order"
 
     def test_the_colour_entry_and_the_ink_entry_live_side_by_side(self, tmp_path, monkeypatch):
@@ -362,7 +364,8 @@ class TestThePictures:
             colour.reset_pin(t)
         again = ra.get_raster_asset("cell", "A cell", tmp_path)
         assert ink.key == again.key == "cell" and col.key == "cell__colour"
-        assert self._red_pixels(again.ink) == 0 and self._red_pixels(col.ink) > 1000
+        assert self._red_pixels(again.ink) == 0 and again.wash is None
+        assert col.wash is not None and self._red_pixels(col.wash) > 1000
 
     def test_the_pins_travel_into_a_render_thread(self, monkeypatch):
         """contextvars are per thread; bind_generation carries the pins the
@@ -488,3 +491,159 @@ class TestTheLeaksTheFirstPhase2DemoFound:
         monkeypatch.setattr(vl, "find", lambda *a, **k: {"asset_key": "sk_cone__colour", "local_cache_path": str(src), "match_score": 1.4})
         assert vli._hydrate_local_library("sk_cone", "A simple cone", tmp_path / "cache") is False
         assert not list((tmp_path / "cache").glob("**/asset.png")) if (tmp_path / "cache").exists() else True
+
+
+class TestTheWash:
+    """Phase 3: a coloured picture is drawn as its OUTLINES first, by the
+    pen, and its colour WASHES IN under them over render.WASH_SECS once a
+    part's outline is complete — the whole picture when drawn in one, each
+    narrated part in turn when the drawing is narration-ordered. An ink
+    asset has no wash and renders exactly as before."""
+
+    @staticmethod
+    def _cutout(fill=(220, 40, 40)):
+        from spike.scene_engine import raster_assets as ra
+        return ra.to_color_art(TestThePictures._filled_art(fill))
+
+    @staticmethod
+    def _red_in(frame) -> int:
+        return TestThePictures._red_pixels(frame)
+
+    @staticmethod
+    def _scene(actions, **el):
+        from spike.scene_engine.schema import Scene
+        pic = {"id": "pic", "type": "illustration", "asset": "cell", "at": [640, 360], "scale": 2.0}
+        pic.update(el)
+        return Scene.model_validate({
+            "id": "w", "narration": "the cell has a nucleus and a wall around it",
+            "elements": [pic], "actions": actions})
+
+    @staticmethod
+    def _asset(key="cell__colour", regions=None):
+        from spike.scene_engine import raster_assets as ra
+        cut = TestTheWash._cutout()
+        return ra._finish(key, cut, regions or {})
+
+    def test_an_ink_asset_has_no_wash(self):
+        from spike.scene_engine import raster_assets as ra
+        art = TestThePictures._filled_art(fill=None)
+        asset = ra._finish("cell", ra.to_ink(art), {})
+        assert asset.wash is None
+        lines, wash = ra.split_colour_layers(ra.to_ink(art))
+        assert wash is not None, "an outline drawing splits into lines and an (all-line) wash"
+
+    def test_a_colour_asset_splits_into_lines_and_wash(self):
+        import numpy as np
+        asset = self._asset()
+        assert asset.wash is not None and asset.wash.size == asset.ink.size
+        assert self._red_in(asset.wash) > 1000
+        assert self._red_in(asset.ink) == 0
+        assert (np.asarray(asset.ink.getchannel("A")) > 128).sum() > 200, "the outline survives as lines"
+        assert asset.trace, "the pen has an outline to follow"
+
+    def test_a_picture_with_no_outline_keeps_the_phase_2_behaviour(self):
+        from PIL import Image, ImageDraw
+        from spike.scene_engine import raster_assets as ra
+        art = Image.new("RGB", (240, 180), (255, 255, 255))
+        ImageDraw.Draw(art).ellipse([40, 30, 200, 150], fill=(220, 40, 40))
+        asset = ra._finish("blob__colour", ra.to_color_art(art), {})
+        assert asset.wash is None and self._red_in(asset.ink) > 1000
+
+    def _render(self, scene, asset, secs=6.0):
+        from spike.scene_engine.render import SceneRenderer
+        r = SceneRenderer(scene, asset_resolver=lambda k: ("raster", asset))
+        r.compile(secs)
+        return r
+
+    def test_the_wash_follows_the_pen(self):
+        from spike.scene_engine.render import WASH_SECS
+        asset = self._asset()
+        r = self._render(self._scene([{"verb": "draw", "target": "pic", "duration": 1.0}]), asset)
+        draw = next(ta for ta in r.timeline if ta.action.verb == "draw")
+        ready = r._wash_ready["pic"]
+        assert ready == [pytest.approx(draw.end)], "one unit, complete when the draw ends"
+        from spike.scene_engine.paper import make_background
+        from spike.scene_engine.render import SS, WORLD_H, WORLD_W
+        w, h = WORLD_W * SS, WORLD_H * SS
+        base = make_background(w, h, r.scene.style.background)
+        mid = r._frame(draw.start + 0.5 * draw.duration, base, w, h)
+        assert self._red_in(mid) == 0, "while the pen draws there is no colour yet"
+        st = r._state_at(draw.start + 0.5 * draw.duration)["pic"]
+        assert 0.0 < st.raster_frac < 1.0 and st.wash == (0.0,)
+        half = r._state_at(draw.end + 0.5 * WASH_SECS)["pic"]
+        assert half.wash == (pytest.approx(0.5),)
+        done = r._frame(draw.end + WASH_SECS + 0.1, base, w, h)
+        assert self._red_in(done) > 500, "after the wash the picture is in colour"
+        assert r._state_at(draw.end + WASH_SECS + 0.1)["pic"].wash == (1.0,)
+
+    def test_the_frame_key_animates_while_the_wash_fades(self):
+        from spike.scene_engine.render import WASH_SECS
+        asset = self._asset()
+        r = self._render(self._scene([{"verb": "draw", "target": "pic", "duration": 1.0}]), asset)
+        draw = next(ta for ta in r.timeline if ta.action.verb == "draw")
+        assert r._frame_key(draw.end + 0.3) is None
+        assert r._frame_key(draw.end + WASH_SECS + 0.2) is not None
+
+    def test_a_carried_over_picture_arrives_in_colour(self):
+        asset = self._asset()
+        r = self._render(self._scene([], drawn_frac=1.0), asset)
+        assert r._wash_ready["pic"] == [pytest.approx(-0.8)]
+        assert r._state_at(0.0)["pic"].wash == (1.0,)
+
+    @staticmethod
+    def _cell_art():
+        """A cell as the colour prompt asks for it: a green wall enclosing a
+        purple nucleus and a blue vacuole, each with its own dark outline."""
+        from PIL import Image, ImageDraw
+        art = Image.new("RGB", (400, 300), (255, 255, 255))
+        d = ImageDraw.Draw(art)
+        d.rounded_rectangle([20, 20, 380, 280], radius=40, fill=(170, 220, 150), outline=(20, 20, 20), width=6)
+        d.ellipse([60, 90, 170, 200], fill=(150, 120, 200), outline=(20, 20, 20), width=5)
+        d.ellipse([220, 70, 350, 230], fill=(150, 200, 235), outline=(20, 20, 20), width=5)
+        return art
+
+    def test_each_narrated_part_washes_when_its_outline_is_complete(self):
+        from spike.scene_engine import raster_assets as ra
+        from spike.scene_engine.render import WASH_SECS
+        cut = ra.to_color_art(self._cell_art())          # crops 8 px off each edge (pad 12 around content at 20)
+        ox, oy = 20 - 12, 20 - 12
+        regions = {"nucleus": [[55 - ox, 85 - oy, 175 - ox, 205 - oy]],
+                   "vacuole": [[215 - ox, 65 - oy, 355 - ox, 235 - oy]]}
+        asset = ra._finish("cell__colour", cut, regions)
+        r = self._render(self._scene(
+            [{"verb": "draw", "target": "pic", "region": "nucleus", "duration": 1.0},
+             {"verb": "draw", "target": "pic", "region": "vacuole", "duration": 1.0, "at": {"phrase": "wall"}}],
+            region_order=["nucleus", "vacuole"]), asset)
+        names = [n for n, _hi in r.bound["pic"].raster.wash_units]
+        assert names == ["__base", "nucleus", "vacuole"]
+        draws = [ta for ta in r.timeline if ta.action.verb == "draw"]
+        assert len(draws) == 2 and draws[1].start >= draws[0].end
+        base_r, nuc_r, vac_r = r._wash_ready["pic"]
+        assert base_r == pytest.approx(draws[0].end) and nuc_r == pytest.approx(draws[0].end)
+        assert vac_r == pytest.approx(draws[1].end)
+        between = r._state_at(draws[0].end + WASH_SECS + 0.05)["pic"].wash
+        assert between[0] == 1.0 and between[1] == 1.0 and between[2] == 0.0
+        owner = r.bound["pic"].raster.wash_owner
+        assert owner.getpixel((115 - ox, 145 - oy)) == 1, "the nucleus owns what its outline encloses"
+        assert owner.getpixel((285 - ox, 150 - oy)) == 2, "the vacuole owns what its outline encloses"
+        assert owner.getpixel((60 - ox, 90 - oy)) == 0, "the wall's fill inside the nucleus BOX stays the base's"
+        assert owner.getpixel((30 - ox, 150 - oy)) == 0
+        # on the board: after the first wash the wall and nucleus are coloured, the vacuole is still white
+        from spike.scene_engine.paper import make_background
+        from spike.scene_engine.render import SS, WORLD_H, WORLD_W
+        import numpy as np
+        w, h = WORLD_W * SS, WORLD_H * SS
+        frame = r._frame(draws[0].end + WASH_SECS + 0.05, make_background(w, h, r.scene.style.background), w, h)
+        a = np.asarray(frame.convert("RGB")).astype(int)
+        blue = ((a[..., 2] > 200) & (a[..., 0] < 180) & (a[..., 1] > 170) & (a[..., 1] < 225)).sum()
+        purple = ((a[..., 0] > 120) & (a[..., 0] < 175) & (a[..., 1] < 140) & (a[..., 2] > 170)).sum()
+        assert purple > 500 and blue < 50, (purple, blue)
+
+    def test_the_benchmark_frame_is_untouched(self):
+        """An ink asset: no wash, no schedule, the same state as before."""
+        from spike.scene_engine import raster_assets as ra
+        art = TestThePictures._filled_art(fill=None)
+        asset = ra._finish("cell", ra.to_ink(art), {})
+        r = self._render(self._scene([{"verb": "draw", "target": "pic", "duration": 1.0}]), asset)
+        assert r._wash_ready == {} and r.bound["pic"].raster.wash is None
+        assert r._state_at(3.0)["pic"].wash == ()

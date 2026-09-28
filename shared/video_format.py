@@ -46,7 +46,8 @@ FORMAT_CHANGES: dict[int, str] = {
         "labels in the frame; the end screen with the call to action."),
     3: ("Board colour: relationship arrows in a second accent, leader arrows in the "
         "first, equations coloured side by side; with the pictures switch on, the "
-        "generated pictures carry restrained flat colour."),
+        "generated pictures carry bold flat colour, drawn as outlines first with the "
+        "colour washing in under each part once its outline is complete."),
 }
 
 SETTINGS_KEY = "video_format"
