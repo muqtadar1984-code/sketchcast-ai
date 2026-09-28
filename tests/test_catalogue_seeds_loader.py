@@ -281,6 +281,9 @@ class TestNodeKind:
         ("7ESp.01", True, "objective"), ("7Bs.01", False, "objective"),
         ("7/Biology", False, "strand"), ("7/Bs", True, "sub_strand"), ("7/TWSm", True, "sub_strand"),
         ("cbse:6:ch01", False, "chapter"), ("cbse:10:U1", False, "unit"), ("cbse:9:U1:01", True, "topic"),
+        # the maths seeds (2026-09-28): 0862 objectives and the NCERT-class strand groupings
+        ("7Ae.01", True, "objective"), ("9As.06", True, "objective"), ("7/As", True, "sub_strand"),
+        ("cbse:7:ALG", False, "unit"), ("cbse:8:ALG:05", True, "topic"),
         ("7", False, None), ("7Bs.1", True, None), ("7Xy.01", True, None), ("cbse:9:U1:01:02", True, None),
         ("", False, None), (None, False, None),
     ])
@@ -335,11 +338,17 @@ class TestNodeKind:
             kinds = {n["code"]: node_kind_for(n) for n in seed["nodes"]}
             missing = [c for c, k in kinds.items() if k is None]
             assert not missing, f"{f.name}: no kind for {missing[:5]}"
-            if "cambridge" in f.name:
+            if "cambridge_ls_science_0893" in f.name:
                 from collections import Counter
                 counts = Counter(kinds.values())
                 # 3 stages × (6 strands + 16 sub-strands), 200 objectives = 266 nodes.
                 assert counts == {"objective": 200, "sub_strand": 48, "strand": 18}
+            if "cambridge_ls_maths_0862" in f.name:
+                from collections import Counter
+                counts = Counter(kinds.values())
+                # the ALGEBRA strand only (partial seed): 3 stages × (1 strand +
+                # 2 sub-strands), 14 objectives a stage = 51 nodes.
+                assert counts == {"objective": 42, "sub_strand": 6, "strand": 3}
 
 
 class TestDryRun:

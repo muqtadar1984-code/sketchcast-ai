@@ -1,0 +1,164 @@
+{
+  "curriculum": {
+    "code": "cbse_maths_041",
+    "name": "CBSE Mathematics (Class 6-10)",
+    "kind": "syllabus",
+    "country": "IN",
+    "edition": "2025-26",
+    "source_url": "https://cbseacademic.nic.in/web_material/CurriculumMain26/Sec/Maths_Sec_2025-26.pdf",
+    "partial": true,
+    "candidates": "none"
+  },
+  "nodes": [
+    {
+      "code": "cbse:7:ALG",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Algebra",
+      "description": null,
+      "parent_code": null,
+      "sort": 1
+    },
+    {
+      "code": "cbse:7:ALG:01",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Simple Equations",
+      "description": "Setting up simple linear equations in one variable from statements and contextual problems (two operations, avoiding complicated coefficients); what an equation is and its solution; solving by doing the same operation on both sides (balancing) and by transposing terms; forming and solving equations for practical word problems. (Paraphrased from the NCERT 'Syllabus for Classes at the Elementary Level' (Mathematics, Class VII) and the NCERT Class 7 Mathematics textbook chapter; not verbatim.)",
+      "parent_code": "cbse:7:ALG",
+      "sort": 2
+    },
+    {
+      "code": "cbse:7:ALG:02",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Algebraic Expressions",
+      "description": "Generating simple algebraic expressions involving one or two variables; variables and constants; terms of an expression and their factors; identifying coefficients and powers; like and unlike terms; degree of an expression (exponent up to 3, at most two variables); monomials, binomials, trinomials and polynomials; addition and subtraction of algebraic expressions with integer coefficients; finding the value of an expression by substituting values for the variables; using expressions in formulas and number patterns. (Paraphrased from the NCERT 'Syllabus for Classes at the Elementary Level' (Mathematics, Class VII) and the NCERT Class 7 Mathematics textbook chapter; not verbatim.)",
+      "parent_code": "cbse:7:ALG",
+      "sort": 3
+    },
+    {
+      "code": "cbse:7:ALG:03",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Exponents and Powers",
+      "description": "Exponents restricted to natural numbers; laws of exponents arrived at by observing patterns: multiplying and dividing powers with the same base (a^m × a^n = a^(m+n); a^m ÷ a^n = a^(m−n), m > n), power of a power ((a^m)^n = a^(mn)), multiplying and dividing powers with the same exponent, a^0 = 1; using the laws to simplify numerical expressions; expressing large numbers in standard form. (Paraphrased from the NCERT 'Syllabus for Classes at the Elementary Level' (Mathematics, Class VII) and the NCERT Class 7 Mathematics textbook chapter; not verbatim.)",
+      "parent_code": "cbse:7:ALG",
+      "sort": 4
+    },
+    {
+      "code": "cbse:8:ALG",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Algebra",
+      "description": null,
+      "parent_code": null,
+      "sort": 5
+    },
+    {
+      "code": "cbse:8:ALG:01",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Linear Equations in One Variable",
+      "description": "Solving linear equations in one variable in contextual problems involving multiplication and division (word problems), avoiding complex coefficients; equations having the variable on both sides; reducing equations to the simpler linear form; applications to problems on numbers, ages, perimeters, money and similar situations. (Paraphrased from the NCERT 'Syllabus for Classes at the Elementary Level' (Mathematics, Class VIII) and the NCERT Class 8 Mathematics textbook chapter; not verbatim.)",
+      "parent_code": "cbse:8:ALG",
+      "sort": 6
+    },
+    {
+      "code": "cbse:8:ALG:02",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Algebraic Expressions and Identities",
+      "description": "Expressions, terms, factors and coefficients; monomials, binomials and polynomials; like and unlike terms; addition and subtraction of algebraic expressions; multiplication of algebraic expressions with integer coefficients (monomial by monomial, monomial by polynomial, polynomial by polynomial); some common errors (e.g. 2 + x ≠ 2x, 7x + y ≠ 7xy); the standard identities (a + b)² = a² + 2ab + b², (a − b)² = a² − 2ab + b², a² − b² = (a − b)(a + b) and (x + a)(x + b) = x² + (a + b)x + ab, and their use in computation. (Paraphrased from the NCERT 'Syllabus for Classes at the Elementary Level' (Mathematics, Class VIII) and the NCERT Class 8 Mathematics textbook chapter; not verbatim.)",
+      "parent_code": "cbse:8:ALG",
+      "sort": 7
+    },
+    {
+      "code": "cbse:8:ALG:03",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Factorisation",
+      "description": "Factorisation (simple cases only) of expressions of the types a(x + y), (x ± y)², a² − b² and (x + a)(x + b): factors of natural numbers and of algebraic expressions, factorisation by taking out common factors, by regrouping terms and by using identities; division of algebraic expressions (monomial by monomial, polynomial by monomial, polynomial by polynomial); finding and correcting common errors in algebraic manipulation. (Paraphrased from the NCERT 'Syllabus for Classes at the Elementary Level' (Mathematics, Class VIII) and the NCERT Class 8 Mathematics textbook chapter; not verbatim.)",
+      "parent_code": "cbse:8:ALG",
+      "sort": 8
+    },
+    {
+      "code": "cbse:8:ALG:04",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Exponents and Powers",
+      "description": "Integers as exponents (powers with negative exponents); laws of exponents with integral powers; using exponents to express very small and very large numbers in standard form and comparing such quantities. (Paraphrased from the NCERT 'Syllabus for Classes at the Elementary Level' (Mathematics, Class VIII) and the NCERT Class 8 Mathematics textbook chapter; not verbatim.)",
+      "parent_code": "cbse:8:ALG",
+      "sort": 9
+    },
+    {
+      "code": "cbse:8:ALG:05",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Introduction to Graphs",
+      "description": "Preliminaries: axes (same units), the Cartesian plane; plotting points for different kinds of situations (perimeter vs length for squares, area as a function of side of a square, plotting of multiples of different numbers, simple interest vs number of years, etc.); reading off from graphs: reading of linear graphs and of distance vs time graphs; bar graphs, pie charts, histograms and line graphs as ways of presenting data. (Paraphrased from the NCERT 'Syllabus for Classes at the Elementary Level' (Mathematics, Class VIII) and the NCERT Class 8 Mathematics textbook chapter; not verbatim.)",
+      "parent_code": "cbse:8:ALG",
+      "sort": 10
+    },
+    {
+      "code": "cbse:9:U2",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Algebra",
+      "description": null,
+      "parent_code": null,
+      "sort": 11
+    },
+    {
+      "code": "cbse:9:U2:01",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Polynomials",
+      "description": "Definition of a polynomial in one variable, with examples and counter examples. Coefficients of a polynomial, terms of a polynomial and zero polynomial. Degree of a polynomial. Constant, linear, quadratic and cubic polynomials. Monomials, binomials, trinomials. Factors and multiples. Zeros of a polynomial. Motivate and State the Remainder Theorem with examples. Statement and proof of the Factor Theorem. Factorization of ax² + bx + c, a ≠ 0 where a, b and c are real numbers, and of cubic polynomials using the Factor Theorem. Recall of algebraic expressions and identities. Verification of identities: (x + y + z)² = x² + y² + z² + 2xy + 2yz + 2zx; (x ± y)³ = x³ ± y³ ± 3xy (x ± y); x³ ± y³ = (x ± y) (x² ∓ xy + y²); x³ + y³ + z³ − 3xyz = (x + y + z) (x² + y² + z² − xy − yz − zx) and their use in factorization of polynomials.",
+      "parent_code": "cbse:9:U2",
+      "sort": 12
+    },
+    {
+      "code": "cbse:9:U2:02",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Linear Equations in Two Variables",
+      "description": "Recall of linear equations in one variable. Introduction to the equation in two variables. Focus on linear equations of the type ax + by + c = 0. Explain that a linear equation in two variables has infinitely many solutions and justify their being written as ordered pairs of real numbers, plotting them and showing that they lie on a line.",
+      "parent_code": "cbse:9:U2",
+      "sort": 13
+    },
+    {
+      "code": "cbse:9:U3",
+      "grade": "9",
+      "strand": "Coordinate Geometry",
+      "sub_strand": null,
+      "title": "Coordinate Geometry",
+      "description": null,
+      "parent_code": null,
+      "sort": 14
+    },
+    {
+      "code": "cbse:9:U3:01",
+      "grade": "9",
+      "strand": "Coordinate Geometry",
+      "sub_strand": null,
+      "title": "Coordinate Geometry",
+      "description": "The Cartesian plane, coordinates of a point, names and terms associated with the coordinate plane, notations.",
+      "parent_code": "cbse:9:U3",
+      "sort": 15
+    }
+  ]
+}
