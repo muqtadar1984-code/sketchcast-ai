@@ -1,0 +1,524 @@
+{
+  "curriculum": {
+    "code": "cambridge_ls_maths_0862",
+    "name": "Cambridge Lower Secondary Mathematics 0862",
+    "kind": "syllabus",
+    "country": "GB",
+    "edition": "2020 (first teaching 2021)",
+    "source_url": "https://www.cambridgeinternational.org/programmes-and-qualifications/cambridge-lower-secondary/curriculum/mathematics/",
+    "partial": true,
+    "candidates": "none"
+  },
+  "nodes": [
+    {
+      "code": "7/Algebra",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Algebra",
+      "description": null,
+      "parent_code": null,
+      "sort": 1
+    },
+    {
+      "code": "7/Ae",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Expressions, equations and formulae",
+      "description": null,
+      "parent_code": "7/Algebra",
+      "sort": 2
+    },
+    {
+      "code": "7Ae.01",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that letters can be used to represent unknown numbers, variables or constants.",
+      "description": "Understand that letters can be used to represent unknown numbers, variables or constants.",
+      "parent_code": "7/Ae",
+      "sort": 3
+    },
+    {
+      "code": "7Ae.02",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that the laws of arithmetic and order of operations apply to algebraic terms and expressions (four operations).",
+      "description": "Understand that the laws of arithmetic and order of operations apply to algebraic terms and expressions (four operations).",
+      "parent_code": "7/Ae",
+      "sort": 4
+    },
+    {
+      "code": "7Ae.03",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand how to manipulate algebraic expressions including: – collecting like terms – applying the distributive law with a constant.",
+      "description": "Understand how to manipulate algebraic expressions including: – collecting like terms – applying the distributive law with a constant.",
+      "parent_code": "7/Ae",
+      "sort": 5
+    },
+    {
+      "code": "7Ae.04",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that a situation can be represented either in words or as an algebraic expression, and move between the two representations (linear with integer coefficients).",
+      "description": "Understand that a situation can be represented either in words or as an algebraic expression, and move between the two representations (linear with integer coefficients).",
+      "parent_code": "7/Ae",
+      "sort": 6
+    },
+    {
+      "code": "7Ae.05",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that a situation can be represented either in words or as a formula (single operation), and move between the two representations.",
+      "description": "Understand that a situation can be represented either in words or as a formula (single operation), and move between the two representations.",
+      "parent_code": "7/Ae",
+      "sort": 7
+    },
+    {
+      "code": "7Ae.06",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that a situation can be represented either in words or as an equation. Move between the two representations and solve the equation (integer coefficients, unknown on one side).",
+      "description": "Understand that a situation can be represented either in words or as an equation. Move between the two representations and solve the equation (integer coefficients, unknown on one side).",
+      "parent_code": "7/Ae",
+      "sort": 8
+    },
+    {
+      "code": "7Ae.07",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that letters can represent an open interval (one term).",
+      "description": "Understand that letters can represent an open interval (one term).",
+      "parent_code": "7/Ae",
+      "sort": 9
+    },
+    {
+      "code": "7/As",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Sequences and functions",
+      "description": null,
+      "parent_code": "7/Algebra",
+      "sort": 10
+    },
+    {
+      "code": "7As.01",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Understand term-to-term rules, and generate sequences from numerical and spatial patterns (linear and integers).",
+      "description": "Understand term-to-term rules, and generate sequences from numerical and spatial patterns (linear and integers).",
+      "parent_code": "7/As",
+      "sort": 11
+    },
+    {
+      "code": "7As.02",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Understand and describe nth term rules algebraically (in the form n ± a, a × n where a is a whole number).",
+      "description": "Understand and describe nth term rules algebraically (in the form n ± a, a × n where a is a whole number).",
+      "parent_code": "7/As",
+      "sort": 12
+    },
+    {
+      "code": "7As.03",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Understand that a function is a relationship where each input has a single output. Generate outputs from a given function and identify inputs from a given output by considering inverse operations (linear and integers).",
+      "description": "Understand that a function is a relationship where each input has a single output. Generate outputs from a given function and identify inputs from a given output by considering inverse operations (linear and integers).",
+      "parent_code": "7/As",
+      "sort": 13
+    },
+    {
+      "code": "7As.04",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Understand that a situation can be represented either in words or as a linear function in two variables (of the form y = x + c or y = mx), and move between the two representations.",
+      "description": "Understand that a situation can be represented either in words or as a linear function in two variables (of the form y = x + c or y = mx), and move between the two representations.",
+      "parent_code": "7/As",
+      "sort": 14
+    },
+    {
+      "code": "7As.05",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Use knowledge of coordinate pairs to construct tables of values and plot the graphs of linear functions, where y is given explicitly in terms of x (y = x + c or y = mx).",
+      "description": "Use knowledge of coordinate pairs to construct tables of values and plot the graphs of linear functions, where y is given explicitly in terms of x (y = x + c or y = mx).",
+      "parent_code": "7/As",
+      "sort": 15
+    },
+    {
+      "code": "7As.06",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Recognise straight-line graphs parallel to the x- or y-axis.",
+      "description": "Recognise straight-line graphs parallel to the x- or y-axis.",
+      "parent_code": "7/As",
+      "sort": 16
+    },
+    {
+      "code": "7As.07",
+      "grade": "7",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Read and interpret graphs related to rates of change. Explain why they have a specific shape.",
+      "description": "Read and interpret graphs related to rates of change. Explain why they have a specific shape.",
+      "parent_code": "7/As",
+      "sort": 17
+    },
+    {
+      "code": "8/Algebra",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Algebra",
+      "description": null,
+      "parent_code": null,
+      "sort": 18
+    },
+    {
+      "code": "8/Ae",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Expressions, equations and formulae",
+      "description": null,
+      "parent_code": "8/Algebra",
+      "sort": 19
+    },
+    {
+      "code": "8Ae.01",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that letters have different meanings in expressions, formulae and equations.",
+      "description": "Understand that letters have different meanings in expressions, formulae and equations.",
+      "parent_code": "8/Ae",
+      "sort": 20
+    },
+    {
+      "code": "8Ae.02",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that the laws of arithmetic and order of operations apply to algebraic terms and expressions (four operations, squares and cubes).",
+      "description": "Understand that the laws of arithmetic and order of operations apply to algebraic terms and expressions (four operations, squares and cubes).",
+      "parent_code": "8/Ae",
+      "sort": 21
+    },
+    {
+      "code": "8Ae.03",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand how to manipulate algebraic expressions including: – applying the distributive law with a single term (squares and cubes) – identifying the highest common factor to factorise.",
+      "description": "Understand how to manipulate algebraic expressions including: – applying the distributive law with a single term (squares and cubes) – identifying the highest common factor to factorise.",
+      "parent_code": "8/Ae",
+      "sort": 22
+    },
+    {
+      "code": "8Ae.04",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that a situation can be represented either in words or as an algebraic expression, and move between the two representations (linear with integer or fractional coefficients).",
+      "description": "Understand that a situation can be represented either in words or as an algebraic expression, and move between the two representations (linear with integer or fractional coefficients).",
+      "parent_code": "8/Ae",
+      "sort": 23
+    },
+    {
+      "code": "8Ae.05",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that a situation can be represented either in words or as a formula (mixed operations), and manipulate using knowledge of inverse operations to change the subject of a formula.",
+      "description": "Understand that a situation can be represented either in words or as a formula (mixed operations), and manipulate using knowledge of inverse operations to change the subject of a formula.",
+      "parent_code": "8/Ae",
+      "sort": 24
+    },
+    {
+      "code": "8Ae.06",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that a situation can be represented either in words or as an equation. Move between the two representations and solve the equation (integer or fractional coefficients, unknown on either or both sides).",
+      "description": "Understand that a situation can be represented either in words or as an equation. Move between the two representations and solve the equation (integer or fractional coefficients, unknown on either or both sides).",
+      "parent_code": "8/Ae",
+      "sort": 25
+    },
+    {
+      "code": "8Ae.07",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that letters can represent open and closed intervals (two terms).",
+      "description": "Understand that letters can represent open and closed intervals (two terms).",
+      "parent_code": "8/Ae",
+      "sort": 26
+    },
+    {
+      "code": "8/As",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Sequences and functions",
+      "description": null,
+      "parent_code": "8/Algebra",
+      "sort": 27
+    },
+    {
+      "code": "8As.01",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Understand term-to-term rules, and generate sequences from numerical and spatial patterns (including fractions).",
+      "description": "Understand term-to-term rules, and generate sequences from numerical and spatial patterns (including fractions).",
+      "parent_code": "8/As",
+      "sort": 28
+    },
+    {
+      "code": "8As.02",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Understand and describe nth term rules algebraically (in the form n ± a, a × n, or an ± b, where a and b are positive or negative integers or fractions).",
+      "description": "Understand and describe nth term rules algebraically (in the form n ± a, a × n, or an ± b, where a and b are positive or negative integers or fractions).",
+      "parent_code": "8/As",
+      "sort": 29
+    },
+    {
+      "code": "8As.03",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Understand that a function is a relationship where each input has a single output. Generate outputs from a given function and identify inputs from a given output by considering inverse operations (including fractions).",
+      "description": "Understand that a function is a relationship where each input has a single output. Generate outputs from a given function and identify inputs from a given output by considering inverse operations (including fractions).",
+      "parent_code": "8/As",
+      "sort": 30
+    },
+    {
+      "code": "8As.04",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Understand that a situation can be represented either in words or as a linear function in two variables (of the form y = mx + c), and move between the two representations.",
+      "description": "Understand that a situation can be represented either in words or as a linear function in two variables (of the form y = mx + c), and move between the two representations.",
+      "parent_code": "8/As",
+      "sort": 31
+    },
+    {
+      "code": "8As.05",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Use knowledge of coordinate pairs to construct tables of values and plot the graphs of linear functions, where y is given explicitly in terms of x (y = mx + c).",
+      "description": "Use knowledge of coordinate pairs to construct tables of values and plot the graphs of linear functions, where y is given explicitly in terms of x (y = mx + c).",
+      "parent_code": "8/As",
+      "sort": 32
+    },
+    {
+      "code": "8As.06",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Recognise that equations of the form y = mx + c correspond to straight-line graphs, where m is the gradient and c is the y-intercept (integer values of m).",
+      "description": "Recognise that equations of the form y = mx + c correspond to straight-line graphs, where m is the gradient and c is the y-intercept (integer values of m).",
+      "parent_code": "8/As",
+      "sort": 33
+    },
+    {
+      "code": "8As.07",
+      "grade": "8",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Read and interpret graphs with more than one component. Explain why they have a specific shape and the significance of intersections of the graphs.",
+      "description": "Read and interpret graphs with more than one component. Explain why they have a specific shape and the significance of intersections of the graphs.",
+      "parent_code": "8/As",
+      "sort": 34
+    },
+    {
+      "code": "9/Algebra",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": null,
+      "title": "Algebra",
+      "description": null,
+      "parent_code": null,
+      "sort": 35
+    },
+    {
+      "code": "9/Ae",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Expressions, equations and formulae",
+      "description": null,
+      "parent_code": "9/Algebra",
+      "sort": 36
+    },
+    {
+      "code": "9Ae.01",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that the laws of arithmetic and order of operations apply to algebraic terms and expressions (four operations and integer powers).",
+      "description": "Understand that the laws of arithmetic and order of operations apply to algebraic terms and expressions (four operations and integer powers).",
+      "parent_code": "9/Ae",
+      "sort": 37
+    },
+    {
+      "code": "9Ae.02",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand how to manipulate algebraic expressions including: – expanding the product of two algebraic expressions – applying the laws of indices – simplifying algebraic fractions.",
+      "description": "Understand how to manipulate algebraic expressions including: – expanding the product of two algebraic expressions – applying the laws of indices – simplifying algebraic fractions.",
+      "parent_code": "9/Ae",
+      "sort": 38
+    },
+    {
+      "code": "9Ae.03",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that a situation can be represented either in words or as an algebraic expression, and move between the two representations (including squares, cubes and roots).",
+      "description": "Understand that a situation can be represented either in words or as an algebraic expression, and move between the two representations (including squares, cubes and roots).",
+      "parent_code": "9/Ae",
+      "sort": 39
+    },
+    {
+      "code": "9Ae.04",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that a situation can be represented either in words or as a formula (including squares and cubes), and manipulate using knowledge of inverse operations to change the subject of a formula.",
+      "description": "Understand that a situation can be represented either in words or as a formula (including squares and cubes), and manipulate using knowledge of inverse operations to change the subject of a formula.",
+      "parent_code": "9/Ae",
+      "sort": 40
+    },
+    {
+      "code": "9Ae.05",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that a situation can be represented either in words or as an equation. Move between the two representations and solve the equation (including those with an unknown in the denominator).",
+      "description": "Understand that a situation can be represented either in words or as an equation. Move between the two representations and solve the equation (including those with an unknown in the denominator).",
+      "parent_code": "9/Ae",
+      "sort": 41
+    },
+    {
+      "code": "9Ae.06",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that the solution of simultaneous linear equations: – is the pair of values that satisfy both equations – can be found algebraically (eliminating one variable) – can be found graphically (point of intersection).",
+      "description": "Understand that the solution of simultaneous linear equations: – is the pair of values that satisfy both equations – can be found algebraically (eliminating one variable) – can be found graphically (point of intersection).",
+      "parent_code": "9/Ae",
+      "sort": 42
+    },
+    {
+      "code": "9Ae.07",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Expressions, equations and formulae",
+      "title": "Understand that a situation can be represented either in words or as an inequality. Move between the two representations and solve linear inequalities.",
+      "description": "Understand that a situation can be represented either in words or as an inequality. Move between the two representations and solve linear inequalities.",
+      "parent_code": "9/Ae",
+      "sort": 43
+    },
+    {
+      "code": "9/As",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Sequences and functions",
+      "description": null,
+      "parent_code": "9/Algebra",
+      "sort": 44
+    },
+    {
+      "code": "9As.01",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Generate linear and quadratic sequences from numerical patterns and from a given term-to-term rule (any indices).",
+      "description": "Generate linear and quadratic sequences from numerical patterns and from a given term-to-term rule (any indices).",
+      "parent_code": "9/As",
+      "sort": 45
+    },
+    {
+      "code": "9As.02",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Understand and describe nth term rules algebraically (in the form an ± b, where a and b are positive or negative integers or fractions, and in the form n/a, n², n³ or n² ± a, where a is a whole number).",
+      "description": "Understand and describe nth term rules algebraically (in the form an ± b, where a and b are positive or negative integers or fractions, and in the form n/a, n², n³ or n² ± a, where a is a whole number).",
+      "parent_code": "9/As",
+      "sort": 46
+    },
+    {
+      "code": "9As.03",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Understand that a function is a relationship where each input has a single output. Generate outputs from a given function and identify inputs from a given output by considering inverse operations (including indices).",
+      "description": "Understand that a function is a relationship where each input has a single output. Generate outputs from a given function and identify inputs from a given output by considering inverse operations (including indices).",
+      "parent_code": "9/As",
+      "sort": 47
+    },
+    {
+      "code": "9As.04",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Understand that a situation can be represented either in words or as a linear function in two variables (of the form y = mx + c or ax + by = c), and move between the two representations.",
+      "description": "Understand that a situation can be represented either in words or as a linear function in two variables (of the form y = mx + c or ax + by = c), and move between the two representations.",
+      "parent_code": "9/As",
+      "sort": 48
+    },
+    {
+      "code": "9As.05",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Use knowledge of coordinate pairs to construct tables of values and plot the graphs of linear functions, including where y is given implicitly in terms of x (ax + by = c), and quadratic functions of the form y = x² ± a.",
+      "description": "Use knowledge of coordinate pairs to construct tables of values and plot the graphs of linear functions, including where y is given implicitly in terms of x (ax + by = c), and quadratic functions of the form y = x² ± a.",
+      "parent_code": "9/As",
+      "sort": 49
+    },
+    {
+      "code": "9As.06",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Understand that straight-line graphs can be represented by equations. Find the equation in the form y = mx + c or where y is given implicitly in terms of x (fractional, positive and negative gradients).",
+      "description": "Understand that straight-line graphs can be represented by equations. Find the equation in the form y = mx + c or where y is given implicitly in terms of x (fractional, positive and negative gradients).",
+      "parent_code": "9/As",
+      "sort": 50
+    },
+    {
+      "code": "9As.07",
+      "grade": "9",
+      "strand": "Algebra",
+      "sub_strand": "Sequences and functions",
+      "title": "Read, draw and interpret graphs and use compound measures to compare graphs.",
+      "description": "Read, draw and interpret graphs and use compound measures to compare graphs.",
+      "parent_code": "9/As",
+      "sort": 51
+    }
+  ]
+}

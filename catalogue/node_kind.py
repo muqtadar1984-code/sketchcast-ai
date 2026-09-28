@@ -29,15 +29,20 @@ from typing import Optional
 
 NODE_KINDS = ("strand", "sub_strand", "objective", "unit", "chapter", "topic")
 
-# Cambridge Lower Secondary Science 0893 learning-objective codes: "7Bs.01",
-# "8TWSm.03", "9SIC.02". Anchored, so a sub-strand code "7/Bs" never matches.
+# Cambridge Lower Secondary learning-objective codes: Science 0893 ("7Bs.01",
+# "8TWSm.03", "9SIC.02") and, since the algebra seed (2026-09-28), Mathematics
+# 0862 ("7Ae.01", "9As.06" — Number, Algebra, Geometry and Statistics
+# sub-strands). Anchored, so a sub-strand code "7/Bs" never matches.
 OBJECTIVE_RE = re.compile(
-    r"^[0-9](Bs|Bp|Be|Cm|Cp|Cc|Pf|Pl|Ps|ESp|ESc|ESs|TWSm|TWSp|TWSc|TWSa|SIC)\.[0-9]{2}$"
+    r"^[0-9](Bs|Bp|Be|Cm|Cp|Cc|Pf|Pl|Ps|ESp|ESc|ESs|TWSm|TWSp|TWSc|TWSa|SIC"
+    r"|Ni|Np|Nf|Nc|Ae|As|Gg|Gp|Ss|Sp|TWM)\.[0-9]{2}$"
 )
 _GROUPING_RE = re.compile(r"^[0-9]/")
 _CBSE_CHAPTER_RE = re.compile(r"^cbse:[0-9]+:ch[0-9]+$")
-_CBSE_UNIT_RE = re.compile(r"^cbse:[0-9]+:U[0-9]+$")
-_CBSE_TOPIC_RE = re.compile(r"^cbse:[0-9]+:U[0-9]+:[0-9]+$")
+# "cbse:9:U2" is a syllabus UNIT; the NCERT-based classes have no units, so
+# the maths seed groups their chapters under a strand code ("cbse:7:ALG")
+_CBSE_UNIT_RE = re.compile(r"^cbse:[0-9]+:(U[0-9]+|[A-Z]{2,5})$")
+_CBSE_TOPIC_RE = re.compile(r"^cbse:[0-9]+:(U[0-9]+|[A-Z]{2,5}):[0-9]+$")
 
 
 def infer_node_kind(code: object, has_parent: bool) -> Optional[str]:
