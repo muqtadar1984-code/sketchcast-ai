@@ -1004,9 +1004,12 @@ class SceneRenderer:
         """
         boxes = [(eid, b.box) for eid, b in self.bound.items()
                  if b.text is not None and b.box and not _is_overlay(eid)]
+        # Touching counts: two boxes a few pixels apart read as one word on
+        # the board once the face's overshoot is drawn (_TEXT_TOUCH).
+        g = self._TEXT_TOUCH
         for i, (aid, a) in enumerate(boxes):
             for bid, c in boxes[i + 1:]:
-                if a[0] < c[2] and a[2] > c[0] and a[1] < c[3] and a[3] > c[1]:
+                if a[0] - g < c[2] and a[2] + g > c[0] and a[1] - g < c[3] and a[3] + g > c[1]:
                     self._warn(f"TEXT_OVERLAP {aid}+{bid}")
 
     # ── text must never be drawn over the art ────────────────────────────
@@ -1200,10 +1203,25 @@ class SceneRenderer:
         own = max(1e-6, (box[2] - box[0]) * (box[3] - box[1]))
         return (ow * oh) / own
 
+    # The gutter a placed text keeps from every other text. A slot flush
+    # against its neighbour passed the strict overlap test, and the
+    # handwriting face overshoots its measured advance, so the top-row spill
+    # of a board-filling picture ran "Root Hair Cell" straight into "Carrier
+    # Proteins" and "Active Transport (Minerals)" into "Osmosis (H2O)" while
+    # the audit read clean (Transport in Plants, 2026-09-28).
+    _TEXT_GUTTER = 18.0
+    # …vertically the column pitch already leaves 16px; this only refuses a
+    # slot that would sit ON the row above or below
+    _TEXT_GUTTER_Y = 6.0
+    # …and how close two texts may sit before the audit calls it an overlap
+    _TEXT_TOUCH = 4.0
+
     @staticmethod
-    def _hits(box: tuple, boxes: list) -> bool:
-        return any(box[0] < c[2] and box[2] > c[0]
-                   and box[1] < c[3] and box[3] > c[1] for c in boxes)
+    def _hits(box: tuple, boxes: list, gap: float = 0.0, gap_y: float | None = None) -> bool:
+        gy = gap if gap_y is None else gap_y
+        x0, y0, x1, y1 = box[0] - gap, box[1] - gy, box[2] + gap, box[3] + gy
+        return any(x0 < c[2] and x1 > c[0]
+                   and y0 < c[3] and y1 > c[1] for c in boxes)
 
     def _top_row_slots(self, w: float, h: float,
                        ry0: float) -> Iterator[tuple]:
@@ -1558,7 +1576,7 @@ class SceneRenderer:
                 # but only the SPILL path tested it — so a column label could
                 # still be lettered across the title, or onto the label placed
                 # two rows above it.
-                if self._hits(box, occupied):
+                if self._hits(box, occupied, self._TEXT_GUTTER, self._TEXT_GUTTER_Y):
                     spill.append((lid, tgt))
                     continue
                 bb.box = box
@@ -1580,7 +1598,7 @@ class SceneRenderer:
             w = bb.box[2] - bb.box[0]
             h = bb.box[3] - bb.box[1]
             for box in self._top_row_slots(w, h, ry0):
-                if self._hits(box, occupied) or \
+                if self._hits(box, occupied, self._TEXT_GUTTER, self._TEXT_GUTTER_Y) or \
                         self._overlap_frac(box, art) > 0.15:
                     continue
                 bb.box = box
