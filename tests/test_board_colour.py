@@ -232,3 +232,180 @@ class TestThePin:
             assert VF.current() == 3
         finally:
             colour.reset_pin(t)
+
+
+class TestThePictures:
+    """Phase 2: restrained colour in the GENERATED PICTURES, behind its own
+    switch (FEATURE_BOARD_COLOUR_PICTURES / params.board_colour_pictures)
+    on top of phase 1. A coloured picture is a different asset from the ink
+    one — its own key, its own cache entry, never a library candidate — so
+    the ink benchmark cannot receive one and a colour lesson cannot receive
+    an ink one."""
+
+    @staticmethod
+    def _stub_generation(monkeypatch, art):
+        """One generated image, no vision call, no working-size resample."""
+        import io
+        from spike.scene_engine import raster_assets as ra
+
+        seen: dict = {}
+
+        def vertex(prompt, *a, **k):
+            seen["prompt"] = prompt
+            buf = io.BytesIO()
+            art.save(buf, "PNG")
+            return buf.getvalue()
+
+        monkeypatch.setattr(ra, "current_image_model", lambda: type("M", (), {"id": "m", "size": None})())
+        monkeypatch.setattr(ra, "_clear_to_generate", lambda *a, **k: True)
+        monkeypatch.setattr(ra, "_take_rate_limited", lambda: (False, 0))
+        monkeypatch.setattr(ra, "_vertex_call", vertex)
+        monkeypatch.setattr(ra, "_aistudio_call", lambda *a, **k: None)
+        monkeypatch.setattr(ra, "to_working_size", lambda im: im)
+        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names, desc=None: {"regions": {}, "has_text": False, "text_boxes": []})
+        return seen
+
+    @staticmethod
+    def _filled_art(fill=(220, 40, 40)):
+        """A board picture as the image model would draw it: a black outline
+        on white, with a red fill when asked in colour (fill=None: the ink
+        drawing the ink suffix asks for)."""
+        from PIL import Image, ImageDraw
+        art = Image.new("RGB", (240, 180), (255, 255, 255))
+        d = ImageDraw.Draw(art)
+        d.ellipse([40, 30, 200, 150], fill=fill, outline=(0, 0, 0), width=6)
+        return art
+
+    @staticmethod
+    def _red_pixels(img) -> int:
+        import numpy as np
+        a = np.asarray(img.convert("RGBA")).astype(int)
+        return int(((a[..., 3] > 128) & (a[..., 0] > 180) & (a[..., 1] < 90) & (a[..., 2] < 90)).sum())
+
+    def test_the_switch_is_its_own_and_never_implied_by_phase_1(self, monkeypatch):
+        monkeypatch.delenv(colour.FLAG, raising=False)
+        monkeypatch.delenv(colour.PICTURES_FLAG, raising=False)
+        assert colour.pictures_enabled() is False
+        t = colour.set_pin(True)                       # phase 1 alone
+        try:
+            assert colour.enabled() is True and colour.pictures_enabled() is False
+        finally:
+            colour.reset_pin(t)
+        t = colour.pin_from_params({colour.PARAM_KEY: True, colour.PICTURES_PARAM: True})
+        try:
+            assert colour.enabled() is True and colour.pictures_enabled() is True
+        finally:
+            colour.reset_pin(t)
+        assert colour.pictures_enabled() is False
+        monkeypatch.setenv(colour.PICTURES_FLAG, "1")
+        assert colour.pictures_enabled() is True
+        t = colour.pin_from_params({colour.PICTURES_PARAM: "0"})
+        try:
+            assert colour.pictures_enabled() is False, "a pin says no on a flag-on worker"
+        finally:
+            colour.reset_pin(t)
+
+    def test_a_board_key_becomes_its_colour_key_only_under_the_switch(self, monkeypatch):
+        from spike.scene_engine import raster_assets as ra
+        monkeypatch.delenv(colour.PICTURES_FLAG, raising=False)
+        assert ra.colour_key("plant_cell") == "plant_cell"
+        t = colour.set_pin(True, True)
+        try:
+            assert ra.colour_key("plant_cell") == "plant_cell__colour"
+            assert ra.colour_key("plant_cell__colour") == "plant_cell__colour", "idempotent"
+            assert ra.colour_key("avatar_teacher_female") == "avatar_teacher_female", "avatars have their own tier"
+            assert ra.colour_key("hand_pen") == "hand_pen", "the pen's sprite is not board art"
+            assert ra.is_colour_key("plant_cell__colour") and not ra.is_colour_key("plant_cell")
+        finally:
+            colour.reset_pin(t)
+
+    def test_the_benchmark_picture_is_untouched_with_the_switch_off(self, tmp_path, monkeypatch):
+        from spike.scene_engine import raster_assets as ra
+        monkeypatch.delenv(colour.PICTURES_FLAG, raising=False)
+        seen = self._stub_generation(monkeypatch, self._filled_art(fill=None))
+        asset = ra.get_raster_asset("plant_cell", "A plant cell", tmp_path)
+        assert asset is not None and asset.key == "plant_cell"
+        assert (ra.cache_dir_for("plant_cell", tmp_path) / "asset.png").exists()
+        assert "no color fill" in seen["prompt"] and "restrained palette" not in seen["prompt"]
+        assert self._red_pixels(asset.ink) == 0, "the ink cut keeps only dark strokes"
+
+    def test_under_the_switch_the_picture_is_asked_in_colour_and_keeps_its_fills(self, tmp_path, monkeypatch):
+        from spike.scene_engine import raster_assets as ra
+        monkeypatch.delenv(colour.PICTURES_FLAG, raising=False)
+        seen = self._stub_generation(monkeypatch, self._filled_art())
+        t = colour.set_pin(True, True)
+        try:
+            asset = ra.get_raster_asset("plant_cell", "A plant cell", tmp_path)
+        finally:
+            colour.reset_pin(t)
+        assert asset is not None and asset.key == "plant_cell__colour"
+        assert (ra.cache_dir_for("plant_cell__colour", tmp_path) / "asset.png").exists()
+        assert not (ra.cache_dir_for("plant_cell", tmp_path) / "asset.png").exists(), "the ink entry is a different asset"
+        assert ra.cache_dir_for("plant_cell__colour", tmp_path) != ra.cache_dir_for("plant_cell", tmp_path)
+        assert "restrained palette" in seen["prompt"] and "no color fill" not in seen["prompt"]
+        assert "ABSOLUTELY NO TEXT OF ANY KIND" in seen["prompt"], "the no-text clause travels with every style"
+        assert self._red_pixels(asset.ink) > 1000, "the cutout keeps the fill"
+        assert asset.trace, "a filled picture still has a drawing order"
+
+    def test_the_colour_entry_and_the_ink_entry_live_side_by_side(self, tmp_path, monkeypatch):
+        """The same lesson key drawn both ways in one cache: the switch picks
+        which entry is read, and neither overwrites the other."""
+        from spike.scene_engine import raster_assets as ra
+        monkeypatch.delenv(colour.PICTURES_FLAG, raising=False)
+        self._stub_generation(monkeypatch, self._filled_art(fill=None))
+        ink = ra.get_raster_asset("cell", "A cell", tmp_path)
+        self._stub_generation(monkeypatch, self._filled_art())
+        t = colour.set_pin(True, True)
+        try:
+            col = ra.get_raster_asset("cell", "A cell", tmp_path)
+        finally:
+            colour.reset_pin(t)
+        again = ra.get_raster_asset("cell", "A cell", tmp_path)
+        assert ink.key == again.key == "cell" and col.key == "cell__colour"
+        assert self._red_pixels(again.ink) == 0 and self._red_pixels(col.ink) > 1000
+
+    def test_the_pins_travel_into_a_render_thread(self, monkeypatch):
+        """contextvars are per thread; bind_generation carries the pins the
+        way it carries the generation id and the image role."""
+        import threading
+        from spike.scene_engine import raster_assets as ra
+        monkeypatch.delenv(colour.FLAG, raising=False)
+        monkeypatch.delenv(colour.PICTURES_FLAG, raising=False)
+        seen: dict = {}
+
+        def probe():
+            seen["colour"] = colour.enabled()
+            seen["pictures"] = colour.pictures_enabled()
+
+        t = colour.set_pin(True, True)
+        try:
+            th = threading.Thread(target=ra.bind_generation(probe, "gen-1"))
+            th.start()
+            th.join()
+        finally:
+            colour.reset_pin(t)
+        assert seen == {"colour": True, "pictures": True}
+        # and an unpinned job thread hands over nothing
+        th = threading.Thread(target=ra.bind_generation(probe, "gen-2"))
+        th.start()
+        th.join()
+        assert seen == {"colour": False, "pictures": False}
+
+    def test_the_library_never_sees_a_coloured_key(self):
+        """Source-level: the wrapper renames BEFORE the lock, and a colour key
+        goes straight to the generator — no scoring, no hydrate, no publish,
+        no decision line."""
+        from pathlib import Path
+        import shared.visual_library_integration as vli
+        src = Path(vli.__file__).read_text(encoding="utf-8")
+        rename = src.index("key = ra.colour_key(key)")
+        lock = src.index("with ra.asset_lock(key):", rename)
+        assert rename < lock
+        bypass = src.index("if ra.is_colour_key(key):\n            return original(key, prompt, cache, allow_generate)")
+        for later in ("best_match(", "hydrate(key", "_hydrate_local_library(", "publish_generated(", "log_decision("):
+            assert src.index(later, bypass) > bypass, later
+        assert src.index("_refresh_from_library(key", bypass) > bypass
+
+    def test_the_format_changelog_names_the_pictures(self):
+        from shared import video_format as VF
+        assert "pictures switch" in VF.FORMAT_CHANGES[3]
