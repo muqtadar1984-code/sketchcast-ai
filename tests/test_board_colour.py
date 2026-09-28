@@ -530,7 +530,7 @@ class TestTheWash:
         asset = ra._finish("cell", ra.to_ink(art), {})
         assert asset.wash is None
         lines, wash = ra.split_colour_layers(ra.to_ink(art))
-        assert wash is not None, "an outline drawing splits into lines and an (all-line) wash"
+        assert wash is None, "an ink drawing has no colour to wash in, whatever key it sits under"
 
     def test_a_colour_asset_splits_into_lines_and_wash(self):
         import numpy as np
@@ -696,3 +696,81 @@ class TestTheDirectorsOneColourSentence:
         src = Path(P.__file__).read_text(encoding="utf-8")
         assert src.index("_colour.pin_from_params(params)") < src.index("script = generate_episode_script("), \
             "the prompt reads the pin, so the pin is set before the director is asked"
+
+
+class TestAColourPictureWithNoPaper:
+    """Phase 3's bolder ask fills the page of a SIMPLE object (a cone, a
+    drop), the flood cut finds no paper, and the picture is refused at
+    ~100 % coverage — twice on the phase 4 demo, which the image gate then
+    refused whole. A colour picture refused for having no paper is asked
+    once more with the page spelled out, then drawn in ink under the
+    colour key; an ink drawing carries no wash."""
+
+    @staticmethod
+    def _stub(monkeypatch, answers):
+        """``answers``: a list of PIL images handed out in call order; the
+        prompts are recorded."""
+        import io
+        from spike.scene_engine import raster_assets as ra
+        seen: list[str] = []
+        queue = list(answers)
+
+        def vertex(prompt, *a, **k):
+            seen.append(prompt)
+            art = queue.pop(0) if queue else answers[-1]
+            buf = io.BytesIO()
+            art.save(buf, "PNG")
+            return buf.getvalue()
+
+        monkeypatch.setattr(ra, "current_image_model", lambda: type("M", (), {"id": "m", "size": None})())
+        monkeypatch.setattr(ra, "_clear_to_generate", lambda *a, **k: True)
+        monkeypatch.setattr(ra, "_take_rate_limited", lambda: (False, 0))
+        monkeypatch.setattr(ra, "_vertex_call", vertex)
+        monkeypatch.setattr(ra, "_aistudio_call", lambda *a, **k: None)
+        monkeypatch.setattr(ra, "to_working_size", lambda im: im)
+        monkeypatch.setattr(ra, "annotate_regions", lambda ink, names, desc=None: {"regions": {}, "has_text": False, "text_boxes": []})
+        return seen
+
+    @staticmethod
+    def _filled_page():
+        """What the model drew for the cone: the object AND the page coloured."""
+        from PIL import Image, ImageDraw
+        art = Image.new("RGB", (240, 180), (120, 180, 240))
+        ImageDraw.Draw(art).polygon([(120, 20), (40, 160), (200, 160)], fill=(230, 160, 60), outline=(20, 20, 20))
+        return art
+
+    def test_it_is_asked_once_more_with_the_page_spelled_out(self, tmp_path, monkeypatch):
+        from spike.scene_engine import raster_assets as ra
+        seen = self._stub(monkeypatch, [self._filled_page(), TestThePictures._filled_art()])
+        t = colour.set_pin(True, True)
+        try:
+            asset = ra.get_raster_asset("sk_cone", "A simple cone", tmp_path)
+        finally:
+            colour.reset_pin(t)
+        assert asset is not None and asset.key == "sk_cone__colour"
+        assert len(seen) == 2 and "PURE WHITE" in seen[1] and "PURE WHITE" not in seen[0]
+        assert "bold, flat" in seen[1], "still asked in colour"
+        assert asset.wash is not None and TestThePictures._red_pixels(asset.wash) > 1000
+
+    def test_refused_twice_it_is_drawn_in_ink_and_carries_no_wash(self, tmp_path, monkeypatch):
+        from spike.scene_engine import raster_assets as ra
+        seen = self._stub(monkeypatch, [self._filled_page(), self._filled_page(), TestThePictures._filled_art(fill=None)])
+        t = colour.set_pin(True, True)
+        try:
+            asset = ra.get_raster_asset("sk_cone", "A simple cone", tmp_path)
+        finally:
+            colour.reset_pin(t)
+        assert asset is not None and asset.key == "sk_cone__colour", "the asset ARRIVES: no gate refusal"
+        assert len(seen) == 3 and "no color fill" in seen[2] and "bold, flat" not in seen[2]
+        assert asset.wash is None and asset.trace, "an ink drawing has no wash and the pen still has lines"
+        assert (ra.cache_dir_for("sk_cone__colour", tmp_path) / "asset.png").exists()
+
+    def test_an_ink_picture_refused_for_coverage_is_not_re_asked(self, tmp_path, monkeypatch):
+        """The benchmark path is untouched: a dense ink picture is refused
+        as before, once, with no white-page re-ask and no ink fallback."""
+        from spike.scene_engine import raster_assets as ra
+        from PIL import Image
+        monkeypatch.delenv(colour.PICTURES_FLAG, raising=False)
+        seen = self._stub(monkeypatch, [Image.new("RGB", (240, 180), (0, 0, 0))])   # solid ink: 100 % coverage
+        assert ra.get_raster_asset("sk_cone", "A simple cone", tmp_path) is None
+        assert len(seen) == 1
