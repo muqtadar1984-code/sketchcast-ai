@@ -55,7 +55,7 @@ from typing import Callable, Optional
 
 import sympy as sp
 
-from maths.notation import NotationError, Relation, parse_state, symbols_named
+from maths.notation import NotationError, Relation, notation_of, parse_state, symbols_named
 from maths.schema import DATA_TASKS, Lesson, Step, TryIt, WorkedExample
 from maths.tokens import TokenError, tokenize
 from mathsvc.safety import MathError, MathTimeoutError, run_with_timeout
@@ -776,8 +776,12 @@ def try_it_example(t: TryIt) -> WorkedExample | None:
     pause, and what the verifier checks. None without a problem."""
     if not t.problem or not t.answer:
         return None
-    rels, _err = _parse([t.problem], "the try-it problem")
-    givens = [t.problem]
+    # the problem's NOTATION, with any lead-in words in front of it set
+    # aside ("the quadratic expression x^2 - x - 12" starts the working at
+    # x^2 - x - 12; the words are the teacher's, not the algebra's)
+    clean = notation_of(t.problem)
+    rels, _err = _parse([clean], "the try-it problem") if clean else (None, "")
+    givens = [clean] if clean else [t.problem]
     if rels is None and t.steps:
         # a word problem: the working starts at its equation — the setup
         # step's result, or the state the first step transforms

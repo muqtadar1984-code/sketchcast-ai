@@ -1680,6 +1680,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                     episode, analysis, chapter_num, _script_client, language=lesson_lang,
                     avatars=avatars, subject=book.get("subject"), curriculum=book.get("curriculum"),
                     learner_age=book.get("grade"), part_info=part_info, book_id=book_id,
+                    min_minutes=_min_minutes or None,
                 )
                 script_dict = script.model_dump()
                 _maths = script_dict.get("maths") or {}
@@ -1688,12 +1689,29 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                           "of": n_parts, "gated": False, "profile": "maths",
                           "maths_verification": _mv.get("status"),
                           "examples": len((_maths.get("lesson") or {}).get("examples") or []),
-                          "dropped": len(_mv.get("dropped") or [])}
+                          "dropped": len(_mv.get("dropped") or []),
+                          "retries": int(_mv.get("length_rounds") or 0),
+                          "extended": list(_mv.get("extended") or [])}
+                # The same floor the science branch enforces, measured on the
+                # SAME spoken text — before a character of TTS. The maths
+                # module has already spent its extension rounds (further
+                # verified examples); what is still short is refused here,
+                # not shipped as a four-minute video of a five-minute lesson
+                # (Quadratic Expressions and Factorising Trinomials, 2026-09-28).
+                _with_length(report, script_dict, _min_minutes)
                 coverage_reports.append(report)
                 db.merge_generation_params(sb, generation_id, {f"maths_part{part_idx}": {
                     "topic": (_maths.get("lesson") or {}).get("topic"), "status": _mv.get("status"),
                     "examples": report["examples"], "dropped": _mv.get("dropped") or [],
+                    "extended": report["extended"], "length_rounds": report["retries"],
                     "try_it": (_mv.get("try_it") or {}).get("ok")}})
+                if coverage.under_length(report):
+                    _record_coverage(sb, generation_id, coverage_reports)
+                    raise RuntimeError(
+                        f"lesson script is too short: {lesson_length.summary(report['length'])} "
+                        f"after {report['retries']} extension round(s) "
+                        f"(part {part_idx}/{n_parts}, model {_script_client.model})"
+                    )
                 save_script(script)
             else:
                 script = generate_episode_script(

@@ -396,3 +396,32 @@ def test_a_try_it_with_a_rounding_step_is_verified_as_an_estimate():
                      Step(operation="add", before=["5000 + 2000"], after=["7000"], speech="b")],
               answer_speech="z")
     assert verify_try_it(t).ok is True
+
+
+def test_a_try_it_problem_with_a_lead_in_phrase_starts_the_working_at_its_notation():
+    """Production 2026-09-28 (Quadratic Expressions and Factorising
+    Trinomials): the model wrote the try-it problem as "the quadratic
+    expression x^2 - x - 12"; the parser read the words as symbols and the
+    chain check found the working did not start from the problem."""
+    t = TryIt(problem="the quadratic expression x^2 - x - 12", answer=["(x - 4)(x + 3)"],
+              speech="Pause and factorise this one.", solution_speech="Let us compare.",
+              steps=[Step(kind="transform", operation="find two numbers", before=["x^2 - x - 12"],
+                          after=["(x - 4)(x + 3)"], speech="Minus four and plus three multiply to minus twelve and add to minus one.")],
+              answer_speech="So it factorises as x minus four times x plus three.")
+    c = verify_try_it(t)
+    assert c.ok is True, c.detail
+    from maths.verify import try_it_example
+    ex = try_it_example(t)
+    assert ex.givens == ["x^2 - x - 12"] and ex.task == "simplify"
+
+
+def test_a_word_problem_try_it_still_starts_from_its_first_step():
+    t = TryIt(problem="A number doubled plus five gives twenty-one. Find it.", answer=["x = 8"],
+              speech="Pause here.", solution_speech="Compare.",
+              steps=[Step(kind="setup", operation="write the equation", before=[], after=["2x + 5 = 21"], speech="Let x be the number."),
+                     Step(kind="transform", operation="subtract 5", before=["2x + 5 = 21"], after=["2x = 16"], speech="Subtract five."),
+                     Step(kind="transform", operation="divide by 2", before=["2x = 16"], after=["x = 8"], speech="Divide by two.")],
+              answer_speech="x is eight.")
+    from maths.verify import try_it_example
+    assert try_it_example(t).givens == ["2x + 5 = 21"]
+    assert verify_try_it(t).ok is True

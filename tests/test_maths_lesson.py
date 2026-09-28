@@ -530,3 +530,135 @@ def test_tall_and_wide_scripts_keep_the_board_free_of_overlaps():
                 b = r.bound.get(eid)
                 if b is not None and b.text is not None:
                     assert b.box[2] <= CARD_X - 16, (lang, s["segment_id"], eid, b.box)
+
+
+# ── the length floor: stated, measured, extended — never rewritten ──────────
+
+EX4 = {
+    "label": "Example 4", "difficulty": 2, "task": "solve", "problem": "3(x + 2) = 21", "givens": ["3(x + 2) = 21"],
+    "target": "x", "intro_speech": "One more with a bracket, so we can practise expanding it before we undo anything.",
+    "steps": [
+        {"kind": "transform", "operation": "expand the bracket", "before": ["3(x + 2) = 21"], "after": ["3x + 6 = 21"],
+         "explanation": "expand the bracket", "speech": "Three times x is three x, and three times two is six, so we have three x plus six equals twenty-one."},
+        {"kind": "transform", "operation": "subtract 6 from both sides", "before": ["3x + 6 = 21"], "after": ["3x = 15"],
+         "explanation": "subtract 6 from both sides", "speech": "The six was added last, so we take it away from both sides first: three x equals fifteen."},
+        {"kind": "transform", "operation": "divide both sides by 3", "before": ["3x = 15"], "after": ["x = 5"],
+         "explanation": "divide by 3", "speech": "Finally divide both sides by three, and x equals five."},
+    ],
+    "final_answer": ["x = 5"], "answer_speech": "So x equals five, and you can check it: three times seven is twenty-one.",
+}
+BAD_EX5 = {**EX4, "label": "Example 5", "problem": "4(x - 1) = 12", "givens": ["4(x - 1) = 12"],
+           "steps": [{"kind": "transform", "operation": "expand", "before": ["4(x - 1) = 12"], "after": ["4x - 1 = 12"],
+                      "speech": "Expand."}], "final_answer": ["x = 13/4"], "answer_speech": "Thirteen over four."}
+
+
+class ExtendingClient(FakeClient):
+    """Answers the extension prompt with `extension` (examples + concept
+    lines), and the regeneration prompt with BAD_EX5 again (never fixed)."""
+
+    def __init__(self, extension, **kw):
+        super().__init__(**kw)
+        self.extension = copy.deepcopy(extension)
+
+    def analyze(self, prompt, system="", max_tokens=0, retries=3, cache_prefix=None, response_schema=None, **kw):
+        if "FURTHER worked example" in prompt:
+            self.calls.append({"prompt": prompt, "schema": response_schema, "max_tokens": max_tokens})
+            return {"data": copy.deepcopy(self.extension), "usage": {}, "truncated": False}
+        if "REJECTED" in prompt and "Example 2" not in prompt:
+            self.calls.append({"prompt": prompt, "schema": response_schema, "max_tokens": max_tokens})
+            return {"data": copy.deepcopy(BAD_EX5), "usage": {}, "truncated": False}
+        return super().analyze(prompt, system, max_tokens, retries, cache_prefix, response_schema, **kw)
+
+
+def _extension_calls(c):
+    return [k for k in c.calls if "FURTHER worked example" in k["prompt"]]
+
+
+def test_the_prompt_states_the_floor_in_words_and_characters_when_one_applies():
+    from shared import lesson_length
+    with_floor = L.build_prompt(topic="t", subject=None, level="Class 8", curriculum=None, language="en",
+                                episode_context="", min_minutes=5.0)
+    assert "MINIMUM LENGTH (hard requirement)" in with_floor
+    assert f"{lesson_length.min_chars(5.0):,} characters" in with_floor and f"{lesson_length.min_words(5.0):,} words" in with_floor
+    assert "8-12 minutes" not in with_floor
+    assert "nothing before it" in with_floor, "the try-it problem is notation alone"
+    without = L.build_prompt(topic="t", subject=None, level=None, curriculum=None, language="en", episode_context="")
+    assert "8-12 minutes" in without and "MINIMUM LENGTH" not in without
+
+
+def test_a_lesson_over_the_floor_is_not_extended():
+    c = ExtendingClient({"examples": [EX4], "concept": []})
+    lesson, report = L.verified_lesson(c, topic="t", subject=None, level=None, curriculum=None, language="en",
+                                       episode_context="")
+    lesson, report = L.extend_to_floor(c, lesson, report, minutes=0.05, avatars=None, language="en")
+    assert _extension_calls(c) == [] and report["length_rounds"] == 0 and report["extended"] == []
+    assert report["length"]["under"] is False and [e.label for e in lesson.examples] == ["Example 1", "Example 2", "Example 3"]
+
+
+def test_a_short_lesson_is_extended_with_verified_examples_appended_after_the_ladder():
+    """The re-ask adds to the verified lesson; it never rewrites it. The new
+    example is verified like the ladder's, labelled in sequence, and the
+    concept lines are appended."""
+    c = ExtendingClient({"examples": [EX4], "concept": [{"who": "teacher", "line": "Think of the bracket as a parcel: open it before you sort what is inside."}]})
+    lesson, report = L.verified_lesson(c, topic="t", subject=None, level=None, curriculum=None, language="en",
+                                       episode_context="")
+    before = L.measure_lesson(lesson, 2.0, None, "en")
+    assert before["under"], "the fixture lesson is under a two-minute floor"
+    n_concept = len(lesson.concept)
+    lesson, report = L.extend_to_floor(c, lesson, report, minutes=2.0, avatars=None, language="en", rounds=1)
+    calls = _extension_calls(c)
+    assert len(calls) == 1
+    p = calls[0]["prompt"]
+    assert "3x + 5 = 20" in p and "2(x - 3) = 8" in p, "the existing problems are named so the model keeps away from them"
+    assert f"{before['chars']:,} characters" in p and "Example 4" in p
+    assert calls[0]["schema"] is L.EXTENSION_SCHEMA
+    assert [e.label for e in lesson.examples] == ["Example 1", "Example 2", "Example 3", "Example 4"]
+    assert lesson.examples[3].final_answer == ["x = 5"] and lesson.examples[0].final_answer == ["x = 5"]
+    assert len(lesson.concept) == n_concept + 1
+    assert report["length_rounds"] == 1 and report["extended"] == ["Example 4"]
+    assert report["length"]["chars"] > before["chars"]
+    assert len(report["examples"]) == 4 and all(e["status"] == "verified" for e in report["examples"])
+    from maths.board import compile_lesson
+    types = [s["type"] for s in compile_lesson(lesson)]
+    assert types.count("worked_example") == 4 if "worked_example" in types else len(types) >= 8
+
+
+def test_an_extension_example_that_fails_is_dropped_and_the_floor_is_reported_still_under():
+    c = ExtendingClient({"examples": [BAD_EX5], "concept": []})
+    lesson, report = L.verified_lesson(c, topic="t", subject=None, level=None, curriculum=None, language="en",
+                                       episode_context="")
+    lesson, report = L.extend_to_floor(c, lesson, report, minutes=5.0, avatars=None, language="en", attempts=1)
+    assert [e.label for e in lesson.examples] == ["Example 1", "Example 2", "Example 3"]
+    assert report["length_rounds"] == L.MAX_LENGTH_ROUNDS and report["extended"] == []
+    assert any(x.startswith("Example 5") or x.startswith("Example 4") for x in report["dropped"])
+    assert report["length"]["under"] is True, "still short: the worker refuses it, the module does not hide it"
+
+
+def test_the_rounds_and_examples_per_round_are_bounded():
+    c = ExtendingClient({"examples": [EX4], "concept": []})
+    lesson, report = L.verified_lesson(c, topic="t", subject=None, level=None, curriculum=None, language="en",
+                                       episode_context="")
+    lesson, report = L.extend_to_floor(c, lesson, report, minutes=30.0, avatars=None, language="en")
+    assert len(_extension_calls(c)) == L.MAX_LENGTH_ROUNDS
+    assert all(f"Write {L.MAX_EXAMPLES_PER_ROUND} FURTHER" in k["prompt"] for k in _extension_calls(c))
+
+
+def test_generate_maths_script_extends_and_carries_the_rounds_in_the_report():
+    c = ExtendingClient({"examples": [EX4], "concept": []})
+    script = L.generate_maths_script({"title": "Linear equations", "episode_num": 1}, {}, 1, c, language="en",
+                                     min_minutes=2.0)
+    ver = script.maths["verification"]
+    assert ver["length_rounds"] >= 1 and "Example 4" in ver["extended"]
+    assert ver["length"]["min_minutes"] == 2.0
+    assert "MINIMUM LENGTH" in c.calls[0]["prompt"]
+
+
+def test_the_worker_measures_the_maths_script_against_the_floor_and_refuses_a_short_one():
+    import worker.process as wp
+    src = open(wp.__file__).read()
+    i = src.index("generate_maths_script(")
+    branch = src[i:i + 6000]
+    assert "min_minutes=_min_minutes or None" in branch
+    assert "_with_length(report, script_dict, _min_minutes)" in branch
+    assert "coverage.under_length(report)" in branch and "lesson script is too short" in branch
+    assert branch.index("_with_length(") < branch.index("save_script(script)")

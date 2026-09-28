@@ -61,6 +61,51 @@ def strip_task_verb(text: str) -> str:
     return s
 
 
+# A run of WORDS (two letters or more) in front of the notation: "the
+# quadratic expression x^2 - x - 12", "this trinomial: ...", "the data
+# 4, 8, 6". Production, 2026-09-28 (Quadratic Expressions and Factorising
+# Trinomials): the model wrote the try-it problem that way, mathsvc read
+# "the", "quadratic" and "expression" as SYMBOLS (long names are allowed
+# for word problems), the chain check found the working did not start
+# from the problem, and the try-it was dropped. A single letter is a
+# variable and stops the run; a word glued to a bracket (sqrt(16)) is a
+# function and stops it too.
+_LEADIN_RE = re.compile(r"^\s*(?:[A-Za-z]{2,}[:,]?\s+)+")
+
+
+def strip_leading_words(text: str) -> str:
+    """The notation without the words in front of it — the task verb and
+    any lead-in phrase — when something is left."""
+    s = strip_task_verb(text)
+    m = _LEADIN_RE.match(s)
+    if m and m.end() < len(s):
+        return s[m.end():].strip()
+    return s
+
+
+def has_word_symbols(rels: list["Relation"]) -> bool:
+    """Whether a parsed state carries a multi-letter symbol — a word the
+    parser accepted as an unknown, which no notation this pipeline writes
+    contains (variables are single letters)."""
+    return any(len(str(sym)) > 1 for r in rels for sym in r.free_symbols)
+
+
+def notation_of(text: str) -> Optional[str]:
+    """The text, or its tail after the lead-in words, whichever first reads
+    as CLEAN notation (parses, no word symbols); None when neither does."""
+    s = str(text or "").strip()
+    for cand in (s, strip_leading_words(s)):
+        if not cand:
+            continue
+        try:
+            rels = [parse_relation(cand)]
+        except (NotationError, MathError, Exception):  # noqa: BLE001
+            continue
+        if not has_word_symbols(rels):
+            return cand
+    return None
+
+
 @dataclass(frozen=True)
 class Relation:
     """One line of a state: ``lhs op rhs``, a bare expression (op None), or
@@ -203,4 +248,5 @@ def is_notation(text: str) -> bool:
 
 
 __all__ = ["normalise", "Relation", "NotationError", "parse_relation", "parse_data", "parse_state",
-           "symbols_named", "is_notation", "strip_task_verb"]
+           "symbols_named", "is_notation", "strip_task_verb", "strip_leading_words", "has_word_symbols",
+           "notation_of"]
