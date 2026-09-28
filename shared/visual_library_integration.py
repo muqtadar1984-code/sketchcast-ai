@@ -23,6 +23,8 @@ import logging
 import os
 import shutil
 from pathlib import Path
+
+from spike.scene_engine.colour import is_colour_key
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -75,6 +77,9 @@ def _bootstrap_existing_cache(ra) -> None:
             if md.get("provenance") != "generated" or md.get("baked_text"):
                 return
             key = str(md.get("key") or meta_path.parent.name)
+            # a coloured board picture (phase 2) is not a library asset
+            if ra.is_colour_key(key):
+                return
             group_ids = list(md.get("group_ids") or [])
             register_local({
                 "asset_key": key,
@@ -118,6 +123,12 @@ def _hydrate_local_library(key: str, prompt: str, cache: Path,
     try:
         from shared.visual_library import _local_asset_path, find
         hit = find(key, prompt, context(), asset_format=asset_format)
+        # belt and braces with register_local's refusal: a coloured board
+        # picture never fills a plain key
+        if hit and is_colour_key(str(hit.get("asset_key") or "")):
+            logger.warning("visual library: refusing %s for %s — a coloured picture is not an ink one",
+                           hit.get("asset_key"), key)
+            return False
         source = Path(str(hit.get("local_cache_path") or "")) if hit else None
         if not source or not source.exists():
             return False

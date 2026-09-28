@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from . import colour
 from . import director
 from . import encode
 from .raster_assets import load_hand, make_resolver
@@ -35,6 +36,16 @@ from .render import SceneRenderer
 # what the composer forces on every scene it renders (video_composer.py)
 PEN_MODE = "hand"
 HAND_SCALE = 0.8
+
+
+def pins_for_child(payload: dict) -> tuple[bool | None, bool | None]:
+    """The board-colour answers the parent put in the payload, as pins for
+    this process — (None, None) for a payload that carries none, which
+    leaves the child's own flags to decide (the pre-phase-2 behaviour)."""
+    raw = payload.get("board_colour")
+    if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+        return (None, None)
+    return (bool(raw[0]), bool(raw[1]))
 
 
 def _bind(payload: dict) -> SceneRenderer | None:
@@ -67,26 +78,38 @@ def render_segment_in_child(payload: dict) -> tuple[bool, list[str]]:
     segment dict, so the parent records the warnings. Any exception
     propagates to the parent's future and lands in the composer's catch-all,
     exactly as an in-process failure would."""
-    r = _bind(payload)
-    if r is None:
-        return False, []
-    audio_secs = float(payload.get("audio_secs") or 0.0)
-    audio_path = payload.get("audio_path")
-    ok = encode.encode_scene(r.frames(audio_secs, encode.FPS), r.total_secs(audio_secs),
-                             audio_path, Path(str(payload["out_mp4"])), encode.FPS)
-    if not ok:
-        return False, []
-    return True, list(r.audit()["warnings"])
+    # Pinned for the life of this call and released after it: the resolver
+    # asks the cache under the colour key exactly when the parent generated
+    # under it, and an in-process caller (the composer's test seams) gets
+    # its own answers back afterwards.
+    pins = colour.restore(pins_for_child(payload))
+    try:
+        r = _bind(payload)
+        if r is None:
+            return False, []
+        audio_secs = float(payload.get("audio_secs") or 0.0)
+        audio_path = payload.get("audio_path")
+        ok = encode.encode_scene(r.frames(audio_secs, encode.FPS), r.total_secs(audio_secs),
+                                 audio_path, Path(str(payload["out_mp4"])), encode.FPS)
+        if not ok:
+            return False, []
+        return True, list(r.audit()["warnings"])
+    finally:
+        colour.release(pins)
 
 
 def render_frame_in_child(payload: dict, frame_index: int) -> bytes | None:
     """One frame's rgb24 bytes from the same payload — the exactness probe
     (tests compare a child-rendered frame with the in-process one)."""
-    r = _bind(payload)
-    if r is None:
+    pins = colour.restore(pins_for_child(payload))
+    try:
+        r = _bind(payload)
+        if r is None:
+            return None
+        audio_secs = float(payload.get("audio_secs") or 0.0)
+        for i, img in enumerate(r.frames(audio_secs, encode.FPS)):
+            if i == frame_index:
+                return img.tobytes()
         return None
-    audio_secs = float(payload.get("audio_secs") or 0.0)
-    for i, img in enumerate(r.frames(audio_secs, encode.FPS)):
-        if i == frame_index:
-            return img.tobytes()
-    return None
+    finally:
+        colour.release(pins)
