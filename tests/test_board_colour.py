@@ -647,3 +647,52 @@ class TestTheWash:
         r = self._render(self._scene([{"verb": "draw", "target": "pic", "duration": 1.0}]), asset)
         assert r._wash_ready == {} and r.bound["pic"].raster.wash is None
         assert r._state_at(3.0)["pic"].wash == ()
+
+
+class TestTheDirectorsOneColourSentence:
+    """Phase 4: the director prompt stays colour-blind — the engine owns
+    every colour decision — except for ONE sentence, given only while the
+    pictures are drawn in colour, saying when a colour is content worth
+    naming in an asset description. With the switch off the prompt is
+    byte-identical to the benchmark's."""
+
+    @staticmethod
+    def _prompt():
+        from agent3_scripts.semantic_prompt import build_semantic_prompt
+        return build_semantic_prompt("dialogue", "Separating Mixtures", "Grade 7", "6 minutes", "CONTEXT",
+                                     subject="Science", curriculum="CBSE", learner_age="12")
+
+    def test_the_benchmark_prompt_carries_no_colour_sentence(self, monkeypatch):
+        monkeypatch.delenv(colour.FLAG, raising=False)
+        monkeypatch.delenv(colour.PICTURES_FLAG, raising=False)
+        p = self._prompt()
+        assert "COLOUR:" not in p and "copper sulfate" not in p
+        t = colour.set_pin(True)                        # phase 1 alone: the marks, not the pictures
+        try:
+            assert self._prompt() == p, "the sentence follows the PICTURES switch, never phase 1 alone"
+        finally:
+            colour.reset_pin(t)
+
+    def test_the_sentence_is_given_under_the_pictures_switch_and_only_then(self, monkeypatch):
+        monkeypatch.delenv(colour.PICTURES_FLAG, raising=False)
+        off = self._prompt()
+        t = colour.set_pin(True, True)
+        try:
+            on = self._prompt()
+        finally:
+            colour.reset_pin(t)
+        assert "COLOUR: the engine chooses every colour" in on and "copper sulfate solution is blue" in on
+        assert "Never name a colour on an element, a label or an arrow" in on
+        assert on.replace("\n" + __import__("agent3_scripts.semantic_prompt", fromlist=["_ASSETS_COLOUR"])._ASSETS_COLOUR, "") == off, \
+            "the ONE sentence is the whole difference"
+        assert on.index("=== PICTURES AND REGIONS ===") < on.index("COLOUR:") < on.index("=== TIMING ==="), \
+            "it lives in the pictures block, where asset descriptions are written"
+        monkeypatch.setenv(colour.PICTURES_FLAG, "1")
+        assert "COLOUR:" in self._prompt(), "the flag works like the pin"
+
+    def test_the_worker_pins_before_the_script_is_asked_for(self):
+        from pathlib import Path
+        import worker.process as P
+        src = Path(P.__file__).read_text(encoding="utf-8")
+        assert src.index("_colour.pin_from_params(params)") < src.index("script = generate_episode_script("), \
+            "the prompt reads the pin, so the pin is set before the director is asked"
