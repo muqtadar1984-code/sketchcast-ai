@@ -25,13 +25,27 @@ THE BENCHMARK. With the flag off every function here is a no-op — no colour
 key is written, the schema defaults apply, and the compiled plan is
 byte-identical to today's (tests/test_board_colour.py pins that). Rolling
 back is unsetting the variable; no code moves.
+
+THE PIN. ``params.board_colour`` on ONE generation decides for that
+generation either way, flag or no flag — the same lever the subject
+profile has (shared/subject_profile.PARAM_KEY). It is how a demo video is
+drawn in colour on a flag-off worker, and how one lesson is drawn plain
+on a flag-on worker. The worker sets it once per generation
+(``set_pin``); it travels in a ContextVar, so the adapter and the
+compiler, which run in the generation's own thread, read it without
+being handed it.
 """
 
 from __future__ import annotations
 
+import contextvars
 import os
 
 FLAG = "FEATURE_BOARD_COLOUR"
+PARAM_KEY = "board_colour"
+
+# None: not pinned, the flag decides. True/False: this generation's answer.
+_PIN: contextvars.ContextVar[bool | None] = contextvars.ContextVar("board_colour_pin", default=None)
 
 # the roles, as the palette (spike/scene_engine/paper.py) names them
 ACCENT = "accent"
@@ -42,8 +56,34 @@ INK = "ink"
 EQUATION_SIGNS = frozenset({"+", "-", "−", "=", "→", "->", "⟶", "×", "÷", "⇌", "≈", "<", ">", "≤", "≥"})
 
 
+def _truthy(value: object) -> bool:
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 def enabled() -> bool:
-    return os.getenv(FLAG, "").strip().lower() in ("1", "true", "yes", "on")
+    pin = _PIN.get()
+    if pin is not None:
+        return pin
+    return _truthy(os.getenv(FLAG, ""))
+
+
+def set_pin(value: object) -> contextvars.Token:
+    """Pin this generation's answer: True/False from a param value, None
+    (or an absent param) to let the flag decide. Returns the token to
+    ``reset_pin`` with."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return _PIN.set(None)
+    return _PIN.set(bool(value) if isinstance(value, bool) else _truthy(value))
+
+
+def reset_pin(token: contextvars.Token) -> None:
+    _PIN.reset(token)
+
+
+def pin_from_params(params: dict | None) -> contextvars.Token:
+    """The worker's call: ``params.board_colour`` when the generation carries
+    it, else unpinned."""
+    return set_pin((params or {}).get(PARAM_KEY) if isinstance(params, dict) else None)
 
 
 def arrow_colour(*, leader: bool) -> str | None:
@@ -89,5 +129,6 @@ def colour_equation_row(row: list[str], texts: dict[str, dict]) -> bool:
     return True
 
 
-__all__ = ["FLAG", "ACCENT", "ACCENT2", "INK", "EQUATION_SIGNS", "enabled",
-           "arrow_colour", "tint_arrow", "colour_equation_row"]
+__all__ = ["FLAG", "PARAM_KEY", "ACCENT", "ACCENT2", "INK", "EQUATION_SIGNS", "enabled",
+           "set_pin", "reset_pin", "pin_from_params", "arrow_colour", "tint_arrow",
+           "colour_equation_row"]

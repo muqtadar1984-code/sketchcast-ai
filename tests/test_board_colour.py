@@ -170,3 +170,65 @@ class TestTheRoles:
         synth = [e for sc in scenes.values() for e in sc["elements"] if e["id"].startswith("arr_auto_")]
         assert synth, "\n".join(report)
         assert {e.get("color") for e in synth} == {"accent"}
+
+
+class TestThePin:
+    """params.board_colour decides for ONE generation, flag or no flag —
+    the demo and rollback lever, and how a demo video is drawn in colour
+    on a flag-off production worker."""
+
+    def test_a_pin_wins_over_the_flag_both_ways(self, monkeypatch):
+        monkeypatch.delenv(colour.FLAG, raising=False)
+        t = colour.set_pin(True)
+        try:
+            assert colour.enabled() is True
+            plan, _ = adapt_semantic_plan(_plan(), NARR, strict=True)
+            assert _arrows(plan)["arr_base"]["color"] == "accent2"
+        finally:
+            colour.reset_pin(t)
+        assert colour.enabled() is False
+        monkeypatch.setenv(colour.FLAG, "1")
+        t = colour.set_pin(False)
+        try:
+            assert colour.enabled() is False
+            plan, _ = adapt_semantic_plan(_plan(), NARR, strict=True)
+            assert all("color" not in a for a in _arrows(plan).values())
+        finally:
+            colour.reset_pin(t)
+        assert colour.enabled() is True
+
+    def test_the_worker_pins_from_the_params(self, monkeypatch):
+        monkeypatch.delenv(colour.FLAG, raising=False)
+        for raw, want in (("true", True), ("1", True), (True, True), ("0", False), (False, False), ("no", False)):
+            t = colour.pin_from_params({colour.PARAM_KEY: raw})
+            try:
+                assert colour.enabled() is want, raw
+            finally:
+                colour.reset_pin(t)
+        # absent, blank or a non-dict: unpinned, the flag decides
+        for params in ({}, {colour.PARAM_KEY: ""}, {colour.PARAM_KEY: None}, None, "x"):
+            t = colour.pin_from_params(params)
+            try:
+                assert colour.enabled() is False
+                monkeypatch.setenv(colour.FLAG, "1")
+                assert colour.enabled() is True
+                monkeypatch.delenv(colour.FLAG)
+            finally:
+                colour.reset_pin(t)
+
+    def test_the_worker_sets_the_pin_beside_the_subject_profile(self):
+        from pathlib import Path
+        import worker.process as P
+        src = Path(P.__file__).read_text(encoding="utf-8")
+        i = src.index("_colour.pin_from_params(params)")
+        assert "_sp.resolve(book.get(\"subject\"), params=params)" in src[i - 600:i]
+
+    def test_a_pinned_generation_is_stamped_format_3(self, monkeypatch):
+        from shared import video_format as VF
+        monkeypatch.delenv(colour.FLAG, raising=False)
+        assert VF.current() == 2
+        t = colour.set_pin(True)
+        try:
+            assert VF.current() == 3
+        finally:
+            colour.reset_pin(t)
