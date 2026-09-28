@@ -120,6 +120,15 @@ Region names come from the actual lesson (a triangle has "hypotenuse"; a map has
 NO PIXELS: never output a numeric coordinate array for a target (no two-number position arrays, no widths, no heights), and never estimate where something is. The engine resolves target geometry, arrow endpoints, arrow routing, label placement, collision avoidance and hand paths.
 Every asset and element id you reference is one you declared in this plan, never an id from the lesson input — a plan referencing a source id is discarded entirely."""
 
+# Board colour, phase 4 (spike/scene_engine/colour.pictures_enabled): the
+# ONE sentence about colour the director is given, and only while the
+# pictures are drawn in colour. The engine owns every colour decision
+# (phases 1-3); this tells the director when a colour is CONTENT — the
+# thing a learner is meant to know — rather than decoration, so an asset
+# description names it then and only then. With the switch off the prompt
+# is byte-identical to the benchmark's (tests/test_board_colour.py).
+_ASSETS_COLOUR = """COLOUR: the engine chooses every colour on the board and in the pictures. In an asset description name a specific colour ONLY when it carries subject meaning or the source teaches it (a copper sulfate solution is blue; arteries red and veins blue; litmus turning red in acid); otherwise describe form, structure and position and leave colour to the engine. Never name a colour on an element, a label or an arrow."""
+
 _TIMING = """=== TIMING ===
 The voice is the clock. Every narration-linked action carries a "cue": a phrase copied VERBATIM from a dialogue line of the SAME segment; the engine finds when those words are spoken.
 Valid:   dialogue "It is the longest side of the triangle."  ->  "cue": "the longest side"
@@ -317,6 +326,8 @@ def build_semantic_prompt(style: str, chapter_title: str, difficulty_level: str,
     schemas = "\n".join([_SCHEMAS_HEAD,
                          _SCHEMAS_ACTION if two_voice else _SCHEMAS_ACTION_MOMENT,
                          "", _SCHEMAS_TAIL])
+    from spike.scene_engine import colour as _colour
+    assets_block = (_ASSETS + "\n" + _ASSETS_COLOUR) if _colour.pictures_enabled() else _ASSETS
     parts = [
         _ROLE,
         _INPUT.format(subject=subject or "(infer from the source content)",
@@ -328,7 +339,7 @@ def build_semantic_prompt(style: str, chapter_title: str, difficulty_level: str,
                       target_duration=target_duration,
                       episode_context=episode_context),
         _FIDELITY, _LEARNER, dialogue_block, _STRUCTURE, _VISUAL_TEACHING,
-        _ASSETS, _TIMING, _LABELS_CAMERA, schemas, _CAPS,
+        assets_block, _TIMING, _LABELS_CAMERA, schemas, _CAPS,
         _EXAMPLE, _FINAL,
     ]
     return "\n\n".join(parts)
