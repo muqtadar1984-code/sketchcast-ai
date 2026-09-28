@@ -105,6 +105,49 @@ _STYLE_SUFFIX = (
     "separately by software). No shading, no color fill, no watermark."
 )
 
+# Board colour, phase 2 (spike/scene_engine/colour.pictures_enabled): the
+# same whiteboard drawing with a RESTRAINED palette — flat fills only where
+# colour tells the parts apart, most of the picture left white — so the
+# board keeps its hand-drawn identity and never becomes clipart. The
+# no-text clauses are the ink suffix's, verbatim: they matter more than the
+# medium. Asked only for a key that carries COLOUR_KEY_SUFFIX, which is
+# what keeps a coloured picture out of the ink cache and the ink library.
+_BOARD_COLOUR_SUFFIX = (
+    " Hand-drawn educational whiteboard illustration: clean dark ink outlines, "
+    "and a small restrained palette of flat colour fills used only where colour "
+    "helps tell the parts apart — most of the picture stays white, no gradients, "
+    "no shading, no photorealism, pure white background. ABSOLUTELY NO TEXT OF "
+    "ANY KIND anywhere in the image: no letters, no words, no labels, no numbers, "
+    "no captions, no arrows pointing at parts — the diagram is UNLABELED (labels "
+    "are added separately by software). No watermark."
+)
+
+# A coloured board picture is a DIFFERENT asset from the ink one: its own
+# cache directory, never a library candidate. The suffix is on the key, so
+# every layer keyed by the key (the lock, the cache, the deferral map, the
+# library wrapper) tells the two apart without learning a new argument.
+COLOUR_KEY_SUFFIX = "__colour"
+
+
+def is_colour_key(key: str) -> bool:
+    return str(key or "").endswith(COLOUR_KEY_SUFFIX)
+
+
+def is_board_key(key: str) -> bool:
+    """Board art — what phase 2 colours. Avatars have their own colour tier
+    and the hand is the pen's sprite; neither is a picture on the board."""
+    k = str(key or "")
+    return bool(k) and not k.startswith("avatar_") and k != "hand_pen"
+
+
+def colour_key(key: str) -> str:
+    """The key a board picture is fetched under when the pictures switch is
+    on; unchanged when it is off, for an avatar, or already coloured."""
+    from . import colour as _colour
+    if not _colour.pictures_enabled() or not is_board_key(key) or is_colour_key(key):
+        return key
+    return f"{key}{COLOUR_KEY_SUFFIX}"
+
 
 @dataclass
 class RasterAsset:
@@ -514,14 +557,20 @@ def bind_generation(fn, generation_id: str | None = None):
     """
     gid = current_generation() if generation_id is None else str(generation_id)
     role = current_image_role()
+    # The board-colour pins travel the same way: a render thread asking
+    # for a picture must answer "coloured or ink?" as the job thread did.
+    from . import colour as _colour
+    pins = _colour.snapshot()
 
     @functools.wraps(fn)
     def _run(*a, **kw):
         token = _GENERATION_VAR.set(gid)
         role_token = _ROLE_VAR.set(role)
+        pin_tokens = _colour.restore(pins)
         try:
             return fn(*a, **kw)
         finally:
+            _colour.release(pin_tokens)
             _ROLE_VAR.reset(role_token)
             _GENERATION_VAR.reset(token)
     return _run
@@ -2095,16 +2144,25 @@ def get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
                      allow_generate: bool = True) -> RasterAsset | None:
     """Per-key serialized: segments render in parallel threads, and a
     baked-text regeneration once raced the readers — two segments bound the
-    flagged ink mid-rewrite."""
+    flagged ink mid-rewrite.
+
+    Under the board-colour pictures switch a board key is fetched as its
+    COLOUR key (colour_key): a different cache entry, drawn in the
+    restrained-colour style and cut out with its fills kept."""
+    key = colour_key(key)
     with asset_lock(key):
         return _get_raster_asset(key, prompt, cache_dir, allow_generate)
 
 
 def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
                       allow_generate: bool = True) -> RasterAsset | None:
-    # avatars are the one COLOUR tier: they are characters, not board ink,
-    # and they are revealed rather than drawn
+    # avatars are one COLOUR tier: they are characters, not board ink, and
+    # they are revealed rather than drawn. A coloured board picture (phase
+    # 2, colour_key) is the other: board-shaped, but cut out like a
+    # character so its fills survive, and dense enough to need the
+    # character's coverage ceiling.
     is_color = key.startswith("avatar_")
+    is_colour_board = is_colour_key(key)
     cache = cache_dir_for(key, cache_dir)
     png, meta = cache / "asset.png", cache / "meta.json"
     names = part_names_from_prompt(prompt)
@@ -2230,7 +2288,8 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
         _take_rate_limited()          # a stale 429 must not survive into this try
         gen_prompt = _re.sub(r"\s*name the layer groups exactly:[^.]*\.?",
                              "", prompt, flags=_re.I)
-        suffix = _COLOR_SUFFIX if is_color else _STYLE_SUFFIX
+        suffix = (_COLOR_SUFFIX if is_color
+                  else _BOARD_COLOUR_SUFFIX if is_colour_board else _STYLE_SUFFIX)
         raw_bytes = _vertex_call(gen_prompt + suffix + extra, model, aspect) or \
             _aistudio_call(gen_prompt + suffix + extra, model, aspect)
         if raw_bytes is None:
@@ -2241,7 +2300,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
             # cache, the vision request, the library and the renderer are all
             # sized for (see to_working_size)
             src = to_working_size(Image.open(io.BytesIO(raw_bytes)))
-            candidate = to_color_art(src) if is_color else to_ink(src)
+            candidate = to_color_art(src) if (is_color or is_colour_board) else to_ink(src)
         except Exception:
             logger.exception("un-decodable image for %r", key)
             return None
@@ -2250,7 +2309,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
         # character is legitimately dense, so its ceiling is far higher.
         a = np.asarray(candidate.getchannel("A"))
         coverage = float((a > 128).mean())
-        hi = 0.92 if is_color else 0.45
+        hi = 0.92 if (is_color or is_colour_board) else 0.45
         if not (0.005 <= coverage <= hi):
             logger.warning("image for %r rejected: ink coverage %.0f%%", key,
                            coverage * 100)

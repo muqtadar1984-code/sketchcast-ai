@@ -44,8 +44,9 @@ FORMAT_CHANGES: dict[int, str] = {
     2: ("Labels anchored to the parts they name, with a description-aware vision pass; "
         "process labels point at the arrow between their states; a zoom keeps a picture's "
         "labels in the frame; the end screen with the call to action."),
-    3: ("Board colour, phase 1: relationship arrows in a second accent, leader arrows "
-        "in the first, equations coloured side by side; pictures unchanged."),
+    3: ("Board colour: relationship arrows in a second accent, leader arrows in the "
+        "first, equations coloured side by side; with the pictures switch on, the "
+        "generated pictures carry restrained flat colour."),
 }
 
 SETTINGS_KEY = "video_format"

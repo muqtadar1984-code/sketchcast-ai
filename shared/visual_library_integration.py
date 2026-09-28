@@ -262,6 +262,11 @@ def _patch() -> None:
         # so one thread could open the half-written asset.png another was
         # writing, call it corrupt, and pay for a second, different face
         # mid-lesson.
+        # Board colour, phase 2: under the pictures switch a board key is a
+        # COLOUR key (ra.colour_key) — the rename happens here, before the
+        # lock, so the wrapper and the generator hold the same lock and read
+        # the same cache entry.
+        key = ra.colour_key(key)
         with ra.asset_lock(key):
             return _decide(key, prompt, cache_dir, allow_generate)
 
@@ -269,6 +274,15 @@ def _patch() -> None:
                 allow_generate: bool):
         cache = cache_dir or ra.CACHE_DIR
         cache.mkdir(parents=True, exist_ok=True)
+        # Board colour, phase 2: a COLOURED board picture is drawn fresh under
+        # its own key and cached locally, and that is all. It is never scored
+        # against the ink library (a confident ink match would put an ink
+        # picture in a colour lesson), never hydrated from it, and never
+        # published into it (an ink lesson must never receive a coloured
+        # picture). The wrapper's log line is skipped with the rest: the
+        # decision it describes was not taken.
+        if ra.is_colour_key(key):
+            return original(key, prompt, cache, allow_generate)
         # Asked of the renderer, which also answers with the directory of the
         # SAME WORD spelled the other way — so the two halves of one decision
         # can never disagree about which file is this key's cache entry.

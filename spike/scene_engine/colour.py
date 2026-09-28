@@ -44,8 +44,18 @@ import os
 FLAG = "FEATURE_BOARD_COLOUR"
 PARAM_KEY = "board_colour"
 
+# Phase 2 — restrained colour in the GENERATED PICTURES — is its own switch
+# on top of phase 1, so the marks can go live without the pictures and one
+# lesson can pin the pictures on while the worker's flag is off. It is read
+# by raster_assets (the style asked of the image model, the cutout that
+# keeps fills, the cache key) and by the visual library integration (a
+# coloured key never hydrates from, or publishes to, the ink library).
+PICTURES_FLAG = "FEATURE_BOARD_COLOUR_PICTURES"
+PICTURES_PARAM = "board_colour_pictures"
+
 # None: not pinned, the flag decides. True/False: this generation's answer.
 _PIN: contextvars.ContextVar[bool | None] = contextvars.ContextVar("board_colour_pin", default=None)
+_PICTURES_PIN: contextvars.ContextVar[bool | None] = contextvars.ContextVar("board_colour_pictures_pin", default=None)
 
 # the roles, as the palette (spike/scene_engine/paper.py) names them
 ACCENT = "accent"
@@ -67,23 +77,56 @@ def enabled() -> bool:
     return _truthy(os.getenv(FLAG, ""))
 
 
-def set_pin(value: object) -> contextvars.Token:
+def pictures_enabled() -> bool:
+    """Phase 2: colour in the generated pictures. Its own pin, then its own
+    flag; never implied by phase 1."""
+    pin = _PICTURES_PIN.get()
+    if pin is not None:
+        return pin
+    return _truthy(os.getenv(PICTURES_FLAG, ""))
+
+
+def _pin_value(value: object) -> bool | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    return bool(value) if isinstance(value, bool) else _truthy(value)
+
+
+def set_pin(value: object, pictures: object = None) -> contextvars.Token:
     """Pin this generation's answer: True/False from a param value, None
     (or an absent param) to let the flag decide. Returns the token to
-    ``reset_pin`` with."""
-    if value is None or (isinstance(value, str) and not value.strip()):
-        return _PIN.set(None)
-    return _PIN.set(bool(value) if isinstance(value, bool) else _truthy(value))
+    ``reset_pin`` with. ``pictures`` pins phase 2 the same way."""
+    _PICTURES_PIN.set(_pin_value(pictures))
+    return _PIN.set(_pin_value(value))
 
 
 def reset_pin(token: contextvars.Token) -> None:
     _PIN.reset(token)
+    _PICTURES_PIN.set(None)
 
 
 def pin_from_params(params: dict | None) -> contextvars.Token:
-    """The worker's call: ``params.board_colour`` when the generation carries
-    it, else unpinned."""
-    return set_pin((params or {}).get(PARAM_KEY) if isinstance(params, dict) else None)
+    """The worker's call: ``params.board_colour`` and
+    ``params.board_colour_pictures`` when the generation carries them, else
+    unpinned."""
+    p = params if isinstance(params, dict) else {}
+    return set_pin(p.get(PARAM_KEY), p.get(PICTURES_PARAM))
+
+
+def snapshot() -> tuple[bool | None, bool | None]:
+    """This thread's pins, for a pool thread to ``restore`` — contextvars
+    are per thread and a render thread starts empty (raster_assets
+    .bind_generation)."""
+    return (_PIN.get(), _PICTURES_PIN.get())
+
+
+def restore(snap: tuple[bool | None, bool | None]) -> tuple[contextvars.Token, contextvars.Token]:
+    return (_PIN.set(snap[0]), _PICTURES_PIN.set(snap[1]))
+
+
+def release(tokens: tuple[contextvars.Token, contextvars.Token]) -> None:
+    _PIN.reset(tokens[0])
+    _PICTURES_PIN.reset(tokens[1])
 
 
 def arrow_colour(*, leader: bool) -> str | None:
@@ -129,6 +172,7 @@ def colour_equation_row(row: list[str], texts: dict[str, dict]) -> bool:
     return True
 
 
-__all__ = ["FLAG", "PARAM_KEY", "ACCENT", "ACCENT2", "INK", "EQUATION_SIGNS", "enabled",
-           "set_pin", "reset_pin", "pin_from_params", "arrow_colour", "tint_arrow",
+__all__ = ["FLAG", "PARAM_KEY", "PICTURES_FLAG", "PICTURES_PARAM", "ACCENT", "ACCENT2", "INK",
+           "EQUATION_SIGNS", "enabled", "pictures_enabled", "set_pin", "reset_pin",
+           "pin_from_params", "snapshot", "restore", "release", "arrow_colour", "tint_arrow",
            "colour_equation_row"]
