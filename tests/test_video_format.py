@@ -49,7 +49,18 @@ class TestTheStamp:
     def test_the_render_stamps_the_generation(self):
         import worker.process as P
         src = Path(P.__file__).read_text(encoding="utf-8")
-        assert '"format_version": _fmt' in src
+        # current(), not the constant: a flagged version (board colour) must
+        # be stamped on the videos drawn with it
+        assert '"format_version": _fmt_current()' in src
+        assert "from shared.video_format import current as _fmt_current" in src
+
+    def test_a_flagged_version_counts_only_while_its_flag_is_on(self, monkeypatch):
+        monkeypatch.delenv("FEATURE_BOARD_COLOUR", raising=False)
+        assert VF.current() == VF.VIDEO_FORMAT_VERSION == 2
+        monkeypatch.setenv("FEATURE_BOARD_COLOUR", "1")
+        assert VF.current() == 3 and VF.FORMAT_CHANGES[3]
+        monkeypatch.setenv("FEATURE_BOARD_COLOUR", "0")
+        assert VF.current() == 2
 
     def test_the_publication_row_copies_it_from_the_generation(self):
         from catalogue import publish as pub

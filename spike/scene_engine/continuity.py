@@ -37,6 +37,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import colour
 from .anchors import (WORDS_BOARD, WORDS_SEGMENT, resolve_roster_anchors,
                       sanitize_scene)
 from .schema import WORLD_H, WORLD_W
@@ -407,7 +408,7 @@ def _clean_action(a) -> dict | None:
     return out
 
 
-_COLOR_ROLES = {"ink", "muted", "accent"}
+_COLOR_ROLES = {"ink", "muted", "accent", "accent2"}
 _COLOR_MAP = {"black": "ink", "dark": "ink", "navy": "ink", "blue": "accent",
               "green": "accent", "teal": "accent", "red": "accent",
               "orange": "accent", "gray": "muted", "grey": "muted",
@@ -1647,12 +1648,12 @@ def _compile_chapter(ch: VisualChapter, narrations, all_segments, skip_hold,
                 continue        # never point at a label that never appears
             at = _pt(le.get("at")) or root_at
             side = "right" if at[0] < root_at[0] else "left"
-            roster[aid] = {"id": aid, "type": "arrow", "width": 3.2,
-                           "curve": 0.0,
-                           "tail": {"el": lid, "edge": side,
-                                    "dx": 6.0 if side == "right" else -6.0},
-                           "head": {"el": root_id, "layer": part,
-                                    "edge": "center"}}
+            roster[aid] = colour.tint_arrow({
+                "id": aid, "type": "arrow", "width": 3.2, "curve": 0.0,
+                "tail": {"el": lid, "edge": side,
+                         "dx": 6.0 if side == "right" else -6.0},
+                "head": {"el": root_id, "layer": part, "edge": "center"}},
+                leader=True)
             write_step.actions.append({"verb": "draw", "target": aid})
             anchored_parts.add(part.lower())
             report.append(f"CHAPTER {ch.concept} | SYNTHESIZED {aid} -> "

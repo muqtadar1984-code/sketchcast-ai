@@ -162,7 +162,7 @@ class TextElement(_ElementBase):
     at: Point
     role: Literal["title", "label", "term", "caption"] = "label"
     size: float = Field(default=26.0, ge=10.0, le=72.0)
-    color: Literal["ink", "muted", "accent"] = "ink"
+    color: Literal["ink", "muted", "accent", "accent2"] = "ink"
     direction: Literal["ltr", "rtl"] = "ltr"
     anchor: Literal["lt", "mt", "rt", "lm", "mm", "rm"] = "lm"
     after: Optional[After] = None     # chain x behind another element + gap
@@ -191,7 +191,7 @@ class MathElement(_ElementBase):
     expr: str
     at: Point
     size: float = Field(default=34.0, ge=10.0, le=72.0)
-    color: Literal["ink", "muted", "accent"] = "ink"
+    color: Literal["ink", "muted", "accent", "accent2"] = "ink"
     anchor: Literal["lt", "mt", "rt", "lm", "mm", "rm"] = "lt"
     role: Literal["line", "title"] = "line"
 
@@ -207,7 +207,7 @@ class ArrowElement(_ElementBase):
     head: PointSpec
     curve: float = Field(default=0.0, ge=-200.0, le=200.0)
     width: float = Field(default=3.2, ge=1.0, le=10.0)  # force arrows go bold
-    color: Literal["ink", "muted", "accent"] = "ink"
+    color: Literal["ink", "muted", "accent", "accent2"] = "ink"
 
 
 class ShapeElement(_ElementBase):
@@ -222,7 +222,7 @@ class ShapeElement(_ElementBase):
     # "marker": the translucent highlighter, as an ELEMENT — unlike the
     # highlight verb's decoration it can be faded and erased, so a board can
     # move a highlight from one line to the next (the maths method card)
-    color: Literal["ink", "muted", "accent", "marker"] = "ink"
+    color: Literal["ink", "muted", "accent", "accent2", "marker"] = "ink"
     closed: bool = False
     # False = outline only; True = translucent accent wash; "paper" = opaque
     # board-colored fill (speech bubbles occlude the busy board behind them)
@@ -245,7 +245,7 @@ class ParticleGroupElement(_ElementBase):
     glyph: Literal["dot", "ring", "blob"] = "dot"
     spawn: list[Point]
     radius: float = Field(default=7.0, ge=2.0, le=30.0)
-    color: Literal["ink", "muted", "accent"] = "accent"
+    color: Literal["ink", "muted", "accent", "accent2"] = "accent"
 
     @field_validator("spawn")
     @classmethod
