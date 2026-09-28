@@ -1947,11 +1947,12 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                     # per part, and under one key each part overwrote the
                     # last — so the part that failed is exactly the one
                     # whose verdict you lost.
-                    from shared.video_format import VIDEO_FORMAT_VERSION as _fmt
+                    from shared.video_format import current as _fmt_current
                     db.merge_generation_params(sb, generation_id, {
                         # which generation of the pipeline drew this video —
                         # copied onto its publication row when it is posted
-                        "format_version": _fmt,
+                        # (the flagged versions count: shared/video_format)
+                        "format_version": _fmt_current(),
                         f"acceptance_part{part_idx}": {
                             "part": part_idx,
                             "passed": _accept["passed"],

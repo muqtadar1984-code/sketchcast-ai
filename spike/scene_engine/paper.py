@@ -8,13 +8,19 @@ import random
 
 from PIL import Image, ImageDraw
 
-from agent5_slides.theme import CANVAS, GRAPHITE, INK, TEAL, TEAL_DK, TEAL_MIST, WHITE
+from agent5_slides.theme import (CANVAS, CORAL, CORAL_DK, CORAL_MIST, GRAPHITE, INK, TEAL,
+                                 TEAL_DK, TEAL_MIST, WHITE)
 
 PALETTE = {
     "ink": INK,
     "accent": TEAL_DK,       # accent LINES use the dark teal (legible on white)
     "accent_bright": TEAL,
     "accent_mist": TEAL_MIST,
+    # the second accent (spike/scene_engine/colour.py, FEATURE_BOARD_COLOUR):
+    # nothing draws it while the flag is off
+    "accent2": CORAL_DK,
+    "accent2_bright": CORAL,
+    "accent2_mist": CORAL_MIST,
     "muted": GRAPHITE,
     "marker": (255, 214, 74),  # highlighter yellow — the one non-theme color,
                                # because a teal highlighter reads as drawing

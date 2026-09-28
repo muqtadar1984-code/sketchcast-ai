@@ -43,6 +43,7 @@ import re
 
 logger = logging.getLogger(__name__)
 
+from . import colour
 from .continuity import _classify_text
 
 SEMANTIC_PLAN_VERSION = 1
@@ -618,6 +619,8 @@ def _layout_text_only(elements: list[dict], steps: list[dict], ctx: "_Ctx", conc
         total = sum(widths) + _ROWS_GAP * (len(row) - 1)
         x = _ROWS_X0 + max(0.0, (band - total) / 2)
         slots: list[tuple[float, float]] = []
+        if colour.colour_equation_row(row, texts):
+            ctx.note("EQUATION_ROW_COLOURED", f"{concept}: row {r + 1} reads as an equation")
         for i, (eid, w) in enumerate(zip(row, widths)):
             if prev is not None and len(prev) == len(row):
                 px, pw = prev[i]
@@ -872,10 +875,14 @@ def _steps(craw, narrations, ctx, concept, by_id, root_id, label_for_region,
                     lbl = label_for_region.get(_slug(region))
                     tail = ({"el": lbl, "edge": "right", "dx": 6.0} if lbl
                             else [_LABEL_X + 120.0, _LABEL_TOP])
-                    extra.append({"id": aid, "type": "arrow", "width": 3.2,
-                                  "curve": 0.0, "tail": tail,
-                                  "head": {"el": el, "layer": region,
-                                           "edge": "center"}})
+                    # a leader (from the label) annotates; an arrow from
+                    # the margin shows a relation — phase-1 board colour
+                    # tells them apart (spike/scene_engine/colour.py)
+                    extra.append(colour.tint_arrow(
+                        {"id": aid, "type": "arrow", "width": 3.2,
+                         "curve": 0.0, "tail": tail,
+                         "head": {"el": el, "layer": region, "edge": "center"}},
+                        leader=bool(lbl)))
                 actions.append(_act("draw", aid, cue))
                 continue
 

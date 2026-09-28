@@ -21,6 +21,12 @@ INK_SOFT = (0x20, 0x26, 0x2F)
 TEAL = (0x1F, 0xB8, 0xA6)       # accent — badge, dots, illustrations
 TEAL_DK = (0x0C, 0x81, 0x75)    # accent text on light
 TEAL_MIST = (0xE2, 0xF4, 0xF1)  # illustration disc tint
+# The second accent (board colour, phase 1): a warm coral that contrasts
+# with the teal at the same weight, for relationship arrows and the right
+# side of an equation. Same three weights as the teal family.
+CORAL = (0xE0, 0x6A, 0x3C)      # accent2 — bright, for fills and marks
+CORAL_DK = (0xB2, 0x47, 0x24)   # accent2 lines and text on light
+CORAL_MIST = (0xFB, 0xE8, 0xDF) # accent2 tint
 MARKER = (0xFF, 0xB0, 0x20)     # warm highlight (rare)
 GRAPHITE = (0x5B, 0x64, 0x70)   # muted
 FAINT = (0x98, 0xA0, 0xA9)
