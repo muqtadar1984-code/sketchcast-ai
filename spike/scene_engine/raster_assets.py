@@ -127,6 +127,21 @@ _BOARD_COLOUR_SUFFIX = (
     "watermark."
 )
 
+# Phase 3's bolder ask has a failure mode the restrained one did not: for
+# a SIMPLE object — a margin sketch of a cone, a water drop — the model
+# fills the page as well as the object, the flood cut finds no paper, and
+# the picture is refused at 99-100 % coverage (Separating Mixtures phase 3
+# demo: sk_water_drop; phase 4 demo d90f9e70: sk_cone, twice, and the
+# image gate refused the whole lesson). So a colour picture refused for
+# having NO PAPER is asked once more with the page spelled out, and, if
+# that is refused too, drawn in ink under the colour key: an ink drawing
+# of the object beats no lesson, and it carries no wash (split_colour_
+# layers finds no colour in it).
+_WHITE_PAGE_CLAUSE = (
+    " IMPORTANT: the page itself is PURE WHITE and stays completely uncoloured — only the object is "
+    "filled in; no background colour, no backdrop, no scene around it, nothing touching the edges."
+)
+
 # A coloured board picture is a DIFFERENT asset from the ink one: its own
 # cache directory, never a library candidate. The suffix is on the key, so
 # every layer keyed by the key (the lock, the cache, the deferral map, the
@@ -1753,6 +1768,10 @@ def split_colour_layers(cutout: Image.Image) -> tuple[Image.Image, Image.Image |
     opaque = int((a > 128).sum())
     if opaque == 0 or (line_a > 128).sum() < _MIN_LINE_SHARE * opaque:
         return rgba, None
+    if int(chroma[a > 128].max()) < _LINE_CHROMA_LO:
+        # an ink drawing under a colour key (the no-paper fallback in
+        # _get_raster_asset): nothing to wash in
+        return rgba, None
     lines = Image.fromarray(np.dstack([rgb.astype(np.uint8), line_a]), "RGBA")
     return lines, rgba
 
@@ -2320,7 +2339,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
     model = current_image_model()
     aspect = AVATAR_ASPECT if is_color else BOARD_ASPECT
 
-    def generate(extra: str = "") -> Image.Image | None:
+    def generate(extra: str = "", *, as_ink: bool = False) -> Image.Image | None:
         # the layer-groups tail addresses the VISION annotator, never the
         # image model — left in, it reads as 'write these names' and the
         # model bakes exactly those labels into the art (measured: a cell
@@ -2333,8 +2352,9 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
         _take_rate_limited()          # a stale 429 must not survive into this try
         gen_prompt = _re.sub(r"\s*name the layer groups exactly:[^.]*\.?",
                              "", prompt, flags=_re.I)
+        colour_board = is_colour_board and not as_ink
         suffix = (_COLOR_SUFFIX if is_color
-                  else _BOARD_COLOUR_SUFFIX if is_colour_board else _STYLE_SUFFIX)
+                  else _BOARD_COLOUR_SUFFIX if colour_board else _STYLE_SUFFIX)
         raw_bytes = _vertex_call(gen_prompt + suffix + extra, model, aspect) or \
             _aistudio_call(gen_prompt + suffix + extra, model, aspect)
         if raw_bytes is None:
@@ -2345,7 +2365,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
             # cache, the vision request, the library and the renderer are all
             # sized for (see to_working_size)
             src = to_working_size(Image.open(io.BytesIO(raw_bytes)))
-            candidate = to_color_art(src) if (is_color or is_colour_board) else to_ink(src)
+            candidate = to_color_art(src) if (is_color or colour_board) else to_ink(src)
         except Exception:
             logger.exception("un-decodable image for %r", key)
             return None
@@ -2354,14 +2374,24 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
         # character is legitimately dense, so its ceiling is far higher.
         a = np.asarray(candidate.getchannel("A"))
         coverage = float((a > 128).mean())
-        hi = 0.92 if (is_color or is_colour_board) else 0.45
+        hi = 0.92 if (is_color or colour_board) else 0.45
         if not (0.005 <= coverage <= hi):
             logger.warning("image for %r rejected: ink coverage %.0f%%", key,
                            coverage * 100)
+            generate.no_paper = colour_board and coverage > hi
             return None
         return candidate
 
+    generate.no_paper = False
     ink = generate()
+    if ink is None and generate.no_paper:
+        # a colour picture with no paper (the note above _WHITE_PAGE_CLAUSE):
+        # once more with the page spelled out, then in ink
+        logger.warning("colour picture %r filled its page — asking once more with the page spelled out", key)
+        ink = generate(_WHITE_PAGE_CLAUSE)
+        if ink is None:
+            logger.warning("colour picture %r refused twice — drawing it in ink under the colour key", key)
+            ink = generate(as_ink=True)
     if ink is None:
         limited, after = _take_rate_limited()
         if limited:
