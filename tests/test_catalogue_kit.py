@@ -617,6 +617,22 @@ class TestAfterGeneration:
         assert res["failed"] is True and "insert refused" in res["error"] and _kit(sb)["status"] == "failed"
         assert kit.record_presentation(sb, _gen("gen-a"), "kit-1", {"kind": "activity"}) == kit._result("kit-1"), "documents record nothing"
 
+    def test_a_presentation_that_is_not_the_kits_records_nothing(self):
+        """A demo drawn under a pinned setting names the kit (prepare needs
+        the article) but is not the kit's presentation: the approved kit's
+        chapters, clips and lesson-plan reference stay exactly as they are."""
+        sb = _sb()
+        before = dict(_kit(sb))
+        res = kit.record_presentation(sb, _gen("gen-demo", "processing"), "kit-1", {"kind": "presentation", "parts": PARTS})
+        assert res["timestamps"] is False and res["lesson_plan"] is None and res["failed"] is False
+        assert res.get("skipped") == "not the kit's presentation"
+        assert sb.writes("topic_kits") == []
+        assert _kit(sb) == before
+        assert not [g for g in sb.tables["generations"] if g["kind"] == "lesson_plan"]
+        # and its completion pass cannot move an approved kit either
+        res2 = kit.after_generation(sb, _gen("gen-demo", "done"), "kit-1", {"status": "done", "kind": "presentation", "parts": PARTS})
+        assert res2["timestamps"] is False and _kit(sb) == before
+
     def test_a_retry_replaces_a_failed_lesson_plan(self):
         sb = _sb(kit_row={**KIT, "doc_generation_ids": {**KIT["doc_generation_ids"], "lesson_plan": "gen-l"}})
         sb.tables["generations"].append({**_gen("gen-l", "error"), "kind": "lesson_plan"})
