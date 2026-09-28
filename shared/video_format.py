@@ -22,20 +22,22 @@ worker boot, which is where the portal reads it from.
 
 from __future__ import annotations
 
+import importlib
 import logging
-import os
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
 VIDEO_FORMAT_VERSION = 2
 
-# Versions that exist only behind a flag: the constant above is the base;
-# current() reports the highest whose flag is on. Board colour phase 1
-# (spike/scene_engine/colour.py) is viewer-visible — coral relation arrows
-# and two-tone equations — so a video drawn with it must not read as
-# format 2, and a worker that turns the flag off reads as 2 again.
-FLAGGED_VERSIONS: dict[int, str] = {3: "FEATURE_BOARD_COLOUR"}
+# Versions that exist only behind a switch: the constant above is the base;
+# current() reports the highest whose switch answers yes. Board colour
+# phase 1 (spike/scene_engine/colour.py) is viewer-visible — coral relation
+# arrows and two-tone equations — so a video drawn with it must not read as
+# format 2, and a worker that turns the flag off reads as 2 again. The
+# switch is the module's own ``enabled()``, so a generation PINNED to
+# colour on a flag-off worker is stamped 3 as well.
+FLAGGED_VERSIONS: dict[int, str] = {3: "spike.scene_engine.colour:enabled"}
 
 FORMAT_CHANGES: dict[int, str] = {
     1: "The original scene engine.",
@@ -49,12 +51,19 @@ FORMAT_CHANGES: dict[int, str] = {
 SETTINGS_KEY = "video_format"
 
 
-def _flag_on(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
+def _switch_on(ref: str) -> bool:
+    """``module:function`` → its answer; an import error reads as off, so a
+    version whose module is missing never inflates the stamp."""
+    try:
+        mod_name, fn_name = ref.split(":", 1)
+        mod = importlib.import_module(mod_name)
+        return bool(getattr(mod, fn_name)())
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def current() -> int:
-    on = [v for v, flag in FLAGGED_VERSIONS.items() if _flag_on(flag)]
+    on = [v for v, ref in FLAGGED_VERSIONS.items() if _switch_on(ref)]
     return max([int(VIDEO_FORMAT_VERSION), *on])
 
 

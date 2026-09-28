@@ -953,6 +953,19 @@ def record_presentation(sb, gen: dict, kit_id: Optional[str], outcome: dict) -> 
         if kit is None:
             log.error("kit %s vanished before its lifecycle ran", kit_id)
             return result
+        # Only the kit's OWN presentation records onto the kit. A stray
+        # presentation that names the kit — a demo drawn under a pinned
+        # setting (board colour, 2026-09-28), a superseded retry finishing
+        # late — has a video of its own and must not rewrite an approved
+        # kit's chapters, clips, YouTube words or lesson-plan reference.
+        # The portal's Retry re-points the kit BEFORE it queues, so a
+        # legitimate replacement always passes this check.
+        own = str(kit.get("presentation_generation_id") or "")
+        if own and own != str(gen.get("id") or ""):
+            log.info("kit %s: presentation %s is not the kit's (%s); nothing recorded",
+                     kit_id, gen.get("id"), own)
+            result["skipped"] = "not the kit's presentation"
+            return result
         parts = [p for p in (outcome.get("parts") or []) if isinstance(p, dict) and p.get("part") is not None]
         if parts:
             write_timestamps(sb, kit, parts)

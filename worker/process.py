@@ -1512,6 +1512,14 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         # the student is cast and voiced). Everything else is shared.
         from shared import subject_profile as _sp
         profile = _sp.resolve(book.get("subject"), params=params)
+        # Board colour (spike/scene_engine/colour): params.board_colour pins
+        # THIS generation either way, flag or no flag — the demo and
+        # rollback lever. Set here, in the generation's own thread, which
+        # is where the plan is adapted and compiled.
+        from spike.scene_engine import colour as _colour
+        _colour.pin_from_params(params)
+        if _colour.PARAM_KEY in params:
+            logger.info("board colour for %s pinned %s", generation_id, _colour.enabled())
         if profile.worked_examples:
             narration_style = "conversational"
             logger.info("subject profile for %s: maths/%s", generation_id, profile.lesson_mode)

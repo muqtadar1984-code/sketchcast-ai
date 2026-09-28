@@ -62,6 +62,10 @@ class TestTheStamp:
         monkeypatch.setenv("FEATURE_BOARD_COLOUR", "0")
         assert VF.current() == 2
 
+    def test_a_switch_whose_module_is_missing_reads_as_off(self, monkeypatch):
+        monkeypatch.setitem(VF.FLAGGED_VERSIONS, 9, "no.such.module:enabled")
+        assert VF.current() < 9
+
     def test_the_publication_row_copies_it_from_the_generation(self):
         from catalogue import publish as pub
         sb = FakeSB()
