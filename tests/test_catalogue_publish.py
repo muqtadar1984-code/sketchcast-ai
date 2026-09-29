@@ -539,6 +539,20 @@ def test_playlist_keys_are_the_subject_then_each_curriculum():
     assert ids == ["PL-b", "PL-c"] and missing == ["cambridge lower secondary science 0893"]
 
 
+def test_a_publish_lands_in_the_playlist_the_worker_created_itself(monkeypatch):
+    """The youtube_playlists job records the ids it created in
+    platform_settings; a publish with NO environment variable still finds
+    them, keyed by the topic's discipline (7Bs.01 → biology)."""
+    monkeypatch.delenv("YOUTUBE_PLAYLISTS_EN", raising=False)
+    sb = _sb(parts=(1,))
+    sb.tables["topics"][0]["subject"] = "Science"
+    sb.tables.setdefault("platform_settings", []).append({"key": "youtube_playlists_en", "value": {"biology": "PL-job-bio"}})
+    yt = FakeYouTube()
+    P.run_publish_job(sb, _job(), transport=yt)
+    assert yt.playlist_adds == [{"video_id": "yt-1", "playlist_id": "PL-job-bio"}]
+    assert _pubs(sb)[1]["playlist_ids"] == ["PL-job-bio"]
+
+
 def test_an_unparseable_playlist_variable_is_ignored(monkeypatch):
     monkeypatch.setenv("YOUTUBE_PLAYLISTS_EN", "{not json")
     assert P.configured_playlists("en") == {}
