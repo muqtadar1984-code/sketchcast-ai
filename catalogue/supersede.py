@@ -11,7 +11,10 @@ video is done here, on the founder's say-so from the library (the portal's
      reviewer wrote, and idempotent;
   2. a PUBLIC old video becomes UNLISTED: its link and its statistics
      survive, search and browse surface only the new video. An unlisted
-     one stays unlisted, a private one stays private;
+     one stays unlisted, a private one stays private. ``params.keep_privacy``
+     skips this step (founder, 2026-09-29: the old videos stay public for
+     now and are flipped by hand later) — the pointer and the row still
+     happen;
   3. the old ``topic_publications`` row records ``superseded_by`` (the new
      publication) and ``superseded_at``, so the portal stops listing it as
      the live video and the format notice stops counting it.
@@ -159,10 +162,11 @@ def check_pair(sb, old: Optional[dict], new: Optional[dict]) -> tuple[dict, dict
     return old, new
 
 
-def supersede(sb, transport: SupersedeTransport, old: dict, new: dict) -> dict:
+def supersede(sb, transport: SupersedeTransport, old: dict, new: dict, *, keep_privacy: bool = False) -> dict:
     """The three steps, in the order that leaves the least mess if one fails:
-    description first (harmless if the rest fails), then privacy, then the
-    row — so a row that reads superseded is one whose video was handled."""
+    description first (harmless if the rest fails), then privacy (unless
+    ``keep_privacy``), then the row — so a row that reads superseded is one
+    whose video was handled."""
     old_id, new_id = _s(old.get("youtube_video_id")), _s(new.get("youtube_video_id"))
     summary = {"old_publication": _s(old.get("id")), "new_publication": _s(new.get("id")),
                "old_video": old_id, "new_video": new_id, "description": "unchanged",
@@ -180,7 +184,10 @@ def supersede(sb, transport: SupersedeTransport, old: dict, new: dict) -> dict:
         summary["description"] = "pointer added"
     privacy = next_privacy(old.get("privacy"))
     live = _s((current.get("status") or {}).get("privacyStatus")).lower()
-    if live == PRIVACY_PUBLIC and privacy == PRIVACY_UNLISTED:
+    if keep_privacy:
+        privacy = live or _s(old.get("privacy")).lower() or privacy
+        summary["privacy"] = f"{privacy} (kept)"
+    elif live == PRIVACY_PUBLIC and privacy == PRIVACY_UNLISTED:
         transport.set_privacy(old_id, dict(current.get("status") or {}), PRIVACY_UNLISTED)
         summary["privacy"] = f"{live} -> {PRIVACY_UNLISTED}"
     elif live:
@@ -206,7 +213,7 @@ def run_supersede_job(sb, job: dict, transport: Optional[SupersedeTransport] = N
         old, new = check_pair(sb, old, new)
         if transport is None:
             transport = default_transport(_s(old.get("channel_language")) or "en")
-        summary = supersede(sb, transport, old, new)
+        summary = supersede(sb, transport, old, new, keep_privacy=bool(params.get("keep_privacy")))
         db.set_stage(sb, job_id, summary)
         db.finish_job(sb, job_id)
         log.info("supersede job %s: %s", job_id, summary)
