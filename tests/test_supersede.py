@@ -123,6 +123,23 @@ class TestTheJob:
             old = next(r for r in sb.tables["topic_publications"] if r["id"] == "pub-old")
             assert old["superseded_by"] == "pub-new" and old["privacy"] == priv
 
+    def test_keep_privacy_points_and_records_but_leaves_the_video_public(self):
+        """founder, 2026-09-29: the old videos stay public for now; the
+        pointer and the row still happen, and the row records what YouTube
+        says rather than what the step would have done."""
+        sb = _sb()
+        yt = FakeVideos({"vid-old": {"snippet": {"title": "Cells", "description": OLD_DESC},
+                                     "status": {"privacyStatus": "public"}}})
+        job = next(j for j in sb.tables["jobs"] if j["id"] == "job-1")
+        job["params"]["keep_privacy"] = True
+        summary = S.run_supersede_job(sb, job, transport=yt)
+        assert yt.privacy_updates == [] and yt.videos["vid-old"]["status"]["privacyStatus"] == "public"
+        assert yt.snippet_updates and yt.snippet_updates[0][1]["description"].startswith(S.UPDATED_LINE_PREFIX)
+        assert summary["privacy"] == "public (kept)"
+        old = next(r for r in sb.tables["topic_publications"] if r["id"] == "pub-old")
+        assert old["superseded_by"] == "pub-new" and old["privacy"] == "public"
+        assert job["status"] == "done"
+
     def test_a_re_run_is_a_no_op(self):
         sb, yt = _sb(superseded_by="pub-new"), _yt("unlisted")
         out = S.run_supersede_job(sb, sb.tables["jobs"][0], transport=yt)
