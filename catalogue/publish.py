@@ -456,9 +456,11 @@ def build_srt(cues: list[dict]) -> str:
 # Secondary codes read ``7Bs.01`` (stage 7, Biology, structure), ``8ESc.02``
 # (Earth and space), ``9Ae.02`` (Algebra, expressions); CBSE content codes
 # read ``cbse:8:ALG:03``. Only the strands the channel has a playlist for
-# (or may have) are named; anything else classifies as "".
+# (or may have) are named; anything else classifies as "". Earth and space
+# (ES) is filed under physics: the channel has no Earth science playlist and
+# the founder put Weather and Climate in Physics by hand (2026-09-29).
 _STRAND_DISCIPLINE = {
-    "B": "biology", "C": "chemistry", "P": "physics", "ES": "earth science",
+    "B": "biology", "C": "chemistry", "P": "physics", "ES": "physics",
     "A": "algebra", "N": "number", "G": "geometry", "S": "statistics",
     "ALG": "algebra", "NUM": "number", "GEO": "geometry", "STA": "statistics",
 }

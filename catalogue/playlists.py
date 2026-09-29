@@ -20,9 +20,9 @@ founder's say-so (one ``youtube_playlists`` job in ``jobs``):
      discipline has a playlist to that playlist, skipping the ones already
      in it, and record the id on its ``playlist_ids``.
 
-A topic whose codes name no wanted discipline (Weather and Climate is Earth
-science) is REPORTED in the summary and left where it is: no video lands
-in a playlist by guesswork. Idempotent: a re-run creates nothing twice and
+A topic whose codes name no wanted discipline is REPORTED in the summary
+and left where it is: no video lands in a playlist by guesswork. (Earth
+and space codes file under physics — catalogue.publish._STRAND_DISCIPLINE.) Idempotent: a re-run creates nothing twice and
 adds nothing twice. One video's failure is recorded and the run goes on;
 the job then finishes with an error naming the failures, and a re-run
 picks up exactly the ones left.
