@@ -126,6 +126,9 @@ ARTIFACT_BUCKET = "artifacts"
 MAX_PARTS_ENV = "YOUTUBE_MAX_PARTS_PER_RUN"
 MAX_PARTS_DEFAULT = 5
 PLAYLISTS_ENV_PREFIX = "YOUTUBE_PLAYLISTS_"
+# platform_settings key holding the playlists the WORKER created itself
+# (catalogue/playlists.py): the env var wins on a key both name.
+PLAYLISTS_SETTINGS_PREFIX = "youtube_playlists_"
 REFRESH_TOKEN_ENV_PREFIX = "YOUTUBE_REFRESH_TOKEN_"
 CLIENT_ID_ENV = "YOUTUBE_CLIENT_ID"
 CLIENT_SECRET_ENV = "YOUTUBE_CLIENT_SECRET"
@@ -224,23 +227,52 @@ def playlists_env(language: str) -> str:
     return f"{PLAYLISTS_ENV_PREFIX}{_lang(language).upper()}"
 
 
-def configured_playlists(language: str) -> dict[str, str]:
-    """``YOUTUBE_PLAYLISTS_<LANG>``: a JSON object mapping a playlist KEY (a
-    subject, or a curriculum code) to its YouTube playlist id. Absent or
-    unparseable means "no playlists configured" — the channel does not exist
-    yet, and a publish must not fail for want of a playlist."""
+def playlists_settings_key(language: str) -> str:
+    return f"{PLAYLISTS_SETTINGS_PREFIX}{_lang(language)}"
+
+
+def _playlist_map(data: object) -> dict[str, str]:
+    if not isinstance(data, dict):
+        return {}
+    return {str(k).strip().lower(): str(v).strip() for k, v in data.items() if str(v or "").strip()}
+
+
+def stored_playlists(sb, language: str) -> dict[str, str]:
+    """The playlists the worker created on the channel itself (the
+    ``youtube_playlists`` job records them in platform_settings under
+    ``youtube_playlists_<lang>``: ``{"biology": "PL…", …}``). A missing or
+    malformed row is an empty map, never a failure."""
+    if sb is None:
+        return {}
+    try:
+        rows = _rows(sb.table("platform_settings").select("value")
+                     .eq("key", playlists_settings_key(language)).limit(1).execute())
+    except Exception as exc:  # noqa: BLE001
+        log.warning("publish: could not read %s: %s", playlists_settings_key(language), exc)
+        return {}
+    return _playlist_map((rows[0].get("value") if rows else None) or {})
+
+
+def configured_playlists(language: str, sb=None) -> dict[str, str]:
+    """The playlist KEY (a subject, a discipline, or a curriculum name) to
+    YouTube playlist id map: ``YOUTUBE_PLAYLISTS_<LANG>`` (a JSON object) over
+    what the worker recorded when it created playlists itself
+    (``stored_playlists``). Absent or unparseable means "no playlists
+    configured" — the channel does not exist yet, and a publish must not fail
+    for want of a playlist."""
+    out = stored_playlists(sb, language)
     raw = str(os.getenv(playlists_env(language), "") or "").strip()
     if not raw:
-        return {}
+        return out
     try:
         data = json.loads(raw)
     except ValueError as exc:
-        log.warning("publish: %s is not valid JSON (%s); no playlists this run", playlists_env(language), exc)
-        return {}
+        log.warning("publish: %s is not valid JSON (%s); ignored this run", playlists_env(language), exc)
+        return out
     if not isinstance(data, dict):
-        log.warning("publish: %s is not a JSON object; no playlists this run", playlists_env(language))
-        return {}
-    return {str(k).strip().lower(): str(v).strip() for k, v in data.items() if str(v or "").strip()}
+        log.warning("publish: %s is not a JSON object; ignored this run", playlists_env(language))
+        return out
+    return {**out, **_playlist_map(data)}
 
 
 # ── the pure parts ─────────────────────────────────────────────────────
@@ -420,15 +452,56 @@ def build_srt(cues: list[dict]) -> str:
     return "\n".join(out)
 
 
-def playlist_keys(topic: dict, header_lines: list[str]) -> list[str]:
-    """The playlist KEYS a video belongs in: the topic's subject, then one per
+# The discipline a curriculum code's strand letters name. Cambridge Lower
+# Secondary codes read ``7Bs.01`` (stage 7, Biology, structure), ``8ESc.02``
+# (Earth and space), ``9Ae.02`` (Algebra, expressions); CBSE content codes
+# read ``cbse:8:ALG:03``. Only the strands the channel has a playlist for
+# (or may have) are named; anything else classifies as "".
+_STRAND_DISCIPLINE = {
+    "B": "biology", "C": "chemistry", "P": "physics", "ES": "earth science",
+    "A": "algebra", "N": "number", "G": "geometry", "S": "statistics",
+    "ALG": "algebra", "NUM": "number", "GEO": "geometry", "STA": "statistics",
+}
+_CAMBRIDGE_CODE = re.compile(r"^\d+([A-Z]+)[a-z]*\.\d+$")
+_CBSE_CODE = re.compile(r"^cbse:\d+:([A-Z]+):", re.IGNORECASE)
+
+
+def code_discipline(code: object) -> str:
+    """One code's discipline (``"biology"``, ``"algebra"`` …) or ``""``."""
+    text = _s(code)
+    m = _CAMBRIDGE_CODE.match(text) or _CBSE_CODE.match(text)
+    if not m:
+        return ""
+    return _STRAND_DISCIPLINE.get(m.group(1).upper(), "")
+
+
+def discipline_key(codes: Iterable[object]) -> str:
+    """The discipline MOST of a topic's mapped codes name; a tie goes to the
+    first code in mapping order (States of Matter maps 7Cm.06 then 8Pf.07 and
+    is chemistry). ``""`` when no code names one, so a topic never lands in
+    a playlist by guesswork."""
+    votes: dict[str, int] = {}
+    for code in codes or []:
+        d = code_discipline(code)
+        if d:
+            votes[d] = votes.get(d, 0) + 1
+    if not votes:
+        return ""
+    return max(votes, key=lambda d: (votes[d], -list(votes).index(d)))
+
+
+def playlist_keys(topic: dict, header_lines: list[str], codes: Iterable[object] = ()) -> list[str]:
+    """The playlist KEYS a video belongs in: the topic's subject, the
+    discipline its curriculum codes name (``discipline_key``), then one per
     mapped curriculum (the header line's leading name, lowercased). Keys, not
-    ids — the ids live in ``YOUTUBE_PLAYLISTS_<LANG>``, because a channel id
-    is configuration and never belongs in a table the app can write."""
+    ids — the ids come from ``configured_playlists``."""
     keys: list[str] = []
     subject = _s(topic.get("subject")).lower()
     if subject:
         keys.append(subject)
+    discipline = discipline_key(codes)
+    if discipline and discipline not in keys:
+        keys.append(discipline)
     for line in (header_lines or []):
         name = _s(str(line).split("·")[0]).lower()
         if name and name not in keys:
@@ -692,6 +765,8 @@ class Target:
     # topic_kits.youtube_meta, cleaned: the words the reviewer saw (or edited)
     # in the library. None means every block takes its deterministic default.
     meta: Optional[dict] = None
+    # the mapped curriculum codes in mapping order — the discipline playlist
+    codes: list[str] = field(default_factory=list)
 
 
 def check_privacy(requested: object) -> str:
@@ -772,7 +847,7 @@ def load_target(sb, params: dict) -> Target:
     mappings = load_mappings(sb, _s(kit.get("topic_id")))
     return Target(kit=kit, topic=topic, article=article, language=language, privacy=privacy,
                   header_lines=_header_lines(mappings), parts=parts, boards=boards_of(mappings),
-                  meta=clean_meta(kit.get("youtube_meta")))
+                  meta=clean_meta(kit.get("youtube_meta")), codes=[m.code for m in mappings if m.code])
 
 
 # ── the thumbnail (local, no image quota) ──────────────────────────────
@@ -920,8 +995,8 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
         notes.append(f"thumbnail failed ({type(exc).__name__}: {exc})")
         log.warning("publish: kit %s part %d thumbnail failed: %s", kit.get("id"), idx, exc)
 
-    ids, unconfigured = resolve_playlists(playlist_keys(topic, target.header_lines),
-                                          configured_playlists(target.language))
+    ids, unconfigured = resolve_playlists(playlist_keys(topic, target.header_lines, target.codes),
+                                          configured_playlists(target.language, sb))
     for pid in ids:
         try:
             transport.add_to_playlist(video_id, pid)
@@ -1092,7 +1167,8 @@ __all__ = [
     "PUBLISH_MAX_WAIT_ENV", "PUBLISH_MAX_WAIT_DEFAULT", "max_publish_wait", "TITLE_MAX",
     "DESCRIPTION_MAX", "MIN_CHAPTERS", "LINK_BASE", "PublishRefused", "Credentials", "Target",
     "YouTubeTransport", "publish_enabled", "audit_passed", "max_parts_per_run", "refresh_token_env",
-    "playlists_env", "configured_playlists", "part_number", "script_part_number", "ordered_parts", "hhmmss",
+    "playlists_env", "playlists_settings_key", "stored_playlists", "configured_playlists",
+    "code_discipline", "discipline_key", "part_number", "script_part_number", "ordered_parts", "hhmmss",
     "chapters_of", "chapter_lines", "topic_link", "build_title", "build_description", "srt_time",
     "caption_cues", "build_srt", "playlist_keys", "resolve_playlists", "read_credentials",
     "default_transport", "load_kit", "load_topic", "load_article", "load_artifacts", "load_publications",

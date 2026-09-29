@@ -42,6 +42,7 @@ UNIQUE = {
     "article_figures": lambda r: (r.get("article_id"), r.get("figure_key")),
     "topic_questions": lambda r: (r.get("topic_id"), r.get("language"), r.get("content_hash")),
     "topic_publications": lambda r: (r.get("topic_kit_id"), r.get("part"), r.get("channel_language")),
+    "platform_settings": lambda r: (r.get("key"),),
 }
 
 
