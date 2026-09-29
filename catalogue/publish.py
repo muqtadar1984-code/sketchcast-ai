@@ -955,9 +955,19 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
                   if idx < total else None)
     description = build_description(topic, target.header_lines, chapters_of(kit.get("chapters"), idx),
                                     idx, total, next_title=next_title, meta=target.meta, boards=target.boards)
+    # the discipline playlist line, the board and class hashtags and the
+    # tags field (catalogue/youtube_enrich.py) — the same words the enrich
+    # job puts on the videos already posted
+    from catalogue.youtube_enrich import enrich_description, video_tags
+
+    playlists = configured_playlists(target.language, sb)
+    discipline = discipline_key(target.codes)
+    description = enrich_description(description, discipline=discipline, subject=topic.get("subject"),
+                                     boards=target.boards, playlist_id=_s(playlists.get(discipline)))
+    tags = video_tags(topic_title=topic.get("title"), key_terms=terms, discipline=discipline,
+                      subject=topic.get("subject"), boards=target.boards)
     video_id = _s(transport.upload_video(local, title=title, description=description,
-                                         privacy=target.privacy, language=target.language,
-                                         tags=[t for t in [clean_heading(topic.get("subject"))] if t]))
+                                         privacy=target.privacy, language=target.language, tags=tags))
     if not video_id:
         raise RuntimeError(f"part {idx}: the upload returned no video id")
     log.info("publish: kit %s part %d uploaded as %s (%s)", kit.get("id"), idx, video_id, target.privacy)
@@ -997,8 +1007,7 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
         notes.append(f"thumbnail failed ({type(exc).__name__}: {exc})")
         log.warning("publish: kit %s part %d thumbnail failed: %s", kit.get("id"), idx, exc)
 
-    ids, unconfigured = resolve_playlists(playlist_keys(topic, target.header_lines, target.codes),
-                                          configured_playlists(target.language, sb))
+    ids, unconfigured = resolve_playlists(playlist_keys(topic, target.header_lines, target.codes), playlists)
     for pid in ids:
         try:
             transport.add_to_playlist(video_id, pid)
