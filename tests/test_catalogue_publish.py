@@ -305,7 +305,11 @@ def test_the_stored_words_win_the_title_the_intro_the_terms_and_the_tags():
     blocks = up["description"].split("\n\n")
     assert blocks[0] == "What is a cell? A teacher and a student work through it."
     assert "Key terms: cell membrane, nucleus." in blocks
-    assert blocks[-1] == "#Cells #SketchCast"
+    # the reviewer's hashtags stay first; the discipline, board and form
+    # hashtags follow them (catalogue/youtube_enrich.py)
+    assert blocks[-1].startswith("#Cells #SketchCast #Biology")
+    assert "#Stage7Biology" in blocks[-1] and "More Biology lessons" not in up["description"], "no playlist configured"
+    assert up["tags"][:4] == ["Cells", "cell membrane", "nucleus", "Biology"] and "Cambridge Stage 7 Biology" in up["tags"]
     assert "Every living thing is made of cells." not in up["description"]
 
 

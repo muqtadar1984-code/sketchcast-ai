@@ -97,7 +97,8 @@ DOC_JOB_TYPES = ["lesson_plan", "activity", "worksheet", "exam_paper", "case_stu
 OBSERVER_JOB_TYPES = ["support_diagnose", "topic_harvest", "topic_derive", "topic_article", "figure_render",
                       "topic_questions", "topic_publish"]
 CATALOGUE_JOB_TYPES = ["topic_harvest", "topic_derive", "topic_article", "figure_render", "topic_questions",
-                       "topic_publish", "topic_supersede", "youtube_playlists"]  # the last lane
+                       "topic_publish", "topic_supersede", "youtube_playlists",
+                       "youtube_enrich"]  # the last lane
 
 
 def _claim_catalogue_generation(sb):
@@ -560,6 +561,10 @@ def run_once(sb) -> bool:
             from catalogue.playlists import run_playlists_job
 
             run_playlists_job(sb, job)  # self-contained: finishes its own row, done or error
+        elif job_type == "youtube_enrich":
+            from catalogue.youtube_enrich import run_enrich_job
+
+            run_enrich_job(sb, job)  # self-contained: finishes its own row, done or error
         else:
             process_generation(sb, job, gen_id)
     except db.DeferredJob as exc:
