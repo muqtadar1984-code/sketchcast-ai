@@ -54,8 +54,9 @@ TOPICS = {
     "Structure of the Atom": (["8Cm.01", "8Cm.02"], "vid-atom"),
     "Forces and Motion": (["8Pf.03", "8Pf.04"], "vid-forces"),
     "States of Matter": (["7Cm.06", "8Pf.07"], "vid-matter"),
-    "Weather and Climate": (["8ESc.01", "9ESc.02"], "vid-weather"),
+    "Weather and Climate": (["8ESc.01", "9ESc.02"], "vid-weather"),   # Earth science files under physics
     "Expanding Brackets": (["9Ae.02", "cbse:8:ALG:02"], "vid-brackets"),
+    "Rocks and Fossils": (["cbse:9:U2:01"], "vid-rocks"),               # no code names a discipline
 }
 
 
@@ -95,7 +96,7 @@ def _pub(sb, i):
 
 class TestTheDiscipline:
     @pytest.mark.parametrize("code,want", [
-        ("7Bs.01", "biology"), ("8Cm.02", "chemistry"), ("9Pf.05", "physics"), ("8ESc.01", "earth science"),
+        ("7Bs.01", "biology"), ("8Cm.02", "chemistry"), ("9Pf.05", "physics"), ("8ESc.01", "physics"),
         ("9Ae.02", "algebra"), ("7As.04", "algebra"), ("8Ni.01", "number"), ("cbse:8:ALG:03", "algebra"),
         ("cbse:9:U2:01", ""), ("", ""), ("Class 9 · Cells", ""),
     ])
@@ -148,12 +149,13 @@ class TestTheJob:
         assert all(c["privacy"] == "public" and c["language"] == "en" for c in yt.created)
         assert sorted(yt.adds) == sorted([("vid-cells", "PL-biology"), ("vid-atom", "PL-chemistry"),
                                           ("vid-forces", "PL-physics"), ("vid-matter", "PL-chemistry"),
-                                          ("vid-brackets", "PL-algebra")])
-        assert [u["title"] for u in summary["unplaced"]] == ["Weather and Climate"]
-        assert summary["unplaced"][0]["discipline"] == "earth science"
-        assert summary["counts"] == {"placed": 5, "already": 0, "unplaced": 1, "failed": 0}
+                                          ("vid-weather", "PL-physics"), ("vid-brackets", "PL-algebra")])
+        assert [u["title"] for u in summary["unplaced"]] == ["Rocks and Fossils"]
+        assert summary["unplaced"][0]["discipline"] == ""
+        assert summary["counts"] == {"placed": 6, "already": 0, "unplaced": 1, "failed": 0}
         assert _pub(sb, 1)["playlist_ids"] == ["PL-biology"]
-        assert _pub(sb, 5)["playlist_ids"] == [], "no video lands in a playlist by guesswork"
+        assert _pub(sb, 5)["playlist_ids"] == ["PL-physics"], "Earth science files under physics"
+        assert _pub(sb, 7)["playlist_ids"] == [], "no video lands in a playlist by guesswork"
         stored = next(r for r in sb.tables["platform_settings"] if r["key"] == "youtube_playlists_en")
         assert stored["value"] == {"biology": "PL-biology", "chemistry": "PL-chemistry",
                                    "physics": "PL-physics", "algebra": "PL-algebra"}
@@ -170,7 +172,7 @@ class TestTheJob:
         _job(sb)["status"] = "processing"
         summary = PL.run_playlists_job(sb, _job(sb), transport=yt)
         assert len(yt.created) == 4 and yt.adds == adds
-        assert summary["counts"] == {"placed": 0, "already": 5, "unplaced": 1, "failed": 0}
+        assert summary["counts"] == {"placed": 0, "already": 6, "unplaced": 1, "failed": 0}
         assert _pub(sb, 1)["playlist_ids"] == ["PL-biology"]
 
     def test_an_existing_playlist_of_that_title_is_reused_and_a_configured_id_wins(self, monkeypatch):
@@ -200,14 +202,14 @@ class TestTheJob:
         sb = _sb()
         yt = FakePlaylists(fail_adds={"vid-atom"})
         summary = PL.run_playlists_job(sb, _job(sb), transport=yt)
-        assert summary["counts"]["failed"] == 1 and summary["counts"]["placed"] == 4
+        assert summary["counts"]["failed"] == 1 and summary["counts"]["placed"] == 5
         job = _job(sb)
         assert job["status"] == "error" and "Structure of the Atom" in job["error"] and "videoNotFound" in job["error"]
         assert _pub(sb, 2)["playlist_ids"] == []
         yt.fail_adds.clear()
         job["status"] = "processing"
         summary = PL.run_playlists_job(sb, _job(sb), transport=yt)
-        assert summary["counts"] == {"placed": 1, "already": 4, "unplaced": 1, "failed": 0}
+        assert summary["counts"] == {"placed": 1, "already": 5, "unplaced": 1, "failed": 0}
         assert _pub(sb, 2)["playlist_ids"] == ["PL-chemistry"] and _job(sb)["status"] == "done"
 
     def test_a_subset_of_playlists_and_an_unknown_key(self):
@@ -217,7 +219,7 @@ class TestTheJob:
         summary = PL.run_playlists_job(sb, _job(sb), transport=yt)
         assert [c["title"] for c in yt.created] == ["Algebra"]
         assert yt.adds == [("vid-brackets", "PL-algebra")]
-        assert summary["counts"]["unplaced"] == 5
+        assert summary["counts"]["unplaced"] == 6
         _job(sb)["params"] = {"playlists": ["geology"]}
         _job(sb)["status"] = "processing"
         assert PL.run_playlists_job(sb, _job(sb), transport=FakePlaylists()) is None
