@@ -784,14 +784,6 @@ def _serve(sb, stale_min: int, reap_every: float = 60, grace: float | None = Non
             maybe_backfill(sb)
         except Exception as exc:  # noqa: BLE001
             log.error("YouTube CTA backfill tick error: %s", exc)
-        # Once per boot, only while COLOUR_CALIBRATION_SAMPLE is set: a sample
-        # of the ink library to the calibration scratch table
-        # (tools/colour_calibration_sample.py). Dark otherwise.
-        try:
-            from tools.colour_calibration_sample import maybe_ship
-            maybe_ship(sb)
-        except Exception as exc:  # noqa: BLE001
-            log.error("colour calibration sample tick error: %s", exc)
         # So does the website-traffic poll (catalogue/cloudflare_stats.py):
         # Cloudflare's daily figures for sketchcast.app, hourly, dark
         # without CLOUDFLARE_API_TOKEN / CLOUDFLARE_ZONE_ID.
