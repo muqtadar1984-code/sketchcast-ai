@@ -947,19 +947,37 @@ def reset_deferrals() -> None:
         b["abandoned"].clear()
 
 
+def defer_key(key: str) -> str:
+    """The deferral identity of a PICTURE: its canonical key without the
+    colour suffix. A 429 is the provider's answer about the picture, not
+    about its colour variant (the ink fallback for the same key is refused
+    just the same), and the callers disagree about which spelling they hold:
+    the fetch files the refusal under the colour key it generated, while the
+    image gate (asset_warm.missing_pictures, video_composer's warm fetch)
+    asks about the plain key the plan named. canonical_key tokenises the
+    suffix into a word, so the two never met: on 2026-09-29 eleven catalogue
+    re-runs failed as "generation_failed" on pictures whose own log line
+    read "rate-limited; deferring it for 45s", and the gate gave each one
+    five seconds instead of the wait it had earned."""
+    k = str(key or "")
+    if is_colour_key(k):
+        k = k[:-len(COLOUR_KEY_SUFFIX)]
+    return canonical_key(k)
+
+
 def defer_asset(key: str, retry_after: float | None = None) -> float:
     """Do not attempt this key again for a while. Returns the seconds."""
     wait = float(retry_after) if retry_after else float(
         _env_int("IMAGE_DEFER_SECONDS", 45))
     wait = min(max(wait, 1.0), _DEFER_CAP)
     with _IMAGE_BUDGET_LOCK:
-        _bucket()["deferred"][canonical_key(key)] = _now() + wait
+        _bucket()["deferred"][defer_key(key)] = _now() + wait
     return wait
 
 
 def asset_deferred(key: str) -> float | None:
     """Seconds still to wait for this key, or None if it may be tried now."""
-    ck = canonical_key(key)
+    ck = defer_key(key)
     with _IMAGE_BUDGET_LOCK:
         deferred = _bucket()["deferred"]
         until = deferred.get(ck)
@@ -977,12 +995,12 @@ def abandon_asset(key: str) -> None:
     another attempt would NOT fix -- a rate limit is a deferral, never this:
     the burst that cost fa8c0d7d its ciliated cell cleared 14 seconds later."""
     with _IMAGE_BUDGET_LOCK:
-        _bucket()["abandoned"].add(canonical_key(key))
+        _bucket()["abandoned"].add(defer_key(key))
 
 
 def asset_abandoned(key: str) -> bool:
     with _IMAGE_BUDGET_LOCK:
-        return canonical_key(key) in _bucket()["abandoned"]
+        return defer_key(key) in _bucket()["abandoned"]
 
 
 def deferral_state() -> dict:
@@ -2530,7 +2548,7 @@ def make_resolver(prompts: dict[str, str], prefer_ai: bool = True,
     """
     from .vector_assets import placeholder_asset, vector_asset
 
-    _rate_limited = {canonical_key(k) for k in (rate_limited_keys or ())}
+    _rate_limited = {defer_key(k) for k in (rate_limited_keys or ())}
 
     # SVG art is behind a flag until its visual quality matches the raster
     # tier (its drawing MECHANICS are already better: true strokes, layers)
@@ -2563,7 +2581,7 @@ def make_resolver(prompts: dict[str, str], prefer_ai: bool = True,
                 # the child-process path: it may only read the cache, so a
                 # miss here means the parent's warm-up did not land the file
                 # -- unless the parent already told us the provider refused it
-                reason = ("rate_limited" if canonical_key(key) in _rate_limited
+                reason = ("rate_limited" if defer_key(key) in _rate_limited
                           else "cache_only_miss")
             elif asset_abandoned(key) or asset_deferred(key) is not None:
                 # the honest cause: a rate limit we chose to wait out, not a
