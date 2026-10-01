@@ -94,8 +94,8 @@ DOC_JOB_TYPES = ["lesson_plan", "activity", "worksheet", "exam_paper", "case_stu
 # Supabase egress out and up to YouTube, which is bandwidth a teacher's render
 # wants — so it takes the last lane too, and re-checks builder_queued between
 # parts the way figure_render does before every generation.
-OBSERVER_JOB_TYPES = ["support_diagnose", "topic_harvest", "topic_derive", "topic_article", "figure_render",
-                      "topic_questions", "topic_publish"]
+OBSERVER_JOB_TYPES = ["support_diagnose", "issue_resolve", "topic_harvest", "topic_derive", "topic_article",
+                      "figure_render", "topic_questions", "topic_publish"]
 CATALOGUE_JOB_TYPES = ["topic_harvest", "topic_derive", "topic_article", "figure_render", "topic_questions",
                        "topic_publish", "topic_supersede", "youtube_playlists",
                        "youtube_enrich"]  # the last lane
@@ -498,7 +498,7 @@ def run_once(sb) -> bool:
     # catalogue=False on the user lanes: a kit's rows are the same builder
     # TYPES as a teacher's, and only the flag tells them apart.
     job = (
-        db.claim_next_job(sb, job_type="support_diagnose", catalogue=False)
+        db.claim_next_job(sb, job_type=["support_diagnose", "issue_resolve"], catalogue=False)
         or db.claim_next_job(sb, job_type=DOC_JOB_TYPES, catalogue=False)
         or db.claim_next_job(sb, exclude_types=_user_builder_exclusions(), catalogue=False)  # every user builder, videos capped
         or db.claim_next_job(sb, job_type=CATALOGUE_JOB_TYPES)      # harvest / derive / …: only when nothing else waits
@@ -529,6 +529,10 @@ def run_once(sb) -> bool:
 
             run_support_job(sb, job)
             db.finish_job(sb, job["id"])
+        elif job_type == "issue_resolve":
+            from support_agent.resolve import run_issue_resolve_job
+
+            run_issue_resolve_job(sb, job)  # self-contained: finishes its own row, done or error
         elif job_type == "topic_harvest":
             from catalogue.harvest import run_harvest_job
 
@@ -641,7 +645,7 @@ def run_once(sb) -> bool:
         # A catalogue kit's failure is the reviewer's, in the portal (the kit
         # row goes 'failed' with the reason): filing a console issue under
         # the system account would only spend a diagnosis call on nobody.
-        if (_support_agent_enabled() and job_type not in ("support_diagnose", "index_book", *CATALOGUE_JOB_TYPES)
+        if (_support_agent_enabled() and job_type not in ("support_diagnose", "issue_resolve", "index_book", *CATALOGUE_JOB_TYPES)
                 and not _is_catalogue_job(job)):
             _auto_file_support_issue(sb, job, str(exc))
     finally:

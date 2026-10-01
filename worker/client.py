@@ -59,7 +59,7 @@ def admin() -> Client:
 # artifacts and writes topic_publications; the generation it reads from was
 # built, approved and finished long before, so relabelling it would overwrite
 # a reviewer's verdict with an upload's lifecycle.
-OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "topic_harvest", "topic_derive", "topic_article",
+OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "issue_resolve", "topic_harvest", "topic_derive", "topic_article",
                                 "figure_render", "topic_questions", "topic_publish", "topic_supersede",
                                 "youtube_playlists", "youtube_enrich"})
 
