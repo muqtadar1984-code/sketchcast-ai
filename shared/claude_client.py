@@ -809,6 +809,117 @@ def _drop_superfluous_closers(text: str):
     return "".join(out)
 
 
+def _drop_closers_before_an_element(text: str):
+    """Closers the model wrote one or two too many of at a CHAPTER BOUNDARY,
+    just before the next element of the array it was in.
+
+    Measured four times in a row on one teacher's Arabic history lesson
+    (gens f45fdc92 and b76badb6, 2026-10-01; 18,664–26,888 chars, never
+    truncated), the script path's re-ask included:
+        …"cue":"يكشف أسباب التغيرات عبر الزمن"}]}]}},{"id":"chapter_2",…
+        …"cue":"يفسّر حركة المجتمعات"}]}]}]},{"id":"chapter_2",…
+    After the chapter's own `}` the model closed once more — a `}` with the
+    chapters ARRAY still open, or a well-formed `]}` that shut the array and
+    the plan — and then went on writing chapter_2 as the next array element.
+
+    The three neighbours cannot reach it. _rebalance_json inserts closers;
+    _substitute_closers swaps the mis-nested `}` for `]`, which shuts the
+    chapters array and strands chapter_2 in the plan object; and
+    _drop_superfluous_closers fires only where a KEY follows the comma.
+
+    Decidable, not guessed. The thing after the run of closers is `,` and
+    then `{` or `[` — an ELEMENT, which is valid only inside an array. So
+    among the closers in the run, the ones to keep are the longest prefix
+    that leaves an ARRAY as the open container (the fewest dropped — the
+    reading nearest the text); the rest cannot be right under any reading.
+    A run that already leaves an array open is left alone (that is just
+    valid JSON), and a mis-nested closer that is not followed by an element
+    belongs to _substitute_closers as before. Same severed-tail refusal as
+    its neighbours.
+
+    Returns the corrected source, or None when nothing was dropped, the text
+    was truncated, or the shape belongs to another rule.
+    """
+    out, stack = [], []
+    ins = esc = dropped = False
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if esc:
+            out.append(c); esc = False; i += 1
+            continue
+        if ins:
+            out.append(c)
+            if c == "\\":
+                esc = True
+            elif c == '"':
+                ins = False
+            i += 1
+            continue
+        if c == '"':
+            ins = True; out.append(c); i += 1
+            continue
+        if c in "{[":
+            stack.append(c); out.append(c); i += 1
+            continue
+        if c not in "}]":
+            out.append(c); i += 1
+            continue
+        # the maximal run of closers (whitespace between them allowed)
+        j, run = i, []
+        while j < n and (text[j] in "}]" or text[j] in " \t\r\n"):
+            if text[j] in "}]":
+                run.append((j, text[j]))
+            j += 1
+        k = j
+        element_follows = False
+        if k < n and text[k] == ",":
+            k += 1
+            while k < n and text[k] in " \t\r\n":
+                k += 1
+            element_follows = k < n and text[k] in "{["
+        if not element_follows:
+            # not this rule's shape: emit the run's first closer the plain way
+            want = "{" if c == "}" else "["
+            if not stack or stack[-1] != want:
+                return None       # mis-nested with no element behind it: _substitute_closers' shape
+            stack.pop(); out.append(c); i += 1
+            continue
+        # keep the longest prefix of matched closers that leaves an array open
+        keep, depth = 0, list(stack)
+        best = 0 if (depth and depth[-1] == "[") else None
+        for idx, (_pos, ch) in enumerate(run, start=1):
+            want = "{" if ch == "}" else "["
+            if not depth or depth[-1] != want:
+                break
+            depth.pop()
+            if depth and depth[-1] == "[":
+                best = idx
+        if best is None or best == len(run):
+            # no array to return into, or the run is already right: leave
+            # the whole run to the plain walk (nothing of ours to drop)
+            want = "{" if c == "}" else "["
+            if not stack or stack[-1] != want:
+                return None
+            stack.pop(); out.append(c); i += 1
+            continue
+        for idx, (pos, ch) in enumerate(run, start=1):
+            if idx <= best:
+                stack.pop(); out.append(ch)
+            else:
+                dropped = True
+        out.append(text[j - 1] if j > 0 and text[j - 1] in " \t\r\n" else "")
+        i = j
+    if ins or esc or not dropped:
+        return None
+    tail = "".join(out).rstrip()
+    if not tail or tail[-1] in ",:":
+        return None          # a value was severed — leave the failure loud
+    while stack:
+        out.append("]" if stack.pop() == "[" else "}")
+    return "".join(out)
+
+
 def _repair_json(text: str):
     """Salvage a reply that is COMPLETE but slightly malformed.
 
@@ -970,6 +1081,14 @@ def _repair_json(text: str):
         surplus = _drop_superfluous_closers(src)
         if surplus:
             candidates.append(surplus)
+        # 3. and the FOURTH: closers one too many at a chapter boundary with
+        #    the next ELEMENT right behind them (four Arabic replies in a row,
+        #    2026-10-01) — a mis-nested `}` the substitution reading turns into
+        #    the wrong `]`, or a well-formed `]}` the surplus reading cannot
+        #    see because no key follows.
+        before_element = _drop_closers_before_an_element(src)
+        if before_element:
+            candidates.append(before_element)
     # 3. a stray closer sits at the very end of an otherwise good reply, so
     #    walk the tail back — but ONLY over structural punctuation. Trimming
     #    CONTENT would turn a genuinely truncated reply into a plausible,

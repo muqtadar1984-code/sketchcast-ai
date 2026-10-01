@@ -462,3 +462,76 @@ class TestStrayQuoteBeforeAnObject:
         out = X(legit)
         assert out["segments"][0]["text"] == "{" and out["segments"][0]["slide_points"] == ["{", "[x]"]
         assert _repair_json(legit) == json.loads(legit)
+
+
+class TestClosersBeforeAnElement:
+    """Four replies in a row on one teacher's Arabic history lesson (gens
+    f45fdc92 and b76badb6, 2026-10-01) closed chapter_1 once too often and
+    then went on writing chapter_2 as the next element of the chapters array:
+
+        …"cue":"يكشف أسباب التغيرات عبر الزمن"}]}]}},{"id":"chapter_2",…
+        …"cue":"يفسّر حركة المجتمعات"}]}]}]},{"id":"chapter_2",…
+
+    Neither was truncated; the re-ask produced the same slip; the lesson died.
+    """
+
+    HEAD = ('{"segments":[{"type":"hook","text":"","elevenlabs_text":"",'
+            '"dialogue":[{"who":"teacher","line":"تخيّل معي لحظةً واحدة"}]}],'
+            '"visual_plan":{"chapters":[')
+    CH1 = ('{"id":"chapter_1","concept":"history_vision","transition":"clear_and_redraw",'
+           '"assets":{"history_vision_triangle":"A triangle"},"semantic_regions":["triangle_body"],'
+           '"elements":[{"id":"tri","type":"illustration","asset":"history_vision_triangle","role":"root_visual"}],'
+           '"steps":[{"segment":1,"decision":"EXTEND","reason":"The picture first.",'
+           '"actions":[{"verb":"HIGHLIGHT","target":{"asset":"history_vision_triangle","region":"triangle_body"},'
+           '"cue":"يكشف أسباب التغيرات عبر الزمن"}]}]}')
+    CH2 = ('{"id":"chapter_2","concept":"historian_tools","transition":"clear_and_redraw",'
+           '"assets":{"historian_tools_flow":"Four distinct tools"},"semantic_regions":["tools"],'
+           '"elements":[],"steps":[{"segment":2,"decision":"CONTINUE","reason":"Words do the work.","actions":[]}]}')
+    GOOD = HEAD + CH1 + "," + CH2 + "]}}"
+    EXTRA_BRACE = HEAD + CH1 + "}," + CH2 + "]}}"        # the first three replies
+    EXTRA_PAIR = HEAD + CH1 + "]}," + CH2 + "]}}"        # the fourth
+
+    def test_the_control_parses(self):
+        assert json.loads(self.GOOD)["visual_plan"]["chapters"][1]["id"] == "chapter_2"
+
+    @pytest.mark.parametrize("bad", [EXTRA_BRACE, EXTRA_PAIR], ids=["extra }", "extra ]}"])
+    def test_the_measured_shapes_yield_both_chapters_intact(self, bad):
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(bad)
+        out = X(bad)
+        assert ok(out)
+        chapters = out["visual_plan"]["chapters"]
+        assert [c["id"] for c in chapters] == ["chapter_1", "chapter_2"]
+        assert chapters[0]["steps"][0]["actions"][0]["cue"] == "يكشف أسباب التغيرات عبر الزمن"
+        assert chapters[1]["assets"]["historian_tools_flow"] == "Four distinct tools"
+        assert out == json.loads(self.GOOD), "the repair is exactly the reply with the surplus closers gone"
+
+    def test_the_neighbouring_rules_cannot_reach_it(self):
+        """Pins WHY a fifth rule exists: the substitution reading turns the
+        mis-nested `}` into `]` and strands chapter_2 in the plan object; the
+        surplus reading sees no key after the comma; the omission reading
+        only inserts."""
+        from shared.claude_client import (_drop_superfluous_closers, _rebalance_json,
+                                          _substitute_closers)
+        for bad in (self.EXTRA_BRACE, self.EXTRA_PAIR):
+            for rule in (_rebalance_json, _substitute_closers, _drop_superfluous_closers):
+                out = rule(bad)
+                if out is None:
+                    continue
+                with pytest.raises(json.JSONDecodeError):
+                    json.loads(out, strict=False)
+
+    def test_it_fires_only_where_an_element_follows_and_an_array_is_open(self):
+        from shared.claude_client import _drop_closers_before_an_element as D
+        assert D(self.GOOD) is None, "valid JSON: nothing to drop"
+        assert D('{"a": [{"b": 1}, {"c": 2}]}') is None, "a closer returning into an array is ordinary"
+        assert D('{"a": {"b": 1}}, "c": 2}') is None, "a KEY after the comma is _drop_superfluous_closers' shape"
+        assert D('{"a": [1, 2}, "b": 3') is None, "a mis-nested closer with no element behind it is _substitute_closers' shape"
+        assert D('{"a": [{"b": 1}}, {"c":') is None, "a severed tail stays loud"
+        assert D('{"a": [{"b": 1}}, {"c": 2}]}') == '{"a": [{"b": 1}, {"c": 2}]}'
+
+    def test_valid_json_is_untouched(self):
+        payload = {"segments": [{"type": "hook"}],
+                   "visual_plan": {"chapters": [{"id": "c1", "steps": [{"actions": [{"cue": "x"}]}]},
+                                                {"id": "c2", "steps": []}]}}
+        assert X(json.dumps(payload)) == payload
