@@ -173,7 +173,10 @@ def test_scope_no_content_refused():
 # ── regeneration guards ───────────────────────────────────────────────────────
 _GEN = {"id": "g1", "owner_id": "u1", "book_id": "b1", "chapter_ref": "3",
         "kind": "presentation", "school_id": None, "params": {}, "status": "error"}
-_BOOK = {"id": "b1", "owner_id": "u1", "storage_path": "x", "chapters": [{"num": 0}], "title": "T", "status": "ready"}
+# two chapters: the re-split path is for books that HAVE a split to get wrong
+_BOOK = {"id": "b1", "owner_id": "u1", "storage_path": "x", "chapters": [{"num": 0}, {"num": 1}], "title": "T",
+         "status": "ready"}
+_ONE_CHAPTER_BOOK = {**_BOOK, "chapters": [{"num": 0, "title": "pythagoras theorem"}], "title": "pythagoras theorem"}
 _ISSUE = {"id": "i1", "reporter_id": "u1"}
 _HIGH = {"confidence": 0.9}
 
@@ -734,3 +737,70 @@ def test_a_refused_retry_escalates_and_does_not_claim_a_fix(monkeypatch):
     sb, mails = _drive(monkeypatch, "retry_transient", outcome="retry_cap_reached")
     assert mails == []
     assert any(t == "platform_issues" and r.get("agent_action") == "escalated" for t, r in sb.updates)
+
+
+# ── a one-chapter book: the file is the chapter ───────────────────────────────
+
+def test_a_one_chapter_book_that_reads_as_another_subject_is_a_content_mismatch_not_a_reindex(monkeypatch):
+    """2026-10-02: "pythagoras theorem" / Breast.pptx. One chapter has no split
+    to get wrong; the agent must not re-index, must not touch the book, and
+    must hand back the fact it already holds."""
+    sb = _RegenSB({"platform_issues": []}, assigned=False)
+    called = []
+    monkeypatch.setattr("worker.process.index_book", lambda *a, **k: called.append(1))
+    monkeypatch.setattr("support_agent.bundle._chapter_source_text",
+                        lambda sb, book, ref, tmp: ("slides about breast anatomy", {"stored_chapter": {"title": "pythagoras theorem"}}))
+    monkeypatch.setattr("agent1_ingestion.chapter_check.verify_chapter_content",
+                        lambda title, text, client: (False, "breast anatomy and clinical surgery"))
+    out = actions.reindex_and_regenerate(sb, _ISSUE, _GEN, _ONE_CHAPTER_BOOK, _HIGH, client=None, job_id="j1")
+    assert out["action"] == "content_mismatch"
+    assert out["actual"] == "breast anatomy and clinical surgery" and out["title"] == "pythagoras theorem"
+    assert not called, "nothing to re-split"
+    assert not sb.inserts and not [t for t, _ in sb.updates if t == "books"], "the book is untouched"
+
+
+def test_a_one_chapter_book_that_reads_as_its_title_is_not_a_split_problem(monkeypatch):
+    sb = _RegenSB({"platform_issues": []}, assigned=False)
+    called = []
+    monkeypatch.setattr("worker.process.index_book", lambda *a, **k: called.append(1))
+    monkeypatch.setattr("support_agent.bundle._chapter_source_text",
+                        lambda sb, book, ref, tmp: ("right-angled triangles", {"stored_chapter": {"title": "pythagoras theorem"}}))
+    monkeypatch.setattr("agent1_ingestion.chapter_check.verify_chapter_content", lambda title, text, client: (True, ""))
+    out = actions.reindex_and_regenerate(sb, _ISSUE, _GEN, _ONE_CHAPTER_BOOK, _HIGH, client=None, job_id="j1")
+    assert out["action"] == "regen_blocked_single_chapter" and not called and not sb.inserts
+
+
+class _AgentSBWithBook(_AgentSB):
+    def table(self, name):
+        q = _Q(self, name)
+        if name == "generations":
+            q.execute = lambda: SimpleNamespace(data=self._gen)  # type: ignore[method-assign]
+        elif name == "books":
+            q.execute = lambda: SimpleNamespace(data=_ONE_CHAPTER_BOOK)  # type: ignore[method-assign]
+        return q
+
+
+def test_a_content_mismatch_resolves_as_a_user_fix_and_tells_the_owner_what_the_file_is(monkeypatch):
+    pytest.importorskip("supabase")
+    from support_agent import agent as agent_mod
+    mails = []
+    monkeypatch.setattr(agent_mod, "assemble_bundle", lambda sb, issue: {"chapters": []})
+    monkeypatch.setattr(agent_mod, "diagnose", lambda client, bundle: {
+        "category": "wrong_chapter_detection", "confidence": 0.92,
+        "user_message": "The system indexed a different document.", "staff_note": "s",
+        "recommended_action": "reindex_regenerate", "gate_signals": {}})
+    monkeypatch.setattr(agent_mod, "reindex_and_regenerate", lambda *a, **k: {
+        "action": "content_mismatch", "title": "pythagoras theorem", "actual": "breast anatomy and clinical surgery",
+        "detail": "the whole file reads as 'breast anatomy and clinical surgery', not as 'pythagoras theorem'"})
+    monkeypatch.setattr(agent_mod, "notify_owner", lambda sb, owner, subject, text: mails.append((owner, subject, text)) or True)
+    monkeypatch.setattr(agent_mod, "notify_staff", lambda issue, reason: None)
+    gen = {"id": "g1", "kind": "exam_paper", "owner_id": "u1", "book_id": "b1", "status": "error"}
+    sb = _AgentSBWithBook(gen)
+    issue = {"id": "iss-10", "category": "generation_failed", "generation_id": "g1", "reporter_id": "u1"}
+    agent_mod._run(sb, {"id": "j1"}, issue, client=None)
+    resolved = [r for t, r in sb.updates if t == "platform_issues" and r.get("status") == "resolved"]
+    assert resolved and resolved[0]["agent_action"] == "user_fix"
+    assert "reads as breast anatomy and clinical surgery" in resolved[0]["resolution_note"]
+    assert len(mails) == 1 and mails[0][0] == "u1" and "test paper" in mails[0][1]
+    assert "not as 'pythagoras theorem'" in mails[0][2] and "Nothing on our side failed" in mails[0][2]
+    assert not any(r.get("agent_action") == "escalated" for t, r in sb.updates if t == "platform_issues")
