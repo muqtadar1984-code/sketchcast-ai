@@ -183,6 +183,30 @@ def _run(sb, job: dict, issue: dict, client) -> None:
 
     if action == "reindex_regenerate" and gen and book:
         result = reindex_and_regenerate(sb, issue, gen, book, dx, client, job["id"])
+        if result["action"] == "content_mismatch":
+            # The file is not what the book says it is (a one-chapter book
+            # whose only slice reads as another subject). That is the owner's
+            # to fix, and the agent already holds every fact the sentence
+            # needs — a user_fix, not a page to staff.
+            what = _what(gen, issue)
+            note = (f"The file uploaded for the book '{book.get('title') or 'this book'}' reads as "
+                    f"{result.get('actual') or 'a different subject'}, not as "
+                    f"'{result.get('title') or book.get('title') or 'its title'}', so the {what} could not be "
+                    "made from it. Nothing on our side failed. Upload the material that matches the title, or "
+                    "give the book a title and subject that match the file, then generate again.")
+            _update_issue(
+                sb,
+                issue_id,
+                {
+                    "status": "resolved",
+                    "agent_action": "user_fix",
+                    "diagnosis": user_dx,
+                    "resolution_note": note[:500],
+                },
+            )
+            _audit(sb, issue, "content_mismatch", result)
+            notify_owner(sb, gen["owner_id"], f"About your {what} on SketchCast", resolution_text(what, note))
+            return
         if result["action"] in ("regenerated", "regenerated_pending"):
             pending = result["action"] == "regenerated_pending"
             note = (

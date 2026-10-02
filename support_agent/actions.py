@@ -86,6 +86,30 @@ def reindex_and_regenerate(sb, issue: dict, gen: dict, book: dict, diagnosis: di
     if diagnosis.get("confidence", 0) < MIN_REGEN_CONFIDENCE:
         return {"action": "regen_blocked_confidence", "detail": "confidence below threshold"}
 
+    from support_agent.bundle import _chapter_source_text
+    import tempfile
+    from pathlib import Path
+
+    # A ONE-chapter book has no split to get wrong: the whole file IS the
+    # chapter, so a re-split would change nothing and a "wrong chapter"
+    # reading can only mean the FILE is not what the book says it is.
+    # Measured 2026-10-02: a book titled "pythagoras theorem" (subject
+    # Mathematics) whose only file was Breast.pptx — the maths question
+    # writer could verify nothing, the agent re-indexed one chapter into one
+    # chapter, the slice still read as breast anatomy, and a human was
+    # paged for a fact the agent already held. Verify first, re-index never.
+    chapters = book.get("chapters") if isinstance(book.get("chapters"), list) else []
+    if len(chapters) <= 1:
+        with tempfile.TemporaryDirectory() as tmp:
+            src, meta = _chapter_source_text(sb, book, chapter_ref, Path(tmp))
+        title = (meta.get("stored_chapter") or {}).get("title") or str(book.get("title") or "")
+        ok, actual = verify_chapter_content(title, src, client)
+        if not ok:
+            return {"action": "content_mismatch", "title": title, "actual": actual,
+                    "detail": f"the whole file reads as {actual!r}, not as {title!r}"}
+        return {"action": "regen_blocked_single_chapter",
+                "detail": "one chapter and it reads as its title; a re-split would change nothing"}
+
     # Assigned-content check BEFORE any mutation (drives the pending path).
     r = sb.table("generation_shares").select("id").eq("generation_id", gen["id"]).limit(1).execute()
     assigned = bool(getattr(r, "data", None))
@@ -101,10 +125,6 @@ def reindex_and_regenerate(sb, issue: dict, gen: dict, book: dict, diagnosis: di
 
     # 2) Verify the requested chapter NOW reads as its title — regenerating an
     #    unfixed split would just reproduce the wrong lesson.
-    from support_agent.bundle import _chapter_source_text
-    import tempfile
-    from pathlib import Path
-
     r = sb.table("books").select("*").eq("id", book["id"]).maybe_single().execute()
     fresh_book = getattr(r, "data", None) or book
     with tempfile.TemporaryDirectory() as tmp:
