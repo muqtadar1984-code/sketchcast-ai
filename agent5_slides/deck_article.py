@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from catalogue.article import (MAX_PARTS_PER_FIGURE, MAX_TOKENS, RESPONSE_SCHEMA,
+from catalogue.article import (MAX_PARTS_PER_FIGURE, MAX_TOKENS, MIN_SECTIONS, RESPONSE_SCHEMA,
                                SYSTEM_PROMPT, ArticleInvalid, validate_article)
 from docgen.docx_builder import chapter_grounding
 from shared.languages import prompt_directive
@@ -37,6 +37,11 @@ logger = logging.getLogger("worker.deck_article")
 # Below the floor the reply is a refusal, a truncation or a stub.
 WORDS_MIN, WORDS_MAX = 600, 1400
 WORDS_FLOOR = 200
+# A reply the validator refuses earns this many further calls, each with the
+# refusal named. A Grade 1 English unit ("Where's my bag?", 2026-10-02) came
+# back as two sections twice, and each time the whole deck job failed on the
+# first reply — the lesson video of the same unit had taught six topics.
+SHAPE_RETRIES = 2
 
 PROMPT = f"""TASK: from the chapter above, write the complete explanation a strong teacher would give of THIS chapter (or this part of it), in the form of a knowledge article. The article is the source of the slide deck the teacher projects: its claims become the points on the slides, its glossary the vocabulary slide, its figures the diagrams. It must be complete, correct and self-contained, and it must teach what the chapter teaches — at the chapter's own depth, in the chapter's own order, and nothing the chapter does not cover.
 
@@ -74,6 +79,19 @@ def build_article_prompt(language: Optional[str] = "en") -> str:
     return PROMPT + prompt_directive(language)
 
 
+def shape_note(refused: ArticleInvalid) -> str:
+    """The re-ask: the validator's refusal of the previous reply, appended to
+    the SAME prompt so nothing else about the task changes. A short unit is
+    still several sections — its words, its pattern, its practice."""
+    return (
+        f"\n\nSHAPE — the previous reply to this task was rejected: {refused}. Write the article again, "
+        f"complete, as a JSON object of exactly the shape above, with at least {MIN_SECTIONS} sections "
+        f"(at most 8) and at least {WORDS_FLOOR} words of body text. A short unit still teaches several "
+        f"things — its vocabulary, its language pattern, its sounds, its practice — and each is a section "
+        f"of its own with its own claims. Keep every other rule above."
+    )
+
+
 def _reply_payload(reply) -> object:
     if isinstance(reply, dict) and "data" in reply:
         return reply.get("data")
@@ -89,14 +107,26 @@ def author_article(book: dict, chapter: dict, analysis: dict, client, params: di
     job, so a thin reply fails the job rather than shipping three slides."""
     grounding = chapter_grounding(book, chapter, analysis)
     prompt = build_article_prompt(language)
-    reply = client.analyze(prompt, system=SYSTEM_PROMPT, max_tokens=MAX_TOKENS,
-                           cache_prefix=grounding, response_schema=RESPONSE_SCHEMA)
-    raw = _reply_payload(reply)
-    try:
-        art = validate_article(raw, coverage_codes=[], fallback_title=title or str(chapter.get("title") or ""),
-                               words_floor=WORDS_FLOOR)
-    except ArticleInvalid as exc:
-        raise RuntimeError(f"deck article authoring: {exc}") from exc
+    fallback_title = title or str(chapter.get("title") or "")
+    art = None
+    refused: Optional[ArticleInvalid] = None
+    for attempt in range(1 + SHAPE_RETRIES):
+        ask = prompt if refused is None else prompt + shape_note(refused)
+        reply = client.analyze(ask, system=SYSTEM_PROMPT, max_tokens=MAX_TOKENS,
+                               cache_prefix=grounding, response_schema=RESPONSE_SCHEMA)
+        raw = _reply_payload(reply)
+        try:
+            art = validate_article(raw, coverage_codes=[], fallback_title=fallback_title,
+                                   words_floor=WORDS_FLOOR)
+            break
+        except ArticleInvalid as exc:
+            refused = exc
+            if attempt < SHAPE_RETRIES:
+                logger.warning("deck article: %s — asking again (%d/%d)", exc, attempt + 1, SHAPE_RETRIES)
+    if art is None:
+        raise RuntimeError(f"deck article authoring: {refused} after {SHAPE_RETRIES} re-ask(s)") from refused
+    if refused is not None:
+        art.repairs.append(f"re-asked for shape: {refused}")
     for line in art.repairs:
         logger.info("deck article repair: %s", line)
     logger.info("deck article authored: %d sections, %d claims, %d figures, %d words — %s",
