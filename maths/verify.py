@@ -215,6 +215,108 @@ def _same_solutions(a, b) -> bool:
     return False
 
 
+def _free(rels: list[Relation]) -> set:
+    out: set = set()
+    for r in rels:
+        out |= r.free_symbols
+    return out
+
+
+def _project(sols, keep: list[sp.Symbol]):
+    """A multivariate solution list restricted to ``keep`` — what the state
+    says about those unknowns alone. One unknown becomes a Set, so it
+    compares with a univariate state's solutions."""
+    if not isinstance(sols, list):
+        return sols
+    rows: list[dict] = []
+    for d in sols:
+        row = {k: v for k, v in d.items() if k in keep}
+        if not any(set(row) == set(r) and all(_equal_values(row[k], r[k]) for k in row) for r in rows):
+            rows.append(row)
+    if len(keep) == 1:
+        k = keep[0]
+        vals = [r[k] for r in rows if k in r]
+        if len(vals) == len(rows):
+            return sp.FiniteSet(*vals) if vals else sp.S.EmptySet
+    return rows
+
+
+def _proper_subset(a, b) -> bool:
+    """``a`` is a non-empty strict subset of ``b`` (Sets or solution lists)."""
+    if isinstance(a, sp.Set) and isinstance(b, sp.Set):
+        try:
+            return bool(a.is_subset(b)) and not bool(b.is_subset(a)) and a != sp.S.EmptySet
+        except Exception:  # noqa: BLE001
+            return False
+    if isinstance(a, list) and isinstance(b, list):
+        if not a or len(a) >= len(b):
+            return False
+        for sa in a:
+            if not any(set(sa) == set(sb) and all(_equal_values(sa[k], sb[k]) for k in sa) for sb in b):
+                return False
+        return True
+    return False
+
+
+# A step that keeps only SOME of the solutions is a different step from a
+# transformation, and it has to say so: a root rejected for a stated reason
+# ("c is a length", "reject the negative root") — or a problem whose unknown
+# is a magnitude, where only the non-positive roots may go.
+_DISCARD_WORDS = re.compile(r"\b(positive|negative|length|distance|side|reject(?:ed|s)?|discard(?:ed|s)?|"
+                            r"rule[sd]? out|cannot be|can't be|not possible|invalid|extraneous|"
+                            r"does not fit|doesn't fit|measure|physical)\b", re.I)
+_MAGNITUDE_WORDS = re.compile(r"\b(hypotenuse|side|length|distance|height|width|depth|radius|diameter|"
+                              r"perimeter|area|volume|speed|time|age|mass|weight|number of)\b", re.I)
+
+
+def _discarded(before_sols, after_sols) -> list:
+    """The solutions ``before`` has and ``after`` does not."""
+    if isinstance(before_sols, sp.Set) and isinstance(after_sols, sp.Set):
+        gone = sp.Complement(before_sols, after_sols)
+        return list(gone) if isinstance(gone, sp.FiniteSet) else [gone]
+    if isinstance(before_sols, list) and isinstance(after_sols, list):
+        return [d for d in before_sols
+                if not any(set(d) == set(a) and all(_equal_values(d[k], a[k]) for k in d) for a in after_sols)]
+    return []
+
+
+def _discard_allowed(before_sols, after_sols, operation: str, problem: str) -> tuple[bool, str]:
+    """May this step keep only some solutions? Yes when the operation names
+    a reason (any root may go), or the problem's unknown is a magnitude and
+    every root that went is non-positive."""
+    gone = _discarded(before_sols, after_sols)
+    if not gone:
+        return False, ""
+    if _DISCARD_WORDS.search(operation or ""):
+        return True, f"root(s) discarded for the stated reason: {_fmt_solutions(gone) if isinstance(gone[0], dict) else ', '.join(str(g) for g in gone)}"
+    if _MAGNITUDE_WORDS.search(problem or ""):
+        values = []
+        for g in gone:
+            values.extend(g.values() if isinstance(g, dict) else [g])
+        try:
+            if values and all(v.is_number and bool(v <= 0) for v in values):
+                return True, f"non-positive root(s) discarded: the unknown is a magnitude ({', '.join(str(v) for v in values)})"
+        except Exception:  # noqa: BLE001
+            return False, ""
+    return False, ""
+
+
+def _fully_determined(rels: list[Relation]) -> bool:
+    """Every line is ``unknown = number``: the state is a list of known
+    values, nothing is left to solve."""
+    if not rels:
+        return False
+    for r in rels:
+        if not r.is_equation or r.rhs is None:
+            return False
+        if isinstance(r.lhs, sp.Symbol) and not r.rhs.free_symbols:
+            continue
+        if isinstance(r.rhs, sp.Symbol) and not r.lhs.free_symbols:
+            continue
+        return False
+    return True
+
+
 def _fmt_solutions(s) -> str:
     if isinstance(s, list):
         return "; ".join(", ".join(f"{k} = {v}" for k, v in sorted(d.items(), key=lambda kv: str(kv[0])))
@@ -376,12 +478,27 @@ def _data_step(before: list[Relation], after: list[Relation], task: Optional[str
 
 
 def _states_equivalent(before: list[Relation], after: list[Relation], variables: list[sp.Symbol],
-                       mode: str, task: Optional[str] = None) -> tuple[Optional[bool], str]:
+                       mode: str, task: Optional[str] = None, *, operation: str = "",
+                       problem: str = "") -> tuple[Optional[bool], str]:
     """(verdict, detail) for "does `after` mean what `before` meant".
     ``mode`` is the example's default ("all" for a declared system, "any"
     otherwise); a state that IS a system is read as one regardless.
     ``task`` matters only when ``before`` is a data list: what `after`
-    must be is then the task's statistic of it (_data_step)."""
+    must be is then the task's statistic of it (_data_step).
+
+    Two readings beyond plain equivalence, both decidable:
+      * SUBSTITUTION — `after` has dropped unknowns `before` determined
+        ("c^2 = a^2 + b^2; a = 3; b = 4" -> "c^2 = 3^2 + 4^2"): the states
+        agree when `before`, projected onto the unknowns that remain, is
+        `after`. Measured 2026-10-02: every Pythagoras step was "solutions
+        before: a = 3, b = 4; after: no solution", because the sides were
+        solved for the hypotenuse.
+      * A DISCARDED ROOT — `after` keeps some of `before`'s solutions
+        ("c^2 = 25" -> "c = 5"): allowed when ``operation`` says why, or the
+        ``problem``'s unknown is a magnitude and only non-positive roots
+        went (_discard_allowed). A step that silently halves the solutions
+        of a plain equation still fails.
+    """
     kb, ka = _kinds(before), _kinds(after)
     if kb == "data":
         return _data_step(before, after, task)
@@ -394,7 +511,20 @@ def _states_equivalent(before: list[Relation], after: list[Relation], variables:
             if not _timed(_zero, b.lhs - a.lhs):
                 return False, f"{b.text!r} is not equivalent to {a.text!r}"
         return True, "equivalent expressions"
+    fb, fa = _free(before), _free(after)
     try:
+        if fa and fb and fa < fb:
+            # substitution: compare what `before` says about the unknowns
+            # that remain with what `after` says about them
+            vb, va = sorted(fb, key=str), sorted(fa, key=str)
+            sb = _project(_timed(_solution_set, before, vb, _state_mode(before, mode)), va)
+            sa = _timed(_solution_set, after, va, _state_mode(after, mode))
+            if _same_solutions(sb, sa):
+                return True, f"solutions unchanged for {', '.join(map(str, va))}: {_fmt_solutions(sa)}"
+            ok, why = _discard_allowed(sb, sa, operation, problem)
+            if ok and _proper_subset(sa, sb):
+                return True, why
+            return False, f"solutions before (for {', '.join(map(str, va))}): {_fmt_solutions(sb)}; after: {_fmt_solutions(sa)}"
         sb = _timed(_solution_set, before, variables, _state_mode(before, mode))
         sa = _timed(_solution_set, after, variables, _state_mode(after, mode))
     except MathTimeoutError:
@@ -413,6 +543,10 @@ def _states_equivalent(before: list[Relation], after: list[Relation], variables:
         return None, f"could not solve: {exc}"
     if _same_solutions(sb, sa):
         return True, f"solutions unchanged: {_fmt_solutions(sa)}"
+    if _proper_subset(sa, sb):
+        ok, why = _discard_allowed(sb, sa, operation, problem)
+        if ok:
+            return True, why
     return False, f"solutions before: {_fmt_solutions(sb)}; after: {_fmt_solutions(sa)}"
 
 
@@ -546,8 +680,10 @@ def _check_round_step(name: str, st: Step) -> Check:
 def _variables(ex: WorkedExample, givens: Optional[list[Relation]]) -> list[sp.Symbol]:
     if ex.task in SOLVE_TASKS:
         if givens and _is_system(givens):
-            # every unknown of a system, whatever the target names
-            free: set = set()
+            # every unknown of a system, whatever the target names — AND the
+            # target, which the givens may not mention yet ("a = 3", "b = 4";
+            # find c: the hypotenuse enters with the theorem, 2026-10-02)
+            free: set = set(symbols_named(ex.variables))
             for r in givens:
                 free |= r.free_symbols
             return sorted(free, key=str)
@@ -585,7 +721,16 @@ def _check_step(i: int, st: Step, ex: WorkedExample, variables: list[sp.Symbol])
     before, err = _parse(st.before, "the line before")
     if before is None:
         return Check(name, None, err)
-    ok, detail = _states_equivalent(before, after, variables, _mode(ex), ex.task)
+    if _fully_determined(before) and (_free(after) - _free(before)):
+        # the givens are known values and the step writes a relation among
+        # NEW unknowns — Pythagoras from two sides, an area formula from a
+        # length: a relation the problem's words supply, which no algebra
+        # can prove from "a = 3, b = 4". A setup, whatever the model called
+        # it; verified from here on, never against the values alone.
+        return Check(name, None, f"setup: {st.operation or 'a relation from the problem'} — "
+                                 "brought in from the problem's words, not a transformation")
+    ok, detail = _states_equivalent(before, after, variables, _mode(ex), ex.task,
+                                    operation=st.operation, problem=ex.problem)
     return Check(name, ok, f"{st.operation}: {detail}" if st.operation else detail)
 
 
@@ -597,7 +742,10 @@ def _check_chain(ex: WorkedExample, givens: Optional[list[Relation]], variables)
     if not steps:
         return [Check("chain", False, "no steps")]
     first = next((s for s in steps if s.before), None)
-    if givens and first is not None and first.kind != "setup":
+    # a setup before the first worked line wrote the state the working
+    # starts from; the problem's givens are what IT started from
+    after_a_setup = first is not None and any(s.kind == "setup" for s in steps[:steps.index(first)])
+    if givens and first is not None and first.kind != "setup" and not after_a_setup:
         b, err = _parse(first.before, "the first line")
         if b is None:
             out.append(Check("chain start", None, err))
@@ -669,15 +817,36 @@ def _check_answer(ex: WorkedExample, givens: Optional[list[Relation]], variables
             return Check("answer", None, err)
         if any(r.is_expression for r in ans):
             return Check("answer", False, "a solution must name the unknown: write x = 5")
+        problem = givens
+        if not (set(symbols_named(ex.variables)) & _free(givens)):
+            # the givens never mention the unknown ("a = 3", "b = 4"; find
+            # c): the problem's equation is the one the setup wrote down —
+            # its steps are verified from there, so the answer is judged
+            # from there too
+            start = _setup_state(ex)
+            if start is None:
+                return Check("answer", None, "the problem's equation for the unknown was never written down")
+            problem = start
         try:
-            expected = _timed(_solution_set, givens, variables, "all")
+            expected = _timed(_solution_set, problem, variables, "all")
             actual = _timed(_solution_set, ans, variables, _state_mode(ans, _mode(ex)))
         except MathTimeoutError:
             return Check("answer", None, "SymPy timed out")
         except Exception as exc:  # noqa: BLE001
             return Check("answer", None, f"could not solve the problem: {exc}")
+        targets = [v for v in variables if v in set(symbols_named(ex.variables))]
+        if targets and len(targets) < len(variables) and isinstance(expected, list) and isinstance(actual, list) \
+                and all(set(d) <= set(targets) for d in actual):
+            # the answer names the target alone; the given values travel in
+            # the problem's solutions and are not what the answer is judged on
+            expected, actual = _project(expected, targets), _project(actual, targets)
         if _same_solutions(expected, actual):
             return Check("answer", True, f"answer verified: {_fmt_solutions(actual)}")
+        if _proper_subset(actual, expected):
+            reasons = " ".join(s.operation for s in ex.steps if s.kind == "transform")
+            ok, why = _discard_allowed(expected, actual, reasons, ex.problem)
+            if ok:
+                return Check("answer", True, f"answer verified: {_fmt_solutions(actual)} ({why})")
         return Check("answer", False, f"the problem's solution is {_fmt_solutions(expected)}, "
                                       f"the answer says {_fmt_solutions(actual)}")
     # expression tasks
@@ -702,6 +871,25 @@ def _check_answer(ex: WorkedExample, givens: Optional[list[Relation]], variables
     if ex.task == "evaluate" and a.lhs.free_symbols:
         return Check("answer", False, f"{a.text!r} is not a value")
     return Check("answer", True, "answer verified")
+
+
+def _setup_state(ex: WorkedExample) -> Optional[list[Relation]]:
+    """The state the first setup step wrote down — a declared "setup", or a
+    transform that brought a relation in from known values (_check_step's
+    implicit setup). None when there is no such step or it does not parse."""
+    for st in ex.steps:
+        if not st.after:
+            continue
+        after, _e = _parse(st.after, "the setup's result")
+        if after is None:
+            return None
+        if st.kind == "setup":
+            return after
+        if st.kind == "transform" and st.before:
+            before, _e = _parse(st.before, "the setup's start")
+            if before is not None and _fully_determined(before) and (_free(after) - _free(before)):
+                return after
+    return None
 
 
 def _check_last_step(ex: WorkedExample, variables) -> Optional[Check]:
@@ -764,7 +952,8 @@ def verify_example(ex: WorkedExample) -> ExampleReport:
     if mistake is not None:
         rep.checks.append(mistake)
     transforms_unverified = [c for c in rep.checks if c.ok is None and c.name.startswith("step")
-                             and ex.steps[int(c.name.split()[1]) - 1].kind in ("transform", "round")]
+                             and ex.steps[int(c.name.split()[1]) - 1].kind in ("transform", "round")
+                             and not c.detail.startswith("setup:")]
     answer_unverified = [c for c in rep.checks if c.ok is None and c.name == "answer"]
     if rep.failures or transforms_unverified or answer_unverified or not ex.steps:
         rep.status = "failed"

@@ -425,3 +425,106 @@ def test_a_word_problem_try_it_still_starts_from_its_first_step():
     from maths.verify import try_it_example
     assert try_it_example(t).givens == ["2x + 5 = 21"]
     assert verify_try_it(t).ok is True
+
+
+# ── a relation the problem's words supply: Pythagoras (2026-10-02) ───────────
+# A teacher's "pythagoras theorem" book failed every question and every
+# worked example with "solutions before: a = 3, b = 4; after: no solution":
+# the sides were solved for the hypotenuse, a substitution dropped the known
+# sides, and the positive root was "half the solutions".
+
+def _hypotenuse(root_step="take the square root", problem="A right-angled triangle has legs a = 3 cm and b = 4 cm. "
+                                                            "Find the hypotenuse c."):
+    return WorkedExample(label="Ex", task="solve", problem=problem, givens=["a = 3", "b = 4"], target="c",
+                         steps=[Step(kind="transform", operation="apply Pythagoras' theorem", before=["a = 3", "b = 4"],
+                                     after=["c^2 = 3^2 + 4^2"]),
+                                Step(kind="transform", operation="evaluate", before=["c^2 = 3^2 + 4^2"], after=["c^2 = 25"]),
+                                Step(kind="transform", operation=root_step, before=["c^2 = 25"], after=["c = 5"])],
+                         final_answer=["c = 5"])
+
+
+def test_a_relation_brought_in_from_known_values_is_a_setup_whatever_it_was_called():
+    rep = verify_example(_hypotenuse())
+    assert rep.status == "verified", rep.reasons
+    step1 = next(c for c in rep.checks if c.name == "step 1")
+    assert step1.ok is None and step1.detail.startswith("setup:")
+    assert next(c for c in rep.checks if c.name == "answer").ok is True
+
+
+def test_the_positive_root_of_a_magnitude_is_accepted_but_a_plain_equation_keeps_both_roots():
+    assert verify_example(_hypotenuse()).status == "verified"
+    plain = WorkedExample(label="Ex", task="solve", problem="Solve x^2 = 25", givens=["x^2 = 25"], target="x",
+                          steps=[Step(kind="transform", operation="take the square root", before=["x^2 = 25"], after=["x = 5"])],
+                          final_answer=["x = 5"])
+    rep = verify_example(plain)
+    assert rep.status == "failed"
+    assert "solutions before: {-5, 5}; after: {5}" in next(c for c in rep.checks if c.name == "step 1").detail
+
+
+def test_a_stated_rejection_of_a_root_is_accepted_for_any_problem():
+    plain = WorkedExample(label="Ex", task="solve", problem="Solve x^2 = 25 for the positive x", givens=["x^2 = 25"], target="x",
+                          steps=[Step(kind="transform", operation="reject the negative root", before=["x^2 = 25"], after=["x = 5"])],
+                          final_answer=["x = 5"])
+    rep = verify_example(plain)
+    assert rep.status == "verified", rep.reasons
+    assert "discarded for the stated reason" in next(c for c in rep.checks if c.name == "step 1").detail
+
+
+def test_a_magnitude_problem_may_not_discard_a_positive_root_without_saying_why():
+    ex = WorkedExample(label="Ex", task="solve", problem="The side s of a square satisfies s^2 - 5s + 6 = 0. Find s.",
+                       givens=["s^2 - 5s + 6 = 0"], target="s",
+                       steps=[Step(kind="transform", operation="factorise", before=["s^2 - 5s + 6 = 0"], after=["(s - 2)(s - 3) = 0"]),
+                              Step(kind="transform", operation="take the first root", before=["(s - 2)(s - 3) = 0"], after=["s = 2"])],
+                       final_answer=["s = 2"])
+    assert verify_example(ex).status == "failed"
+
+
+def test_a_declared_setup_carries_the_givens_and_the_substitution_is_a_projection():
+    ex = WorkedExample(label="Ex", task="solve", problem="Legs 3 and 4; find the hypotenuse c.", givens=["a = 3", "b = 4"], target="c",
+                       steps=[Step(kind="setup", operation="Pythagoras' theorem", before=[], after=["c^2 = a^2 + b^2", "a = 3", "b = 4"]),
+                              Step(kind="transform", operation="substitute the given sides",
+                                   before=["c^2 = a^2 + b^2", "a = 3", "b = 4"], after=["c^2 = 3^2 + 4^2"]),
+                              Step(kind="transform", operation="evaluate", before=["c^2 = 3^2 + 4^2"], after=["c^2 = 25"]),
+                              Step(kind="transform", operation="reject the negative root: c is a length", before=["c^2 = 25"],
+                                   after=["c = 5"])],
+                       final_answer=["c = 5"])
+    rep = verify_example(ex)
+    assert rep.status == "verified", rep.reasons
+    assert "solutions unchanged for c" in next(c for c in rep.checks if c.name == "step 2").detail
+    assert not any(c.name == "chain start" for c in rep.checks), "the setup wrote the start; the givens are its input"
+
+
+def test_a_wrong_substitution_and_a_wrong_theorem_still_fail():
+    wrong_sub = WorkedExample(label="Ex", task="solve", problem="find c", givens=["c^2 = a^2 + b^2", "a = 3", "b = 4"], target="c",
+                              steps=[Step(kind="transform", operation="substitute",
+                                          before=["c^2 = a^2 + b^2", "a = 3", "b = 4"], after=["c^2 = 7"])],
+                              final_answer=["c = 5"])
+    assert verify_example(wrong_sub).status == "failed"
+    wrong_theorem = WorkedExample(label="Ex", task="solve", problem="Legs a = 3 and b = 4. Find the hypotenuse c.",
+                                  givens=["a = 3", "b = 4"], target="c",
+                                  steps=[Step(kind="transform", operation="apply Pythagoras' theorem", before=["a = 3", "b = 4"],
+                                              after=["c = 3 + 4"]),
+                                         Step(kind="transform", operation="add", before=["c = 3 + 4"], after=["c = 7"])],
+                                  final_answer=["c = 5"])
+    rep = verify_example(wrong_theorem)
+    assert rep.status == "failed"
+    assert next(c for c in rep.checks if c.name == "answer").ok is False, "the answer is judged from the setup's equation"
+
+
+def test_a_leg_from_the_hypotenuse_verifies():
+    ex = WorkedExample(label="Ex", task="solve",
+                       problem="A ladder 13 m long reaches 12 m up a wall. How far is its foot from the wall? Call the distance b.",
+                       givens=["c = 13", "a = 12"], target="b",
+                       steps=[Step(kind="transform", operation="apply Pythagoras' theorem", before=["c = 13", "a = 12"],
+                                   after=["13^2 = 12^2 + b^2"]),
+                              Step(kind="transform", operation="evaluate the squares", before=["13^2 = 12^2 + b^2"], after=["169 = 144 + b^2"]),
+                              Step(kind="transform", operation="subtract 144 from both sides", before=["169 = 144 + b^2"], after=["b^2 = 25"]),
+                              Step(kind="transform", operation="take the square root", before=["b^2 = 25"], after=["b = 5"])],
+                       final_answer=["b = 5"])
+    assert verify_example(ex).status == "verified", verify_example(ex).reasons
+
+
+def test_the_prompt_tells_the_model_about_formula_setups_and_stated_rejections():
+    from maths.lesson import _STEP_RULES
+    assert "Pythagoras" in _STEP_RULES and "stays in 'after' until a step uses it" in _STEP_RULES
+    assert "reject the negative root" in _STEP_RULES
