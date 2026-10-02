@@ -340,3 +340,47 @@ class TestTheCheckSlideFitsItsBlanks:
         (chk,) = [s for s in storyboard(m) if s.kind == CHECK]
         assert 1 <= check_blanks() <= 12
         assert len(chk.parts) <= check_blanks()
+
+
+class _SequencedClient(_StubClient):
+    """One payload per call, in order; the last is repeated."""
+
+    def __init__(self, *payloads):
+        super().__init__(payloads[-1])
+        self._seq = list(payloads)
+
+    def analyze(self, prompt, max_tokens=0, **k):
+        self._data = self._seq.pop(0) if self._seq else self._data
+        return super().analyze(prompt, max_tokens=max_tokens, **k)
+
+
+class TestAThinReplyIsAskedAgain:
+    """Grade 1 English, "Where's my bag?" (2026-10-02): the reply came back as
+    two sections twice and each time the whole deck job failed on that one
+    reply, while the lesson video of the same unit had taught six topics. A
+    refused reply earns a re-ask that names the refusal, on the same prompt
+    and the same cached grounding."""
+
+    def test_the_refusal_is_named_and_the_next_reply_is_kept(self):
+        thin = {**ARTICLE_REPLY, "sections": ARTICLE_REPLY["sections"][:2]}
+        client = _SequencedClient(thin, ARTICLE_REPLY)
+        art = da.author_article(BOOK, CHAPTER, ANALYSIS, client, {}, "en", title="Where's my bag?")
+        assert [s["id"] for s in art["sections"]] == ["s1", "s2", "s3"]
+        assert len(client.calls) == 2
+        first, second = client.calls
+        assert "SHAPE" not in first["prompt"]
+        assert second["prompt"].startswith(first["prompt"]), "the same prompt, the note appended"
+        assert "only 2 usable section(s)" in second["prompt"] and f"at least {da.MIN_SECTIONS} sections" in second["prompt"]
+        assert second["cache_prefix"] == first["cache_prefix"], "the grounding block is re-read from cache"
+
+    def test_a_reply_still_refused_after_the_re_asks_fails_the_job(self):
+        thin = {**ARTICLE_REPLY, "sections": ARTICLE_REPLY["sections"][:2]}
+        client = _StubClient(thin)
+        with pytest.raises(RuntimeError, match=r"usable section.*after 2 re-ask"):
+            da.author_article(BOOK, CHAPTER, ANALYSIS, client, {}, "en")
+        assert len(client.calls) == 1 + da.SHAPE_RETRIES
+
+    def test_a_good_first_reply_is_not_asked_again(self):
+        client = _StubClient(ARTICLE_REPLY)
+        da.author_article(BOOK, CHAPTER, ANALYSIS, client, {}, "en")
+        assert len(client.calls) == 1
