@@ -545,6 +545,7 @@ def _chapter(craw, ci: int, narrations: dict, ctx: _Ctx) -> dict | None:
                                 ". Name the layer groups exactly: " +
                                 ", ".join(regions) + ".")
 
+    craw = _merge_equation_rows(craw, ctx, concept)
     elements, by_id, label_for_region, sentences = _elements(craw, ctx,
                                                              concept)
     if not elements:
@@ -649,6 +650,138 @@ def _root_asset_key(craw: dict, assets: dict) -> str | None:
                 and isinstance(e.get("asset"), str) and e["asset"] in assets:
             return e["asset"]
     return next(iter(assets), None)
+
+
+# ── an equation is ONE line ─────────────────────────────────────────────────
+# Photosynthesis (2026-10-02): the director declared the word equation as
+# three text elements — "Carbon Dioxide + Water", "→", "Glucose + Oxygen".
+# Every non-title text is a label, so the three went into the label column
+# one under another, and the renderer's keep-outs then moved them apart: on
+# screen the products sat above the reactants with the arrow dangling under
+# both. The equation is the line a student copies down; split across three
+# independently placed labels it cannot survive any layout pass.
+#
+# A run of text elements joined by an arrow glyph is therefore merged into a
+# single caption (the slot under the picture, centred), under the first
+# term's id. "+" joins terms inside a run but never makes one on its own.
+_EQ_ARROWS = frozenset({"→", "->", "-->", "⟶", "⟹", "⇒", "=>", "⇌", "⇄", "↔",
+                        "⟷", "="})
+_EQ_JOINERS = _EQ_ARROWS | {"+"}
+_EQ_ASCII_ARROWS = {"->": "→", "-->": "→", "=>": "⇒"}
+_EQ_TERM_MAX_CHARS = 60
+_EQ_LINE_MAX_CHARS = 60          # continuity._CAPTION_MAX_CHARS: past this
+                                 # _classify_text calls the line a sentence
+                                 # and it leaves the board altogether
+_INTRODUCING = ("write", "reveal", "draw")
+
+
+def _eq_text(e) -> str | None:
+    if not (isinstance(e, dict) and isinstance(e.get("id"), str)
+            and str(e.get("type") or "").strip().lower() == "text"):
+        return None
+    return " ".join(str(e.get("text") or "").split())
+
+
+def _eq_is_term(e) -> bool:
+    t = _eq_text(e)
+    return (bool(t) and t not in _EQ_JOINERS
+            and str(e.get("role") or "label").strip().lower() != "title"
+            and len(t) <= _EQ_TERM_MAX_CHARS)
+
+
+def _eq_target_id(a: dict):
+    t = a.get("target")
+    return t.get("element") if isinstance(t, dict) else t
+
+
+def _merge_equation_rows(craw: dict, ctx: _Ctx, concept: str) -> dict:
+    els = craw.get("elements")
+    if not isinstance(els, list) or len(els) < 3:
+        return craw
+    # A chapter with NO picture already lays its texts out in rows, one row
+    # per step (TEXT_ONLY_ROWS) — there an equation's pieces sit side by side
+    # by construction. The column, and so this merge, is the pictured case.
+    if not any(isinstance(e, dict)
+               and str(e.get("type") or "").strip().lower() == "illustration"
+               for e in els):
+        return craw
+    n = len(els)
+    runs: list[list[int]] = []
+    for i in range(1, n - 1):
+        if _eq_text(els[i]) not in _EQ_ARROWS:
+            continue
+        if not (_eq_is_term(els[i - 1]) and _eq_is_term(els[i + 1])):
+            continue
+        lo, hi = i - 1, i + 1
+        while lo - 2 >= 0 and _eq_text(els[lo - 1]) in _EQ_JOINERS \
+                and _eq_is_term(els[lo - 2]):
+            lo -= 2
+        while hi + 2 < n and _eq_text(els[hi + 1]) in _EQ_JOINERS \
+                and _eq_is_term(els[hi + 2]):
+            hi += 2
+        if runs and lo <= runs[-1][1]:
+            runs[-1][1] = max(runs[-1][1], hi)
+        else:
+            runs.append([lo, hi])
+    if not runs:
+        return craw
+
+    gone: dict[str, str] = {}          # merged-away id -> the id that holds it
+    kept: dict[int, dict] = {}
+    for lo, hi in runs:
+        parts = [_EQ_ASCII_ARROWS.get(_eq_text(els[j]), _eq_text(els[j]))
+                 for j in range(lo, hi + 1)]
+        line = " ".join(parts)
+        if len(line) > _EQ_LINE_MAX_CHARS:
+            ctx.note("EQUATION_TOO_LONG_TO_MERGE",
+                     f"{concept}: {len(line)} chars — left as separate texts: "
+                     f"{line[:60]!r}")
+            continue
+        head = dict(els[lo])
+        head["text"] = line
+        head["role"] = "caption"
+        kept[lo] = head
+        for j in range(lo + 1, hi + 1):
+            gone[els[j]["id"]] = head["id"]
+        ctx.note("EQUATION_MERGED",
+                 f"{concept}: {[els[j]['id'] for j in range(lo, hi + 1)]} -> "
+                 f"{head['id']!r}: {line!r}")
+    if not gone:
+        return craw
+
+    out = dict(craw)
+    out["elements"] = [kept.get(j, e) for j, e in enumerate(els)
+                       if not (isinstance(e, dict) and e.get("id") in gone)]
+    holders = set(gone.values())
+    introduced: set[str] = set()
+    steps = []
+    for st in craw.get("steps") or []:
+        if not isinstance(st, dict):
+            steps.append(st)
+            continue
+        acts = []
+        for a in st.get("actions") or []:
+            if not isinstance(a, dict):
+                acts.append(a)
+                continue
+            tid = _eq_target_id(a)
+            if isinstance(tid, str) and tid in gone:
+                a = dict(a)
+                a["target"] = ({**a["target"], "element": gone[tid]}
+                               if isinstance(a.get("target"), dict)
+                               else gone[tid])
+                tid = gone[tid]
+            if isinstance(tid, str) and tid in holders \
+                    and str(a.get("verb") or "").strip().lower() in _INTRODUCING:
+                if tid in introduced:
+                    continue       # the line is written once, whole
+                introduced.add(tid)
+            acts.append(a)
+        st = dict(st)
+        st["actions"] = acts
+        steps.append(st)
+    out["steps"] = steps
+    return out
 
 
 def _elements(craw: dict, ctx: _Ctx, concept: str):
