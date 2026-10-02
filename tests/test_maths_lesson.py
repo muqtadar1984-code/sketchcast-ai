@@ -662,3 +662,49 @@ def test_the_worker_measures_the_maths_script_against_the_floor_and_refuses_a_sh
     assert "_with_length(report, script_dict, _min_minutes)" in branch
     assert "coverage.under_length(report)" in branch and "lesson script is too short" in branch
     assert branch.index("_with_length(") < branch.index("save_script(script)")
+
+
+def test_a_wiped_column_leaves_no_overlap_in_the_report():
+    """Production a0fcb332 (Pythagoras, 2026-10-02): a setup that carries the
+    givens is three lines, so every example filled the column and wiped it;
+    the notes written after the wipe sat where the wiped notes had been and
+    the bind-time audit paired them — 8 of 9 scenes "overlapping", frames
+    correct, lesson refused. The report must judge the pairs on the timeline."""
+    from maths.board import compile_lesson
+    from maths.schema import Lesson, MethodCard, Mistake, Step, WorkedExample
+
+    def ex(label, a, b, c, problem):
+        sq = f"c^2 = {a}^2 + {b}^2"
+        steps = [Step(kind="setup", operation="Write Pythagoras' theorem with the given sides", before=[],
+                      after=["c^2 = a^2 + b^2", f"a = {a}", f"b = {b}"], speech="Write the theorem and the two legs."),
+                 Step(operation="Substitute the given sides", before=["c^2 = a^2 + b^2", f"a = {a}", f"b = {b}"],
+                      after=[sq], speech="Substitute the given sides into the theorem."),
+                 Step(operation="Evaluate the squares", before=[sq], after=[f"c^2 = {a * a} + {b * b}"], speech="Square each side."),
+                 Step(operation="Add", before=[f"c^2 = {a * a} + {b * b}"], after=[f"c^2 = {c * c}"], speech="Add them."),
+                 Step(operation="Take the positive square root; reject the negative root: c is a length",
+                      before=[f"c^2 = {c * c}"], after=[f"c = {c}"], speech="Take the positive square root."),
+                 Step(kind="check", operation="check", before=[f"c = {c}"], after=[f"{c}^2 = {a}^2 + {b}^2"], speech="Check it.")]
+        return WorkedExample(label=label, task="solve", problem=problem, givens=[f"a = {a}", f"b = {b}"], target="c",
+                             steps=steps, final_answer=[f"c = {c}"], answer_speech=f"So the hypotenuse is {c}.",
+                             intro_speech="Here is the next example.", student_question="How do we start?",
+                             common_mistake=Mistake(from_state=[f"c^2 = {a * a} + {b * b}"], wrong_state=[f"c = {a} + {b}"],
+                                                    operation="add the sides", why_wrong="you cannot add before squaring",
+                                                    speech="A common mistake is to add the legs directly."))
+
+    lesson = Lesson(topic="Pythagoras' theorem", level="Class 8",
+                    method=MethodCard(title="Method", steps=["Write the theorem", "Substitute the sides", "Square and add", "Square root"]),
+                    concept_points=["c² = a² + b²", "c is the hypotenuse", "Square, add, root"],
+                    misconceptions=["adding sides before squaring", "forgetting the root"],
+                    examples=[ex("Example 1", 3, 4, 5, "A right-angled triangle has legs a = 3 cm and b = 4 cm. Find the hypotenuse c."),
+                              ex("Example 2", 5, 12, 13, "A ladder's foot is 5 m from a wall and reaches 12 m up it. How long is the ladder c?")])
+    wiped = 0
+    for s in compile_lesson(lesson):
+        sc = s["scene"]
+        if sc.get("scene_type") != "worked_example":
+            continue
+        wiped += sum(1 for a in sc["actions"] if a["verb"] == "erase")
+        r = SceneRenderer(parse_scene_response(sc, s["text"]))
+        r.compile(30.0)
+        overlaps = [w for w in r.audit()["warnings"] if w.startswith("TEXT_OVERLAP")]
+        assert not overlaps, (s["segment_id"], overlaps)
+    assert wiped, "the scenario is a column that fills and is wiped"

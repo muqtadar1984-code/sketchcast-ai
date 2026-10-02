@@ -522,6 +522,9 @@ class SceneRenderer:
         self._fonts: dict[tuple[bool, int, str], object] = {}
         self._audit_warnings: list[str] = []
         self._warned: set[str] = set()
+        # text-on-text pairs the bind-time audit found, re-judged against
+        # the final timeline once compile() knows when each is on the board
+        self._text_overlap_pairs: list[tuple[str, str]] = []
         self._suppressed: set[str] = set()   # arrows with no locatable target
         # illustrations whose asset never arrived (image model 429, budget
         # exhausted, cache miss in a child process) and the labels/arrows that
@@ -1109,6 +1112,57 @@ class SceneRenderer:
             for bid, c in boxes[i + 1:]:
                 if a[0] - g < c[2] and a[2] + g > c[0] and a[1] - g < c[3] and a[3] + g > c[1]:
                     self._warn(f"TEXT_OVERLAP {aid}+{bid}")
+                    self._text_overlap_pairs.append((aid, bid))
+
+    # ── overlaps that never share a frame ──────────────────────────────────
+
+    def _on_board(self, eid: str) -> list[tuple[float, float]]:
+        """The spans of time ``eid`` is on the board, read from the final
+        timeline: from its write, draw or reveal (from t=0 when no action
+        introduces it) until an erase, or a fade to nothing, has finished.
+        An action on a group reaches each of its children."""
+        b = self.bound.get(eid)
+        if b is None:
+            return []
+        spans: list[tuple[float, float]] = []
+        open_at: float | None = None if b.introduced else 0.0
+        for ta in sorted(self.timeline, key=lambda t: t.start):
+            a = ta.action
+            if eid not in self._expand(a.target):
+                continue
+            to = float(getattr(a, "to", None) or 0.0) if a.verb == "fade" else 1.0
+            if a.verb in ("write", "draw", "reveal") or (a.verb == "fade" and to > 0.01):
+                if open_at is None:
+                    open_at = ta.start
+            elif a.verb == "erase" or (a.verb == "fade" and to <= 0.01):
+                if open_at is not None:
+                    spans.append((open_at, ta.end))
+                    open_at = None
+        if open_at is not None:
+            spans.append((open_at, math.inf))
+        return spans
+
+    def _prune_overlaps_never_on_the_board_together(self) -> None:
+        """TEXT_OVERLAP is measured on boxes alone, at bind time, before any
+        timeline exists. The maths board WIPES a filled column and writes
+        the next working, notes included, where the old lines were — so
+        every note written after a wipe was paired with the erased note
+        under it, and the acceptance gate refused a Pythagoras lesson
+        (a0fcb332, 2026-10-02: 8 of 9 scenes, each pair an erased note
+        against its successor) whose frames were correct. Two texts that
+        are never on the board at the same moment do not overlap: once the
+        final timeline is known, such a pair is withdrawn. A pair that
+        shares even one frame stays reported."""
+        if not self._text_overlap_pairs or not self.timeline:
+            return
+        for aid, bid in self._text_overlap_pairs:
+            sa, sb = self._on_board(aid), self._on_board(bid)
+            if any(a0 < b1 and b0 < a1 for a0, a1 in sa for b0, b1 in sb):
+                continue
+            msg = f"TEXT_OVERLAP {aid}+{bid}"
+            if msg in self._warned:
+                self._warned.discard(msg)
+                self._audit_warnings = [w for w in self._audit_warnings if w != msg]
 
     # ── text must never be drawn over the art ────────────────────────────
 
@@ -1980,6 +2034,10 @@ class SceneRenderer:
                                      self.scene.min_hold)
         for _fit in take_tail_fits():
             self._warn(f"TAIL_FIT {_fit}")
+        # the timeline is final: a text-on-text pair whose two texts are
+        # never on the board together (one wiped before the other is
+        # written) is not an overlap any frame will show
+        self._prune_overlaps_never_on_the_board_together()
         focus: dict[int, Point] = {}
         hud = self._hud_element_ids()
         caps: dict[int, float] = {}
