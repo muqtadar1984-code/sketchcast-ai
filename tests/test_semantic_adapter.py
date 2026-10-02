@@ -880,3 +880,128 @@ class TestAnEquationSideIsALabel:
         assert _classify_text({"role": "label", "text": "6CO2 + 6H2O + energy (ATP)"}) == "label"
         assert _classify_text({"role": "label", "text": "→"}) == "label"
         assert _classify_text({"role": "label", "text": "Glucose reacts with oxygen to release energy"}) == "sentence"
+
+
+# ── an equation is one line ──────────────────────────────────────────────────
+
+_EQ_NARR = {"s001": "We use a summary word equation. Carbon dioxide and water "
+                    "become glucose and oxygen, with light and chlorophyll.",
+            "s002": "Look again at the products on the right."}
+
+
+def _eq_plan(elements=None, steps=None):
+    els = elements if elements is not None else [
+        {"id": "leaf", "type": "illustration", "asset": "leaf_section",
+         "role": "root_visual"},
+        {"id": "eq_left", "type": "text", "text": "Carbon Dioxide + Water", "role": "label"},
+        {"id": "eq_arrow", "type": "text", "text": "→", "role": "label"},
+        {"id": "eq_right", "type": "text", "text": "Glucose + Oxygen", "role": "label"},
+        {"id": "eq_light", "type": "text", "text": "Light", "role": "label"},
+    ]
+    sts = steps if steps is not None else [
+        {"segment": 1, "decision": "NEW_VISUAL", "actions": [
+            {"verb": "DRAW", "target": {"element": "leaf"}},
+            {"verb": "WRITE", "target": {"element": "eq_left"}},
+            {"verb": "WRITE", "target": {"element": "eq_arrow"}},
+            {"verb": "WRITE", "target": {"element": "eq_right"}},
+            {"verb": "WRITE", "target": {"element": "eq_light"}}]},
+        {"segment": 2, "decision": "FOCUS", "actions": [
+            {"verb": "HIGHLIGHT", "target": {"element": "eq_right"}}]},
+    ]
+    return {"chapters": [{
+        "id": "c1", "concept": "photosynthesis_equation", "transition": "clear_and_redraw",
+        "assets": {"leaf_section": "A leaf cross-section"},
+        "elements": els, "steps": sts}]}
+
+
+def _eq_chapter(adapted):
+    return adapted["chapters"][0]
+
+
+class TestAnEquationIsOneLine:
+    """Photosynthesis, 2026-10-02: 'Carbon Dioxide + Water', '→' and 'Glucose +
+    Oxygen' were three labels in a column; the keep-outs moved them apart and
+    the board showed the products above the reactants."""
+
+    def test_three_pieces_become_one_caption_under_the_first_id(self):
+        adapted, issues = adapt_semantic_plan(_eq_plan(), _EQ_NARR)
+        texts = {e["id"]: e for e in _eq_chapter(adapted)["elements"] if e["type"] == "text"}
+        assert "eq_arrow" not in texts and "eq_right" not in texts
+        eq = texts["eq_left"]
+        assert eq["text"] == "Carbon Dioxide + Water → Glucose + Oxygen"
+        assert eq["role"] == "caption"
+        assert eq["at"][0] > 300, "the caption slot, never the label column"
+        assert texts["eq_light"]["role"] == "label", "a condition stays a label"
+        assert "EQUATION_MERGED" in [i["code"] for i in issues]
+
+    def test_the_line_is_written_once_and_later_actions_follow_it(self):
+        adapted, _ = adapt_semantic_plan(_eq_plan(), _EQ_NARR)
+        steps = _eq_chapter(adapted)["steps"]
+        writes = [a for a in steps[0]["actions"]
+                  if a["verb"] == "write" and a["target"] == "eq_left"]
+        assert len(writes) == 1, steps[0]["actions"]
+        targets = {a.get("target") for st in steps for a in st["actions"]}
+        assert not targets & {"eq_arrow", "eq_right"}, targets
+        moved = any(a.get("target") == "eq_left" for a in steps[1]["actions"])
+        assert moved, "the highlight on the products moved to the line that holds them"
+
+    def test_an_ascii_arrow_is_drawn_as_an_arrow(self):
+        plan = _eq_plan()
+        plan["chapters"][0]["elements"][2]["text"] = "->"
+        adapted, _ = adapt_semantic_plan(plan, _EQ_NARR)
+        eq = next(e for e in _eq_chapter(adapted)["elements"] if e["id"] == "eq_left")
+        assert eq["text"] == "Carbon Dioxide + Water → Glucose + Oxygen"
+
+    def test_plus_signs_inside_a_run_join_it(self):
+        els = [{"id": "leaf", "type": "illustration", "asset": "leaf_section",
+                "role": "root_visual"},
+               {"id": "t1", "type": "text", "text": "Glucose"},
+               {"id": "p1", "type": "text", "text": "+"},
+               {"id": "t2", "type": "text", "text": "Oxygen"},
+               {"id": "ar", "type": "text", "text": "→"},
+               {"id": "t3", "type": "text", "text": "Carbon dioxide"},
+               {"id": "p2", "type": "text", "text": "+"},
+               {"id": "t4", "type": "text", "text": "Water"}]
+        steps = [{"segment": 1, "decision": "NEW_VISUAL", "actions": [
+            {"verb": "DRAW", "target": {"element": "leaf"}},
+            {"verb": "WRITE", "target": {"element": "t1"}},
+            {"verb": "WRITE", "target": {"element": "t4"}}]}]
+        adapted, _ = adapt_semantic_plan(_eq_plan(els, steps), _EQ_NARR)
+        texts = [e for e in _eq_chapter(adapted)["elements"] if e["type"] == "text"]
+        assert [e["text"] for e in texts] == ["Glucose + Oxygen → Carbon dioxide + Water"]
+
+    def test_a_plus_alone_is_not_an_equation(self):
+        els = [{"id": "leaf", "type": "illustration", "asset": "leaf_section",
+                "role": "root_visual"},
+               {"id": "t1", "type": "text", "text": "Sunlight"},
+               {"id": "p1", "type": "text", "text": "+"},
+               {"id": "t2", "type": "text", "text": "Water"}]
+        steps = [{"segment": 1, "decision": "NEW_VISUAL", "actions": [
+            {"verb": "DRAW", "target": {"element": "leaf"}},
+            {"verb": "WRITE", "target": {"element": "t1"}}]}]
+        adapted, issues = adapt_semantic_plan(_eq_plan(els, steps), _EQ_NARR)
+        assert "EQUATION_MERGED" not in [i["code"] for i in issues]
+        assert {e["id"] for e in _eq_chapter(adapted)["elements"]} >= {"t1", "t2"}
+
+    def test_a_title_is_never_a_term(self):
+        plan = _eq_plan()
+        plan["chapters"][0]["elements"][1]["role"] = "title"
+        adapted, issues = adapt_semantic_plan(plan, _EQ_NARR)
+        assert "EQUATION_MERGED" not in [i["code"] for i in issues]
+
+    def test_a_line_too_long_for_the_caption_slot_is_left_alone_and_said(self):
+        plan = _eq_plan()
+        plan["chapters"][0]["elements"][1]["text"] = "Carbon dioxide from the surrounding air"
+        plan["chapters"][0]["elements"][3]["text"] = "Glucose stored in the leaf as starch"
+        adapted, issues = adapt_semantic_plan(plan, _EQ_NARR)
+        codes = [i["code"] for i in issues]
+        assert "EQUATION_TOO_LONG_TO_MERGE" in codes and "EQUATION_MERGED" not in codes
+
+    def test_the_merged_plan_compiles_and_validates(self):
+        adapted, _ = adapt_semantic_plan(_eq_plan(), _EQ_NARR)
+        plan = parse_visual_plan(adapted)
+        scenes, _, report = compile_plan(plan, _EQ_NARR)
+        eq = next(e for e in scenes["s001"]["elements"] if e["id"] == "eq_left")
+        assert eq["text"] == "Carbon Dioxide + Water → Glucose + Oxygen", report
+        for sc in scenes.values():
+            Scene.model_validate(sc)
