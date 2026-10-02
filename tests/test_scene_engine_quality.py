@@ -3346,3 +3346,70 @@ class TestADroppedElementIsNotAZoomTarget:
         b = r.bound["lbl_rbc"].box
         assert r.cam.state_at(zt.end).cy == \
             pytest.approx((b[1] + b[3]) / 2, abs=1.0)
+
+
+class TestOverlapsThatNeverShareAFrame:
+    """The overlap audit measures boxes before any timeline exists. A text
+    written where an ERASED text used to be is not an overlap any frame
+    shows — the maths board wipes a filled column and writes the next
+    working, notes included, on the same rows (a0fcb332, 2026-10-02: eight
+    "overlaps" in four scenes, each an erased note against its successor,
+    and the gate refused a lesson whose frames were correct)."""
+
+    @staticmethod
+    def _scene(actions):
+        from spike.scene_engine.schema import Scene
+        return Scene.model_validate({
+            "id": "t", "narration": "One note, then its successor on the same spot.",
+            "elements": [
+                {"id": "a", "type": "text", "text": "subtract 5", "at": [95, 200], "anchor": "lt", "role": "caption"},
+                {"id": "b", "type": "text", "text": "divide by 2", "at": [98, 204], "anchor": "lt", "role": "caption"},
+                {"id": "wipe", "type": "group", "children": ["a"]}],
+            "actions": actions})
+
+    @staticmethod
+    def _overlaps(r):
+        return [w for w in r.audit()["warnings"] if w.startswith("TEXT_OVERLAP")]
+
+    def test_a_text_written_after_the_other_was_erased_is_not_an_overlap(self):
+        from spike.scene_engine.render import SceneRenderer
+        r = SceneRenderer(self._scene([{"verb": "write", "target": "a"},
+                                       {"verb": "erase", "target": "a", "duration": 0.9},
+                                       {"verb": "write", "target": "b"}]))
+        assert self._overlaps(r), "before the timeline exists the boxes do collide"
+        r.compile(12.0)
+        assert not self._overlaps(r)
+
+    def test_an_erase_through_a_group_counts(self):
+        from spike.scene_engine.render import SceneRenderer
+        r = SceneRenderer(self._scene([{"verb": "write", "target": "a"},
+                                       {"verb": "erase", "target": "wipe", "duration": 0.9},
+                                       {"verb": "write", "target": "b"}]))
+        r.compile(12.0)
+        assert not self._overlaps(r)
+
+    def test_two_texts_that_share_a_frame_stay_reported(self):
+        from spike.scene_engine.render import SceneRenderer
+        both = SceneRenderer(self._scene([{"verb": "write", "target": "a"},
+                                          {"verb": "write", "target": "b"}]))
+        both.compile(12.0)
+        assert self._overlaps(both) == ["TEXT_OVERLAP a+b"]
+        # erased only AFTER the second was written: they were together
+        late = SceneRenderer(self._scene([{"verb": "write", "target": "a"},
+                                          {"verb": "write", "target": "b"},
+                                          {"verb": "erase", "target": "a", "duration": 0.9}]))
+        late.compile(12.0)
+        assert self._overlaps(late) == ["TEXT_OVERLAP a+b"]
+
+    def test_a_text_present_from_the_start_is_on_the_board_until_erased(self):
+        """No action introduces ``a``: it is on the board from t=0, so a text
+        written over it before it is erased shares a frame with it."""
+        from spike.scene_engine.render import SceneRenderer
+        r = SceneRenderer(self._scene([{"verb": "write", "target": "b"},
+                                       {"verb": "erase", "target": "a", "duration": 0.9}]))
+        r.compile(12.0)
+        assert self._overlaps(r) == ["TEXT_OVERLAP a+b"]
+        gone_first = SceneRenderer(self._scene([{"verb": "erase", "target": "a", "duration": 0.9},
+                                                {"verb": "write", "target": "b"}]))
+        gone_first.compile(12.0)
+        assert not self._overlaps(gone_first)

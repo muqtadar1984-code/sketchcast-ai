@@ -981,6 +981,17 @@ def try_it_example(t: TryIt) -> WorkedExample | None:
             rels, _err = _parse(givens, "the try-it equation")
     expression = bool(rels) and rels[0].is_expression
     target = ", ".join(sorted(str(s) for s in rels[0].free_symbols)) if rels else "x"
+    # the unknown is what the ANSWER names when that is some of the
+    # equation's symbols: a triangle whose setup wrote c^2 = a^2 + b^2 with
+    # a = 6 and b = 8 is solved for c, and its answer "c = 10" was judged
+    # against solutions carrying a and b too (a0fcb332, 2026-10-02: the
+    # try-it dropped for "the answer says c = 10")
+    if rels:
+        ans, _e = _parse(_split_answers(t.answer), "the try-it answer")
+        named = {str(sym) for r in (ans or []) if r.is_equation and r.lhs.is_Symbol for sym in [r.lhs]}
+        known = {str(sym) for r in rels for sym in r.free_symbols}
+        if named and named < known:
+            target = ", ".join(sorted(named))
     rounding = any(s.kind == "round" for s in t.steps)
     data_task = None
     if rels and rels[0].is_data:

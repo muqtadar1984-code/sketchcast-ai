@@ -528,3 +528,27 @@ def test_the_prompt_tells_the_model_about_formula_setups_and_stated_rejections()
     from maths.lesson import _STEP_RULES
     assert "Pythagoras" in _STEP_RULES and "stays in 'after' until a step uses it" in _STEP_RULES
     assert "reject the negative root" in _STEP_RULES
+
+
+def test_a_try_it_solved_for_one_side_of_a_formula_is_judged_on_that_side():
+    """Production a0fcb332 (2026-10-02): the try-it's setup wrote the theorem
+    with both legs, so its first line named a, b and c and the answer "c = 10"
+    was compared with solutions that carried a = 6 and b = 8 too — dropped
+    for "the answer says c = 10". The unknown is what the answer names."""
+    from maths.verify import try_it_example
+
+    def try_it(answer, root="take the positive square root: c is a length"):
+        return TryIt(problem="A right-angled triangle has legs 6 cm and 8 cm. Find the hypotenuse c.", answer=answer,
+                     steps=[Step(kind="setup", operation="Pythagoras' theorem", before=[],
+                                 after=["c^2 = a^2 + b^2", "a = 6", "b = 8"], speech="s"),
+                            Step(operation="substitute the sides", before=["c^2 = a^2 + b^2", "a = 6", "b = 8"],
+                                 after=["c^2 = 6^2 + 8^2"], speech="t"),
+                            Step(operation="evaluate", before=["c^2 = 6^2 + 8^2"], after=["c^2 = 100"], speech="u"),
+                            Step(operation=root, before=["c^2 = 100"], after=["c = 10"], speech="v")])
+    ok = verify_try_it(try_it(["c = 10"]))
+    assert ok.ok is True, ok.detail
+    assert try_it_example(try_it(["c = 10"])).target == "c"
+    wrong = verify_try_it(try_it(["c = 14"]))
+    assert wrong.ok is False
+    # an answer naming every unknown of the line is judged as before
+    assert try_it_example(TryIt(problem="x + y = 10", answer=["x = 4", "y = 6"])).target == "x, y"
