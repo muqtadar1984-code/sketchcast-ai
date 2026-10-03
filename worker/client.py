@@ -61,7 +61,7 @@ def admin() -> Client:
 # a reviewer's verdict with an upload's lifecycle.
 OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "issue_resolve", "topic_harvest", "topic_derive", "topic_article",
                                 "figure_render", "topic_questions", "topic_publish", "topic_supersede",
-                                "youtube_playlists", "youtube_enrich"})
+                                "youtube_playlists", "youtube_enrich", "announcement_email"})
 
 
 def generation_to_mirror(job: Optional[dict]) -> Optional[str]:
