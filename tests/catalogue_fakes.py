@@ -97,6 +97,11 @@ class _Query:
         self.filters.append(("in", col, list(vals)))
         return self
 
+    def is_(self, col, val):
+        """postgrest ``is_(col, "null")`` — only the null form is modelled."""
+        self.filters.append(("is", col, val))
+        return self
+
     @property
     def not_(self):
         """postgrest's ``q.not_.in_(col, vals)`` — the next filter is negated
@@ -158,6 +163,8 @@ class _Query:
             if kind == "in" and v not in val:
                 return False
             if kind == "not_in" and v in val:
+                return False
+            if kind == "is" and val == "null" and v is not None:
                 return False
         return True
 

@@ -805,6 +805,14 @@ def _serve(sb, stale_min: int, reap_every: float = 60, grace: float | None = Non
             maybe_poll_cloudflare(sb)
         except Exception as exc:  # noqa: BLE001
             log.error("Cloudflare stats tick error: %s", exc)
+        # Issue resolutions reach their owners as ONE digest per owner, sent
+        # from here once everything of theirs is resolved and the queue has
+        # gone quiet (support_agent/notices.py) — never one email per issue.
+        try:
+            from support_agent.notices import flush_due_notices
+            flush_due_notices(sb)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Issue digest tick error: %s", exc)
     budget = SHUTDOWN_GRACE_SECONDS if grace is None else grace
     deadline = time.monotonic() + budget
     while _holding_work() and time.monotonic() < deadline:
