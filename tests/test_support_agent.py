@@ -709,7 +709,7 @@ def _drive(monkeypatch, action, *, outcome="requeued"):
         "user_message": "Please upload a text PDF of the same pages.", "staff_note": "s",
         "recommended_action": action, "gate_signals": {}})
     monkeypatch.setattr(agent_mod, "retry_transient", lambda sb, gen: outcome)
-    monkeypatch.setattr(agent_mod, "notify_owner", lambda sb, owner, subject, text: mails.append((owner, subject, text)) or True)
+    monkeypatch.setattr(agent_mod, "queue_owner_notice", lambda sb, owner, issue_id, what, note: mails.append((owner, what, note)) or True)
     monkeypatch.setattr(agent_mod, "notify_staff", lambda issue, reason: None)
     gen = {"id": "g1", "kind": "exam_paper", "owner_id": "u1", "book_id": None, "status": "error"}
     sb = _AgentSB(gen)
@@ -721,16 +721,16 @@ def _drive(monkeypatch, action, *, outcome="requeued"):
 def test_a_self_heal_retry_tells_the_owner(monkeypatch):
     sb, mails = _drive(monkeypatch, "retry_transient")
     assert [m[0] for m in mails] == ["u1"]
-    assert "rebuilding your test paper" in mails[0][1]
-    assert "queued it again" in mails[0][2] and "reply to this email" in mails[0][2]
+    assert mails[0][1] == "test paper"
+    assert "queued it again" in mails[0][2]
     assert any(t == "platform_issues" and r.get("status") == "resolved" for t, r in sb.updates)
 
 
 def test_a_user_fix_reaches_the_owner_with_the_advice(monkeypatch):
     sb, mails = _drive(monkeypatch, "user_fix")
     assert len(mails) == 1 and mails[0][0] == "u1"
-    assert "test paper" in mails[0][1]
-    assert "Please upload a text PDF" in mails[0][2] and "reply to this email" in mails[0][2]
+    assert mails[0][1] == "test paper"
+    assert "Please upload a text PDF" in mails[0][2]
 
 
 def test_a_refused_retry_escalates_and_does_not_claim_a_fix(monkeypatch):
@@ -792,7 +792,7 @@ def test_a_content_mismatch_resolves_as_a_user_fix_and_tells_the_owner_what_the_
     monkeypatch.setattr(agent_mod, "reindex_and_regenerate", lambda *a, **k: {
         "action": "content_mismatch", "title": "pythagoras theorem", "actual": "breast anatomy and clinical surgery",
         "detail": "the whole file reads as 'breast anatomy and clinical surgery', not as 'pythagoras theorem'"})
-    monkeypatch.setattr(agent_mod, "notify_owner", lambda sb, owner, subject, text: mails.append((owner, subject, text)) or True)
+    monkeypatch.setattr(agent_mod, "queue_owner_notice", lambda sb, owner, issue_id, what, note: mails.append((owner, what, note)) or True)
     monkeypatch.setattr(agent_mod, "notify_staff", lambda issue, reason: None)
     gen = {"id": "g1", "kind": "exam_paper", "owner_id": "u1", "book_id": "b1", "status": "error"}
     sb = _AgentSBWithBook(gen)
