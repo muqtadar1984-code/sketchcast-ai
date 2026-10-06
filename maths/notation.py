@@ -157,9 +157,16 @@ class NotationError(ValueError):
     the line, so a verification report can say which one."""
 
 
+# In a school lesson a capital letter is a letter. The calculator's parser
+# resolves "E" to Euler's number, so "E = 3x + 7" (the expression given a
+# name, Substitution kit 604b3b79, 2026-10-06) read as 2.718... = 3x + 7 and
+# no step of it could be followed. Overridden here, for notation only.
+_LETTERS = {"E": sp.Symbol("E")}
+
+
 def _side(text: str, *, where: str) -> sp.Expr:
     cleaned = validate_text(text, field=where)
-    expr = _parse(cleaned)
+    expr = _parse(cleaned, local_dict=_LETTERS)
     if not isinstance(expr, sp.Expr):
         raise MathInputError(f"{where}: not an expression")
     return expr

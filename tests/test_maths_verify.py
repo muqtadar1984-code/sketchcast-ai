@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sympy as sp
+
 from maths.schema import Mistake, Step, TryIt, WorkedExample, Lesson
 from maths.verify import verify_example, verify_lesson, verify_try_it
 
@@ -552,3 +554,80 @@ def test_a_try_it_solved_for_one_side_of_a_formula_is_judged_on_that_side():
     assert wrong.ok is False
     # an answer naming every unknown of the line is judged as before
     assert try_it_example(TryIt(problem="x + y = 10", answer=["x = 4", "y = 6"])).target == "x, y"
+
+
+# ── an expression task carries values: substitution (2026-10-06) ──────────────
+# Kit 604b3b79 "Substitution: Evaluating Algebraic Expressions": every step
+# read as "'x + 5' is not equivalent to '3 + 5'", the answer as "'8' is not
+# equivalent to 'x + 5'"; a lesson that wrote the values as lines or named the
+# expression ("E = 3x + 7") was "mixed" and unreadable.
+
+def _evaluate(problem, givens, steps, answer, target="expression"):
+    return WorkedExample(label="Ex", task="evaluate", problem=problem, givens=givens, target=target,
+                         steps=[Step(operation=op, before=b, after=a, speech="s") for op, b, a in steps],
+                         final_answer=answer)
+
+
+def test_a_worksheet_substitution_verifies_with_the_value_from_the_words():
+    ex = _evaluate("Evaluate x + 5 when x = 3", ["x + 5"],
+                   [("substitute x with 3", ["x + 5"], ["3 + 5"]), ("add", ["3 + 5"], ["8"])], ["8"])
+    rep = verify_example(ex)
+    assert rep.status == "verified", [c.detail for c in rep.failures]
+    wrong_sub = _evaluate("Evaluate x + 5 when x = 3", ["x + 5"],
+                          [("substitute x with 3", ["x + 5"], ["4 + 5"]), ("add", ["4 + 5"], ["9"])], ["9"])
+    rep = verify_example(wrong_sub)
+    assert rep.status == "failed" and any("with x = 3" in c.detail for c in rep.failures)
+    wrong_answer = _evaluate("Evaluate 4x when x = 5", ["4x"], [("substitute", ["4x"], ["4(5)"]), ("multiply", ["4(5)"], ["20"])], ["25"])
+    assert verify_example(wrong_answer).status == "failed"
+
+
+def test_the_values_may_be_lines_of_the_givens_and_the_expression_may_carry_a_name():
+    as_lines = _evaluate("Find the value of 3x + 7 when x = 4.", ["3x + 7", "x = 4"],
+                         [("Substitute 4 for x", ["3x + 7", "x = 4"], ["3(4) + 7"]),
+                          ("Multiply", ["3(4) + 7"], ["12 + 7"]), ("Add", ["12 + 7"], ["19"])], ["19"])
+    rep = verify_example(as_lines)
+    assert rep.status == "verified", [c.detail for c in rep.failures]
+    named = _evaluate("Find the value of E = 3x + 7 when x = 4.", ["E = 3x + 7", "x = 4"],
+                      [("Substitute 4 for x", ["E = 3x + 7", "x = 4"], ["E = 3(4) + 7"]),
+                       ("Multiply", ["E = 3(4) + 7"], ["E = 12 + 7"]), ("Add", ["E = 12 + 7"], ["E = 19"])], ["E = 19"])
+    rep = verify_example(named)
+    assert rep.status == "verified", [c.detail for c in rep.failures]
+    # "E = 3x + 7" in the words gives E no value; only x has one
+    from maths.verify import _values
+    assert _values(named) == {sp.Symbol("x"): 4}
+
+
+def test_two_letters_a_squared_negative_and_a_two_line_answer():
+    two = _evaluate("Evaluate (4a + b)/(2a - b) when a = 2 and b = 1", ["(4a + b)/(2a - b)", "a = 2", "b = 1"],
+                    [("Substitute values for a and b", ["(4a + b)/(2a - b)", "a = 2", "b = 1"], ["(4(2) + 1)/(2(2) - 1)"]),
+                     ("Work out", ["(4(2) + 1)/(2(2) - 1)"], ["9/3"]), ("Divide", ["9/3"], ["3"])], ["(4(2) + 1)/(2(2) - 1)", "3"])
+    rep = verify_example(two)
+    assert rep.status == "verified", [c.detail for c in rep.failures]
+    sq = _evaluate("Evaluate 2y^2 - y when y = -3", ["2y^2 - y", "y = -3"],
+                   [("Substitute -3 for y", ["2y^2 - y", "y = -3"], ["2(-3)^2 - (-3)"]),
+                    ("Evaluate exponent (-3)^2", ["2(-3)^2 - (-3)"], ["2(9) + 3"]),
+                    ("Multiply 2 by 9", ["2(9) + 3"], ["18 + 3"]), ("Add", ["18 + 3"], ["21"])], ["21"])
+    rep = verify_example(sq)
+    assert rep.status == "verified", [c.detail for c in rep.failures]
+    # the answer must be a value, and a value that is not the expression's fails
+    sq.final_answer = ["2y^2 - y"]
+    assert verify_example(sq).status == "failed"
+
+
+def test_a_substitution_mistake_is_still_a_mistake_and_other_expression_tasks_are_untouched():
+    ex = _evaluate("Evaluate 3x + 7 when x = 4", ["3x + 7"],
+                   [("Substitute", ["3x + 7"], ["3(4) + 7"]), ("Work out", ["3(4) + 7"], ["19"])], ["19"])
+    ex.common_mistake = Mistake(from_state=["3(4) + 7"], wrong_state=["3 + 4 + 7"], operation="add instead of multiply",
+                                why_wrong="3x means 3 times x", speech="s")
+    rep = verify_example(ex)
+    assert rep.status == "verified", [c.detail for c in rep.failures]
+    assert {c.name: c for c in rep.checks}["mistake"].ok is True
+    # simplify without values: a step that changes the expression still fails
+    bad = WorkedExample(label="s", task="simplify", problem="2x + 3x", givens=["2x + 3x"], target="expression",
+                        steps=[Step(operation="collect", before=["2x + 3x"], after=["6x"], speech="s")], final_answer=["6x"])
+    assert verify_example(bad).status == "failed"
+
+
+def test_the_model_is_told_the_shape_of_an_evaluate_task():
+    from maths.lesson import _STEP_RULES
+    assert "task evaluate" in _STEP_RULES and '"3x + 7", "x = 4"' in _STEP_RULES and "Never give the expression a name" in _STEP_RULES
