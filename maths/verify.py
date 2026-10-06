@@ -477,9 +477,110 @@ def _data_step(before: list[Relation], after: list[Relation], task: Optional[str
     return False, f"the {task} of {before[0].text!r} is {_fmt_stat(want)}, not {after[0].text!r}"
 
 
+# ── the values an expression task supplies ───────────────────────────────────
+#
+# "Evaluate x + 5 when x = 3" (Substitution kit 604b3b79, 2026-10-06): every
+# substitution step read as "'x + 5' is not equivalent to '3 + 5'", the answer
+# as "'8' is not equivalent to 'x + 5'", and a lesson that wrote the values as
+# lines ("3x + 7", "x = 4") or named the expression ("E = 3x + 7") was "mixed"
+# and unreadable. The values are part of the problem: a step or an answer is
+# judged with them substituted.
+
+# a letter given a number in the words: "when x = 3", "for a = 2 and b = -1",
+# "x = 1/2". Never "E = 3x + 7" (a number followed by a letter or a bracket is
+# a term, not a value).
+_VALUE_RE = re.compile(r"\b([a-zA-Z])\s*=\s*(-?\s*\d+(?:\.\d+)?(?:\s*/\s*\d+)?)(?!\s*[a-zA-Z(.\d])")
+
+
+def _is_assignment(r: Relation) -> bool:
+    """``x = 3``: a letter given a number."""
+    return (r.is_equation and isinstance(r.lhs, sp.Symbol) and r.rhs is not None
+            and not r.rhs.free_symbols and bool(r.rhs.is_number))
+
+
+def _values(ex: WorkedExample) -> dict:
+    """The values the problem assigns its letters, for an EXPRESSION task:
+    assignment lines among the givens first, then the words."""
+    if ex.task not in EXPRESSION_TASKS:
+        return {}
+    out: dict = {}
+    rels, _err = _parse(ex.givens, "the givens")
+    for r in rels or []:
+        if _is_assignment(r):
+            out[r.lhs] = r.rhs
+    for name, num in _VALUE_RE.findall(ex.problem or ""):
+        try:
+            out.setdefault(sp.Symbol(name), sp.Rational(num.replace(" ", "")))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _problem_symbols(ex: WorkedExample) -> set:
+    """The letters of the problem's expression(s) — the ones a value may be
+    given for; any other letter on the left of an equation is a NAME for the
+    expression ("E = 3x + 7"), not an unknown."""
+    rels, _err = _parse(ex.givens, "the givens")
+    free: set = set()
+    for r in rels or []:
+        if _is_assignment(r) or r.is_data:
+            continue
+        if r.is_equation and isinstance(r.lhs, sp.Symbol) and r.rhs is not None and r.lhs not in r.rhs.free_symbols:
+            free |= r.rhs.free_symbols   # "E = 3x + 7": E names the expression, x is its letter
+        else:
+            free |= r.free_symbols
+    if not free:
+        for name, _num in _VALUE_RE.findall(ex.problem or ""):
+            free.add(sp.Symbol(name))
+    return free
+
+
+def _expression_lines(rels: list[Relation], values: dict, letters: set) -> Optional[list[tuple]]:
+    """An expression-task state as ``[(relation, expression)]`` with the
+    values substituted: a bare expression is itself; an assignment of one of
+    the problem's letters is a value restated, not a line; ``E = 3x + 7`` with
+    E not a letter of the problem is the expression under a name. None when
+    a line is a genuine relation (an equation to solve, an inequality)."""
+    out: list[tuple] = []
+    for r in rels:
+        if r.is_data:
+            return None
+        if r.is_expression:
+            out.append((r, r.lhs.subs(values)))
+        elif _is_assignment(r) and (r.lhs in letters or r.lhs in values):
+            continue
+        elif r.is_equation and isinstance(r.lhs, sp.Symbol) and r.lhs not in letters and r.rhs is not None:
+            out.append((r, r.rhs.subs(values)))
+        else:
+            return None
+    return out
+
+
+def _expression_step(before: list[Relation], after: list[Relation], ex: WorkedExample) -> Optional[tuple]:
+    """The expression-task reading of a step, or None to fall through: each
+    line after says what the matching line before said, once the problem's
+    values are in. One line after several (the values written, then used)
+    is matched against the last line before."""
+    values, letters = _values(ex), _problem_symbols(ex)
+    eb, ea = _expression_lines(before, values, letters), _expression_lines(after, values, letters)
+    if not eb or not ea:
+        return None
+    if len(eb) != len(ea):
+        if len(ea) == 1:
+            eb = eb[-1:]
+        else:
+            return None, f"{len(eb)} expression(s) became {len(ea)}"
+    for (rb, b), (ra, a) in zip(eb, ea):
+        if not _timed(_zero, b - a):
+            with_values = (" with " + ", ".join(f"{k} = {v}" for k, v in sorted(values.items(), key=lambda kv: str(kv[0])))
+                           if values else "")
+            return False, f"{rb.text!r} is not equivalent to {ra.text!r}{with_values}"
+    return True, "equivalent expressions" + (" under the given values" if values else "")
+
+
 def _states_equivalent(before: list[Relation], after: list[Relation], variables: list[sp.Symbol],
                        mode: str, task: Optional[str] = None, *, operation: str = "",
-                       problem: str = "") -> tuple[Optional[bool], str]:
+                       problem: str = "", ex: Optional[WorkedExample] = None) -> tuple[Optional[bool], str]:
     """(verdict, detail) for "does `after` mean what `before` meant".
     ``mode`` is the example's default ("all" for a declared system, "any"
     otherwise); a state that IS a system is read as one regardless.
@@ -502,6 +603,12 @@ def _states_equivalent(before: list[Relation], after: list[Relation], variables:
     kb, ka = _kinds(before), _kinds(after)
     if kb == "data":
         return _data_step(before, after, task)
+    if ex is not None and ex.task in EXPRESSION_TASKS:
+        # an expression task: the lines as expressions with the problem's
+        # values in, assignments and names set aside (_expression_step)
+        read = _expression_step(before, after, ex)
+        if read is not None:
+            return read
     if kb != ka or kb in ("mixed", "empty"):
         return None, f"the lines change kind ({kb} -> {ka})"
     if kb == "expressions":
@@ -730,7 +837,7 @@ def _check_step(i: int, st: Step, ex: WorkedExample, variables: list[sp.Symbol])
         return Check(name, None, f"setup: {st.operation or 'a relation from the problem'} — "
                                  "brought in from the problem's words, not a transformation")
     ok, detail = _states_equivalent(before, after, variables, _mode(ex), ex.task,
-                                    operation=st.operation, problem=ex.problem)
+                                    operation=st.operation, problem=ex.problem, ex=ex)
     return Check(name, ok, f"{st.operation}: {detail}" if st.operation else detail)
 
 
@@ -750,7 +857,7 @@ def _check_chain(ex: WorkedExample, givens: Optional[list[Relation]], variables)
         if b is None:
             out.append(Check("chain start", None, err))
         else:
-            ok, detail = _states_equivalent(givens, b, variables, _mode(ex), ex.task)
+            ok, detail = _states_equivalent(givens, b, variables, _mode(ex), ex.task, ex=ex)
             out.append(Check("chain start", ok, "the working starts from the problem" if ok
                              else f"the working does not start from the problem: {detail}"))
     prev: Optional[list[str]] = None
@@ -762,7 +869,7 @@ def _check_chain(ex: WorkedExample, givens: Optional[list[Relation]], variables)
                 if a is None or b is None:
                     out.append(Check(f"chain {i + 1}", None, e1 or e2))
                 else:
-                    ok, detail = _states_equivalent(a, b, variables, _mode(ex), ex.task)
+                    ok, detail = _states_equivalent(a, b, variables, _mode(ex), ex.task, ex=ex)
                     if not ok:
                         out.append(Check(f"chain {i + 1}", ok,
                                          f"step {i + 1} does not start where step {i} ended: {detail}"))
@@ -807,7 +914,7 @@ def _check_answer(ex: WorkedExample, givens: Optional[list[Relation]], variables
         a, err = _parse(last.after, "the last line")
         if a is None:
             return Check("answer", None, err)
-        ok, detail = _states_equivalent(a, ans, variables, _mode(ex))
+        ok, detail = _states_equivalent(a, ans, variables, _mode(ex), ex=ex)
         if ok:
             return Check("answer", True, "the answer is what the rounding reaches")
         return Check("answer", ok, f"the answer is not the last line's value: {detail}")
@@ -849,28 +956,37 @@ def _check_answer(ex: WorkedExample, givens: Optional[list[Relation]], variables
                 return Check("answer", True, f"answer verified: {_fmt_solutions(actual)} ({why})")
         return Check("answer", False, f"the problem's solution is {_fmt_solutions(expected)}, "
                                       f"the answer says {_fmt_solutions(actual)}")
-    # expression tasks
-    if len(answers) != 1:
-        return Check("answer", False, f"one expression expected, got {len(answers)}")
+    # expression tasks: the problem's expression, with the values the problem
+    # gives its letters substituted, against the answer read the same way
+    # ("8" for "x + 5 when x = 3"; "E = 19" names the value; two answer lines
+    # must agree)
     ans, err = _parse(answers, "the final answer")
     if ans is None:
         return Check("answer", None, err)
-    a = ans[0]
-    problem = givens[0] if givens else None
-    if problem is None or not problem.is_expression or not a.is_expression:
-        if ex.task == "evaluate" and a.is_equation and problem is not None:
-            a = Relation(a.rhs, None, None, a.text)
-        else:
-            return Check("answer", None, "the problem and the answer must both be expressions")
-    if not _timed(_zero, problem.lhs - a.lhs):
-        return Check("answer", False, f"{a.text!r} is not equivalent to {problem.text!r}")
-    if ex.task == "expand" and sp.expand(a.lhs) != a.lhs:
-        return Check("answer", False, f"{a.text!r} is not fully expanded")
-    if ex.task == "factorise" and a.lhs.is_Add and sp.expand(a.lhs) == a.lhs and len(a.lhs.args) > 1:
-        return Check("answer", False, f"{a.text!r} is not factorised")
-    if ex.task == "evaluate" and a.lhs.free_symbols:
-        return Check("answer", False, f"{a.text!r} is not a value")
-    return Check("answer", True, "answer verified")
+    values, letters = _values(ex), _problem_symbols(ex)
+    pe = _expression_lines(givens, values, letters)
+    ae = _expression_lines(ans, values, letters)
+    if not pe or not ae:
+        return Check("answer", None, "the problem and the answer must both be expressions")
+    if len(pe) != 1:
+        return Check("answer", None, f"one expression expected in the givens, got {len(pe)}")
+    problem_rel, problem_e = pe[0]
+    for rel, a_e in ae:
+        if not _timed(_zero, problem_e - a_e):
+            with_values = (" with " + ", ".join(f"{k} = {v}" for k, v in sorted(values.items(), key=lambda kv: str(kv[0])))
+                           if values else "")
+            return Check("answer", False, f"{rel.text!r} is not equivalent to {problem_rel.text!r}{with_values}")
+    if ex.task in ("expand", "factorise", "simplify") and len(ae) != 1:
+        return Check("answer", False, f"one expression expected, got {len(ae)}")
+    rel, a_e = ae[-1]
+    a_form = rel.lhs if rel.is_expression else rel.rhs
+    if ex.task == "expand" and sp.expand(a_form) != a_form:
+        return Check("answer", False, f"{rel.text!r} is not fully expanded")
+    if ex.task == "factorise" and a_form.is_Add and sp.expand(a_form) == a_form and len(a_form.args) > 1:
+        return Check("answer", False, f"{rel.text!r} is not factorised")
+    if ex.task == "evaluate" and a_form.free_symbols:
+        return Check("answer", False, f"{rel.text!r} is not a value")
+    return Check("answer", True, "answer verified" + (f": {a_e}" if ex.task == "evaluate" else ""))
 
 
 def _setup_state(ex: WorkedExample) -> Optional[list[Relation]]:
@@ -913,7 +1029,7 @@ def _check_last_step(ex: WorkedExample, variables) -> Optional[Check]:
             return Check("chain end", True, "the last line gives the answer")
         return Check("chain end", False, f"the last line does not give the stated answer: "
                                           f"{_fmt_stat(va)} vs {_fmt_stat(vb)}")
-    ok, detail = _states_equivalent(a, b, variables, _mode(ex), ex.task)
+    ok, detail = _states_equivalent(a, b, variables, _mode(ex), ex.task, ex=ex)
     if ok:
         return Check("chain end", True, "the last line gives the answer")
     return Check("chain end", ok, f"the last line does not give the stated answer: {detail}")
@@ -927,7 +1043,7 @@ def _check_mistake(ex: WorkedExample, variables) -> Optional[Check]:
     b, e2 = _parse(m.wrong_state, "the mistake's result")
     if a is None or b is None:
         return Check("mistake", None, e1 or e2)
-    ok, detail = _states_equivalent(a, b, variables, _mode(ex), ex.task)
+    ok, detail = _states_equivalent(a, b, variables, _mode(ex), ex.task, ex=ex)
     if ok is True:
         return Check("mistake", False, "the 'mistake' is actually a valid step — it must not be taught as wrong")
     if ok is False:
