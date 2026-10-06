@@ -631,3 +631,31 @@ def test_a_substitution_mistake_is_still_a_mistake_and_other_expression_tasks_ar
 def test_the_model_is_told_the_shape_of_an_evaluate_task():
     from maths.lesson import _STEP_RULES
     assert "task evaluate" in _STEP_RULES and '"3x + 7", "x = 4"' in _STEP_RULES and "Never give the expression a name" in _STEP_RULES
+
+
+def test_adjacent_letters_are_a_product_and_a_value_may_be_followed_by_a_word():
+    """Worksheet 604b3b79 after the first fix: 'Evaluate 2a^2 - 3ab + b when
+    a = 3 and b = -2' still failed — "a = 3 and" lost its value to the word
+    after it, and "3ab" parsed as three times one symbol named ab."""
+    from maths.notation import parse_relation
+    from maths.verify import _VALUE_RE
+    a, b, m, v = sp.symbols("a b m v")
+    assert parse_relation("2a^2 - 3ab + b").lhs == 2 * a**2 - 3 * a * b + b
+    assert parse_relation("0.5mv^2").lhs == sp.Float(0.5) * m * v**2
+    assert parse_relation("sin(x) + pi").lhs.free_symbols == {sp.Symbol("x")}
+    assert _VALUE_RE.findall("Evaluate 2a^2 - 3ab + b when a = 3 and b = -2") == [("a", "3"), ("b", "-2")]
+    two = _evaluate("Evaluate 2a^2 - 3ab + b when a = 3 and b = -2", ["2a^2 - 3ab + b"],
+                    [("Substitute a = 3 and b = -2", ["2a^2 - 3ab + b"], ["2(3)^2 - 3(3)(-2) + (-2)"]),
+                     ("Work out", ["2(3)^2 - 3(3)(-2) + (-2)"], ["18 + 18 - 2"]), ("Add", ["18 + 18 - 2"], ["34"])], ["34"])
+    rep = verify_example(two)
+    assert rep.status == "verified", [c.detail for c in rep.failures]
+    formula = WorkedExample(label="Ex", task="evaluate", target="expression",
+                            problem="The kinetic energy of an object is E = 0.5mv^2. Find E when m = 4 and v = -6.",
+                            givens=["E = 0.5mv^2", "m = 4", "v = -6"],
+                            steps=[Step(kind="setup", operation="write the formula", before=[], after=["E = 0.5mv^2", "m = 4", "v = -6"], speech="s"),
+                                   Step(operation="Substitute m = 4 and v = -6", before=["E = 0.5mv^2", "m = 4", "v = -6"], after=["E = 0.5(4)(-6)^2"], speech="s"),
+                                   Step(operation="Square", before=["E = 0.5(4)(-6)^2"], after=["E = 0.5(4)(36)"], speech="s"),
+                                   Step(operation="Multiply", before=["E = 0.5(4)(36)"], after=["E = 72"], speech="s")],
+                            final_answer=["E = 72"])
+    rep = verify_example(formula)
+    assert rep.status == "verified", [c.detail for c in rep.failures]

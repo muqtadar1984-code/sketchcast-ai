@@ -487,9 +487,10 @@ def _data_step(before: list[Relation], after: list[Relation], task: Optional[str
 # judged with them substituted.
 
 # a letter given a number in the words: "when x = 3", "for a = 2 and b = -1",
-# "x = 1/2". Never "E = 3x + 7" (a number followed by a letter or a bracket is
-# a term, not a value).
-_VALUE_RE = re.compile(r"\b([a-zA-Z])\s*=\s*(-?\s*\d+(?:\.\d+)?(?:\s*/\s*\d+)?)(?!\s*[a-zA-Z(.\d])")
+# "x = 1/2". Never "E = 3x + 7" (a number followed at once by a letter or a
+# bracket is a term, not a value); "a = 3 and b = -2" is two values — the
+# word after a space is prose (measured 2026-10-06: a = 3 was missed).
+_VALUE_RE = re.compile(r"\b([a-zA-Z])\s*=\s*(-?\s*\d+(?:\.\d+)?(?:\s*/\s*\d+)?)(?![a-zA-Z(\d]|\.\d)")
 
 
 def _is_assignment(r: Relation) -> bool:
@@ -504,13 +505,19 @@ def _values(ex: WorkedExample) -> dict:
     if ex.task not in EXPRESSION_TASKS:
         return {}
     out: dict = {}
+    named: set = set()   # letters that NAME a given expression ("E = 0.5mv^2"): never values
     rels, _err = _parse(ex.givens, "the givens")
     for r in rels or []:
         if _is_assignment(r):
             out[r.lhs] = r.rhs
+        elif r.is_equation and isinstance(r.lhs, sp.Symbol) and r.rhs is not None and r.lhs not in r.rhs.free_symbols:
+            named.add(r.lhs)
     for name, num in _VALUE_RE.findall(ex.problem or ""):
+        sym = sp.Symbol(name)
+        if sym in named:
+            continue
         try:
-            out.setdefault(sp.Symbol(name), sp.Rational(num.replace(" ", "")))
+            out.setdefault(sym, sp.Rational(num.replace(" ", "")))
         except (TypeError, ValueError):
             continue
     return out

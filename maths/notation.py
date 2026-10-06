@@ -163,9 +163,26 @@ class NotationError(ValueError):
 # no step of it could be followed. Overridden here, for notation only.
 _LETTERS = {"E": sp.Symbol("E")}
 
+# "3ab", "4ac", "0.5mv^2": two or three letters with no digit or subscript
+# are a PRODUCT of variables — the rule the board's tokenizer already applies
+# (maths.tokens._PRODUCT_RE) — not one symbol named "ab", which is what the
+# calculator's parser made of it (the same kit: '2a^2 - 3ab + b' could not
+# equal its own substitution). A function or constant name is left alone.
+_LETTER_RUN_RE = re.compile(r"(?<![A-Za-z_])([A-Za-z]{2,3})(?![A-Za-z0-9_(])")
+_KEEP_RUNS = {"pi", "ln", "abs", "exp", "sin", "cos", "tan", "log"}
+
+
+def _split_products(text: str) -> str:
+    def one(m: "re.Match[str]") -> str:
+        run = m.group(1)
+        if run.lower() in _KEEP_RUNS:
+            return run
+        return "*".join(run)
+    return _LETTER_RUN_RE.sub(one, text)
+
 
 def _side(text: str, *, where: str) -> sp.Expr:
-    cleaned = validate_text(text, field=where)
+    cleaned = validate_text(_split_products(text), field=where)
     expr = _parse(cleaned, local_dict=_LETTERS)
     if not isinstance(expr, sp.Expr):
         raise MathInputError(f"{where}: not an expression")
