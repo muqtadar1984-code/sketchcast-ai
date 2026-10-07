@@ -214,6 +214,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "es": "Capítulo", "pt": "Capítulo", "te": "అధ్యాయం", "mr": "प्रकरण",
         "hi": "अध्याय", "ms-arab": "باب",
     },
+    "quiz_number_only": {  # a find-x figure question in the quiz player is auto-marked on the number
+        "en": "(write the number only)", "ms": "(tulis nombornya sahaja)", "ar": "(اكتب الرقم فقط)",
+        "fr": "(écrivez seulement le nombre)", "es": "(escribe solo el número)",
+        "pt": "(escreva apenas o número)", "hi": "(केवल संख्या लिखें)", "mr": "(फक्त संख्या लिहा)",
+        "te": "(సంఖ్య మాత్రమే రాయండి)", "ms-arab": "(توليس نومبورڽ سهاج)",
+    },
     "quiz": {  # questions.json fallback title
         "en": "Quiz", "ms": "Kuiz", "ar": "اختبار قصير", "fr": "Quiz",
         "es": "Cuestionario", "pt": "Questionário", "te": "క్విజ్",

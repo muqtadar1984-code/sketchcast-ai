@@ -532,6 +532,55 @@ class GeometryItem:
         return 5 if self.role == "reasoning" else 2
 
 
+QUIZ_MAX_PX = 720          # the quiz player's picture width cap (a data URL rides in questions.json)
+_QUIZ_GAP_PX = 36
+_QUIZ_LABEL_PX = 40
+
+
+def quiz_image(item: GeometryItem, max_px: int = QUIZ_MAX_PX) -> bytes:
+    """The item's figures as ONE picture for the quiz player: the student
+    images (schematic for a reasoning question, true-scale metric for
+    evidence) side by side at their rendered size — the relative sizes are
+    part of the evidence — each labelled beneath, then scaled to the cap."""
+    import io
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    from maths.geometry.render_static import _FONT
+
+    frames = [Image.open(io.BytesIO(fi.png)).convert("RGBA") for fi in item.images]
+    if not frames:
+        raise GeometryRefusal("bad_schema", "no figure image to show")
+    labelled = any(fi.label for fi in item.images) and len(frames) > 1
+    try:
+        font = ImageFont.truetype(str(_FONT), _QUIZ_LABEL_PX)
+    except OSError:
+        font = ImageFont.load_default()
+    label_h = _QUIZ_LABEL_PX + 12 if labelled else 0
+    width = sum(f.width for f in frames) + _QUIZ_GAP_PX * (len(frames) - 1)
+    height = max(f.height for f in frames) + label_h
+    sheet = Image.new("RGBA", (width, height), (255, 255, 255, 255))
+    draw = ImageDraw.Draw(sheet)
+    x = 0
+    for fi, f in zip(item.images, frames):
+        sheet.alpha_composite(f, (x, 0))
+        if labelled and fi.label:
+            w = draw.textlength(fi.label, font=font)
+            draw.text((x + (f.width - w) / 2, f.height + 4), fi.label, fill=(30, 30, 30, 255), font=font)
+        x += f.width + _QUIZ_GAP_PX
+    if sheet.width > max_px:
+        sheet = sheet.resize((max_px, max(1, round(sheet.height * max_px / sheet.width))), Image.LANCZOS)
+    out = io.BytesIO()
+    sheet.convert("RGB").save(out, format="PNG", optimize=True)
+    return out.getvalue()
+
+
+def quiz_image_data_url(item: GeometryItem) -> str:
+    import base64
+
+    return "data:image/png;base64," + base64.b64encode(quiz_image(item)).decode("ascii")
+
+
 def _policy_for(role: str) -> str:
     return "assessment_schematic" if role == "reasoning" else "instructional_metric"
 
@@ -792,5 +841,5 @@ def _pretty_line(text: str) -> str:
         return s
 
 
-__all__ = ["figure_client", "GEOMETRY_SET_SCHEMA", "GeometryItem", "FigureImage", "geometry_items", "geometry_prompt",
+__all__ = ["figure_client", "quiz_image", "quiz_image_data_url", "GEOMETRY_SET_SCHEMA", "GeometryItem", "FigureImage", "geometry_items", "geometry_prompt",
            "key_lines", "normalise_question", "render_item"]
