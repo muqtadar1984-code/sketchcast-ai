@@ -18,6 +18,12 @@ class _DirectiveClient:
     def analyze(self, prompt, **kwargs):
         return self._inner.analyze(prompt + self._directive, **kwargs)
 
+    def undirected(self):
+        """The client without the language directive — for a call whose
+        output must NOT be in the document's language (a maths fact
+        sentence read back into English to be checked)."""
+        return self._inner
+
     def __getattr__(self, name):
         return getattr(self._inner, name)
 
