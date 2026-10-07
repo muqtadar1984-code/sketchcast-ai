@@ -66,7 +66,7 @@ def write_exam(out_dir: Path, title: str, instructions, fill, tf, match, subj,
 
 
 def write_worksheet(out_dir: Path, title: str, instructions, fill, tf, match, short,
-                    language: str = "en") -> Path:
+                    language: str = "en", extra: list[dict] | None = None) -> Path:
     """Typed, grouped worksheet → the quiz player's unified schema. Mirrors
     write_exam but the free-response section is `short` (with answers) rather than
     long-form `subjective`. Grouped so the player renders one section per kind."""
@@ -89,4 +89,10 @@ def write_worksheet(out_dir: Path, title: str, instructions, fill, tf, match, sh
         if isinstance(q, dict) and str(q.get("q", "")).strip():
             i += 1
             qs.append({"id": f"q{i}", "type": "short", "prompt": str(q.get("q", "")), "answer": str(q.get("answer", "")), "marks": 1})
+    # prebuilt questions in the player's own schema — the maths figure
+    # questions, each with its picture as a data URL — numbered on
+    for q in (extra or []):
+        if isinstance(q, dict) and q.get("type") and str(q.get("prompt", "")).strip():
+            i += 1
+            qs.append({**q, "id": f"q{i}"})
     return _write(out_dir, title, instructions, qs, language)

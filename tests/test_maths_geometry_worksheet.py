@@ -157,7 +157,18 @@ def test_a_geometry_worksheet_prints_verified_diagrams_and_refuses_the_rest(tmp_
     # the wrong-answer twin of q1 is refused, not printed twice
     assert sheet.count("Which of these triangles are scalene?") == 1
     qs = json.loads((tmp_path / "questions.json").read_text(encoding="utf-8"))["questions"]
-    assert qs == [], "figure questions stay out of the quiz player (no picture in its schema)"
+    figure_qs = [q for q in qs if q.get("image")]
+    assert figure_qs, "figure questions reach the quiz player, each with its picture"
+    assert all(q["image"].startswith("data:image/png;base64,") for q in figure_qs)
+    assert {q["type"] for q in figure_qs} <= {"fill_blank", "true_false", "match"}
+    # find x -> fill_blank on the number the engine proved
+    find_x = [q for q in figure_qs if q["type"] == "fill_blank" and "straight line" in q["prompt"]]
+    assert find_x and find_x[0]["answer"] == "110" and "number only" in find_x[0]["prompt"]
+    # "which of these triangles are scalene?" -> one true/false per figure, A true
+    tf = [q for q in figure_qs if q["type"] == "true_false" and "scalene" in q["prompt"]]
+    assert [q["prompt"].rsplit(" — ", 1)[1] for q in tf] == ["A", "B", "C"] and [q["answer"] for q in tf] == [True, False, False]
+    assert len({q["image"] for q in tf}) == 1, "the three figures share one labelled picture"
+    assert [q["id"] for q in qs] == [f"q{i}" for i in range(1, len(qs) + 1)]
 
 
 def test_the_diagram_is_printed_at_true_size_for_an_evidence_question(tmp_path):

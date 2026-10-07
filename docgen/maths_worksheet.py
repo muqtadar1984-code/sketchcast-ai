@@ -42,7 +42,7 @@ from typing import Optional
 
 from docgen import docx_builder as dx
 from maths.facts import FactItem
-from maths.geometry.items import GeometryItem, figure_client, geometry_items, key_lines
+from maths.geometry.items import GeometryItem, figure_client, geometry_items, key_lines, quiz_image_data_url
 from maths.pretty import pretty
 from maths.tokens import TokenError, tokenize
 from maths.questions import fact_items, question_ladder, worked_solution
@@ -150,6 +150,52 @@ def _fact_sections(doc, key_doc, facts: list[FactItem], language: str, *, exam: 
 
 
 _figure_client = figure_client   # the figure call's client; it lives in maths.geometry.items
+
+
+def _plain(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    try:
+        f = float(v)
+        return str(int(round(f))) if abs(f - round(f)) < 1e-9 else f"{f:.2f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def _figure_quiz(item: GeometryItem, language: str) -> list[dict]:
+    """A verified figure question in the quiz player's schema, with its
+    picture. Answers come from what the ENGINE proved or computed."""
+    spec, rep = item.spec, item.report
+    image = quiz_image_data_url(item)
+    if item.role == "reasoning":
+        if len(rep.proved) != 1:
+            return []
+        value = _plain(next(iter(rep.proved.values())))
+        return [{"type": "fill_blank", "prompt": f"{item.prompt} {dx._t('quiz_number_only', language)}",
+                 "answer": value, "marks": item.marks, "image": image}]
+    asks = spec.get("asks") or ((spec.get("parts") or [{}])[0].get("asks")) or {}
+    prop = str(asks.get("property") or "")
+    values = rep.computed.get(prop) or {}
+    if not values:
+        return []
+    labels = {f["id"]: f.get("label") or f["id"] for f in spec.get("figures") or []}
+    order = [labels.get(fid, fid) for fid in (asks.get("over") or list(labels))]
+    order = [lab for lab in order if lab in values] or list(values)
+    select = asks.get("select")
+    if select is not None:
+        want = str(select).lower()
+        return [{"type": "true_false", "prompt": f"{item.prompt} — {lab}",
+                 "answer": str(values[lab]).lower() == want, "marks": 1, "image": image} for lab in order]
+    if all(isinstance(values[lab], bool) for lab in order):
+        return [{"type": "true_false", "prompt": f"{item.prompt} — {lab}", "answer": bool(values[lab]),
+                 "marks": 1, "image": image} for lab in order]
+    if len(order) == 1:
+        value = values[order[0]]
+        hint = f" {dx._t('quiz_number_only', language)}" if isinstance(value, (int, float)) else ""
+        return [{"type": "fill_blank", "prompt": f"{item.prompt}{hint}", "answer": _plain(value), "marks": 1,
+                 "image": image}]
+    pairs = [{"left": lab, "right": _plain(values[lab])} for lab in order]
+    return [{"type": "match", "prompt": item.prompt, "pairs": pairs, "marks": len(pairs), "image": image}]
 
 
 def _figure_section(doc, key_doc, items: list[GeometryItem], language: str, *, exam: bool,
@@ -294,8 +340,10 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         dx.end_of_paper(doc)
 
     # the quiz player's structured questions (best-effort, like the science
-    # worksheet). Figure questions are left out: the player's schema has no
-    # picture, and "find x" without its diagram is not a question.
+    # worksheet). A figure question carries its picture as a data URL and
+    # maps onto the player's own types, so it is auto-marked like the rest:
+    # find x -> fill_blank on the number; "which of these are …" -> one
+    # true/false per figure; "classify each" -> match; a count -> fill_blank.
     try:
         from docgen.questions import write_worksheet
         short = [{"q": _problem_text(ex), "answer": " or ".join(pretty(a) for a in ex.final_answer)}
@@ -304,7 +352,13 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         tf = [{"statement": f.q, "answer": f.truth} for f in facts if f.format == "true_false"]
         match = next(([{"left": p["left"], "right": p["right"]} for p in f.pairs]
                       for f in facts if f.format == "match"), [])
-        write_worksheet(out_dir, title, instructions, fill, tf, match, short, language=language)
+        extra: list[dict] = []
+        for item in figures:
+            try:
+                extra.extend(_figure_quiz(item, language))
+            except Exception as exc:  # noqa: BLE001 — one picture must not sink the paper's quiz
+                logger.warning("quiz question for figure %s skipped: %s", item.id, exc)
+        write_worksheet(out_dir, title, instructions, fill, tf, match, short, language=language, extra=extra)
     except Exception as exc:  # noqa: BLE001
         logger.warning("questions.json (maths %s) skipped: %s", kind, exc)
 
