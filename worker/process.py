@@ -742,6 +742,27 @@ def _sibling_video_segments(sb: Client, gen: dict) -> list[dict]:
         return []
 
 
+def _sibling_maths_lesson(sb: Client, gen: dict) -> Optional[dict]:
+    """The sibling video's maths lesson (its verified worked examples, each
+    figure example with its spec), from the same script_json the pictures
+    come from. None when there is no finished sibling or it is not maths."""
+    sib = _sibling_presentation(sb, gen)
+    if not sib or str(sib.get("status") or "") != "done":
+        return None
+    try:
+        res = (sb.table("artifacts").select("storage_path").eq("generation_id", str(sib["id"]))
+               .eq("kind", "script_json").execute())
+        for path in sorted(str(r.get("storage_path") or "") for r in (getattr(res, "data", None) or [])):
+            body = json.loads(sb.storage.from_("artifacts").download(path))
+            script = body.get("script") if isinstance(body, dict) and isinstance(body.get("script"), dict) else body
+            lesson = ((script or {}).get("maths") or {}).get("lesson") if isinstance(script, dict) else None
+            if isinstance(lesson, dict) and lesson.get("examples"):
+                return lesson
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("deck %s: could not read the video's maths lesson (%s)", gen.get("id"), exc)
+    return None
+
+
 def _find_segments(o):
     if isinstance(o, dict):
         if isinstance(o.get("segments"), list):
@@ -762,7 +783,7 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
                    analysis: dict, client, params: dict, branding: dict, lesson_lang: str,
                    lesson_dir: str, tmp: str | Path, base: str, unit_label: str,
                    catalogue=None, video_segments: Optional[list] = None,
-                   art_context: Optional[dict] = None) -> str:
+                   art_context: Optional[dict] = None, maths_lesson: Optional[dict] = None) -> str:
     """The 'deck' generation kind: author the slides, render them, build the
     .pptx, upload it. Returns the generation title.
 
@@ -813,6 +834,13 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
         article = author_article(book, chapter, analysis, client, params or {}, lesson_lang,
                                  title=unit_label)
         model = dg.model_from_book_article(article)
+        if maths_lesson:
+            # a maths chapter: the lesson's VERIFIED worked examples, each
+            # figure example with the engine's own picture, in place of the
+            # article's prose ones
+            n_ex = dg.apply_maths_lesson(model, maths_lesson, Path(tmp) / "deck", lesson_lang)
+            logger.info("deck %s: %d verified maths example(s), %d with a figure", generation_id, n_ex,
+                        len(model.worked_figures))
         deck_art.decorate(model, sb=sb, tmp=Path(tmp) / "deck", video_segments=video_segments,
                           context=art_context or deck_art.book_context(book, unit_label, analysis),
                           job_id=job_id, exclude_job_id=job_id)
@@ -2364,6 +2392,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             sb, job_id, generation_id, book, chapter, analysis, gen_client,
             gen.get("params") or {}, branding, lesson_lang, lesson_dir, tmp, base, _unit,
             catalogue=catalogue, video_segments=_video_segs, art_context=_art_ctx,
+            maths_lesson=_sibling_maths_lesson(sb, gen) if profile.worked_examples else None,
         )
         for _k, _v in gen_client.session_usage.items():
             client.session_usage[_k] = client.session_usage.get(_k, 0) + _v

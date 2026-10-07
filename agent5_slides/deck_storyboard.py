@@ -729,6 +729,8 @@ def storyboard(model: LessonModel, label_pt: float = mx.LABEL_PT) -> list[Slide]
                          heading=(T(lang, "worked_example_n", n=i) if len(model.worked_examples) > 1
                                   else T(lang, "worked_example")),
                          key_idea=problem,
+                         # a maths figure example brings the engine's own picture
+                         figure=model.figures.get(model.worked_figures.get(i - 1, "")),
                          blocks=_paginate(_clean_blocks(solution),
                                           mx.BODY_H_IN
                                           - mx.key_idea_height_in(problem))[0]))
