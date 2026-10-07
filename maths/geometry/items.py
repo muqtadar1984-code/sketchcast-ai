@@ -18,6 +18,8 @@ before parsing.
 
 from __future__ import annotations
 
+import re
+
 import logging
 import os
 from dataclasses import dataclass, field
@@ -255,6 +257,7 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         "prompt": str(q.get("prompt") or "")[:600],
         "figures": figures,
     }
+    _letter_long_labels(figures, q)
     fig_ids = [f["id"] for f in figures]
     fig_labels = [f.get("label") or f["id"] for f in figures]
     asks = _asks(q.get("asks"), fig_ids)
@@ -275,6 +278,9 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         s = _strip(dict(st))
         if "before" in s and not s["before"]:
             del s["before"]
+        for key in ("before", "after"):
+            if isinstance(s.get(key), list):
+                s[key] = [_ang_by_points(x) if isinstance(x, str) else x for x in s[key]]
         steps.append(s)
     # an evidence question is answered by the property the engine computes;
     # steps a model attaches to it are commentary, not a chain to prove
@@ -285,6 +291,53 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         out["answer"] = ans
     _bind_from_answer(out)
     return out, difficulty
+
+
+def _letter_long_labels(figures: list, q: dict) -> None:
+    """A figure labelled with a WORD ("Hexagon", "Triangle 1") — the spec's
+    label is a tag of at most four characters (A, B, C). Such labels become
+    letters, in figure order, and the answer's references follow (the
+    exam-paper call lost two questions to this, 2026-10-07)."""
+    renamed: dict[str, str] = {}
+    taken = {str(f.get("label")) for f in figures if f.get("label") and len(str(f["label"])) <= 4}
+    for i, f in enumerate(figures):
+        lab = f.get("label")
+        if not lab or len(str(lab)) <= 4:
+            continue
+        new = chr(ord("A") + i)
+        while new in taken:
+            new = chr(ord(new) + 1)
+        taken.add(new)
+        renamed[str(lab)] = new
+        f["label"] = new
+    if not renamed:
+        return
+
+    def fix(v):
+        if isinstance(v, str):
+            return renamed.get(v, v)
+        if isinstance(v, list):
+            return [fix(x) for x in v]
+        if isinstance(v, dict):
+            return {renamed.get(str(k), k): fix(x) for k, x in v.items()}
+        return v
+
+    for key in ("answer",):
+        if isinstance(q.get(key), dict):
+            q[key] = fix(q[key])
+    for part in q.get("parts") or []:
+        if isinstance(part, dict) and isinstance(part.get("answer"), dict):
+            part["answer"] = fix(part["answer"])
+
+
+_ANG_POINTS_RE = re.compile(r"ang\(\s*p_([a-z0-9]+)\s*,\s*p_([a-z0-9]+)\s*,\s*p_([a-z0-9]+)\s*\)")
+
+
+def _ang_by_points(line: str) -> str:
+    """``ang(p_c,p_b,p_a)`` — an angle named by its three points, the vertex
+    in the middle — becomes the notation's ``ang(cba)`` (the live exam call
+    lost a question to it, 2026-10-07)."""
+    return _ANG_POINTS_RE.sub(lambda mt: f"ang({mt.group(1)}{mt.group(2)}{mt.group(3)})", line)
 
 
 def _bind_from_answer(q: dict) -> None:
@@ -385,7 +438,7 @@ _SPEECH_RULES = (
 
 
 def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, chapter_context: str,
-                    kind: str) -> str:
+                    kind: str, focus: Optional[list[str]] = None) -> str:
     sigs = "\n".join(f"  - {name}: {sig}" for name, sig in _SIGNATURES.items())
     theorems = "\n".join(f"  - {t}: {REASONS[t]}" for t in THEOREMS)
     doc = {"worksheet": "a practice worksheet",
@@ -430,7 +483,12 @@ def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, 
         "an evidence question's answer is what the figures show (the engine recomputes it and checks), a "
         "reasoning question's answer is the value its steps prove.",
         "EXAMPLES (one of each kind):\n" + _EXAMPLE_REASONING + "\n" + _EXAMPLE_EVIDENCE,
-    ] + ([_SPEECH_RULES.format(language=language or "en")] if kind == "lesson" else []) + [
+    ] + ([_SPEECH_RULES.format(language=language or "en")] if kind == "lesson" else []) + ([
+        "CONCEPTS OF THIS CHAPTER NOT YET TAUGHT by the rest of the lesson: " + "; ".join(focus[:8]) + ". "
+        "Prefer examples that teach THESE, where the construction library can draw them (a 'which of these "
+        "are polygons?' evidence question for polygons; a shape's lines of symmetry for symmetry); a "
+        "concept the library cannot draw (tessellation, nets) is left out, not faked."
+    ] if focus else []) + [
         "Only questions this TOPIC's own exercises would ask: a chapter on fractions or equations has no diagram "
         "questions — then return {\"questions\": []} rather than a triangle from another chapter.",
         "=== OUTPUT ===\nReturn ONLY one minified JSON object: {\"questions\": [ ... ]}. Unused fields are empty "
@@ -518,7 +576,8 @@ def figure_client(client, language: str):
 
 def geometry_items(client, *, topic: str, level: Optional[str], language: str, n: int,
                    chapter_context: str = "", kind: str = "worksheet",
-                   note: Optional[str] = None, rounds: int = 2, render: bool = True) -> tuple[list[GeometryItem], dict]:
+                   note: Optional[str] = None, rounds: int = 2, render: bool = True,
+                   focus: Optional[list[str]] = None) -> tuple[list[GeometryItem], dict]:
     """Up to ``n`` verified, rendered figure questions; one model call,
     plus one repair round carrying the refusals back when short.
     ``note`` is the "Not drawn to scale" text in the document's language;
@@ -531,7 +590,7 @@ def geometry_items(client, *, topic: str, level: Optional[str], language: str, n
     seen_prompts: set[str] = set()
     asked = 0
     base_prompt = geometry_prompt(topic=topic, level=level, language=language, n=min(MAX_PER_CALL, n + 1),
-                                  chapter_context=chapter_context, kind=kind)
+                                  chapter_context=chapter_context, kind=kind, focus=focus)
     for round_ in range(rounds):
         # the repair round is for a model that CAN do this topic and slipped
         # on some questions. A first round that produced nothing (a fractions

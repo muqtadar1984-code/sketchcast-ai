@@ -822,10 +822,17 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
         prev_state_rows = rows
         last_rows = rows or last_rows
     if evidence and ex.final_answer:
-        # the selection the engine computed, as the closing line
-        rows = _add_state(board, ex.final_answer[:1], _cue(say(ex.answer_speech, lang), narration),
-                          color="accent", dim_previous=False)
-        last_rows = rows or last_rows
+        observed = [x for st in ex.steps for x in st.after[:1]]
+        if all(o in ex.final_answer[0] for o in observed):
+            # the answer IS the observations (a label_map with no selection):
+            # writing "A: equilateral; B: isosceles; C: scalene" under those
+            # three lines repeats them — underline them instead (5c4dbf30)
+            last_rows = [r for r in board.rows if r.state_index >= board.state_no - len(observed)] or last_rows
+        else:
+            # the selection the engine computed, as the closing line
+            rows = _add_state(board, ex.final_answer[:1], _cue(say(ex.answer_speech, lang), narration),
+                              color="accent", dim_previous=False)
+            last_rows = rows or last_rows
     if fig is not None and not evidence:
         _reveal_answers(board, fig, _cue(say(ex.answer_speech, lang), narration))
     if last_rows:

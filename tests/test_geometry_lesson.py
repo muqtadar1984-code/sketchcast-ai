@@ -243,3 +243,70 @@ def test_symmetry_axes_agree_with_the_count_on_the_corpus():
             assert len(symmetry_axes(m)) == lines_of_symmetry(m), (qid, fid)
             checked += 1
     assert checked >= 2
+
+
+def test_long_figure_labels_become_letters_and_the_answer_follows():
+    q = copy.deepcopy(ITEMS["P1"])
+    q["difficulty"] = 1
+    figs = q["figures"]
+    old = [f.get("label") or f["id"] for f in figs]
+    figs[0]["label"] = "Triangle one"
+    figs[1]["label"] = "Hexagon"
+    ans = q["answer"]
+    # the answer names the long labels the way the model would
+    if isinstance(ans.get("value"), list):
+        ans["value"] = ["Triangle one" if v == old[0] else ("Hexagon" if v == old[1] else v) for v in ans["value"]]
+    spec, _d = normalise_question(q)
+    labels = [f.get("label") for f in spec["figures"]]
+    assert all(len(l) <= 4 for l in labels) and len(set(labels)) == len(labels), labels
+    rep = verify_question(spec)
+    assert rep.ok, rep.refusal
+
+
+def test_the_figure_call_is_told_the_concepts_the_ladder_missed(monkeypatch):
+    monkeypatch.delenv("MATHS_FIGURES", raising=False)
+    analysis = {"chapter_title": "2D shape and pattern", "concepts": {"concepts": [
+        {"name": "Polygon", "concept_id": "c1"}, {"name": "Equilateral Triangle", "concept_id": "c2"},
+        {"name": "Linear equation", "concept_id": "c3"}]}}
+    c = FakeClient(figures=[_b1_reply()])
+    lesson, report = L.verified_lesson(c, topic="Linear equations", subject="Mathematics", level="Class 8",
+                                       curriculum="CBSE", language="en", episode_context="", analysis=analysis,
+                                       episode={"key_concepts_introduced": ["c1", "c2", "c3"]})
+    geo = next(k for k in c.calls if "geometry.figure.v1" in k["prompt"])
+    assert "NOT YET TAUGHT" in geo["prompt"] and "Polygon" in geo["prompt"] and "Equilateral Triangle" in geo["prompt"]
+    assert "Linear equation" not in geo["prompt"].split("NOT YET TAUGHT")[1].split("\n")[0]
+    assert report["figures"]["focus"] == ["Polygon", "Equilateral Triangle"]
+    # no analysis: no focus, no failure
+    c2 = FakeClient(figures=[_b1_reply()])
+    _lesson, report2 = L.verified_lesson(c2, topic="t", subject=None, level=None, curriculum=None, language="en",
+                                         episode_context="")
+    assert report2["figures"]["focus"] == [] and "NOT YET TAUGHT" not in c2.calls[-1]["prompt"]
+
+
+def test_a_full_map_answer_is_not_written_twice():
+    q = copy.deepcopy(ITEMS["P1"])
+    q["difficulty"] = 1
+    q["asks"] = {"property": "triangle_class_by_sides", "over": [f["id"] for f in q["figures"]]}
+    q.pop("parts", None)
+    q["answer"] = {"kind": "label_map", "value": {}}
+    q["intro_speech"] = "Classify each triangle by its sides."
+    q["answer_speech"] = "And that is each one named."
+    q["observations"] = [{"figure": f["id"], "speech": f"Look at {f.get('label') or f['id']}."} for f in q["figures"]]
+    spec, _d = normalise_question(q)
+    rep = verify_question(spec)
+    if not rep.ok:
+        # the engine insists on a stated answer: give it the computed one
+        q["answer"] = {"kind": "label_map", "value": {k: str(v) for k, v in rep.computed.get("triangle_class_by_sides", {}).items()}}
+        spec, _d = normalise_question(q)
+        rep = verify_question(spec)
+    assert rep.ok, rep.refusal
+    item = GeometryItem(spec["id"], spec["prompt"], spec["figure_role"], 1, spec, rep,
+                        speech={"intro": q["intro_speech"], "answer": q["answer_speech"],
+                                "observations": {o["figure"]: o["speech"] for o in q["observations"]}})
+    ex = L.figure_example(item)
+    scene, _lines = B.example_scene(ex, MethodCard(), "s003", has_card=False)
+    texts = [e.get("text") or e.get("expr") for e in scene["elements"] if e["type"] in ("text", "math")]
+    rows = [t for t in texts if t and ": " in t and t.split(": ")[0] in ("A", "B", "C", "D", "E")]
+    assert len(rows) == len(q["figures"]), rows
+    assert not any(";" in (t or "") for t in texts), "the closing line is not repeated"
+    assert [a["verb"] for a in scene["actions"]].count("underline") == len(q["figures"])

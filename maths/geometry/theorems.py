@@ -95,6 +95,22 @@ def _need_angles(m: Model, u: Uses, theorem: str, n: Optional[int] = None, at_le
     return [m.angle_ids[a] for a in u.angles]
 
 
+def _only_triangle(m: Model, u: Uses):
+    """The triangle a step means when it cites NO angle and no shape: the
+    cited polygon if one, else the figure's only closed triangle. A figure
+    with two triangles is ambiguous and stays a refusal. The live lesson
+    call left `uses` empty on isosceles_base_angles / equilateral_angles
+    twice (2026-10-07); every premise still runs on what is inferred."""
+    if u.polygons:
+        return u.polygons[0], m.polygons[u.polygons[0]]
+    tris = [(pid, pg) for pid, pg in m.polygons.items() if pg.closed and len(pg.vertices) == 3]
+    return tris[0] if len(tris) == 1 else (None, None)
+
+
+def _angle_id(m: Model, k: AngleKey) -> Optional[str]:
+    return next((a for a, kk in m.angle_ids.items() if kk == k), None)
+
+
 def _same_vertex(keys: list[AngleKey], theorem: str) -> str:
     vs = {k[0] for k in keys}
     _premise(theorem, len(vs) == 1, "the angles must share a vertex")
@@ -245,6 +261,19 @@ def t_polygon_exterior_sum(m: Model, u: Uses) -> list[sp.Eq]:
 
 def t_isosceles_base_angles(m: Model, u: Uses) -> list[sp.Eq]:
     T = "isosceles_base_angles"
+    if not u.angles:
+        # nothing cited: the base angles of the figure's isosceles triangle —
+        # the pair opposite its equal legs. Checked below like any citation.
+        _pid, pg = _only_triangle(m, u)
+        if pg is not None:
+            a, b, c = pg.vertices
+            for apex, p, q in ((a, b, c), (b, c, a), (c, a, b)):
+                if m.lengths_equal(seg_key(apex, p), seg_key(apex, q)):
+                    ids = [_angle_id(m, angle_key(p, apex, q)), _angle_id(m, angle_key(q, apex, p))]
+                    if all(ids):
+                        u.angles = [m.canonical_angle_id(i) for i in ids]
+                        u.polygons = []
+                    break
     k1, k2 = _need_angles(m, u, T, n=2)
     b, c = k1[0], k2[0]
     _premise(T, b != c and b in k2[1] and c in k1[1], "the two base angles are at the ends of the base")
@@ -258,6 +287,11 @@ def t_isosceles_base_angles(m: Model, u: Uses) -> list[sp.Eq]:
 
 def t_equilateral_angles(m: Model, u: Uses) -> list[sp.Eq]:
     T = "equilateral_angles"
+    if not u.angles and not u.polygons:
+        # nothing cited: the figure's only triangle, all three angles
+        pid, _pg = _only_triangle(m, u)
+        if pid is not None:
+            u.polygons = [pid]
     keys = _need_angles(m, u, T, at_least=1)
     _premise(T, len(keys) <= 3, "cite at most the three angles of the triangle")
     verts = [k[0] for k in keys]
