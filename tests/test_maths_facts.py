@@ -15,8 +15,8 @@ import json
 import pytest
 
 from docgen import generate_document
-from maths.facts import parse_item, verify_item
-from maths.questions import FACT_SET_SCHEMA, SET_SCHEMA
+from maths.facts import _digits, parse_item, read_back_item, verify_item
+from maths.questions import FACT_SET_SCHEMA, READ_BACK_SCHEMA, SET_SCHEMA
 from maths.schema import parse_example
 from maths.verify import verify_example
 from shared.coverage import docx_text
@@ -86,14 +86,20 @@ class GeometryClient:
     optionally one computational one) and the fact call with items."""
     model = "stub"
 
-    def __init__(self, ladder: list[dict], facts: list[dict]):
-        self.ladder, self.facts = ladder, facts
+    def __init__(self, ladder: list[dict], facts: list[dict], readings: list[dict] | None = None):
+        self.ladder, self.facts, self.readings = ladder, facts, readings
         self.calls: list[str] = []
+        self.prompts: dict[str, str] = {}
 
     def analyze(self, prompt, system="", max_tokens=0, retries=3, cache_prefix=None, response_schema=None, **kw):
         if response_schema is FACT_SET_SCHEMA:
             self.calls.append("facts")
+            self.prompts["facts"] = prompt
             return {"data": {"items": copy.deepcopy(self.facts)}, "usage": {}, "truncated": False}
+        if response_schema is READ_BACK_SCHEMA:
+            self.calls.append("read_back")
+            self.prompts["read_back"] = prompt
+            return {"data": {"items": copy.deepcopy(self.readings or [])}, "usage": {}, "truncated": False}
         assert response_schema is SET_SCHEMA
         self.calls.append("ladder")
         return {"data": {"questions": copy.deepcopy(self.ladder)}, "usage": {}, "truncated": False}
@@ -226,10 +232,82 @@ def test_a_geometry_test_paper_counts_the_fact_marks(tmp_path):
     assert "[1 mark]" in sheet and "[3 marks]" in sheet and "Total: 8" in sheet
 
 
-def test_a_non_english_geometry_worksheet_still_fails_rather_than_print_unchecked_facts(tmp_path):
-    client = GeometryClient([Q_TRIANGLE, Q_PENTAGON], GOOD_FACTS)
+# ── every language: the printed sentence, read back into English ────────────
+
+def _fill(q, answer, relation, subject, value):
+    return {"format": "fill_blank", "difficulty": 1, "q": q, "answer": answer, "relation": relation,
+            "subject": subject, "value": value, "pairs": []}
+
+
+def _tf(q, answer, relation, subject, value):
+    return {"format": "true_false", "difficulty": 1, "q": q, "answer": answer, "relation": relation,
+            "subject": subject, "value": value, "pairs": []}
+
+
+def _reading(q, answer="", pairs=()):
+    return {"q": q, "answer": answer, "pairs": [dict(p) for p in pairs]}
+
+
+# (printed Malay item, what an independent reader says it means)
+MALAY = [
+    (_fill("Sebuah segi tiga mempunyai ____ sisi.", "3", "polygon_sides", "triangle", "3"),
+     _reading("A triangle has ____ sides.", "3")),
+    (_fill("Poligon dengan 5 sisi dipanggil ____.", "pentagon", "polygon_sides", "pentagon", "5"),
+     _reading("A polygon with 5 sides is called a ____.", "pentagon")),
+    (_tf("Sebuah heksagon mempunyai 8 sisi.", "false", "polygon_sides", "hexagon", "8"),
+     _reading("A hexagon has 8 sides.")),
+    ({"format": "match", "difficulty": 1, "q": "", "answer": "", "relation": "polygon_sides", "subject": "",
+      "value": "", "pairs": [{"left": "oktagon", "right": "8 sisi", "subject": "octagon", "value": "8"},
+                             {"left": "heptagon", "right": "7 sisi", "subject": "heptagon", "value": "7"},
+                             {"left": "dekagon", "right": "10 sisi", "subject": "decagon", "value": "10"}]},
+     _reading("", "", [{"left": "octagon", "right": "8 sides"}, {"left": "heptagon", "right": "7 sides"},
+                       {"left": "decagon", "right": "10 sides"}])),
+    # LIES: the sentence names a hexagon, the declaration a pentagon
+    (_fill("Sebuah heksagon mempunyai ____ sisi.", "5", "polygon_sides", "pentagon", "5"),
+     _reading("A hexagon has ____ sides.", "5")),
+    # the READER changed a numeral: 8 printed, 6 read — never trust that reading
+    (_tf("Sebuah oktagon mempunyai 8 sisi.", "true", "polygon_sides", "octagon", "8"),
+     _reading("An octagon has 6 sides.")),
+    # a negation, visible only in the reading
+    (_tf("Sebuah dodekagon tidak mempunyai 12 sisi.", "false", "polygon_sides", "dodecagon", "12"),
+     _reading("A dodecagon does not have 12 sides.")),
+]
+
+
+def test_a_malay_geometry_worksheet_prints_only_what_its_english_reading_proves(tmp_path):
+    client = GeometryClient([Q_TRIANGLE, Q_PENTAGON], [i for i, _r in MALAY], [r for _i, r in MALAY])
+    paths = generate_document("worksheet", BOOK, CHAPTER, {}, client, {"num_questions": 6}, tmp_path,
+                              language="ms", maths=True)
+    assert client.calls == ["ladder", "facts", "read_back"]
+    rb = client.prompts["read_back"]
+    assert "Write ALL output" not in rb and "Do not translate" not in rb, \
+        "the read-back must not be told to answer in Malay"
+    assert '"subject"' not in rb and "polygon_sides" not in rb, "the reader never sees the declaration"
+    assert "ALWAYS in English" in client.prompts["facts"]
+    sheet, key = docx_text(paths[0]), docx_text(paths[1])
+    for printed in ("Sebuah segi tiga mempunyai ____ sisi.", "Poligon dengan 5 sisi dipanggil ____.",
+                    "Sebuah heksagon mempunyai 8 sisi.", "dekagon"):
+        assert printed in sheet, "the student reads the MALAY sentence"
+    for refused in ("Sebuah heksagon mempunyai ____ sisi.", "Sebuah oktagon mempunyai 8 sisi.", "dodekagon"):
+        assert refused not in sheet, f"an unproved item was printed: {refused!r}"
+    assert "A triangle has" not in sheet, "the English reading is for the checker, not the page"
+    assert "pentagon" in key
+
+
+def test_arabic_indic_numerals_are_the_same_numerals():
+    assert _digits("للمثلث ٣ أضلاع") == ["3"] and _digits("त्रिभुज की ३ भुजाएँ") == ["3"]
+    assert _digits("0,5") == _digits("0.5") == ["0", "5"]
+    item = parse_item(_fill("للمثلث ____ أضلاع.", "٣", "polygon_sides", "triangle", "3"))
+    english, why = read_back_item(item, _reading("A triangle has ____ sides.", "3"))
+    assert english is not None and verify_item(english).ok, why
+    english, why = read_back_item(item, _reading("A triangle has ____ sides.", "4"))
+    assert english is None and "numeral" in why
+
+
+def test_a_reading_that_cannot_be_aligned_is_not_used(tmp_path):
+    items = [i for i, _r in MALAY[:3]]
+    client = GeometryClient([Q_TRIANGLE], items, [r for _i, r in MALAY[:2]])   # one reading short
     with pytest.raises(RuntimeError) as err:
-        generate_document("worksheet", BOOK, CHAPTER, {}, client, {"num_questions": 6}, tmp_path,
+        generate_document("worksheet", BOOK, CHAPTER, {}, client, {"num_questions": 4}, tmp_path,
                           language="ms", maths=True)
-    assert "English only" in str(err.value) and "not a quantity" in str(err.value)
-    assert "facts" not in client.calls, "no model call is spent on items that could not be checked"
+    assert "not read back" in str(err.value) and "not a quantity" in str(err.value)

@@ -21,15 +21,22 @@ exercise has exactly one right-hand partner. A fact the table does not know
 the sentence — is never printed (fail over degrade: a printed answer is a
 proved answer, here proved by lookup instead of algebra).
 
-The vocabulary is English. A document in another language could state one
-fact in its sentence and declare another, and nothing here can read the
-sentence to tell, so a non-English document never takes this path
-(``supported_language``).
+The vocabulary is English; the declaration is always English. A document
+in another language prints its own sentence, which could state a different
+fact from the one it declares, so that sentence is READ BACK into English by
+a separate call that never sees the declaration (maths.questions), and the
+English reading is what this table checks (``read_back_item``). Two guards
+make the reading trustworthy rather than merely plausible: every numeral the
+printed sentence carries must survive into the reading unchanged (digits are
+compared language-neutrally — Arabic-Indic, Devanagari and Telugu digits
+fold to ASCII), and a reading the table cannot prove drops the item exactly
+as an English sentence would.
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Callable, Optional
@@ -535,8 +542,66 @@ def verify_item(item: FactItem) -> FactCheck:
     return _match(item, rel)
 
 
-def supported_language(language: str | None) -> bool:
+def is_english(language: str | None) -> bool:
+    """Whether the printed sentence can be checked as written; any other
+    language is checked through its English reading (read_back_item)."""
     return (language or "en").split("-")[0].lower() == "en"
 
 
-__all__ = ["RELATIONS", "FORMATS", "FactItem", "FactCheck", "parse_item", "verify_item", "supported_language"]
+# ── another language: the printed sentence, read back ───────────────────────
+
+def _digits(text) -> list[str]:
+    """The numerals a text prints, in any script's digits, as ASCII runs:
+    "٥ أضلاع" and "5 sides" both give ["5"]; "0,5" and "0.5" both ["0", "5"]."""
+    s = "".join(str(unicodedata.decimal(c)) if c.isdecimal() else c for c in str(text or ""))
+    return re.findall(r"\d+", s)
+
+
+def _numerals_survive(printed: str, reading: str) -> Optional[str]:
+    """None when every numeral of the printed text is in its reading (a
+    reading may ADD numerals: "lima" read as "5" is checked by the table);
+    else what went missing."""
+    have = list(_digits(reading))
+    for d in _digits(printed):
+        if d in have:
+            have.remove(d)
+        else:
+            return f"the reading lost or changed the numeral {d!r} ({printed!r} read as {reading!r})"
+    return None
+
+
+def read_back_item(item: FactItem, reading: dict | None) -> tuple[Optional[FactItem], str]:
+    """The English item the table checks for a printed non-English ``item``:
+    its declaration with the READING's text. (None, why) when the reading is
+    missing, drops a numeral, or does not have the item's shape."""
+    if not isinstance(reading, dict):
+        return None, "the sentence was not read back"
+    r_q, r_answer = _norm(reading.get("q")), _norm(reading.get("answer"))
+    r_pairs = [p for p in (reading.get("pairs") or []) if isinstance(p, dict)]
+    fields = [(item.q, r_q)]
+    if item.format == "fill_blank":
+        fields.append((item.answer, r_answer))
+        if not _BLANK_RE.search(item.q):
+            return None, "a fill-in-the-blank needs a blank (____)"
+    if item.format == "match":
+        if len(r_pairs) != len(item.pairs):
+            return None, f"{len(item.pairs)} pairs were read back as {len(r_pairs)}"
+        for p, rp in zip(item.pairs, r_pairs):
+            fields += [(p.get("left", ""), _norm(rp.get("left"))), (p.get("right", ""), _norm(rp.get("right")))]
+    for printed, read in fields:
+        lost = _numerals_survive(printed, read)
+        if lost:
+            return None, lost
+    english = FactItem(
+        format=item.format, difficulty=item.difficulty, q=r_q,
+        # a true/false answer is the declared English word in every language
+        answer=r_answer if item.format == "fill_blank" else item.answer,
+        relation=item.relation, subject=item.subject, value=item.value,
+        pairs=[{"left": _norm(rp.get("left")), "right": _norm(rp.get("right")),
+                "subject": p.get("subject", ""), "value": p.get("value", "")}
+               for p, rp in zip(item.pairs, r_pairs)])
+    return english, ""
+
+
+__all__ = ["RELATIONS", "FORMATS", "FactItem", "FactCheck", "parse_item", "verify_item", "is_english",
+           "read_back_item"]
