@@ -336,6 +336,19 @@ class TryIt(BaseModel):
     solution_speech: str = ""   # the teacher resuming after the pause
     steps: list[Step] = Field(default_factory=list)
     answer_speech: str = ""
+    #: a geometry.figure.v1 question when the learner pauses on a DIAGRAM:
+    #: drawn schematic (not to scale) for the pause, metric for the solution;
+    #: verified by the geometry chain like a figure example
+    figure: Optional[dict] = None
+
+    @field_validator("figure", mode="before")
+    @classmethod
+    def _figure(cls, v):
+        return v if isinstance(v, dict) and v.get("figures") else None
+
+    @property
+    def has_figure(self) -> bool:
+        return bool(self.figure)
 
     @field_validator("problem", "speech", "solution_speech", "answer_speech", mode="before")
     @classmethod

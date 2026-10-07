@@ -37,7 +37,8 @@ from maths.schema import (EXAMPLE_SCHEMA, LESSON_SCHEMA, DIFFICULTY_NAMES, Lesso
                           WorkedExample, parse_example, parse_lesson)
 from maths.geometry.errors import GeometryRefusal
 from maths.geometry.items import GeometryItem, figure_client, geometry_items, key_lines
-from maths.schema import Step, WorkedExample
+from maths.i18n import board_text as _board_text
+from maths.schema import Step, TryIt, WorkedExample
 from maths.verify import verify_example, verify_lesson, verify_try_it
 from shared import coverage as _coverage
 from shared import lesson_length
@@ -344,6 +345,16 @@ def missed_concepts(lesson: Lesson, examples: list[WorkedExample], analysis: dic
     return [str(x) for x in (rep.get("missed") or []) if str(x).strip()] if rep.get("checked") else []
 
 
+def figure_try_it(ex: WorkedExample, language: str) -> TryIt:
+    """A verified figure example as the learner's try-it: the teacher reads
+    the diagram (the item's intro) and asks for the pause; after it the
+    item's own steps are taught."""
+    invite = _board_text("pause_line", language)
+    speech = f"{ex.intro_speech.rstrip('.')}. {invite}." if ex.intro_speech else ""
+    return TryIt(problem=ex.problem, answer=list(ex.final_answer), speech=speech, solution_speech="",
+                 steps=list(ex.steps), answer_speech=ex.answer_speech, figure=ex.figure)
+
+
 def figure_examples(client, *, topic: str, level: str | None, language: str, context: str, n: int,
                     report: dict, focus: list[str] | None = None) -> list[WorkedExample]:
     """Up to ``n`` figure examples from the geometry engine's own call —
@@ -466,8 +477,22 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
     # the figure call is told which of the chapter's concepts the verified
     # ladder leaves untaught (a13f7761: three triangle questions, no polygon)
     focus = missed_concepts(lesson, kept, analysis, episode, language) if figures_enabled() else []
+    # one item more than the examples: a third verified figure is the
+    # learner's try-it — on a shapes chapter the pause is on a shape
     figures = figure_examples(client, topic=topic, level=level, language=language, context=episode_context,
-                              n=FIGURE_EXAMPLES, report=figures_report, focus=focus) if figures_enabled() else []
+                              n=FIGURE_EXAMPLES + 1, report=figures_report, focus=focus) if figures_enabled() else []
+    figure_pause: TryIt | None = None
+    if len(figures) > FIGURE_EXAMPLES:
+        candidate = figure_try_it(figures[FIGURE_EXAMPLES], language)
+        try:
+            board.check_figure_try_it(candidate, language)
+            figure_pause = candidate
+        except (GeometryRefusal, ValueError) as exc:
+            logger.info("figure try-it rejected at the board (%s): %s", getattr(exc, "code", "board"),
+                        getattr(exc, "message", str(exc))[:200])
+        figures = figures[:FIGURE_EXAMPLES]
+    if figures_enabled():
+        figures_report["try_it"] = figure_pause is not None
     if len(kept) + len(figures) < MIN_EXAMPLES:
         raise MathsVerificationError(
             f"only {len(kept)} of {len(lesson.examples)} worked examples could be verified after "
@@ -485,6 +510,8 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
         for i, ex in enumerate(kept, 1):
             ex.label = ex.label or f"Example {i}"
         lesson.examples = kept
+    if figure_pause is not None:
+        lesson.try_it = figure_pause
     t = verify_try_it(lesson.try_it)
     # the try-it is TAUGHT on the board after the pause, so "could not be
     # verified" is as fatal as "wrong" — a try-it the verifier cannot read
@@ -559,7 +586,7 @@ def generate_maths_script(episode: dict, analysis: dict, chapter_num: int, clien
 
 
 __all__ = ["MathsVerificationError", "build_prompt", "build_regen_prompt", "build_extend_prompt",
-           "figure_example", "figure_examples", "figures_enabled", "missed_concepts", "FIGURE_EXAMPLES",
+           "figure_example", "figure_examples", "figure_try_it", "figures_enabled", "missed_concepts", "FIGURE_EXAMPLES",
            "generate_lesson", "regenerate_example", "verified_lesson", "extend_to_floor", "measure_lesson",
            "to_episode_script", "generate_maths_script", "REGEN_ATTEMPTS", "MIN_EXAMPLES",
            "MAX_LENGTH_ROUNDS", "MAX_EXAMPLES_PER_ROUND", "EXTENSION_SCHEMA"]

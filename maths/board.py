@@ -28,11 +28,11 @@ from typing import Optional
 
 from agent5_slides.slide_builder import _font
 from maths.i18n import board_text as _bt, norm_lang, words_for
-from maths.geometry import GeometryRefusal, parse_question, verify_question
+from maths.geometry import GeometryRefusal, parse_question, realise, verify_question
 from maths.geometry.board_adapter import FigureBoard, figure_board, figure_targets, op_actions
 from maths.geometry.constructions import exact_value
 from maths.geometry.theorems import reason as _reason
-from maths.schema import Lesson, Line, MethodCard, Mistake, Step, WorkedExample
+from maths.schema import Lesson, Line, MethodCard, Mistake, Step, TryIt, WorkedExample
 from maths.speech import speakable_maths
 from maths.tokens import TokenError, normalise
 from maths.typeset import Layout, typeset
@@ -610,7 +610,7 @@ class _Figure:
         return None, None
 
 
-def _figure_panel(ex: WorkedExample, board: _Board) -> _Figure:
+def _figure_panel(ex: WorkedExample, board: _Board, *, schematic: bool = False) -> _Figure:
     """The example's figures drawn under the question: one reasoning figure
     on the left with the working beside it; evidence figures in a row at
     ONE shared scale (their relative sizes are part of the evidence), each
@@ -625,8 +625,12 @@ def _figure_panel(ex: WorkedExample, board: _Board) -> _Figure:
     fig = _Figure(q, rep)
     if len(q.figures) == 1:
         ref = q.figures[0]
-        fig.boards[ref.id] = figure_board(rep.models[ref.id], ref.figure, panel=(Q_AT[0], top, FIG_RIGHT, bottom),
-                                          prefix="fig")
+        m = rep.models[ref.id]
+        if schematic and q.figure_role == "reasoning":
+            # the learner's own go: measuring must not bypass the reasoning
+            # (plan §6 — try_it → assessment_schematic for reasoning figures)
+            m = realise(ref.figure, "assessment_schematic", metric=m)
+        fig.boards[ref.id] = figure_board(m, ref.figure, panel=(Q_AT[0], top, FIG_RIGHT, bottom), prefix="fig")
         board.line_x = FIG_LINE_X
     else:
         # a grid, EV_COLS to a row: five triangles in one row left 87 px
@@ -862,6 +866,19 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
     return scene, lines
 
 
+def check_figure_try_it(t: TryIt, lang: str = "en") -> None:
+    """A figure try-it fits the board twice: the schematic pause and the
+    metric solution. Raises when either cannot be laid out or schematised."""
+    from maths.verify import try_it_example
+    lesson = Lesson(try_it=t)
+    pause = try_it_segment(lesson, "s000", lang)
+    solution = try_it_solution_segment(lesson, "s000", lang)
+    if pause is None or solution is None:
+        raise GeometryRefusal("bad_schema", "a figure try-it has a problem, steps and an answer")
+    Scene.model_validate(pause["scene"])
+    Scene.model_validate(solution["scene"])
+
+
 def check_figure_example(ex: WorkedExample, lang: str = "en") -> None:
     """A figure example fits the board: compiled once, validated against the
     scene schema. Raises GeometryRefusal (or a validation error) when it
@@ -952,6 +969,29 @@ def recap_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
 TRY_IT_HOLD_SECS = 3.0
 
 
+def _try_it_figure_scene(t: TryIt, lang: str, narration: str) -> dict:
+    """The pause on a diagram: the question top-left, the figure under it —
+    schematic, "not drawn to scale", so the answer cannot be measured off
+    the board — and the pause line below; no working."""
+    from maths.verify import try_it_example
+    ex = try_it_example(t)
+    board = _Board()
+    heading = f"{_bt('try_it', lang)}: {t.problem}"
+    _problem_elements(WorkedExample(problem=heading, givens=[]), board, None)
+    fig = _figure_panel(ex, board, schematic=True)
+    if fig.q.figure_role == "reasoning":
+        nid = board.uid("n")
+        y = min(WORK_BOTTOM - 4, max(fb.box[3] for fb in fig.boards.values()) + 8)
+        board.elements.append({"id": nid, "type": "text", "text": _bt("not_to_scale", lang), "size": 20,
+                               "color": "muted", "role": "caption", "at": [Q_AT[0] + 6, y], "anchor": "lt"})
+        board.actions.append({"verb": "write", "target": nid})
+    board.elements.append({"id": "pause", "type": "text", "text": _bt("pause_line", lang), "size": 24,
+                           "color": "muted", "at": [board.line_x + 40, 300], "anchor": "lt"})
+    board.actions.append({"verb": "write", "target": "pause", "at": {"frac": 0.7}})
+    return {"id": "mt_try", "compiled": True, "scene_type": "generic", "narration": narration,
+            "elements": _pin_text(board.elements), "actions": board.actions}
+
+
 def try_it_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> Optional[dict]:
     """The learner's own go: the problem, the invitation, then the whole
     video holds for TRY_IT_HOLD_SECS of silence before the solution segment
@@ -959,6 +999,14 @@ def try_it_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> Optional[di
     t = lesson.try_it
     if not t.problem:
         return None
+    if t.figure:
+        lines = [Line(line=say(t.speech, lang) or say(_bt("try_it_speech", lang, problem=t.problem), lang))]
+        seg = _segment(seg_id, "question_hook", lines, heading=_bt("try_it", lang), points=[t.problem], pause=True,
+                       hold=TRY_IT_HOLD_SECS)
+        scene = _try_it_figure_scene(t, lang, seg["text"])
+        scene["id"] = f"mt_{seg_id}"
+        seg["scene"] = scene
+        return seg
     lines = [Line(line=say(t.speech, lang) or say(_bt("try_it_speech", lang, problem=t.problem), lang))]
     heading = _bt("try_it", lang)
     seg = _segment(seg_id, "question_hook", lines, heading=heading, points=[t.problem], pause=True,
@@ -1068,6 +1116,6 @@ def compile_lesson(lesson: Lesson, avatars: dict | None = None, language: str = 
     return segs
 
 
-__all__ = ["say", "example_scene", "example_segment", "check_figure_example", "hook_segment", "concept_segment", "recap_segment",
+__all__ = ["say", "example_scene", "example_segment", "check_figure_example", "check_figure_try_it", "hook_segment", "concept_segment", "recap_segment",
            "try_it_segment", "try_it_solution_segment", "closing_segment", "compile_lesson", "card_elements",
            "method_step_for"]
