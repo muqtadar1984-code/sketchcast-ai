@@ -347,3 +347,17 @@ def test_the_answer_key_prints_the_reason_in_the_documents_language():
     assert any(TABLE["angles_on_line"]["en"] in ln for ln in en)
     assert any(TABLE["angles_on_line"]["ms"] in ln for ln in ms)
     assert [ln.split("   (")[0] for ln in en] == [ln.split("   (")[0] for ln in ms], "only the reasons differ"
+
+
+def test_reasons_use_only_glyphs_their_scripts_face_has():
+    """NotoSansDevanagari / Telugu lack ° ½ ² π; NotoSansArabic (Arabic and
+    Jawi) also lacks × and −; the renderer sets a whole string in one face,
+    so a reason must not carry a glyph its script cannot draw (the Hindi
+    board printed 180▯, 2026-10-07)."""
+    from maths.i18n import REASONS as TABLE
+
+    bad = {"hi": "°½²π", "mr": "°½²π", "te": "°½²π", "ar": "°½²π×−", "ms-arab": "°½²π×−"}
+    for tid, table in TABLE.items():
+        for lang, glyphs in bad.items():
+            hit = [g for g in glyphs if g in table[lang]]
+            assert not hit, (tid, lang, hit, table[lang])
