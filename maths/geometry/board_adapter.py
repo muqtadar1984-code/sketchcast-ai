@@ -20,6 +20,7 @@ from typing import Optional
 from maths.geometry.errors import GeometryRefusal
 from maths.geometry.layout import LINE_OVERHANG, Drawing, Stroke, _add, _mul, _sub, _unit, angle_tag, build_drawing
 from maths.geometry.model import Model
+from maths.geometry.properties import symmetry_axes
 from maths.geometry.spec import FigureSpec
 
 Rect = tuple[float, float, float, float]   # x0, y0, x1, y1 in board pixels
@@ -28,6 +29,17 @@ MAX_PX_PER_UNIT = 70.0      # a 3-unit figure is not blown up to fill a panel
 MIN_PX_PER_UNIT = 18.0
 STROKE_PX = 3.2
 MARK_PX = 2.2
+AXIS_PX = 2.0               # a symmetry axis drawn across the figure
+AXIS_OVERHANG = 0.15        # past the shape, as a fraction of the axis length
+# A figure is many short strokes. At the timeline's defaults every `draw` is
+# at least 0.8 s and every label `write` 0.6 s, so a hexagon took ~5 s and
+# five triangles ~15 s before the first observation could start — the
+# timeline then compressed to fit the audio and the highlight landed on a
+# half-drawn figure. Explicit durations: a brisk pen, a short floor.
+PEN_PX_PER_SEC = 900.0
+STROKE_MIN_SECS = 0.25
+MARK_SECS = 0.3
+LABEL_SECS = 0.4
 LABEL_PX = 24.0             # the figure's labels, board pixels (em)
 DIM = 0.42
 
@@ -44,6 +56,17 @@ class FigureBoard:
     box: Rect = (0.0, 0.0, 0.0, 0.0)
     scale: float = 1.0
     prefix: str = "fig"
+    origin: tuple[float, float] = (0.0, 0.0)   # board = origin + (x, -y) * scale
+
+    def to_board(self, pt) -> list[float]:
+        return [round(self.origin[0] + pt[0] * self.scale, 1), round(self.origin[1] - pt[1] * self.scale, 1)]
+
+
+def _stroke_secs(points: list, role: str) -> float:
+    if role == "mark":
+        return MARK_SECS
+    length = sum(((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5 for (x0, y0), (x1, y1) in zip(points, points[1:]))
+    return round(max(STROKE_MIN_SECS, length / PEN_PX_PER_SEC), 2)
 
 
 def _fit(d: Drawing, panel: Rect, max_scale: Optional[float] = None) -> tuple[float, float, float]:
@@ -113,8 +136,8 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
         # whose labels are a little smaller and already placed
     fb.scale = s
 
-    def P(pt):
-        return [round(ox + pt[0] * s, 1), round(oy - pt[1] * s, 1)]
+    fb.origin = (ox, oy)
+    P = fb.to_board
 
     n = 0
 
@@ -138,7 +161,7 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
             lid = st.tag.split(":", 1)[1] if st.tag else eid
             fb.hidden.setdefault(lid, []).append(eid)
             continue   # exists, not drawn: a reveal_object step draws it
-        act = {"verb": "draw", "target": eid}
+        act = {"verb": "draw", "target": eid, "duration": _stroke_secs(el["points"], st.role)}
         if first_cue:
             act["at"] = first_cue
             first_cue = None
@@ -148,7 +171,7 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
         x, y = P((t.x, t.y))
         fb.elements.append({"id": eid, "type": "text", "text": t.text, "size": round(t.size * s, 1),
                             "at": [x, y], "anchor": "mm", "role": "label", "fixed": True})
-        fb.actions.append({"verb": "write", "target": eid})
+        fb.actions.append({"verb": "write", "target": eid, "duration": LABEL_SECS})
         if t.tag:
             fb.targets.setdefault(t.tag, []).append(eid)
             if t.tag.startswith(("anglelabel:", "seglabel:")):
@@ -264,6 +287,16 @@ def op_actions(fb: FigureBoard, m: Model, op: dict, *, cue: Optional[dict] = Non
                 actions.append({"verb": "fade", "target": old, "to": 0.0, "duration": 0.3, **at})
                 at = {}
             actions.append({"verb": "write", "target": eid, **at})
+    elif verb == "show_symmetry":
+        # the mirror lines, one after another, each across the whole shape
+        for i, (a, b) in enumerate(symmetry_axes(m)):
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            p0 = (a[0] - dx * AXIS_OVERHANG, a[1] - dy * AXIS_OVERHANG)
+            p1 = (b[0] + dx * AXIS_OVERHANG, b[1] + dy * AXIS_OVERHANG)
+            eid = f"{prefix}_sym{i + 1}"
+            elements.append({"id": eid, "type": "shape", "shape": "line", "points": [fb.to_board(p0), fb.to_board(p1)],
+                             "width": AXIS_PX, "color": "accent2", "exact": True})
+            actions.append({"verb": "draw", "target": eid, "duration": 0.5, **(at if i == 0 else {})})
     # unhighlight: a highlight is a sweep, nothing persists to undo
     return elements, actions
 
