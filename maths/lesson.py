@@ -27,6 +27,7 @@ import json
 import logging
 import math
 import os
+import re
 import uuid
 from datetime import datetime
 
@@ -36,7 +37,7 @@ from maths import board
 from maths.schema import (EXAMPLE_SCHEMA, LESSON_SCHEMA, DIFFICULTY_NAMES, Lesson, Line, TryIt,
                           WorkedExample, parse_example, parse_lesson)
 from maths.geometry.errors import GeometryRefusal
-from maths.geometry.items import GeometryItem, figure_client, geometry_items, key_lines
+from maths.geometry.items import GeometryItem, _pretty_line, figure_client, geometry_items, key_lines
 from maths.i18n import board_text as _board_text
 from maths.schema import Step, TryIt, WorkedExample
 from maths.verify import verify_example, verify_lesson, verify_try_it
@@ -280,6 +281,15 @@ def _plain_value(v) -> str:
     return _num(v) if isinstance(v, (int, float)) else str(v)
 
 
+_ANGLE_NAME = re.compile("\u2220([a-z0-9]+)")
+
+
+def _board_line(x) -> str:
+    """A figure step's line as the board writes it: ang(abc) -> \u2220ABC.
+    The verifier re-reads the SPEC's own lines, never these."""
+    return _ANGLE_NAME.sub(lambda m: "\u2220" + m.group(1).upper(), _pretty_line(str(x)))
+
+
 def figure_example(item: GeometryItem) -> WorkedExample:
     """A verified figure question as a worked example. A reasoning question
     keeps its deduce / transform steps (with their speech) and answers with
@@ -294,7 +304,8 @@ def figure_example(item: GeometryItem) -> WorkedExample:
             kind = st.get("kind") or "transform"
             steps.append(Step(kind=kind if kind in ("deduce", "transform", "setup", "check") else "transform",
                               theorem=st.get("theorem") or "", uses=list(st.get("uses") or []),
-                              before=list(st.get("before") or []), after=list(st.get("after") or []),
+                              before=[_board_line(x) for x in (st.get("before") or [])],
+                              after=[_board_line(x) for x in (st.get("after") or [])],
                               speech=st.get("speech") or "", figure_ops=list(st.get("figure_ops") or [])))
         final = [f"{k} = {_num(v)}" for k, v in rep.proved.items()]
         target = ", ".join(rep.proved) or "x"

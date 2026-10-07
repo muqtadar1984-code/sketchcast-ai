@@ -430,3 +430,13 @@ def test_a_five_step_figure_proof_stays_on_one_board():
     scene2, _ = B.example_scene(short, MethodCard(), "s003", has_card=False)
     rows2 = [e for e in scene2["elements"] if e["id"].startswith("w") and e["id"][1:].isdigit()]
     assert all(e.get("size") == B.LINE_SIZE for e in rows2 if e["type"] == "math")
+
+
+def test_the_board_lines_of_a_figure_proof_are_typeset_for_reading():
+    ex = L.figure_example(_item(_spoken("B11", 3)))
+    lines = [x for st in ex.steps for x in st.after]
+    assert not any("ang(" in x for x in lines), lines
+    assert lines[0] == "\u2220ABC = \u2220ACB", lines[0]
+    # the record the verifier reads is untouched
+    assert ex.figure["steps"][0]["after"] == ["ang(abc) = ang(acb)"]
+    assert verify_example(ex).status == "verified"
