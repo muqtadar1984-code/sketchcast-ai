@@ -2236,7 +2236,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         # as the cumulative exam: the answer key restates the paper.
         try:
             _doc_report = _coverage_report(
-                analysis, None, coverage.docx_text(paths[0]),
+                analysis, None, coverage.document_text(paths[0]),
                 kind=kind, model=gen_client.model,
             )
             _record_coverage(sb, generation_id, [_doc_report])
@@ -2320,7 +2320,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         # measured; the answer key restates it.
         try:
             _record_coverage(sb, generation_id, [_coverage_report(
-                analysis, None, coverage.docx_text(paths[0]),
+                analysis, None, coverage.document_text(paths[0]),
                 kind="exam", model=gen_client.model,
             )])
         except Exception as exc:  # noqa: BLE001

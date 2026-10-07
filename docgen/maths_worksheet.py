@@ -326,6 +326,17 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     except Exception as exc:  # noqa: BLE001
         logger.warning("questions.json (maths %s) skipped: %s", kind, exc)
 
+    # What the diagrams say, in words, beside the document: the coverage gate
+    # reads text, and a page of drawn triangles teaches scalene, isosceles
+    # and equilateral without those words reaching the page (shared.coverage
+    # .document_text picks the sidecar up). Written from the engine's own
+    # facts, so it describes what was drawn, not what the model intended.
+    if figures:
+        from maths.geometry.items import describe
+        from shared.coverage import FIGURE_TRANSCRIPT
+        transcript = "\n\n".join(describe(item, answer_word=dx._t("sol_answer", language)) for item in figures)
+        (out_dir / FIGURE_TRANSCRIPT).write_text(transcript, encoding="utf-8")
+
     stem = "worksheet" if kind == "worksheet" else "exam_paper"
     sheet_path = dx.save(doc, out_dir / f"{stem}.docx")
     key_path = dx.save(key_doc, out_dir / f"{stem}_answer_key.docx")

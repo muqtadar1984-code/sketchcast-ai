@@ -194,6 +194,43 @@ def test_a_non_english_paper_draws_the_note_in_its_language(tmp_path):
     assert _pictures(paths[0]) == 1
 
 
+def test_the_coverage_gate_counts_what_the_diagrams_show(tmp_path):
+    """A sheet of drawn triangles teaches scalene, isosceles and
+    equilateral triangles; the gate reads text, so the builder writes the
+    figures' transcript beside the document and the gate reads both."""
+    from shared import coverage
+
+    client = Client([], [Q_SCALENE, Q_STRAIGHT_LINE], [])
+    paths = generate_document("worksheet", BOOK, CHAPTER, {}, client, {"num_questions": 4}, tmp_path,
+                              language="en", maths=True)
+    sidecar = tmp_path / coverage.FIGURE_TRANSCRIPT
+    assert sidecar.exists()
+    transcript = sidecar.read_text(encoding="utf-8")
+    for word in ("scalene triangle", "isosceles triangle", "equilateral triangle", "lines of symmetry",
+                 "Which of these triangles are scalene?", "angle abd = 70°", "straight line"):
+        assert word in transcript, transcript
+    assert "Answer: A" in transcript and "x = 110" in transcript
+    # the document's own text says none of the class names...
+    plain = coverage.docx_text(paths[0])
+    assert "isosceles" not in plain.lower() and "equilateral" not in plain.lower()
+    # ...the gate's text does, and the topics come out addressed
+    full = coverage.document_text(paths[0])
+    assert "isosceles" in full.lower()
+    # the analyzer's own shape (shared.coverage.chapter_topics reads it)
+    analysis = {"concepts": {"concepts": [{"name": n, "concept_id": f"c{i}"} for i, n in enumerate((
+        "Equilateral Triangle", "Isosceles Triangle", "Scalene Triangle", "Lines of symmetry",
+        "Angles on a straight line", "Tessellation"))]}}
+    before = coverage.measure(analysis, None, plain)
+    after = coverage.measure(analysis, None, full)
+    # the sheet's own words reach "scalene" and "straight line"; the figures
+    # B and C are what teach isosceles and equilateral, and only the
+    # transcript says so
+    assert {"Isosceles Triangle", "Equilateral Triangle"} <= set(before["missed"])
+    assert after["addressed"] > before["addressed"]
+    assert not {"Isosceles Triangle", "Equilateral Triangle"} & set(after["missed"])
+    assert "Tessellation" in after["missed"], "a concept the figures do not show stays missed"
+
+
 def test_nothing_verified_fails_loudly_with_the_geometry_reasons(tmp_path):
     client = Client([], [Q_IMPOSSIBLE], [])
     with pytest.raises(RuntimeError) as err:
