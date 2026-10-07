@@ -176,7 +176,7 @@ def _figure_section(doc, key_doc, items: list[GeometryItem], language: str, *, e
         else:
             dx.picture_row(doc, [(im.png, im.width_mm, im.label) for im in item.images])
         dx.writing_lines(doc, item.lines)
-        lines = key_lines(item, answer_word=dx._t("sol_answer", language), reasons=(language or "en") == "en")
+        lines = key_lines(item, answer_word=dx._t("sol_answer", language), language=language)
         if exam and item.role == "reasoning":
             scheme = dx._t("marks_scheme", language).format(m=item.marks, method=max(1, item.marks - 1))
             key_items.append("\n".join(lines) + scheme)
