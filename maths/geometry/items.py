@@ -409,6 +409,8 @@ def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, 
         "an evidence question's answer is what the figures show (the engine recomputes it and checks), a "
         "reasoning question's answer is the value its steps prove.",
         "EXAMPLES (one of each kind):\n" + _EXAMPLE_REASONING + "\n" + _EXAMPLE_EVIDENCE,
+        "Only questions this TOPIC's own exercises would ask: a chapter on fractions or equations has no diagram "
+        "questions — then return {\"questions\": []} rather than a triangle from another chapter.",
         "=== OUTPUT ===\nReturn ONLY one minified JSON object: {\"questions\": [ ... ]}. Unused fields are empty "
         "strings or empty lists.",
     ])
