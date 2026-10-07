@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import uuid
 from datetime import datetime
 
@@ -34,6 +35,9 @@ from agent3_scripts.script_generator import _build_episode_context
 from maths import board
 from maths.schema import (EXAMPLE_SCHEMA, LESSON_SCHEMA, DIFFICULTY_NAMES, Lesson, Line, TryIt,
                           WorkedExample, parse_example, parse_lesson)
+from maths.geometry.errors import GeometryRefusal
+from maths.geometry.items import GeometryItem, figure_client, geometry_items, key_lines
+from maths.schema import Step, WorkedExample
 from maths.verify import verify_example, verify_lesson, verify_try_it
 from shared import lesson_length
 
@@ -41,6 +45,7 @@ logger = logging.getLogger("worker")
 
 REGEN_ATTEMPTS = 2
 MIN_EXAMPLES = 2
+FIGURE_EXAMPLES = 2      # figure examples asked of the geometry engine's call, per lesson
 MAX_TOKENS = 20000
 JOB_KIND = "maths_lesson"
 
@@ -247,6 +252,98 @@ def regenerate_example(client, prompt: str) -> WorkedExample:
     return parse_example(_analyze(client, prompt, EXAMPLE_SCHEMA, 8000))
 
 
+# ── figure examples (geometry.figure.v1) ─────────────────────────────────
+
+
+def figures_enabled() -> bool:
+    """MATHS_FIGURES=0 turns the figure examples off without a deploy."""
+    return os.environ.get("MATHS_FIGURES", "1").strip().lower() not in ("0", "false", "off", "no")
+
+
+def _num(v) -> str:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    return str(int(round(f))) if abs(f - round(f)) < 1e-9 else f"{f:.2f}".rstrip("0").rstrip(".")
+
+
+def _plain_value(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (list, set, tuple)):
+        return ", ".join(str(x) for x in sorted(v, key=str))
+    if isinstance(v, dict):
+        return "; ".join(f"{k}: {_plain_value(x)}" for k, x in v.items())
+    return _num(v) if isinstance(v, (int, float)) else str(v)
+
+
+def figure_example(item: GeometryItem) -> WorkedExample:
+    """A verified figure question as a worked example. A reasoning question
+    keeps its deduce / transform steps (with their speech) and answers with
+    what the chain PROVED; an evidence question becomes one observation step
+    per figure saying what the ENGINE computed for it, in the order the
+    question asks them, closing on the computed selection."""
+    spec, rep, speech = item.spec, item.report, item.speech
+    labels = {f["id"]: f.get("label") or f["id"] for f in spec.get("figures") or []}
+    steps: list[Step] = []
+    if item.role == "reasoning":
+        for st in spec.get("steps") or []:
+            kind = st.get("kind") or "transform"
+            steps.append(Step(kind=kind if kind in ("deduce", "transform", "setup", "check") else "transform",
+                              theorem=st.get("theorem") or "", uses=list(st.get("uses") or []),
+                              before=list(st.get("before") or []), after=list(st.get("after") or []),
+                              speech=st.get("speech") or "", figure_ops=list(st.get("figure_ops") or [])))
+        final = [f"{k} = {_num(v)}" for k, v in rep.proved.items()]
+        target = ", ".join(rep.proved) or "x"
+    else:
+        asks = spec.get("asks") or ((spec.get("parts") or [{}])[0].get("asks")) or {}
+        prop = str(asks.get("property") or "")
+        values = rep.computed.get(prop) or {}
+        obs = speech.get("observations") or {}
+        for fid in asks.get("over") or list(labels):
+            lab = labels.get(fid, fid)
+            value = values.get(lab, values.get(fid))
+            steps.append(Step(kind="deduce", uses=[fid], after=[f"{lab}: {_plain_value(value)}"],
+                              speech=obs.get(fid) or obs.get(lab) or "",
+                              figure_ops=[{"op": "highlight", "target": fid}]))
+        final = [ln.split(": ", 1)[-1] for ln in key_lines(item, reasons=False)][:1]
+        target = prop
+    if not steps:
+        raise GeometryRefusal("bad_schema", "a lesson example has steps to teach")
+    if not any(st.speech for st in steps):
+        raise GeometryRefusal("bad_schema", "a lesson example speaks its steps")
+    return WorkedExample(label="", difficulty=item.difficulty, task="solve", problem=item.prompt, givens=[],
+                         target=target, intro_speech=speech.get("intro") or "", steps=steps, final_answer=final,
+                         answer_speech=speech.get("answer") or "", figure=spec)
+
+
+def figure_examples(client, *, topic: str, level: str | None, language: str, context: str, n: int,
+                    report: dict) -> list[WorkedExample]:
+    """Up to ``n`` figure examples from the geometry engine's own call —
+    unconstrained JSON on the script model, the shape the worksheet already
+    yields from (the lesson's constrained call strips construction
+    parameters) — each compiled onto the board once to prove it fits. The
+    call's report (asked / verified / rejected) lands in ``report``."""
+    items, frep = geometry_items(figure_client(client, language), topic=topic, level=level, language=language,
+                                 n=n, chapter_context=context, kind="lesson", render=False)
+    out: list[WorkedExample] = []
+    for it in items:
+        try:
+            ex = figure_example(it)
+            board.check_figure_example(ex, language)
+        except (GeometryRefusal, ValueError) as exc:
+            code = getattr(exc, "code", "board")
+            msg = getattr(exc, "message", str(exc))
+            logger.info("figure example rejected at the board (%s): %r — %s", code, it.prompt[:60], msg[:200])
+            frep["rejected"] = list(frep.get("rejected") or []) + [f"{it.prompt[:60]}: {code}: {msg[:200]}"]
+            continue
+        out.append(ex)
+    frep["verified"] = len(out)
+    report.update(frep)
+    return out
+
+
 def _verify_examples(client, examples: list[WorkedExample], lesson: Lesson, language: str, attempts: int,
                      history: list[dict], dropped: list[str]) -> list[WorkedExample]:
     """Verify each example, regenerate ONLY the ones that fail with the
@@ -335,13 +432,28 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
     history: list[dict] = []
     dropped: list[str] = []
     kept = _verify_examples(client, lesson.examples, lesson, language, attempts, history, dropped)
-    if len(kept) < MIN_EXAMPLES:
+    # the diagram examples: a chapter that has none answers with an empty
+    # list (the engine's prompt says so); a shapes chapter opens on a shape
+    figures_report: dict = {}
+    figures = figure_examples(client, topic=topic, level=level, language=language, context=episode_context,
+                              n=FIGURE_EXAMPLES, report=figures_report) if figures_enabled() else []
+    if len(kept) + len(figures) < MIN_EXAMPLES:
         raise MathsVerificationError(
             f"only {len(kept)} of {len(lesson.examples)} worked examples could be verified after "
-            f"{attempts} regeneration(s) each — {' | '.join(dropped)[:1500]}")
-    for i, ex in enumerate(kept, 1):
-        ex.label = ex.label or f"Example {i}"
-    lesson.examples = kept
+            f"{attempts} regeneration(s) each"
+            + (f" and {len(figures)} figure example(s) survived" if figures_enabled() else "")
+            + f" — {' | '.join(dropped)[:1500]}")
+    if figures:
+        # one ladder, by difficulty, figures first among equals; relabelled
+        # in the order they are taught
+        merged = sorted(figures + kept, key=lambda e: e.difficulty)[:4]
+        for i, ex in enumerate(merged, 1):
+            ex.label = f"Example {i}"
+        lesson.examples = merged
+    else:
+        for i, ex in enumerate(kept, 1):
+            ex.label = ex.label or f"Example {i}"
+        lesson.examples = kept
     t = verify_try_it(lesson.try_it)
     # the try-it is TAUGHT on the board after the pause, so "could not be
     # verified" is as fatal as "wrong" — a try-it the verifier cannot read
@@ -353,6 +465,7 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
     report = verify_lesson(lesson)
     report["dropped"] = dropped
     report["history"] = history
+    report["figures"] = figures_report
     return lesson, report
 
 
@@ -414,6 +527,7 @@ def generate_maths_script(episode: dict, analysis: dict, chapter_num: int, clien
 
 
 __all__ = ["MathsVerificationError", "build_prompt", "build_regen_prompt", "build_extend_prompt",
+           "figure_example", "figure_examples", "figures_enabled", "FIGURE_EXAMPLES",
            "generate_lesson", "regenerate_example", "verified_lesson", "extend_to_floor", "measure_lesson",
            "to_episode_script", "generate_maths_script", "REGEN_ATTEMPTS", "MIN_EXAMPLES",
            "MAX_LENGTH_ROUNDS", "MAX_EXAMPLES_PER_ROUND", "EXTENSION_SCHEMA"]

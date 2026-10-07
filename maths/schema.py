@@ -22,7 +22,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-StepKind = Literal["transform", "setup", "check", "round"]
+StepKind = Literal["transform", "setup", "check", "round", "deduce"]
 Task = Literal["solve", "solve_system", "solve_inequality", "simplify", "expand",
                "factorise", "evaluate", "round", "estimate", "mean", "median", "mode", "range"]
 # The four DATA tasks (mean, median, mode, range) take a data list as their
@@ -135,21 +135,35 @@ class Step(BaseModel):
     speech: str = ""
     #: an optional student reaction or question after the step
     student: str = ""
+    #: kind "deduce" only — a FIGURE example (geometry.figure.v1): the theorem
+    #: cited, the figure ids it applies to, and what the board does on the
+    #: figure meanwhile ({"op": "highlight", "target": "angle_abd"}). Proved
+    #: by maths.geometry, never by SymPy equivalence.
+    theorem: str = ""
+    uses: list[str] = Field(default_factory=list)
+    figure_ops: list[dict] = Field(default_factory=list)
 
-    @field_validator("operation", "precision", "explanation", "speech", "student", mode="before")
+    @field_validator("operation", "precision", "explanation", "speech", "student", "theorem", mode="before")
     @classmethod
     def _text(cls, v):
         return _as_text(v)
 
-    @field_validator("operation", "precision", "explanation", "speech", "student")
+    @field_validator("operation", "precision", "explanation", "speech", "student", "theorem")
     @classmethod
     def _trim(cls, v: str) -> str:
         return _clean(v)[:_MAX_LINE]
 
-    @field_validator("before", "after", mode="before")
+    @field_validator("before", "after", "uses", mode="before")
     @classmethod
     def _listify(cls, v):
         return _as_list(v)
+
+    @field_validator("figure_ops", mode="before")
+    @classmethod
+    def _ops(cls, v):
+        if not isinstance(v, (list, tuple)):
+            return []
+        return [x for x in v if isinstance(x, dict) and x.get("op") and x.get("target")][:12]
 
     @field_validator("before", "after")
     @classmethod
@@ -213,6 +227,19 @@ class WorkedExample(BaseModel):
     final_answer: list[str] = Field(default_factory=list)
     answer_speech: str = ""
     common_mistake: Optional[Mistake] = None
+    #: a geometry.figure.v1 question when the example teaches from a DIAGRAM:
+    #: its figures draw on the board and its steps (deduce / transform) are
+    #: proved by the geometry chain (maths.geometry.verify), not SymPy
+    figure: Optional[dict] = None
+
+    @field_validator("figure", mode="before")
+    @classmethod
+    def _figure(cls, v):
+        return v if isinstance(v, dict) and v.get("figures") else None
+
+    @property
+    def has_figure(self) -> bool:
+        return bool(self.figure)
 
     @field_validator("label", "problem", "target", "intro_speech", "student_question", "answer_speech",
                      mode="before")

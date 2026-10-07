@@ -42,7 +42,7 @@ from typing import Optional
 
 from docgen import docx_builder as dx
 from maths.facts import FactItem
-from maths.geometry.items import GeometryItem, geometry_items, key_lines
+from maths.geometry.items import GeometryItem, figure_client, geometry_items, key_lines
 from maths.pretty import pretty
 from maths.tokens import TokenError, tokenize
 from maths.questions import fact_items, question_ladder, worked_solution
@@ -149,25 +149,7 @@ def _fact_sections(doc, key_doc, facts: list[FactItem], language: str, *, exam: 
     return marks
 
 
-def _figure_client(client, language: str):
-    """The client for the figure call: the script role's model on the Gemini
-    path, wrapped in the same language directive the document's client
-    carries. A stub client (tests) and the Claude/Kimi paths keep the client
-    they were given."""
-    inner = client.undirected() if hasattr(client, "undirected") else client
-    if type(inner).__name__ != "GeminiClient":
-        return client            # a stub, or another provider's client
-    try:
-        from shared.llm import script_client
-        from shared.model_routing import GEMINI, provider_for
-    except Exception:  # noqa: BLE001 — docgen stays importable without the worker's routing
-        return client
-    if provider_for(language) != GEMINI:
-        return client
-    strong = script_client(language)
-    if inner is not client:
-        return type(client)(strong, client._directive)  # noqa: SLF001 — the same directive, the stronger model
-    return strong
+_figure_client = figure_client   # the figure call's client; it lives in maths.geometry.items
 
 
 def _figure_section(doc, key_doc, items: list[GeometryItem], language: str, *, exam: bool,
