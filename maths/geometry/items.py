@@ -567,9 +567,20 @@ def key_lines(item: GeometryItem, *, answer_word: str = "Answer", reasons: bool 
     if item.role != "reasoning":
         parts = spec.get("parts") or ([{"asks": spec.get("asks"), "answer": spec.get("answer")}]
                                       if spec.get("asks") else [])
+        # the key names figures by their printed LABEL (A, B, C); a model's
+        # answer may be keyed by figure id (fig_a), which the sheet never shows
+        labels = {f["id"]: f.get("label") or f["id"] for f in spec.get("figures") or []}
+
+        def relabel(v):
+            if isinstance(v, dict):
+                return {labels.get(str(k), k): x for k, x in v.items()}
+            if isinstance(v, (list, set, tuple)):
+                return [labels.get(str(x), x) for x in v]
+            return labels.get(str(v), v) if isinstance(v, str) else v
+
         if len(parts) == 1:
-            return [f"{answer_word}: {_fmt(parts[0]['answer']['value'])}"]
-        return [f"({i}) {_fmt(p['answer']['value'])}" for i, p in enumerate(parts, 1)]
+            return [f"{answer_word}: {_fmt(relabel(parts[0]['answer']['value']))}"]
+        return [f"({i}) {_fmt(relabel(p['answer']['value']))}" for i, p in enumerate(parts, 1)]
     lines: list[str] = []
     reason_iter = iter(item.report.reasons_given)
     for st in spec.get("steps") or []:

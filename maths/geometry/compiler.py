@@ -160,8 +160,10 @@ def check_given_measures(m: Model, spec: FigureSpec) -> None:
         have = realised(m, ms.target)
         if ms.target in m.angle_ids:
             if abs(have - want) > ANGLE_TOL_DEG:
+                # six significant digits: a 59.996° built from rounded sides
+                # must not read as "60° but the figure has 60°"
                 raise GeometryRefusal("given_not_realised",
-                                      f"{ms.target} is given as {ms.value} = {want:g}° but the figure has {have:.4g}°",
+                                      f"{ms.target} is given as {ms.value} = {want:g}° but the figure has {have:.6g}°",
                                       ms.target)
             an = m.angles[m.angle_ids[ms.target]]
             if an.exact is None:
