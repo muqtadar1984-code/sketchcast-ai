@@ -19,10 +19,11 @@ before parsing.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from maths.geometry.constructions import CONSTRUCTIONS
+from maths.geometry.constructions import CONSTRUCTIONS, exact_value
 from maths.geometry.errors import GeometryRefusal
 from maths.geometry.properties import PROPERTIES
 from maths.geometry.realise import realise
@@ -36,6 +37,16 @@ logger = logging.getLogger("worker")
 
 MAX_TOKENS = 16000
 MAX_PER_CALL = 8
+
+
+def strict_schema() -> bool:
+    """Constrained decoding for the geometry call. Measured 2026-10-07:
+    with every construction parameter optional, gemini-3.5-flash under
+    constrained decoding OMITTED the parameters (`sides` is required ×8 in
+    one probe) while the Lite emitted them; unconstrained JSON with the
+    prompt's examples is the default until a schema the API constrains
+    WELL exists. GEOMETRY_STRICT_SCHEMA=1 switches it on without a deploy."""
+    return (os.getenv("GEOMETRY_STRICT_SCHEMA") or "0").strip().lower() in ("1", "true", "yes", "on")
 
 # ── the closed reply schema ───────────────────────────────────────────────
 
@@ -88,8 +99,8 @@ _FIGURE = _obj({
     "objects": _arr(_CONSTRUCTION), "angles": _arr(_ANGLE), "segments": _arr(_SEGMENT),
     "measures": _arr(_MEASURE), "relations": _arr(_RELATION), "marks": _arr(_MARK),
 }, ("objects",))
-_ASKS = _obj({"property": _enum(*sorted(PROPERTIES)), "over": _arr(_S), "select": _S, "fill": _S,
-              "equals": _I, "greater_than": _I, "less_than": _I}, ("property", "over"))
+_ASKS = _obj({"property": _enum("none", *sorted(PROPERTIES)), "over": _arr(_S), "select": _S, "fill": _S,
+              "equals": _I, "greater_than": _I, "less_than": _I}, ("property",))
 _ANSWER = _obj({
     "kind": _enum("number", "values", "label_set", "label_map", "value_set"),
     "value": _S, "unit": _S,
@@ -107,7 +118,10 @@ _QUESTION = _obj({
     "figures": _arr(_obj({"id": _S, "label": _S, "figure": _FIGURE}, ("id", "figure"))),
     "asks": _ASKS, "parts": _arr(_obj({"asks": _ASKS, "answer": _ANSWER}, ("asks", "answer"))),
     "steps": _arr(_STEP), "answer": _ANSWER,
-}, ("id", "difficulty", "figure_role", "prompt", "figures"))
+}, ("id", "difficulty", "figure_role", "prompt", "figures", "asks", "answer"))
+# `answer` is REQUIRED: the first live probe (gemini-3.5-flash-lite,
+# 2026-10-07) left it out of every evidence question, and a question whose
+# answer the engine computes still needs the model's claim to check against.
 GEOMETRY_SET_SCHEMA = _obj({"questions": _arr(_QUESTION)}, ("questions",))
 
 
@@ -123,33 +137,69 @@ def _strip(d: dict) -> dict:
     return out
 
 
-def _answer(a: Optional[dict]) -> Optional[dict]:
+_ROLES = ("given", "unknown", "derived")
+
+
+def _measure(m: dict) -> dict:
+    """A measure with its role folded into the enum: a model's 'find',
+    'required' or 'target' is an unknown when the value carries a symbol,
+    a given otherwise (the enum is the engine's; the engine checks both)."""
+    out = _strip(dict(m))
+    role = str(out.get("role") or "").strip().lower()
+    if role not in _ROLES:
+        try:
+            syms = exact_value(out.get("value"), where="measure").free_symbols
+        except GeometryRefusal:
+            syms = set()
+        out["role"] = "unknown" if syms else "given"
+    return out
+
+
+def _answer(a: Optional[dict], figure_labels: Optional[list[str]] = None) -> Optional[dict]:
     if not isinstance(a, dict) or not a.get("kind"):
         return None
     kind = a["kind"]
     out: dict[str, Any] = {"kind": kind}
     if a.get("unit"):
         out["unit"] = a["unit"]
+    # unconstrained JSON arrives in its natural shapes (a dict in `value`, a
+    # list of labels); the closed schema's list-of-pairs shapes are mapped too
+    value = a.get("value")
     if kind == "number":
-        out["value"] = a.get("value", "")
+        out["value"] = "" if value is None else (str(value) if not isinstance(value, (dict, list)) else "")
     elif kind == "values":
-        out["value"] = {x["name"]: x["value"] for x in (a.get("values") or []) if isinstance(x, dict)}
-        if not out["value"] and a.get("value"):
-            out["value"] = {"x": a["value"]}
+        if isinstance(value, dict):
+            out["value"] = {str(k): str(v) for k, v in value.items()}
+        else:
+            out["value"] = {x["name"]: x["value"] for x in (a.get("values") or []) if isinstance(x, dict)}
+            if not out["value"] and value not in (None, ""):
+                out["value"] = {"x": str(value)}
     elif kind in ("label_set", "value_set"):
         labels = a.get("labels") or []
-        if not labels and a.get("value"):
-            labels = [s.strip() for s in str(a["value"]).replace(";", ",").split(",") if s.strip()]
+        if not labels and isinstance(value, list):
+            labels = [str(v) for v in value]
+        elif not labels and value not in (None, ""):
+            labels = [s.strip() for s in str(value).replace(";", ",").split(",") if s.strip()]
         out["value"] = labels
     elif kind == "label_map":
-        out["value"] = {x["label"]: x["value"] for x in (a.get("map") or []) if isinstance(x, dict)}
+        if isinstance(value, dict):
+            out["value"] = {str(k): str(v) for k, v in value.items()}
+        else:
+            out["value"] = {x["label"]: x["value"] for x in (a.get("map") or []) if isinstance(x, dict)}
+        if not out["value"] and figure_labels:
+            # the values listed in figure order, no labels: zipped with the figures
+            vals = a.get("labels") or [s.strip() for s in str(a.get("value") or "").replace(";", ",").split(",") if s.strip()]
+            if len(vals) == len(figure_labels):
+                out["value"] = dict(zip(figure_labels, vals))
     return out
 
 
-def _asks(a: Optional[dict]) -> Optional[dict]:
-    if not isinstance(a, dict) or not a.get("property"):
+def _asks(a: Optional[dict], figure_ids: list[str]) -> Optional[dict]:
+    if not isinstance(a, dict) or not a.get("property") or a.get("property") == "none":
         return None
     out = _strip(dict(a))
+    if not out.get("over"):
+        out["over"] = list(figure_ids)   # asked of every figure unless said otherwise
     sel = out.get("select")
     if isinstance(sel, str) and sel.strip().lower() in ("true", "false"):
         out["select"] = sel.strip().lower() == "true"
@@ -177,11 +227,18 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         fig["objects"] = [_strip(o) for o in (fig.get("objects") or []) if isinstance(o, dict)]
         fig["angles"] = [_strip(a) for a in (fig.get("angles") or []) if isinstance(a, dict)]
         fig["segments"] = [_strip(s) for s in (fig.get("segments") or []) if isinstance(s, dict)]
-        fig["measures"] = [_strip(m) for m in (fig.get("measures") or []) if isinstance(m, dict)]
+        fig["measures"] = [_measure(m) for m in (fig.get("measures") or []) if isinstance(m, dict)]
         fig["relations"] = [_strip(r) for r in (fig.get("relations") or []) if isinstance(r, dict)]
         fig["marks"] = [_strip(m) for m in (fig.get("marks") or []) if isinstance(m, dict)]
         fig = _strip(fig)
-        figures.append(_strip({"id": ref.get("id"), "label": ref.get("label") or None, "figure": fig}))
+        if not fig.get("objects"):
+            # a padding entry (a closed schema invites them): no construction,
+            # no figure — dropped, so it cannot sink the question
+            continue
+        entry = {"id": ref.get("id") or f"fig_{len(figures) + 1}", "figure": fig}
+        if ref.get("label"):
+            entry["label"] = ref["label"]
+        figures.append(entry)
     out: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "id": str(q.get("id") or "q"),
@@ -189,13 +246,15 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         "prompt": str(q.get("prompt") or "")[:600],
         "figures": figures,
     }
-    asks = _asks(q.get("asks"))
+    fig_ids = [f["id"] for f in figures]
+    fig_labels = [f.get("label") or f["id"] for f in figures]
+    asks = _asks(q.get("asks"), fig_ids)
     if asks:
         out["asks"] = asks
     parts = []
     for p in q.get("parts") or []:
         if isinstance(p, dict):
-            pa, an = _asks(p.get("asks")), _answer(p.get("answer"))
+            pa, an = _asks(p.get("asks"), fig_ids), _answer(p.get("answer"), fig_labels)
             if pa and an:
                 parts.append({"asks": pa, "answer": an})
     if parts:
@@ -208,12 +267,45 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         if "before" in s and not s["before"]:
             del s["before"]
         steps.append(s)
-    if steps:
+    # an evidence question is answered by the property the engine computes;
+    # steps a model attaches to it are commentary, not a chain to prove
+    if steps and not (asks or parts):
         out["steps"] = steps
-    ans = _answer(q.get("answer"))
+    ans = _answer(q.get("answer"), fig_labels)
     if ans:
         out["answer"] = ans
+    _bind_from_answer(out)
     return out, difficulty
+
+
+def _bind_from_answer(q: dict) -> None:
+    """A figure whose givens are in x but names no bind draws with the
+    answer's x — which the chain must then prove (bind_mismatch otherwise)."""
+    ans = q.get("answer") or {}
+    stated: dict[str, str] = {}
+    if ans.get("kind") == "number" and ans.get("value") not in (None, ""):
+        stated["*"] = str(ans["value"])
+    elif ans.get("kind") == "values" and isinstance(ans.get("value"), dict):
+        stated = {k: str(v) for k, v in ans["value"].items()}
+    if not stated:
+        return
+    for ref in q.get("figures") or []:
+        fig = ref["figure"]
+        bind = dict(fig.get("bind") or {})
+        free: set[str] = set()
+        for ms in fig.get("measures") or []:
+            try:
+                free |= {str(s) for s in exact_value(ms.get("value"), where="measure").free_symbols}
+            except GeometryRefusal:
+                continue
+        missing = sorted(s for s in free if s not in bind)
+        for s in missing:
+            if s in stated:
+                bind[s] = stated[s]
+            elif "*" in stated and len(missing) == 1:
+                bind[s] = stated["*"]
+        if bind:
+            fig["bind"] = bind
 
 
 # ── the prompt ────────────────────────────────────────────────────────────
@@ -296,7 +388,10 @@ def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, 
         "expression in x (e.g. '2x + 10'), put x's value in the figure's 'bind'.",
         "Point ids 'p_a', labels 'A'. Every measurement is a STRING ('70', '2x + 10', '6'). Angles in degrees, "
         "lengths in the figure's 'units' (cm for anything a student measures). Property values are English ids "
-        "(isosceles, scalene, equilateral, acute, right, obtuse, true, false) even when the question text is not.",
+        "(isosceles, scalene, equilateral, acute, right, obtuse, true, false) even when the question text is not. "
+        "An evidence question has ONE shape per figure (three triangles = three figures) and always fills 'asks'; a "
+        "reasoning question sets asks.property to 'none'. Every construction carries its parameters as listed "
+        "below — a triangle_sss without 'sides' or a ray_at_angle without 'angle' is thrown away.",
         "CONSTRUCTIONS (the only ones that exist; parameters as listed):\n" + sigs,
         "THEOREMS a deduce step may cite (the only reasons that exist):\n" + theorems,
         "PROPERTIES an evidence question may ask: " + ", ".join(sorted(PROPERTIES)) + ".",
@@ -305,6 +400,11 @@ def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, 
         "squares on a count-the-right-angles question); sides meant to differ differ by at least 0.5 cm; a "
         "question with no diagram does not belong here. Difficulty 1-2 for evidence and one-theorem reasoning, "
         "3-4 for two or more theorems or algebra in x.",
+        "Every GIVEN must be realised by the construction: a find-x triangle is built FROM its given angles "
+        "(triangle_asa / triangle_aas / triangle_isosceles with apex_angle), never from side lengths with angles "
+        "declared on top. An isosceles triangle's 'legs' is ONE number ('5'). Every question states its answer: "
+        "an evidence question's answer is what the figures show (the engine recomputes it and checks), a "
+        "reasoning question's answer is the value its steps prove.",
         "EXAMPLES (one of each kind):\n" + _EXAMPLE_REASONING + "\n" + _EXAMPLE_EVIDENCE,
         "=== OUTPUT ===\nReturn ONLY one minified JSON object: {\"questions\": [ ... ]}. Unused fields are empty "
         "strings or empty lists.",
@@ -366,31 +466,62 @@ def render_item(item: GeometryItem, *, note: Optional[str] = None) -> None:
 
 def geometry_items(client, *, topic: str, level: Optional[str], language: str, n: int,
                    chapter_context: str = "", kind: str = "worksheet",
-                   note: Optional[str] = None) -> tuple[list[GeometryItem], dict]:
-    """Up to ``n`` verified, rendered figure questions; one model call.
+                   note: Optional[str] = None, rounds: int = 2) -> tuple[list[GeometryItem], dict]:
+    """Up to ``n`` verified, rendered figure questions; one model call,
+    plus one repair round carrying the refusals back when short.
     ``note`` is the "Not drawn to scale" text in the document's language."""
     if n <= 0:
         return [], {"asked": 0, "verified": 0, "rejected": []}
-    ask = min(MAX_PER_CALL, n + 1)
-    result = client.analyze(prompt=geometry_prompt(topic=topic, level=level, language=language, n=ask,
-                                                   chapter_context=chapter_context, kind=kind),
-                            system=_SYSTEM, max_tokens=MAX_TOKENS, response_schema=GEOMETRY_SET_SCHEMA,
-                            strict_schema=True)
-    if result.get("truncated"):
-        logger.warning("geometry questions for %r: the reply was cut off; nothing parsed from it is complete", topic)
-        return [], {"asked": 0, "verified": 0, "rejected": ["the model's reply was cut off at the output cap"]}
-    data = result.get("data", result)
-    raw = data.get("questions") if isinstance(data, dict) else None
     kept: list[GeometryItem] = []
     rejected: list[str] = []
-    for i, entry in enumerate(raw or [], 1):
+    seen_prompts: set[str] = set()
+    asked = 0
+    base_prompt = geometry_prompt(topic=topic, level=level, language=language, n=min(MAX_PER_CALL, n + 1),
+                                  chapter_context=chapter_context, kind=kind)
+    for round_ in range(rounds):
+        if round_ and (len(kept) >= n or not rejected):
+            break
+        prompt = base_prompt
+        if round_:
+            # the repair round: the refusals, with their reasons, go back —
+            # the same loop the algebra ladder runs
+            prompt += ("\n\nTHE ENGINE REFUSED THESE LAST TIME (fix the fault or replace the question; "
+                       f"write {min(MAX_PER_CALL, n - len(kept) + 1)} questions):\n"
+                       + "\n".join(f"  - {r}" for r in rejected[-MAX_PER_CALL:]))
+        result = client.analyze(prompt=prompt, system=_SYSTEM, max_tokens=MAX_TOKENS,
+                                response_schema=GEOMETRY_SET_SCHEMA, strict_schema=strict_schema())
+        if result.get("truncated"):
+            logger.warning("geometry questions for %r: the reply was cut off; nothing parsed from it is complete", topic)
+            rejected.append("the model's reply was cut off at the output cap")
+            continue
+        data = result.get("data", result)
+        raw = data.get("questions") if isinstance(data, dict) else None
+        if raw is None:
+            # unconstrained JSON can arrive malformed beyond repair (the Lite,
+            # 2026-10-07): the call is lost, the repair round asks again. An
+            # explicit empty list is an answer — the chapter has no diagrams.
+            logger.warning("geometry questions for %r: the reply carried no questions (malformed or empty)", topic)
+            rejected.append("the reply carried no questions — it was malformed or empty; write them again")
+            continue
+        _take(raw, n, kept, rejected, seen_prompts, note, asked)
+        asked += len(raw)
+    kept.sort(key=lambda it: it.difficulty)
+    logger.info("geometry questions for %r: %d returned, %d verified and drawn, %d rejected", topic,
+                asked, len(kept), len(rejected))
+    return kept, {"asked": asked, "verified": len(kept), "rejected": rejected}
+
+
+def _take(raw: list, n: int, kept: list, rejected: list, seen_prompts: set, note: Optional[str], offset: int) -> None:
+    for i, entry in enumerate(raw, offset + 1):
         if not isinstance(entry, dict):
             rejected.append(f"question {i}: not an object")
             continue
         spec, difficulty = normalise_question(entry)
         spec["id"] = f"g{i}"
-        rep = verify_question(spec)
         label = (spec.get("prompt") or spec["id"])[:60]
+        if label.lower() in seen_prompts:
+            continue   # the repair round re-sent a question already kept
+        rep = verify_question(spec)
         if not rep.ok:
             code = (rep.refusal or {}).get("code")
             msg = (rep.refusal or {}).get("message", "")
@@ -406,10 +537,7 @@ def geometry_items(client, *, topic: str, level: Optional[str], language: str, n
             continue
         if len(kept) < n:
             kept.append(item)
-    kept.sort(key=lambda it: it.difficulty)
-    logger.info("geometry questions for %r: %d returned, %d verified and drawn, %d rejected", topic,
-                len(raw or []), len(kept), len(rejected))
-    return kept, {"asked": len(raw or []), "verified": len(kept), "rejected": rejected}
+            seen_prompts.add(label.lower())
 
 
 # ── the answer key ────────────────────────────────────────────────────────

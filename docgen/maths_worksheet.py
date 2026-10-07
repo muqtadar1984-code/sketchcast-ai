@@ -146,6 +146,27 @@ def _fact_sections(doc, key_doc, facts: list[FactItem], language: str, *, exam: 
     return marks
 
 
+def _figure_client(client, language: str):
+    """The client for the figure call: the script role's model on the Gemini
+    path, wrapped in the same language directive the document's client
+    carries. A stub client (tests) and the Claude/Kimi paths keep the client
+    they were given."""
+    inner = client.undirected() if hasattr(client, "undirected") else client
+    if type(inner).__name__ != "GeminiClient":
+        return client            # a stub, or another provider's client
+    try:
+        from shared.llm import script_client
+        from shared.model_routing import GEMINI, provider_for
+    except Exception:  # noqa: BLE001 — docgen stays importable without the worker's routing
+        return client
+    if provider_for(language) != GEMINI:
+        return client
+    strong = script_client(language)
+    if inner is not client:
+        return type(client)(strong, client._directive)  # noqa: SLF001 — the same directive, the stronger model
+    return strong
+
+
 def _figure_section(doc, key_doc, items: list[GeometryItem], language: str, *, exam: bool,
                     number: int) -> tuple[int, int]:
     """The verified figure questions: each question, its drawing(s) at the
@@ -196,9 +217,13 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     # The diagram half: what the ladder could not fill is asked as figure
     # questions — a construction the geometry engine builds, proves and
     # draws (maths.geometry). A question it refuses is never printed.
-    figures, figure_report = geometry_items(client, topic=topic, level=grade, language=language,
-                                            n=n - len(questions), chapter_context=grounding, kind=kind,
-                                            note=dx._t("not_to_scale", language))
+    # Asked of the SCRIPT role's model, not the document kind's: measured
+    # 2026-10-07 on the same prompt, gemini-3.5-flash-lite verified 2 of 7
+    # figure questions and gemini-3.5-flash 6 of 7 — a construction grammar
+    # is a harder reply than a worksheet's prose.
+    figures, figure_report = geometry_items(_figure_client(client, language), topic=topic, level=grade,
+                                            language=language, n=n - len(questions), chapter_context=grounding,
+                                            kind=kind, note=dx._t("not_to_scale", language))
     # The categorical half (2D shape and pattern, 2026-10-07): a chapter
     # whose answers are names — polygons, solids, angle types, directions —
     # verified nothing through SymPy and failed every time. What the ladder

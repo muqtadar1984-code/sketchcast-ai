@@ -59,7 +59,7 @@ def sort_uses(m: Model, uses: list[str], theorem: str) -> Uses:
     u = Uses([], [], [], [], [], [])
     for x in uses:
         if x in m.angle_ids:
-            u.angles.append(x)
+            u.angles.append(m.canonical_angle_id(x))
         elif x in m.segment_ids:
             u.segments.append(x)
         elif x in m.polygons:
@@ -79,6 +79,15 @@ def _premise(theorem: str, ok: bool, why: str) -> None:
 
 
 def _need_angles(m: Model, u: Uses, theorem: str, n: Optional[int] = None, at_least: Optional[int] = None) -> list[AngleKey]:
+    if not u.angles and len(u.polygons) == 1:
+        # the shape cited instead of its angles: its interior angles, in order
+        pg = m.polygons[u.polygons[0]]
+        L = len(pg.vertices)
+        for i, v in enumerate(pg.vertices):
+            k = angle_key(v, pg.vertices[i - 1], pg.vertices[(i + 1) % L])
+            aid = next((a for a, kk in m.angle_ids.items() if kk == k), None)
+            if aid:
+                u.angles.append(aid)
     if n is not None:
         _premise(theorem, len(u.angles) == n, f"cite exactly {n} angles (got {len(u.angles)})")
     if at_least is not None:
@@ -249,8 +258,18 @@ def t_isosceles_base_angles(m: Model, u: Uses) -> list[sp.Eq]:
 
 def t_equilateral_angles(m: Model, u: Uses) -> list[sp.Eq]:
     T = "equilateral_angles"
-    keys = _need_angles(m, u, T, n=3)
-    pg = _polygon_of_angles(m, keys, T, 3)
+    keys = _need_angles(m, u, T, at_least=1)
+    _premise(T, len(keys) <= 3, "cite at most the three angles of the triangle")
+    verts = [k[0] for k in keys]
+    pg = None
+    for cand in m.polygons.values():
+        if cand.closed and len(cand.vertices) == 3 and set(verts) <= set(cand.vertices):
+            pg = cand
+    _premise(T, pg is not None, "no construction makes a triangle with these vertices")
+    for k in keys:
+        i = pg.vertices.index(k[0])
+        _premise(T, k[1] == frozenset((pg.vertices[i - 1], pg.vertices[(i + 1) % 3])),
+                 f"the angle at {k[0]} must be between the triangle's sides")
     a, b, c = pg.vertices
     _premise(T, m.lengths_equal(seg_key(a, b), seg_key(b, c)) and m.lengths_equal(seg_key(b, c), seg_key(c, a)),
              "no construction makes all three sides equal")

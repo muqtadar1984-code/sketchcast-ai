@@ -123,7 +123,7 @@ def _measure_substitutions(m: Model, q: QuestionSpec, fid: str) -> dict[sp.Symbo
     for ms in fig.measures:
         e = exact_value(ms.value, where=f"measure.{ms.target}")
         if ms.target in m.angle_ids:
-            subs[angle_symbol(ms.target)] = e
+            subs[angle_symbol(m.canonical_angle_id(ms.target))] = e
         else:
             subs[length_symbol(ms.target)] = e
     return subs
@@ -134,6 +134,10 @@ def _measure_substitutions(m: Model, q: QuestionSpec, fid: str) -> dict[sp.Symbo
 def _implies(premises: list[sp.Expr], conclusions: list[sp.Expr]) -> Optional[bool]:
     """Every solution of the premises satisfies every conclusion. None when
     SymPy cannot decide."""
+    # an identically-true premise (a theorem whose two sides are the same
+    # unknown, ang(b) = ang(c) with both x) says nothing: dropped, or SymPy
+    # refuses the system and a wrong line reads as "unverifiable"
+    premises = [p for p in premises if sp.simplify(p) != 0]
     syms = sorted(set().union(*(e.free_symbols for e in premises + conclusions)), key=str)
     if not syms:
         return all(sp.simplify(c) == 0 for c in conclusions)
@@ -186,6 +190,13 @@ def _check_figure_ops(m: Model, st: StepSpec, name: str) -> None:
 
 def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list[sp.Expr]:
     subs = _measure_substitutions(m, q, fid)
+    # one symbol per angle: an alias spelling (angle_cab for angle_bac)
+    # maps straight to the canonical symbol's value, or to the canonical
+    # symbol when it has none — a flat map, nothing chains
+    for a in list(m.angle_ids):
+        c = m.canonical_angle_id(a)
+        if c != a:
+            subs[angle_symbol(a)] = subs.get(angle_symbol(c), angle_symbol(c))
     knowledge: list[sp.Expr] = []
     prev_after: list[Relation] = []
     for i, st in enumerate(q.steps, 1):
@@ -356,8 +367,18 @@ def _compare_answer(ans: Answer, got: Any, name: str, rep: QuestionReport) -> No
         have = {_norm_label(x) for x in (got if isinstance(got, (set, list)) else [got])}
         if want != have:
             raise GeometryRefusal("answer_mismatch", f"{name}: the figure gives {sorted(have)}, the answer says {sorted(want)}")
+    elif ans.kind == "label_map" and not isinstance(got, dict):
+        # one figure: the engine computed a single value; a label_map answer
+        # with one entry (or a bare value) names it
+        want = ans.value
+        if isinstance(want, dict) and len(want) == 1:
+            want = next(iter(want.values()))
+        elif isinstance(want, list) and len(want) == 1:
+            want = want[0]
+        if isinstance(want, (dict, list)) or _norm_label(got) != _norm_label(want):
+            raise GeometryRefusal("answer_mismatch", f"{name}: the figure gives {_plain(got)}, the answer says {_plain(want)}")
     elif ans.kind == "label_map":
-        if not isinstance(ans.value, dict) or not isinstance(got, dict):
+        if not isinstance(ans.value, dict):
             raise GeometryRefusal("bad_schema", f"{name}: label_map is {{label: value}}")
         want = {_norm_label(k): _norm_label(v) for k, v in ans.value.items()}
         have = {_norm_label(k): _norm_label(v) for k, v in got.items()}

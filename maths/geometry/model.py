@@ -318,6 +318,14 @@ class Model:
             return _exact_equal(a.exact, b.exact)
         return False
 
+    def canonical_angle_id(self, aid: str) -> str:
+        """The first id bound to this angle's key: angle_bac, angle_cab and
+        angle_a are one angle and must be one symbol in a proof."""
+        k = self.angle_ids.get(aid)
+        if k is None:
+            return aid
+        return next(i for i, kk in self.angle_ids.items() if kk == k)
+
     def angle_by_id(self, aid: str) -> Angle:
         k = self.angle_ids.get(aid)
         if k is None or k not in self.angles:

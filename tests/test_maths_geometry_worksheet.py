@@ -94,7 +94,9 @@ class Client:
         if response_schema is GEOMETRY_SET_SCHEMA:
             self.calls.append("geometry")
             self.prompts["geometry"] = prompt
-            assert kw.get("strict_schema") is True
+            # constrained decoding is a switch (off by default: measured to make
+            # gemini-3.5-flash omit construction parameters); the call names it
+            assert "strict_schema" in kw
             return {"data": {"questions": copy.deepcopy(self.geometry)}, "usage": {}, "truncated": False}
         if response_schema is FACT_SET_SCHEMA:
             self.calls.append("facts")
@@ -136,9 +138,10 @@ def test_a_geometry_worksheet_prints_verified_diagrams_and_refuses_the_rest(tmp_
     client = Client([], [Q_SCALENE, Q_IMPOSSIBLE, Q_STRAIGHT_LINE, Q_WRONG_ANSWER, Q_WITH_BIND], [])
     paths = generate_document("worksheet", BOOK, CHAPTER, {}, client, {"num_questions": 6}, tmp_path,
                               language="en", maths=True)
-    # the ladder's two rounds (an empty reply buys a second), then ONE
-    # geometry call, then the facts fill what is left
-    assert client.calls.count("geometry") == 1 and client.calls[-2:] == ["geometry", "facts"]
+    # the ladder's two rounds (an empty reply buys a second), the geometry
+    # call plus its repair round (two of five were refused and the set is
+    # short), then the facts fill what is left
+    assert client.calls.count("geometry") == 2 and client.calls[-3:] == ["geometry", "geometry", "facts"]
     sheet, key = docx_text(paths[0]), docx_text(paths[1])
     assert "Diagrams" in sheet
     assert "Which of these triangles are scalene?" in sheet and "ABC is a straight line. Find x." in sheet
