@@ -351,6 +351,12 @@ def _region_ordered_trace(trace: list, regions: dict, order: list[str]
     return new_trace, spans
 
 
+def _true_ellipse(cx: float, cy: float, rx: float, ry: float, n: int = 72) -> list:
+    """An exact ellipse as a closed polyline (an `exact` shape: no wobble)."""
+    return [(cx + rx * math.cos(2 * math.pi * i / n), cy + ry * math.sin(2 * math.pi * i / n))
+            for i in range(n + 1)]
+
+
 def _seed(s: str) -> int:
     """Process-stable seed for hand-wobble. NEVER hash(): Python salts string
     hashes per process, and the determinism contract is cross-process (a retry
@@ -1883,18 +1889,27 @@ class SceneRenderer:
         return (px + spec.dx, py + spec.dy)
 
     def _bind_shape(self, el: ShapeElement, b: Bound) -> None:
+        from .geometry import resample, roughen
         if el.shape == "ellipse":
-            pts = ellipse_path(el.center[0], el.center[1], el.rx, el.ry,
-                               seed=_seed(el.id))
+            if el.exact:
+                pts = _true_ellipse(el.center[0], el.center[1], el.rx, el.ry)
+            else:
+                pts = ellipse_path(el.center[0], el.center[1], el.rx, el.ry,
+                                   seed=_seed(el.id))
         else:
             pts = [tuple(p) for p in el.points]
             if el.closed and pts[0] != pts[-1]:
                 pts.append(pts[0])
-            # author paths are geometric; the wobble that makes them read as
-            # hand-drawn is applied here, deterministically per element
-            from .geometry import resample, roughen
-            pts = roughen(resample(pts, 7.0), amplitude=1.0, wobble=2.2,
-                          seed=_seed(el.id))
+            if el.exact:
+                # a geometric figure: the points stay exactly where the
+                # author put them; resampled only so the pen's frontier
+                # advances smoothly along the stroke
+                pts = resample(pts, 7.0)
+            else:
+                # author paths are geometric; the wobble that makes them read
+                # as hand-drawn is applied here, deterministically per element
+                pts = roughen(resample(pts, 7.0), amplitude=1.0, wobble=2.2,
+                              seed=_seed(el.id))
         fill = None
         if el.fill == "paper":
             fill = "paper"

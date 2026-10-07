@@ -126,9 +126,11 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
     first_cue = cue
     for st in d.strokes:
         eid = uid("s")
+        # exact: a geometric figure is never hand-wobbled — a triangle with
+        # equal sides must look it (founder direction 2026-10-08)
         el = {"id": eid, "type": "shape", "shape": "path", "points": [P(p) for p in st.points],
               "width": (MARK_PX if st.role == "mark" else STROKE_PX) * max(0.6, min(1.4, st.width)),
-              "color": "muted" if st.role in ("hidden", "mark") else "ink"}
+              "color": "muted" if st.role in ("hidden", "mark") else "ink", "exact": True}
         fb.elements.append(el)
         if st.tag:
             fb.targets.setdefault(st.tag, []).append(eid)
@@ -156,7 +158,8 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
         eid = uid("d")
         c = P((dot.x, dot.y))
         fb.elements.append({"id": eid, "type": "shape", "shape": "ellipse", "center": c,
-                            "rx": max(1.5, dot.r * s), "ry": max(1.5, dot.r * s), "fill": True, "color": "ink"})
+                            "rx": max(1.5, dot.r * s), "ry": max(1.5, dot.r * s), "fill": True, "color": "ink",
+                            "exact": True})
         fb.actions.append({"verb": "draw", "target": eid, "duration": 0.2})
     x0, y0, x1, y1 = d.bbox
     fb.box = (ox + x0 * s, oy - y1 * s, ox + x1 * s, oy - y0 * s)
