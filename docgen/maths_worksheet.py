@@ -14,6 +14,13 @@ and part), worker/process.py hands that lesson over (``maths_lesson``): the
 questions then follow the lesson's own method card and avoid repeating its
 examples. Without one, the chapter alone sets the topic.
 
+A chapter whose answers are NAMES — polygons, solids, angle and triangle
+types, symmetry, directions, probability words — cannot be proved by
+algebra (2D shape and pattern, 2026-10-07: every question rejected, the
+worksheet failed). What the ladder cannot fill is asked as fill-in,
+true/false and matching items, each checked against the closed table of
+facts in maths.facts; an item the table cannot prove is never printed.
+
 Same student/teacher split as every other document (2026-08-18): build()
 returns [student_document, answer_key].
 """
@@ -21,13 +28,15 @@ returns [student_document, answer_key].
 from __future__ import annotations
 
 import logging
+import random
 from pathlib import Path
 from typing import Optional
 
 from docgen import docx_builder as dx
+from maths.facts import FactItem
 from maths.pretty import pretty
 from maths.tokens import TokenError, tokenize
-from maths.questions import question_ladder, worked_solution
+from maths.questions import fact_items, question_ladder, worked_solution
 from maths.schema import DATA_TASKS, DIFFICULTY_NAMES, Lesson
 
 
@@ -85,6 +94,49 @@ def _problem_text(ex, language: str = "en") -> str:
     return p
 
 
+def _fact_sections(doc, key_doc, facts: list[FactItem], language: str, *, exam: bool) -> int:
+    """The verified fact items, grouped by format the way the science
+    worksheet groups them (fill-in, true/false, one matching table), on the
+    sheet and in the key. Returns the marks they carry (exam: one a blank or
+    statement, one a pair)."""
+    fill = [f for f in facts if f.format == "fill_blank"]
+    tf = [f for f in facts if f.format == "true_false"]
+    match = next((f for f in facts if f.format == "match"), None)
+    marks = 0
+    si = 0
+
+    def tag(k: int) -> str:
+        return f"    [{k} mark{'s' if k != 1 else ''}]" if exam else ""
+
+    if fill:
+        name = dx.section_heading(language, si, "sec_fill_blank")
+        dx.heading(doc, name, 1)
+        dx.numbered(doc, [dx.strip_leading_number(f.q) + tag(1) for f in fill])
+        dx.answer_section(key_doc, name, [f.answer for f in fill])
+        marks += len(fill)
+        si += 1
+    if tf:
+        name = dx.section_heading(language, si, "sec_true_false")
+        dx.heading(doc, name, 1)
+        dx.numbered(doc, [dx.strip_leading_number(f.q) + tag(1) for f in tf])
+        dx.answer_section(key_doc, name, [dx.tf_word(f.truth, language) for f in tf])
+        marks += len(tf)
+        si += 1
+    if match is not None:
+        name = dx.section_heading(language, si, "sec_match")
+        dx.heading(doc, name, 1)
+        dx.para(doc, dx.match_instruction(language) + tag(len(match.pairs)), italic=True)
+        letters = dx.letters(language)
+        order = list(range(len(match.pairs)))
+        random.shuffle(order)   # Column B shuffled, so it is a real matching task
+        rows = [[f"{i + 1}. {match.pairs[i]['left']}", f"{letters[i]}. {match.pairs[order[i]]['right']}"]
+                for i in range(len(match.pairs))]
+        dx.table(doc, [dx.column_label(language, 0), dx.column_label(language, 1)], rows)
+        dx.answer_section(key_doc, name, [letters[order.index(i)] for i in range(len(match.pairs))])
+        marks += len(match.pairs)
+    return marks
+
+
 def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path,
           template: str | None = None, language: str = "en", *, kind: str = "worksheet",
           maths_lesson: Optional[Lesson] = None) -> list[Path]:
@@ -98,9 +150,23 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
 
     questions, report = question_ladder(client, topic=topic, level=grade, language=language, n=n,
                                         lesson=maths_lesson, chapter_context=grounding, kind=kind)
-    if not questions:
-        raise RuntimeError(f"no {kind} question could be verified for {topic!r}: "
-                           + "; ".join(report.get("rejected") or [])[:600])
+    # The categorical half (2D shape and pattern, 2026-10-07): a chapter
+    # whose answers are names — polygons, solids, angle types, directions —
+    # verified nothing through SymPy and failed every time. What the ladder
+    # could not fill is asked as fill-in / true-false / match items, each
+    # declaring a fact the closed table in maths.facts proves; an item it
+    # cannot prove is never printed. Computational questions keep their
+    # place first in the count.
+    facts, fact_report = fact_items(client, topic=topic, level=grade, language=language,
+                                    n=n - len(questions), chapter_context=grounding, kind=kind)
+    if not questions and not facts:
+        raise RuntimeError(
+            f"no {kind} question could be verified for {topic!r}: "
+            + "; ".join(report.get("rejected") or [])[:600]
+            + (" | fact items: " + "; ".join(fact_report.get("rejected") or [])[:400]
+               if fact_report.get("rejected") else ""))
+    logger.info("maths %s for %r: %d computational question(s) verified by algebra, %d fact item(s) "
+                "verified by the table (of %d wanted)", kind, topic, len(questions), len(facts), n)
 
     doc_kind = "worksheet" if kind == "worksheet" else "exam_paper"
     title = f"{dx._t('doc_worksheet' if kind == 'worksheet' else 'doc_test_paper', language)} — {topic}"
@@ -113,10 +179,13 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     key_doc = dx.new_doc(f"{title} — {dx._t('answer_key', language)}", subtitle, template=template,
                          kind=doc_kind, language=language, header_lines=header_lines)
     dx.para(key_doc, dx._t("teacher_only", language), italic=True)
-    dx.para(key_doc, dx._t("cas_note", language), italic=True)
+    if questions:
+        dx.para(key_doc, dx._t("cas_note", language), italic=True)
+    if facts:
+        dx.para(key_doc, dx._t("facts_note", language), italic=True)
 
+    total_marks = _fact_sections(doc, key_doc, facts, language, exam=(kind == "exam_paper"))
     number = 0
-    total_marks = 0
     by_level: dict[int, list] = {}
     for ex in questions:
         by_level.setdefault(int(ex.difficulty), []).append(ex)
@@ -130,12 +199,13 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         for ex in items:
             number += 1
             text = _problem_text(ex, language)
+            first = number == 1 and not facts
             if kind == "exam_paper":
                 marks = _MARKS[level]
                 total_marks += marks
-                dx.question(doc, f"{number}. {text}    [{marks} marks]", first=(number == 1))
+                dx.question(doc, f"{number}. {text}    [{marks} marks]", first=first)
             else:
-                dx.question(doc, f"{number}. {text}", first=(number == 1))
+                dx.question(doc, f"{number}. {text}", first=first)
             dx.writing_lines(doc, _LINES[level])
             sol = worked_solution(ex, pretty, check=dx._t("sol_check", language),
                                   answer=dx._t("sol_answer", language), or_word=dx._t("sol_or", language))
@@ -154,7 +224,11 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         from docgen.questions import write_worksheet
         short = [{"q": _problem_text(ex), "answer": " or ".join(pretty(a) for a in ex.final_answer)}
                  for ex in questions]
-        write_worksheet(out_dir, title, instructions, [], [], [], short, language=language)
+        fill = [{"q": f.q, "answer": f.answer} for f in facts if f.format == "fill_blank"]
+        tf = [{"statement": f.q, "answer": f.truth} for f in facts if f.format == "true_false"]
+        match = next(([{"left": p["left"], "right": p["right"]} for p in f.pairs]
+                      for f in facts if f.format == "match"), [])
+        write_worksheet(out_dir, title, instructions, fill, tf, match, short, language=language)
     except Exception as exc:  # noqa: BLE001
         logger.warning("questions.json (maths %s) skipped: %s", kind, exc)
 
