@@ -42,6 +42,10 @@ def test_a_straight_line_figure_draws_inside_the_panel():
         pts = e.get("points") or ([e["at"]] if "at" in e else [e["center"]])
         for x, y in pts:
             assert PANEL[0] - 2 <= x <= PANEL[2] + 2 and PANEL[1] - 2 <= y <= PANEL[3] + 2, (e["id"], x, y)
+    # every stroke carries its own brisk duration: the whole figure draws in a
+    # few seconds, so nothing downstream is compressed onto a half-drawn figure
+    draw_secs = [a["duration"] for a in fb.actions if a["verb"] in ("draw", "write")]
+    assert draw_secs and all(0.2 <= d <= 1.5 for d in draw_secs) and sum(draw_secs) < 6.0, draw_secs
     # every stroke is drawn EXACTLY — no hand wobble on a geometric figure
     assert all(e.get("exact") is True for e in fb.elements if e["type"] == "shape")
     # the first stroke is cued to the narration; labels are pinned text

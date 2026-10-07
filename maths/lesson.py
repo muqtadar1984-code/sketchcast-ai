@@ -301,12 +301,18 @@ def figure_example(item: GeometryItem) -> WorkedExample:
         prop = str(asks.get("property") or "")
         values = rep.computed.get(prop) or {}
         obs = speech.get("observations") or {}
-        for fid in asks.get("over") or list(labels):
+        over = list(asks.get("over") or list(labels))
+        for fid in over:
             lab = labels.get(fid, fid)
             value = values.get(lab, values.get(fid))
-            steps.append(Step(kind="deduce", uses=[fid], after=[f"{lab}: {_plain_value(value)}"],
-                              speech=obs.get(fid) or obs.get(lab) or "",
-                              figure_ops=[{"op": "highlight", "target": fid}]))
+            # one figure: the value alone ("6"), not "A: 6" — the label names
+            # nothing the student can confuse it with (live demo a13f7761)
+            line = _plain_value(value) if len(over) == 1 else f"{lab}: {_plain_value(value)}"
+            ops = [{"op": "highlight", "target": fid}]
+            if prop == "lines_of_symmetry":
+                ops.append({"op": "show_symmetry", "target": fid})   # the mirror lines, drawn
+            steps.append(Step(kind="deduce", uses=[fid], after=[line],
+                              speech=obs.get(fid) or obs.get(lab) or "", figure_ops=ops))
         final = [ln.split(": ", 1)[-1] for ln in key_lines(item, reasons=False)][:1]
         target = prop
     if not steps:

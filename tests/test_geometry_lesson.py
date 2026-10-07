@@ -85,9 +85,13 @@ def test_a_find_x_figure_example_draws_its_figure_and_works_beside_it():
     work = [e for e in els.values() if e["id"].startswith("w") and e["id"][1:].isdigit()]
     assert work and all(e["at"][0] == B.FIG_LINE_X for e in work), [e["at"] for e in work]
     assert {e.get("expr") for e in work} == {"70 + x = 180", "x = 110"}
-    # the deduce step highlights the angle it cites, at its own speech cue
+    # the deduce step highlights the angle it cites — UNCUED because it is the
+    # first step: it follows the figure's last stroke instead of firing at the
+    # phrase on a half-drawn figure
     hl = [a for a in scene["actions"] if a["verb"] == "highlight"]
-    assert hl and hl[0].get("at") == {"phrase": "Look at the two angles"}
+    assert hl and "at" not in hl[0]
+    draws = [i for i, a in enumerate(scene["actions"]) if a["verb"] == "draw" and a["target"].startswith("fig_")]
+    assert scene["actions"].index(hl[0]) > max(draws), "the highlight comes after the figure's strokes"
     assert any(a["target"] in set(sum((targets_for(fb, m, "angle_abd") for fb, m in [_fb(ex)]), []))
                for a in hl)
     # the theorem's reason sits beside the line it gave
@@ -188,3 +192,54 @@ def test_a_figure_example_without_speech_is_rejected_not_taught(monkeypatch):
                                        episode_context="")
     assert report["figures"]["verified"] == 0 and "speaks its steps" in " ".join(report["figures"]["rejected"])
     assert not any(e.has_figure for e in lesson.examples)
+
+
+HEXAGON = {
+    "id": "h", "difficulty": 1, "figure_role": "evidence",
+    "prompt": "How many lines of symmetry does a regular hexagon have?",
+    "figures": [{"id": "fig_hex", "figure": {"objects": [{"id": "hex", "make": "regular_polygon", "n": 6, "side": "3"}]}}],
+    "asks": {"property": "lines_of_symmetry", "over": ["fig_hex"]},
+    "answer": {"kind": "number", "value": "6"},
+    "intro_speech": "Here is a regular hexagon. How many mirror lines does it have?",
+    "observations": [{"figure": "fig_hex", "speech": "Fold it corner to corner, then edge to edge: every fold is a mirror line."}],
+    "answer_speech": "So a regular hexagon has six lines of symmetry.",
+}
+
+
+def test_a_single_figure_evidence_example_writes_the_value_and_draws_the_mirror_lines():
+    ex = L.figure_example(_item(copy.deepcopy(HEXAGON)))
+    assert len(ex.steps) == 1 and ex.steps[0].after == ["6"], "no label prefix for a single figure"
+    assert ex.steps[0].figure_ops == [{"op": "highlight", "target": "fig_hex"}, {"op": "show_symmetry", "target": "fig_hex"}]
+    scene, _lines = B.example_scene(ex, MethodCard(), "s003", has_card=False)
+    Scene.model_validate(scene)
+    axes = [e for e in scene["elements"] if e["id"].startswith("fig_sym")]
+    assert len(axes) == 6 and all(e["exact"] and e["shape"] == "line" for e in axes)
+    # every axis passes through the hexagon's centre
+    cx = sum(p[0] for e in axes for p in e["points"]) / 12
+    cy = sum(p[1] for e in axes for p in e["points"]) / 12
+    for e in axes:
+        (x0, y0), (x1, y1) = e["points"]
+        d = abs((x1 - x0) * (cy - y0) - (y1 - y0) * (cx - x0)) / ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
+        assert d < 1.0, (e["id"], d)
+    verbs = [a["verb"] for a in scene["actions"]]
+    assert verbs.count("draw") >= 6 + 6 and "highlight" in verbs
+    texts = [e.get("text") or e.get("expr") for e in scene["elements"] if e["type"] in ("text", "math")]
+    assert "6" in texts and not any(t.startswith("A:") for t in texts)
+    assert verbs.count("underline") == 1
+    _render(scene, scene["narration"])
+
+
+def test_symmetry_axes_agree_with_the_count_on_the_corpus():
+    from maths.geometry.properties import lines_of_symmetry, symmetry_axes
+    checked = 0
+    for qid, q in ITEMS.items():
+        asks = q.get("asks") or {}
+        if asks.get("property") != "lines_of_symmetry":
+            continue
+        rep = verify_question(q)
+        for fid, m in rep.models.items():
+            if m.grids or m.circles:
+                continue
+            assert len(symmetry_axes(m)) == lines_of_symmetry(m), (qid, fid)
+            checked += 1
+    assert checked >= 2

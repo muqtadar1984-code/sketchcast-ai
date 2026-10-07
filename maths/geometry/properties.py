@@ -111,10 +111,12 @@ def count_obtuse_angles(m: Model) -> int:
     return sum(1 for k in _angle_keys(m, pg) if 90.0 + ANGLE_TOL_DEG < _angle_value(m, k) < 180.0 - ANGLE_TOL_DEG)
 
 
-def _polygon_symmetry_lines(m: Model, pg: Polygon) -> int:
+def _polygon_symmetry_axes(m: Model, pg: Polygon) -> list[tuple[tuple[float, float], tuple[float, float]]]:
     """Reflection axes of a polygon from its cyclic side/angle sequence:
     an axis is a position the sequence reads the same both ways from.
-    Each axis appears at two positions (its two ends), hence the halving."""
+    Each axis appears at two positions (its two ends) — position 2i is
+    side i's midpoint, position 2i+1 is vertex v_{i+1} — so an axis is
+    the pair {k, k+n}, returned as those two anchor points."""
     n = len(pg.vertices)
     sides, angles = _side_keys(pg), _angle_keys(m, pg)
     # seq[2i] = side i (v_i -> v_{i+1}); seq[2i+1] = angle at v_{i+1}
@@ -129,11 +131,39 @@ def _polygon_symmetry_lines(m: Model, pg: Polygon) -> int:
             return False
         return _lengths_equal(m, x[1], y[1]) if x[0] == "s" else _angles_equal(m, x[1], y[1])
 
-    hits = 0
+    def anchor(k: int) -> tuple[float, float]:
+        i, odd = divmod(k, 2)
+        if odd:
+            return m.xy(pg.vertices[(i + 1) % n])
+        a, b = m.xy(pg.vertices[i]), m.xy(pg.vertices[(i + 1) % n])
+        return ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+
+    axes: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    seen: set[frozenset] = set()
     for k in range(L):
         if all(same(seq[(k + j) % L], seq[(k - j) % L]) for j in range(1, n + 1)):
-            hits += 1
-    return hits // 2
+            key = frozenset((k, (k + n) % L))
+            if key not in seen:
+                seen.add(key)
+                axes.append((anchor(k), anchor((k + n) % L)))
+    return axes
+
+
+def _polygon_symmetry_lines(m: Model, pg: Polygon) -> int:
+    return len(_polygon_symmetry_axes(m, pg))
+
+
+def symmetry_axes(m: Model) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """The polygon's reflection axes as anchor-point pairs, figure units —
+    what a board draws when it says "six lines of symmetry". A grid or a
+    circle has none to draw here (the count is still answered)."""
+    if m.grids or m.circles:
+        return []
+    try:
+        pg = _the_polygon(m, "symmetry_axes")
+    except GeometryRefusal:
+        return []
+    return _polygon_symmetry_axes(m, pg)
 
 
 def _grid_symmetry_lines(g: GridPattern, fill: Optional[str] = None) -> int:

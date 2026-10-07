@@ -649,7 +649,7 @@ def _figure_panel(ex: WorkedExample, board: _Board) -> _Figure:
             fb.elements.append({"id": lid, "type": "text", "text": ref.label or ref.id, "size": FIG_LABEL_SIZE,
                                 "at": [(pn[0] + pn[2]) / 2, cell[3] - FIG_LABEL_SIZE * 0.6], "anchor": "mm",
                                 "role": "title", "fixed": True})
-            fb.actions.append({"verb": "write", "target": lid})
+            fb.actions.append({"verb": "write", "target": lid, "duration": 0.4})
             fig.boards[ref.id] = fb
         board.line_x = EV_LINE_X
     for fb in fig.boards.values():
@@ -783,10 +783,16 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
 
     prev_state_rows: list[_Row] = [board.question] if board.question else []
     last_rows: list[_Row] = []
+    figure_ready = fig is None
     for k, st in enumerate(ex.steps):
         cue = _cue(step_speech[k], narration)
         if fig is not None:
-            _figure_ops(board, fig, st, cue)
+            # the FIRST step's figure ops take no cue: uncued actions follow
+            # the previous one, so they wait for the last stroke of the
+            # figure instead of highlighting a half-drawn hexagon at the
+            # phrase (live demo a13f7761, 2026-10-07)
+            _figure_ops(board, fig, st, cue if figure_ready else None)
+            figure_ready = True
         if not st.after:
             continue
         if st.kind == "check":
