@@ -361,3 +361,55 @@ def test_reasons_use_only_glyphs_their_scripts_face_has():
         for lang, glyphs in bad.items():
             hit = [g for g in glyphs if g in table[lang]]
             assert not hit, (tid, lang, hit, table[lang])
+
+
+def _spoken(qid: str, difficulty: int) -> dict:
+    """A corpus reasoning question in reply shape with speech on every step."""
+    q = copy.deepcopy(ITEMS[qid])
+    q["difficulty"] = difficulty
+    q["intro_speech"] = f"Here is the diagram for {qid}. Look at what is given and what is asked."
+    q["answer_speech"] = f"And that is the answer to {qid}."
+    for i, st in enumerate(q.get("steps") or [], 1):
+        st["speech"] = f"Step {i} of {qid}: we use what the diagram tells us and write the line."
+    return q
+
+
+def test_a_third_figure_item_becomes_the_learners_try_it(monkeypatch):
+    monkeypatch.delenv("MATHS_FIGURES", raising=False)
+    c = FakeClient(figures=[_b1_reply(), _spoken("B8", 2), _spoken("B11", 3)])
+    lesson, report = L.verified_lesson(c, topic="Angles", subject="Mathematics", level="Class 7", curriculum=None,
+                                       language="en", episode_context="")
+    # the ladder is by difficulty, figures first among equals: B1 (1), then the
+    # algebra Example 1 (1), then B8 (2) — two figure examples in all
+    assert lesson.examples[0].has_figure and sum(e.has_figure for e in lesson.examples) == 2
+    assert lesson.try_it.has_figure and report["figures"]["try_it"] is True
+    assert lesson.try_it.problem and lesson.try_it.steps and lesson.try_it.answer
+    assert lesson.try_it.speech.endswith("Pause the video and try it.")
+    assert report["try_it"]["ok"] is True, report["try_it"]
+
+    script = L.generate_maths_script({"title": "Angles", "episode_num": 1}, {"concepts": {"concepts": []}}, 1,
+                                     FakeClient(figures=[_b1_reply(), _spoken("B8", 2), _spoken("B11", 3)]),
+                                     language="en", avatars={"teacher": "avatar_teacher", "student": "avatar_student"},
+                                     book_id="bk")
+    pause = next(s for s in script.segments if s.pause_for_question)
+    solution = script.segments[script.segments.index(pause) + 1]
+    assert pause.hold_secs == 3.0 and pause.scene["scene_type"] == "generic"
+    p_strokes = {e["id"]: e for e in pause.scene["elements"] if e["type"] == "shape" and e.get("exact")}
+    s_strokes = {e["id"]: e for e in solution.scene["elements"] if e["type"] == "shape" and e.get("exact")}
+    assert p_strokes and s_strokes, "the figure is on both boards"
+    # the pause figure is schematic (not to scale): the same strokes, moved
+    assert any(p_strokes[k]["points"] != s_strokes[k]["points"] for k in p_strokes if k in s_strokes)
+    assert any(e.get("text") == "not drawn to scale" for e in pause.scene["elements"])
+    assert not any(e["type"] == "math" for e in pause.scene["elements"]), "no working on the pause board"
+    assert any(e["type"] == "math" for e in solution.scene["elements"]), "the solution works it"
+    for seg in (pause, solution):
+        _render(seg.scene, seg.text)
+
+
+def test_two_figure_items_keep_the_algebra_try_it(monkeypatch):
+    monkeypatch.delenv("MATHS_FIGURES", raising=False)
+    c = FakeClient(figures=[_b1_reply(), _spoken("B8", 2)])
+    lesson, report = L.verified_lesson(c, topic="t", subject=None, level=None, curriculum=None, language="en",
+                                       episode_context="")
+    assert not lesson.try_it.has_figure and lesson.try_it.problem == "4x + 3 = 19"
+    assert report["figures"]["try_it"] is False

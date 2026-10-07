@@ -50,6 +50,12 @@ BOARD: dict[str, dict[str, str]] = {
         "pt": "Tente você", "hi": "अब आप कीजिए", "mr": "तुम्ही करून पाहा", "te": "మీరు ప్రయత్నించండి",
         "ms-arab": "چوبا سنديري",
     },
+    "not_to_scale": {
+        "en": "not drawn to scale", "ms": "tidak dilukis mengikut skala", "ar": "الرسم ليس بمقياس",
+        "fr": "figure non à l'échelle", "es": "no está a escala", "pt": "sem escala",
+        "hi": "पैमाने के अनुसार नहीं", "mr": "प्रमाणानुसार नाही", "te": "స్కేలు ప్రకారం కాదు",
+        "ms-arab": "تيدق دلوکيس مڠيکوت سکالا",
+    },
     "pause_line": {
         "en": "Pause the video and try it", "ms": "Jeda video dan cuba", "ar": "أوقف الفيديو وجرّب",
         "fr": "Mettez la vidéo en pause et essayez", "es": "Pausa el video e inténtalo",

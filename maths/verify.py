@@ -1144,6 +1144,12 @@ def try_it_example(t: TryIt) -> WorkedExample | None:
     pause, and what the verifier checks. None without a problem."""
     if not t.problem or not t.answer:
         return None
+    if t.figure:
+        # the learner paused on a diagram: solved and verified exactly as a
+        # figure example (the geometry chain), never as notation
+        return WorkedExample(label="Try it", difficulty=2, task="solve", problem=t.problem, givens=[],
+                             target="x", intro_speech=t.solution_speech, steps=list(t.steps),
+                             final_answer=list(t.answer), answer_speech=t.answer_speech, figure=t.figure)
     # the problem's NOTATION, with any lead-in words in front of it set
     # aside ("the quadratic expression x^2 - x - 12" starts the working at
     # x^2 - x - 12; the words are the teacher's, not the algebra's)
@@ -1190,6 +1196,10 @@ def verify_try_it(t: TryIt) -> Check:
     ex = try_it_example(t)
     if ex is None:
         return Check("try it", None, "no try-it question")
+    if t.figure:
+        rep = verify_example(ex)
+        ok = rep.status == "verified"
+        return Check("try it", ok, "figure verified by the geometry chain" if ok else "; ".join(rep.reasons)[:400])
     rels, err = _parse(ex.givens, "the try-it problem")
     if rels is None:
         return Check("try it", None, err)
