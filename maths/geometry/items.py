@@ -601,6 +601,68 @@ def key_lines(item: GeometryItem, *, answer_word: str = "Answer", reasons: bool 
     return lines
 
 
+def _figure_facts(m) -> list[str]:
+    """What a figure IS, in the chapter's own words: the properties the
+    engine computes (triangle class, lines of symmetry, right angles, the
+    polygon's name) and the measures it carries. Computed, not copied from
+    the model — the same facts the answer is checked against."""
+    from maths.geometry.properties import PROPERTIES  # noqa: PLC0415
+    facts: list[str] = []
+    closed = [p for p in m.polygons.values() if p.closed]
+    if len(closed) == 1:
+        pg = closed[0]
+        for prop, phrase in (("polygon_name", "{v}"), ("triangle_class_by_sides", "{v} triangle"),
+                             ("triangle_class_by_angles", "{v}-angled triangle"),
+                             ("lines_of_symmetry", "{v} lines of symmetry"),
+                             ("count_right_angles", "{v} right angles")):
+            if prop.startswith("triangle") and len(pg.vertices) != 3:
+                continue
+            try:
+                facts.append(phrase.format(v=PROPERTIES[prop](m)))
+            except GeometryRefusal:
+                continue
+    elif m.grids:
+        try:
+            facts.append(f"a coloured grid pattern with {PROPERTIES['lines_of_symmetry'](m)} lines of symmetry")
+        except GeometryRefusal:
+            facts.append("a coloured grid pattern")
+    elif m.circles and not closed:
+        facts.append("a circle, which is not a polygon")
+    elif any(not p.closed for p in m.polygons.values()):
+        facts.append("an open shape, which is not a polygon")
+    if m.lines or m.rays:
+        facts.append("straight lines" if len(m.lines) > 1 else "a straight line")
+    if any(pair for pair in m.parallel):
+        facts.append("parallel lines")
+    return facts
+
+
+def describe(item: GeometryItem, *, answer_word: str = "Answer") -> str:
+    """A plain-text transcript of a figure question — what the student sees
+    in the pictures, said in words — for the coverage gate, which reads a
+    document's TEXT and would otherwise miss that a sheet of drawn
+    triangles teaches scalene, isosceles and equilateral triangles."""
+    spec = item.spec
+    lines = [f"Diagram question: {item.prompt}".rstrip()]
+    labels = {f["id"]: f.get("label") or f["id"] for f in spec.get("figures") or []}
+    for fid, m in item.report.models.items():
+        facts = _figure_facts(m)
+        measures = []
+        for ms in (next((f["figure"] for f in spec.get("figures") or [] if f["id"] == fid), {}) or {}).get("measures") or []:
+            if ms.get("role") == "given":
+                unit = "°" if (ms.get("unit") in (None, "deg") and ms.get("target", "").startswith("angle")) else f" {ms.get('unit') or ''}".rstrip()
+                measures.append(f"{ms['target'].replace('_', ' ')} = {ms['value']}{unit}")
+        parts = facts + ([f"given {', '.join(measures)}"] if measures else [])
+        if parts:
+            lines.append(f"Figure {labels.get(fid, fid)}: " + "; ".join(parts) + ".")
+    if item.role == "reasoning":
+        reasons = item.report.reasons_given
+        if reasons:
+            lines.append("Reasoning: " + "; ".join(reasons) + ".")
+    lines.extend(key_lines(item, answer_word=answer_word, reasons=False))
+    return "\n".join(lines)
+
+
 def _pretty_line(text: str) -> str:
     s = str(text)
     try:
