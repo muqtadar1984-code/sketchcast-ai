@@ -1095,7 +1095,26 @@ def _check_mistake(ex: WorkedExample, variables) -> Optional[Check]:
     return Check("mistake", None, detail)
 
 
+def _verify_figure_example(ex: WorkedExample) -> ExampleReport:
+    """A figure example: the geometry chain (constructions build, theorems
+    deduce, SymPy proves) re-run on the example's question. Deterministic,
+    so it agrees with the acceptance that put the example in the lesson;
+    the re-run is what makes the report honest about THIS record."""
+    from maths.geometry import verify_question
+
+    rep = ExampleReport(label=ex.label or "example")
+    q = verify_question(ex.figure or {})
+    rep.checks.extend(Check(c.name, c.ok, str(c.detail or "")) for c in q.checks)
+    if not q.ok:
+        r = q.refusal or {}
+        rep.checks.append(Check("figure", False, f"{r.get('code')}: {r.get('message', '')}"))
+        rep.status = "failed"
+    return rep
+
+
 def verify_example(ex: WorkedExample) -> ExampleReport:
+    if ex.figure:
+        return _verify_figure_example(ex)
     rep = ExampleReport(label=ex.label or "example")
     givens, err = _parse(ex.givens or ([ex.problem] if ex.problem else []), "the problem")
     if givens is None:

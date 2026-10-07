@@ -93,14 +93,17 @@ class FakeClient:
 
     model = "fake"
 
-    def __init__(self, lesson=None, fixed=None, fail_regen=False):
+    def __init__(self, lesson=None, fixed=None, fail_regen=False, figures=None):
         self.lesson = copy.deepcopy(lesson or LESSON)
         self.fixed = copy.deepcopy(fixed or FIXED_EX2)
         self.fail_regen = fail_regen
+        self.figures = copy.deepcopy(figures or [])   # the geometry engine's call: no diagrams unless given
         self.calls: list[dict] = []
 
     def analyze(self, prompt, system="", max_tokens=0, retries=3, cache_prefix=None, response_schema=None, **kw):
         self.calls.append({"prompt": prompt, "schema": response_schema, "max_tokens": max_tokens})
+        if "geometry.figure.v1" in prompt:
+            return {"data": {"questions": self.figures}, "usage": {}, "truncated": False}
         if "REJECTED" in prompt:
             data = copy.deepcopy(BAD_EX2) if self.fail_regen else self.fixed
             return {"data": data, "usage": {}, "truncated": False}

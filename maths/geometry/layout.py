@@ -50,6 +50,7 @@ class Stroke:
     dashed: bool = False
     arrow: bool = False         # arrowhead at the end (parallel marks)
     role: str = "ink"           # ink | mark | hidden
+    tag: Optional[str] = None   # what it depicts: line:<id> ray:<id> seg:<a>|<b> angle:<key> mark
 
 
 @dataclass
@@ -63,6 +64,7 @@ class Text:
     italic: bool = False
     # the placed box, figure units (x0, y0, x1, y1), filled by place()
     box: Optional[tuple[float, float, float, float]] = None
+    tag: Optional[str] = None   # point:<id> anglelabel:<key> seglabel:<a>|<b>
 
 
 @dataclass
@@ -226,13 +228,13 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
         p0, p1 = m.xy(ln.points[0]), m.xy(ln.points[-1])
         u = _unit(_sub(p1, p0))
         d.strokes.append(Stroke([_sub(p0, _mul(u, LINE_OVERHANG)), _add(p1, _mul(u, LINE_OVERHANG))],
-                                dashed=ln.hidden, role="hidden" if ln.hidden else "ink"))
+                                dashed=ln.hidden, role="hidden" if ln.hidden else "ink", tag=f"line:{ln.id}"))
         for a, b in zip(ln.points, ln.points[1:]):
             drawn_segments.add(seg_key(a, b))
     for r in m.rays.values():
         p0, p1 = m.xy(r.vertex), m.xy(r.through)
         u = _unit(_sub(p1, p0))
-        d.strokes.append(Stroke([p0, _add(p1, _mul(u, RAY_OVERHANG))]))
+        d.strokes.append(Stroke([p0, _add(p1, _mul(u, RAY_OVERHANG))], tag=f"ray:{r.id}"))
         drawn_segments.add(seg_key(r.vertex, r.through))
     # segments (polygon sides, radii, chords, plain segments)
     for key in m.segments:
@@ -243,7 +245,7 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
         if on_line:
             # a side of a shape that also carries a hidden line fact (parallel-side bookkeeping)
             pass
-        d.strokes.append(Stroke([m.xy(a), m.xy(b)]))
+        d.strokes.append(Stroke([m.xy(a), m.xy(b)], tag=f"seg:{a}|{b}"))
         drawn_segments.add(key)
     # circles
     for c in m.circles.values():
@@ -354,6 +356,11 @@ def _seg_from_ref(m: Model, ref):
     raise GeometryRefusal("bad_reference", f"mark: segment {ref!r} is not defined")
 
 
+def angle_tag(key) -> str:
+    v, arms, region = key
+    return f"{v}|{'|'.join(sorted(arms))}|{region}"
+
+
 def _angle_arc(d: Drawing, m: Model, key, drawn: set) -> None:
     if key in drawn:
         return
@@ -363,7 +370,7 @@ def _angle_arc(d: Drawing, m: Model, key, drawn: set) -> None:
     # nested arcs at the same vertex step outward so they stay distinct
     n_here = sum(1 for k in drawn if k[0] == key[0]) - 1
     r += 0.12 * n_here
-    d.strokes.append(Stroke(_arc_points(v, r, a0, a1), width=0.8, role="mark"))
+    d.strokes.append(Stroke(_arc_points(v, r, a0, a1), width=0.8, role="mark", tag=f"angle:{angle_tag(key)}"))
 
 
 def _right_angle_square(d: Drawing, m: Model, key) -> None:
@@ -411,11 +418,11 @@ def _parallel_arrow(d: Drawing, m: Model, ref, count: int) -> None:
 # ── label placement ───────────────────────────────────────────────────────
 
 def _try_place(d: Drawing, candidates: list[tuple[float, float, str]], text: str, size: float, boxes: list,
-               role: str, what: str) -> None:
+               role: str, what: str, tag: Optional[str] = None) -> None:
     for (x, y, anchor) in candidates:
         box = text_box(x, y, text, size, anchor)
         if _box_clear(box, d.strokes, boxes):
-            t = Text(x, y, text, size, role=role, anchor=anchor, box=box)
+            t = Text(x, y, text, size, role=role, anchor=anchor, box=box, tag=tag)
             d.texts.append(t)
             boxes.append(box)
             return
@@ -435,7 +442,7 @@ def _place_angle_label(d: Drawing, m: Model, key, text: str, size: float, boxes:
         for off in (0.0, 14.0, -14.0):
             a = math.radians(bis_deg + off)
             cands.append((v[0] + math.cos(a) * r, v[1] + math.sin(a) * r, "middle"))
-    _try_place(d, cands, text, size, boxes, "label", what)
+    _try_place(d, cands, text, size, boxes, "label", what, tag=f"anglelabel:{angle_tag(key)}")
 
 
 def _place_segment_label(d: Drawing, m: Model, key, text: str, size: float, boxes: list, what: str) -> None:
@@ -452,7 +459,7 @@ def _place_segment_label(d: Drawing, m: Model, key, text: str, size: float, boxe
     for off in (0.38, 0.6, 0.85):
         cands.append((mid[0] + n[0] * off, mid[1] + n[1] * off, "middle"))
         cands.append((mid[0] - n[0] * off, mid[1] - n[1] * off, "middle"))
-    _try_place(d, cands, text, size, boxes, "label", what)
+    _try_place(d, cands, text, size, boxes, "label", what, tag=f"seglabel:{a}|{b}")
 
 
 def _place_point_label(d: Drawing, m: Model, pid: str, text: str, size: float, boxes: list, centroid: Vec) -> None:
@@ -470,7 +477,7 @@ def _place_point_label(d: Drawing, m: Model, pid: str, text: str, size: float, b
     for off in (0.45, 0.7, 0.95, 1.2):
         for ux, uy in dirs:
             cands.append((x + ux * off, y + uy * off, "middle"))
-    _try_place(d, cands, text, size, boxes, "point", pid)
+    _try_place(d, cands, text, size, boxes, "point", pid, tag=f"point:{pid}")
 
 
 def _drawing_bbox(d: Drawing, m: Model) -> tuple[float, float, float, float]:

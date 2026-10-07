@@ -118,6 +118,9 @@ _QUESTION = _obj({
     "figures": _arr(_obj({"id": _S, "label": _S, "figure": _FIGURE}, ("id", "figure"))),
     "asks": _ASKS, "parts": _arr(_obj({"asks": _ASKS, "answer": _ANSWER}, ("asks", "answer"))),
     "steps": _arr(_STEP), "answer": _ANSWER,
+    # the lesson kind only: the teacher's words around the question (a video)
+    "intro_speech": _S, "answer_speech": _S,
+    "observations": _arr(_obj({"figure": _S, "speech": _S}, ("figure", "speech"))),
 }, ("id", "difficulty", "figure_role", "prompt", "figures", "asks", "answer"))
 # `answer` is REQUIRED: the first live probe (gemini-3.5-flash-lite,
 # 2026-10-07) left it out of every evidence question, and a question whose
@@ -219,6 +222,9 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
     except (TypeError, ValueError):
         difficulty = 2
     figures = []
+    if not q.get("figures") and isinstance(q.get("figure"), dict):
+        # a one-figure question written with the spec's singular key
+        q["figures"] = [{"id": "fig", "figure": q["figure"]}]
     for ref in q.get("figures") or []:
         if not isinstance(ref, dict) or not isinstance(ref.get("figure"), dict):
             continue
@@ -367,17 +373,32 @@ _EXAMPLE_EVIDENCE = (
 )
 
 
+_SPEECH_RULES = (
+    "SPEECH (this is a video — every example is spoken, in {language}, in words a voice can read, never symbols: "
+    "say 'seventy degrees', 'x equals one hundred and ten'): every example carries 'intro_speech' (the teacher "
+    "introducing the example and reading the diagram aloud: what is drawn, which measures are given, what is "
+    "asked), 'answer_speech' (what the answer is and what it means), and EVERY step carries 'speech' (what we "
+    "look at on the diagram, which fact or theorem we use, what we get — two or three sentences). An evidence "
+    "example carries 'observations': one per figure, in 'figures' order ({{\"figure\": \"fig_a\", \"speech\": "
+    "\"...\"}}), saying what the student should notice about that figure and what it is therefore called. "
+    "Difficulty 1 first, then 2, then 3: a worked-example ladder, not a test.")
+
+
 def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, chapter_context: str,
                     kind: str) -> str:
     sigs = "\n".join(f"  - {name}: {sig}" for name, sig in _SIGNATURES.items())
     theorems = "\n".join(f"  - {t}: {REASONS[t]}" for t in THEOREMS)
+    doc = {"worksheet": "a practice worksheet",
+           "lesson": "a VIDEO LESSON — worked examples the teacher talks through on the board while the diagram "
+                     "draws itself; each example is spoken, not set as a test"}.get(kind, "a test paper")
     ctx = [f"TOPIC: {topic}", f"LEARNER LEVEL: {level or 'school'}", f"LANGUAGE of the question text: {language or 'en'}",
-           f"DOCUMENT: {'a practice worksheet' if kind == 'worksheet' else 'a test paper'}"]
+           f"DOCUMENT: {doc}"]
     if chapter_context:
         ctx.append(chapter_context[:6000])
+    what = "worked examples" if kind == "lesson" else "geometry questions"
     return "\n\n".join([
         "\n".join(ctx),
-        f"Write {n} geometry questions on this topic, each with its diagram described as a construction in the "
+        f"Write {n} {what} on this topic, each with its diagram described as a construction in the "
         "geometry.figure.v1 format. Two kinds:\n"
         "  * figure_role 'evidence' — the student reads the answer FROM the diagram (classify these triangles, "
         "count the right angles, how many lines of symmetry, which are polygons). Give several labelled figures "
@@ -409,6 +430,7 @@ def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, 
         "an evidence question's answer is what the figures show (the engine recomputes it and checks), a "
         "reasoning question's answer is the value its steps prove.",
         "EXAMPLES (one of each kind):\n" + _EXAMPLE_REASONING + "\n" + _EXAMPLE_EVIDENCE,
+    ] + ([_SPEECH_RULES.format(language=language or "en")] if kind == "lesson" else []) + [
         "Only questions this TOPIC's own exercises would ask: a chapter on fractions or equations has no diagram "
         "questions — then return {\"questions\": []} rather than a triangle from another chapter.",
         "=== OUTPUT ===\nReturn ONLY one minified JSON object: {\"questions\": [ ... ]}. Unused fields are empty "
@@ -437,6 +459,9 @@ class GeometryItem:
     report: QuestionReport
     images: list[FigureImage] = field(default_factory=list)
     key_images: list[FigureImage] = field(default_factory=list)   # the metric figure of a reasoning question
+    # the lesson kind: the teacher's words — intro, answer, and one
+    # observation per figure id (evidence); a step's speech lives on the step
+    speech: dict = field(default_factory=dict)
 
     @property
     def marks(self) -> int:
@@ -469,12 +494,36 @@ def render_item(item: GeometryItem, *, note: Optional[str] = None) -> None:
             item.key_images.append(FigureImage(ref.label, rk.png, rk.width_mm, rk.height_mm, rk.true_scale))
 
 
+def figure_client(client, language: str):
+    """The client for the figure call: the script role's model on the Gemini
+    path, wrapped in the same language directive the caller's client
+    carries. A stub client (tests) and the Claude/Kimi paths keep the client
+    they were given. (The worksheet's Lite emitted constructions without
+    their parameters, 2026-10-07.)"""
+    inner = client.undirected() if hasattr(client, "undirected") else client
+    if type(inner).__name__ != "GeminiClient":
+        return client            # a stub, or another provider's client
+    try:
+        from shared.llm import script_client
+        from shared.model_routing import GEMINI, provider_for
+    except Exception:  # noqa: BLE001 — the engine stays importable without the worker's routing
+        return client
+    if provider_for(language) != GEMINI:
+        return client
+    strong = script_client(language)
+    if inner is not client:
+        return type(client)(strong, client._directive)  # noqa: SLF001 — the same directive, the stronger model
+    return strong
+
+
 def geometry_items(client, *, topic: str, level: Optional[str], language: str, n: int,
                    chapter_context: str = "", kind: str = "worksheet",
-                   note: Optional[str] = None, rounds: int = 2) -> tuple[list[GeometryItem], dict]:
+                   note: Optional[str] = None, rounds: int = 2, render: bool = True) -> tuple[list[GeometryItem], dict]:
     """Up to ``n`` verified, rendered figure questions; one model call,
     plus one repair round carrying the refusals back when short.
-    ``note`` is the "Not drawn to scale" text in the document's language."""
+    ``note`` is the "Not drawn to scale" text in the document's language;
+    ``render=False`` (the video lesson) skips the print PNGs — the board
+    draws from the spec."""
     if n <= 0:
         return [], {"asked": 0, "verified": 0, "rejected": []}
     kept: list[GeometryItem] = []
@@ -512,7 +561,7 @@ def geometry_items(client, *, topic: str, level: Optional[str], language: str, n
             logger.warning("geometry questions for %r: the reply carried no questions (malformed or empty)", topic)
             rejected.append("the reply carried no questions — it was malformed or empty; write them again")
             continue
-        _take(raw, n, kept, rejected, seen_prompts, note, asked)
+        _take(raw, n, kept, rejected, seen_prompts, note, asked, render=render)
         asked += len(raw)
     kept.sort(key=lambda it: it.difficulty)
     logger.info("geometry questions for %r: %d returned, %d verified and drawn, %d rejected", topic,
@@ -520,7 +569,20 @@ def geometry_items(client, *, topic: str, level: Optional[str], language: str, n
     return kept, {"asked": asked, "verified": len(kept), "rejected": rejected}
 
 
-def _take(raw: list, n: int, kept: list, rejected: list, seen_prompts: set, note: Optional[str], offset: int) -> None:
+def _speech(entry: dict) -> dict:
+    def text(v) -> str:
+        return " ".join(str(v).split()) if isinstance(v, (str, int, float)) else ""
+
+    obs = {}
+    for o in entry.get("observations") or []:
+        if isinstance(o, dict) and o.get("figure") and text(o.get("speech")):
+            obs[str(o["figure"])] = text(o["speech"])
+    return {"intro": text(entry.get("intro_speech")), "answer": text(entry.get("answer_speech")),
+            "observations": obs}
+
+
+def _take(raw: list, n: int, kept: list, rejected: list, seen_prompts: set, note: Optional[str], offset: int,
+          render: bool = True) -> None:
     for i, entry in enumerate(raw, offset + 1):
         if not isinstance(entry, dict):
             rejected.append(f"question {i}: not an object")
@@ -537,13 +599,15 @@ def _take(raw: list, n: int, kept: list, rejected: list, seen_prompts: set, note
             logger.info("geometry question rejected (%s): %r — %s", code, label, msg[:200])
             rejected.append(f"{label}: {code}: {msg[:200]}")
             continue
-        item = GeometryItem(spec["id"], spec.get("prompt") or "", spec["figure_role"], difficulty, spec, rep)
-        try:
-            render_item(item, note=note)
-        except GeometryRefusal as exc:
-            logger.info("geometry question rejected at render (%s): %r — %s", exc.code, label, exc.message[:200])
-            rejected.append(f"{label}: {exc.code}: {exc.message[:200]}")
-            continue
+        item = GeometryItem(spec["id"], spec.get("prompt") or "", spec["figure_role"], difficulty, spec, rep,
+                            speech=_speech(entry))
+        if render:
+            try:
+                render_item(item, note=note)
+            except GeometryRefusal as exc:
+                logger.info("geometry question rejected at render (%s): %r — %s", exc.code, label, exc.message[:200])
+                rejected.append(f"{label}: {exc.code}: {exc.message[:200]}")
+                continue
         if len(kept) < n:
             kept.append(item)
             seen_prompts.add(label.lower())
@@ -671,5 +735,5 @@ def _pretty_line(text: str) -> str:
         return s
 
 
-__all__ = ["GEOMETRY_SET_SCHEMA", "GeometryItem", "FigureImage", "geometry_items", "geometry_prompt",
+__all__ = ["figure_client", "GEOMETRY_SET_SCHEMA", "GeometryItem", "FigureImage", "geometry_items", "geometry_prompt",
            "key_lines", "normalise_question", "render_item"]

@@ -227,6 +227,11 @@ class ShapeElement(_ElementBase):
     # False = outline only; True = translucent accent wash; "paper" = opaque
     # board-colored fill (speech bubbles occlude the busy board behind them)
     fill: Union[bool, Literal["paper"]] = False
+    # True = a GEOMETRIC figure (a maths triangle, an angle arc, a circle):
+    # no hand wobble — a straight line stays straight and an arc true, the
+    # pen still draws it. A sketchy triangle cannot be read for equal sides
+    # (founder direction 2026-10-08).
+    exact: bool = False
 
     @model_validator(mode="after")
     def _geometry(self) -> "ShapeElement":
