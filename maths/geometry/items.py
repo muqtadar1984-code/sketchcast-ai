@@ -182,10 +182,13 @@ def _answer(a: Optional[dict], figure_labels: Optional[list[str]] = None) -> Opt
             labels = [s.strip() for s in str(value).replace(";", ",").split(",") if s.strip()]
         out["value"] = labels
     elif kind == "label_map":
+        mp = a.get("map")
         if isinstance(value, dict):
             out["value"] = {str(k): str(v) for k, v in value.items()}
+        elif isinstance(mp, dict):
+            out["value"] = {str(k): str(v) for k, v in mp.items()}
         else:
-            out["value"] = {x["label"]: x["value"] for x in (a.get("map") or []) if isinstance(x, dict)}
+            out["value"] = {x["label"]: x["value"] for x in (mp or []) if isinstance(x, dict)}
         if not out["value"] and figure_labels:
             # the values listed in figure order, no labels: zipped with the figures
             vals = a.get("labels") or [s.strip() for s in str(a.get("value") or "").replace(";", ",").split(",") if s.strip()]

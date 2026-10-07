@@ -620,6 +620,11 @@ def _transversal_angles(m: Model, a, b, c, d, e, f, p, q, theta: sp.Expr) -> Non
 def c_parallels_transversal(ctx: BuildContext, obj: dict) -> None:
     w = _where(obj)
     pts = _ids(_req(obj, "points", w), 8, w, "points")
+    # the documented order is a,b,c,d,e,f,p,q; a model writing the transversal
+    # in reading order gives a,b,c,d,e,p,q,f — told apart by the labels
+    tail = [(ctx.labels.get(x) or x).strip().lower()[-1:] for x in pts[5:8]]
+    if tail == ["p", "q", "f"]:
+        pts = pts[:5] + [pts[7], pts[5], pts[6]]
     a, b, c, d, e, f, p, q = pts
     m = ctx.model
     if any(m.has_point(x) for x in pts):
@@ -1194,8 +1199,12 @@ def c_turtle_polygon(ctx: BuildContext, obj: dict, *, closed: bool = True) -> No
         end = coords.pop()
         if math.dist(end, coords[0]) > 1e-6 * max(1.0, sum(f_sides)):
             raise GeometryRefusal("closure_failed", f"{w}: the sides and turns do not return to the start", w)
-        if abs((sum(f_turns) % 360.0)) > 1e-6 and abs((sum(f_turns) % 360.0) - 360.0) > 1e-6:
-            raise GeometryRefusal("closure_failed", f"{w}: the turns add to {sum(f_turns):g}°, not 360°", w)
+        # the walk closed, so the last turn is whatever brings the heading
+        # home: a model that wrote 0 (or 90 for a rectangle's 4th corner) for
+        # it has still described this polygon
+        last = 360.0 - sum(f_turns[:-1]) if sum(f_turns[:-1]) > 0 else -360.0 - sum(f_turns[:-1])
+        f_turns[-1] = last
+        e_turns[-1] = 360 - sum(e_turns[:-1]) if sum(f_turns[:-1]) > 0 else -360 - sum(e_turns[:-1])
         # interior angle at the vertex AFTER side i is 180 - turn i; a right
         # turn (negative) makes a reflex corner. Vertex k's angle is turn k-1.
         n = len(coords)
