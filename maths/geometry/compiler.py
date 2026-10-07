@@ -160,8 +160,10 @@ def check_given_measures(m: Model, spec: FigureSpec) -> None:
         have = realised(m, ms.target)
         if ms.target in m.angle_ids:
             if abs(have - want) > ANGLE_TOL_DEG:
+                # six significant digits: a 59.996° built from rounded sides
+                # must not read as "60° but the figure has 60°"
                 raise GeometryRefusal("given_not_realised",
-                                      f"{ms.target} is given as {ms.value} = {want:g}° but the figure has {have:.4g}°",
+                                      f"{ms.target} is given as {ms.value} = {want:g}° but the figure has {have:.6g}°",
                                       ms.target)
             an = m.angles[m.angle_ids[ms.target]]
             if an.exact is None:
@@ -177,6 +179,14 @@ def check_given_measures(m: Model, spec: FigureSpec) -> None:
 
 
 # ── relations ─────────────────────────────────────────────────────────────
+
+_RELATION_ALIASES = {
+    "equal_segments": "equal_length", "equal_sides": "equal_length", "equal_lengths": "equal_length",
+    "same_length": "equal_length", "congruent_segments": "equal_length",
+    "equal_angles": "equal_angle", "same_angle": "equal_angle", "congruent_angles": "equal_angle",
+    "parallel_lines": "parallel", "perpendicular_lines": "perpendicular", "straight_line": "collinear",
+    "right_angled": "right_angle",
+}
 
 def _seg_ref(m: Model, ref, where: str) -> SegKey:
     if isinstance(ref, str):
@@ -223,7 +233,9 @@ def check_relation(m: Model, r: RelationSpec) -> None:
     the first failure is the refusal."""
     where = r.id or r.kind
     extra = r.model_extra or {}
-    kind = r.kind
+    # a model's synonyms for the relation kinds (equal_segments for
+    # equal_length, 2026-10-07): the registry's name is the one checked
+    kind = _RELATION_ALIASES.get(r.kind, r.kind)
 
     def fail(msg: str):
         raise GeometryRefusal("relation_not_implied", f"{where} ({kind}): {msg}", where)

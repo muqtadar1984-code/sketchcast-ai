@@ -62,7 +62,10 @@ def test_a_maths_worksheet_prints_only_verified_questions_and_the_working(tmp_pa
     assert "x = 5" in key and "subtract 5 from both sides" in key and "Answer:" in key
     assert "Check: 3 × 5 + 5 = 20" in key
     assert "computer algebra" in key
-    assert "METHOD TAUGHT" in c.calls[0] and "3x + 5 = 20" in c.calls[0], "the sibling lesson steers the set"
+    # the figure call comes first (2026-10-07); the ladder's prompt is the one
+    # that asks for NEW questions on the topic
+    ladder = next(p for p in c.calls if "NEW questions on this topic" in p)
+    assert "METHOD TAUGHT" in ladder and "3x + 5 = 20" in ladder, "the sibling lesson steers the set"
     qjson = json.loads((tmp_path / "questions.json").read_text())
     assert qjson["questions"] and all(q["prompt"] and q["answer"] for q in qjson["questions"])
 
