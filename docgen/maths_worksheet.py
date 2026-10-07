@@ -62,6 +62,9 @@ _SECTION = {1: "ws_warm_up", 2: "ws_practice", 3: "ws_challenge", 4: "ws_stretch
 _LINES = {1: 3, 2: 4, 3: 6, 4: 8}
 _MARKS = {1: 2, 2: 3, 3: 4, 4: 6}
 _DEFAULT_N = {"worksheet": 10, "exam_paper": 8}
+# the share of the count offered to figure questions first (see build());
+# the ladder and the facts fill whatever the figures leave
+FIGURE_SHARE = 0.5
 
 
 def _n(params: dict, kind: str) -> int:
@@ -212,18 +215,25 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     topic = maths_lesson.topic if maths_lesson and maths_lesson.topic else chapter_title
     grounding = dx.chapter_grounding(book, chapter, analysis)
 
-    questions, report = question_ladder(client, topic=topic, level=grade, language=language, n=n,
-                                        lesson=maths_lesson, chapter_context=grounding, kind=kind)
-    # The diagram half: what the ladder could not fill is asked as figure
+    # The diagram half comes FIRST and holds a share of the count: figure
     # questions — a construction the geometry engine builds, proves and
-    # draws (maths.geometry). A question it refuses is never printed.
-    # Asked of the SCRIPT role's model, not the document kind's: measured
-    # 2026-10-07 on the same prompt, gemini-3.5-flash-lite verified 2 of 7
-    # figure questions and gemini-3.5-flash 6 of 7 — a construction grammar
-    # is a harder reply than a worksheet's prose.
+    # draws (maths.geometry); a question it refuses is never printed. They
+    # were a fallback for a short ladder until 2026-10-07, when "2D shape
+    # and pattern" filled all ten slots with perimeters and angle sums the
+    # ladder could prove, left the figure call unmade, and scored 0.286 on
+    # coverage with every shape concept missed. A chapter without diagram
+    # questions answers with an empty list and the ladder fills everything.
+    # Asked of the SCRIPT role's model, not the document kind's: measured on
+    # the same prompt, gemini-3.5-flash-lite verified 2 of 7 figure
+    # questions and gemini-3.5-flash 6 of 7 — a construction grammar is a
+    # harder reply than a worksheet's prose.
+    figure_share = n if n < 4 else max(2, round(n * FIGURE_SHARE))
     figures, figure_report = geometry_items(_figure_client(client, language), topic=topic, level=grade,
-                                            language=language, n=n - len(questions), chapter_context=grounding,
+                                            language=language, n=figure_share, chapter_context=grounding,
                                             kind=kind, note=dx._t("not_to_scale", language))
+    questions, report = question_ladder(client, topic=topic, level=grade, language=language,
+                                        n=n - len(figures), lesson=maths_lesson, chapter_context=grounding,
+                                        kind=kind)
     # The categorical half (2D shape and pattern, 2026-10-07): a chapter
     # whose answers are names — polygons, solids, angle types, directions —
     # verified nothing through SymPy and failed every time. What the ladder

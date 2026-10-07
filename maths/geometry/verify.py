@@ -361,7 +361,20 @@ def _compute_part(rep: QuestionReport, q: QuestionSpec, asks: Asks) -> Any:
     return values
 
 
-def _compare_answer(ans: Answer, got: Any, name: str, rep: QuestionReport) -> None:
+def _relabel(value: Any, id_to_label: dict[str, str]) -> Any:
+    """An answer keyed by figure ID (fig_a) means the figure's LABEL (A):
+    models write either, the engine keys by label."""
+    if isinstance(value, dict):
+        return {id_to_label.get(str(k), k): v for k, v in value.items()}
+    if isinstance(value, list):
+        return [id_to_label.get(str(v), v) for v in value]
+    return id_to_label.get(str(value), value) if isinstance(value, str) else value
+
+
+def _compare_answer(ans: Answer, got: Any, name: str, rep: QuestionReport,
+                    id_to_label: Optional[dict[str, str]] = None) -> None:
+    if id_to_label:
+        ans = Answer(kind=ans.kind, value=_relabel(ans.value, id_to_label), unit=ans.unit)
     if ans.kind == "label_set" or ans.kind == "value_set":
         want = {_norm_label(x) for x in (ans.value if isinstance(ans.value, list) else [ans.value])}
         have = {_norm_label(x) for x in (got if isinstance(got, (set, list)) else [got])}
@@ -469,7 +482,8 @@ def verify_question(raw: dict | QuestionSpec) -> QuestionReport:
                         if fid in rep.models:
                             _check_discernible(rep.models[fid], part.asks.property, fid)
                 got = _compute_part(rep, q, part.asks)
-                _compare_answer(part.answer, got, name, rep)
+                _compare_answer(part.answer, got, name, rep,
+                                {ref.id: (ref.label or ref.id) for ref in q.figures})
         if q.steps:
             if len(q.figures) != 1:
                 raise GeometryRefusal("bad_schema", "a reasoning chain works on exactly one figure")

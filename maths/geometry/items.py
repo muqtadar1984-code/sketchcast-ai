@@ -484,7 +484,11 @@ def geometry_items(client, *, topic: str, level: Optional[str], language: str, n
     base_prompt = geometry_prompt(topic=topic, level=level, language=language, n=min(MAX_PER_CALL, n + 1),
                                   chapter_context=chapter_context, kind=kind)
     for round_ in range(rounds):
-        if round_ and (len(kept) >= n or not rejected):
+        # the repair round is for a model that CAN do this topic and slipped
+        # on some questions. A first round that produced nothing (a fractions
+        # chapter answered with shaded-grid questions the engine refuses
+        # wholesale, 2026-10-07) is not repaired — it is the answer
+        if round_ and (len(kept) >= n or not rejected or not kept):
             break
         prompt = base_prompt
         if round_:

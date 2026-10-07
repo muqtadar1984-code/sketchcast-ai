@@ -138,10 +138,11 @@ def test_a_geometry_worksheet_prints_verified_diagrams_and_refuses_the_rest(tmp_
     client = Client([], [Q_SCALENE, Q_IMPOSSIBLE, Q_STRAIGHT_LINE, Q_WRONG_ANSWER, Q_WITH_BIND], [])
     paths = generate_document("worksheet", BOOK, CHAPTER, {}, client, {"num_questions": 6}, tmp_path,
                               language="en", maths=True)
-    # the ladder's two rounds (an empty reply buys a second), the geometry
-    # call plus its repair round (two of five were refused and the set is
-    # short), then the facts fill what is left
-    assert client.calls.count("geometry") == 2 and client.calls[-3:] == ["geometry", "geometry", "facts"]
+    # figures FIRST: the share of six is three, the stub's three verified
+    # questions fill it in one call (no repair round), then the ladder's
+    # two rounds (an empty reply buys a second), then the facts fill the rest
+    assert client.calls[0] == "geometry" and client.calls.count("geometry") == 1
+    assert client.calls[-1] == "facts" and "ladder" in client.calls
     sheet, key = docx_text(paths[0]), docx_text(paths[1])
     assert "Diagrams" in sheet
     assert "Which of these triangles are scalene?" in sheet and "ABC is a straight line. Find x." in sheet

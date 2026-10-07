@@ -198,7 +198,7 @@ def test_the_production_geometry_worksheet_now_builds_from_proved_facts(tmp_path
     client = GeometryClient([Q_TRIANGLE, Q_PENTAGON], GOOD_FACTS + BAD_FACTS)
     paths = generate_document("worksheet", BOOK, CHAPTER, {}, client, {"num_questions": 10}, tmp_path,
                               language="en", maths=True)
-    assert client.calls == ["ladder", "geometry", "facts"], \
+    assert client.calls == ["geometry", "ladder", "facts"], \
         "a round of nothing but naming questions does not buy a second round"
     sheet, key = docx_text(paths[0]), docx_text(paths[1])
     for good in ("A triangle has ____ sides.", "A regular hexagon has 6 lines of symmetry.", "heptagon"):
@@ -283,7 +283,7 @@ def test_a_malay_geometry_worksheet_prints_only_what_its_english_reading_proves(
     client = GeometryClient([Q_TRIANGLE, Q_PENTAGON], [i for i, _r in MALAY], [r for _i, r in MALAY])
     paths = generate_document("worksheet", BOOK, CHAPTER, {}, client, {"num_questions": 6}, tmp_path,
                               language="ms", maths=True)
-    assert client.calls == ["ladder", "geometry", "facts", "read_back"]
+    assert client.calls == ["geometry", "ladder", "facts", "read_back"]
     rb = client.prompts["read_back"]
     assert "Write ALL output" not in rb and "Do not translate" not in rb, \
         "the read-back must not be told to answer in Malay"
