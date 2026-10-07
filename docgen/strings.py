@@ -679,6 +679,27 @@ _STRINGS.update({
         "te": "క్రింది ప్రతి ఖాళీ పూరించు, ఒప్పు/తప్పు మరియు జతపరచు సమాధానాన్ని గణిత వాస్తవాల పట్టికతో సరిచూశారు.",
         "ms-arab": "ستياڤ جواڤن ايسي تمڤت کوسوڠ، بتول/ساله دان ڤادنن دباوه تله دسيمق دڠن جدوال فکتا متماتيک.",
     },
+    "sec_figures": {
+        "en": "Diagrams", "ms": "Rajah", "ar": "الأشكال", "fr": "Figures", "es": "Figuras", "pt": "Figuras",
+        "hi": "आकृतियाँ", "mr": "आकृत्या", "te": "పటాలు", "ms-arab": "راجه",
+    },
+    "figures_note": {
+        "en": "Every diagram question below was built and checked by a geometry engine; a drawing is exact unless it says 'Not drawn to scale'.",
+        "ms": "Setiap soalan rajah di bawah dibina dan disemak oleh enjin geometri; lukisan adalah tepat kecuali ditandakan 'Tidak dilukis mengikut skala'.",
+        "ar": "كل سؤال شكل أدناه بُني وتُحقق منه بمحرك هندسي؛ الرسم دقيق ما لم يُكتب عليه 'غير مرسوم بمقياس'.",
+        "fr": "Chaque question avec figure ci-dessous a été construite et vérifiée par un moteur de géométrie ; un dessin est exact sauf mention « Pas à l'échelle ».",
+        "es": "Cada pregunta con figura a continuación fue construida y comprobada por un motor de geometría; un dibujo es exacto salvo que indique «No a escala».",
+        "pt": "Cada questão com figura abaixo foi construída e verificada por um motor de geometria; um desenho é exato salvo indicação «Não à escala».",
+        "hi": "नीचे हर आकृति वाला प्रश्न एक ज्यामिति इंजन से बनाया और जाँचा गया है; चित्र सटीक है जब तक उस पर 'पैमाने पर नहीं' न लिखा हो।",
+        "mr": "खालील प्रत्येक आकृतीचा प्रश्न भूमिती इंजिनने तयार करून तपासला आहे; 'प्रमाणात नाही' असे लिहिले नसल्यास चित्र अचूक आहे.",
+        "te": "క్రింది ప్రతి పట ప్రశ్నను జ్యామితి ఇంజిన్ నిర్మించి సరిచూసింది; 'స్కేలు ప్రకారం కాదు' అని లేకపోతే చిత్రం ఖచ్చితమైనది.",
+        "ms-arab": "ستياڤ سوءالن راجه دباوه دبينا دان دسيمق اوليه اينجين ڬيومتري؛ لوکيسن اداله تڤت کچوالي دتنداکن 'تيدق دلوکيس مڠيکوت سکالا'.",
+    },
+    "not_to_scale": {
+        "en": "Not drawn to scale", "ms": "Tidak dilukis mengikut skala", "ar": "غير مرسوم بمقياس",
+        "fr": "Pas à l'échelle", "es": "No a escala", "pt": "Não à escala", "hi": "पैमाने पर नहीं",
+        "mr": "प्रमाणात नाही", "te": "స్కేలు ప్రకారం కాదు", "ms-arab": "تيدق دلوکيس مڠيکوت سکالا",
+    },
     "ws_total_marks": {
         "en": "Total: {n} marks", "ms": "Jumlah: {n} markah", "ar": "المجموع: {n} درجة", "fr": "Total : {n} points",
         "es": "Total: {n} puntos", "pt": "Total: {n} pontos", "hi": "कुल: {n} अंक", "mr": "एकूण: {n} गुण",
