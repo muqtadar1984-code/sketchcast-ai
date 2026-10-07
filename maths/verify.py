@@ -563,6 +563,34 @@ def _expression_lines(rels: list[Relation], values: dict, letters: set) -> Optio
     return out
 
 
+# ── a word is not a quantity ─────────────────────────────────────────────────
+#
+# Cambridge Primary Mathematics 5, "2D shape and pattern" (generation
+# 8861d1e6, 2026-10-07): "Identify the number of sides of a triangle" was
+# written as the step "triangle" -> "3", and "Name the regular polygon with
+# 5 sides" as "5 sides" -> "pentagon". The parser accepts long names (a word
+# problem may call a quantity "speed"), so SymPy compared the SYMBOL
+# triangle with 3 and reported "WRONG" — a false proof: nothing about
+# triangles was decided, the lines were English. When two sides differ only
+# by words one side has and the other lacks, the verdict is "cannot be
+# checked", never "wrong". (It still fails the example: unproven is never
+# printed. A naming question belongs to maths.facts.)
+
+def _words(e) -> set:
+    return {s for s in getattr(e, "free_symbols", set()) if len(str(s)) > 1}
+
+
+def _word_gap(b, a) -> Optional[str]:
+    """The reason two sides cannot be compared when their WORDS differ, or
+    None when they carry the same words (or none)."""
+    wb, wa = _words(b), _words(a)
+    if wb == wa:
+        return None
+    names = sorted(str(s) for s in wb ^ wa)
+    return (f"{', '.join(repr(n) for n in names)} {'is a word' if len(names) == 1 else 'are words'}, not a "
+            "quantity: a naming or classifying answer is not something algebra can check")
+
+
 def _expression_step(before: list[Relation], after: list[Relation], ex: WorkedExample) -> Optional[tuple]:
     """The expression-task reading of a step, or None to fall through: each
     line after says what the matching line before said, once the problem's
@@ -579,6 +607,9 @@ def _expression_step(before: list[Relation], after: list[Relation], ex: WorkedEx
             return None, f"{len(eb)} expression(s) became {len(ea)}"
     for (rb, b), (ra, a) in zip(eb, ea):
         if not _timed(_zero, b - a):
+            gap = _word_gap(b, a)
+            if gap:
+                return None, gap
             with_values = (" with " + ", ".join(f"{k} = {v}" for k, v in sorted(values.items(), key=lambda kv: str(kv[0])))
                            if values else "")
             return False, f"{rb.text!r} is not equivalent to {ra.text!r}{with_values}"
@@ -623,6 +654,9 @@ def _states_equivalent(before: list[Relation], after: list[Relation], variables:
             return None, f"{len(before)} expression(s) became {len(after)}"
         for i, (b, a) in enumerate(zip(before, after)):
             if not _timed(_zero, b.lhs - a.lhs):
+                gap = _word_gap(b.lhs, a.lhs)
+                if gap:
+                    return None, gap
                 return False, f"{b.text!r} is not equivalent to {a.text!r}"
         return True, "equivalent expressions"
     fb, fa = _free(before), _free(after)
@@ -980,6 +1014,9 @@ def _check_answer(ex: WorkedExample, givens: Optional[list[Relation]], variables
     problem_rel, problem_e = pe[0]
     for rel, a_e in ae:
         if not _timed(_zero, problem_e - a_e):
+            gap = _word_gap(problem_e, a_e)
+            if gap:
+                return Check("answer", None, gap)
             with_values = (" with " + ", ".join(f"{k} = {v}" for k, v in sorted(values.items(), key=lambda kv: str(kv[0])))
                            if values else "")
             return Check("answer", False, f"{rel.text!r} is not equivalent to {problem_rel.text!r}{with_values}")

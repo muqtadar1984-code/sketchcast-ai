@@ -14,6 +14,7 @@ import json
 import logging
 from typing import Optional
 
+from maths.facts import FORMATS, RELATIONS, FactItem, parse_item, supported_language, verify_item
 from maths.lesson import _NOTATION_RULES, _STEP_RULES, _SYSTEM, _analyze
 from maths.schema import EXAMPLE_SCHEMA, DIFFICULTY_NAMES, Lesson, WorkedExample, parse_example
 from maths.verify import verify_example
@@ -56,6 +57,10 @@ def _prompt(*, topic: str, level: str | None, language: str, counts: dict[int, i
         "Difficulty means, for THIS level: 1 direct application (one or two steps); 2 one twist (a negative, a "
         "fraction, a bracket, terms on both sides); 3 multi-step or a word problem; 4 exam-style needing an insight. "
         "Never leave the level's syllabus.",
+        "Every question here has a NUMBER or an algebraic expression as its answer, reached by working written in "
+        "notation (a perimeter, a missing angle, a time difference, a count). A question whose answer is a WORD "
+        "— a shape's name, a type of angle, a direction, 'likely' — does not belong here: a separate section of "
+        "the document asks those. If the topic has few computational questions, write fewer.",
         _NOTATION_RULES, _STEP_RULES,
         "=== OUTPUT ===\nReturn ONLY one minified JSON object: {\"questions\": [ ...examples... ]}. Each example: "
         "label, difficulty, task, problem, givens, target, intro_speech (may be short), steps, final_answer, "
@@ -73,9 +78,16 @@ def question_ladder(client, *, topic: str, level: str | None, language: str, n: 
     kept: dict[int, list[WorkedExample]] = {1: [], 2: [], 3: [], 4: []}
     rejected: list[str] = []
     asked = 0
+    worded = 0
     for _round in range(rounds):
         need = {d: max(0, counts[d] - len(kept[d])) for d in counts}
         if sum(need.values()) == 0:
+            break
+        if _round and asked and worded == asked:
+            # every question so far was a naming one ("triangle" -> "3"):
+            # the chapter's answers are words, and another round would buy
+            # the same refusals (2D shape and pattern, 2026-10-07). The
+            # caller fills the set from maths.facts instead.
             break
         # ask for one spare per level so a single rejection does not cost a round
         ask = {d: (k + 1 if k else 0) for d, k in need.items()}
@@ -93,6 +105,8 @@ def question_ladder(client, *, topic: str, level: str | None, language: str, n: 
                 # shipped) said nothing about WHY — a model slip and a gap in
                 # the verifier look identical as a number.
                 reason = "; ".join(rep.reasons)[:300]
+                if "not a quantity" in reason:
+                    worded += 1
                 logger.info("maths question rejected (round %d, difficulty %s, task %s): %r — %s",
                             _round + 1, ex.difficulty, ex.task, ex.problem[:80], reason)
                 rejected.append(f"{ex.problem[:60]}: {reason[:200]}")
@@ -114,7 +128,91 @@ def question_ladder(client, *, topic: str, level: str | None, language: str, n: 
             out.append(ex)
     logger.info("maths question ladder for %r: %d asked, %d verified, %d rejected (%s)", topic, asked, len(out),
                 len(rejected), "reasons logged above" if rejected else "nothing rejected")
-    return out, {"asked": asked, "verified": len(out), "rejected": rejected, "wanted": counts}
+    return out, {"asked": asked, "verified": len(out), "rejected": rejected, "wanted": counts, "worded": worded}
+
+
+# ── the categorical half: fact items, checked against maths.facts ────────────
+
+FACT_SET_SCHEMA = {"type": "object", "properties": {"items": {"type": "array", "items": {
+    "type": "object", "properties": {
+        "format": {"type": "string", "enum": list(FORMATS)},
+        "difficulty": {"type": "integer"},
+        "q": {"type": "string"}, "answer": {"type": "string"},
+        "relation": {"type": "string", "enum": list(RELATIONS)},
+        "subject": {"type": "string"}, "value": {"type": "string"},
+        "pairs": {"type": "array", "items": {"type": "object", "properties": {
+            "left": {"type": "string"}, "right": {"type": "string"},
+            "subject": {"type": "string"}, "value": {"type": "string"}},
+            "required": ["left", "right", "subject", "value"]}}},
+    "required": ["format", "difficulty", "q", "answer", "relation", "subject", "value", "pairs"]}}},
+    "required": ["items"]}
+
+
+def _fact_prompt(*, topic: str, level: str | None, n: int, chapter_context: str, kind: str) -> str:
+    relations = "\n".join(f"  - {r.name}: {r.describe}" for r in RELATIONS.values())
+    ctx = [f"TOPIC: {topic}", f"LEARNER LEVEL: {level or 'school'}",
+           f"DOCUMENT: {'a practice worksheet' if kind == 'worksheet' else 'a test paper'}"]
+    if chapter_context:
+        ctx.append(chapter_context[:6000])
+    return "\n\n".join([
+        "\n".join(ctx),
+        f"Write {n} short questions on this topic whose answers are FACTS — a shape's name or number of sides, "
+        "faces, edges or vertices, a type of angle or triangle, lines of symmetry, a probability word, a compass "
+        "direction after a turn, a 24-hour time. Mix three formats: fill_blank (a sentence with one ____ blank; "
+        "'answer' is the word or number that fills it), true_false ('q' is the statement; 'answer' is 'true' or "
+        "'false' — make some false), and at most ONE match exercise (3 to 6 'pairs', left and right, every right "
+        "different; 'q' and 'answer' empty).",
+        "EVERY item DECLARES the fact it tests, from this closed list ('relation', 'subject', 'value' — for a "
+        "match, each pair has its own subject and value). Only these relations exist; a question that fits none "
+        "of them is not wanted:\n" + relations,
+        "Rules the checker enforces (an item that breaks one is thrown away): the sentence names the declared "
+        "subject and nothing else of its kind; a blank's answer is the subject or the value, and the sentence "
+        "does not also print it; a true/false statement says exactly subject and value, true or not; no 'not', "
+        "'never' or 'no' in any sentence; a blank whose answer could be two things (4 sides: square? kite?) is "
+        "not allowed; a polygon's lines of symmetry are asked of 'regular pentagon', never of a bare 'pentagon'; "
+        "curved solids (cylinder, cone, sphere) are not in the list.",
+        "Difficulty 1 or 2 for recall, 3 for a classification from measurements (side lengths, angles, a turn).",
+        "=== OUTPUT ===\nReturn ONLY one minified JSON object: {\"items\": [ ... ]}. Unused fields are empty "
+        "strings or an empty 'pairs' list.",
+    ])
+
+
+def fact_items(client, *, topic: str, level: str | None, language: str, n: int, chapter_context: str = "",
+               kind: str = "worksheet") -> tuple[list[FactItem], dict]:
+    """Up to ``n`` objective items whose every answer the closed table in
+    maths.facts proves; one model call. English only (maths.facts says
+    why). A matching exercise counts as one item."""
+    if n <= 0:
+        return [], {"asked": 0, "verified": 0, "rejected": []}
+    if not supported_language(language):
+        return [], {"asked": 0, "verified": 0,
+                    "rejected": [f"fact items are checked in English only; the document is {language!r}"]}
+    # one spare in three: a rejection should not leave the set short
+    ask = n + max(2, n // 3)
+    data = _analyze(client, _fact_prompt(topic=topic, level=level, n=ask, chapter_context=chapter_context,
+                                         kind=kind), FACT_SET_SCHEMA, 8000)
+    kept: list[FactItem] = []
+    rejected: list[str] = []
+    seen: set = set()
+    raw = data.get("items") if isinstance(data, dict) else None
+    for d in raw or []:
+        item = parse_item(d)
+        check = verify_item(item)
+        if not check.ok:
+            logger.info("maths fact item rejected (%s, %s): %r — %s", item.format, item.relation,
+                        (item.q or str(item.pairs))[:80], check.detail)
+            rejected.append(f"{(item.q or item.format)[:60]}: {check.detail[:200]}")
+            continue
+        key = (item.relation, item.subject.lower(), item.format) if item.format != "match" else ("match",)
+        if key in seen:
+            rejected.append(f"{item.q[:60]}: repeats an item already kept")
+            continue
+        seen.add(key)
+        if len(kept) < n:
+            kept.append(item)
+    logger.info("maths fact items for %r: %d returned, %d verified, %d rejected", topic, len(raw or []),
+                len(kept), len(rejected))
+    return kept, {"asked": len(raw or []), "verified": len(kept), "rejected": rejected}
 
 
 def worked_solution(ex: WorkedExample, pretty, *, check: str = "Check", answer: str = "Answer",
@@ -140,4 +238,4 @@ def worked_solution(ex: WorkedExample, pretty, *, check: str = "Check", answer: 
     return lines
 
 
-__all__ = ["question_ladder", "worked_solution", "SET_SCHEMA"]
+__all__ = ["question_ladder", "worked_solution", "fact_items", "SET_SCHEMA", "FACT_SET_SCHEMA"]

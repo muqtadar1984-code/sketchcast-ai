@@ -666,6 +666,19 @@ _STRINGS.update({
         "te": "క్రింది ప్రతి పరిష్కారాన్ని కంప్యూటర్ బీజగణిత వ్యవస్థ దశలవారీగా సరిచూసింది.",
         "ms-arab": "ستياڤ ڤڽلسايان دباوه تله دسيمق لڠکه دمي لڠکه اوليه سيستم الجبر کومڤوتر.",
     },
+    # maths.facts: the fill-in / true-false / match items of a maths sheet
+    "facts_note": {
+        "en": "Every fill-in, true/false and matching answer below was checked against a table of mathematical facts.",
+        "ms": "Setiap jawapan isi tempat kosong, betul/salah dan padanan di bawah telah disemak dengan jadual fakta matematik.",
+        "ar": "تم التحقق من كل إجابة ملء فراغ وصواب/خطأ ومطابقة أدناه مقابل جدول من الحقائق الرياضية.",
+        "fr": "Chaque réponse à compléter, vrai/faux et d'association ci-dessous a été vérifiée dans une table de faits mathématiques.",
+        "es": "Cada respuesta de completar, verdadero/falso y relacionar a continuación se comprobó con una tabla de hechos matemáticos.",
+        "pt": "Cada resposta de completar, verdadeiro/falso e associação abaixo foi verificada numa tabela de factos matemáticos.",
+        "hi": "नीचे दिए गए हर रिक्त-स्थान, सही/गलत और मिलान वाले उत्तर की जाँच गणितीय तथ्यों की तालिका से की गई है।",
+        "mr": "खालील प्रत्येक रिकाम्या जागा, बरोबर/चूक आणि जोड्या लावा उत्तराची गणितीय तथ्यांच्या तक्त्याशी तपासणी केली आहे.",
+        "te": "క్రింది ప్రతి ఖాళీ పూరించు, ఒప్పు/తప్పు మరియు జతపరచు సమాధానాన్ని గణిత వాస్తవాల పట్టికతో సరిచూశారు.",
+        "ms-arab": "ستياڤ جواڤن ايسي تمڤت کوسوڠ، بتول/ساله دان ڤادنن دباوه تله دسيمق دڠن جدوال فکتا متماتيک.",
+    },
     "ws_total_marks": {
         "en": "Total: {n} marks", "ms": "Jumlah: {n} markah", "ar": "المجموع: {n} درجة", "fr": "Total : {n} points",
         "es": "Total: {n} puntos", "pt": "Total: {n} pontos", "hi": "कुल: {n} अंक", "mr": "एकूण: {n} गुण",
