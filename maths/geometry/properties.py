@@ -1,0 +1,201 @@
+"""Derived properties: what a figure IS, computed from the facts.
+
+An EVIDENCE question ("which of these triangles are scalene?", "how many
+lines of symmetry?") is answered by the engine from the thing drawn, not
+looked up from its name: a triangle built with sides 5, 5, 3 is isosceles
+because those numbers say so. The ids here share vocabulary with
+maths.facts (``lines_of_symmetry``, ``triangle_class_by_sides``), so the
+same fact never has two names.
+
+Comparisons prefer the exact value and the construction's equality facts;
+a float comparison is the last resort and uses the model's tolerances.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Callable, Optional
+
+import sympy as sp
+
+from maths.geometry.errors import GeometryRefusal
+from maths.geometry.model import ANGLE_TOL_DEG, LENGTH_REL_TOL, GridPattern, Model, Polygon, angle_key, seg_key
+
+_NAMES = {3: "triangle", 4: "quadrilateral", 5: "pentagon", 6: "hexagon", 7: "heptagon", 8: "octagon",
+          9: "nonagon", 10: "decagon", 12: "dodecagon"}
+
+
+def _the_polygon(m: Model, what: str, *, closed: bool = True) -> Polygon:
+    pgs = [p for p in m.polygons.values() if p.closed == closed]
+    if len(pgs) != 1:
+        raise GeometryRefusal("bad_reference", f"{what}: the figure must contain exactly one shape (it has {len(pgs)})")
+    return pgs[0]
+
+
+def _the_triangle(m: Model, what: str) -> Polygon:
+    pg = _the_polygon(m, what)
+    if len(pg.vertices) != 3:
+        raise GeometryRefusal("bad_reference", f"{what}: the shape is not a triangle")
+    return pg
+
+
+def _side_keys(pg: Polygon) -> list:
+    n = len(pg.vertices)
+    return [seg_key(pg.vertices[i], pg.vertices[(i + 1) % n]) for i in range(n)]
+
+
+def _angle_keys(m: Model, pg: Polygon) -> list:
+    n = len(pg.vertices)
+    out = []
+    for i in range(n):
+        v, p, q = pg.vertices[i], pg.vertices[i - 1], pg.vertices[(i + 1) % n]
+        k = angle_key(v, p, q, "reflex")
+        out.append(k if k in m.angles else angle_key(v, p, q))
+    return out
+
+
+def _lengths_equal(m: Model, k1, k2) -> bool:
+    if m.lengths_equal(k1, k2):
+        return True
+    a, b = m.length_float(k1), m.length_float(k2)
+    return abs(a - b) <= LENGTH_REL_TOL * max(1.0, a, b)
+
+
+def _angles_equal(m: Model, k1, k2) -> bool:
+    if m.angles_equal(k1, k2):
+        return True
+    return abs(m.angle_float(k1) - m.angle_float(k2)) <= ANGLE_TOL_DEG
+
+
+def _angle_value(m: Model, k) -> float:
+    an = m.angles.get(k)
+    if an is not None and an.exact is not None and not an.exact.free_symbols:
+        return float(an.exact)
+    return m.angle_float(k)
+
+
+def triangle_class_by_sides(m: Model) -> str:
+    pg = _the_triangle(m, "triangle_class_by_sides")
+    s = _side_keys(pg)
+    pairs = sum(1 for i, j in ((0, 1), (1, 2), (0, 2)) if _lengths_equal(m, s[i], s[j]))
+    return {3: "equilateral", 1: "isosceles", 0: "scalene"}.get(pairs, "isosceles")
+
+
+def triangle_class_by_angles(m: Model) -> str:
+    pg = _the_triangle(m, "triangle_class_by_angles")
+    vals = [_angle_value(m, k) for k in _angle_keys(m, pg)]
+    if any(abs(v - 90.0) <= ANGLE_TOL_DEG for v in vals):
+        return "right"
+    if any(v > 90.0 for v in vals):
+        return "obtuse"
+    return "acute"
+
+
+def count_right_angles(m: Model) -> int:
+    pg = _the_polygon(m, "count_right_angles")
+    return sum(1 for k in _angle_keys(m, pg) if k[2] == "interior" and abs(_angle_value(m, k) - 90.0) <= ANGLE_TOL_DEG)
+
+
+def count_reflex_angles(m: Model) -> int:
+    pg = _the_polygon(m, "count_reflex_angles")
+    return sum(1 for k in _angle_keys(m, pg) if _angle_value(m, k) > 180.0 + ANGLE_TOL_DEG)
+
+
+def count_acute_angles(m: Model) -> int:
+    pg = _the_polygon(m, "count_acute_angles")
+    return sum(1 for k in _angle_keys(m, pg) if _angle_value(m, k) < 90.0 - ANGLE_TOL_DEG)
+
+
+def count_obtuse_angles(m: Model) -> int:
+    pg = _the_polygon(m, "count_obtuse_angles")
+    return sum(1 for k in _angle_keys(m, pg) if 90.0 + ANGLE_TOL_DEG < _angle_value(m, k) < 180.0 - ANGLE_TOL_DEG)
+
+
+def _polygon_symmetry_lines(m: Model, pg: Polygon) -> int:
+    """Reflection axes of a polygon from its cyclic side/angle sequence:
+    an axis is a position the sequence reads the same both ways from.
+    Each axis appears at two positions (its two ends), hence the halving."""
+    n = len(pg.vertices)
+    sides, angles = _side_keys(pg), _angle_keys(m, pg)
+    # seq[2i] = side i (v_i -> v_{i+1}); seq[2i+1] = angle at v_{i+1}
+    seq = []
+    for i in range(n):
+        seq.append(("s", sides[i]))
+        seq.append(("a", angles[(i + 1) % n]))
+    L = 2 * n
+
+    def same(x, y) -> bool:
+        if x[0] != y[0]:
+            return False
+        return _lengths_equal(m, x[1], y[1]) if x[0] == "s" else _angles_equal(m, x[1], y[1])
+
+    hits = 0
+    for k in range(L):
+        if all(same(seq[(k + j) % L], seq[(k - j) % L]) for j in range(1, n + 1)):
+            hits += 1
+    return hits // 2
+
+
+def _grid_symmetry_lines(g: GridPattern, fill: Optional[str] = None) -> int:
+    cells = [[fill if (fill is not None and c == g.blank) else c for c in row] for row in g.cells]
+    r, c = g.rows, g.cols
+    count = 0
+    if all(cells[i][j] == cells[i][c - 1 - j] for i in range(r) for j in range(c)):
+        count += 1                                             # vertical axis
+    if all(cells[i][j] == cells[r - 1 - i][j] for i in range(r) for j in range(c)):
+        count += 1                                             # horizontal axis
+    if r == c:
+        if all(cells[i][j] == cells[j][i] for i in range(r) for j in range(c)):
+            count += 1                                         # main diagonal
+        if all(cells[i][j] == cells[c - 1 - j][r - 1 - i] for i in range(r) for j in range(c)):
+            count += 1                                         # anti-diagonal
+    return count
+
+
+def lines_of_symmetry(m: Model, fill: Optional[str] = None) -> int:
+    if m.grids:
+        if len(m.grids) != 1:
+            raise GeometryRefusal("bad_reference", "lines_of_symmetry: one grid per figure")
+        return _grid_symmetry_lines(next(iter(m.grids.values())), fill)
+    if m.circles and not m.polygons:
+        raise GeometryRefusal("bad_reference", "lines_of_symmetry: a circle has infinitely many; not a question v1 asks")
+    return _polygon_symmetry_lines(m, _the_polygon(m, "lines_of_symmetry"))
+
+
+def is_polygon(m: Model) -> bool:
+    closed = [p for p in m.polygons.values() if p.closed]
+    open_ = [p for p in m.polygons.values() if not p.closed]
+    if closed and not open_ and not m.circles:
+        return True
+    if (open_ or m.circles) and not closed:
+        return False
+    raise GeometryRefusal("bad_reference", "is_polygon: the figure mixes a polygon with something else")
+
+
+def polygon_name(m: Model) -> str:
+    pg = _the_polygon(m, "polygon_name")
+    n = len(pg.vertices)
+    name = _NAMES.get(n, f"{n}-gon")
+    sides, angles = _side_keys(pg), _angle_keys(m, pg)
+    regular = all(_lengths_equal(m, sides[0], s) for s in sides) and all(_angles_equal(m, angles[0], a) for a in angles)
+    return f"regular {name}" if regular and n > 3 else ("equilateral triangle" if regular else name)
+
+
+PROPERTIES: dict[str, Callable] = {
+    "triangle_class_by_sides": triangle_class_by_sides,
+    "triangle_class_by_angles": triangle_class_by_angles,
+    "count_right_angles": count_right_angles,
+    "count_reflex_angles": count_reflex_angles,
+    "count_acute_angles": count_acute_angles,
+    "count_obtuse_angles": count_obtuse_angles,
+    "lines_of_symmetry": lines_of_symmetry,
+    "is_polygon": is_polygon,
+    "polygon_name": polygon_name,
+}
+
+
+def compute(m: Model, prop: str, **kw):
+    fn = PROPERTIES.get(prop)
+    if fn is None:
+        raise GeometryRefusal("theorem_unknown", f"{prop!r} is not a property v1 computes")
+    return fn(m, **kw) if kw else fn(m)
