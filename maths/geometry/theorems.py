@@ -492,6 +492,15 @@ THEOREMS: dict[str, Callable[[Model, Uses], list[sp.Eq]]] = {
 
 # The reason an answer key prints for each theorem, English; other
 # languages go through maths.i18n when the document path is wired.
+def reason(theorem: str, lang: str | None = "en") -> str:
+    """The reason the answer key and the board print for a theorem, in the
+    lesson language (maths.i18n.REASONS); English is the reference and the
+    fallback. REASONS below stays the engine's own English table."""
+    from maths.i18n import reason_text
+
+    return reason_text(theorem, lang) or REASONS.get(theorem, theorem)
+
+
 REASONS: dict[str, str] = {
     "angles_on_line": "angles on a straight line add up to 180°",
     "angles_at_point": "angles at a point add up to 360°",

@@ -310,3 +310,40 @@ def test_a_full_map_answer_is_not_written_twice():
     assert len(rows) == len(q["figures"]), rows
     assert not any(";" in (t or "") for t in texts), "the closing line is not repeated"
     assert [a["verb"] for a in scene["actions"]].count("underline") == len(q["figures"])
+
+
+def test_every_theorem_has_its_reason_in_every_lesson_language():
+    from maths.geometry.theorems import REASONS as EN, reason
+    from maths.i18n import LANGS, REASONS as TABLE
+
+    assert set(TABLE) == set(EN), set(TABLE) ^ set(EN)
+    for tid, table in TABLE.items():
+        assert set(table) == set(LANGS), (tid, set(LANGS) ^ set(table))
+        assert table["en"] == EN[tid], tid
+        assert all(table[lg].strip() for lg in LANGS), tid
+    assert reason("angles_on_line", "hi") == TABLE["angles_on_line"]["hi"]
+    assert reason("angles_on_line", "xx") == EN["angles_on_line"]
+    assert reason("no_such_theorem", "fr") == "no_such_theorem"
+
+
+def test_the_board_writes_the_reason_in_the_lesson_language():
+    from maths.i18n import REASONS as TABLE
+
+    ex = L.figure_example(_item(_b1_reply()))
+    scene, _lines = B.example_scene(ex, MethodCard(), "s003", has_card=False, lang="hi")
+    notes = [e["text"] for e in scene["elements"] if e["id"].startswith("n")]
+    assert " ".join(notes) == TABLE["angles_on_line"]["hi"], notes   # whole, wrapped if need be, never cut
+    scene_ar, _ = B.example_scene(ex, MethodCard(), "s003", has_card=False, lang="ar")
+    assert any(TABLE["angles_on_line"]["ar"] in (e.get("text") or "") for e in scene_ar["elements"])
+
+
+def test_the_answer_key_prints_the_reason_in_the_documents_language():
+    from maths.geometry.items import key_lines
+    from maths.i18n import REASONS as TABLE
+
+    item = _item(_b1_reply())
+    en = key_lines(item)
+    ms = key_lines(item, language="ms")
+    assert any(TABLE["angles_on_line"]["en"] in ln for ln in en)
+    assert any(TABLE["angles_on_line"]["ms"] in ln for ln in ms)
+    assert [ln.split("   (")[0] for ln in en] == [ln.split("   (")[0] for ln in ms], "only the reasons differ"

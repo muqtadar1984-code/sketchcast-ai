@@ -31,7 +31,7 @@ from maths.i18n import board_text as _bt, norm_lang, words_for
 from maths.geometry import GeometryRefusal, parse_question, verify_question
 from maths.geometry.board_adapter import FigureBoard, figure_board, figure_targets, op_actions
 from maths.geometry.constructions import exact_value
-from maths.geometry.theorems import REASONS
+from maths.geometry.theorems import reason as _reason
 from maths.schema import Lesson, Line, MethodCard, Mistake, Step, WorkedExample
 from maths.speech import speakable_maths
 from maths.tokens import TokenError, normalise
@@ -569,25 +569,27 @@ def _add_reason(board: _Board, row: _Row, text: str) -> None:
     """A deduce step's reason UNDER the line it gave, the way a geometry
     board carries "(angles on a straight line)": beside a figure the column
     is too narrow for a note to the right — it shrank to 'angles on a st…'."""
-    text = _short(text, 60)
+    text = " ".join(str(text or "").split())
     if not text:
         return
+    # the whole reason, wrapped to at most two lines under the equation:
+    # a Hindi or Telugu reason runs well past an English one and a cut
+    # reason ("…ह…") teaches nothing. Shrunk a little first, wrapped second.
     max_w = NOTE_RIGHT - board.line_x
     size = REASON_SIZE
-    w = _M.text_width(text, size)
-    while w > max_w and size > 17:
+    lines = _wrap_text(text, size, max_w, 2)
+    while size > 17 and (len(lines) > 1 or " ".join(lines) != text):
         size -= 1.0
-        w = _M.text_width(text, size)
-    if w > max_w:
-        text = _short(text, max(12, int(len(text) * max_w / w)))
-    nid = board.uid("n")
+        lines = _wrap_text(text, size, max_w, 2)
     y = row.y + row.lay.h + REASON_GAP
-    board.elements.append({"id": nid, "type": "text", "text": text, "size": size, "color": "muted",
-                           "role": "caption", "at": [board.line_x + 6, y], "anchor": "lt"})
-    board.actions.append({"verb": "write", "target": nid})
-    board.annotations.append(nid)
-    h = _M.text_box(text, size)[1]
-    board.next_y = max(board.next_y, y + h + ROW_GAP * 0.5)
+    for ln in lines:
+        nid = board.uid("n")
+        board.elements.append({"id": nid, "type": "text", "text": ln, "size": size, "color": "muted",
+                               "role": "caption", "at": [board.line_x + 6, y], "anchor": "lt"})
+        board.actions.append({"verb": "write", "target": nid})
+        board.annotations.append(nid)
+        y += _M.text_box(ln, size)[1] + 2.0
+    board.next_y = max(board.next_y, y + ROW_GAP * 0.5)
 
 
 @dataclass
@@ -808,11 +810,10 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
         # the answer, one line per figure, not a chain of working
         rows = _add_state(board, st.after, cue, dim_previous=not evidence)
         if rows and st.kind == "deduce":
-            # the theorem's reason beside the line it gave — the answer key's
-            # wording (English only until the reasons table is localised);
-            # no leader: the line came from the figure, not a line above
-            if lang == "en":
-                _add_reason(board, rows[-1], REASONS.get(st.theorem, ""))
+            # the theorem's reason under the line it gave, in the lesson
+            # language (maths.i18n.REASONS); no leader: the line came from
+            # the figure, not from a line above
+            _add_reason(board, rows[-1], _reason(st.theorem, lang) if st.theorem else "")
         elif rows:
             note = st.note if st.kind in ("transform", "round") else (st.note or _bt("set_up", lang))
             # after a wipe the line this step came from is gone: the note

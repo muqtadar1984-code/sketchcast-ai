@@ -31,7 +31,7 @@ from maths.geometry.properties import PROPERTIES
 from maths.geometry.realise import realise
 from maths.geometry.render_static import render_figure
 from maths.geometry.spec import SCHEMA_VERSION, parse_question
-from maths.geometry.theorems import REASONS, THEOREMS
+from maths.geometry.theorems import REASONS, THEOREMS, reason
 from maths.geometry.verify import QuestionReport, verify_question
 from maths.pretty import pretty
 
@@ -682,10 +682,11 @@ def _fmt(value) -> str:
     return str(value)
 
 
-def key_lines(item: GeometryItem, *, answer_word: str = "Answer", reasons: bool = True) -> list[str]:
+def key_lines(item: GeometryItem, *, answer_word: str = "Answer", reasons: bool = True,
+              language: str = "en") -> list[str]:
     """The answer key's lines: an evidence question's computed answer; a
-    reasoning question's proof, each deduce line with its reason (English
-    only — the reasons table is not yet localised), then the answer."""
+    reasoning question's proof, each deduce line with its reason in the
+    document's language (maths.i18n.REASONS), then the answer."""
     spec = item.spec
     if item.role != "reasoning":
         parts = spec.get("parts") or ([{"asks": spec.get("asks"), "answer": spec.get("answer")}]
@@ -705,16 +706,13 @@ def key_lines(item: GeometryItem, *, answer_word: str = "Answer", reasons: bool 
             return [f"{answer_word}: {_fmt(relabel(parts[0]['answer']['value']))}"]
         return [f"({i}) {_fmt(relabel(p['answer']['value']))}" for i, p in enumerate(parts, 1)]
     lines: list[str] = []
-    reason_iter = iter(item.report.reasons_given)
     for st in spec.get("steps") or []:
         after = st.get("after") or []
         if not after:
             continue
         text = "; ".join(_pretty_line(x) for x in after)
-        if st.get("kind") == "deduce":
-            reason = next(reason_iter, None)
-            if reasons and reason:
-                text = f"{text}   ({reason})"
+        if st.get("kind") == "deduce" and reasons and st.get("theorem"):
+            text = f"{text}   ({reason(str(st['theorem']), language)})"
         lines.append(text)
     proved = item.report.proved
     if proved:
