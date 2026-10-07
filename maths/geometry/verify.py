@@ -326,6 +326,28 @@ def _norm_label(x) -> str:
     return str(x).strip().lower()
 
 
+# the engine's value may be more specific than a correct answer
+_LESS_SPECIFIC = {"regular quadrilateral": {"square", "quadrilateral"},
+                  "equilateral triangle": {"regular triangle", "triangle"}}
+
+
+def _label_eq(got, want) -> bool:
+    """The answer names what the engine computed: exactly, or less
+    specifically ('hexagon' for a 'regular hexagon'). Never the other way."""
+    g, w = _norm_label(got), _norm_label(want)
+    if g == w:
+        return True
+    if g.startswith("regular ") and g[len("regular "):] == w:
+        return True
+    return w in _LESS_SPECIFIC.get(g, ())
+
+
+def _label_sets_eq(have, want) -> bool:
+    have, want = list(have), list(want)
+    return len(have) == len(want) and all(any(_label_eq(h, w) for h in have) for w in want) \
+        and all(any(_label_eq(h, w) for w in want) for h in have)
+
+
 def _compute_part(rep: QuestionReport, q: QuestionSpec, asks: Asks) -> Any:
     values: dict[str, Any] = {}
     for fid in asks.over:
@@ -378,7 +400,7 @@ def _compare_answer(ans: Answer, got: Any, name: str, rep: QuestionReport,
     if ans.kind == "label_set" or ans.kind == "value_set":
         want = {_norm_label(x) for x in (ans.value if isinstance(ans.value, list) else [ans.value])}
         have = {_norm_label(x) for x in (got if isinstance(got, (set, list)) else [got])}
-        if want != have:
+        if not _label_sets_eq(have, want):
             raise GeometryRefusal("answer_mismatch", f"{name}: the figure gives {sorted(have)}, the answer says {sorted(want)}")
     elif ans.kind == "label_map" and not isinstance(got, dict):
         # one figure: the engine computed a single value; a label_map answer
@@ -388,14 +410,14 @@ def _compare_answer(ans: Answer, got: Any, name: str, rep: QuestionReport,
             want = next(iter(want.values()))
         elif isinstance(want, list) and len(want) == 1:
             want = want[0]
-        if isinstance(want, (dict, list)) or _norm_label(got) != _norm_label(want):
+        if isinstance(want, (dict, list)) or not _label_eq(got, want):
             raise GeometryRefusal("answer_mismatch", f"{name}: the figure gives {_plain(got)}, the answer says {_plain(want)}")
     elif ans.kind == "label_map":
         if not isinstance(ans.value, dict):
             raise GeometryRefusal("bad_schema", f"{name}: label_map is {{label: value}}")
         want = {_norm_label(k): _norm_label(v) for k, v in ans.value.items()}
         have = {_norm_label(k): _norm_label(v) for k, v in got.items()}
-        if want != have:
+        if set(want) != set(have) or not all(_label_eq(have[k], want[k]) for k in want):
             raise GeometryRefusal("answer_mismatch", f"{name}: the figure gives {have}, the answer says {want}")
     elif ans.kind == "number":
         if isinstance(got, dict):
@@ -433,7 +455,8 @@ def _check_discernible(m: Model, prop: str, fid: str) -> None:
         for k in angles:
             v = m.angle_float(k)
             an = m.angles.get(k)
-            is_right = an is not None and an.exact is not None and sp.simplify(an.exact - 90) == 0
+            is_right = (an is not None and an.exact is not None and sp.simplify(an.exact - 90) == 0) \
+                or abs(v - 90.0) <= ANGLE_TOL_DEG   # a 3-4-5 triangle's right angle arrives by floats
             if not is_right and abs(v - 90.0) < DISCERN_ANGLE:
                 raise GeometryRefusal("not_discernible",
                                       f"{fid}: an angle of {v:.3g}° is too close to a right angle to read", fid)
