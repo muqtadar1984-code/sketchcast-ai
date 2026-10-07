@@ -58,14 +58,17 @@ def choose_scale(m: Model, bbox, *, role: str, units: Optional[str]) -> tuple[fl
 
 
 def render_figure(m: Model, spec: FigureSpec, *, role: str = "reasoning", policy: str = "instructional_metric",
-                  dpi: int = 200, show_hidden: bool = False, scale_mm: Optional[float] = None) -> Rendered:
+                  dpi: int = 200, show_hidden: bool = False, scale_mm: Optional[float] = None,
+                  note: Optional[str] = None) -> Rendered:
+    """``note`` is the "Not drawn to scale" text in the document's language
+    (English when None); it is set in the script's own font."""
     # the scale comes from the figure itself, so labels can be sized in
     # millimetres (a fitted figure at 6 mm/unit must not get 2.5 mm text)
     if scale_mm is None:
         scale, true_scale = choose_scale(m, m.bbox(), role=role, units=spec.units)
     else:
         scale, true_scale = scale_mm, False
-    d = build_drawing(m, spec, show_hidden=show_hidden, policy=policy, label_size=LABEL_MM / scale)
+    d = build_drawing(m, spec, show_hidden=show_hidden, policy=policy, label_size=LABEL_MM / scale, note=note)
     x0, y0, x1, y1 = d.bbox
     note_h = 5.0 if d.notes else 0.0
     w_mm = (x1 - x0) * scale + 2 * MARGIN_MM
@@ -146,8 +149,13 @@ def _png(d: Drawing, tx, w_mm: float, h_mm: float, scale: float, dpi: int) -> by
         anchor = {"middle": "mm", "start": "lm", "end": "rm"}[t.anchor]
         dr.text((x, y), t.text, fill="#111111", font=font, anchor=anchor)
     for i, note in enumerate(d.notes):
-        font = ImageFont.truetype(str(_FONT), max(6, int(round(2.6 * px * S))))
-        dr.text(((w_mm - 2) * px * S, (h_mm - 1.5 - i * 3.5) * px * S), note, fill="#444444", font=font, anchor="rm")
+        # the note may be Arabic, Devanagari or Telugu: the slide builder's
+        # font picker and shaper know which face and shaping each needs
+        from agent5_slides.slide_builder import _font as script_font  # noqa: PLC0415
+        from shared.text_shaping import display_text  # noqa: PLC0415
+        font = script_font(False, max(6, int(round(2.6 * px * S))), note)
+        dr.text(((w_mm - 2) * px * S, (h_mm - 1.5 - i * 3.5) * px * S), display_text(note), fill="#444444",
+                font=font, anchor="rm")
     img = img.resize((W, H), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="PNG", dpi=(dpi, dpi))

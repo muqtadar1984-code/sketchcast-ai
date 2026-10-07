@@ -54,7 +54,8 @@ def compile_figure(spec: FigureSpec, resolve: Optional[Resolver] = None, *,
     m.bind = parse_bind(spec)
     if resolve is None:
         resolve = metric_resolver(m.bind)
-    ctx = BuildContext(m, spec, resolve, labels={p.id: p.label for p in spec.points if p.label})
+    ctx = BuildContext(m, spec, resolve, labels={p.id: p.label for p in spec.points if p.label},
+                       strict=check_givens)
     # angle ids are bound to their keys BEFORE building: a construction may
     # take an angle by id (angle_bisector of angle_avb, B15) once an earlier
     # construction has made it a fact
@@ -67,6 +68,7 @@ def compile_figure(spec: FigureSpec, resolve: Optional[Resolver] = None, *,
     for p in spec.points:
         if not m.has_point(p.id):
             raise GeometryRefusal("bad_reference", f"point {p.id!r} is listed but no construction places it", p.id)
+    _implicit_angle_ids(m)
     for a in spec.angles:
         for pid in (a.vertex, *a.arms):
             if not m.has_point(pid):
@@ -94,6 +96,31 @@ def compile_figure(spec: FigureSpec, resolve: Optional[Resolver] = None, *,
     if spec.orientation:
         _rotate(m, spec.orientation)
     return m
+
+
+def _label_of(m: Model, pid: str) -> str:
+    lab = (m.points[pid].label or pid.removeprefix("p_")).lower()
+    return "".join(ch for ch in lab if ch.isalnum()) or pid
+
+
+def _implicit_angle_ids(m: Model) -> None:
+    """Every interior angle of a closed shape gets ids from its vertex
+    labels — angle_bac, angle_cab and the short angle_a — unless the spec
+    already names that angle. A step may cite them and a measure target
+    them without the model declaring an `angles` entry; the proof sees
+    one symbol per angle through Model.canonical_angle_id."""
+    for pg in m.polygons.values():
+        if not pg.closed:
+            continue
+        L = len(pg.vertices)
+        for i, v in enumerate(pg.vertices):
+            pv, nv = pg.vertices[i - 1], pg.vertices[(i + 1) % L]
+            k = angle_key(v, pv, nv)
+            m.angle(v, pv, nv)
+            lp, lv, ln_ = _label_of(m, pv), _label_of(m, v), _label_of(m, nv)
+            for name in (f"angle_{lp}{lv}{ln_}", f"angle_{ln_}{lv}{lp}", f"angle_{lv}"):
+                if name not in m.angle_ids:
+                    m.angle_ids[name] = k
 
 
 def _rotate(m: Model, deg: float) -> None:

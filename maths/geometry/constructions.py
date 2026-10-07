@@ -74,13 +74,23 @@ class BuildContext:
     spec: FigureSpec
     resolve: Callable[[sp.Expr, str, bool, str], float]   # (exact, kind, free, where) -> float
     labels: dict[str, str] = field(default_factory=dict)
+    strict: bool = True   # the metric build; a schematic re-run skips the over-determination checks
+
+    def _by_measure(self, v: Any) -> Any:
+        """A parameter that NAMES a measured angle or segment ("angles":
+        ["angle_a", "angle_b"]) stands for that measure's value."""
+        if isinstance(v, str):
+            ms = self.spec.measure(v.strip())
+            if ms is not None:
+                return ms.value
+        return v
 
     def num(self, v: Any, kind: str, *, where: str, free: bool = True) -> float:
-        e = exact_value(v, where=where)
+        e = exact_value(self._by_measure(v), where=where)
         return self.resolve(e, kind, free, where)
 
     def exact(self, v: Any, *, where: str) -> sp.Expr:
-        return exact_value(v, where=where)
+        return exact_value(self._by_measure(v), where=where)
 
     def angle_measure(self, angle_id: str, *, where: str) -> tuple[sp.Expr, float, str]:
         """(exact, float, region) of a spec angle used as a construction
@@ -88,7 +98,16 @@ class BuildContext:
         70° at 55°); the exact value is the fact."""
         a = self.spec.angle(angle_id)
         if a is None:
-            raise GeometryRefusal("bad_reference", f"{where}: angle {angle_id!r} is not defined", where)
+            # a model wrote the measure itself where an angle id belongs
+            # ("angle": "130"): taken as the value; the angle it makes is
+            # named in `angles` and its measure is checked against the figure
+            try:
+                e = exact_value(angle_id, where=f"{where}.angle")
+            except GeometryRefusal:
+                e = None
+            if e is None or any(str(s) not in self.model.bind for s in e.free_symbols):
+                raise GeometryRefusal("bad_reference", f"{where}: angle {angle_id!r} is not defined", where)
+            return e, self.resolve(e, "angle", True, where), "interior"
         m = self.spec.measure(angle_id)
         if m is None:
             raise GeometryRefusal("construction_impossible",
@@ -428,6 +447,13 @@ def c_intersection(ctx: BuildContext, obj: dict) -> None:
 def c_ray_at_angle(ctx: BuildContext, obj: dict) -> None:
     w = _where(obj)
     v = _req(obj, "vertex", w)
+    if "from_ray" not in obj:
+        # no base ray named: the line through the vertex, towards its
+        # first point — a default the given/realised check still polices
+        lines = [ln for ln in ctx.model.lines_through(v) if len(ln.points) > 1] if ctx.model.has_point(v) else []
+        if len(lines) != 1:
+            raise GeometryRefusal("bad_schema", f"{w}: `from_ray` is required (the vertex is not on exactly one line)", w)
+        obj = {**obj, "from_ray": [v, next(p for p in lines[0].points if p != v)]}
     fv, fa = _ids(_req(obj, "from_ray", w), 2, w, "from_ray")
     if fv != v:
         raise GeometryRefusal("bad_schema", f"{w}: `from_ray` must start at the vertex", w)
@@ -572,12 +598,18 @@ def _transversal_angles(m: Model, a, b, c, d, e, f, p, q, theta: sp.Expr) -> Non
     theta is the angle EPB (upper-right at P)."""
     t = theta
     s = 180 - theta
-    at_p = {(e, b): t, (e, a): s, (a, q): t, (b, q): s}
-    at_q = {(p, d): t, (p, c): s, (c, f): t, (d, f): s}
+    # the ray P->Q continues to F and Q->P to E, so the angle with arm Q at
+    # P is also the angle with arm F there (angle APF = angle APQ)
+    at_p = {(e, b): t, (e, a): s, (a, q): t, (b, q): s, (a, f): t, (b, f): s}
+    at_q = {(p, d): t, (p, c): s, (c, f): t, (d, f): s, (e, d): t, (e, c): s}
     for (x, y), val in at_p.items():
         m.angle(p, x, y, exact=val)
     for (x, y), val in at_q.items():
         m.angle(q, x, y, exact=val)
+    m.set_equal_angles(angle_key(p, a, q), angle_key(p, a, f))
+    m.set_equal_angles(angle_key(p, b, q), angle_key(p, b, f))
+    m.set_equal_angles(angle_key(q, p, d), angle_key(q, e, d))
+    m.set_equal_angles(angle_key(q, p, c), angle_key(q, e, c))
     for group in (
         [angle_key(p, e, b), angle_key(p, a, q), angle_key(q, p, d), angle_key(q, c, f)],
         [angle_key(p, e, a), angle_key(p, b, q), angle_key(q, p, c), angle_key(q, d, f)],
@@ -588,18 +620,29 @@ def _transversal_angles(m: Model, a, b, c, d, e, f, p, q, theta: sp.Expr) -> Non
 def c_parallels_transversal(ctx: BuildContext, obj: dict) -> None:
     w = _where(obj)
     pts = _ids(_req(obj, "points", w), 8, w, "points")
+    # the documented order is a,b,c,d,e,f,p,q; a model writing the transversal
+    # in reading order gives a,b,c,d,e,p,q,f — told apart by the labels
+    tail = [(ctx.labels.get(x) or x).strip().lower()[-1:] for x in pts[5:8]]
+    if tail == ["p", "q", "f"]:
+        pts = pts[:5] + [pts[7], pts[5], pts[6]]
     a, b, c, d, e, f, p, q = pts
     m = ctx.model
     if any(m.has_point(x) for x in pts):
         raise GeometryRefusal("bad_schema", f"{w}: parallels_transversal builds all eight points itself", w)
-    aid = _req(obj, "angle", w)
-    spec_angle = ctx.spec.angle(aid)
+    aid = obj.get("angle")
+    spec_angle = ctx.spec.angle(aid) if aid else None
     if spec_angle is None:
-        raise GeometryRefusal("bad_reference", f"{w}: angle {aid!r} is not defined", w)
+        cands = [s for s in ctx.spec.angles if s.vertex in (p, q) and ctx.spec.measure(s.id) is not None]
+        if len(cands) != 1:
+            raise GeometryRefusal("bad_reference", f"{w}: angle {aid!r} is not defined", w)
+        spec_angle, aid = cands[0], cands[0].id
     exact, val, region = ctx.angle_measure(aid, where=w)
     if region != "interior":
         raise GeometryRefusal("construction_impossible", f"{w}: the defining angle must be interior", w)
-    arms = set(spec_angle.arms)
+    # at P the ray towards Q continues to F, at Q the ray towards P continues
+    # to E: angle APF is angle APQ, angle PQD is angle EQD
+    alias = {f: q} if spec_angle.vertex == p else {e: p}
+    arms = {alias.get(x, x) for x in spec_angle.arms}
     theta_roles = {frozenset((e, b)), frozenset((a, q)), frozenset((p, d)), frozenset((c, f))}
     supp_roles = {frozenset((e, a)), frozenset((b, q)), frozenset((p, c)), frozenset((d, f))}
     if spec_angle.vertex == p and frozenset(arms) in theta_roles or spec_angle.vertex == q and frozenset(arms) in theta_roles:
@@ -750,7 +793,10 @@ def _finish_polygon(ctx: BuildContext, obj: dict, coords: list[Vec], kind: str, 
     if vids is not None:
         vids = _ids(vids, n, w, "vertices")
     else:
-        vids = [m.new_point_id("v") for _ in range(n)]
+        # a model lists A, B, C and builds "the triangle": the spec's
+        # unplaced points, in order, are its vertices; else fresh ids
+        pending = [p.id for p in ctx.spec.points if not m.has_point(p.id)]
+        vids = pending[:n] if len(pending) >= n else [m.new_point_id("v") for _ in range(n)]
     for v in vids:
         if m.has_point(v):
             raise GeometryRefusal("bad_reference", f"{w}: vertex {v!r} already exists; a shape is built whole", w)
@@ -833,6 +879,8 @@ def _angle_exact_from_sides(e_ab, e_bc, e_ca) -> list[Optional[sp.Expr]]:
 
 def c_triangle_sss(ctx: BuildContext, obj: dict) -> None:
     w = _where(obj)
+    if "sides" not in obj and isinstance(obj.get("side"), list):
+        obj = {**obj, "sides": obj["side"]}   # the singular key with three values
     sides = _req(obj, "sides", w)
     if not isinstance(sides, list) or len(sides) != 3:
         raise GeometryRefusal("bad_schema", f"{w}: `sides` is [AB, BC, CA]", w)
@@ -848,6 +896,8 @@ def c_triangle_sas(ctx: BuildContext, obj: dict) -> None:
     if not isinstance(sides, list) or len(sides) != 2:
         raise GeometryRefusal("bad_schema", f"{w}: `sides` is [AB, BC]; `angle` is at B", w)
     e_ab, e_bc = (ctx.exact(s, where=w) for s in sides)
+    if "angle" not in obj and isinstance(obj.get("angles"), list) and len(obj["angles"]) == 1:
+        obj = {**obj, "angle": obj["angles"][0]}
     e_b = ctx.exact(_req(obj, "angle", w), where=w)
     ab, bc = (ctx.num(s, "length", where=w) for s in sides)
     b_deg = ctx.num(obj["angle"], "angle", where=w)
@@ -922,12 +972,35 @@ def c_triangle_rhs(ctx: BuildContext, obj: dict) -> None:
 def c_triangle_isosceles(ctx: BuildContext, obj: dict) -> None:
     """Apex A; AB = AC = legs; plus exactly one of base / apex_angle / base_angle."""
     w = _where(obj)
-    e_leg = ctx.exact(_req(obj, "legs", w), where=w)
-    leg = ctx.num(obj["legs"], "length", where=w)
-    given = [k for k in ("base", "apex_angle", "base_angle") if k in obj]
-    if len(given) != 1:
-        raise GeometryRefusal("bad_schema", f"{w}: give exactly one of base, apex_angle, base_angle", w)
-    k = given[0]
+    obj = dict(obj)
+    if "legs" not in obj:
+        # legs written as `side`, or as `sides` with the repeated length
+        sides = obj.get("sides")
+        if isinstance(sides, list) and len(sides) == 3:
+            names = [str(s).strip() for s in sides]
+            rep_ = [s for s in dict.fromkeys(names) if names.count(s) >= 2]
+            if len(rep_) == 1:
+                obj["legs"] = rep_[0]
+                other = [s for s in names if s != rep_[0]]
+                if other and not any(k in obj for k in ("base", "apex_angle", "base_angle")):
+                    obj["base"] = other[0]
+        elif obj.get("side") is not None and not isinstance(obj.get("side"), list):
+            obj["legs"] = obj["side"]
+    legs = _req(obj, "legs", w)
+    if isinstance(legs, list):
+        # the reply schema types `legs` as a list for the right-angled
+        # triangle; a model writes ["6", "6"] here. Two equal legs are one leg.
+        if not legs or any(str(x).strip() != str(legs[0]).strip() for x in legs):
+            raise GeometryRefusal("bad_schema", f"{w}: an isosceles triangle's legs are one length, not {legs}", w)
+        legs = legs[0]
+    e_leg = ctx.exact(legs, where=w)
+    leg = ctx.num(legs, "length", where=w)
+    given = [k for k in ("apex_angle", "base_angle", "base") if k in obj]
+    if not given:
+        raise GeometryRefusal("bad_schema", f"{w}: give one of base, apex_angle, base_angle", w)
+    # over-determined (apex AND base): built from the first, the rest must
+    # agree — a figure is never built from contradictory givens
+    k, extra = given[0], given[1:]
     if k == "base":
         e_base, base = ctx.exact(obj["base"], where=w), ctx.num(obj["base"], "length", where=w)
         if base >= 2 * leg - 1e-9:
@@ -947,6 +1020,14 @@ def c_triangle_isosceles(ctx: BuildContext, obj: dict) -> None:
             raise GeometryRefusal("construction_impossible", f"{w}: an apex of {apex:g}° makes no triangle", w)
         base = 2 * leg * math.sin(math.radians(apex / 2))
         e_base = None
+    if ctx.strict:
+        for key in extra:
+            want = ctx.num(obj[key], "angle" if key.endswith("angle") else "length", where=w, free=False)
+            have = {"apex_angle": apex, "base_angle": (180.0 - apex) / 2,
+                    "base": 2 * leg * math.sin(math.radians(apex / 2))}[key]
+            if abs(want - have) > 1e-6 * max(1.0, abs(have)):
+                raise GeometryRefusal("construction_impossible",
+                                      f"{w}: {key} = {want:g} contradicts the triangle built from {k} (it has {have:.4g})", w)
     half = math.radians(apex / 2)
     bxy = (leg * math.sin(half), -leg * math.cos(half))
     cxy = (-leg * math.sin(half), -leg * math.cos(half))
@@ -979,6 +1060,8 @@ def c_square(ctx: BuildContext, obj: dict) -> None:
 
 def c_rectangle(ctx: BuildContext, obj: dict) -> None:
     w = _where(obj)
+    if ("width" not in obj or "height" not in obj) and isinstance(obj.get("sides"), list) and len(obj["sides"]) >= 2:
+        obj = {**obj, "width": obj["sides"][0], "height": obj["sides"][1]}
     e_w, e_h = ctx.exact(_req(obj, "width", w), where=w), ctx.exact(_req(obj, "height", w), where=w)
     wd, ht = ctx.num(obj["width"], "length", where=w), ctx.num(obj["height"], "length", where=w)
     ninety = sp.Integer(90)
@@ -1097,6 +1180,8 @@ def c_regular_polygon(ctx: BuildContext, obj: dict) -> None:
 def c_turtle_polygon(ctx: BuildContext, obj: dict, *, closed: bool = True) -> None:
     w = _where(obj)
     sides, turns = _req(obj, "sides", w), _req(obj, "turns", w)
+    if not closed and isinstance(sides, list) and isinstance(turns, list) and len(turns) == len(sides) - 1:
+        turns = list(turns) + ["0"]   # an open path turns between sides, not after the last
     if not (isinstance(sides, list) and isinstance(turns, list) and len(sides) == len(turns) and len(sides) >= 2):
         raise GeometryRefusal("bad_schema", f"{w}: `sides` and `turns` are lists of the same length", w)
     e_sides = [ctx.exact(s, where=w) for s in sides]
@@ -1114,8 +1199,12 @@ def c_turtle_polygon(ctx: BuildContext, obj: dict, *, closed: bool = True) -> No
         end = coords.pop()
         if math.dist(end, coords[0]) > 1e-6 * max(1.0, sum(f_sides)):
             raise GeometryRefusal("closure_failed", f"{w}: the sides and turns do not return to the start", w)
-        if abs((sum(f_turns) % 360.0)) > 1e-6 and abs((sum(f_turns) % 360.0) - 360.0) > 1e-6:
-            raise GeometryRefusal("closure_failed", f"{w}: the turns add to {sum(f_turns):g}°, not 360°", w)
+        # the walk closed, so the last turn is whatever brings the heading
+        # home: a model that wrote 0 (or 90 for a rectangle's 4th corner) for
+        # it has still described this polygon
+        last = 360.0 - sum(f_turns[:-1]) if sum(f_turns[:-1]) > 0 else -360.0 - sum(f_turns[:-1])
+        f_turns[-1] = last
+        e_turns[-1] = 360 - sum(e_turns[:-1]) if sum(f_turns[:-1]) > 0 else -360 - sum(e_turns[:-1])
         # interior angle at the vertex AFTER side i is 180 - turn i; a right
         # turn (negative) makes a reflex corner. Vertex k's angle is turn k-1.
         n = len(coords)

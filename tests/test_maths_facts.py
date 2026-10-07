@@ -16,6 +16,7 @@ import pytest
 
 from docgen import generate_document
 from maths.facts import _digits, parse_item, read_back_item, verify_item
+from maths.geometry.items import GEOMETRY_SET_SCHEMA
 from maths.questions import FACT_SET_SCHEMA, READ_BACK_SCHEMA, SET_SCHEMA
 from maths.schema import parse_example
 from maths.verify import verify_example
@@ -100,6 +101,10 @@ class GeometryClient:
             self.calls.append("read_back")
             self.prompts["read_back"] = prompt
             return {"data": {"items": copy.deepcopy(self.readings or [])}, "usage": {}, "truncated": False}
+        if response_schema is GEOMETRY_SET_SCHEMA:
+            # the figure call (2026-10-07): this chapter's stub offers no diagrams
+            self.calls.append("geometry")
+            return {"data": {"questions": []}, "usage": {}, "truncated": False}
         assert response_schema is SET_SCHEMA
         self.calls.append("ladder")
         return {"data": {"questions": copy.deepcopy(self.ladder)}, "usage": {}, "truncated": False}
@@ -193,7 +198,7 @@ def test_the_production_geometry_worksheet_now_builds_from_proved_facts(tmp_path
     client = GeometryClient([Q_TRIANGLE, Q_PENTAGON], GOOD_FACTS + BAD_FACTS)
     paths = generate_document("worksheet", BOOK, CHAPTER, {}, client, {"num_questions": 10}, tmp_path,
                               language="en", maths=True)
-    assert client.calls == ["ladder", "facts"], \
+    assert client.calls == ["ladder", "geometry", "facts"], \
         "a round of nothing but naming questions does not buy a second round"
     sheet, key = docx_text(paths[0]), docx_text(paths[1])
     for good in ("A triangle has ____ sides.", "A regular hexagon has 6 lines of symmetry.", "heptagon"):
@@ -278,7 +283,7 @@ def test_a_malay_geometry_worksheet_prints_only_what_its_english_reading_proves(
     client = GeometryClient([Q_TRIANGLE, Q_PENTAGON], [i for i, _r in MALAY], [r for _i, r in MALAY])
     paths = generate_document("worksheet", BOOK, CHAPTER, {}, client, {"num_questions": 6}, tmp_path,
                               language="ms", maths=True)
-    assert client.calls == ["ladder", "facts", "read_back"]
+    assert client.calls == ["ladder", "geometry", "facts", "read_back"]
     rb = client.prompts["read_back"]
     assert "Write ALL output" not in rb and "Do not translate" not in rb, \
         "the read-back must not be told to answer in Malay"

@@ -213,7 +213,7 @@ def _fmt_value(value, unit: Optional[str], is_angle: bool) -> str:
 # ── the drawing ───────────────────────────────────────────────────────────
 
 def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, label_size: float = 0.42,
-                  policy: str = "instructional_metric") -> Drawing:
+                  policy: str = "instructional_metric", note: Optional[str] = None) -> Drawing:
     d = Drawing()
     drawn_segments: set = set()
 
@@ -333,7 +333,7 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
             continue
         _place_point_label(d, m, p.id, p.label, label_size, boxes, (cx, cy))
     if policy == "assessment_schematic":
-        d.notes.append("Not drawn to scale")
+        d.notes.append(note or "Not drawn to scale")
     d.bbox = _drawing_bbox(d, m)
     return d
 

@@ -14,12 +14,20 @@ and part), worker/process.py hands that lesson over (``maths_lesson``): the
 questions then follow the lesson's own method card and avoid repeating its
 examples. Without one, the chapter alone sets the topic.
 
+A chapter whose content is DIAGRAMS — classify these triangles, count the
+right angles, find x on a straight line — is asked as figure questions
+(maths.geometry.items): the model describes each diagram as a construction,
+a deterministic engine builds, proves and draws it, and only a verified
+figure is printed, at true size when the student is meant to measure it
+and deliberately off-scale when the student is meant to reason.
+
 A chapter whose answers are NAMES — polygons, solids, angle and triangle
 types, symmetry, directions, probability words — cannot be proved by
 algebra (2D shape and pattern, 2026-10-07: every question rejected, the
-worksheet failed). What the ladder cannot fill is asked as fill-in,
-true/false and matching items, each checked against the closed table of
-facts in maths.facts; an item the table cannot prove is never printed.
+worksheet failed). What the ladder and the figures cannot fill is asked as
+fill-in, true/false and matching items, each checked against the closed
+table of facts in maths.facts; an item the table cannot prove is never
+printed.
 
 Same student/teacher split as every other document (2026-08-18): build()
 returns [student_document, answer_key].
@@ -34,6 +42,7 @@ from typing import Optional
 
 from docgen import docx_builder as dx
 from maths.facts import FactItem
+from maths.geometry.items import GeometryItem, geometry_items, key_lines
 from maths.pretty import pretty
 from maths.tokens import TokenError, tokenize
 from maths.questions import fact_items, question_ladder, worked_solution
@@ -137,6 +146,61 @@ def _fact_sections(doc, key_doc, facts: list[FactItem], language: str, *, exam: 
     return marks
 
 
+def _figure_client(client, language: str):
+    """The client for the figure call: the script role's model on the Gemini
+    path, wrapped in the same language directive the document's client
+    carries. A stub client (tests) and the Claude/Kimi paths keep the client
+    they were given."""
+    inner = client.undirected() if hasattr(client, "undirected") else client
+    if type(inner).__name__ != "GeminiClient":
+        return client            # a stub, or another provider's client
+    try:
+        from shared.llm import script_client
+        from shared.model_routing import GEMINI, provider_for
+    except Exception:  # noqa: BLE001 — docgen stays importable without the worker's routing
+        return client
+    if provider_for(language) != GEMINI:
+        return client
+    strong = script_client(language)
+    if inner is not client:
+        return type(client)(strong, client._directive)  # noqa: SLF001 — the same directive, the stronger model
+    return strong
+
+
+def _figure_section(doc, key_doc, items: list[GeometryItem], language: str, *, exam: bool,
+                    number: int) -> tuple[int, int]:
+    """The verified figure questions: each question, its drawing(s) at the
+    width the renderer chose, writing lines; the key prints the computed
+    answer or the proof with its reasons. Returns (next number, marks)."""
+    if not items:
+        return number, 0
+    name = dx._t("sec_figures", language)
+    dx.heading(doc, name, 1)
+    marks = 0
+    key_items: list[str] = []
+    for item in items:
+        number += 1
+        text = dx.strip_leading_number(item.prompt) or dx._t("sec_figures", language)
+        if exam:
+            marks += item.marks
+            dx.question(doc, f"{number}. {text}    [{item.marks} marks]", first=(number == 1))
+        else:
+            dx.question(doc, f"{number}. {text}", first=(number == 1))
+        if len(item.images) == 1 and not item.images[0].label:
+            dx.picture(doc, item.images[0].png, item.images[0].width_mm)
+        else:
+            dx.picture_row(doc, [(im.png, im.width_mm, im.label) for im in item.images])
+        dx.writing_lines(doc, item.lines)
+        lines = key_lines(item, answer_word=dx._t("sol_answer", language), reasons=(language or "en") == "en")
+        if exam and item.role == "reasoning":
+            scheme = dx._t("marks_scheme", language).format(m=item.marks, method=max(1, item.marks - 1))
+            key_items.append("\n".join(lines) + scheme)
+        else:
+            key_items.append("\n".join(lines))
+    dx.answer_section(key_doc, name, key_items)
+    return number, marks
+
+
 def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_dir: Path,
           template: str | None = None, language: str = "en", *, kind: str = "worksheet",
           maths_lesson: Optional[Lesson] = None) -> list[Path]:
@@ -150,23 +214,36 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
 
     questions, report = question_ladder(client, topic=topic, level=grade, language=language, n=n,
                                         lesson=maths_lesson, chapter_context=grounding, kind=kind)
+    # The diagram half: what the ladder could not fill is asked as figure
+    # questions — a construction the geometry engine builds, proves and
+    # draws (maths.geometry). A question it refuses is never printed.
+    # Asked of the SCRIPT role's model, not the document kind's: measured
+    # 2026-10-07 on the same prompt, gemini-3.5-flash-lite verified 2 of 7
+    # figure questions and gemini-3.5-flash 6 of 7 — a construction grammar
+    # is a harder reply than a worksheet's prose.
+    figures, figure_report = geometry_items(_figure_client(client, language), topic=topic, level=grade,
+                                            language=language, n=n - len(questions), chapter_context=grounding,
+                                            kind=kind, note=dx._t("not_to_scale", language))
     # The categorical half (2D shape and pattern, 2026-10-07): a chapter
     # whose answers are names — polygons, solids, angle types, directions —
     # verified nothing through SymPy and failed every time. What the ladder
-    # could not fill is asked as fill-in / true-false / match items, each
-    # declaring a fact the closed table in maths.facts proves; an item it
-    # cannot prove is never printed. Computational questions keep their
-    # place first in the count.
+    # and the figures could not fill is asked as fill-in / true-false /
+    # match items, each declaring a fact the closed table in maths.facts
+    # proves; an item it cannot prove is never printed. Computational
+    # questions keep their place first in the count.
     facts, fact_report = fact_items(client, topic=topic, level=grade, language=language,
-                                    n=n - len(questions), chapter_context=grounding, kind=kind)
-    if not questions and not facts:
+                                    n=n - len(questions) - len(figures), chapter_context=grounding, kind=kind)
+    if not questions and not facts and not figures:
         raise RuntimeError(
             f"no {kind} question could be verified for {topic!r}: "
             + "; ".join(report.get("rejected") or [])[:600]
+            + (" | figure questions: " + "; ".join(figure_report.get("rejected") or [])[:400]
+               if figure_report.get("rejected") else "")
             + (" | fact items: " + "; ".join(fact_report.get("rejected") or [])[:400]
                if fact_report.get("rejected") else ""))
-    logger.info("maths %s for %r: %d computational question(s) verified by algebra, %d fact item(s) "
-                "verified by the table (of %d wanted)", kind, topic, len(questions), len(facts), n)
+    logger.info("maths %s for %r: %d computational question(s) verified by algebra, %d figure question(s) "
+                "verified by the geometry engine, %d fact item(s) verified by the table (of %d wanted)",
+                kind, topic, len(questions), len(figures), len(facts), n)
 
     doc_kind = "worksheet" if kind == "worksheet" else "exam_paper"
     title = f"{dx._t('doc_worksheet' if kind == 'worksheet' else 'doc_test_paper', language)} — {topic}"
@@ -181,11 +258,16 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     dx.para(key_doc, dx._t("teacher_only", language), italic=True)
     if questions:
         dx.para(key_doc, dx._t("cas_note", language), italic=True)
+    if figures:
+        dx.para(key_doc, dx._t("figures_note", language), italic=True)
     if facts:
         dx.para(key_doc, dx._t("facts_note", language), italic=True)
 
     total_marks = _fact_sections(doc, key_doc, facts, language, exam=(kind == "exam_paper"))
     number = 0
+    number, figure_marks = _figure_section(doc, key_doc, figures, language, exam=(kind == "exam_paper"),
+                                           number=number)
+    total_marks += figure_marks
     by_level: dict[int, list] = {}
     for ex in questions:
         by_level.setdefault(int(ex.difficulty), []).append(ex)
@@ -219,7 +301,9 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         dx.para(doc, dx._t("ws_total_marks", language).format(n=total_marks), bold=True)
         dx.end_of_paper(doc)
 
-    # the quiz player's structured questions (best-effort, like the science worksheet)
+    # the quiz player's structured questions (best-effort, like the science
+    # worksheet). Figure questions are left out: the player's schema has no
+    # picture, and "find x" without its diagram is not a question.
     try:
         from docgen.questions import write_worksheet
         short = [{"q": _problem_text(ex), "answer": " or ".join(pretty(a) for a in ex.final_answer)}
