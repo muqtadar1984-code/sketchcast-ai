@@ -144,6 +144,8 @@ class LessonModel:
     glossary: list[tuple[str, str]] = field(default_factory=list)
     misconceptions: list[tuple[str, str]] = field(default_factory=list)
     worked_examples: list[tuple[str, str]] = field(default_factory=list)
+    # worked example index -> figure key: a maths figure example's own picture
+    worked_figures: dict[int, str] = field(default_factory=dict)
     figures: dict[str, Figure] = field(default_factory=dict)
     claims: list[tuple[str, str]] = field(default_factory=list)   # (section_id, text)
     source: str = SOURCE_ARTICLE

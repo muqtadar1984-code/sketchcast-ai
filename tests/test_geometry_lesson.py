@@ -413,3 +413,30 @@ def test_two_figure_items_keep_the_algebra_try_it(monkeypatch):
                                        episode_context="")
     assert not lesson.try_it.has_figure and lesson.try_it.problem == "4x + 3 = 19"
     assert report["figures"]["try_it"] is False
+
+
+def test_a_five_step_figure_proof_stays_on_one_board():
+    """B11 — five lines, three reasons under them — wiped the column mid-proof
+    at the algebra pitch; beside a figure the rows tighten instead."""
+    ex = L.figure_example(_item(_spoken("B11", 3)))
+    scene, _lines = B.example_scene(ex, MethodCard(), "s003", has_card=False)
+    verbs = [a["verb"] for a in scene["actions"]]
+    assert "erase" not in verbs, "no wipe"
+    rows = [e for e in scene["elements"] if e["id"].startswith("w") and e["id"][1:].isdigit()]
+    assert len(rows) == 5 and all(e["at"][1] + 30 <= B.WORK_BOTTOM for e in rows), [e["at"] for e in rows]
+    assert all(e.get("size", 0) <= B.COMPACT_LINE_SIZE for e in rows)
+    # a short proof keeps the normal pitch
+    short = L.figure_example(_item(_b1_reply()))
+    scene2, _ = B.example_scene(short, MethodCard(), "s003", has_card=False)
+    rows2 = [e for e in scene2["elements"] if e["id"].startswith("w") and e["id"][1:].isdigit()]
+    assert all(e.get("size") == B.LINE_SIZE for e in rows2 if e["type"] == "math")
+
+
+def test_the_board_lines_of_a_figure_proof_are_typeset_for_reading():
+    ex = L.figure_example(_item(_spoken("B11", 3)))
+    lines = [x for st in ex.steps for x in st.after]
+    assert not any("ang(" in x for x in lines), lines
+    assert lines[0] == "\u2220ABC = \u2220ACB", lines[0]
+    # the record the verifier reads is untouched
+    assert ex.figure["steps"][0]["after"] == ["ang(abc) = ang(acb)"]
+    assert verify_example(ex).status == "verified"

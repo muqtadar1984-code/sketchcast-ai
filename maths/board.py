@@ -81,6 +81,11 @@ FIG_LINE_X = 500.0           # the working column beside a figure
 EV_RIGHT = 560.0             # a row of evidence figures ends here
 EV_LINE_X = 600.0
 FIG_GAP = 16.0
+COMPACT_LINE_SIZE = 30.0     # a figure proof of four lines or more
+COMPACT_ROW_GAP = 12.0
+COMPACT_REASON_SIZE = 18.0
+REASON_SIZE = 21.0           # a deduce step's reason under its line
+REASON_GAP = 6.0
 FIG_LABEL_SIZE = 24.0
 EV_COLS = 3                  # evidence figures per row; a fourth starts a second row
 EV_LABEL_PX = 20.0           # the figures' own labels (points, lengths) in an evidence grid
@@ -399,6 +404,12 @@ class _Board:
     highlight: Optional[tuple[int, str]] = None            # (card line, marker element) in use
     question: Optional["_Row"] = None      # the pinned problem, when it is notation
     line_x: float = LINE_X                 # the working column (shifted right beside a figure)
+    # a long figure proof (B11: five lines, three reasons under them) outgrew
+    # the panel and wiped mid-proof; beside a figure the column is narrow and
+    # the rows may be tighter without reading smaller than the figure's labels
+    line_size: float = LINE_SIZE
+    row_gap: float = ROW_GAP
+    reason_size: float = REASON_SIZE
 
     def uid(self, prefix: str) -> str:
         self.n += 1
@@ -442,8 +453,9 @@ def _add_state(board: _Board, state: list[str], cue: Optional[dict], color: str 
     lines (the final answer) to write again at the top after such a wipe,
     the way a teacher keeps the result on the board while checking it —
     the answer underline once landed where the wiped row had been."""
-    lays = [(x, _layout(x, LINE_SIZE)) for x in state[:4]]
-    needed = sum(max(l.h if l else LINE_SIZE, MIN_ROW_H) + ROW_GAP for _x, l in lays)
+    lays = [(x, _layout(x, board.line_size)) for x in state[:4]]
+    min_row_h = board.line_size * 1.08
+    needed = sum(max(l.h if l else board.line_size, min_row_h) + board.row_gap for _x, l in lays)
     board.wiped = False
     board.carried = []
     if board.next_y + needed > WORK_BOTTOM and board.rows:
@@ -473,17 +485,17 @@ def _add_state(board: _Board, state: list[str], cue: Optional[dict], color: str 
         eid = board.uid("w")
         y = board.next_y
         if lay is None:
-            board.elements.append({"id": eid, "type": "text", "text": _short(expr, 60), "size": 28,
+            board.elements.append({"id": eid, "type": "text", "text": _short(expr, 60), "size": round(board.line_size * 0.78),
                                    "at": [board.line_x, y], "anchor": "lt", "color": color})
-            h = 34.0
-            lay = _layout("0", LINE_SIZE)  # a stand-in for geometry
+            h = board.line_size * 0.95
+            lay = _layout("0", board.line_size)  # a stand-in for geometry
         else:
             board.elements.append({"id": eid, "type": "math", "expr": expr, "at": [board.line_x, y],
-                                   "size": LINE_SIZE, "color": color})
-            h = max(lay.h, MIN_ROW_H)
+                                   "size": board.line_size, "color": color})
+            h = max(lay.h, min_row_h)
         board.actions.append({"verb": "write", "target": eid, **({"at": cue} if cue and i == 0 else {})})
         rows.append(_Row(eid, expr, y, lay, board.state_no))
-        board.next_y = y + h + ROW_GAP
+        board.next_y = y + h + board.row_gap
     board.rows.extend(rows)
     board.state_no += 1
     return rows
@@ -521,7 +533,7 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
     # or just above it when that line is gone (a wipe) or was never one (a
     # check, a mistake). A note ON a line collided with the next line's
     # between-note (TEXT_OVERLAP n14+n16).
-    y = row.y - ROW_GAP * 0.5
+    y = row.y - board.row_gap * 0.5
     if target is not None and target.y < row.y:
         right = max(right, target.lay.w if target.eid != "q" else 0.0)
         y = (target.y + target.lay.h + row.y) / 2.0
@@ -561,8 +573,6 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
 
 
 HL_WIDTH = 26.0
-REASON_SIZE = 21.0
-REASON_GAP = 6.0
 
 
 def _add_reason(board: _Board, row: _Row, text: str) -> None:
@@ -576,7 +586,7 @@ def _add_reason(board: _Board, row: _Row, text: str) -> None:
     # a Hindi or Telugu reason runs well past an English one and a cut
     # reason ("…ह…") teaches nothing. Shrunk a little first, wrapped second.
     max_w = NOTE_RIGHT - board.line_x
-    size = REASON_SIZE
+    size = board.reason_size
     lines = _wrap_text(text, size, max_w, 2)
     while size > 17 and (len(lines) > 1 or " ".join(lines) != text):
         size -= 1.0
@@ -589,7 +599,7 @@ def _add_reason(board: _Board, row: _Row, text: str) -> None:
         board.actions.append({"verb": "write", "target": nid})
         board.annotations.append(nid)
         y += _M.text_box(ln, size)[1] + 2.0
-    board.next_y = max(board.next_y, y + ROW_GAP * 0.5)
+    board.next_y = max(board.next_y, y + board.row_gap * 0.5)
 
 
 @dataclass
@@ -786,6 +796,9 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
     # the working moves to the right of it
     fig = _figure_panel(ex, board) if ex.figure else None
     evidence = fig is not None and len(fig.boards) > 1
+    if fig is not None and not evidence and len([st for st in ex.steps if st.after]) >= 4:
+        # a long proof beside a figure: tighter rows so it stays on one board
+        board.line_size, board.row_gap, board.reason_size = COMPACT_LINE_SIZE, COMPACT_ROW_GAP, COMPACT_REASON_SIZE
 
     prev_state_rows: list[_Row] = [board.question] if board.question else []
     last_rows: list[_Row] = []
