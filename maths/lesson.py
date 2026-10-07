@@ -39,6 +39,7 @@ from maths.geometry.errors import GeometryRefusal
 from maths.geometry.items import GeometryItem, figure_client, geometry_items, key_lines
 from maths.schema import Step, WorkedExample
 from maths.verify import verify_example, verify_lesson, verify_try_it
+from shared import coverage as _coverage
 from shared import lesson_length
 
 logger = logging.getLogger("worker")
@@ -324,15 +325,35 @@ def figure_example(item: GeometryItem) -> WorkedExample:
                          answer_speech=speech.get("answer") or "", figure=spec)
 
 
+def missed_concepts(lesson: Lesson, examples: list[WorkedExample], analysis: dict | None, episode: dict | None,
+                    language: str) -> list[str]:
+    """The chapter's concepts the lesson, with THESE examples, does not yet
+    address — measured the way the coverage gate measures a script, on the
+    words the board would speak and show. Nothing to measure against (no
+    analysis) is an empty list, never a guess."""
+    if not analysis:
+        return []
+    try:
+        tmp = lesson.model_copy()
+        tmp.examples = list(examples)
+        text = _coverage.script_text({"segments": board.compile_lesson(tmp, None, language=language)})
+        rep = _coverage.measure(analysis, episode, text)
+    except Exception as exc:  # noqa: BLE001 — a focus list is a hint, never a reason to fail the lesson
+        logger.warning("maths lesson %r: could not measure the missed concepts: %s", lesson.topic, exc)
+        return []
+    return [str(x) for x in (rep.get("missed") or []) if str(x).strip()] if rep.get("checked") else []
+
+
 def figure_examples(client, *, topic: str, level: str | None, language: str, context: str, n: int,
-                    report: dict) -> list[WorkedExample]:
+                    report: dict, focus: list[str] | None = None) -> list[WorkedExample]:
     """Up to ``n`` figure examples from the geometry engine's own call —
     unconstrained JSON on the script model, the shape the worksheet already
     yields from (the lesson's constrained call strips construction
     parameters) — each compiled onto the board once to prove it fits. The
     call's report (asked / verified / rejected) lands in ``report``."""
     items, frep = geometry_items(figure_client(client, language), topic=topic, level=level, language=language,
-                                 n=n, chapter_context=context, kind="lesson", render=False)
+                                 n=n, chapter_context=context, kind="lesson", render=False, focus=focus)
+    frep["focus"] = list(focus or [])
     out: list[WorkedExample] = []
     for it in items:
         try:
@@ -425,7 +446,8 @@ def extend_to_floor(client, lesson: Lesson, report: dict, *, minutes: float, ava
 
 def verified_lesson(client, *, topic: str, subject: str | None, level: str | None, curriculum: str | None,
                     language: str, episode_context: str, attempts: int = REGEN_ATTEMPTS,
-                    min_minutes: float | None = None) -> tuple[Lesson, dict]:
+                    min_minutes: float | None = None, analysis: dict | None = None,
+                    episode: dict | None = None) -> tuple[Lesson, dict]:
     """Generate, verify, regenerate what failed, and return the lesson with
     its report. Raises MathsVerificationError when too little survives."""
     prompt = build_prompt(topic=topic, subject=subject, level=level, curriculum=curriculum,
@@ -441,8 +463,11 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
     # the diagram examples: a chapter that has none answers with an empty
     # list (the engine's prompt says so); a shapes chapter opens on a shape
     figures_report: dict = {}
+    # the figure call is told which of the chapter's concepts the verified
+    # ladder leaves untaught (a13f7761: three triangle questions, no polygon)
+    focus = missed_concepts(lesson, kept, analysis, episode, language) if figures_enabled() else []
     figures = figure_examples(client, topic=topic, level=level, language=language, context=episode_context,
-                              n=FIGURE_EXAMPLES, report=figures_report) if figures_enabled() else []
+                              n=FIGURE_EXAMPLES, report=figures_report, focus=focus) if figures_enabled() else []
     if len(kept) + len(figures) < MIN_EXAMPLES:
         raise MathsVerificationError(
             f"only {len(kept)} of {len(lesson.examples)} worked examples could be verified after "
@@ -521,7 +546,8 @@ def generate_maths_script(episode: dict, analysis: dict, chapter_num: int, clien
                 f"teach ONLY this part's topic as a complete lesson of its own.")
     lesson, report = verified_lesson(
         client, topic=topic, subject=subject, level=learner_age, curriculum=curriculum,
-        language=language, episode_context=ctx, min_minutes=min_minutes)
+        language=language, episode_context=ctx, min_minutes=min_minutes,
+        analysis=analysis if isinstance(analysis, dict) else None, episode=episode)
     lesson, report = extend_to_floor(client, lesson, report, minutes=min_minutes or 0.0, avatars=avatars,
                                      language=language)
     n_ok = sum(1 for e in report.get("examples", []) if e.get("status") == "verified")
@@ -533,7 +559,7 @@ def generate_maths_script(episode: dict, analysis: dict, chapter_num: int, clien
 
 
 __all__ = ["MathsVerificationError", "build_prompt", "build_regen_prompt", "build_extend_prompt",
-           "figure_example", "figure_examples", "figures_enabled", "FIGURE_EXAMPLES",
+           "figure_example", "figure_examples", "figures_enabled", "missed_concepts", "FIGURE_EXAMPLES",
            "generate_lesson", "regenerate_example", "verified_lesson", "extend_to_floor", "measure_lesson",
            "to_episode_script", "generate_maths_script", "REGEN_ATTEMPTS", "MIN_EXAMPLES",
            "MAX_LENGTH_ROUNDS", "MAX_EXAMPLES_PER_ROUND", "EXTENSION_SCHEMA"]

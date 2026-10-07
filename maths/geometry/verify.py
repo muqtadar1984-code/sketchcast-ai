@@ -207,7 +207,13 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
         if st.kind == "deduce":
             if not st.theorem:
                 raise GeometryRefusal("bad_schema", f"{name}: a deduce step names its theorem", name)
-            template = [(e.lhs - e.rhs).subs(subs) for e in apply_theorem(m, st.theorem, st.uses)]
+            uses = list(st.uses)
+            if not any(x in m.angle_ids for x in uses):
+                # nothing cited (the live lesson call, 2026-10-07): the angles
+                # the step's own equation names ARE its citation — every
+                # premise of the theorem still runs on them
+                uses += _angles_named(m, st.after)
+            template = [(e.lhs - e.rhs).subs(subs) for e in apply_theorem(m, st.theorem, uses)]
             if not after:
                 raise GeometryRefusal("bad_schema", f"{name}: write the equation the theorem gives", name)
             verdict = _equivalent(knowledge, template, after)
@@ -478,6 +484,21 @@ def _check_giveaway(q: QuestionSpec, prop: str) -> None:
 
 
 # ── entry point ───────────────────────────────────────────────────────────
+
+_ANG_RE = re.compile(r"ang\(\s*([A-Za-z0-9_]+)\s*\)")
+
+
+def _angles_named(m: Model, lines: list[str]) -> list[str]:
+    """The angle ids a step's lines mention (``ang(abc)`` -> ``angle_abc``),
+    in order, once each, only those the figure knows."""
+    out: list[str] = []
+    for line in lines:
+        for name in _ANG_RE.findall(line):
+            aid = f"angle_{name}"
+            if aid in m.angle_ids and aid not in out:
+                out.append(aid)
+    return out
+
 
 def verify_question(raw: dict | QuestionSpec) -> QuestionReport:
     try:

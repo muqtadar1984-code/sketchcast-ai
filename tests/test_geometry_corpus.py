@@ -189,3 +189,98 @@ def test_unknown_schema_version_is_refused():
     q = _b1()
     q["schema_version"] = "geometry.figure.v2"
     assert verify_question(q).refusal["code"] == "bad_schema"
+
+
+def _blank_uses(theorem: str):
+    """Corpus questions citing ``theorem`` with that step's `uses` emptied —
+    what the live lesson call sent (2026-10-07)."""
+    import copy
+
+    out = []
+    for item in CORPUS["items"]:
+        q = copy.deepcopy(item["question"])
+        hit = False
+        for st in q.get("steps") or []:
+            if st.get("theorem") == theorem and st.get("uses"):
+                st["uses"] = []
+                hit = True
+        if hit:
+            out.append((item["question"]["id"], item["question"], q))
+    return out
+
+
+EQUILATERAL_X = {
+    "schema_version": "geometry.figure.v1", "id": "eq", "figure_role": "reasoning", "prompt": "Find x.",
+    "figures": [{"id": "f", "figure": {
+        "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}],
+        "objects": [{"id": "t", "make": "triangle_equilateral", "vertices": ["p_a", "p_b", "p_c"], "side": "4"}],
+        "angles": [{"id": "angle_abc", "rays": [["p_b", "p_a"], ["p_b", "p_c"]]}],
+        "measures": [{"target": "angle_abc", "value": "x", "unit": "deg", "role": "unknown"}]}}],
+    "steps": [{"kind": "deduce", "theorem": "equilateral_angles", "uses": [], "after": ["ang(abc) = 60"]},
+              {"kind": "transform", "after": ["x = 60"]}],
+    "answer": {"kind": "number", "value": "60", "unit": "deg"},
+}
+
+
+def test_an_equilateral_step_that_cites_nothing_uses_the_angle_its_line_names():
+    from maths.geometry import verify_question
+
+    rep = verify_question(EQUILATERAL_X)
+    assert rep.ok, rep.refusal
+    assert str(rep.proved.get("x")) == "60"
+
+
+def test_an_angle_named_by_its_points_is_read():
+    import copy
+
+    from maths.geometry import verify_question
+    from maths.geometry.items import normalise_question
+
+    q = copy.deepcopy(EQUILATERAL_X)
+    q["steps"][0]["after"] = ["ang(p_a,p_b,p_c) = 60"]
+    spec, _d = normalise_question(q)
+    assert spec["steps"][0]["after"] == ["ang(abc) = 60"]
+    assert verify_question(spec).ok
+
+
+@pytest.mark.parametrize("theorem", ["isosceles_base_angles"])
+def test_a_deduce_step_that_cites_nothing_takes_the_figures_only_triangle(theorem):
+    from maths.geometry import verify_question
+
+    cases = _blank_uses(theorem)
+    assert cases, f"the corpus has a {theorem} question"
+    for qid, original, blanked in cases:
+        want = verify_question(original)
+        got = verify_question(blanked)
+        if len([pg for m in want.models.values() for pg in m.polygons.values()
+                if pg.closed and len(pg.vertices) == 3]) != 1:
+            assert not got.ok, f"{qid}: two triangles stay ambiguous"
+            continue
+        assert got.ok, (qid, got.refusal)
+        assert got.proved == want.proved, qid
+
+
+def test_with_two_triangles_the_angles_a_step_names_say_which_one():
+    from maths.geometry import verify_question
+
+    q = {"schema_version": "geometry.figure.v1", "id": "two", "figure_role": "reasoning",
+         "prompt": "Find x.",
+         "figures": [{"id": "f", "figure": {
+             "points": [{"id": "p_a"}, {"id": "p_b"}, {"id": "p_c"}, {"id": "p_d"}, {"id": "p_e"}, {"id": "p_f"}],
+             "objects": [{"id": "t1", "make": "triangle_isosceles", "vertices": ["p_a", "p_b", "p_c"], "legs": "5", "apex_angle": "40"},
+                         {"id": "t2", "make": "triangle_equilateral", "vertices": ["p_d", "p_e", "p_f"], "side": "3"}],
+             "angles": [{"id": "angle_abc", "rays": [["p_b", "p_a"], ["p_b", "p_c"]]},
+                        {"id": "angle_acb", "rays": [["p_c", "p_a"], ["p_c", "p_b"]]},
+                        {"id": "angle_bac", "rays": [["p_a", "p_b"], ["p_a", "p_c"]]}],
+             "measures": [{"target": "angle_bac", "value": "40", "unit": "deg", "role": "given"},
+                          {"target": "angle_abc", "value": "x", "unit": "deg", "role": "unknown"}]}}],
+         "steps": [{"kind": "deduce", "theorem": "isosceles_base_angles", "uses": [], "after": ["ang(abc) = ang(acb)"]},
+                   {"kind": "deduce", "theorem": "triangle_angle_sum", "uses": ["angle_bac", "angle_abc", "angle_acb"],
+                    "after": ["40 + 2*ang(acb) = 180"]},
+                   {"kind": "transform", "after": ["ang(acb) = 70"]}],
+         "answer": {"kind": "number", "value": "70", "unit": "deg"}}
+    rep = verify_question(q)
+    # `uses` is empty, yet ang(abc) = ang(acb) names the base angles of t1:
+    # the equation is the citation, the second triangle is no ambiguity
+    assert rep.ok, rep.refusal
+    assert str(rep.proved.get("x")) == "70"
