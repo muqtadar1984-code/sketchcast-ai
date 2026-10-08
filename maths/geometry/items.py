@@ -406,6 +406,42 @@ _SIGNATURES = {
     "grid_pattern": "rows, cols, cells:[[colour letters, '*' for the blank]], palette:[letters]",
 }
 
+# v2 (coordinate geometry): the only constructions that take a coordinate
+_SIGNATURES_V2 = {
+    "axes": "x:[min,max], y:[min,max] (integers), step:1 (0.5|1|2|5|10), grid:true — FIRST object of a coordinate figure",
+    "point_at": "id, x:'3', y:'-2' — a point placed by its coordinates (exact; an unknown like 'k' goes in bind)",
+    "polygon": "id, vertices:[placed point ids] — a shape over plotted points",
+    "reflect_point": "point, in:x_axis|y_axis|origin|y=x, to:<new point id>",
+}
+
+_EXAMPLE_COORD = (
+    '{"id":"q3","difficulty":2,"figure_role":"reasoning","prompt":"M is the midpoint of AB. Find the coordinates of M.",'
+    '"figures":[{"id":"fig","figure":{"points":[{"id":"p_a","label":"A"},{"id":"p_b","label":"B"},{"id":"p_m","label":"M"}],'
+    '"objects":[{"make":"axes","x":[-2,8],"y":[-2,8],"step":1},{"make":"point_at","id":"p_a","x":"1","y":"2"},'
+    '{"make":"point_at","id":"p_b","x":"7","y":"6"},{"make":"midpoint","id":"p_m","segment":["p_a","p_b"]}],'
+    '"segments":[{"id":"s_ab","points":["p_a","p_b"]}],'
+    '"measures":[{"target":"p_a","value":"(1, 2)","role":"given"},{"target":"p_b","value":"(7, 6)","role":"given"},'
+    '{"target":"p_m","value":"(a, b)","role":"unknown"}]}}],'
+    '"steps":[{"kind":"deduce","theorem":"midpoint_formula","uses":["s_ab","p_m"],"after":["a = (1 + 7)/2","b = (2 + 6)/2"]},'
+    '{"kind":"transform","after":["a = 4","b = 4"]}],"answer":{"kind":"values","value":{"a":"4","b":"4"}}}'
+)
+_COORD_RULES = (
+    "COORDINATE GEOMETRY (a chapter on coordinates, midpoints, gradients, straight-line graphs, reflections on a grid): "
+    "the figure's FIRST object is `axes`; every point is placed with `point_at` (the one place a coordinate is written); "
+    "a point's coordinates are stated as a measure with value '(3, -2)' ('given') and an unknown point as '(a, b)' "
+    "('unknown', answer kind 'values' {a, b}); a shape over plotted points is `polygon`; a reflection is `reflect_point`. "
+    "Theorems: distance_formula (unknown length as a segment measure 'd'), midpoint_formula (cite the segment and the "
+    "midpoint), gradient (the answer symbol is m), line_equation (m and c), parallel_gradients, perpendicular_gradients, "
+    "reflection_rule (cite the image point). Evidence: coordinates_of (label_map point label -> '(x, y)'), quadrant "
+    "(label_map point label -> '1'..'4'; 'select' picks a quadrant), polygon_name / triangle_class_* over a polygon. "
+    "Every plotted point sits on a grid intersection at the axes' step."
+)
+
+
+def v2_enabled() -> bool:
+    """GEOMETRY_V2=0 keeps coordinate geometry out of the prompt without a deploy."""
+    return os.environ.get("GEOMETRY_V2", "1").strip().lower() not in ("0", "false", "off", "no")
+
 _EXAMPLE_REASONING = (
     '{"id":"q1","difficulty":2,"figure_role":"reasoning","prompt":"ABC is a straight line. Find x.",'
     '"figures":[{"id":"fig","figure":{"points":[{"id":"p_a","label":"A"},{"id":"p_b","label":"B"},{"id":"p_c","label":"C"},{"id":"p_d","label":"D"}],'
@@ -440,7 +476,7 @@ _SPEECH_RULES = (
 
 def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, chapter_context: str,
                     kind: str, focus: Optional[list[str]] = None) -> str:
-    sigs = "\n".join(f"  - {name}: {sig}" for name, sig in _SIGNATURES.items())
+    sigs = "\n".join(f"  - {name}: {sig}" for name, sig in {**_SIGNATURES, **(_SIGNATURES_V2 if v2_enabled() else {})}.items())
     theorems = "\n".join(f"  - {t}: {REASONS[t]}" for t in THEOREMS)
     doc = {"worksheet": "a practice worksheet",
            "lesson": "a VIDEO LESSON — worked examples the teacher talks through on the board while the diagram "
@@ -487,7 +523,9 @@ def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, 
         "declared on top. An isosceles triangle's 'legs' is ONE number ('5'). Every question states its answer: "
         "an evidence question's answer is what the figures show (the engine recomputes it and checks), a "
         "reasoning question's answer is the value its steps prove.",
-        "EXAMPLES (one of each kind):\n" + _EXAMPLE_REASONING + "\n" + _EXAMPLE_EVIDENCE,
+        "EXAMPLES (one of each kind):\n" + _EXAMPLE_REASONING + "\n" + _EXAMPLE_EVIDENCE
+        + ("\n" + _EXAMPLE_COORD if v2_enabled() else ""),
+    ] + ([_COORD_RULES] if v2_enabled() else []) + [
     ] + ([_SPEECH_RULES.format(language=language or "en")] if kind == "lesson" else []) + ([
         "CONCEPTS OF THIS CHAPTER NOT YET TAUGHT by the rest of the lesson: " + "; ".join(focus[:8]) + ". "
         "Prefer examples that teach THESE, where the construction library can draw them (a 'which of these "
@@ -776,6 +814,14 @@ def key_lines(item: GeometryItem, *, answer_word: str = "Answer", reasons: bool 
     return lines
 
 
+def _c(v) -> str:
+    try:
+        f = float(v)
+        return str(int(round(f))) if abs(f - round(f)) < 1e-9 else f"{f:g}"
+    except (TypeError, ValueError):
+        return str(v)
+
+
 def _figure_facts(m) -> list[str]:
     """What a figure IS, in the chapter's own words: the properties the
     engine computes (triangle class, lines of symmetry, right angles, the
@@ -805,6 +851,9 @@ def _figure_facts(m) -> list[str]:
         facts.append("a circle, which is not a polygon")
     elif any(not p.closed for p in m.polygons.values()):
         facts.append("an open shape, which is not a polygon")
+    if m.axes is not None:
+        pts = [f"{p.label}({_c(p.exact[0])}, {_c(p.exact[1])})" for p in m.points.values() if p.label and p.exact is not None]
+        facts.append("a coordinate grid" + (" with the points " + ", ".join(pts) if pts else ""))
     if m.lines or m.rays:
         facts.append("straight lines" if len(m.lines) > 1 else "a straight line")
     if any(pair for pair in m.parallel):
@@ -846,5 +895,5 @@ def _pretty_line(text: str) -> str:
         return s
 
 
-__all__ = ["figure_client", "quiz_image", "quiz_image_data_url", "GEOMETRY_SET_SCHEMA", "GeometryItem", "FigureImage", "geometry_items", "geometry_prompt",
+__all__ = ["figure_client", "v2_enabled", "quiz_image", "quiz_image_data_url", "GEOMETRY_SET_SCHEMA", "GeometryItem", "FigureImage", "geometry_items", "geometry_prompt",
            "key_lines", "normalise_question", "render_item"]

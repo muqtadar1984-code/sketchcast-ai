@@ -93,7 +93,7 @@ def _svg(d: Drawing, tx, w_mm: float, h_mm: float, scale: float) -> str:
     for s in d.strokes:
         pts = " ".join(f"{x:.3f},{y:.3f}" for x, y in (tx(p) for p in s.points))
         width = STROKE_MM * s.width
-        colour = "#555555" if s.role == "hidden" else "#111111"
+        colour = {"hidden": "#555555", "grid": "#b8b8b8"}.get(s.role, "#111111")   # v2: the grid is background
         dash = ' stroke-dasharray="1.2,0.8"' if s.dashed else ""
         out.append(f'<polyline points="{pts}" fill="none" stroke="{colour}" stroke-width="{width:.2f}" '
                    f'stroke-linecap="round" stroke-linejoin="round"{dash}/>')
@@ -132,7 +132,7 @@ def _png(d: Drawing, tx, w_mm: float, h_mm: float, scale: float, dpi: int) -> by
         dr.polygon([P(p) for p in f.points], fill=PALETTE.get(f.colour, "#cccccc"))
     for s in d.strokes:
         width = max(1, int(round(STROKE_MM * s.width * px * S)))
-        colour = "#555555" if s.role == "hidden" else "#111111"
+        colour = {"hidden": "#555555", "grid": "#b8b8b8"}.get(s.role, "#111111")   # v2: the grid is background
         pts = [P(p) for p in s.points]
         if s.dashed:
             _dashed(dr, pts, width, colour, 1.2 * px * S, 0.8 * px * S)

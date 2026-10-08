@@ -137,7 +137,9 @@ def _box_clear(box, strokes: list[Stroke], boxes: list) -> bool:
         if _boxes_overlap(box, b):
             return False
     for s in strokes:
-        if s.role == "hidden":
+        if s.role in ("hidden", "grid"):
+            # a grid line is background, not an obstacle (v2: every label
+            # on a gridded figure crosses one)
             continue
         for p, q in zip(s.points, s.points[1:]):
             if _seg_hits_box(p, q, box):
@@ -269,6 +271,8 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
                 d.strokes.append(Stroke(pts + [pts[0]], width=0.8, role="mark"))
 
     boxes: list = []
+    if m.axes is not None:
+        _draw_axes(d, m, label_size, boxes)
     # angle marks and labels: every measured angle, plus explicit angle_arc marks
     labelled: set = set()
     arcs_drawn: set = set()
@@ -287,6 +291,12 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
             key = m.segment_ids[ms.target]
             text = _fmt_value(ms.value, ms.unit or m.units, False)
             _place_segment_label(d, m, key, text, label_size, boxes, ms.target)
+        elif ms.target in m.points and m.axes is not None:
+            # v2: the coordinate tag "(3, -2)" beside a plotted point; an
+            # unknown's "(a, b)" the same way (it is what the question asks)
+            if ms.role == "derived":
+                continue
+            _place_coord_tag(d, m, ms.target, _fmt_pair(ms.value), label_size, boxes)
     for mk in spec.marks:
         extra = mk.model_extra or {}
         kind = mk.kind
@@ -334,10 +344,98 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
         if not p.label:
             continue
         _place_point_label(d, m, p.id, p.label, label_size, boxes, (cx, cy))
-    if policy == "assessment_schematic":
+    if policy == "assessment_schematic" and m.axes is None:
         d.notes.append(note or "Not drawn to scale")
     d.bbox = _drawing_bbox(d, m)
     return d
+
+
+# ── v2: the coordinate grid ───────────────────────────────────────────────
+
+AXIS_OVERHANG = 0.6          # past the range, before the arrowhead
+TICK = 0.12                  # half-length of a tick, figure units
+
+
+def _fmt_pair(value) -> str:
+    text = str(value).strip()
+    if text.startswith("(") and text.endswith(")"):
+        text = text[1:-1]
+    parts = [t.strip() for t in text.split(",")]
+    return "(" + ", ".join(parts) + ")" if len(parts) == 2 else str(value)
+
+
+def _fmt_tick(v: float) -> str:
+    return str(int(round(v))) if abs(v - round(v)) < 1e-9 else f"{v:g}"
+
+
+def _draw_axes(d: Drawing, m: Model, label_size: float, boxes: list) -> None:
+    """Axes with arrowheads and names, numbered ticks every step, a light
+    grid when the axes ask for one (and the step is 1 or more — finer
+    grids are noise at board size), dots for the plotted points."""
+    ax = m.axes
+    step = ax.step
+    num_size = label_size * 0.8
+    if ax.grid and step >= 1.0:
+        x = ax.x0
+        while x <= ax.x1 + 1e-9:
+            if abs(x) > 1e-9:
+                d.strokes.append(Stroke([(x, ax.y0), (x, ax.y1)], width=0.35, role="grid", tag="grid"))
+            x += step
+        y = ax.y0
+        while y <= ax.y1 + 1e-9:
+            if abs(y) > 1e-9:
+                d.strokes.append(Stroke([(ax.x0, y), (ax.x1, y)], width=0.35, role="grid", tag="grid"))
+            y += step
+    # the axes themselves: through the origin when it is inside the range,
+    # else along the range's edge
+    y_axis_x = 0.0 if ax.x0 <= 0 <= ax.x1 else ax.x0
+    x_axis_y = 0.0 if ax.y0 <= 0 <= ax.y1 else ax.y0
+    d.strokes.append(Stroke([(ax.x0 - AXIS_OVERHANG * 0.5, x_axis_y), (ax.x1 + AXIS_OVERHANG, x_axis_y)],
+                            width=1.1, arrow=True, tag="axis:x"))
+    d.strokes.append(Stroke([(y_axis_x, ax.y0 - AXIS_OVERHANG * 0.5), (y_axis_x, ax.y1 + AXIS_OVERHANG)],
+                            width=1.1, arrow=True, tag="axis:y"))
+    # ticks and numbers
+    x = ax.x0
+    while x <= ax.x1 + 1e-9:
+        if abs(x) > 1e-9:
+            d.strokes.append(Stroke([(x, x_axis_y - TICK), (x, x_axis_y + TICK)], width=0.8, role="mark", tag="tick"))
+            t = Text(x, x_axis_y - TICK - num_size * 0.9, _fmt_tick(x), num_size, role="label", anchor="middle")
+            t.box = text_box(t.x, t.y, t.text, t.size, t.anchor)
+            d.texts.append(t)
+            boxes.append(t.box)
+        x += step
+    y = ax.y0
+    while y <= ax.y1 + 1e-9:
+        if abs(y) > 1e-9:
+            d.strokes.append(Stroke([(y_axis_x - TICK, y), (y_axis_x + TICK, y)], width=0.8, role="mark", tag="tick"))
+            t = Text(y_axis_x - TICK - num_size * 0.4, y - num_size * 0.35, _fmt_tick(y), num_size, role="label", anchor="end")
+            t.box = text_box(t.x, t.y, t.text, t.size, t.anchor)
+            d.texts.append(t)
+            boxes.append(t.box)
+        y += step
+    # the origin and the axis names
+    if ax.x0 <= 0 <= ax.x1 and ax.y0 <= 0 <= ax.y1:
+        t = Text(-num_size * 0.6, -num_size * 1.1, "O", num_size, role="label", anchor="middle")
+        t.box = text_box(t.x, t.y, t.text, t.size, t.anchor)
+        d.texts.append(t)
+        boxes.append(t.box)
+    for (tx, ty, name) in ((ax.x1 + AXIS_OVERHANG + num_size * 0.9, x_axis_y - num_size * 0.35, "x"),
+                           (y_axis_x + num_size * 0.9, ax.y1 + AXIS_OVERHANG, "y")):
+        t = Text(tx, ty, name, label_size, role="label", anchor="middle", italic=True)
+        t.box = text_box(t.x, t.y, t.text, t.size, t.anchor)
+        d.texts.append(t)
+        boxes.append(t.box)
+    for pid in m.points:
+        x, y = m.xy(pid)
+        d.dots.append(Dot(x, y, r=0.09))
+
+
+def _place_coord_tag(d: Drawing, m: Model, pid: str, text: str, size: float, boxes: list) -> None:
+    x, y = m.xy(pid)
+    off = size * 0.9
+    cands = [(x + off, y + off, "start"), (x + off, y - off * 1.3, "start"), (x - off, y + off, "end"),
+             (x - off, y - off * 1.3, "end"), (x, y + off * 1.4, "middle"), (x, y - off * 1.8, "middle")]
+    _try_place(d, cands, text, size * 0.85, boxes, "label", pid, tag=f"coord:{pid}")
 
 
 def _centroid(m: Model) -> Vec:

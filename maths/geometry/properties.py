@@ -211,7 +211,53 @@ def polygon_name(m: Model) -> str:
     return f"regular {name}" if regular and n > 3 else ("equilateral triangle" if regular else name)
 
 
+def _fmt_coord(v) -> str:
+    e = v if isinstance(v, sp.Basic) else sp.nsimplify(v)
+    return str(int(e)) if getattr(e, "is_Integer", False) else str(e)
+
+
+def _labelled_points(m: Model) -> dict[str, str]:
+    """label -> point id for the points a student can name."""
+    return {(p.label or pid): pid for pid, p in m.points.items() if p.label}
+
+
+def coordinates_of(m: Model) -> dict[str, str]:
+    """v2: each labelled point's coordinates, read from the figure, as
+    "(x, y)" — exact where the point was placed exactly."""
+    if m.axes is None:
+        raise GeometryRefusal("bad_reference", "coordinates_of: the figure has no axes")
+    out = {}
+    for lab, pid in _labelled_points(m).items():
+        pt = m.points[pid]
+        if pt.exact is not None:
+            out[lab] = f"({_fmt_coord(pt.exact[0])}, {_fmt_coord(pt.exact[1])})"
+        else:
+            out[lab] = f"({_fmt_coord(sp.nsimplify(round(pt.x, 6)))}, {_fmt_coord(sp.nsimplify(round(pt.y, 6)))})"
+    return out
+
+
+def quadrant(m: Model) -> dict[str, str]:
+    """v2: which quadrant each labelled point lies in (1-4), or the axis it
+    sits on."""
+    if m.axes is None:
+        raise GeometryRefusal("bad_reference", "quadrant: the figure has no axes")
+    out = {}
+    for lab, pid in _labelled_points(m).items():
+        x, y = m.xy(pid)
+        if abs(x) < 1e-9 and abs(y) < 1e-9:
+            out[lab] = "origin"
+        elif abs(y) < 1e-9:
+            out[lab] = "x-axis"
+        elif abs(x) < 1e-9:
+            out[lab] = "y-axis"
+        else:
+            out[lab] = {(True, True): "1", (False, True): "2", (False, False): "3", (True, False): "4"}[(x > 0, y > 0)]
+    return out
+
+
 PROPERTIES: dict[str, Callable] = {
+    "coordinates_of": coordinates_of,
+    "quadrant": quadrant,
     "triangle_class_by_sides": triangle_class_by_sides,
     "triangle_class_by_angles": triangle_class_by_angles,
     "count_right_angles": count_right_angles,

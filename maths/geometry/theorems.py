@@ -17,13 +17,13 @@ not a measurement: nothing here compares a size.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import sympy as sp
 
 from maths.geometry.errors import GeometryRefusal
-from maths.geometry.model import AngleKey, Line, Model, Polygon, SegKey, angle_key, seg_key
+from maths.geometry.model import AngleKey, Line, Model, Polygon, SegKey, angle_key, seg_key, coord_symbols
 
 ANGLE_PREFIX = "angle_"
 SEG_PREFIX = "seg_"
@@ -42,6 +42,8 @@ def length_symbol(seg_id: str) -> sp.Symbol:
 PERIMETER = sp.Symbol("P")
 AREA = sp.Symbol("A")
 CIRCUMFERENCE = sp.Symbol("C")
+GRADIENT = sp.Symbol("m")       # v2: the gradient a question asks for
+INTERCEPT = sp.Symbol("c")      # v2: the y-intercept of a line
 
 
 @dataclass
@@ -53,6 +55,7 @@ class Uses:
     lines: list[str]
     circles: list[str]
     other: list[str]
+    points: list[str] = field(default_factory=list)   # v2: plotted points a coordinate theorem works on
 
 
 def sort_uses(m: Model, uses: list[str], theorem: str) -> Uses:
@@ -68,6 +71,8 @@ def sort_uses(m: Model, uses: list[str], theorem: str) -> Uses:
             u.lines.append(x)
         elif x in m.circles:
             u.circles.append(x)
+        elif x in m.points:
+            u.points.append(x)
         else:
             u.other.append(x)   # a relation id or a configuration id: documentation
     return u
@@ -444,6 +449,121 @@ def t_area_triangle(m: Model, u: Uses) -> list[sp.Eq]:
     return []
 
 
+# ── v2: coordinate geometry ───────────────────────────────────────────────
+
+def _coordinate_figure(m: Model, T: str) -> None:
+    _premise(T, m.axes is not None, "a coordinate theorem needs a figure with axes")
+
+
+def _two_points(m: Model, u: Uses, T: str, *, exclude: tuple[str, ...] = ()) -> tuple[str, str]:
+    """The two endpoints a coordinate theorem works on: a cited segment, a
+    cited line through two points, or two cited points."""
+    for sid in u.segments:
+        a, b = tuple(m.segment_ids[sid])
+        return a, b
+    for lid in u.lines:
+        pts = [q for q in m.lines[lid].points if q not in exclude]
+        if len(pts) >= 2:
+            return pts[0], pts[-1]
+    pts = [q for q in u.points if q not in exclude]
+    _premise(T, len(pts) == 2, "cite the segment (or its two points)")
+    return pts[0], pts[1]
+
+
+def t_distance_formula(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "distance_formula"
+    _coordinate_figure(m, T)
+    a, b = _two_points(m, u, T)
+    (x1, y1), (x2, y2) = m.exact_xy(a), m.exact_xy(b)
+    return [sp.Eq(_segment_symbol(m, a, b), sp.sqrt(sp.expand((x2 - x1) ** 2 + (y2 - y1) ** 2)))]
+
+
+def t_midpoint_formula(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "midpoint_formula"
+    _coordinate_figure(m, T)
+    endpoints: set = set()
+    for sid in u.segments:
+        endpoints |= set(m.segment_ids[sid])
+    mids = [q for q in u.points if q not in endpoints]
+    _premise(T, len(mids) == 1, "cite the segment and the midpoint")
+    mid = mids[0]
+    a, b = _two_points(m, u, T, exclude=(mid,))
+    _premise(T, m.between(a, mid, b) and m.lengths_equal(seg_key(a, mid), seg_key(mid, b)),
+             f"no construction makes {mid} the midpoint of {a}{b}")
+    (x1, y1), (x2, y2) = m.exact_xy(a), m.exact_xy(b)
+    xm, ym = coord_symbols(mid)
+    return [sp.Eq(xm, (x1 + x2) / 2), sp.Eq(ym, (y1 + y2) / 2)]
+
+
+def _gradient_of(m: Model, a: str, b: str, T: str) -> sp.Expr:
+    (x1, y1), (x2, y2) = m.exact_xy(a), m.exact_xy(b)
+    dx = sp.simplify(x2 - x1)
+    _premise(T, dx != 0, f"{a}{b} is vertical: its gradient is undefined")
+    return sp.simplify((y2 - y1) / dx)
+
+
+def t_gradient(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "gradient"
+    _coordinate_figure(m, T)
+    a, b = _two_points(m, u, T)
+    return [sp.Eq(GRADIENT, _gradient_of(m, a, b, T))]
+
+
+def t_line_equation(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "line_equation"
+    _coordinate_figure(m, T)
+    a, b = _two_points(m, u, T)
+    g = _gradient_of(m, a, b, T)
+    x1, y1 = m.exact_xy(a)
+    return [sp.Eq(GRADIENT, g), sp.Eq(INTERCEPT, sp.simplify(y1 - g * x1))]
+
+
+def _two_segments(m: Model, u: Uses, T: str) -> tuple[tuple[str, str], tuple[str, str]]:
+    pairs = [tuple(m.segment_ids[s]) for s in u.segments]
+    for lid in u.lines:
+        pts = m.lines[lid].points
+        if len(pts) >= 2:
+            pairs.append((pts[0], pts[-1]))
+    _premise(T, len(pairs) == 2, "cite the two segments")
+    return pairs[0], pairs[1]
+
+
+def t_parallel_gradients(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "parallel_gradients"
+    _coordinate_figure(m, T)
+    (a, b), (c, d) = _two_segments(m, u, T)
+    g1, g2 = _gradient_of(m, a, b, T), _gradient_of(m, c, d, T)
+    _premise(T, sp.simplify(g1 - g2) == 0, f"the gradients are {g1} and {g2}: not parallel")
+    return [sp.Eq(g1, g2)]
+
+
+def t_perpendicular_gradients(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "perpendicular_gradients"
+    _coordinate_figure(m, T)
+    (a, b), (c, d) = _two_segments(m, u, T)
+    g1, g2 = _gradient_of(m, a, b, T), _gradient_of(m, c, d, T)
+    _premise(T, sp.simplify(g1 * g2 + 1) == 0, f"the gradients multiply to {sp.simplify(g1 * g2)}, not -1")
+    return [sp.Eq(g1 * g2, -1)]
+
+
+def t_reflection_rule(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "reflection_rule"
+    _coordinate_figure(m, T)
+    images = [q for q in u.points if q in m.reflections]
+    _premise(T, len(images) == 1, "cite the reflected point (made by reflect_point)")
+    img = images[0]
+    src, mirror = m.reflections[img]
+    x, y = m.exact_xy(src)
+    xi, yi = coord_symbols(img)
+    if mirror == "x_axis":
+        return [sp.Eq(xi, x), sp.Eq(yi, -y)]
+    if mirror == "y_axis":
+        return [sp.Eq(xi, -x), sp.Eq(yi, y)]
+    if mirror == "origin":
+        return [sp.Eq(xi, -x), sp.Eq(yi, -y)]
+    return [sp.Eq(xi, y), sp.Eq(yi, x)]
+
+
 def _lines_parallel(m: Model, a: str, b: str, c: str, d: str) -> bool:
     l1, l2 = m.line_through(a, b), m.line_through(c, d)
     return l1 is not None and l2 is not None and (l1.id == l2.id or frozenset((l1.id, l2.id)) in m.parallel)
@@ -557,6 +677,13 @@ THEOREMS: dict[str, Callable[[Model, Uses], list[sp.Eq]]] = {
     "area_circle": t_area_circle,
     "circumference": t_circumference,
     "area_composite": _unsupported("area_composite"),
+    "distance_formula": t_distance_formula,
+    "midpoint_formula": t_midpoint_formula,
+    "gradient": t_gradient,
+    "line_equation": t_line_equation,
+    "parallel_gradients": t_parallel_gradients,
+    "perpendicular_gradients": t_perpendicular_gradients,
+    "reflection_rule": t_reflection_rule,
 }
 
 # The reason an answer key prints for each theorem, English; other
@@ -594,6 +721,13 @@ REASONS: dict[str, str] = {
     "area_circle": "area of a circle = πr²",
     "circumference": "circumference = 2πr",
     "area_composite": "the area of a compound shape is the sum of its parts",
+    "distance_formula": "distance between two points: the square root of the sum of the squared differences in x and in y",
+    "midpoint_formula": "the midpoint averages the x-coordinates and the y-coordinates",
+    "gradient": "gradient = change in y ÷ change in x",
+    "line_equation": "a straight line is y = mx + c, with m the gradient and c the y-intercept",
+    "parallel_gradients": "parallel lines have equal gradients",
+    "perpendicular_gradients": "the gradients of perpendicular lines multiply to −1",
+    "reflection_rule": "a reflection keeps the distance to the mirror line and swaps the side",
 }
 
 

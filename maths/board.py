@@ -992,7 +992,7 @@ def _try_it_figure_scene(t: TryIt, lang: str, narration: str) -> dict:
     heading = f"{_bt('try_it', lang)}: {t.problem}"
     _problem_elements(WorkedExample(problem=heading, givens=[]), board, None)
     fig = _figure_panel(ex, board, schematic=True)
-    if fig.q.figure_role == "reasoning":
+    if fig.q.figure_role == "reasoning" and not any(mm.axes is not None for mm in fig.rep.models.values()):
         nid = board.uid("n")
         y = min(WORK_BOTTOM - 4, max(fb.box[3] for fb in fig.boards.values()) + 8)
         board.elements.append({"id": nid, "type": "text", "text": _bt("not_to_scale", lang), "size": 20,
