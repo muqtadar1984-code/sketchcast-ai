@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import sympy as sp
 from PIL import ImageFont
@@ -88,22 +88,34 @@ class Drawing:
     dots: list[Dot] = field(default_factory=list)
     bbox: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
     notes: list[str] = field(default_factory=list)
+    # clearance around every label box; the video board asks for more than
+    # print (its handwriting face runs wider than the measuring font and its
+    # audit counts touching as overlap)
+    label_pad: float = LABEL_PAD
+    # (text, size) -> (w, h) in figure units with the face that will draw
+    # the labels; None measures with the print font at cap height
+    measure: Optional[Callable[[str, float], tuple[float, float]]] = None
 
 
 # ── text metrics ──────────────────────────────────────────────────────────
 
-def text_box(x: float, y: float, text: str, size: float, anchor: str) -> tuple[float, float, float, float]:
+def text_box(x: float, y: float, text: str, size: float, anchor: str, pad: float = LABEL_PAD,
+             measure: Optional[Callable[[str, float], tuple[float, float]]] = None
+             ) -> tuple[float, float, float, float]:
     """The box a string occupies at (x, y) — y is the vertical centre —
     measured with the font the PNG uses. Figure units."""
-    w = _MEASURE_FONT.getlength(text) / 100.0 * size
-    h = 0.78 * size
+    if measure is not None:
+        w, h = measure(text, size)
+    else:
+        w = _MEASURE_FONT.getlength(text) / 100.0 * size
+        h = 0.78 * size
     if anchor == "middle":
         x0 = x - w / 2
     elif anchor == "end":
         x0 = x - w
     else:
         x0 = x
-    return (x0 - LABEL_PAD, y - h / 2 - LABEL_PAD, x0 + w + LABEL_PAD, y + h / 2 + LABEL_PAD)
+    return (x0 - pad, y - h / 2 - pad, x0 + w + pad, y + h / 2 + pad)
 
 
 def _boxes_overlap(a, b) -> bool:
@@ -137,9 +149,10 @@ def _box_clear(box, strokes: list[Stroke], boxes: list) -> bool:
         if _boxes_overlap(box, b):
             return False
     for s in strokes:
-        if s.role in ("hidden", "grid"):
+        if s.role in ("hidden", "grid") or s.tag == "tick":
             # a grid line is background, not an obstacle (v2: every label
-            # on a gridded figure crosses one)
+            # on a gridded figure crosses one); a tick mark is too small to
+            # block a label (the (1, 1) tag by the origin, 2026-10-08)
             continue
         for p, q in zip(s.points, s.points[1:]):
             if _seg_hits_box(p, q, box):
@@ -201,6 +214,9 @@ def _angle_geometry(m: Model, key) -> tuple[Vec, float, float, Vec]:
 
 
 def _fmt_value(value, unit: Optional[str], is_angle: bool) -> str:
+    # coordinate geometry's unit is the grid's own: "d", never "d units"
+    if (unit or "").strip().lower() in ("", "unit", "units"):
+        unit = None
     s = str(value).strip()
     e = exact_value(value, where="label")
     if not e.free_symbols:
@@ -217,8 +233,13 @@ def _fmt_value(value, unit: Optional[str], is_angle: bool) -> str:
 # ── the drawing ───────────────────────────────────────────────────────────
 
 def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, label_size: float = 0.42,
+                  label_pad: Optional[float] = None,
+                  measure: Optional[Callable[[str, float], tuple[float, float]]] = None,
                   policy: str = "instructional_metric", note: Optional[str] = None) -> Drawing:
     d = Drawing()
+    if label_pad is not None:
+        d.label_pad = label_pad
+    d.measure = measure
     drawn_segments: set = set()
 
     # lines, rays
@@ -276,6 +297,7 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
     # angle marks and labels: every measured angle, plus explicit angle_arc marks
     labelled: set = set()
     arcs_drawn: set = set()
+    coord_tags: list[tuple[str, str]] = []   # v2: placed after the point labels
     for ms in spec.measures:
         if ms.target in m.angle_ids:
             key = m.angle_ids[ms.target]
@@ -296,7 +318,7 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
             # unknown's "(a, b)" the same way (it is what the question asks)
             if ms.role == "derived":
                 continue
-            _place_coord_tag(d, m, ms.target, _fmt_pair(ms.value), label_size, boxes)
+            coord_tags.append((ms.target, _fmt_pair(ms.value)))
     for mk in spec.marks:
         extra = mk.model_extra or {}
         kind = mk.kind
@@ -344,6 +366,12 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
         if not p.label:
             continue
         _place_point_label(d, m, p.id, p.label, label_size, boxes, (cx, cy))
+    # v2: the coordinate tag beside a plotted point gives way to the point's
+    # name — placed after every name, it takes the next clear side
+    for pid, text in coord_tags:
+        _place_coord_tag(d, m, pid, text, label_size, boxes)
+    if m.axes is not None:
+        _number_axes(d, m, label_size, boxes)
     if policy == "assessment_schematic" and m.axes is None:
         d.notes.append(note or "Not drawn to scale")
     d.bbox = _drawing_bbox(d, m)
@@ -368,13 +396,61 @@ def _fmt_tick(v: float) -> str:
     return str(int(round(v))) if abs(v - round(v)) < 1e-9 else f"{v:g}"
 
 
-def _draw_axes(d: Drawing, m: Model, label_size: float, boxes: list) -> None:
-    """Axes with arrowheads and names, numbered ticks every step, a light
-    grid when the axes ask for one (and the step is 1 or more — finer
-    grids are noise at board size), dots for the plotted points."""
+def _tick_numbers(ax, label_size: float) -> tuple[float, int]:
+    """(number size, every n-th tick numbered). Sized to the step's pitch,
+    not only to the figure's labels: on the video board a 24 px label beside
+    a 29 px grid pitch ran the tick numbers into each other (chapter-17
+    probe, 2026-10-08). When the pitch is too tight for every tick, every
+    second one is numbered."""
+    step = ax.step
+    num_size = min(label_size * 0.8, step * 0.42)
+    every = 1
+    if num_size < label_size * 0.5:
+        every = 2
+        num_size = min(label_size * 0.8, step * 0.84)
+    return num_size, every
+
+
+def _number_axes(d: Drawing, m: Model, label_size: float, boxes: list) -> None:
+    """The tick numbers and O, written LAST — after every label of the
+    question's data — and skipped where one of those already sits: a point
+    by the origin keeps its name and its coordinates, the axis loses a
+    number it can spare (its tick mark stays)."""
     ax = m.axes
     step = ax.step
-    num_size = label_size * 0.8
+    num_size, every = _tick_numbers(ax, label_size)
+    y_axis_x = 0.0 if ax.x0 <= 0 <= ax.x1 else ax.x0
+    x_axis_y = 0.0 if ax.y0 <= 0 <= ax.y1 else ax.y0
+
+    def numbered(v: float) -> bool:
+        return abs(v) > 1e-9 and round(v / step) % every == 0
+
+    # the y-axis numbers first, then O, then the x-axis numbers: the "-1"
+    # under the x-axis and the "-1" beside the y-axis meet at the corner
+    y = ax.y0
+    while y <= ax.y1 + 1e-9:
+        if numbered(y):
+            _place_or_skip(d, [(y_axis_x - TICK - num_size * 0.3, y - num_size * 0.35, "end")], _fmt_tick(y),
+                           num_size, boxes, strokes=False)
+        y += step
+    if ax.x0 <= 0 <= ax.x1 and ax.y0 <= 0 <= ax.y1:
+        _place_or_skip(d, [(-num_size * 0.6, -num_size * 1.1, "middle")], "O", num_size, boxes, strokes=False)
+    x = ax.x0
+    while x <= ax.x1 + 1e-9:
+        if numbered(x):
+            _place_or_skip(d, [(x, x_axis_y - TICK - num_size * 0.9, "middle")], _fmt_tick(x), num_size, boxes,
+                           strokes=False)
+        x += step
+
+
+def _draw_axes(d: Drawing, m: Model, label_size: float, boxes: list) -> None:
+    """Axes with arrowheads and names, tick marks every step, a light grid
+    when the axes ask for one (and the step is 1 or more — finer grids
+    are noise at board size), dots for the plotted points. The numbers
+    come last, from _number_axes, once the question's labels are placed."""
+    ax = m.axes
+    step = ax.step
+    num_size, _every = _tick_numbers(ax, label_size)
     if ax.grid and step >= 1.0:
         x = ax.x0
         while x <= ax.x1 + 1e-9:
@@ -394,35 +470,22 @@ def _draw_axes(d: Drawing, m: Model, label_size: float, boxes: list) -> None:
                             width=1.1, arrow=True, tag="axis:x"))
     d.strokes.append(Stroke([(y_axis_x, ax.y0 - AXIS_OVERHANG * 0.5), (y_axis_x, ax.y1 + AXIS_OVERHANG)],
                             width=1.1, arrow=True, tag="axis:y"))
-    # ticks and numbers
+    # ticks on both axes
     x = ax.x0
     while x <= ax.x1 + 1e-9:
         if abs(x) > 1e-9:
             d.strokes.append(Stroke([(x, x_axis_y - TICK), (x, x_axis_y + TICK)], width=0.8, role="mark", tag="tick"))
-            t = Text(x, x_axis_y - TICK - num_size * 0.9, _fmt_tick(x), num_size, role="label", anchor="middle")
-            t.box = text_box(t.x, t.y, t.text, t.size, t.anchor)
-            d.texts.append(t)
-            boxes.append(t.box)
         x += step
     y = ax.y0
     while y <= ax.y1 + 1e-9:
         if abs(y) > 1e-9:
             d.strokes.append(Stroke([(y_axis_x - TICK, y), (y_axis_x + TICK, y)], width=0.8, role="mark", tag="tick"))
-            t = Text(y_axis_x - TICK - num_size * 0.4, y - num_size * 0.35, _fmt_tick(y), num_size, role="label", anchor="end")
-            t.box = text_box(t.x, t.y, t.text, t.size, t.anchor)
-            d.texts.append(t)
-            boxes.append(t.box)
         y += step
-    # the origin and the axis names
-    if ax.x0 <= 0 <= ax.x1 and ax.y0 <= 0 <= ax.y1:
-        t = Text(-num_size * 0.6, -num_size * 1.1, "O", num_size, role="label", anchor="middle")
-        t.box = text_box(t.x, t.y, t.text, t.size, t.anchor)
-        d.texts.append(t)
-        boxes.append(t.box)
+    # the axis names
     for (tx, ty, name) in ((ax.x1 + AXIS_OVERHANG + num_size * 0.9, x_axis_y - num_size * 0.35, "x"),
                            (y_axis_x + num_size * 0.9, ax.y1 + AXIS_OVERHANG, "y")):
         t = Text(tx, ty, name, label_size, role="label", anchor="middle", italic=True)
-        t.box = text_box(t.x, t.y, t.text, t.size, t.anchor)
+        t.box = text_box(t.x, t.y, t.text, t.size, t.anchor, d.label_pad, d.measure)
         d.texts.append(t)
         boxes.append(t.box)
     for pid in m.points:
@@ -430,12 +493,45 @@ def _draw_axes(d: Drawing, m: Model, label_size: float, boxes: list) -> None:
         d.dots.append(Dot(x, y, r=0.09))
 
 
+def _place_or_skip(d: Drawing, candidates: list[tuple[float, float, str]], text: str, size: float,
+                   boxes: list, *, strokes: bool = True) -> bool:
+    """A label that may be left out: placed at the first clear candidate,
+    else not written (a tick number at a crowded corner). ``strokes=False``
+    checks other labels only — a tick number sits against its own tick
+    and axis by construction."""
+    for (x, y, anchor) in candidates:
+        box = text_box(x, y, text, size, anchor, d.label_pad, d.measure)
+        if _box_clear(box, d.strokes if strokes else [], boxes):
+            d.texts.append(Text(x, y, text, size, role="label", anchor=anchor, box=box))
+            boxes.append(box)
+            return True
+    return False
+
+
 def _place_coord_tag(d: Drawing, m: Model, pid: str, text: str, size: float, boxes: list) -> None:
     x, y = m.xy(pid)
     off = size * 0.9
     cands = [(x + off, y + off, "start"), (x + off, y - off * 1.3, "start"), (x - off, y + off, "end"),
              (x - off, y - off * 1.3, "end"), (x, y + off * 1.4, "middle"), (x, y - off * 1.8, "middle")]
-    _try_place(d, cands, text, size * 0.85, boxes, "label", pid, tag=f"coord:{pid}")
+    # a second ring, further out: the name took the near side, and a point
+    # by the origin sits among the tick numbers (C5's A at (1, 1))
+    far = off * 1.8
+    cands += [(x + far, y + far, "start"), (x + far, y - far, "start"), (x - far, y + far, "end"),
+              (x - far, y - far, "end"), (x, y + far * 1.3, "middle"), (x, y - far * 1.3, "middle")]
+    # a point by the axes (C4's A at (1, 1)) has no room for a full-size tag
+    # between its segment and the axis lines: a smaller tag before none —
+    # the way a textbook writes small coordinates by a crowded origin
+    last: Optional[GeometryRefusal] = None
+    for k in (0.85, 0.7, 0.55):
+        try:
+            _try_place(d, cands, text, size * k, boxes, "label", pid, tag=f"coord:{pid}")
+            return
+        except GeometryRefusal as exc:
+            if exc.code != "layout_collision":
+                raise
+            last = exc
+    assert last is not None
+    raise last
 
 
 def _centroid(m: Model) -> Vec:
@@ -518,7 +614,7 @@ def _parallel_arrow(d: Drawing, m: Model, ref, count: int) -> None:
 def _try_place(d: Drawing, candidates: list[tuple[float, float, str]], text: str, size: float, boxes: list,
                role: str, what: str, tag: Optional[str] = None) -> None:
     for (x, y, anchor) in candidates:
-        box = text_box(x, y, text, size, anchor)
+        box = text_box(x, y, text, size, anchor, d.label_pad, d.measure)
         if _box_clear(box, d.strokes, boxes):
             t = Text(x, y, text, size, role=role, anchor=anchor, box=box, tag=tag)
             d.texts.append(t)

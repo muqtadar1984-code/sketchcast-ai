@@ -127,3 +127,29 @@ def test_an_exact_stroke_binds_on_the_authors_line_while_a_plain_one_is_roughene
 
     assert off_line(line["id"]) < 1e-6
     assert off_line("plain") > 0.5
+
+
+def test_a_coordinate_figure_renders_without_text_overlaps():
+    """The chapter-17 probe (2026-10-08) failed acceptance on its coordinate
+    figure: tick numbers sized by the labels ran into each other and into
+    the origin's O, and a coordinate tag touched its point's name."""
+    from maths.board import _M
+    from spike.scene_engine.render import SceneRenderer
+    from tests.test_geometry_corpus_v2 import CORPUS as V2
+    for qid in ("C3", "C7"):      # ranges through the origin: numbers meet at its corner
+        q = V2[qid]
+        rep = verify_question(q)
+        assert rep.ok, (qid, rep.refusal)
+        pq = parse_question(q)
+        ref = pq.figures[0]
+        fb = figure_board(rep.models[ref.id], ref.figure, panel=PANEL, text_metric=_M.text_box)
+        r = SceneRenderer(_scene(fb))
+        r.compile(20.0)
+        overlaps = [w for w in r.audit()["warnings"] if w.startswith("TEXT_OVERLAP")]
+        assert not overlaps, (qid, overlaps)
+        texts = [e for e in fb.elements if e["type"] == "text"]
+        nums = [e for e in texts if e["text"].lstrip("-").isdigit()]
+        names = [e for e in texts if len(e["text"]) == 1 and e["text"].isupper() and e["text"] != "O"]
+        # the numbers read smaller than the point names; every tick keeps its mark
+        assert nums and names and max(n["size"] for n in nums) < min(l["size"] for l in names)
+        assert len(fb.targets.get("tick", [])) >= len(nums)

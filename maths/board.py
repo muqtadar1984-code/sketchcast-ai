@@ -386,6 +386,10 @@ class _Row:
     y: float
     lay: Layout
     state_index: int
+    # the row's drawn height: the layout's, or the measured text when the
+    # typesetter had no layout and the line was written as text (its
+    # stand-in layout is a bare "0", far shorter than the words)
+    h: float = 0.0
 
 
 @dataclass
@@ -485,16 +489,17 @@ def _add_state(board: _Board, state: list[str], cue: Optional[dict], color: str 
         eid = board.uid("w")
         y = board.next_y
         if lay is None:
-            board.elements.append({"id": eid, "type": "text", "text": _short(expr, 60), "size": round(board.line_size * 0.78),
+            text, size = _short(expr, 60), round(board.line_size * 0.78)
+            board.elements.append({"id": eid, "type": "text", "text": text, "size": size,
                                    "at": [board.line_x, y], "anchor": "lt", "color": color})
-            h = board.line_size * 0.95
+            h = max(board.line_size * 0.95, _M.text_box(text, size)[1])
             lay = _layout("0", board.line_size)  # a stand-in for geometry
         else:
             board.elements.append({"id": eid, "type": "math", "expr": expr, "at": [board.line_x, y],
                                    "size": board.line_size, "color": color})
             h = max(lay.h, min_row_h)
         board.actions.append({"verb": "write", "target": eid, **({"at": cue} if cue and i == 0 else {})})
-        rows.append(_Row(eid, expr, y, lay, board.state_no))
+        rows.append(_Row(eid, expr, y, lay, board.state_no, h))
         board.next_y = y + h + board.row_gap
     board.rows.extend(rows)
     board.state_no += 1
@@ -591,14 +596,17 @@ def _add_reason(board: _Board, row: _Row, text: str) -> None:
     while size > 17 and (len(lines) > 1 or " ".join(lines) != text):
         size -= 1.0
         lines = _wrap_text(text, size, max_w, 2)
-    y = row.y + row.lay.h + REASON_GAP
+    # under the row's DRAWN height: a line the typesetter could not lay out
+    # is written as text, taller than its stand-in layout, and the reason
+    # landed on it (chapter-17 probe, 2026-10-08: TEXT_OVERLAP w1+n5)
+    y = row.y + max(row.h, row.lay.h) + REASON_GAP
     for ln in lines:
         nid = board.uid("n")
         board.elements.append({"id": nid, "type": "text", "text": ln, "size": size, "color": "muted",
                                "role": "caption", "at": [board.line_x + 6, y], "anchor": "lt"})
         board.actions.append({"verb": "write", "target": nid})
         board.annotations.append(nid)
-        y += _M.text_box(ln, size)[1] + 2.0
+        y += _M.text_box(ln, size)[1] + 6.0    # the audit counts a touch as an overlap
     board.next_y = max(board.next_y, y + board.row_gap * 0.5)
 
 
@@ -640,7 +648,8 @@ def _figure_panel(ex: WorkedExample, board: _Board, *, schematic: bool = False) 
             # the learner's own go: measuring must not bypass the reasoning
             # (plan §6 — try_it → assessment_schematic for reasoning figures)
             m = realise(ref.figure, "assessment_schematic", metric=m)
-        fig.boards[ref.id] = figure_board(m, ref.figure, panel=(Q_AT[0], top, FIG_RIGHT, bottom), prefix="fig")
+        fig.boards[ref.id] = figure_board(m, ref.figure, panel=(Q_AT[0], top, FIG_RIGHT, bottom), prefix="fig",
+                                          text_metric=_M.text_box)
         board.line_x = FIG_LINE_X
     else:
         # a grid, EV_COLS to a row: five triangles in one row left 87 px
@@ -656,10 +665,12 @@ def _figure_panel(ex: WorkedExample, board: _Board, *, schematic: bool = False) 
             x0, y0 = Q_AT[0] + c_ * (w + FIG_GAP), top + r_ * (h + FIG_GAP)
             cells.append((x0, y0, x0 + w, y0 + h))
         panels = [(x0, y0, x1, y1 - FIG_LABEL_SIZE * 1.4) for (x0, y0, x1, y1) in cells]
-        scale = min(figure_board(rep.models[r.id], r.figure, panel=pn, prefix=f"f{i}", label_px=EV_LABEL_PX).scale
+        scale = min(figure_board(rep.models[r.id], r.figure, panel=pn, prefix=f"f{i}", label_px=EV_LABEL_PX,
+                                 text_metric=_M.text_box).scale
                     for i, (r, pn) in enumerate(zip(q.figures, panels)))
         for i, (ref, pn, cell) in enumerate(zip(q.figures, panels, cells)):
             fb = figure_board(rep.models[ref.id], ref.figure, panel=pn, prefix=f"f{i}", max_scale=scale,
+                              text_metric=_M.text_box,
                               label_px=EV_LABEL_PX)
             lid = f"f{i}_lab"
             fb.elements.append({"id": lid, "type": "text", "text": ref.label or ref.id, "size": FIG_LABEL_SIZE,
@@ -724,7 +735,8 @@ def _reveal_answers(board: _Board, fig: _Figure, cue: Optional[dict]) -> None:
             continue
         if val.free_symbols:
             continue
-        text = _num(val) + ("" if ms.unit in (None, "deg") else f" {ms.unit}")
+        # the grid's generic unit is never written ("5", not "5 units"), as on the figure
+        text = _num(val) + ("" if ms.unit in (None, "deg", "unit", "units") else f" {ms.unit}")
         els, acts = op_actions(fb, m, {"op": "reveal_measure", "target": ms.target, "value": text}, cue=cue)
         board.elements.extend(els)
         board.actions.extend(acts)
