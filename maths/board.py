@@ -390,6 +390,10 @@ class _Row:
     # typesetter had no layout and the line was written as text (its
     # stand-in layout is a bare "0", far shorter than the words)
     h: float = 0.0
+    # the row's drawn width, for the same reason: a note placed from the
+    # stand-in's width sat ON the words (chapter-17 third run, 2026-10-08:
+    # "B_x = A_x + translation" under "add translation to coordinate")
+    w: float = 0.0
 
 
 @dataclass
@@ -488,18 +492,20 @@ def _add_state(board: _Board, state: list[str], cue: Optional[dict], color: str 
     for i, (expr, lay) in enumerate(lays):
         eid = board.uid("w")
         y = board.next_y
+        tw = 0.0
         if lay is None:
             text, size = _short(expr, 60), round(board.line_size * 0.78)
             board.elements.append({"id": eid, "type": "text", "text": text, "size": size,
                                    "at": [board.line_x, y], "anchor": "lt", "color": color})
-            h = max(board.line_size * 0.95, _M.text_box(text, size)[1])
+            tw, th = _M.text_box(text, size)
+            h = max(board.line_size * 0.95, th)
             lay = _layout("0", board.line_size)  # a stand-in for geometry
         else:
             board.elements.append({"id": eid, "type": "math", "expr": expr, "at": [board.line_x, y],
                                    "size": board.line_size, "color": color})
             h = max(lay.h, min_row_h)
         board.actions.append({"verb": "write", "target": eid, **({"at": cue} if cue and i == 0 else {})})
-        rows.append(_Row(eid, expr, y, lay, board.state_no, h))
+        rows.append(_Row(eid, expr, y, lay, board.state_no, h, tw))
         board.next_y = y + h + board.row_gap
     board.rows.extend(rows)
     board.state_no += 1
@@ -533,15 +539,15 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
     note = _short(note, MAX_NOTE_CHARS)
     if not note:
         return
-    right = row.lay.w
+    right = max(row.lay.w, row.w)
     # in the gap above the new line: between it and the line it came from,
     # or just above it when that line is gone (a wipe) or was never one (a
     # check, a mistake). A note ON a line collided with the next line's
     # between-note (TEXT_OVERLAP n14+n16).
     y = row.y - board.row_gap * 0.5
     if target is not None and target.y < row.y:
-        right = max(right, target.lay.w if target.eid != "q" else 0.0)
-        y = (target.y + target.lay.h + row.y) / 2.0
+        right = max(right, max(target.lay.w, target.w) if target.eid != "q" else 0.0)
+        y = (target.y + max(target.lay.h, target.h) + row.y) / 2.0
     # one column for the notes of a column of working — they zigzagged with
     # each line's width
     x = max(board.line_x + right + NOTE_GAP, board.note_x)
@@ -882,7 +888,8 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
             r = rows[0]
             sid = board.uid("strike")
             board.elements.append({"id": sid, "type": "shape", "shape": "line", "width": 3.6, "color": "accent",
-                                   "points": [[board.line_x - 6, r.y + r.lay.h * 0.55], [board.line_x + r.lay.w + 6, r.y + r.lay.h * 0.45]]})
+                                   "points": [[board.line_x - 6, r.y + max(r.lay.h, r.h) * 0.55],
+                                              [board.line_x + max(r.lay.w, r.w) + 6, r.y + max(r.lay.h, r.h) * 0.45]]})
             board.actions.append({"verb": "draw", "target": sid, "duration": 0.5})
             _add_note(board, r, _bt("not_allowed", lang, why=_short(m.why_wrong or m.operation, 30)), None, "")
     scene = {"id": f"mx_{seg_id}", "compiled": True, "scene_type": "worked_example",
