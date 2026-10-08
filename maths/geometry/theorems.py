@@ -570,7 +570,10 @@ def t_perpendicular_gradients(m: Model, u: Uses) -> list[sp.Eq]:
 def t_reflection_rule(m: Model, u: Uses) -> list[sp.Eq]:
     T = "reflection_rule"
     _coordinate_figure(m, T)
-    images = [q for q in u.points if q in m.reflections]
+    # the image, or the source whose image it is: a step that cites the
+    # point being reflected means the same rule (chapter-17 probe, 2026-10-08)
+    images = [q for q in u.points if q in m.reflections] or \
+        [img for img, (src, _m) in m.reflections.items() if src in u.points]
     _premise(T, len(images) == 1, "cite the reflected point (made by reflect_point)")
     img = images[0]
     src, mirror = m.reflections[img]
@@ -588,7 +591,8 @@ def t_reflection_rule(m: Model, u: Uses) -> list[sp.Eq]:
 def t_translation_rule(m: Model, u: Uses) -> list[sp.Eq]:
     T = "translation_rule"
     _coordinate_figure(m, T)
-    images = [q for q in u.points if q in m.translations]
+    images = [q for q in u.points if q in m.translations] or \
+        [img for img, (src, _v) in m.translations.items() if src in u.points]
     _premise(T, len(images) == 1, "cite the translated point (made by translate_point)")
     img = images[0]
     src, (dx, dy) = m.translations[img]
