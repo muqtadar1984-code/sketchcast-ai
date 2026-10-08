@@ -440,3 +440,42 @@ def test_the_board_lines_of_a_figure_proof_are_typeset_for_reading():
     # the record the verifier reads is untouched
     assert ex.figure["steps"][0]["after"] == ["ang(abc) = ang(acb)"]
     assert verify_example(ex).status == "verified"
+
+
+def test_a_coordinate_example_board_audits_clean_of_text_overlaps():
+    from maths import board as B
+    from tests.test_geometry_corpus_v2 import CORPUS as V2
+    # C4's A sits at (1, 1) among the tick numbers and C7's A on the y-axis
+    # at (0, -1): the point keeps its name and its tag, the axis a number
+    for qid in ("C3", "C4", "C7"):
+        q = copy.deepcopy(V2[qid])
+        q["difficulty"] = 2
+        q["intro_speech"] = "Here is the grid. Read the coordinates of A and B first."
+        q["answer_speech"] = "And that is the answer."
+        for st in q["steps"]:
+            st["speech"] = "Use the formula and write the line."
+        ex = L.figure_example(_item(q))
+        scene, _lines = B.example_scene(ex, MethodCard(title="METHOD", steps=["Read", "Apply"]), "s004",
+                                        has_card=True)
+        r = _render(scene, scene["narration"])
+        overlaps = [w for w in r.audit()["warnings"] if w.startswith("TEXT_OVERLAP")]
+        assert not overlaps, (qid, overlaps)
+        tags = [e for e in scene["elements"] if e["type"] == "text" and e["text"].startswith("(")]
+        assert len(tags) >= 2, (qid, "both given points keep their coordinates")
+
+
+def test_a_reason_sits_clear_of_a_line_the_typesetter_could_not_lay_out():
+    """A line written as text (no layout) is taller than its stand-in
+    layout; the reason under it landed on it (TEXT_OVERLAP w1+n5)."""
+    from maths import board as B
+    from maths.schema import Step, WorkedExample
+    ex = WorkedExample(problem="M is the midpoint of AB.", target="M", intro_speech="Watch the two coordinates.",
+                       steps=[Step(kind="deduce", after=["midpoint M = (4, 4)"], theorem="midpoint_formula",
+                                   speech="Average them.")],
+                       final_answer=["midpoint M = (4, 4)"], answer_speech="Done.")
+    scene, _lines = B.example_scene(ex, MethodCard(title="METHOD", steps=["Average"]), "s004", has_card=True)
+    w = [e for e in scene["elements"] if e["id"].startswith("w")]
+    assert w and w[0]["type"] == "text", w      # no layout for words: written as text
+    r = _render(scene, scene["narration"])
+    overlaps = [x for x in r.audit()["warnings"] if x.startswith("TEXT_OVERLAP")]
+    assert not overlaps, overlaps

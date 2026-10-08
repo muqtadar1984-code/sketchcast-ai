@@ -15,7 +15,7 @@ start and draws when its step says so.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from maths.geometry.errors import GeometryRefusal
 from maths.geometry.layout import LINE_OVERHANG, Drawing, Stroke, _add, _mul, _sub, _unit, angle_tag, build_drawing
@@ -44,6 +44,7 @@ GRID_PX = 1.0               # v2: a grid line, faint and quick
 GRID_SECS = 0.05
 LABEL_PX = 24.0             # the figure's labels, board pixels (em)
 DIM = 0.42
+_ANCHOR = {"start": "lm", "middle": "mm", "end": "rm"}   # layout anchors -> scene anchors
 
 
 @dataclass
@@ -92,8 +93,23 @@ def _declared_hidden(spec: FigureSpec) -> set[str]:
     return {str(o.get("id")) for o in spec.objects if o.get("hidden") and o.get("id")}
 
 
-def _with_hidden(m: Model, spec: FigureSpec, label_size: float) -> Drawing:
-    d = build_drawing(m, spec, policy="instructional_metric", label_size=label_size)
+def _with_hidden(m: Model, spec: FigureSpec, label_size: float, px_per_unit: Optional[float] = None,
+                 text_metric: Optional[Callable[[str, float], tuple[float, float]]] = None) -> Drawing:
+    # on a coordinate figure, a quarter of a label around every label: the
+    # board's handwriting face runs wider than the measuring font and its
+    # audit counts a touch as an overlap (a coordinate tag against its
+    # point's name, 2026-10-08). A v1 figure keeps print's clearance — a
+    # narrow wedge (B8's 30°) has no room for more, and never overlapped.
+    measure = None
+    if text_metric is not None and px_per_unit and m.axes is not None:
+        # the board's own face, in figure units: the print font's cap height
+        # under-measured the handwriting face by half, and a point's name
+        # was placed touching its coordinate tag
+        def measure(text: str, size: float, _k: float = px_per_unit) -> tuple[float, float]:
+            w, h = text_metric(text, size * _k)
+            return (w / _k, h / _k)
+    d = build_drawing(m, spec, policy="instructional_metric", label_size=label_size,
+                      label_pad=label_size * 0.25 if m.axes is not None else None, measure=measure)
     x0, y0, x1, y1 = d.bbox
     for lid in sorted(_declared_hidden(spec)):
         ln = m.lines.get(lid)
@@ -111,7 +127,8 @@ def _with_hidden(m: Model, spec: FigureSpec, label_size: float) -> Drawing:
 
 def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig",
                  cue: Optional[dict] = None, label_px: float = LABEL_PX,
-                 max_scale: Optional[float] = None) -> FigureBoard:
+                 max_scale: Optional[float] = None,
+                 text_metric: Optional[Callable[[str, float], tuple[float, float]]] = None) -> FigureBoard:
     """The figure's elements and its initial draw/write actions. ``cue``
     times the first stroke to the narration; the rest follow in sequence.
     ``max_scale`` (px per unit) lets a row of figures share one scale."""
@@ -122,7 +139,7 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
     bx0, by0, bx1, by1 = m.bbox()
     prov = min((panel[2] - panel[0]) / max(1e-6, bx1 - bx0), (panel[3] - panel[1]) / max(1e-6, by1 - by0),
                MAX_PX_PER_UNIT)
-    d = _with_hidden(m, spec, label_px / max(prov, MIN_PX_PER_UNIT))
+    d = _with_hidden(m, spec, label_px / max(prov, MIN_PX_PER_UNIT), max(prov, MIN_PX_PER_UNIT), text_metric)
     if d.fills:
         raise GeometryRefusal("unsupported_feature", "a coloured grid pattern is not drawn on the video board")
     s, ox, oy = _fit(d, panel, max_scale)
@@ -130,7 +147,7 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
     # provisional one and the labels come out small: one more pass at the
     # true scale settles them within a pixel
     try:
-        d2 = _with_hidden(m, spec, label_px / s)
+        d2 = _with_hidden(m, spec, label_px / s, s, text_metric)
         s, ox, oy = _fit(d2, panel, max_scale)
         d = d2
     except GeometryRefusal as exc:
@@ -173,8 +190,11 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
     for t in d.texts:
         eid = uid("t")
         x, y = P((t.x, t.y))
+        # the layout's anchor, kept: a start-anchored tag written centred sat
+        # half its width to the left — into its point's name (chapter-17
+        # probe, 2026-10-08: TEXT_OVERLAP B + "(7, 6)")
         fb.elements.append({"id": eid, "type": "text", "text": t.text, "size": round(t.size * s, 1),
-                            "at": [x, y], "anchor": "mm", "role": "label", "fixed": True})
+                            "at": [x, y], "anchor": _ANCHOR.get(t.anchor, "mm"), "role": "label", "fixed": True})
         fb.actions.append({"verb": "write", "target": eid, "duration": LABEL_SECS})
         if t.tag:
             fb.targets.setdefault(t.tag, []).append(eid)
@@ -285,8 +305,9 @@ def op_actions(fb: FigureBoard, m: Model, op: dict, *, cue: Optional[dict] = Non
             is_angle = tag.startswith("anglelabel:")
             text = f"{value}°" if is_angle and value.replace(".", "").isdigit() else value
             eid = f"{prefix}_m{len(fb.elements) + len(elements) + 1}"
+            anchor = next((e.get("anchor", "mm") for e in fb.elements if e["id"] == old), "mm")
             elements.append({"id": eid, "type": "text", "text": text, "size": LABEL_PX, "at": [x, y],
-                             "anchor": "mm", "role": "label", "color": "accent", "fixed": True})
+                             "anchor": anchor, "role": "label", "color": "accent", "fixed": True})
             if old:
                 actions.append({"verb": "fade", "target": old, "to": 0.0, "duration": 0.3, **at})
                 at = {}
