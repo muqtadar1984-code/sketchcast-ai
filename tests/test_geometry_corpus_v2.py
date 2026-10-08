@@ -221,3 +221,35 @@ def test_several_one_point_figures_answer_per_figure():
     rep = verify_question(q)
     assert rep.ok, rep.refusal
     assert rep.computed["quadrant"] == {"A": "1", "B": "2", "C": "3"}
+
+
+def test_asks_over_may_name_the_figures_points_or_shape():
+    """The chapter-17 video (2026-10-08) lost both evidence figures to
+    bad_reference: the model wrote the POINTS it wanted read, and the SHAPE it
+    wanted named, in asks.over instead of the figure's id."""
+    import copy
+    from maths.geometry import verify_question
+    # the four points instead of the figure
+    q = copy.deepcopy(CORPUS["C1"])
+    q["asks"]["over"] = [p["id"] for p in q["figures"][0]["figure"]["points"]]
+    rep = verify_question(q)
+    assert rep.ok, rep.refusal
+    # two of them: the answer is about those two only
+    q = copy.deepcopy(CORPUS["C1"])
+    pts = q["figures"][0]["figure"]["points"][:2]
+    q["asks"]["over"] = [p["id"] for p in pts]
+    q["answer"]["value"] = {p["label"]: CORPUS["C1"]["answer"]["value"][p["label"]] for p in pts}
+    rep = verify_question(q)
+    assert rep.ok, rep.refusal
+    assert set(rep.computed["coordinates_of"]) == {p["label"] for p in pts}
+    # the shape instead of the figure
+    q = copy.deepcopy(CORPUS["C9"])
+    shape = next(o["id"] for o in q["figures"][0]["figure"]["objects"] if o["make"] == "polygon")
+    q["asks"]["over"] = [shape]
+    rep = verify_question(q)
+    assert rep.ok, rep.refusal
+    # a name nothing owns is still refused
+    q = copy.deepcopy(CORPUS["C1"])
+    q["asks"]["over"] = ["p_zz"]
+    rep = verify_question(q)
+    assert not rep.ok and rep.refusal["code"] == "bad_reference"

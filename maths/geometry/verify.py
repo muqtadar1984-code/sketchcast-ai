@@ -401,9 +401,41 @@ def _label_sets_eq(have, want) -> bool:
         and all(any(_label_eq(h, w) for w in want) for h in have)
 
 
+def resolve_over(rep: QuestionReport, q: QuestionSpec, over: list[str]) -> tuple[list[str], set[str]]:
+    """(figure ids, point ids) for an `asks.over`. A model writes the figure's
+    id — or, as the chapter-17 video did on 2026-10-08, the POINTS it wants
+    read ("coordinates of A, B, C, D": over = [p_a, p_b, …]) or the SHAPE it
+    wants named (over = [rect]). A name that is an object of exactly one
+    figure means that figure; named points also restrict a per-point
+    answer to themselves. A name nothing owns is still a bad reference."""
+    fids: list[str] = []
+    points: set[str] = set()
+    for name in over:
+        if q.figure_by_id(name) is not None:
+            fid = name
+        else:
+            owners = [ref.id for ref in q.figures if _figure_owns(rep.models.get(ref.id), name)]
+            if len(owners) != 1:
+                raise GeometryRefusal("bad_reference", f"asks.over names {name!r}, not a figure of this question", name)
+            fid = owners[0]
+            if rep.models[fid].has_point(name):
+                points.add(name)
+        if fid not in fids:
+            fids.append(fid)
+    return fids, points
+
+
+def _figure_owns(m: Optional[Model], name: str) -> bool:
+    if m is None:
+        return False
+    return bool(m.has_point(name) or name in m.object_ids or name in m.polygons or name in m.segment_ids
+                or name in m.angle_ids or name in m.lines)
+
+
 def _compute_part(rep: QuestionReport, q: QuestionSpec, asks: Asks) -> Any:
     values: dict[str, Any] = {}
-    for fid in asks.over:
+    over, named_points = resolve_over(rep, q, asks.over)
+    for fid in over:
         ref = q.figure_by_id(fid)
         if ref is None:
             raise GeometryRefusal("bad_reference", f"asks.over names {fid!r}, not a figure of this question", fid)
@@ -426,10 +458,13 @@ def _compute_part(rep: QuestionReport, q: QuestionSpec, asks: Asks) -> Any:
             rep.computed[f"{fid}:{asks.property}:by_colour"] = per_colour
         else:
             got = compute_property(m, asks.property)
-            if isinstance(got, dict) and len(asks.over) == 1:
+            if isinstance(got, dict) and len(over) == 1:
                 # v2: a property per POINT of the one figure (read the
-                # coordinates, name the quadrant): the points are the labels
-                values.update({str(k): v for k, v in got.items()})
+                # coordinates, name the quadrant): the points are the labels —
+                # the named ones when the question named points (the property
+                # keys by LABEL, the question by point id)
+                keep = {m.points[pid].label or pid for pid in named_points if m.has_point(pid)} | named_points
+                values.update({str(k): v for k, v in got.items() if not named_points or str(k) in keep})
             elif isinstance(got, dict) and len(got) == 1:
                 # several figures, one point each ("which quadrant is P in,
                 # in each diagram"): the figure's label carries its point's value
@@ -588,9 +623,8 @@ def verify_question(raw: dict | QuestionSpec) -> QuestionReport:
                 name = f"part {i} ({part.asks.property})"
                 _check_giveaway(q, part.asks.property)
                 if q.figure_role == "evidence":
-                    for fid in part.asks.over:
-                        if fid in rep.models:
-                            _check_discernible(rep.models[fid], part.asks.property, fid)
+                    for fid in resolve_over(rep, q, part.asks.over)[0]:
+                        _check_discernible(rep.models[fid], part.asks.property, fid)
                 got = _compute_part(rep, q, part.asks)
                 _compare_answer(part.answer, got, name, rep,
                                 {ref.id: (ref.label or ref.id) for ref in q.figures})
