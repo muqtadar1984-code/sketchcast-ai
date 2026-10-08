@@ -283,3 +283,12 @@ def test_a_translation_is_a_new_point_with_the_rule_as_its_reason():
     q = copy.deepcopy(C11)
     q["figures"][0]["figure"]["objects"][2]["to"] = "p_p"
     assert verify_question(q).refusal["code"] == "bad_reference"
+
+
+def test_the_coordinate_rules_demand_steps_and_asks():
+    """Sixth chapter-17 run (2026-10-08): three reasoning items came with an
+    answer but no steps and one evidence item with no asks — all thrown away.
+    The coordinate rules now say so in the model's own terms."""
+    from maths.geometry.items import _COORD_RULES
+    assert "ALWAYS has at least one 'deduce' step" in _COORD_RULES
+    assert "ALWAYS fills 'asks'" in _COORD_RULES
