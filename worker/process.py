@@ -152,6 +152,33 @@ def _record_coverage(sb: Client, generation_id: str, reports: list[dict]) -> Non
 TAIL_OVERRUN_BLOCKING_SECS = 1.5
 
 
+def overlap_details(report: dict, script_data: dict | None, limit: int = 40) -> list[dict]:
+    """Each TEXT_OVERLAP of the acceptance report as {scene, a, a_text, b,
+    b_text}: the two element ids resolved to what they say (a text's
+    text, a math element's expr) in the scene of the script that drew
+    them, so a failed lesson can be diagnosed from its row alone."""
+    out: list[dict] = []
+    scenes: dict[str, dict] = {}
+    for ep in ((script_data or {}).get("episodes") or []):
+        for seg in (ep.get("segments") or []) if isinstance(ep, dict) else []:
+            sid = str(seg.get("id") or seg.get("segment_id") or "")
+            els = ((seg.get("scene") or {}).get("elements") or []) if isinstance(seg, dict) else []
+            scenes[sid] = {str(e.get("id")): e for e in els if isinstance(e, dict)}
+    for entry in (report.get("overlapping_text") or [])[:limit]:
+        text = str(entry)
+        sid, _, rest = text.partition(": ")
+        pair = rest.replace("TEXT_OVERLAP", "").strip()
+        a, _, b = pair.partition("+")
+        els = scenes.get(sid, {})
+
+        def says(eid: str) -> str:
+            e = els.get(eid) or {}
+            return str(e.get("text") or e.get("expr") or "")[:80]
+
+        out.append({"scene": sid, "a": a, "a_text": says(a), "b": b, "b_text": says(b)})
+    return out
+
+
 def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
     """Run the visual-language acceptance check on a finished lesson.
 
@@ -264,7 +291,8 @@ def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
         plan_report = [str(ln) for ln in ((plan or {}).get("report") or [])]
         return {"passed": bool(report.get("passed")), "ship": not blocking,
                 "summary": summary, "report": report,
-                "plan_report": plan_report}
+                "plan_report": plan_report,
+                "overlaps": overlap_details(report, script_data)}
     except Exception:  # noqa: BLE001 — never fail a rendered lesson on the checker
         logger.exception("acceptance check itself failed; lesson allowed through")
         return None
@@ -2012,6 +2040,11 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                             "passed": _accept["passed"],
                             "ship": _accept["ship"],
                             "summary": _accept["summary"],
+                            # the pairs, with what each element SAYS: the
+                            # chapter-17 probe (2026-10-08) failed on
+                            # overlapping_text twice and the pairs were only
+                            # in a log that lagged the worker by 12 minutes
+                            "overlaps": _accept.get("overlaps") or [],
                         },
                         f"visual_plan_report_part{part_idx}":
                             (_accept.get("plan_report") or [])[:200],
