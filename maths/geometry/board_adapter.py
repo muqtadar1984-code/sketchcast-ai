@@ -18,7 +18,8 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from maths.geometry.errors import GeometryRefusal
-from maths.geometry.layout import LINE_OVERHANG, Drawing, Stroke, _add, _mul, _sub, _unit, angle_tag, build_drawing
+from maths.geometry.layout import (LINE_OVERHANG, Drawing, Stroke, _add, _mul, _sub, _unit, angle_tag,
+                                  build_drawing, grid_axes)
 from maths.geometry.model import Model
 from maths.geometry.properties import symmetry_axes
 from maths.geometry.spec import FigureSpec
@@ -42,6 +43,11 @@ MARK_SECS = 0.3
 LABEL_SECS = 0.4
 GRID_PX = 1.0               # v2: a grid line, faint and quick
 GRID_SECS = 0.05
+CELL_SECS = 0.15            # a coloured cell of a grid pattern: outlined, then filled
+# the worksheet's palette letters as the scene engine's fill names
+# (spike/scene_engine/paper.py CELL_FILLS; the two are pinned equal by a test)
+CELL_COLOURS = {"R": "red", "Y": "yellow", "G": "green", "B": "blue", "O": "orange", "P": "purple",
+                "W": "white", "K": "black"}
 LABEL_PX = 24.0             # the figure's labels, board pixels (em)
 DIM = 0.42
 _ANCHOR = {"start": "lm", "middle": "mm", "end": "rm"}   # layout anchors -> scene anchors
@@ -140,8 +146,6 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
     prov = min((panel[2] - panel[0]) / max(1e-6, bx1 - bx0), (panel[3] - panel[1]) / max(1e-6, by1 - by0),
                MAX_PX_PER_UNIT)
     d = _with_hidden(m, spec, label_px / max(prov, MIN_PX_PER_UNIT), max(prov, MIN_PX_PER_UNIT), text_metric)
-    if d.fills:
-        raise GeometryRefusal("unsupported_feature", "a coloured grid pattern is not drawn on the video board")
     s, ox, oy = _fit(d, panel, max_scale)
     # the labels widen the box, so the fitted scale is smaller than the
     # provisional one and the labels come out small: one more pass at the
@@ -187,6 +191,19 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
             act["at"] = first_cue
             first_cue = None
         fb.actions.append(act)
+    for f in d.fills:
+        # a coloured cell of a grid pattern: the pen outlines it, then the
+        # colour lands — solid, exact, the worksheet's own colour
+        name = CELL_COLOURS.get(f.colour)
+        if name is None:
+            raise GeometryRefusal("unsupported_feature",
+                                  f"the video board has no fill for the palette colour {f.colour!r}")
+        eid = uid("c")
+        fb.elements.append({"id": eid, "type": "shape", "shape": "path", "points": [P(p) for p in f.points],
+                            "closed": True, "width": MARK_PX, "color": "muted", "fill": name, "exact": True})
+        fb.actions.append({"verb": "draw", "target": eid, "duration": CELL_SECS})
+        if f.tag:
+            fb.targets.setdefault(f.tag, []).append(eid)
     for t in d.texts:
         eid = uid("t")
         x, y = P((t.x, t.y))
@@ -237,7 +254,8 @@ def _segment_targets(fb: FigureBoard, m: Model, sid: str) -> list[str]:
 
 def figure_targets(fb: FigureBoard) -> list[str]:
     """Every ink stroke of the figure — what 'highlight this figure' means."""
-    return [eid for tag, ids in fb.targets.items() if tag.startswith(("line:", "ray:", "seg:")) for eid in ids]
+    return [eid for tag, ids in fb.targets.items() if tag.startswith(("line:", "ray:", "seg:", "grid:"))
+            for eid in ids]
 
 
 def _label_tag(fb: FigureBoard, m: Model, target: str) -> Optional[str]:
@@ -268,6 +286,8 @@ def targets_for(fb: FigureBoard, m: Model, target: str) -> list[str]:
         return fb.targets.get(f"ray:{target}", [])
     if target in m.points:
         return fb.targets.get(f"point:{target}", [])
+    if target in m.grids:
+        return fb.targets.get(f"grid:{target}", [])      # the border, never the cells
     if target in m.polygons:
         pg = m.polygons[target]
         out: list[str] = []
@@ -314,7 +334,8 @@ def op_actions(fb: FigureBoard, m: Model, op: dict, *, cue: Optional[dict] = Non
             actions.append({"verb": "write", "target": eid, **at})
     elif verb == "show_symmetry":
         # the mirror lines, one after another, each across the whole shape
-        for i, (a, b) in enumerate(symmetry_axes(m)):
+        # (a polygon's, else the one grid pattern's as coloured)
+        for i, (a, b) in enumerate(symmetry_axes(m) or grid_axes(m)):
             dx, dy = b[0] - a[0], b[1] - a[1]
             p0 = (a[0] - dx * AXIS_OVERHANG, a[1] - dy * AXIS_OVERHANG)
             p1 = (b[0] + dx * AXIS_OVERHANG, b[1] + dy * AXIS_OVERHANG)

@@ -28,6 +28,16 @@ PALETTE = {
                                # bubbles use it to occlude what sits behind
 }
 
+# Solid cell fills: a coloured grid pattern on the maths board. The hex
+# values maths/geometry/render_static.py prints on the worksheet, so the
+# video and the paper agree on what "red" is (a test pins the two).
+CELL_FILLS = {
+    "red": (0xD9, 0x45, 0x3B), "yellow": (0xF2, 0xC9, 0x4C), "green": (0x4C, 0xAF, 0x50),
+    "blue": (0x3B, 0x6F, 0xD9), "orange": (0xF2, 0x8C, 0x28), "purple": (0x9B, 0x59, 0xB6),
+    "white": (0xFF, 0xFF, 0xFF), "black": (0x33, 0x33, 0x33),
+}
+PALETTE.update(CELL_FILLS)
+
 _GRAIN_SEED = 7
 
 

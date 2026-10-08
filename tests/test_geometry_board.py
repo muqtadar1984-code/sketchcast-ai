@@ -92,13 +92,58 @@ def test_an_evidence_triangle_set_draws_each_figure():
         _scene(fb)
 
 
-def test_a_grid_pattern_is_refused_on_the_board():
-    from maths.geometry.errors import GeometryRefusal
+def test_a_grid_pattern_draws_its_coloured_cells_on_the_board():
     rep = verify_question(ITEMS["P8"]["question"])
     q = parse_question(ITEMS["P8"]["question"])
-    with pytest.raises(GeometryRefusal) as err:
-        figure_board(rep.models[q.figures[0].id], q.figures[0].figure, panel=PANEL)
-    assert err.value.code == "unsupported_feature"
+    m, fig = rep.models[q.figures[0].id], q.figures[0].figure
+    fb = figure_board(m, fig, panel=PANEL)
+    cells = [e for e in fb.elements if isinstance(e.get("fill"), str)]
+    # 3 × 3 with one blank: eight solid cells in the worksheet's colours, exact
+    assert len(cells) == 8 and {e["fill"] for e in cells} == {"red", "yellow", "green"}
+    assert all(e["exact"] and e["closed"] for e in cells)
+    # the blank cell is marked for the student
+    assert any(e["type"] == "text" and e["text"] == "★" for e in fb.elements)
+    # the scene schema accepts the fills; the whole grid draws in a few seconds
+    _scene(fb)
+    assert sum(a["duration"] for a in fb.actions) < 8.0
+    # a highlight of the grid sweeps its ink border only: a band along every
+    # cell outline tinted the cells themselves (frame review, 2026-10-08)
+    border = targets_for(fb, m, "g")
+    assert len(border) == 1 and border[0] not in {e["id"] for e in cells}
+    (b,) = [e for e in fb.elements if e["id"] == border[0]]
+    assert b["color"] == "ink" and len(b["points"]) == 5
+    # show_symmetry draws the pattern's mirror lines AS COLOURED: with the
+    # blank unfilled only the main diagonal (top-left to bottom-right) holds
+    els, acts = op_actions(fb, m, {"op": "show_symmetry", "target": "g"})
+    assert len(els) == 1 and els[0]["shape"] == "line" and els[0]["exact"]
+    (x0, y0), (x1, y1) = els[0]["points"]
+    assert x1 > x0 and y1 > y0, els[0]["points"]        # board y is down: a falling diagonal
+    assert acts == [{"verb": "draw", "target": els[0]["id"], "duration": 0.5}]
+
+
+def test_the_board_and_the_worksheet_agree_on_the_cell_colours():
+    from maths.geometry.board_adapter import CELL_COLOURS
+    from maths.geometry.render_static import PALETTE as PAPER_HEX
+    from spike.scene_engine.paper import CELL_FILLS
+    assert set(CELL_COLOURS) == set(PAPER_HEX)
+    for letter, name in CELL_COLOURS.items():
+        r, g, b = CELL_FILLS[name]
+        assert PAPER_HEX[letter].lower() == f"#{r:02x}{g:02x}{b:02x}", (letter, name)
+
+
+def test_a_cell_fill_paints_solid_colour_on_the_board():
+    from spike.scene_engine.render import SceneRenderer
+    scene = Scene.model_validate({
+        "id": "c", "scene_type": "worked_example", "narration": "n", "min_hold": 0.2,
+        "elements": [{"id": "c1", "type": "shape", "shape": "path", "closed": True, "exact": True,
+                      "points": [[100, 100], [220, 100], [220, 220], [100, 220]],
+                      "width": 2.0, "color": "muted", "fill": "red"}],
+        "actions": [{"verb": "draw", "target": "c1", "duration": 0.5}]})
+    r = SceneRenderer(scene)
+    r.compile(2.0)
+    frame = list(r.frames(2.0, 4))[-1].convert("RGB")
+    px = frame.getpixel((160, 160))
+    assert px[0] > 170 and px[1] < 130 and px[2] < 130, px      # solid red, not a teal wash
 
 
 def test_an_exact_stroke_binds_on_the_authors_line_while_a_plain_one_is_roughened():

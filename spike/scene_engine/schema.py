@@ -226,7 +226,10 @@ class ShapeElement(_ElementBase):
     closed: bool = False
     # False = outline only; True = translucent accent wash; "paper" = opaque
     # board-colored fill (speech bubbles occlude the busy board behind them)
-    fill: Union[bool, Literal["paper"]] = False
+    # a named cell colour = a SOLID fill: a coloured grid pattern on the
+    # maths board (the same colours the worksheet prints)
+    fill: Union[bool, Literal["paper", "red", "yellow", "green", "blue", "orange", "purple",
+                              "white", "black"]] = False
     # True = a GEOMETRIC figure (a maths triangle, an angle arc, a circle):
     # no hand wobble — a straight line stays straight and an arc true, the
     # pen still draws it. A sketchy triangle cannot be read for equal sides

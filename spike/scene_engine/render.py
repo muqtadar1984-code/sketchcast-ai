@@ -179,7 +179,7 @@ _ZOOM_FIT_MARGIN = 0.92
 _ZOOM_MIN_WORTH = 1.08
 from .geometry import (Point, bbox, cut_at_fraction, ease, ellipse_path,
                        path_length, underline_path)
-from .paper import PALETTE, make_background, role_color
+from .paper import CELL_FILLS, PALETTE, make_background, role_color
 from .pen import PenSprite, resolve_mode
 from .schema import (WORLD_H, WORLD_W, AnchorRef, ArrowElement, GroupElement,
                      IllustrationElement, MathElement, ParticleGroupElement, Scene,
@@ -1911,8 +1911,8 @@ class SceneRenderer:
                 pts = roughen(resample(pts, 7.0), amplitude=1.0, wobble=2.2,
                               seed=_seed(el.id))
         fill = None
-        if el.fill == "paper":
-            fill = "paper"
+        if isinstance(el.fill, str):
+            fill = el.fill            # "paper", or a named cell colour
         elif el.fill:
             fill = "accent_mist"
         b.layers = [BLayer("shape", [
@@ -2701,7 +2701,7 @@ class SceneRenderer:
                 if stx.fill and frac >= 1.0 and len(spts) > 2:
                     # paper fill is near-opaque (it exists to OCCLUDE the busy
                     # board under a speech bubble); accent washes stay faint
-                    fa = 242 if stx.fill == "paper" else 90
+                    fa = 242 if stx.fill == "paper" else (225 if stx.fill in CELL_FILLS else 90)
                     d.polygon(spts, fill=PALETTE.get(stx.fill, PALETTE["accent_mist"]) + (int(fa * alpha),))
                 self._polyline(d, spts, max(1, round(stx.width * ecam.scale * SS * s.pulse)), col)
             if b.text is not None and s.text_frac > 0:
