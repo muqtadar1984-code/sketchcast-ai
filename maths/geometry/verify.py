@@ -430,6 +430,10 @@ def _compute_part(rep: QuestionReport, q: QuestionSpec, asks: Asks) -> Any:
                 # v2: a property per POINT of the one figure (read the
                 # coordinates, name the quadrant): the points are the labels
                 values.update({str(k): v for k, v in got.items()})
+            elif isinstance(got, dict) and len(got) == 1:
+                # several figures, one point each ("which quadrant is P in,
+                # in each diagram"): the figure's label carries its point's value
+                values[label] = next(iter(got.values()))
             else:
                 values[label] = got
     rep.computed[asks.property] = dict(values)

@@ -199,3 +199,25 @@ def test_a_coordinate_example_reaches_the_board_with_a_faint_fast_grid():
     pause = B.try_it_segment(Lesson(try_it=t), "s007", "en")
     assert not any("not drawn to scale" in (e.get("text") or "") for e in pause["scene"]["elements"])
     assert [e for e in pause["scene"]["elements"] if e["type"] == "shape" and e.get("exact")]
+
+
+def _one_point_grid(fid: str, pid: str, x: int, y: int, label: str) -> dict:
+    return {"id": fid, "label": label, "figure": {"objects": [
+        {"make": "axes", "id": "ax", "x": [-5, 5], "y": [-5, 5], "step": 1, "grid": True},
+        {"make": "point_at", "id": pid, "x": str(x), "y": str(y)}],
+        "points": [{"id": pid, "label": "P"}], "measures": [{"target": pid, "value": f"({x}, {y})"}]}}
+
+
+def test_several_one_point_figures_answer_per_figure():
+    """"In which quadrant is P in each diagram?" — three grids, a point in
+    each: each figure's label carries its one point's value (the per-point
+    dict is flattened per figure, as it is for a single figure's points)."""
+    from maths.geometry import verify_question
+    q = {"schema_version": V2, "id": "E3", "figure_role": "evidence", "prompt": "In which quadrant is P in each diagram?",
+         "figures": [_one_point_grid("f1", "p_1", 3, 2, "A"), _one_point_grid("f2", "p_2", -4, 1, "B"),
+                     _one_point_grid("f3", "p_3", -2, -3, "C")],
+         "asks": {"property": "quadrant", "over": ["f1", "f2", "f3"]},
+         "answer": {"kind": "label_map", "value": {"A": "1", "B": "2", "C": "3"}}}
+    rep = verify_question(q)
+    assert rep.ok, rep.refusal
+    assert rep.computed["quadrant"] == {"A": "1", "B": "2", "C": "3"}
