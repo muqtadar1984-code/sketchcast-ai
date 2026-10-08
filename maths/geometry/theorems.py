@@ -585,6 +585,18 @@ def t_reflection_rule(m: Model, u: Uses) -> list[sp.Eq]:
     return [sp.Eq(xi, y), sp.Eq(yi, x)]
 
 
+def t_translation_rule(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "translation_rule"
+    _coordinate_figure(m, T)
+    images = [q for q in u.points if q in m.translations]
+    _premise(T, len(images) == 1, "cite the translated point (made by translate_point)")
+    img = images[0]
+    src, (dx, dy) = m.translations[img]
+    x, y = m.exact_xy(src)
+    xi, yi = coord_symbols(img)
+    return [sp.Eq(xi, x + dx), sp.Eq(yi, y + dy)]
+
+
 def _lines_parallel(m: Model, a: str, b: str, c: str, d: str) -> bool:
     l1, l2 = m.line_through(a, b), m.line_through(c, d)
     return l1 is not None and l2 is not None and (l1.id == l2.id or frozenset((l1.id, l2.id)) in m.parallel)
@@ -705,6 +717,7 @@ THEOREMS: dict[str, Callable[[Model, Uses], list[sp.Eq]]] = {
     "parallel_gradients": t_parallel_gradients,
     "perpendicular_gradients": t_perpendicular_gradients,
     "reflection_rule": t_reflection_rule,
+    "translation_rule": t_translation_rule,
 }
 
 # The reason an answer key prints for each theorem, English; other
@@ -749,6 +762,7 @@ REASONS: dict[str, str] = {
     "parallel_gradients": "parallel lines have equal gradients",
     "perpendicular_gradients": "the gradients of perpendicular lines multiply to −1",
     "reflection_rule": "a reflection keeps the distance to the mirror line and swaps the side",
+    "translation_rule": "a translation adds the same shift to the x-coordinate and to the y-coordinate",
 }
 
 

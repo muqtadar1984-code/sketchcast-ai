@@ -650,6 +650,18 @@ REASONS: dict[str, dict[str, str]] = {
         "mr": "परावर्तनात आरसा रेषेपासूनचे अंतर समान राहते आणि बाजू बदलते",
         "te": "ప్రతిబింబం అద్దం రేఖకు దూరాన్ని ఉంచి వైపును మారుస్తుంది",
     },
+    "translation_rule": {
+        "en": "a translation adds the same shift to the x-coordinate and to the y-coordinate",
+        "ms": "translasi menambah anjakan yang sama pada koordinat-x dan koordinat-y",
+        "ms-arab": "ترانسلاسي منمبه انجقن يڠ سام ڤد کوأورديينت-x دان کوأورديينت-y",
+        "ar": "الإزاحة تضيف نفس المقدار إلى الإحداثي السيني وإلى الإحداثي الصادي",
+        "fr": "une translation ajoute le même déplacement à l'abscisse et à l'ordonnée",
+        "es": "una traslación suma el mismo desplazamiento a la coordenada x y a la coordenada y",
+        "pt": "uma translação soma o mesmo deslocamento à coordenada x e à coordenada y",
+        "hi": "स्थानांतरण में x-निर्देशांक और y-निर्देशांक में समान खिसकाव जोड़ा जाता है",
+        "mr": "स्थानांतरात x-निर्देशांक आणि y-निर्देशांक यांना समान सरकाव जोडला जातो",
+        "te": "స్థానభ్రంశం x-నిరూపకానికి మరియు y-నిరూపకానికి ఒకే మార్పును కలుపుతుంది",
+    },
     "area_composite": {
         "en": "the area of a compound shape is the sum of its parts",
         "ms": "luas bentuk gabungan ialah jumlah luas bahagian-bahagiannya",

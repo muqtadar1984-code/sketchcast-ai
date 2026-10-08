@@ -412,6 +412,7 @@ _SIGNATURES_V2 = {
     "point_at": "id, x:'3', y:'-2' — a point placed by its coordinates (exact; an unknown like 'k' goes in bind)",
     "polygon": "id, vertices:[placed point ids] — a shape over plotted points",
     "reflect_point": "point, in:x_axis|y_axis|origin|y=x, to:<new point id>",
+    "translate_point": "point, by:['4', '-1'] (dx, dy as exact numbers), to:<new point id>",
 }
 
 _EXAMPLE_COORD = (
@@ -429,10 +430,11 @@ _COORD_RULES = (
     "COORDINATE GEOMETRY (a chapter on coordinates, midpoints, gradients, straight-line graphs, reflections on a grid): "
     "the figure's FIRST object is `axes`; every point is placed with `point_at` (the one place a coordinate is written); "
     "a point's coordinates are stated as a measure with value '(3, -2)' ('given') and an unknown point as '(a, b)' "
-    "('unknown', answer kind 'values' {a, b}); a shape over plotted points is `polygon`; a reflection is `reflect_point`. "
+    "('unknown', answer kind 'values' {a, b}); a shape over plotted points is `polygon`; a reflection is `reflect_point`; a translation ('slide 4 right and 1 down') "
+    "is `translate_point` with by:['4', '-1']. "
     "Theorems: distance_formula (unknown length as a segment measure 'd'), midpoint_formula (cite the segment and the "
     "midpoint), gradient (the answer symbol is m), line_equation (m and c), parallel_gradients, perpendicular_gradients, "
-    "reflection_rule (cite the image point). Evidence: coordinates_of (label_map point label -> '(x, y)'), quadrant "
+    "reflection_rule (cite the image point), translation_rule (cite the image point). Evidence: coordinates_of (label_map point label -> '(x, y)'), quadrant "
     "(label_map point label -> '1'..'4'; 'select' picks a quadrant), polygon_name / triangle_class_* over a polygon. "
     "Every plotted point sits on a grid intersection at the axes' step."
 )
