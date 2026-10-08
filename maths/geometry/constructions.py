@@ -777,6 +777,34 @@ def c_reflect_point(ctx: BuildContext, obj: dict) -> None:
     m.segment(src, to, None)
 
 
+def c_translate_point(ctx: BuildContext, obj: dict) -> None:
+    """v2: the image of `point` translated `by` [dx, dy] (exact numbers),
+    placed as `to`. The rule is a fact the chain's translation_rule theorem
+    states. Chapter 17 of Primary 5 is half translation (2026-10-08)."""
+    w = _where(obj)
+    _need_axes(ctx, w)
+    m = ctx.model
+    src = _req(obj, "point", w)
+    to = _req(obj, "to", w)
+    by = _req(obj, "by", w)
+    if not (isinstance(by, (list, tuple)) and len(by) == 2):
+        raise GeometryRefusal("bad_schema", f"{w}: `by` is [dx, dy]", w)
+    edx, edy = ctx.exact(by[0], where=w), ctx.exact(by[1], where=w)
+    if edx.free_symbols or edy.free_symbols:
+        raise GeometryRefusal("bad_schema", f"{w}: `by` is two numbers (a translation vector)", w)
+    if not m.has_point(src):
+        raise GeometryRefusal("bad_reference", f"{w}: point {src!r} is not placed", w)
+    if m.has_point(to):
+        raise GeometryRefusal("bad_reference", f"{w}: `to` names a new point; {to!r} exists", w)
+    sx, sy = m.xy(src)
+    pt = ctx.place(to, sx + float(edx), sy + float(edy))
+    pe = m.points[src].exact
+    if pe is not None:
+        pt.exact = (sp.simplify(pe[0] + edx), sp.simplify(pe[1] + edy))
+    m.translations[to] = (src, (edx, edy))
+    m.segment(src, to, None)
+
+
 def c_perpendicular_from(ctx: BuildContext, obj: dict) -> None:
     """The perpendicular dropped from `point` onto `line` (an id) or
     `segment` [a, b], meeting it at `to` — the HEIGHT a shape's area is
@@ -1616,6 +1644,7 @@ CONSTRUCTIONS: dict[str, Callable[[BuildContext, dict], None]] = {
     "point_at": c_point_at,
     "polygon": c_polygon,
     "reflect_point": c_reflect_point,
+    "translate_point": c_translate_point,
     "transversal": c_transversal,
     "parallels_transversal": c_parallels_transversal,
     "angle_bisector": c_angle_bisector,

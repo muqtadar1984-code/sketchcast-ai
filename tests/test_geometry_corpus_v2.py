@@ -109,9 +109,20 @@ C10 = {"schema_version": V2, "id": "C10", "figure_role": "reasoning", "prompt": 
                  {"kind": "transform", "after": ["k = 1", "m = 2"]}],
        "answer": {"kind": "values", "value": {"k": "1", "m": "2"}}}
 
-CORPUS = {"C1": C1, "C2": C2, "C3": C3, "C4": C4, "C5": C5, "C6": C6, "C7": C7, "C8": C8, "C9": C9, "C10": C10}
+C11 = {"schema_version": V2, "id": "C11", "figure_role": "reasoning",
+       "prompt": "P is translated 4 to the right and 1 down to P'. Find the coordinates of P'.",
+       "figures": [{"id": "f", "figure": {"points": [{"id": "p_p", "label": "P"}, {"id": "p_q", "label": "P'"}],
+                    "objects": [_axes((-1, 8), (-1, 5)), _at("P", 2, 2),
+                                {"make": "translate_point", "point": "p_p", "by": ["4", "-1"], "to": "p_q"}],
+                    "measures": [_given("P", 2, 2), {"target": "p_q", "value": "(a, b)", "role": "unknown"}]}}],
+       "steps": [{"kind": "deduce", "theorem": "translation_rule", "uses": ["p_q"], "after": ["a = 2 + 4", "b = 2 - 1"]}],
+       "answer": {"kind": "values", "value": {"a": "6", "b": "1"}}}
+
+CORPUS = {"C1": C1, "C2": C2, "C3": C3, "C4": C4, "C5": C5, "C6": C6, "C7": C7, "C8": C8, "C9": C9, "C10": C10,
+          "C11": C11}
 EXPECT = {"C1": None, "C2": None, "C3": {"a": "4", "b": "4"}, "C4": {"d": "5"}, "C5": {"m": "2"}, "C6": None,
-          "C7": {"m": "2", "c": "-1"}, "C8": {"a": "-3", "b": "2"}, "C9": None, "C10": {"k": "1", "m": "2"}}
+          "C7": {"m": "2", "c": "-1"}, "C8": {"a": "-3", "b": "2"}, "C9": None, "C10": {"k": "1", "m": "2"},
+          "C11": {"a": "6", "b": "1"}}
 
 
 @pytest.mark.parametrize("qid", list(CORPUS))
@@ -253,3 +264,22 @@ def test_asks_over_may_name_the_figures_points_or_shape():
     q["asks"]["over"] = ["p_zz"]
     rep = verify_question(q)
     assert not rep.ok and rep.refusal["code"] == "bad_reference"
+
+
+def test_a_translation_is_a_new_point_with_the_rule_as_its_reason():
+    """Chapter 17 of Primary 5 is half translation; without translate_point the
+    model wrote translations as transform steps and the verifier refused
+    every one (fifth run, 2026-10-08)."""
+    import copy
+    from maths.geometry import verify_question
+    rep = verify_question(C11)
+    assert rep.ok, rep.refusal
+    assert str(rep.proved["a"]) == "6" and str(rep.proved["b"]) == "1"
+    assert any("translation" in r for r in rep.reasons_given)
+    # the vector must be numbers; the image is a new point
+    q = copy.deepcopy(C11)
+    q["figures"][0]["figure"]["objects"][2]["by"] = ["h", "k"]
+    assert not verify_question(q).ok
+    q = copy.deepcopy(C11)
+    q["figures"][0]["figure"]["objects"][2]["to"] = "p_p"
+    assert verify_question(q).refusal["code"] == "bad_reference"

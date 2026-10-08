@@ -156,6 +156,7 @@ class Model:
     grids: dict[str, GridPattern] = field(default_factory=dict)
     axes: Optional[Axes] = None                                   # v2
     reflections: dict[str, tuple[str, str]] = field(default_factory=dict)   # image -> (source, mirror)
+    translations: dict[str, tuple[str, tuple]] = field(default_factory=dict)   # image -> (source, (dx, dy) exact)
     parallel: set[frozenset] = field(default_factory=set)        # {line id, line id}
     perpendicular: set[frozenset] = field(default_factory=set)
     equal_lengths: set[frozenset] = field(default_factory=set)   # {SegKey, SegKey}
