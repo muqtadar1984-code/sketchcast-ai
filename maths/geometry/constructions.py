@@ -30,7 +30,7 @@ from typing import Any, Callable, Optional
 import sympy as sp
 
 from maths.geometry.errors import GeometryRefusal
-from maths.geometry.model import Circle, GridPattern, Model, angle_key, seg_key
+from maths.geometry.model import Circle, GridPattern, Model, angle_key, seg_key, Axes
 from maths.geometry.spec import FigureSpec
 from maths.notation import NotationError, parse_relation
 
@@ -384,7 +384,10 @@ def c_point_on_segment(ctx: BuildContext, obj: dict, ratio: Optional[float] = No
         raise GeometryRefusal("construction_impossible", f"{w}: ratio must be strictly between 0 and 1", w)
     ax, ay = m.xy(a)
     bx, by = m.xy(b)
-    ctx.place(pid, ax + (bx - ax) * ratio, ay + (by - ay) * ratio)
+    pt = ctx.place(pid, ax + (bx - ax) * ratio, ay + (by - ay) * ratio)
+    pa, pb = m.points[a], m.points[b]
+    if ratio == 0.5 and pa.exact is not None and pb.exact is not None:
+        pt.exact = (sp.simplify((pa.exact[0] + pb.exact[0]) / 2), sp.simplify((pa.exact[1] + pb.exact[1]) / 2))
     _extend_line_fact(m, [a, b], pid)
     whole = m.segments.get(seg_key(a, b))
     e = whole.exact if whole else None
@@ -428,7 +431,16 @@ def c_intersection(ctx: BuildContext, obj: dict) -> None:
     if (ray1 and s < -1e-9) or (ray2 and t < -1e-9):
         raise GeometryRefusal("construction_impossible", f"{w}: the rays {o1!r} and {o2!r} do not meet", w)
     x, y = _add(p, _mul(d1, s))
-    ctx.place(pid, x, y)
+    pt = ctx.place(pid, x, y)
+    # exact when both carriers run through exactly placed points (v2)
+    e1, e2 = _exact_dir(m, v1, t1), _exact_dir(m, v2, t2)
+    if e1 is not None and e2 is not None and m.points[v1].exact is not None and m.points[v2].exact is not None:
+        px, py = m.points[v1].exact
+        qx, qy = m.points[v2].exact
+        den = sp.simplify(e1[0] * e2[1] - e1[1] * e2[0])
+        if den != 0:
+            ss = sp.simplify(((qx - px) * e2[1] - (qy - py) * e2[0]) / den)
+            pt.exact = (sp.simplify(px + e1[0] * ss), sp.simplify(py + e1[1] * ss))
     for (oid, vtx, thr, is_ray) in ((o1, v1, t1, ray1), (o2, v2, t2, ray2)):
         if is_ray:
             # the new point is on the ray: every angle at its vertex that
@@ -588,6 +600,181 @@ def c_parallel_through(ctx: BuildContext, obj: dict, *, perpendicular: bool = Fa
 
 def c_perpendicular_through(ctx: BuildContext, obj: dict) -> None:
     c_parallel_through(ctx, obj, perpendicular=True)
+
+
+def exact_pair(v: Any, *, where: str) -> tuple[sp.Expr, sp.Expr]:
+    """A coordinate pair as two exact expressions: "(3, -2)", "(a, b)",
+    [3, -2] or {"x": 3, "y": -2}."""
+    if isinstance(v, dict) and "x" in v and "y" in v:
+        return exact_value(v["x"], where=f"{where}.x"), exact_value(v["y"], where=f"{where}.y")
+    if isinstance(v, (list, tuple)) and len(v) == 2:
+        return exact_value(v[0], where=f"{where}.x"), exact_value(v[1], where=f"{where}.y")
+    text = str(v).strip()
+    if text.startswith("(") and text.endswith(")"):
+        text = text[1:-1]
+    parts = [t.strip() for t in text.split(",")]
+    if len(parts) != 2 or not all(parts):
+        raise GeometryRefusal("bad_schema", f"{where}: a coordinate pair is written (x, y)", where)
+    return exact_value(parts[0], where=f"{where}.x"), exact_value(parts[1], where=f"{where}.y")
+
+
+_AXES_STEPS = (0.5, 1.0, 2.0, 5.0, 10.0)
+_AXES_MAX_STEPS = 40
+
+
+def c_axes(ctx: BuildContext, obj: dict) -> None:
+    """v2: the coordinate grid. `x` and `y` are integer ranges, `step` one
+    of 0.5, 1, 2, 5, 10, `grid` draws the light grid. One per figure; it
+    must come before the points it carries."""
+    w = _where(obj)
+    m = ctx.model
+    if m.axes is not None:
+        raise GeometryRefusal("bad_schema", f"{w}: a figure has one set of axes", w)
+    if m.points:
+        raise GeometryRefusal("bad_schema", f"{w}: axes come before the points they carry", w)
+    rng = {}
+    for key in ("x", "y"):
+        r = obj.get(key, [-5, 5])
+        if not isinstance(r, list) or len(r) != 2:
+            raise GeometryRefusal("bad_schema", f"{w}: `{key}` is [min, max]", w)
+        try:
+            lo, hi = float(exact_value(r[0], where=f"{w}.{key}")), float(exact_value(r[1], where=f"{w}.{key}"))
+        except (TypeError, ValueError) as exc:
+            raise GeometryRefusal("bad_schema", f"{w}: `{key}` range is not numeric: {exc}", w) from exc
+        if not lo < hi:
+            raise GeometryRefusal("bad_schema", f"{w}: `{key}` range must be [min, max] with min < max", w)
+        rng[key] = (lo, hi)
+    step = float(exact_value(obj.get("step", 1), where=f"{w}.step"))
+    if step not in _AXES_STEPS:
+        raise GeometryRefusal("bad_schema", f"{w}: `step` is one of {_AXES_STEPS}", w)
+    for key, (lo, hi) in rng.items():
+        if (hi - lo) / step > _AXES_MAX_STEPS:
+            raise GeometryRefusal("bad_schema", f"{w}: the {key} range spans more than {_AXES_MAX_STEPS} steps", w)
+    m.axes = Axes(obj.get("id") or "axes", rng["x"][0], rng["x"][1], rng["y"][0], rng["y"][1], step,
+                  bool(obj.get("grid", True)))
+
+
+def _need_axes(ctx: BuildContext, w: str) -> Axes:
+    if ctx.model.axes is None:
+        raise GeometryRefusal("bad_schema", f"{w}: a coordinate construction needs `axes` first", w)
+    return ctx.model.axes
+
+
+def c_point_at(ctx: BuildContext, obj: dict) -> None:
+    """v2: a point placed BY its coordinates — the one place a coordinate
+    is written. Exact (a rational, or an expression in a bound unknown)
+    and inside the axes."""
+    w = _where(obj)
+    ax = _need_axes(ctx, w)
+    pid = _req(obj, "id", w)
+    if ctx.model.has_point(pid):
+        raise GeometryRefusal("bad_reference", f"{w}: point {pid!r} is placed twice", w)
+    ex, ey = exact_pair({"x": _req(obj, "x", w), "y": _req(obj, "y", w)}, where=w)
+    x = ctx.num(obj["x"], "coord", where=w, free=False)
+    y = ctx.num(obj["y"], "coord", where=w, free=False)
+    if not (ax.x0 - 1e-9 <= x <= ax.x1 + 1e-9 and ax.y0 - 1e-9 <= y <= ax.y1 + 1e-9):
+        raise GeometryRefusal("construction_impossible", f"{w}: ({x:g}, {y:g}) lies outside the axes", w)
+    pt = ctx.place(pid, x, y)
+    pt.exact = (ex, ey)
+
+
+def _exact_dist(m: Model, a: str, b: str) -> Optional[sp.Expr]:
+    pa, pb = m.points.get(a), m.points.get(b)
+    if pa is None or pb is None or pa.exact is None or pb.exact is None:
+        return None
+    (x1, y1), (x2, y2) = pa.exact, pb.exact
+    return sp.sqrt(sp.simplify((x2 - x1) ** 2 + (y2 - y1) ** 2))
+
+
+def _exact_dir(m: Model, a: str, b: str) -> Optional[tuple[sp.Expr, sp.Expr]]:
+    pa, pb = m.points.get(a), m.points.get(b)
+    if pa is None or pb is None or pa.exact is None or pb.exact is None:
+        return None
+    return sp.simplify(pb.exact[0] - pa.exact[0]), sp.simplify(pb.exact[1] - pa.exact[1])
+
+
+def _exact_angle(m: Model, v: str, p: str, q: str) -> Optional[sp.Expr]:
+    """The angle at v between p and q in degrees, exact when the dot product
+    gives 0 (90°) or the cosine is one SymPy names (60°, 45°, 120° …)."""
+    d1, d2 = _exact_dir(m, v, p), _exact_dir(m, v, q)
+    if d1 is None or d2 is None:
+        return None
+    dot = sp.simplify(d1[0] * d2[0] + d1[1] * d2[1])
+    if dot == 0:
+        return sp.Integer(90)
+    n1, n2 = sp.sqrt(sp.simplify(d1[0] ** 2 + d1[1] ** 2)), sp.sqrt(sp.simplify(d2[0] ** 2 + d2[1] ** 2))
+    cos = sp.simplify(dot / (n1 * n2))
+    ang = sp.simplify(sp.acos(cos) * 180 / sp.pi)
+    return ang if getattr(ang, "is_Rational", False) else None
+
+
+def c_polygon(ctx: BuildContext, obj: dict) -> None:
+    """v2: a polygon over points already placed (by coordinate): its sides
+    as segments, exact lengths where the coordinates are exact, parallel
+    and perpendicular sides as facts, equal sides as facts."""
+    w = _where(obj)
+    m = ctx.model
+    vids = _ids(_req(obj, "vertices", w), None, w, "vertices")
+    if len(vids) < 3 or len(set(vids)) != len(vids):
+        raise GeometryRefusal("bad_schema", f"{w}: a polygon has three or more distinct vertices", w)
+    for v in vids:
+        if not m.has_point(v):
+            raise GeometryRefusal("bad_reference", f"{w}: vertex {v!r} is not placed (point_at first)", w)
+    n = len(vids)
+    pid = obj.get("id") or m.new_point_id("shape_")
+    kind = {3: "triangle", 4: "quadrilateral"}.get(n, "polygon")
+    m.add_polygon(pid, vids, kind, True)
+    lines = []
+    for i in range(n):
+        a, b = vids[i], vids[(i + 1) % n]
+        m.segment(a, b, _exact_dist(m, a, b))
+        lines.append(m.add_line(f"{pid}_s{i}", [a, b], hidden=True))
+    for i in range(n):
+        for j in range(i + 1, n):
+            ea, eb = _exact_dir(m, vids[i], vids[(i + 1) % n]), _exact_dir(m, vids[j], vids[(j + 1) % n])
+            if ea is not None and eb is not None:
+                if sp.simplify(ea[0] * eb[1] - ea[1] * eb[0]) == 0:
+                    m.set_parallel(lines[i].id, lines[j].id)
+                if sp.simplify(ea[0] * eb[0] + ea[1] * eb[1]) == 0:
+                    m.set_perpendicular(lines[i].id, lines[j].id)
+            la, lb = _exact_dist(m, vids[i], vids[(i + 1) % n]), _exact_dist(m, vids[j], vids[(j + 1) % n])
+            if la is not None and lb is not None and sp.simplify(la - lb) == 0:
+                m.set_equal_lengths(seg_key(vids[i], vids[(i + 1) % n]), seg_key(vids[j], vids[(j + 1) % n]))
+    for i in range(n):
+        v, pv, nv = vids[i], vids[i - 1], vids[(i + 1) % n]
+        m.angle(v, pv, nv, exact=_exact_angle(m, v, pv, nv))
+
+
+_MIRROR_NAMES = {"y=x": "y=x", "x_axis": "x_axis", "x-axis": "x_axis", "xaxis": "x_axis", "y_axis": "y_axis",
+                 "y-axis": "y_axis", "yaxis": "y_axis", "origin": "origin"}
+_MIRRORS = {"x_axis": (1, -1, False), "y_axis": (-1, 1, False), "origin": (-1, -1, False), "y=x": (1, 1, True)}
+
+
+def c_reflect_point(ctx: BuildContext, obj: dict) -> None:
+    """v2: the image of `point` reflected `in` the x-axis, y-axis, origin
+    or the line y = x, placed as `to`. The rule is a fact the chain's
+    reflection_rule theorem states."""
+    w = _where(obj)
+    _need_axes(ctx, w)
+    m = ctx.model
+    src = _req(obj, "point", w)
+    to = _req(obj, "to", w)
+    mirror = _MIRROR_NAMES.get(str(_req(obj, "in", w)).strip().lower().replace(" ", ""))
+    if mirror is None:
+        raise GeometryRefusal("bad_schema", f"{w}: `in` is x_axis, y_axis, origin or y=x", w)
+    if not m.has_point(src):
+        raise GeometryRefusal("bad_reference", f"{w}: point {src!r} is not placed", w)
+    if m.has_point(to):
+        raise GeometryRefusal("bad_reference", f"{w}: `to` names a new point; {to!r} exists", w)
+    sx, sy = m.xy(src)
+    fx, fy, swap = _MIRRORS[mirror]
+    x, y = (sy, sx) if swap else (sx * fx, sy * fy)
+    pt = ctx.place(to, x, y)
+    pe = m.points[src].exact
+    if pe is not None:
+        pt.exact = (pe[1], pe[0]) if swap else (pe[0] * fx, pe[1] * fy)
+    m.reflections[to] = (src, mirror)
+    m.segment(src, to, None)
 
 
 def c_perpendicular_from(ctx: BuildContext, obj: dict) -> None:
@@ -1412,6 +1599,10 @@ CONSTRUCTIONS: dict[str, Callable[[BuildContext, dict], None]] = {
     "parallel_through": c_parallel_through,
     "perpendicular_through": c_perpendicular_through,
     "perpendicular_from": c_perpendicular_from,
+    "axes": c_axes,
+    "point_at": c_point_at,
+    "polygon": c_polygon,
+    "reflect_point": c_reflect_point,
     "transversal": c_transversal,
     "parallels_transversal": c_parallels_transversal,
     "angle_bisector": c_angle_bisector,

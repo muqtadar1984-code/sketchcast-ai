@@ -21,7 +21,7 @@ from typing import Callable, Optional
 
 import sympy as sp
 
-from maths.geometry.constructions import BuildContext, exact_value, run
+from maths.geometry.constructions import BuildContext, exact_value, run, exact_pair
 from maths.geometry.errors import GeometryRefusal
 from maths.geometry.model import (ANGLE_TOL_DEG, LENGTH_REL_TOL, Model, SegKey, angle_key, is_exact_number,
                                   seg_key, to_float)
@@ -84,8 +84,12 @@ def compile_figure(spec: FigureSpec, resolve: Optional[Resolver] = None, *,
         m.segment_ids[s.id] = sg.key
         m.object_ids[s.id] = ("segment", s.id)
     for ms in spec.measures:
+        if ms.target in m.points:
+            # v2: a point's coordinates, given "(3, -2)" or asked "(a, b)"
+            exact_pair(ms.value, where=f"measure.{ms.target}")
+            continue
         if ms.target not in m.angle_ids and ms.target not in m.segment_ids:
-            raise GeometryRefusal("bad_reference", f"measure of {ms.target!r}: no such angle or segment", ms.target)
+            raise GeometryRefusal("bad_reference", f"measure of {ms.target!r}: no such angle, segment or point", ms.target)
         exact_value(ms.value, where=f"measure.{ms.target}")
     m.close()
     if check_givens:
@@ -94,6 +98,8 @@ def compile_figure(spec: FigureSpec, resolve: Optional[Resolver] = None, *,
         for r in spec.relations:
             check_relation(m, r)
     if spec.orientation:
+        if m.axes is not None:
+            raise GeometryRefusal("bad_schema", "a coordinate figure is not rotated: the axes fix its orientation")
         _rotate(m, spec.orientation)
     return m
 
@@ -154,6 +160,18 @@ def realised(m: Model, target: str) -> float:
 def check_given_measures(m: Model, spec: FigureSpec) -> None:
     for ms in spec.measures:
         if ms.role != "given":
+            continue
+        if ms.target in m.points:
+            ex, ey = exact_pair(ms.value, where=f"measure.{ms.target}")
+            wx, wy = to_float(ex, m.bind), to_float(ey, m.bind)
+            hx, hy = m.xy(ms.target)
+            if abs(hx - wx) > LENGTH_REL_TOL * max(1.0, abs(wx)) or abs(hy - wy) > LENGTH_REL_TOL * max(1.0, abs(wy)):
+                raise GeometryRefusal("given_not_realised",
+                                      f"{ms.target} is given at ({wx:g}, {wy:g}) but the figure places it at ({hx:.6g}, {hy:.6g})",
+                                      ms.target)
+            pt = m.points[ms.target]
+            if pt.exact is None:
+                pt.exact = (ex, ey)
             continue
         e = exact_value(ms.value, where=f"measure.{ms.target}")
         want = to_float(e, m.bind)

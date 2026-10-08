@@ -20,7 +20,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from maths.geometry.errors import GeometryRefusal
 
-SCHEMA_VERSION = "geometry.figure.v1"
+SCHEMA_VERSION = "geometry.figure.v2"
+# v2 (2026-10-08, founder decisions) adds coordinate geometry — axes,
+# points placed BY coordinate, a polygon over placed points, reflection —
+# and a point measure "(a, b)". A v1 record is a valid v2 record.
+SCHEMA_VERSIONS = ("geometry.figure.v1", "geometry.figure.v2")
 
 FigureRole = Literal["evidence", "reasoning", "illustration"]
 StepKind = Literal["deduce", "transform", "check", "setup"]
@@ -192,8 +196,8 @@ class QuestionSpec(_Strict):
     @field_validator("schema_version")
     @classmethod
     def _version(cls, v):
-        if v != SCHEMA_VERSION:
-            raise ValueError(f"schema_version must be {SCHEMA_VERSION!r}, got {v!r}")
+        if v not in SCHEMA_VERSIONS:
+            raise ValueError(f"schema_version must be one of {SCHEMA_VERSIONS}, got {v!r}")
         return v
 
     @model_validator(mode="after")

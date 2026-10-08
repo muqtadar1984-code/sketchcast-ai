@@ -40,6 +40,8 @@ PEN_PX_PER_SEC = 900.0
 STROKE_MIN_SECS = 0.25
 MARK_SECS = 0.3
 LABEL_SECS = 0.4
+GRID_PX = 1.0               # v2: a grid line, faint and quick
+GRID_SECS = 0.05
 LABEL_PX = 24.0             # the figure's labels, board pixels (em)
 DIM = 0.42
 
@@ -63,6 +65,8 @@ class FigureBoard:
 
 
 def _stroke_secs(points: list, role: str) -> float:
+    if role == "grid":
+        return GRID_SECS
     if role == "mark":
         return MARK_SECS
     length = sum(((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5 for (x0, y0), (x1, y1) in zip(points, points[1:]))
@@ -151,9 +155,9 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
         eid = uid("s")
         # exact: a geometric figure is never hand-wobbled — a triangle with
         # equal sides must look it (founder direction 2026-10-08)
+        width = GRID_PX if st.role == "grid" else (MARK_PX if st.role == "mark" else STROKE_PX) * max(0.6, min(1.4, st.width))
         el = {"id": eid, "type": "shape", "shape": "path", "points": [P(p) for p in st.points],
-              "width": (MARK_PX if st.role == "mark" else STROKE_PX) * max(0.6, min(1.4, st.width)),
-              "color": "muted" if st.role in ("hidden", "mark") else "ink", "exact": True}
+              "width": width, "color": "muted" if st.role in ("hidden", "mark", "grid") else "ink", "exact": True}
         fb.elements.append(el)
         if st.tag:
             fb.targets.setdefault(st.tag, []).append(eid)

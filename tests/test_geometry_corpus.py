@@ -187,7 +187,7 @@ def test_evidence_prints_at_true_scale():
 
 def test_unknown_schema_version_is_refused():
     q = _b1()
-    q["schema_version"] = "geometry.figure.v2"
+    q["schema_version"] = "geometry.figure.v9"   # v2 is a version now
     assert verify_question(q).refusal["code"] == "bad_schema"
 
 

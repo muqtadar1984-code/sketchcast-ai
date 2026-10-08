@@ -30,9 +30,9 @@ from typing import Any, Optional
 import sympy as sp
 
 from maths.geometry.compiler import compile_figure, measure_exact, realised
-from maths.geometry.constructions import exact_value
+from maths.geometry.constructions import exact_value, exact_pair
 from maths.geometry.errors import GeometryRefusal
-from maths.geometry.model import ANGLE_TOL_DEG, LENGTH_REL_TOL, Model, to_float
+from maths.geometry.model import ANGLE_TOL_DEG, LENGTH_REL_TOL, Model, to_float, coord_symbols
 from maths.geometry.properties import compute as compute_property
 from maths.geometry.spec import Answer, Asks, QuestionSpec, StepSpec, parse_question
 from maths.geometry.theorems import REASONS, angle_symbol, apply as apply_theorem, length_symbol
@@ -121,11 +121,24 @@ def _measure_substitutions(m: Model, q: QuestionSpec, fid: str) -> dict[sp.Symbo
     fig = q.figure_by_id(fid).figure
     subs = {}
     for ms in fig.measures:
+        if ms.target in m.points:
+            # v2: a point's coordinates — the question's unknowns (a, b) or
+            # its stated pair — stand for the point's coordinate symbols
+            ex, ey = exact_pair(ms.value, where=f"measure.{ms.target}")
+            xs, ys = coord_symbols(ms.target)
+            subs[xs], subs[ys] = ex, ey
+            continue
         e = exact_value(ms.value, where=f"measure.{ms.target}")
         if ms.target in m.angle_ids:
             subs[angle_symbol(m.canonical_angle_id(ms.target))] = e
         else:
             subs[length_symbol(ms.target)] = e
+    # v2: a point the figure fixes exactly resolves to its coordinates
+    for pid, pt in m.points.items():
+        if pt.exact is not None:
+            xs, ys = coord_symbols(pid)
+            subs.setdefault(xs, sp.sympify(pt.exact[0]))
+            subs.setdefault(ys, sp.sympify(pt.exact[1]))
     return subs
 
 
@@ -273,10 +286,19 @@ def _answer_symbols(q: QuestionSpec, fid: str, m: Model) -> list[sp.Symbol]:
     fig = q.figure_by_id(fid).figure
     syms: set = set()
     for ms in fig.measures:
+        if ms.target in m.points:
+            ex, ey = exact_pair(ms.value, where=f"measure.{ms.target}")
+            syms |= ex.free_symbols | ey.free_symbols
+            continue
         syms |= exact_value(ms.value, where=f"measure.{ms.target}").free_symbols
-    # a quantity a theorem establishes (an area, a perimeter, a circumference)
-    # is the question's unknown too — nothing else names it
-    from maths.geometry.theorems import AREA, CIRCUMFERENCE, PERIMETER
+    # v2: a coordinate written in an unknown (A(k, 2)) makes k an unknown
+    for pt in m.points.values():
+        if pt.exact is not None:
+            syms |= sp.sympify(pt.exact[0]).free_symbols | sp.sympify(pt.exact[1]).free_symbols
+    # a quantity a theorem establishes (an area, a perimeter, a circumference,
+    # a gradient, an intercept) is the question's unknown too — nothing else
+    # names it
+    from maths.geometry.theorems import AREA, CIRCUMFERENCE, GRADIENT, INTERCEPT, PERIMETER
 
     cited = {st.theorem for st in q.steps if st.kind == "deduce" and st.theorem}
     if any(t.startswith("area_") for t in cited):
@@ -285,6 +307,10 @@ def _answer_symbols(q: QuestionSpec, fid: str, m: Model) -> list[sp.Symbol]:
         syms.add(PERIMETER)
     if "circumference" in cited:
         syms.add(CIRCUMFERENCE)
+    if "gradient" in cited or "line_equation" in cited:
+        syms.add(GRADIENT)
+    if "line_equation" in cited:
+        syms.add(INTERCEPT)
     return sorted(syms, key=str)
 
 
@@ -325,6 +351,16 @@ def _check_reasoning_answer(rep: QuestionReport, q: QuestionSpec, fid: str, m: M
     proved_subs = {sp.Symbol(k): v for k, v in rep.proved.items()}
     for ms in fig.measures:
         if ms.role not in ("unknown", "derived"):
+            continue
+        if ms.target in m.points:
+            ex, ey = (v.subs(proved_subs) for v in exact_pair(ms.value, where=f"measure.{ms.target}"))
+            if ex.free_symbols or ey.free_symbols:
+                continue
+            hx, hy = m.xy(ms.target)
+            if abs(float(ex) - hx) > LENGTH_REL_TOL * max(1.0, abs(float(ex))) or \
+                    abs(float(ey) - hy) > LENGTH_REL_TOL * max(1.0, abs(float(ey))):
+                raise GeometryRefusal("answer_mismatch",
+                                      f"the proof puts {ms.target} at ({ex}, {ey}) but the figure draws it at ({hx:.6g}, {hy:.6g})")
             continue
         e = exact_value(ms.value, where=f"measure.{ms.target}").subs(proved_subs)
         if e.free_symbols:
@@ -389,7 +425,13 @@ def _compute_part(rep: QuestionReport, q: QuestionSpec, asks: Asks) -> Any:
             values[label] = sorted(c for c, v in per_colour.items() if passes(v))
             rep.computed[f"{fid}:{asks.property}:by_colour"] = per_colour
         else:
-            values[label] = compute_property(m, asks.property)
+            got = compute_property(m, asks.property)
+            if isinstance(got, dict) and len(asks.over) == 1:
+                # v2: a property per POINT of the one figure (read the
+                # coordinates, name the quadrant): the points are the labels
+                values.update({str(k): v for k, v in got.items()})
+            else:
+                values[label] = got
     rep.computed[asks.property] = dict(values)
     if asks.select is not None:
         return {lab for lab, v in values.items() if _norm_label(v) == _norm_label(asks.select)}
@@ -452,6 +494,15 @@ def _check_discernible(m: Model, prop: str, fid: str) -> None:
     """An evidence figure the student reads must be readable: what is
     meant to differ differs by a margin a ruler or a glance resolves."""
     from maths.geometry.properties import _angle_keys, _side_keys, _the_polygon  # noqa: PLC0415
+    if prop in ("coordinates_of", "quadrant") and m.axes is not None:
+        # v2: a point the student reads sits on a grid intersection
+        for pid, pt in m.points.items():
+            for v in (pt.x, pt.y):
+                k = v / m.axes.step
+                if abs(k - round(k)) > 1e-6:
+                    raise GeometryRefusal("not_discernible",
+                                          f"{fid}: {pid} at ({pt.x:g}, {pt.y:g}) is not on a grid intersection at step {m.axes.step:g}", fid)
+        return
     if prop not in ("triangle_class_by_sides", "triangle_class_by_angles", "count_right_angles",
                     "count_obtuse_angles", "count_acute_angles", "lines_of_symmetry", "polygon_name"):
         return

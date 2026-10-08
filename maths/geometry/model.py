@@ -39,6 +39,10 @@ class Point:
     x: float
     y: float
     label: Optional[str] = None
+    # v2: the exact coordinates when the point was placed BY coordinate
+    # (point_at) or derived from such points (midpoint, intersection,
+    # reflection); None for a v1 construction's point
+    exact: Optional[tuple] = None
 
     @property
     def xy(self) -> tuple[float, float]:
@@ -120,6 +124,27 @@ def seg_key(a: str, b: str) -> SegKey:
 
 
 @dataclass
+class Axes:
+    """v2: the coordinate grid a figure is drawn on. Figure units ARE
+    coordinate units; the axes fix what is drawn and what a student may
+    read off (a point sits on a grid intersection or is not discernible)."""
+    id: str
+    x0: float
+    x1: float
+    y0: float
+    y1: float
+    step: float = 1.0
+    grid: bool = True
+
+
+def coord_symbols(pid: str) -> tuple[sp.Symbol, sp.Symbol]:
+    """The chain's symbols for a point's coordinates, resolved like an
+    angle's symbol: to the exact coordinates when the figure fixes them,
+    to the question's unknowns (a, b) when it asks for them."""
+    return sp.Symbol(f"x_{pid}"), sp.Symbol(f"y_{pid}")
+
+
+@dataclass
 class Model:
     points: dict[str, Point] = field(default_factory=dict)
     lines: dict[str, Line] = field(default_factory=dict)
@@ -129,6 +154,8 @@ class Model:
     polygons: dict[str, Polygon] = field(default_factory=dict)
     circles: dict[str, Circle] = field(default_factory=dict)
     grids: dict[str, GridPattern] = field(default_factory=dict)
+    axes: Optional[Axes] = None                                   # v2
+    reflections: dict[str, tuple[str, str]] = field(default_factory=dict)   # image -> (source, mirror)
     parallel: set[frozenset] = field(default_factory=set)        # {line id, line id}
     perpendicular: set[frozenset] = field(default_factory=set)
     equal_lengths: set[frozenset] = field(default_factory=set)   # {SegKey, SegKey}
@@ -375,9 +402,19 @@ class Model:
             return 0
         return 1 if cross > 0 else -1
 
+    def exact_xy(self, pid: str) -> tuple[sp.Expr, sp.Expr]:
+        """A point's exact coordinates, or its coordinate symbols."""
+        p = self.points.get(pid)
+        if p is not None and p.exact is not None:
+            return sp.sympify(p.exact[0]), sp.sympify(p.exact[1])
+        return coord_symbols(pid)
+
     def bbox(self) -> tuple[float, float, float, float]:
         xs = [p.x for p in self.points.values()]
         ys = [p.y for p in self.points.values()]
+        if self.axes is not None:
+            xs += [self.axes.x0, self.axes.x1]
+            ys += [self.axes.y0, self.axes.y1]
         for c in self.circles.values():
             cx, cy = self.xy(c.centre)
             xs += [cx - c.radius, cx + c.radius]
