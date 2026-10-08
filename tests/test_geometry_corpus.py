@@ -383,3 +383,54 @@ def test_the_dropped_height_draws_and_renders():
     assert out.png and len(out.png) > 1000
     sch = realise(spec, "assessment_schematic", metric=m)
     assert sch.has_point("p_h")
+
+
+def _l_shape_q(after: list[str], answer="68"):
+    """An L-shaped garden: 10 by 8 with a 4 by 3 corner taken out of the
+    top right, walked as one turtle_polygon (right angles only)."""
+    pts = [{"id": f"p_{c}", "label": c.upper()} for c in "abcdef"]
+    sides = ["10", "5", "4", "3", "6", "8"]
+    segs = [{"id": f"s_{i}", "points": [f"p_{'abcdef'[i]}", f"p_{'abcdef'[(i + 1) % 6]}"]} for i in range(6)]
+    return {"schema_version": "geometry.figure.v1", "id": "L", "figure_role": "reasoning",
+            "prompt": "Find the area of the garden.",
+            "figures": [{"id": "f", "figure": {"units": "m", "points": pts,
+                                               "objects": [{"id": "L", "make": "turtle_polygon",
+                                                            "vertices": [p["id"] for p in pts],
+                                                            "sides": sides, "turns": ["90", "90", "-90", "90", "90", "90"]}],
+                                               "segments": segs,
+                                               "measures": [{"target": f"s_{i}", "value": sides[i], "unit": "m"} for i in range(6)]}}],
+            "steps": [{"kind": "deduce", "theorem": "area_composite", "uses": ["L"], "after": after},
+                      {"kind": "transform", "after": [f"A = {answer}"]}],
+            "answer": {"kind": "number", "value": answer, "unit": "m"}}
+
+
+def test_a_compound_shapes_area_is_the_sum_of_its_parts():
+    """area_composite was refused in v1; a turtle_polygon's exact corners
+    give the exact area, and the step's own decomposition is checked."""
+    from maths.geometry import verify_question
+
+    rep = verify_question(_l_shape_q(["A = 10 * 8 - 4 * 3"]))        # a rectangle less the corner
+    assert rep.ok, rep.refusal
+    assert str(rep.proved.get("A")) == "68"
+    rep = verify_question(_l_shape_q(["A = 6 * 8 + 4 * 5"]))         # two rectangles
+    assert rep.ok, rep.refusal
+    assert "sum of its parts" in " ".join(rep.reasons_given)
+
+
+def test_a_wrong_decomposition_of_a_compound_shape_is_refused():
+    from maths.geometry import verify_question
+
+    rep = verify_question(_l_shape_q(["A = 10 * 8"], answer="80"))   # the corner was never taken out
+    assert not rep.ok and rep.refusal["code"] == "step_not_equivalent", rep.refusal
+
+
+def test_a_compound_shape_not_walked_exactly_is_refused_with_the_fix():
+    from maths.geometry import verify_question
+
+    q = _area_q([{"id": "r", "make": "rectangle", "vertices": ["p_a", "p_b", "p_c", "p_d"], "width": "6", "height": "4"}],
+                [{"id": "s_ab", "points": ["p_a", "p_b"]}, {"id": "s_bc", "points": ["p_b", "p_c"]}],
+                [{"target": "s_ab", "value": "6", "unit": "cm"}, {"target": "s_bc", "value": "4", "unit": "cm"}],
+                [{"kind": "deduce", "theorem": "area_composite", "uses": ["r"], "after": ["A = 6 * 4"]},
+                 {"kind": "transform", "after": ["A = 24"]}], 24)
+    rep = verify_question(q)
+    assert not rep.ok and rep.refusal["code"] == "theorem_premise" and "turtle_polygon" in rep.refusal["message"], rep.refusal

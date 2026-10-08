@@ -1445,8 +1445,21 @@ def c_turtle_polygon(ctx: BuildContext, obj: dict, *, closed: bool = True) -> No
         for k in range(n):
             t = e_turns[k - 1]
             e_angles.append((180 - t) if ccw else (180 + t))
-        _finish_polygon(ctx, obj, coords, "triangle" if n == 3 else ("quadrilateral" if n == 4 else "polygon"),
-                        exact_sides=e_sides, exact_angles=e_angles)
+        vids = _finish_polygon(ctx, obj, coords, "triangle" if n == 3 else ("quadrilateral" if n == 4 else "polygon"),
+                               exact_sides=e_sides, exact_angles=e_angles)
+        # the walk again, exactly: every side and turn is exact (a turn of
+        # 90, 45, 30 … has an exact cosine), so every corner has exact
+        # coordinates from the first — a compound shape's exact area
+        # (area_composite) is the shoelace sum over them
+        ex: list[tuple[sp.Expr, sp.Expr]] = [(sp.Integer(0), sp.Integer(0))]
+        hd: sp.Expr = sp.Integer(0)
+        for s_e, t_e in zip(e_sides, e_turns):
+            c, sn = sp.cos(sp.pi * hd / 180), sp.sin(sp.pi * hd / 180)
+            ex.append((sp.simplify(ex[-1][0] + s_e * c), sp.simplify(ex[-1][1] + s_e * sn)))
+            hd = hd + t_e
+        for v, xy in zip(vids, ex[:n]):
+            if ctx.model.points[v].exact is None:
+                ctx.model.points[v].exact = xy
     else:
         _finish_polygon(ctx, obj, coords, "open", exact_sides=e_sides, exact_angles=[], closed=False)
 

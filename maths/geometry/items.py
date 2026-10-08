@@ -438,6 +438,14 @@ _COORD_RULES = (
 )
 
 
+_COMPOSITE_RULE = (
+    "\n  A COMPOUND shape (an L, a T, a rectangle with a corner cut out) is ONE turtle_polygon (its sides and"
+    " turns, right angles as 90 / -90); its area step cites area_composite with the shape's id and writes"
+    " the parts' sum or the difference the figure shows (A = 10 * 8 - 4 * 3) — the engine checks that"
+    " arithmetic against the shape's exact area. Never draw the parts as separate shapes."
+)
+
+
 def v2_enabled() -> bool:
     """GEOMETRY_V2=0 keeps coordinate geometry out of the prompt without a deploy."""
     return os.environ.get("GEOMETRY_V2", "1").strip().lower() not in ("0", "false", "off", "no")
@@ -507,7 +515,7 @@ def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, 
         "reasoning question sets asks.property to 'none'. Every construction carries its parameters as listed "
         "below — a triangle_sss without 'sides' or a ray_at_angle without 'angle' is thrown away.",
         "CONSTRUCTIONS (the only ones that exist; parameters as listed):\n" + sigs,
-        "THEOREMS a deduce step may cite (the only reasons that exist):\n" + theorems,
+        "THEOREMS a deduce step may cite (the only reasons that exist):\n" + theorems + _COMPOSITE_RULE,
         "An AREA or PERIMETER question: the shape's sides are given as segment measures, the height (for a "
         "parallelogram or trapezium) is built with perpendicular_from and measured, the deduce step cites the shape "
         "id (and the height segment id) and writes the formula with the numbers in — 'A = 1/2 * (8 + 5) * 4'; "
