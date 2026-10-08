@@ -49,6 +49,7 @@ CELL_SECS = 0.15            # a coloured cell of a grid pattern: outlined, then 
 CELL_COLOURS = {"R": "red", "Y": "yellow", "G": "green", "B": "blue", "O": "orange", "P": "purple",
                 "W": "white", "K": "black"}
 LABEL_PX = 24.0             # the figure's labels, board pixels (em)
+MIN_TEXT_PX = 10.0          # the scene schema's floor for a text element
 DIM = 0.42
 _ANCHOR = {"start": "lm", "middle": "mm", "end": "rm"}   # layout anchors -> scene anchors
 
@@ -210,7 +211,11 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
         # the layout's anchor, kept: a start-anchored tag written centred sat
         # half its width to the left — into its point's name (chapter-17
         # probe, 2026-10-08: TEXT_OVERLAP B + "(7, 6)")
-        fb.elements.append({"id": eid, "type": "text", "text": t.text, "size": round(t.size * s, 1),
+        # never under the schema's floor: a tick number sized in the first fit
+        # pass and kept after the second failed came out at 9.9 px in a short
+        # panel, and the whole example was lost to a validation error
+        fb.elements.append({"id": eid, "type": "text", "text": t.text,
+                            "size": max(MIN_TEXT_PX, round(t.size * s, 1)),
                             "at": [x, y], "anchor": _ANCHOR.get(t.anchor, "mm"), "role": "label", "fixed": True})
         fb.actions.append({"verb": "write", "target": eid, "duration": LABEL_SECS})
         if t.tag:

@@ -479,3 +479,25 @@ def test_a_reason_sits_clear_of_a_line_the_typesetter_could_not_lay_out():
     r = _render(scene, scene["narration"])
     overlaps = [x for x in r.audit()["warnings"] if x.startswith("TEXT_OVERLAP")]
     assert not overlaps, overlaps
+
+
+def test_a_long_question_leaves_every_figure_label_at_the_schema_floor():
+    """A three-line question shortens the figure panel; the first fit pass's
+    tick numbers, kept when the second pass could not place its labels,
+    rendered at 9.9 px and the scene failed validation (size >= 10) — the
+    example was lost, not taught."""
+    from maths import board as B
+    from tests.test_geometry_corpus_v2 import CORPUS as V2
+    q = copy.deepcopy(V2["C3"])
+    q["difficulty"] = 2
+    q["prompt"] = ("The points A and B are plotted on the grid below. " + q["prompt"]
+                   + " Show your working clearly and write the answer as a pair of coordinates.")
+    q["intro_speech"] = "Here is the grid."
+    q["answer_speech"] = "So M is at four, four."
+    for st in q["steps"]:
+        st["speech"] = "Average the coordinates."
+    ex = L.figure_example(_item(q))
+    B.check_figure_example(ex)          # validates the scene: every text at 10 px or more
+    scene, _lines = B.example_scene(ex, MethodCard(title="METHOD", steps=["Read", "Average"]), "s004", has_card=True)
+    sizes = [e["size"] for e in scene["elements"] if e["type"] == "text" and e["id"].startswith("fig_")]
+    assert sizes and min(sizes) >= 10.0, sorted(sizes)[:5]
