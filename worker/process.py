@@ -2388,11 +2388,18 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         else:
             from agent5_slides.deck_art import book_context as _book_ctx
             _art_ctx = _book_ctx(book, chapter_title, analysis)
+        # The subject profile for a DECK, resolved here the way the documents
+        # resolve `_doc_profile` above. `profile` is bound in the presentation
+        # branch only; reading it here raised UnboundLocalError on every deck
+        # job after #167 (2026-10-08) — the function shares one scope, so a
+        # name a sibling branch assigns is unbound, not undefined.
+        from shared import subject_profile as _sp
+        _deck_profile = _sp.resolve(book.get("subject"), params=gen.get("params") or {})
         title = _generate_deck(
             sb, job_id, generation_id, book, chapter, analysis, gen_client,
             gen.get("params") or {}, branding, lesson_lang, lesson_dir, tmp, base, _unit,
             catalogue=catalogue, video_segments=_video_segs, art_context=_art_ctx,
-            maths_lesson=_sibling_maths_lesson(sb, gen) if profile.worked_examples else None,
+            maths_lesson=_sibling_maths_lesson(sb, gen) if _deck_profile.worked_examples else None,
         )
         for _k, _v in gen_client.session_usage.items():
             client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
