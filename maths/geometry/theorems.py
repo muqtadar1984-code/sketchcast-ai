@@ -444,6 +444,74 @@ def t_area_triangle(m: Model, u: Uses) -> list[sp.Eq]:
     return []
 
 
+def _lines_parallel(m: Model, a: str, b: str, c: str, d: str) -> bool:
+    l1, l2 = m.line_through(a, b), m.line_through(c, d)
+    return l1 is not None and l2 is not None and (l1.id == l2.id or frozenset((l1.id, l2.id)) in m.parallel)
+
+
+def _height_onto(m: Model, u: Uses, base_a: str, base_b: str) -> Optional[tuple[str, str]]:
+    """A cited segment perpendicular to the line base_a–base_b with its
+    foot on that line — a height — as (top, foot); None when none is."""
+    base = m.line_through(base_a, base_b)
+    if base is None:
+        return None
+    for sid in u.segments:
+        key = m.segment_ids.get(sid)
+        if key is None:
+            continue
+        a, b = tuple(key)
+        for top, foot in ((a, b), (b, a)):
+            if foot in base.points:
+                hl = m.line_through(top, foot)
+                if hl is not None and m.are_perpendicular(hl.id, base.id):
+                    return top, foot
+    return None
+
+
+def t_area_parallelogram(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "area_parallelogram"
+    pg = _the_polygon_cited(m, u, T, 4)
+    v = pg.vertices
+    _premise(T, _lines_parallel(m, v[0], v[1], v[3], v[2]) and _lines_parallel(m, v[1], v[2], v[0], v[3]),
+             "no construction makes both pairs of sides parallel")
+    # base × height, with the cited height (perpendicular_from)
+    for i in range(4):
+        a, b = v[i], v[(i + 1) % 4]
+        h = _height_onto(m, u, a, b)
+        if h is not None:
+            return [sp.Eq(AREA, _segment_symbol(m, a, b) * _segment_symbol(m, *h))]
+    # no height cited: two sides and the exact angle between them, when its
+    # sine is exact (30°, 45°, 60°, 90° …) — otherwise the height must be built.
+    # The vertex whose two sides the question DECLARES comes first: the area
+    # is written in the sides the student measured, not an equal opposite one
+    declared = set(m.segment_ids.values())
+    order = sorted(range(4), key=lambda i: (seg_key(v[i - 1], v[i]) not in declared
+                                             or seg_key(v[i], v[(i + 1) % 4]) not in declared, i))
+    for i in order:
+        an = m.angles.get(angle_key(v[i], v[i - 1], v[(i + 1) % 4]))
+        if an is not None and an.exact is not None and not sp.sympify(an.exact).free_symbols:
+            sin = sp.simplify(sp.sin(sp.sympify(an.exact) * sp.pi / 180))
+            if not sin.has(sp.sin):
+                return [sp.Eq(AREA, _segment_symbol(m, v[i - 1], v[i]) * _segment_symbol(m, v[i], v[(i + 1) % 4]) * sin)]
+    _premise(T, False, "build the height with perpendicular_from and cite it")
+    return []
+
+
+def t_area_trapezium(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "area_trapezium"
+    pg = _the_polygon_cited(m, u, T, 4)
+    v = pg.vertices
+    for i, j in ((0, 2), (1, 3)):
+        a, b, c, d = v[i], v[(i + 1) % 4], v[j], v[(j + 1) % 4]
+        if _lines_parallel(m, a, b, c, d):
+            h = _height_onto(m, u, a, b) or _height_onto(m, u, c, d)
+            _premise(T, h is not None, "cite the height: build it with perpendicular_from between the parallel sides")
+            return [sp.Eq(AREA, sp.Rational(1, 2) * (_segment_symbol(m, a, b) + _segment_symbol(m, c, d))
+                          * _segment_symbol(m, *h))]
+    _premise(T, False, "no construction makes a pair of parallel sides")
+    return []
+
+
 def t_area_circle(m: Model, u: Uses) -> list[sp.Eq]:
     T = "area_circle"
     _premise(T, len(u.circles) == 1, "cite the circle by its id")
@@ -460,7 +528,8 @@ def t_circumference(m: Model, u: Uses) -> list[sp.Eq]:
 
 def _unsupported(name: str):
     def fn(m: Model, u: Uses) -> list[sp.Eq]:
-        raise GeometryRefusal("theorem_premise", f"{name}: in the enum, not yet computed by the v1 engine")
+        raise GeometryRefusal("theorem_premise", f"{name}: not yet computed by the v1 engine — cite each part's "
+                                                 "own area theorem on its own step")
     return fn
 
 
@@ -483,8 +552,8 @@ THEOREMS: dict[str, Callable[[Model, Uses], list[sp.Eq]]] = {
     "perimeter": t_perimeter,
     "area_rectangle": t_area_rectangle,
     "area_triangle": t_area_triangle,
-    "area_parallelogram": _unsupported("area_parallelogram"),
-    "area_trapezium": _unsupported("area_trapezium"),
+    "area_parallelogram": t_area_parallelogram,
+    "area_trapezium": t_area_trapezium,
     "area_circle": t_area_circle,
     "circumference": t_circumference,
     "area_composite": _unsupported("area_composite"),

@@ -590,6 +590,51 @@ def c_perpendicular_through(ctx: BuildContext, obj: dict) -> None:
     c_parallel_through(ctx, obj, perpendicular=True)
 
 
+def c_perpendicular_from(ctx: BuildContext, obj: dict) -> None:
+    """The perpendicular dropped from `point` onto `line` (an id) or
+    `segment` [a, b], meeting it at `to` — the HEIGHT a shape's area is
+    measured by. Facts: the foot lies on the base line, point–foot is a
+    segment, the two lines are perpendicular and the angles at the foot
+    are right angles. The height's length is a measure the question
+    gives and the engine checks against the figure."""
+    w = _where(obj)
+    m = ctx.model
+    top = _req(obj, "point", w)
+    foot = _req(obj, "to", w)
+    if not m.has_point(top):
+        raise GeometryRefusal("bad_reference", f"{w}: point {top!r} is not placed yet", w)
+    if m.has_point(foot):
+        raise GeometryRefusal("bad_reference", f"{w}: `to` names a new point; {foot!r} exists", w)
+    lid = obj.get("line")
+    if lid is None:
+        seg = _ids(_req(obj, "segment", w), 2, w, "segment")
+        ln = m.line_through(*seg)
+        if ln is None:
+            if not all(m.has_point(q) for q in seg):
+                raise GeometryRefusal("bad_reference", f"{w}: `segment` names points that are not placed", w)
+            ln = m.add_line(m.new_point_id("line_"), _order_on_line(m, list(seg)), hidden=True)
+        lid = ln.id
+    if lid not in m.lines:
+        raise GeometryRefusal("bad_reference", f"{w}: line {lid!r} is not defined", w)
+    ln = m.lines[lid]
+    d = _line_direction(m, lid)
+    a0 = m.xy(ln.points[0])
+    px = m.xy(top)
+    dd = d[0] * d[0] + d[1] * d[1]
+    t = ((px[0] - a0[0]) * d[0] + (px[1] - a0[1]) * d[1]) / dd
+    fx = (a0[0] + d[0] * t, a0[1] + d[1] * t)
+    if abs(fx[0] - px[0]) < 1e-9 and abs(fx[1] - px[1]) < 1e-9:
+        raise GeometryRefusal("construction_impossible", f"{w}: {top!r} lies on the line; no perpendicular to drop", w)
+    ctx.place(foot, *fx)
+    ln.points = _order_on_line(m, list(ln.points) + [foot])
+    m.segment(top, foot)
+    hl = m.add_line(obj.get("id") or m.new_point_id("line_"), [top, foot], hidden=True)
+    m.set_perpendicular(hl.id, lid)
+    for q in ln.points:
+        if q != foot:
+            m.angle(foot, top, q, exact=sp.Integer(90))
+
+
 _P_ROLES = {"a": 0, "b": 1, "c": 2, "d": 3, "e": 4, "f": 5, "p": 6, "q": 7}
 
 
@@ -1366,6 +1411,7 @@ CONSTRUCTIONS: dict[str, Callable[[BuildContext, dict], None]] = {
     "angles_at_point": c_angles_at_point,
     "parallel_through": c_parallel_through,
     "perpendicular_through": c_perpendicular_through,
+    "perpendicular_from": c_perpendicular_from,
     "transversal": c_transversal,
     "parallels_transversal": c_parallels_transversal,
     "angle_bisector": c_angle_bisector,
