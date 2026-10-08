@@ -449,6 +449,27 @@ def t_area_triangle(m: Model, u: Uses) -> list[sp.Eq]:
     return []
 
 
+def t_area_composite(m: Model, u: Uses) -> list[sp.Eq]:
+    """A compound shape (an L, a T, a rectangle with a corner cut): its
+    exact area is the shoelace sum over its exactly placed corners — a
+    turtle_polygon walks them from its sides and turns. The step's own
+    decomposition (two rectangles added, a corner taken from a rectangle)
+    is what the chain compares with this, under the givens; the engine
+    does not choose the decomposition, it checks the one the step wrote."""
+    T = "area_composite"
+    pg = _the_polygon_cited(m, u, T)
+    ex = [m.points[v].exact for v in pg.vertices]
+    _premise(T, all(e is not None for e in ex),
+             "the shape's corners are not exactly placed: build it as one turtle_polygon (its sides and "
+             "turns) so its area is known, then write the parts' sum")
+    n = len(ex)
+    twice = sum(ex[i][0] * ex[(i + 1) % n][1] - ex[(i + 1) % n][0] * ex[i][1] for i in range(n))
+    pts = [m.xy(v) for v in pg.vertices]
+    sign = sum(pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1] for i in range(n))
+    area = sp.simplify(twice / 2 if sign >= 0 else -twice / 2)
+    return [sp.Eq(AREA, area)]
+
+
 # ── v2: coordinate geometry ───────────────────────────────────────────────
 
 def _coordinate_figure(m: Model, T: str) -> None:
@@ -676,7 +697,7 @@ THEOREMS: dict[str, Callable[[Model, Uses], list[sp.Eq]]] = {
     "area_trapezium": t_area_trapezium,
     "area_circle": t_area_circle,
     "circumference": t_circumference,
-    "area_composite": _unsupported("area_composite"),
+    "area_composite": t_area_composite,
     "distance_formula": t_distance_formula,
     "midpoint_formula": t_midpoint_formula,
     "gradient": t_gradient,
