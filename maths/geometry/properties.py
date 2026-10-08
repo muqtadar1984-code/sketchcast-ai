@@ -166,20 +166,22 @@ def symmetry_axes(m: Model) -> list[tuple[tuple[float, float], tuple[float, floa
     return _polygon_symmetry_axes(m, pg)
 
 
-def _grid_symmetry_lines(g: GridPattern, fill: Optional[str] = None) -> int:
+def grid_symmetry_flags(g: GridPattern, fill: Optional[str] = None) -> tuple[bool, bool, bool, bool]:
+    """(vertical, horizontal, main diagonal, anti-diagonal): which mirror
+    lines the coloured cells have, a blank cell read as ``fill`` when one
+    is given. Rows are counted from the top; the main diagonal runs from
+    the top-left corner to the bottom-right. Diagonals need a square grid."""
     cells = [[fill if (fill is not None and c == g.blank) else c for c in row] for row in g.cells]
     r, c = g.rows, g.cols
-    count = 0
-    if all(cells[i][j] == cells[i][c - 1 - j] for i in range(r) for j in range(c)):
-        count += 1                                             # vertical axis
-    if all(cells[i][j] == cells[r - 1 - i][j] for i in range(r) for j in range(c)):
-        count += 1                                             # horizontal axis
-    if r == c:
-        if all(cells[i][j] == cells[j][i] for i in range(r) for j in range(c)):
-            count += 1                                         # main diagonal
-        if all(cells[i][j] == cells[c - 1 - j][r - 1 - i] for i in range(r) for j in range(c)):
-            count += 1                                         # anti-diagonal
-    return count
+    vertical = all(cells[i][j] == cells[i][c - 1 - j] for i in range(r) for j in range(c))
+    horizontal = all(cells[i][j] == cells[r - 1 - i][j] for i in range(r) for j in range(c))
+    main = r == c and all(cells[i][j] == cells[j][i] for i in range(r) for j in range(c))
+    anti = r == c and all(cells[i][j] == cells[c - 1 - j][r - 1 - i] for i in range(r) for j in range(c))
+    return vertical, horizontal, main, anti
+
+
+def _grid_symmetry_lines(g: GridPattern, fill: Optional[str] = None) -> int:
+    return sum(grid_symmetry_flags(g, fill))
 
 
 def lines_of_symmetry(m: Model, fill: Optional[str] = None) -> int:

@@ -26,6 +26,7 @@ from PIL import ImageFont
 
 from maths.geometry.constructions import exact_value
 from maths.geometry.errors import GeometryRefusal
+from maths.geometry.properties import grid_symmetry_flags
 from maths.geometry.model import Line, Model, angle_key, seg_key
 from maths.geometry.spec import FigureSpec
 
@@ -71,6 +72,7 @@ class Text:
 class Fill:
     points: list[Vec]
     colour: str                 # a palette name; the renderer maps it
+    tag: Optional[str] = None   # cell:<grid id>
 
 
 @dataclass
@@ -232,6 +234,39 @@ def _fmt_value(value, unit: Optional[str], is_angle: bool) -> str:
 
 # ── the drawing ───────────────────────────────────────────────────────────
 
+def grid_origin(m: Model) -> Vec:
+    """Where a grid pattern sits in figure units: at the origin, or one
+    unit to the right of the figure's points. Unit cells, rows from the
+    top (row 0 is the highest)."""
+    if m.points:
+        _x0, _y0, x1, _y1 = m.bbox()
+        return (x1 + 1.0, 0.0)
+    return (0.0, 0.0)
+
+
+def grid_axes(m: Model) -> list[tuple[Vec, Vec]]:
+    """The mirror lines of the figure's one grid pattern as DRAWN (a blank
+    cell is a blank), as anchor pairs across the grid in figure units —
+    what a board draws when it says how many lines of symmetry the
+    pattern has. Empty when the figure has no grid, or more than one."""
+    if len(m.grids) != 1:
+        return []
+    g = next(iter(m.grids.values()))
+    ox, oy = grid_origin(m)
+    r, c = g.rows, g.cols
+    vertical, horizontal, main, anti = grid_symmetry_flags(g)
+    out: list[tuple[Vec, Vec]] = []
+    if vertical:
+        out.append(((ox + c / 2, oy), (ox + c / 2, oy + r)))
+    if horizontal:
+        out.append(((ox, oy + r / 2), (ox + c, oy + r / 2)))
+    if main:        # top-left corner to bottom-right
+        out.append(((ox, oy + r), (ox + c, oy)))
+    if anti:        # bottom-left corner to top-right
+        out.append(((ox, oy), (ox + c, oy + r)))
+    return out
+
+
 def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, label_size: float = 0.42,
                   label_pad: Optional[float] = None,
                   measure: Optional[Callable[[str, float], tuple[float, float]]] = None,
@@ -275,21 +310,23 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
         d.strokes.append(Stroke(_arc_points(m.xy(c.centre), c.radius, 0.0, 360.0, 72)))
         d.dots.append(Dot(*m.xy(c.centre)))
     # grids
-    for g in m.grids.values():
-        ox, oy = 0.0, 0.0
-        if m.points:
-            x0, y0, x1, y1 = m.bbox()
-            ox = x1 + 1.0
+    for gid, g in m.grids.items():
+        ox, oy = grid_origin(m)
         for i in range(g.rows):
             for j in range(g.cols):
                 x, y = ox + j, oy + (g.rows - 1 - i)
                 cell = g.cells[i][j]
                 pts = [(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)]
                 if cell != g.blank:
-                    d.fills.append(Fill(pts, cell))
+                    d.fills.append(Fill(pts, cell, tag=f"cell:{gid}"))
                 else:
                     d.texts.append(Text(x + 0.5, y + 0.5, "★", 0.5, role="note"))
-                d.strokes.append(Stroke(pts + [pts[0]], width=0.8, role="mark"))
+                d.strokes.append(Stroke(pts + [pts[0]], width=0.8, role="mark", tag=f"cell:{gid}"))
+        # the pattern's border in ink: what "highlight this figure" sweeps (a
+        # band along every cell outline would tint the cells themselves)
+        r, c = g.rows, g.cols
+        border = [(ox, oy), (ox + c, oy), (ox + c, oy + r), (ox, oy + r), (ox, oy)]
+        d.strokes.append(Stroke(border, width=1.0, role="ink", tag=f"grid:{gid}"))
 
     boxes: list = []
     if m.axes is not None:
