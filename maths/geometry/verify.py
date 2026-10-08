@@ -274,6 +274,17 @@ def _answer_symbols(q: QuestionSpec, fid: str, m: Model) -> list[sp.Symbol]:
     syms: set = set()
     for ms in fig.measures:
         syms |= exact_value(ms.value, where=f"measure.{ms.target}").free_symbols
+    # a quantity a theorem establishes (an area, a perimeter, a circumference)
+    # is the question's unknown too — nothing else names it
+    from maths.geometry.theorems import AREA, CIRCUMFERENCE, PERIMETER
+
+    cited = {st.theorem for st in q.steps if st.kind == "deduce" and st.theorem}
+    if any(t.startswith("area_") for t in cited):
+        syms.add(AREA)
+    if "perimeter" in cited:
+        syms.add(PERIMETER)
+    if "circumference" in cited:
+        syms.add(CIRCUMFERENCE)
     return sorted(syms, key=str)
 
 

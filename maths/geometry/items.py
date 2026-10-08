@@ -384,6 +384,7 @@ _SIGNATURES = {
     "angles_at_point": "vertex, points:[a,b,c...] round the vertex; consecutive angles need measures (all but one)",
     "parallel_through": "point, line:<line id>, points:[...] on the new line",
     "perpendicular_through": "point (on the line), line, points:[...]",
+    "perpendicular_from": "point, segment:[a,b] (or line:<id>), to:<new foot point> — the HEIGHT dropped from a vertex; give its length as a measure and cite the segment in an area step",
     "parallels_transversal": "points:[a,b,c,d,e,f,p,q] — line a-p-b above, c-q-d below, transversal e-p-q-f; angle:<one of the 8 angles, with a measure>",
     "intersection": "id:<new point>, of:[ray or line id, ray or line id]",
     "midpoint": "id:<new point>, segment:[a,b]",
@@ -471,6 +472,10 @@ def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, 
         "below — a triangle_sss without 'sides' or a ray_at_angle without 'angle' is thrown away.",
         "CONSTRUCTIONS (the only ones that exist; parameters as listed):\n" + sigs,
         "THEOREMS a deduce step may cite (the only reasons that exist):\n" + theorems,
+        "An AREA or PERIMETER question: the shape's sides are given as segment measures, the height (for a "
+        "parallelogram or trapezium) is built with perpendicular_from and measured, the deduce step cites the shape "
+        "id (and the height segment id) and writes the formula with the numbers in — 'A = 1/2 * (8 + 5) * 4'; "
+        "the answer is the number; the symbols are A (area), P (perimeter), C (circumference).",
         "PROPERTIES an evidence question may ask: " + ", ".join(sorted(PROPERTIES)) + ".",
         "Rules the engine enforces: a construction never takes a coordinate; a triangle from two sides and a "
         "non-included angle is refused; an evidence question never marks the property it asks (no right-angle "

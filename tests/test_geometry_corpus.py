@@ -284,3 +284,102 @@ def test_with_two_triangles_the_angles_a_step_names_say_which_one():
     # the equation is the citation, the second triangle is no ambiguity
     assert rep.ok, rep.refusal
     assert str(rep.proved.get("x")) == "70"
+
+
+def _area_q(objects, segments, measures, steps, answer, extra_pts=()):
+    pts = [{"id": pid, "label": pid[-1].upper()} for pid in ("p_a", "p_b", "p_c", "p_d") + tuple(extra_pts)]
+    return {"schema_version": "geometry.figure.v1", "id": "area", "figure_role": "reasoning", "prompt": "Find the area.",
+            "figures": [{"id": "f", "figure": {"units": "cm", "points": pts, "objects": objects, "segments": segments,
+                                               "measures": measures}}],
+            "steps": steps, "answer": {"kind": "number", "value": str(answer), "unit": "cm"}}
+
+
+def test_a_rectangles_area_is_the_questions_unknown():
+    from maths.geometry import verify_question
+
+    q = _area_q([{"id": "r", "make": "rectangle", "vertices": ["p_a", "p_b", "p_c", "p_d"], "width": "6", "height": "4"}],
+                [{"id": "s_ab", "points": ["p_a", "p_b"]}, {"id": "s_bc", "points": ["p_b", "p_c"]}],
+                [{"target": "s_ab", "value": "6", "unit": "cm"}, {"target": "s_bc", "value": "4", "unit": "cm"}],
+                [{"kind": "deduce", "theorem": "area_rectangle", "uses": ["r"], "after": ["A = 6 * 4"]},
+                 {"kind": "transform", "after": ["A = 24"]}], 24)
+    rep = verify_question(q)
+    assert rep.ok, rep.refusal
+    assert str(rep.proved.get("A")) == "24"
+
+
+def test_a_parallelograms_area_from_two_sides_and_an_exact_angle():
+    from maths.geometry import verify_question
+
+    q = _area_q([{"id": "pg", "make": "parallelogram", "vertices": ["p_a", "p_b", "p_c", "p_d"], "sides": ["8", "5"], "angle": "30"}],
+                [{"id": "s_ab", "points": ["p_a", "p_b"]}, {"id": "s_bc", "points": ["p_b", "p_c"]}],
+                [{"target": "s_ab", "value": "8", "unit": "cm"}, {"target": "s_bc", "value": "5", "unit": "cm"}],
+                [{"kind": "deduce", "theorem": "area_parallelogram", "uses": ["pg"], "after": ["A = 8 * 5 * 1/2"]},
+                 {"kind": "transform", "after": ["A = 20"]}], 20)
+    rep = verify_question(q)
+    assert rep.ok, rep.refusal
+    assert str(rep.proved.get("A")) == "20"
+
+
+def test_a_parallelograms_area_from_a_dropped_height():
+    from maths.geometry import verify_question
+
+    q = _area_q([{"id": "pg", "make": "parallelogram", "vertices": ["p_a", "p_b", "p_c", "p_d"], "sides": ["8", "5"], "angle": "30"},
+                 {"id": "h", "make": "perpendicular_from", "point": "p_d", "segment": ["p_a", "p_b"], "to": "p_h"}],
+                [{"id": "s_ab", "points": ["p_a", "p_b"]}, {"id": "s_dh", "points": ["p_d", "p_h"]}],
+                [{"target": "s_ab", "value": "8", "unit": "cm"}, {"target": "s_dh", "value": "2.5", "unit": "cm"}],
+                [{"kind": "deduce", "theorem": "area_parallelogram", "uses": ["pg", "s_dh"], "after": ["A = 8 * 2.5"]},
+                 {"kind": "transform", "after": ["A = 20"]}], 20, extra_pts=("p_h",))
+    rep = verify_question(q)
+    assert rep.ok, rep.refusal
+    assert float(rep.proved.get("A")) == 20.0
+    # a wrong height is refused by the figure, not by the formula
+    q["figures"][0]["figure"]["measures"][1]["value"] = "3"
+    bad = verify_question(q)
+    assert not bad.ok and (bad.refusal or {}).get("code") == "given_not_realised", bad.refusal
+
+
+def test_a_trapeziums_area_needs_its_height_built_and_cited():
+    from maths.geometry import verify_question
+
+    objects = [{"id": "tz", "make": "trapezium", "vertices": ["p_a", "p_b", "p_c", "p_d"], "parallel_sides": ["8", "5"],
+                "height": "4", "offset": "1"},
+               {"id": "h", "make": "perpendicular_from", "point": "p_d", "segment": ["p_a", "p_b"], "to": "p_h"}]
+    segments = [{"id": "s_ab", "points": ["p_a", "p_b"]}, {"id": "s_dc", "points": ["p_d", "p_c"]},
+                {"id": "s_dh", "points": ["p_d", "p_h"]}]
+    measures = [{"target": "s_ab", "value": "8", "unit": "cm"}, {"target": "s_dc", "value": "5", "unit": "cm"},
+                {"target": "s_dh", "value": "4", "unit": "cm"}]
+    q = _area_q(objects, segments, measures,
+                [{"kind": "deduce", "theorem": "area_trapezium", "uses": ["tz", "s_dh"], "after": ["A = 1/2 * (8 + 5) * 4"]},
+                 {"kind": "transform", "after": ["A = 26"]}], 26, extra_pts=("p_h",))
+    rep = verify_question(q)
+    assert rep.ok, rep.refusal
+    assert str(rep.proved.get("A")) == "26"
+    # without the height cited the theorem refuses, naming what to build
+    q2 = _area_q(objects, segments, measures,
+                 [{"kind": "deduce", "theorem": "area_trapezium", "uses": ["tz"], "after": ["A = 1/2 * (8 + 5) * 4"]},
+                  {"kind": "transform", "after": ["A = 26"]}], 26, extra_pts=("p_h",))
+    bad = verify_question(q2)
+    assert not bad.ok and "perpendicular_from" in (bad.refusal or {}).get("message", ""), bad.refusal
+
+
+def test_the_dropped_height_draws_and_renders():
+    from maths.geometry import parse_question, realise, verify_question
+    from maths.geometry.render_static import render_figure
+
+    objects = [{"id": "tz", "make": "trapezium", "vertices": ["p_a", "p_b", "p_c", "p_d"], "parallel_sides": ["8", "5"],
+                "height": "4", "offset": "1"},
+               {"id": "h", "make": "perpendicular_from", "point": "p_d", "segment": ["p_a", "p_b"], "to": "p_h"}]
+    q = _area_q(objects, [{"id": "s_dh", "points": ["p_d", "p_h"]}], [{"target": "s_dh", "value": "4", "unit": "cm"}],
+                [{"kind": "deduce", "theorem": "area_trapezium", "uses": ["tz", "s_dh"], "after": ["A = 1/2 * (8 + 5) * 4"]}],
+                26, extra_pts=("p_h",))
+    q["figures"][0]["figure"]["segments"] += [{"id": "s_ab", "points": ["p_a", "p_b"]}, {"id": "s_dc", "points": ["p_d", "p_c"]}]
+    q["figures"][0]["figure"]["measures"] += [{"target": "s_ab", "value": "8", "unit": "cm"}, {"target": "s_dc", "value": "5", "unit": "cm"}]
+    rep = verify_question(q)
+    assert rep.ok, rep.refusal
+    spec = parse_question(q).figures[0].figure
+    m = rep.models["f"]
+    assert m.has_point("p_h") and "p_h" in m.line_through("p_a", "p_b").points
+    out = render_figure(m, spec, role="reasoning", policy="instructional_metric")
+    assert out.png and len(out.png) > 1000
+    sch = realise(spec, "assessment_schematic", metric=m)
+    assert sch.has_point("p_h")
