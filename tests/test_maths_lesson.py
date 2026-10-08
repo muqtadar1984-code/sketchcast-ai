@@ -711,3 +711,11 @@ def test_a_wiped_column_leaves_no_overlap_in_the_report():
         overlaps = [w for w in r.audit()["warnings"] if w.startswith("TEXT_OVERLAP")]
         assert not overlaps, (s["segment_id"], overlaps)
     assert wiped, "the scenario is a column that fills and is wiped"
+
+
+def test_the_step_rules_say_a_moved_point_is_a_new_point():
+    """Chapter-17 fifth run (2026-10-08): the model wrote translations as
+    transform steps ('x = 5' -> 'x = 2'), which the verifier refuses — a
+    transform must keep the solution. The rule now says so."""
+    from maths.lesson import _STEP_RULES
+    assert "A point that MOVES" in _STEP_RULES and "NEVER as a \"transform\"" in _STEP_RULES
