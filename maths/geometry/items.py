@@ -434,7 +434,7 @@ _COORD_RULES = (
     "is `translate_point` with by:['4', '-1']. "
     "Theorems: distance_formula (unknown length as a segment measure 'd'), midpoint_formula (cite the segment and the "
     "midpoint), gradient (the answer symbol is m), line_equation (m and c), parallel_gradients, perpendicular_gradients, "
-    "reflection_rule (cite the image point), translation_rule (cite the image point). Evidence: coordinates_of (label_map point label -> '(x, y)'), quadrant "
+    "reflection_rule (cite the image point), translation_rule (cite the image point). A coordinate REASONING question ALWAYS has at least one 'deduce' step citing its rule with 'after' lines in the unknown's symbols ('a = 1 + 3', 'b = 2 - 4'): an answer with no steps is thrown away. A coordinate EVIDENCE question ALWAYS fills 'asks' (coordinates_of or quadrant over the figure): a question with no asks is thrown away. Evidence: coordinates_of (label_map point label -> '(x, y)'), quadrant "
     "(label_map point label -> '1'..'4'; 'select' picks a quadrant), polygon_name / triangle_class_* over a polygon. "
     "Every plotted point sits on a grid intersection at the axes' step."
 )
