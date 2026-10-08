@@ -325,8 +325,12 @@ def figure_example(item: GeometryItem) -> WorkedExample:
             ops = [{"op": "highlight", "target": fid}]
             if prop == "lines_of_symmetry":
                 ops.append({"op": "show_symmetry", "target": fid})   # the mirror lines, drawn
+            # a one-figure evidence item the model sent without an observation
+            # (chapter-17 probe, 2026-10-08): its own answer speech says what is
+            # read and what it is — better than losing the example
+            fallback = item.speech.get("answer", "") if len(over) == 1 else ""
             steps.append(Step(kind="deduce", uses=[fid], after=[line],
-                              speech=obs.get(fid) or obs.get(lab) or "", figure_ops=ops))
+                              speech=obs.get(fid) or obs.get(lab) or fallback or "", figure_ops=ops))
         final = [ln.split(": ", 1)[-1] for ln in key_lines(item, reasons=False)][:1]
         target = prop
     if not steps:

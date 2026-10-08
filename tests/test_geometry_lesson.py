@@ -526,3 +526,17 @@ def test_notes_beside_text_written_lines_sit_clear_of_the_words():
     r = _render(scene, scene["narration"])
     overlaps = [x for x in r.audit()["warnings"] if x.startswith("TEXT_OVERLAP")]
     assert not overlaps, overlaps
+
+
+def test_a_one_figure_evidence_item_without_an_observation_speaks_its_answer():
+    """Eighth chapter-17 run (2026-10-08): "Find the coordinates of the point
+    A" verified and was refused for silence — no 'observations' on a
+    one-figure item. The one observation step speaks the answer speech."""
+    from tests.test_geometry_corpus_v2 import CORPUS as V2
+    q = copy.deepcopy(V2["C1"])
+    q["difficulty"] = 1
+    q["intro_speech"] = "Here are four points on a grid."
+    q["answer_speech"] = "A is at three, two; B at minus four, one; C at zero, minus three; D at minus two, minus five."
+    q.pop("observations", None)
+    ex = L.figure_example(_item(q))
+    assert len(ex.steps) == 1 and ex.steps[0].speech == q["answer_speech"]
