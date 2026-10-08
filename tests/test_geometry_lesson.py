@@ -501,3 +501,28 @@ def test_a_long_question_leaves_every_figure_label_at_the_schema_floor():
     scene, _lines = B.example_scene(ex, MethodCard(title="METHOD", steps=["Read", "Average"]), "s004", has_card=True)
     sizes = [e["size"] for e in scene["elements"] if e["type"] == "text" and e["id"].startswith("fig_")]
     assert sizes and min(sizes) >= 10.0, sorted(sizes)[:5]
+
+
+def test_notes_beside_text_written_lines_sit_clear_of_the_words():
+    """The chapter-17 third run (2026-10-08) failed on every scene: lines
+    like "B_x = A_x + translation" cannot be typeset, so they are written as
+    text, and their notes were placed from the stand-in layout's width (a
+    bare "0") — on the words."""
+    from maths import board as B
+    from maths.schema import Step, WorkedExample
+    ex = WorkedExample(problem="A is at (1, 3). B is A translated 4 to the right. Find B_x.", target="B_x",
+                       intro_speech="Watch the x-coordinate.",
+                       steps=[Step(kind="setup", after=["B_x = A_x + translation"], explanation="add translation to coordinate",
+                                   speech="Write what a translation does."),
+                              Step(kind="setup", after=["A_x = 1", "translation = 4"], explanation="substitute given values",
+                                   speech="Put the numbers in."),
+                              Step(kind="transform", after=["B_x = 1 + 4"], explanation="substitute given values",
+                                   speech="Substitute."),
+                              Step(kind="transform", after=["B_x = 5"], explanation="add the numbers", speech="Add.")],
+                       final_answer=["B_x = 5"], answer_speech="So B is at five, three.")
+    scene, _lines = B.example_scene(ex, MethodCard(title="METHOD", steps=["Add the shift"]), "s005", has_card=True)
+    kinds = {e["id"]: e["type"] for e in scene["elements"]}
+    assert kinds["w1"] == "text", kinds          # no layout for a word: written as text
+    r = _render(scene, scene["narration"])
+    overlaps = [x for x in r.audit()["warnings"] if x.startswith("TEXT_OVERLAP")]
+    assert not overlaps, overlaps
