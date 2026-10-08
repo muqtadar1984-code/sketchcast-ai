@@ -376,7 +376,10 @@ def _check_reasoning_answer(rep: QuestionReport, q: QuestionSpec, fid: str, m: M
 # ── evidence questions ────────────────────────────────────────────────────
 
 def _norm_label(x) -> str:
-    return str(x).strip().lower()
+    """'A', 'a' and 'p_a' name the same point: an answer keyed by the point
+    id is read the way the figure's own naming reads it."""
+    t = str(x).strip().lower()
+    return t[2:] if t.startswith("p_") and len(t) > 2 else t
 
 
 # the engine's value may be more specific than a correct answer

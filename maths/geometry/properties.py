@@ -218,9 +218,28 @@ def _fmt_coord(v) -> str:
     return str(int(e)) if getattr(e, "is_Integer", False) else str(e)
 
 
+def point_name(pid: str, label: Optional[str]) -> str:
+    """What a point is called on the paper: its label, else its id's own
+    letter (p_a -> A, p_m -> M), else the id. The chapter-17 probe
+    (2026-10-08) placed every point without a label and every evidence
+    question was refused with 'the figure gives {}'."""
+    if label:
+        return label
+    tail = pid[2:] if pid.lower().startswith("p_") else pid
+    return tail.upper() if tail.isalpha() and len(tail) <= 2 else pid
+
+
 def _labelled_points(m: Model) -> dict[str, str]:
-    """label -> point id for the points a student can name."""
-    return {(p.label or pid): pid for pid, p in m.points.items() if p.label}
+    """name -> point id for every point a student can name: by its label,
+    or by its id's letter when the model gave it none. Hidden bookkeeping
+    points (an id the engine made, e.g. 'v3', 'grid_1') are not points a
+    student reads and stay out."""
+    out: dict[str, str] = {}
+    for pid, pt in m.points.items():
+        name = point_name(pid, pt.label)
+        if name != pid or pt.label:
+            out[name] = pid
+    return out
 
 
 def coordinates_of(m: Model) -> dict[str, str]:

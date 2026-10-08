@@ -292,3 +292,35 @@ def test_the_coordinate_rules_demand_steps_and_asks():
     from maths.geometry.items import _COORD_RULES
     assert "ALWAYS has at least one 'deduce' step" in _COORD_RULES
     assert "ALWAYS fills 'asks'" in _COORD_RULES
+
+
+def test_points_without_labels_are_named_by_their_ids():
+    """Seventh chapter-17 run (2026-10-08): the model placed every point
+    without a label; coordinates_of found nothing to read and four evidence
+    items were refused. A point is named by its id's letter when it has no
+    label, and an answer keyed 'p_a' / 'a' / 'A' names the same point."""
+    import copy
+    from maths.geometry import verify_question
+    q = copy.deepcopy(CORPUS["C1"])
+    q["figures"][0]["figure"].pop("points")                      # no labels at all
+    rep = verify_question(q)
+    assert rep.ok, rep.refusal
+    assert rep.computed["coordinates_of"] == {"A": "(3, 2)", "B": "(-4, 1)", "C": "(0, -3)", "D": "(-2, -5)"}
+    q["answer"]["value"] = {"p_a": "(3, 2)", "p_b": "(-4, 1)", "c": "(0, -3)", "D": "(-2, -5)"}
+    assert verify_question(q).ok
+    # quadrant the same way, with select
+    q2 = copy.deepcopy(CORPUS["C2"])
+    q2["figures"][0]["figure"].pop("points")
+    assert verify_question(q2).ok, verify_question(q2).refusal
+
+
+def test_a_rule_step_may_cite_the_source_point_instead_of_its_image():
+    import copy
+    from maths.geometry import verify_question
+    q = copy.deepcopy(C11)
+    q["steps"][0]["uses"] = ["p_p"]                              # the point being translated
+    rep = verify_question(q)
+    assert rep.ok, rep.refusal
+    q = copy.deepcopy(CORPUS["C8"])
+    q["steps"][0]["uses"] = ["p_p"]
+    assert verify_question(q).ok
