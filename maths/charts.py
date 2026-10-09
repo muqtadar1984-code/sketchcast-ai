@@ -114,8 +114,8 @@ def chart_for(ex: WorkedExample) -> Optional[dict]:
     kind "lines":    {beside, closing, point: "(2, 1)" | None, lines: [labels]}
     kind "parabola": {beside, closing, point: None, roots: ["-2", "3"], vertex: "(h, k)", lines: [label]}"""
     try:
-        return (_lines_chart(ex) or _parabola_chart(ex) or _number_line_chart(ex) or _data_chart(ex)
-                or _half_plane_chart(ex))
+        return (_line_task_chart(ex) or _lines_chart(ex) or _parabola_chart(ex) or _number_line_chart(ex)
+                or _data_chart(ex) or _half_plane_chart(ex))
     except Exception:  # noqa: BLE001 — a chart is a bonus; the example stands without it
         return None
 
@@ -290,6 +290,58 @@ def _lines_chart(ex: WorkedExample) -> Optional[dict]:
     return {"kind": "lines", "beside": beside, "closing": closing,
             "point": f"({_fmt(point[0])}, {_fmt(point[1])})" if point is not None else None,
             "lines": [_label(g) for g, _abc in lines]}
+
+
+def _line_task_chart(ex: WorkedExample) -> Optional[dict]:
+    """A straight-line task (2026-10-09): the line the facts fix, beside the
+    working; the given points (and the intercept asked for) on it at the
+    close. Read from the verifier's own facts, so the chart is the line the
+    example was verified against."""
+    if ex.figure or ex.task != "line":
+        return None
+    from maths.verify import line_facts  # noqa: PLC0415 — the verifier is the source of the line
+    F = line_facts(ex)
+    if F.problem or F.m is None or F.c is None or not (F.m.is_Rational and F.c.is_Rational):
+        return None
+    m, c = sp.Rational(F.m), sp.Rational(F.c)
+    a, b, k = -m, sp.Integer(1), c          # a·x + b·y = k  ⇔  y = m x + c
+    pts = [(sp.Rational(x), sp.Rational(y)) for x, y in F.points if sp.nsimplify(x).is_Rational and sp.nsimplify(y).is_Rational]
+    if F.target == "x_intercept" and m != 0:
+        pts.append((-c / m, sp.Integer(0)))
+    if F.target in ("c", "mc") and not any(x == 0 for x, _y in pts):
+        pts.append((sp.Integer(0), c))
+    xs: list = [0] + [x for x, _y in pts]
+    ys: list = [0, c] + [y for _x, y in pts]
+    if m != 0:
+        xs.append(-c / m)
+    ax, ay = _axis(xs), _axis(ys)
+    if ax is None or ay is None:
+        return None
+    step = max(ax[2], ay[2])
+    label = ("y = " + ("" if m == 1 else "-" if m == -1 else _fmt(m)) + "x" + ("" if c == 0 else f" - {_fmt(-c)}" if c < 0 else f" + {_fmt(c)}")
+             if m != 0 else f"y = {_fmt(c)}")
+    axes = {"make": "axes", "id": "ax", "x": [ax[0], ax[1]], "y": [ay[0], ay[1]], "step": step, "grid": True}
+    line = {"make": "line_eq", "id": "l1", "a": _fmt(a), "b": _fmt(b), "c": _fmt(k), "label": label}
+
+    def spec(with_points: bool) -> dict:
+        objects = [axes, line]
+        points: list[dict] = []
+        measures: list[dict] = []
+        if with_points:
+            for i, (x, y) in enumerate(pts):
+                objects.append({"make": "point_at", "id": f"p{i + 1}", "x": _fmt(x), "y": _fmt(y)})
+                points.append({"id": f"p{i + 1}"})
+                measures.append({"target": f"p{i + 1}", "value": f"({_fmt(x)}, {_fmt(y)})", "role": "given"})
+        return {"schema_version": SCHEMA, "id": "chart", "figure_role": "illustration", "prompt": "",
+                "figures": [{"id": "g", "figure": {"units": "units", "points": points, "objects": objects,
+                                                   "measures": measures}}]}
+
+    from maths.geometry import verify_question  # noqa: PLC0415 — the engine checks what it drew
+    beside, closing = spec(False), spec(True)
+    if not verify_question(beside).ok or not verify_question(closing).ok:
+        return None
+    return {"kind": "lines", "beside": beside, "closing": closing,
+            "point": f"({_fmt(pts[0][0])}, {_fmt(pts[0][1])})" if pts else None, "lines": [label]}
 
 
 def chart_image(chart: Optional[dict], *, which: str = "closing") -> Optional[tuple[bytes, float]]:

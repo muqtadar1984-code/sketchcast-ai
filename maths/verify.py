@@ -70,8 +70,8 @@ from typing import Callable, Optional
 
 import sympy as sp
 
-from maths.notation import NotationError, Relation, notation_of, parse_state, symbols_named
-from maths.schema import DATA_TASKS, Lesson, Step, TryIt, WorkedExample
+from maths.notation import NotationError, Relation, notation_of, parse_point, parse_relation, parse_state, symbols_named
+from maths.schema import DATA_TASKS, LINE_TASKS, Lesson, Step, TryIt, WorkedExample
 from maths.tokens import TokenError, tokenize
 from mathsvc.safety import MathError, MathTimeoutError, run_with_timeout
 
@@ -1338,6 +1338,411 @@ def _check_mistake(ex: WorkedExample, variables) -> Optional[Check]:
     return Check("mistake", None, detail)
 
 
+# ── straight lines ────────────────────────────────────────────────────────
+#
+# "Gradient and Intercept of a Straight Line" (kit 6c7be369, 2026-10-09)
+# lost nine of twelve examples to four shapes the solve path cannot read: a
+# point written as a line ("(2, 3)"), an answer that is the EQUATION of a
+# line (solved for x: "the answer says x = y/2 + 1/2"), m and c read off
+# "y = 3x + 5" (no transformation of anything), and "6 = m(2) - 4". A line
+# problem is not an equation to transform; it is a set of FACTS — points on
+# the line, its equation, its gradient, a line it is parallel to — and
+# every step of the working is a CONSEQUENCE of those facts. So the line
+# task is verified by entailment: the facts (and the line before) must
+# imply every line after, SymPy solving the facts for every symbol in
+# play; the answer is the line the facts fix (y = m x + c), or its m, its
+# c, its x-intercept, as the target asks.
+
+_X, _Y, _M, _C = sp.Symbol("x"), sp.Symbol("y"), sp.Symbol("m"), sp.Symbol("c")
+_REF_LINE_RE = re.compile(r"^\s*(parallel|perpendicular)\s+(?:to\s+)?(?:the\s+line\s+)?(.+?)\s*$", re.I)
+_INTERCEPT_GIVEN_RE = re.compile(r"^\s*([xy])[\s_-]*intercept\s*(?:=|:|is)\s*(.+?)\s*$", re.I)
+_PARAM_GIVEN_RE = re.compile(r"^\s*(m|c|gradient|slope|intercept)\s*=\s*(.+?)\s*$", re.I)
+
+
+@dataclass
+class LineFacts:
+    """The problem's facts as SymPy expressions equal to zero, the given
+    points, what is asked, and the m and c the facts fix (None when they do
+    not). ``problem`` names a given that could not be read."""
+    facts: list = field(default_factory=list)
+    points: list = field(default_factory=list)
+    target: str = "equation"
+    m: Optional[sp.Expr] = None
+    c: Optional[sp.Expr] = None
+    problem: str = ""
+
+
+def _line_target(ex: WorkedExample) -> str:
+    """What a line task asks for: equation | m | c | x_intercept | mc — read
+    from ``target``, then from the problem's words."""
+    for text in (ex.target or "", ex.problem or ""):
+        t = " ".join(text.lower().replace("_", "-").split())
+        if not t:
+            continue
+        has_m = bool(re.search(r"\b(m|gradient|slope)\b", t))
+        has_c = bool(re.search(r"\b(c|y-?intercept|intercept)\b", t)) and not re.search(r"\bx-?intercept\b", t)
+        if "equation" in t:
+            return "equation"      # "the equation of the line with gradient 3": the equation is what is asked
+        if re.search(r"\bx-?intercept\b", t):
+            return "x_intercept"
+        if has_m and has_c:
+            return "mc"
+        if has_m:
+            return "m"
+        if has_c:
+            return "c"
+        if "equation" in t or t in ("line", "y", "x, y", "x and y"):
+            return "equation"
+    return "equation"
+
+
+def _abc(rel: Relation) -> Optional[tuple]:
+    """(a, b, d) with a·x + b·y + d = 0 for an equation linear in x and y,
+    else None."""
+    if not rel.is_equation or rel.rhs is None:
+        return None
+    expr = sp.expand(_exact(rel.lhs - rel.rhs))
+    if not expr.free_symbols or not expr.free_symbols <= {_X, _Y}:
+        return None
+    try:
+        poly = sp.Poly(expr, _X, _Y)
+    except sp.PolynomialError:
+        return None
+    if poly.total_degree() != 1:
+        return None
+    return poly.coeff_monomial(_X), poly.coeff_monomial(_Y), poly.coeff_monomial(1)
+
+
+def _line_value(text: str) -> Optional[sp.Expr]:
+    try:
+        return _exact(parse_relation(f"q = {text}").rhs)
+    except NotationError:
+        return None
+
+
+def line_facts(ex: WorkedExample) -> LineFacts:
+    """The facts of a line task, from its givens. Public: the chart reads the
+    line and the points from here too."""
+    F = LineFacts(target=_line_target(ex))
+    F.facts.append(_Y - (_M * _X + _C))
+    k = 0
+    for text in ex.givens:
+        text = str(text or "").strip()
+        if not text:
+            continue
+        pt = parse_point(text)
+        if pt is not None:
+            k += 1
+            xs, ys = pt.names or (f"x{k}", f"y{k}")
+            F.facts += [sp.Symbol(xs) - pt.x, sp.Symbol(ys) - pt.y, pt.y - (_M * pt.x + _C)]
+            F.points.append((pt.x, pt.y))
+            continue
+        ref = _REF_LINE_RE.match(text)
+        if ref:
+            try:
+                abc = _abc(parse_relation(ref.group(2)))
+            except NotationError:
+                abc = None
+            if abc is None or abc[1] == 0:
+                F.problem = f"{text!r}: the reference line must be an equation in x and y, not vertical"
+                return F
+            m1, c1 = -abc[0] / abc[1], -abc[2] / abc[1]
+            F.facts += [sp.Symbol("m1") - m1, sp.Symbol("m_1") - m1, sp.Symbol("c1") - c1, sp.Symbol("c_1") - c1]
+            F.facts.append(_M - m1 if ref.group(1).lower() == "parallel" else _M * m1 + 1)
+            continue
+        ig = _INTERCEPT_GIVEN_RE.match(text)
+        if ig:
+            v = _line_value(ig.group(2))
+            if v is None:
+                F.problem = f"{text!r}: could not read the intercept"
+                return F
+            x0, y0 = (v, sp.Integer(0)) if ig.group(1).lower() == "x" else (sp.Integer(0), v)
+            F.facts.append(y0 - (_M * x0 + _C))
+            F.points.append((x0, y0))
+            continue
+        pg = _PARAM_GIVEN_RE.match(text)
+        if pg:
+            v = _line_value(pg.group(2))
+            if v is None:
+                F.problem = f"{text!r}: could not read the value"
+                return F
+            F.facts.append((_M if pg.group(1).lower() in ("m", "gradient", "slope") else _C) - v)
+            continue
+        try:
+            rel = parse_relation(text)
+        except NotationError as exc:
+            F.problem = f"{text!r} is not a line fact: {exc}"
+            return F
+        if _is_pi_declaration(rel):
+            continue
+        abc = _abc(rel)
+        if abc is not None:
+            if abc[1] == 0:
+                F.problem = f"{text!r} is a vertical line; its gradient is undefined and the line task does not cover it"
+                return F
+            F.facts += [_exact(rel.lhs - rel.rhs), _M + abc[0] / abc[1], _C + abc[2] / abc[1]]
+            continue
+        if rel.is_equation and rel.rhs is not None:
+            F.facts.append(_exact(rel.lhs - rel.rhs))
+            continue
+        F.problem = f"{text!r} is not a line fact (a point, an equation, m = …, c = …, parallel/perpendicular to …)"
+        return F
+    # the intercept asked for is a point of the line on an axis: y = 0 on the
+    # x-axis, x = 0 on the y-axis — the fact a step like "4x + 3(0) = 12" uses
+    if F.target == "x_intercept":
+        F.facts.append(_Y)
+    elif F.target == "c":
+        F.facts.append(_X)
+    fixed = [f for f in F.facts if not (f.free_symbols & {_X, _Y})]
+    syms = sorted(set().union(*(f.free_symbols for f in fixed)) if fixed else set(), key=str)
+    if fixed and syms:
+        try:
+            sols = sp.solve(fixed, syms, dict=True)
+        except Exception:  # noqa: BLE001
+            sols = []
+        if len(sols) == 1:
+            m, c = sols[0].get(_M), sols[0].get(_C)
+            if m is not None and c is not None and not m.free_symbols and not c.free_symbols:
+                F.m, F.c = sp.nsimplify(m, rational=True), sp.nsimplify(c, rational=True)
+    return F
+
+
+def _entails(premises: list, conclusions: list) -> Optional[bool]:
+    """Every solution of the premises satisfies every conclusion (all
+    expressions equal to zero); None when SymPy cannot decide or the
+    premises contradict each other."""
+    premises = [sp.expand(_exact(p)) for p in premises]
+    premises = [p for p in premises if p != 0]
+    conclusions = [sp.expand(_exact(c)) for c in conclusions]
+    syms = sorted(set().union(*(e.free_symbols for e in premises + conclusions)) if premises + conclusions else set(),
+                  key=str)
+    if not syms:
+        return all(_zero(c) for c in conclusions)
+    try:
+        sols = sp.solve(premises, syms, dict=True) if premises else [{}]
+    except Exception:  # noqa: BLE001
+        return None
+    if premises and not sols:
+        return None
+    for sol in sols:
+        for c in conclusions:
+            if not _zero(c.subs(sol)):
+                return False
+    return True
+
+
+def _line_state(lines: list[str], F: LineFacts, what: str) -> tuple[Optional[list], str]:
+    """A state of a line task as expressions equal to zero: an equation is
+    lhs - rhs; a point restating a given is nothing to prove, any other
+    point must lie on the line. None (with the reason) for a line that is
+    not an equation."""
+    out: list = []
+    for text in lines:
+        pt = parse_point(text)
+        if pt is not None:
+            if not any(_equal_values(pt.x, x0) and _equal_values(pt.y, y0) for x0, y0 in F.points):
+                out.append(pt.y - (_M * pt.x + _C))
+            continue
+        try:
+            rel = parse_relation(text)
+        except NotationError as exc:
+            return None, f"{what} could not be read: {exc}"
+        if _is_pi_declaration(rel):
+            continue
+        if not rel.is_equation or rel.rhs is None:
+            return None, f"{what}: {rel.text!r} is not an equation"
+        out.append(_exact(rel.lhs - rel.rhs))
+    return out, ""
+
+
+def _check_line_step(i: int, st: Step, ex: WorkedExample, F: LineFacts) -> Check:
+    name = f"step {i + 1}"
+    if st.kind in ("check", "round"):
+        return _check_step(i, st, ex, [])
+    after, err = _line_state(st.after, F, "the line after")
+    if after is None:
+        return Check(name, None, err)
+    if st.kind == "setup":
+        ok = _timed(_entails, F.facts, after)
+        if ok is False:
+            return Check(name, False, f"{st.operation or 'setup'}: contradicts the problem's facts")
+        return Check(name, ok, f"setup: {st.operation or 'a fact of the problem'}"
+                     + (" — follows from the givens" if ok else " — could not be checked against the givens"))
+    before, err = _line_state(st.before, F, "the line before")
+    if before is None:
+        return Check(name, None, err)
+    ok = _timed(_entails, F.facts + before, after)
+    label = f"{st.operation}: " if st.operation else ""
+    if ok:
+        return Check(name, True, label + "follows from the givens and the line before")
+    if ok is False:
+        return Check(name, False, label + f"{'; '.join(st.after)!r} does not follow from the givens and {'; '.join(st.before)!r}")
+    return Check(name, None, label + "could not be decided from the givens")
+
+
+def _line_same(a: list, b: list, F: LineFacts) -> Optional[bool]:
+    x, y = _timed(_entails, F.facts + a, b), _timed(_entails, F.facts + b, a)
+    if x is None or y is None:
+        return None
+    return x and y
+
+
+def _check_line_chain(ex: WorkedExample, F: LineFacts) -> list[Check]:
+    out: list[Check] = []
+    prev: Optional[list[str]] = None
+    for i, st in enumerate(ex.steps):
+        if prev and st.before and st.kind != "check" and [x.strip() for x in prev] != [x.strip() for x in st.before]:
+            a, e1 = _line_state(prev, F, "previous line")
+            b, e2 = _line_state(st.before, F, "this line")
+            if a is None or b is None:
+                out.append(Check(f"chain {i + 1}", None, e1 or e2))
+            elif not _line_same(a, b, F):
+                out.append(Check(f"chain {i + 1}", False, f"step {i + 1} does not start where step {i} ended"))
+        if st.kind != "check" and st.after:
+            prev = st.after
+    return out
+
+
+def _fmt_line(m, c) -> str:
+    ms = "" if m == 1 else "-" if m == -1 else f"{_fmt_q(m)}"
+    cs = "" if c == 0 else f" - {_fmt_q(-c)}" if c < 0 else f" + {_fmt_q(c)}"
+    return f"y = {ms}x{cs}" if m != 0 else f"y = {_fmt_q(c)}"
+
+
+def _fmt_q(v) -> str:
+    v = sp.nsimplify(v, rational=True)
+    if getattr(v, "is_Rational", False):
+        return _fmt_num(Fraction(int(v.p), int(v.q)))
+    return str(v)
+
+
+def _answer_value(text: str, names: set[str]) -> Optional[sp.Expr]:
+    """``m = 3``, ``gradient = 3`` or a bare ``3`` as the value; None when
+    the line names something else."""
+    try:
+        rel = parse_relation(text)
+    except NotationError:
+        return None
+    if rel.is_expression:
+        return _exact(rel.lhs) if not rel.lhs.free_symbols else None
+    if rel.is_equation and rel.rhs is not None:
+        if rel.lhs.is_Symbol and str(rel.lhs).lower() in names and not rel.rhs.free_symbols:
+            return _exact(rel.rhs)
+        if rel.rhs.is_Symbol and str(rel.rhs).lower() in names and not rel.lhs.free_symbols:
+            return _exact(rel.lhs)
+    return None
+
+
+def _check_line_answer(ex: WorkedExample, F: LineFacts) -> Check:
+    answers = _split_answers(ex.final_answer)
+    if not answers:
+        return Check("answer", False, "no final answer")
+    if F.problem:
+        return Check("answer", None, F.problem)
+    if F.m is None or F.c is None:
+        return Check("answer", None, "the givens do not fix the line (two points, a point and a gradient, an equation…)")
+    want_line = _fmt_line(F.m, F.c)
+    if F.target == "equation":
+        for a in answers:
+            try:
+                abc = _abc(parse_relation(a))
+            except NotationError:
+                abc = None
+            if abc is None or abc[1] == 0:
+                return Check("answer", False, f"{a!r} is not the equation of a line in x and y")
+            m2, c2 = -abc[0] / abc[1], -abc[2] / abc[1]
+            if not (_equal_values(m2, F.m) and _equal_values(c2, F.c)):
+                return Check("answer", False, f"the givens fix the line {want_line}; the answer's line is {_fmt_line(m2, c2)}")
+        return Check("answer", True, f"answer verified: {want_line}")
+    if F.target == "mc":
+        got_m = got_c = None
+        for a in answers:
+            got_m = got_m if got_m is not None else _answer_value(a, {"m", "gradient", "slope"})
+            got_c = got_c if got_c is not None else _answer_value(a, {"c", "intercept", "y"})
+        if got_m is None or got_c is None:
+            return Check("answer", False, "the answer must give both: m = … and c = …")
+        if _equal_values(got_m, F.m) and _equal_values(got_c, F.c):
+            return Check("answer", True, f"answer verified: m = {_fmt_q(F.m)}, c = {_fmt_q(F.c)}")
+        return Check("answer", False, f"the line is {want_line}: m = {_fmt_q(F.m)}, c = {_fmt_q(F.c)}; "
+                                      f"the answer says m = {_fmt_q(got_m)}, c = {_fmt_q(got_c)}")
+    if F.target == "m":
+        want, names, what = F.m, {"m", "gradient", "slope"}, "the gradient"
+    elif F.target == "c":
+        want, names, what = F.c, {"c", "intercept", "y"}, "the y-intercept"
+    else:
+        if F.m == 0:
+            return Check("answer", None, "a horizontal line has no x-intercept to find")
+        want, names, what = -F.c / F.m, {"x"}, "the x-intercept"
+    for a in answers:
+        pt = parse_point(a)
+        if pt is not None:
+            got = pt.y if F.target == "c" and pt.x == 0 else pt.x if F.target == "x_intercept" and pt.y == 0 else None
+        else:
+            got = _answer_value(a, names)
+        if got is None:
+            return Check("answer", False, f"{a!r} does not state {what} (write {sorted(names)[0]} = …)")
+        if not _equal_values(got, want):
+            return Check("answer", False, f"the line is {want_line}, so {what} is {_fmt_q(want)}; the answer says {_fmt_q(got)}")
+    return Check("answer", True, f"answer verified: {what} is {_fmt_q(want)} ({want_line})")
+
+
+def _check_line_last_step(ex: WorkedExample, F: LineFacts) -> Optional[Check]:
+    last = next((s for s in reversed(ex.steps) if s.kind in ("transform", "round", "deduce") and s.after), None)
+    answers = _split_answers(ex.final_answer)
+    if last is None or not answers or F.problem:
+        return None
+    a, e1 = _line_state(last.after, F, "the last line")
+    b, e2 = _line_state(answers, F, "the final answer")
+    if a is None or b is None:
+        return Check("chain end", None, e1 or e2)
+    # one way: the last line (with the facts) gives the answer — an answer
+    # written as the point (3, 0) is given by the line "x = 3", not the
+    # other way round
+    same = _timed(_entails, F.facts + a, b)
+    if same:
+        return Check("chain end", True, "the last line gives the answer")
+    return Check("chain end", same, "the last line does not give the stated answer")
+
+
+def _check_line_mistake(ex: WorkedExample, F: LineFacts) -> Optional[Check]:
+    m = ex.common_mistake
+    if m is None or not (m.from_state and m.wrong_state):
+        return None
+    a, e1 = _line_state(m.from_state, F, "the mistake's starting line")
+    b, e2 = _line_state(m.wrong_state, F, "the mistake's result")
+    if a is None or b is None:
+        return Check("mistake", None, e1 or e2)
+    ok = _timed(_entails, F.facts + a, b)
+    if ok is True:
+        return Check("mistake", False, "the 'mistake' is actually a valid step — it must not be taught as wrong")
+    if ok is False:
+        return Check("mistake", True, "confirmed wrong: it does not follow from the givens")
+    return Check("mistake", None, "could not be decided from the givens")
+
+
+def _verify_line_example(ex: WorkedExample) -> ExampleReport:
+    rep = ExampleReport(label=ex.label or "example")
+    F = line_facts(ex)
+    if F.problem:
+        rep.checks.append(Check("problem", None, F.problem))
+    for i, st in enumerate(ex.steps):
+        rep.checks.append(_check_line_step(i, st, ex, F))
+    rep.checks.extend(_check_line_chain(ex, F))
+    rep.checks.append(_check_line_answer(ex, F))
+    last = _check_line_last_step(ex, F)
+    if last is not None:
+        rep.checks.append(last)
+    mistake = _check_line_mistake(ex, F)
+    if mistake is not None:
+        rep.checks.append(mistake)
+    transforms_unverified = [c for c in rep.checks if c.ok is None and c.name.startswith("step")
+                             and ex.steps[int(c.name.split()[1]) - 1].kind in ("transform", "deduce", "round")]
+    answer_unverified = [c for c in rep.checks if c.ok is None and c.name == "answer"]
+    if rep.failures or transforms_unverified or answer_unverified or not ex.steps:
+        rep.status = "failed"
+    return rep
+
+
 def _verify_figure_example(ex: WorkedExample) -> ExampleReport:
     """A figure example: the geometry chain (constructions build, theorems
     deduce, SymPy proves) re-run on the example's question. Deterministic,
@@ -1358,6 +1763,8 @@ def _verify_figure_example(ex: WorkedExample) -> ExampleReport:
 def verify_example(ex: WorkedExample) -> ExampleReport:
     if ex.figure:
         return _verify_figure_example(ex)
+    if ex.task in LINE_TASKS:
+        return _verify_line_example(ex)
     rep = ExampleReport(label=ex.label or "example")
     givens, err = _parse(ex.givens or ([ex.problem] if ex.problem else []), "the problem")
     if givens is None:
@@ -1393,6 +1800,13 @@ def try_it_example(t: TryIt) -> WorkedExample | None:
         return WorkedExample(label="Try it", difficulty=2, task="solve", problem=t.problem, givens=[],
                              target="x", intro_speech=t.solution_speech, steps=list(t.steps),
                              final_answer=list(t.answer), answer_speech=t.answer_speech, figure=t.figure)
+    if (t.task or "").strip().lower() in LINE_TASKS:
+        # a straight-line try-it carries its facts in 'givens' (points are
+        # not notation the solve path reads) and what is asked in 'target'
+        givens = list(t.givens) or (list(t.steps[0].before) if t.steps and t.steps[0].before else [])
+        return WorkedExample(label="the try-it question", difficulty=2, task="line", problem=t.problem,
+                             givens=givens, target=t.target or "", intro_speech=t.solution_speech,
+                             steps=list(t.steps), final_answer=list(t.answer), answer_speech=t.answer_speech)
     # the problem's NOTATION, with any lead-in words in front of it set
     # aside ("the quadratic expression x^2 - x - 12" starts the working at
     # x^2 - x - 12; the words are the teacher's, not the algebra's)
@@ -1443,6 +1857,13 @@ def verify_try_it(t: TryIt) -> Check:
         rep = verify_example(ex)
         ok = rep.status == "verified"
         return Check("try it", ok, "figure verified by the geometry chain" if ok else "; ".join(rep.reasons)[:400])
+    if ex.task in LINE_TASKS:
+        if t.steps:
+            rep = verify_example(ex)
+            ok = rep.status == "verified"
+            return Check("try it", ok, f"{len(t.steps)} step(s) verified" if ok else "; ".join(rep.reasons)[:400])
+        c = _check_line_answer(ex, line_facts(ex))
+        return Check("try it", c.ok, c.detail)
     rels, err = _parse(ex.givens, "the try-it problem")
     if rels is None:
         return Check("try it", None, err)
@@ -1467,5 +1888,5 @@ def verify_lesson(lesson: Lesson) -> dict:
             "try_it": try_it.to_dict()}
 
 
-__all__ = ["Check", "ExampleReport", "verify_example", "verify_try_it", "verify_lesson",
-           "SOLVE_TASKS", "EXPRESSION_TASKS", "ROUND_TASKS", "DATA_TASKS"]
+__all__ = ["Check", "ExampleReport", "verify_example", "verify_try_it", "verify_lesson", "line_facts", "LineFacts",
+           "SOLVE_TASKS", "EXPRESSION_TASKS", "ROUND_TASKS", "DATA_TASKS", "LINE_TASKS"]

@@ -403,3 +403,22 @@ def test_the_half_plane_draws_beside_the_working_and_closes_on_the_shaded_region
     assert len(tints) == 1, "the region is one translucent wash"
     assert not _audit(close)
     assert chart_image(ex.chart) is not None
+
+
+def test_a_straight_line_task_gets_the_line_it_was_verified_against_with_its_points():
+    from maths.charts import chart_for
+    from maths.schema import Step, WorkedExample
+    ex = WorkedExample(label="L", task="line", givens=["(2, 5)", "m = 3"], target="equation",
+                       steps=[Step(operation="substitute", before=["y = mx + c"], after=["5 = 3(2) + c"], speech="…"),
+                              Step(operation="solve", before=["5 = 3(2) + c"], after=["c = -1"], speech="…")],
+                       final_answer=["y = 3x - 1"])
+    chart = chart_for(ex)
+    assert chart and chart["kind"] == "lines" and chart["lines"] == ["y = 3x - 1"] and chart["point"] == "(2, 5)"
+    objs = chart["closing"]["figures"][0]["figure"]["objects"]
+    assert any(o["make"] == "point_at" and o["x"] == "2" and o["y"] == "5" for o in objs)
+    assert not any(o["make"] == "point_at" for o in chart["beside"]["figures"][0]["figure"]["objects"])
+    inter = WorkedExample(label="L", task="line", givens=["4x + 3y = 12"], target="x-intercept",
+                          steps=[Step(operation="set y to zero", before=["4x + 3y = 12"], after=["x = 3"], speech="…")],
+                          final_answer=["x = 3"])
+    chart = chart_for(inter)
+    assert chart and chart["point"] == "(3, 0)"

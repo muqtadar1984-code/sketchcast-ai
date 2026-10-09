@@ -433,6 +433,176 @@ def test_a_check_step_may_substitute_pi_as_an_approximation():
     assert _by(rep)["step 3"].ok and _by(rep)["answer"].ok
 
 
+# ── the straight-line task (2026-10-09, after the gradient kit lost 9 of 12 examples) ──
+
+
+def _line(givens, target, steps, answer, problem="", mistake=None):
+    return WorkedExample(label="L", task="line", problem=problem, givens=givens, target=target,
+                         steps=[Step(kind=k, operation=op, before=b, after=a, speech="…") for k, op, b, a in steps],
+                         final_answer=answer, common_mistake=mistake)
+
+
+def test_a_point_is_read_as_a_point_and_a_letter_before_a_bracketed_number_is_a_product():
+    from maths.notation import parse_point, parse_relation
+    assert (parse_point("(2, 3)").x, parse_point("(2, 3)").y) == (2, 3)
+    assert parse_point("(2,3)").y == 3 and parse_point("( -1/2 , 4.5 )").x == sp.Rational(-1, 2)
+    assert parse_point("A(2, 3)").label == "A" and parse_point("point_1 = (2, 3)").label == "point_1"
+    assert parse_point("(x1, y1) = (0, -4)").names == ("x1", "y1")
+    assert parse_point("2, 3") is None and parse_point("(x, y)") is None and parse_point("y = 3x + 5") is None
+    r = parse_relation("6 = m(2) - 4")
+    assert r.is_equation and r.rhs == 2 * sp.Symbol("m") - 4
+    assert parse_relation("sin(2)").lhs == sp.sin(2)   # a function name is more than one letter
+
+
+def test_m_and_c_read_off_an_equation_in_slope_intercept_form():
+    ex = _line(["y = 3x + 5"], "m, c",
+               [("setup", "compare with y = mx + c", [], ["y = mx + c"]),
+                ("transform", "read off m and c", ["y = 3x + 5"], ["m = 3", "c = 5"])],
+               ["m = 3", "c = 5"])
+    rep = verify_example(ex)
+    assert rep.status == "verified", rep.reasons
+    ex.final_answer = ["m = 5", "c = 3"]
+    assert "the answer says m = 5" in _by(verify_example(ex))["answer"].detail
+    # a general-form line, m and c as the target names them
+    ex2 = _line(["3x - 4y = 12"], "gradient and y-intercept",
+                [("transform", "make y the subject", ["3x - 4y = 12"], ["4y = 3x - 12"]),
+                 ("transform", "divide by 4", ["4y = 3x - 12"], ["y = 3x/4 - 3"]),
+                 ("transform", "read off", ["y = 3x/4 - 3"], ["m = 3/4", "c = -3"])],
+                ["m = 3/4", "c = -3"])
+    assert verify_example(ex2).status == "verified", verify_example(ex2).reasons
+
+
+def test_the_gradient_through_two_points_with_the_points_as_lines_of_working():
+    ex = _line(["(1, 2)", "(3, 8)"], "m",
+               [("setup", "the gradient formula", [], ["m = (y2 - y1)/(x2 - x1)"]),
+                ("transform", "substitute the coordinates", ["m = (y2 - y1)/(x2 - x1)"], ["m = (8 - 2)/(3 - 1)"]),
+                ("transform", "evaluate", ["m = (8 - 2)/(3 - 1)"], ["m = 6/2"]),
+                ("transform", "simplify", ["m = 6/2"], ["m = 3"])],
+               ["m = 3"], problem="Find the gradient of the line through (1, 2) and (3, 8).",
+               mistake=Mistake(from_state=["m = (y2 - y1)/(x2 - x1)"], wrong_state=["m = (3 - 1)/(8 - 2)"],
+                               operation="rise and run swapped", why_wrong="run over rise", speech="…"))
+    rep = verify_example(ex)
+    assert rep.status == "verified", rep.reasons
+    by = _by(rep)
+    assert by["step 2"].ok and by["mistake"].ok and "confirmed wrong" in by["mistake"].detail
+    ex.final_answer = ["m = 2"]
+    assert _by(verify_example(ex))["answer"].ok is False
+    ex.final_answer = ["3"]            # a bare value names the gradient asked for
+    assert verify_example(ex).status == "verified", verify_example(ex).reasons
+    ex.final_answer = ["m = 3"]
+    ex.steps[2].after = ["m = 6/4"]
+    ex.steps[3].before = ["m = 6/4"]
+    rep = verify_example(ex)
+    assert rep.status == "failed" and _by(rep)["step 3"].ok is False
+
+
+def test_the_equation_of_a_line_from_a_point_and_a_gradient_in_any_written_form():
+    steps = [("setup", "the line's equation", [], ["y = mx + c"]),
+             ("transform", "substitute m and the point", ["y = mx + c"], ["5 = 3(2) + c"]),
+             ("transform", "multiply", ["5 = 3(2) + c"], ["5 = 6 + c"]),
+             ("transform", "subtract 6", ["5 = 6 + c"], ["c = -1"]),
+             ("transform", "write the equation", ["c = -1"], ["y = 3x - 1"])]
+    ex = _line(["(2, 5)", "m = 3"], "equation", steps, ["y = 3x - 1"],
+               problem="Find the equation of the line through (2, 5) with gradient 3.")
+    rep = verify_example(ex)
+    assert rep.status == "verified", rep.reasons
+    assert "y = 3x - 1" in _by(rep)["answer"].detail
+    for form in (["3x - y - 1 = 0"], ["y - 3x = -1"], ["6x - 2y = 2"]):
+        ex.final_answer = form
+        assert _by(verify_example(ex))["answer"].ok, form
+    ex.final_answer = ["y = 3x + 1"]
+    assert "the answer's line is y = 3x + 1" in _by(verify_example(ex))["answer"].detail
+    ex.final_answer = ["m = 3"]
+    assert "not the equation of a line" in _by(verify_example(ex))["answer"].detail
+
+
+def test_intercepts_by_writing_the_other_coordinate_as_zero():
+    ex = _line(["4x + 3y = 12"], "x-intercept",
+               [("transform", "set y to zero", ["4x + 3y = 12"], ["4x + 3(0) = 12"]),
+                ("transform", "simplify", ["4x + 3(0) = 12"], ["4x = 12"]),
+                ("transform", "divide by 4", ["4x = 12"], ["x = 3"])],
+               ["x = 3"])
+    assert verify_example(ex).status == "verified", verify_example(ex).reasons
+    ex.final_answer = ["(3, 0)"]
+    assert verify_example(ex).status == "verified", verify_example(ex).reasons
+    ex.final_answer = ["x = 4"]
+    assert "the x-intercept is 3" in _by(verify_example(ex))["answer"].detail
+    ey = _line(["3x - 2y = 12"], "y-intercept",
+               [("transform", "set x to zero", ["3x - 2y = 12"], ["3(0) - 2y = 12"]),
+                ("transform", "simplify", ["3(0) - 2y = 12"], ["-2y = 12"]),
+                ("transform", "divide by -2", ["-2y = 12"], ["y = -6"])],
+               ["y = -6"])
+    assert verify_example(ey).status == "verified", verify_example(ey).reasons
+    for ans in (["c = -6"], ["(0, -6)"], ["-6"]):
+        ey.final_answer = ans
+        assert _by(verify_example(ey))["answer"].ok, ans
+
+
+def test_parallel_and_perpendicular_reference_lines():
+    perp = _line(["perpendicular to y = -2x + 4", "(6, 3)"], "equation",
+                 [("setup", "the given line's gradient", [], ["m1 = -2"]),
+                  ("transform", "perpendicular gradients multiply to -1", ["m1 = -2"], ["m = -1/m1"]),
+                  ("transform", "evaluate", ["m = -1/m1"], ["m = 1/2"]),
+                  ("setup", "the line's equation", [], ["y = mx + c"]),
+                  ("transform", "substitute", ["y = mx + c"], ["3 = (1/2)(6) + c"]),
+                  ("transform", "simplify", ["3 = (1/2)(6) + c"], ["c = 0"]),
+                  ("transform", "write the equation", ["c = 0"], ["y = x/2"])],
+                 ["y = x/2"], problem="Find the equation of the line perpendicular to y = -2x + 4 through (6, 3).")
+    assert verify_example(perp).status == "verified", verify_example(perp).reasons
+    par = _line(["parallel to y = 4x - 5", "(2, 11)"], "equation",
+                [("transform", "parallel lines share a gradient", ["m_1 = 4"], ["m = 4"]),
+                 ("transform", "substitute the point", ["m = 4"], ["11 = 4(2) + c"]),
+                 ("transform", "solve for c", ["11 = 4(2) + c"], ["c = 3"]),
+                 ("transform", "write the equation", ["c = 3"], ["y = 4x + 3"])],
+                ["y = 4x + 3"])
+    assert verify_example(par).status == "verified", verify_example(par).reasons
+    par.steps[0].after = ["m = -1/4"]
+    par.steps[1].before = ["m = -1/4"]
+    assert _by(verify_example(par))["step 1"].ok is False
+
+
+def test_a_line_from_its_two_intercepts_and_a_word_given_is_refused():
+    ex = _line(["x-intercept = 4", "y-intercept = -6"], "equation",
+               [("setup", "the two points", [], ["(4, 0)", "(0, -6)"]),
+                ("transform", "the gradient", ["(4, 0)", "(0, -6)"], ["m = (-6 - 0)/(0 - 4)"]),
+                ("transform", "evaluate", ["m = (-6 - 0)/(0 - 4)"], ["m = 3/2"]),
+                ("transform", "c is the y-intercept", ["m = 3/2"], ["y = 1.5x - 6"])],
+               ["y = 1.5x - 6"])
+    rep = verify_example(ex)
+    assert rep.status == "verified", rep.reasons
+    bad = _line(["the line through the origin"], "equation", [("setup", "", [], ["y = mx"])], ["y = 2x"])
+    rep = verify_example(bad)
+    assert rep.status == "failed" and "not a line fact" in _by(rep)["answer"].detail
+    one = _line(["(2, 5)"], "equation", [("setup", "", [], ["y = mx + c"])], ["y = 2x + 1"])
+    assert "do not fix the line" in _by(verify_example(one))["answer"].detail
+    vert = _line(["x = 3"], "equation", [("setup", "", [], ["x = 3"])], ["x = 3"])
+    assert "vertical" in _by(verify_example(vert))["answer"].detail
+
+
+def test_a_point_written_with_named_coordinates_and_a_6_equals_m_times_2_line():
+    ex = _line(["(x1, y1) = (2, 6)", "c = -4"], "m",
+               [("transform", "substitute into y = mx + c", ["y1 = m*x1 + c"], ["6 = m(2) - 4"]),
+                ("transform", "add 4", ["6 = m(2) - 4"], ["10 = 2m"]),
+                ("transform", "divide by 2", ["10 = 2m"], ["m = 5"])],
+               ["m = 5"])
+    rep = verify_example(ex)
+    assert rep.status == "verified", rep.reasons
+
+
+def test_a_straight_line_try_it_carries_its_facts_and_its_target():
+    t = TryIt(task="line", problem="Find the gradient of the line through (0, 3) and (2, 7).",
+              givens=["(0, 3)", "(2, 7)"], target="m", answer=["m = 2"], speech="…", solution_speech="…",
+              answer_speech="…")
+    assert verify_try_it(t).ok is True, verify_try_it(t).detail
+    t.answer = ["m = 4"]
+    assert verify_try_it(t).ok is False
+    t.answer = ["m = 2"]
+    t.steps = [Step(operation="gradient formula", before=["m = (y2 - y1)/(x2 - x1)"], after=["m = (7 - 3)/(2 - 0)"], speech="…"),
+               Step(operation="evaluate", before=["m = (7 - 3)/(2 - 0)"], after=["m = 2"], speech="…")]
+    c = verify_try_it(t)
+    assert c.ok is True and "2 step(s) verified" in c.detail
+
+
 def _round_ex(before, after, precision, answer, task="round", extra_steps=()):
     steps = [Step(kind="round", operation="round", precision=precision, before=[before], after=[after], speech="r")]
     steps += list(extra_steps)
