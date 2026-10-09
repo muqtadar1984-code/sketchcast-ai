@@ -181,8 +181,15 @@ def _split_products(text: str) -> str:
     return _LETTER_RUN_RE.sub(one, text)
 
 
+# "m(2)", "3 = m(2) - 4": a single letter before a bracketed NUMBER is a
+# product, the way "3(4)" already is — never a function call (the gradient
+# kit, 2026-10-09: "6 = m(2) - 4" could not be read). A function name is
+# longer than one letter, so sin(2) is untouched.
+_LETTER_CALL_RE = re.compile(r"(?<![A-Za-z_])([A-Za-z])\((?=\s*-?\s*\d)")
+
+
 def _side(text: str, *, where: str) -> sp.Expr:
-    cleaned = validate_text(_split_products(text), field=where)
+    cleaned = validate_text(_split_products(_LETTER_CALL_RE.sub(r"\1*(", text)), field=where)
     expr = _parse(cleaned, local_dict=_LETTERS)
     if not isinstance(expr, sp.Expr):
         raise MathInputError(f"{where}: not an expression")
@@ -257,6 +264,43 @@ def parse_state(lines: list[str]) -> list[Relation]:
     return [parse_relation(x) for x in lines]
 
 
+# ── a point ──────────────────────────────────────────────────────────────
+#
+# A coordinate pair is not an expression and never was one ("(2, 3)": "I
+# found a list separated by commas" — every straight-line example of the
+# gradient kit, 2026-10-09). It is read on its own, BEFORE normalise, because
+# normalise turns the comma of "(2,3)" into a decimal point.
+
+_POINT_NUM = r"-?\s*\d+(?:\.\d+)?(?:\s*/\s*\d+)?"
+_POINT_RE = re.compile(
+    r"^\s*(?:(?P<name>[A-Za-z]\w*)\s*[=:]?\s*|\(\s*(?P<xn>[A-Za-z]\w*)\s*,\s*(?P<yn>[A-Za-z]\w*)\s*\)\s*=\s*)?"
+    rf"\(\s*(?P<x>{_POINT_NUM})\s*,\s*(?P<y>{_POINT_NUM})\s*\)\s*$")
+
+
+@dataclass(frozen=True)
+class Point:
+    """``(2, 3)``, ``A(2, 3)``, ``A = (2, 3)``, ``(x1, y1) = (2, 3)``: the
+    coordinates exact, the label or the coordinate names when given."""
+    x: sp.Expr
+    y: sp.Expr
+    label: Optional[str] = None
+    names: Optional[tuple[str, str]] = None
+
+
+def parse_point(text) -> Optional[Point]:
+    raw = str(text or "").replace("\u2212", "-").replace("\u2013", "-").replace("\u00a0", " ")
+    m = _POINT_RE.match(raw)
+    if not m:
+        return None
+    try:
+        x = sp.Rational(m.group("x").replace(" ", ""))
+        y = sp.Rational(m.group("y").replace(" ", ""))
+    except (TypeError, ValueError):
+        return None
+    names = (m.group("xn"), m.group("yn")) if m.group("xn") else None
+    return Point(x, y, m.group("name"), names)
+
+
 def symbols_named(names: list[str]) -> list[sp.Symbol]:
     return [sp.Symbol(n) for n in names]
 
@@ -271,6 +315,6 @@ def is_notation(text: str) -> bool:
         return False
 
 
-__all__ = ["normalise", "Relation", "NotationError", "parse_relation", "parse_data", "parse_state",
+__all__ = ["normalise", "Relation", "NotationError", "parse_relation", "parse_data", "parse_state", "Point", "parse_point",
            "symbols_named", "is_notation", "strip_task_verb", "strip_leading_words", "has_word_symbols",
            "notation_of"]

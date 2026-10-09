@@ -24,15 +24,21 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 StepKind = Literal["transform", "setup", "check", "round", "deduce"]
 Task = Literal["solve", "solve_system", "solve_inequality", "simplify", "expand",
-               "factorise", "evaluate", "round", "estimate", "mean", "median", "mode", "range"]
+               "factorise", "evaluate", "round", "estimate", "mean", "median", "mode", "range", "line"]
 # The four DATA tasks (mean, median, mode, range) take a data list as their
 # givens — "4, 8, 6, 10, 12" — and are verified against the statistic of
 # that list (maths.verify). Added 2026-09-26 after a Grade 7 statistics
 # chapter failed every worksheet and exam question: a comma list could
 # only ever be a refusal.
 TASKS: tuple[str, ...] = ("solve", "solve_system", "solve_inequality", "simplify", "expand",
-                          "factorise", "evaluate", "round", "estimate", "mean", "median", "mode", "range")
+                          "factorise", "evaluate", "round", "estimate", "mean", "median", "mode", "range", "line")
 DATA_TASKS: tuple[str, ...] = ("mean", "median", "mode", "range")
+# The STRAIGHT-LINE task (2026-10-09, after the gradient kit lost 9 of 12
+# examples): the givens are the line's facts — points "(2, 3)", an equation
+# "3x - 2y = 12", "m = 3", "parallel to y = 4x - 5", "x-intercept = 4" —
+# the target names what is asked (equation | m | c | x-intercept | m, c),
+# and every step is verified as a CONSEQUENCE of those facts (maths.verify).
+LINE_TASKS: tuple[str, ...] = ("line",)
 DIFFICULTY_NAMES = {1: "simplest", 2: "medium", 3: "difficult", 4: "extremely difficult"}
 
 _MAX_LINE = 400
@@ -340,6 +346,12 @@ class TryIt(BaseModel):
     solution_speech: str = ""   # the teacher resuming after the pause
     steps: list[Step] = Field(default_factory=list)
     answer_speech: str = ""
+    #: a straight-line try-it says so: task "line", its facts in 'givens'
+    #: (points, equations) and what is asked in 'target' — the problem's
+    #: words alone cannot be parsed into a line
+    task: str = ""
+    givens: list[str] = Field(default_factory=list)
+    target: str = ""
     #: a geometry.figure.v1 question when the learner pauses on a DIAGRAM:
     #: drawn schematic (not to scale) for the pause, metric for the solution;
     #: verified by the geometry chain like a figure example
@@ -354,12 +366,12 @@ class TryIt(BaseModel):
     def has_figure(self) -> bool:
         return bool(self.figure)
 
-    @field_validator("problem", "speech", "solution_speech", "answer_speech", mode="before")
+    @field_validator("problem", "speech", "solution_speech", "answer_speech", "task", "target", mode="before")
     @classmethod
     def _text(cls, v):
         return _as_text(v)
 
-    @field_validator("answer", mode="before")
+    @field_validator("answer", "givens", mode="before")
     @classmethod
     def _listify(cls, v):
         return _as_list(v)
@@ -475,7 +487,8 @@ LESSON_SCHEMA = {"type": "object", "properties": {
     "try_it": {"type": "object", "properties": {"problem": _str(), "answer": _strs(), "speech": _str(),
                                                 "solution_speech": _str(),
                                                 "steps": {"type": "array", "items": STEP_SCHEMA},
-                                                "answer_speech": _str()},
+                                                "answer_speech": _str(),
+                                                "task": _str(), "givens": _strs(), "target": _str()},
                "required": ["problem", "answer", "speech", "steps", "answer_speech"]},
     "closing": _str()},
     "required": ["topic", "hook", "concept", "concept_points", "method", "examples", "recap",
@@ -497,5 +510,5 @@ def parse_example(data) -> WorkedExample:
 
 
 __all__ = ["Line", "Step", "Mistake", "WorkedExample", "MethodCard", "TryIt", "Lesson",
-           "TASKS", "DATA_TASKS", "DIFFICULTY_NAMES", "STEP_SCHEMA", "EXAMPLE_SCHEMA", "LESSON_SCHEMA",
+           "TASKS", "DATA_TASKS", "LINE_TASKS", "DIFFICULTY_NAMES", "STEP_SCHEMA", "EXAMPLE_SCHEMA", "LESSON_SCHEMA",
            "parse_lesson", "parse_example"]
