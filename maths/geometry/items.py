@@ -480,7 +480,8 @@ _SPEECH_RULES = (
     "asked), 'answer_speech' (what the answer is and what it means), and EVERY step carries 'speech' (what we "
     "look at on the diagram, which fact or theorem we use, what we get — two or three sentences). An evidence "
     "example carries 'observations': one per figure, in 'figures' order ({{\"figure\": \"fig_a\", \"speech\": "
-    "\"...\"}}), saying what the student should notice about that figure and what it is therefore called. "
+    "\"...\"}}), saying what the student should notice about that figure and what it is therefore called — "
+    "an evidence example with ONE figure still carries one observation (an example with none is thrown away). "
     "Difficulty 1 first, then 2, then 3: a worked-example ladder, not a test.")
 
 
