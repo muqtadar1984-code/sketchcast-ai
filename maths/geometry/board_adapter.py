@@ -239,8 +239,12 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
         # exact: a geometric figure is never hand-wobbled — a triangle with
         # equal sides must look it (founder direction 2026-10-08)
         width = GRID_PX if st.role == "grid" else (MARK_PX if st.role == "mark" else STROKE_PX) * max(0.6, min(1.4, st.width))
+        # the axes in their own colour: on the simultaneous-equations video the
+        # x- and y-axes read as a third and fourth line (founder, 2026-10-09)
+        colour = "muted" if st.role in ("hidden", "mark", "grid", "back") else (
+            "accent2" if (st.tag or "").startswith("axis:") else "ink")
         el = {"id": eid, "type": "shape", "shape": "path", "points": [P(p) for p in st.points],
-              "width": width, "color": "muted" if st.role in ("hidden", "mark", "grid", "back") else "ink", "exact": True}
+              "width": width, "color": colour, "exact": True}
         fb.elements.append(el)
         if st.tag:
             fb.targets.setdefault(st.tag, []).append(eid)
