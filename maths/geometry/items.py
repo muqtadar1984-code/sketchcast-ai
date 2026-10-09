@@ -77,6 +77,7 @@ _CONSTRUCTION = _obj({
     "apex_angle": _S, "base_angle": _S, "hyp": _S, "width": _S, "height": _S, "parallel_sides": _arr(_S),
     "offset": _S, "n": _I, "turns": _arr(_S), "radius": _S, "centre": _S, "circle": _S, "vertex": _S,
     "from_ray": _arr(_S), "to": _S, "length": _S, "segment": _arr(_S), "beyond": _S, "ratio": _S,
+    "edge": _S, "base_side": _S, "base_height": _S, "solid": _S, "layout": _S, "labels": _arr(_S), "shaded": _S,
     "of": _arr(_S), "line": _S, "point": _S, "lines": _arr(_S), "gap": _S, "hidden": _B,
     "rows": _I, "cols": _I, "cells": _arr(_arr(_S)), "palette": _arr(_S), "through": _S,
 }, ("make",))
@@ -448,6 +449,53 @@ _COMPOSITE_RULE = (
 )
 
 
+# v3 (3D solids and nets): one projection draws every solid; a solid is
+# COUNTED, never measured
+_SIGNATURES_V3 = {
+    "cube": "id, edge:'4' — vertices A–H placed as p_a…p_h (A the near corner, AB an edge)",
+    "cuboid": "id, length:'6', width:'4', height:'3' — A–D round the base, E–H above them; AB the length, BC the width, AE the height",
+    "prism": "id, base:'4', base_height:'3', length:'7' — a triangular prism: right-angled cross-section ABC at the front (AB the base, AC its height), DEF behind, AD the length",
+    "pyramid": "id, base_side:'6', height:'4' — square base ABCD, apex T, O the base's centre (OT the height, dashed)",
+    "cylinder": "id, radius:'3', height:'8' — P the top centre, PR the radius, SU the height",
+    "cone": "id, radius:'3', height:'4' — O the base centre, T the apex, OR the radius, OT the height",
+    "sphere": "id, radius:'5' — O the centre, OR the radius",
+    "net": "id, solid:cube|cuboid, layout:cross|skew_cross|end_cross|end_skew|end_far|end_ends|pair_mid|pair_far|pair_end|staircase|two_rows "
+           "(the eleven cube nets) OR cells:[[row,col],…] (six squares, checked by folding), labels:['1',…,'6'], shaded:'1'",
+}
+_EXAMPLE_SOLID = (
+    '{"id":"q4","difficulty":2,"figure_role":"reasoning","prompt":"Find the volume of the cuboid.",'
+    '"figures":[{"id":"fig","figure":{"units":"cm","points":[{"id":"p_a","label":"A"},{"id":"p_b","label":"B"},{"id":"p_c","label":"C"},'
+    '{"id":"p_d","label":"D"},{"id":"p_e","label":"E"},{"id":"p_f","label":"F"},{"id":"p_g","label":"G"},{"id":"p_h","label":"H"}],'
+    '"objects":[{"make":"cuboid","id":"s","length":"6","width":"4","height":"3"}],'
+    '"segments":[{"id":"s_ab","points":["p_a","p_b"]},{"id":"s_bc","points":["p_b","p_c"]},{"id":"s_ae","points":["p_a","p_e"]}],'
+    '"measures":[{"target":"s_ab","value":"6","unit":"cm","role":"given"},{"target":"s_bc","value":"4","unit":"cm","role":"given"},'
+    '{"target":"s_ae","value":"3","unit":"cm","role":"given"}]}}],'
+    '"steps":[{"kind":"deduce","theorem":"volume_cuboid","uses":["s"],"after":["V = 6 * 4 * 3"]},{"kind":"transform","after":["V = 72"]}],'
+    '"answer":{"kind":"number","value":"72","unit":"cm"}}'
+)
+_SOLID_RULES = (
+    "3D SOLIDS AND NETS (a chapter on cubes, cuboids, prisms, pyramids, cylinders, cones, spheres, volume, surface area, nets): "
+    "a solid is ONE construction (cube, cuboid, prism, pyramid, cylinder, cone, sphere) and its own figure — never on axes, never "
+    "rotated; its vertices are placed and named by the construction (list them in 'points' with their labels). The picture is a "
+    "view, never a measurement: every length is a MEASURE on a named segment of the solid's own points (s_ab for AB, s_ae for the "
+    "height AE, s_ot for a pyramid's or cone's height OT, s_pr / s_or for a radius), 'given' or 'unknown'. A solid is COUNTED, "
+    "never read with a ruler: an EVIDENCE question asks faces / edges / vertices (answer kind 'number'), solid_name (label_set, "
+    "e.g. ['triangular prism']), folds_to_cube over several 'net' figures with select:true (label_set of the figures that fold), "
+    "or opposite_face on one net with a 'shaded' cell (label_set of the opposite cell's label). A REASONING question cites "
+    "volume_cuboid (V = l * w * h; a cube V = e^3), volume_prism (V = (base * base_height / 2) * length), volume_cylinder "
+    "(V = pi * r^2 * h, exact in pi), volume_pyramid (V = base_side^2 * h / 3), volume_cone, volume_sphere, surface_area_cuboid "
+    "(S = 2(lw + wh + lh)), surface_area_cylinder (S = 2 pi r^2 + 2 pi r h) with the solid's id in 'uses' and 'after' lines in V "
+    "or S; euler_solids gives F = faces, N = vertices and F + N - E = 2 (the unknown count E). An unknown edge from a given volume: "
+    "bind the volume (bind V = 72) and measure the edge 'h' as unknown. A net is drawn flat with its cells labelled; a cube net "
+    "not on the eleven-name list is given as cells and the engine folds it to check."
+)
+
+
+def v3_enabled() -> bool:
+    """GEOMETRY_V3=0 keeps solids and nets out of the prompt without a deploy."""
+    return os.environ.get("GEOMETRY_V3", "1").strip().lower() not in ("0", "false", "off", "no")
+
+
 def v2_enabled() -> bool:
     """GEOMETRY_V2=0 keeps coordinate geometry out of the prompt without a deploy."""
     return os.environ.get("GEOMETRY_V2", "1").strip().lower() not in ("0", "false", "off", "no")
@@ -487,7 +535,8 @@ _SPEECH_RULES = (
 
 def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, chapter_context: str,
                     kind: str, focus: Optional[list[str]] = None) -> str:
-    sigs = "\n".join(f"  - {name}: {sig}" for name, sig in {**_SIGNATURES, **(_SIGNATURES_V2 if v2_enabled() else {})}.items())
+    sigs = "\n".join(f"  - {name}: {sig}" for name, sig in {**_SIGNATURES, **(_SIGNATURES_V2 if v2_enabled() else {}),
+                                                          **(_SIGNATURES_V3 if v3_enabled() else {})}.items())
     theorems = "\n".join(f"  - {t}: {REASONS[t]}" for t in THEOREMS)
     doc = {"worksheet": "a practice worksheet",
            "lesson": "a VIDEO LESSON — worked examples the teacher talks through on the board while the diagram "
@@ -535,13 +584,13 @@ def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, 
         "an evidence question's answer is what the figures show (the engine recomputes it and checks), a "
         "reasoning question's answer is the value its steps prove.",
         "EXAMPLES (one of each kind):\n" + _EXAMPLE_REASONING + "\n" + _EXAMPLE_EVIDENCE
-        + ("\n" + _EXAMPLE_COORD if v2_enabled() else ""),
-    ] + ([_COORD_RULES] if v2_enabled() else []) + [
+        + ("\n" + _EXAMPLE_COORD if v2_enabled() else "") + ("\n" + _EXAMPLE_SOLID if v3_enabled() else ""),
+    ] + ([_COORD_RULES] if v2_enabled() else []) + ([_SOLID_RULES] if v3_enabled() else []) + [
     ] + ([_SPEECH_RULES.format(language=language or "en")] if kind == "lesson" else []) + ([
         "CONCEPTS OF THIS CHAPTER NOT YET TAUGHT by the rest of the lesson: " + "; ".join(focus[:8]) + ". "
         "Prefer examples that teach THESE, where the construction library can draw them (a 'which of these "
         "are polygons?' evidence question for polygons; a shape's lines of symmetry for symmetry); a "
-        "concept the library cannot draw (tessellation, nets) is left out, not faked."
+        "concept the library cannot draw (tessellation) is left out, not faked."
     ] if focus else []) + [
         "Only questions this TOPIC's own exercises would ask: a chapter on fractions or equations has no diagram "
         "questions — then return {\"questions\": []} rather than a triangle from another chapter.",
@@ -820,8 +869,15 @@ def key_lines(item: GeometryItem, *, answer_word: str = "Answer", reasons: bool 
     proved = item.report.proved
     if proved:
         unit = (spec.get("answer") or {}).get("unit")
-        tail = "°" if unit == "deg" else ""
-        lines.append(f"{answer_word}: " + ", ".join(f"{k} = {v}{tail}" for k, v in proved.items()))
+
+        def tail(sym: str) -> str:
+            if unit == "deg":
+                return "°"
+            if unit in ("cm", "mm", "m"):
+                # v3: a volume in cubic units, a surface area in square units
+                return f" {unit}³" if sym == "V" else (f" {unit}²" if sym == "S" else "")
+            return ""
+        lines.append(f"{answer_word}: " + ", ".join(f"{k} = {v}{tail(k)}" for k, v in proved.items()))
     return lines
 
 
@@ -862,6 +918,11 @@ def _figure_facts(m) -> list[str]:
         facts.append("a circle, which is not a polygon")
     elif any(not p.closed for p in m.polygons.values()):
         facts.append("an open shape, which is not a polygon")
+    for sd in m.solids.values():
+        f, e, v = sd.counts
+        facts.append(f"a {sd.name} with {f} faces, {e} edges and {v} vertices")
+    for nt in m.nets.values():
+        facts.append(f"a net of a {nt.of}" + ("" if nt.folds else " that does not fold"))
     if m.axes is not None:
         pts = [f"{p.label}({_c(p.exact[0])}, {_c(p.exact[1])})" for p in m.points.values() if p.label and p.exact is not None]
         facts.append("a coordinate grid" + (" with the points " + ", ".join(pts) if pts else ""))
@@ -906,5 +967,5 @@ def _pretty_line(text: str) -> str:
         return s
 
 
-__all__ = ["figure_client", "v2_enabled", "quiz_image", "quiz_image_data_url", "GEOMETRY_SET_SCHEMA", "GeometryItem", "FigureImage", "geometry_items", "geometry_prompt",
+__all__ = ["figure_client", "v2_enabled", "v3_enabled", "quiz_image", "quiz_image_data_url", "GEOMETRY_SET_SCHEMA", "GeometryItem", "FigureImage", "geometry_items", "geometry_prompt",
            "key_lines", "normalise_question", "render_item"]

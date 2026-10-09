@@ -20,11 +20,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from maths.geometry.errors import GeometryRefusal
 
-SCHEMA_VERSION = "geometry.figure.v2"
+SCHEMA_VERSION = "geometry.figure.v3"
 # v2 (2026-10-08, founder decisions) adds coordinate geometry — axes,
 # points placed BY coordinate, a polygon over placed points, reflection —
 # and a point measure "(a, b)". A v1 record is a valid v2 record.
-SCHEMA_VERSIONS = ("geometry.figure.v1", "geometry.figure.v2")
+# v3 (2026-10-09, founder decisions) adds 3D solids drawn flat — cube,
+# cuboid, prism, pyramid, cylinder, cone, sphere — and nets. A v2 record
+# is a valid v3 record.
+SCHEMA_VERSIONS = ("geometry.figure.v1", "geometry.figure.v2", "geometry.figure.v3")
 
 FigureRole = Literal["evidence", "reasoning", "illustration"]
 StepKind = Literal["deduce", "transform", "check", "setup"]

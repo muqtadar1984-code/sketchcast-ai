@@ -298,7 +298,8 @@ def _answer_symbols(q: QuestionSpec, fid: str, m: Model) -> list[sp.Symbol]:
     # a quantity a theorem establishes (an area, a perimeter, a circumference,
     # a gradient, an intercept) is the question's unknown too — nothing else
     # names it
-    from maths.geometry.theorems import AREA, CIRCUMFERENCE, GRADIENT, INTERCEPT, PERIMETER
+    from maths.geometry.theorems import (AREA, CIRCUMFERENCE, EDGES, FACES, GRADIENT, INTERCEPT, PERIMETER, SURFACE,
+                                         VERTICES, VOLUME)
 
     cited = {st.theorem for st in q.steps if st.kind == "deduce" and st.theorem}
     if any(t.startswith("area_") for t in cited):
@@ -311,6 +312,13 @@ def _answer_symbols(q: QuestionSpec, fid: str, m: Model) -> list[sp.Symbol]:
         syms.add(GRADIENT)
     if "line_equation" in cited:
         syms.add(INTERCEPT)
+    # v3: a volume, a surface area, the counts of Euler's formula
+    if any(t.startswith("volume_") for t in cited):
+        syms.add(VOLUME)
+    if any(t.startswith("surface_area_") for t in cited):
+        syms.add(SURFACE)
+    if "euler_solids" in cited:
+        syms.add(EDGES)          # F and N are counted by the theorem itself
     return sorted(syms, key=str)
 
 
@@ -536,6 +544,9 @@ def _check_discernible(m: Model, prop: str, fid: str) -> None:
     """An evidence figure the student reads must be readable: what is
     meant to differ differs by a margin a ruler or a glance resolves."""
     from maths.geometry.properties import _angle_keys, _side_keys, _the_polygon  # noqa: PLC0415
+    if m.solids and prop not in ("faces", "edges", "vertices", "solid_name", "folds_to_cube", "opposite_face"):
+        # v3: a solid is counted, never measured — its picture is a view
+        raise GeometryRefusal("not_discernible", f"{fid}: {prop} cannot be read off a solid's picture; a solid is counted", fid)
     if prop in ("coordinates_of", "quadrant") and m.axes is not None:
         # v2: a point the student reads sits on a grid intersection
         for pid, pt in m.points.items():

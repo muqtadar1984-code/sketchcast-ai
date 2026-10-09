@@ -278,7 +278,57 @@ def quadrant(m: Model) -> dict[str, str]:
     return out
 
 
+# ── v3: solids are counted ───────────────────────────────────────────────
+
+def _the_solid(m: Model, what: str):
+    if len(m.solids) != 1:
+        raise GeometryRefusal("bad_reference", f"{what}: the figure must contain exactly one solid (it has {len(m.solids)})")
+    return next(iter(m.solids.values()))
+
+
+def faces(m: Model) -> int:
+    return _the_solid(m, "faces").counts[0]
+
+
+def edges(m: Model) -> int:
+    return _the_solid(m, "edges").counts[1]
+
+
+def vertices(m: Model) -> int:
+    return _the_solid(m, "vertices").counts[2]
+
+
+def solid_name(m: Model) -> str:
+    return _the_solid(m, "solid_name").name
+
+
+def folds_to_cube(m: Model) -> bool:
+    if len(m.nets) != 1:
+        raise GeometryRefusal("bad_reference", f"folds_to_cube: the figure must contain exactly one net (it has {len(m.nets)})")
+    return bool(next(iter(m.nets.values())).folds)
+
+
+def opposite_face(m: Model) -> set:
+    """The label of the face opposite the SHADED cell once the net folds."""
+    if len(m.nets) != 1:
+        raise GeometryRefusal("bad_reference", "opposite_face: the figure must contain exactly one net")
+    nt = next(iter(m.nets.values()))
+    if not nt.folds:
+        raise GeometryRefusal("construction_impossible", "opposite_face: this net does not fold into a cube")
+    shaded = [c for c in nt.cells if c.shaded]
+    if len(shaded) != 1:
+        raise GeometryRefusal("bad_schema", "opposite_face: shade exactly one cell of the net")
+    return {nt.opposite[shaded[0].label]}
+
+
 PROPERTIES: dict[str, Callable] = {
+    # v3
+    "faces": faces,
+    "edges": edges,
+    "vertices": vertices,
+    "solid_name": solid_name,
+    "folds_to_cube": folds_to_cube,
+    "opposite_face": opposite_face,
     "coordinates_of": coordinates_of,
     "quadrant": quadrant,
     "triangle_class_by_sides": triangle_class_by_sides,

@@ -100,6 +100,8 @@ def compile_figure(spec: FigureSpec, resolve: Optional[Resolver] = None, *,
     if spec.orientation:
         if m.axes is not None:
             raise GeometryRefusal("bad_schema", "a coordinate figure is not rotated: the axes fix its orientation")
+        if m.solids or m.nets:
+            raise GeometryRefusal("bad_schema", "a solid is not rotated: one projection draws every solid")
         _rotate(m, spec.orientation)
     return m
 

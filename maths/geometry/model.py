@@ -207,6 +207,8 @@ class Model:
     number_line: Optional[NumberLine] = None       # a one-variable inequality's chart
     bar_chart: Optional[BarChart] = None           # a data task's chart
     intervals: dict[str, Interval] = field(default_factory=dict)
+    solids: dict = field(default_factory=dict)      # v3: id -> solids.Solid (a 3D object drawn flat)
+    nets: dict = field(default_factory=dict)        # v3: id -> nets.Net (a solid unfolded)
     parallel: set[frozenset] = field(default_factory=set)        # {line id, line id}
     perpendicular: set[frozenset] = field(default_factory=set)
     equal_lengths: set[frozenset] = field(default_factory=set)   # {SegKey, SegKey}
@@ -472,6 +474,12 @@ class Model:
         if self.bar_chart is not None:
             xs += [-0.6, len(self.bar_chart.values) + 0.6]
             ys += [-1.0, self.bar_chart.steps + 0.6]
+        for sd in self.solids.values():
+            xs += [p[0] for p in sd.extent]
+            ys += [p[1] for p in sd.extent]
+        for nt in self.nets.values():
+            xs += [p[0] for p in nt.extent]
+            ys += [p[1] for p in nt.extent]
         for c in self.circles.values():
             cx, cy = self.xy(c.centre)
             xs += [cx - c.radius, cx + c.radius]
