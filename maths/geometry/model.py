@@ -161,6 +161,9 @@ class Model:
     reflections: dict[str, tuple[str, str]] = field(default_factory=dict)   # image -> (source, mirror)
     translations: dict[str, tuple[str, tuple]] = field(default_factory=dict)   # image -> (source, (dx, dy) exact)
     line_labels: dict[str, str] = field(default_factory=dict)   # line id -> its equation, written beside it
+    # id -> (sampled runs in figure units, label): a curve drawn from its
+    # equation (y = ax² + bx + c), one polyline per run inside the axes
+    curves: dict[str, tuple[list[list[tuple[float, float]]], str]] = field(default_factory=dict)
     parallel: set[frozenset] = field(default_factory=set)        # {line id, line id}
     perpendicular: set[frozenset] = field(default_factory=set)
     equal_lengths: set[frozenset] = field(default_factory=set)   # {SegKey, SegKey}
