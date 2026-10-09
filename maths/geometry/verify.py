@@ -37,7 +37,7 @@ from maths.geometry.properties import compute as compute_property
 from maths.geometry.spec import Answer, Asks, QuestionSpec, StepSpec, parse_question
 from maths.geometry.theorems import REASONS, angle_symbol, apply as apply_theorem, length_symbol
 from maths.notation import NotationError, Relation, parse_relation
-from maths.verify import Check, ExampleReport, _states_equivalent
+from maths.verify import Check, ExampleReport, _pi_match, _states_equivalent, pi_taken_as
 from mathsvc.safety import MathTimeoutError
 
 DISCERN_LEN = 0.5        # sides meant to differ differ by this much (figure units; 5 mm at 1 cm/unit)
@@ -265,6 +265,13 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
             if not verdict:
                 raise GeometryRefusal("step_not_equivalent", f"{name}: {detail}", name)
             rep.checks.append(Check(name, True, detail))
+            taken = pi_taken_as(detail)
+            if taken is not None:
+                # the step took π as a school value (maths.verify, 2026-10-09):
+                # from here the knowledge says what the working now says, or
+                # "V = 72π" and "V = 226.08" together prove nothing and the
+                # answer is "never established"
+                knowledge = [k.subs(sp.pi, taken) for k in knowledge]
             knowledge += after
         elif st.kind == "check":
             if not after:
@@ -376,10 +383,16 @@ def _check_reasoning_answer(rep: QuestionReport, q: QuestionSpec, fid: str, m: M
         got = _determined(knowledge, sym)
         if got is None:
             raise GeometryRefusal("answer_unproved", f"the steps never establish {name}")
+        approx = ""
         if sp.simplify(got - value) != 0 and not _rounds_to(got, ans.value if ans.kind == "number" else ans.value.get(name)):
-            raise GeometryRefusal("answer_mismatch", f"the steps give {name} = {got}, the answer says {value}")
+            # an exact chain and a decimal answer: 72π stated as 226.08 is π
+            # taken as 3.14 (maths.verify, 2026-10-09)
+            why = _pi_match(got, value)
+            if not why:
+                raise GeometryRefusal("answer_mismatch", f"the steps give {name} = {got}, the answer says {value}")
+            approx = f" ({why})"
         rep.proved[name] = got
-        rep.checks.append(Check(f"answer {name}", True, f"{name} = {got}"))
+        rep.checks.append(Check(f"answer {name}", True, f"{name} = {got}{approx}"))
     # consistency 8a: the bound value is the proved one
     for name, bound in m.bind.items():
         got = rep.proved.get(name)

@@ -323,6 +323,116 @@ def test_a_list_of_numbers_is_data_and_never_a_crash():
 # ── rounding and estimation ───────────────────────────────────────────────
 
 
+# ── π as a school approximation, and exact decimals (2026-10-09) ──────────
+
+
+def _by(rep):
+    return {c.name: c for c in rep.checks}
+
+
+def test_decimal_arithmetic_is_exact_not_floating_point():
+    # the first geometry kit: '188.4 + 56.52' was "not equivalent to" '244.92' by 2.8e-14
+    ex = WorkedExample(label="d", task="evaluate", problem="188.4 + 56.52", givens=["188.4 + 56.52"], target="expression",
+                       steps=[Step(operation="add", before=["188.4 + 56.52"], after=["244.92"], speech="Add.")],
+                       final_answer=["244.92"])
+    rep = verify_example(ex)
+    assert rep.status == "verified", rep.reasons
+
+
+def _cylinder(approx="3.14", first="2 * 3.14 * 3 * 10 + 2 * 3.14 * 3^2", answer="244.92"):
+    return WorkedExample(
+        label="c", task="evaluate", problem=f"Find the total surface area of a cylinder with r = 3 cm and h = 10 cm, taking pi = {approx}.",
+        givens=["2 * pi * r * h + 2 * pi * r^2", "r = 3", "h = 10"], target="expression",
+        steps=[Step(operation="substitute the values", before=["2 * pi * r * h + 2 * pi * r^2", "r = 3", "h = 10"],
+                    after=[first], speech="Substitute."),
+               Step(operation="multiply", before=[first], after=["188.4 + 56.52"], speech="Multiply."),
+               Step(operation="add", before=["188.4 + 56.52"], after=[answer], speech="Add.")],
+        final_answer=[answer])
+
+
+def test_pi_taken_as_a_school_approximation_verifies_and_the_report_names_it():
+    rep = verify_example(_cylinder())
+    assert rep.status == "verified", rep.reasons
+    by = _by(rep)
+    assert "π taken as 3.14" in by["step 1"].detail and by["step 2"].ok and by["step 3"].ok
+    assert by["answer"].ok and "π taken as 3.14" in by["answer"].detail
+    # 22/7 is a school value too; 3.1 is not an approximation anyone teaches
+    seven = _cylinder("22/7", "2 * 22/7 * 3 * 10 + 2 * 22/7 * 3^2", "1716/7")
+    seven.steps = seven.steps[:1]
+    rep = verify_example(seven)
+    assert _by(rep)["step 1"].ok and "22/7" in _by(rep)["step 1"].detail, rep.reasons
+    crude = _cylinder("3.1", "2 * 3.1 * 3 * 10 + 2 * 3.1 * 3^2", "241.8")
+    crude.problem = "Find the total surface area of a cylinder with r = 3 cm and h = 10 cm."  # 3.1 not declared
+    crude.steps = crude.steps[:1]
+    assert _by(verify_example(crude))["step 1"].ok is False
+    # the way back is not a step: once π is 3.14 it does not become π again
+    back = WorkedExample(label="b", task="simplify", problem="2 * 3.14 * 5", givens=["2 * 3.14 * 5"], target="expression",
+                         steps=[Step(operation="write pi", before=["2 * 3.14 * 5"], after=["10pi"], speech="Pi.")],
+                         final_answer=["10pi"])
+    assert verify_example(back).status == "failed"
+
+
+def test_an_answer_in_terms_of_pi_still_verifies_exactly_and_a_wrong_one_fails():
+    ex = WorkedExample(label="v", task="evaluate", problem="V = pi r^2 h with r = 3 and h = 10",
+                       givens=["pi * r^2 * h", "r = 3", "h = 10"], target="expression",
+                       steps=[Step(operation="substitute", before=["pi * r^2 * h", "r = 3", "h = 10"], after=["pi * 3^2 * 10"], speech="Sub."),
+                              Step(operation="multiply", before=["pi * 3^2 * 10"], after=["90pi"], speech="Ninety pi.")],
+                       final_answer=["90pi"])
+    assert verify_example(ex).status == "verified", verify_example(ex).reasons
+    ex.final_answer = ["90"]
+    assert _by(verify_example(ex))["answer"].ok is False
+
+
+def test_a_decimal_answer_may_be_the_pi_value_rounded_to_two_places():
+    ex = WorkedExample(label="r", task="evaluate", problem="pi * 3^2 * 10 to 2 decimal places", givens=["pi * 3^2 * 10"],
+                       target="expression",
+                       steps=[Step(operation="multiply", before=["pi * 3^2 * 10"], after=["90pi"], speech="Ninety pi."),
+                              Step(operation="use the calculator's pi and round", before=["90pi"], after=["282.74"], speech="Round.")],
+                       final_answer=["282.74"])
+    rep = verify_example(ex)
+    assert rep.status == "verified", rep.reasons
+    assert "then rounded" in _by(rep)["step 2"].detail
+    ex.steps[1].after = ["283.74"]
+    ex.final_answer = ["283.74"]
+    assert verify_example(ex).status == "failed"
+
+
+def test_a_declared_pi_line_is_an_approximation_not_a_false_equation():
+    # the kit's volume example: "pi = 3.14" among the givens made the state's solution set EmptySet
+    givens = ["V = pi * r^2 * h", "r = 5", "h = 8", "pi = 3.14"]
+    ex = WorkedExample(label="V", task="solve", problem="A cylinder has r = 5 cm and h = 8 cm. Take pi = 3.14. Find its volume V.",
+                       givens=givens, target="V",
+                       steps=[Step(operation="substitute the given values", before=givens, after=["V = 3.14 * 5^2 * 8"], speech="Sub."),
+                              Step(operation="evaluate the square", before=["V = 3.14 * 5^2 * 8"], after=["V = 3.14 * 25 * 8"], speech="Square."),
+                              Step(operation="multiply", before=["V = 3.14 * 25 * 8"], after=["V = 628"], speech="Multiply.")],
+                       final_answer=["V = 628"])
+    rep = verify_example(ex)
+    assert rep.status == "verified", rep.reasons
+    by = _by(rep)
+    assert by["step 1"].ok and "3.14" in by["step 1"].detail and by["answer"].ok and by["chain end"].ok
+    # a declared value off the standard list is honoured because it was declared
+    three = WorkedExample(label="3", task="evaluate", problem="Take pi = 3. Find 2 * pi * 7.", givens=["2 * pi * 7", "pi = 3"],
+                          target="expression",
+                          steps=[Step(operation="substitute", before=["2 * pi * 7", "pi = 3"], after=["2 * 3 * 7"], speech="Sub.")],
+                          final_answer=["42"])
+    assert verify_example(three).status == "verified", verify_example(three).reasons
+
+
+def test_a_check_step_may_substitute_pi_as_an_approximation():
+    ex = _linear()
+    ex.givens = ["2 * pi * r = 18.84"]
+    ex.problem = "2 * pi * r = 18.84, pi = 3.14"
+    ex.target = "r"
+    ex.steps = [Step(operation="divide both sides by 2pi, pi = 3.14", before=["2 * pi * r = 18.84"], after=["r = 18.84 / 6.28"], speech="Divide."),
+                Step(operation="divide", before=["r = 18.84 / 6.28"], after=["r = 3"], speech="Three."),
+                Step(kind="check", operation="check", before=["r = 3"], after=["2 * 3.14 * 3 = 18.84"], speech="Check.")]
+    ex.final_answer = ["r = 3"]
+    ex.common_mistake = None
+    rep = verify_example(ex)
+    assert rep.status == "verified", rep.reasons
+    assert _by(rep)["step 3"].ok and _by(rep)["answer"].ok
+
+
 def _round_ex(before, after, precision, answer, task="round", extra_steps=()):
     steps = [Step(kind="round", operation="round", precision=precision, before=[before], after=[after], speech="r")]
     steps += list(extra_steps)

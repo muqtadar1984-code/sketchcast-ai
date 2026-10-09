@@ -157,6 +157,33 @@ def test_every_v3_figure_draws_as_its_projection_under_every_policy(qid):
             assert "Not drawn to scale" in r.svg or "scale" in r.svg.lower()
 
 
+def test_a_cylinder_volume_may_take_pi_as_a_school_value_in_the_chain_or_the_answer():
+    # the first geometry kit (2026-10-09) lost every example that wrote π as 3.14
+    q = copy.deepcopy(D7)
+    q["steps"] = [{"kind": "deduce", "theorem": "volume_cylinder", "uses": ["s"], "after": ["V = pi * 3^2 * 8"]},
+                  {"kind": "transform", "after": ["V = 3.14 * 9 * 8"]},
+                  {"kind": "transform", "after": ["V = 226.08"]}]
+    q["answer"] = {"kind": "number", "value": "226.08", "unit": "cm"}
+    rep = verify_question(q)
+    assert rep.refusal is None, rep.refusal
+    assert any("π taken as 3.14" in c.detail for c in rep.checks)
+    # an exact chain whose stated answer is the decimal
+    q2 = copy.deepcopy(D7)
+    q2["answer"] = {"kind": "number", "value": "226.08", "unit": "cm"}
+    rep2 = verify_question(q2)
+    assert rep2.refusal is None, rep2.refusal
+    assert any("π taken as 3.14" in c.detail for c in rep2.checks)
+    # 22/7 is a school value; 3.1 is not
+    q3 = copy.deepcopy(q)
+    q3["steps"][1:] = [{"kind": "transform", "after": ["V = 22/7 * 72"]}]
+    q3["answer"] = {"kind": "number", "value": "1584/7", "unit": "cm"}
+    assert verify_question(q3).refusal is None
+    q4 = copy.deepcopy(q)
+    q4["steps"][1:] = [{"kind": "transform", "after": ["V = 3.1 * 72"]}]
+    q4["answer"] = {"kind": "number", "value": "223.2", "unit": "cm"}
+    assert verify_question(q4).refusal["code"] == "step_not_equivalent"
+
+
 def test_the_cuboids_hidden_edges_are_the_three_at_the_far_corner():
     rep = verify_question(copy.deepcopy(D5))
     sd = rep.models["f"].solids["s"]
