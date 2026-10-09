@@ -105,6 +105,11 @@ def realise(spec: FigureSpec, policy: str, *, metric: Optional[Model] = None) ->
         metric = compile_figure(spec)
     if policy == "instructional_metric":
         return metric
+    if metric.solids or metric.nets:
+        # v3: a solid's picture is a view, always schematic by nature and
+        # always captioned; its numbers live in the facts. The projected
+        # figure under every policy.
+        return metric
     if metric.axes is not None:
         # v2: the grid IS the ruler — a coordinate figure drawn off its
         # coordinates is wrong, not schematic. Metric under every policy.

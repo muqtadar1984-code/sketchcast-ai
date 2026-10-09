@@ -152,7 +152,9 @@ def _box_clear(box, strokes: list[Stroke], boxes: list) -> bool:
         if _boxes_overlap(box, b):
             return False
     for s in strokes:
-        if s.role in ("hidden", "grid") or s.tag == "tick":
+        if s.role in ("hidden", "grid", "back") or s.tag == "tick" or (s.tag or "").startswith(("rim:", "outline:")):
+            # v3: a solid's rim is an outline a label may cross (a radius
+            # written inside the top ellipse, as a textbook does)
             # a grid line is background, not an obstacle (v2: every label
             # on a gridded figure crosses one); a tick mark is too small to
             # block a label (the (1, 1) tag by the origin, 2026-10-08)
@@ -296,6 +298,17 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
         d.strokes.append(Stroke([p0, _add(p1, _mul(u, RAY_OVERHANG))], tag=f"ray:{r.id}"))
         drawn_segments.add(seg_key(r.vertex, r.through))
     # segments (polygon sides, radii, chords, plain segments)
+    # v3: a solid draws its own edges — the seen ones in ink, the hidden
+    # ones dashed (role `back`: drawn, muted, never a reveal) — and its rims
+    for sd in m.solids.values():
+        for a, b, hidden in sd.edges:
+            d.strokes.append(Stroke([m.xy(a), m.xy(b)], dashed=hidden, role="back" if hidden else "ink",
+                                    tag=f"seg:{min(a, b)}|{max(a, b)}"))
+            drawn_segments.add(seg_key(a, b))
+        for pts, dashed, tag in sd.curves:
+            d.strokes.append(Stroke(list(pts), dashed=dashed, role="back" if dashed else "ink", tag=f"{tag}:{sd.id}"))
+    for nt in m.nets.values():
+        _draw_net(d, nt)
     for key in m.segments:
         if key in drawn_segments:
             continue
@@ -463,7 +476,10 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
         _number_line_numbers(d, m, label_size, boxes)
     if m.bar_chart is not None:
         _bar_chart_labels(d, m, label_size, boxes)
-    if policy == "assessment_schematic" and m.axes is None:
+    if m.nets:
+        _net_labels(d, m, label_size, boxes)
+    if (policy == "assessment_schematic" and m.axes is None) or m.solids:
+        # v3: a solid's picture is a view — always captioned
         d.notes.append(note or "Not drawn to scale")
     d.bbox = _drawing_bbox(d, m)
     return d
@@ -707,6 +723,24 @@ def _number_line_numbers(d: Drawing, m: Model, label_size: float, boxes: list) -
         k += 1
 
 
+def _draw_net(d: Drawing, nt) -> None:
+    """v3: a net's cells as squares (or rectangles), the shaded one filled."""
+    for cell in nt.cells:
+        x0, y0, x1, y1 = cell.box
+        pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        if cell.shaded:
+            d.fills.append(Fill(pts, "Y", tag=f"cell:{nt.id}:{cell.label}"))
+        d.strokes.append(Stroke(pts + [pts[0]], width=1.0, tag=f"net:{nt.id}:{cell.label}"))
+
+
+def _net_labels(d: Drawing, m: Model, label_size: float, boxes: list) -> None:
+    for nt in m.nets.values():
+        for cell in nt.cells:
+            x0, y0, x1, y1 = cell.box
+            _place_or_skip(d, [((x0 + x1) / 2, (y0 + y1) / 2 - label_size * 0.35, "middle")], cell.label,
+                           label_size * 0.9, boxes, strokes=False, tag=f"netlabel:{nt.id}:{cell.label}")
+
+
 def _place_or_skip(d: Drawing, candidates: list[tuple[float, float, str]], text: str, size: float,
                    boxes: list, *, strokes: bool = True, tag: Optional[str] = None) -> bool:
     """A label that may be left out: placed at the first clear candidate,
@@ -863,8 +897,20 @@ def _place_segment_label(d: Drawing, m: Model, key, text: str, size: float, boxe
     cx, cy = _centroid(m)
     if (mid[0] - cx) * n[0] + (mid[1] - cy) * n[1] < 0:
         n = (-n[0], -n[1])
+    # the label's axis-aligned box must clear its OWN slanted segment: on a
+    # solid's board (a cylinder's radius PR, 2026-10-09) the handwriting
+    # face's box was wider than the segment and every near offset crossed
+    # it — the offset along the normal is at least half the box's extent
+    # across that normal (as a line's equation label is placed, phase 1)
+    bx0, by0, bx1, by1 = text_box(0.0, 0.0, text, size, "middle", d.label_pad, d.measure)
+    bw, bh = bx1 - bx0, by1 - by0
+    need = (bw * abs(n[0]) + bh * abs(n[1])) / 2 + 0.08
     cands = []
     for off in (0.38, 0.6, 0.85):
+        off = max(off, need)
+        cands.append((mid[0] + n[0] * off, mid[1] + n[1] * off, "middle"))
+        cands.append((mid[0] - n[0] * off, mid[1] - n[1] * off, "middle"))
+    for off in (need + 0.3, need + 0.6):
         cands.append((mid[0] + n[0] * off, mid[1] + n[1] * off, "middle"))
         cands.append((mid[0] - n[0] * off, mid[1] - n[1] * off, "middle"))
     _try_place(d, cands, text, size, boxes, "label", what, tag=f"seglabel:{a}|{b}")

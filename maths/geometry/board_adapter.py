@@ -115,7 +115,7 @@ def _stroke_secs(points: list, role: str) -> float:
 
 def _gridded(m: Model) -> bool:
     """Axes or a number line: figure units are numbers, labels crowd."""
-    return m.axes is not None or m.number_line is not None or m.bar_chart is not None
+    return m.axes is not None or m.number_line is not None or m.bar_chart is not None or bool(m.solids) or bool(m.nets)
 
 
 def _min_px(m: Model) -> float:
@@ -240,7 +240,7 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
         # equal sides must look it (founder direction 2026-10-08)
         width = GRID_PX if st.role == "grid" else (MARK_PX if st.role == "mark" else STROKE_PX) * max(0.6, min(1.4, st.width))
         el = {"id": eid, "type": "shape", "shape": "path", "points": [P(p) for p in st.points],
-              "width": width, "color": "muted" if st.role in ("hidden", "mark", "grid") else "ink", "exact": True}
+              "width": width, "color": "muted" if st.role in ("hidden", "mark", "grid", "back") else "ink", "exact": True}
         fb.elements.append(el)
         if st.tag:
             fb.targets.setdefault(st.tag, []).append(eid)
@@ -328,7 +328,7 @@ def _segment_targets(fb: FigureBoard, m: Model, sid: str) -> list[str]:
 
 def figure_targets(fb: FigureBoard) -> list[str]:
     """Every ink stroke of the figure — what 'highlight this figure' means."""
-    return [eid for tag, ids in fb.targets.items() if tag.startswith(("line:", "ray:", "seg:", "grid:"))
+    return [eid for tag, ids in fb.targets.items() if tag.startswith(("line:", "ray:", "seg:", "grid:", "rim:", "outline:", "net:"))
             for eid in ids]
 
 

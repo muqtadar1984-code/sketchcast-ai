@@ -1823,6 +1823,257 @@ def c_grid_pattern(ctx: BuildContext, obj: dict) -> None:
     ctx.model.object_ids[gid] = ("grid", gid)
 
 
+# ── v3: solids ────────────────────────────────────────────────────────────
+
+from maths.geometry import solids as _sol  # noqa: E402
+
+
+def _solid_dim(ctx: BuildContext, obj: dict, key: str, w: str, *, default=None) -> tuple[sp.Expr, float]:
+    if key not in obj and default is not None:
+        return sp.nsimplify(default), float(default)
+    e = ctx.exact(_req(obj, key, w), where=f"{w}.{key}")
+    v = ctx.num(obj[key], "length", where=f"{w}.{key}")
+    if v <= 0:
+        raise GeometryRefusal("construction_impossible", f"{w}: `{key}` must be positive", w)
+    return e, float(v)
+
+
+def _solid_points(ctx: BuildContext, sd: "_sol.Solid", named: dict[str, tuple], exact: dict[str, tuple],
+                  hidden: tuple[str, ...] = ()) -> None:
+    """Place every vertex (and helper point) of a solid at its projection,
+    the exact projected pair kept, helpers hidden."""
+    m = ctx.model
+    for pid, p3 in named.items():
+        sx, sy = _sol.project(p3)
+        pt = ctx.place(pid, sx, sy)
+        pt.exact = _sol.project_exact(exact[pid])
+        if pid in hidden:
+            pt.hidden = True
+            sd.hidden_points.add(pid)
+        sd.vertices[pid] = p3
+        sd.extent.append((sx, sy))
+
+
+def _register_solid(ctx: BuildContext, sd: "_sol.Solid", w: str) -> None:
+    m = ctx.model
+    if m.axes is not None or m.number_line is not None or m.bar_chart is not None:
+        raise GeometryRefusal("bad_schema", f"{w}: a solid is its own figure, never on axes", w)
+    if sd.id in m.solids:
+        raise GeometryRefusal("bad_reference", f"{w}: solid {sd.id!r} is defined twice", w)
+    for a, b, _hidden in sd.edges:
+        m.segment(a, b)
+    for a, b in sd.roles.values():
+        m.segment(a, b)
+    m.solids[sd.id] = sd
+    m.object_ids[sd.id] = ("solid", sd.id)
+
+
+def _box(ctx: BuildContext, obj: dict, kind: str) -> None:
+    """A cuboid (or a cube: one edge) with A–D round the base and E–H above
+    them: A at the near corner, AB the length (to the right), AD the width
+    (back, to the left), AE the height."""
+    w = _where(obj)
+    sid = str(obj.get("id") or kind)
+    if kind == "cube":
+        e_e, e_v = _solid_dim(ctx, obj, "edge", w)
+        dims = {"edge": e_e}
+        l = wd = h = e_v
+        el = ew = eh = e_e
+    else:
+        el, l = _solid_dim(ctx, obj, "length", w)
+        ew, wd = _solid_dim(ctx, obj, "width", w)
+        eh, h = _solid_dim(ctx, obj, "height", w)
+        dims = {"length": el, "width": ew, "height": eh}
+    ids = [str(obj.get("points", {}).get(k) or f"p_{k}") for k in "abcdefgh"] if isinstance(obj.get("points"), dict) \
+        else [f"p_{k}" for k in "abcdefgh"]
+    a, b, c, d, e, f, g, hh = ids
+    named = {a: (0.0, 0.0, 0.0), b: (l, 0.0, 0.0), c: (l, wd, 0.0), d: (0.0, wd, 0.0),
+             e: (0.0, 0.0, h), f: (l, 0.0, h), g: (l, wd, h), hh: (0.0, wd, h)}
+    exact = {a: (0, 0, 0), b: (el, 0, 0), c: (el, ew, 0), d: (0, ew, 0),
+             e: (0, 0, eh), f: (el, 0, eh), g: (el, ew, eh), hh: (0, ew, eh)}
+    sd = _sol.Solid(sid, kind, dims)
+    sd.faces = [[a, b, c, d], [e, f, g, hh], [a, b, f, e], [b, c, g, f], [c, d, hh, g], [d, a, e, hh]]
+    _solid_points(ctx, sd, named, exact)
+    sd.edges = _sol.cull_edges(sd.faces, sd.vertices)
+    sd.roles = {"length": (a, b), "width": (b, c), "height": (a, e), "edge": (a, b)}
+    _register_solid(ctx, sd, w)
+
+
+def c_cube(ctx: BuildContext, obj: dict) -> None:
+    """v3: `edge`. Points A–H (ids p_a … p_h, or `points: {a: id, …}`)."""
+    _box(ctx, obj, "cube")
+
+
+def c_cuboid(ctx: BuildContext, obj: dict) -> None:
+    """v3: `length`, `width`, `height`. Points A–H."""
+    _box(ctx, obj, "cuboid")
+
+
+def c_prism(ctx: BuildContext, obj: dict) -> None:
+    """v3: a triangular prism — a right-angled cross-section ABC (AB the
+    `base`, AC the `base_height`, the right angle at A) at the front and
+    DEF behind it, `length` apart. Volume = area of the cross-section ×
+    length, the LS7/8 question."""
+    w = _where(obj)
+    shape = str(obj.get("shape") or "triangle")
+    if shape != "triangle":
+        raise GeometryRefusal("unsupported_feature", f"{w}: a prism on a {shape} base is a later phase", w)
+    eb, bv = _solid_dim(ctx, obj, "base", w)
+    eht, htv = _solid_dim(ctx, obj, "base_height", w)
+    el, lv = _solid_dim(ctx, obj, "length", w)
+    a, b, c, d, e, f = [f"p_{k}" for k in "abcdef"]
+    named = {a: (0.0, 0.0, 0.0), b: (bv, 0.0, 0.0), c: (0.0, 0.0, htv),
+             d: (0.0, lv, 0.0), e: (bv, lv, 0.0), f: (0.0, lv, htv)}
+    exact = {a: (0, 0, 0), b: (eb, 0, 0), c: (0, 0, eht), d: (0, el, 0), e: (eb, el, 0), f: (0, el, eht)}
+    sd = _sol.Solid(str(obj.get("id") or "prism"), "prism", {"base": eb, "base_height": eht, "length": el})
+    sd.faces = [[a, b, c], [d, e, f], [a, b, e, d], [a, c, f, d], [b, c, f, e]]
+    _solid_points(ctx, sd, named, exact)
+    sd.edges = _sol.cull_edges(sd.faces, sd.vertices)
+    sd.roles = {"base": (a, b), "base_height": (a, c), "length": (a, d)}
+    _register_solid(ctx, sd, w)
+
+
+def c_pyramid(ctx: BuildContext, obj: dict) -> None:
+    """v3: a square-based pyramid — base ABCD of side `base_side`, apex T,
+    `height` from the base's centre O (a helper point) to T, drawn dashed."""
+    w = _where(obj)
+    shape = str(obj.get("shape") or "square")
+    if shape != "square":
+        raise GeometryRefusal("unsupported_feature", f"{w}: a pyramid on a {shape} base is a later phase", w)
+    es, sv = _solid_dim(ctx, obj, "base_side", w)
+    eh, hv = _solid_dim(ctx, obj, "height", w)
+    a, b, c, d, t, o = "p_a", "p_b", "p_c", "p_d", "p_t", "p_o"
+    named = {a: (0.0, 0.0, 0.0), b: (sv, 0.0, 0.0), c: (sv, sv, 0.0), d: (0.0, sv, 0.0),
+             t: (sv / 2, sv / 2, hv), o: (sv / 2, sv / 2, 0.0)}
+    exact = {a: (0, 0, 0), b: (es, 0, 0), c: (es, es, 0), d: (0, es, 0), t: (es / 2, es / 2, eh), o: (es / 2, es / 2, 0)}
+    sd = _sol.Solid(str(obj.get("id") or "pyramid"), "pyramid", {"base_side": es, "height": eh})
+    sd.faces = [[a, b, c, d], [a, b, t], [b, c, t], [c, d, t], [d, a, t]]
+    _solid_points(ctx, sd, named, exact, hidden=(o,))
+    verts = {k: v for k, v in sd.vertices.items() if k != o}
+    sd.edges = _sol.cull_edges(sd.faces, verts) + [(o, t, True)]
+    sd.roles = {"base_side": (a, b), "height": (o, t)}
+    _register_solid(ctx, sd, w)
+
+
+def c_cylinder(ctx: BuildContext, obj: dict) -> None:
+    """v3: `radius`, `height`. O and P the bottom and top centres, R on the
+    top rim (PR the radius), S and U the ends of the right-hand side (SU
+    the height). The rims are ellipses: the top whole, the bottom's front
+    arc drawn and its back arc dashed."""
+    w = _where(obj)
+    er, rv = _solid_dim(ctx, obj, "radius", w)
+    eh, hv = _solid_dim(ctx, obj, "height", w)
+    o, pp, r, s_, u, l1, l2 = "p_o", "p_p", "p_r", "p_s", "p_u", "p_l1", "p_l2"
+    k = rv / math.sqrt(2)
+    ek = er * sp.sqrt(2) / 2
+    named = {o: (0.0, 0.0, 0.0), pp: (0.0, 0.0, hv), r: (rv, 0.0, hv), s_: (k, -k, 0.0), u: (k, -k, hv),
+             l1: (-k, k, 0.0), l2: (-k, k, hv)}
+    exact = {o: (0, 0, 0), pp: (0, 0, eh), r: (er, 0, eh), s_: (ek, -ek, 0), u: (ek, -ek, eh),
+             l1: (-ek, ek, 0), l2: (-ek, ek, eh)}
+    sd = _sol.Solid(str(obj.get("id") or "cylinder"), "cylinder", {"radius": er, "height": eh})
+    _solid_points(ctx, sd, named, exact, hidden=(o, r, s_, u, l1, l2))
+    sd.edges = [(s_, u, False), (l1, l2, False), (o, pp, True)]
+    sd.roles = {"radius": (pp, r), "height": (s_, u)}
+    sd.curves = [(_sol.rim(0, 0, hv, rv), False, "rim:top"), (_sol.rim(0, 0, 0, rv, front=True), False, "rim:bottom"),
+                 (_sol.rim(0, 0, 0, rv, front=False), True, "rim:bottom")]
+    for pts, _d, _t in sd.curves:
+        sd.extent += pts
+    _register_solid(ctx, sd, w)
+
+
+def c_cone(ctx: BuildContext, obj: dict) -> None:
+    """v3: `radius`, `height`. O the base centre, T the apex (OT the height,
+    dashed), R on the rim (OR the radius, dashed inside the base)."""
+    w = _where(obj)
+    er, rv = _solid_dim(ctx, obj, "radius", w)
+    eh, hv = _solid_dim(ctx, obj, "height", w)
+    o, t, r, s_, l1 = "p_o", "p_t", "p_r", "p_s", "p_l1"
+    k = rv / math.sqrt(2)
+    ek = er * sp.sqrt(2) / 2
+    named = {o: (0.0, 0.0, 0.0), t: (0.0, 0.0, hv), r: (rv, 0.0, 0.0), s_: (k, -k, 0.0), l1: (-k, k, 0.0)}
+    exact = {o: (0, 0, 0), t: (0, 0, eh), r: (er, 0, 0), s_: (ek, -ek, 0), l1: (-ek, ek, 0)}
+    sd = _sol.Solid(str(obj.get("id") or "cone"), "cone", {"radius": er, "height": eh})
+    _solid_points(ctx, sd, named, exact, hidden=(r, s_, l1))
+    sd.edges = [(s_, t, False), (l1, t, False), (o, t, True), (o, r, True)]
+    sd.roles = {"radius": (o, r), "height": (o, t)}
+    sd.curves = [(_sol.rim(0, 0, 0, rv, front=True), False, "rim:base"), (_sol.rim(0, 0, 0, rv, front=False), True, "rim:base")]
+    for pts, _d, _t in sd.curves:
+        sd.extent += pts
+    _register_solid(ctx, sd, w)
+
+
+def c_sphere(ctx: BuildContext, obj: dict) -> None:
+    """v3: `radius`. O the centre, R on the equator (OR the radius): the
+    outline circle and the equator ellipse, its back arc dashed."""
+    w = _where(obj)
+    er, rv = _solid_dim(ctx, obj, "radius", w)
+    o, r = "p_o", "p_r"
+    named = {o: (0.0, 0.0, 0.0), r: (rv, 0.0, 0.0)}
+    exact = {o: (0, 0, 0), r: (er, 0, 0)}
+    sd = _sol.Solid(str(obj.get("id") or "sphere"), "sphere", {"radius": er})
+    _solid_points(ctx, sd, named, exact, hidden=(r,))
+    sd.edges = [(o, r, True)]
+    sd.roles = {"radius": (o, r)}
+    outline = [(rv * math.cos(2 * math.pi * i / 72), rv * math.sin(2 * math.pi * i / 72)) for i in range(73)]
+    # the equator as a textbook draws it: an ellipse INSIDE the outline (the
+    # drawing convention is not an orthonormal projection, so the projected
+    # circle would poke past the sphere's silhouette — contact sheet, 2026-10-09)
+    def eq(t0, t1):
+        return [(rv * math.cos(t0 + (t1 - t0) * i / 36), 0.38 * rv * math.sin(t0 + (t1 - t0) * i / 36)) for i in range(37)]
+    sd.curves = [(outline, False, "outline"), (eq(math.pi, 2 * math.pi), False, "rim:equator"),
+                 (eq(0.0, math.pi), True, "rim:equator")]
+    for pts, _d, _t in sd.curves:
+        sd.extent += pts
+    _register_solid(ctx, sd, w)
+
+
+def c_net(ctx: BuildContext, obj: dict) -> None:
+    """v3: a cube or cuboid unfolded. `solid` cube|cuboid; a cube net is one
+    of the eleven `layout` names or explicit `cells` [[row, col], …] (six
+    squares; folded to check); `labels` six strings (default '1'..'6'),
+    `shaded` one of them; a cube's `edge` (default 1), a cuboid's `length`,
+    `width`, `height`."""
+    from maths.geometry import nets as _nets  # noqa: PLC0415
+
+    w = _where(obj)
+    m = ctx.model
+    if m.axes is not None or m.solids:
+        raise GeometryRefusal("bad_schema", f"{w}: a net is its own figure", w)
+    nid = str(obj.get("id") or "net")
+    if nid in m.nets:
+        raise GeometryRefusal("bad_reference", f"{w}: net {nid!r} is defined twice", w)
+    of = str(obj.get("solid") or obj.get("of") or "cube")
+    labels = obj.get("labels")
+    if labels is not None and (not isinstance(labels, list) or len(labels) != 6):
+        raise GeometryRefusal("bad_schema", f"{w}: `labels` is a list of six", w)
+    shaded = obj.get("shaded")
+    try:
+        if of == "cube":
+            cells = None
+            if obj.get("cells") is not None:
+                raw = obj["cells"]
+                if not isinstance(raw, list):
+                    raise GeometryRefusal("bad_schema", f"{w}: `cells` is a list of [row, col]", w)
+                cells = []
+                for rc in raw:
+                    if not isinstance(rc, (list, tuple)) or len(rc) != 2:
+                        raise GeometryRefusal("bad_schema", f"{w}: `cells` is a list of [row, col]", w)
+                    cells.append((int(float(rc[0])), int(float(rc[1]))))
+            edge = ctx.num(obj.get("edge", 1), "length", where=f"{w}.edge") if "edge" in obj else 1.0
+            net = _nets.cube_net(nid, layout=obj.get("layout"), cells=cells, edge=float(edge),
+                                 labels=labels, shaded=None if shaded is None else str(shaded))
+        elif of == "cuboid":
+            dims = {k: ctx.num(obj.get(k, dflt), "length", where=f"{w}.{k}") for k, dflt in
+                    (("length", 3), ("width", 2), ("height", 1))}
+            net = _nets.cuboid_net(nid, labels=labels, shaded=None if shaded is None else str(shaded), **dims)
+        else:
+            raise GeometryRefusal("unsupported_feature", f"{w}: a net of a {of} is a later phase", w)
+    except ValueError as exc:
+        raise GeometryRefusal("bad_schema", f"{w}: {exc}", w) from exc
+    m.nets[nid] = net
+    m.object_ids[nid] = ("net", nid)
+
+
 # ── the registry ──────────────────────────────────────────────────────────
 
 CONSTRUCTIONS: dict[str, Callable[[BuildContext, dict], None]] = {
@@ -1875,6 +2126,15 @@ CONSTRUCTIONS: dict[str, Callable[[BuildContext, dict], None]] = {
     "diameter": c_diameter,
     "chord": c_chord,
     "grid_pattern": c_grid_pattern,
+    # v3: solids drawn flat
+    "cube": c_cube,
+    "cuboid": c_cuboid,
+    "prism": c_prism,
+    "pyramid": c_pyramid,
+    "cylinder": c_cylinder,
+    "cone": c_cone,
+    "sphere": c_sphere,
+    "net": c_net,
 }
 
 # Features the corpus met and v1 deliberately does not express. Naming
@@ -1887,8 +2147,7 @@ UNSUPPORTED: dict[str, str] = {
     "tessellation": "tilings are a later phase",
     "curved_boundary": "regions bounded by arcs are not in v1",
     "arc_capped_rectangle": "regions bounded by arcs are not in v1",
-    "net": "3D solids and nets are a later phase",
-    "solid": "3D solids and nets are a later phase",
+    "solid": "name the solid: cube, cuboid, prism, pyramid, cylinder, cone or sphere",
     "compass_construction": "animated compass work is a later phase; use construction_arc marks",
 }
 

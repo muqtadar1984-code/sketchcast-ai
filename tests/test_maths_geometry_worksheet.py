@@ -114,7 +114,7 @@ def _pictures(path: Path) -> int:
 
 def test_the_reply_shape_normalises_to_the_spec_and_verifies():
     spec, difficulty = normalise_question(copy.deepcopy(Q_SCALENE))
-    assert difficulty == 1 and spec["schema_version"] == "geometry.figure.v2"   # the current version (v2 is a superset of v1)
+    assert difficulty == 1 and spec["schema_version"] == "geometry.figure.v3"   # the current version (v2 is a superset of v1)
     assert spec["answer"] == {"kind": "label_set", "value": ["A"]}
     assert "bind" not in spec["figures"][0]["figure"] and "vertices" not in spec["figures"][0]["figure"]["objects"][0]
     assert verify_question(spec).ok

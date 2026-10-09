@@ -44,6 +44,9 @@ AREA = sp.Symbol("A")
 CIRCUMFERENCE = sp.Symbol("C")
 GRADIENT = sp.Symbol("m")       # v2: the gradient a question asks for
 INTERCEPT = sp.Symbol("c")      # v2: the y-intercept of a line
+VOLUME = sp.Symbol("V")         # v3: the volume of a solid
+SURFACE = sp.Symbol("S")        # v3: the surface area of a solid
+FACES, EDGES, VERTICES = sp.Symbol("F"), sp.Symbol("E"), sp.Symbol("N")   # v3: Euler, N vertices
 
 
 @dataclass
@@ -56,6 +59,7 @@ class Uses:
     circles: list[str]
     other: list[str]
     points: list[str] = field(default_factory=list)   # v2: plotted points a coordinate theorem works on
+    solids: list[str] = field(default_factory=list)   # v3: the solid a volume theorem works on
 
 
 def sort_uses(m: Model, uses: list[str], theorem: str) -> Uses:
@@ -73,6 +77,8 @@ def sort_uses(m: Model, uses: list[str], theorem: str) -> Uses:
             u.circles.append(x)
         elif x in m.points:
             u.points.append(x)
+        elif x in m.solids:
+            u.solids.append(x)
         else:
             u.other.append(x)   # a relation id or a configuration id: documentation
     return u
@@ -690,6 +696,78 @@ def _unsupported(name: str):
     return fn
 
 
+# ── v3: solids ────────────────────────────────────────────────────────────
+
+def _the_solid(m: Model, u: Uses, T: str, *kinds: str):
+    _premise(T, len(u.solids) == 1, "cite the solid by its id")
+    sd = m.solids[u.solids[0]]
+    if kinds:
+        _premise(T, sd.kind in kinds, f"{sd.name} is not a {' or '.join(kinds)}")
+    return sd
+
+
+def _role_symbol(m: Model, sd, role: str) -> sp.Symbol:
+    a, b = sd.roles[role]
+    return _segment_symbol(m, a, b)
+
+
+def t_volume_cuboid(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "volume_cuboid", "cuboid", "cube")
+    if sd.kind == "cube":
+        e = _role_symbol(m, sd, "edge")
+        return [sp.Eq(VOLUME, e ** 3)]
+    return [sp.Eq(VOLUME, _role_symbol(m, sd, "length") * _role_symbol(m, sd, "width") * _role_symbol(m, sd, "height"))]
+
+
+def t_volume_prism(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "volume_prism", "prism")
+    return [sp.Eq(VOLUME, sp.Rational(1, 2) * _role_symbol(m, sd, "base") * _role_symbol(m, sd, "base_height")
+                  * _role_symbol(m, sd, "length"))]
+
+
+def t_volume_cylinder(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "volume_cylinder", "cylinder")
+    return [sp.Eq(VOLUME, sp.pi * _role_symbol(m, sd, "radius") ** 2 * _role_symbol(m, sd, "height"))]
+
+
+def t_volume_pyramid(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "volume_pyramid", "pyramid")
+    return [sp.Eq(VOLUME, sp.Rational(1, 3) * _role_symbol(m, sd, "base_side") ** 2 * _role_symbol(m, sd, "height"))]
+
+
+def t_volume_cone(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "volume_cone", "cone")
+    return [sp.Eq(VOLUME, sp.Rational(1, 3) * sp.pi * _role_symbol(m, sd, "radius") ** 2 * _role_symbol(m, sd, "height"))]
+
+
+def t_volume_sphere(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "volume_sphere", "sphere")
+    return [sp.Eq(VOLUME, sp.Rational(4, 3) * sp.pi * _role_symbol(m, sd, "radius") ** 3)]
+
+
+def t_surface_area_cuboid(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "surface_area_cuboid", "cuboid", "cube")
+    if sd.kind == "cube":
+        return [sp.Eq(SURFACE, 6 * _role_symbol(m, sd, "edge") ** 2)]
+    l, w, h = (_role_symbol(m, sd, r) for r in ("length", "width", "height"))
+    return [sp.Eq(SURFACE, 2 * (l * w + w * h + l * h))]
+
+
+def t_surface_area_cylinder(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "surface_area_cylinder", "cylinder")
+    r, h = _role_symbol(m, sd, "radius"), _role_symbol(m, sd, "height")
+    return [sp.Eq(SURFACE, 2 * sp.pi * r ** 2 + 2 * sp.pi * r * h)]
+
+
+def t_euler_solids(m: Model, u: Uses) -> list[sp.Eq]:
+    """F + N − E = 2 for the cited solid, its faces and vertices counted
+    (N vertices, so the volume's V stays its own symbol)."""
+    sd = _the_solid(m, u, "euler_solids")
+    _premise("euler_solids", sd.kind not in ("cylinder", "cone", "sphere"), "Euler's formula is for polyhedra")
+    f, e, n = sd.counts
+    return [sp.Eq(FACES, f), sp.Eq(VERTICES, n), sp.Eq(FACES + VERTICES - EDGES, 2)]
+
+
 THEOREMS: dict[str, Callable[[Model, Uses], list[sp.Eq]]] = {
     "angles_on_line": t_angles_on_line,
     "angles_at_point": t_angles_at_point,
@@ -722,6 +800,16 @@ THEOREMS: dict[str, Callable[[Model, Uses], list[sp.Eq]]] = {
     "perpendicular_gradients": t_perpendicular_gradients,
     "reflection_rule": t_reflection_rule,
     "translation_rule": t_translation_rule,
+    # v3: solids
+    "volume_cuboid": t_volume_cuboid,
+    "volume_prism": t_volume_prism,
+    "volume_cylinder": t_volume_cylinder,
+    "volume_pyramid": t_volume_pyramid,
+    "volume_cone": t_volume_cone,
+    "volume_sphere": t_volume_sphere,
+    "surface_area_cuboid": t_surface_area_cuboid,
+    "surface_area_cylinder": t_surface_area_cylinder,
+    "euler_solids": t_euler_solids,
 }
 
 # The reason an answer key prints for each theorem, English; other
@@ -767,6 +855,15 @@ REASONS: dict[str, str] = {
     "perpendicular_gradients": "the gradients of perpendicular lines multiply to −1",
     "reflection_rule": "a reflection keeps the distance to the mirror line and swaps the side",
     "translation_rule": "a translation adds the same shift to the x-coordinate and to the y-coordinate",
+    "volume_cuboid": "the volume of a cuboid is length times width times height (a cube: edge cubed)",
+    "volume_prism": "the volume of a prism is the area of its cross-section times its length",
+    "volume_cylinder": "the volume of a cylinder is pi times the radius squared times the height",
+    "volume_pyramid": "the volume of a pyramid is a third of the base area times the height",
+    "volume_cone": "the volume of a cone is a third of pi times the radius squared times the height",
+    "volume_sphere": "the volume of a sphere is four thirds of pi times the radius cubed",
+    "surface_area_cuboid": "the surface area of a cuboid is the sum of its six faces: 2(lw + wh + lh)",
+    "surface_area_cylinder": "the surface area of a cylinder is two circles and the curved face: 2(pi)r(r + h)",
+    "euler_solids": "for any polyhedron, faces + vertices - edges = 2",
 }
 
 
