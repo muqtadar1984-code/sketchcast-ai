@@ -17,8 +17,10 @@ def _system() -> WorkedExample:
                          intro_speech="Two equations, two unknowns.",
                          steps=[Step(kind="transform", before=["2x + y = 5", "x - y = 1"], after=["3x = 6", "x - y = 1"],
                                      operation="add the equations", speech="Add them: the y terms cancel."),
-                                Step(kind="transform", after=["x = 2", "x - y = 1"], operation="divide by 3", speech="Divide by three."),
-                                Step(kind="transform", after=["x = 2", "y = 1"], operation="substitute x = 2", speech="Put x back in.")],
+                                Step(kind="transform", before=["3x = 6", "x - y = 1"], after=["x = 2", "x - y = 1"],
+                                     operation="divide by 3", speech="Divide by three."),
+                                Step(kind="transform", before=["x = 2", "x - y = 1"], after=["x = 2", "y = 1"],
+                                     operation="substitute x = 2", speech="Put x back in.")],
                          final_answer=["x = 2", "y = 1"], answer_speech="So x is two and y is one.")
 
 
@@ -99,3 +101,48 @@ def test_every_chart_string_exists_in_every_lesson_language():
     from maths.i18n import BOARD, LANGS
     for key in ("lines_cross", "lines_cross_speech", "line_graph", "line_graph_speech"):
         assert set(BOARD[key]) >= set(LANGS), key
+
+
+def test_a_chart_renders_to_a_picture_for_paper_and_slides():
+    from maths.charts import chart_image
+    ch = chart_for(_system())
+    img = chart_image(ch)
+    assert img is not None
+    png, width_mm = img
+    assert png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 2000 and 30.0 < width_mm < 200.0
+    assert chart_image(None) is None and chart_image({"closing": "nonsense"}) is None
+
+
+def test_the_deck_slide_carries_the_chart(tmp_path):
+    from agent5_slides.deck_generator import apply_maths_lesson
+    from shared.lesson_model import LessonModel
+    ex = _system()
+    ex.chart = chart_for(ex)
+    model = LessonModel(title="Simultaneous equations")
+    n = apply_maths_lesson(model, {"examples": [ex.model_dump()]}, tmp_path, "en")
+    assert n == 1 and model.worked_figures == {0: "maths_chart_1"}
+    fig = model.figures["maths_chart_1"]
+    assert fig.png.exists() and fig.w > 0 and fig.h > 0
+
+
+def test_the_answer_key_prints_the_chart_under_a_system_question(tmp_path):
+    from docgen import generate_document
+    from tests.test_maths_geometry_worksheet import BOOK, CHAPTER, Client, _pictures
+    from tests.test_maths_lesson import GOOD_EX1
+    system = {
+        "label": "Q", "difficulty": 2, "task": "solve_system", "problem": "Solve 2x + y = 5 and x - y = 1.",
+        "givens": ["2x + y = 5", "x - y = 1"], "target": "x, y",
+        "steps": [{"kind": "transform", "operation": "add the equations", "before": ["2x + y = 5", "x - y = 1"],
+                   "after": ["3x = 6", "x - y = 1"], "explanation": "add the equations"},
+                  {"kind": "transform", "operation": "divide by 3", "before": ["3x = 6", "x - y = 1"],
+                   "after": ["x = 2", "x - y = 1"], "explanation": "divide by 3"},
+                  {"kind": "transform", "operation": "substitute x = 2", "before": ["x = 2", "x - y = 1"],
+                   "after": ["x = 2", "y = 1"], "explanation": "substitute"}],
+        "final_answer": ["x = 2", "y = 1"],
+    }
+    client = Client([dict(GOOD_EX1), system], [], [])
+    paths = generate_document("worksheet", BOOK, CHAPTER, {}, client, {"num_questions": 2}, tmp_path,
+                              language="en", maths=True)
+    # the sheet shows no chart (it would give the answer away); the key shows ONE, under the system
+    assert _pictures(paths[0]) == 0
+    assert _pictures(paths[1]) == 1
