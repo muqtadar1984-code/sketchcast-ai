@@ -85,7 +85,7 @@ _CONSTRUCTION = _obj({
 _ANGLE = _obj({"id": _S, "rays": _arr(_arr(_S)), "region": _enum("interior", "reflex")}, ("id", "rays"))
 _SEGMENT = _obj({"id": _S, "points": _arr(_S)}, ("id", "points"))
 _MEASURE = _obj({"target": _S, "value": _S, "unit": _enum("deg", "cm", "mm", "m", "units"),
-                 "role": _enum("given", "unknown", "derived")}, ("target", "value", "role"))
+                 "role": _enum("given", "unknown", "derived"), "kind": _enum("volume", "surface_area")}, ("target", "value", "role"))
 _RELATION = _obj({
     "id": _S, "kind": _enum("collinear", "parallel", "perpendicular", "equal_length", "equal_angle", "midpoint",
                             "on_segment", "on_circle", "right_angle", "angle_value", "length_value"),
@@ -487,7 +487,8 @@ _SOLID_RULES = (
     "(V = pi * r^2 * h, exact in pi), volume_pyramid (V = base_side^2 * h / 3), volume_cone, volume_sphere, surface_area_cuboid "
     "(S = 2(lw + wh + lh)), surface_area_cylinder (S = 2 pi r^2 + 2 pi r h) with the solid's id in 'uses' and 'after' lines in V "
     "or S; euler_solids gives F = faces, N = vertices and F + N - E = 2 (the unknown count E). An unknown edge from a given volume: "
-    "bind the volume (bind V = 72) and measure the edge 'h' as unknown. A net is drawn flat with its cells labelled; a cube net "
+    "measure the SOLID itself ({target: 's', value: '72', unit: 'cm', kind: 'volume'}) and the edge as unknown ('h', bound to its "
+    "value for the drawing); the step then reads '72 = 6 * 4 * h'. A net is drawn flat with its cells labelled; a cube net "
     "not on the eleven-name list is given as cells and the engine folds it to check."
 )
 

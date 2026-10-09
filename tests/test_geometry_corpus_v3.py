@@ -90,11 +90,11 @@ D7 = _reasoning("D7", "Find the volume of the cylinder. Leave your answer in ter
 D8 = _reasoning("D8", "The volume of the cuboid is 72 cm³. Find its height h.",
                 [{"make": "cuboid", "id": "s", "length": "6", "width": "4", "height": "h"}],
                 [_seg("A", "B"), _seg("B", "C"), _seg("A", "E")],
-                [_given("A", "B", "6"), _given("B", "C", "4"), {"target": "s_ae", "value": "h", "unit": "cm", "role": "unknown"}],
-                [{"kind": "deduce", "theorem": "volume_cuboid", "uses": ["s"], "after": ["V = 6 * 4 * h"]},
-                 {"kind": "transform", "after": ["72 = 24 * h"]},
+                [_given("A", "B", "6"), _given("B", "C", "4"), {"target": "s_ae", "value": "h", "unit": "cm", "role": "unknown"},
+                 {"target": "s", "value": "72", "unit": "cm", "kind": "volume"}],
+                [{"kind": "deduce", "theorem": "volume_cuboid", "uses": ["s"], "after": ["72 = 6 * 4 * h"]},
                  {"kind": "transform", "after": ["h = 3"]}],
-                {"kind": "number", "value": "3", "unit": "cm"}, BOX_PTS, bind={"V": 72, "h": 3})
+                {"kind": "number", "value": "3", "unit": "cm"}, BOX_PTS, bind={"h": 3})
 
 D9 = _reasoning("D9", "Find the volume of the triangular prism.",
                 [{"make": "prism", "id": "s", "base": "4", "base_height": "3", "length": "7"}],
@@ -131,10 +131,8 @@ D13 = _reasoning("D13", "Find the volume of the sphere, in terms of pi.",
                   {"kind": "transform", "after": ["V = 36 * pi"]}],
                  {"kind": "number", "value": "36*pi", "unit": "cm"}, _pts("O"))
 
-# D8 (an unknown height from a GIVEN volume) waits on a measure of the solid
-# itself ("V = 72 given"); the spec has no such measure yet.
-CORPUS = {q["id"]: q for q in (D1, D2, D3, D4, D5, D6, D7, D9, D10, D11, D12, D13)}
-EXPECT = {"D5": {"V": "72"}, "D6": {"S": "108"}, "D7": {"V": "72*pi"}, "D9": {"V": "42"},
+CORPUS = {q["id"]: q for q in (D1, D2, D3, D4, D5, D6, D7, D8, D9, D10, D11, D12, D13)}
+EXPECT = {"D5": {"V": "72"}, "D6": {"S": "108"}, "D7": {"V": "72*pi"}, "D8": {"h": "3"}, "D9": {"V": "42"},
           "D10": {"E": "12"}, "D11": {"V": "48"}, "D12": {"V": "12*pi"}, "D13": {"V": "36*pi"}}
 
 
