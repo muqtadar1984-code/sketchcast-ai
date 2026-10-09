@@ -78,6 +78,7 @@ _CONSTRUCTION = _obj({
     "offset": _S, "n": _I, "turns": _arr(_S), "radius": _S, "centre": _S, "circle": _S, "vertex": _S,
     "from_ray": _arr(_S), "to": _S, "length": _S, "segment": _arr(_S), "beyond": _S, "ratio": _S,
     "edge": _S, "base_side": _S, "base_height": _S, "solid": _S, "layout": _S, "labels": _arr(_S), "shaded": _S,
+    "by": _S, "clockwise": _B, "about": _S, "shape": _S,
     "of": _arr(_S), "line": _S, "point": _S, "lines": _arr(_S), "gap": _S, "hidden": _B,
     "rows": _I, "cols": _I, "cells": _arr(_arr(_S)), "palette": _arr(_S), "through": _S,
 }, ("make",))
@@ -491,6 +492,34 @@ _SOLID_RULES = (
 )
 
 
+# v4: rotation, trigonometry, circle theorems, compass arcs
+_SIGNATURES_V4 = {
+    "rotate_point": "point, by:90|180|270 (anticlockwise; clockwise:true to turn the other way), about:origin, to:<new point id>",
+    "tangent_at": "id, circle, point:<a point on the circle>, length, side:left|right, to:<new point id> — the tangent at the point; "
+                  "the radius meets it at 90",
+}
+_V4_RULES = (
+    "ROTATION: `rotate_point` about the origin by 90, 180 or 270 (clockwise:true to turn the other way); cite the image point "
+    "with rotation_rule. TRIGONOMETRY (a right-angled triangle drawn by triangle_rhs, or any triangle whose construction fixes "
+    "a 90 angle): declare the angle in 'angles' and measure it ('30' given, or 'x' unknown); cite sin_ratio, cos_ratio or "
+    "tan_ratio with the triangle's id AND the angle's id in 'uses'; write the ratio as the theorem gives it, in DEGREES: "
+    "'sin(30) = 5/h', 'tan(x) = 3/4'; then transform ('h = 10', 'x = atan(3/4)'). An answer that is not exact is written "
+    "ROUNDED to two decimals ('36.87', '7.78') and the engine accepts the correct rounding only. CIRCLE THEOREMS over a "
+    "`circle` with points placed by point_on_circle / diameter / chord and angles declared in 'angles' (vertex first in each "
+    "ray): angle_at_centre (cite the circle, the angle at the centre and the angle at the circumference), angle_in_semicircle "
+    "(the circle and the angle on a diameter), angles_same_segment (the circle and the two angles), cyclic_quadrilateral (the "
+    "circle, the polygon over the four points, and two OPPOSITE interior angles), tangent_radius (the circle and the angle at "
+    "the point of contact of a `tangent_at`). COMPASS CONSTRUCTIONS: perpendicular_bisector / angle_bisector drawn hidden, "
+    "the arcs as construction_arc marks with an id and hidden:true, revealed by steps' figure_ops reveal_object (the arc "
+    "ids, then the bisector)."
+)
+
+
+def v4_enabled() -> bool:
+    """GEOMETRY_V4=0 keeps rotation, trigonometry and circle theorems out of the prompt without a deploy."""
+    return os.environ.get("GEOMETRY_V4", "1").strip().lower() not in ("0", "false", "off", "no")
+
+
 def v3_enabled() -> bool:
     """GEOMETRY_V3=0 keeps solids and nets out of the prompt without a deploy."""
     return os.environ.get("GEOMETRY_V3", "1").strip().lower() not in ("0", "false", "off", "no")
@@ -536,7 +565,8 @@ _SPEECH_RULES = (
 def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, chapter_context: str,
                     kind: str, focus: Optional[list[str]] = None) -> str:
     sigs = "\n".join(f"  - {name}: {sig}" for name, sig in {**_SIGNATURES, **(_SIGNATURES_V2 if v2_enabled() else {}),
-                                                          **(_SIGNATURES_V3 if v3_enabled() else {})}.items())
+                                                          **(_SIGNATURES_V3 if v3_enabled() else {}),
+                                                          **(_SIGNATURES_V4 if v4_enabled() else {})}.items())
     theorems = "\n".join(f"  - {t}: {REASONS[t]}" for t in THEOREMS)
     doc = {"worksheet": "a practice worksheet",
            "lesson": "a VIDEO LESSON — worked examples the teacher talks through on the board while the diagram "
@@ -585,7 +615,7 @@ def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, 
         "reasoning question's answer is the value its steps prove.",
         "EXAMPLES (one of each kind):\n" + _EXAMPLE_REASONING + "\n" + _EXAMPLE_EVIDENCE
         + ("\n" + _EXAMPLE_COORD if v2_enabled() else "") + ("\n" + _EXAMPLE_SOLID if v3_enabled() else ""),
-    ] + ([_COORD_RULES] if v2_enabled() else []) + ([_SOLID_RULES] if v3_enabled() else []) + [
+    ] + ([_COORD_RULES] if v2_enabled() else []) + ([_SOLID_RULES] if v3_enabled() else []) + ([_V4_RULES] if v4_enabled() else []) + [
     ] + ([_SPEECH_RULES.format(language=language or "en")] if kind == "lesson" else []) + ([
         "CONCEPTS OF THIS CHAPTER NOT YET TAUGHT by the rest of the lesson: " + "; ".join(focus[:8]) + ". "
         "Prefer examples that teach THESE, where the construction library can draw them (a 'which of these "
@@ -967,5 +997,5 @@ def _pretty_line(text: str) -> str:
         return s
 
 
-__all__ = ["figure_client", "v2_enabled", "v3_enabled", "quiz_image", "quiz_image_data_url", "GEOMETRY_SET_SCHEMA", "GeometryItem", "FigureImage", "geometry_items", "geometry_prompt",
+__all__ = ["figure_client", "v2_enabled", "v3_enabled", "v4_enabled", "quiz_image", "quiz_image_data_url", "GEOMETRY_SET_SCHEMA", "GeometryItem", "FigureImage", "geometry_items", "geometry_prompt",
            "key_lines", "normalise_question", "render_item"]

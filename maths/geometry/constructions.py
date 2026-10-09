@@ -777,6 +777,76 @@ def c_reflect_point(ctx: BuildContext, obj: dict) -> None:
     m.segment(src, to, None)
 
 
+def c_rotate_point(ctx: BuildContext, obj: dict) -> None:
+    """v4: the image of `point` turned about the ORIGIN `by` 90, 180 or 270
+    degrees (anticlockwise unless `clockwise` is true), placed as `to`. The
+    rule is a fact the chain's rotation_rule theorem states."""
+    w = _where(obj)
+    _need_axes(ctx, w)
+    m = ctx.model
+    src = _req(obj, "point", w)
+    to = _req(obj, "to", w)
+    about = str(obj.get("about") or "origin").strip().lower()
+    if about not in ("origin", "o", "(0, 0)", "(0,0)"):
+        raise GeometryRefusal("unsupported_feature", f"{w}: rotation about {about!r} — only the origin is drawn", w)
+    try:
+        by = int(round(float(ctx.num(_req(obj, "by", w), "angle", where=w, free=False))))
+    except (TypeError, ValueError):
+        raise GeometryRefusal("bad_schema", f"{w}: `by` is 90, 180 or 270", w) from None
+    if by % 360 not in (90, 180, 270):
+        raise GeometryRefusal("bad_schema", f"{w}: `by` is 90, 180 or 270", w)
+    k = (by % 360) // 90
+    if bool(obj.get("clockwise", False)):
+        k = (4 - k) % 4
+    if not m.has_point(src):
+        raise GeometryRefusal("bad_reference", f"{w}: point {src!r} is not placed", w)
+    if m.has_point(to):
+        raise GeometryRefusal("bad_reference", f"{w}: `to` names a new point; {to!r} exists", w)
+    sx, sy = m.xy(src)
+    x, y = {1: (-sy, sx), 2: (-sx, -sy), 3: (sy, -sx)}[k]
+    pt = ctx.place(to, x, y)
+    pe = m.points[src].exact
+    if pe is not None:
+        pt.exact = {1: (-pe[1], pe[0]), 2: (-pe[0], -pe[1]), 3: (pe[1], -pe[0])}[k]
+    m.rotations[to] = (src, k)
+    m.segment(src, to, None)
+
+
+def c_tangent_at(ctx: BuildContext, obj: dict) -> None:
+    """v4: the tangent to `circle` at `point` (on the circle): a segment from
+    the point to `to` (a new point, `length` along the tangent, to the
+    `side` left or right of the radius). The angle between the radius and
+    the tangent is a fact: 90, which tangent_radius states."""
+    w = _where(obj)
+    m = ctx.model
+    cid, pid = _req(obj, "circle", w), _req(obj, "point", w)
+    c = m.circles.get(cid)
+    if c is None:
+        raise GeometryRefusal("bad_reference", f"{w}: circle {cid!r} is not defined", w)
+    if not m.has_point(pid):
+        raise GeometryRefusal("bad_reference", f"{w}: point {pid!r} is not placed", w)
+    o, p_ = m.xy(c.centre), m.xy(pid)
+    if abs(math.dist(o, p_) - c.radius) > 1e-6 * max(1.0, c.radius):
+        raise GeometryRefusal("construction_impossible", f"{w}: {pid!r} is not on circle {cid!r}", w)
+    to = obj.get("to") or m.new_point_id("t")
+    if m.has_point(to):
+        raise GeometryRefusal("bad_reference", f"{w}: `to` names a new point; {to!r} exists", w)
+    length = ctx.num(obj["length"], "length", where=w) if "length" in obj else DEFAULT_LEN * 0.8
+    side = obj.get("side", "right")
+    if side not in ("left", "right"):
+        raise GeometryRefusal("bad_schema", f"{w}: side is 'left' or 'right'", w)
+    u = _unit(_sub(p_, o))
+    d = (-u[1], u[0]) if side == "left" else (u[1], -u[0])
+    ctx.place(to, *(_add(p_, _mul(d, length))))
+    s_ = m.segment(pid, to, ctx.exact(obj["length"], where=w) if "length" in obj else None)
+    if "id" in obj:
+        m.segment_ids[obj["id"]] = s_.key
+        m.object_ids[obj["id"]] = ("segment", obj["id"])
+    m.segment(c.centre, pid, c.exact).hidden = False      # the radius the tangent meets is drawn
+    m.angle(pid, c.centre, to, exact=sp.Integer(90))
+    m.tangents[pid] = (cid, to)
+
+
 def c_line_eq(ctx: BuildContext, obj: dict) -> None:
     """A straight line from its equation a·x + b·y = c, drawn across the
     axes through two HIDDEN points where it meets the axes box, and
@@ -1761,7 +1831,9 @@ def c_point_on_circle(ctx: BuildContext, obj: dict) -> None:
     ang = ctx.num(obj.get("angle", 0), "angle", where=w)
     cx, cy = m.xy(c.centre)
     ctx.place(pid, cx + c.radius * math.cos(math.radians(ang)), cy + c.radius * math.sin(math.radians(ang)))
-    m.segment(c.centre, pid, c.exact)
+    rad = m.segment(c.centre, pid, c.exact)
+    if not bool(obj.get("draw", False)):
+        rad.hidden = True       # v4: the radius is a fact, drawn only when named (circle theorems' figures were spoked)
     for other in list(m.points):
         if other != pid and other != c.centre and m.segments.get(seg_key(c.centre, other)) is not None \
                 and abs(m.length_float(seg_key(c.centre, other)) - c.radius) < 1e-9:
@@ -1769,7 +1841,7 @@ def c_point_on_circle(ctx: BuildContext, obj: dict) -> None:
 
 
 def c_radius_segment(ctx: BuildContext, obj: dict) -> None:
-    c_point_on_circle(ctx, obj)
+    c_point_on_circle(ctx, {**obj, "draw": True})
 
 
 def c_diameter(ctx: BuildContext, obj: dict) -> None:
@@ -2094,6 +2166,8 @@ CONSTRUCTIONS: dict[str, Callable[[BuildContext, dict], None]] = {
     "polygon": c_polygon,
     "reflect_point": c_reflect_point,
     "translate_point": c_translate_point,
+    "rotate_point": c_rotate_point,
+    "tangent_at": c_tangent_at,
     "line_eq": c_line_eq,
     "curve_eq": c_curve_eq,
     "number_line": c_number_line,
@@ -2142,7 +2216,7 @@ CONSTRUCTIONS: dict[str, Callable[[BuildContext, dict], None]] = {
 # plausible figure drawn in its place.
 UNSUPPORTED: dict[str, str] = {
     "reflection": "transformations are a later phase",
-    "rotation": "transformations are a later phase",
+    "rotation": "a rotation is rotate_point (about the origin, by 90, 180 or 270)",
     "translation": "transformations are a later phase",
     "tessellation": "tilings are a later phase",
     "curved_boundary": "regions bounded by arcs are not in v1",

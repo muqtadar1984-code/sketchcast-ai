@@ -71,6 +71,10 @@ class Ray:
 class Segment:
     key: SegKey
     exact: Optional[sp.Expr] = None     # length, when a construction fixed it
+    # v4: a fact of length that is not a line on the page — the radius to a
+    # point placed on a circle is a fact (equal radii) but is drawn only when
+    # the question names it (segments, radius_segment, diameter)
+    hidden: bool = False
 
 
 @dataclass
@@ -200,6 +204,8 @@ class Model:
     axes: Optional[Axes] = None                                   # v2
     reflections: dict[str, tuple[str, str]] = field(default_factory=dict)   # image -> (source, mirror)
     translations: dict[str, tuple[str, tuple]] = field(default_factory=dict)   # image -> (source, (dx, dy) exact)
+    rotations: dict[str, tuple[str, int]] = field(default_factory=dict)        # v4: image -> (source, quarter turns anticlockwise)
+    tangents: dict[str, tuple[str, str]] = field(default_factory=dict)         # v4: point on circle -> (circle id, tangent's far point)
     line_labels: dict[str, str] = field(default_factory=dict)   # line id -> its equation, written beside it
     # id -> (sampled runs in figure units, label): a curve drawn from its
     # equation (y = ax² + bx + c), one polyline per run inside the axes
@@ -500,6 +506,20 @@ def _exact_equal(a: sp.Expr, b: sp.Expr) -> bool:
         return sp.simplify(a - b) == 0
     except Exception:  # noqa: BLE001 — SymPy refused; the facts cannot say
         return False
+
+
+_TRIG_FNS = (sp.sin, sp.cos, sp.tan)
+_INV_FNS = (sp.asin, sp.acos, sp.atan)
+
+
+def in_degrees(e):
+    """v4: a figure's angles are degrees — sin(40) in a bound value or a
+    chain line means sin 40°, and atan(3/4) a number of degrees."""
+    if not isinstance(e, sp.Basic):
+        return e
+    e = e.replace(lambda x: x.func in _TRIG_FNS and not (x.args and x.args[0].has(sp.pi)),
+                  lambda x: x.func(x.args[0] * sp.pi / 180))
+    return e.replace(lambda x: x.func in _INV_FNS, lambda x: x * 180 / sp.pi)
 
 
 def to_float(expr: sp.Expr, bind: dict[str, sp.Expr]) -> float:

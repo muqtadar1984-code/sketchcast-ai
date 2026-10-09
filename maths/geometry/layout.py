@@ -309,8 +309,8 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
             d.strokes.append(Stroke(list(pts), dashed=dashed, role="back" if dashed else "ink", tag=f"{tag}:{sd.id}"))
     for nt in m.nets.values():
         _draw_net(d, nt)
-    for key in m.segments:
-        if key in drawn_segments:
+    for key, sg in m.segments.items():
+        if key in drawn_segments or sg.hidden:
             continue
         a, b = sorted(key)
         on_line = any(a in ln.points and b in ln.points for ln in m.lines.values() if ln.hidden and not show_hidden)
@@ -415,7 +415,12 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
             c, p = m.xy(centre), m.xy(through)
             r = math.dist(c, p)
             a = math.degrees(math.atan2(p[1] - c[1], p[0] - c[0]))
-            d.strokes.append(Stroke(_arc_points(c, r, a - 12, a + 12, 10), width=0.7, role="mark"))
+            # v4: an arc with an id and `hidden` waits for a step's reveal_object
+            # (the compass set at A, the arc drawn as the teacher says so)
+            hidden_mark = bool(extra.get("hidden")) and bool(mk.id)
+            d.strokes.append(Stroke(_arc_points(c, r, a - 12, a + 12, 10), width=0.7,
+                                    role="hidden" if hidden_mark else "mark",
+                                    tag=f"mark:{mk.id}" if mk.id else None))
         else:
             raise GeometryRefusal("bad_schema", f"mark kind {kind!r} is not one v1 draws")
     # right-angle squares the facts guarantee, when the policy shows them
