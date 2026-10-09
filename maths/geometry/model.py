@@ -207,6 +207,8 @@ class Model:
     rotations: dict[str, tuple[str, int]] = field(default_factory=dict)        # v4: image -> (source, quarter turns anticlockwise)
     tangents: dict[str, tuple[str, str]] = field(default_factory=dict)         # v4: point on circle -> (circle id, tangent's far point)
     line_labels: dict[str, str] = field(default_factory=dict)   # line id -> its equation, written beside it
+    dashed_lines: set = field(default_factory=set)              # line ids drawn dashed (a strict inequality's boundary)
+    regions: dict[str, list] = field(default_factory=dict)      # id -> polygon (figure units): a tinted half-plane
     # id -> (sampled runs in figure units, label): a curve drawn from its
     # equation (y = ax² + bx + c), one polyline per run inside the axes
     curves: dict[str, tuple[list[list[tuple[float, float]]], str]] = field(default_factory=dict)

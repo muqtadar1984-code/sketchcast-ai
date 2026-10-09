@@ -898,6 +898,50 @@ def c_line_eq(ctx: BuildContext, obj: dict) -> None:
     label = str(obj.get("label") or "").strip()
     if label:
         m.line_labels[lid] = label[:24]
+    if bool(obj.get("dashed", False)):
+        m.dashed_lines.add(lid)        # a strict inequality's boundary: not included
+
+
+def c_half_plane(ctx: BuildContext, obj: dict) -> None:
+    """The region a·x + b·y `op` c of the axes box (op one of < <= > >=),
+    tinted. The chart of a two-variable inequality (maths/charts.py)."""
+    w = _where(obj)
+    ax = _need_axes(ctx, w)
+    m = ctx.model
+    rid = str(obj.get("id") or f"region_{len(m.regions) + 1}")
+    if rid in m.regions:
+        raise GeometryRefusal("bad_reference", f"{w}: region {rid!r} is defined twice", w)
+    a, b, c = (ctx.exact(_req(obj, k, w), where=w) for k in ("a", "b", "c"))
+    if a.free_symbols or b.free_symbols or c.free_symbols:
+        raise GeometryRefusal("bad_schema", f"{w}: a, b and c are numbers", w)
+    op = str(obj.get("op") or "<=")
+    if op not in ("<", "<=", ">", ">="):
+        raise GeometryRefusal("bad_schema", f"{w}: `op` is <, <=, > or >=", w)
+    fa, fb, fc = float(a), float(b), float(c)
+    sign = 1.0 if op in ("<", "<=") else -1.0
+
+    def inside(p):
+        return sign * (fa * p[0] + fb * p[1] - fc) <= 1e-9
+
+    def cross(p, q):
+        fp, fq = fa * p[0] + fb * p[1] - fc, fa * q[0] + fb * q[1] - fc
+        t = fp / (fp - fq)
+        return (p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t)
+
+    box = [(ax.x0, ax.y0), (ax.x1, ax.y0), (ax.x1, ax.y1), (ax.x0, ax.y1)]
+    out = []
+    for i, p in enumerate(box):
+        q = box[(i + 1) % 4]
+        if inside(p):
+            out.append(p)
+            if not inside(q):
+                out.append(cross(p, q))
+        elif inside(q):
+            out.append(cross(p, q))
+    if len(out) < 3:
+        raise GeometryRefusal("construction_impossible", f"{w}: the region does not enter the axes box", w)
+    m.regions[rid] = [(float(x), float(y)) for x, y in out]
+    m.object_ids[rid] = ("region", rid)
 
 
 _BAR_STEPS = (1, 2, 5, 10, 20, 50, 100)
@@ -2169,6 +2213,7 @@ CONSTRUCTIONS: dict[str, Callable[[BuildContext, dict], None]] = {
     "rotate_point": c_rotate_point,
     "tangent_at": c_tangent_at,
     "line_eq": c_line_eq,
+    "half_plane": c_half_plane,
     "curve_eq": c_curve_eq,
     "number_line": c_number_line,
     "bar_chart": c_bar_chart,

@@ -104,7 +104,7 @@ def test_every_chart_string_exists_in_every_lesson_language():
                 "ineq_left_open", "ineq_left_closed", "ineq_between",
                 "data_caption_mean", "data_caption_median", "data_caption_mode", "data_caption_range",
                 "data_mean_speech", "data_median_speech", "data_median_even_speech", "data_mode_speech",
-                "data_range_speech"):
+                "data_range_speech", "region_caption", "region_speech_closed", "region_speech_strict"):
         assert set(BOARD[key]) >= set(LANGS), key
 
 
@@ -249,12 +249,11 @@ def test_a_solved_inequality_gets_its_number_line_with_the_solution_set():
     wrong = _inequality()
     wrong.final_answer = ["x <= 2"]
     assert chart_for(wrong) is None
-    # two variables: the verifier never passes such an example, and the
-    # chart builder refuses it on its own too
+    # two variables: not a number line — a half-plane (phase 7)
     two = WorkedExample(task="solve_inequality", problem="x + y <= 4", givens=["x + y <= 4"], target="y",
                         steps=[Step(kind="transform", before=["x + y <= 4"], after=["y <= 4 - x"], speech="s")],
                         final_answer=["y <= 4 - x"])
-    assert chart_for(two) is None
+    assert chart_for(two)["kind"] == "half_plane"
 
 
 def test_the_number_line_draws_beside_the_working_and_closes_on_the_solution_set():
@@ -347,3 +346,60 @@ def test_the_bar_chart_draws_beside_the_working_and_closes_on_the_statistic():
         assert want_caption in texts and want_words in lines[0].line, task
         assert not _audit(close), task
         assert chart_image(ex.chart) is not None, task
+
+
+def _half() -> WorkedExample:
+    return WorkedExample(label="Example 5", task="solve_inequality", problem="Show the region x + y <= 4.", givens=["x + y <= 4"],
+                         target="y", intro_speech="A region.", answer_speech="Shade below the line.",
+                         steps=[Step(kind="transform", before=["x + y <= 4"], after=["y <= 4 - x"], operation="subtract x", speech="Take x across.")],
+                         final_answer=["y <= 4 - x"])
+
+
+def test_a_two_variable_inequality_verifies_as_a_half_plane_and_is_shaded():
+    from maths.verify import half_plane, verify_example
+    from maths.notation import parse_relation
+    assert half_plane(parse_relation("x + y <= 4")) == half_plane(parse_relation("y <= 4 - x"))
+    assert half_plane(parse_relation("2x + 2y < 8")) == half_plane(parse_relation("x + y < 4"))
+    assert half_plane(parse_relation("x + y <= 4")) != half_plane(parse_relation("x + y < 4"))       # strictness matters
+    assert half_plane(parse_relation("x + y <= 4")) != half_plane(parse_relation("x + y >= 4"))      # the side matters
+    assert half_plane(parse_relation("x^2 + y <= 4")) is None and half_plane(parse_relation("x <= 4")) is None
+    ex = _half()
+    rep = verify_example(ex)
+    assert rep.status == "verified", rep.reasons
+    ch = chart_for(ex)
+    assert ch and ch["kind"] == "half_plane" and ch["answer"] == "y ≤ 4 - x" and ch["strict"] is False
+    objs = ch["closing"]["figures"][0]["figure"]["objects"]
+    assert [o["make"] for o in objs] == ["axes", "line_eq", "half_plane"] and objs[1]["dashed"] is False
+    assert [o["make"] for o in ch["beside"]["figures"][0]["figure"]["objects"]] == ["axes", "line_eq"]
+    rep = verify_question(ch["closing"])
+    assert rep.ok, rep.refusal
+    m = rep.models["g"]
+    assert len(m.regions["r1"]) >= 3 and all((x + y) <= 4 + 1e-6 for x, y in m.regions["r1"])
+    # a strict inequality: the boundary is dashed; a wrong side gets no chart
+    strict = _half()
+    strict.givens, strict.final_answer = ["y > 2x - 1"], ["y > 2x - 1"]
+    strict.steps = [Step(kind="transform", before=["y > 2x - 1"], after=["y > 2x - 1"], speech="s")]
+    ch2 = chart_for(strict)
+    assert ch2 and ch2["strict"] and ch2["closing"]["figures"][0]["figure"]["objects"][1]["dashed"] is True
+    wrong = _half()
+    wrong.final_answer = ["y >= 4 - x"]
+    assert chart_for(wrong) is None
+    assert verify_example(wrong).status != "verified"
+
+
+def test_the_half_plane_draws_beside_the_working_and_closes_on_the_shaded_region():
+    from maths.charts import chart_image
+    ex = _half()
+    ex.chart = chart_for(ex)
+    scene, _lines = B.example_scene(ex, MethodCard(title="METHOD", steps=["Rearrange", "Shade"]), "s003", has_card=True)
+    assert not _audit(scene)
+    assert any(e["id"].startswith("fig_s") for e in scene["elements"]), "the boundary is drawn"
+    out = B.chart_scene(ex, "s004", "en")
+    assert out is not None
+    close, lines = out
+    texts = {e["text"] for e in close["elements"] if e["type"] == "text"}
+    assert "The shaded region is y ≤ 4 - x" in texts and "drawn solid" in lines[0].line
+    tints = [e for e in close["elements"] if e["type"] == "shape" and e.get("fill") is True]
+    assert len(tints) == 1, "the region is one translucent wash"
+    assert not _audit(close)
+    assert chart_image(ex.chart) is not None

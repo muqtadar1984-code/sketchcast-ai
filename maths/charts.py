@@ -114,7 +114,8 @@ def chart_for(ex: WorkedExample) -> Optional[dict]:
     kind "lines":    {beside, closing, point: "(2, 1)" | None, lines: [labels]}
     kind "parabola": {beside, closing, point: None, roots: ["-2", "3"], vertex: "(h, k)", lines: [label]}"""
     try:
-        return _lines_chart(ex) or _parabola_chart(ex) or _number_line_chart(ex) or _data_chart(ex)
+        return (_lines_chart(ex) or _parabola_chart(ex) or _number_line_chart(ex) or _data_chart(ex)
+                or _half_plane_chart(ex))
     except Exception:  # noqa: BLE001 — a chart is a bonus; the example stands without it
         return None
 
@@ -480,3 +481,49 @@ def _data_chart(ex: WorkedExample) -> Optional[dict]:
            "value": value, "n": n, "labels": labels}
     out.update(extra)
     return out
+
+
+def _half_plane_chart(ex: WorkedExample) -> Optional[dict]:
+    """After a linear inequality in x and y is solved (rearranged): the
+    boundary line beside the working, dashed when strict; closing, the
+    region shaded. The answer's half-plane must be the givens'."""
+    from maths.verify import half_plane  # noqa: PLC0415
+
+    if ex.figure or ex.task != "solve_inequality":
+        return None
+    givens = [g for g in (ex.givens or []) if str(g).strip()]
+    answer = [a for a in (ex.final_answer or []) if str(a).strip()]
+    if len(givens) != 1 or len(answer) != 1:
+        return None
+    try:
+        want, got = half_plane(parse_relation(givens[0])), half_plane(parse_relation(answer[0]))
+    except NotationError:
+        return None
+    if want is None or got is None or want != got or got[5] != ("x", "y"):
+        return None
+    _t, a, b, c, op, _syms = got                   # a·x + b·y + c op 0
+    strict = op == "<"
+    # the boundary a·x + b·y = -c; its intercepts range the axes
+    xs: list = [0] + ([-c / a] if a != 0 else [])
+    ys: list = [0] + ([-c / b] if b != 0 else [])
+    ax, ay = _axis(xs), _axis(ys)
+    if ax is None or ay is None:
+        return None
+    step = max(ax[2], ay[2])
+    (x0, x1), (y0, y1) = _align(ax, step), _align(ay, step)
+    label = _label(answer[0]).replace(">=", "≥").replace("<=", "≤")
+    axes = {"make": "axes", "id": "ax", "x": [x0, x1], "y": [y0, y1], "step": step, "grid": True}
+    line = {"make": "line_eq", "id": "l1", "a": _fmt(a), "b": _fmt(b), "c": _fmt(-c), "label": label, "dashed": strict}
+    region = {"make": "half_plane", "id": "r1", "a": _fmt(a), "b": _fmt(b), "c": _fmt(-c), "op": op}
+
+    def spec(with_region: bool) -> dict:
+        objects = [axes, line] + ([region] if with_region else [])
+        return {"schema_version": SCHEMA, "id": "chart", "figure_role": "illustration", "prompt": "",
+                "figures": [{"id": "g", "figure": {"units": "units", "points": [], "objects": objects, "measures": []}}]}
+
+    from maths.geometry import verify_question  # noqa: PLC0415 — the engine checks what it drew
+    beside, closing = spec(False), spec(True)
+    if not verify_question(beside).ok or not verify_question(closing).ok:
+        return None
+    return {"kind": "half_plane", "beside": beside, "closing": closing, "point": None, "lines": [label],
+            "answer": label, "strict": strict}

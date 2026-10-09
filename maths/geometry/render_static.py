@@ -89,7 +89,8 @@ def _svg(d: Drawing, tx, w_mm: float, h_mm: float, scale: float) -> str:
            f'viewBox="0 0 {w_mm:.2f} {h_mm:.2f}" font-family="DejaVu Sans, Arial, sans-serif">']
     for f in d.fills:
         pts = " ".join(f"{x:.3f},{y:.3f}" for x, y in (tx(p) for p in f.points))
-        out.append(f'<polygon points="{pts}" fill="{PALETTE.get(f.colour, "#cccccc")}" stroke="none"/>')
+        colour = "#d6e2fb" if getattr(f, "tint", False) else PALETTE.get(f.colour, "#cccccc")
+        out.append(f'<polygon points="{pts}" fill="{colour}" stroke="none"/>')
     for s in d.strokes:
         pts = " ".join(f"{x:.3f},{y:.3f}" for x, y in (tx(p) for p in s.points))
         width = STROKE_MM * s.width
@@ -129,7 +130,7 @@ def _png(d: Drawing, tx, w_mm: float, h_mm: float, scale: float, dpi: int) -> by
         return (x * px * S, y * px * S)
 
     for f in d.fills:
-        dr.polygon([P(p) for p in f.points], fill=PALETTE.get(f.colour, "#cccccc"))
+        dr.polygon([P(p) for p in f.points], fill="#d6e2fb" if getattr(f, "tint", False) else PALETTE.get(f.colour, "#cccccc"))
     for s in d.strokes:
         width = max(1, int(round(STROKE_MM * s.width * px * S)))
         colour = {"hidden": "#555555", "grid": "#b8b8b8", "back": "#555555"}.get(s.role, "#111111")   # v2: the grid is background; v3: hidden edges

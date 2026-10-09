@@ -1132,7 +1132,11 @@ def chart_scene(ex: WorkedExample, seg_id: str, lang: str = "en") -> Optional[tu
     if not isinstance(spec, dict):
         return None
     point, eqs = ch.get("point"), ch.get("lines") or []
-    if ch.get("kind") == "data":
+    if ch.get("kind") == "half_plane":
+        caption = _bt("region_caption", lang, ans=ch.get("answer") or "")
+        speech = _bt("region_speech_strict" if ch.get("strict") else "region_speech_closed", lang,
+                     ans=ch.get("answer") or "", line=(ch.get("lines") or [""])[0])
+    elif ch.get("kind") == "data":
         stat, v = str(ch.get("stat")), ch.get("value") or ""
         caption = _bt(f"data_caption_{stat}", lang, v=v)
         if stat == "median" and ch.get("a") is not None:

@@ -73,6 +73,7 @@ class Fill:
     points: list[Vec]
     colour: str                 # a palette name; the renderer maps it
     tag: Optional[str] = None   # cell:<grid id>
+    tint: bool = False          # a translucent wash (a shaded half-plane), not a solid cell colour
 
 
 @dataclass
@@ -288,8 +289,10 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
             continue
         p0, p1 = m.xy(ln.points[0]), m.xy(ln.points[-1])
         u = _unit(_sub(p1, p0))
+        dashed = ln.hidden or ln.id in m.dashed_lines
         d.strokes.append(Stroke([_sub(p0, _mul(u, LINE_OVERHANG)), _add(p1, _mul(u, LINE_OVERHANG))],
-                                dashed=ln.hidden, role="hidden" if ln.hidden else "ink", tag=f"line:{ln.id}"))
+                                dashed=dashed, role="hidden" if ln.hidden else ("back" if dashed else "ink"),
+                                tag=f"line:{ln.id}"))
         for a, b in zip(ln.points, ln.points[1:]):
             drawn_segments.add(seg_key(a, b))
     for r in m.rays.values():
@@ -345,6 +348,8 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
     boxes: list = []
     if m.axes is not None:
         _draw_axes(d, m, label_size, boxes)
+    for rid, pts in m.regions.items():
+        d.fills.append(Fill(list(pts), "B", tag=f"region:{rid}", tint=True))
     if m.number_line is not None:
         _draw_number_line(d, m)
     if m.bar_chart is not None:
