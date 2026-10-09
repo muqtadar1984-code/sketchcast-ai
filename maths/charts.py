@@ -8,6 +8,11 @@ already consume. The model never writes one; one that cannot be built is
 omitted, never faked (founder decisions, 2026-10-09; the catalogue's
 "Simultaneous Linear Equations" solved well and drew nothing).
 
+Phase 4 (inequalities): a solved one-variable inequality gets its number
+line — bare beside the working; closing, the solution set marked with
+open/closed circles and an arrow. (A two-variable half-plane waits on
+the verifier: multivariate inequalities are never verified.)
+
 Phase 3 (quadratics): a solved or factorised quadratic in x gets its
 parabola (`curve_eq`), and — closing — its roots on the x-axis and its
 vertex, when every root is rational and the answer names them all.
@@ -104,7 +109,7 @@ def chart_for(ex: WorkedExample) -> Optional[dict]:
     kind "lines":    {beside, closing, point: "(2, 1)" | None, lines: [labels]}
     kind "parabola": {beside, closing, point: None, roots: ["-2", "3"], vertex: "(h, k)", lines: [label]}"""
     try:
-        return _lines_chart(ex) or _parabola_chart(ex)
+        return _lines_chart(ex) or _parabola_chart(ex) or _number_line_chart(ex)
     except Exception:  # noqa: BLE001 — a chart is a bonus; the example stands without it
         return None
 
@@ -301,3 +306,83 @@ def chart_image(chart: Optional[dict], *, which: str = "closing") -> Optional[tu
         return r.png, float(r.width_mm)
     except Exception:  # noqa: BLE001 — a picture is a bonus
         return None
+
+
+def _interval_of(texts: list[str]) -> Optional[sp.Interval]:
+    """The solution set of inequalities in x alone, when it is ONE interval."""
+    from maths.verify import _solution_set  # noqa: PLC0415
+
+    rels = []
+    for t in texts:
+        try:
+            rel = parse_relation(t)
+        except NotationError:
+            return None
+        if not rel.is_inequality or rel.free_symbols != {X}:
+            return None
+        rels.append(rel)
+    if not rels:
+        return None
+    try:
+        out = _solution_set(rels, [X], "all")
+    except Exception:  # noqa: BLE001
+        return None
+    return out if isinstance(out, sp.Interval) else None
+
+
+def _bound(v) -> Optional[sp.Rational]:
+    if v in (sp.S.Infinity, sp.S.NegativeInfinity):
+        return None
+    v = sp.nsimplify(v)
+    return sp.Rational(v) if v.is_Rational else None
+
+
+def _number_line_chart(ex: WorkedExample) -> Optional[dict]:
+    """After a one-variable inequality is solved: the number line, and —
+    closing — the solution set. The answer's set must be the givens' set."""
+    if ex.figure or ex.task != "solve_inequality":
+        return None
+    givens = [g for g in (ex.givens or []) if str(g).strip()]
+    answer = [a for a in (ex.final_answer or []) if str(a).strip()]
+    if not givens or not answer:
+        return None
+    want, got = _interval_of(givens), _interval_of(answer)
+    if want is None or got is None or want != got or got.is_empty:
+        return None
+    lo, hi = got.start, got.end
+    if lo == sp.S.NegativeInfinity and hi == sp.S.Infinity:
+        return None
+    blo, bhi = _bound(lo), _bound(hi)
+    if (lo != sp.S.NegativeInfinity and blo is None) or (hi != sp.S.Infinity and bhi is None):
+        return None
+    lo_closed, hi_closed = not got.left_open, not got.right_open
+    vals = [0] + [v for v in (blo, bhi) if v is not None]
+    ax = _axis(vals, lo_min=-1.0, hi_min=1.0)
+    if ax is None:
+        return None
+    x0, x1, step = ax
+    if blo is None:
+        x0 -= 2 * step           # room for the arrow to be seen going on
+    if bhi is None:
+        x1 += 2 * step
+    nl = {"make": "number_line", "id": "nl", "range": [x0, x1], "step": step}
+    iv = {"make": "interval", "id": "s", "from_closed": lo_closed, "to_closed": hi_closed}
+    if blo is not None:
+        iv["from"] = _fmt(blo)
+    if bhi is not None:
+        iv["to"] = _fmt(bhi)
+
+    def spec(with_set: bool) -> dict:
+        objects = [nl] + ([iv] if with_set else [])
+        return {"schema_version": SCHEMA, "id": "chart", "figure_role": "illustration", "prompt": "",
+                "figures": [{"id": "g", "figure": {"units": "units", "points": [], "objects": objects, "measures": []}}]}
+
+    from maths.geometry import verify_question  # noqa: PLC0415 — the engine checks what it drew
+    beside, closing = spec(False), spec(True)
+    if not verify_question(beside).ok or not verify_question(closing).ok:
+        return None
+    shape = "between" if blo is not None and bhi is not None else ("right" if blo is not None else "left")
+    return {"kind": "number_line", "beside": beside, "closing": closing, "point": None, "lines": [],
+            "answer": " and ".join(_label(a).replace(">=", "≥").replace("<=", "≤") for a in answer), "shape": shape,
+            "a": _fmt(blo) if blo is not None else None, "b": _fmt(bhi) if bhi is not None else None,
+            "closed": [lo_closed, hi_closed]}

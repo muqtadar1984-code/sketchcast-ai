@@ -100,7 +100,8 @@ def test_the_chart_segment_follows_its_example_in_the_lesson():
 def test_every_chart_string_exists_in_every_lesson_language():
     from maths.i18n import BOARD, LANGS
     for key in ("lines_cross", "lines_cross_speech", "line_graph", "line_graph_speech",
-                "roots_cross", "roots_cross_speech"):
+                "roots_cross", "roots_cross_speech", "ineq_caption", "ineq_right_open", "ineq_right_closed",
+                "ineq_left_open", "ineq_left_closed", "ineq_between"):
         assert set(BOARD[key]) >= set(LANGS), key
 
 
@@ -208,3 +209,69 @@ def test_the_parabola_draws_beside_the_working_and_closes_on_its_roots():
     assert not _audit(close)
     seg = B.chart_segment(ex, "s004", "en")
     assert seg["slide_heading"].startswith("The curve crosses")
+
+
+def _inequality() -> WorkedExample:
+    return WorkedExample(label="Example 3", task="solve_inequality", problem="3x - 1 >= 5", givens=["3x - 1 >= 5"], target="x",
+                         intro_speech="An inequality.",
+                         steps=[Step(kind="transform", before=["3x - 1 >= 5"], after=["3x >= 6"], operation="add 1", speech="Add one."),
+                                Step(kind="transform", before=["3x >= 6"], after=["x >= 2"], operation="divide by 3", speech="Divide by three.")],
+                         final_answer=["x >= 2"], answer_speech="So x is at least two.")
+
+
+def test_a_solved_inequality_gets_its_number_line_with_the_solution_set():
+    from maths.verify import verify_example
+    ex = _inequality()
+    assert verify_example(ex).status == "verified"
+    ch = chart_for(ex)
+    assert ch and ch["kind"] == "number_line" and ch["shape"] == "right" and ch["a"] == "2" and ch["closed"] == [True, False]
+    assert ch["answer"] == "x ≥ 2"                   # as the working writes it
+    beside = ch["beside"]["figures"][0]["figure"]["objects"]
+    closing = ch["closing"]["figures"][0]["figure"]["objects"]
+    assert [o["make"] for o in beside] == ["number_line"]                # bare, beside the working
+    assert [o["make"] for o in closing] == ["number_line", "interval"]
+    assert closing[1] == {"make": "interval", "id": "s", "from_closed": True, "to_closed": False, "from": "2"}
+    assert closing[0]["range"][0] <= 0 and closing[0]["range"][1] >= 5     # room for the arrow to run
+    rep = verify_question(ch["closing"])
+    assert rep.ok, rep.refusal
+    m = rep.models["g"]
+    assert m.number_line is not None and m.intervals["s"].lo == 2.0 and m.intervals["s"].hi is None
+    # a strict pair of bounds ("x > 1" and "x <= 4") is one interval, between
+    pair = _inequality()
+    pair.givens, pair.final_answer = ["x > 1", "x <= 4"], ["x > 1", "x <= 4"]
+    pair.steps = [Step(kind="transform", before=["x > 1", "x <= 4"], after=["x > 1", "x <= 4"], speech="s")]
+    ch2 = chart_for(pair)
+    assert ch2 and ch2["shape"] == "between" and (ch2["a"], ch2["b"], ch2["closed"]) == ("1", "4", [False, True])
+    # a flipped answer is not the givens' set: no chart, never a wrong one
+    wrong = _inequality()
+    wrong.final_answer = ["x <= 2"]
+    assert chart_for(wrong) is None
+    # two variables: the verifier never passes such an example, and the
+    # chart builder refuses it on its own too
+    two = WorkedExample(task="solve_inequality", problem="x + y <= 4", givens=["x + y <= 4"], target="y",
+                        steps=[Step(kind="transform", before=["x + y <= 4"], after=["y <= 4 - x"], speech="s")],
+                        final_answer=["y <= 4 - x"])
+    assert chart_for(two) is None
+
+
+def test_the_number_line_draws_beside_the_working_and_closes_on_the_solution_set():
+    ex = _inequality()
+    ex.chart = chart_for(ex)
+    scene, _lines = B.example_scene(ex, MethodCard(title="METHOD", steps=["Collect", "Divide"]), "s003", has_card=True)
+    assert not _audit(scene)
+    ids = [e["id"] for e in scene["elements"]]
+    assert any(i.startswith("fig_s") for i in ids), "the number line is drawn"
+    out = B.chart_scene(ex, "s004", "en")
+    assert out is not None
+    close, lines = out
+    texts = {e["text"] for e in close["elements"] if e["type"] == "text"}
+    assert "x ≥ 2 on the number line" in texts
+    assert "filled circle at 2" in lines[0].line and "greater than 2" in lines[0].line
+    assert not _audit(close)
+    # the closed bound is a solid disc: a stroke as wide as the dot (the
+    # renderer fills an ellipse with mist, never ink)
+    widths = [float(e.get("width", 0)) for e in close["elements"] if e["type"] == "shape"]
+    assert max(widths) >= 12.0, widths
+    from maths.charts import chart_image
+    img = chart_image(ex.chart)
+    assert img is not None and img[0][:4] == b"\x89PNG"

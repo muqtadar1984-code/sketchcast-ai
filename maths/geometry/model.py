@@ -127,6 +127,28 @@ def seg_key(a: str, b: str) -> SegKey:
 
 
 @dataclass
+class NumberLine:
+    """A number line: the chart of a one-variable inequality. Figure
+    units are the numbers; the line lies along y = 0."""
+    id: str
+    lo: float
+    hi: float
+    step: float = 1.0
+
+
+@dataclass
+class Interval:
+    """A solution set marked on the number line: a bound of None is
+    unbounded (drawn as an arrow); a closed bound is a filled circle, an
+    open one a hollow circle."""
+    id: str
+    lo: Optional[float]
+    hi: Optional[float]
+    lo_closed: bool = False
+    hi_closed: bool = False
+
+
+@dataclass
 class Axes:
     """v2: the coordinate grid a figure is drawn on. Figure units ARE
     coordinate units; the axes fix what is drawn and what a student may
@@ -164,6 +186,8 @@ class Model:
     # id -> (sampled runs in figure units, label): a curve drawn from its
     # equation (y = ax² + bx + c), one polyline per run inside the axes
     curves: dict[str, tuple[list[list[tuple[float, float]]], str]] = field(default_factory=dict)
+    number_line: Optional[NumberLine] = None       # a one-variable inequality's chart
+    intervals: dict[str, Interval] = field(default_factory=dict)
     parallel: set[frozenset] = field(default_factory=set)        # {line id, line id}
     perpendicular: set[frozenset] = field(default_factory=set)
     equal_lengths: set[frozenset] = field(default_factory=set)   # {SegKey, SegKey}
@@ -423,6 +447,9 @@ class Model:
         if self.axes is not None:
             xs += [self.axes.x0, self.axes.x1]
             ys += [self.axes.y0, self.axes.y1]
+        if self.number_line is not None:
+            xs += [self.number_line.lo, self.number_line.hi]
+            ys += [-0.5, 0.5]
         for c in self.circles.values():
             cx, cy = self.xy(c.centre)
             xs += [cx - c.radius, cx + c.radius]

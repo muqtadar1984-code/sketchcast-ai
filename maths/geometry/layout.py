@@ -80,6 +80,7 @@ class Dot:
     x: float
     y: float
     r: float = 0.06
+    solid: bool = False         # a disc of ink (a closed bound), not the board's mist-filled ring
 
 
 @dataclass
@@ -331,6 +332,8 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
     boxes: list = []
     if m.axes is not None:
         _draw_axes(d, m, label_size, boxes)
+    if m.number_line is not None:
+        _draw_number_line(d, m)
     # a curve from its equation: one polyline per run inside the box — drawn
     # BEFORE any label is placed, so a coordinate tag (a parabola's vertex)
     # keeps clear of it (frame review, 2026-10-09)
@@ -454,6 +457,8 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
         _place_or_skip(d, cands, text, size, boxes, tag=f"linelabel:{ln.id}")
     if m.axes is not None:
         _number_axes(d, m, label_size, boxes)
+    if m.number_line is not None:
+        _number_line_numbers(d, m, label_size, boxes)
     if policy == "assessment_schematic" and m.axes is None:
         d.notes.append(note or "Not drawn to scale")
     d.bbox = _drawing_bbox(d, m)
@@ -575,6 +580,70 @@ def _draw_axes(d: Drawing, m: Model, label_size: float, boxes: list) -> None:
             continue            # a line's own end, nobody's point
         x, y = m.xy(pid)
         d.dots.append(Dot(x, y, r=0.09))
+
+
+NL_OVERHANG = 0.8            # a number line runs past its range to its arrowheads
+BOUND_R = 0.13               # the circle at an interval's bound
+
+
+def _arrowhead(d: Drawing, tip: Vec, direction: Vec, size: float, width: float, tag: Optional[str]) -> None:
+    """Two barbs meeting at `tip`, drawn as strokes: no renderer draws
+    a Stroke's `arrow` flag, and a number line's unbounded side must be
+    SEEN to go on."""
+    u = _unit(direction)
+    n = (-u[1], u[0])
+    base = _sub(tip, _mul(u, size))
+    for sgn in (1.0, -1.0):
+        d.strokes.append(Stroke([_add(base, _mul(n, sgn * size * 0.5)), tip], width=width, tag=tag))
+
+
+def _draw_number_line(d: Drawing, m: Model) -> None:
+    """The line with arrowheads both ways, a tick every step, then each
+    interval: a heavy bar along the line, a filled circle at a closed
+    bound, a hollow one at an open bound, an arrowhead where it goes on
+    for ever. The numbers come last (_number_line_numbers)."""
+    nl = m.number_line
+    assert nl is not None
+    x0, x1 = nl.lo - NL_OVERHANG, nl.hi + NL_OVERHANG
+    d.strokes.append(Stroke([(x0, 0.0), (x1, 0.0)], width=1.1, tag="numberline"))
+    _arrowhead(d, (x1, 0.0), (1.0, 0.0), 0.3, 1.1, "numberline")
+    _arrowhead(d, (x0, 0.0), (-1.0, 0.0), 0.3, 1.1, "numberline")
+    x = nl.lo
+    while x <= nl.hi + 1e-9:
+        d.strokes.append(Stroke([(x, -TICK), (x, TICK)], width=0.8, role="mark", tag="tick"))
+        x += nl.step
+    for iv in m.intervals.values():
+        a = nl.lo - NL_OVERHANG * 0.6 if iv.lo is None else iv.lo
+        b = nl.hi + NL_OVERHANG * 0.6 if iv.hi is None else iv.hi
+        d.strokes.append(Stroke([(a, 0.0), (b, 0.0)], width=1.4, tag=f"interval:{iv.id}"))
+        if iv.lo is None:
+            _arrowhead(d, (a, 0.0), (-1.0, 0.0), 0.36, 1.4, f"interval:{iv.id}")
+        if iv.hi is None:
+            _arrowhead(d, (b, 0.0), (1.0, 0.0), 0.36, 1.4, f"interval:{iv.id}")
+        for bound, closed in ((iv.lo, iv.lo_closed), (iv.hi, iv.hi_closed)):
+            if bound is None:
+                continue
+            if closed:
+                d.dots.append(Dot(bound, 0.0, r=BOUND_R, solid=True))
+            else:
+                ring = [(bound + BOUND_R * math.cos(2 * math.pi * k / 20), BOUND_R * math.sin(2 * math.pi * k / 20))
+                        for k in range(21)]
+                d.strokes.append(Stroke(ring, width=1.1, tag=f"bound:{iv.id}"))
+
+
+def _number_line_numbers(d: Drawing, m: Model, label_size: float, boxes: list) -> None:
+    """Every tick's number under the line (0 included), written last and
+    skipped where a label already sits."""
+    nl = m.number_line
+    assert nl is not None
+    num_size, every = _tick_numbers(nl, label_size)
+    x = nl.lo
+    k = 0
+    while x <= nl.hi + 1e-9:
+        if k % every == 0:
+            _place_or_skip(d, [(x, -TICK - num_size * 1.0, "middle")], _fmt_tick(x), num_size, boxes, strokes=False)
+        x += nl.step
+        k += 1
 
 
 def _place_or_skip(d: Drawing, candidates: list[tuple[float, float, str]], text: str, size: float,

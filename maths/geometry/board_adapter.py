@@ -81,13 +81,19 @@ def _stroke_secs(points: list, role: str) -> float:
     return round(max(STROKE_MIN_SECS, length / PEN_PX_PER_SEC), 2)
 
 
+def _gridded(m: Model) -> bool:
+    """Axes or a number line: figure units are numbers, labels crowd."""
+    return m.axes is not None or m.number_line is not None
+
+
 def _min_px(m: Model) -> float:
     """The smallest scale a figure may draw at: MIN_PX_PER_UNIT — per grid
     STEP on axes, where the step is the pitch the eye reads (a parabola over
     y in [-8, 8] at step 2 is as legible as a line over [-4, 4] at step 1;
     the labels are sized in board pixels, not units, either way)."""
-    if m.axes is not None and float(m.axes.step) > 1.0:
-        return MIN_PX_PER_UNIT / float(m.axes.step)
+    step = m.axes.step if m.axes is not None else (m.number_line.step if m.number_line is not None else 1.0)
+    if float(step) > 1.0:
+        return MIN_PX_PER_UNIT / float(step)
     return MIN_PX_PER_UNIT
 
 
@@ -119,7 +125,7 @@ def _with_hidden(m: Model, spec: FigureSpec, label_size: float, px_per_unit: Opt
     # point's name, 2026-10-08). A v1 figure keeps print's clearance — a
     # narrow wedge (B8's 30°) has no room for more, and never overlapped.
     measure = None
-    if text_metric is not None and px_per_unit and m.axes is not None:
+    if text_metric is not None and px_per_unit and _gridded(m):
         # the board's own face, in figure units: the print font's cap height
         # under-measured the handwriting face by half, and a point's name
         # was placed touching its coordinate tag
@@ -127,7 +133,7 @@ def _with_hidden(m: Model, spec: FigureSpec, label_size: float, px_per_unit: Opt
             w, h = text_metric(text, size * _k)
             return (w / _k, h / _k)
     d = build_drawing(m, spec, policy="instructional_metric", label_size=label_size,
-                      label_pad=label_size * 0.25 if m.axes is not None else None, measure=measure)
+                      label_pad=label_size * 0.25 if _gridded(m) else None, measure=measure)
     x0, y0, x1, y1 = d.bbox
     for lid in sorted(_declared_hidden(spec)):
         ln = m.lines.get(lid)
@@ -238,9 +244,17 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
     for dot in d.dots:
         eid = uid("d")
         c = P((dot.x, dot.y))
-        fb.elements.append({"id": eid, "type": "shape", "shape": "ellipse", "center": c,
-                            "rx": max(1.5, dot.r * s), "ry": max(1.5, dot.r * s), "fill": True, "color": "ink",
-                            "exact": True})
+        if dot.solid:
+            # the renderer fills an ellipse with mist, never ink; a stroke as
+            # wide as the dot, one pixel long, lands as a solid disc through
+            # its round caps (a number line's closed bound, 2026-10-09)
+            fb.elements.append({"id": eid, "type": "shape", "shape": "path",
+                                "points": [[round(c[0] - 0.5, 1), c[1]], [round(c[0] + 0.5, 1), c[1]]],
+                                "width": round(max(3.0, 2 * dot.r * s), 1), "color": "ink", "exact": True})
+        else:
+            fb.elements.append({"id": eid, "type": "shape", "shape": "ellipse", "center": c,
+                                "rx": max(1.5, dot.r * s), "ry": max(1.5, dot.r * s), "fill": True, "color": "ink",
+                                "exact": True})
         fb.actions.append({"verb": "draw", "target": eid, "duration": 0.2})
     x0, y0, x1, y1 = d.bbox
     fb.box = (ox + x0 * s, oy - y1 * s, ox + x1 * s, oy - y0 * s)
