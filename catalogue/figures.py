@@ -378,11 +378,18 @@ def load_article(sb, article_id: str) -> Optional[dict]:
     return rows[0] if rows else None
 
 
+def is_engine_figure(row: dict) -> bool:
+    """A chart the maths engine drew (catalogue.article_charts): exact,
+    already rendered, and never the image ladder's to redraw."""
+    spec = row.get("spec") if isinstance(row.get("spec"), dict) else {}
+    return bool(spec.get("engine"))
+
+
 def load_figures(sb, article_id: str, force: bool) -> list[dict]:
     q = sb.table("article_figures").select("*").eq("article_id", article_id)
     if not force:
         q = q.eq("status", STATUS_DRAFT)
-    rows = _rows(q.order("sort").execute())
+    rows = [r for r in _rows(q.order("sort").execute()) if not is_engine_figure(r)]
     return sorted(rows, key=lambda r: (int(r.get("sort") or 0), str(r.get("figure_key") or "")))
 
 
@@ -618,6 +625,17 @@ def render_figures(sb, job_id: str, params: dict, backend: Optional[FigureBacken
     article = load_article(sb, article_id)
     if not article:
         raise RuntimeError(f"article {article_id} not found")
+    # the engine's own charts first — no image call, nothing to pause for;
+    # a failure here never costs the article its drawn figures
+    try:
+        from catalogue.article_charts import ARTICLE_COLUMNS, attach_charts  # noqa: PLC0415
+        full = _rows(sb.table("topic_articles").select(ARTICLE_COLUMNS).eq("id", article_id).limit(1).execute())
+        if full:
+            charts = attach_charts(sb, full[0])
+            if charts.get("attached"):
+                log.info("figures: %d engine chart(s) attached to article %s", charts["attached"], article_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("figures: engine charts for article %s not attached: %s", article_id, exc)
     figures = load_figures(sb, article_id, force)
     stage = {"phase": "figures", "step": "render", "article_id": article_id, "total": len(figures),
              "done": 0, "reused": 0, "generated": 0, "failed": 0, "paused": None}
