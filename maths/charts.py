@@ -161,3 +161,25 @@ def _lines_chart(ex: WorkedExample) -> Optional[dict]:
     return {"kind": "lines", "beside": beside, "closing": closing,
             "point": f"({_fmt(point[0])}, {_fmt(point[1])})" if point is not None else None,
             "lines": [_label(g) for g, _abc in lines]}
+
+
+def chart_image(chart: Optional[dict], *, which: str = "closing") -> Optional[tuple[bytes, float]]:
+    """(PNG, width in mm) of a chart's spec, rendered metric by the same
+    renderer the worksheet prints figures with; None when it cannot be
+    drawn. For the deck slide and the answer key."""
+    spec = (chart or {}).get(which)
+    if not isinstance(spec, dict):
+        return None
+    try:
+        from maths.geometry import parse_question, verify_question  # noqa: PLC0415
+        from maths.geometry.render_static import render_figure  # noqa: PLC0415
+
+        rep = verify_question(spec)
+        if not rep.ok:
+            return None
+        q = parse_question(spec)
+        ref = q.figures[0]
+        r = render_figure(rep.models[ref.id], ref.figure, role="illustration", policy="instructional_metric")
+        return r.png, float(r.width_mm)
+    except Exception:  # noqa: BLE001 — a picture is a bonus
+        return None

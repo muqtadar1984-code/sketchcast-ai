@@ -42,6 +42,7 @@ from typing import Optional
 
 from docgen import docx_builder as dx
 from maths.facts import FactItem
+from maths.charts import chart_for, chart_image
 from maths.geometry.items import GeometryItem, figure_client, geometry_items, key_lines, quiz_image_data_url
 from maths.pretty import pretty
 from maths.tokens import TokenError, tokenize
@@ -316,6 +317,7 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
         name = f"{dx._t(_SECTION[level], language)} — {dx._t(f'difficulty_{level}', language)}"
         dx.heading(doc, name, 1)
         key_items: list[str] = []
+        graphs: list[tuple[bytes, float, str]] = []   # (png, width mm, "Q7") — the key's charts
         for ex in items:
             number += 1
             text = _problem_text(ex, language)
@@ -334,7 +336,15 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
                 key_items.append("\n".join(sol) + scheme)
             else:
                 key_items.append("\n".join(sol))
+            # a plottable question's chart under its solution in the key: the
+            # lines and the crossing point the engine derived from the proved
+            # answer (founder, 2026-10-09: every surface)
+            img = chart_image(chart_for(ex))
+            if img is not None:
+                graphs.append((img[0], min(img[1], 75.0), f"Q{number}"))
         dx.answer_section(key_doc, name, key_items)
+        if graphs:
+            dx.picture_row(key_doc, graphs)
     if kind == "exam_paper":
         dx.para(doc, dx._t("ws_total_marks", language).format(n=total_marks), bold=True)
         dx.end_of_paper(doc)

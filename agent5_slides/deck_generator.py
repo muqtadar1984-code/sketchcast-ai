@@ -160,6 +160,24 @@ def _figure_png(ex: dict, out: Path, caption: str):
     return Figure(key=out.stem, caption=caption, png=out, w=float(w), h=float(h))
 
 
+def _chart_png(chart: dict, out: Path, caption: str):
+    """The engine's chart of an algebra example (maths/charts.py: the lines
+    and the solution point) as a Figure, or None when it cannot be drawn."""
+    from maths.charts import chart_image
+
+    img = chart_image(chart)
+    if img is None:
+        return None
+    png, _w_mm = img
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(png)
+    from PIL import Image
+
+    with Image.open(out) as im:
+        w, h = im.size
+    return Figure(key=out.stem, caption=caption, png=out, w=float(w), h=float(h))
+
+
 def apply_maths_lesson(model: LessonModel, lesson: dict, tmp: Path, language: str = "en",
                        limit: int = 3) -> int:
     """A maths chapter's deck teaches the lesson's VERIFIED worked examples
@@ -179,6 +197,17 @@ def apply_maths_lesson(model: LessonModel, lesson: dict, tmp: Path, language: st
                 fig = _figure_png(ex, Path(tmp) / "art" / f"maths_fig_{i + 1}.png", problem)
             except Exception as exc:  # noqa: BLE001 — the example still teaches without its picture
                 logger.warning("deck: figure for example %d not drawn: %s", i + 1, exc)
+                fig = None
+            if fig is not None:
+                model.figures[fig.key] = fig
+                model.worked_figures[i] = fig.key
+        elif isinstance(ex.get("chart"), dict):
+            # an algebra example's chart — the lines and the crossing point the
+            # engine derived (founder, 2026-10-09: every surface)
+            try:
+                fig = _chart_png(ex["chart"], Path(tmp) / "art" / f"maths_chart_{i + 1}.png", problem)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("deck: chart for example %d not drawn: %s", i + 1, exc)
                 fig = None
             if fig is not None:
                 model.figures[fig.key] = fig

@@ -32,6 +32,7 @@ from maths.geometry import GeometryRefusal, parse_question, realise, verify_ques
 from maths.geometry.board_adapter import FigureBoard, figure_board, figure_targets, op_actions
 from maths.geometry.constructions import exact_value
 from maths.geometry.theorems import reason as _reason
+from maths.charts import chart_for
 from maths.schema import Lesson, Line, MethodCard, Mistake, Step, TryIt, WorkedExample
 from maths.speech import speakable_maths
 from maths.tokens import TokenError, normalise
@@ -1082,6 +1083,8 @@ def try_it_solution_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> Op
     example, with the method card, notes and the answer underline."""
     from maths.verify import try_it_example
     ex = try_it_example(lesson.try_it)
+    if ex is not None and not ex.figure and ex.chart is None:
+        ex.chart = chart_for(ex)       # the learner's own system, plotted like any example
     if ex is None or not lesson.try_it.steps:
         return None
     ex.label = _bt("try_it_label", lang)
@@ -1240,6 +1243,14 @@ def compile_lesson(lesson: Lesson, avatars: dict | None = None, language: str = 
         if sol is not None:
             segs.append(sol)
             n += 1
+            from maths.verify import try_it_example  # noqa: PLC0415
+            tex = try_it_example(lesson.try_it)
+            if tex is not None and not tex.figure:
+                tex.chart = chart_for(tex)
+                cs = chart_segment(tex, f"s{n:03d}", lang) if tex.chart else None
+                if cs is not None:
+                    segs.append(cs)
+                    n += 1
     segs.append(closing_segment(lesson, f"s{n:03d}", lang))
     return segs
 
