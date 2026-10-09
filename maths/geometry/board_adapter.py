@@ -261,8 +261,11 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
             raise GeometryRefusal("unsupported_feature",
                                   f"the video board has no fill for the palette colour {f.colour!r}")
         eid = uid("c")
+        # a tint is the renderer's translucent wash (the lines show through
+        # a shaded half-plane); a cell is the worksheet's own solid colour
         fb.elements.append({"id": eid, "type": "shape", "shape": "path", "points": [P(p) for p in f.points],
-                            "closed": True, "width": MARK_PX, "color": "muted", "fill": name, "exact": True})
+                            "closed": True, "width": MARK_PX, "color": "muted", "fill": True if f.tint else name,
+                            "exact": True})
         fb.actions.append({"verb": "draw", "target": eid, "duration": CELL_SECS})
         if f.tag:
             fb.targets.setdefault(f.tag, []).append(eid)

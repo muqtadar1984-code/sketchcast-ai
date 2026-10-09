@@ -156,6 +156,35 @@ def _kinds(rels: list[Relation]) -> str:
     return "mixed"
 
 
+def half_plane(rel: Relation):
+    """A linear inequality in two unknowns as the canonical half-plane it
+    names: ("halfplane", a, b, c, op) for a·x + b·y + c op 0 with op "<" or
+    "<=" (a ">" is turned round) and the first non-zero coefficient scaled
+    to ±1 — so "x + y <= 4" and "y <= 4 - x" are one state. None when the
+    relation is not a linear inequality in two unknowns."""
+    if not rel.is_inequality or rel.rhs is None:
+        return None
+    syms = sorted(rel.free_symbols, key=str)
+    if len(syms) != 2:
+        return None
+    expr = sp.expand(rel.lhs - rel.rhs)
+    op = rel.op
+    if op in (">", ">="):
+        expr, op = -expr, {">": "<", ">=": "<="}[op]
+    try:
+        poly = sp.Poly(expr, *syms)
+    except sp.PolynomialError:
+        return None
+    if poly.total_degree() != 1:
+        return None
+    a, b = poly.coeff_monomial(syms[0]), poly.coeff_monomial(syms[1])
+    c = poly.coeff_monomial(1)
+    if not all(v.is_Rational for v in (a, b, c)) or (a == 0 and b == 0):
+        return None
+    k = abs(a) if a != 0 else abs(b)
+    return ("halfplane", sp.Rational(a) / k, sp.Rational(b) / k, sp.Rational(c) / k, op, tuple(str(s) for s in syms))
+
+
 def _solution_set(rels: list[Relation], variables: list[sp.Symbol], mode: str):
     """The solutions of a state. Univariate states become SymPy Sets (so
     inequalities and equations compose); multivariate systems become a list
@@ -178,6 +207,12 @@ def _solution_set(rels: list[Relation], variables: list[sp.Symbol], mode: str):
         return out
     eqs = [r for r in rels if r.is_equation]
     if len(eqs) != len(rels):
+        # charts phase 7 (2026-10-09): ONE linear inequality in two unknowns
+        # is a half-plane, compared by its canonical form
+        if len(rels) == 1:
+            hp = half_plane(rels[0])
+            if hp is not None:
+                return hp
         raise ValueError("a multivariate inequality is not verifiable here")
     if mode == "all":
         sols = sp.solve([sp.Eq(r.lhs, r.rhs) for r in eqs], variables, dict=True)
@@ -189,6 +224,8 @@ def _solution_set(rels: list[Relation], variables: list[sp.Symbol], mode: str):
 
 
 def _same_solutions(a, b) -> bool:
+    if isinstance(a, tuple) or isinstance(b, tuple):
+        return a == b                       # two half-planes: the same canonical form
     if isinstance(a, sp.Set) and isinstance(b, sp.Set):
         if a == b:
             return True
@@ -318,6 +355,9 @@ def _fully_determined(rels: list[Relation]) -> bool:
 
 
 def _fmt_solutions(s) -> str:
+    if isinstance(s, tuple) and s and s[0] == "halfplane":
+        _t, a, b, c, op, (x, y) = s
+        return f"the half-plane {a}*{x} + {b}*{y} + {c} {op} 0"
     if isinstance(s, list):
         return "; ".join(", ".join(f"{k} = {v}" for k, v in sorted(d.items(), key=lambda kv: str(kv[0])))
                          for d in s) or "no solution"

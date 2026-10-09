@@ -201,6 +201,8 @@ class Model:
     reflections: dict[str, tuple[str, str]] = field(default_factory=dict)   # image -> (source, mirror)
     translations: dict[str, tuple[str, tuple]] = field(default_factory=dict)   # image -> (source, (dx, dy) exact)
     line_labels: dict[str, str] = field(default_factory=dict)   # line id -> its equation, written beside it
+    dashed_lines: set = field(default_factory=set)              # line ids drawn dashed (a strict inequality's boundary)
+    regions: dict[str, list] = field(default_factory=dict)      # id -> polygon (figure units): a tinted half-plane
     # id -> (sampled runs in figure units, label): a curve drawn from its
     # equation (y = ax² + bx + c), one polyline per run inside the axes
     curves: dict[str, tuple[list[list[tuple[float, float]]], str]] = field(default_factory=dict)
