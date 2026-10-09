@@ -162,6 +162,16 @@ def _measure(m: dict) -> dict:
     return out
 
 
+_SLOPE_MEASURE_RE = re.compile(r"^\s*(?:m|c|gradient|slope|intercept)\s*(?:=.*)?$", re.I)
+
+
+def _is_slope_measure(ms: dict) -> bool:
+    """A measure on a segment or line whose value is the gradient or the
+    intercept rather than a length."""
+    target = str(ms.get("target") or "")
+    return not target.startswith("p_") and bool(_SLOPE_MEASURE_RE.match(str(ms.get("value") or "")))
+
+
 def _answer(a: Optional[dict], figure_labels: Optional[list[str]] = None) -> Optional[dict]:
     if not isinstance(a, dict) or not a.get("kind"):
         return None
@@ -241,6 +251,15 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         fig["angles"] = [_strip(a) for a in (fig.get("angles") or []) if isinstance(a, dict)]
         fig["segments"] = [_strip(s) for s in (fig.get("segments") or []) if isinstance(s, dict)]
         fig["measures"] = [_measure(m) for m in (fig.get("measures") or []) if isinstance(m, dict)]
+        if any(isinstance(o, dict) and o.get("make") == "axes" for o in fig["objects"]):
+            # a gradient or an intercept written as a MEASURE of a segment
+            # ({target: s_ab, value: "m"}, or "m = 1.5"): the engine read it
+            # as the segment's length and refused the answer against the
+            # drawn length (the gradient kit, 2026-10-09: "s_ca: the proof
+            # gives 2 but the constructed figure has 6.708"). m and c are
+            # the theorems' symbols; the measure is dropped, the chain
+            # establishes them from the plotted points
+            fig["measures"] = [ms for ms in fig["measures"] if not _is_slope_measure(ms)]
         fig["relations"] = [_strip(r) for r in (fig.get("relations") or []) if isinstance(r, dict)]
         fig["marks"] = [_strip(m) for m in (fig.get("marks") or []) if isinstance(m, dict)]
         fig = _strip(fig)
@@ -438,7 +457,20 @@ _COORD_RULES = (
     "midpoint), gradient (the answer symbol is m), line_equation (m and c), parallel_gradients, perpendicular_gradients, "
     "reflection_rule (cite the image point), translation_rule (cite the image point). A coordinate REASONING question ALWAYS has at least one 'deduce' step citing its rule with 'after' lines in the unknown's symbols ('a = 1 + 3', 'b = 2 - 4'): an answer with no steps is thrown away. A coordinate EVIDENCE question ALWAYS fills 'asks' (coordinates_of or quadrant over the figure): a question with no asks is thrown away. Evidence: coordinates_of (label_map point label -> '(x, y)'), quadrant "
     "(label_map point label -> '1'..'4'; 'select' picks a quadrant), polygon_name / triangle_class_* over a polygon. "
-    "Every plotted point sits on a grid intersection at the axes' step."
+    "Every plotted point sits on a grid intersection at the axes' step. "
+    "STRAIGHT LINES (gradient, y-intercept, equation of a line): the line is ALWAYS drawn as `line_through` two "
+    "plotted points (`point_at`), and the gradient is NEVER a measure — never {target: 's_ab', value: 'm'} and never "
+    "'m = 1.5' as a value: m and c are the theorems' own symbols. 'Find the gradient': cite gradient on the line, "
+    "'after' is 'm = (y2 - y1)/(x2 - x1)' with the numbers in, the answer is kind 'number' with m's value and the "
+    "figure has NO unknown measure. 'Find the equation' / 'find m and c': cite line_equation, 'after' writes "
+    "'m = …' and 'c = y1 - m*x1' with the numbers in (writing only 'c = …' is allowed once m is established), the "
+    "answer is kind 'values' {m, c}. The y-intercept is where the line crosses the y-axis: plot that point with "
+    "x = 0 when the question is about it. A quadrant question never asks about a point ON an axis (the engine "
+    "answers 'x-axis', 'y-axis' or 'origin' there, never a quadrant). A PARALLEL or PERPENDICULAR line question "
+    "plots BOTH lines (each a `line_through` two plotted points, each with its segment in 'segments') and cites "
+    "parallel_gradients / perpendicular_gradients with the TWO segment ids; the gradient theorem's symbol is always "
+    "m — never write m1 or m2 (a 'find the y-intercept' question is a reasoning question citing line_equation, not "
+    "an evidence question reading coordinates)."
 )
 
 
@@ -774,35 +806,46 @@ def geometry_items(client, *, topic: str, level: Optional[str], language: str, n
     asked = 0
     base_prompt = geometry_prompt(topic=topic, level=level, language=language, n=min(MAX_PER_CALL, n + 1),
                                   chapter_context=chapter_context, kind=kind, focus=focus)
-    for round_ in range(rounds):
+    # A reply that never arrived — cut off, or malformed beyond repair — is
+    # not a round the model USED: it earns ONE further round whatever the
+    # round count says (the gradient kit, 2026-10-09: the repair round came
+    # back malformed and 3 of 4 refusals were never repaired)
+    budget, lost_last, grace_used = rounds, False, False
+    round_ = 0
+    while round_ < budget:
         # the repair round is for a model that CAN do this topic and slipped
         # on some questions. A first round that produced nothing (a fractions
         # chapter answered with shaded-grid questions the engine refuses
         # wholesale, 2026-10-07) is not repaired — it is the answer
-        if round_ and (len(kept) >= n or not rejected or not kept):
+        if round_ and not lost_last and (len(kept) >= n or not rejected or not kept):
             break
         prompt = base_prompt
-        if round_:
+        if round_ and rejected:
             # the repair round: the refusals, with their reasons, go back —
             # the same loop the algebra ladder runs
             prompt += ("\n\nTHE ENGINE REFUSED THESE LAST TIME (fix the fault or replace the question; "
                        f"write {min(MAX_PER_CALL, n - len(kept) + 1)} questions):\n"
                        + "\n".join(f"  - {r}" for r in rejected[-MAX_PER_CALL:]))
+        round_ += 1
         result = client.analyze(prompt=prompt, system=_SYSTEM, max_tokens=MAX_TOKENS,
                                 response_schema=GEOMETRY_SET_SCHEMA, strict_schema=strict_schema())
-        if result.get("truncated"):
-            logger.warning("geometry questions for %r: the reply was cut off; nothing parsed from it is complete", topic)
-            rejected.append("the model's reply was cut off at the output cap")
-            continue
         data = result.get("data", result)
-        raw = data.get("questions") if isinstance(data, dict) else None
+        raw = None if result.get("truncated") else (data.get("questions") if isinstance(data, dict) else None)
         if raw is None:
-            # unconstrained JSON can arrive malformed beyond repair (the Lite,
-            # 2026-10-07): the call is lost, the repair round asks again. An
-            # explicit empty list is an answer — the chapter has no diagrams.
-            logger.warning("geometry questions for %r: the reply carried no questions (malformed or empty)", topic)
-            rejected.append("the reply carried no questions — it was malformed or empty; write them again")
+            if result.get("truncated"):
+                logger.warning("geometry questions for %r: the reply was cut off; nothing parsed from it is complete", topic)
+                rejected.append("the model's reply was cut off at the output cap")
+            else:
+                # unconstrained JSON can arrive malformed beyond repair (the
+                # Lite, 2026-10-07): the call is lost. An explicit empty list
+                # is an answer — the chapter has no diagrams.
+                logger.warning("geometry questions for %r: the reply carried no questions (malformed or empty)", topic)
+                rejected.append("the reply carried no questions — it was malformed or empty; write them again")
+            lost_last = True
+            if not grace_used:
+                budget, grace_used = budget + 1, True
             continue
+        lost_last = False
         _take(raw, n, kept, rejected, seen_prompts, note, asked, render=render)
         asked += len(raw)
     kept.sort(key=lambda it: it.difficulty)

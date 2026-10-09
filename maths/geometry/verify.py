@@ -233,13 +233,25 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
             if not after:
                 raise GeometryRefusal("bad_schema", f"{name}: write the equation the theorem gives", name)
             verdict = _equivalent(knowledge, template, after)
+            partial = False
+            if not verdict and len(after) < len(template):
+                # the step states PART of what the theorem gives — a
+                # line_equation step that writes only "c = -3" before m is
+                # known (the gradient kit, 2026-10-09: "line_equation gives
+                # m - 1/2 = 0; c - 3 = 0, not c = 3"). A true consequence,
+                # weaker than the whole: accepted, and the knowledge gains
+                # only what was written
+                partial = bool(_implies(knowledge + template, after))
+                if partial:
+                    verdict = True
             if verdict is None:
                 raise GeometryRefusal("step_unverifiable", f"{name}: could not compare the line with {st.theorem}", name)
             if not verdict:
                 want = "; ".join(str(sp.Eq(t, 0)) for t in template)
                 raise GeometryRefusal("step_not_equivalent",
                                       f"{name}: {st.theorem} gives {want}, not {'; '.join(st.after)}", name)
-            rep.checks.append(Check(name, True, f"{st.theorem}: {REASONS.get(st.theorem, st.theorem)}"))
+            rep.checks.append(Check(name, True, f"{st.theorem}: {REASONS.get(st.theorem, st.theorem)}"
+                                    + (" (part of what the theorem gives)" if partial else "")))
             rep.reasons_given.append(REASONS.get(st.theorem, st.theorem))
             knowledge += after
         elif st.kind == "transform":
