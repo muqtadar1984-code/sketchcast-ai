@@ -30,7 +30,7 @@ from typing import Any, Callable, Optional
 import sympy as sp
 
 from maths.geometry.errors import GeometryRefusal
-from maths.geometry.model import Circle, GridPattern, Model, angle_key, seg_key, Axes, Interval, NumberLine
+from maths.geometry.model import Circle, GridPattern, Model, angle_key, seg_key, Axes, BarChart, Interval, NumberLine
 from maths.geometry.spec import FigureSpec
 from maths.notation import NotationError, parse_relation
 
@@ -828,6 +828,58 @@ def c_line_eq(ctx: BuildContext, obj: dict) -> None:
     label = str(obj.get("label") or "").strip()
     if label:
         m.line_labels[lid] = label[:24]
+
+
+_BAR_STEPS = (1, 2, 5, 10, 20, 50, 100)
+_BAR_MAX_STEPS = 8
+
+
+def c_bar_chart(ctx: BuildContext, obj: dict) -> None:
+    """A bar chart of `values` (2 to 12 exact non-negative numbers, each
+    as the question wrote it): its own figure. `highlight` indexes the
+    bars to colour (the median's middle, the mode's repeats, the range's
+    ends); `mean` draws a line across at that value; `range` a bracket
+    from the smallest bar to the largest. The chart of a data task
+    (maths/charts.py). The value axis's step is chosen here: the fewest
+    ticks that hold the tallest bar, at most _BAR_MAX_STEPS."""
+    w = _where(obj)
+    m = ctx.model
+    if m.bar_chart is not None or m.axes is not None or m.number_line is not None:
+        raise GeometryRefusal("bad_schema", f"{w}: a figure has one bar chart, and nothing else drawn on it", w)
+    raw = obj.get("values")
+    if not isinstance(raw, list) or not 2 <= len(raw) <= 12:
+        raise GeometryRefusal("bad_schema", f"{w}: `values` is a list of 2 to 12 numbers", w)
+    values: list[float] = []
+    labels: list[str] = []
+    for i, v in enumerate(raw):
+        e = ctx.exact(v, where=f"{w}.values[{i}]")
+        if e.free_symbols:
+            raise GeometryRefusal("bad_schema", f"{w}: values[{i}] is a number", w)
+        fv = float(e)
+        if fv < 0:
+            raise GeometryRefusal("unsupported_feature", f"{w}: a bar chart of negative values", w)
+        values.append(fv)
+        labels.append(str(v).strip()[:12])
+    mean: Optional[float] = None
+    mean_label = ""
+    if obj.get("mean") not in (None, ""):
+        e = ctx.exact(obj["mean"], where=f"{w}.mean")
+        if e.free_symbols:
+            raise GeometryRefusal("bad_schema", f"{w}: `mean` is a number", w)
+        mean = float(e)
+        mean_label = str(obj["mean"]).strip()[:12]
+        if not (min(values) - 1e-9 <= mean <= max(values) + 1e-9):
+            raise GeometryRefusal("construction_impossible", f"{w}: the mean lies between the smallest and largest value", w)
+    hl = obj.get("highlight") or []
+    if not isinstance(hl, list) or any(not isinstance(i, int) or not 0 <= i < len(values) for i in hl):
+        raise GeometryRefusal("bad_schema", f"{w}: `highlight` lists bar indices 0..{len(values) - 1}", w)
+    vmax = max(values + ([mean] if mean is not None else []))
+    step = next((st for st in _BAR_STEPS if vmax / st <= _BAR_MAX_STEPS), None)
+    if step is None:
+        raise GeometryRefusal("unsupported_feature", f"{w}: values above {_BAR_STEPS[-1] * _BAR_MAX_STEPS} are not charted", w)
+    steps = max(1, math.ceil(vmax / step - 1e-9))
+    m.bar_chart = BarChart(str(obj.get("id") or "bc"), values, labels, float(step), steps, [int(i) for i in hl],
+                           mean, mean_label, bool(obj.get("range", False)), str(obj.get("range_label") or "")[:12])
 
 
 def c_number_line(ctx: BuildContext, obj: dict) -> None:
@@ -1794,6 +1846,7 @@ CONSTRUCTIONS: dict[str, Callable[[BuildContext, dict], None]] = {
     "line_eq": c_line_eq,
     "curve_eq": c_curve_eq,
     "number_line": c_number_line,
+    "bar_chart": c_bar_chart,
     "interval": c_interval,
     "transversal": c_transversal,
     "parallels_transversal": c_parallels_transversal,

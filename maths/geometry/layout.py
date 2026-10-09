@@ -334,6 +334,8 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
         _draw_axes(d, m, label_size, boxes)
     if m.number_line is not None:
         _draw_number_line(d, m)
+    if m.bar_chart is not None:
+        _draw_bar_chart(d, m)
     # a curve from its equation: one polyline per run inside the box — drawn
     # BEFORE any label is placed, so a coordinate tag (a parabola's vertex)
     # keeps clear of it (frame review, 2026-10-09)
@@ -459,6 +461,8 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
         _number_axes(d, m, label_size, boxes)
     if m.number_line is not None:
         _number_line_numbers(d, m, label_size, boxes)
+    if m.bar_chart is not None:
+        _bar_chart_labels(d, m, label_size, boxes)
     if policy == "assessment_schematic" and m.axes is None:
         d.notes.append(note or "Not drawn to scale")
     d.bbox = _drawing_bbox(d, m)
@@ -629,6 +633,63 @@ def _draw_number_line(d: Drawing, m: Model) -> None:
                 ring = [(bound + BOUND_R * math.cos(2 * math.pi * k / 20), BOUND_R * math.sin(2 * math.pi * k / 20))
                         for k in range(21)]
                 d.strokes.append(Stroke(ring, width=1.1, tag=f"bound:{iv.id}"))
+
+
+BAR_AXIS_X = -0.3            # the value axis, left of the first bar
+BAR_IN, BAR_OUT = 0.15, 0.85 # a bar spans i + BAR_IN .. i + BAR_OUT
+
+
+def _draw_bar_chart(d: Drawing, m: Model) -> None:
+    """The baseline and the value axis (ticks every step, an arrowhead),
+    a filled bar per value — the highlighted ones in yellow, the rest in
+    blue, each outlined — then the mean line and the range bracket. The
+    numbers come last (_bar_chart_labels)."""
+    bc = m.bar_chart
+    assert bc is not None
+    n = len(bc.values)
+    top = bc.steps + 0.5
+    d.strokes.append(Stroke([(BAR_AXIS_X, 0.0), (n + 0.3, 0.0)], width=1.1, tag="axis:x"))
+    d.strokes.append(Stroke([(BAR_AXIS_X, 0.0), (BAR_AXIS_X, top)], width=1.1, tag="axis:y"))
+    _arrowhead(d, (BAR_AXIS_X, top), (0.0, 1.0), 0.25, 1.1, "axis:y")
+    for k in range(1, bc.steps + 1):
+        d.strokes.append(Stroke([(BAR_AXIS_X - TICK, float(k)), (BAR_AXIS_X + TICK, float(k))], width=0.8,
+                                role="mark", tag="tick"))
+    for i, v in enumerate(bc.values):
+        h = v / bc.step
+        pts = [(i + BAR_IN, 0.0), (i + BAR_OUT, 0.0), (i + BAR_OUT, h), (i + BAR_IN, h)]
+        if h > 1e-9:
+            d.fills.append(Fill(pts, "Y" if i in bc.highlight else "B", tag=f"bar:{i}"))
+        d.strokes.append(Stroke(pts + [pts[0]], width=0.7, tag=f"bar:{i}"))
+    if bc.mean is not None:
+        y = bc.mean / bc.step
+        d.strokes.append(Stroke([(BAR_AXIS_X, y), (n + 0.3, y)], width=0.9, dashed=True, tag="mean"))
+    if bc.range_bracket:
+        x = n + 0.55
+        lo, hi = min(bc.values) / bc.step, max(bc.values) / bc.step
+        d.strokes.append(Stroke([(x - 0.15, lo), (x, lo), (x, hi), (x - 0.15, hi)], width=0.9, tag="range"))
+
+
+def _bar_chart_labels(d: Drawing, m: Model, label_size: float, boxes: list) -> None:
+    """The tick numbers up the value axis, each value under its bar, the
+    mean beside its line and the range beside its bracket — written last,
+    skipped where a label already sits."""
+    bc = m.bar_chart
+    assert bc is not None
+    n = len(bc.values)
+    num = label_size * 0.8
+    for k in range(1, bc.steps + 1):
+        _place_or_skip(d, [(BAR_AXIS_X - TICK - num * 0.3, k - num * 0.35, "end")], _fmt_tick(k * bc.step), num,
+                       boxes, strokes=False)
+    _place_or_skip(d, [(BAR_AXIS_X - TICK - num * 0.3, -num * 0.35, "end")], "0", num, boxes, strokes=False)
+    for i, text in enumerate(bc.labels):
+        _place_or_skip(d, [(i + 0.5, -num * 1.0, "middle")], text, num, boxes, strokes=False)
+    if bc.mean is not None and bc.mean_label:
+        y = bc.mean / bc.step
+        _place_or_skip(d, [(n + 0.45, y, "start"), (n + 0.45, y + num * 0.8, "start"), (n + 0.45, y - num * 0.8, "start")],
+                       bc.mean_label, num, boxes, tag="meanlabel")
+    if bc.range_bracket and bc.range_label:
+        lo, hi = min(bc.values) / bc.step, max(bc.values) / bc.step
+        _place_or_skip(d, [(n + 0.8, (lo + hi) / 2, "start")], bc.range_label, num, boxes, tag="rangelabel")
 
 
 def _number_line_numbers(d: Drawing, m: Model, label_size: float, boxes: list) -> None:
