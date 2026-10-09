@@ -307,6 +307,36 @@ def test_the_entry_point_never_raises_and_records_the_failure():
     assert "no 'items' list" in _job_row(sb3)["error"]
 
 
+def test_a_reply_with_no_item_at_all_is_asked_once_more_on_the_analysis_model(monkeypatch):
+    # Job dd720e03 (2026-10-09): {"items": []} in 1.2 s; the same prompt drew 30 items a minute later.
+    first, second, asked = FakeModel({"items": []}), FakeModel(), []
+
+    def fake_retry(lang):
+        asked.append(lang)
+        return second
+
+    monkeypatch.setattr(questions, "retry_client", fake_retry)
+    sb = _sb()
+    summary = run_questions_job(sb, _job(), client=first)
+    assert len(first.calls) == 1 and len(second.calls) == 1 and asked == ["en"]
+    assert second.calls[0]["prompt"] == first.calls[0]["prompt"]  # the same question, a heavier model
+    assert summary["written"] == len(_bank(sb)) > 0 and summary["retry"] == "analysis"
+    assert _job_row(sb)["status"] == "done" and _job_row(sb)["stage"]["retry"] == "analysis"
+    # A reply whose items were all REFUSED is not empty: no retry, the old error.
+    monkeypatch.setattr(questions, "retry_client", lambda lang: (_ for _ in ()).throw(AssertionError("no retry")))
+    sb2 = _sb()
+    run_questions_job(sb2, _job(), client=FakeModel({"items": [{"item_type": "essay", "stem": "x"}]}))
+    assert "no usable item" in _job_row(sb2)["error"]
+
+
+def test_a_second_empty_reply_fails_the_row_naming_both_models(monkeypatch):
+    monkeypatch.setattr(questions, "retry_client", lambda lang: FakeModel({"items": []}))
+    for empty in ({"items": []}, (lambda prompt: []), {}, (lambda prompt: None), {"raw_text": "I cannot help with that."}):
+        sb = _sb()
+        assert run_questions_job(sb, _job(), client=FakeModel(empty)) is None
+        assert "no item at all, twice" in _job_row(sb)["error"] and _bank(sb) == []
+
+
 def test_the_client_is_built_for_the_job_s_language(monkeypatch):
     seen = []
 
