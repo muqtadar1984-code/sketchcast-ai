@@ -2015,8 +2015,13 @@ def c_sphere(ctx: BuildContext, obj: dict) -> None:
     sd.edges = [(o, r, True)]
     sd.roles = {"radius": (o, r)}
     outline = [(rv * math.cos(2 * math.pi * i / 72), rv * math.sin(2 * math.pi * i / 72)) for i in range(73)]
-    sd.curves = [(outline, False, "outline"), (_sol.rim(0, 0, 0, rv, front=True), False, "rim:equator"),
-                 (_sol.rim(0, 0, 0, rv, front=False), True, "rim:equator")]
+    # the equator as a textbook draws it: an ellipse INSIDE the outline (the
+    # drawing convention is not an orthonormal projection, so the projected
+    # circle would poke past the sphere's silhouette — contact sheet, 2026-10-09)
+    def eq(t0, t1):
+        return [(rv * math.cos(t0 + (t1 - t0) * i / 36), 0.38 * rv * math.sin(t0 + (t1 - t0) * i / 36)) for i in range(37)]
+    sd.curves = [(outline, False, "outline"), (eq(math.pi, 2 * math.pi), False, "rim:equator"),
+                 (eq(0.0, math.pi), True, "rim:equator")]
     for pts, _d, _t in sd.curves:
         sd.extent += pts
     _register_solid(ctx, sd, w)
