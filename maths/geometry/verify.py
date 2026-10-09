@@ -129,7 +129,10 @@ def _measure_substitutions(m: Model, q: QuestionSpec, fid: str) -> dict[sp.Symbo
             subs[xs], subs[ys] = ex, ey
             continue
         e = exact_value(ms.value, where=f"measure.{ms.target}")
-        if ms.target in m.angle_ids:
+        if ms.target in m.solids:
+            from maths.geometry.theorems import SURFACE, VOLUME  # noqa: PLC0415
+            subs[VOLUME if ms.kind == "volume" else SURFACE] = e     # v3: a given volume / surface area
+        elif ms.target in m.angle_ids:
             subs[angle_symbol(m.canonical_angle_id(ms.target))] = e
         else:
             subs[length_symbol(ms.target)] = e
@@ -291,6 +294,8 @@ def _answer_symbols(q: QuestionSpec, fid: str, m: Model) -> list[sp.Symbol]:
             syms |= ex.free_symbols | ey.free_symbols
             continue
         syms |= exact_value(ms.value, where=f"measure.{ms.target}").free_symbols
+    # v3: a given volume or surface area is a known; the unknown is the edge
+    given_solid = {ms.kind for ms in fig.measures if ms.target in m.solids}
     # v2: a coordinate written in an unknown (A(k, 2)) makes k an unknown
     for pt in m.points.values():
         if pt.exact is not None:
@@ -313,9 +318,9 @@ def _answer_symbols(q: QuestionSpec, fid: str, m: Model) -> list[sp.Symbol]:
     if "line_equation" in cited:
         syms.add(INTERCEPT)
     # v3: a volume, a surface area, the counts of Euler's formula
-    if any(t.startswith("volume_") for t in cited):
+    if any(t.startswith("volume_") for t in cited) and "volume" not in given_solid:
         syms.add(VOLUME)
-    if any(t.startswith("surface_area_") for t in cited):
+    if any(t.startswith("surface_area_") for t in cited) and "surface_area" not in given_solid:
         syms.add(SURFACE)
     if "euler_solids" in cited:
         syms.add(EDGES)          # F and N are counted by the theorem itself
@@ -358,7 +363,7 @@ def _check_reasoning_answer(rep: QuestionReport, q: QuestionSpec, fid: str, m: M
     fig = q.figure_by_id(fid).figure
     proved_subs = {sp.Symbol(k): v for k, v in rep.proved.items()}
     for ms in fig.measures:
-        if ms.role not in ("unknown", "derived"):
+        if ms.role not in ("unknown", "derived") or ms.target in m.solids:
             continue
         if ms.target in m.points:
             ex, ey = (v.subs(proved_subs) for v in exact_pair(ms.value, where=f"measure.{ms.target}"))
