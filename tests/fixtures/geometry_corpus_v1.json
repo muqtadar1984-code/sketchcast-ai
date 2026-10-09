@@ -446,7 +446,7 @@
                       {"id": "r_bd", "make": "ray_at_angle", "vertex": "p_b", "from_ray": ["p_b", "p_a"], "angle": "angle_abd", "side": "left", "to": "p_d"}],
           "angles": [{"id": "angle_abd", "rays": [["p_b", "p_a"], ["p_b", "p_d"]]}, {"id": "angle_dbc", "rays": [["p_b", "p_d"], ["p_b", "p_c"]]}],
           "measures": [{"target": "angle_abd", "value": "70", "role": "given"}, {"target": "angle_dbc", "value": "x", "role": "unknown"}]},
-        "steps": [{"kind": "deduce", "theorem": "angle_at_centre", "uses": ["angle_abd", "angle_dbc"], "after": ["70 + x = 180"]}, {"kind": "transform", "after": ["x = 110"]}],
+        "steps": [{"kind": "deduce", "theorem": "alternate_segment", "uses": ["angle_abd", "angle_dbc"], "after": ["70 + x = 180"]}, {"kind": "transform", "after": ["x = 110"]}],
         "answer": {"kind": "number", "value": 110}}
     },
     {

@@ -594,6 +594,140 @@ def t_reflection_rule(m: Model, u: Uses) -> list[sp.Eq]:
     return [sp.Eq(xi, y), sp.Eq(yi, x)]
 
 
+def t_rotation_rule(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "rotation_rule"
+    _coordinate_figure(m, T)
+    images = [q for q in u.points if q in m.rotations] or \
+        [img for img, (src, _k) in m.rotations.items() if src in u.points]
+    _premise(T, len(images) == 1, "cite the rotated point (made by rotate_point)")
+    img = images[0]
+    src, k = m.rotations[img]
+    x, y = m.exact_xy(src)
+    xi, yi = coord_symbols(img)
+    if k == 1:
+        return [sp.Eq(xi, -y), sp.Eq(yi, x)]
+    if k == 2:
+        return [sp.Eq(xi, -x), sp.Eq(yi, -y)]
+    return [sp.Eq(xi, y), sp.Eq(yi, -x)]
+
+
+# ── v4: trigonometry on a right-angled triangle ───────────────────────────
+
+def _right_triangle_parts(m: Model, u: Uses, T: str) -> tuple[sp.Symbol, sp.Symbol, sp.Symbol, sp.Symbol]:
+    """(the angle's symbol, opposite, adjacent, hypotenuse) for the one
+    cited interior angle of the one cited right-angled triangle."""
+    pg = _the_polygon_cited(m, u, T, 3)
+    _premise(T, len(u.angles) == 1, "cite the angle the ratio is taken at")
+    key = m.angle_ids[u.angles[0]]
+    v, arms = key[0], set(key[1])
+    verts = list(pg.vertices)
+    _premise(T, v in verts and arms == set(verts) - {v}, "the angle is an interior angle of the triangle")
+    right = None
+    for r in verts:
+        if r == v:
+            continue
+        others = [x for x in verts if x != r]
+        an = m.angles.get(angle_key(r, others[0], others[1]))
+        if an is not None and an.exact is not None and sp.simplify(an.exact - 90) == 0:
+            right = r
+    _premise(T, right is not None, "no construction makes a right angle in this triangle")
+    q = next(x for x in verts if x not in (v, right))
+    opp = _segment_symbol(m, right, q)
+    adj = _segment_symbol(m, v, right)
+    hyp = _segment_symbol(m, v, q)
+    return angle_symbol(u.angles[0]), opp, adj, hyp
+
+
+def t_sin_ratio(m: Model, u: Uses) -> list[sp.Eq]:
+    a, opp, _adj, hyp = _right_triangle_parts(m, u, "sin_ratio")
+    return [sp.Eq(sp.sin(a * sp.pi / 180), opp / hyp)]
+
+
+def t_cos_ratio(m: Model, u: Uses) -> list[sp.Eq]:
+    a, _opp, adj, hyp = _right_triangle_parts(m, u, "cos_ratio")
+    return [sp.Eq(sp.cos(a * sp.pi / 180), adj / hyp)]
+
+
+def t_tan_ratio(m: Model, u: Uses) -> list[sp.Eq]:
+    a, opp, adj, _hyp = _right_triangle_parts(m, u, "tan_ratio")
+    return [sp.Eq(sp.tan(a * sp.pi / 180), opp / adj)]
+
+
+# ── v4: circle theorems ───────────────────────────────────────────────────
+
+def _the_circle(m: Model, u: Uses, T: str):
+    _premise(T, len(u.circles) == 1, "cite the circle by its id")
+    return m.circles[u.circles[0]]
+
+
+def _on_circle(m: Model, c, pid: str) -> bool:
+    return m.has_point(pid) and abs(math.dist(m.xy(c.centre), m.xy(pid)) - c.radius) < 1e-6 * max(1.0, c.radius)
+
+
+def t_angle_at_centre(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "angle_at_centre"
+    c = _the_circle(m, u, T)
+    keys = _need_angles(m, u, T, n=2)
+    centre = [i for i, k in zip(u.angles, keys) if k[0] == c.centre]
+    rim = [i for i, k in zip(u.angles, keys) if k[0] != c.centre]
+    _premise(T, len(centre) == 1 and len(rim) == 1, "cite the angle at the centre and the angle at the circumference")
+    kc, kr = m.angle_ids[centre[0]], m.angle_ids[rim[0]]
+    _premise(T, kc[1] == kr[1], "both angles stand on the same two points")
+    _premise(T, all(_on_circle(m, c, p) for p in kc[1]) and _on_circle(m, c, kr[0]), "the points must lie on the circle")
+    return [sp.Eq(angle_symbol(centre[0]), 2 * angle_symbol(rim[0]))]
+
+
+def t_angle_in_semicircle(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "angle_in_semicircle"
+    c = _the_circle(m, u, T)
+    (key,) = _need_angles(m, u, T, n=1)
+    v, (a, b) = key[0], sorted(key[1])
+    _premise(T, _on_circle(m, c, v) and _on_circle(m, c, a) and _on_circle(m, c, b), "the three points must lie on the circle")
+    _premise(T, abs(math.dist(m.xy(a), m.xy(b)) - 2 * c.radius) < 1e-6 * max(1.0, c.radius), "the angle must stand on a diameter")
+    return [sp.Eq(angle_symbol(u.angles[0]), 90)]
+
+
+def t_angles_same_segment(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "angles_same_segment"
+    c = _the_circle(m, u, T)
+    k1, k2 = _need_angles(m, u, T, n=2)
+    _premise(T, k1[1] == k2[1], "both angles stand on the same chord")
+    a, b = sorted(k1[1])
+    _premise(T, all(_on_circle(m, c, p) for p in (a, b, k1[0], k2[0])), "the points must lie on the circle")
+    pa, pb = m.xy(a), m.xy(b)
+
+    def side(p):
+        x, y = m.xy(p)
+        return (pb[0] - pa[0]) * (y - pa[1]) - (pb[1] - pa[1]) * (x - pa[0])
+    _premise(T, side(k1[0]) * side(k2[0]) > 0, "the angles must be on the same side of the chord (the same segment)")
+    return [sp.Eq(angle_symbol(u.angles[0]), angle_symbol(u.angles[1]))]
+
+
+def t_cyclic_quadrilateral(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "cyclic_quadrilateral"
+    c = _the_circle(m, u, T)
+    pg = _the_polygon_cited(m, u, T, 4)
+    _premise(T, all(_on_circle(m, c, p) for p in pg.vertices), "every vertex must lie on the circle")
+    k1, k2 = _need_angles(m, u, T, n=2)
+    vs = list(pg.vertices)
+    _premise(T, k1[0] in vs and k2[0] in vs and (vs.index(k1[0]) - vs.index(k2[0])) % 2 == 0 and k1[0] != k2[0],
+             "cite two OPPOSITE interior angles of the quadrilateral")
+    for k in (k1, k2):
+        i = vs.index(k[0])
+        _premise(T, set(k[1]) == {vs[i - 1], vs[(i + 1) % 4]}, "each angle is an interior angle of the quadrilateral")
+    return [sp.Eq(angle_symbol(u.angles[0]) + angle_symbol(u.angles[1]), 180)]
+
+
+def t_tangent_radius(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "tangent_radius"
+    c = _the_circle(m, u, T)
+    (key,) = _need_angles(m, u, T, n=1)
+    v = key[0]
+    _premise(T, v in m.tangents and m.tangents[v][0] == c.id, "the angle's vertex is where a tangent (tangent_at) touches the circle")
+    _premise(T, set(key[1]) == {c.centre, m.tangents[v][1]}, "the angle is between the radius and the tangent")
+    return [sp.Eq(angle_symbol(u.angles[0]), 90)]
+
+
 def t_translation_rule(m: Model, u: Uses) -> list[sp.Eq]:
     T = "translation_rule"
     _coordinate_figure(m, T)
@@ -800,6 +934,16 @@ THEOREMS: dict[str, Callable[[Model, Uses], list[sp.Eq]]] = {
     "perpendicular_gradients": t_perpendicular_gradients,
     "reflection_rule": t_reflection_rule,
     "translation_rule": t_translation_rule,
+    # v4
+    "rotation_rule": t_rotation_rule,
+    "sin_ratio": t_sin_ratio,
+    "cos_ratio": t_cos_ratio,
+    "tan_ratio": t_tan_ratio,
+    "angle_at_centre": t_angle_at_centre,
+    "angle_in_semicircle": t_angle_in_semicircle,
+    "angles_same_segment": t_angles_same_segment,
+    "cyclic_quadrilateral": t_cyclic_quadrilateral,
+    "tangent_radius": t_tangent_radius,
     # v3: solids
     "volume_cuboid": t_volume_cuboid,
     "volume_prism": t_volume_prism,
@@ -855,6 +999,15 @@ REASONS: dict[str, str] = {
     "perpendicular_gradients": "the gradients of perpendicular lines multiply to −1",
     "reflection_rule": "a reflection keeps the distance to the mirror line and swaps the side",
     "translation_rule": "a translation adds the same shift to the x-coordinate and to the y-coordinate",
+    "rotation_rule": "a quarter turn about the origin sends (x, y) to (-y, x); a half turn to (-x, -y)",
+    "sin_ratio": "in a right-angled triangle, sin of an angle is opposite over hypotenuse",
+    "cos_ratio": "in a right-angled triangle, cos of an angle is adjacent over hypotenuse",
+    "tan_ratio": "in a right-angled triangle, tan of an angle is opposite over adjacent",
+    "angle_at_centre": "the angle at the centre is twice the angle at the circumference on the same arc",
+    "angle_in_semicircle": "the angle in a semicircle is a right angle",
+    "angles_same_segment": "angles in the same segment are equal",
+    "cyclic_quadrilateral": "opposite angles of a cyclic quadrilateral add up to 180 degrees",
+    "tangent_radius": "a tangent meets the radius at the point of contact at a right angle",
     "volume_cuboid": "the volume of a cuboid is length times width times height (a cube: edge cubed)",
     "volume_prism": "the volume of a prism is the area of its cross-section times its length",
     "volume_cylinder": "the volume of a cylinder is pi times the radius squared times the height",

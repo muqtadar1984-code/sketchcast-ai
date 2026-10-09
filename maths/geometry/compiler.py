@@ -23,7 +23,7 @@ import sympy as sp
 
 from maths.geometry.constructions import BuildContext, exact_value, run, exact_pair
 from maths.geometry.errors import GeometryRefusal
-from maths.geometry.model import (ANGLE_TOL_DEG, LENGTH_REL_TOL, Model, SegKey, angle_key, is_exact_number,
+from maths.geometry.model import (in_degrees, ANGLE_TOL_DEG, LENGTH_REL_TOL, Model, SegKey, angle_key, is_exact_number,
                                   seg_key, to_float)
 from maths.geometry.spec import FigureSpec, RelationSpec
 
@@ -40,7 +40,7 @@ def metric_resolver(bind: dict[str, sp.Expr]) -> Resolver:
 def parse_bind(spec: FigureSpec) -> dict[str, sp.Expr]:
     out = {}
     for k, v in spec.bind.items():
-        e = exact_value(v, where=f"bind.{k}")
+        e = in_degrees(exact_value(v, where=f"bind.{k}"))      # v4: bind o = 10*sin(40) means 40°
         if e.free_symbols:
             raise GeometryRefusal("bad_schema", f"bind.{k}: a bound value is a number", f"bind.{k}")
         out[k] = e
@@ -83,6 +83,10 @@ def compile_figure(spec: FigureSpec, resolve: Optional[Resolver] = None, *,
         sg = m.segment(s.points[0], s.points[1])
         m.segment_ids[s.id] = sg.key
         m.object_ids[s.id] = ("segment", s.id)
+        sg.hidden = False          # named by the question: drawn
+    for mk in spec.marks:
+        if mk.id:
+            m.object_ids[mk.id] = ("mark", mk.id)   # v4: a compass arc a step reveals
     for ms in spec.measures:
         if ms.target in m.points:
             # v2: a point's coordinates, given "(3, -2)" or asked "(a, b)"

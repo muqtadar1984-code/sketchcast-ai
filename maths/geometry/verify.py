@@ -216,7 +216,7 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
         name = f"step {i} ({st.kind})"
         _check_figure_ops(m, st, name)
         after_rels = [parse_line(x) for x in st.after]
-        after = [_eq(r).subs(subs) for r in after_rels]
+        after = [_in_degrees(_eq(r).subs(subs)) for r in after_rels]
         if st.kind == "deduce":
             if not st.theorem:
                 raise GeometryRefusal("bad_schema", f"{name}: a deduce step names its theorem", name)
@@ -226,7 +226,7 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
                 # the step's own equation names ARE its citation — every
                 # premise of the theorem still runs on them
                 uses += _angles_named(m, st.after)
-            template = [(e.lhs - e.rhs).subs(subs) for e in apply_theorem(m, st.theorem, uses)]
+            template = [_in_degrees((e.lhs - e.rhs).subs(subs)) for e in apply_theorem(m, st.theorem, uses)]
             if not after:
                 raise GeometryRefusal("bad_schema", f"{name}: write the equation the theorem gives", name)
             verdict = _equivalent(knowledge, template, after)
@@ -250,6 +250,13 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
                 verdict, detail = _states_equivalent(b_sub, a_sub, variables, "any")
             except MathTimeoutError:
                 verdict, detail = None, "SymPy timed out"
+            if not verdict:
+                # v4: an inverse trig step — tan(x) = 3/4 to x = atan(3/4) — is
+                # one solution of a periodic set; the chain's own implication
+                # (sp.solve, principal values) decides it, both ways
+                alt = _equivalent(knowledge, [_eq(r) for r in b_sub], [_eq(r) for r in a_sub])
+                if alt:
+                    verdict, detail = True, f"{detail}; equivalent by the chain's own solver"
             if verdict is None:
                 raise GeometryRefusal("step_unverifiable", f"{name}: {detail}", name)
             if not verdict:
@@ -273,9 +280,28 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
     return knowledge
 
 
+from maths.geometry.model import in_degrees as _in_degrees  # noqa: E402
+
+
+def _rounds_to(got, text) -> bool:
+    """The stated value is the proved one rounded to the decimals it
+    states (7.78 for 5/sin 40°, 36.87 for tan⁻¹ 0.75) — the one inexact
+    answer the engine accepts, and only as the CORRECT rounding."""
+    t = str(text).strip()
+    if "." not in t:
+        return False
+    try:
+        decimals = len(t.split(".")[1].rstrip())
+        want = float(t)
+        have = float(sp.N(got, 30))
+    except (TypeError, ValueError):
+        return False
+    return round(have, decimals) == round(want, decimals)
+
+
 def _with_subs(r: Relation, subs: dict) -> Relation:
-    lhs = r.lhs.subs(subs)
-    rhs = r.rhs.subs(subs) if r.rhs is not None else None
+    lhs = _in_degrees(r.lhs.subs(subs))
+    rhs = _in_degrees(r.rhs.subs(subs)) if r.rhs is not None else None
     return Relation(lhs, r.op, rhs, r.text, r.data)
 
 
@@ -345,14 +371,14 @@ def _check_reasoning_answer(rep: QuestionReport, q: QuestionSpec, fid: str, m: M
         got = _determined(knowledge, sym)
         if got is None:
             raise GeometryRefusal("answer_unproved", f"the steps never establish {name}")
-        if sp.simplify(got - value) != 0:
+        if sp.simplify(got - value) != 0 and not _rounds_to(got, ans.value if ans.kind == "number" else ans.value.get(name)):
             raise GeometryRefusal("answer_mismatch", f"the steps give {name} = {got}, the answer says {value}")
         rep.proved[name] = got
         rep.checks.append(Check(f"answer {name}", True, f"{name} = {got}"))
     # consistency 8a: the bound value is the proved one
     for name, bound in m.bind.items():
         got = rep.proved.get(name)
-        if got is not None and sp.simplify(got - bound) != 0:
+        if got is not None and sp.simplify(got - bound) != 0 and not _rounds_to(got, bound):
             raise GeometryRefusal("bind_mismatch", f"the figure was drawn with {name} = {bound}, the proof gives {got}")
     # consistency 8b: the drawn unknown agrees with the proof
     fig = q.figure_by_id(fid).figure

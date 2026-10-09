@@ -169,7 +169,7 @@ _LETTERS = {"E": sp.Symbol("E")}
 # calculator's parser made of it (the same kit: '2a^2 - 3ab + b' could not
 # equal its own substitution). A function or constant name is left alone.
 _LETTER_RUN_RE = re.compile(r"(?<![A-Za-z_])([A-Za-z]{2,3})(?![A-Za-z0-9_(])")
-_KEEP_RUNS = {"pi", "ln", "abs", "exp", "sin", "cos", "tan", "log"}
+_KEEP_RUNS = {"pi", "ln", "abs", "exp", "sin", "cos", "tan", "log", "asin", "acos", "atan", "arcsin", "arccos", "arctan"}
 
 
 def _split_products(text: str) -> str:
