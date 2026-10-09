@@ -99,6 +99,11 @@ def _hand_face(size: int):
 _HAND_CMAP: frozenset | None = None
 
 
+# maths signs above the punctuation ceiling that Caveat draws (checked
+# glyph by glyph, 2026-10-09): minus, not-equal, approximately, ≤, ≥
+_HAND_MATHS = frozenset({0x2212, 0x2260, 0x2248, 0x2264, 0x2265})
+
+
 def _hand_covers(sample: str) -> bool:
     """Whether the handwriting face has a glyph for every character of
     ``sample``. This used to be ``ord(c) <= 0x2014``, which let Devanagari
@@ -112,11 +117,14 @@ def _hand_covers(sample: str) -> bool:
             from fontTools.ttLib import TTFont
             _HAND_CMAP = frozenset(TTFont(str(_HAND_TTF)).getBestCmap().keys())
         except Exception:  # noqa: BLE001
-            _HAND_CMAP = frozenset(range(0x20, 0x250)) | frozenset(range(0x2000, 0x2070))
+            _HAND_CMAP = frozenset(range(0x20, 0x250)) | frozenset(range(0x2000, 0x2070)) | _HAND_MATHS
     # the 0x2014 ceiling stays: smart punctuation is folded to ASCII
     # before the face is chosen (ascii_punct), and a line that still
     # carries it must not slip into the hand face as a mixed-typeface bubble
-    return all((ord(c) in _HAND_CMAP and ord(c) <= 0x2014) or c.isspace() for c in sample)
+    # — except the maths signs the face DOES carry (≤ ≥ − ≠ ≈): a chart's
+    # caption "x ≥ 2 on the number line" dropped whole to the sans face
+    # for its one sign (algebra charts, 2026-10-09)
+    return all((ord(c) in _HAND_CMAP and (ord(c) <= 0x2014 or ord(c) in _HAND_MATHS)) or c.isspace() for c in sample)
 
 
 def _script_runs(disp: str) -> list[str]:
