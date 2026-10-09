@@ -1132,7 +1132,16 @@ def chart_scene(ex: WorkedExample, seg_id: str, lang: str = "en") -> Optional[tu
     if not isinstance(spec, dict):
         return None
     point, eqs = ch.get("point"), ch.get("lines") or []
-    if ch.get("kind") == "parabola":
+    if ch.get("kind") == "number_line":
+        caption = _bt("ineq_caption", lang, ans=ch.get("answer") or "")
+        shape, closed = ch.get("shape"), ch.get("closed") or [False, False]
+        if shape == "between":
+            speech = _bt("ineq_between", lang, a=ch.get("a") or "", b=ch.get("b") or "")
+        elif shape == "right":
+            speech = _bt("ineq_right_closed" if closed[0] else "ineq_right_open", lang, a=ch.get("a") or "")
+        else:
+            speech = _bt("ineq_left_closed" if closed[1] else "ineq_left_open", lang, b=ch.get("b") or "")
+    elif ch.get("kind") == "parabola":
         roots = ", ".join(f"x = {r}" for r in (ch.get("roots") or []))
         caption = _bt("roots_cross", lang, r=roots)
         speech = _bt("roots_cross_speech", lang, r=roots, v=ch.get("vertex") or "")

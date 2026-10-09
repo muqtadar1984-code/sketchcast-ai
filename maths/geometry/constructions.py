@@ -30,7 +30,7 @@ from typing import Any, Callable, Optional
 import sympy as sp
 
 from maths.geometry.errors import GeometryRefusal
-from maths.geometry.model import Circle, GridPattern, Model, angle_key, seg_key, Axes
+from maths.geometry.model import Circle, GridPattern, Model, angle_key, seg_key, Axes, Interval, NumberLine
 from maths.geometry.spec import FigureSpec
 from maths.notation import NotationError, parse_relation
 
@@ -828,6 +828,61 @@ def c_line_eq(ctx: BuildContext, obj: dict) -> None:
     label = str(obj.get("label") or "").strip()
     if label:
         m.line_labels[lid] = label[:24]
+
+
+def c_number_line(ctx: BuildContext, obj: dict) -> None:
+    """A number line `range` [lo, hi] at `step` (one of the axes' steps):
+    its own figure, never on axes. The chart of a one-variable
+    inequality (maths/charts.py)."""
+    w = _where(obj)
+    m = ctx.model
+    if m.number_line is not None or m.axes is not None:
+        raise GeometryRefusal("bad_schema", f"{w}: a figure has one number line, and no axes with it", w)
+    r = obj.get("range", [-5, 5])
+    if not isinstance(r, list) or len(r) != 2:
+        raise GeometryRefusal("bad_schema", f"{w}: `range` is [min, max]", w)
+    lo, hi = float(exact_value(r[0], where=f"{w}.range")), float(exact_value(r[1], where=f"{w}.range"))
+    if not lo < hi:
+        raise GeometryRefusal("bad_schema", f"{w}: `range` must be [min, max] with min < max", w)
+    step = float(exact_value(obj.get("step", 1), where=f"{w}.step"))
+    if step not in _AXES_STEPS:
+        raise GeometryRefusal("bad_schema", f"{w}: `step` is one of {_AXES_STEPS}", w)
+    if (hi - lo) / step > _AXES_MAX_STEPS:
+        raise GeometryRefusal("bad_schema", f"{w}: the range spans more than {_AXES_MAX_STEPS} steps", w)
+    m.number_line = NumberLine(str(obj.get("id") or "nl"), lo, hi, step)
+
+
+def c_interval(ctx: BuildContext, obj: dict) -> None:
+    """A solution set on the number line: `from` and/or `to` (exact
+    numbers inside the range; a missing one is unbounded), `from_closed`
+    / `to_closed` for ≤ and ≥."""
+    w = _where(obj)
+    m = ctx.model
+    nl = m.number_line
+    if nl is None:
+        raise GeometryRefusal("bad_schema", f"{w}: an interval needs `number_line` first", w)
+    iid = str(obj.get("id") or f"interval_{len(m.intervals) + 1}")
+    if iid in m.intervals:
+        raise GeometryRefusal("bad_reference", f"{w}: interval {iid!r} is defined twice", w)
+    bounds: dict[str, Optional[float]] = {}
+    for key in ("from", "to"):
+        v = obj.get(key)
+        if v is None or v == "":
+            bounds[key] = None
+            continue
+        e = ctx.exact(v, where=f"{w}.{key}")
+        if e.free_symbols:
+            raise GeometryRefusal("bad_schema", f"{w}: `{key}` is a number", w)
+        fv = float(e)
+        if not (nl.lo - 1e-9 <= fv <= nl.hi + 1e-9):
+            raise GeometryRefusal("construction_impossible", f"{w}: `{key}` = {fv:g} is off the number line", w)
+        bounds[key] = fv
+    lo, hi = bounds["from"], bounds["to"]
+    if lo is None and hi is None:
+        raise GeometryRefusal("bad_schema", f"{w}: an interval has `from`, `to` or both", w)
+    if lo is not None and hi is not None and not lo < hi:
+        raise GeometryRefusal("construction_impossible", f"{w}: `from` must be less than `to`", w)
+    m.intervals[iid] = Interval(iid, lo, hi, bool(obj.get("from_closed", False)), bool(obj.get("to_closed", False)))
 
 
 def c_curve_eq(ctx: BuildContext, obj: dict) -> None:
@@ -1738,6 +1793,8 @@ CONSTRUCTIONS: dict[str, Callable[[BuildContext, dict], None]] = {
     "translate_point": c_translate_point,
     "line_eq": c_line_eq,
     "curve_eq": c_curve_eq,
+    "number_line": c_number_line,
+    "interval": c_interval,
     "transversal": c_transversal,
     "parallels_transversal": c_parallels_transversal,
     "angle_bisector": c_angle_bisector,
