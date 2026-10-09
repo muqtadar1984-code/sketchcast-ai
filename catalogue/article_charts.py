@@ -160,6 +160,14 @@ def derive_example(we_id: str, problem: str, solution: str) -> Optional[WorkedEx
         return WorkedExample(label=we_id, task="solve", problem=problem, givens=[eq.text], target="y", steps=[],
                              final_answer=[eq.text])
 
+    if not two_var and re.search(r"(gradient|slope|intercept|equation of (?:a|the) (?:straight )?line)", low):
+        # the line is the ANSWER ("find the equation of the line through…"):
+        # its equation is read from the solution's last lines and graphed
+        found = [r for r in _relations(tail) if r.is_equation and r.free_symbols == {X, Y}]
+        if found:
+            eq = found[-1]
+            return WorkedExample(label=we_id, task="solve", problem=problem, givens=[eq.text], target="y", steps=[],
+                                 final_answer=[eq.text])
     quad_eq = [r for r in eqs if r.free_symbols == {X} and _degree(r.lhs - r.rhs) == 2]
     if quad_eq:
         roots = re.findall(rf"\bx\s*=\s*({_NUM})", tail)

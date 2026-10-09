@@ -44,6 +44,8 @@ FACTORISE = ("Factorise the quadratic trinomial x^2 + 9x + 18 completely.",
 PLOT = ("Construct a table of values and plot the linear graph for the equation y = 2x - 3 using x-values from -1 to 3.",
         "Step 1: Set up a table of values.\nStep 9: Draw a straight line through all points using a ruler and label the "
         "line with the equation y = 2x - 3.")
+GRADIENT = ('Find the gradient and y-intercept of the line passing through the points zero comma three and four comma eleven, and write its equation.',
+            'Step 1: Label the points.\nStep 5: Read the y-intercept c from the point (0, 3), where c equals 3.\nStep 6: Substitute m and c into the slope-intercept form y = mx + c to get the final equation: y = 2x + 3.')
 MEAN = ("Find the mean of the numbers 4, 8, 6, 10, and 12.",
         "Step 1: Add the numbers: 4 + 8 + 6 + 10 + 12 = 40.\nStep 2: Divide by how many there are: 40 / 5 = 8.\n"
         "The mean is 8.")
@@ -69,6 +71,8 @@ def test_the_catalogue_texts_read_back_into_plottable_examples():
     assert chart_for(ex)["roots"] == ["-6", "-3"]
     ex = derive_example("w2", *PLOT)
     assert ex and ex.task == "solve" and ex.givens == ["y = 2x - 3"] and chart_for(ex)["point"] is None
+    ex = derive_example("w1", *GRADIENT)
+    assert ex and ex.task == "solve" and ex.givens == ["y = 2x + 3"] and chart_for(ex)["lines"] == ["y = 2x + 3"]
     ex = derive_example("w1", *MEAN)
     assert ex and ex.task == "mean" and ex.givens == ["4, 8, 6, 10, 12"] and ex.final_answer == ["8"]
     assert chart_for(ex)["value"] == "8"
