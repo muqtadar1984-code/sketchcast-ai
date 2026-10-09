@@ -331,6 +331,12 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
     boxes: list = []
     if m.axes is not None:
         _draw_axes(d, m, label_size, boxes)
+    # a curve from its equation: one polyline per run inside the box — drawn
+    # BEFORE any label is placed, so a coordinate tag (a parabola's vertex)
+    # keeps clear of it (frame review, 2026-10-09)
+    for cid, (runs, _ctext) in m.curves.items():
+        for run in runs:
+            d.strokes.append(Stroke(list(run), width=1.1, tag=f"curve:{cid}"))
     # angle marks and labels: every measured angle, plus explicit angle_arc marks
     labelled: set = set()
     arcs_drawn: set = set()
@@ -407,6 +413,21 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
     # name — placed after every name, it takes the next clear side
     for pid, text in coord_tags:
         _place_coord_tag(d, m, pid, text, label_size, boxes)
+    # a curve's label beside the end of its longest run, else by its
+    # highest point; a crowded curve goes unlabelled
+    for cid, (runs, ctext) in m.curves.items():
+        if ctext:
+            longest = max(runs, key=len)
+            first, last = longest[0], longest[-1]
+            top = max(longest, key=lambda pt: pt[1])
+            size = label_size * 0.8
+            cands = [(last[0] - label_size * 0.4, last[1] - label_size * 0.9, "end"),
+                     (first[0] + label_size * 0.4, first[1] - label_size * 0.9, "start"),
+                     (last[0] + label_size * 0.4, last[1] + label_size * 0.6, "start"),
+                     (first[0] - label_size * 0.4, first[1] + label_size * 0.6, "end"),
+                     (top[0] + label_size * 0.6, top[1] + label_size * 0.6, "start"),
+                     (top[0] - label_size * 0.6, top[1] + label_size * 0.6, "end")]
+            _place_or_skip(d, cands, ctext, size, boxes, tag=f"curvelabel:{cid}")
     # a line drawn from its equation carries the equation beside it, near
     # its far end, on whichever side is clear; a crowded line goes unlabelled
     for ln in m.lines.values():

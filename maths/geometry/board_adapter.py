@@ -81,12 +81,23 @@ def _stroke_secs(points: list, role: str) -> float:
     return round(max(STROKE_MIN_SECS, length / PEN_PX_PER_SEC), 2)
 
 
-def _fit(d: Drawing, panel: Rect, max_scale: Optional[float] = None) -> tuple[float, float, float]:
+def _min_px(m: Model) -> float:
+    """The smallest scale a figure may draw at: MIN_PX_PER_UNIT — per grid
+    STEP on axes, where the step is the pitch the eye reads (a parabola over
+    y in [-8, 8] at step 2 is as legible as a line over [-4, 4] at step 1;
+    the labels are sized in board pixels, not units, either way)."""
+    if m.axes is not None and float(m.axes.step) > 1.0:
+        return MIN_PX_PER_UNIT / float(m.axes.step)
+    return MIN_PX_PER_UNIT
+
+
+def _fit(d: Drawing, panel: Rect, max_scale: Optional[float] = None,
+         min_px: float = MIN_PX_PER_UNIT) -> tuple[float, float, float]:
     x0, y0, x1, y1 = d.bbox
     w, h = max(1e-6, x1 - x0), max(1e-6, y1 - y0)
     pw, ph = panel[2] - panel[0], panel[3] - panel[1]
     s = min(pw / w, ph / h, MAX_PX_PER_UNIT, max_scale or MAX_PX_PER_UNIT)
-    if s < MIN_PX_PER_UNIT:
+    if s < min_px:
         raise GeometryRefusal("layout_collision", f"the figure ({w:.1f}×{h:.1f} units) does not fit the board panel")
     # centred in the panel
     ox = panel[0] + (pw - w * s) / 2 - x0 * s
@@ -146,14 +157,15 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
     bx0, by0, bx1, by1 = m.bbox()
     prov = min((panel[2] - panel[0]) / max(1e-6, bx1 - bx0), (panel[3] - panel[1]) / max(1e-6, by1 - by0),
                MAX_PX_PER_UNIT)
-    d = _with_hidden(m, spec, label_px / max(prov, MIN_PX_PER_UNIT), max(prov, MIN_PX_PER_UNIT), text_metric)
-    s, ox, oy = _fit(d, panel, max_scale)
+    floor = _min_px(m)
+    d = _with_hidden(m, spec, label_px / max(prov, floor), max(prov, floor), text_metric)
+    s, ox, oy = _fit(d, panel, max_scale, floor)
     # the labels widen the box, so the fitted scale is smaller than the
     # provisional one and the labels come out small: one more pass at the
     # true scale settles them within a pixel
     try:
         d2 = _with_hidden(m, spec, label_px / s, s, text_metric)
-        s, ox, oy = _fit(d2, panel, max_scale)
+        s, ox, oy = _fit(d2, panel, max_scale, floor)
         d = d2
     except GeometryRefusal as exc:
         if exc.code != "layout_collision":

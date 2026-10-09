@@ -561,6 +561,8 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
     if x + w > NOTE_RIGHT:
         note = _short(note, max(12, int(len(note) * (NOTE_RIGHT - x) / w)))
         w = _M.text_width(note, size)
+    if x + w > NOTE_RIGHT:
+        return          # a wide line left no room before the card: no note beats one across it
     nid = board.uid("n")
     board.elements.append({"id": nid, "type": "text", "text": note, "size": size, "color": "muted",
                            "role": "caption", "at": [x, y], "anchor": "lm"})
@@ -1130,7 +1132,11 @@ def chart_scene(ex: WorkedExample, seg_id: str, lang: str = "en") -> Optional[tu
     if not isinstance(spec, dict):
         return None
     point, eqs = ch.get("point"), ch.get("lines") or []
-    if point:
+    if ch.get("kind") == "parabola":
+        roots = ", ".join(f"x = {r}" for r in (ch.get("roots") or []))
+        caption = _bt("roots_cross", lang, r=roots)
+        speech = _bt("roots_cross_speech", lang, r=roots, v=ch.get("vertex") or "")
+    elif point:
         px, py = [t.strip() for t in point.strip("()").split(",")]
         caption = _bt("lines_cross", lang, p=point)
         speech = _bt("lines_cross_speech", lang, p=point, x=px, y=py)
@@ -1143,8 +1149,12 @@ def chart_scene(ex: WorkedExample, seg_id: str, lang: str = "en") -> Optional[tu
         return None
     q = parse_question(spec)
     ref = q.figures[0]
+    # the chart starts under the caption: a long caption (a parabola's two
+    # roots) ran into the y-axis name at the panel's fixed top (2026-10-09)
+    _cw, cap_h = _M.text_box(display_text(caption), Q_SIZE)
+    panel = (CHART_PANEL[0], max(CHART_PANEL[1], Q_AT[1] + cap_h + 10.0), CHART_PANEL[2], CHART_PANEL[3])
     try:
-        fb = figure_board(rep.models[ref.id], ref.figure, panel=CHART_PANEL, prefix="fig",
+        fb = figure_board(rep.models[ref.id], ref.figure, panel=panel, prefix="fig",
                           text_metric=_M.text_box)
     except GeometryRefusal:
         return None
@@ -1160,9 +1170,10 @@ def chart_scene(ex: WorkedExample, seg_id: str, lang: str = "en") -> Optional[tu
         if "duration" in a:
             a["duration"] = round(max(0.05, float(a["duration"]) * CHART_PACE), 2)
     actions += fb.actions
-    # the solution point's tag, swept once the figure is drawn
-    for eid in fb.targets.get("coord:p_s", []):
-        actions.append({"verb": "highlight", "target": eid})
+    # the solution point's tag — or the roots' — swept once the figure is drawn
+    for tag in ("coord:p_s", "coord:p_r1", "coord:p_r2"):
+        for eid in fb.targets.get(tag, []):
+            actions.append({"verb": "highlight", "target": eid})
     # "compiled": the board's own scene, not a model reply — the director's
     # 12-element / 18-action cap is for replies, and it cut this chart to its
     # first eleven strokes (frame review, 2026-10-09)
@@ -1186,7 +1197,7 @@ def chart_segment(ex: WorkedExample, seg_id: str, lang: str = "en") -> Optional[
     if out is None:
         return None
     scene, lines = out
-    heading = _short(_bt("lines_cross", lang, p=(ex.chart or {}).get("point") or ""), 60)
+    heading = _short(str(scene["elements"][0]["text"]), 60)     # the scene's own caption
     seg = _segment(seg_id, "explore", lines, heading=heading, points=[], hold=_chart_hold(scene, lines[0].line))
     seg["scene"] = scene
     return seg

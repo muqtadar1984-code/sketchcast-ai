@@ -830,6 +830,44 @@ def c_line_eq(ctx: BuildContext, obj: dict) -> None:
         m.line_labels[lid] = label[:24]
 
 
+def c_curve_eq(ctx: BuildContext, obj: dict) -> None:
+    """The parabola y = a·x² + b·x + c across the axes: sampled at exact
+    rationals, every run that stays inside the axes box kept as one
+    polyline, labelled with the equation as the question wrote it. No
+    points are placed; roots and the vertex are point_at objects the chart
+    builder adds (maths/charts.py). Not a carrier: nothing references it."""
+    w = _where(obj)
+    ax = _need_axes(ctx, w)
+    m = ctx.model
+    cid = str(obj.get("id") or f"curve_{len(m.curves) + 1}")
+    if cid in m.curves:
+        raise GeometryRefusal("bad_reference", f"{w}: curve {cid!r} is defined twice", w)
+    a, b, c = (ctx.exact(_req(obj, k, w), where=w) for k in ("a", "b", "c"))
+    if a.free_symbols or b.free_symbols or c.free_symbols:
+        raise GeometryRefusal("bad_schema", f"{w}: a, b and c are numbers", w)
+    if a == 0:
+        raise GeometryRefusal("construction_impossible", f"{w}: a = 0 is a line, not a curve (use line_eq)", w)
+    x0, x1 = sp.Rational(ax.x0).limit_denominator(1000), sp.Rational(ax.x1).limit_denominator(1000)
+    y0, y1 = float(ax.y0), float(ax.y1)
+    n = 96
+    runs: list[list[tuple[float, float]]] = []
+    run: list[tuple[float, float]] = []
+    for i in range(n + 1):
+        xv = x0 + (x1 - x0) * sp.Rational(i, n)
+        y = float(a * xv * xv + b * xv + c)
+        if y0 - 1e-9 <= y <= y1 + 1e-9:
+            run.append((float(xv), y))
+        else:
+            if len(run) >= 2:
+                runs.append(run)
+            run = []
+    if len(run) >= 2:
+        runs.append(run)
+    if not runs:
+        raise GeometryRefusal("construction_impossible", f"{w}: the curve does not enter the axes box", w)
+    m.curves[cid] = (runs, str(obj.get("label") or "").strip()[:24])
+
+
 def c_translate_point(ctx: BuildContext, obj: dict) -> None:
     """v2: the image of `point` translated `by` [dx, dy] (exact numbers),
     placed as `to`. The rule is a fact the chain's translation_rule theorem
@@ -1699,6 +1737,7 @@ CONSTRUCTIONS: dict[str, Callable[[BuildContext, dict], None]] = {
     "reflect_point": c_reflect_point,
     "translate_point": c_translate_point,
     "line_eq": c_line_eq,
+    "curve_eq": c_curve_eq,
     "transversal": c_transversal,
     "parallels_transversal": c_parallels_transversal,
     "angle_bisector": c_angle_bisector,
