@@ -43,6 +43,21 @@ The common mistake is verified the other way round: SymPy must show the
 wrong route really changes the meaning, or a valid method would be taught as
 an error. Every SymPy call runs under mathsvc's hard timeout — a hung
 verification is worse than an unverified one.
+
+DECIMALS ARE EXACT. A decimal in a line is the rational it writes, never a
+binary float: "188.4 + 56.52" IS "244.92", and the 2.8e-14 a float left
+over made that step "WRONG" on the first geometry kit (2026-10-09).
+
+π MAY BE TAKEN AS A SCHOOL APPROXIMATION (founder direction 2026-10-09, after
+the same kit lost its only cylinder-surface-area example three times). A
+line "pi = 3.14" (or "π ≈ 22/7") among the givens or the working is a
+DECLARATION of the approximation in force, not an equation to solve (as an
+equation it is false, and the state's solution set was EmptySet). And when
+two sides are not equivalent exactly, but the side with π in it equals the
+side without once π is 22/7, 3.14, 3.142, 3.1416, 3.14159 or 3.141593 —
+or that value rounded to a few decimal places — the step is verified and
+the report says which value π was taken as. An answer in terms of π still
+verifies exactly; a wrong approximation (π as 3.1) still fails.
 """
 
 from __future__ import annotations
@@ -109,16 +124,164 @@ def _timed(fn: Callable, *args):
     return run_with_timeout(fn, *args, timeout=_TIMEOUT)
 
 
+def _exact(expr):
+    """The expression with every decimal read as the rational it writes:
+    188.4 is 942/5, not the nearest binary float. Floats are what the
+    calculator's parser makes of a decimal, and float arithmetic is why
+    "188.4 + 56.52" was not "244.92" (2.84e-14 over) on the first geometry
+    kit. A non-SymPy value comes back unchanged."""
+    try:
+        floats = expr.atoms(sp.Float)
+    except AttributeError:
+        return expr
+    if not floats:
+        return expr
+    return expr.xreplace({f: sp.nsimplify(f, rational=True) for f in floats})
+
+
 def _zero(expr) -> bool:
     """Is this expression identically zero? expand first (cheap and exact
     for polynomials), simplify only when needed (radicals, fractions)."""
-    e = sp.expand(expr)
+    e = sp.expand(_exact(expr))
     if e == 0:
         return True
     try:
         return sp.simplify(e) == 0
     except Exception:  # noqa: BLE001 — a simplify that blows up is "no"
         return False
+
+
+# ── π as a school approximation ──────────────────────────────────────────
+#
+# The values a syllabus tells a learner to take π as: 22/7 (CBSE), 3.14
+# (CBSE and Cambridge), 3.142 / 3.1416 / 3.14159 / 3.141593 (3-7 figures,
+# the calculator's value rounded). A line of working that replaces π by one
+# of these is a step a textbook prints, not an error — but only these: a
+# step that takes π as 3.1 is wrong.
+_PI_VALUES = (sp.Rational(22, 7), sp.Rational(314, 100), sp.Rational(3142, 1000), sp.Rational(31416, 10000),
+              sp.Rational(314159, 100000), sp.Rational(3141593, 1000000))
+_PI_DECLARED_RE = re.compile(r"(?:π|\bpi\b)\s*(?:=|≈|~|is|as|be)\s*(\d+(?:\.\d+)?(?:\s*/\s*\d+)?)", re.I)
+
+
+def _fmt_pi(q) -> str:
+    q = sp.Rational(q)
+    for k in range(0, 7):
+        scaled = q * 10 ** k
+        if scaled.q == 1:
+            return f"{int(scaled) / 10 ** k:.{k}f}" if k else str(q.p)
+    return f"{q.p}/{q.q}"
+
+
+def _is_pi_declaration(r: Relation) -> bool:
+    """``pi = 3.14``: the approximation declared, not an equation (false as
+    one — SymPy gave the whole state no solution)."""
+    return (r.is_equation and r.rhs is not None and not r.free_symbols
+            and ((r.lhs == sp.pi and r.rhs.is_number and not r.rhs.has(sp.pi))
+                 or (r.rhs == sp.pi and r.lhs.is_number and not r.lhs.has(sp.pi))))
+
+
+def _pi_values(ex: Optional[WorkedExample]) -> tuple:
+    """The approximations accepted for this example: the standard ones, and
+    any the problem's words or a declaration line name ("take π = 3.14",
+    "pi = 22/7"), so a stated value is honoured even off the standard list."""
+    out = list(_PI_VALUES)
+    if ex is None:
+        return tuple(out)
+    texts = [ex.problem or ""] + list(ex.givens)
+    for st in ex.steps:
+        texts += list(st.before) + list(st.after)
+    for t in texts:
+        for m in _PI_DECLARED_RE.finditer(t.replace("π", "pi")):
+            try:
+                q = sp.Rational(m.group(1).replace(" ", ""))
+            except (TypeError, ValueError):
+                continue
+            if 3 <= q <= sp.Rational(32, 10) and q not in out:
+                out.append(q)
+    return tuple(out)
+
+
+def _as_fraction(v) -> Optional[Fraction]:
+    v = _exact(v)
+    if getattr(v, "is_Rational", False):
+        return Fraction(int(v.p), int(v.q))
+    return None
+
+
+def _is_decimal_rounding(b: Fraction, a: Fraction) -> bool:
+    """``a`` is ``b`` rounded to 0-4 decimal places or 3-4 significant
+    figures — what a printed answer does with 282.7431... (282.74), never
+    "300" for it."""
+    return any(_round_to(b, Fraction(10) ** k) == a for k in range(-4, 1)) or \
+        any(_round_sf(b, n) == a for n in (3, 4))
+
+
+def _pi_match(b, a, ex: Optional[WorkedExample] = None) -> Optional[str]:
+    """``a`` is ``b`` with π taken as a school approximation (and, for a
+    bare number, perhaps rounded after): the reason to report, or None.
+    Only from the exact side to the approximate one — once π is 3.14 it
+    does not come back."""
+    try:
+        if not (b.has(sp.pi) and not a.has(sp.pi)):
+            return None
+    except AttributeError:
+        return None
+    for q in _pi_values(ex):
+        if _zero(b.subs(sp.pi, q) - a):
+            return f"π taken as {_fmt_pi(q)}"
+    fa = _as_fraction(a)
+    if fa is None:
+        return None
+    for q in _pi_values(ex):
+        fb = _as_fraction(sp.nsimplify(b.subs(sp.pi, q), rational=True))
+        if fb is not None and _is_decimal_rounding(fb, fa):
+            return f"π taken as {_fmt_pi(q)}, then rounded"
+    return None
+
+
+_PI_TAKEN_RE = re.compile(r"π taken as (\d+(?:\.\d+)?(?:/\d+)?)")
+
+
+def pi_taken_as(detail: str) -> Optional[sp.Rational]:
+    """The value π was taken as in a verdict this module wrote ("… (π taken
+    as 3.14)"), or None. For a caller that must carry the approximation
+    forward — the geometry chain's knowledge, once a step has taken it."""
+    m = _PI_TAKEN_RE.search(detail or "")
+    return sp.Rational(m.group(1)) if m else None
+
+
+def _pi_sets_match(sb, sa, ex: Optional[WorkedExample] = None) -> Optional[str]:
+    """Two solution sets that agree once π is taken as an approximation in
+    ``sb`` — finite sets element by element, solution lists value by value."""
+    notes: list[str] = []
+
+    def value(vb, va) -> bool:
+        if _equal_values(vb, va):
+            return True
+        why = _pi_match(vb, va, ex)
+        if why:
+            notes.append(why)
+            return True
+        return False
+
+    if isinstance(sb, sp.FiniteSet) and isinstance(sa, sp.FiniteSet) and len(sb) == len(sa):
+        left = list(sa.args)
+        for vb in sb.args:
+            hit = next((i for i, va in enumerate(left) if value(vb, va)), None)
+            if hit is None:
+                return None
+            left.pop(hit)
+        return notes[0] if notes else None
+    if isinstance(sb, list) and isinstance(sa, list) and len(sb) == len(sa):
+        left = list(sa)
+        for db in sb:
+            hit = next((i for i, da in enumerate(left)
+                        if set(db) == set(da) and all(value(db[k], da[k]) for k in db)), None)
+            if hit is None:
+                return None
+            left.pop(hit)
+        return notes[0] if notes else None
+    return None
 
 
 def _equal_values(a, b) -> bool:
@@ -197,7 +360,7 @@ def _solution_set(rels: list[Relation], variables: list[sp.Symbol], mode: str):
             if r.is_inequality:
                 sets.append(sp.solve_univariate_inequality(r.as_sympy(), x, relational=False))
             else:
-                s = sp.solveset(sp.Eq(r.lhs, r.rhs), x, domain=sp.S.Reals)
+                s = sp.solveset(sp.Eq(_exact(r.lhs), _exact(r.rhs)), x, domain=sp.S.Reals)
                 sets.append(s)
         if not sets:
             return sp.S.EmptySet
@@ -215,11 +378,11 @@ def _solution_set(rels: list[Relation], variables: list[sp.Symbol], mode: str):
                 return hp
         raise ValueError("a multivariate inequality is not verifiable here")
     if mode == "all":
-        sols = sp.solve([sp.Eq(r.lhs, r.rhs) for r in eqs], variables, dict=True)
+        sols = sp.solve([sp.Eq(_exact(r.lhs), _exact(r.rhs)) for r in eqs], variables, dict=True)
         return [dict(s) for s in sols]
     out = []
     for r in eqs:
-        out.extend(dict(s) for s in sp.solve(sp.Eq(r.lhs, r.rhs), variables, dict=True))
+        out.extend(dict(s) for s in sp.solve(sp.Eq(_exact(r.lhs), _exact(r.rhs)), variables, dict=True))
     return out
 
 
@@ -645,15 +808,21 @@ def _expression_step(before: list[Relation], after: list[Relation], ex: WorkedEx
             eb = eb[-1:]
         else:
             return None, f"{len(eb)} expression(s) became {len(ea)}"
+    notes: list[str] = []
     for (rb, b), (ra, a) in zip(eb, ea):
         if not _timed(_zero, b - a):
+            why = _timed(_pi_match, b, a, ex)
+            if why:
+                notes.append(why)
+                continue
             gap = _word_gap(b, a)
             if gap:
                 return None, gap
             with_values = (" with " + ", ".join(f"{k} = {v}" for k, v in sorted(values.items(), key=lambda kv: str(kv[0])))
                            if values else "")
             return False, f"{rb.text!r} is not equivalent to {ra.text!r}{with_values}"
-    return True, "equivalent expressions" + (" under the given values" if values else "")
+    return True, "equivalent expressions" + (" under the given values" if values else "") + \
+        (f" ({notes[0]})" if notes else "")
 
 
 def _states_equivalent(before: list[Relation], after: list[Relation], variables: list[sp.Symbol],
@@ -692,13 +861,18 @@ def _states_equivalent(before: list[Relation], after: list[Relation], variables:
     if kb == "expressions":
         if len(before) != len(after):
             return None, f"{len(before)} expression(s) became {len(after)}"
+        notes: list[str] = []
         for i, (b, a) in enumerate(zip(before, after)):
             if not _timed(_zero, b.lhs - a.lhs):
+                why = _timed(_pi_match, b.lhs, a.lhs, ex)
+                if why:
+                    notes.append(why)
+                    continue
                 gap = _word_gap(b.lhs, a.lhs)
                 if gap:
                     return None, gap
                 return False, f"{b.text!r} is not equivalent to {a.text!r}"
-        return True, "equivalent expressions"
+        return True, "equivalent expressions" + (f" ({notes[0]})" if notes else "")
     fb, fa = _free(before), _free(after)
     try:
         if fa and fb and fa < fb:
@@ -709,6 +883,9 @@ def _states_equivalent(before: list[Relation], after: list[Relation], variables:
             sa = _timed(_solution_set, after, va, _state_mode(after, mode))
             if _same_solutions(sb, sa):
                 return True, f"solutions unchanged for {', '.join(map(str, va))}: {_fmt_solutions(sa)}"
+            approx = _pi_sets_match(sb, sa, ex)
+            if approx:
+                return True, f"solutions unchanged for {', '.join(map(str, va))} ({approx}): {_fmt_solutions(sa)}"
             ok, why = _discard_allowed(sb, sa, operation, problem)
             if ok and _proper_subset(sa, sb):
                 return True, why
@@ -731,6 +908,9 @@ def _states_equivalent(before: list[Relation], after: list[Relation], variables:
         return None, f"could not solve: {exc}"
     if _same_solutions(sb, sa):
         return True, f"solutions unchanged: {_fmt_solutions(sa)}"
+    approx = _pi_sets_match(sb, sa, ex)
+    if approx:
+        return True, f"solutions unchanged ({approx}): {_fmt_solutions(sa)}"
     if _proper_subset(sa, sb):
         ok, why = _discard_allowed(sb, sa, operation, problem)
         if ok:
@@ -739,10 +919,22 @@ def _states_equivalent(before: list[Relation], after: list[Relation], variables:
 
 
 def _parse(lines: list[str], what: str) -> tuple[Optional[list[Relation]], str]:
+    """The lines as relations — less any ``pi = 3.14`` line, which declares
+    the approximation in force (_pi_values reads it) and is no equation."""
     try:
-        return parse_state(lines), ""
+        return [_exact_relation(r) for r in parse_state(lines) if not _is_pi_declaration(r)], ""
     except (NotationError, MathError) as exc:
         return None, f"{what} could not be read: {exc}"
+
+
+def _exact_relation(r: Relation) -> Relation:
+    """The relation with its decimals exact (_exact). Done here, at the
+    parse, because two parsed floats subtract into a float BEFORE any check
+    can rationalise them — "188.4 + 56.52" minus "244.92" was already the
+    float 2.84e-14 by the time _zero saw it."""
+    if r.data is not None:
+        return r
+    return Relation(_exact(r.lhs), r.op, None if r.rhs is None else _exact(r.rhs), r.text)
 
 
 # ── rounding and estimation ──────────────────────────────────────────────
@@ -904,6 +1096,9 @@ def _check_step(i: int, st: Step, ex: WorkedExample, variables: list[sp.Symbol])
             if r.free_symbols:
                 return Check(name, None, f"a check must have no unknowns left: {r.text!r}")
             if not _timed(_zero, r.lhs - r.rhs):
+                why = _timed(_pi_match, r.lhs, r.rhs, ex) or _timed(_pi_match, r.rhs, r.lhs, ex)
+                if why:
+                    return Check(name, True, f"the check holds ({why})")
                 return Check(name, False, f"{r.text!r} is false")
         return Check(name, True, "the check holds")
     before, err = _parse(st.before, "the line before")
@@ -1030,6 +1225,9 @@ def _check_answer(ex: WorkedExample, givens: Optional[list[Relation]], variables
             expected, actual = _project(expected, targets), _project(actual, targets)
         if _same_solutions(expected, actual):
             return Check("answer", True, f"answer verified: {_fmt_solutions(actual)}")
+        approx = _pi_sets_match(expected, actual, ex)
+        if approx:
+            return Check("answer", True, f"answer verified ({approx}): {_fmt_solutions(actual)}")
         if _proper_subset(actual, expected):
             reasons = " ".join(s.operation for s in ex.steps if s.kind == "transform")
             ok, why = _discard_allowed(expected, actual, reasons, ex.problem)
@@ -1052,8 +1250,13 @@ def _check_answer(ex: WorkedExample, givens: Optional[list[Relation]], variables
     if len(pe) != 1:
         return Check("answer", None, f"one expression expected in the givens, got {len(pe)}")
     problem_rel, problem_e = pe[0]
+    approx = ""
     for rel, a_e in ae:
         if not _timed(_zero, problem_e - a_e):
+            why = _timed(_pi_match, problem_e, a_e, ex)
+            if why:
+                approx = f" ({why})"
+                continue
             gap = _word_gap(problem_e, a_e)
             if gap:
                 return Check("answer", None, gap)
@@ -1070,7 +1273,7 @@ def _check_answer(ex: WorkedExample, givens: Optional[list[Relation]], variables
         return Check("answer", False, f"{rel.text!r} is not factorised")
     if ex.task == "evaluate" and a_form.free_symbols:
         return Check("answer", False, f"{rel.text!r} is not a value")
-    return Check("answer", True, "answer verified" + (f": {a_e}" if ex.task == "evaluate" else ""))
+    return Check("answer", True, "answer verified" + (f": {a_e}" if ex.task == "evaluate" else "") + approx)
 
 
 def _setup_state(ex: WorkedExample) -> Optional[list[Relation]]:
