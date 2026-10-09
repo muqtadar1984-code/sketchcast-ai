@@ -159,6 +159,36 @@
       "description": "The Cartesian plane, coordinates of a point, names and terms associated with the coordinate plane, notations.",
       "parent_code": "cbse:9:U3",
       "sort": 15
+    },
+    {
+      "code": "cbse:9:U5",
+      "grade": "9",
+      "strand": "Mensuration",
+      "sub_strand": null,
+      "title": "Mensuration",
+      "description": null,
+      "parent_code": null,
+      "sort": 16
+    },
+    {
+      "code": "cbse:9:U5:01",
+      "grade": "9",
+      "strand": "Mensuration",
+      "sub_strand": null,
+      "title": "Areas",
+      "description": "Area of a triangle using Heron's formula (without proof).",
+      "parent_code": "cbse:9:U5",
+      "sort": 17
+    },
+    {
+      "code": "cbse:9:U5:02",
+      "grade": "9",
+      "strand": "Mensuration",
+      "sub_strand": null,
+      "title": "Surface Areas and Volumes",
+      "description": "Surface areas and volumes of cubes, cuboids, spheres (including hemispheres) and right circular cylinders and cones.",
+      "parent_code": "cbse:9:U5",
+      "sort": 18
     }
   ]
 }
