@@ -104,6 +104,15 @@ def _relations(text: str) -> list:
     return out
 
 
+def _degree(expr) -> int:
+    """The polynomial degree in x, or -1 for what is not a polynomial (a
+    rational expression such as 1/(x^2 + x - 6) raises inside SymPy)."""
+    try:
+        return int(sp.degree(sp.expand(expr), X))
+    except Exception:  # noqa: BLE001
+        return -1
+
+
 def _last(pattern: str, text: str) -> Optional[str]:
     found = re.findall(pattern, text)
     return found[-1] if found else None
@@ -146,19 +155,19 @@ def derive_example(we_id: str, problem: str, solution: str) -> Optional[WorkedEx
             return None
         return WorkedExample(label=we_id, task="solve_system", problem=problem, givens=[r.text for r in two_var[:2]],
                              target="x, y", steps=[], final_answer=[f"x = {xs}", f"y = {ys}"])
-    if len(two_var) == 1 and re.search(r"\b(plot|graph|draw|sketch)\b", low):
+    if len(two_var) == 1 and re.search(r"\b(plot|graph|draw|sketch|gradient|slope|intercept|line)\b", low):
         eq = two_var[0]
         return WorkedExample(label=we_id, task="solve", problem=problem, givens=[eq.text], target="y", steps=[],
                              final_answer=[eq.text])
 
-    quad_eq = [r for r in eqs if r.free_symbols == {X} and sp.degree(sp.expand(r.lhs - r.rhs), X) == 2]
+    quad_eq = [r for r in eqs if r.free_symbols == {X} and _degree(r.lhs - r.rhs) == 2]
     if quad_eq:
         roots = re.findall(rf"\bx\s*=\s*({_NUM})", tail)
         if not roots:
             return None
         return WorkedExample(label=we_id, task="solve", problem=problem, givens=[quad_eq[0].text], target="x",
                              steps=[], final_answer=[" or ".join(f"x = {r}" for r in dict.fromkeys(roots))])
-    quad_expr = [r for r in exprs if sp.degree(sp.expand(r.lhs), X) == 2]
+    quad_expr = [r for r in exprs if _degree(r.lhs) == 2]
     if quad_expr and re.search(r"factori[sz]e", low):
         given = quad_expr[0]
         fac = _last(r"(\([^()]*x[^()]*\)\s*\([^()]*x[^()]*\))", tail)
@@ -288,7 +297,11 @@ def attach_charts(sb, article: dict, *, dry_run: bool = False) -> dict:
     changed = False
     for i, we in enumerate(examples):
         we_id = str(we.get("id") or f"w{i + 1}")
-        ex = derive_example(we_id, we.get("problem") or "", we.get("solution_md") or "")
+        try:
+            ex = derive_example(we_id, we.get("problem") or "", we.get("solution_md") or "")
+        except Exception as exc:  # noqa: BLE001 — one unreadable example never costs the others
+            summary["skipped"].append((we_id, f"could not be read: {type(exc).__name__}"))
+            continue
         if ex is None:
             summary["skipped"].append((we_id, "the example's text does not state a plottable problem and answer"))
             continue
