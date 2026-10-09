@@ -466,7 +466,11 @@ _COORD_RULES = (
     "'m = …' and 'c = y1 - m*x1' with the numbers in (writing only 'c = …' is allowed once m is established), the "
     "answer is kind 'values' {m, c}. The y-intercept is where the line crosses the y-axis: plot that point with "
     "x = 0 when the question is about it. A quadrant question never asks about a point ON an axis (the engine "
-    "answers 'x-axis', 'y-axis' or 'origin' there, never a quadrant)."
+    "answers 'x-axis', 'y-axis' or 'origin' there, never a quadrant). A PARALLEL or PERPENDICULAR line question "
+    "plots BOTH lines (each a `line_through` two plotted points, each with its segment in 'segments') and cites "
+    "parallel_gradients / perpendicular_gradients with the TWO segment ids; the gradient theorem's symbol is always "
+    "m — never write m1 or m2 (a 'find the y-intercept' question is a reasoning question citing line_equation, not "
+    "an evidence question reading coordinates)."
 )
 
 
