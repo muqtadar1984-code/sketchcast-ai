@@ -236,6 +236,8 @@ def _labelled_points(m: Model) -> dict[str, str]:
     student reads and stay out."""
     out: dict[str, str] = {}
     for pid, pt in m.points.items():
+        if getattr(pt, "hidden", False):
+            continue
         name = point_name(pid, pt.label)
         if name != pid or pt.label:
             out[name] = pid

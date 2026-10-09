@@ -231,6 +231,10 @@ class WorkedExample(BaseModel):
     #: its figures draw on the board and its steps (deduce / transform) are
     #: proved by the geometry chain (maths.geometry.verify), not SymPy
     figure: Optional[dict] = None
+    #: a chart the ENGINE derived from the givens and the proved answer
+    #: (maths/charts.py): {"kind", "beside", "closing", "point", "lines"}.
+    #: Never written by the model; never a figure the verifier reads.
+    chart: Optional[dict] = None
 
     @field_validator("figure", mode="before")
     @classmethod

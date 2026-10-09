@@ -41,6 +41,7 @@ from maths.geometry.items import GeometryItem, _pretty_line, figure_client, geom
 from maths.i18n import board_text as _board_text
 from maths.schema import Step, TryIt, WorkedExample
 from maths.verify import verify_example, verify_lesson, verify_try_it
+from maths.charts import chart_for
 from shared import coverage as _coverage
 from shared import lesson_length
 
@@ -422,6 +423,9 @@ def _verify_examples(client, examples: list[WorkedExample], lesson: Lesson, lang
             rep = verify_example(ex)
             history.append({"label": ex.label, "attempt": tries, **rep.to_dict()})
         if rep.status == "verified":
+            # the engine's chart of a plottable example, from the givens and
+            # the proved answer — never from the model (maths/charts.py)
+            ex.chart = chart_for(ex)
             kept.append(ex)
         else:
             dropped.append(f"{ex.label or 'example'}: {'; '.join(rep.reasons)[:300]}")
