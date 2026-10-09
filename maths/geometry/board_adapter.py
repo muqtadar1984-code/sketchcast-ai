@@ -72,6 +72,38 @@ class FigureBoard:
         return [round(self.origin[0] + pt[0] * self.scale, 1), round(self.origin[1] - pt[1] * self.scale, 1)]
 
 
+def _dash_pieces(points: list, on: float, off: float) -> list[list]:
+    """A polyline cut into dashes of `on` figure units with `off` gaps."""
+    out: list[list] = []
+    pos, drawing = 0.0, True        # distance into the current dash or gap
+    cur: list = []
+    for p, q in zip(points, points[1:]):
+        seg = _sub(q, p)
+        length = (seg[0] ** 2 + seg[1] ** 2) ** 0.5
+        if length < 1e-9:
+            continue
+        u = _unit(seg)
+        t = 0.0
+        if drawing and not cur:
+            cur = [p]
+        while t < length:
+            room = (on if drawing else off) - pos
+            step = min(room, length - t)
+            t += step
+            pos += step
+            here = _add(p, _mul(u, t))
+            if drawing:
+                cur.append(here)
+            if pos >= (on if drawing else off) - 1e-9:
+                if drawing and len(cur) >= 2:
+                    out.append(cur)
+                cur = [] if drawing else [here]
+                drawing, pos = not drawing, 0.0
+    if drawing and len(cur) >= 2:
+        out.append(cur)
+    return out
+
+
 def _stroke_secs(points: list, role: str) -> float:
     if role == "grid":
         return GRID_SECS
@@ -83,7 +115,7 @@ def _stroke_secs(points: list, role: str) -> float:
 
 def _gridded(m: Model) -> bool:
     """Axes or a number line: figure units are numbers, labels crowd."""
-    return m.axes is not None or m.number_line is not None
+    return m.axes is not None or m.number_line is not None or m.bar_chart is not None
 
 
 def _min_px(m: Model) -> float:
@@ -191,7 +223,18 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
         return f"{prefix}_{kind}{n}"
 
     first_cue = cue
+    # a dashed stroke that is DRAWN (a bar chart's mean line) becomes its
+    # dashes: the scene schema has no dash style, and the teacher calls it
+    # "the dashed line" (2026-10-09). A hidden dashed line stays one element
+    # for reveal_object.
+    strokes: list[Stroke] = []
     for st in d.strokes:
+        if st.dashed and st.role != "hidden":
+            for piece in _dash_pieces(st.points, 0.28, 0.18):
+                strokes.append(Stroke(piece, width=st.width, role=st.role, tag=st.tag))
+        else:
+            strokes.append(st)
+    for st in strokes:
         eid = uid("s")
         # exact: a geometric figure is never hand-wobbled — a triangle with
         # equal sides must look it (founder direction 2026-10-08)

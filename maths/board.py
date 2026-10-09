@@ -1132,7 +1132,16 @@ def chart_scene(ex: WorkedExample, seg_id: str, lang: str = "en") -> Optional[tu
     if not isinstance(spec, dict):
         return None
     point, eqs = ch.get("point"), ch.get("lines") or []
-    if ch.get("kind") == "number_line":
+    if ch.get("kind") == "data":
+        stat, v = str(ch.get("stat")), ch.get("value") or ""
+        caption = _bt(f"data_caption_{stat}", lang, v=v)
+        if stat == "median" and ch.get("a") is not None:
+            speech = _bt("data_median_even_speech", lang, a=ch.get("a"), b=ch.get("b"), v=v)
+        elif stat == "range":
+            speech = _bt("data_range_speech", lang, lo=ch.get("lo") or "", hi=ch.get("hi") or "", v=v)
+        else:
+            speech = _bt(f"data_{stat}_speech", lang, v=v)
+    elif ch.get("kind") == "number_line":
         caption = _bt("ineq_caption", lang, ans=ch.get("answer") or "")
         shape, closed = ch.get("shape"), ch.get("closed") or [False, False]
         if shape == "between":

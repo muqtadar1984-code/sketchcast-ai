@@ -8,6 +8,11 @@ already consume. The model never writes one; one that cannot be built is
 omitted, never faked (founder decisions, 2026-10-09; the catalogue's
 "Simultaneous Linear Equations" solved well and drew nothing).
 
+Phase 5 (data charts): a data task's list as a bar chart beside the
+working; closing, the statistic marked — the mean as a line across the
+bars, the median as the middle bar(s) of the sorted data, the mode as
+the repeated bars, the range as a bracket from smallest to largest.
+
 Phase 4 (inequalities): a solved one-variable inequality gets its number
 line — bare beside the working; closing, the solution set marked with
 open/closed circles and an arrow. (A two-variable half-plane waits on
@@ -33,7 +38,7 @@ from typing import Optional
 import sympy as sp
 
 from maths.notation import NotationError, parse_relation
-from maths.schema import WorkedExample
+from maths.schema import DATA_TASKS, WorkedExample
 
 X, Y = sp.Symbol("x"), sp.Symbol("y")
 SCHEMA = "geometry.figure.v2"
@@ -109,7 +114,7 @@ def chart_for(ex: WorkedExample) -> Optional[dict]:
     kind "lines":    {beside, closing, point: "(2, 1)" | None, lines: [labels]}
     kind "parabola": {beside, closing, point: None, roots: ["-2", "3"], vertex: "(h, k)", lines: [label]}"""
     try:
-        return _lines_chart(ex) or _parabola_chart(ex) or _number_line_chart(ex)
+        return _lines_chart(ex) or _parabola_chart(ex) or _number_line_chart(ex) or _data_chart(ex)
     except Exception:  # noqa: BLE001 — a chart is a bonus; the example stands without it
         return None
 
@@ -386,3 +391,92 @@ def _number_line_chart(ex: WorkedExample) -> Optional[dict]:
             "answer": " and ".join(_label(a).replace(">=", "≥").replace("<=", "≤") for a in answer), "shape": shape,
             "a": _fmt(blo) if blo is not None else None, "b": _fmt(bhi) if bhi is not None else None,
             "closed": [lo_closed, hi_closed]}
+
+
+def _answer_values(ex: WorkedExample) -> Optional[list]:
+    """The numbers the final answer states ("8", "mean = 8", "2, 3"), exact."""
+    out: list = []
+    for line in ex.final_answer:
+        try:
+            rel = parse_relation(line)
+        except NotationError:
+            return None
+        if rel.is_data:
+            vals = [sp.nsimplify(v, rational=True) for v in rel.data]
+        elif rel.is_equation and rel.rhs is not None:
+            vals = [sp.nsimplify(rel.rhs, rational=True)]
+        elif rel.is_expression:
+            vals = [sp.nsimplify(rel.lhs, rational=True)]
+        else:
+            return None
+        if not all(v.is_Rational for v in vals):
+            return None
+        out += vals
+    return out or None
+
+
+def _data_chart(ex: WorkedExample) -> Optional[dict]:
+    """After mean / median / mode / range of a data list: the bars, and —
+    closing — the statistic marked. The answer must be the statistic."""
+    if ex.figure or ex.task not in DATA_TASKS:
+        return None
+    givens = [g for g in (ex.givens or []) if str(g).strip()]
+    if len(givens) != 1:
+        return None
+    try:
+        rel = parse_relation(givens[0])
+    except NotationError:
+        return None
+    if not rel.is_data:
+        return None
+    data = [sp.nsimplify(v, rational=True) for v in rel.data]
+    if not 2 <= len(data) <= 12 or not all(v.is_Rational and v >= 0 for v in data):
+        return None
+    n = len(data)
+    srt = sorted(data)
+    if ex.task == "mean":
+        stat = [sum(data) / n]
+    elif ex.task == "median":
+        stat = [srt[n // 2]] if n % 2 else [(srt[n // 2 - 1] + srt[n // 2]) / 2]
+    elif ex.task == "mode":
+        counts = {v: data.count(v) for v in set(data)}
+        best = max(counts.values())
+        if best < 2:
+            return None
+        stat = sorted(v for v, c in counts.items() if c == best)
+    else:
+        stat = [srt[-1] - srt[0]]
+    got = _answer_values(ex)
+    if got is None or sorted(got) != sorted(stat):
+        return None
+    labels = [_fmt(v) for v in data]
+    value = ", ".join(_fmt(v) for v in stat)
+
+    def bars(values: list, **marks) -> dict:
+        obj = {"make": "bar_chart", "id": "bc", "values": [_fmt(v) for v in values]}
+        obj.update({k: v for k, v in marks.items() if v not in (None, [], False, "")})
+        return {"schema_version": SCHEMA, "id": "chart", "figure_role": "illustration", "prompt": "",
+                "figures": [{"id": "g", "figure": {"units": "units", "points": [], "objects": [obj], "measures": []}}]}
+
+    beside = bars(data)
+    extra: dict = {"sorted": False}
+    if ex.task == "mean":
+        closing = bars(data, mean=value)
+    elif ex.task == "median":
+        mid = [n // 2] if n % 2 else [n // 2 - 1, n // 2]
+        closing = bars(srt, highlight=mid)
+        extra = {"sorted": True, "a": _fmt(srt[n // 2 - 1]) if n % 2 == 0 else None, "b": _fmt(srt[n // 2]) if n % 2 == 0 else None}
+    elif ex.task == "mode":
+        closing = bars(data, highlight=[i for i, v in enumerate(data) if v in stat])
+    else:
+        lo_i, hi_i = data.index(srt[0]), data.index(srt[-1])
+        closing = bars(data, highlight=sorted({lo_i, hi_i}), range=True, range_label=value)
+        extra = {"sorted": False, "lo": _fmt(srt[0]), "hi": _fmt(srt[-1])}
+
+    from maths.geometry import verify_question  # noqa: PLC0415 — the engine checks what it drew
+    if not verify_question(beside).ok or not verify_question(closing).ok:
+        return None
+    out = {"kind": "data", "stat": ex.task, "beside": beside, "closing": closing, "point": None, "lines": [],
+           "value": value, "n": n, "labels": labels}
+    out.update(extra)
+    return out

@@ -149,6 +149,24 @@ class Interval:
 
 
 @dataclass
+class BarChart:
+    """A bar chart of a data list: the chart of a data task. Figure x
+    units are bar positions (bar i spans i + 0.15 .. i + 0.85); figure y
+    units are STEPS of the value axis (a bar of value v is v / step tall),
+    so a chart of hundreds is no taller than one of units."""
+    id: str
+    values: list[float]
+    labels: list[str]                   # each value as the question wrote it
+    step: float
+    steps: int                          # ticks up the value axis
+    highlight: list[int] = field(default_factory=list)
+    mean: Optional[float] = None        # a line across the bars
+    mean_label: str = ""
+    range_bracket: bool = False         # from the smallest bar to the largest
+    range_label: str = ""
+
+
+@dataclass
 class Axes:
     """v2: the coordinate grid a figure is drawn on. Figure units ARE
     coordinate units; the axes fix what is drawn and what a student may
@@ -187,6 +205,7 @@ class Model:
     # equation (y = ax² + bx + c), one polyline per run inside the axes
     curves: dict[str, tuple[list[list[tuple[float, float]]], str]] = field(default_factory=dict)
     number_line: Optional[NumberLine] = None       # a one-variable inequality's chart
+    bar_chart: Optional[BarChart] = None           # a data task's chart
     intervals: dict[str, Interval] = field(default_factory=dict)
     parallel: set[frozenset] = field(default_factory=set)        # {line id, line id}
     perpendicular: set[frozenset] = field(default_factory=set)
@@ -450,6 +469,9 @@ class Model:
         if self.number_line is not None:
             xs += [self.number_line.lo, self.number_line.hi]
             ys += [-0.5, 0.5]
+        if self.bar_chart is not None:
+            xs += [-0.6, len(self.bar_chart.values) + 0.6]
+            ys += [-1.0, self.bar_chart.steps + 0.6]
         for c in self.circles.values():
             cx, cy = self.xy(c.centre)
             xs += [cx - c.radius, cx + c.radius]

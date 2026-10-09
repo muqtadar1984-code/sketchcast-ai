@@ -101,7 +101,10 @@ def test_every_chart_string_exists_in_every_lesson_language():
     from maths.i18n import BOARD, LANGS
     for key in ("lines_cross", "lines_cross_speech", "line_graph", "line_graph_speech",
                 "roots_cross", "roots_cross_speech", "ineq_caption", "ineq_right_open", "ineq_right_closed",
-                "ineq_left_open", "ineq_left_closed", "ineq_between"):
+                "ineq_left_open", "ineq_left_closed", "ineq_between",
+                "data_caption_mean", "data_caption_median", "data_caption_mode", "data_caption_range",
+                "data_mean_speech", "data_median_speech", "data_median_even_speech", "data_mode_speech",
+                "data_range_speech"):
         assert set(BOARD[key]) >= set(LANGS), key
 
 
@@ -275,3 +278,72 @@ def test_the_number_line_draws_beside_the_working_and_closes_on_the_solution_set
     from maths.charts import chart_image
     img = chart_image(ex.chart)
     assert img is not None and img[0][:4] == b"\x89PNG"
+
+
+def _data(task, data, steps, answer) -> WorkedExample:
+    return WorkedExample(label="Example 4", task=task, problem=f"Find the {task} of {data}.", givens=[data], target=task,
+                         intro_speech="Some data.", answer_speech="There it is.",
+                         steps=[Step(kind="transform", operation=op, before=[b], after=[a], speech="s") for op, b, a in steps],
+                         final_answer=[answer])
+
+
+def test_a_data_task_gets_its_bar_chart_with_the_statistic_marked():
+    from maths.verify import verify_example
+    mean = _data("mean", "4, 8, 6, 10, 12", [("mean", "4, 8, 6, 10, 12", "(4 + 8 + 6 + 10 + 12)/5"), ("work out", "(4 + 8 + 6 + 10 + 12)/5", "8")], "8")
+    assert verify_example(mean).status == "verified"
+    ch = chart_for(mean)
+    assert ch and ch["kind"] == "data" and ch["stat"] == "mean" and ch["value"] == "8"
+    beside = ch["beside"]["figures"][0]["figure"]["objects"][0]
+    closing = ch["closing"]["figures"][0]["figure"]["objects"][0]
+    assert beside == {"make": "bar_chart", "id": "bc", "values": ["4", "8", "6", "10", "12"]}   # as given, no answer
+    assert closing["mean"] == "8" and "highlight" not in closing
+    rep = verify_question(ch["closing"])
+    assert rep.ok, rep.refusal
+    bc = rep.models["g"].bar_chart
+    assert bc.values == [4.0, 8.0, 6.0, 10.0, 12.0] and bc.step == 2.0 and bc.steps == 6 and bc.mean == 8.0
+    # median: the closing bars are SORTED and the middle one is highlighted
+    median = _data("median", "3, 7, 3, 5, 2, 3, 9", [("sort", "3, 7, 3, 5, 2, 3, 9", "2, 3, 3, 3, 5, 7, 9"), ("middle", "2, 3, 3, 3, 5, 7, 9", "3")], "3")
+    ch = chart_for(median)
+    assert ch["sorted"] and ch["closing"]["figures"][0]["figure"]["objects"][0] == {
+        "make": "bar_chart", "id": "bc", "values": ["2", "3", "3", "3", "5", "7", "9"], "highlight": [3]}
+    even = _data("median", "20, 5, 15, 10", [("sort", "20, 5, 15, 10", "5, 10, 15, 20"), ("middle two", "5, 10, 15, 20", "(10 + 15)/2"),
+                                            ("work out", "(10 + 15)/2", "12.5")], "12.5")
+    ch = chart_for(even)
+    assert ch and ch["a"] == "10" and ch["b"] == "15" and ch["value"] == "25/2"
+    # mode: every bar of the commonest value; range: the ends and a bracket
+    mode = _data("mode", "3, 7, 3, 5, 2, 3, 9", [("count", "3, 7, 3, 5, 2, 3, 9", "3")], "3")
+    assert chart_for(mode)["closing"]["figures"][0]["figure"]["objects"][0]["highlight"] == [0, 2, 5]
+    rng = _data("range", "12, 15, 18, 9, 11", [("largest minus smallest", "12, 15, 18, 9, 11", "18 - 9"), ("subtract", "18 - 9", "9")], "9")
+    ch = chart_for(rng)
+    assert ch["closing"]["figures"][0]["figure"]["objects"][0] == {
+        "make": "bar_chart", "id": "bc", "values": ["12", "15", "18", "9", "11"], "highlight": [2, 3], "range": True, "range_label": "9"}
+    assert (ch["lo"], ch["hi"]) == ("9", "18")
+    # a wrong statistic gets no chart; the answer may name the statistic
+    wrong = _data("range", "12, 15, 18, 9, 11", [("subtract", "12, 15, 18, 9, 11", "18 - 11")], "7")
+    assert chart_for(wrong) is None
+    named = _data("mean", "5, 10, 15, 20", [("mean", "5, 10, 15, 20", "(5 + 10 + 15 + 20)/4"), ("work out", "(5 + 10 + 15 + 20)/4", "12.5")], "mean = 12.5")
+    assert chart_for(named)["value"] == "25/2"
+
+
+def test_the_bar_chart_draws_beside_the_working_and_closes_on_the_statistic():
+    from maths.charts import chart_image
+    for task, data, steps, answer, want_caption, want_words in (
+        ("mean", "4, 8, 6, 10, 12", [("mean", "4, 8, 6, 10, 12", "(4 + 8 + 6 + 10 + 12)/5"), ("work out", "(4 + 8 + 6 + 10 + 12)/5", "8")], "8",
+         "Mean = 8", "dashed line"),
+        ("range", "12, 15, 18, 9, 11", [("largest minus smallest", "12, 15, 18, 9, 11", "18 - 9"), ("subtract", "18 - 9", "9")], "9",
+         "Range = 9", "from the smallest bar, 9, to the largest, 18"),
+    ):
+        ex = _data(task, data, steps, answer)
+        ex.chart = chart_for(ex)
+        assert ex.chart is not None, task
+        scene, _lines = B.example_scene(ex, MethodCard(title="METHOD", steps=["Add them up", "Divide by how many"]), "s003", has_card=True)
+        assert not _audit(scene), task
+        fills = [e for e in scene["elements"] if e["type"] == "shape" and e.get("fill") in ("blue", "yellow")]
+        assert len(fills) == 5, task                                       # one bar per number
+        out = B.chart_scene(ex, "s004", "en")
+        assert out is not None, task
+        close, lines = out
+        texts = {e["text"] for e in close["elements"] if e["type"] == "text"}
+        assert want_caption in texts and want_words in lines[0].line, task
+        assert not _audit(close), task
+        assert chart_image(ex.chart) is not None, task
