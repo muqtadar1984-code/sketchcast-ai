@@ -634,17 +634,21 @@ class _Figure:
         return None, None
 
 
-def _figure_panel(ex: WorkedExample, board: _Board, *, schematic: bool = False) -> _Figure:
+def _figure_panel(ex: WorkedExample, board: _Board, *, schematic: bool = False,
+                  question: Optional[dict] = None) -> _Figure:
     """The example's figures drawn under the question: one reasoning figure
     on the left with the working beside it; evidence figures in a row at
     ONE shared scale (their relative sizes are part of the evidence), each
-    labelled. Raises a GeometryRefusal when a figure cannot be laid out."""
-    rep = verify_question(ex.figure or {})
+    labelled. Raises a GeometryRefusal when a figure cannot be laid out.
+    ``question`` draws another question's figures in the example's panel —
+    the engine's chart of an algebra example (ex.chart['beside'])."""
+    question = question if question is not None else (ex.figure or {})
+    rep = verify_question(question)
     if not rep.ok:
         r = rep.refusal or {}
         raise GeometryRefusal(str(r.get("code") or "bad_schema"),
                               f"the figure example {ex.label or ex.problem[:40]!r} does not verify: {r.get('message', '')}")
-    q = parse_question(ex.figure)
+    q = parse_question(question)
     top, bottom = board.top_y, WORK_BOTTOM
     fig = _Figure(q, rep)
     if len(q.figures) == 1:
@@ -813,6 +817,14 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
     # the diagram draws under the question while the teacher introduces it;
     # the working moves to the right of it
     fig = _figure_panel(ex, board) if ex.figure else None
+    if fig is None and ex.chart and isinstance(ex.chart.get("beside"), dict):
+        # the engine's chart of an algebra example: the lines beside the
+        # working from the start, the solution point kept for the closing
+        # scene (founder, 2026-10-09: "both")
+        try:
+            fig = _figure_panel(ex, board, question=ex.chart["beside"])
+        except GeometryRefusal:
+            fig = None       # a chart is a bonus; the example stands without it
     evidence = fig is not None and len(fig.boards) > 1
     if fig is not None and not evidence and len([st for st in ex.steps if st.after]) >= 4:
         # a long proof beside a figure: tighter rows so it stays on one board
@@ -1100,6 +1112,83 @@ def closing_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
     return seg
 
 
+# the closing chart has the board to itself (no working column, no card):
+# centred, as tall as the avatars allow, as wide as it likes
+CHART_PANEL = (Q_AT[0], FIRST_ROW_Y - 18.0, 1220.0, WORK_BOTTOM)
+
+
+def chart_scene(ex: WorkedExample, seg_id: str, lang: str = "en") -> Optional[tuple[dict, list[Line]]]:
+    """The closing scene after a solved example: its chart drawn large,
+    the solution point written and highlighted, one line of caption and
+    the teacher saying what the crossing means. None when the example has
+    no chart or it cannot be laid out."""
+    ch = ex.chart or {}
+    spec = ch.get("closing")
+    if not isinstance(spec, dict):
+        return None
+    point, eqs = ch.get("point"), ch.get("lines") or []
+    if point:
+        px, py = [t.strip() for t in point.strip("()").split(",")]
+        caption = _bt("lines_cross", lang, p=point)
+        speech = _bt("lines_cross_speech", lang, p=point, x=px, y=py)
+    else:
+        caption = _bt("line_graph", lang, eq=eqs[0] if eqs else "")
+        speech = _bt("line_graph_speech", lang, eq=eqs[0] if eqs else "")
+    lines = [Line(who="teacher", line=speech)]
+    rep = verify_question(spec)
+    if not rep.ok:
+        return None
+    q = parse_question(spec)
+    ref = q.figures[0]
+    try:
+        fb = figure_board(rep.models[ref.id], ref.figure, panel=CHART_PANEL, prefix="fig",
+                          text_metric=_M.text_box)
+    except GeometryRefusal:
+        return None
+    elements: list[dict] = [{"id": "q0", "type": "text", "text": display_text(caption), "size": Q_SIZE,
+                             "at": [Q_AT[0], Q_AT[1]], "anchor": "lt", "role": "title"}]
+    actions: list[dict] = [{"verb": "write", "target": "q0", "at": _cue(speech, speech)}]
+    elements += fb.elements
+    # a redraw of lines the class has already watched: brisk strokes, and the
+    # board held past the speech for whatever the pen still needs — the
+    # renderer cuts what outruns the voice, and a first cut left the chart
+    # half-drawn (frame review, 2026-10-09)
+    for a in fb.actions:
+        if "duration" in a:
+            a["duration"] = round(max(0.05, float(a["duration"]) * CHART_PACE), 2)
+    actions += fb.actions
+    # the solution point's tag, swept once the figure is drawn
+    for eid in fb.targets.get("coord:p_s", []):
+        actions.append({"verb": "highlight", "target": eid})
+    # "compiled": the board's own scene, not a model reply — the director's
+    # 12-element / 18-action cap is for replies, and it cut this chart to its
+    # first eleven strokes (frame review, 2026-10-09)
+    scene = {"id": f"mg_{seg_id}", "compiled": True, "scene_type": "worked_example", "narration": speech,
+             "elements": elements, "actions": actions}
+    return scene, lines
+
+
+CHART_PACE = 0.4
+
+
+def _chart_hold(scene: dict, speech: str) -> float:
+    """Seconds to hold the board after the speech so every stroke lands."""
+    pen = sum(float(a.get("duration") or 0.8) for a in scene.get("actions", []) if a.get("verb") in ("draw", "write", "highlight"))
+    spoken = len(speech) / 14.0
+    return round(max(0.0, pen + 2.0 - spoken), 1)
+
+
+def chart_segment(ex: WorkedExample, seg_id: str, lang: str = "en") -> Optional[dict]:
+    out = chart_scene(ex, seg_id, lang)
+    if out is None:
+        return None
+    scene, lines = out
+    heading = _short(_bt("lines_cross", lang, p=(ex.chart or {}).get("point") or ""), 60)
+    seg = _segment(seg_id, "explore", lines, heading=heading, points=[], hold=_chart_hold(scene, lines[0].line))
+    seg["scene"] = scene
+    return seg
+
+
 def example_segment(ex: WorkedExample, lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
     scene, lines = example_scene(ex, lesson.method, seg_id, has_card=bool(lesson.method.steps), lang=lang)
     heading = _short(f"{ex.label or 'Example'}: {ex.problem}", 60)
@@ -1134,6 +1223,13 @@ def compile_lesson(lesson: Lesson, avatars: dict | None = None, language: str = 
     for ex in lesson.examples:
         segs.append(example_segment(ex, lesson, f"s{n:03d}", lang))
         n += 1
+        if ex.chart:
+            # the engine's chart, after the solution: the lines and the
+            # crossing point, said in words (founder, 2026-10-09)
+            cs = chart_segment(ex, f"s{n:03d}", lang)
+            if cs is not None:
+                segs.append(cs)
+                n += 1
     segs.append(recap_segment(lesson, f"s{n:03d}", lang))
     n += 1
     t = try_it_segment(lesson, f"s{n:03d}", lang)

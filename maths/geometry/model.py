@@ -43,6 +43,9 @@ class Point:
     # (point_at) or derived from such points (midpoint, intersection,
     # reflection); None for a v1 construction's point
     exact: Optional[tuple] = None
+    # a helper point a construction needed and nobody reads: no dot, no
+    # name, no evidence (the two ends of a line drawn from its equation)
+    hidden: bool = False
 
     @property
     def xy(self) -> tuple[float, float]:
@@ -157,6 +160,7 @@ class Model:
     axes: Optional[Axes] = None                                   # v2
     reflections: dict[str, tuple[str, str]] = field(default_factory=dict)   # image -> (source, mirror)
     translations: dict[str, tuple[str, tuple]] = field(default_factory=dict)   # image -> (source, (dx, dy) exact)
+    line_labels: dict[str, str] = field(default_factory=dict)   # line id -> its equation, written beside it
     parallel: set[frozenset] = field(default_factory=set)        # {line id, line id}
     perpendicular: set[frozenset] = field(default_factory=set)
     equal_lengths: set[frozenset] = field(default_factory=set)   # {SegKey, SegKey}

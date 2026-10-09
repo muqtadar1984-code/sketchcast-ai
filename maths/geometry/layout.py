@@ -407,6 +407,30 @@ def build_drawing(m: Model, spec: FigureSpec, *, show_hidden: bool = False, labe
     # name — placed after every name, it takes the next clear side
     for pid, text in coord_tags:
         _place_coord_tag(d, m, pid, text, label_size, boxes)
+    # a line drawn from its equation carries the equation beside it, near
+    # its far end, on whichever side is clear; a crowded line goes unlabelled
+    for ln in m.lines.values():
+        text = m.line_labels.get(ln.id)
+        if not text or len(ln.points) < 2:
+            continue
+        p0, p1 = m.xy(ln.points[0]), m.xy(ln.points[-1])
+        u = _unit(_sub(p1, p0))
+        nrm = (-u[1], u[0])
+        size = label_size * 0.8
+        # the label's axis-aligned box must clear its own slanted line: the
+        # offset along the normal is half the box's extent across that normal
+        bx0, by0, bx1, by1 = text_box(0.0, 0.0, text, size, "middle", d.label_pad, d.measure)
+        bw, bh = bx1 - bx0, by1 - by0
+        off = (bw * abs(nrm[0]) + bh * abs(nrm[1])) / 2 + label_size * 0.3
+        # either end first (one end is usually in the axes' corner), then the
+        # middle; close to the line, then a little further out
+        cands = []
+        for k in (1.0, 1.5):
+            for t in (0.8, 0.2, 0.62, 0.38, 0.9, 0.1, 0.5):
+                base = _add(p0, _mul(_sub(p1, p0), t))
+                cands += [(base[0] + nrm[0] * off * k, base[1] + nrm[1] * off * k, "middle"),
+                          (base[0] - nrm[0] * off * k, base[1] - nrm[1] * off * k, "middle")]
+        _place_or_skip(d, cands, text, size, boxes, tag=f"linelabel:{ln.id}")
     if m.axes is not None:
         _number_axes(d, m, label_size, boxes)
     if policy == "assessment_schematic" and m.axes is None:
@@ -525,13 +549,15 @@ def _draw_axes(d: Drawing, m: Model, label_size: float, boxes: list) -> None:
         t.box = text_box(t.x, t.y, t.text, t.size, t.anchor, d.label_pad, d.measure)
         d.texts.append(t)
         boxes.append(t.box)
-    for pid in m.points:
+    for pid, pt in m.points.items():
+        if pt.hidden:
+            continue            # a line's own end, nobody's point
         x, y = m.xy(pid)
         d.dots.append(Dot(x, y, r=0.09))
 
 
 def _place_or_skip(d: Drawing, candidates: list[tuple[float, float, str]], text: str, size: float,
-                   boxes: list, *, strokes: bool = True) -> bool:
+                   boxes: list, *, strokes: bool = True, tag: Optional[str] = None) -> bool:
     """A label that may be left out: placed at the first clear candidate,
     else not written (a tick number at a crowded corner). ``strokes=False``
     checks other labels only — a tick number sits against its own tick
@@ -539,7 +565,7 @@ def _place_or_skip(d: Drawing, candidates: list[tuple[float, float, str]], text:
     for (x, y, anchor) in candidates:
         box = text_box(x, y, text, size, anchor, d.label_pad, d.measure)
         if _box_clear(box, d.strokes if strokes else [], boxes):
-            d.texts.append(Text(x, y, text, size, role="label", anchor=anchor, box=box))
+            d.texts.append(Text(x, y, text, size, role="label", anchor=anchor, box=box, tag=tag))
             boxes.append(box)
             return True
     return False

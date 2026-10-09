@@ -777,6 +777,59 @@ def c_reflect_point(ctx: BuildContext, obj: dict) -> None:
     m.segment(src, to, None)
 
 
+def c_line_eq(ctx: BuildContext, obj: dict) -> None:
+    """A straight line from its equation a·x + b·y = c, drawn across the
+    axes through two HIDDEN points where it meets the axes box, and
+    labelled with the equation as the question wrote it. The chart of a
+    linear equation or a simultaneous pair (maths/charts.py): the engine
+    builds it from the proved values, the model never writes one."""
+    w = _where(obj)
+    ax = _need_axes(ctx, w)
+    m = ctx.model
+    lid = obj.get("id") or m.new_point_id("line_")
+    if lid in m.lines:
+        raise GeometryRefusal("bad_reference", f"{w}: line {lid!r} is defined twice", w)
+    a, b, c = (ctx.exact(_req(obj, k, w), where=w) for k in ("a", "b", "c"))
+    if a.free_symbols or b.free_symbols or c.free_symbols:
+        raise GeometryRefusal("bad_schema", f"{w}: a, b and c are numbers", w)
+    if a == 0 and b == 0:
+        raise GeometryRefusal("construction_impossible", f"{w}: a and b cannot both be 0", w)
+    x0, x1, y0, y1 = (sp.Rational(v).limit_denominator(1000) for v in (ax.x0, ax.x1, ax.y0, ax.y1))
+    hits: list[tuple[sp.Expr, sp.Expr]] = []
+    if b != 0:
+        for xv in (x0, x1):
+            yv = (c - a * xv) / b
+            if y0 <= yv <= y1:
+                hits.append((xv, yv))
+    if a != 0:
+        for yv in (y0, y1):
+            xv = (c - b * yv) / a
+            if x0 <= xv <= x1:
+                hits.append((xv, yv))
+    uniq: list[tuple[sp.Expr, sp.Expr]] = []
+    for h in hits:
+        if all(sp.simplify(h[0] - u[0]) != 0 or sp.simplify(h[1] - u[1]) != 0 for u in uniq):
+            uniq.append(h)
+    if len(uniq) < 2:
+        raise GeometryRefusal("construction_impossible", f"{w}: the line does not cross the axes box", w)
+    # the two farthest apart, so the line spans the box
+    best = max(((p, q) for i, p in enumerate(uniq) for q in uniq[i + 1:]),
+               key=lambda pq: (pq[0][0] - pq[1][0]) ** 2 + (pq[0][1] - pq[1][1]) ** 2)
+    pids = []
+    for k, (xv, yv) in zip("ab", best):
+        pid = f"{lid}_{k}"
+        if m.has_point(pid):
+            raise GeometryRefusal("bad_reference", f"{w}: point {pid!r} already exists", w)
+        pt = ctx.place(pid, float(xv), float(yv))
+        pt.exact = (xv, yv)
+        pt.hidden = True
+        pids.append(pid)
+    m.add_line(lid, pids)
+    label = str(obj.get("label") or "").strip()
+    if label:
+        m.line_labels[lid] = label[:24]
+
+
 def c_translate_point(ctx: BuildContext, obj: dict) -> None:
     """v2: the image of `point` translated `by` [dx, dy] (exact numbers),
     placed as `to`. The rule is a fact the chain's translation_rule theorem
@@ -1645,6 +1698,7 @@ CONSTRUCTIONS: dict[str, Callable[[BuildContext, dict], None]] = {
     "polygon": c_polygon,
     "reflect_point": c_reflect_point,
     "translate_point": c_translate_point,
+    "line_eq": c_line_eq,
     "transversal": c_transversal,
     "parallels_transversal": c_parallels_transversal,
     "angle_bisector": c_angle_bisector,
