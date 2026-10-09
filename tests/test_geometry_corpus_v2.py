@@ -324,3 +324,32 @@ def test_a_rule_step_may_cite_the_source_point_instead_of_its_image():
     q = copy.deepcopy(CORPUS["C8"])
     q["steps"][0]["uses"] = ["p_p"]
     assert verify_question(q).ok
+
+
+def test_a_line_equation_step_may_state_only_the_intercept_before_the_gradient_is_known():
+    # the gradient kit (2026-10-09): "line_equation gives m - 1/2 = 0; c - 3 = 0, not c = 3"
+    q = copy.deepcopy(C7)
+    q["steps"] = [{"kind": "deduce", "theorem": "line_equation", "uses": ["l_ab"], "after": ["c = -1"]},
+                  {"kind": "deduce", "theorem": "gradient", "uses": ["l_ab"], "after": ["m = (3 - (-1))/(2 - 0)"]},
+                  {"kind": "transform", "after": ["m = 2"]}]
+    rep = verify_question(q)
+    assert rep.refusal is None, rep.refusal
+    assert any("part of what the theorem gives" in c.detail for c in rep.checks)
+    # a part that is NOT a consequence is still refused
+    q["steps"][0]["after"] = ["c = 5"]
+    assert verify_question(q).refusal["code"] == "step_not_equivalent"
+
+
+def test_a_gradient_written_as_a_segment_measure_is_dropped_at_normalisation():
+    # the gradient kit (2026-10-09): "s_ca: the proof gives 2 but the constructed figure has 6.708"
+    from maths.geometry.items import normalise_question
+    raw = copy.deepcopy(C5)
+    raw["figures"][0]["figure"]["measures"].append({"target": "s_ab", "value": "m", "role": "unknown"})
+    raw["figures"][0]["figure"]["segments"] = [{"id": "s_ab", "points": ["p_a", "p_b"]}]
+    spec, _d = normalise_question(raw)
+    measures = spec["figures"][0]["figure"]["measures"]
+    assert all(ms["target"].startswith("p_") for ms in measures) and len(measures) == 2
+    assert verify_question(spec).refusal is None
+    raw["figures"][0]["figure"]["measures"][-1] = {"target": "s_ab", "value": "m = 1.5", "role": "given"}
+    spec, _d = normalise_question(raw)
+    assert len(spec["figures"][0]["figure"]["measures"]) == 2

@@ -172,6 +172,37 @@ def test_the_lesson_takes_figure_examples_first_and_renders_them(monkeypatch):
     assert stored["figure"]["figures"] and stored["steps"][0]["kind"] == "deduce"
 
 
+def test_a_malformed_figure_reply_earns_one_further_round(monkeypatch):
+    # the gradient kit (2026-10-09): the repair round came back malformed and the refusals were never repaired
+    from maths.geometry.items import geometry_items
+
+    class Flaky:
+        def __init__(self, replies):
+            self.replies, self.calls = list(replies), []
+
+        def analyze(self, prompt, system="", max_tokens=0, retries=3, cache_prefix=None, response_schema=None, **kw):
+            self.calls.append(prompt)
+            return self.replies.pop(0) if self.replies else {"data": {"questions": []}, "usage": {}, "truncated": False}
+
+    good = {"data": {"questions": [_b1_reply()]}, "usage": {}, "truncated": False}
+    bad = {"data": {"raw_text": "{{not json"}, "usage": {}, "truncated": False}
+    # malformed first: the grace round still asks, and the good reply is kept
+    items, rep = geometry_items(Flaky([bad, good]), topic="Angles on a straight line", level="Class 7", language="en",
+                                n=1, kind="lesson", render=False)
+    assert len(items) == 1 and rep["verified"] == 1 and len(rep["rejected"]) == 1
+    # a reply with one refusal, then a malformed repair, then the repair again: three calls, not two
+    mixed = {"data": {"questions": [_b1_reply(), {"id": "junk", "prompt": "Find x.", "figures": []}]}, "usage": {}, "truncated": False}
+    fl = Flaky([mixed, bad, good])
+    items, rep = geometry_items(fl, topic="Angles on a straight line", level="Class 7", language="en",
+                                n=2, kind="lesson", render=False)
+    assert len(fl.calls) == 3 and rep["verified"] == 1 and "REFUSED THESE" in fl.calls[2]
+    # the grace is ONE round: three lost replies end the call
+    fl = Flaky([bad, bad, bad, good])
+    items, rep = geometry_items(fl, topic="Angles on a straight line", level="Class 7", language="en",
+                                n=1, kind="lesson", render=False)
+    assert len(fl.calls) == 3 and rep["verified"] == 0
+
+
 def test_the_switch_turns_the_figure_call_off(monkeypatch):
     monkeypatch.setenv("MATHS_FIGURES", "0")
     c = FakeClient(figures=[_b1_reply()])
