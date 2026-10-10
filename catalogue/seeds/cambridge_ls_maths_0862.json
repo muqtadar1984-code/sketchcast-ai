@@ -519,6 +519,66 @@
       "description": "Read, draw and interpret graphs and use compound measures to compare graphs.",
       "parent_code": "9/As",
       "sort": 51
+    },
+    {
+      "code": "9/Geometry and measure",
+      "grade": "9",
+      "strand": "Geometry and measure",
+      "sub_strand": null,
+      "title": "Geometry and measure",
+      "description": null,
+      "parent_code": null,
+      "sort": 52
+    },
+    {
+      "code": "9/Gg",
+      "grade": "9",
+      "strand": "Geometry and measure",
+      "sub_strand": "Geometrical reasoning, shapes and measurements",
+      "title": "Geometrical reasoning, shapes and measurements",
+      "description": null,
+      "parent_code": "9/Geometry and measure",
+      "sort": 53
+    },
+    {
+      "code": "9Gg.01",
+      "grade": "9",
+      "strand": "Geometry and measure",
+      "sub_strand": "Geometrical reasoning, shapes and measurements",
+      "title": "Know and use the formulae for the area and circumference of a circle.",
+      "description": "Know and use the formulae for the area and circumference of a circle.",
+      "parent_code": "9/Gg",
+      "sort": 54
+    },
+    {
+      "code": "9Gg.04",
+      "grade": "9",
+      "strand": "Geometry and measure",
+      "sub_strand": "Geometrical reasoning, shapes and measurements",
+      "title": "Use knowledge of area and volume to derive the formula for the volume of prisms and cylinders. Use the formula to calculate the volume of prisms and cylinders.",
+      "description": "Use knowledge of area and volume to derive the formula for the volume of prisms and cylinders. Use the formula to calculate the volume of prisms and cylinders.",
+      "parent_code": "9/Gg",
+      "sort": 55
+    },
+    {
+      "code": "9Gg.05",
+      "grade": "9",
+      "strand": "Geometry and measure",
+      "sub_strand": "Geometrical reasoning, shapes and measurements",
+      "title": "Use knowledge of area, and properties of cubes, cuboids, triangular prisms, pyramids and cylinders to calculate their surface area.",
+      "description": "Use knowledge of area, and properties of cubes, cuboids, triangular prisms, pyramids and cylinders to calculate their surface area.",
+      "parent_code": "9/Gg",
+      "sort": 56
+    },
+    {
+      "code": "9Gg.06",
+      "grade": "9",
+      "strand": "Geometry and measure",
+      "sub_strand": "Geometrical reasoning, shapes and measurements",
+      "title": "Identify reflective symmetry in 3D shapes.",
+      "description": "Identify reflective symmetry in 3D shapes.",
+      "parent_code": "9/Gg",
+      "sort": 57
     }
   ]
 }

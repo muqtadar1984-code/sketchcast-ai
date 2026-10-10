@@ -1,0 +1,1027 @@
+"""The theorem registry: a closed enum of the reasons a `deduce` step may
+give, each a PREMISE over the facts graph and an equation TEMPLATE.
+
+The model names a theorem id and the objects it applies to (``uses``).
+The premise decides whether the theorem applies to those objects — two
+angles cited as alternate must sit at two points of one transversal, each
+on one of two lines the facts say are parallel, on opposite sides of the
+transversal — and the template is the equation the theorem then yields,
+in the symbols ``ang_<name>`` (the measure of angle id ``angle_<name>``)
+and ``len_<name>``. The verifier checks the step's own line against it.
+
+Where a premise needs "which side" (alternate vs corresponding), the sign
+is read from the realisation. That is topology the construction produced,
+not a measurement: nothing here compares a size.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Callable, Optional
+
+import sympy as sp
+
+from maths.geometry.errors import GeometryRefusal
+from maths.geometry.model import AngleKey, Line, Model, Polygon, SegKey, angle_key, seg_key, coord_symbols
+
+ANGLE_PREFIX = "angle_"
+SEG_PREFIX = "seg_"
+
+
+def angle_symbol(angle_id: str) -> sp.Symbol:
+    name = angle_id[len(ANGLE_PREFIX):] if angle_id.startswith(ANGLE_PREFIX) else angle_id
+    return sp.Symbol(f"ang_{name}")
+
+
+def length_symbol(seg_id: str) -> sp.Symbol:
+    name = seg_id[len(SEG_PREFIX):] if seg_id.startswith(SEG_PREFIX) else seg_id
+    return sp.Symbol(f"len_{name}")
+
+
+PERIMETER = sp.Symbol("P")
+AREA = sp.Symbol("A")
+CIRCUMFERENCE = sp.Symbol("C")
+GRADIENT = sp.Symbol("m")       # v2: the gradient a question asks for
+INTERCEPT = sp.Symbol("c")      # v2: the y-intercept of a line
+VOLUME = sp.Symbol("V")         # v3: the volume of a solid
+SURFACE = sp.Symbol("S")        # v3: the surface area of a solid
+FACES, EDGES, VERTICES = sp.Symbol("F"), sp.Symbol("E"), sp.Symbol("N")   # v3: Euler, N vertices
+
+
+@dataclass
+class Uses:
+    """The objects a step cites, sorted by what they are."""
+    angles: list[str]
+    segments: list[str]
+    polygons: list[str]
+    lines: list[str]
+    circles: list[str]
+    other: list[str]
+    points: list[str] = field(default_factory=list)   # v2: plotted points a coordinate theorem works on
+    solids: list[str] = field(default_factory=list)   # v3: the solid a volume theorem works on
+
+
+def sort_uses(m: Model, uses: list[str], theorem: str) -> Uses:
+    u = Uses([], [], [], [], [], [])
+    for x in uses:
+        if x in m.angle_ids:
+            u.angles.append(m.canonical_angle_id(x))
+        elif x in m.segment_ids:
+            u.segments.append(x)
+        elif x in m.polygons:
+            u.polygons.append(x)
+        elif x in m.lines:
+            u.lines.append(x)
+        elif x in m.circles:
+            u.circles.append(x)
+        elif x in m.points:
+            u.points.append(x)
+        elif x in m.solids:
+            u.solids.append(x)
+        else:
+            u.other.append(x)   # a relation id or a configuration id: documentation
+    return u
+
+
+def _premise(theorem: str, ok: bool, why: str) -> None:
+    if not ok:
+        raise GeometryRefusal("theorem_premise", f"{theorem}: {why}")
+
+
+def _need_angles(m: Model, u: Uses, theorem: str, n: Optional[int] = None, at_least: Optional[int] = None) -> list[AngleKey]:
+    if not u.angles and len(u.polygons) == 1:
+        # the shape cited instead of its angles: its interior angles, in order
+        pg = m.polygons[u.polygons[0]]
+        L = len(pg.vertices)
+        for i, v in enumerate(pg.vertices):
+            k = angle_key(v, pg.vertices[i - 1], pg.vertices[(i + 1) % L])
+            aid = next((a for a, kk in m.angle_ids.items() if kk == k), None)
+            if aid:
+                u.angles.append(aid)
+    if n is not None:
+        _premise(theorem, len(u.angles) == n, f"cite exactly {n} angles (got {len(u.angles)})")
+    if at_least is not None:
+        _premise(theorem, len(u.angles) >= at_least, f"cite at least {at_least} angles")
+    return [m.angle_ids[a] for a in u.angles]
+
+
+def _only_triangle(m: Model, u: Uses):
+    """The triangle a step means when it cites NO angle and no shape: the
+    cited polygon if one, else the figure's only closed triangle. A figure
+    with two triangles is ambiguous and stays a refusal. The live lesson
+    call left `uses` empty on isosceles_base_angles / equilateral_angles
+    twice (2026-10-07); every premise still runs on what is inferred."""
+    if u.polygons:
+        return u.polygons[0], m.polygons[u.polygons[0]]
+    tris = [(pid, pg) for pid, pg in m.polygons.items() if pg.closed and len(pg.vertices) == 3]
+    return tris[0] if len(tris) == 1 else (None, None)
+
+
+def _angle_id(m: Model, k: AngleKey) -> Optional[str]:
+    return next((a for a, kk in m.angle_ids.items() if kk == k), None)
+
+
+def _same_vertex(keys: list[AngleKey], theorem: str) -> str:
+    vs = {k[0] for k in keys}
+    _premise(theorem, len(vs) == 1, "the angles must share a vertex")
+    return next(iter(vs))
+
+
+def _arm_counts(keys: list[AngleKey]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for k in keys:
+        for a in k[1]:
+            counts[a] = counts.get(a, 0) + 1
+    return counts
+
+
+def _connected(keys: list[AngleKey]) -> bool:
+    """Angles chained by shared arms form one run."""
+    if not keys:
+        return False
+    seen = {0}
+    frontier = [0]
+    while frontier:
+        i = frontier.pop()
+        for j in range(len(keys)):
+            if j not in seen and keys[i][1] & keys[j][1]:
+                seen.add(j)
+                frontier.append(j)
+    return len(seen) == len(keys)
+
+
+def _sum_eq(u: Uses, total) -> list[sp.Eq]:
+    return [sp.Eq(sum(angle_symbol(a) for a in u.angles), total)]
+
+
+# ── angles at a vertex ────────────────────────────────────────────────────
+
+def t_angles_on_line(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "angles_on_line"
+    keys = _need_angles(m, u, T, at_least=2)
+    v = _same_vertex(keys, T)
+    _premise(T, all(k[2] == "interior" for k in keys), "reflex angles do not lie on a line")
+    counts = _arm_counts(keys)
+    outer = [a for a, c in counts.items() if c == 1]
+    _premise(T, len(outer) == 2 and all(c <= 2 for c in counts.values()) and _connected(keys),
+             "the angles must be adjacent, side by side along one line")
+    _premise(T, m.between(outer[0], v, outer[1]),
+             f"no construction puts {outer[0]}, {v}, {outer[1]} on one straight line")
+    total = sum(m.angle_float(k) for k in keys)
+    _premise(T, abs(total - 180.0) < 1e-6, "the cited angles overlap or do not fill the straight angle")
+    return _sum_eq(u, 180)
+
+
+def t_angles_at_point(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "angles_at_point"
+    keys = _need_angles(m, u, T, at_least=2)
+    _same_vertex(keys, T)
+    if len(set(keys)) < len(keys):
+        dup = [u.angles[i] for i, k in enumerate(keys) if keys.index(k) != i]
+        _premise(T, False, f"{', '.join(dup)} names the same angle as another cited one; the other angle "
+                           f"round the point on the same arms is its reflex (region: \"reflex\")")
+    counts = _arm_counts(keys)
+    _premise(T, all(c == 2 for c in counts.values()) and _connected(keys),
+             "the angles must go all the way round the point, each arm shared by two of them")
+    total = sum(m.angle_float(k) for k in keys)
+    _premise(T, abs(total - 360.0) < 1e-6, "the cited angles overlap or do not fill the full turn")
+    return _sum_eq(u, 360)
+
+
+def t_vertically_opposite(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "vertically_opposite"
+    k1, k2 = _need_angles(m, u, T, n=2)
+    v = _same_vertex([k1, k2], T)
+    p, q = sorted(k1[1])
+    r, s = sorted(k2[1])
+    ok = (m.between(p, v, r) and m.between(q, v, s)) or (m.between(p, v, s) and m.between(q, v, r))
+    _premise(T, ok, "the angles are not formed by two straight lines crossing at the vertex")
+    return [sp.Eq(angle_symbol(u.angles[0]), angle_symbol(u.angles[1]))]
+
+
+def t_angle_addition(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "angle_addition"
+    k1, k2, kw = _need_angles(m, u, T, n=3)
+    v = _same_vertex([k1, k2, kw], T)
+    shared = k1[1] & k2[1]
+    _premise(T, len(shared) == 1, "the two parts must share one arm")
+    _premise(T, (k1[1] | k2[1]) - shared == kw[1], "the whole angle's arms are the parts' outer arms")
+    f = m.angle_float(k1) + m.angle_float(k2)
+    _premise(T, abs(f - m.angle_float(kw)) < 1e-6, "the shared arm does not lie inside the whole angle")
+    a1, a2, aw = (angle_symbol(a) for a in u.angles)
+    return [sp.Eq(aw, a1 + a2)]
+
+
+# ── polygons ──────────────────────────────────────────────────────────────
+
+def _polygon_of_angles(m: Model, keys: list[AngleKey], T: str, n: Optional[int] = None) -> Polygon:
+    verts = [k[0] for k in keys]
+    _premise(T, len(set(verts)) == len(verts), "one angle per vertex")
+    pg = m.polygon_with_vertices(set(verts))
+    _premise(T, pg is not None, "no construction makes these vertices one closed shape")
+    if n is not None:
+        _premise(T, len(pg.vertices) == n, f"the shape has {len(pg.vertices)} vertices, not {n}")
+    L = len(pg.vertices)
+    for k in keys:
+        i = pg.vertices.index(k[0])
+        _premise(T, k[1] == frozenset((pg.vertices[i - 1], pg.vertices[(i + 1) % L])),
+                 f"the angle at {k[0]} must be between its two neighbouring vertices")
+    return pg
+
+
+def t_triangle_angle_sum(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "triangle_angle_sum"
+    keys = _need_angles(m, u, T, n=3)
+    _polygon_of_angles(m, keys, T, 3)
+    return _sum_eq(u, 180)
+
+
+def t_quadrilateral_angle_sum(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "quadrilateral_angle_sum"
+    keys = _need_angles(m, u, T, n=4)
+    _polygon_of_angles(m, keys, T, 4)
+    return _sum_eq(u, 360)
+
+
+def t_polygon_interior_sum(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "polygon_interior_sum"
+    keys = _need_angles(m, u, T, at_least=3)
+    pg = _polygon_of_angles(m, keys, T)
+    _premise(T, len(keys) == len(pg.vertices), "cite every interior angle of the shape")
+    return _sum_eq(u, (len(pg.vertices) - 2) * 180)
+
+
+def t_polygon_exterior_sum(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "polygon_exterior_sum"
+    keys = _need_angles(m, u, T, at_least=3)
+    verts = [k[0] for k in keys]
+    pg = m.polygon_with_vertices(set(verts))
+    _premise(T, pg is not None and len(keys) == len(pg.vertices), "cite one exterior angle at every vertex of one shape")
+    L = len(pg.vertices)
+    for k in keys:
+        i = pg.vertices.index(k[0])
+        prev_v, next_v = pg.vertices[i - 1], pg.vertices[(i + 1) % L]
+        arms = set(k[1])
+        _premise(T, next_v in arms or prev_v in arms, f"the exterior angle at {k[0]} is between a side and the next side extended")
+        (ext,) = arms - {next_v, prev_v} if len(arms - {next_v, prev_v}) == 1 else (None,)
+        other = prev_v if next_v in arms else next_v
+        _premise(T, ext is not None and m.between(other, k[0], ext), f"{ext} is not on the side through {k[0]} extended")
+    return _sum_eq(u, 360)
+
+
+def t_isosceles_base_angles(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "isosceles_base_angles"
+    if not u.angles:
+        # nothing cited: the base angles of the figure's isosceles triangle —
+        # the pair opposite its equal legs. Checked below like any citation.
+        _pid, pg = _only_triangle(m, u)
+        if pg is not None:
+            a, b, c = pg.vertices
+            for apex, p, q in ((a, b, c), (b, c, a), (c, a, b)):
+                if m.lengths_equal(seg_key(apex, p), seg_key(apex, q)):
+                    ids = [_angle_id(m, angle_key(p, apex, q)), _angle_id(m, angle_key(q, apex, p))]
+                    if all(ids):
+                        u.angles = [m.canonical_angle_id(i) for i in ids]
+                        u.polygons = []
+                    break
+    k1, k2 = _need_angles(m, u, T, n=2)
+    b, c = k1[0], k2[0]
+    _premise(T, b != c and b in k2[1] and c in k1[1], "the two base angles are at the ends of the base")
+    apex = (k1[1] - {c}) | (k2[1] - {b})
+    _premise(T, len(apex) == 1, "the angles must share the apex as their other arm")
+    (a,) = apex
+    _premise(T, m.polygon_with_vertices({a, b, c}) is not None, "no construction makes a triangle of these points")
+    _premise(T, m.lengths_equal(seg_key(a, b), seg_key(a, c)), f"no construction makes {a}{b} equal to {a}{c}")
+    return [sp.Eq(angle_symbol(u.angles[0]), angle_symbol(u.angles[1]))]
+
+
+def t_equilateral_angles(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "equilateral_angles"
+    if not u.angles and not u.polygons:
+        # nothing cited: the figure's only triangle, all three angles
+        pid, _pg = _only_triangle(m, u)
+        if pid is not None:
+            u.polygons = [pid]
+    keys = _need_angles(m, u, T, at_least=1)
+    _premise(T, len(keys) <= 3, "cite at most the three angles of the triangle")
+    verts = [k[0] for k in keys]
+    pg = None
+    for cand in m.polygons.values():
+        if cand.closed and len(cand.vertices) == 3 and set(verts) <= set(cand.vertices):
+            pg = cand
+    _premise(T, pg is not None, "no construction makes a triangle with these vertices")
+    for k in keys:
+        i = pg.vertices.index(k[0])
+        _premise(T, k[1] == frozenset((pg.vertices[i - 1], pg.vertices[(i + 1) % 3])),
+                 f"the angle at {k[0]} must be between the triangle's sides")
+    a, b, c = pg.vertices
+    _premise(T, m.lengths_equal(seg_key(a, b), seg_key(b, c)) and m.lengths_equal(seg_key(b, c), seg_key(c, a)),
+             "no construction makes all three sides equal")
+    return [sp.Eq(angle_symbol(x), 60) for x in u.angles]
+
+
+def t_exterior_angle_triangle(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "exterior_angle_triangle"
+    k1, k2, ke = _need_angles(m, u, T, n=3)
+    a, b, c = k1[0], k2[0], ke[0]
+    _premise(T, len({a, b, c}) == 3, "two interior angles at two vertices and the exterior angle at the third")
+    _premise(T, m.polygon_with_vertices({a, b, c}) is not None, "no construction makes a triangle of these points")
+    _premise(T, k1[1] == frozenset((b, c)) and k2[1] == frozenset((a, c)), "the interior angles are between the triangle's sides")
+    arms = set(ke[1])
+    inner = arms & {a, b}
+    _premise(T, len(inner) == 1 and len(arms) == 2, "the exterior angle is between one side and the other side extended")
+    (side_end,) = inner
+    (ext,) = arms - inner
+    other = b if side_end == a else a
+    _premise(T, m.between(other, c, ext), f"{ext} is not on {other}{c} extended beyond {c}")
+    return [sp.Eq(angle_symbol(u.angles[2]), angle_symbol(u.angles[0]) + angle_symbol(u.angles[1]))]
+
+
+# ── parallel lines ────────────────────────────────────────────────────────
+
+def _transversal_roles(m: Model, k1: AngleKey, k2: AngleKey, T: str):
+    """(inner_P, side_P, inner_Q, side_Q) for two angles at P and Q on a
+    transversal, each between the transversal and one of two parallels."""
+    p, q = k1[0], k2[0]
+    _premise(T, p != q, "the two angles are at different points of the transversal")
+    tr = m.line_through(p, q)
+    if tr is None and seg_key(p, q) in m.segments:
+        # a side of a shape is a transversal too (the parallel through the
+        # apex, B12): two points joined by a segment are on one line
+        tr = Line("_transversal", [p, q])
+    _premise(T, tr is not None, f"no construction puts {p} and {q} on one line (the transversal)")
+    out = []
+    for k, here, there in ((k1, p, q), (k2, q, p)):
+        t_arm = [a for a in k[1] if a in tr.points]
+        s_arm = [a for a in k[1] if a not in tr.points]
+        _premise(T, len(t_arm) == 1 and len(s_arm) == 1, f"the angle at {here} must have one arm along the transversal")
+        ih, it, io = tr.points.index(here), tr.points.index(t_arm[0]), tr.points.index(there)
+        inner = (it - ih) * (io - ih) > 0
+        own = [ln for ln in m.lines_through(here) if ln is not tr and s_arm[0] in ln.points]
+        _premise(T, bool(own), f"the other arm at {here} is not along a known line")
+        out.append((inner, m.side_of_line(tr, s_arm[0]), own))
+    (ip, sp_, lp), (iq, sq, lq) = out
+    _premise(T, any(m.are_parallel(a.id, b.id) for a in lp for b in lq),
+             "no construction makes the two lines parallel")
+    _premise(T, sp_ != 0 and sq != 0, "an arm lies on the transversal")
+    return ip, sp_, iq, sq
+
+
+def t_alternate_angles(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "alternate_angles"
+    k1, k2 = _need_angles(m, u, T, n=2)
+    ip, sp_, iq, sq = _transversal_roles(m, k1, k2, T)
+    _premise(T, ip == iq and sp_ != sq, "these are not alternate angles (opposite sides, both inside or both outside)")
+    return [sp.Eq(angle_symbol(u.angles[0]), angle_symbol(u.angles[1]))]
+
+
+def t_corresponding_angles(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "corresponding_angles"
+    k1, k2 = _need_angles(m, u, T, n=2)
+    ip, sp_, iq, sq = _transversal_roles(m, k1, k2, T)
+    _premise(T, ip != iq and sp_ == sq, "these are not corresponding angles (same side, same direction)")
+    return [sp.Eq(angle_symbol(u.angles[0]), angle_symbol(u.angles[1]))]
+
+
+def t_cointerior_angles(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "cointerior_angles"
+    k1, k2 = _need_angles(m, u, T, n=2)
+    ip, sp_, iq, sq = _transversal_roles(m, k1, k2, T)
+    _premise(T, ip and iq and sp_ == sq, "these are not co-interior angles (same side, both between the parallels)")
+    return _sum_eq(u, 180)
+
+
+# ── lengths and areas ─────────────────────────────────────────────────────
+
+def _segment_symbol(m: Model, a: str, b: str) -> sp.Symbol:
+    k = seg_key(a, b)
+    for sid, key in m.segment_ids.items():
+        if key == k:
+            return length_symbol(sid)
+    x, y = sorted(k)
+    return sp.Symbol(f"len_{x}_{y}")
+
+
+def _the_polygon_cited(m: Model, u: Uses, T: str, n: Optional[int] = None) -> Polygon:
+    _premise(T, len(u.polygons) == 1, "cite the shape by its id")
+    pg = m.polygons[u.polygons[0]]
+    _premise(T, pg.closed, "the shape is not closed")
+    if n is not None:
+        _premise(T, len(pg.vertices) == n, f"the shape has {len(pg.vertices)} sides, not {n}")
+    return pg
+
+
+def t_pythagoras(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "pythagoras"
+    pg = _the_polygon_cited(m, u, T, 3)
+    a, b, c = pg.vertices
+    right = None
+    for v, p, q in ((a, c, b), (b, a, c), (c, b, a)):
+        an = m.angles.get(angle_key(v, p, q))
+        if an is not None and an.exact is not None and sp.simplify(an.exact - 90) == 0:
+            right = (v, p, q)
+    _premise(T, right is not None, "no construction makes a right angle in this triangle")
+    v, p, q = right
+    return [sp.Eq(_segment_symbol(m, p, q) ** 2, _segment_symbol(m, v, p) ** 2 + _segment_symbol(m, v, q) ** 2)]
+
+
+def t_perimeter(m: Model, u: Uses) -> list[sp.Eq]:
+    pg = _the_polygon_cited(m, u, "perimeter")
+    n = len(pg.vertices)
+    return [sp.Eq(PERIMETER, sum(_segment_symbol(m, pg.vertices[i], pg.vertices[(i + 1) % n]) for i in range(n)))]
+
+
+def t_area_rectangle(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "area_rectangle"
+    pg = _the_polygon_cited(m, u, T, 4)
+    v = pg.vertices
+    for i in range(4):
+        an = m.angles.get(angle_key(v[i], v[i - 1], v[(i + 1) % 4]))
+        _premise(T, an is not None and an.exact is not None and sp.simplify(an.exact - 90) == 0,
+                 "no construction makes every angle a right angle")
+    return [sp.Eq(AREA, _segment_symbol(m, v[0], v[1]) * _segment_symbol(m, v[1], v[2]))]
+
+
+def t_area_triangle(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "area_triangle"
+    pg = _the_polygon_cited(m, u, T, 3)
+    a, b, c = pg.vertices
+    for v, p, q in ((a, c, b), (b, a, c), (c, b, a)):
+        an = m.angles.get(angle_key(v, p, q))
+        if an is not None and an.exact is not None and sp.simplify(an.exact - 90) == 0:
+            return [sp.Eq(AREA, sp.Rational(1, 2) * _segment_symbol(m, v, p) * _segment_symbol(m, v, q))]
+    _premise(T, False, "v1 computes a triangle's area from two legs at a right angle; build the height")
+    return []
+
+
+def t_area_composite(m: Model, u: Uses) -> list[sp.Eq]:
+    """A compound shape (an L, a T, a rectangle with a corner cut): its
+    exact area is the shoelace sum over its exactly placed corners — a
+    turtle_polygon walks them from its sides and turns. The step's own
+    decomposition (two rectangles added, a corner taken from a rectangle)
+    is what the chain compares with this, under the givens; the engine
+    does not choose the decomposition, it checks the one the step wrote."""
+    T = "area_composite"
+    pg = _the_polygon_cited(m, u, T)
+    ex = [m.points[v].exact for v in pg.vertices]
+    _premise(T, all(e is not None for e in ex),
+             "the shape's corners are not exactly placed: build it as one turtle_polygon (its sides and "
+             "turns) so its area is known, then write the parts' sum")
+    n = len(ex)
+    twice = sum(ex[i][0] * ex[(i + 1) % n][1] - ex[(i + 1) % n][0] * ex[i][1] for i in range(n))
+    pts = [m.xy(v) for v in pg.vertices]
+    sign = sum(pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1] for i in range(n))
+    area = sp.simplify(twice / 2 if sign >= 0 else -twice / 2)
+    return [sp.Eq(AREA, area)]
+
+
+# ── v2: coordinate geometry ───────────────────────────────────────────────
+
+def _coordinate_figure(m: Model, T: str) -> None:
+    _premise(T, m.axes is not None, "a coordinate theorem needs a figure with axes")
+
+
+def _two_points(m: Model, u: Uses, T: str, *, exclude: tuple[str, ...] = ()) -> tuple[str, str]:
+    """The two endpoints a coordinate theorem works on: a cited segment, a
+    cited line through two points, or two cited points."""
+    for sid in u.segments:
+        a, b = tuple(m.segment_ids[sid])
+        return a, b
+    for lid in u.lines:
+        pts = [q for q in m.lines[lid].points if q not in exclude]
+        if len(pts) >= 2:
+            return pts[0], pts[-1]
+    pts = [q for q in u.points if q not in exclude]
+    _premise(T, len(pts) == 2, "cite the segment (or its two points)")
+    return pts[0], pts[1]
+
+
+def t_distance_formula(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "distance_formula"
+    _coordinate_figure(m, T)
+    a, b = _two_points(m, u, T)
+    (x1, y1), (x2, y2) = m.exact_xy(a), m.exact_xy(b)
+    return [sp.Eq(_segment_symbol(m, a, b), sp.sqrt(sp.expand((x2 - x1) ** 2 + (y2 - y1) ** 2)))]
+
+
+def t_midpoint_formula(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "midpoint_formula"
+    _coordinate_figure(m, T)
+    endpoints: set = set()
+    for sid in u.segments:
+        endpoints |= set(m.segment_ids[sid])
+    mids = [q for q in u.points if q not in endpoints]
+    _premise(T, len(mids) == 1, "cite the segment and the midpoint")
+    mid = mids[0]
+    a, b = _two_points(m, u, T, exclude=(mid,))
+    _premise(T, m.between(a, mid, b) and m.lengths_equal(seg_key(a, mid), seg_key(mid, b)),
+             f"no construction makes {mid} the midpoint of {a}{b}")
+    (x1, y1), (x2, y2) = m.exact_xy(a), m.exact_xy(b)
+    xm, ym = coord_symbols(mid)
+    return [sp.Eq(xm, (x1 + x2) / 2), sp.Eq(ym, (y1 + y2) / 2)]
+
+
+def _gradient_of(m: Model, a: str, b: str, T: str) -> sp.Expr:
+    (x1, y1), (x2, y2) = m.exact_xy(a), m.exact_xy(b)
+    dx = sp.simplify(x2 - x1)
+    _premise(T, dx != 0, f"{a}{b} is vertical: its gradient is undefined")
+    return sp.simplify((y2 - y1) / dx)
+
+
+def t_gradient(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "gradient"
+    _coordinate_figure(m, T)
+    a, b = _two_points(m, u, T)
+    return [sp.Eq(GRADIENT, _gradient_of(m, a, b, T))]
+
+
+def t_line_equation(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "line_equation"
+    _coordinate_figure(m, T)
+    a, b = _two_points(m, u, T)
+    g = _gradient_of(m, a, b, T)
+    x1, y1 = m.exact_xy(a)
+    return [sp.Eq(GRADIENT, g), sp.Eq(INTERCEPT, sp.simplify(y1 - g * x1))]
+
+
+def _two_segments(m: Model, u: Uses, T: str) -> tuple[tuple[str, str], tuple[str, str]]:
+    pairs = [tuple(m.segment_ids[s]) for s in u.segments]
+    for lid in u.lines:
+        pts = m.lines[lid].points
+        if len(pts) >= 2:
+            pairs.append((pts[0], pts[-1]))
+    _premise(T, len(pairs) == 2, "cite the two segments")
+    return pairs[0], pairs[1]
+
+
+def t_parallel_gradients(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "parallel_gradients"
+    _coordinate_figure(m, T)
+    (a, b), (c, d) = _two_segments(m, u, T)
+    g1, g2 = _gradient_of(m, a, b, T), _gradient_of(m, c, d, T)
+    _premise(T, sp.simplify(g1 - g2) == 0, f"the gradients are {g1} and {g2}: not parallel")
+    return [sp.Eq(g1, g2)]
+
+
+def t_perpendicular_gradients(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "perpendicular_gradients"
+    _coordinate_figure(m, T)
+    (a, b), (c, d) = _two_segments(m, u, T)
+    g1, g2 = _gradient_of(m, a, b, T), _gradient_of(m, c, d, T)
+    _premise(T, sp.simplify(g1 * g2 + 1) == 0, f"the gradients multiply to {sp.simplify(g1 * g2)}, not -1")
+    return [sp.Eq(g1 * g2, -1)]
+
+
+def t_reflection_rule(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "reflection_rule"
+    _coordinate_figure(m, T)
+    # the image, or the source whose image it is: a step that cites the
+    # point being reflected means the same rule (chapter-17 probe, 2026-10-08)
+    images = [q for q in u.points if q in m.reflections] or \
+        [img for img, (src, _m) in m.reflections.items() if src in u.points]
+    _premise(T, len(images) == 1, "cite the reflected point (made by reflect_point)")
+    img = images[0]
+    src, mirror = m.reflections[img]
+    x, y = m.exact_xy(src)
+    xi, yi = coord_symbols(img)
+    if mirror == "x_axis":
+        return [sp.Eq(xi, x), sp.Eq(yi, -y)]
+    if mirror == "y_axis":
+        return [sp.Eq(xi, -x), sp.Eq(yi, y)]
+    if mirror == "origin":
+        return [sp.Eq(xi, -x), sp.Eq(yi, -y)]
+    return [sp.Eq(xi, y), sp.Eq(yi, x)]
+
+
+def t_rotation_rule(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "rotation_rule"
+    _coordinate_figure(m, T)
+    images = [q for q in u.points if q in m.rotations] or \
+        [img for img, (src, _k) in m.rotations.items() if src in u.points]
+    _premise(T, len(images) == 1, "cite the rotated point (made by rotate_point)")
+    img = images[0]
+    src, k = m.rotations[img]
+    x, y = m.exact_xy(src)
+    xi, yi = coord_symbols(img)
+    if k == 1:
+        return [sp.Eq(xi, -y), sp.Eq(yi, x)]
+    if k == 2:
+        return [sp.Eq(xi, -x), sp.Eq(yi, -y)]
+    return [sp.Eq(xi, y), sp.Eq(yi, -x)]
+
+
+# ── v4: trigonometry on a right-angled triangle ───────────────────────────
+
+def _right_triangle_parts(m: Model, u: Uses, T: str) -> tuple[sp.Symbol, sp.Symbol, sp.Symbol, sp.Symbol]:
+    """(the angle's symbol, opposite, adjacent, hypotenuse) for the one
+    cited interior angle of the one cited right-angled triangle."""
+    pg = _the_polygon_cited(m, u, T, 3)
+    _premise(T, len(u.angles) == 1, "cite the angle the ratio is taken at")
+    key = m.angle_ids[u.angles[0]]
+    v, arms = key[0], set(key[1])
+    verts = list(pg.vertices)
+    _premise(T, v in verts and arms == set(verts) - {v}, "the angle is an interior angle of the triangle")
+    right = None
+    for r in verts:
+        if r == v:
+            continue
+        others = [x for x in verts if x != r]
+        an = m.angles.get(angle_key(r, others[0], others[1]))
+        if an is not None and an.exact is not None and sp.simplify(an.exact - 90) == 0:
+            right = r
+    _premise(T, right is not None, "no construction makes a right angle in this triangle")
+    q = next(x for x in verts if x not in (v, right))
+    opp = _segment_symbol(m, right, q)
+    adj = _segment_symbol(m, v, right)
+    hyp = _segment_symbol(m, v, q)
+    return angle_symbol(u.angles[0]), opp, adj, hyp
+
+
+def t_sin_ratio(m: Model, u: Uses) -> list[sp.Eq]:
+    a, opp, _adj, hyp = _right_triangle_parts(m, u, "sin_ratio")
+    return [sp.Eq(sp.sin(a * sp.pi / 180), opp / hyp)]
+
+
+def t_cos_ratio(m: Model, u: Uses) -> list[sp.Eq]:
+    a, _opp, adj, hyp = _right_triangle_parts(m, u, "cos_ratio")
+    return [sp.Eq(sp.cos(a * sp.pi / 180), adj / hyp)]
+
+
+def t_tan_ratio(m: Model, u: Uses) -> list[sp.Eq]:
+    a, opp, adj, _hyp = _right_triangle_parts(m, u, "tan_ratio")
+    return [sp.Eq(sp.tan(a * sp.pi / 180), opp / adj)]
+
+
+# ── v4: circle theorems ───────────────────────────────────────────────────
+
+def _the_circle(m: Model, u: Uses, T: str):
+    _premise(T, len(u.circles) == 1, "cite the circle by its id")
+    return m.circles[u.circles[0]]
+
+
+def _on_circle(m: Model, c, pid: str) -> bool:
+    return m.has_point(pid) and abs(math.dist(m.xy(c.centre), m.xy(pid)) - c.radius) < 1e-6 * max(1.0, c.radius)
+
+
+def t_angle_at_centre(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "angle_at_centre"
+    c = _the_circle(m, u, T)
+    keys = _need_angles(m, u, T, n=2)
+    centre = [i for i, k in zip(u.angles, keys) if k[0] == c.centre]
+    rim = [i for i, k in zip(u.angles, keys) if k[0] != c.centre]
+    _premise(T, len(centre) == 1 and len(rim) == 1, "cite the angle at the centre and the angle at the circumference")
+    kc, kr = m.angle_ids[centre[0]], m.angle_ids[rim[0]]
+    _premise(T, kc[1] == kr[1], "both angles stand on the same two points")
+    _premise(T, all(_on_circle(m, c, p) for p in kc[1]) and _on_circle(m, c, kr[0]), "the points must lie on the circle")
+    return [sp.Eq(angle_symbol(centre[0]), 2 * angle_symbol(rim[0]))]
+
+
+def t_angle_in_semicircle(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "angle_in_semicircle"
+    c = _the_circle(m, u, T)
+    (key,) = _need_angles(m, u, T, n=1)
+    v, (a, b) = key[0], sorted(key[1])
+    _premise(T, _on_circle(m, c, v) and _on_circle(m, c, a) and _on_circle(m, c, b), "the three points must lie on the circle")
+    _premise(T, abs(math.dist(m.xy(a), m.xy(b)) - 2 * c.radius) < 1e-6 * max(1.0, c.radius), "the angle must stand on a diameter")
+    return [sp.Eq(angle_symbol(u.angles[0]), 90)]
+
+
+def t_angles_same_segment(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "angles_same_segment"
+    c = _the_circle(m, u, T)
+    k1, k2 = _need_angles(m, u, T, n=2)
+    _premise(T, k1[1] == k2[1], "both angles stand on the same chord")
+    a, b = sorted(k1[1])
+    _premise(T, all(_on_circle(m, c, p) for p in (a, b, k1[0], k2[0])), "the points must lie on the circle")
+    pa, pb = m.xy(a), m.xy(b)
+
+    def side(p):
+        x, y = m.xy(p)
+        return (pb[0] - pa[0]) * (y - pa[1]) - (pb[1] - pa[1]) * (x - pa[0])
+    _premise(T, side(k1[0]) * side(k2[0]) > 0, "the angles must be on the same side of the chord (the same segment)")
+    return [sp.Eq(angle_symbol(u.angles[0]), angle_symbol(u.angles[1]))]
+
+
+def t_cyclic_quadrilateral(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "cyclic_quadrilateral"
+    c = _the_circle(m, u, T)
+    pg = _the_polygon_cited(m, u, T, 4)
+    _premise(T, all(_on_circle(m, c, p) for p in pg.vertices), "every vertex must lie on the circle")
+    k1, k2 = _need_angles(m, u, T, n=2)
+    vs = list(pg.vertices)
+    _premise(T, k1[0] in vs and k2[0] in vs and (vs.index(k1[0]) - vs.index(k2[0])) % 2 == 0 and k1[0] != k2[0],
+             "cite two OPPOSITE interior angles of the quadrilateral")
+    for k in (k1, k2):
+        i = vs.index(k[0])
+        _premise(T, set(k[1]) == {vs[i - 1], vs[(i + 1) % 4]}, "each angle is an interior angle of the quadrilateral")
+    return [sp.Eq(angle_symbol(u.angles[0]) + angle_symbol(u.angles[1]), 180)]
+
+
+def t_tangent_radius(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "tangent_radius"
+    c = _the_circle(m, u, T)
+    (key,) = _need_angles(m, u, T, n=1)
+    v = key[0]
+    _premise(T, v in m.tangents and m.tangents[v][0] == c.id, "the angle's vertex is where a tangent (tangent_at) touches the circle")
+    _premise(T, set(key[1]) == {c.centre, m.tangents[v][1]}, "the angle is between the radius and the tangent")
+    return [sp.Eq(angle_symbol(u.angles[0]), 90)]
+
+
+def t_translation_rule(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "translation_rule"
+    _coordinate_figure(m, T)
+    images = [q for q in u.points if q in m.translations] or \
+        [img for img, (src, _v) in m.translations.items() if src in u.points]
+    _premise(T, len(images) == 1, "cite the translated point (made by translate_point)")
+    img = images[0]
+    src, (dx, dy) = m.translations[img]
+    x, y = m.exact_xy(src)
+    xi, yi = coord_symbols(img)
+    return [sp.Eq(xi, x + dx), sp.Eq(yi, y + dy)]
+
+
+def _lines_parallel(m: Model, a: str, b: str, c: str, d: str) -> bool:
+    l1, l2 = m.line_through(a, b), m.line_through(c, d)
+    return l1 is not None and l2 is not None and (l1.id == l2.id or frozenset((l1.id, l2.id)) in m.parallel)
+
+
+def _height_onto(m: Model, u: Uses, base_a: str, base_b: str) -> Optional[tuple[str, str]]:
+    """A cited segment perpendicular to the line base_a–base_b with its
+    foot on that line — a height — as (top, foot); None when none is."""
+    base = m.line_through(base_a, base_b)
+    if base is None:
+        return None
+    for sid in u.segments:
+        key = m.segment_ids.get(sid)
+        if key is None:
+            continue
+        a, b = tuple(key)
+        for top, foot in ((a, b), (b, a)):
+            if foot in base.points:
+                hl = m.line_through(top, foot)
+                if hl is not None and m.are_perpendicular(hl.id, base.id):
+                    return top, foot
+    return None
+
+
+def t_area_parallelogram(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "area_parallelogram"
+    pg = _the_polygon_cited(m, u, T, 4)
+    v = pg.vertices
+    _premise(T, _lines_parallel(m, v[0], v[1], v[3], v[2]) and _lines_parallel(m, v[1], v[2], v[0], v[3]),
+             "no construction makes both pairs of sides parallel")
+    # base × height, with the cited height (perpendicular_from)
+    for i in range(4):
+        a, b = v[i], v[(i + 1) % 4]
+        h = _height_onto(m, u, a, b)
+        if h is not None:
+            return [sp.Eq(AREA, _segment_symbol(m, a, b) * _segment_symbol(m, *h))]
+    # no height cited: two sides and the exact angle between them, when its
+    # sine is exact (30°, 45°, 60°, 90° …) — otherwise the height must be built.
+    # The vertex whose two sides the question DECLARES comes first: the area
+    # is written in the sides the student measured, not an equal opposite one
+    declared = set(m.segment_ids.values())
+    order = sorted(range(4), key=lambda i: (seg_key(v[i - 1], v[i]) not in declared
+                                             or seg_key(v[i], v[(i + 1) % 4]) not in declared, i))
+    for i in order:
+        an = m.angles.get(angle_key(v[i], v[i - 1], v[(i + 1) % 4]))
+        if an is not None and an.exact is not None and not sp.sympify(an.exact).free_symbols:
+            sin = sp.simplify(sp.sin(sp.sympify(an.exact) * sp.pi / 180))
+            if not sin.has(sp.sin):
+                return [sp.Eq(AREA, _segment_symbol(m, v[i - 1], v[i]) * _segment_symbol(m, v[i], v[(i + 1) % 4]) * sin)]
+    _premise(T, False, "build the height with perpendicular_from and cite it")
+    return []
+
+
+def t_area_trapezium(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "area_trapezium"
+    pg = _the_polygon_cited(m, u, T, 4)
+    v = pg.vertices
+    for i, j in ((0, 2), (1, 3)):
+        a, b, c, d = v[i], v[(i + 1) % 4], v[j], v[(j + 1) % 4]
+        if _lines_parallel(m, a, b, c, d):
+            h = _height_onto(m, u, a, b) or _height_onto(m, u, c, d)
+            _premise(T, h is not None, "cite the height: build it with perpendicular_from between the parallel sides")
+            return [sp.Eq(AREA, sp.Rational(1, 2) * (_segment_symbol(m, a, b) + _segment_symbol(m, c, d))
+                          * _segment_symbol(m, *h))]
+    _premise(T, False, "no construction makes a pair of parallel sides")
+    return []
+
+
+def t_area_circle(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "area_circle"
+    _premise(T, len(u.circles) == 1, "cite the circle by its id")
+    c = m.circles[u.circles[0]]
+    return [sp.Eq(AREA, sp.pi * sp.Symbol(f"r_{c.id}") ** 2)]
+
+
+def t_circumference(m: Model, u: Uses) -> list[sp.Eq]:
+    T = "circumference"
+    _premise(T, len(u.circles) == 1, "cite the circle by its id")
+    c = m.circles[u.circles[0]]
+    return [sp.Eq(CIRCUMFERENCE, 2 * sp.pi * sp.Symbol(f"r_{c.id}"))]
+
+
+def _unsupported(name: str):
+    def fn(m: Model, u: Uses) -> list[sp.Eq]:
+        raise GeometryRefusal("theorem_premise", f"{name}: not yet computed by the v1 engine — cite each part's "
+                                                 "own area theorem on its own step")
+    return fn
+
+
+# ── v3: solids ────────────────────────────────────────────────────────────
+
+def _the_solid(m: Model, u: Uses, T: str, *kinds: str):
+    _premise(T, len(u.solids) == 1, "cite the solid by its id")
+    sd = m.solids[u.solids[0]]
+    if kinds:
+        _premise(T, sd.kind in kinds, f"{sd.name} is not a {' or '.join(kinds)}")
+    return sd
+
+
+def _role_symbol(m: Model, sd, role: str) -> sp.Symbol:
+    a, b = sd.roles[role]
+    return _segment_symbol(m, a, b)
+
+
+def t_volume_cuboid(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "volume_cuboid", "cuboid", "cube")
+    if sd.kind == "cube":
+        e = _role_symbol(m, sd, "edge")
+        return [sp.Eq(VOLUME, e ** 3)]
+    return [sp.Eq(VOLUME, _role_symbol(m, sd, "length") * _role_symbol(m, sd, "width") * _role_symbol(m, sd, "height"))]
+
+
+def t_volume_prism(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "volume_prism", "prism")
+    return [sp.Eq(VOLUME, sp.Rational(1, 2) * _role_symbol(m, sd, "base") * _role_symbol(m, sd, "base_height")
+                  * _role_symbol(m, sd, "length"))]
+
+
+def t_volume_cylinder(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "volume_cylinder", "cylinder")
+    return [sp.Eq(VOLUME, sp.pi * _role_symbol(m, sd, "radius") ** 2 * _role_symbol(m, sd, "height"))]
+
+
+def t_volume_pyramid(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "volume_pyramid", "pyramid")
+    return [sp.Eq(VOLUME, sp.Rational(1, 3) * _role_symbol(m, sd, "base_side") ** 2 * _role_symbol(m, sd, "height"))]
+
+
+def t_volume_cone(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "volume_cone", "cone")
+    return [sp.Eq(VOLUME, sp.Rational(1, 3) * sp.pi * _role_symbol(m, sd, "radius") ** 2 * _role_symbol(m, sd, "height"))]
+
+
+def t_volume_sphere(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "volume_sphere", "sphere")
+    return [sp.Eq(VOLUME, sp.Rational(4, 3) * sp.pi * _role_symbol(m, sd, "radius") ** 3)]
+
+
+def t_surface_area_cuboid(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "surface_area_cuboid", "cuboid", "cube")
+    if sd.kind == "cube":
+        return [sp.Eq(SURFACE, 6 * _role_symbol(m, sd, "edge") ** 2)]
+    l, w, h = (_role_symbol(m, sd, r) for r in ("length", "width", "height"))
+    return [sp.Eq(SURFACE, 2 * (l * w + w * h + l * h))]
+
+
+def t_surface_area_cylinder(m: Model, u: Uses) -> list[sp.Eq]:
+    sd = _the_solid(m, u, "surface_area_cylinder", "cylinder")
+    r, h = _role_symbol(m, sd, "radius"), _role_symbol(m, sd, "height")
+    return [sp.Eq(SURFACE, 2 * sp.pi * r ** 2 + 2 * sp.pi * r * h)]
+
+
+def t_euler_solids(m: Model, u: Uses) -> list[sp.Eq]:
+    """F + N − E = 2 for the cited solid, its faces and vertices counted
+    (N vertices, so the volume's V stays its own symbol)."""
+    sd = _the_solid(m, u, "euler_solids")
+    _premise("euler_solids", sd.kind not in ("cylinder", "cone", "sphere"), "Euler's formula is for polyhedra")
+    f, e, n = sd.counts
+    return [sp.Eq(FACES, f), sp.Eq(VERTICES, n), sp.Eq(FACES + VERTICES - EDGES, 2)]
+
+
+THEOREMS: dict[str, Callable[[Model, Uses], list[sp.Eq]]] = {
+    "angles_on_line": t_angles_on_line,
+    "angles_at_point": t_angles_at_point,
+    "vertically_opposite": t_vertically_opposite,
+    "angle_addition": t_angle_addition,
+    "triangle_angle_sum": t_triangle_angle_sum,
+    "quadrilateral_angle_sum": t_quadrilateral_angle_sum,
+    "polygon_interior_sum": t_polygon_interior_sum,
+    "polygon_exterior_sum": t_polygon_exterior_sum,
+    "isosceles_base_angles": t_isosceles_base_angles,
+    "equilateral_angles": t_equilateral_angles,
+    "exterior_angle_triangle": t_exterior_angle_triangle,
+    "alternate_angles": t_alternate_angles,
+    "corresponding_angles": t_corresponding_angles,
+    "cointerior_angles": t_cointerior_angles,
+    "pythagoras": t_pythagoras,
+    "perimeter": t_perimeter,
+    "area_rectangle": t_area_rectangle,
+    "area_triangle": t_area_triangle,
+    "area_parallelogram": t_area_parallelogram,
+    "area_trapezium": t_area_trapezium,
+    "area_circle": t_area_circle,
+    "circumference": t_circumference,
+    "area_composite": t_area_composite,
+    "distance_formula": t_distance_formula,
+    "midpoint_formula": t_midpoint_formula,
+    "gradient": t_gradient,
+    "line_equation": t_line_equation,
+    "parallel_gradients": t_parallel_gradients,
+    "perpendicular_gradients": t_perpendicular_gradients,
+    "reflection_rule": t_reflection_rule,
+    "translation_rule": t_translation_rule,
+    # v4
+    "rotation_rule": t_rotation_rule,
+    "sin_ratio": t_sin_ratio,
+    "cos_ratio": t_cos_ratio,
+    "tan_ratio": t_tan_ratio,
+    "angle_at_centre": t_angle_at_centre,
+    "angle_in_semicircle": t_angle_in_semicircle,
+    "angles_same_segment": t_angles_same_segment,
+    "cyclic_quadrilateral": t_cyclic_quadrilateral,
+    "tangent_radius": t_tangent_radius,
+    # v3: solids
+    "volume_cuboid": t_volume_cuboid,
+    "volume_prism": t_volume_prism,
+    "volume_cylinder": t_volume_cylinder,
+    "volume_pyramid": t_volume_pyramid,
+    "volume_cone": t_volume_cone,
+    "volume_sphere": t_volume_sphere,
+    "surface_area_cuboid": t_surface_area_cuboid,
+    "surface_area_cylinder": t_surface_area_cylinder,
+    "euler_solids": t_euler_solids,
+}
+
+# The reason an answer key prints for each theorem, English; other
+# languages go through maths.i18n when the document path is wired.
+def reason(theorem: str, lang: str | None = "en") -> str:
+    """The reason the answer key and the board print for a theorem, in the
+    lesson language (maths.i18n.REASONS); English is the reference and the
+    fallback. REASONS below stays the engine's own English table."""
+    from maths.i18n import reason_text
+
+    return reason_text(theorem, lang) or REASONS.get(theorem, theorem)
+
+
+REASONS: dict[str, str] = {
+    "angles_on_line": "angles on a straight line add up to 180°",
+    "angles_at_point": "angles at a point add up to 360°",
+    "vertically_opposite": "vertically opposite angles are equal",
+    "angle_addition": "the whole angle is the sum of its parts",
+    "triangle_angle_sum": "angles in a triangle add up to 180°",
+    "quadrilateral_angle_sum": "angles in a quadrilateral add up to 360°",
+    "polygon_interior_sum": "interior angles of an n-sided polygon add up to (n − 2) × 180°",
+    "polygon_exterior_sum": "exterior angles of a polygon add up to 360°",
+    "isosceles_base_angles": "base angles of an isosceles triangle are equal",
+    "equilateral_angles": "every angle of an equilateral triangle is 60°",
+    "exterior_angle_triangle": "the exterior angle of a triangle equals the sum of the two opposite interior angles",
+    "alternate_angles": "alternate angles are equal",
+    "corresponding_angles": "corresponding angles are equal",
+    "cointerior_angles": "co-interior angles add up to 180°",
+    "pythagoras": "Pythagoras' theorem",
+    "perimeter": "the perimeter is the sum of the sides",
+    "area_rectangle": "area of a rectangle = length × width",
+    "area_triangle": "area of a triangle = ½ × base × height",
+    "area_parallelogram": "area of a parallelogram = base × height",
+    "area_trapezium": "area of a trapezium = ½ × (a + b) × h",
+    "area_circle": "area of a circle = πr²",
+    "circumference": "circumference = 2πr",
+    "area_composite": "the area of a compound shape is the sum of its parts",
+    "distance_formula": "distance between two points: the square root of the sum of the squared differences in x and in y",
+    "midpoint_formula": "the midpoint averages the x-coordinates and the y-coordinates",
+    "gradient": "gradient = change in y ÷ change in x",
+    "line_equation": "a straight line is y = mx + c, with m the gradient and c the y-intercept",
+    "parallel_gradients": "parallel lines have equal gradients",
+    "perpendicular_gradients": "the gradients of perpendicular lines multiply to −1",
+    "reflection_rule": "a reflection keeps the distance to the mirror line and swaps the side",
+    "translation_rule": "a translation adds the same shift to the x-coordinate and to the y-coordinate",
+    "rotation_rule": "a quarter turn about the origin sends (x, y) to (-y, x); a half turn to (-x, -y)",
+    "sin_ratio": "in a right-angled triangle, sin of an angle is opposite over hypotenuse",
+    "cos_ratio": "in a right-angled triangle, cos of an angle is adjacent over hypotenuse",
+    "tan_ratio": "in a right-angled triangle, tan of an angle is opposite over adjacent",
+    "angle_at_centre": "the angle at the centre is twice the angle at the circumference on the same arc",
+    "angle_in_semicircle": "the angle in a semicircle is a right angle",
+    "angles_same_segment": "angles in the same segment are equal",
+    "cyclic_quadrilateral": "opposite angles of a cyclic quadrilateral add up to 180 degrees",
+    "tangent_radius": "a tangent meets the radius at the point of contact at a right angle",
+    "volume_cuboid": "the volume of a cuboid is length times width times height (a cube: edge cubed)",
+    "volume_prism": "the volume of a prism is the area of its cross-section times its length",
+    "volume_cylinder": "the volume of a cylinder is pi times the radius squared times the height",
+    "volume_pyramid": "the volume of a pyramid is a third of the base area times the height",
+    "volume_cone": "the volume of a cone is a third of pi times the radius squared times the height",
+    "volume_sphere": "the volume of a sphere is four thirds of pi times the radius cubed",
+    "surface_area_cuboid": "the surface area of a cuboid is the sum of its six faces: 2(lw + wh + lh)",
+    "surface_area_cylinder": "the surface area of a cylinder is two circles and the curved face: 2(pi)r(r + h)",
+    "euler_solids": "for any polyhedron, faces + vertices - edges = 2",
+}
+
+
+def apply(m: Model, theorem: str, uses: list[str]) -> list[sp.Eq]:
+    fn = THEOREMS.get(theorem)
+    if fn is None:
+        raise GeometryRefusal("theorem_unknown", f"{theorem!r} is not a theorem v1 knows")
+    return fn(m, sort_uses(m, uses, theorem))

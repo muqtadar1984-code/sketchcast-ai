@@ -152,6 +152,33 @@ def _record_coverage(sb: Client, generation_id: str, reports: list[dict]) -> Non
 TAIL_OVERRUN_BLOCKING_SECS = 1.5
 
 
+def overlap_details(report: dict, script_data: dict | None, limit: int = 40) -> list[dict]:
+    """Each TEXT_OVERLAP of the acceptance report as {scene, a, a_text, b,
+    b_text}: the two element ids resolved to what they say (a text's
+    text, a math element's expr) in the scene of the script that drew
+    them, so a failed lesson can be diagnosed from its row alone."""
+    out: list[dict] = []
+    scenes: dict[str, dict] = {}
+    for ep in ((script_data or {}).get("episodes") or []):
+        for seg in (ep.get("segments") or []) if isinstance(ep, dict) else []:
+            sid = str(seg.get("id") or seg.get("segment_id") or "")
+            els = ((seg.get("scene") or {}).get("elements") or []) if isinstance(seg, dict) else []
+            scenes[sid] = {str(e.get("id")): e for e in els if isinstance(e, dict)}
+    for entry in (report.get("overlapping_text") or [])[:limit]:
+        text = str(entry)
+        sid, _, rest = text.partition(": ")
+        pair = rest.replace("TEXT_OVERLAP", "").strip()
+        a, _, b = pair.partition("+")
+        els = scenes.get(sid, {})
+
+        def says(eid: str) -> str:
+            e = els.get(eid) or {}
+            return str(e.get("text") or e.get("expr") or "")[:80]
+
+        out.append({"scene": sid, "a": a, "a_text": says(a), "b": b, "b_text": says(b)})
+    return out
+
+
 def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
     """Run the visual-language acceptance check on a finished lesson.
 
@@ -264,7 +291,8 @@ def _acceptance_report(script_data: dict, video_manifest: dict) -> dict | None:
         plan_report = [str(ln) for ln in ((plan or {}).get("report") or [])]
         return {"passed": bool(report.get("passed")), "ship": not blocking,
                 "summary": summary, "report": report,
-                "plan_report": plan_report}
+                "plan_report": plan_report,
+                "overlaps": overlap_details(report, script_data)}
     except Exception:  # noqa: BLE001 — never fail a rendered lesson on the checker
         logger.exception("acceptance check itself failed; lesson allowed through")
         return None
@@ -742,6 +770,27 @@ def _sibling_video_segments(sb: Client, gen: dict) -> list[dict]:
         return []
 
 
+def _sibling_maths_lesson(sb: Client, gen: dict) -> Optional[dict]:
+    """The sibling video's maths lesson (its verified worked examples, each
+    figure example with its spec), from the same script_json the pictures
+    come from. None when there is no finished sibling or it is not maths."""
+    sib = _sibling_presentation(sb, gen)
+    if not sib or str(sib.get("status") or "") != "done":
+        return None
+    try:
+        res = (sb.table("artifacts").select("storage_path").eq("generation_id", str(sib["id"]))
+               .eq("kind", "script_json").execute())
+        for path in sorted(str(r.get("storage_path") or "") for r in (getattr(res, "data", None) or [])):
+            body = json.loads(sb.storage.from_("artifacts").download(path))
+            script = body.get("script") if isinstance(body, dict) and isinstance(body.get("script"), dict) else body
+            lesson = ((script or {}).get("maths") or {}).get("lesson") if isinstance(script, dict) else None
+            if isinstance(lesson, dict) and lesson.get("examples"):
+                return lesson
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("deck %s: could not read the video's maths lesson (%s)", gen.get("id"), exc)
+    return None
+
+
 def _find_segments(o):
     if isinstance(o, dict):
         if isinstance(o.get("segments"), list):
@@ -762,7 +811,7 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
                    analysis: dict, client, params: dict, branding: dict, lesson_lang: str,
                    lesson_dir: str, tmp: str | Path, base: str, unit_label: str,
                    catalogue=None, video_segments: Optional[list] = None,
-                   art_context: Optional[dict] = None) -> str:
+                   art_context: Optional[dict] = None, maths_lesson: Optional[dict] = None) -> str:
     """The 'deck' generation kind: author the slides, render them, build the
     .pptx, upload it. Returns the generation title.
 
@@ -813,6 +862,13 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
         article = author_article(book, chapter, analysis, client, params or {}, lesson_lang,
                                  title=unit_label)
         model = dg.model_from_book_article(article)
+        if maths_lesson:
+            # a maths chapter: the lesson's VERIFIED worked examples, each
+            # figure example with the engine's own picture, in place of the
+            # article's prose ones
+            n_ex = dg.apply_maths_lesson(model, maths_lesson, Path(tmp) / "deck", lesson_lang)
+            logger.info("deck %s: %d verified maths example(s), %d with a figure", generation_id, n_ex,
+                        len(model.worked_figures))
         deck_art.decorate(model, sb=sb, tmp=Path(tmp) / "deck", video_segments=video_segments,
                           context=art_context or deck_art.book_context(book, unit_label, analysis),
                           job_id=job_id, exclude_job_id=job_id)
@@ -1984,6 +2040,11 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                             "passed": _accept["passed"],
                             "ship": _accept["ship"],
                             "summary": _accept["summary"],
+                            # the pairs, with what each element SAYS: the
+                            # chapter-17 probe (2026-10-08) failed on
+                            # overlapping_text twice and the pairs were only
+                            # in a log that lagged the worker by 12 minutes
+                            "overlaps": _accept.get("overlaps") or [],
                         },
                         f"visual_plan_report_part{part_idx}":
                             (_accept.get("plan_report") or [])[:200],
@@ -2236,7 +2297,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         # as the cumulative exam: the answer key restates the paper.
         try:
             _doc_report = _coverage_report(
-                analysis, None, coverage.docx_text(paths[0]),
+                analysis, None, coverage.document_text(paths[0]),
                 kind=kind, model=gen_client.model,
             )
             _record_coverage(sb, generation_id, [_doc_report])
@@ -2320,7 +2381,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         # measured; the answer key restates it.
         try:
             _record_coverage(sb, generation_id, [_coverage_report(
-                analysis, None, coverage.docx_text(paths[0]),
+                analysis, None, coverage.document_text(paths[0]),
                 kind="exam", model=gen_client.model,
             )])
         except Exception as exc:  # noqa: BLE001
@@ -2360,10 +2421,18 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         else:
             from agent5_slides.deck_art import book_context as _book_ctx
             _art_ctx = _book_ctx(book, chapter_title, analysis)
+        # The subject profile for a DECK, resolved here the way the documents
+        # resolve `_doc_profile` above. `profile` is bound in the presentation
+        # branch only; reading it here raised UnboundLocalError on every deck
+        # job after #167 (2026-10-08) — the function shares one scope, so a
+        # name a sibling branch assigns is unbound, not undefined.
+        from shared import subject_profile as _sp
+        _deck_profile = _sp.resolve(book.get("subject"), params=gen.get("params") or {})
         title = _generate_deck(
             sb, job_id, generation_id, book, chapter, analysis, gen_client,
             gen.get("params") or {}, branding, lesson_lang, lesson_dir, tmp, base, _unit,
             catalogue=catalogue, video_segments=_video_segs, art_context=_art_ctx,
+            maths_lesson=_sibling_maths_lesson(sb, gen) if _deck_profile.worked_examples else None,
         )
         for _k, _v in gen_client.session_usage.items():
             client.session_usage[_k] = client.session_usage.get(_k, 0) + _v

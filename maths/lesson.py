@@ -26,6 +26,8 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
+import re
 import uuid
 from datetime import datetime
 
@@ -34,13 +36,20 @@ from agent3_scripts.script_generator import _build_episode_context
 from maths import board
 from maths.schema import (EXAMPLE_SCHEMA, LESSON_SCHEMA, DIFFICULTY_NAMES, Lesson, Line, TryIt,
                           WorkedExample, parse_example, parse_lesson)
+from maths.geometry.errors import GeometryRefusal
+from maths.geometry.items import GeometryItem, _pretty_line, figure_client, geometry_items, key_lines
+from maths.i18n import board_text as _board_text
+from maths.schema import Step, TryIt, WorkedExample
 from maths.verify import verify_example, verify_lesson, verify_try_it
+from maths.charts import chart_for
+from shared import coverage as _coverage
 from shared import lesson_length
 
 logger = logging.getLogger("worker")
 
 REGEN_ATTEMPTS = 2
 MIN_EXAMPLES = 2
+FIGURE_EXAMPLES = 2      # figure examples asked of the geometry engine's call, per lesson
 MAX_TOKENS = 20000
 JOB_KIND = "maths_lesson"
 
@@ -82,11 +91,14 @@ _STEP_RULES = """=== STEPS ===
 Each step is ONE operation, machine-checkable:
   - kind "transform": 'before' is the current state, 'after' is the state after ONE valid operation (subtract 5 from both sides; divide by 3; expand the bracket; collect like terms; factorise; add the equations). The two states MUST be mathematically equivalent (same solutions). 'operation' names the operation in at most six words. 'explanation' is a short board note (at most six words), e.g. "subtract 5 from both sides".
   - kind "setup": introducing a variable, translating words into an equation ("let x be the number of tickets"), or bringing in a relation the problem's words supply — a theorem or a formula (Pythagoras: "c^2 = a^2 + b^2"; an area formula); 'after' is the equation(s) written down, and any given value still needed ("a = 3", "b = 4") stays in 'after' until a step uses it. Use for word problems and for formula problems.
+  - A point that MOVES (a translation "slide 4 right and 1 down", a reflection) is a NEW point, not a new state of the old one: write the new coordinates as a "setup" step ("x' = 2 + 4", "y' = 2 - 1") or, on a figure, a "deduce" step citing translation_rule / reflection_rule — NEVER as a "transform" of the old point's lines ('x = 2' -> 'x = 6' is not an equivalent state and is refused).
   - a step that keeps only SOME solutions (a negative root for a length) must say why in 'operation': "reject the negative root: c is a length".
   - kind "check": substituting the answer back: 'after' is a TRUE numeric statement like "3*5 + 5 = 20" with no variables left.
   - task evaluate (substitution): 'givens' is the expression and then each given value as its own line ("3x + 7", "x = 4"); the first transform substitutes the values ("3(4) + 7"), later steps work it out ("12 + 7" -> "19"); 'final_answer' is the value alone ("19"). Never give the expression a name ("E = 3x + 7"); the 'check' step does not apply.
   - kind "round" (tasks round and estimate ONLY): 'after' is 'before' with its numbers replaced by their roundings and NOTHING else changed ("7583 + 3421" -> "8000 + 3000"; "x = 17173" -> "x = 17000"); 'precision' says what they were rounded to, machine-readable: a unit ("1000", "100", "0.01", "nearest thousand"), "2 dp" or "1 sf". Round half up (17500 -> 18000). Never round inside a "transform" step, and never write ≈.
   - DATA tasks (mean, median, mode, range): 'givens' is the data list. The first transform step turns the list into the statistic as an expression of the data — mean: "4, 8, 6, 10, 12" -> "(4 + 8 + 6 + 10 + 12)/5"; range: -> "12 - 4"; median: first a step whose 'after' is the SAME numbers sorted ("2, 3, 3, 3, 5, 7, 9"), then the middle value ("3") or the mean of the middle two ("(10 + 15)/2"); mode: -> the value(s) occurring most often ("3", or "2, 3" for two modes). Later steps work the expression out as usual ("40/5" -> "8"). 'final_answer' is the exact value ("8", or "mean = 8"); never a rounded one.
+  - task "line" (a STRAIGHT LINE: its gradient, its y-intercept, its x-intercept, or its equation — from points, from an equation, from a parallel or perpendicular line): 'givens' are the line's FACTS, one per string — a point as "(2, 3)" (or "A = (2, 3)", "(x1, y1) = (2, 3)"), an equation "3x - 2y = 12", a gradient "m = 3", an intercept "c = -1" or "x-intercept = 4", a reference line "parallel to y = 4x - 5" or "perpendicular to 2y = 4x + 6". 'target' says what is asked: "equation", "m", "c", "x-intercept" or "m, c". Steps use m and c for the gradient and the y-intercept and x1, y1, x2, y2 for the points' coordinates ("m = (y2 - y1)/(x2 - x1)" -> "m = (8 - 2)/(3 - 1)" -> "m = 3"; "y = mx + c" -> "5 = 3(2) + c" -> "c = -1" -> "y = 3x - 1"); an intercept is found by writing the other coordinate as 0 ("4x + 3(0) = 12"). Each step must FOLLOW from the givens and the line before. 'final_answer' is the equation ("y = 3x - 1"), or "m = 3", "c = -1", "x = 3" as asked. Lines are never vertical.
+  - π: write "pi". An answer may stay in terms of π ("90pi"). To work in decimals, declare the approximation as its own line among the givens — "pi = 3.14" or "pi = 22/7" — and substitute that value in a transform step; the verifier reads the line as the declared value (22/7, 3.14, 3.142, 3.1416 and 3.14159 are accepted, nothing cruder), and a decimal answer may be that value rounded to 2 decimal places.
   - 'before' of each step equals the 'after' of the previous step. The first step's 'before' is the problem's givens.
   - 'speech': what the teacher SAYS for this step, in words a voice can read — never symbols: say "x squared", "three x plus five equals twenty", "x over two". Two or three sentences: what we do, why, and what we get.
   - 'student' (optional): a short line from the student — a genuine question, a "so x is 5?", a likely misconception — used sparingly, never on every step."""
@@ -100,10 +112,10 @@ _LADDER = """=== THE LESSON (fixed blueprint — do not reorder) ===
    - 3 "difficult": multi-step; combines this topic with an earlier one, or a word problem that must be translated first (use a "setup" step).
    - 4 "extremely difficult": exam-style at this level, needing an insight. Include 'common_mistake' here: a tempting WRONG route from a real state of THIS example ('from_state' -> 'wrong_state' that is NOT equivalent), 'why_wrong' in at most ten words, and 'speech' explaining it in words.
    {difficulty_note}
-   Every example: 'label' ("Example 1"), 'task' (solve | solve_system | solve_inequality | simplify | expand | factorise | evaluate | round | estimate | mean | median | mode | range — round: round a number, the working is one 'round' step; estimate: round the numbers first, then work the rounded expression out in 'transform' steps; the final_answer of both is the rounded value; mean/median/mode/range: the givens are a data list, see STEPS), 'problem' (as the student reads it: notation, or the word problem in words), 'givens' (the equations or expression the working starts from, in notation), 'target' ("x", "x, y" or "expression"), 'intro_speech' (the teacher introducing the example, in words), optional 'student_question', the 'steps', 'final_answer' (one relation or expression per string), 'answer_speech'.
+   Every example: 'label' ("Example 1"), 'task' (solve | solve_system | solve_inequality | simplify | expand | factorise | evaluate | round | estimate | mean | median | mode | range | line — line: a straight line's gradient, intercept or equation, see STEPS; round: round a number, the working is one 'round' step; estimate: round the numbers first, then work the rounded expression out in 'transform' steps; the final_answer of both is the rounded value; mean/median/mode/range: the givens are a data list, see STEPS), 'problem' (as the student reads it: notation, or the word problem in words), 'givens' (the equations or expression the working starts from, in notation), 'target' ("x", "x, y" or "expression"), 'intro_speech' (the teacher introducing the example, in words), optional 'student_question', the 'steps', 'final_answer' (one relation or expression per string), 'answer_speech'.
    Examples 1-3 stay clean and progressive: no wrong routes there.
 4. recap: 2-4 spoken lines restating the method, and 'misconceptions': 1-3 board points naming the mistakes students make most (at most ten words each).
-5. try_it: one problem for the student to pause on (difficulty like example 2): 'problem' (the notation itself and nothing before it — no "the expression", no "factorise": those words go in 'speech'), 'answer' (notation), 'speech' (the teacher setting it and telling the learner to pause the video and try it, in words), then — because the video resumes by solving it on the board — 'solution_speech' (one sentence resuming after the pause, e.g. inviting the learner to compare their working), 'steps' (2-4 steps in exactly the format of an example's steps) and 'answer_speech'.
+5. try_it: one problem for the student to pause on (difficulty like example 2): 'problem' (the notation itself and nothing before it — no "the expression", no "factorise": those words go in 'speech'), 'answer' (notation), 'speech' (the teacher setting it and telling the learner to pause the video and try it, in words), then — because the video resumes by solving it on the board — 'solution_speech' (one sentence resuming after the pause, e.g. inviting the learner to compare their working), 'steps' (2-4 steps in exactly the format of an example's steps) and 'answer_speech'. A straight-line try-it also carries 'task': "line", its facts in 'givens' and what is asked in 'target', exactly as a line example does.
 6. closing: one or two spoken sentences ending the lesson: the teacher hopes the learner now understands {topic} better and encourages a little practice.
 Keep every spoken line natural, in {language}, for a learner of {level}. {length_rule}"""
 
@@ -247,6 +259,148 @@ def regenerate_example(client, prompt: str) -> WorkedExample:
     return parse_example(_analyze(client, prompt, EXAMPLE_SCHEMA, 8000))
 
 
+# ── figure examples (geometry.figure.v1) ─────────────────────────────────
+
+
+def figures_enabled() -> bool:
+    """MATHS_FIGURES=0 turns the figure examples off without a deploy."""
+    return os.environ.get("MATHS_FIGURES", "1").strip().lower() not in ("0", "false", "off", "no")
+
+
+def _num(v) -> str:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    return str(int(round(f))) if abs(f - round(f)) < 1e-9 else f"{f:.2f}".rstrip("0").rstrip(".")
+
+
+def _plain_value(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (list, set, tuple)):
+        return ", ".join(str(x) for x in sorted(v, key=str))
+    if isinstance(v, dict):
+        return "; ".join(f"{k}: {_plain_value(x)}" for k, x in v.items())
+    return _num(v) if isinstance(v, (int, float)) else str(v)
+
+
+_ANGLE_NAME = re.compile("\u2220([a-z0-9]+)")
+
+
+def _board_line(x) -> str:
+    """A figure step's line as the board writes it: ang(abc) -> \u2220ABC.
+    The verifier re-reads the SPEC's own lines, never these."""
+    return _ANGLE_NAME.sub(lambda m: "\u2220" + m.group(1).upper(), _pretty_line(str(x)))
+
+
+def figure_example(item: GeometryItem) -> WorkedExample:
+    """A verified figure question as a worked example. A reasoning question
+    keeps its deduce / transform steps (with their speech) and answers with
+    what the chain PROVED; an evidence question becomes one observation step
+    per figure saying what the ENGINE computed for it, in the order the
+    question asks them, closing on the computed selection."""
+    spec, rep, speech = item.spec, item.report, item.speech
+    labels = {f["id"]: f.get("label") or f["id"] for f in spec.get("figures") or []}
+    steps: list[Step] = []
+    if item.role == "reasoning":
+        for st in spec.get("steps") or []:
+            kind = st.get("kind") or "transform"
+            steps.append(Step(kind=kind if kind in ("deduce", "transform", "setup", "check") else "transform",
+                              theorem=st.get("theorem") or "", uses=list(st.get("uses") or []),
+                              before=[_board_line(x) for x in (st.get("before") or [])],
+                              after=[_board_line(x) for x in (st.get("after") or [])],
+                              speech=st.get("speech") or "", figure_ops=list(st.get("figure_ops") or [])))
+        final = [f"{k} = {_num(v)}" for k, v in rep.proved.items()]
+        target = ", ".join(rep.proved) or "x"
+    else:
+        asks = spec.get("asks") or ((spec.get("parts") or [{}])[0].get("asks")) or {}
+        prop = str(asks.get("property") or "")
+        values = rep.computed.get(prop) or {}
+        obs = speech.get("observations") or {}
+        over = list(asks.get("over") or list(labels))
+        for fid in over:
+            lab = labels.get(fid, fid)
+            value = values.get(lab, values.get(fid))
+            # one figure: the value alone ("6"), not "A: 6" — the label names
+            # nothing the student can confuse it with (live demo a13f7761)
+            line = _plain_value(value) if len(over) == 1 else f"{lab}: {_plain_value(value)}"
+            ops = [{"op": "highlight", "target": fid}]
+            if prop == "lines_of_symmetry":
+                ops.append({"op": "show_symmetry", "target": fid})   # the mirror lines, drawn
+            # a one-figure evidence item the model sent without an observation
+            # (chapter-17 probe, 2026-10-08): its own answer speech says what is
+            # read and what it is — better than losing the example
+            fallback = item.speech.get("answer", "") if len(over) == 1 else ""
+            steps.append(Step(kind="deduce", uses=[fid], after=[line],
+                              speech=obs.get(fid) or obs.get(lab) or fallback or "", figure_ops=ops))
+        final = [ln.split(": ", 1)[-1] for ln in key_lines(item, reasons=False)][:1]
+        target = prop
+    if not steps:
+        raise GeometryRefusal("bad_schema", "a lesson example has steps to teach")
+    if not any(st.speech for st in steps):
+        raise GeometryRefusal("bad_schema", "a lesson example speaks its steps")
+    return WorkedExample(label="", difficulty=item.difficulty, task="solve", problem=item.prompt, givens=[],
+                         target=target, intro_speech=speech.get("intro") or "", steps=steps, final_answer=final,
+                         answer_speech=speech.get("answer") or "", figure=spec)
+
+
+def missed_concepts(lesson: Lesson, examples: list[WorkedExample], analysis: dict | None, episode: dict | None,
+                    language: str) -> list[str]:
+    """The chapter's concepts the lesson, with THESE examples, does not yet
+    address — measured the way the coverage gate measures a script, on the
+    words the board would speak and show. Nothing to measure against (no
+    analysis) is an empty list, never a guess."""
+    if not analysis:
+        return []
+    try:
+        tmp = lesson.model_copy()
+        tmp.examples = list(examples)
+        text = _coverage.script_text({"segments": board.compile_lesson(tmp, None, language=language)})
+        rep = _coverage.measure(analysis, episode, text)
+    except Exception as exc:  # noqa: BLE001 — a focus list is a hint, never a reason to fail the lesson
+        logger.warning("maths lesson %r: could not measure the missed concepts: %s", lesson.topic, exc)
+        return []
+    return [str(x) for x in (rep.get("missed") or []) if str(x).strip()] if rep.get("checked") else []
+
+
+def figure_try_it(ex: WorkedExample, language: str) -> TryIt:
+    """A verified figure example as the learner's try-it: the teacher reads
+    the diagram (the item's intro) and asks for the pause; after it the
+    item's own steps are taught."""
+    invite = _board_text("pause_line", language)
+    speech = f"{ex.intro_speech.rstrip('.')}. {invite}." if ex.intro_speech else ""
+    return TryIt(problem=ex.problem, answer=list(ex.final_answer), speech=speech, solution_speech="",
+                 steps=list(ex.steps), answer_speech=ex.answer_speech, figure=ex.figure)
+
+
+def figure_examples(client, *, topic: str, level: str | None, language: str, context: str, n: int,
+                    report: dict, focus: list[str] | None = None) -> list[WorkedExample]:
+    """Up to ``n`` figure examples from the geometry engine's own call —
+    unconstrained JSON on the script model, the shape the worksheet already
+    yields from (the lesson's constrained call strips construction
+    parameters) — each compiled onto the board once to prove it fits. The
+    call's report (asked / verified / rejected) lands in ``report``."""
+    items, frep = geometry_items(figure_client(client, language), topic=topic, level=level, language=language,
+                                 n=n, chapter_context=context, kind="lesson", render=False, focus=focus)
+    frep["focus"] = list(focus or [])
+    out: list[WorkedExample] = []
+    for it in items:
+        try:
+            ex = figure_example(it)
+            board.check_figure_example(ex, language)
+        except (GeometryRefusal, ValueError) as exc:
+            code = getattr(exc, "code", "board")
+            msg = getattr(exc, "message", str(exc))
+            logger.info("figure example rejected at the board (%s): %r — %s", code, it.prompt[:60], msg[:200])
+            frep["rejected"] = list(frep.get("rejected") or []) + [f"{it.prompt[:60]}: {code}: {msg[:200]}"]
+            continue
+        out.append(ex)
+    frep["verified"] = len(out)
+    report.update(frep)
+    return out
+
+
 def _verify_examples(client, examples: list[WorkedExample], lesson: Lesson, language: str, attempts: int,
                      history: list[dict], dropped: list[str]) -> list[WorkedExample]:
     """Verify each example, regenerate ONLY the ones that fail with the
@@ -271,6 +425,9 @@ def _verify_examples(client, examples: list[WorkedExample], lesson: Lesson, lang
             rep = verify_example(ex)
             history.append({"label": ex.label, "attempt": tries, **rep.to_dict()})
         if rep.status == "verified":
+            # the engine's chart of a plottable example, from the givens and
+            # the proved answer — never from the model (maths/charts.py)
+            ex.chart = chart_for(ex)
             kept.append(ex)
         else:
             dropped.append(f"{ex.label or 'example'}: {'; '.join(rep.reasons)[:300]}")
@@ -322,7 +479,8 @@ def extend_to_floor(client, lesson: Lesson, report: dict, *, minutes: float, ava
 
 def verified_lesson(client, *, topic: str, subject: str | None, level: str | None, curriculum: str | None,
                     language: str, episode_context: str, attempts: int = REGEN_ATTEMPTS,
-                    min_minutes: float | None = None) -> tuple[Lesson, dict]:
+                    min_minutes: float | None = None, analysis: dict | None = None,
+                    episode: dict | None = None) -> tuple[Lesson, dict]:
     """Generate, verify, regenerate what failed, and return the lesson with
     its report. Raises MathsVerificationError when too little survives."""
     prompt = build_prompt(topic=topic, subject=subject, level=level, curriculum=curriculum,
@@ -335,13 +493,47 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
     history: list[dict] = []
     dropped: list[str] = []
     kept = _verify_examples(client, lesson.examples, lesson, language, attempts, history, dropped)
-    if len(kept) < MIN_EXAMPLES:
+    # the diagram examples: a chapter that has none answers with an empty
+    # list (the engine's prompt says so); a shapes chapter opens on a shape
+    figures_report: dict = {}
+    # the figure call is told which of the chapter's concepts the verified
+    # ladder leaves untaught (a13f7761: three triangle questions, no polygon)
+    focus = missed_concepts(lesson, kept, analysis, episode, language) if figures_enabled() else []
+    # one item more than the examples: a third verified figure is the
+    # learner's try-it — on a shapes chapter the pause is on a shape
+    figures = figure_examples(client, topic=topic, level=level, language=language, context=episode_context,
+                              n=FIGURE_EXAMPLES + 1, report=figures_report, focus=focus) if figures_enabled() else []
+    figure_pause: TryIt | None = None
+    if len(figures) > FIGURE_EXAMPLES:
+        candidate = figure_try_it(figures[FIGURE_EXAMPLES], language)
+        try:
+            board.check_figure_try_it(candidate, language)
+            figure_pause = candidate
+        except (GeometryRefusal, ValueError) as exc:
+            logger.info("figure try-it rejected at the board (%s): %s", getattr(exc, "code", "board"),
+                        getattr(exc, "message", str(exc))[:200])
+        figures = figures[:FIGURE_EXAMPLES]
+    if figures_enabled():
+        figures_report["try_it"] = figure_pause is not None
+    if len(kept) + len(figures) < MIN_EXAMPLES:
         raise MathsVerificationError(
             f"only {len(kept)} of {len(lesson.examples)} worked examples could be verified after "
-            f"{attempts} regeneration(s) each — {' | '.join(dropped)[:1500]}")
-    for i, ex in enumerate(kept, 1):
-        ex.label = ex.label or f"Example {i}"
-    lesson.examples = kept
+            f"{attempts} regeneration(s) each"
+            + (f" and {len(figures)} figure example(s) survived" if figures_enabled() else "")
+            + f" — {' | '.join(dropped)[:1500]}")
+    if figures:
+        # one ladder, by difficulty, figures first among equals; relabelled
+        # in the order they are taught
+        merged = sorted(figures + kept, key=lambda e: e.difficulty)[:4]
+        for i, ex in enumerate(merged, 1):
+            ex.label = f"Example {i}"
+        lesson.examples = merged
+    else:
+        for i, ex in enumerate(kept, 1):
+            ex.label = ex.label or f"Example {i}"
+        lesson.examples = kept
+    if figure_pause is not None:
+        lesson.try_it = figure_pause
     t = verify_try_it(lesson.try_it)
     # the try-it is TAUGHT on the board after the pause, so "could not be
     # verified" is as fatal as "wrong" — a try-it the verifier cannot read
@@ -353,6 +545,7 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
     report = verify_lesson(lesson)
     report["dropped"] = dropped
     report["history"] = history
+    report["figures"] = figures_report
     return lesson, report
 
 
@@ -402,7 +595,8 @@ def generate_maths_script(episode: dict, analysis: dict, chapter_num: int, clien
                 f"teach ONLY this part's topic as a complete lesson of its own.")
     lesson, report = verified_lesson(
         client, topic=topic, subject=subject, level=learner_age, curriculum=curriculum,
-        language=language, episode_context=ctx, min_minutes=min_minutes)
+        language=language, episode_context=ctx, min_minutes=min_minutes,
+        analysis=analysis if isinstance(analysis, dict) else None, episode=episode)
     lesson, report = extend_to_floor(client, lesson, report, minutes=min_minutes or 0.0, avatars=avatars,
                                      language=language)
     n_ok = sum(1 for e in report.get("examples", []) if e.get("status") == "verified")
@@ -414,6 +608,7 @@ def generate_maths_script(episode: dict, analysis: dict, chapter_num: int, clien
 
 
 __all__ = ["MathsVerificationError", "build_prompt", "build_regen_prompt", "build_extend_prompt",
+           "figure_example", "figure_examples", "figure_try_it", "figures_enabled", "missed_concepts", "FIGURE_EXAMPLES",
            "generate_lesson", "regenerate_example", "verified_lesson", "extend_to_floor", "measure_lesson",
            "to_episode_script", "generate_maths_script", "REGEN_ATTEMPTS", "MIN_EXAMPLES",
            "MAX_LENGTH_ROUNDS", "MAX_EXAMPLES_PER_ROUND", "EXTENSION_SCHEMA"]

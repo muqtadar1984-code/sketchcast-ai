@@ -99,6 +99,11 @@ def _hand_face(size: int):
 _HAND_CMAP: frozenset | None = None
 
 
+# maths signs above the punctuation ceiling that Caveat draws (checked
+# glyph by glyph, 2026-10-09): minus, not-equal, approximately, ≤, ≥
+_HAND_MATHS = frozenset({0x2212, 0x2260, 0x2248, 0x2264, 0x2265})
+
+
 def _hand_covers(sample: str) -> bool:
     """Whether the handwriting face has a glyph for every character of
     ``sample``. This used to be ``ord(c) <= 0x2014``, which let Devanagari
@@ -112,11 +117,14 @@ def _hand_covers(sample: str) -> bool:
             from fontTools.ttLib import TTFont
             _HAND_CMAP = frozenset(TTFont(str(_HAND_TTF)).getBestCmap().keys())
         except Exception:  # noqa: BLE001
-            _HAND_CMAP = frozenset(range(0x20, 0x250)) | frozenset(range(0x2000, 0x2070))
+            _HAND_CMAP = frozenset(range(0x20, 0x250)) | frozenset(range(0x2000, 0x2070)) | _HAND_MATHS
     # the 0x2014 ceiling stays: smart punctuation is folded to ASCII
     # before the face is chosen (ascii_punct), and a line that still
     # carries it must not slip into the hand face as a mixed-typeface bubble
-    return all((ord(c) in _HAND_CMAP and ord(c) <= 0x2014) or c.isspace() for c in sample)
+    # — except the maths signs the face DOES carry (≤ ≥ − ≠ ≈): a chart's
+    # caption "x ≥ 2 on the number line" dropped whole to the sans face
+    # for its one sign (algebra charts, 2026-10-09)
+    return all((ord(c) in _HAND_CMAP and (ord(c) <= 0x2014 or ord(c) in _HAND_MATHS)) or c.isspace() for c in sample)
 
 
 def _script_runs(disp: str) -> list[str]:
@@ -179,7 +187,7 @@ _ZOOM_FIT_MARGIN = 0.92
 _ZOOM_MIN_WORTH = 1.08
 from .geometry import (Point, bbox, cut_at_fraction, ease, ellipse_path,
                        path_length, underline_path)
-from .paper import PALETTE, make_background, role_color
+from .paper import CELL_FILLS, PALETTE, make_background, role_color
 from .pen import PenSprite, resolve_mode
 from .schema import (WORLD_H, WORLD_W, AnchorRef, ArrowElement, GroupElement,
                      IllustrationElement, MathElement, ParticleGroupElement, Scene,
@@ -349,6 +357,12 @@ def _region_ordered_trace(trace: list, regions: dict, order: list[str]
         new_trace.extend(pts)
         pos += len(pts)
     return new_trace, spans
+
+
+def _true_ellipse(cx: float, cy: float, rx: float, ry: float, n: int = 72) -> list:
+    """An exact ellipse as a closed polyline (an `exact` shape: no wobble)."""
+    return [(cx + rx * math.cos(2 * math.pi * i / n), cy + ry * math.sin(2 * math.pi * i / n))
+            for i in range(n + 1)]
 
 
 def _seed(s: str) -> int:
@@ -1883,21 +1897,30 @@ class SceneRenderer:
         return (px + spec.dx, py + spec.dy)
 
     def _bind_shape(self, el: ShapeElement, b: Bound) -> None:
+        from .geometry import resample, roughen
         if el.shape == "ellipse":
-            pts = ellipse_path(el.center[0], el.center[1], el.rx, el.ry,
-                               seed=_seed(el.id))
+            if el.exact:
+                pts = _true_ellipse(el.center[0], el.center[1], el.rx, el.ry)
+            else:
+                pts = ellipse_path(el.center[0], el.center[1], el.rx, el.ry,
+                                   seed=_seed(el.id))
         else:
             pts = [tuple(p) for p in el.points]
             if el.closed and pts[0] != pts[-1]:
                 pts.append(pts[0])
-            # author paths are geometric; the wobble that makes them read as
-            # hand-drawn is applied here, deterministically per element
-            from .geometry import resample, roughen
-            pts = roughen(resample(pts, 7.0), amplitude=1.0, wobble=2.2,
-                          seed=_seed(el.id))
+            if el.exact:
+                # a geometric figure: the points stay exactly where the
+                # author put them; resampled only so the pen's frontier
+                # advances smoothly along the stroke
+                pts = resample(pts, 7.0)
+            else:
+                # author paths are geometric; the wobble that makes them read
+                # as hand-drawn is applied here, deterministically per element
+                pts = roughen(resample(pts, 7.0), amplitude=1.0, wobble=2.2,
+                              seed=_seed(el.id))
         fill = None
-        if el.fill == "paper":
-            fill = "paper"
+        if isinstance(el.fill, str):
+            fill = el.fill            # "paper", or a named cell colour
         elif el.fill:
             fill = "accent_mist"
         b.layers = [BLayer("shape", [
@@ -2686,7 +2709,7 @@ class SceneRenderer:
                 if stx.fill and frac >= 1.0 and len(spts) > 2:
                     # paper fill is near-opaque (it exists to OCCLUDE the busy
                     # board under a speech bubble); accent washes stay faint
-                    fa = 242 if stx.fill == "paper" else 90
+                    fa = 242 if stx.fill == "paper" else (225 if stx.fill in CELL_FILLS else 90)
                     d.polygon(spts, fill=PALETTE.get(stx.fill, PALETTE["accent_mist"]) + (int(fa * alpha),))
                 self._polyline(d, spts, max(1, round(stx.width * ecam.scale * SS * s.pulse)), col)
             if b.text is not None and s.text_frac > 0:

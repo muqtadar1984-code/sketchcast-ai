@@ -32,7 +32,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from shared.lesson_model import LessonModel, from_analysis, from_article
+from shared.lesson_model import Figure, LessonModel, from_analysis, from_article
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,112 @@ def model_from_book_article(article: dict) -> LessonModel:
 def model_from_script(analysis: dict, deck_script: dict,
                       extras: Optional[dict] = None, language: Optional[str] = None) -> LessonModel:
     return from_analysis(analysis, deck_script, extras, language)
+
+
+def _solution_md(ex: dict, language: str) -> str:
+    """A verified example's working as slide text: one bullet per line of
+    working, a deduce line with its theorem's reason, then the answer."""
+    from maths.geometry.items import _pretty_line
+    from maths.geometry.theorems import reason
+    from maths.pretty import pretty
+
+    figure = bool(ex.get("figure"))
+    lines: list[str] = []
+    for st in ex.get("steps") or []:
+        after = [str(x) for x in (st.get("after") or []) if str(x).strip()]
+        if not after:
+            continue
+        text = "; ".join(_pretty_line(x) if figure else pretty(x) for x in after)
+        if st.get("kind") == "deduce" and st.get("theorem"):
+            text = f"{text}  ({reason(str(st['theorem']), language)})"
+        elif st.get("explanation") or st.get("operation"):
+            text = f"{text}  ({st.get('explanation') or st.get('operation')})"
+        lines.append(f"- {text}")
+    answer = ", ".join(str(a) for a in (ex.get("final_answer") or []) if str(a).strip())
+    if answer:
+        lines.append("")
+        lines.append(pretty(answer) if not figure else answer)
+    return "\n".join(lines)
+
+
+def _figure_png(ex: dict, out: Path, caption: str):
+    """The engine's picture of a figure example (metric — a worked example
+    is taught, not measured), as a Figure, or None when it cannot be drawn."""
+    from maths.geometry import verify_question
+    from maths.geometry.items import GeometryItem, quiz_image, render_item
+
+    spec = ex.get("figure") or {}
+    rep_ = verify_question(spec)
+    if not rep_.ok:
+        return None
+    item = GeometryItem(str(spec.get("id") or "q"), caption, str(spec.get("figure_role") or "reasoning"),
+                        int(ex.get("difficulty") or 1), spec, rep_)
+    render_item(item)
+    if item.key_images:
+        item.images = item.key_images     # metric, not the schematic a student answers from
+    png = quiz_image(item, max_px=1200)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(png)
+    from PIL import Image
+
+    with Image.open(out) as im:
+        w, h = im.size
+    return Figure(key=out.stem, caption=caption, png=out, w=float(w), h=float(h))
+
+
+def _chart_png(chart: dict, out: Path, caption: str):
+    """The engine's chart of an algebra example (maths/charts.py: the lines
+    and the solution point) as a Figure, or None when it cannot be drawn."""
+    from maths.charts import chart_image
+
+    img = chart_image(chart)
+    if img is None:
+        return None
+    png, _w_mm = img
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(png)
+    from PIL import Image
+
+    with Image.open(out) as im:
+        w, h = im.size
+    return Figure(key=out.stem, caption=caption, png=out, w=float(w), h=float(h))
+
+
+def apply_maths_lesson(model: LessonModel, lesson: dict, tmp: Path, language: str = "en",
+                       limit: int = 3) -> int:
+    """A maths chapter's deck teaches the lesson's VERIFIED worked examples
+    (the sibling video's), not the article's prose ones; a figure example
+    brings the picture the geometry engine drew. Returns how many were
+    placed; a lesson without examples leaves the model as it was."""
+    examples = [e for e in (lesson or {}).get("examples") or [] if isinstance(e, dict) and e.get("problem")]
+    if not examples:
+        return 0
+    model.worked_examples = []
+    model.worked_figures = {}
+    for i, ex in enumerate(examples[:limit]):
+        problem = " ".join(str(ex.get("problem") or "").split())
+        model.worked_examples.append((problem, _solution_md(ex, language)))
+        if ex.get("figure"):
+            try:
+                fig = _figure_png(ex, Path(tmp) / "art" / f"maths_fig_{i + 1}.png", problem)
+            except Exception as exc:  # noqa: BLE001 — the example still teaches without its picture
+                logger.warning("deck: figure for example %d not drawn: %s", i + 1, exc)
+                fig = None
+            if fig is not None:
+                model.figures[fig.key] = fig
+                model.worked_figures[i] = fig.key
+        elif isinstance(ex.get("chart"), dict):
+            # an algebra example's chart — the lines and the crossing point the
+            # engine derived (founder, 2026-10-09: every surface)
+            try:
+                fig = _chart_png(ex["chart"], Path(tmp) / "art" / f"maths_chart_{i + 1}.png", problem)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("deck: chart for example %d not drawn: %s", i + 1, exc)
+                fig = None
+            if fig is not None:
+                model.figures[fig.key] = fig
+                model.worked_figures[i] = fig.key
+    return len(model.worked_examples)
 
 
 # ── render ────────────────────────────────────────────────────────────

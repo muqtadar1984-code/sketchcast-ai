@@ -235,6 +235,14 @@ class _Bucket:
     def __init__(self, store, name):
         self.store, self.name = store, name
 
+    def upload(self, path, data, options=None):
+        """``upload(path, bytes_or_file, {headers})`` — the real client refuses
+        an existing object unless ``upsert`` is "true"."""
+        if (self.name, path) in self.store.files and str((options or {}).get("upsert", "false")).lower() != "true":
+            raise RuntimeError("The resource already exists")
+        self.store.files[(self.name, path)] = data if isinstance(data, (bytes, bytearray)) else data.read()
+        return {"path": path}
+
     def download(self, path):
         self.store.downloads.append((self.name, path))
         try:

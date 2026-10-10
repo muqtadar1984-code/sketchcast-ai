@@ -1,0 +1,460 @@
+{
+  "_about": "geometry-corpus-v1 — 30 hand-written geometry.figure.v1 questions (Edtech/geometry-corpus-v1.md). Each item carries `expect`: the status and, for a refusal, the code. The corpus is the golden set: a change that flips an expectation is a design change.",
+  "items": [
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "P1", "figure_role": "evidence",
+        "prompt": "Which of these triangles are scalene?",
+        "figures": [
+          {"id": "fig_a", "label": "A", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_sss", "sides": [4, 5, 6]}]}},
+          {"id": "fig_b", "label": "B", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_isosceles", "legs": 5, "base": 3}]}},
+          {"id": "fig_c", "label": "C", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_equilateral", "side": 4}]}},
+          {"id": "fig_d", "label": "D", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_sss", "sides": [3, 4, 5]}], "orientation": 25}},
+          {"id": "fig_e", "label": "E", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_isosceles", "legs": 4, "apex_angle": 120}]}}],
+        "asks": {"property": "triangle_class_by_sides", "over": ["fig_a", "fig_b", "fig_c", "fig_d", "fig_e"], "select": "scalene"},
+        "answer": {"kind": "label_set", "value": ["A", "D"]}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "P2", "figure_role": "evidence",
+        "prompt": "Name each type of triangle.",
+        "figures": [
+          {"id": "fig_a", "label": "a", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_isosceles", "legs": 4, "apex_angle": 50}], "orientation": 15}},
+          {"id": "fig_b", "label": "b", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_sss", "sides": [3, 5, 6]}]}},
+          {"id": "fig_c", "label": "c", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_equilateral", "side": 3.5}], "orientation": -30}},
+          {"id": "fig_d", "label": "d", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_rhs", "legs": [3, 5]}]}}],
+        "asks": {"property": "triangle_class_by_sides", "over": ["fig_a", "fig_b", "fig_c", "fig_d"]},
+        "answer": {"kind": "label_map", "value": {"a": "isosceles", "b": "scalene", "c": "equilateral", "d": "scalene"}}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "P3", "figure_role": "evidence",
+        "prompt": "Which of these triangles has an obtuse angle?",
+        "figures": [
+          {"id": "fig_a", "label": "A", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_asa", "angles": [50, 60], "side": 5}]}},
+          {"id": "fig_b", "label": "B", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_sas", "sides": [4, 5], "angle": 115}]}},
+          {"id": "fig_c", "label": "C", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_rhs", "hyp": 5, "side": 3}]}},
+          {"id": "fig_d", "label": "D", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_isosceles", "legs": 4, "apex_angle": 40}]}}],
+        "asks": {"property": "triangle_class_by_angles", "over": ["fig_a", "fig_b", "fig_c", "fig_d"], "select": "obtuse"},
+        "answer": {"kind": "label_set", "value": ["B"]}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "P4", "figure_role": "evidence",
+        "prompt": "How many right angles does this shape have?",
+        "figure": {"units": "cm", "objects": [{"id": "l_shape", "make": "turtle_polygon", "sides": [6, 2, 4, 3, 2, 5], "turns": [90, 90, -90, 90, 90, 90]}]},
+        "asks": {"property": "count_right_angles", "over": ["fig"]},
+        "answer": {"kind": "number", "value": 5}}
+    },
+    {
+      "expect": {"status": "failed", "code": "unsupported_feature"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "P5", "figure_role": "evidence",
+        "prompt": "Which of these shapes are polygons?",
+        "figures": [
+          {"id": "fig_a", "label": "A", "figure": {"objects": [{"id": "s", "make": "regular_polygon", "n": 5, "side": 2}]}},
+          {"id": "fig_b", "label": "B", "figure": {"objects": [{"id": "s", "make": "circle", "radius": 1.5}]}},
+          {"id": "fig_c", "label": "C", "figure": {"objects": [{"id": "s", "make": "polyline_open", "sides": [2, 2, 2], "turns": [60, -60, 0]}]}},
+          {"id": "fig_d", "label": "D", "figure": {"objects": [{"id": "s", "make": "turtle_polygon", "sides": [6, 2, 4, 3, 2, 5], "turns": [90, 90, -90, 90, 90, 90]}]}},
+          {"id": "fig_e", "label": "E", "figure": {"objects": [{"id": "s", "make": "arc_capped_rectangle", "width": 4, "height": 2}]}}],
+        "asks": {"property": "is_polygon", "over": ["fig_a", "fig_b", "fig_c", "fig_d", "fig_e"], "select": true},
+        "answer": {"kind": "label_set", "value": ["A", "D"]}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "P5b", "figure_role": "evidence",
+        "prompt": "Which of these shapes are polygons? (without the curved one)",
+        "figures": [
+          {"id": "fig_a", "label": "A", "figure": {"objects": [{"id": "s", "make": "regular_polygon", "n": 5, "side": 2}]}},
+          {"id": "fig_b", "label": "B", "figure": {"objects": [{"id": "s", "make": "circle", "radius": 1.5}]}},
+          {"id": "fig_c", "label": "C", "figure": {"objects": [{"id": "s", "make": "polyline_open", "sides": [2, 2, 2], "turns": [60, -60, 0]}]}},
+          {"id": "fig_d", "label": "D", "figure": {"objects": [{"id": "s", "make": "turtle_polygon", "sides": [6, 2, 4, 3, 2, 5], "turns": [90, 90, -90, 90, 90, 90]}]}}],
+        "asks": {"property": "is_polygon", "over": ["fig_a", "fig_b", "fig_c", "fig_d"], "select": true},
+        "answer": {"kind": "label_set", "value": ["A", "D"]}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "P6", "figure_role": "evidence",
+        "prompt": "How many lines of symmetry does each triangle have?",
+        "figures": [
+          {"id": "fig_a", "label": "a", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_equilateral", "side": 3}]}},
+          {"id": "fig_b", "label": "b", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_isosceles", "legs": 4, "base": 2.5}], "orientation": 40}},
+          {"id": "fig_c", "label": "c", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_sss", "sides": [3, 4, 5]}]}},
+          {"id": "fig_d", "label": "d", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_rhs", "legs": [3, 3]}]}},
+          {"id": "fig_e", "label": "e", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_isosceles", "legs": 3, "apex_angle": 130}]}},
+          {"id": "fig_f", "label": "f", "figure": {"units": "cm", "objects": [{"id": "t", "make": "triangle_sas", "sides": [3, 5], "angle": 125}]}}],
+        "asks": {"property": "lines_of_symmetry", "over": ["fig_a", "fig_b", "fig_c", "fig_d", "fig_e", "fig_f"]},
+        "answer": {"kind": "label_map", "value": {"a": 3, "b": 1, "c": 0, "d": 1, "e": 1, "f": 0}}}
+    },
+    {
+      "expect": {"status": "failed", "code": "bad_schema"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "P7", "figure_role": "evidence",
+        "prompt": "How many lines of symmetry does an equilateral triangle have? (no figure: the maths.facts path)",
+        "figures": [],
+        "asks": {"property": "lines_of_symmetry", "over": []},
+        "answer": {"kind": "number", "value": 3}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "P8", "figure_role": "evidence",
+        "prompt": "What colour can you colour the square at * to make a pattern with exactly one line of symmetry? More than two?",
+        "figures": [{"id": "grid", "figure": {"objects": [
+          {"id": "g", "make": "grid_pattern", "rows": 3, "cols": 3, "cells": [["R", "Y", "R"], ["Y", "G", "Y"], ["R", "Y", "*"]], "palette": ["R", "Y", "G", "B"]}]}}],
+        "parts": [
+          {"asks": {"property": "lines_of_symmetry", "over": ["grid"], "fill": "*", "equals": 1}, "answer": {"kind": "value_set", "value": ["Y", "G", "B"]}},
+          {"asks": {"property": "lines_of_symmetry", "over": ["grid"], "fill": "*", "greater_than": 2}, "answer": {"kind": "value_set", "value": ["R"]}}]}
+    },
+    {
+      "expect": {"status": "failed", "code": "unsupported_feature"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "P9", "figure_role": "evidence",
+        "prompt": "Reflect the tile pattern in the two mirror lines.",
+        "figure": {"objects": [
+          {"id": "g", "make": "grid_pattern", "rows": 4, "cols": 4, "cells": [["R", "B", "*", "*"], ["B", "Y", "*", "*"], ["*", "*", "*", "*"], ["*", "*", "*", "*"]], "palette": ["R", "Y", "B"]},
+          {"id": "m", "make": "reflection", "target": "g", "axis": "vertical"}]},
+        "asks": {"property": "lines_of_symmetry", "over": ["fig"]},
+        "answer": {"kind": "number", "value": 2}}
+    },
+    {
+      "expect": {"status": "failed", "code": "unsupported_feature"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "P10", "figure_role": "evidence",
+        "prompt": "Name the smallest triangle that has been tessellated in this pattern.",
+        "figure": {"objects": [
+          {"id": "t", "make": "triangle_equilateral", "side": 1},
+          {"id": "tess", "make": "tessellation", "tile": "t", "repeat": [4, 3]}]},
+        "asks": {"property": "polygon_name", "over": ["fig"]},
+        "answer": {"kind": "label_map", "value": {"fig": "equilateral triangle"}}}
+    },
+
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "B1", "figure_role": "reasoning",
+        "prompt": "ABC is a straight line. Find x.",
+        "figure": {
+          "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}, {"id": "p_d", "label": "D"}],
+          "objects": [{"id": "l_abc", "make": "line_through", "points": ["p_a", "p_b", "p_c"]},
+                      {"id": "r_bd", "make": "ray_at_angle", "vertex": "p_b", "from_ray": ["p_b", "p_a"], "angle": "angle_abd", "side": "left", "to": "p_d"}],
+          "angles": [{"id": "angle_abd", "rays": [["p_b", "p_a"], ["p_b", "p_d"]]}, {"id": "angle_dbc", "rays": [["p_b", "p_d"], ["p_b", "p_c"]]}],
+          "measures": [{"target": "angle_abd", "value": "70", "unit": "deg", "role": "given"}, {"target": "angle_dbc", "value": "x", "unit": "deg", "role": "unknown"}],
+          "relations": [{"id": "r1", "kind": "collinear", "points": ["p_a", "p_b", "p_c"], "given": true}]},
+        "steps": [{"kind": "deduce", "theorem": "angles_on_line", "uses": ["r1", "angle_abd", "angle_dbc"], "after": ["70 + x = 180"], "speech": "Angles on a straight line add up to one hundred and eighty degrees."},
+                  {"kind": "transform", "after": ["x = 110"]}],
+        "answer": {"kind": "number", "value": 110, "unit": "deg"}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "B2", "figure_role": "reasoning",
+        "prompt": "Find x.",
+        "figure": {"bind": {"x": 30},
+          "points": [{"id": "p_o", "label": "O"}, {"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}, {"id": "p_d", "label": "D"}],
+          "objects": [{"id": "fan", "make": "angles_at_point", "vertex": "p_o", "points": ["p_a", "p_b", "p_c", "p_d"]}],
+          "angles": [{"id": "angle_aob", "rays": [["p_o", "p_a"], ["p_o", "p_b"]]}, {"id": "angle_boc", "rays": [["p_o", "p_b"], ["p_o", "p_c"]]},
+                     {"id": "angle_cod", "rays": [["p_o", "p_c"], ["p_o", "p_d"]]}, {"id": "angle_doa", "rays": [["p_o", "p_d"], ["p_o", "p_a"]]}],
+          "measures": [{"target": "angle_aob", "value": "90", "role": "given"}, {"target": "angle_boc", "value": "2x", "role": "given"},
+                       {"target": "angle_cod", "value": "3x", "role": "given"}, {"target": "angle_doa", "value": "120", "role": "given"}],
+          "marks": [{"kind": "right_angle_square", "target": "angle_aob"}]},
+        "steps": [{"kind": "deduce", "theorem": "angles_at_point", "uses": ["angle_aob", "angle_boc", "angle_cod", "angle_doa"], "after": ["90 + 2x + 3x + 120 = 360"]},
+                  {"kind": "transform", "after": ["5x = 150"]}, {"kind": "transform", "after": ["x = 30"]}],
+        "answer": {"kind": "number", "value": 30}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "B3", "figure_role": "reasoning",
+        "prompt": "AOB and COD are straight lines. Find x and y.",
+        "figure": {"bind": {"x": 30},
+          "points": [{"id": "p_a", "label": "A"}, {"id": "p_o", "label": "O"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}, {"id": "p_d", "label": "D"}],
+          "objects": [{"id": "l_aob", "make": "line_through", "points": ["p_a", "p_o", "p_b"]},
+                      {"id": "r_oc", "make": "ray_at_angle", "vertex": "p_o", "from_ray": ["p_o", "p_a"], "angle": "angle_aoc", "side": "left", "to": "p_c"},
+                      {"id": "l_cod", "make": "extend", "segment": ["p_c", "p_o"], "beyond": "p_o", "to": "p_d"}],
+          "angles": [{"id": "angle_aoc", "rays": [["p_o", "p_a"], ["p_o", "p_c"]]}, {"id": "angle_bod", "rays": [["p_o", "p_b"], ["p_o", "p_d"]]},
+                     {"id": "angle_cob", "rays": [["p_o", "p_c"], ["p_o", "p_b"]]}],
+          "measures": [{"target": "angle_aoc", "value": "3x + 10", "role": "given"}, {"target": "angle_bod", "value": "2x + 40", "role": "given"},
+                       {"target": "angle_cob", "value": "y", "role": "unknown"}]},
+        "steps": [{"kind": "deduce", "theorem": "vertically_opposite", "uses": ["angle_aoc", "angle_bod"], "after": ["3x + 10 = 2x + 40"]},
+                  {"kind": "transform", "after": ["x = 30"]},
+                  {"kind": "check", "after": ["ang(aoc) = 100"]},
+                  {"kind": "deduce", "theorem": "angles_on_line", "uses": ["l_aob", "angle_aoc", "angle_cob"], "after": ["100 + y = 180"]},
+                  {"kind": "transform", "after": ["y = 80"]}],
+        "answer": {"kind": "values", "value": {"x": 30, "y": 80}}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "B4", "figure_role": "reasoning",
+        "prompt": "AB and CD are parallel. Find x.",
+        "figure": {
+          "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}, {"id": "p_d", "label": "D"},
+                     {"id": "p_e", "label": "E"}, {"id": "p_f", "label": "F"}, {"id": "p_p", "label": "P"}, {"id": "p_q", "label": "Q"}],
+          "objects": [{"id": "cfg", "make": "parallels_transversal", "points": ["p_a", "p_b", "p_c", "p_d", "p_e", "p_f", "p_p", "p_q"], "angle": "angle_epb"}],
+          "angles": [{"id": "angle_epb", "rays": [["p_p", "p_e"], ["p_p", "p_b"]]}, {"id": "angle_pqd", "rays": [["p_q", "p_p"], ["p_q", "p_d"]]}],
+          "measures": [{"target": "angle_epb", "value": "65", "role": "given"}, {"target": "angle_pqd", "value": "x", "role": "unknown"}],
+          "marks": [{"kind": "parallel_arrows", "targets": ["cfg_l1", "cfg_l2"]}]},
+        "steps": [{"kind": "deduce", "theorem": "corresponding_angles", "uses": ["cfg", "angle_epb", "angle_pqd"], "after": ["x = 65"]}],
+        "answer": {"kind": "number", "value": 65}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "B5", "figure_role": "reasoning",
+        "prompt": "AB and CD are parallel. Find x.",
+        "figure": {
+          "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}, {"id": "p_d", "label": "D"},
+                     {"id": "p_e", "label": "E"}, {"id": "p_f", "label": "F"}, {"id": "p_p", "label": "P"}, {"id": "p_q", "label": "Q"}],
+          "objects": [{"id": "cfg", "make": "parallels_transversal", "points": ["p_a", "p_b", "p_c", "p_d", "p_e", "p_f", "p_p", "p_q"], "angle": "angle_apq"}],
+          "angles": [{"id": "angle_apq", "rays": [["p_p", "p_a"], ["p_p", "p_q"]]}, {"id": "angle_pqd", "rays": [["p_q", "p_p"], ["p_q", "p_d"]]}],
+          "measures": [{"target": "angle_apq", "value": "72", "role": "given"}, {"target": "angle_pqd", "value": "x", "role": "unknown"}]},
+        "steps": [{"kind": "deduce", "theorem": "alternate_angles", "uses": ["angle_apq", "angle_pqd"], "after": ["x = 72"]}],
+        "answer": {"kind": "number", "value": 72}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "B6", "figure_role": "reasoning",
+        "prompt": "AB and CD are parallel. Find x.",
+        "figure": {
+          "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}, {"id": "p_d", "label": "D"},
+                     {"id": "p_e", "label": "E"}, {"id": "p_f", "label": "F"}, {"id": "p_p", "label": "P"}, {"id": "p_q", "label": "Q"}],
+          "objects": [{"id": "cfg", "make": "parallels_transversal", "points": ["p_a", "p_b", "p_c", "p_d", "p_e", "p_f", "p_p", "p_q"], "angle": "angle_bpq"}],
+          "angles": [{"id": "angle_bpq", "rays": [["p_p", "p_b"], ["p_p", "p_q"]]}, {"id": "angle_pqd", "rays": [["p_q", "p_p"], ["p_q", "p_d"]]}],
+          "measures": [{"target": "angle_bpq", "value": "110", "role": "given"}, {"target": "angle_pqd", "value": "x", "role": "unknown"}]},
+        "steps": [{"kind": "deduce", "theorem": "cointerior_angles", "uses": ["angle_bpq", "angle_pqd"], "after": ["110 + x = 180"]},
+                  {"kind": "transform", "after": ["x = 70"]}],
+        "answer": {"kind": "number", "value": 70}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "B7", "figure_role": "reasoning",
+        "prompt": "AB and CD are parallel. Find x.",
+        "figure": {"bind": {"x": 25},
+          "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}, {"id": "p_d", "label": "D"},
+                     {"id": "p_e", "label": "E"}, {"id": "p_f", "label": "F"}, {"id": "p_p", "label": "P"}, {"id": "p_q", "label": "Q"}],
+          "objects": [{"id": "cfg", "make": "parallels_transversal", "points": ["p_a", "p_b", "p_c", "p_d", "p_e", "p_f", "p_p", "p_q"], "angle": "angle_apq"}],
+          "angles": [{"id": "angle_apq", "rays": [["p_p", "p_a"], ["p_p", "p_q"]]}, {"id": "angle_pqd", "rays": [["p_q", "p_p"], ["p_q", "p_d"]]}],
+          "measures": [{"target": "angle_apq", "value": "4x - 20", "role": "given"}, {"target": "angle_pqd", "value": "2x + 30", "role": "given"}]},
+        "steps": [{"kind": "deduce", "theorem": "alternate_angles", "uses": ["angle_apq", "angle_pqd"], "after": ["4x - 20 = 2x + 30"]},
+                  {"kind": "transform", "after": ["2x = 50"]},
+                  {"kind": "transform", "after": ["x = 25"]},
+                  {"kind": "check", "after": ["ang(apq) = 80"]}],
+        "answer": {"kind": "number", "value": 25}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "B8", "figure_role": "reasoning",
+        "prompt": "AG and CH are parallel. Find angle BED.",
+        "figure": {
+          "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_g", "label": "G"}, {"id": "p_c", "label": "C"},
+                     {"id": "p_d", "label": "D"}, {"id": "p_h", "label": "H"}, {"id": "p_e", "label": "E"}, {"id": "p_k", "label": "K"}, {"id": "p_m"}],
+          "objects": [{"id": "l1", "make": "line_through", "points": ["p_a", "p_b", "p_g"]},
+                      {"id": "l2", "make": "parallel_through", "point": "p_c", "line": "l1", "points": ["p_c", "p_d", "p_h"], "gap": 3},
+                      {"id": "r_be", "make": "ray_at_angle", "vertex": "p_b", "from_ray": ["p_b", "p_g"], "angle": "angle_gbe", "side": "right"},
+                      {"id": "r_de", "make": "ray_at_angle", "vertex": "p_d", "from_ray": ["p_d", "p_h"], "angle": "angle_hde", "side": "left"},
+                      {"id": "p_e", "make": "intersection", "of": ["r_be", "r_de"]},
+                      {"id": "aux", "make": "parallel_through", "point": "p_e", "line": "l1", "points": ["p_k", "p_e", "p_m"], "hidden": true}],
+          "angles": [{"id": "angle_gbe", "rays": [["p_b", "p_g"], ["p_b", "p_e"]]}, {"id": "angle_hde", "rays": [["p_d", "p_h"], ["p_d", "p_e"]]},
+                     {"id": "angle_bed", "rays": [["p_e", "p_b"], ["p_e", "p_d"]]}, {"id": "angle_bek", "rays": [["p_e", "p_b"], ["p_e", "p_k"]]},
+                     {"id": "angle_dek", "rays": [["p_e", "p_d"], ["p_e", "p_k"]]}],
+          "measures": [{"target": "angle_gbe", "value": "40", "role": "given"}, {"target": "angle_hde", "value": "30", "role": "given"},
+                       {"target": "angle_bed", "value": "x", "role": "unknown"}],
+          "relations": [{"id": "r_par", "kind": "parallel", "lines": ["l1", "l2"], "given": true}]},
+        "steps": [{"kind": "setup", "figure_ops": [{"op": "reveal_object", "target": "aux"}], "speech": "Draw a line through E parallel to the other two."},
+                  {"kind": "deduce", "theorem": "alternate_angles", "uses": ["angle_gbe", "angle_bek"], "after": ["ang(bek) = 40"]},
+                  {"kind": "deduce", "theorem": "alternate_angles", "uses": ["angle_hde", "angle_dek"], "after": ["ang(dek) = 30"]},
+                  {"kind": "deduce", "theorem": "angle_addition", "uses": ["angle_bek", "angle_dek", "angle_bed"], "after": ["x = 40 + 30"]},
+                  {"kind": "transform", "after": ["x = 70"]}],
+        "answer": {"kind": "number", "value": 70}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "B9", "figure_role": "reasoning",
+        "prompt": "BCD is a straight line. Find x.",
+        "figure": {
+          "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}, {"id": "p_d", "label": "D"}],
+          "objects": [{"id": "tri", "make": "triangle_asa", "vertices": ["p_a", "p_b", "p_c"], "angles": [50, 60], "side": 6},
+                      {"id": "ext", "make": "extend", "segment": ["p_b", "p_c"], "beyond": "p_c", "to": "p_d"}],
+          "angles": [{"id": "angle_bac", "rays": [["p_a", "p_b"], ["p_a", "p_c"]]}, {"id": "angle_abc", "rays": [["p_b", "p_a"], ["p_b", "p_c"]]},
+                     {"id": "angle_acd", "rays": [["p_c", "p_a"], ["p_c", "p_d"]]}],
+          "measures": [{"target": "angle_bac", "value": "50", "role": "given"}, {"target": "angle_abc", "value": "60", "role": "given"},
+                       {"target": "angle_acd", "value": "x", "role": "unknown"}]},
+        "steps": [{"kind": "deduce", "theorem": "exterior_angle_triangle", "uses": ["angle_bac", "angle_abc", "angle_acd"], "after": ["x = 50 + 60"]},
+                  {"kind": "transform", "after": ["x = 110"]}],
+        "answer": {"kind": "number", "value": 110}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "B10", "figure_role": "reasoning",
+        "prompt": "BCD is a straight line. Find x.",
+        "figure": {"bind": {"x": 45},
+          "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}, {"id": "p_d", "label": "D"}],
+          "objects": [{"id": "tri", "make": "triangle_asa", "vertices": ["p_a", "p_b", "p_c"], "angles": ["x + 30", "x + 15"], "side": 6},
+                      {"id": "ext", "make": "extend", "segment": ["p_b", "p_c"], "beyond": "p_c", "to": "p_d"}],
+          "angles": [{"id": "angle_bac", "rays": [["p_a", "p_b"], ["p_a", "p_c"]]}, {"id": "angle_abc", "rays": [["p_b", "p_a"], ["p_b", "p_c"]]},
+                     {"id": "angle_acd", "rays": [["p_c", "p_a"], ["p_c", "p_d"]]}],
+          "measures": [{"target": "angle_bac", "value": "x + 30", "role": "given"}, {"target": "angle_abc", "value": "x + 15", "role": "given"},
+                       {"target": "angle_acd", "value": "3x", "role": "given"}]},
+        "steps": [{"kind": "deduce", "theorem": "exterior_angle_triangle", "uses": ["angle_bac", "angle_abc", "angle_acd"], "after": ["3x = x + 30 + x + 15"]},
+                  {"kind": "transform", "after": ["3x = 2x + 45"]},
+                  {"kind": "transform", "after": ["x = 45"]},
+                  {"kind": "check", "after": ["ang(acd) = 135"]}],
+        "answer": {"kind": "number", "value": 45}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "B11", "figure_role": "reasoning",
+        "prompt": "AB = AC and BCD is a straight line. Find x.",
+        "figure": {
+          "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}, {"id": "p_d", "label": "D"}],
+          "objects": [{"id": "tri", "make": "triangle_isosceles", "vertices": ["p_a", "p_b", "p_c"], "legs": 5, "apex_angle": 40},
+                      {"id": "ext", "make": "extend", "segment": ["p_b", "p_c"], "beyond": "p_c", "to": "p_d"}],
+          "angles": [{"id": "angle_bac", "rays": [["p_a", "p_b"], ["p_a", "p_c"]]}, {"id": "angle_abc", "rays": [["p_b", "p_a"], ["p_b", "p_c"]]},
+                     {"id": "angle_acb", "rays": [["p_c", "p_a"], ["p_c", "p_b"]]}, {"id": "angle_acd", "rays": [["p_c", "p_a"], ["p_c", "p_d"]]}],
+          "measures": [{"target": "angle_bac", "value": "40", "role": "given"}, {"target": "angle_acd", "value": "x", "role": "unknown"}],
+          "relations": [{"id": "r_eq", "kind": "equal_length", "segments": [["p_a", "p_b"], ["p_a", "p_c"]], "given": true}],
+          "marks": [{"kind": "equal_ticks", "targets": [["p_a", "p_b"], ["p_a", "p_c"]]}]},
+        "steps": [{"kind": "deduce", "theorem": "isosceles_base_angles", "uses": ["r_eq", "angle_abc", "angle_acb"], "after": ["ang(abc) = ang(acb)"]},
+                  {"kind": "deduce", "theorem": "triangle_angle_sum", "uses": ["angle_bac", "angle_abc", "angle_acb"], "after": ["40 + 2*ang(acb) = 180"]},
+                  {"kind": "transform", "after": ["ang(acb) = 70"]},
+                  {"kind": "deduce", "theorem": "angles_on_line", "uses": ["angle_acb", "angle_acd"], "after": ["70 + x = 180"]},
+                  {"kind": "transform", "after": ["x = 110"]}],
+        "answer": {"kind": "number", "value": 110}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "B12", "figure_role": "reasoning",
+        "prompt": "DAE is parallel to BC. Find x, and explain why the angles of a triangle add up to 180°.",
+        "figure": {
+          "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}, {"id": "p_d", "label": "D"}, {"id": "p_e", "label": "E"}],
+          "objects": [{"id": "tri", "make": "triangle_asa", "vertices": ["p_b", "p_c", "p_a"], "angles": [50, 60], "side": 7},
+                      {"id": "l_bc", "make": "line_through", "points": ["p_b", "p_c"]},
+                      {"id": "l_dae", "make": "parallel_through", "point": "p_a", "line": "l_bc", "points": ["p_d", "p_a", "p_e"]}],
+          "angles": [{"id": "angle_dab", "rays": [["p_a", "p_d"], ["p_a", "p_b"]]}, {"id": "angle_eac", "rays": [["p_a", "p_e"], ["p_a", "p_c"]]},
+                     {"id": "angle_bac", "rays": [["p_a", "p_b"], ["p_a", "p_c"]]}, {"id": "angle_abc", "rays": [["p_b", "p_a"], ["p_b", "p_c"]]},
+                     {"id": "angle_acb", "rays": [["p_c", "p_a"], ["p_c", "p_b"]]}],
+          "measures": [{"target": "angle_dab", "value": "50", "role": "given"}, {"target": "angle_eac", "value": "60", "role": "given"},
+                       {"target": "angle_bac", "value": "x", "role": "unknown"}],
+          "relations": [{"id": "r_par", "kind": "parallel", "lines": ["l_dae", "l_bc"], "given": true}]},
+        "steps": [{"kind": "deduce", "theorem": "alternate_angles", "uses": ["angle_dab", "angle_abc"], "after": ["ang(abc) = 50"]},
+                  {"kind": "deduce", "theorem": "alternate_angles", "uses": ["angle_eac", "angle_acb"], "after": ["ang(acb) = 60"]},
+                  {"kind": "deduce", "theorem": "angles_on_line", "uses": ["l_dae", "angle_dab", "angle_bac", "angle_eac"], "after": ["50 + x + 60 = 180"]},
+                  {"kind": "transform", "after": ["x = 70"]}],
+        "answer": {"kind": "number", "value": 70}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "B13", "figure_role": "reasoning",
+        "prompt": "Find x.",
+        "figure": {"bind": {"x": 45},
+          "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}, {"id": "p_d", "label": "D"}],
+          "objects": [{"id": "quad", "make": "quadrilateral_by_angles", "vertices": ["p_a", "p_b", "p_c", "p_d"], "angles": [110, 70, "2x", "x + 45"], "sides": [6, 5]}],
+          "angles": [{"id": "angle_dab", "rays": [["p_a", "p_d"], ["p_a", "p_b"]]}, {"id": "angle_abc", "rays": [["p_b", "p_a"], ["p_b", "p_c"]]},
+                     {"id": "angle_bcd", "rays": [["p_c", "p_b"], ["p_c", "p_d"]]}, {"id": "angle_cda", "rays": [["p_d", "p_c"], ["p_d", "p_a"]]}],
+          "measures": [{"target": "angle_dab", "value": "110", "role": "given"}, {"target": "angle_abc", "value": "70", "role": "given"},
+                       {"target": "angle_bcd", "value": "2x", "role": "given"}, {"target": "angle_cda", "value": "x + 45", "role": "given"}]},
+        "steps": [{"kind": "deduce", "theorem": "quadrilateral_angle_sum", "uses": ["angle_dab", "angle_abc", "angle_bcd", "angle_cda"], "after": ["110 + 70 + 2x + x + 45 = 360"]},
+                  {"kind": "transform", "after": ["3x + 225 = 360"]},
+                  {"kind": "transform", "after": ["x = 45"]}],
+        "answer": {"kind": "number", "value": 45}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "B14", "figure_role": "illustration",
+        "prompt": "Construct a triangle with sides 7 cm, 5 cm and 6 cm. (answer key)",
+        "figure": {"units": "cm",
+          "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}],
+          "objects": [{"id": "tri", "make": "triangle_sss", "vertices": ["p_a", "p_b", "p_c"], "sides": [7, 5, 6]}],
+          "segments": [{"id": "seg_ab", "points": ["p_a", "p_b"]}, {"id": "seg_bc", "points": ["p_b", "p_c"]}, {"id": "seg_ca", "points": ["p_c", "p_a"]}],
+          "measures": [{"target": "seg_ab", "value": "7", "unit": "cm", "role": "given"}, {"target": "seg_bc", "value": "5", "unit": "cm", "role": "given"},
+                       {"target": "seg_ca", "value": "6", "unit": "cm", "role": "given"}],
+          "marks": [{"kind": "construction_arc", "centre": "p_a", "through": "p_c"}, {"kind": "construction_arc", "centre": "p_b", "through": "p_c"}]}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "B15", "figure_role": "illustration",
+        "prompt": "Construct the bisector of a 70° angle. (answer key: each half is 35°)",
+        "figure": {
+          "points": [{"id": "p_v", "label": "V"}, {"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_m", "label": "M"}],
+          "objects": [{"id": "arm", "make": "segment", "points": ["p_v", "p_a"], "length": 4},
+                      {"id": "r_vb", "make": "ray_at_angle", "vertex": "p_v", "from_ray": ["p_v", "p_a"], "angle": "angle_avb", "side": "left", "to": "p_b", "length": 4},
+                      {"id": "bis", "make": "angle_bisector", "angle": "angle_avb", "to": "p_m", "length": 3.5}],
+          "angles": [{"id": "angle_avb", "rays": [["p_v", "p_a"], ["p_v", "p_b"]]}, {"id": "angle_avm", "rays": [["p_v", "p_a"], ["p_v", "p_m"]]},
+                     {"id": "angle_mvb", "rays": [["p_v", "p_m"], ["p_v", "p_b"]]}],
+          "measures": [{"target": "angle_avb", "value": "70", "role": "given"}, {"target": "angle_avm", "value": "35", "role": "given"},
+                       {"target": "angle_mvb", "value": "35", "role": "given"}],
+          "marks": [{"kind": "construction_arc", "centre": "p_v", "through": "p_a"}, {"kind": "construction_arc", "centre": "p_v", "through": "p_b"}]}}
+    },
+
+    {
+      "expect": {"status": "failed", "code": "construction_impossible"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "E1", "figure_role": "reasoning",
+        "prompt": "E1: a triangle with angles 100° and 90°",
+        "figure": {"objects": [{"id": "t", "make": "triangle_asa", "angles": [100, 90], "side": 5}]},
+        "steps": [{"kind": "setup"}], "answer": {"kind": "number", "value": 1}}
+    },
+    {
+      "expect": {"status": "failed", "code": "relation_not_implied"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "E2", "figure_role": "evidence",
+        "prompt": "E2: a 5-6-7 triangle claimed isosceles",
+        "figure": {"objects": [{"id": "t", "make": "triangle_sss", "vertices": ["p_a", "p_b", "p_c"], "sides": [5, 6, 7]}],
+                   "relations": [{"id": "r1", "kind": "equal_length", "segments": [["p_a", "p_b"], ["p_a", "p_c"]]}]},
+        "asks": {"property": "triangle_class_by_sides", "over": ["fig"]}, "answer": {"kind": "label_map", "value": {"fig": "isosceles"}}}
+    },
+    {
+      "expect": {"status": "failed", "code": "theorem_premise"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "E3", "figure_role": "reasoning",
+        "prompt": "E3: the reflex angle asked for, the region omitted",
+        "figure": {"points": [{"id": "p_p", "label": "P"}, {"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}],
+          "objects": [{"id": "ra", "make": "segment", "points": ["p_p", "p_a"]},
+                      {"id": "rb", "make": "ray_at_angle", "vertex": "p_p", "from_ray": ["p_p", "p_a"], "angle": "angle_apb", "side": "left", "to": "p_b"}],
+          "angles": [{"id": "angle_apb", "rays": [["p_p", "p_a"], ["p_p", "p_b"]]}, {"id": "angle_x", "rays": [["p_p", "p_a"], ["p_p", "p_b"]]}],
+          "measures": [{"target": "angle_apb", "value": "140", "role": "given"}, {"target": "angle_x", "value": "x", "role": "unknown"}]},
+        "steps": [{"kind": "deduce", "theorem": "angles_at_point", "uses": ["angle_apb", "angle_x"], "after": ["140 + x = 360"]}, {"kind": "transform", "after": ["x = 220"]}],
+        "answer": {"kind": "number", "value": 220}}
+    },
+    {
+      "expect": {"status": "verified"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "E3b", "figure_role": "reasoning",
+        "prompt": "E3 with region: reflex",
+        "figure": {"points": [{"id": "p_p", "label": "P"}, {"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}],
+          "objects": [{"id": "ra", "make": "segment", "points": ["p_p", "p_a"]},
+                      {"id": "rb", "make": "ray_at_angle", "vertex": "p_p", "from_ray": ["p_p", "p_a"], "angle": "angle_apb", "side": "left", "to": "p_b"}],
+          "angles": [{"id": "angle_apb", "rays": [["p_p", "p_a"], ["p_p", "p_b"]]}, {"id": "angle_x", "rays": [["p_p", "p_a"], ["p_p", "p_b"]], "region": "reflex"}],
+          "measures": [{"target": "angle_apb", "value": "140", "role": "given"}, {"target": "angle_x", "value": "x", "role": "unknown"}]},
+        "steps": [{"kind": "deduce", "theorem": "angles_at_point", "uses": ["angle_apb", "angle_x"], "after": ["140 + x = 360"]}, {"kind": "transform", "after": ["x = 220"]}],
+        "answer": {"kind": "number", "value": 220}}
+    },
+    {
+      "expect": {"status": "verified", "render_must_succeed": true},
+      "question": {"schema_version": "geometry.figure.v1", "id": "E4", "figure_role": "reasoning",
+        "prompt": "E4: all eight angles labelled. Find x and y.",
+        "figure": {
+          "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}, {"id": "p_d", "label": "D"},
+                     {"id": "p_e", "label": "E"}, {"id": "p_f", "label": "F"}, {"id": "p_p", "label": "P"}, {"id": "p_q", "label": "Q"}],
+          "objects": [{"id": "cfg", "make": "parallels_transversal", "points": ["p_a", "p_b", "p_c", "p_d", "p_e", "p_f", "p_p", "p_q"], "angle": "angle_epb"}],
+          "angles": [{"id": "angle_epb", "rays": [["p_p", "p_e"], ["p_p", "p_b"]]}, {"id": "angle_epa", "rays": [["p_p", "p_e"], ["p_p", "p_a"]]},
+                     {"id": "angle_apq", "rays": [["p_p", "p_a"], ["p_p", "p_q"]]}, {"id": "angle_bpq", "rays": [["p_p", "p_b"], ["p_p", "p_q"]]},
+                     {"id": "angle_pqd", "rays": [["p_q", "p_p"], ["p_q", "p_d"]]}, {"id": "angle_pqc", "rays": [["p_q", "p_p"], ["p_q", "p_c"]]},
+                     {"id": "angle_cqf", "rays": [["p_q", "p_c"], ["p_q", "p_f"]]}, {"id": "angle_dqf", "rays": [["p_q", "p_d"], ["p_q", "p_f"]]}],
+          "measures": [{"target": "angle_epb", "value": "65", "role": "given"}, {"target": "angle_epa", "value": "115", "role": "given"},
+                       {"target": "angle_apq", "value": "x", "role": "unknown"}, {"target": "angle_bpq", "value": "y", "role": "unknown"},
+                       {"target": "angle_pqd", "value": "65", "role": "given"}, {"target": "angle_pqc", "value": "115", "role": "given"},
+                       {"target": "angle_cqf", "value": "65", "role": "given"}, {"target": "angle_dqf", "value": "115", "role": "given"}]},
+        "steps": [{"kind": "deduce", "theorem": "vertically_opposite", "uses": ["angle_epb", "angle_apq"], "after": ["x = 65"]},
+                  {"kind": "deduce", "theorem": "vertically_opposite", "uses": ["angle_epa", "angle_bpq"], "after": ["y = 115"]}],
+        "answer": {"kind": "values", "value": {"x": 65, "y": 115}}}
+    },
+    {
+      "expect": {"status": "failed", "code": "theorem_unknown"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "E5a", "figure_role": "reasoning",
+        "prompt": "E5a: a circle theorem outside the enum",
+        "figure": {
+          "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}, {"id": "p_d", "label": "D"}],
+          "objects": [{"id": "l_abc", "make": "line_through", "points": ["p_a", "p_b", "p_c"]},
+                      {"id": "r_bd", "make": "ray_at_angle", "vertex": "p_b", "from_ray": ["p_b", "p_a"], "angle": "angle_abd", "side": "left", "to": "p_d"}],
+          "angles": [{"id": "angle_abd", "rays": [["p_b", "p_a"], ["p_b", "p_d"]]}, {"id": "angle_dbc", "rays": [["p_b", "p_d"], ["p_b", "p_c"]]}],
+          "measures": [{"target": "angle_abd", "value": "70", "role": "given"}, {"target": "angle_dbc", "value": "x", "role": "unknown"}]},
+        "steps": [{"kind": "deduce", "theorem": "alternate_segment", "uses": ["angle_abd", "angle_dbc"], "after": ["70 + x = 180"]}, {"kind": "transform", "after": ["x = 110"]}],
+        "answer": {"kind": "number", "value": 110}}
+    },
+    {
+      "expect": {"status": "failed", "code": "unknown_construction"},
+      "question": {"schema_version": "geometry.figure.v1", "id": "E5b", "figure_role": "reasoning",
+        "prompt": "E5b: two sides and a non-included angle",
+        "figure": {"objects": [{"id": "t", "make": "triangle_ssa", "sides": [6, 4], "angle": 30}]},
+        "steps": [{"kind": "setup"}], "answer": {"kind": "number", "value": 1}}
+    }
+  ]
+}

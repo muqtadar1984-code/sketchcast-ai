@@ -520,6 +520,59 @@ def _content_width_dxa(doc: Document) -> int:
         return 9412
 
 
+def content_width_mm(doc: Document) -> float:
+    return _content_width_dxa(doc) / 567.0 * 10.0
+
+
+# ── Pictures (geometry figures) ───────────────────────────────────────────────
+
+_PICTURE_GAP_MM = 6.0
+
+
+def picture(doc: Document, png: bytes, width_mm: float) -> None:
+    """One picture under a question, at the PHYSICAL width the renderer
+    chose: a figure a student measures is printed at true size, so the
+    width is honoured unless it exceeds the text column."""
+    import io  # noqa: PLC0415
+    from docx.shared import Mm  # noqa: PLC0415
+
+    width = min(float(width_mm), content_width_mm(doc) - 2.0)
+    ctx = _ctx(doc)
+    p = _p(doc, ctx, before=4, after=6, left=_Q_INDENT)
+    p.add_run().add_picture(io.BytesIO(png), width=Mm(width))
+
+
+def picture_row(doc: Document, images: list[tuple[bytes, float, str | None]]) -> None:
+    """Labelled figures side by side (A, B, C …), as many to a row as the
+    column fits at their own widths, each with its label beneath. A
+    borderless table, so Word keeps a picture and its label together."""
+    import io  # noqa: PLC0415
+    from docx.shared import Mm  # noqa: PLC0415
+
+    ctx = _ctx(doc)
+    avail = content_width_mm(doc) - 2.0
+    rows: list[list[tuple[bytes, float, str | None]]] = []
+    for png, w, label in images:
+        w = min(float(w), avail)
+        if rows and sum(x[1] for x in rows[-1]) + len(rows[-1]) * _PICTURE_GAP_MM + w <= avail:
+            rows[-1].append((png, w, label))
+        else:
+            rows.append([(png, w, label)])
+    for row in rows:
+        t = doc.add_table(rows=2, cols=len(row))
+        t.alignment = WD_TABLE_ALIGNMENT.CENTER
+        _table_borders(t, none=True)
+        _table_bidi(t, ctx)
+        for i, (png, w, label) in enumerate(row):
+            cell = t.rows[0].cells[i]
+            para = _fmt_cell_par(cell, ctx, align=WD_ALIGN_PARAGRAPH.CENTER)
+            para.add_run().add_picture(io.BytesIO(png), width=Mm(w))
+            cap = _fmt_cell_par(t.rows[1].cells[i], ctx, align=WD_ALIGN_PARAGRAPH.CENTER)
+            if label:
+                _run(cap, str(label), ctx, bold=True)
+        _spacer(doc, 4)
+
+
 # ── Chips / bars / rules ─────────────────────────────────────────────────────
 
 def _bar(doc: Document, ctx: _Ctx, text: str, fill: str, text_color: str,

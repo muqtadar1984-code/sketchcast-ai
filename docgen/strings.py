@@ -214,6 +214,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "es": "Capítulo", "pt": "Capítulo", "te": "అధ్యాయం", "mr": "प्रकरण",
         "hi": "अध्याय", "ms-arab": "باب",
     },
+    "quiz_number_only": {  # a find-x figure question in the quiz player is auto-marked on the number
+        "en": "(write the number only)", "ms": "(tulis nombornya sahaja)", "ar": "(اكتب الرقم فقط)",
+        "fr": "(écrivez seulement le nombre)", "es": "(escribe solo el número)",
+        "pt": "(escreva apenas o número)", "hi": "(केवल संख्या लिखें)", "mr": "(फक्त संख्या लिहा)",
+        "te": "(సంఖ్య మాత్రమే రాయండి)", "ms-arab": "(توليس نومبورڽ سهاج)",
+    },
     "quiz": {  # questions.json fallback title
         "en": "Quiz", "ms": "Kuiz", "ar": "اختبار قصير", "fr": "Quiz",
         "es": "Cuestionario", "pt": "Questionário", "te": "క్విజ్",
@@ -665,6 +671,40 @@ _STRINGS.update({
         "mr": "खालील प्रत्येक उत्तर संगणकीय बीजगणित प्रणालीद्वारे पायरी-पायरीने तपासले आहे.",
         "te": "క్రింది ప్రతి పరిష్కారాన్ని కంప్యూటర్ బీజగణిత వ్యవస్థ దశలవారీగా సరిచూసింది.",
         "ms-arab": "ستياڤ ڤڽلسايان دباوه تله دسيمق لڠکه دمي لڠکه اوليه سيستم الجبر کومڤوتر.",
+    },
+    # maths.facts: the fill-in / true-false / match items of a maths sheet
+    "facts_note": {
+        "en": "Every fill-in, true/false and matching answer below was checked against a table of mathematical facts.",
+        "ms": "Setiap jawapan isi tempat kosong, betul/salah dan padanan di bawah telah disemak dengan jadual fakta matematik.",
+        "ar": "تم التحقق من كل إجابة ملء فراغ وصواب/خطأ ومطابقة أدناه مقابل جدول من الحقائق الرياضية.",
+        "fr": "Chaque réponse à compléter, vrai/faux et d'association ci-dessous a été vérifiée dans une table de faits mathématiques.",
+        "es": "Cada respuesta de completar, verdadero/falso y relacionar a continuación se comprobó con una tabla de hechos matemáticos.",
+        "pt": "Cada resposta de completar, verdadeiro/falso e associação abaixo foi verificada numa tabela de factos matemáticos.",
+        "hi": "नीचे दिए गए हर रिक्त-स्थान, सही/गलत और मिलान वाले उत्तर की जाँच गणितीय तथ्यों की तालिका से की गई है।",
+        "mr": "खालील प्रत्येक रिकाम्या जागा, बरोबर/चूक आणि जोड्या लावा उत्तराची गणितीय तथ्यांच्या तक्त्याशी तपासणी केली आहे.",
+        "te": "క్రింది ప్రతి ఖాళీ పూరించు, ఒప్పు/తప్పు మరియు జతపరచు సమాధానాన్ని గణిత వాస్తవాల పట్టికతో సరిచూశారు.",
+        "ms-arab": "ستياڤ جواڤن ايسي تمڤت کوسوڠ، بتول/ساله دان ڤادنن دباوه تله دسيمق دڠن جدوال فکتا متماتيک.",
+    },
+    "sec_figures": {
+        "en": "Diagrams", "ms": "Rajah", "ar": "الأشكال", "fr": "Figures", "es": "Figuras", "pt": "Figuras",
+        "hi": "आकृतियाँ", "mr": "आकृत्या", "te": "పటాలు", "ms-arab": "راجه",
+    },
+    "figures_note": {
+        "en": "Every diagram question below was built and checked by a geometry engine; a drawing is exact unless it says 'Not drawn to scale'.",
+        "ms": "Setiap soalan rajah di bawah dibina dan disemak oleh enjin geometri; lukisan adalah tepat kecuali ditandakan 'Tidak dilukis mengikut skala'.",
+        "ar": "كل سؤال شكل أدناه بُني وتُحقق منه بمحرك هندسي؛ الرسم دقيق ما لم يُكتب عليه 'غير مرسوم بمقياس'.",
+        "fr": "Chaque question avec figure ci-dessous a été construite et vérifiée par un moteur de géométrie ; un dessin est exact sauf mention « Pas à l'échelle ».",
+        "es": "Cada pregunta con figura a continuación fue construida y comprobada por un motor de geometría; un dibujo es exacto salvo que indique «No a escala».",
+        "pt": "Cada questão com figura abaixo foi construída e verificada por um motor de geometria; um desenho é exato salvo indicação «Não à escala».",
+        "hi": "नीचे हर आकृति वाला प्रश्न एक ज्यामिति इंजन से बनाया और जाँचा गया है; चित्र सटीक है जब तक उस पर 'पैमाने पर नहीं' न लिखा हो।",
+        "mr": "खालील प्रत्येक आकृतीचा प्रश्न भूमिती इंजिनने तयार करून तपासला आहे; 'प्रमाणात नाही' असे लिहिले नसल्यास चित्र अचूक आहे.",
+        "te": "క్రింది ప్రతి పట ప్రశ్నను జ్యామితి ఇంజిన్ నిర్మించి సరిచూసింది; 'స్కేలు ప్రకారం కాదు' అని లేకపోతే చిత్రం ఖచ్చితమైనది.",
+        "ms-arab": "ستياڤ سوءالن راجه دباوه دبينا دان دسيمق اوليه اينجين ڬيومتري؛ لوکيسن اداله تڤت کچوالي دتنداکن 'تيدق دلوکيس مڠيکوت سکالا'.",
+    },
+    "not_to_scale": {
+        "en": "Not drawn to scale", "ms": "Tidak dilukis mengikut skala", "ar": "غير مرسوم بمقياس",
+        "fr": "Pas à l'échelle", "es": "No a escala", "pt": "Não à escala", "hi": "पैमाने पर नहीं",
+        "mr": "प्रमाणात नाही", "te": "స్కేలు ప్రకారం కాదు", "ms-arab": "تيدق دلوکيس مڠيکوت سکالا",
     },
     "ws_total_marks": {
         "en": "Total: {n} marks", "ms": "Jumlah: {n} markah", "ar": "المجموع: {n} درجة", "fr": "Total : {n} points",

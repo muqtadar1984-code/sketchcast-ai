@@ -89,7 +89,7 @@ from typing import Iterable, Optional
 from catalogue.composer import largest_remainder
 from catalogue.harvest import clean_heading
 from catalogue.key import canonical_key
-from shared.llm import client_for
+from shared.llm import analysis_client, client_for
 from worker import client as db
 
 log = logging.getLogger("worker.questions")
@@ -407,6 +407,30 @@ def ask_model(client, prompt: str):
     if isinstance(reply, dict) and "data" in reply:
         return reply.get("data")
     return reply
+
+
+def retry_client(language: str):
+    """The client for the ONE retry of an empty reply: the analysis role's
+    model on the Gemini path (the heavier model the analyzer moved to for
+    this same symptom), the language's own client elsewhere."""
+    return analysis_client(language)
+
+
+def empty_reply(raw: object) -> bool:
+    """True when the reply carried NO item at all — ``{"items": []}``, a bare
+    ``[]``, ``{}``, ``None`` or the ``raw_text`` wrapper of a reply that was
+    not JSON. A reply whose items were all REFUSED is not empty: that is the
+    model misreading the contract, which a second call would misread too."""
+    if raw is None:
+        return True
+    if isinstance(raw, list):
+        return not raw
+    if isinstance(raw, dict):
+        items = raw.get("items")
+        if isinstance(items, list):
+            return not items
+        return not raw or set(raw) == {"raw_text"}
+    return False
 
 
 # ── validation ─────────────────────────────────────────────────────────
@@ -939,7 +963,23 @@ def author_questions(sb, job_id: str, params: dict, client=None) -> dict:
     db.set_progress(sb, job_id, 15)
     if client is None:
         client = client_for(language)
-    raw = ask_model(client, build_questions_prompt(topic, article, figures, language, mix, hints=hints))
+    prompt = build_questions_prompt(topic, article, figures, language, mix, hints=hints)
+    raw = ask_model(client, prompt)
+    if empty_reply(raw):
+        # A well-formed reply with nothing in it. The artifact model answered
+        # {"items": []} in 1.2 s on the first geometry kit (job dd720e03,
+        # 2026-10-09) and the same prompt drew 30 items a minute later: the
+        # model said nothing, it did not misread the contract. One more call,
+        # on the analysis role's model — the call that already pays for a
+        # heavier model on this symptom — and the retry is in the stage for
+        # whoever reads the row.
+        log.warning("questions %s: the model answered with no item at all; asking once more on the analysis model",
+                    topic_id)
+        stage["retry"] = "analysis"
+        db.set_stage(sb, job_id, dict(stage))
+        raw = ask_model(retry_client(language), prompt)
+        if empty_reply(raw):
+            raise QuestionsInvalid("the model answered with no item at all, twice (the artifact model, then the analysis model)")
 
     stage["step"] = "validate"
     db.set_stage(sb, job_id, dict(stage))
@@ -1033,7 +1073,7 @@ __all__ = [
     "SYSTEM_PROMPT", "QUESTIONS_PROMPT", "ARTICLE_FENCE_NOTE", "REPLY_CAP_FACTOR", "RESPONSE_SCHEMA",
     "QuestionsInvalid", "content_hash", "content_words",
     "numerical_allowed", "labelled_figures", "mix_for", "read_target", "article_block", "build_questions_prompt",
-    "ask_model", "nearest_objective", "validate_item", "validate_items", "coverage_of", "under_covered",
+    "ask_model", "retry_client", "empty_reply", "nearest_objective", "validate_item", "validate_items", "coverage_of", "under_covered",
     "load_topic", "load_article", "load_approved_article", "load_rendered_figures", "existing_hashes",
     "write_items", "earlier_done", "author_questions", "run_questions_job",
 ]

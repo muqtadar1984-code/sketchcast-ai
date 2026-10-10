@@ -348,7 +348,7 @@ class TestNodeKind:
                 counts = Counter(kinds.values())
                 # the ALGEBRA strand only (partial seed): 3 stages × (1 strand +
                 # 2 sub-strands), 14 objectives a stage = 51 nodes.
-                assert counts == {"objective": 42, "sub_strand": 6, "strand": 3}
+                assert counts == {"objective": 46, "sub_strand": 7, "strand": 4}
 
 
 class TestDryRun:

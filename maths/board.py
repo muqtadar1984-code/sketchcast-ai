@@ -22,11 +22,18 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+
+import sympy as sp
 from typing import Optional
 
 from agent5_slides.slide_builder import _font
 from maths.i18n import board_text as _bt, norm_lang, words_for
-from maths.schema import Lesson, Line, Mistake, Step, WorkedExample
+from maths.geometry import GeometryRefusal, parse_question, realise, verify_question
+from maths.geometry.board_adapter import FigureBoard, figure_board, figure_targets, op_actions
+from maths.geometry.constructions import exact_value
+from maths.geometry.theorems import reason as _reason
+from maths.charts import chart_for
+from maths.schema import Lesson, Line, MethodCard, Mistake, Step, TryIt, WorkedExample
 from maths.speech import speakable_maths
 from maths.tokens import TokenError, normalise
 from maths.typeset import Layout, typeset
@@ -34,7 +41,7 @@ from shared.text_clean import strip_ssml
 from shared.text_shaping import contains_arabic, display_text
 from spike.scene_engine.render import (_CAVEAT_MATHS, _HAND_SIZE_COMP, _hand_face, _hand_font, _script_runs,
                                        ascii_punct)
-from spike.scene_engine.schema import WORLD_W
+from spike.scene_engine.schema import WORLD_W, Scene
 from spike.scene_engine.whiteboard import build_whiteboard_scene
 
 # ── geometry ────────────────────────────────────────────────────────────
@@ -67,6 +74,22 @@ DIM = 0.42
 MAX_NOTE_CHARS = 44
 # the model's notation is capped at 200 chars, a board line at this
 MAX_LINE_CHARS = 60
+# a FIGURE example (geometry.figure.v1): the diagram under the question on
+# the left, the working column beside it; an evidence example's figures in
+# a row, each labelled, the observations written to their right
+FIG_RIGHT = 470.0            # a reasoning figure's panel ends here
+FIG_LINE_X = 500.0           # the working column beside a figure
+EV_RIGHT = 560.0             # a row of evidence figures ends here
+EV_LINE_X = 600.0
+FIG_GAP = 16.0
+COMPACT_LINE_SIZE = 30.0     # a figure proof of four lines or more
+COMPACT_ROW_GAP = 12.0
+COMPACT_REASON_SIZE = 18.0
+REASON_SIZE = 21.0           # a deduce step's reason under its line
+REASON_GAP = 6.0
+FIG_LABEL_SIZE = 24.0
+EV_COLS = 3                  # evidence figures per row; a fourth starts a second row
+EV_LABEL_PX = 20.0           # the figures' own labels (points, lengths) in an evidence grid
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
 
@@ -364,6 +387,14 @@ class _Row:
     y: float
     lay: Layout
     state_index: int
+    # the row's drawn height: the layout's, or the measured text when the
+    # typesetter had no layout and the line was written as text (its
+    # stand-in layout is a bare "0", far shorter than the words)
+    h: float = 0.0
+    # the row's drawn width, for the same reason: a note placed from the
+    # stand-in's width sat ON the words (chapter-17 third run, 2026-10-08:
+    # "B_x = A_x + translation" under "add translation to coordinate")
+    w: float = 0.0
 
 
 @dataclass
@@ -381,6 +412,13 @@ class _Board:
     state_no: int = 0
     highlight: Optional[tuple[int, str]] = None            # (card line, marker element) in use
     question: Optional["_Row"] = None      # the pinned problem, when it is notation
+    line_x: float = LINE_X                 # the working column (shifted right beside a figure)
+    # a long figure proof (B11: five lines, three reasons under them) outgrew
+    # the panel and wiped mid-proof; beside a figure the column is narrow and
+    # the rows may be tighter without reading smaller than the figure's labels
+    line_size: float = LINE_SIZE
+    row_gap: float = ROW_GAP
+    reason_size: float = REASON_SIZE
 
     def uid(self, prefix: str) -> str:
         self.n += 1
@@ -424,8 +462,9 @@ def _add_state(board: _Board, state: list[str], cue: Optional[dict], color: str 
     lines (the final answer) to write again at the top after such a wipe,
     the way a teacher keeps the result on the board while checking it —
     the answer underline once landed where the wiped row had been."""
-    lays = [(x, _layout(x, LINE_SIZE)) for x in state[:4]]
-    needed = sum(max(l.h if l else LINE_SIZE, MIN_ROW_H) + ROW_GAP for _x, l in lays)
+    lays = [(x, _layout(x, board.line_size)) for x in state[:4]]
+    min_row_h = board.line_size * 1.08
+    needed = sum(max(l.h if l else board.line_size, min_row_h) + board.row_gap for _x, l in lays)
     board.wiped = False
     board.carried = []
     if board.next_y + needed > WORK_BOTTOM and board.rows:
@@ -454,18 +493,21 @@ def _add_state(board: _Board, state: list[str], cue: Optional[dict], color: str 
     for i, (expr, lay) in enumerate(lays):
         eid = board.uid("w")
         y = board.next_y
+        tw = 0.0
         if lay is None:
-            board.elements.append({"id": eid, "type": "text", "text": _short(expr, 60), "size": 28,
-                                   "at": [LINE_X, y], "anchor": "lt", "color": color})
-            h = 34.0
-            lay = _layout("0", LINE_SIZE)  # a stand-in for geometry
+            text, size = _short(expr, 60), round(board.line_size * 0.78)
+            board.elements.append({"id": eid, "type": "text", "text": text, "size": size,
+                                   "at": [board.line_x, y], "anchor": "lt", "color": color})
+            tw, th = _M.text_box(text, size)
+            h = max(board.line_size * 0.95, th)
+            lay = _layout("0", board.line_size)  # a stand-in for geometry
         else:
-            board.elements.append({"id": eid, "type": "math", "expr": expr, "at": [LINE_X, y],
-                                   "size": LINE_SIZE, "color": color})
-            h = max(lay.h, MIN_ROW_H)
+            board.elements.append({"id": eid, "type": "math", "expr": expr, "at": [board.line_x, y],
+                                   "size": board.line_size, "color": color})
+            h = max(lay.h, min_row_h)
         board.actions.append({"verb": "write", "target": eid, **({"at": cue} if cue and i == 0 else {})})
-        rows.append(_Row(eid, expr, y, lay, board.state_no))
-        board.next_y = y + h + ROW_GAP
+        rows.append(_Row(eid, expr, y, lay, board.state_no, h, tw))
+        board.next_y = y + h + board.row_gap
     board.rows.extend(rows)
     board.state_no += 1
     return rows
@@ -498,18 +540,18 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
     note = _short(note, MAX_NOTE_CHARS)
     if not note:
         return
-    right = row.lay.w
+    right = max(row.lay.w, row.w)
     # in the gap above the new line: between it and the line it came from,
     # or just above it when that line is gone (a wipe) or was never one (a
     # check, a mistake). A note ON a line collided with the next line's
     # between-note (TEXT_OVERLAP n14+n16).
-    y = row.y - ROW_GAP * 0.5
+    y = row.y - board.row_gap * 0.5
     if target is not None and target.y < row.y:
-        right = max(right, target.lay.w if target.eid != "q" else 0.0)
-        y = (target.y + target.lay.h + row.y) / 2.0
+        right = max(right, max(target.lay.w, target.w) if target.eid != "q" else 0.0)
+        y = (target.y + max(target.lay.h, target.h) + row.y) / 2.0
     # one column for the notes of a column of working — they zigzagged with
     # each line's width
-    x = max(LINE_X + right + NOTE_GAP, board.note_x)
+    x = max(board.line_x + right + NOTE_GAP, board.note_x)
     board.note_x = x
     size = NOTE_SIZE
     w = _M.text_width(note, size)
@@ -519,6 +561,8 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
     if x + w > NOTE_RIGHT:
         note = _short(note, max(12, int(len(note) * (NOTE_RIGHT - x) / w)))
         w = _M.text_width(note, size)
+    if x + w > NOTE_RIGHT:
+        return          # a wide line left no room before the card: no note beats one across it
     nid = board.uid("n")
     board.elements.append({"id": nid, "type": "text", "text": note, "size": size, "color": "muted",
                            "role": "caption", "at": [x, y], "anchor": "lm"})
@@ -530,7 +574,7 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
     if found is None:
         return
     term, box = found
-    ox = LINE_X if target.eid != "q" else Q_AT[0]
+    ox = board.line_x if target.eid != "q" else Q_AT[0]
     oy = target.y
     aid = board.uid("ar")
     # the head is placed from the layout directly (the renderer's `sub`
@@ -543,6 +587,174 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
 
 
 HL_WIDTH = 26.0
+
+
+def _add_reason(board: _Board, row: _Row, text: str) -> None:
+    """A deduce step's reason UNDER the line it gave, the way a geometry
+    board carries "(angles on a straight line)": beside a figure the column
+    is too narrow for a note to the right — it shrank to 'angles on a st…'."""
+    text = " ".join(str(text or "").split())
+    if not text:
+        return
+    # the whole reason, wrapped to at most two lines under the equation:
+    # a Hindi or Telugu reason runs well past an English one and a cut
+    # reason ("…ह…") teaches nothing. Shrunk a little first, wrapped second.
+    max_w = NOTE_RIGHT - board.line_x
+    size = board.reason_size
+    lines = _wrap_text(text, size, max_w, 2)
+    while size > 17 and (len(lines) > 1 or " ".join(lines) != text):
+        size -= 1.0
+        lines = _wrap_text(text, size, max_w, 2)
+    # under the row's DRAWN height: a line the typesetter could not lay out
+    # is written as text, taller than its stand-in layout, and the reason
+    # landed on it (chapter-17 probe, 2026-10-08: TEXT_OVERLAP w1+n5)
+    y = row.y + max(row.h, row.lay.h) + REASON_GAP
+    for ln in lines:
+        nid = board.uid("n")
+        board.elements.append({"id": nid, "type": "text", "text": ln, "size": size, "color": "muted",
+                               "role": "caption", "at": [board.line_x + 6, y], "anchor": "lt"})
+        board.actions.append({"verb": "write", "target": nid})
+        board.annotations.append(nid)
+        y += _M.text_box(ln, size)[1] + 6.0    # the audit counts a touch as an overlap
+    board.next_y = max(board.next_y, y + board.row_gap * 0.5)
+
+
+@dataclass
+class _Figure:
+    """A figure example's diagrams on the board: the verified question, the
+    engine's report (models, proved values, computed answers) and one
+    FigureBoard per figure id."""
+    q: object
+    rep: object
+    boards: dict = field(default_factory=dict)
+
+    def board_for(self, target: str):
+        if target in self.boards:
+            return self.boards[target], self.rep.models[target]
+        if len(self.boards) == 1:
+            fid = next(iter(self.boards))
+            return self.boards[fid], self.rep.models[fid]
+        return None, None
+
+
+def _figure_panel(ex: WorkedExample, board: _Board, *, schematic: bool = False,
+                  question: Optional[dict] = None) -> _Figure:
+    """The example's figures drawn under the question: one reasoning figure
+    on the left with the working beside it; evidence figures in a row at
+    ONE shared scale (their relative sizes are part of the evidence), each
+    labelled. Raises a GeometryRefusal when a figure cannot be laid out.
+    ``question`` draws another question's figures in the example's panel —
+    the engine's chart of an algebra example (ex.chart['beside'])."""
+    question = question if question is not None else (ex.figure or {})
+    rep = verify_question(question)
+    if not rep.ok:
+        r = rep.refusal or {}
+        raise GeometryRefusal(str(r.get("code") or "bad_schema"),
+                              f"the figure example {ex.label or ex.problem[:40]!r} does not verify: {r.get('message', '')}")
+    q = parse_question(question)
+    top, bottom = board.top_y, WORK_BOTTOM
+    fig = _Figure(q, rep)
+    if len(q.figures) == 1:
+        ref = q.figures[0]
+        m = rep.models[ref.id]
+        if schematic and q.figure_role == "reasoning":
+            # the learner's own go: measuring must not bypass the reasoning
+            # (plan §6 — try_it → assessment_schematic for reasoning figures)
+            m = realise(ref.figure, "assessment_schematic", metric=m)
+        fig.boards[ref.id] = figure_board(m, ref.figure, panel=(Q_AT[0], top, FIG_RIGHT, bottom), prefix="fig",
+                                          text_metric=_M.text_box)
+        board.line_x = FIG_LINE_X
+    else:
+        # a grid, EV_COLS to a row: five triangles in one row left 87 px
+        # each and the wide obtuse one could not be drawn legibly (P1)
+        n = len(q.figures)
+        cols = min(EV_COLS, n)
+        nrows = -(-n // cols)
+        w = (EV_RIGHT - Q_AT[0] - FIG_GAP * (cols - 1)) / cols
+        h = (bottom - top - FIG_GAP * (nrows - 1)) / nrows
+        cells = []
+        for i in range(n):
+            r_, c_ = divmod(i, cols)
+            x0, y0 = Q_AT[0] + c_ * (w + FIG_GAP), top + r_ * (h + FIG_GAP)
+            cells.append((x0, y0, x0 + w, y0 + h))
+        panels = [(x0, y0, x1, y1 - FIG_LABEL_SIZE * 1.4) for (x0, y0, x1, y1) in cells]
+        scale = min(figure_board(rep.models[r.id], r.figure, panel=pn, prefix=f"f{i}", label_px=EV_LABEL_PX,
+                                 text_metric=_M.text_box).scale
+                    for i, (r, pn) in enumerate(zip(q.figures, panels)))
+        for i, (ref, pn, cell) in enumerate(zip(q.figures, panels, cells)):
+            fb = figure_board(rep.models[ref.id], ref.figure, panel=pn, prefix=f"f{i}", max_scale=scale,
+                              text_metric=_M.text_box,
+                              label_px=EV_LABEL_PX)
+            lid = f"f{i}_lab"
+            fb.elements.append({"id": lid, "type": "text", "text": ref.label or ref.id, "size": FIG_LABEL_SIZE,
+                                "at": [(pn[0] + pn[2]) / 2, cell[3] - FIG_LABEL_SIZE * 0.6], "anchor": "mm",
+                                "role": "title", "fixed": True})
+            fb.actions.append({"verb": "write", "target": lid, "duration": 0.4})
+            fig.boards[ref.id] = fb
+        board.line_x = EV_LINE_X
+    for fb in fig.boards.values():
+        board.elements.extend(fb.elements)
+        board.actions.extend(fb.actions)
+    return fig
+
+
+def _figure_ops(board: _Board, fig: _Figure, st: Step, cue: Optional[dict]) -> None:
+    """What the step does on the figure: its own figure_ops, or — for a
+    deduce step that names none — a highlight of each id it cites. A
+    figure id as target highlights that whole figure (evidence)."""
+    ops = list(st.figure_ops)
+    if not ops and st.kind == "deduce":
+        ops = [{"op": "highlight", "target": u} for u in st.uses]
+    for op in ops:
+        target = str(op.get("target") or "")
+        fb, m = fig.board_for(target)
+        if fb is None:
+            continue
+        if target in fig.boards and str(op.get("op")) in ("highlight", "tag_equal"):
+            acts = [{"verb": "highlight", "target": eid} for eid in figure_targets(fb)]
+            if acts and cue:
+                acts[0]["at"] = cue
+        else:
+            els, acts = op_actions(fb, m, op, cue=cue)
+            board.elements.extend(els)
+        board.actions.extend(acts)
+        if acts:
+            cue = None
+
+
+def _num(v) -> str:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    return str(int(round(f))) if abs(f - round(f)) < 1e-9 else f"{f:.2f}".rstrip("0").rstrip(".")
+
+
+def _reveal_answers(board: _Board, fig: _Figure, cue: Optional[dict]) -> None:
+    """The proved unknowns written onto the figure where their symbols were
+    — from the engine's proved values, never from the model's text."""
+    if not fig.rep.proved or len(fig.boards) != 1:
+        return
+    fid = next(iter(fig.boards))
+    fb, m = fig.boards[fid], fig.rep.models[fid]
+    ref = fig.q.figures[0]
+    subs = {sp.Symbol(k): v for k, v in fig.rep.proved.items()}
+    for ms in ref.figure.measures:
+        if ms.role not in ("unknown", "derived"):
+            continue
+        try:
+            val = exact_value(ms.value, where="measure").subs(subs)
+        except GeometryRefusal:
+            continue
+        if val.free_symbols:
+            continue
+        # the grid's generic unit is never written ("5", not "5 units"), as on the figure
+        text = _num(val) + ("" if ms.unit in (None, "deg", "unit", "units") else f" {ms.unit}")
+        els, acts = op_actions(fb, m, {"op": "reveal_measure", "target": ms.target, "value": text}, cue=cue)
+        board.elements.extend(els)
+        board.actions.extend(acts)
+        if acts:
+            cue = None
 
 
 def _highlight_method(board: _Board, step: Step, method, cue: Optional[dict], has_card: bool,
@@ -605,11 +817,34 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
     els, _acts = card_elements(method, present=True, lang=lang)
     board.elements.extend(els)
     _problem_elements(ex, board, _cue(lines[0].line if lines else "", narration))
+    # the diagram draws under the question while the teacher introduces it;
+    # the working moves to the right of it
+    fig = _figure_panel(ex, board) if ex.figure else None
+    if fig is None and ex.chart and isinstance(ex.chart.get("beside"), dict):
+        # the engine's chart of an algebra example: the lines beside the
+        # working from the start, the solution point kept for the closing
+        # scene (founder, 2026-10-09: "both")
+        try:
+            fig = _figure_panel(ex, board, question=ex.chart["beside"])
+        except GeometryRefusal:
+            fig = None       # a chart is a bonus; the example stands without it
+    evidence = fig is not None and len(fig.boards) > 1
+    if fig is not None and not evidence and len([st for st in ex.steps if st.after]) >= 4:
+        # a long proof beside a figure: tighter rows so it stays on one board
+        board.line_size, board.row_gap, board.reason_size = COMPACT_LINE_SIZE, COMPACT_ROW_GAP, COMPACT_REASON_SIZE
 
     prev_state_rows: list[_Row] = [board.question] if board.question else []
     last_rows: list[_Row] = []
+    figure_ready = fig is None
     for k, st in enumerate(ex.steps):
         cue = _cue(step_speech[k], narration)
+        if fig is not None:
+            # the FIRST step's figure ops take no cue: uncued actions follow
+            # the previous one, so they wait for the last stroke of the
+            # figure instead of highlighting a half-drawn hexagon at the
+            # phrase (live demo a13f7761, 2026-10-07)
+            _figure_ops(board, fig, st, cue if figure_ready else None)
+            figure_ready = True
         if not st.after:
             continue
         if st.kind == "check":
@@ -621,8 +856,15 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
                 _add_note(board, rows[0], _bt("check", lang), None, "")
             continue
         _highlight_method(board, st, method, cue, has_card, lang)
-        rows = _add_state(board, st.after, cue)
-        if rows:
+        # an evidence example's observations stay bright together: they are
+        # the answer, one line per figure, not a chain of working
+        rows = _add_state(board, st.after, cue, dim_previous=not evidence)
+        if rows and st.kind == "deduce":
+            # the theorem's reason under the line it gave, in the lesson
+            # language (maths.i18n.REASONS); no leader: the line came from
+            # the figure, not from a line above
+            _add_reason(board, rows[-1], _reason(st.theorem, lang) if st.theorem else "")
+        elif rows:
             note = st.note if st.kind in ("transform", "round") else (st.note or _bt("set_up", lang))
             # after a wipe the line this step came from is gone: the note
             # sits beside the new line and no leader points at nothing
@@ -630,6 +872,20 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
             _add_note(board, rows[0], note, target, f"{st.operation} {st.explanation}")
         prev_state_rows = rows
         last_rows = rows or last_rows
+    if evidence and ex.final_answer:
+        observed = [x for st in ex.steps for x in st.after[:1]]
+        if all(o in ex.final_answer[0] for o in observed):
+            # the answer IS the observations (a label_map with no selection):
+            # writing "A: equilateral; B: isosceles; C: scalene" under those
+            # three lines repeats them — underline them instead (5c4dbf30)
+            last_rows = [r for r in board.rows if r.state_index >= board.state_no - len(observed)] or last_rows
+        else:
+            # the selection the engine computed, as the closing line
+            rows = _add_state(board, ex.final_answer[:1], _cue(say(ex.answer_speech, lang), narration),
+                              color="accent", dim_previous=False)
+            last_rows = rows or last_rows
+    if fig is not None and not evidence:
+        _reveal_answers(board, fig, _cue(say(ex.answer_speech, lang), narration))
     if last_rows:
         acue = _cue(say(ex.answer_speech, lang), narration)
         for r in last_rows:
@@ -647,13 +903,35 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
             r = rows[0]
             sid = board.uid("strike")
             board.elements.append({"id": sid, "type": "shape", "shape": "line", "width": 3.6, "color": "accent",
-                                   "points": [[LINE_X - 6, r.y + r.lay.h * 0.55], [LINE_X + r.lay.w + 6, r.y + r.lay.h * 0.45]]})
+                                   "points": [[board.line_x - 6, r.y + max(r.lay.h, r.h) * 0.55],
+                                              [board.line_x + max(r.lay.w, r.w) + 6, r.y + max(r.lay.h, r.h) * 0.45]]})
             board.actions.append({"verb": "draw", "target": sid, "duration": 0.5})
             _add_note(board, r, _bt("not_allowed", lang, why=_short(m.why_wrong or m.operation, 30)), None, "")
     scene = {"id": f"mx_{seg_id}", "compiled": True, "scene_type": "worked_example",
              "narration": narration, "elements": _pin_text(board.elements), "actions": board.actions,
              "min_hold": 1.0}
     return scene, lines
+
+
+def check_figure_try_it(t: TryIt, lang: str = "en") -> None:
+    """A figure try-it fits the board twice: the schematic pause and the
+    metric solution. Raises when either cannot be laid out or schematised."""
+    from maths.verify import try_it_example
+    lesson = Lesson(try_it=t)
+    pause = try_it_segment(lesson, "s000", lang)
+    solution = try_it_solution_segment(lesson, "s000", lang)
+    if pause is None or solution is None:
+        raise GeometryRefusal("bad_schema", "a figure try-it has a problem, steps and an answer")
+    Scene.model_validate(pause["scene"])
+    Scene.model_validate(solution["scene"])
+
+
+def check_figure_example(ex: WorkedExample, lang: str = "en") -> None:
+    """A figure example fits the board: compiled once, validated against the
+    scene schema. Raises GeometryRefusal (or a validation error) when it
+    does not, so the lesson rejects the example before it is taught."""
+    scene, _lines = example_scene(ex, MethodCard(), "s000", has_card=False, lang=lang)
+    Scene.model_validate(scene)
 
 
 # ── the other cards ─────────────────────────────────────────────────────
@@ -738,6 +1016,29 @@ def recap_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
 TRY_IT_HOLD_SECS = 3.0
 
 
+def _try_it_figure_scene(t: TryIt, lang: str, narration: str) -> dict:
+    """The pause on a diagram: the question top-left, the figure under it —
+    schematic, "not drawn to scale", so the answer cannot be measured off
+    the board — and the pause line below; no working."""
+    from maths.verify import try_it_example
+    ex = try_it_example(t)
+    board = _Board()
+    heading = f"{_bt('try_it', lang)}: {t.problem}"
+    _problem_elements(WorkedExample(problem=heading, givens=[]), board, None)
+    fig = _figure_panel(ex, board, schematic=True)
+    if fig.q.figure_role == "reasoning" and not any(mm.axes is not None for mm in fig.rep.models.values()):
+        nid = board.uid("n")
+        y = min(WORK_BOTTOM - 4, max(fb.box[3] for fb in fig.boards.values()) + 8)
+        board.elements.append({"id": nid, "type": "text", "text": _bt("not_to_scale", lang), "size": 20,
+                               "color": "muted", "role": "caption", "at": [Q_AT[0] + 6, y], "anchor": "lt"})
+        board.actions.append({"verb": "write", "target": nid})
+    board.elements.append({"id": "pause", "type": "text", "text": _bt("pause_line", lang), "size": 24,
+                           "color": "muted", "at": [board.line_x + 40, 300], "anchor": "lt"})
+    board.actions.append({"verb": "write", "target": "pause", "at": {"frac": 0.7}})
+    return {"id": "mt_try", "compiled": True, "scene_type": "generic", "narration": narration,
+            "elements": _pin_text(board.elements), "actions": board.actions}
+
+
 def try_it_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> Optional[dict]:
     """The learner's own go: the problem, the invitation, then the whole
     video holds for TRY_IT_HOLD_SECS of silence before the solution segment
@@ -745,6 +1046,14 @@ def try_it_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> Optional[di
     t = lesson.try_it
     if not t.problem:
         return None
+    if t.figure:
+        lines = [Line(line=say(t.speech, lang) or say(_bt("try_it_speech", lang, problem=t.problem), lang))]
+        seg = _segment(seg_id, "question_hook", lines, heading=_bt("try_it", lang), points=[t.problem], pause=True,
+                       hold=TRY_IT_HOLD_SECS)
+        scene = _try_it_figure_scene(t, lang, seg["text"])
+        scene["id"] = f"mt_{seg_id}"
+        seg["scene"] = scene
+        return seg
     lines = [Line(line=say(t.speech, lang) or say(_bt("try_it_speech", lang, problem=t.problem), lang))]
     heading = _bt("try_it", lang)
     seg = _segment(seg_id, "question_hook", lines, heading=heading, points=[t.problem], pause=True,
@@ -776,6 +1085,8 @@ def try_it_solution_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> Op
     example, with the method card, notes and the answer underline."""
     from maths.verify import try_it_example
     ex = try_it_example(lesson.try_it)
+    if ex is not None and not ex.figure and ex.chart is None:
+        ex.chart = chart_for(ex)       # the learner's own system, plotted like any example
     if ex is None or not lesson.try_it.steps:
         return None
     ex.label = _bt("try_it_label", lang)
@@ -803,6 +1114,114 @@ def closing_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
         acts.append({"verb": "pulse", "target": "card_box", "times": 2, "duration": 1.2, "at": {"frac": 0.55}})
     seg["scene"] = {"id": f"mz_{seg_id}", "compiled": True, "scene_type": "generic", "narration": seg["text"],
                     "elements": _pin_text(els), "actions": acts}
+    return seg
+
+
+# the closing chart has the board to itself (no working column, no card):
+# centred, as tall as the avatars allow, as wide as it likes
+CHART_PANEL = (Q_AT[0], FIRST_ROW_Y - 18.0, 1220.0, WORK_BOTTOM)
+
+
+def chart_scene(ex: WorkedExample, seg_id: str, lang: str = "en") -> Optional[tuple[dict, list[Line]]]:
+    """The closing scene after a solved example: its chart drawn large,
+    the solution point written and highlighted, one line of caption and
+    the teacher saying what the crossing means. None when the example has
+    no chart or it cannot be laid out."""
+    ch = ex.chart or {}
+    spec = ch.get("closing")
+    if not isinstance(spec, dict):
+        return None
+    point, eqs = ch.get("point"), ch.get("lines") or []
+    if ch.get("kind") == "half_plane":
+        caption = _bt("region_caption", lang, ans=ch.get("answer") or "")
+        speech = _bt("region_speech_strict" if ch.get("strict") else "region_speech_closed", lang,
+                     ans=ch.get("answer") or "", line=(ch.get("lines") or [""])[0])
+    elif ch.get("kind") == "data":
+        stat, v = str(ch.get("stat")), ch.get("value") or ""
+        caption = _bt(f"data_caption_{stat}", lang, v=v)
+        if stat == "median" and ch.get("a") is not None:
+            speech = _bt("data_median_even_speech", lang, a=ch.get("a"), b=ch.get("b"), v=v)
+        elif stat == "range":
+            speech = _bt("data_range_speech", lang, lo=ch.get("lo") or "", hi=ch.get("hi") or "", v=v)
+        else:
+            speech = _bt(f"data_{stat}_speech", lang, v=v)
+    elif ch.get("kind") == "number_line":
+        caption = _bt("ineq_caption", lang, ans=ch.get("answer") or "")
+        shape, closed = ch.get("shape"), ch.get("closed") or [False, False]
+        if shape == "between":
+            speech = _bt("ineq_between", lang, a=ch.get("a") or "", b=ch.get("b") or "")
+        elif shape == "right":
+            speech = _bt("ineq_right_closed" if closed[0] else "ineq_right_open", lang, a=ch.get("a") or "")
+        else:
+            speech = _bt("ineq_left_closed" if closed[1] else "ineq_left_open", lang, b=ch.get("b") or "")
+    elif ch.get("kind") == "parabola":
+        roots = ", ".join(f"x = {r}" for r in (ch.get("roots") or []))
+        caption = _bt("roots_cross", lang, r=roots)
+        speech = _bt("roots_cross_speech", lang, r=roots, v=ch.get("vertex") or "")
+    elif point:
+        px, py = [t.strip() for t in point.strip("()").split(",")]
+        caption = _bt("lines_cross", lang, p=point)
+        speech = _bt("lines_cross_speech", lang, p=point, x=px, y=py)
+    else:
+        caption = _bt("line_graph", lang, eq=eqs[0] if eqs else "")
+        speech = _bt("line_graph_speech", lang, eq=eqs[0] if eqs else "")
+    lines = [Line(who="teacher", line=speech)]
+    rep = verify_question(spec)
+    if not rep.ok:
+        return None
+    q = parse_question(spec)
+    ref = q.figures[0]
+    # the chart starts under the caption: a long caption (a parabola's two
+    # roots) ran into the y-axis name at the panel's fixed top (2026-10-09)
+    _cw, cap_h = _M.text_box(display_text(caption), Q_SIZE)
+    panel = (CHART_PANEL[0], max(CHART_PANEL[1], Q_AT[1] + cap_h + 10.0), CHART_PANEL[2], CHART_PANEL[3])
+    try:
+        fb = figure_board(rep.models[ref.id], ref.figure, panel=panel, prefix="fig",
+                          text_metric=_M.text_box)
+    except GeometryRefusal:
+        return None
+    elements: list[dict] = [{"id": "q0", "type": "text", "text": display_text(caption), "size": Q_SIZE,
+                             "at": [Q_AT[0], Q_AT[1]], "anchor": "lt", "role": "title"}]
+    actions: list[dict] = [{"verb": "write", "target": "q0", "at": _cue(speech, speech)}]
+    elements += fb.elements
+    # a redraw of lines the class has already watched: brisk strokes, and the
+    # board held past the speech for whatever the pen still needs — the
+    # renderer cuts what outruns the voice, and a first cut left the chart
+    # half-drawn (frame review, 2026-10-09)
+    for a in fb.actions:
+        if "duration" in a:
+            a["duration"] = round(max(0.05, float(a["duration"]) * CHART_PACE), 2)
+    actions += fb.actions
+    # the solution point's tag — or the roots' — swept once the figure is drawn
+    for tag in ("coord:p_s", "coord:p_r1", "coord:p_r2"):
+        for eid in fb.targets.get(tag, []):
+            actions.append({"verb": "highlight", "target": eid})
+    # "compiled": the board's own scene, not a model reply — the director's
+    # 12-element / 18-action cap is for replies, and it cut this chart to its
+    # first eleven strokes (frame review, 2026-10-09)
+    scene = {"id": f"mg_{seg_id}", "compiled": True, "scene_type": "worked_example", "narration": speech,
+             "elements": elements, "actions": actions}
+    return scene, lines
+
+
+CHART_PACE = 0.4
+
+
+def _chart_hold(scene: dict, speech: str) -> float:
+    """Seconds to hold the board after the speech so every stroke lands."""
+    pen = sum(float(a.get("duration") or 0.8) for a in scene.get("actions", []) if a.get("verb") in ("draw", "write", "highlight"))
+    spoken = len(speech) / 14.0
+    return round(max(0.0, pen + 2.0 - spoken), 1)
+
+
+def chart_segment(ex: WorkedExample, seg_id: str, lang: str = "en") -> Optional[dict]:
+    out = chart_scene(ex, seg_id, lang)
+    if out is None:
+        return None
+    scene, lines = out
+    heading = _short(str(scene["elements"][0]["text"]), 60)     # the scene's own caption
+    seg = _segment(seg_id, "explore", lines, heading=heading, points=[], hold=_chart_hold(scene, lines[0].line))
+    seg["scene"] = scene
     return seg
 
 
@@ -840,6 +1259,13 @@ def compile_lesson(lesson: Lesson, avatars: dict | None = None, language: str = 
     for ex in lesson.examples:
         segs.append(example_segment(ex, lesson, f"s{n:03d}", lang))
         n += 1
+        if ex.chart:
+            # the engine's chart, after the solution: the lines and the
+            # crossing point, said in words (founder, 2026-10-09)
+            cs = chart_segment(ex, f"s{n:03d}", lang)
+            if cs is not None:
+                segs.append(cs)
+                n += 1
     segs.append(recap_segment(lesson, f"s{n:03d}", lang))
     n += 1
     t = try_it_segment(lesson, f"s{n:03d}", lang)
@@ -850,10 +1276,18 @@ def compile_lesson(lesson: Lesson, avatars: dict | None = None, language: str = 
         if sol is not None:
             segs.append(sol)
             n += 1
+            from maths.verify import try_it_example  # noqa: PLC0415
+            tex = try_it_example(lesson.try_it)
+            if tex is not None and not tex.figure:
+                tex.chart = chart_for(tex)
+                cs = chart_segment(tex, f"s{n:03d}", lang) if tex.chart else None
+                if cs is not None:
+                    segs.append(cs)
+                    n += 1
     segs.append(closing_segment(lesson, f"s{n:03d}", lang))
     return segs
 
 
-__all__ = ["say", "example_scene", "example_segment", "hook_segment", "concept_segment", "recap_segment",
+__all__ = ["say", "example_scene", "example_segment", "check_figure_example", "check_figure_try_it", "hook_segment", "concept_segment", "recap_segment",
            "try_it_segment", "try_it_solution_segment", "closing_segment", "compile_lesson", "card_elements",
            "method_step_for"]

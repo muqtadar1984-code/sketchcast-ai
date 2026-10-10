@@ -673,6 +673,34 @@ def script_text(script: dict) -> str:
     return " ".join(p for p in out if p)
 
 
+# A sidecar a document builder may write beside the student document: what
+# the document's PICTURES say, in words. A maths worksheet's diagram
+# questions carry the chapter's content in drawn triangles — the words
+# "scalene", "isosceles", "equilateral" never reach the text, so the gate
+# scored a sheet of exactly those triangles 0.286 on 2026-10-07. The builder
+# (docgen.maths_worksheet) writes each figure question's transcript from
+# the facts the geometry engine computed, and document_text reads it with
+# the document. The transcript is what a sighted student reads off the
+# page; counting it is counting the page.
+FIGURE_TRANSCRIPT = "figures_transcript.txt"
+
+
+def document_text(path) -> str:
+    """The text a student document presents: its .docx text plus the
+    figure transcript written beside it, when there is one."""
+    text = docx_text(path)
+    try:
+        sidecar = os.path.join(os.path.dirname(str(path)), FIGURE_TRANSCRIPT)
+        if os.path.exists(sidecar):
+            with open(sidecar, encoding="utf-8") as fh:
+                extra = fh.read().strip()
+            if extra:
+                text = f"{text} {extra}"
+    except OSError:
+        pass   # best-effort, like docx_text: unreadable is unmeasured, never a failure
+    return text
+
+
 def docx_text(path) -> str:
     """All text in a built .docx — paragraphs AND table cells.
 

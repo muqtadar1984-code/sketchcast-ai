@@ -93,14 +93,17 @@ class FakeClient:
 
     model = "fake"
 
-    def __init__(self, lesson=None, fixed=None, fail_regen=False):
+    def __init__(self, lesson=None, fixed=None, fail_regen=False, figures=None):
         self.lesson = copy.deepcopy(lesson or LESSON)
         self.fixed = copy.deepcopy(fixed or FIXED_EX2)
         self.fail_regen = fail_regen
+        self.figures = copy.deepcopy(figures or [])   # the geometry engine's call: no diagrams unless given
         self.calls: list[dict] = []
 
     def analyze(self, prompt, system="", max_tokens=0, retries=3, cache_prefix=None, response_schema=None, **kw):
         self.calls.append({"prompt": prompt, "schema": response_schema, "max_tokens": max_tokens})
+        if "geometry.figure.v1" in prompt:
+            return {"data": {"questions": self.figures}, "usage": {}, "truncated": False}
         if "REJECTED" in prompt:
             data = copy.deepcopy(BAD_EX2) if self.fail_regen else self.fixed
             return {"data": data, "usage": {}, "truncated": False}
@@ -708,3 +711,11 @@ def test_a_wiped_column_leaves_no_overlap_in_the_report():
         overlaps = [w for w in r.audit()["warnings"] if w.startswith("TEXT_OVERLAP")]
         assert not overlaps, (s["segment_id"], overlaps)
     assert wiped, "the scenario is a column that fills and is wiped"
+
+
+def test_the_step_rules_say_a_moved_point_is_a_new_point():
+    """Chapter-17 fifth run (2026-10-08): the model wrote translations as
+    transform steps ('x = 5' -> 'x = 2'), which the verifier refuses — a
+    transform must keep the solution. The rule now says so."""
+    from maths.lesson import _STEP_RULES
+    assert "A point that MOVES" in _STEP_RULES and "NEVER as a \"transform\"" in _STEP_RULES

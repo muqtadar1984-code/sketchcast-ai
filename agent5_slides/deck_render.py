@@ -397,11 +397,30 @@ def _misconceptions(prs, sl):
     return s, _overflow(end, sl)
 
 
+def _plain_picture(s, png: Path, left: float, top: float, max_w: float, max_h: float) -> None:
+    """A picture as it is, fitted inside a frame, top-right aligned."""
+    from PIL import Image
+
+    with Image.open(png) as im:
+        w, h = im.size
+    scale = min(max_w / w, max_h / h)
+    pw, ph = int(w * scale), int(h * scale)
+    s.shapes.add_picture(str(png), int(left + max_w - pw), int(top), width=pw, height=ph)
+
+
 def _worked(prs, sl):
     s = _slide(prs)
     _chrome(s, sl)
     y = _key_idea(s, sl.key_idea) if sl.key_idea else BODY_TOP + 0.1 * IN
-    end = _blocks(s, sl.blocks, y=y)
+    fig = sl.figure
+    if fig is not None and fig.png and Path(fig.png).exists():
+        # a maths figure example: the figure the question is about on the
+        # right, the working on the left (the geometry engine drew it)
+        pic_w = CONTENT_W * 0.42
+        _plain_picture(s, Path(fig.png), MARGIN + CONTENT_W - pic_w, y, pic_w, BODY_BOTTOM - y)
+        end = _blocks(s, sl.blocks, y=y, w=CONTENT_W * 0.54)
+    else:
+        end = _blocks(s, sl.blocks, y=y)
     return s, _overflow(end, sl)
 
 
