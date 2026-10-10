@@ -2466,11 +2466,12 @@ def _process_catalogue(sb: Client, job: dict, generation_id: str, gen: dict, *,
     except db.DeferredJob:
         raise                                 # a wait is not a failure
     except Exception as exc:
-        # A model quota refusal is a wait too (worker.client.rate_limit_deferral):
-        # the kit stays `generating` and run.py puts the job back with a wake-up
-        # time. Two consecutive videos of one kit went `failed` on Vertex 429s
-        # three minutes apart (2026-09-25) with nothing wrong in them.
-        wait = db.rate_limit_deferral(job, exc)
+        # A model quota refusal, or a provider outage, is a wait too
+        # (worker.client.model_wait): the kit stays `generating` and run.py
+        # puts the job back with a wake-up time. Two consecutive videos of one
+        # kit went `failed` on Vertex 429s three minutes apart (2026-09-25)
+        # with nothing wrong in them.
+        wait = db.model_wait(job, exc)
         if wait is not None:
             logger.warning("catalogue generation %s: %s", generation_id, wait.note)
             raise wait from exc
