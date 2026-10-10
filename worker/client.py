@@ -189,6 +189,66 @@ def rate_limit_deferral(job: dict, exc: BaseException) -> "DeferredJob | None":
                        f"{RATE_LIMIT_MAX_WAIT_SECONDS}s)")
 
 
+# A provider OUTAGE is a wait too. 2026-09-22 21:18-21:33: Vertex answered
+# 500 Internal Server Error for a quarter of an hour; the client's three
+# retries span seconds, so eight of one teacher's documents went to `error`
+# with nothing wrong in them, the support agent misread the first as a
+# scanned book, and the teacher reported the last by hand eighteen days
+# later (issue 7c00cffd). A 5xx that survives the client's retries now earns
+# the job a longer wait, OUTAGE_DEFER_SECONDS at a time, no attempt spent,
+# until it has waited OUTAGE_MAX_WAIT_SECONDS in total.
+OUTAGE_DEFER_SECONDS = int(os.getenv("OUTAGE_DEFER_SECONDS", "300"))
+OUTAGE_MAX_WAIT_SECONDS = int(os.getenv("OUTAGE_MAX_WAIT_SECONDS", "3600"))
+_OUTAGE_CLASSES = ("_Transient", "InternalServerError", "ServiceUnavailableError", "APIStatusError",
+                   "ServiceUnavailable", "InternalServerError", "DeadlineExceeded")
+_OUTAGE_MARKS = ("500 Server Error", "502 Server Error", "503 Server Error", "504 Server Error",
+                 "Internal Server Error", "Service Unavailable", "Bad Gateway", "Gateway Time-out",
+                 "Gateway Timeout", '"code": 500', '"code": 502', '"code": 503', '"code": 504',
+                 '"status": "UNAVAILABLE"', '"status": "INTERNAL"', "overloaded_error", "Overloaded")
+
+
+def is_provider_outage(exc: BaseException) -> bool:
+    """A model provider failing on ITS side — a 5xx from Vertex or Anthropic,
+    by class or by the text of a wrapped error. Never a 4xx: a refused
+    request is the request's fault and a retry would refuse again."""
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        status = getattr(cur, "status", None) or getattr(cur, "status_code", None)
+        try:
+            if status is not None and 500 <= int(status) <= 599:
+                return True
+        except (TypeError, ValueError):
+            pass
+        if type(cur).__name__ in _OUTAGE_CLASSES and status is None:
+            return True
+        text = str(cur)
+        if any(m.lower() in text.lower() for m in _OUTAGE_MARKS):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def provider_outage_deferral(job: dict, exc: BaseException) -> "DeferredJob | None":
+    """The wait a provider outage earns this job, or None when the exception
+    is not one, or the job has already waited its whole budget."""
+    if not is_provider_outage(exc):
+        return None
+    waited = deferred_seconds(job)
+    if waited >= OUTAGE_MAX_WAIT_SECONDS:
+        return None
+    return DeferredJob(OUTAGE_DEFER_SECONDS,
+                       f"model provider outage; waiting (waited {waited:.0f}s of "
+                       f"{OUTAGE_MAX_WAIT_SECONDS}s)")
+
+
+def model_wait(job: dict, exc: BaseException) -> "DeferredJob | None":
+    """A rate limit's wait, else an outage's, else None — the one question
+    every failure path asks before it calls a failure a failure."""
+    return rate_limit_deferral(job, exc) or provider_outage_deferral(job, exc)
+
+
 def deferred_seconds(job: dict) -> float:
     """How long this job has been waiting in total (0 if never deferred)."""
     since = ((job.get("params") or {}) if isinstance(job.get("params"), dict) else {}).get("deferred_since")

@@ -125,5 +125,63 @@ class TestTheCatalogueBranch:
         src = Path(run.__file__).with_name("process.py").read_text(encoding="utf-8")
         body = src[src.index("def _process_catalogue"):src.index("def process_generation")]
         assert body.index("except db.DeferredJob:") < body.index("except Exception as exc:")
-        assert body.index("db.rate_limit_deferral(job, exc)") < body.index('{"status": "failed", "kind": gen.get("kind")')
+        assert body.index("db.model_wait(job, exc)") < body.index('{"status": "failed", "kind": gen.get("kind")')
         assert "raise wait from exc" in body
+
+
+# ── a provider outage is a wait too (2026-10-10) ─────────────────────────────
+# 2026-09-22 21:18-21:33: Vertex answered 500 for a quarter of an hour. The
+# client's three retries span seconds, so eight of one teacher's documents
+# went to `error` with nothing wrong in them; the teacher reported the last
+# by hand eighteen days later (issue 7c00cffd).
+
+VERTEX_500 = "500 Server Error: Internal Server Error for url: https://aiplatform.googleapis.com/v1/projects/x:generateContent"
+
+
+class TestWhatCountsAsAnOutage:
+    def test_a_5xx_by_class_status_or_text(self):
+        from shared.gemini_client import _Transient
+        assert db.is_provider_outage(_Transient(500, "Internal Server Error"))
+        assert db.is_provider_outage(_Transient(503, '{"error": {"code": 503, "status": "UNAVAILABLE"}}'))
+        assert db.is_provider_outage(RuntimeError(VERTEX_500))
+        wrapped = RuntimeError("document build failed")
+        wrapped.__cause__ = RuntimeError("503 Server Error: Service Unavailable")
+        assert db.is_provider_outage(wrapped)
+
+    def test_a_refusal_or_an_ordinary_error_is_not_one(self):
+        assert not db.is_provider_outage(_RateLimited(VERTEX_429))
+        assert not db.is_provider_outage(RuntimeError("400 Client Error: Bad Request"))
+        assert not db.is_provider_outage(RuntimeError("only 2 usable section(s); at least 3 needed"))
+        assert not db.is_provider_outage(RuntimeError("'tuple' object has no attribute 'is_Symbol'"))
+
+
+class TestTheOutageWait:
+    def test_a_fresh_job_waits_the_outage_time(self, monkeypatch):
+        monkeypatch.setattr(db, "OUTAGE_DEFER_SECONDS", 300)
+        wait = db.provider_outage_deferral(_builder(), RuntimeError(VERTEX_500))
+        assert isinstance(wait, db.DeferredJob) and wait.seconds == 300 and "outage" in wait.note
+        assert db.model_wait(_builder(), RuntimeError(VERTEX_500)).seconds == 300
+
+    def test_a_rate_limit_keeps_its_own_wait(self, monkeypatch):
+        monkeypatch.setattr(db, "RATE_LIMIT_DEFER_SECONDS", 180)
+        monkeypatch.setattr(db, "OUTAGE_DEFER_SECONDS", 300)
+        assert db.model_wait(_builder(), _RateLimited(VERTEX_429)).seconds == 180
+
+    def test_after_its_budget_the_outage_is_a_failure(self, monkeypatch):
+        monkeypatch.setattr(db, "OUTAGE_MAX_WAIT_SECONDS", 3600)
+        monkeypatch.setattr(db, "deferred_seconds", lambda job: 3600.0)
+        assert db.provider_outage_deferral(_builder(), RuntimeError(VERTEX_500)) is None
+        assert db.model_wait(_builder(), RuntimeError("malformed JSON")) is None
+
+    def test_the_run_loop_puts_the_job_back_with_no_attempt(self, monkeypatch):
+        def boom(sb, job, gen_id):
+            raise RuntimeError(VERTEX_500)
+
+        monkeypatch.setattr(run, "process_generation", boom)
+        monkeypatch.setattr(db, "OUTAGE_DEFER_SECONDS", 300)
+        sb = _fresh("queued", jobs=[_builder("job-1", "exam_paper")])
+        assert run.run_once(sb) is True
+        row = sb.tables["jobs"][0]
+        assert row["status"] == "queued" and row["attempts"] == 0 and not row.get("error")
+        assert row["params"]["deferred_until"] > row["params"]["deferred_since"]
+        assert sb.tables["generations"][0]["status"] == "queued"
