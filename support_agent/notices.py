@@ -101,17 +101,34 @@ def due(notices: list[dict], still_open: int, now: datetime) -> bool:
     return still_open == 0 and newest <= now - timedelta(minutes=SETTLE_MINUTES)
 
 
+def _names_an_item(what: str) -> bool:
+    """Does ``what`` name ONE thing — a kind with its book ('slide deck for
+    "Where\'s my bag?"') or a report's own title ('test paper (Class Eight ·
+    Chapter 1 · Part 3)') — rather than a bare category ("generation
+    failed")? Only notices about one item may share a line."""
+    return ' for "' in what or "(" in what
+
+
 def _lines(notices: list[dict]) -> list[tuple[str, str]]:
-    """One (what, note) per item: several notices about the same item carry
-    its latest sentence — three failed attempts at one deck are one line."""
+    """One (what, note) per item: several notices about the SAME item carry
+    its latest sentence — three failed attempts at one deck are one line.
+    Notices under a bare category stay one line each: two of a teacher's
+    reports both read "generation failed" and the digest kept one sentence
+    of two (2026-10-10, the report the teacher had just made was the one
+    dropped)."""
     latest: dict[str, str] = {}
     order: list[str] = []
+    out: list[tuple[str, str]] = []
     for n in notices:  # oldest first, so the last write wins
         what = str(n.get("what") or "request").strip()
+        note = str(n.get("note") or "").strip()
+        if not _names_an_item(what):
+            out.append((what, note))
+            continue
         if what not in latest:
             order.append(what)
-        latest[what] = str(n.get("note") or "").strip()
-    return [(w, latest[w]) for w in order]
+        latest[what] = note
+    return [(w, latest[w]) for w in order] + out
 
 
 def digest(notices: list[dict], still_open: int = 0) -> tuple[str, str]:
@@ -176,6 +193,16 @@ def what_for(sb, gen: Optional[dict], issue: dict) -> str:
     """"slide deck for \\"Where's my bag?\\"": the item in the owner's words,
     with its book when it has one."""
     from support_agent.agent import _what
+    if gen is None:
+        # a report made by hand carries no generation; its title names the
+        # item ("Test paper failed — Class Eight · Chapter 1 · Part 3")
+        title = " ".join(str(issue.get("title") or "").split())
+        if " failed" in title:
+            kind, _sep, where = title.partition(" failed")
+            where = where.lstrip(" —-–:").strip()
+            kind = kind.strip().lower()
+            if kind:
+                return f"{kind} ({where})" if where else kind
     what = _what(gen, issue)
     book_id = (gen or {}).get("book_id") or issue.get("book_id")
     if book_id:

@@ -80,6 +80,26 @@ class TestTheDigest:
         assert text.count("slide deck") == 1 and "The writer is fixed" in text
         assert "First attempt" not in text and "reply to this email" in text
 
+    def test_notices_under_a_bare_category_are_never_folded_into_one(self):
+        """2026-10-10: two reports made by hand both read "generation failed";
+        the digest kept one sentence of two, and the report the teacher had
+        just made was the one dropped."""
+        subject, text = N.digest([_notice("iss-1", what="generation failed", note="The worksheet is in your library."),
+                                  _notice("iss-2", what="generation failed", note="The test paper is in your library.")])
+        assert subject == "An update on your SketchCast items"
+        assert "The worksheet is in your library." in text and "The test paper is in your library." in text
+        # a report's own title names the item, so its notices still fold
+        subject, text = N.digest([_notice("iss-1", what="test paper (Class Eight · Chapter 1 · Part 3)", note="First."),
+                                  _notice("iss-2", what="test paper (Class Eight · Chapter 1 · Part 3)", note="Second.")])
+        assert "First." not in text and "Second." in text
+
+    def test_a_report_made_by_hand_is_named_by_its_title(self):
+        sb = _sb()
+        issue = {"id": "iss-1", "title": "Test paper failed — Class Eight · Chapter 1 · Part 3", "category": "deck_docs"}
+        assert N.what_for(sb, None, issue) == "test paper (Class Eight · Chapter 1 · Part 3)"
+        assert N.what_for(sb, None, {"id": "iss-2", "title": "Worksheet failed", "category": "x"}) == "worksheet"
+        assert N.what_for(sb, None, {"id": "iss-3", "title": "Something odd", "category": "generation_failed"}) == "generation failed"
+
     def test_several_items_are_numbered_and_the_open_ones_are_counted(self):
         subject, text = N.digest([_notice("iss-1", what="worksheet", note="Regenerated."),
                                   _notice("iss-2", what="test paper", note="Regenerated too.")], still_open=1)
