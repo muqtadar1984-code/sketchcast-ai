@@ -674,3 +674,66 @@ class TestTheRoleTravelsWithTheWork:
     def test_the_scene_engine_asks_for_nothing_and_gets_a_scene(self, monkeypatch):
         monkeypatch.setenv(ENV_PROFILE, MIXED)
         assert ra.current_image_model().id == FLASH
+
+
+
+class TestTheFigureIsTheInkOne:
+    """Coordinates and Plotting Linear Graphs (2026-10-09 and -11): with the
+    board-colour pictures switch on, the ladder cached every figure under its
+    COLOUR key and the figure job looked for the file under the plain key —
+    "rendered asset unreadable" for 2 of 2, twice. A figure is the library's
+    reviewed INK asset; the pictures pin is off for its generation, and the
+    path comes from the key the ladder actually cached under."""
+
+    def test_the_pictures_switch_is_off_while_a_figure_draws_and_restored_after(self, monkeypatch):
+        from types import SimpleNamespace
+        from catalogue import figures
+        from spike.scene_engine import colour
+
+        monkeypatch.setenv(colour.PICTURES_FLAG, "1")
+        monkeypatch.setenv(colour.FLAG, "1")
+        seen: list[tuple[bool, bool]] = []
+
+        def spy(key, prompt, cache_dir=None, allow_generate=True):
+            seen.append((colour.enabled(), colour.pictures_enabled()))
+            return None
+
+        backend = figures.default_backend()
+        monkeypatch.setattr(ra, "get_raster_asset", spy)
+        assert colour.pictures_enabled() is True
+        assert backend.generate("cartesian_plane", "a cartesian grid") is None
+        assert seen == [(True, False)], "phase 1 as it was, phase 2 pinned off"
+        assert colour.pictures_enabled() is True, "the pin does not leak out"
+        assert colour.snapshot() == (None, None)
+
+    def test_the_path_is_the_key_the_ladder_cached_under(self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+        from catalogue import figures
+
+        monkeypatch.setattr(ra, "CACHE_DIR", tmp_path)
+        # the cache directory is the scene engine's CANONICAL form of the key
+        # (sorted tokens: cartesian_plane__colour -> cartesian_colour_plane),
+        # exactly as the ladder writes it
+        plain, coloured = ra.canonical_key("cartesian_plane"), ra.canonical_key("cartesian_plane__colour")
+        assert plain != coloured
+        for name in (plain, coloured):
+            d = tmp_path / name
+            d.mkdir()
+            (d / "asset.png").write_bytes(b"png")
+            (d / "meta.json").write_text('{"under": "%s"}' % name, encoding="utf-8")
+        backend = figures.default_backend()
+
+        def served_under(cached_key):
+            def spy(key, prompt, cache_dir=None, allow_generate=True):
+                return SimpleNamespace(key=cached_key, trace=[(0.0, 0.0)], regions={"x_axis": [[0, 0, 1, 1]], "empty": []})
+            return spy
+
+        monkeypatch.setattr(ra, "get_raster_asset", served_under("cartesian_plane__colour"))
+        r = backend.generate("cartesian_plane", "a cartesian grid")
+        assert r.path == tmp_path / coloured / "asset.png" and r.meta == {"under": coloured}
+        assert r.group_ids == ["x_axis"]
+        monkeypatch.setattr(ra, "get_raster_asset", served_under("cartesian_plane"))
+        assert backend.generate("cartesian_plane", "a cartesian grid").path == tmp_path / plain / "asset.png"
+        # a key the ladder names but never wrote falls back to the request's own directory
+        monkeypatch.setattr(ra, "get_raster_asset", served_under("somewhere_else"))
+        assert backend.generate("cartesian_plane", "a cartesian grid").path == tmp_path / plain / "asset.png"

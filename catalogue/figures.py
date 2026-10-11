@@ -309,6 +309,7 @@ def default_backend() -> FigureBackend:
     from shared import image_models as images
     from shared import visual_library as lib
     from shared import visual_library_integration as integration
+    from spike.scene_engine import colour
     from spike.scene_engine import raster_assets as ra
     from spike.scene_engine import svg_assets as sa
 
@@ -329,19 +330,39 @@ def default_backend() -> FigureBackend:
         # scene engine's own thirty-a-lesson diagrams keep whatever the
         # `scene` role says (shared/image_models.py). Scoped to the call:
         # nothing downstream of this block inherits it.
-        with ra.image_role(images.FIGURE):
-            if os.getenv("SCENE_SVG_ASSETS", "").strip() == "1":
-                asset = sa.get_svg_asset(key, prompt, None, True)
-                if asset is not None:
-                    path = sa.svg_cache_dir(None, key) / "asset.svg"
-                    return Rendered(path, "svg", list(asset.layer_ids()), _meta(path.parent))
-            asset = ra.get_raster_asset(key, prompt, None, True)
+        # THE INK FIGURE, whatever the board-colour switches say. Under the
+        # pictures switch the ladder fetches a board key as its COLOUR key
+        # (raster_assets.colour_key: <key>__colour), caches the picture
+        # there, and the visual library refuses to publish a coloured key.
+        # The path computed below from the plain key then named a file that
+        # did not exist: "rendered asset unreadable" on every figure of
+        # every article since the switch went live (Coordinates and
+        # Plotting Linear Graphs, 2026-10-09 and -11, 2 of 2). A figure is
+        # the library's reviewed ink asset — the one every kit, document
+        # and translation reuses — so the pictures pin is OFF for this
+        # call; a colour lesson draws its coloured copy fresh, as designed.
+        snap = colour.snapshot()
+        pinned = colour.restore((snap[0], False))
+        try:
+            with ra.image_role(images.FIGURE):
+                if os.getenv("SCENE_SVG_ASSETS", "").strip() == "1":
+                    asset = sa.get_svg_asset(key, prompt, None, True)
+                    if asset is not None:
+                        path = sa.svg_cache_dir(None, key) / "asset.svg"
+                        return Rendered(path, "svg", list(asset.layer_ids()), _meta(path.parent))
+                asset = ra.get_raster_asset(key, prompt, None, True)
+        finally:
+            colour.release(pinned)
         if asset is not None and asset.trace:
-            # Asked of the renderer rather than rebuilt from the key: the
-            # ladder may have served this key from the cache of the SAME WORD
-            # spelled the other way (raster_assets.cache_dir_for), and a path
-            # computed here would then point at a file that does not exist.
-            path = ra.cache_dir_for(key) / "asset.png"
+            # The key the ladder actually cached under (asset.key), not the
+            # one asked for: the ladder may have served this key from the
+            # cache of the SAME WORD spelled the other way
+            # (raster_assets.cache_dir_for), or under a colour key, and a
+            # path computed from the request would name a file that does
+            # not exist.
+            path = ra.cache_dir_for(asset.key or key) / "asset.png"
+            if not path.exists():
+                path = ra.cache_dir_for(key) / "asset.png"
             groups = [n for n, boxes in (asset.regions or {}).items() if boxes]
             return Rendered(path, "png", groups, _meta(path.parent))
         return None
