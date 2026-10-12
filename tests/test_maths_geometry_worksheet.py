@@ -248,3 +248,24 @@ def test_nothing_verified_fails_loudly_with_the_geometry_reasons(tmp_path):
         generate_document("worksheet", BOOK, CHAPTER, {}, client, {"num_questions": 2}, tmp_path,
                           language="en", maths=True)
     assert "construction_impossible" in str(err.value)
+
+
+def test_an_algebra_worksheet_makes_no_figure_call(tmp_path):
+    # the same gate as the lesson's: a chapter named by no geometry is never
+    # asked for diagrams, and the ladder (plus the facts) fills the sheet
+    client = Client([], [Q_SCALENE, Q_STRAIGHT_LINE], [])
+    chapter = {"title": "Variables, Constants and Algebraic Expressions",
+               "sections": [{"section_title": "Translating Words into Algebra", "section_type": "body",
+                             "content": "The perimeter of a rectangle with sides l and w is 2l + 2w."}]}
+    analysis = {"concepts": {"concepts": [{"name": "Variable", "concept_id": "c1"},
+                                          {"name": "Algebraic expression", "concept_id": "c2"}]}}
+    try:
+        paths = generate_document("worksheet", BOOK, chapter, analysis, client, {"num_questions": 4}, tmp_path,
+                                  language="en", maths=True)
+    except RuntimeError as err:
+        # the stub ladder may verify nothing — the point is the call that was never made
+        assert "figure questions" not in str(err)
+        paths = []
+    assert "geometry" not in client.calls, client.calls
+    if paths:
+        assert "Which of these triangles are scalene?" not in docx_text(paths[0])
