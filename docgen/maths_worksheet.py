@@ -44,6 +44,7 @@ from docgen import docx_builder as dx
 from maths.facts import FactItem
 from maths.charts import chart_for, chart_image
 from maths.geometry.items import GeometryItem, figure_client, geometry_items, key_lines, quiz_image_data_url
+from maths.geometry.scope import chapter_names, figures_wanted
 from maths.pretty import pretty
 from maths.tokens import TokenError, tokenize
 from maths.questions import fact_items, question_ladder, worked_solution
@@ -256,10 +257,18 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     # the same prompt, gemini-3.5-flash-lite verified 2 of 7 figure
     # questions and gemini-3.5-flash 6 of 7 — a construction grammar is a
     # harder reply than a worksheet's prose.
+    # Asked ONLY of a chapter whose names mention geometry (maths/geometry/
+    # scope.py): the prompt's "a chapter on equations has no diagram" was not
+    # honoured on Variables, Constants and Algebraic Expressions (2026-10-12).
     figure_share = n if n < 4 else max(2, round(n * FIGURE_SHARE))
-    figures, figure_report = geometry_items(_figure_client(client, language), topic=topic, level=grade,
-                                            language=language, n=figure_share, chapter_context=grounding,
-                                            kind=kind, note=dx._t("not_to_scale", language))
+    names = chapter_names(topic=topic, analysis=analysis, chapter=chapter)
+    if figures_wanted(names):
+        figures, figure_report = geometry_items(_figure_client(client, language), topic=topic, level=grade,
+                                                language=language, n=figure_share, chapter_context=grounding,
+                                                kind=kind, note=dx._t("not_to_scale", language))
+    else:
+        logger.info("maths %s for %r: no figure call — nothing the chapter is named by mentions geometry", kind, topic)
+        figures, figure_report = [], {"skipped": "the chapter's names mention no geometry", "asked": 0, "verified": 0}
     questions, report = question_ladder(client, topic=topic, level=grade, language=language,
                                         n=n - len(figures), lesson=maths_lesson, chapter_context=grounding,
                                         kind=kind)

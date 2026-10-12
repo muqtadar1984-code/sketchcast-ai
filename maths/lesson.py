@@ -38,6 +38,7 @@ from maths.schema import (EXAMPLE_SCHEMA, LESSON_SCHEMA, DIFFICULTY_NAMES, Lesso
                           WorkedExample, parse_example, parse_lesson)
 from maths.geometry.errors import GeometryRefusal
 from maths.geometry.items import GeometryItem, _pretty_line, figure_client, geometry_items, key_lines
+from maths.geometry.scope import chapter_names, figures_wanted, geometry_words
 from maths.i18n import board_text as _board_text
 from maths.schema import Step, TryIt, WorkedExample
 from maths.verify import verify_example, verify_lesson, verify_try_it
@@ -493,16 +494,28 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
     history: list[dict] = []
     dropped: list[str] = []
     kept = _verify_examples(client, lesson.examples, lesson, language, attempts, history, dropped)
-    # the diagram examples: a chapter that has none answers with an empty
-    # list (the engine's prompt says so); a shapes chapter opens on a shape
+    # the diagram examples: asked ONLY of a chapter whose names (title,
+    # sections, concept names) mention geometry — the engine's prompt says a
+    # chapter on equations answers with an empty list, and the model did not
+    # listen (Variables, Constants and Algebraic Expressions, 2026-10-12,
+    # opened on a perimeter and a polygon sort). A shapes chapter opens on
+    # a shape; any other chapter never sees the call. See maths/geometry/scope.py.
     figures_report: dict = {}
+    names = chapter_names(topic=topic, analysis=analysis, episode=episode)
+    wanted = figures_enabled() and figures_wanted(names)
+    if figures_enabled() and not wanted:
+        logger.info("maths lesson %r: no figure call — nothing the chapter is named by mentions geometry", topic)
+        figures_report = {"skipped": "the chapter's names mention no geometry", "names": names[:12],
+                          "asked": 0, "verified": 0}
     # the figure call is told which of the chapter's concepts the verified
     # ladder leaves untaught (a13f7761: three triangle questions, no polygon)
-    focus = missed_concepts(lesson, kept, analysis, episode, language) if figures_enabled() else []
+    focus = missed_concepts(lesson, kept, analysis, episode, language) if wanted else []
     # one item more than the examples: a third verified figure is the
     # learner's try-it — on a shapes chapter the pause is on a shape
     figures = figure_examples(client, topic=topic, level=level, language=language, context=episode_context,
-                              n=FIGURE_EXAMPLES + 1, report=figures_report, focus=focus) if figures_enabled() else []
+                              n=FIGURE_EXAMPLES + 1, report=figures_report, focus=focus) if wanted else []
+    if wanted:
+        figures_report["geometry_words"] = geometry_words(names)
     figure_pause: TryIt | None = None
     if len(figures) > FIGURE_EXAMPLES:
         candidate = figure_try_it(figures[FIGURE_EXAMPLES], language)
@@ -513,13 +526,13 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
             logger.info("figure try-it rejected at the board (%s): %s", getattr(exc, "code", "board"),
                         getattr(exc, "message", str(exc))[:200])
         figures = figures[:FIGURE_EXAMPLES]
-    if figures_enabled():
+    if wanted:
         figures_report["try_it"] = figure_pause is not None
     if len(kept) + len(figures) < MIN_EXAMPLES:
         raise MathsVerificationError(
             f"only {len(kept)} of {len(lesson.examples)} worked examples could be verified after "
             f"{attempts} regeneration(s) each"
-            + (f" and {len(figures)} figure example(s) survived" if figures_enabled() else "")
+            + (f" and {len(figures)} figure example(s) survived" if wanted else "")
             + f" — {' | '.join(dropped)[:1500]}")
     if figures:
         # one ladder, by difficulty, figures first among equals; relabelled

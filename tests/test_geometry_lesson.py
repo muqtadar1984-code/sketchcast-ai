@@ -219,7 +219,7 @@ def test_a_figure_example_without_speech_is_rejected_not_taught(monkeypatch):
     for st in silent["steps"]:
         st.pop("speech", None)
     c = FakeClient(figures=[silent])
-    lesson, report = L.verified_lesson(c, topic="t", subject=None, level=None, curriculum=None, language="en",
+    lesson, report = L.verified_lesson(c, topic="Angles", subject=None, level=None, curriculum=None, language="en",
                                        episode_context="")
     assert report["figures"]["verified"] == 0 and "speaks its steps" in " ".join(report["figures"]["rejected"])
     assert not any(e.has_figure for e in lesson.examples)
@@ -309,7 +309,7 @@ def test_the_figure_call_is_told_the_concepts_the_ladder_missed(monkeypatch):
     assert report["figures"]["focus"] == ["Polygon", "Equilateral Triangle"]
     # no analysis: no focus, no failure
     c2 = FakeClient(figures=[_b1_reply()])
-    _lesson, report2 = L.verified_lesson(c2, topic="t", subject=None, level=None, curriculum=None, language="en",
+    _lesson, report2 = L.verified_lesson(c2, topic="Angles", subject=None, level=None, curriculum=None, language="en",
                                          episode_context="")
     assert report2["figures"]["focus"] == [] and "NOT YET TAUGHT" not in c2.calls[-1]["prompt"]
 
@@ -440,7 +440,7 @@ def test_a_third_figure_item_becomes_the_learners_try_it(monkeypatch):
 def test_two_figure_items_keep_the_algebra_try_it(monkeypatch):
     monkeypatch.delenv("MATHS_FIGURES", raising=False)
     c = FakeClient(figures=[_b1_reply(), _spoken("B8", 2)])
-    lesson, report = L.verified_lesson(c, topic="t", subject=None, level=None, curriculum=None, language="en",
+    lesson, report = L.verified_lesson(c, topic="Angles", subject=None, level=None, curriculum=None, language="en",
                                        episode_context="")
     assert not lesson.try_it.has_figure and lesson.try_it.problem == "4x + 3 = 19"
     assert report["figures"]["try_it"] is False
@@ -571,3 +571,49 @@ def test_a_one_figure_evidence_item_without_an_observation_speaks_its_answer():
     q.pop("observations", None)
     ex = L.figure_example(_item(q))
     assert len(ex.steps) == 1 and ex.steps[0].speech == q["answer_speech"]
+
+
+def test_an_algebra_chapter_never_sees_the_figure_call(monkeypatch):
+    # Variables, Constants and Algebraic Expressions (2026-10-12): the engine
+    # answered an algebra chapter with a perimeter and a polygon sort, and the
+    # lesson opened on them. The gate is in code, before the call.
+    from maths.geometry.scope import chapter_names, figures_wanted, geometry_words
+    monkeypatch.delenv("MATHS_FIGURES", raising=False)
+    analysis = {"chapter_title": "Variables, Constants and Algebraic Expressions", "concepts": {"concepts": [
+        {"name": "Variable", "concept_id": "c1", "definition": "a letter standing for a number"},
+        {"name": "Constant", "concept_id": "c2"}, {"name": "Algebraic expression", "concept_id": "c3"},
+        {"name": "Substitution", "concept_id": "c4",
+         "definition": "replacing a letter with a value, e.g. the perimeter of a rectangle 2l + 2w"}]}}
+    episode = {"title": "Variables, Constants and Algebraic Expressions", "key_concepts_introduced": ["c1", "c2", "c3", "c4"],
+               "sections_covered": ["Introduction to Variables and Constants", "Building and Reading Algebraic Expressions",
+                                    "Translating Words into Algebra", "Evaluating Algebraic Expressions by Substitution",
+                                    "Common Mistakes and Misconceptions"]}
+    # the word problem's rectangle is in a DEFINITION and in the episode's prose, never in a name
+    assert geometry_words(chapter_names(topic=episode["title"], analysis=analysis, episode=episode)) == []
+    c = FakeClient(figures=[_b1_reply(), _spoken("B8", 2), _spoken("B11", 3)])
+    lesson, report = L.verified_lesson(c, topic=episode["title"], subject="Mathematics", level="Class 7", curriculum=None,
+                                       language="en", episode_context="The perimeter of a rectangle is 2l + 2w.",
+                                       analysis=analysis, episode=episode)
+    assert not any("geometry.figure.v1" in k["prompt"] for k in c.calls), "the engine was asked"
+    assert not any(e.has_figure for e in lesson.examples) and not lesson.try_it.has_figure
+    assert report["figures"]["skipped"] and report["figures"]["verified"] == 0 and "try_it" not in report["figures"]
+    assert [e.label for e in lesson.examples] == ["Example 1", "Example 2", "Example 3"]
+    # a shapes chapter named by its concepts (not its title) still gets the call
+    shapes = {"chapter_title": "Unit 4", "concepts": {"concepts": [{"name": "Isosceles triangle", "concept_id": "c1"}]}}
+    assert figures_wanted(chapter_names(topic="Unit 4", analysis=shapes, episode={"key_concepts_introduced": ["c1"]}))
+    c2 = FakeClient(figures=[_b1_reply()])
+    _lesson, report2 = L.verified_lesson(c2, topic="Unit 4", subject=None, level=None, curriculum=None, language="en",
+                                         episode_context="", analysis=shapes, episode={"key_concepts_introduced": ["c1"]})
+    assert report2["figures"]["verified"] == 1 and report2["figures"]["geometry_words"] == ["isosceles", "triangle"]
+
+
+def test_the_geometry_vocabulary_names_shapes_not_algebra():
+    from maths.geometry.scope import geometry_words
+    for title in ("Variables, Constants and Algebraic Expressions", "Substitution: Evaluating Algebraic Expressions",
+                  "Translating Words into Algebra", "Squares and Square Roots", "Cube numbers", "Linear equations",
+                  "Constructing formulae", "Number line and integers", "Bar graphs and pictograms", "Fractions"):
+        assert geometry_words([title]) == [], title
+    for title in ("Angles on a straight line", "2D shape and pattern", "Pythagoras' theorem", "Perimeter and Area",
+                  "Coordinates and Plotting Linear Graphs", "Properties of quadrilaterals", "Circle theorems",
+                  "Symmetry", "Volume of prisms", "Straight-line graphs", "Trigonometry in right-angled triangles"):
+        assert geometry_words([title]), title
