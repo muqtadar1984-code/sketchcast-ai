@@ -450,14 +450,29 @@ def build_article_prompt(topic: dict, language: str, mappings: list[Mapping], de
     return head + _previous_block(previous, full=revise) + notes + "\n" + ARTICLE_PROMPT
 
 
-def ask_model(client, prompt: str):
-    """One call; the reply's payload — a dict when the model behaved, else
-    whatever came back (validate_article refuses it with a reason)."""
-    reply = client.analyze(prompt, system=SYSTEM_PROMPT, max_tokens=MAX_TOKENS,
-                           response_schema=RESPONSE_SCHEMA)
-    if isinstance(reply, dict) and "data" in reply:
-        return reply.get("data")
-    return reply
+ASK_GRACE = 1   # further calls when the reply cannot be read as an article
+
+
+def ask_model(client, prompt: str, *, grace: int = ASK_GRACE):
+    """The reply's payload — a dict when the model behaved, else whatever
+    came back (validate_article refuses it with a reason). A reply the
+    client could not read as JSON arrives as ``{"raw_text": ...}`` and
+    read as "no 'objectives' list": the geometry set (2026-10-13) lost
+    seven of twenty-two calls that way in one burst, every one of which
+    passed when asked again. Such a reply earns ``grace`` further calls."""
+    data = None
+    for attempt in range(grace + 1):
+        reply = client.analyze(prompt, system=SYSTEM_PROMPT, max_tokens=MAX_TOKENS,
+                               response_schema=RESPONSE_SCHEMA)
+        data = reply.get("data") if isinstance(reply, dict) and "data" in reply else reply
+        if isinstance(data, dict) and isinstance(data.get("objectives"), list):
+            return data
+        if attempt < grace:
+            why = ("not JSON" if isinstance(data, dict) and set(data) == {"raw_text"}
+                   else "no 'objectives' list" if isinstance(data, dict) else "not an object")
+            log.warning("article: the model reply could not be read as an article (%s); asking again (%d/%d)",
+                        why, attempt + 1, grace)
+    return data
 
 
 # ── validation and repair ──────────────────────────────────────────────

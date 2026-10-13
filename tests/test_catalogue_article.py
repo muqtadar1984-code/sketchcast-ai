@@ -953,7 +953,7 @@ def test_a_re_ask_that_comes_back_worse_or_unusable_does_not_replace_the_draft()
     model = FakeModel({"not": "an article"})
     with pytest.raises(ArticleInvalid, match="only 800 words"):
         lengthen_if_short(model, "PROMPT", first, CODES, "Cells")
-    assert len(model.calls) == 1
+    assert len(model.calls) == 2    # a reply with no article in it is asked once more (ask_model's grace)
     # over the floor already: no call at all
     good = validate_article(GOOD, CODES, "Cells")
     model = FakeModel()
@@ -970,3 +970,29 @@ def test_a_stub_under_the_hard_floor_is_not_worth_a_re_ask():
     sb = _sb()
     assert run_article_job(sb, _job(), client=model) is None
     assert len(model.calls) == 1 and "at least 300" in _job_row(sb)["error"]
+
+
+def test_a_reply_that_is_not_an_article_is_asked_again_once():
+    # the geometry set (2026-10-13): seven of twenty-two calls came back as
+    # {"raw_text": ...} and failed the job; every one passed when re-queued
+    from catalogue import article as A
+
+    class Flaky:
+        def __init__(self, replies):
+            self.replies, self.calls = list(replies), 0
+
+        def analyze(self, prompt, system="", max_tokens=0, response_schema=None, **kw):
+            self.calls += 1
+            return {"data": self.replies.pop(0), "usage": {}, "truncated": False}
+
+    good = {"title": "T", "objectives": [{"id": "o1", "text": "x"}], "sections": [], "glossary": [],
+            "misconceptions": [], "claims": [], "figures": []}
+    c = Flaky([{"raw_text": "```json\n{\"title\": \"T\""}, good])
+    assert A.ask_model(c, "p") == good and c.calls == 2
+    c = Flaky([{"raw_text": "nope"}, {"raw_text": "still no"}, good])
+    out = A.ask_model(c, "p")
+    assert c.calls == 2 and set(out) == {"raw_text"}
+    with pytest.raises(A.ArticleInvalid, match="no 'objectives' list"):
+        A.validate_article(out, [], "T")
+    c = Flaky([good])
+    assert A.ask_model(c, "p") == good and c.calls == 1
