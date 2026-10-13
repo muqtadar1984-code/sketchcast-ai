@@ -1269,11 +1269,39 @@ def _check_answer(ex: WorkedExample, givens: Optional[list[Relation]], variables
     a_form = rel.lhs if rel.is_expression else rel.rhs
     if ex.task == "expand" and sp.expand(a_form) != a_form:
         return Check("answer", False, f"{rel.text!r} is not fully expanded")
-    if ex.task == "factorise" and a_form.is_Add and sp.expand(a_form) == a_form and len(a_form.args) > 1:
+    if ex.task == "factorise" and not _is_factorised_text(rel.text):
         return Check("answer", False, f"{rel.text!r} is not factorised")
     if ex.task == "evaluate" and a_form.free_symbols:
         return Check("answer", False, f"{rel.text!r} is not a value")
     return Check("answer", True, "answer verified" + (f": {a_e}" if ex.task == "evaluate" else "") + approx)
+
+
+def _is_factorised_text(text: str) -> bool:
+    """A factorised answer, judged on the TEXT: a product — no "+" or "-"
+    outside the brackets, apart from a leading sign. SymPy cannot judge it:
+    it distributes a numeric factor as it parses, so "3(2x + 5)" arrives as
+    "6x + 15" and read as "not factorised" (Factorising by Taking Out a
+    Common Factor, 2026-10-13: every example with a numeric common factor
+    was refused and regenerated until the lesson failed). "x(x + 3)",
+    "(x + 2)(x + 3)", "-3(x - 2)" and a bare monomial pass; "6x + 15" and
+    "x(x + 3) + 2" do not."""
+    body = str(text or "").strip()
+    if "=" in body:
+        body = body.split("=", 1)[1].strip()
+    body = body.lstrip("+-").strip()
+    depth = 0
+    for i, ch in enumerate(body):
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+        elif ch in "+-" and depth == 0:
+            # a sign inside an exponent or after an operator ("x^-1",
+            # "3*-2") is not a sum; one between two terms is
+            prev = body[:i].rstrip()
+            if prev and prev[-1] not in "^*/(":
+                return False
+    return bool(body)
 
 
 def _setup_state(ex: WorkedExample) -> Optional[list[Relation]]:
