@@ -82,6 +82,7 @@ class Dot:
     y: float
     r: float = 0.06
     solid: bool = False         # a disc of ink (a closed bound), not the board's mist-filled ring
+    tag: Optional[str] = None   # bound:<interval id>
 
 
 @dataclass
@@ -613,7 +614,7 @@ def _draw_axes(d: Drawing, m: Model, label_size: float, boxes: list) -> None:
 
 
 NL_OVERHANG = 0.8            # a number line runs past its range to its arrowheads
-BOUND_R = 0.13               # the circle at an interval's bound
+BOUND_R = 0.2                # the circle at an interval's bound, as a share of one STEP
 
 
 def _arrowhead(d: Drawing, tip: Vec, direction: Vec, size: float, width: float, tag: Optional[str]) -> None:
@@ -631,21 +632,32 @@ def _draw_number_line(d: Drawing, m: Model) -> None:
     """The line with arrowheads both ways, a tick every step, then each
     interval: a heavy bar along the line, a filled circle at a closed
     bound, a hollow one at an open bound, an arrowhead where it goes on
-    for ever. The numbers come last (_number_line_numbers)."""
+    for ever. The numbers come last (_number_line_numbers).
+
+    The circle is a CIRCLE the class can see: its radius is a share of one
+    step (a fixed 0.13 units was a pinhead on a 0..10 line and nothing at
+    all on a line stepped in tens), the bar starts at the ring's edge
+    rather than running through its middle, and the tick under a bound is
+    left out — Linear Inequalities (2026-10-12): "the script speaks of a
+    circle but shows a line"."""
     nl = m.number_line
     assert nl is not None
+    r = BOUND_R * nl.step
+    bounds = [b for iv in m.intervals.values() for b in (iv.lo, iv.hi) if b is not None]
     x0, x1 = nl.lo - NL_OVERHANG, nl.hi + NL_OVERHANG
     d.strokes.append(Stroke([(x0, 0.0), (x1, 0.0)], width=1.1, tag="numberline"))
     _arrowhead(d, (x1, 0.0), (1.0, 0.0), 0.3, 1.1, "numberline")
     _arrowhead(d, (x0, 0.0), (-1.0, 0.0), 0.3, 1.1, "numberline")
     x = nl.lo
     while x <= nl.hi + 1e-9:
-        d.strokes.append(Stroke([(x, -TICK), (x, TICK)], width=0.8, role="mark", tag="tick"))
+        if not any(abs(x - b) < 1e-9 for b in bounds):
+            d.strokes.append(Stroke([(x, -TICK), (x, TICK)], width=0.8, role="mark", tag="tick"))
         x += nl.step
     for iv in m.intervals.values():
-        a = nl.lo - NL_OVERHANG * 0.6 if iv.lo is None else iv.lo
-        b = nl.hi + NL_OVERHANG * 0.6 if iv.hi is None else iv.hi
-        d.strokes.append(Stroke([(a, 0.0), (b, 0.0)], width=1.4, tag=f"interval:{iv.id}"))
+        a = nl.lo - NL_OVERHANG * 0.6 if iv.lo is None else iv.lo + (0.0 if iv.lo_closed else r)
+        b = nl.hi + NL_OVERHANG * 0.6 if iv.hi is None else iv.hi - (0.0 if iv.hi_closed else r)
+        if a < b:
+            d.strokes.append(Stroke([(a, 0.0), (b, 0.0)], width=1.4, tag=f"interval:{iv.id}"))
         if iv.lo is None:
             _arrowhead(d, (a, 0.0), (-1.0, 0.0), 0.36, 1.4, f"interval:{iv.id}")
         if iv.hi is None:
@@ -654,11 +666,11 @@ def _draw_number_line(d: Drawing, m: Model) -> None:
             if bound is None:
                 continue
             if closed:
-                d.dots.append(Dot(bound, 0.0, r=BOUND_R, solid=True))
+                d.dots.append(Dot(bound, 0.0, r=r, solid=True, tag=f"bound:{iv.id}"))
             else:
-                ring = [(bound + BOUND_R * math.cos(2 * math.pi * k / 20), BOUND_R * math.sin(2 * math.pi * k / 20))
-                        for k in range(21)]
-                d.strokes.append(Stroke(ring, width=1.1, tag=f"bound:{iv.id}"))
+                ring = [(bound + r * math.cos(2 * math.pi * k / 24), r * math.sin(2 * math.pi * k / 24))
+                        for k in range(25)]
+                d.strokes.append(Stroke(ring, width=1.4, tag=f"bound:{iv.id}"))
 
 
 BAR_AXIS_X = -0.3            # the value axis, left of the first bar

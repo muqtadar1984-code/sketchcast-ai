@@ -237,6 +237,7 @@ def test_text_fields_written_as_objects_or_lists_keep_their_words():
     ex = parse_example({"label": {"text": "Example 2"}, "difficulty": 2, "task": "solve", "problem": "x + 1 = 2",
                         "givens": ["x + 1 = 2"], "target": "x",
                         "student_question": {"who": "student", "line": "Do we subtract first, or add four first?"},
+                        "reply": {"who": "teacher", "line": "Subtract first: the one is added on, so we undo it."},
                         "intro_speech": ["Two lines", "joined"],
                         "steps": [{"kind": "transform", "operation": {"text": "subtract 1"}, "before": ["x + 1 = 2"],
                                    "after": [{"line": "x = 1"}], "speech": {"who": "teacher", "line": "Subtract one."}}],
