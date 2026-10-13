@@ -940,3 +940,25 @@ def test_adjacent_letters_are_a_product_and_a_value_may_be_followed_by_a_word():
                             final_answer=["E = 72"])
     rep = verify_example(formula)
     assert rep.status == "verified", [c.detail for c in rep.failures]
+
+
+def test_a_numeric_common_factor_is_a_factorised_answer():
+    # Factorising by Taking Out a Common Factor (2026-10-13): SymPy parses
+    # "3(2x + 5)" as 6x + 15, and the answer check called it not factorised —
+    # every example with a numeric common factor was regenerated until the
+    # lesson failed. Factorised is a property of the text: a product.
+    from maths.verify import _is_factorised_text
+    for ok in ("3(2x + 5)", "-3(x - 2)", "x(x + 3)", "(x + 2)(x + 3)", "2xy(3x - 4y)", "5x", "E = 4(x + 1)", "(a - b)^2"):
+        assert _is_factorised_text(ok), ok
+    for bad in ("6x + 15", "x(x + 3) + 2", "x^2 + 5x + 6", "3(x + 1) - 2", ""):
+        assert not _is_factorised_text(bad), bad
+    ex = WorkedExample(label="Example 1", task="factorise", problem="Factorise 6x + 15", givens=["6x + 15"],
+                       target="expression", intro_speech="Take out the common factor.",
+                       steps=[Step(kind="transform", operation="take out the common factor 3", before=["6x + 15"],
+                                   after=["3(2x + 5)"], speech="Three is common to both terms.")],
+                       final_answer=["3(2x + 5)"], answer_speech="So it is three times two x plus five.")
+    rep = verify_example(ex)
+    assert rep.status == "verified", rep.reasons
+    wrong = ex.model_copy(update={"final_answer": ["6x + 15"], "steps": [Step(kind="transform", operation="copy", before=["6x + 15"], after=["6x + 15"], speech="s")]})
+    rep = verify_example(wrong)
+    assert rep.status != "verified" and any("not factorised" in r for r in rep.reasons)
