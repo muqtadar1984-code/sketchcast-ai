@@ -32,6 +32,12 @@ from worker import client as db  # noqa: E402
 from worker.process import index_book, process_generation  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+# httpx logs every request at INFO — one line per Supabase poll, and the
+# lanes poll several times a second between them. On 2026-10-13 that stream
+# put Railway's log ingestion over an hour behind, so a stuck video could
+# not be read live. Requests are not news; failures still log as warnings.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("worker")
 
 POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "5"))
