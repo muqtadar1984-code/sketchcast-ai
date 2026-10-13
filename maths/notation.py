@@ -181,11 +181,14 @@ def _split_products(text: str) -> str:
     return _LETTER_RUN_RE.sub(one, text)
 
 
-# "m(2)", "3 = m(2) - 4": a single letter before a bracketed NUMBER is a
-# product, the way "3(4)" already is — never a function call (the gradient
-# kit, 2026-10-09: "6 = m(2) - 4" could not be read). A function name is
-# longer than one letter, so sin(2) is untouched.
-_LETTER_CALL_RE = re.compile(r"(?<![A-Za-z_])([A-Za-z])\((?=\s*-?\s*\d)")
+# "m(2)", "3 = m(2) - 4", "x(x - 1)", "-5x(x - 1)": a single letter before
+# a bracket is a PRODUCT, the way "3(4)" already is — never a function call
+# (the gradient kit, 2026-10-09: "6 = m(2) - 4" could not be read; then
+# Factorising by Taking Out a Common Factor, 2026-10-13: "-5x(x - 1)", the
+# answer of every example with a variable common factor, "could not be
+# read", and the lesson failed). A function name is longer than one
+# letter, so sin(2) and log(x) are untouched.
+_LETTER_CALL_RE = re.compile(r"(?<![A-Za-z_])([A-Za-z])\(")
 
 
 def _side(text: str, *, where: str) -> sp.Expr:
