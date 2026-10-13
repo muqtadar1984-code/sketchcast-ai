@@ -207,3 +207,23 @@ class TestWriteForKit:
 
         assert Y.write_for_kit(sb, sb.tables["topic_kits"][0], [{"part": 1, "narration": "x"}],
                                client_factory=lambda: Boom()) is None
+
+
+def test_the_title_and_description_never_carry_the_signs_youtube_refuses():
+    # Linear Inequalities (2026-10-13, kit 43d0743e): "The request metadata
+    # specifies an invalid video description" — the chapters were "x > 7 on
+    # the number line" and "3x - 4 <= 8". YouTube allows every UTF-8
+    # character in a title or description except "<" and ">".
+    from catalogue.youtube_meta import compose_description, compose_title, youtube_safe
+    assert youtube_safe("x > 7 and 3x - 4 <= 8, y >= -2, a < b") == "x ＞ 7 and 3x - 4 ≤ 8, y ≥ -2, a ＜ b"
+    chapters = ["0:00 Linear Inequalities", "1:07 Example 1: x + 5 > 12", "1:48 x > 7 on the number line",
+                "1:56 Example 2: 3x - 4 <= 8", "4:06 Example 4: 5 - 3x >= 2(x - 5)"]
+    text = compose_description(topic_title="Linear Inequalities and Their Solutions on a Number Line", summary="s",
+                               meta={"intro": "Solve x + 5 > 12 and show it on a number line."}, header_lines=["Cambridge 7Ae.07"],
+                               chapter_lines_=chapters, key_terms=["open circle"], hashtags=["Maths"], part=1, total=1, next_title=None,
+                               link="https://sketchcast.app/?x=1")
+    assert "<" not in text and ">" not in text
+    assert "1:07 Example 1: x + 5 ＞ 12" in text and "1:56 Example 2: 3x - 4 ≤ 8" in text and "5 - 3x ≥ 2(x - 5)" in text
+    assert "Solve x + 5 ＞ 12 and show it" in text
+    title = compose_title("Solving x > 3", meta={"title": "When is x > 3? | Inequalities"}, part=1, total=1)
+    assert title == "When is x ＞ 3? | Inequalities"

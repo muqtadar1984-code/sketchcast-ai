@@ -186,6 +186,24 @@ def default_hashtags(key_terms: Iterable[str], boards: Iterable[tuple[str, str]]
 
 # ── the composers (pure; mirrored by the portal's preview) ───────────────
 
+# YouTube's videos.insert rejects a title or description holding "<" or ">"
+# ("invalidDescription" / "invalidTitle": every UTF-8 character except those
+# two). A maths video names its chapters by its examples — "x > 7 on the
+# number line", "3x - 4 <= 8" — and Linear Inequalities (2026-10-13, kit
+# 43d0743e) could not be posted at all. The relation is kept, in the
+# characters YouTube allows: ≤ ≥ and the full-width ＜ ＞.
+_YOUTUBE_SIGNS = (("<=", "≤"), (">=", "≥"), ("=<", "≤"), ("=>", "≥"), ("<", "＜"), (">", "＞"))
+
+
+def youtube_safe(text: object) -> str:
+    """``text`` with the characters YouTube refuses in a title or a
+    description replaced by their allowed look-alikes."""
+    out = _s(text) if not isinstance(text, str) else text
+    for raw, safe in _YOUTUBE_SIGNS:
+        out = out.replace(raw, safe)
+    return out
+
+
 def compose_title(topic_title: object, *, meta: Optional[dict] = None, key_terms: Iterable[str] = (),
                   audience: str = "", part: int = 1, total: int = 1) -> str:
     """``<Topic> Explained | <terms> | <audience>`` — the stored title when the
@@ -224,7 +242,7 @@ def compose_title(topic_title: object, *, meta: Optional[dict] = None, key_terms
                 base = headline(topic)
     if len(base) > room:
         base = base[:room].rstrip()
-    return (base + suffix).strip()
+    return youtube_safe((base + suffix).strip())
 
 
 def headline(topic_title: object) -> str:
@@ -296,7 +314,7 @@ def compose_description(*, topic_title: object, summary: object, meta: Optional[
     if tags:
         blocks.append([" ".join("#" + t for t in tags)])
 
-    text = "\n\n".join("\n".join(b) for b in blocks)
+    text = youtube_safe("\n\n".join("\n".join(b) for b in blocks))
     if len(text) <= DESCRIPTION_MAX:
         return text
     cut = text[:DESCRIPTION_MAX]
