@@ -17,6 +17,7 @@ GOOD_EX1 = {
     "label": "Example 1", "difficulty": 1, "task": "solve", "problem": "3x + 5 = 20", "givens": ["3x + 5 = 20"],
     "target": "x", "intro_speech": "Let's start simple: three x plus five equals twenty.",
     "student_question": "Do we deal with the five or the three first?",
+    "reply": "The five: it was added last, so it is the first thing we undo.",
     "steps": [
         {"kind": "transform", "operation": "subtract 5 from both sides", "before": ["3x + 5 = 20"], "after": ["3x = 15"],
          "explanation": "subtract 5 from both sides", "speech": "The five was added last, so we undo it first. Subtract five from both sides: three x equals fifteen."},
@@ -690,6 +691,7 @@ def test_a_wiped_column_leaves_no_overlap_in_the_report():
         return WorkedExample(label=label, task="solve", problem=problem, givens=[f"a = {a}", f"b = {b}"], target="c",
                              steps=steps, final_answer=[f"c = {c}"], answer_speech=f"So the hypotenuse is {c}.",
                              intro_speech="Here is the next example.", student_question="How do we start?",
+                             reply="With the theorem: c squared is a squared plus b squared.",
                              common_mistake=Mistake(from_state=[f"c^2 = {a * a} + {b * b}"], wrong_state=[f"c = {a} + {b}"],
                                                     operation="add the sides", why_wrong="you cannot add before squaring",
                                                     speech="A common mistake is to add the legs directly."))
@@ -719,3 +721,27 @@ def test_the_step_rules_say_a_moved_point_is_a_new_point():
     transform must keep the solution. The rule now says so."""
     from maths.lesson import _STEP_RULES
     assert "A point that MOVES" in _STEP_RULES and "NEVER as a \"transform\"" in _STEP_RULES
+
+
+def test_a_students_question_is_spoken_only_with_the_teachers_reply():
+    # Linear Inequalities (2026-10-12): the student asked, the teacher carried
+    # on teaching. A question without a reply is cut at parse time; with one,
+    # the reply follows the question before the working starts.
+    from maths.schema import MethodCard, parse_example
+    from maths import board as B
+    method = MethodCard(title="Method", steps=["Undo + and -", "Undo × and ÷"])
+    unanswered = parse_example({**GOOD_EX1, "reply": ""})
+    assert unanswered.student_question == ""
+    _scene, lines = B.example_scene(unanswered, method, "s003")
+    assert lines[0].who == "teacher" and lines[1].who == "teacher" and "undo it first" in lines[1].line
+    answered = parse_example(GOOD_EX1)
+    assert answered.student_question and answered.reply
+    _scene, lines = B.example_scene(answered, method, "s003")
+    who = [l.who for l in lines[:4]]
+    assert who == ["teacher", "student", "teacher", "teacher"], who
+    assert lines[1].line.startswith("Do we deal with the five") and lines[2].line.startswith("The five:")
+    assert "The five:" not in lines[3].line
+    # the prompt asks for the pair, and says an unanswered question is cut
+    text = L.build_prompt(topic="t", subject=None, level=None, curriculum=None, language="en", episode_context="")
+    assert "'reply'" in text and "without a reply is cut" in text
+    assert "opens by answering it" in text

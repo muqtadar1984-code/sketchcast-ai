@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 StepKind = Literal["transform", "setup", "check", "round", "deduce"]
 Task = Literal["solve", "solve_system", "solve_inequality", "simplify", "expand",
@@ -228,6 +228,11 @@ class WorkedExample(BaseModel):
     target: str = "x"
     intro_speech: str = ""
     student_question: str = ""
+    #: the teacher's answer to student_question, spoken before the working
+    #: starts. A question without one is never spoken (see _answered): the
+    #: Linear Inequalities video (2026-10-12) had the student ask and the
+    #: teacher carry on teaching as if nothing had been said.
+    reply: str = ""
     steps: list[Step] = Field(default_factory=list)
     #: one relation per entry: ["x = 5"], ["x = 2", "x = 3"] (either), ["x = 1", "y = 2"] (both)
     final_answer: list[str] = Field(default_factory=list)
@@ -251,16 +256,23 @@ class WorkedExample(BaseModel):
     def has_figure(self) -> bool:
         return bool(self.figure)
 
-    @field_validator("label", "problem", "target", "intro_speech", "student_question", "answer_speech",
+    @field_validator("label", "problem", "target", "intro_speech", "student_question", "reply", "answer_speech",
                      mode="before")
     @classmethod
     def _text(cls, v):
         return _as_text(v)
 
-    @field_validator("label", "problem", "target", "intro_speech", "student_question", "answer_speech")
+    @field_validator("label", "problem", "target", "intro_speech", "student_question", "reply", "answer_speech")
     @classmethod
     def _trim(cls, v: str) -> str:
         return _clean(v)[:_MAX_LINE]
+
+    @model_validator(mode="after")
+    def _answered(self):
+        """A student's question is spoken only with the teacher's reply."""
+        if self.student_question and not self.reply:
+            self.student_question = ""
+        return self
 
     @field_validator("givens", "final_answer", mode="before")
     @classmethod
@@ -470,7 +482,7 @@ EXAMPLE_SCHEMA = {"type": "object", "properties": {
     "label": _str(), "difficulty": {"type": "integer"},
     "task": {"type": "string", "enum": list(TASKS)},
     "problem": _str(), "givens": _strs(), "target": _str(),
-    "intro_speech": _str(), "student_question": _str(),
+    "intro_speech": _str(), "student_question": _str(), "reply": _str(),
     "steps": {"type": "array", "items": STEP_SCHEMA},
     "final_answer": _strs(), "answer_speech": _str(),
     "common_mistake": MISTAKE_SCHEMA},

@@ -306,6 +306,8 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
                                 "rx": max(1.5, dot.r * s), "ry": max(1.5, dot.r * s), "fill": True, "color": "ink",
                                 "exact": True})
         fb.actions.append({"verb": "draw", "target": eid, "duration": 0.2})
+        if dot.tag:
+            fb.targets.setdefault(dot.tag, []).append(eid)
     x0, y0, x1, y1 = d.bbox
     fb.box = (ox + x0 * s, oy - y1 * s, ox + x1 * s, oy - y0 * s)
     return fb

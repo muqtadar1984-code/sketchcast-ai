@@ -757,6 +757,17 @@ def _reveal_answers(board: _Board, fig: _Figure, cue: Optional[dict]) -> None:
             cue = None
 
 
+def _hold_back(board: _Board, fig: _Figure, prefixes: tuple[str, ...]) -> list[dict]:
+    """Take the draw actions of the figure's elements tagged with one of
+    ``prefixes`` out of the board's actions, uncued, to be played later —
+    a number line's solution set at the answer."""
+    ids = {eid for fb in fig.boards.values() for tag, eids in fb.targets.items()
+           if tag.startswith(prefixes) for eid in eids}
+    held = [{k: v for k, v in a.items() if k != "at"} for a in board.actions if a.get("target") in ids]
+    board.actions = [a for a in board.actions if a.get("target") not in ids]
+    return held
+
+
 def _highlight_method(board: _Board, step: Step, method, cue: Optional[dict], has_card: bool,
                       lang: str = "en") -> None:
     """Move the card's highlight to the line this step uses. A marker
@@ -799,7 +810,12 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
 
     teacher(ex.intro_speech or _bt("example_intro", lang, label=ex.label or _bt("next_example", lang),
                                    problem=ex.problem))
-    student(ex.student_question)
+    # the student's question is asked only when the teacher answers it, and
+    # the answer comes straight after it, before the working (the schema
+    # already cuts an unanswered question; this is the board's own guard)
+    if ex.student_question and ex.reply:
+        student(ex.student_question)
+        teacher(ex.reply)
     step_speech: list[str] = []
     for st in ex.steps:
         s = say(st.speech, lang) or say(st.operation, lang)
@@ -820,12 +836,23 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
     # the diagram draws under the question while the teacher introduces it;
     # the working moves to the right of it
     fig = _figure_panel(ex, board) if ex.figure else None
+    held: list[dict] = []
     if fig is None and ex.chart and isinstance(ex.chart.get("beside"), dict):
         # the engine's chart of an algebra example: the lines beside the
         # working from the start, the solution point kept for the closing
         # scene (founder, 2026-10-09: "both")
         try:
-            fig = _figure_panel(ex, board, question=ex.chart["beside"])
+            if ex.chart.get("kind") == "number_line" and isinstance(ex.chart.get("closing"), dict):
+                # a number line: the bare line from the start, and the
+                # solution set — circle, bar, arrow — drawn AT THE ANSWER,
+                # while the teacher describes it. Before this the set was
+                # drawn only on the closing board ten seconds later, so the
+                # class heard "an open circle at seven" and saw a bare line
+                # (Linear Inequalities, 2026-10-12).
+                fig = _figure_panel(ex, board, question=ex.chart["closing"])
+                held = _hold_back(board, fig, ("interval:", "bound:"))
+            else:
+                fig = _figure_panel(ex, board, question=ex.chart["beside"])
         except GeometryRefusal:
             fig = None       # a chart is a bonus; the example stands without it
     evidence = fig is not None and len(fig.boards) > 1
@@ -886,6 +913,9 @@ def example_scene(ex: WorkedExample, method, seg_id: str, *, has_card: bool = Tr
             last_rows = rows or last_rows
     if fig is not None and not evidence:
         _reveal_answers(board, fig, _cue(say(ex.answer_speech, lang), narration))
+    if held:
+        scue = _cue(say(ex.answer_speech, lang), narration)
+        board.actions.extend([{**held[0], **({"at": scue} if scue else {})}] + held[1:])
     if last_rows:
         acue = _cue(say(ex.answer_speech, lang), narration)
         for r in last_rows:

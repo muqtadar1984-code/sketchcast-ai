@@ -422,3 +422,72 @@ def test_a_straight_line_task_gets_the_line_it_was_verified_against_with_its_poi
                           final_answer=["x = 3"])
     chart = chart_for(inter)
     assert chart and chart["point"] == "(3, 0)"
+
+
+def _open_inequality() -> WorkedExample:
+    return WorkedExample(label="Example 1", task="solve_inequality", problem="Solve and graph: x + 5 > 12",
+                         givens=["x + 5 > 12"], target="x", intro_speech="A simple one.",
+                         steps=[Step(kind="transform", operation="subtract 5 from both sides", before=["x + 5 > 12"],
+                                     after=["x > 7"], speech="Subtract five from both sides: x is greater than seven.")],
+                         final_answer=["x > 7"],
+                         answer_speech="So x is greater than seven: an open circle at seven and the arrow to the right.")
+
+
+def test_the_solution_set_is_drawn_at_the_answer_beside_the_working():
+    # Linear Inequalities (2026-10-12): "the script speaks of a circle but
+    # shows a line" — the set was drawn only on the closing board. Now the
+    # bare line draws with the question and the circle, bar and arrow draw
+    # at the answer, while the teacher describes them.
+    ex = _open_inequality()
+    ex.chart = chart_for(ex)
+    assert ex.chart and ex.chart["closed"] == [False, False]
+    scene, lines = B.example_scene(ex, MethodCard(title="METHOD", steps=["Undo + and -", "Graph it"]), "s003", has_card=True)
+    assert not _audit(scene)
+    draws = [a for a in scene["actions"] if a["verb"] == "draw" and str(a["target"]).startswith("fig_")]
+    # the line, its arrowheads and ticks first; the set's strokes are the last figure draws
+    answer_cue = [a for a in scene["actions"] if a["verb"] == "underline"][0]["at"]
+    cued = [a for a in draws if a.get("at") == answer_cue]
+    assert cued, "the solution set is cued at the answer"
+    first_set = scene["actions"].index(cued[0])
+    later = [a for a in scene["actions"][first_set:] if a["verb"] == "draw"]
+    assert len(later) >= 3, "the bar, the arrowhead strokes and the ring"
+    assert all(scene["actions"].index(a) < first_set for a in draws if a not in later), "the bare line draws before"
+    # the ring is a ring: an element path that closes on itself at x = 7
+    ring = [e for e in scene["elements"] if e["id"] == cued[-1]["target"] or e["id"] in {a["target"] for a in later}]
+    assert ring
+
+
+def test_the_open_circle_is_a_circle_the_class_can_see():
+    from maths.geometry.layout import build_drawing, BOUND_R
+    from maths.geometry.spec import parse_question
+    for ex, step in ((_open_inequality(), 1.0),):
+        ex.chart = chart_for(ex)
+        spec = ex.chart["closing"]
+        rep = verify_question(spec)
+        assert rep.ok, rep.refusal
+        q = parse_question(spec)
+        ref = q.figures[0]
+        d = build_drawing(rep.models[ref.id], ref.figure)
+        strokes = {}
+        for st in d.strokes:
+            strokes.setdefault(st.tag, []).append(st)
+        ring = strokes["bound:s"][0]
+        xs, ys = [p[0] for p in ring.points], [p[1] for p in ring.points]
+        r = (max(xs) - min(xs)) / 2
+        assert abs(r - BOUND_R * step) < 1e-6 and abs((max(ys) - min(ys)) / 2 - r) < 1e-6, "a circle of one fifth of a step"
+        assert abs((max(xs) + min(xs)) / 2 - 7.0) < 1e-6
+        bar = min(strokes["interval:s"], key=lambda s_: len(s_.points))   # the bar, not the arrowhead
+        assert abs(bar.points[0][0] - (7.0 + r)) < 1e-6, "the bar starts at the ring's edge, not through it"
+        assert not any(abs(t.points[0][0] - 7.0) < 1e-9 for t in strokes.get("tick", [])), "no tick under the ring"
+        assert not d.dots, "an open bound is hollow"
+    # a closed bound: a disc of the same radius, the bar from the bound itself
+    ex = _inequality()
+    ex.chart = chart_for(ex)
+    spec = ex.chart["closing"]
+    rep = verify_question(spec)
+    q = parse_question(spec)
+    ref = q.figures[0]
+    d = build_drawing(rep.models[ref.id], ref.figure)
+    assert d.dots and d.dots[0].solid and d.dots[0].tag == "bound:s" and d.dots[0].x == 2.0
+    bar = min([st for st in d.strokes if st.tag == "interval:s"], key=lambda s_: len(s_.points))
+    assert bar.points[0][0] == 2.0
