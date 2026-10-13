@@ -244,12 +244,23 @@ def build_regen_prompt(*, topic: str, level: str | None, language: str, example:
 def _analyze(client, prompt: str, schema: dict, max_tokens: int) -> dict:
     # constrained decoding for THIS call (the payload is closed): the two
     # first production runs bent the shape without it
-    result = client.analyze(prompt=prompt, system=_SYSTEM, max_tokens=max_tokens, response_schema=schema,
-                            strict_schema=True)
-    if result.get("truncated"):
-        raise RuntimeError("the maths lesson reply was cut off at the output cap; nothing parsed from it is complete")
-    data = result.get("data", result)
-    return data if isinstance(data, dict) else {}
+    for attempt in (1, 2):
+        result = client.analyze(prompt=prompt, system=_SYSTEM, max_tokens=max_tokens, response_schema=schema,
+                                strict_schema=True)
+        if result.get("truncated"):
+            raise RuntimeError("the maths lesson reply was cut off at the output cap; nothing parsed from it is complete")
+        data = result.get("data", result)
+        if not isinstance(data, dict):
+            data = {}
+        if set(data) != {"raw_text"}:
+            return data
+        # the client could not read the reply as JSON and hands back its
+        # text: parsed as a lesson that is "no worked examples", which hid
+        # what happened (Linear Inequalities, 2026-10-13). One further
+        # round, as the geometry call allows; then the real reason.
+        snippet = str(data.get("raw_text") or "")[:300].replace("\n", " ")
+        logger.warning("maths lesson reply %d was not JSON (%d chars): %r", attempt, len(str(data.get("raw_text") or "")), snippet)
+    raise RuntimeError(f"the maths lesson reply could not be read as JSON twice — it began {snippet!r}")
 
 
 def generate_lesson(client, prompt: str) -> Lesson:

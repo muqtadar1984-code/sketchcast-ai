@@ -745,3 +745,28 @@ def test_a_students_question_is_spoken_only_with_the_teachers_reply():
     text = L.build_prompt(topic="t", subject=None, level=None, curriculum=None, language="en", episode_context="")
     assert "'reply'" in text and "without a reply is cut" in text
     assert "opens by answering it" in text
+
+
+def test_a_reply_that_is_not_json_earns_one_further_round_then_says_so():
+    # Linear Inequalities (2026-10-13): the client handed back {"raw_text"}
+    # and the lesson failed as "no worked examples", hiding the cause
+    class Raw(FakeClient):
+        def __init__(self, raw_rounds):
+            super().__init__()
+            self.raw_rounds = raw_rounds
+
+        def analyze(self, prompt, system="", max_tokens=0, retries=3, cache_prefix=None, response_schema=None, **kw):
+            if "geometry.figure.v1" not in prompt and "REJECTED" not in prompt and self.raw_rounds > 0:
+                self.raw_rounds -= 1
+                self.calls.append({"prompt": prompt, "schema": response_schema, "max_tokens": max_tokens})
+                return {"data": {"raw_text": "```json\n{\"topic\": \"t\", \"examples\": [{"}, "usage": {}, "truncated": False}
+            return super().analyze(prompt, system, max_tokens, retries, cache_prefix, response_schema, **kw)
+
+    c = Raw(1)
+    lesson, report = L.verified_lesson(c, topic="Linear equations", subject=None, level=None, curriculum=None,
+                                       language="en", episode_context="")
+    assert report["status"] == "verified" and len(lesson.examples) == 3
+    assert sum(1 for k in c.calls if "geometry.figure.v1" not in k["prompt"] and "REJECTED" not in k["prompt"]) == 2
+    with pytest.raises(RuntimeError, match="could not be read as JSON twice"):
+        L.verified_lesson(Raw(2), topic="Linear equations", subject=None, level=None, curriculum=None, language="en",
+                          episode_context="")
