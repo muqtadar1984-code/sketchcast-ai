@@ -962,3 +962,30 @@ def test_a_numeric_common_factor_is_a_factorised_answer():
     wrong = ex.model_copy(update={"final_answer": ["6x + 15"], "steps": [Step(kind="transform", operation="copy", before=["6x + 15"], after=["6x + 15"], speech="s")]})
     rep = verify_example(wrong)
     assert rep.status != "verified" and any("not factorised" in r for r in rep.reasons)
+
+
+def test_a_variable_common_factor_before_a_bracket_is_a_product():
+    # Factorising by Taking Out a Common Factor (2026-10-13): "-5x(x - 1)"
+    # was read as a call of a function named x and could not be verified
+    from maths.notation import parse_relation
+    import sympy as sp
+    x = sp.Symbol("x")
+    for text, want in (("-5x(x - 1)", -5 * x * (x - 1)), ("x(x + 3)", x * (x + 3)), ("2a(a + b)", None), ("m(2) - 4", None)):
+        rel = parse_relation(text)
+        got = rel.lhs if rel.is_expression else rel.rhs
+        if want is not None:
+            assert sp.simplify(got - want) == 0, (text, got)
+        else:
+            assert got.free_symbols, (text, got)
+    a, b, m = sp.symbols("a b m")
+    rel = parse_relation("2a(a + b)")
+    assert sp.simplify((rel.lhs if rel.is_expression else rel.rhs) - 2 * a * (a + b)) == 0
+    rel = parse_relation("m(2) - 4")
+    assert sp.simplify((rel.lhs if rel.is_expression else rel.rhs) - (2 * m - 4)) == 0
+    ex = WorkedExample(label="Example 3", task="factorise", problem="Factorise -5x^2 + 5x", givens=["-5x^2 + 5x"],
+                       target="expression", intro_speech="A negative common factor.",
+                       steps=[Step(kind="transform", operation="take out -5x", before=["-5x^2 + 5x"], after=["-5x(x - 1)"],
+                                   speech="Minus five x is common to both terms.")],
+                       final_answer=["-5x(x - 1)"], answer_speech="So it is minus five x times x minus one.")
+    rep = verify_example(ex)
+    assert rep.status == "verified", rep.reasons
