@@ -637,7 +637,9 @@ class _GoogleTransport:
 
     def upload_video(self, path: Path, *, title: str, description: str, privacy: str,
                      language: str, tags: Optional[list[str]] = None) -> str:
-        body = {"snippet": {"title": title, "description": description, "tags": list(tags or []),
+        from catalogue.youtube_meta import youtube_safe   # the last guard: no "<" or ">" reaches YouTube
+        body = {"snippet": {"title": youtube_safe(title), "description": youtube_safe(description),
+                            "tags": list(tags or []),
                             "defaultLanguage": language, "defaultAudioLanguage": language,
                             "categoryId": "27"},  # 27 = Education
                 "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False}}
