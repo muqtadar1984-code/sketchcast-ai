@@ -238,6 +238,7 @@ def test_the_switch_turns_the_figure_call_off(monkeypatch):
 
 def test_a_figure_example_without_speech_is_rejected_not_taught(monkeypatch):
     monkeypatch.delenv("MATHS_FIGURES", raising=False)
+    monkeypatch.setenv("MATHS_FIGURES_REQUIRED", "0")   # the rejection is the point here, not the gate
     silent = copy.deepcopy(ITEMS["B1"])
     silent["difficulty"] = 1
     for st in silent["steps"]:

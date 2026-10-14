@@ -161,6 +161,14 @@ _UNIT_STRIP_RE = re.compile(r"(?:\^\s*[23]|[²³]|\b(?:sq|square|cubic)\b|\bsqua
 
 
 _MEASURE_KEYS = ("target", "value", "unit", "role", "kind")
+_POINT_KEYS = ("id", "label")
+_ANGLE_KEYS = ("id", "rays", "region")
+_SEGMENT_KEYS = ("id", "points")
+
+
+def _keep(d: dict, keys: tuple) -> dict:
+    return {k: v for k, v in d.items() if k in keys}
+
 # the constructions whose id names a 2D shape with an area
 _SHAPE_MAKES = {"triangle_sss", "triangle_sas", "triangle_asa", "triangle_aas", "triangle_rhs", "triangle_isosceles",
                 "triangle_equilateral", "square", "rectangle", "parallelogram", "rhombus", "trapezium", "kite",
@@ -230,10 +238,21 @@ def _area_measures(fig: dict) -> None:
     {target: 'trap', value: '54'} (refused as "measure of 'trap': no such
     angle, segment or point", 2026-10-14)."""
     shapes = {str(o.get("id")) for o in fig.get("objects") or [] if isinstance(o, dict) and o.get("make") in _SHAPE_MAKES}
+    kept = []
     for ms in fig.get("measures") or []:
         if isinstance(ms, dict) and str(ms.get("target")) in shapes and not ms.get("kind"):
+            value = str(ms.get("value") or "").strip()
+            numeric = bool(re.match(r"^-?\d+(?:\.\d+)?(?:\s*/\s*\d+)?$", value))
+            if ms.get("role") == "unknown" or not numeric:
+                # "find the area": the area written as the shape's UNKNOWN
+                # measure ("A") — the theorem the step cites supplies A as
+                # the unknown; the measure says nothing more and would be
+                # refused ("an area is given; the unknown is a side")
+                continue
             ms["kind"] = "area"
             ms["role"] = "given"
+        kept.append(ms)
+    fig["measures"] = kept
 
 
 def _unit(raw) -> Optional[str]:
@@ -357,10 +376,13 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         bind = fig.get("bind")
         if isinstance(bind, list):
             fig["bind"] = {b["name"]: b["value"] for b in bind if isinstance(b, dict) and b.get("name")}
-        fig["points"] = [_strip(p) for p in (fig.get("points") or []) if isinstance(p, dict)]
+        # the strict specs refuse any key the model adds ("style" on a
+        # segment, "note" on a point — the trapeziums kit, 2026-10-14): only
+        # the spec's own keys are kept
+        fig["points"] = [_strip(_keep(p, _POINT_KEYS)) for p in (fig.get("points") or []) if isinstance(p, dict)]
         fig["objects"] = [_strip(o) for o in (fig.get("objects") or []) if isinstance(o, dict)]
-        fig["angles"] = [_strip(a) for a in (fig.get("angles") or []) if isinstance(a, dict)]
-        fig["segments"] = [_strip(s) for s in (fig.get("segments") or []) if isinstance(s, dict)]
+        fig["angles"] = [_strip(_keep(a, _ANGLE_KEYS)) for a in (fig.get("angles") or []) if isinstance(a, dict)]
+        fig["segments"] = [_strip(_keep(s, _SEGMENT_KEYS)) for s in (fig.get("segments") or []) if isinstance(s, dict)]
         fig["measures"] = [_measure(m) for m in (fig.get("measures") or []) if isinstance(m, dict)]
         _resolve_side_names(fig)
         _area_measures(fig)
