@@ -389,3 +389,155 @@ def test_a_question_without_a_sentence_gets_one_from_its_figure():
     raw4 = {"id": "e", "figure_role": "evidence", "figures": [{"id": "f", "figure": fig}],
             "asks": {"property": "polygon_name", "over": ["f"]}, "answer": {"kind": "selection", "value": ["f"]}}
     assert normalise_question(raw4)[0]["prompt"] == ""
+
+
+def test_a_trapezium_written_with_a_stray_area_key_and_an_unplaced_foot_is_read():
+    # live trial 2026-10-14: the area under a figure-level "target" key, the foot p_e listed with
+    # its height segment but no perpendicular construction
+    from maths.geometry import verify_question
+    from maths.geometry.items import normalise_question
+    raw = {"id": "q", "figure_role": "reasoning", "prompt": "The area of the trapezium is 72 cm². Find h.",
+           "figures": [{"id": "f", "figure": {"units": "cm",
+               "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"},
+                          {"id": "p_d", "label": "D"}, {"id": "p_e", "label": "E"}],
+               "objects": [{"id": "trap", "make": "trapezium", "vertices": ["p_a", "p_b", "p_c", "p_d"],
+                            "parallel_sides": ["10", "14"], "height": "6", "offset": "2"}],
+               "segments": [{"id": "s_ab", "points": ["p_a", "p_b"]}, {"id": "s_dc", "points": ["p_d", "p_c"]},
+                            {"id": "s_ae", "points": ["p_a", "p_e"]}],
+               "measures": [{"target": "s_ab", "value": "10", "unit": "cm", "role": "given"},
+                            {"target": "s_dc", "value": "14", "unit": "cm", "role": "given"},
+                            {"target": "p_e", "value": "h", "unit": "cm", "role": "unknown"}],
+               "target": {"target": "trap", "value": "72", "unit": "cm", "kind": "area", "role": "given"}}}],
+           "steps": [{"kind": "deduce", "theorem": "area_trapezium", "uses": ["trap", "s_ae"], "after": ["72 = 1/2 * (10 + 14) * h"]},
+                     {"kind": "transform", "after": ["h = 6"]}],
+           "answer": {"kind": "number", "value": "6", "unit": "cm"}}
+    spec, _d = normalise_question(raw)
+    fig = spec["figures"][0]["figure"]
+    assert "target" not in fig
+    assert {"target": "trap", "value": "72", "unit": "cm", "kind": "area", "role": "given"} in fig["measures"]
+    foot = [o for o in fig["objects"] if o["make"] == "perpendicular_from"]
+    assert foot == [{"id": "h_p_e", "make": "perpendicular_from", "point": "p_a", "segment": ["p_d", "p_c"], "to": "p_e"}]
+    assert [m for m in fig["measures"] if m["value"] == "h"][0]["target"] == "s_ae"
+    rep = verify_question(spec)
+    assert rep.ok, rep.refusal
+    assert str(rep.proved.get("h")) == "6"
+
+
+def test_a_trapeziums_bases_written_the_other_way_round_follow_the_given_ab():
+    from maths.geometry.items import normalise_question
+    fig = {"units": "cm",
+           "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"}, {"id": "p_d", "label": "D"}],
+           "objects": [{"id": "trap", "make": "trapezium", "vertices": ["p_a", "p_b", "p_c", "p_d"],
+                        "parallel_sides": ["8", "12"], "height": "5", "offset": "2"}],
+           "segments": [{"id": "s_ab", "points": ["p_a", "p_b"]}, {"id": "s_dc", "points": ["p_d", "p_c"]}],
+           "measures": [{"target": "s_ab", "value": "12", "unit": "cm", "role": "given"},
+                        {"target": "s_dc", "value": "8", "unit": "cm", "role": "given"}]}
+    spec, _d = normalise_question({"figures": [{"id": "f", "figure": fig}]})
+    assert spec["figures"][0]["figure"]["objects"][0]["parallel_sides"] == ["12", "8"]
+    # consistent already: untouched
+    fig["measures"][0]["value"], fig["measures"][1]["value"] = "8", "12"
+    fig["objects"][0]["parallel_sides"] = ["8", "12"]
+    spec, _d = normalise_question({"figures": [{"id": "f", "figure": fig}]})
+    assert spec["figures"][0]["figure"]["objects"][0]["parallel_sides"] == ["8", "12"]
+
+
+def test_a_turtle_polygon_whose_turn_signs_do_not_close_is_re_signed():
+    # live trials 2026-10-14: every L-shape came as a staircase — the magnitudes right, the signs wrong
+    import math
+    from maths.geometry import verify_question
+    from maths.geometry.items import normalise_question
+
+    def walk(sides, turns):
+        pts, heading = [(0.0, 0.0)], 0.0
+        for s, t in zip(sides, turns):
+            x, y = pts[-1]
+            pts.append((x + s * math.cos(math.radians(heading)), y + s * math.sin(math.radians(heading))))
+            heading += t
+        return pts
+
+    sides = ["10", "4", "4", "6", "6", "10"]
+    bad = ["-90", "90", "-90", "90", "-90", "-90"]
+    raw = {"figures": [{"id": "f", "figure": {"units": "cm", "points": [{"id": f"p_{c}", "label": c.upper()} for c in "abcdef"],
+                                                "objects": [{"id": "shape", "make": "turtle_polygon", "vertices": [f"p_{c}" for c in "abcdef"],
+                                                             "sides": sides, "turns": bad}]}}]}
+    spec, _d = normalise_question(raw)
+    turns = [float(t) for t in spec["figures"][0]["figure"]["objects"][0]["turns"]]
+    pts = walk([float(s) for s in sides], turns)
+    assert math.dist(pts[-1], pts[0]) < 1e-6 and abs(abs(sum(turns)) - 360) < 1e-6
+    assert [abs(t) for t in turns] == [90.0] * 6
+    # the shape the engine now draws has the area the shoelace gives
+    xs, ys = zip(*pts[:-1])
+    area = abs(sum(xs[i] * ys[(i + 1) % 6] - xs[(i + 1) % 6] * ys[i] for i in range(6))) / 2
+    q = {"id": "q", "figure_role": "reasoning", "prompt": "Find the area of the L-shaped floor plan.", "figures": raw["figures"],
+         "steps": [{"kind": "deduce", "theorem": "area_composite", "uses": ["shape"], "after": [f"A = {int(area)}"]}],
+         "answer": {"kind": "number", "value": str(int(area)), "unit": "cm"}}
+    rep = verify_question(normalise_question(q)[0])
+    assert rep.ok, rep.refusal
+    # a walk the side lengths cannot close is left for the engine's own refusal
+    raw["figures"][0]["figure"]["objects"][0]["sides"] = ["10", "4", "4", "6", "6", "3"]
+    raw["figures"][0]["figure"]["objects"][0]["turns"] = list(bad)
+    assert normalise_question(raw)[0]["figures"][0]["figure"]["objects"][0]["turns"] == bad
+
+
+def test_an_unnamed_compound_shape_takes_the_name_its_measure_and_steps_use():
+    # live trial 2026-10-14: the turtle polygon had no id; the measure and the step called it "shape"
+    from maths.geometry import verify_question
+    from maths.geometry.items import normalise_question
+    raw = {"id": "q", "figure_role": "reasoning", "prompt": "Find the area of the L-shaped floor plan.",
+           "figures": [{"id": "f", "figure": {"units": "cm", "points": [{"id": f"p_{c}", "label": c.upper()} for c in "abcdef"],
+                                                "objects": [{"make": "turtle_polygon", "sides": ["8", "4", "4", "2", "4", "6"],
+                                                             "turns": ["-90", "90", "-90", "90", "-90", "90"]}],
+                                                "measures": [{"target": "shape", "value": "A", "role": "unknown"}]}}],
+           "steps": [{"kind": "deduce", "theorem": "area_composite", "uses": ["shape"], "after": ["A = 8 * 6 - 4 * 2"]},
+                     {"kind": "transform", "after": ["A = 40"]}],
+           "answer": {"kind": "number", "value": "40", "unit": "cm"}}
+    spec, _d = normalise_question(raw)
+    fig = spec["figures"][0]["figure"]
+    assert fig["objects"][0]["id"] == "shape" and fig.get("measures", []) == []     # the unknown area is the theorem's
+    rep = verify_question(spec)
+    assert rep.ok, rep.refusal
+    assert str(rep.proved.get("A")) == "40"
+
+
+def test_a_flat_sort_asked_with_the_solids_property_sorts_polygons():
+    from maths.geometry.items import normalise_question
+    raw = {"id": "e", "figure_role": "evidence", "prompt": "Which of these shapes are trapezia?",
+           "figures": [{"id": "a", "figure": {"objects": [{"id": "t", "make": "trapezium", "vertices": ["p_a", "p_b", "p_c", "p_d"],
+                                                              "parallel_sides": ["6", "10"], "height": "4", "offset": "1"}]}},
+                       {"id": "b", "figure": {"objects": [{"id": "r", "make": "rectangle", "vertices": ["p_a", "p_b", "p_c", "p_d"],
+                                                              "width": "6", "height": "4"}]}}],
+           "asks": {"property": "solid_name", "over": ["a", "b"], "select": "trapezium"},
+           "answer": {"kind": "selection", "value": ["a"]}}
+    spec, _d = normalise_question(raw)
+    assert spec["asks"]["property"] == "polygon_name"
+    raw["figures"] = [{"id": "a", "figure": {"objects": [{"id": "c", "make": "cuboid", "length": "6", "width": "4", "height": "3"}]}}]
+    assert normalise_question(raw)[0]["asks"]["property"] == "solid_name"
+
+
+def test_a_listed_point_nothing_refers_to_is_dropped_not_fatal():
+    from maths.geometry import verify_question
+    from maths.geometry.items import normalise_question
+    raw = {"id": "q", "figure_role": "reasoning", "prompt": "Find the area of the trapezium.",
+           "figures": [{"id": "f", "figure": {"units": "cm",
+               "points": [{"id": f"p_{c}", "label": c.upper()} for c in "abcdef"],
+               "objects": [{"id": "s", "make": "trapezium", "vertices": ["p_a", "p_b", "p_c", "p_d"],
+                            "parallel_sides": ["8", "12"], "height": "5", "offset": "2"},
+                           {"id": "s_h", "make": "perpendicular_from", "point": "p_a", "segment": ["p_d", "p_c"], "to": "p_e"}],
+               "segments": [{"id": "s_ab", "points": ["p_a", "p_b"]}, {"id": "s_dc", "points": ["p_d", "p_c"]},
+                            {"id": "s_ae", "points": ["p_a", "p_e"]}],
+               "measures": [{"target": "s_ab", "value": "8", "unit": "cm", "role": "given"},
+                            {"target": "s_dc", "value": "12", "unit": "cm", "role": "given"},
+                            {"target": "s_ae", "value": "5", "unit": "cm", "role": "given"},
+                            {"target": "s", "value": "A", "role": "unknown"}]}}],
+           "steps": [{"kind": "deduce", "theorem": "area_trapezium", "uses": ["s", "s_ae"], "after": ["A = 1/2 * (8 + 12) * 5"]},
+                     {"kind": "transform", "after": ["A = 50"]}],
+           "answer": {"kind": "number", "value": "50", "unit": "cm"}}
+    spec, _d = normalise_question(raw)
+    assert [p["id"] for p in spec["figures"][0]["figure"]["points"]] == ["p_a", "p_b", "p_c", "p_d", "p_e"]
+    rep = verify_question(spec)
+    assert rep.ok, rep.refusal
+    # a polygon written without vertices keeps its listed points: they ARE its corners
+    raw2 = {"figures": [{"id": "f", "figure": {"points": [{"id": f"p_{c}", "label": c.upper()} for c in "abcd"],
+                                                 "objects": [{"id": "r", "make": "turtle_polygon", "sides": ["4", "3", "4", "3"],
+                                                              "turns": ["90", "90", "90", "90"]}]}}]}
+    assert len(normalise_question(raw2)[0]["figures"][0]["figure"]["points"]) == 4

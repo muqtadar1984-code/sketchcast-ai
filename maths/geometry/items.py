@@ -18,6 +18,8 @@ before parsing.
 
 from __future__ import annotations
 
+import itertools
+import math
 import re
 
 import logging
@@ -312,6 +314,236 @@ def _synthesised_prompt(spec: dict) -> str:
     return " ".join(sentences)
 
 
+_FIGURE_KEYS = ("units", "orientation", "bind", "points", "objects", "angles", "segments", "measures", "relations", "marks")
+
+
+def _fold_figure_keys(fig: dict) -> None:
+    """A figure-level key the spec does not know: a measure-shaped dict (the
+    area written as `"target": {target, value, kind: area}` beside the
+    measures list — live trial 2026-10-14) joins the measures; anything
+    else goes (the strict spec refuses it whole)."""
+    for key in list(fig):
+        if key in _FIGURE_KEYS:
+            continue
+        v = fig.pop(key)
+        ms = fig.setdefault("measures", [])
+        if not isinstance(ms, list):
+            continue
+        if isinstance(v, dict) and "target" in v and "value" in v:
+            ms.append(v)
+        elif isinstance(v, list) and v and all(isinstance(x, dict) and "target" in x and "value" in x for x in v):
+            ms.extend(v)
+
+
+def _name_unnamed_shape(fig: dict, steps: list) -> None:
+    """A shape object written without an id, while a measure or a step
+    calls the shape by a name nothing else carries ("shape", "shape_l" —
+    live trial 2026-10-14: `measure of 'shape': no such angle, segment or
+    point`): the one unnamed shape object takes that name."""
+    objects = [o for o in fig.get("objects") or [] if isinstance(o, dict)]
+    unnamed = [o for o in objects if o.get("make") in _SHAPE_MAKES and not o.get("id")]
+    if len(unnamed) != 1:
+        return
+    ids: set[str] = {str(o.get("id")) for o in objects if o.get("id")}
+    ids |= {str(p.get("id")) for p in fig.get("points") or [] if isinstance(p, dict) and p.get("id")}
+    ids |= {str(s.get("id")) for s in fig.get("segments") or [] if isinstance(s, dict) and s.get("id")}
+    ids |= {str(a.get("id")) for a in fig.get("angles") or [] if isinstance(a, dict) and a.get("id")}
+    names: list[str] = []
+    for ms in fig.get("measures") or []:
+        if isinstance(ms, dict) and ms.get("target") and str(ms["target"]) not in ids:
+            names.append(str(ms["target"]))
+    for st in steps or []:
+        for u in (st.get("uses") or []) if isinstance(st, dict) else []:
+            if isinstance(u, str) and u not in ids:
+                names.append(u)
+    if names and all(n == names[0] for n in names) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", names[0]):
+        unnamed[0]["id"] = names[0]
+        logger.info("geometry figure: the unnamed %s is called %r by its measures and steps", unnamed[0].get("make"), names[0])
+
+
+_VERTEX_MAKES = ("turtle_polygon", "polygon", "regular_polygon")
+
+
+def _drop_unused_points(fig: dict) -> None:
+    """A listed point no object, segment, angle or measure refers to is
+    dropped: the engine refuses a question over a point nothing places
+    (live trial 2026-10-15: `p_f` listed beside a trapezium and its foot
+    `p_e`). A polygon written without `vertices` takes the unplaced points
+    in order as its corners, so a figure with one keeps every point."""
+    objects = [o for o in fig.get("objects") or [] if isinstance(o, dict)]
+    if any(o.get("make") in _VERTEX_MAKES and not o.get("vertices") for o in objects):
+        return
+    used: set[str] = set()
+    for o in objects:
+        for v in o.values():
+            if isinstance(v, str):
+                used.add(v)
+            elif isinstance(v, list):
+                used.update(str(x) for x in v if isinstance(x, str))
+    for s in fig.get("segments") or []:
+        if isinstance(s, dict):
+            used.update(str(p) for p in s.get("points") or [])
+    for a in fig.get("angles") or []:
+        if isinstance(a, dict):
+            used.update(str(p) for p in a.get("rays") or [])
+            if a.get("vertex"):
+                used.add(str(a["vertex"]))
+    for ms in fig.get("measures") or []:
+        if isinstance(ms, dict) and ms.get("target"):
+            used.add(str(ms["target"]))
+    for r in fig.get("relations") or []:
+        if isinstance(r, dict):
+            for v in r.values():
+                if isinstance(v, str):
+                    used.add(v)
+                elif isinstance(v, list):
+                    used.update(str(x) for x in v if isinstance(x, str))
+    kept, dropped = [], []
+    for p in fig.get("points") or []:
+        if isinstance(p, dict) and p.get("id") and str(p["id"]) not in used:
+            dropped.append(str(p["id"]))
+        else:
+            kept.append(p)
+    if dropped:
+        fig["points"] = kept
+        logger.info("geometry figure: %d listed point(s) nothing refers to dropped: %s", len(dropped), dropped)
+
+
+def _place_feet(fig: dict) -> None:
+    """A listed point no construction places, joined by one segment to a
+    vertex of a trapezium or parallelogram, is the FOOT of that shape's
+    height: the perpendicular from the vertex onto the opposite parallel
+    side is added (live trial 2026-10-14: `p_e` listed, `s_ae` the height,
+    no construction — "point 'p_e' is listed but no construction places
+    it"). A measure that targets the foot point is the height's."""
+    objects = [o for o in fig.get("objects") or [] if isinstance(o, dict)]
+    mentioned: set[str] = set()
+    for o in objects:
+        for v in o.values():
+            if isinstance(v, str):
+                mentioned.add(v)
+            elif isinstance(v, list):
+                mentioned.update(str(x) for x in v if isinstance(x, str))
+    listed = [str(p.get("id")) for p in fig.get("points") or [] if isinstance(p, dict) and p.get("id")]
+    segs = [s for s in fig.get("segments") or [] if isinstance(s, dict) and isinstance(s.get("points"), list)
+            and len(s["points"]) == 2]
+    for foot in listed:
+        if foot in mentioned:
+            continue
+        joins = [s for s in segs if foot in s["points"]]
+        if len(joins) != 1:
+            continue
+        seg = joins[0]
+        top = next(p for p in seg["points"] if p != foot)
+        for o in objects:
+            verts = [str(v) for v in o.get("vertices") or []]
+            if o.get("make") in ("trapezium", "parallelogram") and len(verts) == 4 and top in verts:
+                a, b, c, d = verts
+                base = [d, c] if top in (a, b) else [a, b]
+                fig["objects"].append({"id": f"h_{foot}", "make": "perpendicular_from", "point": top,
+                                       "segment": base, "to": foot})
+                for ms in fig.get("measures") or []:
+                    if isinstance(ms, dict) and str(ms.get("target")) == foot and seg.get("id"):
+                        ms["target"] = seg["id"]
+                logger.info("geometry figure: point %r read as the foot of the height from %r (perpendicular added)",
+                            foot, top)
+                break
+
+
+def _swap_trapezium_bases(fig: dict) -> None:
+    """`parallel_sides` is [AB, DC] for vertices [A, B, C, D]: a model that
+    wrote the two lengths the other way round, against its own given
+    measure of AB, has them swapped (live trial 2026-10-14: "s_ab is given
+    as 12 but the figure has 5.385" — AB built as a leg)."""
+    seg_pts = {str(s.get("id")): [str(p) for p in s.get("points") or []] for s in fig.get("segments") or []
+               if isinstance(s, dict) and s.get("id")}
+    given: dict[frozenset, str] = {}
+    for ms in fig.get("measures") or []:
+        if isinstance(ms, dict) and str(ms.get("role") or "given") == "given" and _is_number(ms.get("value")):
+            pts = seg_pts.get(str(ms.get("target")))
+            if pts and len(pts) == 2:
+                given[frozenset(pts)] = str(ms["value"])
+    for o in fig.get("objects") or []:
+        if not (isinstance(o, dict) and o.get("make") == "trapezium"):
+            continue
+        verts = [str(v) for v in o.get("vertices") or []]
+        ps = o.get("parallel_sides")
+        if len(verts) != 4 or not (isinstance(ps, list) and len(ps) == 2 and all(_is_number(x) for x in ps)):
+            continue
+        ab = given.get(frozenset(verts[:2]))
+        dc = given.get(frozenset(verts[2:]))
+        p0, p1 = float(ps[0]), float(ps[1])
+        if ab is not None and float(ab) != p0 and float(ab) == p1 and (dc is None or float(dc) == p0):
+            o["parallel_sides"] = [ps[1], ps[0]]
+            logger.info("geometry figure: trapezium %r parallel_sides swapped to match the given AB", o.get("id"))
+
+
+def _close_turtle(obj: dict) -> None:
+    """A turtle polygon whose walk does not return to the start, though its
+    side lengths could: the model wrote the turn MAGNITUDES right and the
+    SIGNS wrong (an L-shape as a staircase — live trials 2026-10-14: every
+    compound shape, `[-90, 90, -90, 90, -90, -90]`). The sign pattern
+    nearest the model's that closes the walk as a simple polygon turning
+    ±360° in total is taken; none, and the engine's own refusal stands."""
+    sides, turns = obj.get("sides"), obj.get("turns")
+    if not (isinstance(sides, list) and isinstance(turns, list) and 3 <= len(sides) == len(turns) <= 10):
+        return
+    try:
+        fs = [float(s) for s in sides]
+        ft = [float(t) for t in turns]
+    except (TypeError, ValueError):
+        return
+    scale = max(1.0, sum(fs))
+
+    def walk(ts: list[float]) -> list[tuple[float, float]]:
+        pts, heading = [(0.0, 0.0)], 0.0
+        for s, t in zip(fs, ts):
+            x, y = pts[-1]
+            pts.append((x + s * math.cos(math.radians(heading)), y + s * math.sin(math.radians(heading))))
+            heading += t
+        return pts
+
+    def closes(pts) -> bool:
+        return math.dist(pts[-1], pts[0]) <= 1e-6 * scale
+
+    if closes(walk(ft)):
+        return
+
+    def crosses(p, q, r, s) -> bool:
+        def orient(a, b, c):
+            return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        o1, o2, o3, o4 = orient(p, q, r), orient(p, q, s), orient(r, s, p), orient(r, s, q)
+        return (o1 * o2 < 0) and (o3 * o4 < 0)
+
+    def simple(pts) -> bool:
+        n = len(pts) - 1
+        for i in range(n):
+            for j in range(i + 2, n):
+                if i == 0 and j == n - 1:
+                    continue
+                if crosses(pts[i], pts[i + 1], pts[j], pts[j + 1]):
+                    return False
+        return True
+
+    signs0 = [1 if t >= 0 else -1 for t in ft]
+    best, best_flips = None, None
+    for signs in itertools.product((1, -1), repeat=len(ft)):
+        cand = [abs(t) * sg for t, sg in zip(ft, signs)]
+        if abs(abs(sum(cand)) - 360.0) > 1e-6:
+            continue
+        pts = walk(cand)
+        if not closes(pts) or not simple(pts):
+            continue
+        flips = sum(1 for a, b in zip(signs, signs0) if a != b)
+        if best is None or flips < best_flips:
+            best, best_flips = cand, flips
+    if best is None:
+        return
+    obj["turns"] = [str(int(t)) if float(t).is_integer() else str(t) for t in best]
+    logger.info("geometry figure: turtle polygon %r turns re-signed to close the walk (%d flip(s)): %s",
+                obj.get("id"), best_flips, obj["turns"])
+
+
 def _unit(raw) -> Optional[str]:
     """The length (or degree) unit a model wrote, or None when it wrote
     none the engine knows — never a refusal."""
@@ -426,6 +658,7 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
     if not q.get("figures") and isinstance(q.get("figure"), dict):
         # a one-figure question written with the spec's singular key
         q["figures"] = [{"id": "fig", "figure": q["figure"]}]
+    raw_steps = [st for st in q.get("steps") or [] if isinstance(st, dict)]
     for ref in q.get("figures") or []:
         if not isinstance(ref, dict) or not isinstance(ref.get("figure"), dict):
             continue
@@ -436,13 +669,21 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         # the strict specs refuse any key the model adds ("style" on a
         # segment, "note" on a point — the trapeziums kit, 2026-10-14): only
         # the spec's own keys are kept
+        _fold_figure_keys(fig)
         fig["points"] = [_strip(_keep(p, _POINT_KEYS)) for p in (fig.get("points") or []) if isinstance(p, dict)]
         fig["objects"] = [_strip(o) for o in (fig.get("objects") or []) if isinstance(o, dict)]
+        _name_unnamed_shape(fig, raw_steps)
         fig["angles"] = [_strip(_keep(a, _ANGLE_KEYS)) for a in (fig.get("angles") or []) if isinstance(a, dict)]
         fig["segments"] = [_strip(_keep(s, _SEGMENT_KEYS)) for s in (fig.get("segments") or []) if isinstance(s, dict)]
         fig["measures"] = [_measure(m) for m in (fig.get("measures") or []) if isinstance(m, dict)]
         _resolve_side_names(fig)
         _area_measures(fig)
+        _place_feet(fig)
+        _drop_unused_points(fig)
+        _swap_trapezium_bases(fig)
+        for o in fig["objects"]:
+            if o.get("make") == "turtle_polygon":
+                _close_turtle(o)
         if any(isinstance(o, dict) and o.get("make") == "axes" for o in fig["objects"]):
             # a gradient or an intercept written as a MEASURE of a segment
             # ({target: s_ab, value: "m"}, or "m = 1.5"): the engine read it
@@ -479,6 +720,12 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
     asks = _asks(q.get("asks"), fig_ids)
     if asks:
         out["asks"] = asks
+    # "which of these are trapezia?" asked with the SOLID's property (live
+    # trial 2026-10-14): a figure with no solid sorts polygons
+    if not any(o.get("make") in _SIGNATURES_V3 for f in figures for o in f["figure"].get("objects") or []):
+        for a in [asks] + [p.get("asks") for p in q.get("parts") or [] if isinstance(p, dict)]:
+            if isinstance(a, dict) and a.get("property") == "solid_name":
+                a["property"] = "polygon_name"
     parts = []
     for p in q.get("parts") or []:
         if isinstance(p, dict):
@@ -681,10 +928,17 @@ _COORD_RULES = (
 
 
 _COMPOSITE_RULE = (
-    "\n  A COMPOUND shape (an L, a T, a rectangle with a corner cut out) is ONE turtle_polygon (its sides and"
-    " turns, right angles as 90 / -90); its area step cites area_composite with the shape's id and writes"
-    " the parts' sum or the difference the figure shows (A = 10 * 8 - 4 * 3) — the engine checks that"
-    " arithmetic against the shape's exact area. Never draw the parts as separate shapes."
+    "\n  A COMPOUND shape (an L, a T, a rectangle with a corner cut out, a rectangle with a triangle on top) is"
+    " ONE turtle_polygon WITH AN id, tracing the WHOLE outline in one walk (its sides and turns; right angles"
+    " as 90 / -90, a left turn positive): an L has 6 sides and 6 turns, five one way and ONE the other"
+    " (90, 90, -90, 90, 90, 90), never alternating; a rectangle with a triangle on top is one path of 5"
+    " sides whose turns at the apex are not right angles. The walk MUST return to its start: the lengths"
+    " going right add up to the lengths going left, up to down. A hole (a piece removed from the INSIDE)"
+    " cannot be drawn — do not write such a question; a piece removed from a corner or an edge is an"
+    " outline. The unknown area is the ANSWER (and A in the steps), never a measure. The area step cites"
+    " area_composite with the shape's id and writes the parts' sum or the difference the figure shows"
+    " (A = 10 * 8 - 4 * 3) — the engine checks that arithmetic against the shape's exact area. Never draw"
+    " the parts as separate shapes."
 )
 
 
