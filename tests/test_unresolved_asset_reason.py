@@ -145,7 +145,7 @@ class TestTheChildIsToldWhatTheParentKnows:
     def test_the_composer_puts_it_on_the_payload(self):
         import inspect
         from agent6_animation import video_composer as vc
-        src = inspect.getsource(vc._render_scene_segment)
+        src = inspect.getsource(vc._render_scene_segment_now)  # the body; _render_scene_segment is the phase-clock wrapper
         assert '"rate_limited": _rl' in src
         assert "asset_deferred" in src and "asset_abandoned" in src
 
