@@ -216,6 +216,15 @@ SLOW_DROP_MODEL = os.getenv("VERTEX_SLOW_DROP_MODEL", text_models.FLASH_LITE_3_5
 # limit, is the floor; Vertex itself sends the first chunk well inside it.
 STREAM_CONNECT_TIMEOUT_S = float(os.getenv("VERTEX_STREAM_CONNECT_TIMEOUT_S", "30"))
 STREAM_READ_TIMEOUT_S = float(os.getenv("VERTEX_STREAM_READ_TIMEOUT_S", "600"))   # first chunk, and between chunks
+# The read timeout fires only when NOTHING arrives. A stream that keeps
+# sending blank keep-alive lines, or chunks with no text (thoughts, empty
+# candidates), never trips it — the video job of 2026-10-14 19:14 UTC sat
+# FOUR AND A HALF HOURS inside one streamed call (heartbeats alive, nothing
+# logged, the worker restarted by hand at 23:42). Two caps, both a
+# _Transient 504 the retry ladder and #217's slow-drop switch handle: the
+# longest run without a TEXT part, and the whole stream.
+STREAM_STALL_S = float(os.getenv("VERTEX_STREAM_STALL_S", "600"))
+STREAM_TOTAL_S = float(os.getenv("VERTEX_STREAM_TOTAL_S", "1800"))
 
 
 def _stream_mode() -> bool:
@@ -365,8 +374,18 @@ class GeminiClient:
         prompt_feedback = None
         chunks = 0
         started = time.monotonic()
+        last_text = started
         try:
             for raw in res.iter_lines(decode_unicode=True):
+                now = time.monotonic()
+                if now - last_text > STREAM_STALL_S or now - started > STREAM_TOTAL_S:
+                    chars = sum(len(t) for t in text_parts)
+                    why = (f"no text for {now - last_text:.0f}s" if now - last_text > STREAM_STALL_S
+                           else f"over its {STREAM_TOTAL_S:.0f}s cap")
+                    logger.warning("Vertex text stream stalled (%s) after %d chunk(s), %d chars, %.0fs — cut",
+                                   why, chunks, chars, now - started)
+                    raise _Transient(504, f"stream stalled: {why} after {chunks} chunk(s), {chars} chars, "
+                                          f"{now - started:.0f}s in total")
                 if not raw:
                     continue
                 line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
@@ -394,6 +413,8 @@ class GeminiClient:
                             continue
                         if "text" in part:
                             text_parts.append(part["text"])
+                            if part["text"]:
+                                last_text = time.monotonic()
                     if cand.get("finishReason"):
                         finish = cand["finishReason"]
                 if chunk.get("usageMetadata"):
