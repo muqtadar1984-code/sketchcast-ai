@@ -185,6 +185,21 @@ def _access_token() -> str:
 MAX_OUTPUT_TOKENS = 65536
 
 
+# A long generation Vertex drops at its own limit. 2026-10-14, "Area of
+# Trapeziums and Compound Shapes": the lesson-script call (gemini-3.5-flash,
+# a 32k-token reply) sat ~600 s per attempt and came back 503 UNAVAILABLE
+# three times, then 499 — the loop sent the IDENTICAL request four times
+# and the job failed after 40 minutes; the morning's retry of the same topic
+# spent 2357 s in that stage before it got through. Nothing else was in the
+# queue: not a burst, a reply too long for the pool's speed that hour. A
+# 5xx that arrives after SLOW_DROP_S is read as that, and the remaining
+# attempts go to the lighter model, which answers in a fraction of the time
+# (the verifier still gates what it writes). VERTEX_SLOW_DROP_MODEL=""
+# keeps the old behaviour.
+SLOW_DROP_S = float(os.getenv("VERTEX_SLOW_DROP_S", "300"))
+SLOW_DROP_MODEL = os.getenv("VERTEX_SLOW_DROP_MODEL", text_models.FLASH_LITE_3_5)
+
+
 class GeminiClient:
     """Vertex Gemini wrapper — same contract as ClaudeClient."""
 
@@ -206,15 +221,15 @@ class GeminiClient:
 
     # ── wire ──────────────────────────────────────────────────────────
 
-    def _url(self) -> str:
+    def _url(self, model: str | None = None) -> str:
         return (
             f"https://aiplatform.googleapis.com/v1/projects/{self.project}"
-            f"/locations/{self.region}/publishers/google/models/{self.model}:generateContent"
+            f"/locations/{self.region}/publishers/google/models/{model or self.model}:generateContent"
         )
 
     def _post(self, parts: list[dict], system: str, max_tokens: int,
               response_schema: dict | None = None, wants_json: bool = True,
-              strict_schema: bool = False) -> dict:
+              strict_schema: bool = False, model: str | None = None) -> dict:
         # `wants_json` is the CALLER's contract, not a preference: a caller
         # that returns the reply as prose (transcribe_images) must not ask for
         # a JSON mime type. The env flag is the second gate.
@@ -233,7 +248,7 @@ class GeminiClient:
         # Gemini 3 dropped: the guard would have gone on being sent and gone on
         # being ignored, and the +38% surcharge it exists to prevent would have
         # come back with nothing in any log to say so.
-        chosen = text_models.resolve(text_models.ARTIFACT, model_id=self.model)
+        chosen = text_models.resolve(text_models.ARTIFACT, model_id=model or self.model)
         thinking = chosen.thinking_config
         max_tokens = self._within_ceiling(chosen, max_tokens)
         body = {
@@ -257,7 +272,7 @@ class GeminiClient:
             },
         }
         res = requests.post(
-            self._url(),
+            self._url(model),
             headers={
                 "Authorization": f"Bearer {_access_token()}",
                 "Content-Type": "application/json",
@@ -332,11 +347,13 @@ class GeminiClient:
         against the same busy pool and two of them failed after 32 minutes."""
         from shared import phase_clock, provider_gate as _pg
         gate = _pg.gate("vertex_text")
+        model: str | None = None            # set after a slow drop: the lighter model from then on
         for attempt in range(retries + 1):
             last = attempt == retries
             token = gate.acquire("Vertex text")
+            started = time.monotonic()
             try:
-                out = self._post(parts, system, max_tokens, response_schema, wants_json, strict_schema)
+                out = self._post(parts, system, max_tokens, response_schema, wants_json, strict_schema, model=model)
             except _RateLimited as exc:
                 gate.release(token)
                 gate.outcome(False, retry_after=exc.retry_after)
@@ -354,11 +371,23 @@ class GeminiClient:
                 continue
             except _Transient as exc:
                 gate.release(token)
+                elapsed = time.monotonic() - started
                 if last:
                     raise
                 wait = _backoff_seconds(attempt)
-                logger.warning("transient Vertex failure (HTTP %d); retrying in %.1fs (%d/%d): %s",
-                               exc.status, wait, attempt + 1, retries, exc.body)
+                if elapsed >= SLOW_DROP_S and SLOW_DROP_MODEL and model is None and SLOW_DROP_MODEL != self.model:
+                    # a slow drop: not a blip to wait out, a reply too long
+                    # for the pool's speed — the same request again would
+                    # sit the same ~600 s and die the same way
+                    model = SLOW_DROP_MODEL
+                    phase_clock.count("slow_drops_text")
+                    logger.warning("Vertex dropped a long request after %.0fs (HTTP %d); the remaining attempts "
+                                   "go to %s (%d/%d): %s", elapsed, exc.status, model, attempt + 1, retries, exc.body)
+                else:
+                    if elapsed >= SLOW_DROP_S:
+                        phase_clock.count("slow_drops_text")
+                    logger.warning("transient Vertex failure (HTTP %d after %.0fs); retrying in %.1fs (%d/%d): %s",
+                                   exc.status, elapsed, wait, attempt + 1, retries, exc.body)
                 time.sleep(wait)
                 continue
             except _SchemaRejected as exc:

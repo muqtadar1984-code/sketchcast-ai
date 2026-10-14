@@ -427,3 +427,89 @@ def test_strict_schema_sends_the_schema_for_that_call_without_the_flag(client, m
     assert "responseSchema" not in bodies[-1]["generationConfig"], "flag off: no schema"
     client.analyze("hello", response_schema=schema, strict_schema=True)
     assert bodies[-1]["generationConfig"]["responseSchema"] == schema
+
+
+# ── a slow drop goes to the lighter model ─────────────────────────────────
+
+
+def _timed_flaky_post(monkeypatch, plan, sleeps):
+    """requests.post answering `plan` in order — (status, seconds the call
+    took) — recording every URL and body; the clock advances by the seconds
+    each call took."""
+    seen = {"n": 0, "urls": [], "bodies": []}
+    clock = {"t": 0.0}
+
+    class _Res:
+        def __init__(self, status):
+            self.status_code = status
+            self.text = f"http {status}"
+            self.headers = {}
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"raise_for_status {self.status_code}")
+
+        def json(self):
+            return usage_response(text='{"ok": true}')
+
+    def post(url, headers=None, json=None, timeout=None):
+        status, took = plan[min(seen["n"], len(plan) - 1)]
+        seen["n"] += 1
+        seen["urls"].append(url)
+        seen["bodies"].append(json)
+        clock["t"] += took
+        return _Res(status)
+
+    monkeypatch.setattr("shared.gemini_client.requests.post", post)
+    monkeypatch.setattr("shared.gemini_client._access_token", lambda: "tok")
+    monkeypatch.setattr("shared.gemini_client.time.sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr("shared.gemini_client.time.monotonic", lambda: clock["t"])
+    return seen
+
+
+def test_a_503_after_a_long_wait_sends_the_remaining_attempts_to_the_lighter_model(monkeypatch):
+    """2026-10-14: the lesson-script call sat ~600 s per attempt and came back
+    503 UNAVAILABLE three times, the identical request each time, 40 minutes
+    to a failure. A slow drop is not a blip: the rest of the ladder goes to
+    the lite model, which answers in a fraction of the time."""
+    import shared.gemini_client as gc
+
+    monkeypatch.setenv("VERTEX_PROJECT_ID", "sketchcast")
+    monkeypatch.setenv("VERTEX_REGION", "global")
+    client = gc.GeminiClient(model="gemini-3.5-flash")
+    sleeps: list = []
+    seen = _timed_flaky_post(monkeypatch, [(503, 601.0), (200, 20.0)], sleeps)
+    out = client.analyze("write the lesson", max_tokens=32000)
+    assert out["data"] == {"ok": True} and seen["n"] == 2
+    assert "gemini-3.5-flash:generateContent" in seen["urls"][0]
+    assert "gemini-3.5-flash-lite:generateContent" in seen["urls"][1], "the retry went to the lighter model"
+    # a quick 503 is the old blip: same model, backoff, try again
+    client = gc.GeminiClient(model="gemini-3.5-flash")
+    seen = _timed_flaky_post(monkeypatch, [(503, 4.0), (200, 20.0)], sleeps)
+    assert client.analyze("hello")["data"] == {"ok": True}
+    assert all("gemini-3.5-flash:generateContent" in u for u in seen["urls"])
+    # the lighter model dropping too is still the bounded failure it was
+    import requests as _rq
+    client = gc.GeminiClient(model="gemini-3.5-flash")
+    seen = _timed_flaky_post(monkeypatch, [(503, 601.0)], sleeps)
+    with pytest.raises(_rq.HTTPError):
+        client.analyze("hello", retries=2)
+    assert seen["n"] == 3 and "flash-lite" in seen["urls"][1] and "flash-lite" in seen["urls"][2]
+
+
+def test_the_slow_drop_switch_has_a_kill_switch_and_never_switches_to_itself(monkeypatch):
+    import shared.gemini_client as gc
+
+    monkeypatch.setenv("VERTEX_PROJECT_ID", "sketchcast")
+    monkeypatch.setenv("VERTEX_REGION", "global")
+    sleeps: list = []
+    monkeypatch.setattr(gc, "SLOW_DROP_MODEL", "")
+    client = gc.GeminiClient(model="gemini-3.5-flash")
+    seen = _timed_flaky_post(monkeypatch, [(503, 601.0), (200, 20.0)], sleeps)
+    client.analyze("hello")
+    assert all("gemini-3.5-flash:generateContent" in u for u in seen["urls"])
+    monkeypatch.setattr(gc, "SLOW_DROP_MODEL", "gemini-3.5-flash-lite")
+    client = gc.GeminiClient(model="gemini-3.5-flash-lite")      # already the lighter model: nothing to switch to
+    seen = _timed_flaky_post(monkeypatch, [(503, 601.0), (200, 20.0)], sleeps)
+    client.analyze("hello")
+    assert seen["n"] == 2 and all("flash-lite:generateContent" in u for u in seen["urls"])
