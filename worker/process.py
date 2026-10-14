@@ -29,7 +29,7 @@ from .client import DeferredJob as _DeferredJob  # the CLASS: tests stub `db` wi
 # live in shared/book_metadata.py so the app (src/utils/book.ts) has one thing
 # to mirror: the two copies drifted apart on 2026-07-12 and the worker's title
 # gate has rejected 100% of production books ever since.
-from shared import coverage, lesson_length, phase_clock
+from shared import coverage, lesson_length, phase_clock, usage_ledger
 from shared.book_metadata import (clean_title_fallback as _clean_title_fallback,
                                   looks_like_filename as _looks_like_filename,
                                   pick_book_title, sanitise_author)
@@ -2540,7 +2540,7 @@ def _process_catalogue(sb: Client, job: dict, generation_id: str, gen: dict, *,
                 sb, job, generation_id, gen, unit, tmp, allow_premium=allow_premium,
                 tier_info=tier_info, canary_provider=canary_provider,
             )
-        db.set_job_usage(sb, job_id, built.client.session_usage)
+        db.set_job_usage(sb, job_id, usage_ledger.total(generation_id))
         if (gen.get("kind") or "presentation") == "presentation":
             recorded = catalogue_kit.record_presentation(
                 sb, gen, prepared.kit_id, {"kind": "presentation", "parts": built.parts})
@@ -2584,6 +2584,9 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     job row's creation and this claim.
     """
     clock = phase_clock.start(generation_id)
+    usage_ledger.start(generation_id)      # every client, every thread, one total
+    from shared.llm import set_script_fallback
+    set_script_fallback(db.script_fallback_requested(job))
     queued_at = _epoch(str(job.get("created_at") or ""))
     if queued_at > 0:
         clock.add("queue_wait", max(0.0, _time.time() - queued_at))
@@ -2609,6 +2612,8 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
             logger.warning("phase timings not recorded for %s", generation_id, exc_info=True)
         finally:
             phase_clock.stop(generation_id)
+            usage_ledger.stop(generation_id)
+            set_script_fallback(False)
 
 
 def _generate(sb: Client, job: dict, generation_id: str) -> None:
@@ -2735,7 +2740,7 @@ def _generate(sb: Client, job: dict, generation_id: str) -> None:
     client = built.client
 
     # Attribute this job's Claude spend to the row (unit economics per lesson).
-    db.set_job_usage(sb, job_id, client.session_usage)
+    db.set_job_usage(sb, job_id, usage_ledger.total(generation_id))
     db.finish_job(sb, job_id, generation_id)
     logger.info("Generation %s (%s) done — %s", generation_id, kind, client.session_usage)
 

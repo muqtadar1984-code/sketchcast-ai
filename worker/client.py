@@ -125,13 +125,14 @@ class DeferredJob(Exception):
     run.py puts the row back in the queue with ``params.deferred_until``,
     and ``claim_next_job`` cannot see it until then."""
 
-    def __init__(self, seconds: int, note: str):
+    def __init__(self, seconds: int, note: str, extra: Optional[dict] = None):
         super().__init__(note)
         self.seconds = max(15, int(seconds))
         self.note = note
+        self.extra = dict(extra or {})   # params to carry into the next run
 
 
-def defer_job(sb: Client, job: dict, seconds: int, note: str) -> bool:
+def defer_job(sb: Client, job: dict, seconds: int, note: str, extra: Optional[dict] = None) -> bool:
     """queued again, invisible to the claim for `seconds`, attempts untouched.
     ``deferred_since`` is set once, so the waiter can bound how long it has
     been waiting in total. Written through requeue_job — the one requeue
@@ -144,6 +145,7 @@ def defer_job(sb: Client, job: dict, seconds: int, note: str) -> bool:
     params.setdefault("deferred_since", _stamp(now))
     params["deferred_until"] = _stamp(now + timedelta(seconds=seconds))
     params["deferred_note"] = note[:200]
+    params.update(extra or {})
     extra = {"params": params, "stage": {"phase": "waiting", "note": note[:200]}}
     return requeue_job(sb, job, bump_attempts=False, extra=extra)
 
@@ -183,6 +185,20 @@ def is_rate_limited(exc: BaseException) -> bool:
         seen.add(id(cur))
         if type(cur).__name__ in _RATE_LIMIT_CLASSES:
             return True
+        # The strict image gate refusing a lesson whose EVERY missing picture
+        # was rate-limited (asset_warm.ImagesIncomplete carries the reasons):
+        # that is the pool saying no, so the job waits like a text refusal
+        # instead of failing with "images incomplete" (24 such failures
+        # between 2026-09-22 and 09-30).
+        # Its message names every reason ("rate_limited=1 (cell)"), which
+        # the text marks below would match on ONE such picture; the reasons
+        # dict is the authority for this exception, not its text.
+        missing = getattr(cur, "missing", None)
+        if isinstance(missing, dict):
+            if missing and all(str(r).startswith("rate_limited") for r in missing.values()):
+                return True
+            cur = cur.__cause__ or cur.__context__
+            continue
         text = str(cur)
         if any(m.lower() in text.lower() for m in _RATE_LIMIT_MARKS):
             return True
@@ -198,10 +214,23 @@ def rate_limit_deferral(job: dict, exc: BaseException) -> "DeferredJob | None":
     step, budget = rate_limit_budget(job)
     waited = deferred_seconds(job)
     if waited >= budget:
-        return None
+        if is_catalogue_params(job.get("params")) or script_fallback_requested(job):
+            return None
+        # A TEACHER'S job that waited its whole budget on the script model
+        # gets one more run with the script on the fallback model (the
+        # seam shared/llm.set_script_fallback reads) before it is a pause.
+        return DeferredJob(step,
+                           f"model quota exhausted for {waited:.0f}s: the next run writes the "
+                           f"script on the fallback model",
+                           extra={"script_fallback": True})
     return DeferredJob(step,
                        f"model quota exhausted; waiting (waited {waited:.0f}s of "
                        f"{budget}s)")
+
+
+def script_fallback_requested(job: dict) -> bool:
+    params = job.get("params") if isinstance(job.get("params"), dict) else {}
+    return bool((params or {}).get("script_fallback"))
 
 
 def rate_limit_exhausted_message(job: dict, exc: BaseException) -> Optional[str]:
@@ -453,7 +482,8 @@ def claim_next_job(sb: Client, job_type=None, exclude_types=None,
     job = res.data[0]
     upd = (
         sb.table("jobs")
-        .update({"status": "processing", "progress": 1})
+        .update({"status": "processing", "progress": 1,
+                 "claimed_at": _stamp(datetime.now(timezone.utc))})   # when a worker took it (0127)
         .eq("id", job["id"])
         .eq("status", "queued")  # guard against a racing worker
         .execute()

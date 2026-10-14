@@ -1579,8 +1579,13 @@ class ClaudeClient:
         file that only grows. It is now line-delimited and appended under a
         lock, so a concurrent write cannot destroy another's entry.
         """
+        from shared import usage_ledger  # noqa: PLC0415 — beside the log, per generation
         entry = {**usage, **_usage_labels(),
                  "timestamp": datetime.now(timezone.utc).isoformat()}
+        try:
+            usage_ledger.add(entry)
+        except Exception:  # noqa: BLE001 — accounting never breaks a call
+            pass
         try:
             with _USAGE_LOCK:
                 with open(TOKEN_LOG_PATH.with_suffix(".jsonl"), "a",

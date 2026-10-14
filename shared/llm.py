@@ -8,7 +8,35 @@ SCRIPT and not the language.
 
 from __future__ import annotations
 
+import contextvars
+import logging
+import os
+
 from shared.model_routing import ANTHROPIC, GEMINI, KIMI, provider_for
+
+# THE SCRIPT FALLBACK SEAM. A teacher's job that has waited its whole
+# rate-limit budget on the script model is sent back once more with
+# params.script_fallback = true (worker/client.rate_limit_deferral); on that
+# run the script call goes to SCRIPT_FALLBACK_MODEL instead of the script
+# role's model. Today that is the lighter Gemini model (the same one #217
+# switches to after a slow drop); a Bedrock-hosted Claude plugs in here
+# later as the provider behind the same flag. "" disables the seam.
+_SCRIPT_FALLBACK: contextvars.ContextVar[bool] = contextvars.ContextVar("script_fallback", default=False)
+_log = logging.getLogger(__name__)
+
+
+def set_script_fallback(on: bool) -> None:
+    """The job thread says whether THIS run's script goes to the fallback model."""
+    _SCRIPT_FALLBACK.set(bool(on))
+
+
+def script_fallback_on() -> bool:
+    return bool(_SCRIPT_FALLBACK.get())
+
+
+def script_fallback_model() -> str:
+    from shared import text_models
+    return os.getenv("SCRIPT_FALLBACK_MODEL", text_models.FLASH_LITE_3_5).strip()
 
 
 def client_for(language: str | None, *, model: str | None = None, kind: str | None = None):
@@ -63,6 +91,12 @@ def script_client(language: str | None):
 
     if provider_for(language) != GEMINI:
         return client_for(language)
+    if script_fallback_on() and script_fallback_model():
+        from shared import phase_clock
+        _log.warning("script fallback: this run's script goes to %s (the job spent its "
+                     "rate-limit budget on the script role's model)", script_fallback_model())
+        phase_clock.count("script_fallback")
+        return client_for(language, model=script_fallback_model())
     return client_for(language, model=text_models.resolve(text_models.SCRIPT).id)
 
 
