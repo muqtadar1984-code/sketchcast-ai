@@ -611,7 +611,7 @@ def run_once(sb) -> bool:
         # spent, nothing is failed, and the generation reads `queued` again
         # (defer_job mirrors it through the one requeue writer) so the
         # dashboard does not show a build that is not happening.
-        if db.defer_job(sb, job, exc.seconds, exc.note):
+        if db.defer_job(sb, job, exc.seconds, exc.note, extra=getattr(exc, "extra", None)):
             log.info("Job %s deferred %ds: %s", job["id"], exc.seconds, exc.note)
         else:
             log.warning("Job %s asked to defer but the row had moved; left as is", job["id"])
@@ -652,7 +652,7 @@ def run_once(sb) -> bool:
         # its kit is marked failed (process._process_catalogue); this is the
         # book path's turn.
         wait = db.model_wait(job, exc)
-        if wait is not None and db.defer_job(sb, job, wait.seconds, wait.note):
+        if wait is not None and db.defer_job(sb, job, wait.seconds, wait.note, extra=getattr(wait, "extra", None)):
             log.warning("Job %s deferred %ds: %s", job["id"], wait.seconds, wait.note)
             return True                       # the finally below releases the slot
         # A refusal that outlasted the waiting budget is recorded as what it

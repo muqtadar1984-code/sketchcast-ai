@@ -129,6 +129,40 @@ remaining attempts go to the lighter model (`VERTEX_SLOW_DROP_MODEL`,
 #217). `VERTEX_STREAM=0` is the kill switch. The log line
 `Vertex text stream: N chunk(s), M chars, S s, finish=…` is one per call.
 
+### 7. What the close-out added (2026-10-14, migration 0127)
+
+Four gaps the first validation runs exposed, closed together:
+
+- **Pictures refused on quota defer the job.** The strict image gate raises
+  `ImagesIncomplete` with a reason per missing picture. When EVERY reason is
+  `rate_limited` the refusal is the pool saying no, and `is_rate_limited`
+  treats it like a text 429: the job is deferred on its budget instead of
+  failing with "images incomplete" (24 such failures, 2026-09-22 to 09-30).
+  A mixed or other cause still fails, so a real fault stays visible. The
+  reasons dict decides, not the message text.
+- **The script fallback seam** (`shared/llm.py`). A teacher's job that has
+  waited its whole budget (1,800 s) on the script model is sent back ONCE
+  MORE with `params.script_fallback = true`; on that run the script call goes
+  to `SCRIPT_FALLBACK_MODEL` (today `gemini-3.5-flash-lite`, the slow-drop
+  model of #217) and the phase clock counts `script_fallback`. Only after
+  that run does the job pause with the Retry text. Catalogue kits never take
+  the seam (nobody is waiting, and the kit's quality bar is the point). This
+  is the exact place a Bedrock-hosted Claude plugs in later: the flag and the
+  deferral stay, the model behind `script_fallback_model()` changes.
+- **The spend on the job row** (`shared/usage_ledger.py`). `jobs.usage` was
+  written from ONE client's session total, so a video (script role, analysis
+  role, images and vision on render threads) reported nothing: 1 of 9
+  presentations carried usage on 2026-10-14. Every call already reaches the
+  token log; each entry is now also folded into the running total of the
+  generation it belongs to, found from the usage labels or, on a render
+  thread, from the phase clock's bound generation. The row gets the ledger
+  total, same shape as before (calls, input_tokens, output_tokens, cost_usd).
+- **`jobs.claimed_at`** (0127). Set on every claim — the worker's ordinary
+  claim and the two transactional catalogue claims — so queue wait and work
+  time separate in SQL without reading `params.timings`:
+  `claimed_at - created_at` is the wait, `updated_at - claimed_at` the work.
+  A requeue or a deferral leaves it: it records the LAST claim.
+
 ## Knobs
 
 ```
@@ -142,6 +176,7 @@ PROVIDER_VERTEX_IMAGE_MAX_COOLDOWN_SECS=120
 PROVIDER_GATE_GLOBAL=1
 VERTEX_STREAM=1  VERTEX_STREAM_CONNECT_TIMEOUT_S=30  VERTEX_STREAM_READ_TIMEOUT_S=600
 VERTEX_SLOW_DROP_S=300  VERTEX_SLOW_DROP_MODEL=gemini-3.5-flash-lite
+SCRIPT_FALLBACK_MODEL=gemini-3.5-flash-lite   ("" disables the seam)
 MAX_CATALOGUE_JOBS=2        MAX_CATALOGUE_KITS=1
 CATALOGUE_RATE_LIMIT_DEFER_SECONDS=300     CATALOGUE_RATE_LIMIT_MAX_WAIT_SECONDS=10800
 ```

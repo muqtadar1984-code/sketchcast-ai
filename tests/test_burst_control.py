@@ -177,9 +177,12 @@ class TestTheWaitingBudget:
     def test_the_worker_stores_the_pause_as_the_error(self, monkeypatch):
         """A teacher's worksheet that has already waited its whole budget and
         is refused once more goes to error with the PAUSE text, not the raw
-        429 body — the support agent and the console read a reason."""
+        429 body — the support agent and the console read a reason. (Since
+        2026-10-14 a teacher's job first gets ONE run on the script fallback
+        model — params.script_fallback — and pauses after that run.)"""
         since = db._stamp(db.datetime.now(db.timezone.utc) - db.timedelta(seconds=1801))
-        job = {**_builder("job-ws", "worksheet"), "params": {"deferred_since": since}}
+        job = {**_builder("job-ws", "worksheet"),
+               "params": {"deferred_since": since, "script_fallback": True}}
         sb = _fresh("queued", jobs=[job])
 
         def boom(sb_, job_, gid):

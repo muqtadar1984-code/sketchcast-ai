@@ -155,7 +155,7 @@ class TestTheHandlerAndTheOrder:
         from worker import run
         src = inspect.getsource(run)
         assert src.index("except db.DeferredJob") < src.index("except db.TransientTierError")
-        assert "db.defer_job(sb, job, exc.seconds, exc.note)" in src
+        assert "db.defer_job(sb, job, exc.seconds, exc.note, extra=" in src   # carries params since 2026-10-14
 
     def test_the_deck_waits_before_any_model_call(self):
         """The wait sits right after the generation row is read — before the

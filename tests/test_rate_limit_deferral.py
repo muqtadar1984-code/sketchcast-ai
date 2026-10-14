@@ -66,10 +66,16 @@ class TestTheWaitItEarns:
         assert isinstance(wait, db.DeferredJob) and wait.seconds == 180
         assert "quota" in wait.note
 
-    def test_a_job_that_has_waited_its_budget_is_a_failure(self, monkeypatch):
+    def test_a_job_that_has_waited_its_budget_takes_the_fallback_then_fails(self, monkeypatch):
+        """2026-10-14: a teacher's job that spent its budget on the script
+        model is sent back ONCE MORE with params.script_fallback (the seam
+        shared/llm reads); a job already on the fallback is a failure."""
         monkeypatch.setattr(db, "RATE_LIMIT_MAX_WAIT_SECONDS", 1800)
         monkeypatch.setattr(db, "deferred_seconds", lambda job: 1800.0)
-        assert db.rate_limit_deferral(_builder(), _RateLimited(VERTEX_429)) is None
+        once_more = db.rate_limit_deferral(_builder(), _RateLimited(VERTEX_429))
+        assert isinstance(once_more, db.DeferredJob) and once_more.extra == {"script_fallback": True}
+        on_fallback = {**_builder(), "params": {"script_fallback": True}}
+        assert db.rate_limit_deferral(on_fallback, _RateLimited(VERTEX_429)) is None
 
     def test_not_a_rate_limit_means_no_wait(self):
         assert db.rate_limit_deferral(_builder(), RuntimeError("boom")) is None
@@ -93,7 +99,7 @@ class TestTheRunLoop:
         with run._inflight_lock:
             assert not run._inflight_jobs, "the slot is released"
 
-    def test_after_the_budget_it_fails_as_before(self, monkeypatch):
+    def test_after_the_budget_it_takes_the_fallback_once_then_fails(self, monkeypatch):
         def boom(sb, job, gen_id):
             raise _RateLimited(VERTEX_429)
 
@@ -103,7 +109,12 @@ class TestTheRunLoop:
         sb = _fresh("queued", jobs=[_builder("job-1", "presentation")])
         assert run.run_once(sb) is True
         row = sb.tables["jobs"][0]
-        assert row["status"] == "error" and "RESOURCE_EXHAUSTED" in str(row.get("error"))
+        assert row["status"] == "queued" and row["params"]["script_fallback"] is True, \
+            "one more run, the script on the fallback model"
+        row["params"]["deferred_until"] = "2000-01-01T00:00:00.000000+00:00"   # its time has come
+        assert run.run_once(sb) is True
+        row = sb.tables["jobs"][0]
+        assert row["status"] == "error" and "paused after" in str(row.get("error"))
 
     def test_an_ordinary_failure_is_untouched(self, monkeypatch):
         def boom(sb, job, gen_id):
