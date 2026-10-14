@@ -467,7 +467,7 @@ def _timed_flaky_post(monkeypatch, plan, sleeps):
     return seen
 
 
-def test_a_503_after_a_long_wait_sends_the_remaining_attempts_to_the_lighter_model(monkeypatch):
+def test_a_503_after_a_long_wait_sends_the_remaining_attempts_to_the_lighter_model(monkeypatch, caplog):
     """2026-10-14: the lesson-script call sat ~600 s per attempt and came back
     503 UNAVAILABLE three times, the identical request each time, 40 minutes
     to a failure. A slow drop is not a blip: the rest of the ladder goes to
@@ -479,10 +479,14 @@ def test_a_503_after_a_long_wait_sends_the_remaining_attempts_to_the_lighter_mod
     client = gc.GeminiClient(model="gemini-3.5-flash")
     sleeps: list = []
     seen = _timed_flaky_post(monkeypatch, [(503, 601.0), (200, 20.0)], sleeps)
-    out = client.analyze("write the lesson", max_tokens=32000)
+    import logging
+    with caplog.at_level(logging.WARNING, logger="shared.gemini_client"):
+        out = client.analyze("write the lesson", max_tokens=32000)
     assert out["data"] == {"ok": True} and seen["n"] == 2
     assert "gemini-3.5-flash:generateContent" in seen["urls"][0]
     assert "gemini-3.5-flash-lite:generateContent" in seen["urls"][1], "the retry went to the lighter model"
+    # the recovery is measured: the lighter model's own elapsed time is logged
+    assert any("answered in 20s after the slow drop" in r.getMessage() for r in caplog.records),         [r.getMessage() for r in caplog.records]
     # a quick 503 is the old blip: same model, backoff, try again
     client = gc.GeminiClient(model="gemini-3.5-flash")
     seen = _timed_flaky_post(monkeypatch, [(503, 4.0), (200, 20.0)], sleeps)

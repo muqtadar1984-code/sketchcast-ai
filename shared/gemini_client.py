@@ -402,6 +402,16 @@ class GeminiClient:
                 raise
             gate.release(token)
             gate.outcome(True)
+            served = model or getattr(self, "model", None) or "unknown"      # a bare test double has no model
+            phase_clock.count(f"vertex_text_calls_{served.replace('-', '_').replace('.', '_')}")
+            if model is not None:
+                # the recovery, measured: how long the lighter model took
+                # where the configured one was dropped at ~600 s — the
+                # number the streaming change is judged against
+                took = time.monotonic() - started
+                phase_clock.count("slow_drop_recoveries")
+                phase_clock.add("slow_drop_recovery_s", took)
+                logger.warning("the lighter model %s answered in %.0fs after the slow drop", model, took)
             return out
         raise AssertionError("unreachable")
 
