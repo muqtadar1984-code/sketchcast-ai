@@ -2101,10 +2101,13 @@ class TestP17ModelCallBurst:
         assert pace_line < slot_line, "the pacing wait must happen before the gate"
         assert sleep_line > release_line, "the slot is given back before the retry sleep"
         from shared import provider_gate as pg
+        # locally the pace wait is _local_admission; with the store it is
+        # the permit — both are asked before the slot is taken
         g = inspect.getsource(pg.ProviderGate.acquire).splitlines()
-        gpace = next(i for i, l in enumerate(g) if "_pace_wait()" in l)
-        gslot = next(i for i, l in enumerate(g) if "_sem.acquire()" in l)
-        assert gpace < gslot, "a paced caller must sleep holding no slot"
+        slots = [i for i, l in enumerate(g) if "self._sem.acquire()" in l]
+        assert next(i for i, l in enumerate(g) if "_local_admission()" in l) < slots[0], \
+            "a paced caller must sleep holding no slot"
+        assert next(i for i, l in enumerate(g) if ".permit(" in l) < slots[-1]
 
     def test_every_paid_transport_goes_through_the_gate(self):
         """Image (both transports) and vision (both transports) all funnel

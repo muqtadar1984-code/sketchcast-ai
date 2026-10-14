@@ -214,6 +214,13 @@ class FakeSB:
     def table(self, name):
         return _Query(self, name)
 
+    def rpc(self, name, params=None):
+        """The transactional catalogue claims of migration 0126, emulated
+        (tests/gate_fakes.py); any other function is one this database
+        does not have."""
+        from tests.gate_fakes import claim_rpc
+        return claim_rpc(self, name, dict(params or {}))
+
 
 def _fresh(gen_status="queued", jobs=()):
     sb = FakeSB()
