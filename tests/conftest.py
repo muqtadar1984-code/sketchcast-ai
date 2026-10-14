@@ -111,6 +111,16 @@ def _fresh_model_call_limiters(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _single_shot_text_requests(monkeypatch):
+    """shared.gemini_client streams by default (VERTEX_STREAM=1). The suite's
+    many requests.post fakes answer with .json(); they test the single-shot
+    form. The streaming form has its own fakes in tests/test_gemini_streaming.py,
+    which set VERTEX_STREAM=1 themselves."""
+    monkeypatch.setenv("VERTEX_STREAM", "0")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _quiet_provider_gates():
     """shared.provider_gate: process-wide, and a refusal silences the
     provider for 30 s — a test that raises one 429 would make the next
