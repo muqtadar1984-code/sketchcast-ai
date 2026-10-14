@@ -160,6 +160,82 @@ _UNIT_WORDS = {"cm": "cm", "centimetre": "cm", "centimeter": "cm", "mm": "mm", "
 _UNIT_STRIP_RE = re.compile(r"(?:\^\s*[23]|[²³]|\b(?:sq|square|cubic)\b|\bsquared\b|[.\s]+|s\b)", re.I)
 
 
+_MEASURE_KEYS = ("target", "value", "unit", "role", "kind")
+# the constructions whose id names a 2D shape with an area
+_SHAPE_MAKES = {"triangle_sss", "triangle_sas", "triangle_asa", "triangle_aas", "triangle_rhs", "triangle_isosceles",
+                "triangle_equilateral", "square", "rectangle", "parallelogram", "rhombus", "trapezium", "kite",
+                "regular_polygon", "polygon", "turtle_polygon", "circle"}
+# the construction parameters that are LENGTHS the model may write as side names
+_LENGTH_LIST_KEYS = ("parallel_sides", "sides", "legs")
+_LENGTH_KEYS = ("side", "base", "hyp", "width", "height", "length", "radius")
+_SIDE_NAME_RE = re.compile(r"^\s*(?:s_)?([A-Za-z])\s*([A-Za-z])\s*$")
+
+
+def _side_lengths(fig: dict) -> dict:
+    """``{"ab": "8", ...}`` — every given segment measure by the two letters
+    of its points, from the figure's segments and measures."""
+    seg_pts: dict = {}
+    for s in fig.get("segments") or []:
+        pts = s.get("points") or []
+        if isinstance(s, dict) and s.get("id") and len(pts) == 2:
+            letters = "".join(str(p).removeprefix("p_")[:1] for p in pts).lower()
+            seg_pts[str(s["id"]).lower()] = letters
+    out: dict = {}
+    for ms in fig.get("measures") or []:
+        if not isinstance(ms, dict) or str(ms.get("role") or "given") != "given":
+            continue
+        target = str(ms.get("target") or "").lower()
+        letters = seg_pts.get(target) or (target.removeprefix("s_") if target.startswith("s_") and len(target) == 4 else "")
+        if letters and len(letters) == 2:
+            out[letters] = ms.get("value")
+            out[letters[::-1]] = ms.get("value")
+    return out
+
+
+def _resolve_side_names(fig: dict) -> None:
+    """A shape's lengths written as the NAMES of its sides — trapezium
+    parallel_sides ["AB", "DC"], a kite's sides ["AB", "BC"] — become the
+    given lengths of those segments; a comma string "8, 5" becomes a list.
+    The trapeziums kit (2026-10-14) lost 6 of 6 figures to
+    "`parallel_sides` is [AB, DC]": the model copied the signature's
+    placeholders and put the numbers in the measures, where they belong
+    anyway. A name with no given length is left for the engine to refuse."""
+    lengths = _side_lengths(fig)
+
+    def one(v):
+        m = _SIDE_NAME_RE.match(str(v)) if isinstance(v, str) else None
+        if m:
+            key = (m.group(1) + m.group(2)).lower()
+            if key in lengths:
+                return lengths[key]
+        return v
+
+    for obj in fig.get("objects") or []:
+        if not isinstance(obj, dict):
+            continue
+        for key in _LENGTH_LIST_KEYS:
+            v = obj.get(key)
+            if isinstance(v, str) and "," in v:
+                v = [x.strip() for x in v.strip("[]() ").split(",") if x.strip()]
+            if isinstance(v, list):
+                obj[key] = [one(x) for x in v]
+        for key in _LENGTH_KEYS:
+            if key in obj:
+                obj[key] = one(obj[key])
+
+
+def _area_measures(fig: dict) -> None:
+    """A measure whose target is a 2D shape's id and that names no kind is
+    the shape's AREA: "the trapezium's area is 54" written as
+    {target: 'trap', value: '54'} (refused as "measure of 'trap': no such
+    angle, segment or point", 2026-10-14)."""
+    shapes = {str(o.get("id")) for o in fig.get("objects") or [] if isinstance(o, dict) and o.get("make") in _SHAPE_MAKES}
+    for ms in fig.get("measures") or []:
+        if isinstance(ms, dict) and str(ms.get("target")) in shapes and not ms.get("kind"):
+            ms["kind"] = "area"
+            ms["role"] = "given"
+
+
 def _unit(raw) -> Optional[str]:
     """The length (or degree) unit a model wrote, or None when it wrote
     none the engine knows — never a refusal."""
@@ -177,7 +253,10 @@ def _measure(m: dict) -> dict:
     'required' or 'target' is an unknown when the value carries a symbol,
     a given otherwise (the enum is the engine's; the engine checks both).
     Its unit folded to a length the engine knows (_unit), or dropped."""
-    out = _strip(dict(m))
+    # only the spec's keys survive: the model adds "id", "label", "note"
+    # (the trapeziums kit, 2026-10-14: "measures.0.id: Extra inputs are
+    # not permitted" took three figures of six)
+    out = _strip({k: v for k, v in dict(m).items() if k in _MEASURE_KEYS})
     if "unit" in out:
         unit = _unit(out.get("unit"))
         if unit:
@@ -283,6 +362,8 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         fig["angles"] = [_strip(a) for a in (fig.get("angles") or []) if isinstance(a, dict)]
         fig["segments"] = [_strip(s) for s in (fig.get("segments") or []) if isinstance(s, dict)]
         fig["measures"] = [_measure(m) for m in (fig.get("measures") or []) if isinstance(m, dict)]
+        _resolve_side_names(fig)
+        _area_measures(fig)
         if any(isinstance(o, dict) and o.get("make") == "axes" for o in fig["objects"]):
             # a gradient or an intercept written as a MEASURE of a segment
             # ({target: s_ab, value: "m"}, or "m = 1.5"): the engine read it
@@ -442,7 +523,7 @@ _SIGNATURES = {
     "intersection": "id:<new point>, of:[ray or line id, ray or line id]",
     "midpoint": "id:<new point>, segment:[a,b]",
     "angle_bisector": "angle:<angle id>, to:<new point>",
-    "triangle_sss": "vertices:[a,b,c], sides:[AB,BC,CA]",
+    "triangle_sss": "vertices:[a,b,c], sides:[AB,BC,CA] (three NUMBERS: the lengths)",
     "triangle_sas": "vertices, sides:[AB,BC], angle:<at B>",
     "triangle_asa": "vertices, angles:[at A, at B], side:AB",
     "triangle_aas": "vertices, angles:[at A, at B], side:BC",
@@ -451,7 +532,7 @@ _SIGNATURES = {
     "triangle_equilateral": "vertices, side",
     "square": "vertices, side", "rectangle": "vertices, width, height",
     "parallelogram": "vertices, sides:[AB,BC], angle:<at B>", "rhombus": "vertices, side, angle",
-    "trapezium": "vertices, parallel_sides:[AB,DC], height, offset", "kite": "vertices, sides:[AB,BC], angle:<at B>",
+    "trapezium": "vertices, parallel_sides:[AB,DC] (two NUMBERS: the lengths of AB and DC, never the names), height, offset", "kite": "vertices, sides:[AB,BC] (two NUMBERS), angle:<at B>",
     "regular_polygon": "n, side", "turtle_polygon": "sides:[...], turns:[...] (left turns positive; must close)",
     "polyline_open": "sides, turns (an open path — not a polygon)",
     "quadrilateral_by_angles": "vertices, angles:[A,B,C,D] (sum 360), sides:[AB,BC]",
