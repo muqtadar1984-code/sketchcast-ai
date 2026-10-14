@@ -255,6 +255,63 @@ def _area_measures(fig: dict) -> None:
     fig["measures"] = kept
 
 
+_SHAPE_NAMES = {"trapezium": "trapezium", "parallelogram": "parallelogram", "rectangle": "rectangle",
+                "square": "square", "rhombus": "rhombus", "kite": "kite", "circle": "circle",
+                "regular_polygon": "regular polygon", "polygon": "shape", "turtle_polygon": "compound shape"}
+
+
+def _is_number(v) -> bool:
+    try:
+        float(str(v).strip())
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _synthesised_prompt(spec: dict) -> str:
+    """The question sentence for a reasoning question the model sent WITHOUT
+    one (two of the trapeziums video's six examples, 2026-10-14: an empty
+    problem line on the board, and the fifth figure refused as the try-it
+    for the same reason). Read off the figure: the shape by its name and
+    vertices, a given area as a sentence, the unknown measures as "Find h";
+    a question with no unknown finds what its steps' theorem names. An
+    evidence question (asks / parts) is left alone."""
+    figs = spec.get("figures") or []
+    if not figs or spec.get("asks") or spec.get("parts"):
+        return ""
+    fig = (figs[0] or {}).get("figure") or {}
+    shape = next((o for o in fig.get("objects") or [] if isinstance(o, dict) and o.get("make") in _SHAPE_MAKES), None)
+    if shape is None:
+        return ""
+    make = str(shape.get("make"))
+    name = "triangle" if make.startswith("triangle") else _SHAPE_NAMES.get(make, "shape")
+    labels = {str(p.get("id")): str(p.get("label") or "") for p in fig.get("points") or [] if isinstance(p, dict)}
+    letters = "".join(labels.get(str(v), "") for v in shape.get("vertices") or [])
+    who = f"{name} {letters}".strip()
+    units = str(fig.get("units") or "").strip()
+    measures = [m for m in fig.get("measures") or [] if isinstance(m, dict)]
+    sentences: list[str] = []
+    for m in measures:
+        if (m.get("kind") == "area" and str(m.get("role") or "given") == "given"
+                and str(m.get("target")) == str(shape.get("id")) and _is_number(m.get("value"))):
+            sentences.append(f"The area of the {who} is {m.get('value')}{(' ' + units + '²') if units else ''}.")
+    unknowns: list[str] = []
+    for m in measures:
+        v = str(m.get("value") or "").strip()
+        if str(m.get("role")) == "unknown" and v and not _is_number(v) and v not in unknowns:
+            unknowns.append(v)
+    theorems = [str(st.get("theorem") or "") for st in spec.get("steps") or [] if isinstance(st, dict)]
+    if unknowns:
+        sentences.append(f"Find {' and '.join(unknowns)}.")
+    elif any(t.startswith("area") for t in theorems):
+        sentences.append(f"Find the area of the {who}.")
+    elif any(t.startswith("perimeter") for t in theorems):
+        sentences.append(f"Find the perimeter of the {who}.")
+    else:
+        return ""
+    return " ".join(sentences)
+
+
 def _unit(raw) -> Optional[str]:
     """The length (or degree) unit a model wrote, or None when it wrote
     none the engine knows — never a refusal."""
@@ -449,6 +506,11 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
     if ans:
         out["answer"] = ans
     _bind_from_answer(out)
+    if not out["prompt"]:
+        # which key the model used is worth knowing (the aliases above were
+        # guessed); the figure itself says what the question asks
+        logger.info("geometry question %r arrived without a prompt — keys %s", out["id"], sorted(q.keys()))
+        out["prompt"] = _synthesised_prompt(out)
     return out, difficulty
 
 
@@ -788,7 +850,9 @@ def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, 
         "(triangle_asa / triangle_aas / triangle_isosceles with apex_angle), never from side lengths with angles "
         "declared on top. An isosceles triangle's 'legs' is ONE number ('5'). Every question states its answer: "
         "an evidence question's answer is what the figures show (the engine recomputes it and checks), a "
-        "reasoning question's answer is the value its steps prove.",
+        "reasoning question's answer is the value its steps prove. Every question has its \"prompt\": the "
+        "sentence the student reads on the board — what is given in words and what to find ('The area of "
+        "trapezium ABCD is 72 cm². Find h.') — never empty, never only a label.",
         "EXAMPLES (one of each kind):\n" + _EXAMPLE_REASONING + "\n" + _EXAMPLE_EVIDENCE
         + ("\n" + _EXAMPLE_COORD if v2_enabled() else "") + ("\n" + _EXAMPLE_SOLID if v3_enabled() else ""),
     ] + ([_COORD_RULES] if v2_enabled() else []) + ([_SOLID_RULES] if v3_enabled() else []) + ([_V4_RULES] if v4_enabled() else []) + [
