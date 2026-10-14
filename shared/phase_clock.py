@@ -47,7 +47,8 @@ _CURRENT: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
 PHASE_ORDER = (
     "queue_wait", "prelude", "analysis", "script", "slides", "images_warm",
     "tts", "render", "compose", "concat", "acceptance", "document", "deck",
-    "upload", "pacing_wait", "rate_limit_wait", "deferral_wait",
+    "upload", "pacing_wait", "cooldown_wait", "lease_wait", "rate_limit_wait",
+    "deferral_wait",
 )
 
 

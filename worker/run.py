@@ -71,6 +71,17 @@ WORKER_CONCURRENCY = max(1, int(os.getenv("WORKER_CONCURRENCY", "1")))
 # for a video slot. Sized with RENDER_WORKERS against the box: 4 x 8 render
 # workers on 24 cores (2026-09-25).
 MAX_VIDEO_JOBS = max(1, int(os.getenv("MAX_VIDEO_JOBS", "4")))
+# Catalogue OBSERVER jobs (figure renders above all: image calls) running at
+# once across the deployment. Nineteen figure jobs claimed by sixteen lanes
+# on 2026-10-13 pushed 12-14 image requests a minute at a pool yielding
+# 3-5 and were refused three times in four. Two in a line finish sooner.
+MAX_CATALOGUE_JOBS = max(1, int(os.getenv("MAX_CATALOGUE_JOBS", "2")))
+# Catalogue KITS generating at once across the deployment — ONE. A kit is
+# five jobs (video, deck, three documents) that already run together; two
+# kits are two scripts and two picture sets on the same shared pool, and
+# every batch of kits in the 30-day history lost most of its videos.
+# Teachers are not under this rule: it reads only params.catalogue rows.
+MAX_CATALOGUE_KITS = max(1, int(os.getenv("MAX_CATALOGUE_KITS", "1")))
 VIDEO_JOB_TYPES = ["presentation"]
 
 # Documents (papers / plans / activities / case studies / exams) are fast — one
@@ -138,9 +149,16 @@ def _claim_catalogue_generation(sb):
 
     if not catalogue_window_open() or builder_queued(sb):
         return None
+    # One kit at a time, whatever the window says: while MAX_CATALOGUE_KITS
+    # kits are generating anywhere in the deployment, only THEIR remaining
+    # jobs may be claimed (the deck waits for its own video; the documents
+    # are a minute each). A new kit starts when they are done.
+    kits = db.catalogue_kits_processing(sb)
+    only = sorted(kits) if len(kits) >= MAX_CATALOGUE_KITS else None
     if catalogue_window_open(margin_minutes=presentation_margin_minutes()) and not _video_slots_full():
-        return db.claim_next_job(sb, exclude_types=OBSERVER_JOB_TYPES, catalogue=True)
-    return db.claim_next_job(sb, exclude_types=[*OBSERVER_JOB_TYPES, *VIDEO_JOB_TYPES], catalogue=True)
+        return db.claim_next_job(sb, exclude_types=OBSERVER_JOB_TYPES, catalogue=True, kit_ids=only)
+    return db.claim_next_job(sb, exclude_types=[*OBSERVER_JOB_TYPES, *VIDEO_JOB_TYPES], catalogue=True,
+                             kit_ids=only)
 
 
 def _is_catalogue_job(job: dict | None) -> bool:
@@ -228,6 +246,18 @@ def _held_sketches() -> list[dict]:
 def _videos_in_flight() -> int:
     with _inflight_lock:
         return sum(1 for j in _inflight_jobs.values() if j.get("type") in VIDEO_JOB_TYPES)
+
+
+def _catalogue_jobs_in_flight() -> int:
+    with _inflight_lock:
+        return sum(1 for j in _inflight_jobs.values() if j.get("type") in CATALOGUE_JOB_TYPES)
+
+
+def _catalogue_slots_full(sb) -> bool:
+    """MAX_CATALOGUE_JOBS observer jobs are processing — here or on a peer."""
+    if _catalogue_jobs_in_flight() >= MAX_CATALOGUE_JOBS:
+        return True
+    return db.catalogue_jobs_processing(sb, CATALOGUE_JOB_TYPES) >= MAX_CATALOGUE_JOBS
 
 
 def _video_slots_full() -> bool:
@@ -507,7 +537,8 @@ def run_once(sb) -> bool:
         db.claim_next_job(sb, job_type=["support_diagnose", "issue_resolve"], catalogue=False)
         or db.claim_next_job(sb, job_type=DOC_JOB_TYPES, catalogue=False)
         or db.claim_next_job(sb, exclude_types=_user_builder_exclusions(), catalogue=False)  # every user builder, videos capped
-        or db.claim_next_job(sb, job_type=CATALOGUE_JOB_TYPES)      # harvest / derive / …: only when nothing else waits
+        or (None if _catalogue_slots_full(sb)
+            else db.claim_next_job(sb, job_type=CATALOGUE_JOB_TYPES))  # harvest / derive / …: only when nothing else waits, MAX_CATALOGUE_JOBS at once
         or _claim_catalogue_generation(sb)                          # kits: no live user builder + off-peak
     )
     if not job:
@@ -631,6 +662,11 @@ def run_once(sb) -> bool:
         if wait is not None and db.defer_job(sb, job, wait.seconds, wait.note):
             log.warning("Job %s deferred %ds: %s", job["id"], wait.seconds, wait.note)
             return True                       # the finally below releases the slot
+        # A refusal that outlasted the waiting budget is recorded as what it
+        # is — a pause the console can resume — not as a fault in the job.
+        paused = db.rate_limit_exhausted_message(job, exc)
+        if paused:
+            exc = RuntimeError(paused)
         log.error("Job %s failed: %s", job["id"], exc)
         log.error(traceback.format_exc())
         try:
@@ -681,6 +717,10 @@ def _worker_loop(idx: int) -> None:
 
 def main() -> None:
     sb = db.admin()
+    # The model-pool gates (shared.provider_gate) share their in-flight cap
+    # and learned pace across replicas through the DB (migration 0125).
+    from shared import provider_gate
+    provider_gate.configure(sb)
 
     # Startup key check: with a privileged (service_role/secret) key this counts
     # ALL jobs; with a non-privileged key, RLS hides them and the count is 0.

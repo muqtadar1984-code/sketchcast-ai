@@ -158,6 +158,18 @@ def defer_job(sb: Client, job: dict, seconds: int, note: str) -> bool:
 # RATE_LIMIT_MAX_WAIT_SECONDS in total; only then is the refusal a failure.
 RATE_LIMIT_DEFER_SECONDS = int(os.getenv("RATE_LIMIT_DEFER_SECONDS", "180"))
 RATE_LIMIT_MAX_WAIT_SECONDS = int(os.getenv("RATE_LIMIT_MAX_WAIT_SECONDS", "1800"))
+# A CATALOGUE kit has nobody waiting on it, and the contention episodes we
+# measured (2026-10-13) ran 30-90 minutes: thirty minutes of waiting turned
+# two sound kits into failures. Kits wait longer, in longer steps.
+CATALOGUE_RATE_LIMIT_DEFER_SECONDS = int(os.getenv("CATALOGUE_RATE_LIMIT_DEFER_SECONDS", "300"))
+CATALOGUE_RATE_LIMIT_MAX_WAIT_SECONDS = int(os.getenv("CATALOGUE_RATE_LIMIT_MAX_WAIT_SECONDS", "10800"))
+
+
+def rate_limit_budget(job: dict) -> tuple[int, int]:
+    """(defer step, total wait) a quota refusal earns THIS job."""
+    if is_catalogue_params((job or {}).get("params")):
+        return CATALOGUE_RATE_LIMIT_DEFER_SECONDS, CATALOGUE_RATE_LIMIT_MAX_WAIT_SECONDS
+    return RATE_LIMIT_DEFER_SECONDS, RATE_LIMIT_MAX_WAIT_SECONDS
 _RATE_LIMIT_CLASSES = ("_RateLimited", "RateLimitError", "ResourceExhausted")
 _RATE_LIMIT_MARKS = ("RESOURCE_EXHAUSTED", '"code": 429', "429 Too Many", "rate limit", "rate_limit")
 
@@ -183,12 +195,29 @@ def rate_limit_deferral(job: dict, exc: BaseException) -> "DeferredJob | None":
     not one, or the job has already waited its whole budget."""
     if not is_rate_limited(exc):
         return None
+    step, budget = rate_limit_budget(job)
     waited = deferred_seconds(job)
-    if waited >= RATE_LIMIT_MAX_WAIT_SECONDS:
+    if waited >= budget:
         return None
-    return DeferredJob(RATE_LIMIT_DEFER_SECONDS,
+    return DeferredJob(step,
                        f"model quota exhausted; waiting (waited {waited:.0f}s of "
-                       f"{RATE_LIMIT_MAX_WAIT_SECONDS}s)")
+                       f"{budget}s)")
+
+
+def rate_limit_exhausted_message(job: dict, exc: BaseException) -> Optional[str]:
+    """When a quota refusal has used up the job's whole waiting budget: the
+    error text to store, saying what happened and what to do — the kit is
+    sound, the pool was busy, Retry from the console re-runs it. None when
+    the exception is not a refusal or the budget is not spent."""
+    if not is_rate_limited(exc):
+        return None
+    _, budget = rate_limit_budget(job)
+    waited = deferred_seconds(job)
+    if waited < budget:
+        return None
+    return (f"paused after {waited:.0f}s of provider refusals (429): nothing is wrong "
+            f"with this job — the model pool was busy for longer than its {budget}s "
+            f"waiting budget. Retry re-runs it. Last refusal: {str(exc)[:300]}")
 
 
 # A provider OUTAGE is a wait too. 2026-09-22 21:18-21:33: Vertex answered
@@ -269,6 +298,36 @@ KIT_GENERATING = "generating"
 KIT_FAILED = "failed"
 
 
+def catalogue_kits_processing(sb: Client) -> set:
+    """The kit ids with a catalogue generation job PROCESSING anywhere — on
+    this replica or another. The "one kit at a time" rule reads this, so
+    it holds across the deployment, not per process."""
+    try:
+        res = (sb.table("jobs").select("params").eq("status", "processing")
+               .eq("params->>catalogue", "true").execute())
+    except Exception as exc:  # noqa: BLE001 — a failed read must not claim a kit
+        logging.getLogger("worker").warning("catalogue kits in flight unreadable: %s", exc)
+        return {"<unreadable>"}
+    out = set()
+    for row in getattr(res, "data", None) or []:
+        kit = kit_id_of(row.get("params"))
+        if kit:
+            out.add(str(kit))
+    return out
+
+
+def catalogue_jobs_processing(sb: Client, job_types) -> int:
+    """How many catalogue OBSERVER jobs (figure renders, harvests, …) are
+    processing anywhere. The catalogue job cap reads this."""
+    try:
+        res = (sb.table("jobs").select("id").eq("status", "processing")
+               .in_("type", list(job_types)).execute())
+        return len(getattr(res, "data", None) or [])
+    except Exception as exc:  # noqa: BLE001 — a failed read must not open the gate
+        logging.getLogger("worker").warning("catalogue jobs in flight unreadable: %s", exc)
+        return 10**6
+
+
 def is_catalogue_params(params: object) -> bool:
     """``params.catalogue`` is JSON true (the app writes a boolean; through
     PostgREST text paths it reads as "true"). The one reading of the flag
@@ -308,7 +367,8 @@ def mark_kit_failed(sb: Client, kit_id: Optional[str], note: str) -> bool:
 
 
 def claim_next_job(sb: Client, job_type=None, exclude_types=None,
-                   catalogue: Optional[bool] = None) -> Optional[dict]:
+                   catalogue: Optional[bool] = None,
+                   kit_ids=None) -> Optional[dict]:
     """Atomically-ish claim the oldest queued job (sets it to processing).
     `job_type` may be a single type or a LIST of types — only those are
     considered; `exclude_types` is a collection of types NOT to consider
@@ -334,6 +394,9 @@ def claim_next_job(sb: Client, job_type=None, exclude_types=None,
         q = q.not_.in_("type", list(exclude_types))
     if catalogue is True:
         q = q.eq("params->>catalogue", "true")
+        if kit_ids is not None:
+            # one kit at a time: only the kits already in flight may add jobs
+            q = q.in_("params->>kit_id", [str(k) for k in kit_ids])
     elif catalogue is False:
         q = q.or_(_NOT_CATALOGUE_FILTER)
     # A job that asked to run LATER (defer_job) is invisible until then. Text

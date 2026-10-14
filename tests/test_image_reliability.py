@@ -340,6 +340,10 @@ class TestJitterBreaksTheLockstep:
         def sleeper(s):
             waits.append(float(s))
         monkeypatch.setattr(time, "sleep", sleeper)
+        # the provider gate's own silence after a refusal is its own test
+        # (tests/test_provider_gate.py); here only the RETRY wait is measured
+        from shared import provider_gate as pg
+        monkeypatch.setattr(pg.gate("vertex_image"), "_sleep", lambda s: None)
 
         def flaky():
             r = requests.Response()
