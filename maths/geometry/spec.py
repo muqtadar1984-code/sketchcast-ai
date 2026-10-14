@@ -102,8 +102,10 @@ class MeasureSpec(_Strict):
     unit: Optional[Literal["deg", "cm", "mm", "m", "units"]] = None
     role: MeasureRole = "given"
     # v3: a measure OF A SOLID (target = the solid's id): its volume or its
-    # surface area, given — "the volume is 72, find the height"
-    kind: Optional[Literal["volume", "surface_area"]] = None
+    # surface area, given — "the volume is 72, find the height"; 2026-10-14:
+    # the AREA of a 2D shape (target = the polygon's id), given — "the
+    # trapezium's area is 72, find its height"
+    kind: Optional[Literal["volume", "surface_area", "area"]] = None
 
 
 class RelationSpec(BaseModel):

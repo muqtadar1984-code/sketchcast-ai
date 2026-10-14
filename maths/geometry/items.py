@@ -85,7 +85,7 @@ _CONSTRUCTION = _obj({
 _ANGLE = _obj({"id": _S, "rays": _arr(_arr(_S)), "region": _enum("interior", "reflex")}, ("id", "rays"))
 _SEGMENT = _obj({"id": _S, "points": _arr(_S)}, ("id", "points"))
 _MEASURE = _obj({"target": _S, "value": _S, "unit": _enum("deg", "cm", "mm", "m", "units"),
-                 "role": _enum("given", "unknown", "derived"), "kind": _enum("volume", "surface_area")}, ("target", "value", "role"))
+                 "role": _enum("given", "unknown", "derived"), "kind": _enum("volume", "surface_area", "area")}, ("target", "value", "role"))
 _RELATION = _obj({
     "id": _S, "kind": _enum("collinear", "parallel", "perpendicular", "equal_length", "equal_angle", "midpoint",
                             "on_segment", "on_circle", "right_angle", "angle_value", "length_value"),
@@ -147,11 +147,43 @@ def _strip(d: dict) -> dict:
 _ROLES = ("given", "unknown", "derived")
 
 
+# The engine's units are LENGTHS (and degrees). The model writes an area's
+# unit as "cm^2", "cm²", "sq cm" or "square metres" and a volume's as "cm^3"
+# — and the spec's enum refused every such question whole ("Area of
+# Trapeziums and Compound Shapes", 2026-10-14: 4 of 4 figures lost to
+# `unit: Input should be 'deg', 'cm', 'mm', 'm' or 'units'`). The length
+# unit is what the figure is drawn in; the power is the quantity's, not
+# the unit's.
+_UNIT_WORDS = {"cm": "cm", "centimetre": "cm", "centimeter": "cm", "mm": "mm", "millimetre": "mm", "millimeter": "mm",
+               "m": "m", "metre": "m", "meter": "m", "unit": "units", "units": "units", "deg": "deg", "degree": "deg",
+               "°": "deg"}
+_UNIT_STRIP_RE = re.compile(r"(?:\^\s*[23]|[²³]|\b(?:sq|square|cubic)\b|\bsquared\b|[.\s]+|s\b)", re.I)
+
+
+def _unit(raw) -> Optional[str]:
+    """The length (or degree) unit a model wrote, or None when it wrote
+    none the engine knows — never a refusal."""
+    text = str(raw or "").strip().lower()
+    if not text:
+        return None
+    if text in ("deg", "cm", "mm", "m", "units"):
+        return text
+    bare = _UNIT_STRIP_RE.sub("", text.replace("°", "deg"))
+    return _UNIT_WORDS.get(bare)
+
+
 def _measure(m: dict) -> dict:
     """A measure with its role folded into the enum: a model's 'find',
     'required' or 'target' is an unknown when the value carries a symbol,
-    a given otherwise (the enum is the engine's; the engine checks both)."""
+    a given otherwise (the enum is the engine's; the engine checks both).
+    Its unit folded to a length the engine knows (_unit), or dropped."""
     out = _strip(dict(m))
+    if "unit" in out:
+        unit = _unit(out.get("unit"))
+        if unit:
+            out["unit"] = unit
+        else:
+            out.pop("unit", None)
     role = str(out.get("role") or "").strip().lower()
     if role not in _ROLES:
         try:
@@ -634,7 +666,12 @@ def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, 
         "An AREA or PERIMETER question: the shape's sides are given as segment measures, the height (for a "
         "parallelogram or trapezium) is built with perpendicular_from and measured, the deduce step cites the shape "
         "id (and the height segment id) and writes the formula with the numbers in — 'A = 1/2 * (8 + 5) * 4'; "
-        "the answer is the number; the symbols are A (area), P (perimeter), C (circumference).",
+        "the answer is the number; the symbols are A (area), P (perimeter), C (circumference). A GIVEN AREA "
+        "('the trapezium's area is 72 cm²; find its height') is a measure of the SHAPE itself — "
+        "{target: '<the shape's id>', value: '72', unit: 'cm', kind: 'area', role: 'given'} — with the side or height "
+        "asked for as an 'unknown' measure ('h') whose value goes in 'bind'; the deduce step then writes "
+        "'72 = 1/2 * (10 + 14) * h'. A unit is always a LENGTH ('cm', 'm', 'mm', 'units') or 'deg' — never 'cm^2' "
+        "or 'cm^3': the power belongs to the quantity, not the unit.",
         "PROPERTIES an evidence question may ask: " + ", ".join(sorted(PROPERTIES)) + ".",
         "Rules the engine enforces: a construction never takes a coordinate; a triangle from two sides and a "
         "non-included angle is refused; an evidence question never marks the property it asks (no right-angle "

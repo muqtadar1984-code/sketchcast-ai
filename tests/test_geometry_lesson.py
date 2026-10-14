@@ -405,21 +405,32 @@ def _spoken(qid: str, difficulty: int) -> dict:
     return q
 
 
-def test_a_third_figure_item_becomes_the_learners_try_it(monkeypatch):
+def test_a_shapes_lesson_is_a_ladder_of_figures_and_a_fifth_becomes_the_try_it(monkeypatch):
+    # 2026-10-14: every verified figure is taught before any algebra example;
+    # the algebra ladder only fills what the engine leaves short
     monkeypatch.delenv("MATHS_FIGURES", raising=False)
     c = FakeClient(figures=[_b1_reply(), _spoken("B8", 2), _spoken("B11", 3)])
     lesson, report = L.verified_lesson(c, topic="Angles", subject="Mathematics", level="Class 7", curriculum=None,
                                        language="en", episode_context="")
-    # the ladder is by difficulty, figures first among equals: B1 (1), then the
-    # algebra Example 1 (1), then B8 (2) — two figure examples in all
-    assert lesson.examples[0].has_figure and sum(e.has_figure for e in lesson.examples) == 2
+    assert [e.has_figure for e in lesson.examples] == [True, True, True, False]
+    assert not lesson.try_it.has_figure and report["figures"]["try_it"] is False
+    geo = [k for k in c.calls if "geometry.figure.v1" in k["prompt"]]
+    assert len(geo) == 1 and "Write 6 worked examples" in geo[0]["prompt"]   # the ladder of 4, a try-it, one spare
+    # five figures: four examples and the learner's try-it
+    more = [_b1_reply(), _spoken("B8", 2), _spoken("B11", 3), _spoken("B8", 3), _spoken("B11", 4)]
+    more[3]["prompt"] = "Again: " + more[3]["prompt"]      # a new prompt — the call drops a repeated one
+    more[4]["prompt"] = "Again: " + more[4]["prompt"]
+    c = FakeClient(figures=more)
+    lesson, report = L.verified_lesson(c, topic="Angles", subject="Mathematics", level="Class 7", curriculum=None,
+                                       language="en", episode_context="")
+    assert all(e.has_figure for e in lesson.examples) and len(lesson.examples) == 4
     assert lesson.try_it.has_figure and report["figures"]["try_it"] is True
     assert lesson.try_it.problem and lesson.try_it.steps and lesson.try_it.answer
     assert lesson.try_it.speech.endswith("Pause the video and try it.")
     assert report["try_it"]["ok"] is True, report["try_it"]
 
     script = L.generate_maths_script({"title": "Angles", "episode_num": 1}, {"concepts": {"concepts": []}}, 1,
-                                     FakeClient(figures=[_b1_reply(), _spoken("B8", 2), _spoken("B11", 3)]),
+                                     FakeClient(figures=copy.deepcopy(more)),
                                      language="en", avatars={"teacher": "avatar_teacher", "student": "avatar_student"},
                                      book_id="bk")
     pause = next(s for s in script.segments if s.pause_for_question)
@@ -435,6 +446,24 @@ def test_a_third_figure_item_becomes_the_learners_try_it(monkeypatch):
     assert any(e["type"] == "math" for e in solution.scene["elements"]), "the solution works it"
     for seg in (pause, solution):
         _render(seg.scene, seg.text)
+
+
+def test_a_shapes_lesson_under_the_floor_grows_by_figures_first(monkeypatch):
+    monkeypatch.delenv("MATHS_FIGURES", raising=False)
+    c = FakeClient(figures=[_b1_reply()])
+    lesson, report = L.verified_lesson(c, topic="Angles on a straight line", subject="Mathematics", level="Class 7",
+                                       curriculum=None, language="en", episode_context="")
+    before = len(lesson.examples)
+    extra = _spoken("B8", 2)
+    c.figures = [extra]            # the engine's answer to the extension round
+    lesson, report = L.extend_to_floor(c, lesson, report, minutes=60.0, avatars=None, language="en", rounds=1,
+                                       figures={"topic": "Angles on a straight line", "level": "Class 7", "context": "",
+                                                "names": ["Angles on a straight line"]})
+    assert report["length_rounds"] == 1 and report["figures"]["extended_calls"] == 1
+    added = lesson.examples[before:]
+    assert added and added[0].has_figure and added[0].label == f"Example {before + 1}"
+    assert report["figures"]["verified"] >= 2
+
 
 
 def test_two_figure_items_keep_the_algebra_try_it(monkeypatch):

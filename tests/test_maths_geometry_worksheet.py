@@ -269,3 +269,17 @@ def test_an_algebra_worksheet_makes_no_figure_call(tmp_path):
     assert "geometry" not in client.calls, client.calls
     if paths:
         assert "Which of these triangles are scalene?" not in docx_text(paths[0])
+
+
+def test_an_area_unit_written_as_a_square_folds_to_the_length_unit():
+    # "Area of Trapeziums and Compound Shapes" (2026-10-14): 4 of 4 figures refused on `unit: cm^2`
+    from maths.geometry.items import _unit, normalise_question
+    assert _unit("cm^2") == "cm" and _unit("cm²") == "cm" and _unit("sq cm") == "cm" and _unit("square metres") == "m"
+    assert _unit("m^3") == "m" and _unit("cubic cm") == "cm" and _unit("mm") == "mm" and _unit("degrees") == "deg"
+    assert _unit("square units") == "units" and _unit("furlongs") is None and _unit("") is None
+    spec, _d = normalise_question({"figures": [{"id": "f", "figure": {
+        "objects": [{"id": "r", "make": "rectangle", "vertices": ["p_a", "p_b", "p_c", "p_d"], "width": "6", "height": "4"}],
+        "measures": [{"target": "r", "value": "24", "unit": "cm^2", "kind": "area", "role": "given"},
+                     {"target": "s_ab", "value": "6", "unit": "furlongs"}]}}]})
+    ms = spec["figures"][0]["figure"]["measures"]
+    assert ms[0]["unit"] == "cm" and "unit" not in ms[1]

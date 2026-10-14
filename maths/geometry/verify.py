@@ -129,7 +129,10 @@ def _measure_substitutions(m: Model, q: QuestionSpec, fid: str) -> dict[sp.Symbo
             subs[xs], subs[ys] = ex, ey
             continue
         e = exact_value(ms.value, where=f"measure.{ms.target}")
-        if ms.target in m.solids:
+        if ms.kind == "area":
+            from maths.geometry.theorems import AREA  # noqa: PLC0415
+            subs[AREA] = e                                           # a given area of the shape (2026-10-14)
+        elif ms.target in m.solids:
             from maths.geometry.theorems import SURFACE, VOLUME  # noqa: PLC0415
             subs[VOLUME if ms.kind == "volume" else SURFACE] = e     # v3: a given volume / surface area
         elif ms.target in m.angle_ids:
@@ -352,7 +355,8 @@ def _answer_symbols(q: QuestionSpec, fid: str, m: Model) -> list[sp.Symbol]:
                                          VERTICES, VOLUME)
 
     cited = {st.theorem for st in q.steps if st.kind == "deduce" and st.theorem}
-    if any(t.startswith("area_") for t in cited):
+    given_area = any(ms.kind == "area" for ms in fig.measures)
+    if any(t.startswith("area_") for t in cited) and not given_area:
         syms.add(AREA)
     if "perimeter" in cited:
         syms.add(PERIMETER)
@@ -414,7 +418,7 @@ def _check_reasoning_answer(rep: QuestionReport, q: QuestionSpec, fid: str, m: M
     fig = q.figure_by_id(fid).figure
     proved_subs = {sp.Symbol(k): v for k, v in rep.proved.items()}
     for ms in fig.measures:
-        if ms.role not in ("unknown", "derived") or ms.target in m.solids:
+        if ms.role not in ("unknown", "derived") or ms.target in m.solids or ms.kind == "area":
             continue
         if ms.target in m.points:
             ex, ey = (v.subs(proved_subs) for v in exact_pair(ms.value, where=f"measure.{ms.target}"))
