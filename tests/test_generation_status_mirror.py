@@ -158,11 +158,14 @@ def test_finish_job_still_writes_the_terminal_status():
 
 def test_every_lifecycle_edge_is_covered():
     """queued -> processing -> done/error, with the crash paths returning it."""
-    # 1 def + 3 call sites: the claim ('processing'), the shared requeue
-    # writer ('queued' — reapers, shutdown, tier retry), the poison pill ('error').
-    assert SRC.count("mirror_generation_status(") == 4
+    # 1 def + 4 call sites: the claim ('processing'), the transactional
+    # catalogue claim of migration 0126 ('processing' too — _claim_rpc), the
+    # shared requeue writer ('queued' — reapers, shutdown, tier retry), the
+    # poison pill ('error').
+    assert SRC.count("mirror_generation_status(") == 5
     for word in ('"processing"', '"queued"', '"error"'):
         assert f"mirror_generation_status(sb, " in SRC and word in SRC
     # …and every call site names its generation through the ownership rule.
     calls = re.findall(r"mirror_generation_status\(sb, (\w+(?:\([^)]*\))?), ", SRC)
-    assert sorted(calls) == ["generation_to_mirror(claimed)", "generation_to_mirror(job)", "owned_gen"], calls
+    assert sorted(calls) == ["generation_to_mirror(claimed)", "generation_to_mirror(claimed)",
+                             "generation_to_mirror(job)", "owned_gen"], calls
