@@ -199,6 +199,22 @@ MAX_OUTPUT_TOKENS = 65536
 SLOW_DROP_S = float(os.getenv("VERTEX_SLOW_DROP_S", "300"))
 SLOW_DROP_MODEL = os.getenv("VERTEX_SLOW_DROP_MODEL", text_models.FLASH_LITE_3_5)
 
+# STREAMING. The maths lesson is one request of up to 20,000 output tokens;
+# as a non-streaming :generateContent call Vertex closed it with HTTP 503 at
+# the ten-minute mark on every attempt of every maths video on 2026-10-14
+# (13:47:59, 13:58:01, and two 39-minute script phases that morning). A
+# streamed call (:streamGenerateContent?alt=sse) is answered as it is
+# generated, so there is no idle ten minutes for the server to give up on:
+# the only timeout that applies is the gap between two chunks. The reply is
+# reassembled into the non-streaming shape, so nothing downstream changes.
+# VERTEX_STREAM=0 is the kill switch (the old single-shot request).
+STREAM_CONNECT_TIMEOUT_S = float(os.getenv("VERTEX_STREAM_CONNECT_TIMEOUT_S", "30"))
+STREAM_READ_TIMEOUT_S = float(os.getenv("VERTEX_STREAM_READ_TIMEOUT_S", "120"))   # between chunks
+
+
+def _stream_mode() -> bool:
+    return str(os.getenv("VERTEX_STREAM", "1")).strip().lower() not in ("0", "false", "off", "no")
+
 
 class GeminiClient:
     """Vertex Gemini wrapper — same contract as ClaudeClient."""
@@ -221,10 +237,11 @@ class GeminiClient:
 
     # ── wire ──────────────────────────────────────────────────────────
 
-    def _url(self, model: str | None = None) -> str:
+    def _url(self, model: str | None = None, stream: bool = False) -> str:
+        method = "streamGenerateContent?alt=sse" if stream else "generateContent"
         return (
             f"https://aiplatform.googleapis.com/v1/projects/{self.project}"
-            f"/locations/{self.region}/publishers/google/models/{model or self.model}:generateContent"
+            f"/locations/{self.region}/publishers/google/models/{model or self.model}:{method}"
         )
 
     def _post(self, parts: list[dict], system: str, max_tokens: int,
@@ -271,14 +288,20 @@ class GeminiClient:
                 **({"responseSchema": response_schema} if schema_on else {}),
             },
         }
+        stream = _stream_mode()
         res = requests.post(
-            self._url(model),
+            self._url(model, stream=stream),
             headers={
                 "Authorization": f"Bearer {_access_token()}",
                 "Content-Type": "application/json",
             },
             json=body,
-            timeout=600,
+            # streamed: connect, then the longest silence BETWEEN chunks;
+            # single-shot: the whole reply, which Vertex itself stops at ~600 s
+            timeout=(STREAM_CONNECT_TIMEOUT_S, STREAM_READ_TIMEOUT_S) if stream else 600,
+            # the kwarg travels only when streaming: the single-shot call is
+            # byte-for-byte what it was (and what every test fake answers)
+            **({"stream": True} if stream else {}),
         )
         if res.status_code == 429:
             raise _RateLimited(res.text, _retry_after_header(res))
@@ -299,7 +322,86 @@ class GeminiClient:
             # salvage, loudly, rather than fail the job.
             raise _SchemaRejected(res.text[:500])
         res.raise_for_status()
-        return res.json()
+        if not stream:
+            return res.json()
+        return self._drain_stream(res)
+
+    @staticmethod
+    def _drain_stream(res) -> dict:
+        """Read a :streamGenerateContent?alt=sse body to its end and hand back
+        ONE response in the :generateContent shape — the text parts of the
+        first candidate joined in order, the last finishReason seen, the last
+        usageMetadata seen (Vertex sends the totals in the final chunk) — so
+        _text, _finish_reason and track_tokens read it unchanged.
+
+        An error chunk mid-stream is raised like its status would have been
+        (429 → _RateLimited, else _Transient); a connection dropped or a gap
+        longer than STREAM_READ_TIMEOUT_S between chunks is a _Transient 504
+        that says how far the reply got, so the retry ladder (and #217's
+        slow-drop switch) treat it like any other transient failure.
+        Thought parts (``"thought": true``) are not text and are skipped.
+        """
+        text_parts: list[str] = []
+        finish = ""
+        usage = None
+        prompt_feedback = None
+        chunks = 0
+        started = time.monotonic()
+        try:
+            for raw in res.iter_lines(decode_unicode=True):
+                if not raw:
+                    continue
+                line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if not payload or payload == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(payload)
+                except ValueError:
+                    logger.warning("Vertex text stream: unreadable chunk skipped (%d bytes)", len(payload))
+                    continue
+                chunks += 1
+                err = chunk.get("error") if isinstance(chunk, dict) else None
+                if err:
+                    code = int(err.get("code") or 503)
+                    body = json.dumps(err)[:300]
+                    if code == 429:
+                        raise _RateLimited(body, None)
+                    raise _Transient(code if 500 <= code <= 599 else 503, body)
+                for cand in chunk.get("candidates") or []:
+                    for part in (cand.get("content") or {}).get("parts") or []:
+                        if part.get("thought"):
+                            continue
+                        if "text" in part:
+                            text_parts.append(part["text"])
+                    if cand.get("finishReason"):
+                        finish = cand["finishReason"]
+                if chunk.get("usageMetadata"):
+                    usage = chunk["usageMetadata"]
+                if chunk.get("promptFeedback"):
+                    prompt_feedback = chunk["promptFeedback"]
+        except (requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as exc:
+            chars = sum(len(t) for t in text_parts)
+            raise _Transient(504, f"stream dropped after {chunks} chunk(s), {chars} chars, "
+                                  f"{time.monotonic() - started:.0f}s: {exc!r}"[:300]) from exc
+        finally:
+            try:
+                res.close()
+            except Exception:  # noqa: BLE001
+                pass
+        chars = sum(len(t) for t in text_parts)
+        logger.info("Vertex text stream: %d chunk(s), %d chars, %.0fs, finish=%s",
+                    chunks, chars, time.monotonic() - started, finish or "-")
+        out: dict = {"candidates": [{"content": {"role": "model", "parts": [{"text": "".join(text_parts)}]},
+                                     "finishReason": finish}]}
+        if usage is not None:
+            out["usageMetadata"] = usage
+        if prompt_feedback is not None:
+            out["promptFeedback"] = prompt_feedback
+        return out
 
     @staticmethod
     def _within_ceiling(chosen: text_models.TextModel, max_tokens: int) -> int:
