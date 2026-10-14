@@ -2048,8 +2048,12 @@ class TestP17ModelCallBurst:
         """The property that matters: whatever the caller's thread count."""
         import threading
         import spike.scene_engine.raster_assets as ra
-        monkeypatch.setenv("MODEL_CALL_CONCURRENCY", "3")
-        monkeypatch.setattr(ra, "_MODEL_GATE", None)   # rebuild at this bound
+        # the IMAGE cap lives in the provider gate since 2026-10-14; build
+        # one at this bound, unpaced and silent so only the cap is measured
+        from shared import provider_gate as pg
+        pg._GATES["vertex_image"] = pg.ProviderGate("vertex_image", {
+            "in_flight": 3, "global_in_flight": 3, "start": 0.0, "floor": 0.0,
+            "ceiling": 0.0, "step_after": 5, "cooldown": 0.0})
 
         live, peak, lock = 0, 0, threading.Lock()
         start = threading.Barrier(12)
@@ -2084,20 +2088,23 @@ class TestP17ModelCallBurst:
         holding no slot."""
         import inspect
         import spike.scene_engine.raster_assets as ra
-        src = inspect.getsource(ra._with_backoff)
-        gate_line = next(i for i, l in enumerate(src.splitlines())
-                         if "with gate:" in l)
-        sleep_line = next(i for i, l in enumerate(src.splitlines())
-                          if "_t.sleep(" in l)
-        pace_line = next(i for i, l in enumerate(src.splitlines())
-                         if ".acquire()" in l)
-        assert pace_line < gate_line, "the pacing wait must happen before the gate"
-        # the sleep lives in the except handler, outside the with-block
-        assert sleep_line > gate_line
-        assert "with gate" not in src.splitlines()[sleep_line]
-        indent = lambda i: len(src.splitlines()[i]) - len(src.splitlines()[i].lstrip())
-        assert indent(sleep_line) <= indent(gate_line), \
-            "sleeping inside the gate would serialise every waiter"
+        # 2026-10-14: image calls hold a provider-gate slot (`gate.acquire` /
+        # `gate.release`), vision a `_model_gate()` slot; both are given back
+        # in a finally BEFORE the retry sleep, and the pacing waits sit
+        # before the slot is taken on both paths.
+        lines = inspect.getsource(ra._with_backoff).splitlines()
+        release_line = max(i for i, l in enumerate(lines)
+                           if "gate.release(token)" in l or "_model_gate().release()" in l)
+        sleep_line = next(i for i, l in enumerate(lines) if "_t.sleep(" in l)
+        pace_line = next(i for i, l in enumerate(lines) if "_limiter(kind).acquire()" in l)
+        slot_line = next(i for i, l in enumerate(lines) if "_model_gate().acquire()" in l)
+        assert pace_line < slot_line, "the pacing wait must happen before the gate"
+        assert sleep_line > release_line, "the slot is given back before the retry sleep"
+        from shared import provider_gate as pg
+        g = inspect.getsource(pg.ProviderGate.acquire).splitlines()
+        gpace = next(i for i, l in enumerate(g) if "_pace_wait()" in l)
+        gslot = next(i for i, l in enumerate(g) if "_sem.acquire()" in l)
+        assert gpace < gslot, "a paced caller must sleep holding no slot"
 
     def test_every_paid_transport_goes_through_the_gate(self):
         """Image (both transports) and vision (both transports) all funnel

@@ -22,6 +22,7 @@ from pathlib import Path
 from supabase import Client
 
 from . import client as db
+from .client import DeferredJob as _DeferredJob  # the CLASS: tests stub `db` with lambdas
 
 # Book-title cleanup — uploaded PDFs often carry junk filenames
 # (e.g. "pdfcoffee.com_cambridge-maths-5-learner-book-pdf-free"). The rules now
@@ -2590,7 +2591,7 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     try:
         _generate(sb, job, generation_id)
         outcome = "done"
-    except db.DeferredJob:
+    except _DeferredJob:
         # Not an outcome: the job goes back in the queue (a deck waiting for
         # its video, a kit waiting out a busy pool) and will be clocked again
         # from the start when it runs. Writing "error" here put a false
