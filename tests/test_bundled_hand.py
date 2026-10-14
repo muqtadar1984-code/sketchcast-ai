@@ -69,6 +69,10 @@ class TestModelCallPacing:
         assert waited >= 60.0 and slept and now[0] >= 60.0
 
     def test_with_backoff_paces_through_the_kind_s_own_window(self, monkeypatch):
+        """IMAGE calls pace through the provider gate (shared.provider_gate,
+        2026-10-14); VISION keeps its own per-minute window. Neither queues
+        behind the other."""
+        from shared import provider_gate as pg
         acquired = []
 
         class Spy(RateLimiter):
@@ -80,9 +84,12 @@ class TestModelCallPacing:
                 acquired.append(self.name)
                 return 0.0
         monkeypatch.setattr(ra, "_LIMITERS", {"image": Spy("image"), "vision": Spy("vision")})
+        gate = pg.gate("vertex_image")
+        real_acquire = gate.acquire
+        monkeypatch.setattr(gate, "acquire", lambda what="": acquired.append("image-gate") or real_acquire(what))
         assert ra._with_backoff(lambda: "ok", "test") == "ok"
         assert ra._with_backoff(lambda: "ok", "test", kind="vision") == "ok"
-        assert acquired == ["image", "vision"], "vision must not queue behind image generation"
+        assert acquired == ["image-gate", "vision"], "vision must not queue behind image generation"
 
     def test_the_vision_call_site_declares_its_kind(self):
         import inspect
@@ -90,13 +97,20 @@ class TestModelCallPacing:
         assert '_with_backoff(_go, "vision", kind="vision")' in src
 
     def test_a_paced_caller_holds_no_gate_slot(self):
-        """The pacing sleep happens before `with gate:` — the invariant the
-        429 sleep already keeps."""
+        """The pacing sleep happens before the in-flight slot is taken — the
+        invariant the 429 sleep already keeps. For VISION that is the window
+        before `_model_gate().acquire()`; for IMAGE it is inside the provider
+        gate, whose pace wait precedes its semaphore."""
         import inspect
+        from shared import provider_gate as pg
         lines = inspect.getsource(ra._with_backoff).splitlines()
-        pace = next(i for i, l in enumerate(lines) if ".acquire()" in l)
-        gate = next(i for i, l in enumerate(lines) if "with gate:" in l)
-        assert pace < gate
+        pace = next(i for i, l in enumerate(lines) if "_limiter(kind).acquire()" in l)
+        slot = next(i for i, l in enumerate(lines) if "_model_gate().acquire()" in l)
+        assert pace < slot
+        glines = inspect.getsource(pg.ProviderGate.acquire).splitlines()
+        gpace = next(i for i, l in enumerate(glines) if "_pace_wait()" in l)
+        gslot = next(i for i, l in enumerate(glines) if "_sem.acquire()" in l)
+        assert gpace < gslot
 
     def test_limiters_are_built_from_the_environment_defensively(self, monkeypatch):
         monkeypatch.setattr(ra, "_LIMITERS", {})

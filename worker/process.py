@@ -2590,12 +2590,20 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
     try:
         _generate(sb, job, generation_id)
         outcome = "done"
+    except db.DeferredJob:
+        # Not an outcome: the job goes back in the queue (a deck waiting for
+        # its video, a kit waiting out a busy pool) and will be clocked again
+        # from the start when it runs. Writing "error" here put a false
+        # failure on every deferred deck (2026-10-14 09:09).
+        outcome = "deferred"
+        raise
     finally:
         try:
-            logger.info("phases %s (%s, %s): %s", generation_id, job.get("type"),
-                        outcome, clock.line())
-            db.merge_generation_params(sb, generation_id,
-                                       {"timings": clock.summary(outcome=outcome)})
+            if outcome != "deferred":
+                logger.info("phases %s (%s, %s): %s", generation_id, job.get("type"),
+                            outcome, clock.line())
+                db.merge_generation_params(sb, generation_id,
+                                           {"timings": clock.summary(outcome=outcome)})
         except Exception:  # noqa: BLE001 — accounting must never fail a lesson
             logger.warning("phase timings not recorded for %s", generation_id, exc_info=True)
         finally:

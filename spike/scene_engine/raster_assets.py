@@ -461,55 +461,66 @@ def _with_backoff(fn, what: str, tries: int = 4, kind: str = "image"):
     AND, when it was the vision annotator, the whole region schedule
     degraded to uniform slices, so labels stopped matching the narration.
     A burst limit is a wait, not a failure.
+
+    IMAGE calls go through the provider gate (shared.provider_gate): the
+    in-flight cap, the learned per-minute pace and the post-refusal cooldown
+    all live there, shared across replicas when the worker configured it.
+    Every outcome is reported back so the pace follows the pool. VISION keeps
+    its own window and gate: it has never been throttled in a measured lesson.
     """
-    import random
     import time as _t
-    delay = 6.0
-    gate = _model_gate()
+    from shared import provider_gate as _pg
+    gate = _pg.gate("vertex_image") if kind == "image" else None
     for attempt in range(tries):
-        # the per-minute token is taken BEFORE the gate: a paced caller sleeps
-        # holding nothing, so the callers that may go now are not queued
-        # behind its wait (same invariant as the 429 sleep below)
-        waited = _limiter(kind).acquire()
-        phase_clock.add("pacing_wait", waited)
-        if waited > 0.5:
-            logger.info("%s paced %.1fs by %s", what, waited, _LIMITER_DEFAULTS[kind][0])
+        if gate is None:
+            # the per-minute token is taken BEFORE the gate: a paced caller
+            # sleeps holding nothing, so the callers that may go now are not
+            # queued behind its wait (same invariant as the 429 sleep below)
+            waited = _limiter(kind).acquire()
+            phase_clock.add("pacing_wait", waited)
+            if waited > 0.5:
+                logger.info("%s paced %.1fs by %s", what, waited, _LIMITER_DEFAULTS[kind][0])
+            token = None
+            _model_gate().acquire()        # at most N paid calls in flight
+        else:
+            token = gate.acquire(what)     # cooldown, pace, in-flight (+ lease)
         if kind == "image":
             # one request, about to go out -- the ceiling counts REQUESTS
             _note_image_attempt()
         try:
-            with gate:                 # at most N paid calls in flight
-                return fn()
+            try:
+                out = fn()
+            finally:
+                if gate is None:
+                    _model_gate().release()
+                else:
+                    gate.release(token)
         except Exception as exc:  # noqa: BLE001 — transport errors only
             limited = _is_rate_limited(exc)
+            server = _retry_after(exc)
             if limited:
                 # EVERY attempt, the final one included — the body is the only
                 # evidence that separates a raisable quota from capacity.
                 logger.warning("%s rate-limited HTTP %s (attempt %d/%d) "
                                "retry_after=%s body=%s", what, _status_of(exc),
-                               attempt + 1, tries, _retry_after(exc),
-                               _error_body(exc))
+                               attempt + 1, tries, server, _error_body(exc))
+                phase_clock.count("rate_limit_refusals_image" if kind == "image"
+                                  else "rate_limit_refusals_vision")
+                if gate is not None:
+                    gate.outcome(False, retry_after=server)
             if not limited or attempt == tries - 1:
                 raise
-            server = _retry_after(exc)
-            base = (min(max(server, 1.0), _RETRY_AFTER_CAP)
-                    if server is not None else delay)
-            # Three gate slots that 429 together retried on the identical
-            # 7/15/36 cadence and re-collided every round. When the SERVER
-            # named the second, honour it: jitter stays inside 25% of the wait
-            # it asked for. When the wait is our OWN ladder there is no such
-            # promise, so spread across half of it -- at 25% three slots
-            # released 36 s later still land inside 6 s of each other, which is
-            # the lockstep this exists to break.
-            span = (min(2.0 + 2.0 * attempt, base * 0.25) if server is not None
-                    else base * 0.5)
-            wait = base + random.uniform(0, span)
+            wait = _pg.backoff_seconds(attempt, base=6.0, cap=_RETRY_AFTER_CAP,
+                                       retry_after=server)
             logger.warning("%s rate-limited; retrying in %.0fs (%d/%d)",
                            what, wait, attempt + 1, tries - 1)
             _t.sleep(wait)
             phase_clock.add("rate_limit_wait", wait)
             phase_clock.count("rate_limit_retries")
-            delay *= 2.4
+            continue
+        if gate is not None:
+            gate.outcome(True)
+        return out
     return None
 
 

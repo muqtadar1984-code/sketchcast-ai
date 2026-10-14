@@ -266,7 +266,7 @@ class GeminiClient:
             timeout=600,
         )
         if res.status_code == 429:
-            raise _RateLimited(res.text)
+            raise _RateLimited(res.text, _retry_after_header(res))
         if res.status_code in _RETRY_STATUS:
             # Vertex answers a one-off 500 while the same model serves the
             # sibling jobs fine (2026-09-22 21:34: a teacher's worksheet and
@@ -324,20 +324,57 @@ class GeminiClient:
     def _call(self, parts: list[dict], system: str, max_tokens: int, retries: int,
               response_schema: dict | None = None, wants_json: bool = True,
               strict_schema: bool = False) -> dict:
-        for attempt in range(retries):
+        """``retries`` retried attempts and one final one, every attempt
+        through the TEXT provider gate (shared.provider_gate): at most N
+        scripts in flight per process — shared across replicas when the
+        worker configured it — and silence for everyone after a 429. Four
+        kits queued together on 2026-10-13 each ran their own retry ladder
+        against the same busy pool and two of them failed after 32 minutes."""
+        from shared import phase_clock, provider_gate as _pg
+        gate = _pg.gate("vertex_text")
+        for attempt in range(retries + 1):
+            last = attempt == retries
+            token = gate.acquire("Vertex text")
             try:
-                return self._post(parts, system, max_tokens, response_schema, wants_json, strict_schema)
-            except _RateLimited:
-                time.sleep(2 ** (attempt + 1))
+                out = self._post(parts, system, max_tokens, response_schema, wants_json, strict_schema)
+            except _RateLimited as exc:
+                gate.release(token)
+                gate.outcome(False, retry_after=exc.retry_after)
+                phase_clock.count("rate_limit_refusals_text")
+                if last:
+                    raise
+                wait = _pg.backoff_seconds(attempt, base=2.0, cap=60.0, growth=2.0,
+                                           retry_after=exc.retry_after)
+                logger.warning("Vertex text rate-limited; retrying in %.1fs (%d/%d)%s",
+                               wait, attempt + 1, retries,
+                               f" (server asked {exc.retry_after:.0f}s)" if exc.retry_after else "")
+                time.sleep(wait)
+                phase_clock.add("rate_limit_wait", wait)
+                phase_clock.count("rate_limit_retries")
+                continue
             except _Transient as exc:
+                gate.release(token)
+                if last:
+                    raise
                 wait = _backoff_seconds(attempt)
                 logger.warning("transient Vertex failure (HTTP %d); retrying in %.1fs (%d/%d): %s",
                                exc.status, wait, attempt + 1, retries, exc.body)
                 time.sleep(wait)
+                continue
             except _SchemaRejected as exc:
+                gate.release(token)
+                if last:
+                    raise
                 logger.error("Vertex rejected responseSchema, retrying unconstrained: %s", exc)
                 response_schema = None
-        return self._post(parts, system, max_tokens, response_schema, wants_json, strict_schema)
+                continue
+            except BaseException:
+                gate.release(token)
+                raise
+            gate.release(token)
+            gate.outcome(True)
+            return out
+        raise AssertionError("unreachable")
 
     # ── response shaping ──────────────────────────────────────────────
 
@@ -535,7 +572,20 @@ class GeminiClient:
 
 
 class _RateLimited(Exception):
-    """429 from Vertex — retried with backoff, mirroring RateLimitError."""
+    """429 from Vertex — retried with backoff, mirroring RateLimitError.
+    Carries the server's Retry-After (seconds) when it named one."""
+    def __init__(self, body: str, retry_after: float | None = None) -> None:
+        super().__init__(body)
+        self.retry_after = retry_after
+
+
+def _retry_after_header(res) -> float | None:
+    """The seconds form of a Retry-After header, else None."""
+    try:
+        v = res.headers.get("Retry-After")
+        return float(v) if v is not None else None
+    except (AttributeError, TypeError, ValueError):
+        return None
 
 
 class _Transient(requests.HTTPError):

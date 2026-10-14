@@ -111,6 +111,23 @@ def _fresh_model_call_limiters(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _quiet_provider_gates():
+    """shared.provider_gate: process-wide, and a refusal silences the
+    provider for 30 s — a test that raises one 429 would make the next
+    image test sleep for real. Every test gets fresh, LOCAL, unpaced,
+    silent gates; tests of the gate itself build their own."""
+    from shared import provider_gate as pg
+    pg.reset()
+    quiet = {"in_flight": 10**6, "global_in_flight": 10**6, "start": 0.0, "floor": 0.0,
+             "ceiling": 0.0, "step_after": 5, "cooldown": 0.0}
+    with pg._REG_LOCK:
+        for name in ("vertex_image", "vertex_text"):
+            pg._GATES[name] = pg.ProviderGate(name, dict(quiet))
+    yield
+    pg.reset()
+
+
+@pytest.fixture(autouse=True)
 def _no_live_visual_library(monkeypatch):
     """The suite must never reach the real visual library.
 
