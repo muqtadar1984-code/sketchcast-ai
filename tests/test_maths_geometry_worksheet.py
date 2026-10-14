@@ -346,3 +346,46 @@ def test_the_question_text_is_read_under_the_key_the_model_chose():
         spec, _d = normalise_question({key: "Find the area.", "figures": []})
         assert spec["prompt"] == "Find the area.", key
     assert normalise_question({"prompt": "P", "question": "Q", "figures": []})[0]["prompt"] == "P"
+
+
+def test_a_question_without_a_sentence_gets_one_from_its_figure():
+    # the trapeziums video (2026-10-14): two examples with an empty problem line, the
+    # fifth figure refused as the try-it for the same reason
+    from maths.geometry.items import normalise_question
+    fig = {"units": "cm",
+           "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"},
+                      {"id": "p_d", "label": "D"}, {"id": "p_h", "label": "H"}],
+           "objects": [{"id": "trap", "make": "trapezium", "vertices": ["p_a", "p_b", "p_c", "p_d"],
+                        "parallel_sides": ["10", "14"], "height": "h", "offset": "2"},
+                       {"id": "hh", "make": "perpendicular_from", "point": "p_a", "segment": ["p_d", "p_c"], "to": "p_h"}],
+           "segments": [{"id": "s_ab", "points": ["p_a", "p_b"]}, {"id": "s_dc", "points": ["p_d", "p_c"]},
+                        {"id": "s_ah", "points": ["p_a", "p_h"]}],
+           "measures": [{"target": "s_ab", "value": "10", "unit": "cm", "role": "given"},
+                        {"target": "s_dc", "value": "14", "unit": "cm", "role": "given"},
+                        {"target": "s_ah", "value": "h", "unit": "cm", "role": "unknown"},
+                        {"target": "trap", "value": "72", "unit": "cm^2"}],
+           "bind": {"h": 6}}
+    raw = {"id": "g2", "figure_role": "reasoning", "figures": [{"id": "f", "figure": fig}],
+           "steps": [{"kind": "deduce", "theorem": "area_trapezium", "uses": ["trap", "s_ah"], "after": ["72 = 1/2 * (10 + 14) * h"]},
+                     {"kind": "transform", "after": ["h = 6"]}],
+           "answer": {"kind": "number", "value": "6", "unit": "cm"}}
+    spec, _d = normalise_question(raw)
+    assert spec["prompt"] == "The area of the trapezium ABCD is 72 cm². Find h."
+    # an area to find: the theorem names it
+    import copy
+    raw2 = copy.deepcopy(raw)
+    raw2["figures"][0]["figure"]["measures"] = [{"target": "s_ab", "value": "8", "unit": "cm", "role": "given"},
+                                                 {"target": "s_dc", "value": "12", "unit": "cm", "role": "given"},
+                                                 {"target": "s_ah", "value": "5", "unit": "cm", "role": "given"}]
+    raw2["figures"][0]["figure"]["objects"][0].update({"parallel_sides": ["8", "12"], "height": "5"})
+    raw2["figures"][0]["figure"].pop("bind")
+    raw2["steps"] = [{"kind": "deduce", "theorem": "area_trapezium", "uses": ["trap", "s_ah"], "after": ["A = 1/2 * (8 + 12) * 5"]},
+                     {"kind": "transform", "after": ["A = 50"]}]
+    raw2["answer"] = {"kind": "number", "value": "50", "unit": "cm"}
+    assert normalise_question(raw2)[0]["prompt"] == "Find the area of the trapezium ABCD."
+    # the model's own sentence is never replaced; an evidence question is left alone
+    raw3 = copy.deepcopy(raw); raw3["prompt"] = "Work out h."
+    assert normalise_question(raw3)[0]["prompt"] == "Work out h."
+    raw4 = {"id": "e", "figure_role": "evidence", "figures": [{"id": "f", "figure": fig}],
+            "asks": {"property": "polygon_name", "over": ["f"]}, "answer": {"kind": "selection", "value": ["f"]}}
+    assert normalise_question(raw4)[0]["prompt"] == ""

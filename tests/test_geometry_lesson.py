@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import copy
 import json
+
+import pytest
 from pathlib import Path
 
 from maths import board as B
@@ -148,6 +150,7 @@ def test_an_evidence_example_draws_its_figures_in_a_row_at_one_scale():
 
 def test_the_lesson_takes_figure_examples_first_and_renders_them(monkeypatch):
     monkeypatch.delenv("MATHS_FIGURES", raising=False)
+    monkeypatch.setenv("MATHS_FIGURES_REQUIRED", "0")      # one figure, no spare for the try-it
     c = FakeClient(figures=[_b1_reply()])
     lesson, report = L.verified_lesson(c, topic="Angles on a straight line", subject="Mathematics", level="Class 7",
                                        curriculum="CBSE", language="en", episode_context="")
@@ -156,7 +159,8 @@ def test_the_lesson_takes_figure_examples_first_and_renders_them(monkeypatch):
     assert lesson.examples[0].has_figure and not any(e.has_figure for e in lesson.examples[1:])
     assert report["examples"][0]["status"] == "verified"
     geo = [k for k in c.calls if "geometry.figure.v1" in k["prompt"]]
-    assert len(geo) == 1 and "VIDEO LESSON" in geo[0]["prompt"] and "intro_speech" in geo[0]["prompt"]
+    # the ladder's call, and one more for the try-it (one figure leaves no spare)
+    assert len(geo) == 2 and "VIDEO LESSON" in geo[0]["prompt"] and "intro_speech" in geo[0]["prompt"]
     assert geo[0]["schema"]["properties"]["questions"]["items"]["properties"].get("observations")
 
     script = L.generate_maths_script({"title": "Angles on a straight line", "episode_num": 1}, {"concepts": {"concepts": []}},
@@ -321,6 +325,7 @@ def test_long_figure_labels_become_letters_and_the_answer_follows():
 
 def test_the_figure_call_is_told_the_concepts_the_ladder_missed(monkeypatch):
     monkeypatch.delenv("MATHS_FIGURES", raising=False)
+    monkeypatch.setenv("MATHS_FIGURES_REQUIRED", "0")      # one figure, no spare for the try-it
     analysis = {"chapter_title": "2D shape and pattern", "concepts": {"concepts": [
         {"name": "Polygon", "concept_id": "c1"}, {"name": "Equilateral Triangle", "concept_id": "c2"},
         {"name": "Linear equation", "concept_id": "c3"}]}}
@@ -434,13 +439,16 @@ def test_a_shapes_lesson_is_a_ladder_of_figures_and_a_fifth_becomes_the_try_it(m
     # 2026-10-14: every verified figure is taught before any algebra example;
     # the algebra ladder only fills what the engine leaves short
     monkeypatch.delenv("MATHS_FIGURES", raising=False)
+    monkeypatch.setenv("MATHS_FIGURES_REQUIRED", "0")      # three figures, no spare: the algebra try-it stays
     c = FakeClient(figures=[_b1_reply(), _spoken("B8", 2), _spoken("B11", 3)])
     lesson, report = L.verified_lesson(c, topic="Angles", subject="Mathematics", level="Class 7", curriculum=None,
                                        language="en", episode_context="")
     assert [e.has_figure for e in lesson.examples] == [True, True, True, False]
     assert not lesson.try_it.has_figure and report["figures"]["try_it"] is False
     geo = [k for k in c.calls if "geometry.figure.v1" in k["prompt"]]
-    assert len(geo) == 1 and "Write 6 worked examples" in geo[0]["prompt"]   # the ladder of 4, a try-it, one spare
+    assert len(geo) == 2 and "Write 6 worked examples" in geo[0]["prompt"]   # the ladder of 4, a try-it, one spare
+    assert report["figures"]["try_it_calls"] == 1                            # … and one more ask for the try-it
+    monkeypatch.delenv("MATHS_FIGURES_REQUIRED", raising=False)
     # five figures: four examples and the learner's try-it
     more = [_b1_reply(), _spoken("B8", 2), _spoken("B11", 3), _spoken("B8", 3), _spoken("B11", 4)]
     more[3]["prompt"] = "Again: " + more[3]["prompt"]      # a new prompt — the call drops a repeated one
@@ -475,6 +483,7 @@ def test_a_shapes_lesson_is_a_ladder_of_figures_and_a_fifth_becomes_the_try_it(m
 
 def test_a_shapes_lesson_under_the_floor_grows_by_figures_first(monkeypatch):
     monkeypatch.delenv("MATHS_FIGURES", raising=False)
+    monkeypatch.setenv("MATHS_FIGURES_REQUIRED", "0")      # one figure, no spare for the try-it
     c = FakeClient(figures=[_b1_reply()])
     lesson, report = L.verified_lesson(c, topic="Angles on a straight line", subject="Mathematics", level="Class 7",
                                        curriculum=None, language="en", episode_context="")
@@ -491,8 +500,63 @@ def test_a_shapes_lesson_under_the_floor_grows_by_figures_first(monkeypatch):
 
 
 
+class _Queued(FakeClient):
+    """A FakeClient whose figure calls answer from a queue, one reply each."""
+
+    def __init__(self, replies, **kw):
+        super().__init__(**kw)
+        self.replies = [copy.deepcopy(r) for r in replies]
+
+    def analyze(self, prompt, **kw):
+        if "geometry.figure.v1" in prompt:
+            self.figures = self.replies.pop(0) if self.replies else []
+        return super().analyze(prompt, **kw)
+
+
+def test_the_try_it_on_a_shapes_chapter_is_a_figure_asked_of_the_engine_again_when_the_spare_does_not_fit(monkeypatch):
+    # the trapeziums video (2026-10-14): the fifth figure failed the board as a try-it and the
+    # pause became "(12 + 18)*6/2" — on a shapes chapter the pause is on a shape
+    monkeypatch.delenv("MATHS_FIGURES", raising=False)
+    monkeypatch.delenv("MATHS_FIGURES_REQUIRED", raising=False)
+    five = [_b1_reply(), _spoken("B8", 2), _spoken("B11", 3), _spoken("B8", 3), _spoken("B11", 4)]
+    five[3]["prompt"] = "Again: " + five[3]["prompt"]
+    five[4]["prompt"] = "Again: " + five[4]["prompt"]
+    later = _spoken("B8", 2)
+    later["prompt"] = "Later: " + later["prompt"]
+    real = B.check_figure_try_it
+    refused = {"n": 0}
+
+    def flaky(t, lang="en"):
+        if refused["n"] == 0:          # the spare fails the board once
+            refused["n"] += 1
+            raise ValueError("a figure try-it has a problem, steps and an answer")
+        return real(t, lang)
+
+    monkeypatch.setattr(B, "check_figure_try_it", flaky)
+    c = _Queued([five, [later]])
+    lesson, report = L.verified_lesson(c, topic="Angles", subject="Mathematics", level="Class 7", curriculum=None,
+                                       language="en", episode_context="")
+    assert all(e.has_figure for e in lesson.examples) and len(lesson.examples) == 4
+    assert lesson.try_it.has_figure and lesson.try_it.problem.startswith("Later: ")
+    assert report["figures"]["try_it"] is True and report["figures"]["try_it_calls"] == 1
+    assert report["figures"]["asked"] >= 6
+    # no figure survives as the try-it: the lesson FAILS rather than pause on algebra …
+    monkeypatch.setattr(B, "check_figure_try_it", lambda t, lang="en": (_ for _ in ()).throw(ValueError("no")))
+    c = _Queued([five, [later]])
+    with pytest.raises(L.MathsVerificationError, match="try-it"):
+        L.verified_lesson(c, topic="Angles", subject="Mathematics", level="Class 7", curriculum=None,
+                          language="en", episode_context="")
+    # … unless the kill switch lets a shapes lesson through without one
+    monkeypatch.setenv("MATHS_FIGURES_REQUIRED", "0")
+    c = _Queued([five, [later]])
+    lesson, report = L.verified_lesson(c, topic="Angles", subject="Mathematics", level="Class 7", curriculum=None,
+                                       language="en", episode_context="")
+    assert not lesson.try_it.has_figure and report["figures"]["try_it"] is False
+
+
 def test_two_figure_items_keep_the_algebra_try_it(monkeypatch):
     monkeypatch.delenv("MATHS_FIGURES", raising=False)
+    monkeypatch.setenv("MATHS_FIGURES_REQUIRED", "0")
     c = FakeClient(figures=[_b1_reply(), _spoken("B8", 2)])
     lesson, report = L.verified_lesson(c, topic="Angles", subject=None, level=None, curriculum=None, language="en",
                                        episode_context="")
@@ -628,6 +692,7 @@ def test_a_one_figure_evidence_item_without_an_observation_speaks_its_answer():
 
 
 def test_an_algebra_chapter_never_sees_the_figure_call(monkeypatch):
+    monkeypatch.setenv("MATHS_FIGURES_REQUIRED", "0")      # one figure, no spare for the try-it
     # Variables, Constants and Algebraic Expressions (2026-10-12): the engine
     # answered an algebra chapter with a perimeter and a polygon sort, and the
     # lesson opened on them. The gate is in code, before the call.

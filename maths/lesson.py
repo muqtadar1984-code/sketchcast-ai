@@ -404,6 +404,38 @@ def figure_try_it(ex: WorkedExample, language: str) -> TryIt:
                  steps=list(ex.steps), answer_speech=ex.answer_speech, figure=ex.figure)
 
 
+def figure_pause(client, spare: list[WorkedExample], *, topic: str, level: str | None, language: str,
+                 context: str, report: dict, focus: list[str] | None, taught: list[WorkedExample]) -> TryIt | None:
+    """The learner's try-it on a shapes chapter is a FIGURE: the first spare
+    verified figure the board lays out as a pause and a solution. When no
+    spare fits (the trapeziums video, 2026-10-14: the fifth figure had no
+    problem line, and the pause became an algebra expression — "area of a
+    trapezium cannot be explained without a drawing"), the engine is asked
+    ONCE more for a try-it; the call's counts join the figures report."""
+    taught_prompts = {str(ex.problem or "").strip().lower() for ex in taught}
+    for round_ in range(2):
+        for ex in spare:
+            if str(ex.problem or "").strip().lower() in taught_prompts:
+                continue
+            candidate = figure_try_it(ex, language)
+            try:
+                board.check_figure_try_it(candidate, language)
+                return candidate
+            except (GeometryRefusal, ValueError) as exc:
+                logger.info("figure try-it rejected at the board (%s): %s", getattr(exc, "code", "board"),
+                            getattr(exc, "message", str(exc))[:200])
+        if round_ == 0:
+            frep: dict = {}
+            spare = figure_examples(client, topic=topic, level=level, language=language, context=context, n=2,
+                                    report=frep, focus=focus)
+            spare = [ex for ex in spare if str(ex.problem or "").strip().lower() not in taught_prompts]
+            report["asked"] = int(report.get("asked") or 0) + int(frep.get("asked") or 0)
+            report["verified"] = int(report.get("verified") or 0) + len(spare)
+            report["rejected"] = list(report.get("rejected") or []) + list(frep.get("rejected") or [])
+            report["try_it_calls"] = int(report.get("try_it_calls") or 0) + 1
+    return None
+
+
 def figure_examples(client, *, topic: str, level: str | None, language: str, context: str, n: int,
                     report: dict, focus: list[str] | None = None) -> list[WorkedExample]:
     """Up to ``n`` figure examples from the geometry engine's own call —
@@ -588,18 +620,20 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
                 f"a shapes chapter ({', '.join(figures_report['geometry_words'][:4])}) and the geometry engine drew "
                 f"none of {figures_report.get('asked', 0)} figure question(s) asked — "
                 + "; ".join(str(r)[:160] for r in (figures_report.get("rejected") or [])[:4]))
-    figure_pause: TryIt | None = None
-    if len(figures) > FIGURE_EXAMPLES:
-        candidate = figure_try_it(figures[FIGURE_EXAMPLES], language)
-        try:
-            board.check_figure_try_it(candidate, language)
-            figure_pause = candidate
-        except (GeometryRefusal, ValueError) as exc:
-            logger.info("figure try-it rejected at the board (%s): %s", getattr(exc, "code", "board"),
-                        getattr(exc, "message", str(exc))[:200])
-        figures = figures[:FIGURE_EXAMPLES]
+    pause: TryIt | None = None
+    spare, figures = figures[FIGURE_EXAMPLES:], figures[:FIGURE_EXAMPLES]
+    if wanted and figures:
+        pause = figure_pause(client, spare, topic=topic, level=level, language=language, context=episode_context,
+                             report=figures_report, focus=focus, taught=figures)
+        if pause is None and figures_required():
+            # the pause on a shapes chapter is on a shape, or the lesson is
+            # not shipped: an algebra expression is not a trapezium
+            raise MathsVerificationError(
+                f"a shapes chapter ({', '.join((figures_report.get('geometry_words') or [])[:4])}) and no verified "
+                f"figure survived the board as the try-it after {figures_report.get('try_it_calls', 0)} further "
+                f"call(s) — " + "; ".join(str(r)[:160] for r in (figures_report.get("rejected") or [])[-4:]))
     if wanted:
-        figures_report["try_it"] = figure_pause is not None
+        figures_report["try_it"] = pause is not None
     if len(kept) + len(figures) < MIN_EXAMPLES:
         raise MathsVerificationError(
             f"only {len(kept)} of {len(lesson.examples)} worked examples could be verified after "
@@ -619,8 +653,8 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
         for i, ex in enumerate(kept, 1):
             ex.label = ex.label or f"Example {i}"
         lesson.examples = kept
-    if figure_pause is not None:
-        lesson.try_it = figure_pause
+    if pause is not None:
+        lesson.try_it = pause
     t = verify_try_it(lesson.try_it)
     # the try-it is TAUGHT on the board after the pause, so "could not be
     # verified" is as fatal as "wrong" — a try-it the verifier cannot read
