@@ -87,7 +87,7 @@ def test_a_text_request_streams_with_a_between_chunk_timeout(streaming, monkeypa
     c = calls[0]
     assert c["url"].endswith("gemini-3.5-flash:streamGenerateContent?alt=sse")
     assert c["stream"] is True
-    assert c["timeout"] == (30.0, 120.0), "connect, then the longest silence between chunks — not a 600 s total"
+    assert c["timeout"] == (30.0, 600.0), "connect, then the longest silence before the first chunk or between two — per read, not a total"
 
 
 def test_the_kill_switch_restores_the_single_shot_request(streaming, monkeypatch):
@@ -217,3 +217,64 @@ def test_a_slow_drop_still_switches_models_under_streaming(streaming, monkeypatc
     assert out["data"] == {"ok": 1}
     assert "gemini-3.5-flash:streamGenerateContent" in calls[0]["url"]
     assert "gemini-3.5-flash-lite:streamGenerateContent" in calls[1]["url"]
+
+
+# ── the first chunk of a thinking request can take minutes ───────────────
+def test_the_read_timeout_covers_time_to_first_chunk(streaming, monkeypatch):
+    """2026-10-14 15:14:40: the first streamed maths lesson timed out at 120 s
+    before its first byte — the lesson-script request thinks for minutes
+    before it answers. The per-read timeout bounds that wait too, so it is
+    the server's own 600 s, not a between-chunk guess."""
+    calls = _post_returning(monkeypatch, [_SSE([_chunk("{}", "STOP")])])
+    gc.GeminiClient(model="gemini-3.5-flash").analyze("write the lesson")
+    assert calls[0]["timeout"] == (30.0, 600.0)
+    assert gc.STREAM_READ_TIMEOUT_S >= 600.0
+
+
+def test_a_timeout_before_any_response_is_a_transient_the_ladder_retries(streaming, monkeypatch):
+    attempts = {"n": 0}
+
+    def post(url, headers=None, json=None, timeout=None, stream=False):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise requests.exceptions.ReadTimeout("HTTPSConnectionPool: Read timed out. (read timeout=600.0)")
+        return _SSE([_chunk('{"ok": 1}', "STOP")])
+    monkeypatch.setattr("shared.gemini_client.requests.post", post)
+    out = gc.GeminiClient(model="gemini-3.5-flash").analyze("write the lesson")
+    assert out["data"] == {"ok": 1} and attempts["n"] == 2
+
+
+def test_a_timeout_before_any_response_names_itself(streaming, monkeypatch):
+    monkeypatch.setattr("shared.gemini_client.requests.post",
+                        lambda *a, **k: (_ for _ in ()).throw(requests.exceptions.ReadTimeout("read timeout=600.0")))
+    with pytest.raises(gc._Transient) as e:
+        gc.GeminiClient(model="gemini-3.5-flash")._post([{"text": "x"}], "sys", 10)
+    assert e.value.status == 504 and "no response in" in e.value.body and "streamed" in e.value.body
+
+
+def test_a_connection_failure_on_the_single_shot_request_is_a_transient_too(streaming, monkeypatch):
+    monkeypatch.setenv("VERTEX_STREAM", "0")
+    monkeypatch.setattr("shared.gemini_client.requests.post",
+                        lambda *a, **k: (_ for _ in ()).throw(requests.exceptions.ConnectionError("reset by peer")))
+    with pytest.raises(gc._Transient) as e:
+        gc.GeminiClient(model="gemini-3.5-flash")._post([{"text": "x"}], "sys", 10)
+    assert e.value.status == 504 and "single-shot" in e.value.body
+
+
+def test_a_long_silence_before_the_first_chunk_switches_to_the_lighter_model(streaming, monkeypatch):
+    """Composes with #217: a request that gave nothing for SLOW_DROP_S is a
+    slow drop, and the remaining attempts go to the lighter model."""
+    clock = {"t": 0.0}
+    monkeypatch.setattr("shared.gemini_client.time.monotonic", lambda: clock["t"])
+    monkeypatch.setattr(gc, "SLOW_DROP_MODEL", "gemini-3.5-flash-lite")
+    calls = []
+
+    def post(url, headers=None, json=None, timeout=None, stream=False):
+        calls.append(url)
+        if len(calls) == 1:
+            clock["t"] += 600.0
+            raise requests.exceptions.ReadTimeout("read timeout=600.0")
+        return _SSE([_chunk('{"ok": 1}', "STOP")])
+    monkeypatch.setattr("shared.gemini_client.requests.post", post)
+    assert gc.GeminiClient(model="gemini-3.5-flash").analyze("write the lesson")["data"] == {"ok": 1}
+    assert "gemini-3.5-flash:stream" in calls[0] and "flash-lite:stream" in calls[1]
