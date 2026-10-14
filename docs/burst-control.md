@@ -120,8 +120,10 @@ client retried the identical request — thirty to forty minutes to a failure.
 No gate shortens a request that cannot finish. Text requests therefore go
 to `:streamGenerateContent?alt=sse` and the reply is reassembled into the
 single-shot shape, so nothing downstream changes; the only timeout that
-applies is the gap between two chunks (`VERTEX_STREAM_READ_TIMEOUT_S`,
-120 s), not a total. A dropped stream is a transient 504 that says how far
+applies is per read — the wait for the first chunk (a thinking request
+answers nothing for minutes) or the gap between two — `VERTEX_STREAM_READ_TIMEOUT_S`,
+600 s, not a total. A request that gets no response at all is a transient
+504 the ladder retries. A dropped stream is a transient 504 that says how far
 the reply got and is retried like any other; after a slow drop the
 remaining attempts go to the lighter model (`VERTEX_SLOW_DROP_MODEL`,
 #217). `VERTEX_STREAM=0` is the kill switch. The log line
@@ -138,7 +140,7 @@ PROVIDER_VERTEX_IMAGE_CEILING_PER_MIN=12   PROVIDER_VERTEX_IMAGE_STEP_AFTER=5
 PROVIDER_VERTEX_IMAGE_COOLDOWN_SECS=30     PROVIDER_VERTEX_TEXT_COOLDOWN_SECS=20
 PROVIDER_VERTEX_IMAGE_MAX_COOLDOWN_SECS=120
 PROVIDER_GATE_GLOBAL=1
-VERTEX_STREAM=1  VERTEX_STREAM_CONNECT_TIMEOUT_S=30  VERTEX_STREAM_READ_TIMEOUT_S=120
+VERTEX_STREAM=1  VERTEX_STREAM_CONNECT_TIMEOUT_S=30  VERTEX_STREAM_READ_TIMEOUT_S=600
 VERTEX_SLOW_DROP_S=300  VERTEX_SLOW_DROP_MODEL=gemini-3.5-flash-lite
 MAX_CATALOGUE_JOBS=2        MAX_CATALOGUE_KITS=1
 CATALOGUE_RATE_LIMIT_DEFER_SECONDS=300     CATALOGUE_RATE_LIMIT_MAX_WAIT_SECONDS=10800

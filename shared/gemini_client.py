@@ -208,8 +208,14 @@ SLOW_DROP_MODEL = os.getenv("VERTEX_SLOW_DROP_MODEL", text_models.FLASH_LITE_3_5
 # the only timeout that applies is the gap between two chunks. The reply is
 # reassembled into the non-streaming shape, so nothing downstream changes.
 # VERTEX_STREAM=0 is the kill switch (the old single-shot request).
+# The read timeout is per socket read: it bounds the wait for the FIRST
+# chunk as much as the gap between two. A thinking request (the maths
+# lesson: 32k tokens, MEDIUM thinking) answers nothing for minutes while it
+# thinks — at 120 s the very first streamed lesson timed out before its
+# first byte (2026-10-14 15:14:40). 600 s, the server's own single-shot
+# limit, is the floor; Vertex itself sends the first chunk well inside it.
 STREAM_CONNECT_TIMEOUT_S = float(os.getenv("VERTEX_STREAM_CONNECT_TIMEOUT_S", "30"))
-STREAM_READ_TIMEOUT_S = float(os.getenv("VERTEX_STREAM_READ_TIMEOUT_S", "120"))   # between chunks
+STREAM_READ_TIMEOUT_S = float(os.getenv("VERTEX_STREAM_READ_TIMEOUT_S", "600"))   # first chunk, and between chunks
 
 
 def _stream_mode() -> bool:
@@ -289,20 +295,32 @@ class GeminiClient:
             },
         }
         stream = _stream_mode()
-        res = requests.post(
-            self._url(model, stream=stream),
-            headers={
-                "Authorization": f"Bearer {_access_token()}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-            # streamed: connect, then the longest silence BETWEEN chunks;
-            # single-shot: the whole reply, which Vertex itself stops at ~600 s
-            timeout=(STREAM_CONNECT_TIMEOUT_S, STREAM_READ_TIMEOUT_S) if stream else 600,
-            # the kwarg travels only when streaming: the single-shot call is
-            # byte-for-byte what it was (and what every test fake answers)
-            **({"stream": True} if stream else {}),
-        )
+        started = time.monotonic()
+        try:
+            res = requests.post(
+                self._url(model, stream=stream),
+                headers={
+                    "Authorization": f"Bearer {_access_token()}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                # streamed: connect, then the longest silence before the first
+                # chunk or between two; single-shot: the whole reply, which
+                # Vertex itself stops at ~600 s
+                timeout=(STREAM_CONNECT_TIMEOUT_S, STREAM_READ_TIMEOUT_S) if stream else 600,
+                # the kwarg travels only when streaming: the single-shot call is
+                # byte-for-byte what it was (and what every test fake answers)
+                **({"stream": True} if stream else {}),
+            )
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            # No response at all — the first chunk never came, or the socket
+            # went. A requests exception is not one the retry ladder knows;
+            # on 2026-10-14 15:14:40 a ReadTimeout here failed the first
+            # streamed lesson outright. It is a transient like a dropped
+            # stream: the ladder retries it, and after SLOW_DROP_S the
+            # remaining attempts go to the lighter model.
+            raise _Transient(504, f"no response in {time.monotonic() - started:.0f}s "
+                                  f"({'streamed' if stream else 'single-shot'}): {exc!r}"[:300]) from exc
         if res.status_code == 429:
             raise _RateLimited(res.text, _retry_after_header(res))
         if res.status_code in _RETRY_STATUS:
