@@ -107,10 +107,14 @@ class TestModelCallPacing:
         pace = next(i for i, l in enumerate(lines) if "_limiter(kind).acquire()" in l)
         slot = next(i for i, l in enumerate(lines) if "_model_gate().acquire()" in l)
         assert pace < slot
+        # locally the pace wait is _local_admission; with the store it is
+        # the permit — both are asked before the slot is taken
         glines = inspect.getsource(pg.ProviderGate.acquire).splitlines()
-        gpace = next(i for i, l in enumerate(glines) if "_pace_wait()" in l)
-        gslot = next(i for i, l in enumerate(glines) if "_sem.acquire()" in l)
-        assert gpace < gslot
+        slots = [i for i, l in enumerate(glines) if "self._sem.acquire()" in l]
+        assert next(i for i, l in enumerate(glines) if "_local_admission()" in l) < slots[0]
+        assert next(i for i, l in enumerate(glines) if ".permit(" in l) < slots[-1]
+        llines = inspect.getsource(pg.ProviderGate._local_admission).splitlines()
+        assert any("_pace_wait()" in l for l in llines)
 
     def test_limiters_are_built_from_the_environment_defensively(self, monkeypatch):
         monkeypatch.setattr(ra, "_LIMITERS", {})

@@ -102,8 +102,9 @@ def test_calls_beyond_the_rate_wait_for_the_window_and_the_wait_is_accounted():
         g.release(g.acquire())
     assert c.slept == []
     g.release(g.acquire())               # the third in the same minute waits
-    assert len(c.slept) == 1 and 59.9 < c.slept[0] <= 60.1
-    assert clk.phases["pacing_wait"] == pytest.approx(c.slept[0])
+    assert 59.9 < sum(c.slept) <= 60.1, "a minute, slept in bounded chunks"
+    assert max(c.slept) <= 5.0
+    assert clk.phases["pacing_wait"] == pytest.approx(sum(c.slept))
 
 
 def test_a_learned_higher_rate_lets_more_through():
@@ -140,6 +141,14 @@ class _Store:
         self.released: list[str] = []
         self.outcomes: list[tuple] = []
         self.denials = 0
+
+    def permit(self, provider, s):
+        if self.fail:
+            return None
+        return {"granted": True, "wait": 0.0, "reason": "ok", "rate": None}
+
+    def renew_lease(self, lease_id, ttl):
+        return None if self.fail else True
 
     def acquire_lease(self, provider, max_in_flight, holder, ttl):
         if self.fail:
@@ -184,11 +193,12 @@ def test_a_denied_lease_waits_and_tries_again():
     g.release(tok)
 
 
-def test_an_unreachable_store_falls_back_to_the_local_cap():
+def test_an_unreachable_store_degrades_to_the_local_regime():
     g, c = _gate(start=0.0, floor=0.0, ceiling=0.0)
     g.store = _Store(fail=True)
     tok = g.acquire()
-    assert tok.lease_id is None and c.slept == []
+    assert tok.lease_id is None and tok.degraded and c.slept == []
+    assert g.snapshot()["degraded"]
     g.release(tok)
 
 

@@ -298,6 +298,50 @@ KIT_GENERATING = "generating"
 KIT_FAILED = "failed"
 
 
+_CLAIM_MUTED_UNTIL = {"t": 0.0}
+
+
+def _claim_rpc(sb: Client, name: str, params: dict) -> Optional[dict]:
+    """One transactional catalogue claim (migration 0126): the admission
+    rule and the claim run in the database under one lock, so two workers
+    cannot both start a kit or both take the cap's last slot. FAIL CLOSED:
+    when the database cannot answer, nothing catalogue is claimed — a lost
+    coordinator must never turn into a burst. Logged once a minute."""
+    try:
+        res = sb.rpc(name, params).execute()
+    except Exception as exc:  # noqa: BLE001
+        now = time.monotonic()
+        if now >= _CLAIM_MUTED_UNTIL["t"]:
+            logging.getLogger("worker").warning("%s failed (%s): no catalogue job claimed "
+                                                "until the database answers", name, exc)
+            _CLAIM_MUTED_UNTIL["t"] = now + 60.0
+        return None
+    rows = getattr(res, "data", None) or []
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not rows:
+        return None
+    claimed = rows[0]
+    mirror_generation_status(sb, generation_to_mirror(claimed), "processing")
+    return claimed
+
+
+def claim_catalogue_kit_job(sb: Client, exclude_types, max_kits: int) -> Optional[dict]:
+    """The oldest queued catalogue KIT job the one-kit-at-a-time rule allows
+    (``claim_catalogue_kit_job`` in SQL), now processing; None when none may
+    start or the database did not answer."""
+    return _claim_rpc(sb, "claim_catalogue_kit_job",
+                      {"p_exclude_types": list(exclude_types or []), "p_max_kits": int(max_kits)})
+
+
+def claim_catalogue_observer_job(sb: Client, job_types, max_jobs: int) -> Optional[dict]:
+    """The oldest queued catalogue OBSERVER job under the deployment-wide cap
+    (``claim_catalogue_observer_job`` in SQL), now processing; None when the
+    cap is full, nothing is queued, or the database did not answer."""
+    return _claim_rpc(sb, "claim_catalogue_observer_job",
+                      {"p_types": list(job_types), "p_max_jobs": int(max_jobs)})
+
+
 def catalogue_kits_processing(sb: Client) -> set:
     """The kit ids with a catalogue generation job PROCESSING anywhere — on
     this replica or another. The "one kit at a time" rule reads this, so

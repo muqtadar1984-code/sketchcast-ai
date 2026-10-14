@@ -12,7 +12,8 @@ import requests
 import worker.run as run
 from shared import phase_clock
 from shared import provider_gate as pg
-from tests.test_observer_job_guard import BOOK, GEN, FakeSB, _builder, _fresh
+from tests.gate_fakes import GateRpcSB
+from tests.test_observer_job_guard import BOOK, GEN, _builder, _fresh
 from worker import client as db
 
 KIT_A, KIT_B = "kit-aaaa", "kit-bbbb"
@@ -50,6 +51,15 @@ def _kit_job(job_id, kind, kit, status="queued", created="1"):
             "params": {"catalogue": True, "kit_id": kit}}
 
 
+def _rpc_sb(jobs):
+    """A queue that answers the transactional claims (migration 0126)."""
+    sb = GateRpcSB()
+    sb.tables["generations"] = [{"id": GEN, "status": "queued", "kind": "worksheet",
+                                 "owner_id": "u1", "book_id": BOOK, "params": {"catalogue": True}}]
+    sb.tables["jobs"] = [dict(j) for j in jobs]
+    return sb
+
+
 def _figure(job_id, status="queued"):
     return {"id": job_id, "type": "figure_render", "status": status, "generation_id": None,
             "book_id": None, "attempts": 0, "created_at": "1", "updated_at": "0", "params": {}}
@@ -61,9 +71,10 @@ class TestTheCatalogueJobCap:
         monkeypatch.setattr(run, "MAX_CATALOGUE_JOBS", 1)
         monkeypatch.setattr(run, "_claim_catalogue_generation", lambda sb: None)
         monkeypatch.setattr(run, "process_generation", lambda sb, job, gid: db.finish_job(sb, job["id"], gid))
-        sb = _fresh("queued", jobs=[_figure("fig-2"), _figure("fig-1", status="processing"),
-                                    _builder("job-w", "worksheet")])
-        assert run._catalogue_slots_full(sb), "a processing figure job on ANY replica fills the one slot"
+        sb = _rpc_sb(jobs=[_figure("fig-2"), _figure("fig-1", status="processing"),
+                           _builder("job-w", "worksheet")])
+        assert db.claim_catalogue_observer_job(sb, ["figure_render"], 1) is None, \
+            "a processing figure job on ANY replica fills the one slot"
         assert run.run_once(sb) is True
         by_id = {j["id"]: j for j in sb.tables["jobs"]}
         assert by_id["job-w"]["status"] == "done"
@@ -76,7 +87,7 @@ class TestTheCatalogueJobCap:
         ran = []
         monkeypatch.setattr("catalogue.figures.run_figure_render_job",
                             lambda sb, job: ran.append(job["id"]) or db.finish_job(sb, job["id"]))
-        sb = _fresh("queued", jobs=[_figure("fig-2"), _figure("fig-1", status="processing")])
+        sb = _rpc_sb(jobs=[_figure("fig-2"), _figure("fig-1", status="processing")])
         assert run.run_once(sb) is False
         sb.tables["jobs"][1]["status"] = "done"
         assert run.run_once(sb) is True and ran == ["fig-2"]
@@ -92,6 +103,11 @@ class TestTheCatalogueJobCap:
                 raise ConnectionError("down")
         assert db.catalogue_jobs_processing(_Broken(), ["figure_render"]) >= 10**6
         assert db.catalogue_kits_processing(_Broken()) == {"<unreadable>"}
+        down = GateRpcSB(fail=True)
+        down.tables["jobs"] = [_figure("fig-1"), _kit_job("a-w", "worksheet", KIT_A)]
+        assert db.claim_catalogue_observer_job(down, ["figure_render"], 2) is None, "fail closed"
+        assert db.claim_catalogue_kit_job(down, [], 1) is None, "fail closed"
+        assert all(j["status"] == "queued" for j in down.tables["jobs"])
 
 
 # ── one kit at a time ───────────────────────────────────────────────────
@@ -103,12 +119,9 @@ class TestOneKitAtATime:
         monkeypatch.setattr(run, "MAX_CATALOGUE_KITS", 1)
 
     def test_a_second_kit_waits_while_the_first_generates(self):
-        sb = FakeSB()
-        sb.tables["generations"] = [{"id": GEN, "status": "queued", "kind": "worksheet",
-                                     "owner_id": "u1", "book_id": BOOK, "params": {"catalogue": True}}]
-        sb.tables["jobs"] = [_kit_job("a-video", "presentation", KIT_A, status="processing"),
-                             _kit_job("b-worksheet", "worksheet", KIT_B, created="2"),
-                             _kit_job("a-deck", "deck", KIT_A, created="3")]
+        sb = _rpc_sb(jobs=[_kit_job("a-video", "presentation", KIT_A, status="processing"),
+                           _kit_job("b-worksheet", "worksheet", KIT_B, created="2"),
+                           _kit_job("a-deck", "deck", KIT_A, created="3")])
         assert db.catalogue_kits_processing(sb) == {KIT_A}
         job = run._claim_catalogue_generation(sb)
         assert job and job["id"] == "a-deck", "kit A's own deck is claimed, kit B's older worksheet is not"
@@ -117,11 +130,8 @@ class TestOneKitAtATime:
         assert by_id["b-worksheet"]["status"] == "queued"
 
     def test_with_nothing_generating_the_oldest_kit_starts(self):
-        sb = FakeSB()
-        sb.tables["generations"] = [{"id": GEN, "status": "queued", "kind": "worksheet",
-                                     "owner_id": "u1", "book_id": BOOK, "params": {"catalogue": True}}]
-        sb.tables["jobs"] = [_kit_job("b-worksheet", "worksheet", KIT_B, created="2"),
-                             _kit_job("a-worksheet", "worksheet", KIT_A, created="1")]
+        sb = _rpc_sb(jobs=[_kit_job("b-worksheet", "worksheet", KIT_B, created="2"),
+                           _kit_job("a-worksheet", "worksheet", KIT_A, created="1")])
         job = run._claim_catalogue_generation(sb)
         assert job and job["id"] == "a-worksheet"
 
@@ -135,11 +145,8 @@ class TestOneKitAtATime:
         assert {j["id"]: j for j in sb.tables["jobs"]}["job-w"]["status"] == "done"
 
     def test_the_claim_filter_is_by_kit_id(self):
-        sb = FakeSB()
-        sb.tables["generations"] = [{"id": GEN, "status": "queued", "kind": "worksheet",
-                                     "owner_id": "u1", "book_id": BOOK, "params": {"catalogue": True}}]
-        sb.tables["jobs"] = [_kit_job("b-w", "worksheet", KIT_B, created="1"),
-                             _kit_job("a-w", "worksheet", KIT_A, created="2")]
+        sb = _rpc_sb(jobs=[_kit_job("b-w", "worksheet", KIT_B, created="1"),
+                           _kit_job("a-w", "worksheet", KIT_A, created="2")])
         assert db.claim_next_job(sb, catalogue=True, kit_ids=[KIT_A])["id"] == "a-w"
         assert db.claim_next_job(sb, catalogue=True, kit_ids=[KIT_A]) is None
 
@@ -228,6 +235,7 @@ class TestTheImagePathReportsToItsGate:
         from spike.scene_engine import raster_assets as ra
         g = pg.gate("vertex_image")
         g.rate, g.s["floor"], g.s["ceiling"], g.s["cooldown"] = 8.0, 2.0, 12.0, 30.0
+        g.s["max_cooldown"] = 120.0          # the quiet test gate caps silence at 0
         clock = _fake_time(g)
         retry_sleeps = []
         monkeypatch.setattr(time, "sleep", lambda s: retry_sleeps.append(s))
@@ -269,7 +277,7 @@ class TestTheTextPathReportsToItsGate:
     def test_a_429_with_retry_after_is_honoured_recorded_and_retried(self, monkeypatch):
         gcm, c = self._client()
         g = pg.gate("vertex_text")
-        g.s["cooldown"] = 20.0
+        g.s["cooldown"], g.s["max_cooldown"] = 20.0, 120.0
         clock = _fake_time(g)
         retry_sleeps = []
         monkeypatch.setattr(time, "sleep", lambda s: retry_sleeps.append(s))
