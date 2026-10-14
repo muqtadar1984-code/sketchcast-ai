@@ -250,7 +250,7 @@ def test_a_figure_example_without_speech_is_rejected_not_taught(monkeypatch):
     c = FakeClient(figures=[silent])
     lesson, report = L.verified_lesson(c, topic="Angles", subject=None, level=None, curriculum=None, language="en",
                                        episode_context="")
-    assert report["figures"]["verified"] == 0 and "speaks its steps" in " ".join(report["figures"]["rejected"])
+    assert report["figures"]["verified"] == 0 and "is spoken" in " ".join(report["figures"]["rejected"])
     assert not any(e.has_figure for e in lesson.examples)
 
 
@@ -736,3 +736,38 @@ def test_the_geometry_vocabulary_names_shapes_not_algebra():
                   "Coordinates and Plotting Linear Graphs", "Properties of quadrilaterals", "Circle theorems",
                   "Symmetry", "Volume of prisms", "Straight-line graphs", "Trigonometry in right-angled triangles"):
         assert geometry_words([title]), title
+
+
+def test_a_figure_step_without_speech_is_spoken_from_its_reason_and_its_line():
+    # the trapeziums re-run (2026-10-14 18:33 UTC): the model sent the steps with no "speech" and the
+    # lesson threw away three of four verified figures and both try-it candidates
+    q = _b1_reply()
+    for st in q["steps"]:
+        st.pop("speech", None)
+    ex = L.figure_example(_item(q), "en")
+    assert all(st.speech for st in ex.steps)
+    assert ex.steps[0].speech.startswith("angles on a straight line")      # the theorem's reason …
+    assert ex.steps[0].after[0] in ex.steps[0].speech                      # … then the line, read by the board
+    assert ex.steps[1].speech.endswith(ex.steps[1].after[0] + ".")         # a transform: the line alone
+    B.check_figure_example(ex, "en")
+    # the key the model chose instead of "speech" is read
+    q = _b1_reply()
+    for st in q["steps"]:
+        st["narration"] = st.pop("speech")
+    ex = L.figure_example(_item(q), "en")
+    assert ex.steps[0].speech == B1_SPEECH["steps"][0]
+    # the reason in the lesson's language
+    q = _b1_reply()
+    for st in q["steps"]:
+        st.pop("speech", None)
+    from maths.i18n import REASONS
+    assert L.figure_example(_item(q), "ms").steps[0].speech.startswith(REASONS["angles_on_line"]["ms"])
+    # a reply with NOTHING spoken — no intro, no answer, no step — is still refused
+    q = _b1_reply()
+    q.pop("intro_speech"); q.pop("answer_speech")
+    for st in q["steps"]:
+        st.pop("speech", None)
+    import pytest as _pt
+    from maths.geometry.errors import GeometryRefusal
+    with _pt.raises(GeometryRefusal, match="spoken"):
+        L.figure_example(_item(q), "en")

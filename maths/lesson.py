@@ -39,7 +39,7 @@ from maths.schema import (EXAMPLE_SCHEMA, LESSON_SCHEMA, DIFFICULTY_NAMES, Lesso
 from maths.geometry.errors import GeometryRefusal
 from maths.geometry.items import GeometryItem, _pretty_line, figure_client, geometry_items, key_lines
 from maths.geometry.scope import chapter_names, figures_wanted, geometry_words
-from maths.i18n import board_text as _board_text
+from maths.i18n import REASONS, board_text as _board_text
 from maths.schema import Step, TryIt, WorkedExample
 from maths.verify import verify_example, verify_lesson, verify_try_it
 from maths.charts import chart_for
@@ -324,7 +324,27 @@ def _board_line(x) -> str:
     return _ANGLE_NAME.sub(lambda m: "\u2220" + m.group(1).upper(), _pretty_line(str(x)))
 
 
-def figure_example(item: GeometryItem) -> WorkedExample:
+_STEP_SPEECH_KEYS = ("speech", "explanation", "operation")     # the reply's other names are folded at normalisation
+
+
+def _step_speech(st: dict, *, theorem: str, line: str, language: str) -> str:
+    """The teacher's words for a figure step: what the model wrote under
+    'speech' (or the key it chose instead), else the theorem's reason and the
+    line itself — the board's ``say`` reads notation aloud. The trapeziums
+    re-run (2026-10-14 18:33 UTC) lost three of four verified figures and
+    both try-it candidates to steps with no speech at all; a verified step
+    spoken from its reason beats a lesson with no drawing."""
+    for key in _STEP_SPEECH_KEYS:
+        v = st.get(key)
+        if isinstance(v, str) and v.strip():
+            return " ".join(v.split())
+    reason = (REASONS.get(theorem) or {}).get(language) or (REASONS.get(theorem) or {}).get("en") or ""
+    if reason and line:
+        return f"{reason}: {line}."
+    return f"{line}." if line else ""
+
+
+def figure_example(item: GeometryItem, language: str = "en") -> WorkedExample:
     """A verified figure question as a worked example. A reasoning question
     keeps its deduce / transform steps (with their speech) and answers with
     what the chain PROVED; an evidence question becomes one observation step
@@ -334,13 +354,21 @@ def figure_example(item: GeometryItem) -> WorkedExample:
     labels = {f["id"]: f.get("label") or f["id"] for f in spec.get("figures") or []}
     steps: list[Step] = []
     if item.role == "reasoning":
+        silent = [st for st in spec.get("steps") or []
+                  if not any(isinstance(st.get(k), str) and st.get(k).strip() for k in _STEP_SPEECH_KEYS)]
+        if silent:
+            logger.info("figure example %r: %d of %d step(s) without speech — step keys %s",
+                        item.prompt[:60], len(silent), len(spec.get("steps") or []), sorted(silent[0].keys()))
         for st in spec.get("steps") or []:
             kind = st.get("kind") or "transform"
+            after = [_board_line(x) for x in (st.get("after") or [])]
             steps.append(Step(kind=kind if kind in ("deduce", "transform", "setup", "check") else "transform",
                               theorem=st.get("theorem") or "", uses=list(st.get("uses") or []),
                               before=[_board_line(x) for x in (st.get("before") or [])],
-                              after=[_board_line(x) for x in (st.get("after") or [])],
-                              speech=st.get("speech") or "", figure_ops=list(st.get("figure_ops") or [])))
+                              after=after,
+                              speech=_step_speech(st, theorem=str(st.get("theorem") or ""),
+                                                  line=after[0] if after else "", language=language),
+                              figure_ops=list(st.get("figure_ops") or [])))
         final = [f"{k} = {_num(v)}" for k, v in rep.proved.items()]
         target = ", ".join(rep.proved) or "x"
     else:
@@ -370,6 +398,10 @@ def figure_example(item: GeometryItem) -> WorkedExample:
         raise GeometryRefusal("bad_schema", "a lesson example has steps to teach")
     if not any(st.speech for st in steps):
         raise GeometryRefusal("bad_schema", "a lesson example speaks its steps")
+    if not (speech.get("intro") or speech.get("answer") or any(st.get("speech") for st in spec.get("steps") or [])):
+        # the model ignored the speech rules altogether: nothing of its own
+        # to say — synthesised lines alone are not a lesson
+        raise GeometryRefusal("bad_schema", "a lesson example is spoken: an intro, an answer or its steps")
     return WorkedExample(label="", difficulty=item.difficulty, task="solve", problem=item.prompt, givens=[],
                          target=target, intro_speech=speech.get("intro") or "", steps=steps, final_answer=final,
                          answer_speech=speech.get("answer") or "", figure=spec)
@@ -449,7 +481,7 @@ def figure_examples(client, *, topic: str, level: str | None, language: str, con
     out: list[WorkedExample] = []
     for it in items:
         try:
-            ex = figure_example(it)
+            ex = figure_example(it, language)
             board.check_figure_example(ex, language)
         except (GeometryRefusal, ValueError) as exc:
             code = getattr(exc, "code", "board")
