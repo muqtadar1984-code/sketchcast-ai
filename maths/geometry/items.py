@@ -410,7 +410,10 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         "schema_version": SCHEMA_VERSION,
         "id": str(q.get("id") or "q"),
         "figure_role": q.get("figure_role") or "reasoning",
-        "prompt": str(q.get("prompt") or "")[:600],
+        # the question text under the key the model chose: three of four kept
+        # trapezium questions arrived with no "prompt" (2026-10-14), the
+        # text under "question" — an empty problem line on the board
+        "prompt": str(q.get("prompt") or q.get("question") or q.get("text") or q.get("stem") or q.get("problem") or "")[:600],
         "figures": figures,
     }
     _letter_long_labels(figures, q)

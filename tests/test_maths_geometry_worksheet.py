@@ -338,3 +338,11 @@ def test_the_models_extra_keys_and_an_unknown_area_measure_are_set_aside():
     assert fig["points"] == [{"id": "p_a", "label": "A"}] and fig["segments"] == [{"id": "s_ab", "points": ["p_a", "p_b"]}]
     assert "mark" not in fig["angles"][0]
     assert [ms["target"] for ms in fig["measures"]] == ["s_ab"], "the unknown area measure is dropped; the theorem supplies A"
+
+
+def test_the_question_text_is_read_under_the_key_the_model_chose():
+    from maths.geometry.items import normalise_question
+    for key in ("question", "text", "stem", "problem"):
+        spec, _d = normalise_question({key: "Find the area.", "figures": []})
+        assert spec["prompt"] == "Find the area.", key
+    assert normalise_question({"prompt": "P", "question": "Q", "figures": []})[0]["prompt"] == "P"
