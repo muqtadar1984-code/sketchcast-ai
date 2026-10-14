@@ -203,6 +203,30 @@ def test_a_malformed_figure_reply_earns_one_further_round(monkeypatch):
     assert len(fl.calls) == 3 and rep["verified"] == 0
 
 
+def test_a_shapes_chapter_without_a_single_figure_fails_the_lesson(monkeypatch):
+    # 2026-10-14: a video of area problems shipped with 0 of 6 figures drawn, and acceptance read it as clean
+    import pytest as _pt
+
+    monkeypatch.delenv("MATHS_FIGURES", raising=False)
+    monkeypatch.delenv("MATHS_FIGURES_REQUIRED", raising=False)
+    c = FakeClient(figures=[])
+    with _pt.raises(L.MathsVerificationError) as exc:
+        L.verified_lesson(c, topic="Area of Trapeziums and Compound Shapes", subject="Mathematics", level="Class 9",
+                          curriculum=None, language="en", episode_context="")
+    assert "drew none" in str(exc.value) and "area" in str(exc.value)
+    # the switch lets the algebra ladder through again
+    monkeypatch.setenv("MATHS_FIGURES_REQUIRED", "0")
+    lesson, report = L.verified_lesson(FakeClient(figures=[]), topic="Area of Trapeziums and Compound Shapes",
+                                       subject="Mathematics", level="Class 9", curriculum=None, language="en",
+                                       episode_context="")
+    assert report["status"] == "verified" and not any(e.has_figure for e in lesson.examples)
+    # a chapter that names no shape is untouched by the rule
+    monkeypatch.delenv("MATHS_FIGURES_REQUIRED", raising=False)
+    lesson, report = L.verified_lesson(FakeClient(figures=[]), topic="Linear equations", subject="Mathematics",
+                                       level="Class 8", curriculum=None, language="en", episode_context="")
+    assert report["status"] == "verified"
+
+
 def test_the_switch_turns_the_figure_call_off(monkeypatch):
     monkeypatch.setenv("MATHS_FIGURES", "0")
     c = FakeClient(figures=[_b1_reply()])
