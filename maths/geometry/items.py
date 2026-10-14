@@ -492,6 +492,12 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         if not isinstance(st, dict) or not st.get("kind"):
             continue
         s = _strip(dict(st))
+        # the step's words under the key the model chose: the spec knows
+        # only "speech" (the trapeziums re-run, 2026-10-14: silent steps)
+        for key in ("say", "narration", "spoken", "voice", "speech_text"):
+            v = s.pop(key, None)
+            if isinstance(v, str) and v.strip() and not s.get("speech"):
+                s["speech"] = v
         if "before" in s and not s["before"]:
             del s["before"]
         for key in ("before", "after"):
