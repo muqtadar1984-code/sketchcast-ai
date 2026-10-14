@@ -450,9 +450,11 @@ class TestLessonsDoNotShareState:
         assert "bind_generation" in src
 
     def test_the_worker_names_the_generation(self):
-        from worker.process import process_generation
+        # process_generation is the phase-clock wrapper; the body (and this
+        # guard) lives in _generate (2026-10-14).
+        from worker.process import _generate
         assert "reset_image_budget(generation_id)" in \
-            inspect.getsource(process_generation)
+            inspect.getsource(_generate)
 
     def test_a_finished_lessons_state_is_eventually_dropped(self, monkeypatch):
         ra.reset_image_budget("old-lesson")

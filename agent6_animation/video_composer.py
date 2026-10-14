@@ -39,6 +39,7 @@ from typing import Callable, Optional
 
 from .models import VideoManifest, VideoSegment
 from .native_render import render_native_segment
+from shared import phase_clock
 from shared.text_clean import speakable, speakable_ssml, strip_ssml
 from shared.tts import synthesize
 
@@ -175,6 +176,19 @@ def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | No
                           audio_secs: float, out_mp4, direction: str,
                           scene_dict: dict | None = None,
                           avatars: dict | None = None) -> bool:
+    """``_render_scene_segment_now`` accounted to the ``render`` phase. Wall
+    time as the CALLER sees it — with RENDER_PROCESSES the frames are drawn
+    in a child process, and what matters is how long this thread waited."""
+    with phase_clock.phase("render"):
+        return _render_scene_segment_now(script_seg, narration, audio_path, audio_secs,
+                                         out_mp4, direction, scene_dict=scene_dict,
+                                         avatars=avatars)
+
+
+def _render_scene_segment_now(script_seg: dict, narration: str, audio_path: str | None,
+                              audio_secs: float, out_mp4, direction: str,
+                              scene_dict: dict | None = None,
+                              avatars: dict | None = None) -> bool:
     """One segment through the scene engine. Imports are lazy and everything is
     caught: with VIDEO_ENGINE unset this function never runs, and when it does,
     False (never an exception) hands the segment to the native renderer.
@@ -828,11 +842,12 @@ def compose_episode_videos(
                 # stale word timings to this dialogue's captions
                 mp3.with_suffix(".words.json").unlink(missing_ok=True)
                 dlg_report: dict = {}
-                starts = _synth_dialogue(script_seg["dialogue"], mp3, vid_dir,
-                                         seg_id, tts_voice, ffmpeg,
-                                         avatars=_avatars, lang=lang,
-                                         allow_premium=allow_premium, report=dlg_report,
-                                         student_voice=student_voice)
+                with phase_clock.phase("tts"):
+                    starts = _synth_dialogue(script_seg["dialogue"], mp3, vid_dir,
+                                             seg_id, tts_voice, ffmpeg,
+                                             avatars=_avatars, lang=lang,
+                                             allow_premium=allow_premium, report=dlg_report,
+                                             student_voice=student_voice)
                 script_seg["_dialogue_starts"] = starts
                 used = dlg_report.get("used") or "dialogue-edge"
                 downgraded = bool(dlg_report.get("downgraded"))
@@ -875,7 +890,8 @@ def compose_episode_videos(
                 # speakable() for both deleted every <break> before any
                 # provider saw it (e898f49, 2026-09-02) — premium pauses were
                 # silently lost for a day. speakable_ssml() keeps the tags.
-                synthesize(speakable(text), mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=speakable_ssml(ssml), report=seg_report, boundaries_out=bnd, lang=lang)
+                with phase_clock.phase("tts"):
+                    synthesize(speakable(text), mp3, voice_id=tts_voice, allow_premium=allow_premium, ssml_text=speakable_ssml(ssml), report=seg_report, boundaries_out=bnd, lang=lang)
                 used = seg_report.get("used")
                 downgraded = bool(seg_report.get("downgraded"))
                 seg_stats = {}
@@ -970,11 +986,12 @@ def compose_episode_videos(
 
         # 2b. Native object animation (paced to the narration) + audio → MP4
         if not ok:
-            ok = render_native_segment(
-                spec, audio_path, str(out_mp4), ffmpeg,
-                audio_secs=duration if audio_path else 0.0,
-                accent=_accent, logo_path=_logo,
-            )
+            with phase_clock.phase("render"):
+                ok = render_native_segment(
+                    spec, audio_path, str(out_mp4), ffmpeg,
+                    audio_secs=duration if audio_path else 0.0,
+                    accent=_accent, logo_path=_logo,
+                )
         if not ok:
             logger.error("native renderer failed to build segment %s", seg_id)
             return None
@@ -1116,10 +1133,13 @@ def compose_episode_videos(
                         progress_callback(done, total, "images")
                 _fetch = (one_more_turn(_warm_fetch) if _gate_mode == "strict"
                           else _warm_fetch)
-                _warm = warm_lesson_assets(_entries, fetch=_fetch,
-                                           budget_secs=gate_budget_secs(_gate_mode),
-                                           on_progress=_warm_progress)
+                with phase_clock.phase("images_warm"):
+                    _warm = warm_lesson_assets(_entries, fetch=_fetch,
+                                               budget_secs=gate_budget_secs(_gate_mode),
+                                               on_progress=_warm_progress)
                 _pending_keys = _warm["pending"]
+                phase_clock.count("images_ready", len(_warm["ready"]))
+                phase_clock.count("images_pending", len(_pending_keys))
                 logger.info("lesson image warm pass: %d/%d ready, %d pending "
                             "after %.0fs (%d rounds)", len(_warm["ready"]),
                             len(_entries), len(_pending_keys),

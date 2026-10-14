@@ -160,7 +160,9 @@ class TestTheHandlerAndTheOrder:
     def test_the_deck_waits_before_any_model_call(self):
         """The wait sits right after the generation row is read — before the
         book prelude, the analysis, or anything that costs a call."""
-        src = inspect.getsource(process.process_generation)
+        # process_generation is the phase-clock wrapper; the body lives in
+        # _generate (2026-10-14).
+        src = inspect.getsource(process._generate)
         wait = src.index("_wait_for_sibling_presentation(sb, job, gen)")
         assert wait < src.index("_book_prelude(") and wait < src.index("_build_from_analysis(")
 

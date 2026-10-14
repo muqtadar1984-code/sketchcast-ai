@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import tempfile
+import time as _time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,7 +28,7 @@ from . import client as db
 # live in shared/book_metadata.py so the app (src/utils/book.ts) has one thing
 # to mirror: the two copies drifted apart on 2026-07-12 and the worker's title
 # gate has rejected 100% of production books ever since.
-from shared import coverage, lesson_length
+from shared import coverage, lesson_length, phase_clock
 from shared.book_metadata import (clean_title_fallback as _clean_title_fallback,
                                   looks_like_filename as _looks_like_filename,
                                   pick_book_title, sanitise_author)
@@ -1482,24 +1483,25 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             if total > 1:
                 db.set_stage(sb, job_id, {"phase": "analysis", "part": part, "total": total, "part_pct": 100})
 
-        analysis = run_full_analysis(
-            # unit.level is DEFAULT_LEVEL for a book; a catalogue kit sets it
-            # from the depth node's grade (catalogue.kit.level_for_grade).
-            book_id=book_id, chapter_content=chapter, level=unit.level,
-            # Its OWN client, on the `analysis` role. The analyzer makes
-            # exactly one model call — the combined analysis — and on
-            # 2026-09-08 the artifact model returned it malformed, leaving a
-            # whole kit "grounded in nothing but the title". That role now
-            # names a model that can hold the call; everything else on this
-            # path keeps the cheaper artifact one. See shared/text_models.
-            client=analysis_client(lesson_lang),
-            on_progress=_analysis_tick,
-            # Part jobs analyze THEIR chunk verbatim — never re-chunked. A
-            # catalogue kit likewise hands over its own parts, chunked with
-            # the longer YouTube budget (unit.chunks_override; None for a book).
-            chunks_override=[part_chunk] if part_ref is not None else unit.chunks_override,
-            language=lesson_lang,
-        ).model_dump()
+        with phase_clock.phase("analysis"):
+            analysis = run_full_analysis(
+                # unit.level is DEFAULT_LEVEL for a book; a catalogue kit sets it
+                # from the depth node's grade (catalogue.kit.level_for_grade).
+                book_id=book_id, chapter_content=chapter, level=unit.level,
+                # Its OWN client, on the `analysis` role. The analyzer makes
+                # exactly one model call — the combined analysis — and on
+                # 2026-09-08 the artifact model returned it malformed, leaving a
+                # whole kit "grounded in nothing but the title". That role now
+                # names a model that can hold the call; everything else on this
+                # path keeps the cheaper artifact one. See shared/text_models.
+                client=analysis_client(lesson_lang),
+                on_progress=_analysis_tick,
+                # Part jobs analyze THEIR chunk verbatim — never re-chunked. A
+                # catalogue kit likewise hands over its own parts, chunked with
+                # the longer YouTube budget (unit.chunks_override; None for a book).
+                chunks_override=[part_chunk] if part_ref is not None else unit.chunks_override,
+                language=lesson_lang,
+            ).model_dump()
         analysis["language"] = lesson_lang  # stamps the cache (see reuse guard above)
     db.set_progress(sb, job_id, 45)
     # Analysis stage is over for every kind; the presentation loop writes
@@ -1732,12 +1734,13 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                 # and a lesson with too few proved examples fails loudly.
                 from maths.lesson import generate_maths_script
 
-                script = generate_maths_script(
-                    episode, analysis, chapter_num, _script_client, language=lesson_lang,
-                    avatars=avatars, subject=book.get("subject"), curriculum=book.get("curriculum"),
-                    learner_age=book.get("grade"), part_info=part_info, book_id=book_id,
-                    min_minutes=_min_minutes or None,
-                )
+                with phase_clock.phase("script"):
+                    script = generate_maths_script(
+                        episode, analysis, chapter_num, _script_client, language=lesson_lang,
+                        avatars=avatars, subject=book.get("subject"), curriculum=book.get("curriculum"),
+                        learner_age=book.get("grade"), part_info=part_info, book_id=book_id,
+                        min_minutes=_min_minutes or None,
+                    )
                 script_dict = script.model_dump()
                 _maths = script_dict.get("maths") or {}
                 _mv = _maths.get("verification") or {}
@@ -1770,15 +1773,16 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                     )
                 save_script(script)
             else:
-                script = generate_episode_script(
-                    episode, analysis, chapter_num, _script_client, narration_style,
-                    part_info=part_info,
-                    language=lesson_lang, avatars=avatars,
-                    subject=book.get("subject"), curriculum=book.get("curriculum"),
-                    learner_age=book.get("grade"),
-                    min_minutes=_min_minutes or None,
-                    source_sections=chapter.get("sections"),
-                )
+                with phase_clock.phase("script"):
+                    script = generate_episode_script(
+                        episode, analysis, chapter_num, _script_client, narration_style,
+                        part_info=part_info,
+                        language=lesson_lang, avatars=avatars,
+                        subject=book.get("subject"), curriculum=book.get("curriculum"),
+                        learner_age=book.get("grade"),
+                        min_minutes=_min_minutes or None,
+                        source_sections=chapter.get("sections"),
+                    )
                 script_dict = script.model_dump()
 
                 # ── Coverage gate (shared/coverage.py) ───────────────────────
@@ -1956,11 +1960,12 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                 # avatars, so an extra top-level key is inert to them
                 "visual_plan": script_dict.get("visual_plan"),
             }
-            slides = generate_episode_slides(
-                script_data=part_scripts, branding=branding, direction=lesson_dir,
-                build_deck=_deck_in_presentation and not _deck_storyboard,
-                analysis=analysis, language=lesson_lang,
-            ).model_dump()
+            with phase_clock.phase("slides"):
+                slides = generate_episode_slides(
+                    script_data=part_scripts, branding=branding, direction=lesson_dir,
+                    build_deck=_deck_in_presentation and not _deck_storyboard,
+                    analysis=analysis, language=lesson_lang,
+                ).model_dump()
 
             # The end screen (founder direction 2026-09-25): the call to
             # action on a catalogue lesson bound for YouTube, a short
@@ -1970,13 +1975,15 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             from shared import outro as _outro
             _video_scripts, _video_slides = _outro.with_outro(
                 part_scripts, slides, _outro.outro_kind(params), lesson_lang)
-            video = compose_episode_videos(
-                script_data=_video_scripts, slide_manifest=_video_slides, branding=branding,
-                tts_voice=tts_voice, allow_premium=allow_premium, voice_report=voice_report,
-                direction=lesson_dir, lang=lesson_lang, student_voice=student_voice,
-            ).model_dump()
+            with phase_clock.phase("compose"):
+                video = compose_episode_videos(
+                    script_data=_video_scripts, slide_manifest=_video_slides, branding=branding,
+                    tts_voice=tts_voice, allow_premium=allow_premium, voice_report=voice_report,
+                    direction=lesson_dir, lang=lesson_lang, student_voice=student_voice,
+                ).model_dump()
 
-            final = render_final_video(video_manifest=video).model_dump()
+            with phase_clock.phase("concat"):
+                final = render_final_video(video_manifest=video).model_dump()
 
             # The deck beside the video, built from the scene the video just
             # drew: every illustration is a library row by now, so the slides
@@ -2011,7 +2018,8 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             # report said PASSED — to a local driver script nobody ran.
             # This is the one place that knows the lesson is finished and
             # can still refuse it.
-            _accept = _acceptance_report(_video_scripts, video)
+            with phase_clock.phase("acceptance"):
+                _accept = _acceptance_report(_video_scripts, video)
             if _accept is not None:
                 db.set_stage(sb, job_id, {"phase": "video", "part": part_idx,
                                           "total": n_parts, "part_pct": 99,
@@ -2262,15 +2270,16 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         # the maths keywords travel only on the maths path, so a stub of
         # generate_document with the original signature keeps working
         _doc_kw = {"maths": True, "maths_lesson": _maths_lesson} if _doc_profile.maths else {}
-        out_path = generate_document(
-            kind=kind, book=book, chapter=chapter, analysis=analysis,
-            client=gen_client,
-            # a catalogue document gets the worker-composed curriculum header
-            # when its params carry none (decision 10); a book's params as-is
-            params=_catalogue_doc_params(gen, catalogue) if catalogue is not None else (gen.get("params") or {}),
-            out_dir=Path(tmp), template=branding.get("docx_template"),
-            language=lesson_lang, **_doc_kw,
-        )
+        with phase_clock.phase("document"):
+            out_path = generate_document(
+                kind=kind, book=book, chapter=chapter, analysis=analysis,
+                client=gen_client,
+                # a catalogue document gets the worker-composed curriculum header
+                # when its params carry none (decision 10); a book's params as-is
+                params=_catalogue_doc_params(gen, catalogue) if catalogue is not None else (gen.get("params") or {}),
+                out_dir=Path(tmp), template=branding.get("docx_template"),
+                language=lesson_lang, **_doc_kw,
+            )
         # Student/teacher split (2026-08-18): exam_paper/worksheet/activity/
         # case_study now return [student_document, answer_key] like the
         # cumulative exam; lesson_plan still returns a single Path.
@@ -2364,12 +2373,13 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         # unreliable (verified 2026-07-19), so kind=None asks for the stronger
         # general model instead of the per-kind Haiku default.
         gen_client = client_for(lesson_lang, kind=None if jawi else kind)
-        out_paths = generate_document(
-            kind="exam", book=book, chapter=chapter, analysis=analysis,
-            client=gen_client, params=gen.get("params") or {}, out_dir=Path(tmp),
-            template=branding.get("docx_template"),
-            language=lesson_lang,
-        )
+        with phase_clock.phase("document"):
+            out_paths = generate_document(
+                kind="exam", book=book, chapter=chapter, analysis=analysis,
+                client=gen_client, params=gen.get("params") or {}, out_dir=Path(tmp),
+                template=branding.get("docx_template"),
+                language=lesson_lang,
+            )
         for _k, _v in gen_client.session_usage.items():
             client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
         db.set_progress(sb, job_id, 90)
@@ -2428,12 +2438,13 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         # name a sibling branch assigns is unbound, not undefined.
         from shared import subject_profile as _sp
         _deck_profile = _sp.resolve(book.get("subject"), params=gen.get("params") or {})
-        title = _generate_deck(
-            sb, job_id, generation_id, book, chapter, analysis, gen_client,
-            gen.get("params") or {}, branding, lesson_lang, lesson_dir, tmp, base, _unit,
-            catalogue=catalogue, video_segments=_video_segs, art_context=_art_ctx,
-            maths_lesson=_sibling_maths_lesson(sb, gen) if _deck_profile.worked_examples else None,
-        )
+        with phase_clock.phase("deck"):
+            title = _generate_deck(
+                sb, job_id, generation_id, book, chapter, analysis, gen_client,
+                gen.get("params") or {}, branding, lesson_lang, lesson_dir, tmp, base, _unit,
+                catalogue=catalogue, video_segments=_video_segs, art_context=_art_ctx,
+                maths_lesson=_sibling_maths_lesson(sb, gen) if _deck_profile.worked_examples else None,
+            )
         for _k, _v in gen_client.session_usage.items():
             client.session_usage[_k] = client.session_usage.get(_k, 0) + _v
 
@@ -2517,7 +2528,8 @@ def _process_catalogue(sb: Client, job: dict, generation_id: str, gen: dict, *,
 
     recorded = None
     try:
-        prepared = catalogue_kit.prepare(sb, gen)
+        with phase_clock.phase("prelude"):
+            prepared = catalogue_kit.prepare(sb, gen)
         prepared.contention_probe = probe
         _set_user_yield(generation_id, _yield_for_images)
         _set_patient_assets(generation_id, True)
@@ -2558,6 +2570,39 @@ def _process_catalogue(sb: Client, job: dict, generation_id: str, gen: dict, *,
 
 
 def process_generation(sb: Client, job: dict, generation_id: str) -> None:
+    """One generation, end to end — ``_generate`` does the work; this wrapper
+    keeps the PHASE CLOCK around it (shared.phase_clock).
+
+    Opened before the first model call and read in ``finally``, so a FAILED
+    generation also reports where its minutes went: on 2026-10-13 two kits
+    each burned 32 minutes before failing on a 429 and nothing recorded on
+    what. The summary lands on the generation row as ``params.timings``
+    (one row per generation, merged like the acceptance report) and on one
+    INFO line — the Railway stream ran up to 47 minutes behind that day, so
+    the row, not the log, is the record. Queue wait is the time between the
+    job row's creation and this claim.
+    """
+    clock = phase_clock.start(generation_id)
+    queued_at = _epoch(str(job.get("created_at") or ""))
+    if queued_at > 0:
+        clock.add("queue_wait", max(0.0, _time.time() - queued_at))
+    outcome = "error"
+    try:
+        _generate(sb, job, generation_id)
+        outcome = "done"
+    finally:
+        try:
+            logger.info("phases %s (%s, %s): %s", generation_id, job.get("type"),
+                        outcome, clock.line())
+            db.merge_generation_params(sb, generation_id,
+                                       {"timings": clock.summary(outcome=outcome)})
+        except Exception:  # noqa: BLE001 — accounting must never fail a lesson
+            logger.warning("phase timings not recorded for %s", generation_id, exc_info=True)
+        finally:
+            phase_clock.stop(generation_id)
+
+
+def _generate(sb: Client, job: dict, generation_id: str) -> None:
     """One generation, end to end: the shared setup and the premium gate, then
     either the BOOK path (``_book_prelude`` → ``_build_from_analysis``) or,
     for a catalogue kit row (``params.catalogue``), ``_process_catalogue``.
@@ -2672,7 +2717,8 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
         return
 
     with tempfile.TemporaryDirectory() as tmp:
-        unit = _book_prelude(sb, job_id, gen, book, tmp)
+        with phase_clock.phase("prelude"):
+            unit = _book_prelude(sb, job_id, gen, book, tmp)
         built = _build_from_analysis(
             sb, job, generation_id, gen, unit, tmp, allow_premium=allow_premium,
             tier_info=tier_info, canary_provider=canary_provider,

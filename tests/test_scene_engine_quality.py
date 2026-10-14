@@ -2009,8 +2009,10 @@ class TestP8ImageSpendGuard:
 
     def test_the_worker_resets_it_for_each_generation(self):
         import inspect
-        from worker.process import process_generation
-        assert "reset_image_budget" in inspect.getsource(process_generation)
+        # process_generation is the phase-clock wrapper; the guard is in
+        # _generate (2026-10-14).
+        from worker.process import _generate
+        assert "reset_image_budget" in inspect.getsource(_generate)
 
     def test_both_transports_are_gated(self):
         import inspect

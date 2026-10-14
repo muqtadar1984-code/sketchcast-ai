@@ -38,6 +38,7 @@ from PIL import Image
 
 from shared.asset_keys import (KEY_NOISE, canonical_key, is_avatar_key,
                                lookup_variants)
+from shared import phase_clock
 from shared.image_models import SCENE, ImageModel, nearest_aspect
 from shared.image_models import resolve as resolve_image_model
 from shared.text_models import VISION as TEXT_VISION
@@ -470,6 +471,7 @@ def _with_backoff(fn, what: str, tries: int = 4, kind: str = "image"):
         # holding nothing, so the callers that may go now are not queued
         # behind its wait (same invariant as the 429 sleep below)
         waited = _limiter(kind).acquire()
+        phase_clock.add("pacing_wait", waited)
         if waited > 0.5:
             logger.info("%s paced %.1fs by %s", what, waited, _LIMITER_DEFAULTS[kind][0])
         if kind == "image":
@@ -505,6 +507,8 @@ def _with_backoff(fn, what: str, tries: int = 4, kind: str = "image"):
             logger.warning("%s rate-limited; retrying in %.0fs (%d/%d)",
                            what, wait, attempt + 1, tries - 1)
             _t.sleep(wait)
+            phase_clock.add("rate_limit_wait", wait)
+            phase_clock.count("rate_limit_retries")
             delay *= 2.4
     return None
 
@@ -580,6 +584,9 @@ def bind_generation(fn, generation_id: str | None = None):
     """
     gid = current_generation() if generation_id is None else str(generation_id)
     role = current_image_role()
+    # The phase clock (shared.phase_clock) travels with the budget: a render
+    # thread's TTS, render and rate-limit seconds must land on ITS lesson.
+    clock_gid = phase_clock.current()
     # The board-colour pins travel the same way: a render thread asking
     # for a picture must answer "coloured or ink?" as the job thread did.
     from . import colour as _colour
@@ -590,9 +597,11 @@ def bind_generation(fn, generation_id: str | None = None):
         token = _GENERATION_VAR.set(gid)
         role_token = _ROLE_VAR.set(role)
         pin_tokens = _colour.restore(pins)
+        clock_token = phase_clock.bind(clock_gid)
         try:
             return fn(*a, **kw)
         finally:
+            phase_clock.unbind(clock_token)
             _colour.release(pin_tokens)
             _ROLE_VAR.reset(role_token)
             _GENERATION_VAR.reset(token)
@@ -809,6 +818,7 @@ def _wait_out_deferral(key: str, waiting: float) -> bool:
             return False
         tick = min(_PATIENCE_TICK_S, wait - waited)
         _sleep(tick)
+        phase_clock.add("deferral_wait", tick)
         waited += tick
     _account_patience(waited)
     still = asset_deferred(key)

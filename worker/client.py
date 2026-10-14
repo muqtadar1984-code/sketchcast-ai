@@ -15,6 +15,8 @@ from typing import Optional
 
 from supabase import Client, ClientOptions, create_client
 
+from shared import phase_clock
+
 
 def admin() -> Client:
     url = os.environ["SUPABASE_URL"]
@@ -1527,7 +1529,16 @@ _CONTENT_TYPES = {
 
 
 def upload_artifact(sb: Client, local_path: str | Path, dest_path: str) -> str:
-    """Upload a local file to the `artifacts` bucket; return its storage path."""
+    """Upload a local file to the `artifacts` bucket; return its storage path.
+    Accounted to the generation's ``upload`` phase (every kind uploads here)."""
+    t = time.perf_counter()
+    try:
+        return _upload_artifact_now(sb, local_path, dest_path)
+    finally:
+        phase_clock.add("upload", time.perf_counter() - t)
+
+
+def _upload_artifact_now(sb: Client, local_path: str | Path, dest_path: str) -> str:
     local_path = Path(local_path)
     ctype = _CONTENT_TYPES.get(local_path.suffix.lower(), "application/octet-stream")
     payload = local_path.read_bytes()
