@@ -287,6 +287,16 @@ def figures_enabled() -> bool:
     return os.environ.get("MATHS_FIGURES", "1").strip().lower() not in ("0", "false", "off", "no")
 
 
+def figures_required() -> bool:
+    """A shapes chapter whose figure call drew NOTHING fails the lesson
+    instead of shipping algebra about shapes with no drawing (founder,
+    2026-10-14: "area of a trapezium or any shape cannot be effectively
+    explained without images" — the acceptance had read a video with 0 of
+    6 figures as clean). MATHS_FIGURES_REQUIRED=0 lets such a lesson
+    through again without a deploy."""
+    return os.environ.get("MATHS_FIGURES_REQUIRED", "1").strip().lower() not in ("0", "false", "off", "no")
+
+
 def _num(v) -> str:
     try:
         f = float(v)
@@ -571,6 +581,13 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
                               n=FIGURE_EXAMPLES + 1, report=figures_report, focus=focus) if wanted else []
     if wanted:
         figures_report["geometry_words"] = geometry_words(names)
+        if not figures and figures_required():
+            # a bad video is worse than no video: a shapes chapter is not
+            # taught without a drawing — the refusals go back as the reason
+            raise MathsVerificationError(
+                f"a shapes chapter ({', '.join(figures_report['geometry_words'][:4])}) and the geometry engine drew "
+                f"none of {figures_report.get('asked', 0)} figure question(s) asked — "
+                + "; ".join(str(r)[:160] for r in (figures_report.get("rejected") or [])[:4]))
     figure_pause: TryIt | None = None
     if len(figures) > FIGURE_EXAMPLES:
         candidate = figure_try_it(figures[FIGURE_EXAMPLES], language)

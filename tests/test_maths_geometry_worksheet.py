@@ -283,3 +283,66 @@ def test_an_area_unit_written_as_a_square_folds_to_the_length_unit():
                      {"target": "s_ab", "value": "6", "unit": "furlongs"}]}}]})
     ms = spec["figures"][0]["figure"]["measures"]
     assert ms[0]["unit"] == "cm" and "unit" not in ms[1]
+
+
+def test_a_shape_written_the_way_the_model_writes_it_is_read_not_refused():
+    # the trapeziums kit (2026-10-14): parallel_sides as the side NAMES, the numbers in the measures;
+    # an "id" on every measure; the area given as a measure of the shape with no kind
+    from maths.geometry import verify_question
+    from maths.geometry.items import normalise_question
+    raw = {"id": "t", "figure_role": "reasoning", "prompt": "Find the height of the trapezium.", "difficulty": 2,
+           "figures": [{"id": "f", "figure": {"units": "cm",
+               "points": [{"id": "p_a", "label": "A"}, {"id": "p_b", "label": "B"}, {"id": "p_c", "label": "C"},
+                          {"id": "p_d", "label": "D"}, {"id": "p_h", "label": "H"}],
+               "objects": [{"id": "tz", "make": "trapezium", "vertices": ["p_a", "p_b", "p_c", "p_d"],
+                            "parallel_sides": ["AB", "DC"], "height": "h", "offset": "2"},
+                           {"id": "hh", "make": "perpendicular_from", "point": "p_d", "segment": ["p_a", "p_b"], "to": "p_h"}],
+               "segments": [{"id": "s_ab", "points": ["p_a", "p_b"]}, {"id": "s_dc", "points": ["p_d", "p_c"]},
+                            {"id": "s_dh", "points": ["p_d", "p_h"]}],
+               "measures": [{"id": "m1", "target": "s_ab", "value": "14", "unit": "cm", "role": "given"},
+                            {"id": "m2", "target": "s_dc", "value": "10", "unit": "cm", "role": "given"},
+                            {"id": "m3", "target": "s_dh", "value": "h", "unit": "cm", "role": "unknown"},
+                            {"id": "m4", "target": "tz", "value": "72", "unit": "cm^2"}],
+               "bind": {"h": 6}}}],
+           "steps": [{"kind": "deduce", "theorem": "area_trapezium", "uses": ["tz", "s_dh"], "after": ["72 = 1/2 * (14 + 10) * h"]},
+                     {"kind": "transform", "after": ["h = 6"]}],
+           "answer": {"kind": "number", "value": "6", "unit": "cm"}}
+    spec, _d = normalise_question(raw)
+    fig = spec["figures"][0]["figure"]
+    assert fig["objects"][0]["parallel_sides"] == ["14", "10"]
+    assert all("id" not in ms for ms in fig["measures"])
+    assert fig["measures"][3] == {"target": "tz", "value": "72", "unit": "cm", "kind": "area", "role": "given"}
+    rep = verify_question(spec)
+    assert rep.ok, rep.refusal
+    assert str(rep.proved.get("h")) == "6"
+    # a comma string, and a name with no given length left alone for the engine's own message
+    raw2 = {"figures": [{"id": "f", "figure": {"objects": [{"id": "k", "make": "kite", "vertices": ["p_a", "p_b", "p_c", "p_d"],
+                                                              "sides": "5, 7", "angle": "100"}]}}]}
+    assert normalise_question(raw2)[0]["figures"][0]["figure"]["objects"][0]["sides"] == ["5", "7"]
+    raw3 = {"figures": [{"id": "f", "figure": {"objects": [{"id": "tz", "make": "trapezium", "vertices": ["p_a", "p_b", "p_c", "p_d"],
+                                                              "parallel_sides": ["AB", "DC"], "height": "4"}]}}]}
+    assert normalise_question(raw3)[0]["figures"][0]["figure"]["objects"][0]["parallel_sides"] == ["AB", "DC"]
+
+
+def test_the_models_extra_keys_and_an_unknown_area_measure_are_set_aside():
+    # live trial 2026-10-14 after the first fix: "segments.2.style: Extra inputs are not permitted" and
+    # "measure of 'trap': an area is given; the unknown is a side" (the model wrote the area asked for as a measure)
+    from maths.geometry.items import normalise_question
+    raw = {"figures": [{"id": "f", "figure": {
+        "points": [{"id": "p_a", "label": "A", "note": "top"}],
+        "segments": [{"id": "s_ab", "points": ["p_a", "p_b"], "style": "dashed"}],
+        "angles": [{"id": "angle_abc", "rays": [["p_b", "p_a"], ["p_b", "p_c"]], "mark": "arc"}],
+        "objects": [{"id": "tz", "make": "trapezium", "vertices": ["p_a", "p_b", "p_c", "p_d"], "parallel_sides": ["8", "5"], "height": "4"}],
+        "measures": [{"target": "tz", "value": "A", "role": "unknown"}, {"target": "s_ab", "value": "8", "unit": "cm"}]}}]}
+    fig = normalise_question(raw)[0]["figures"][0]["figure"]
+    assert fig["points"] == [{"id": "p_a", "label": "A"}] and fig["segments"] == [{"id": "s_ab", "points": ["p_a", "p_b"]}]
+    assert "mark" not in fig["angles"][0]
+    assert [ms["target"] for ms in fig["measures"]] == ["s_ab"], "the unknown area measure is dropped; the theorem supplies A"
+
+
+def test_the_question_text_is_read_under_the_key_the_model_chose():
+    from maths.geometry.items import normalise_question
+    for key in ("question", "text", "stem", "problem"):
+        spec, _d = normalise_question({key: "Find the area.", "figures": []})
+        assert spec["prompt"] == "Find the area.", key
+    assert normalise_question({"prompt": "P", "question": "Q", "figures": []})[0]["prompt"] == "P"
