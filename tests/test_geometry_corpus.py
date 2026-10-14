@@ -434,3 +434,32 @@ def test_a_compound_shape_not_walked_exactly_is_refused_with_the_fix():
                  {"kind": "transform", "after": ["A = 24"]}], 24)
     rep = verify_question(q)
     assert not rep.ok and rep.refusal["code"] == "theorem_premise" and "turtle_polygon" in rep.refusal["message"], rep.refusal
+
+
+def test_a_given_area_is_a_measure_of_the_shape_and_the_height_is_found_from_it():
+    # "A trapezium has an area of 72; its parallel sides are 10 and 14. Find the height." (area kit, 2026-10-14)
+    from maths.geometry import verify_question
+
+    objects = [{"id": "tz", "make": "trapezium", "vertices": ["p_a", "p_b", "p_c", "p_d"], "parallel_sides": ["14", "10"],
+                "height": "h", "offset": "2"},
+               {"id": "hh", "make": "perpendicular_from", "point": "p_d", "segment": ["p_a", "p_b"], "to": "p_h"}]
+    segments = [{"id": "s_ab", "points": ["p_a", "p_b"]}, {"id": "s_dc", "points": ["p_d", "p_c"]},
+                {"id": "s_dh", "points": ["p_d", "p_h"]}]
+    measures = [{"target": "s_ab", "value": "14", "unit": "cm"}, {"target": "s_dc", "value": "10", "unit": "cm"},
+                {"target": "s_dh", "value": "h", "unit": "cm", "role": "unknown"},
+                {"target": "tz", "value": "72", "unit": "cm", "kind": "area", "role": "given"}]
+    q = _area_q(objects, segments, measures,
+                [{"kind": "deduce", "theorem": "area_trapezium", "uses": ["tz", "s_dh"], "after": ["72 = 1/2 * (14 + 10) * h"]},
+                 {"kind": "transform", "after": ["72 = 12 * h"]},
+                 {"kind": "transform", "after": ["h = 6"]}], 6, extra_pts=("p_h",))
+    q["figures"][0]["figure"]["bind"] = {"h": 6}
+    rep = verify_question(q)
+    assert rep.ok, rep.refusal
+    assert str(rep.proved.get("h")) == "6"
+    # the area given on a segment, or asked for, is refused with a reason
+    bad = copy.deepcopy(q)
+    bad["figures"][0]["figure"]["measures"][-1]["target"] = "s_ab"
+    assert verify_question(bad).refusal["code"] == "bad_reference"
+    bad = copy.deepcopy(q)
+    bad["figures"][0]["figure"]["measures"][-1]["role"] = "unknown"
+    assert verify_question(bad).refusal["code"] == "bad_schema"

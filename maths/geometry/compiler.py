@@ -92,6 +92,15 @@ def compile_figure(spec: FigureSpec, resolve: Optional[Resolver] = None, *,
             # v2: a point's coordinates, given "(3, -2)" or asked "(a, b)"
             exact_pair(ms.value, where=f"measure.{ms.target}")
             continue
+        if ms.kind == "area":
+            # the shape's area, given (a number the chain reads as A); never
+            # realised — the unknown is a side or a height (area kit, 2026-10-14)
+            if ms.target not in m.polygons:
+                raise GeometryRefusal("bad_reference", f"measure of {ms.target!r}: kind 'area' needs a polygon's id", ms.target)
+            if ms.role != "given":
+                raise GeometryRefusal("bad_schema", f"measure of {ms.target!r}: an area is given; the unknown is a side", ms.target)
+            exact_value(ms.value, where=f"measure.{ms.target}")
+            continue
         if ms.target in m.solids:
             # v3: the solid's volume or surface area, given (a number the
             # chain reads as V or S); never realised — a picture is a view
@@ -174,7 +183,7 @@ def realised(m: Model, target: str) -> float:
 
 def check_given_measures(m: Model, spec: FigureSpec) -> None:
     for ms in spec.measures:
-        if ms.role != "given" or ms.target in m.solids:
+        if ms.role != "given" or ms.target in m.solids or ms.kind == "area":
             continue
         if ms.target in m.points:
             ex, ey = exact_pair(ms.value, where=f"measure.{ms.target}")

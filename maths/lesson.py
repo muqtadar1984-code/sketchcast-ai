@@ -50,7 +50,15 @@ logger = logging.getLogger("worker")
 
 REGEN_ATTEMPTS = 2
 MIN_EXAMPLES = 2
-FIGURE_EXAMPLES = 2      # figure examples asked of the geometry engine's call, per lesson
+# Figure examples asked of the geometry engine's call, per lesson. Was 2 —
+# two pictures and the rest of the ladder algebra with no drawing, which on
+# "Area of Trapeziums and Compound Shapes" (2026-10-14) shipped a video of
+# area problems without a single diagram (founder: "we can't have area
+# problems without images"). A chapter the engine draws for now gets its
+# WHOLE ladder from the engine; the algebra ladder fills only what the
+# engine leaves short, and the length extension asks the engine first.
+FIGURE_EXAMPLES = 4
+MAX_EXAMPLES = 4         # the ladder's length
 MAX_TOKENS = 20000
 JOB_KIND = "maths_lesson"
 
@@ -446,25 +454,61 @@ def _verify_examples(client, examples: list[WorkedExample], lesson: Lesson, lang
     return kept
 
 
+def _extend_with_figures(client, lesson: Lesson, report: dict, *, figures: dict, language: str, n_add: int) -> list[WorkedExample]:
+    """The engine's further examples for a shapes lesson under the floor:
+    verified figure questions on this topic, less any whose problem the
+    lesson already teaches. The call's counts join the figures report."""
+    frep: dict = {}
+    items = figure_examples(client, topic=str(figures.get("topic") or lesson.topic), level=figures.get("level"),
+                            language=language, context=str(figures.get("context") or ""), n=n_add, report=frep,
+                            focus=list(figures.get("focus") or []))
+    taught = {str(ex.problem or "").strip().lower() for ex in lesson.examples}
+    fresh = [ex for ex in items if str(ex.problem or "").strip().lower() not in taught]
+    fr = report.setdefault("figures", {})
+    fr["asked"] = int(fr.get("asked") or 0) + int(frep.get("asked") or 0)
+    fr["verified"] = int(fr.get("verified") or 0) + len(fresh)
+    fr["rejected"] = list(fr.get("rejected") or []) + list(frep.get("rejected") or [])
+    fr["extended_calls"] = int(fr.get("extended_calls") or 0) + 1
+    return fresh[:n_add]
+
+
 def extend_to_floor(client, lesson: Lesson, report: dict, *, minutes: float, avatars: dict | None,
                     language: str, attempts: int = REGEN_ATTEMPTS,
-                    rounds: int = MAX_LENGTH_ROUNDS) -> tuple[Lesson, dict]:
+                    rounds: int = MAX_LENGTH_ROUNDS, figures: dict | None = None) -> tuple[Lesson, dict]:
     """Measure the verified lesson against the floor and, while it is
     under, ask for further worked examples (and concept lines), verify
     them like the ladder's and append what survives — at most ``rounds``
     asks. The report records every round (``length_rounds``, ``extended``)
     and the final measure (``length``); a lesson still under is returned
-    as it is, for the caller to refuse."""
+    as it is, for the caller to refuse.
+
+    ``figures`` ({topic, level, context, names, focus}) says the lesson is
+    one the geometry engine draws for: each round then asks the ENGINE
+    first (a shapes lesson grows by shapes, not by algebra without a
+    drawing — 2026-10-14) and the algebra re-ask fills only what the
+    engine leaves short."""
     if not minutes or minutes <= 0:
         return lesson, report
     measured = measure_lesson(lesson, minutes, avatars, language)
     report["length_rounds"] = 0
     report.setdefault("extended", [])
+    draw = bool(figures) and figures_enabled() and figures_wanted(list(figures.get("names") or [lesson.topic]))
     while measured.get("under") and report["length_rounds"] < rounds:
         report["length_rounds"] += 1
         n_add = _examples_to_add(lesson, measured, avatars, language)
         logger.warning("maths lesson %r under the length floor (round %d/%d): %s — asking for %d further example(s)",
                        lesson.topic, report["length_rounds"], rounds, lesson_length.summary(measured), n_add)
+        if draw:
+            drawn = _extend_with_figures(client, lesson, report, figures=figures or {}, language=language, n_add=n_add)
+            if drawn:
+                for i, ex in enumerate(drawn, len(lesson.examples) + 1):
+                    ex.label = f"Example {i}"
+                lesson.examples = list(lesson.examples) + drawn
+                report["extended"].extend(ex.label for ex in drawn)
+                measured = measure_lesson(lesson, minutes, avatars, language)
+                if not measured.get("under") or len(drawn) >= n_add:
+                    continue
+                n_add = max(1, n_add - len(drawn))
         data = _analyze(client, build_extend_prompt(lesson=lesson, language=language, n_examples=n_add,
                                                     measured=measured), EXTENSION_SCHEMA, MAX_TOKENS)
         new = [parse_example(e) for e in (data.get("examples") or []) if isinstance(e, dict)]
@@ -546,9 +590,11 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
             + (f" and {len(figures)} figure example(s) survived" if wanted else "")
             + f" — {' | '.join(dropped)[:1500]}")
     if figures:
-        # one ladder, by difficulty, figures first among equals; relabelled
-        # in the order they are taught
-        merged = sorted(figures + kept, key=lambda e: e.difficulty)[:4]
+        # one ladder: EVERY verified figure (by difficulty), then the algebra
+        # examples fill what the engine left short; relabelled in the order
+        # they are taught
+        merged = (sorted(figures, key=lambda e: e.difficulty)[:MAX_EXAMPLES]
+                  + sorted(kept, key=lambda e: e.difficulty))[:MAX_EXAMPLES]
         for i, ex in enumerate(merged, 1):
             ex.label = f"Example {i}"
         lesson.examples = merged
@@ -621,8 +667,10 @@ def generate_maths_script(episode: dict, analysis: dict, chapter_num: int, clien
         client, topic=topic, subject=subject, level=learner_age, curriculum=curriculum,
         language=language, episode_context=ctx, min_minutes=min_minutes,
         analysis=analysis if isinstance(analysis, dict) else None, episode=episode)
+    names = chapter_names(topic=topic, analysis=analysis if isinstance(analysis, dict) else None, episode=episode)
     lesson, report = extend_to_floor(client, lesson, report, minutes=min_minutes or 0.0, avatars=avatars,
-                                     language=language)
+                                     language=language,
+                                     figures={"topic": topic, "level": learner_age, "context": ctx, "names": names})
     n_ok = sum(1 for e in report.get("examples", []) if e.get("status") == "verified")
     logger.info("maths lesson %r: %d verified example(s), %d dropped, status %s", lesson.topic, n_ok,
                 len(report.get("dropped") or []), report.get("status"))
