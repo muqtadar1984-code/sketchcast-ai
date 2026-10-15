@@ -541,3 +541,16 @@ def test_a_listed_point_nothing_refers_to_is_dropped_not_fatal():
                                                  "objects": [{"id": "r", "make": "turtle_polygon", "sides": ["4", "3", "4", "3"],
                                                               "turns": ["90", "90", "90", "90"]}]}}]}
     assert len(normalise_question(raw2)[0]["figures"][0]["figure"]["points"]) == 4
+
+
+def test_a_superscript_the_model_wrote_as_mojibake_is_read_back():
+    # two boards of the trapeziums video read "54 cmÂ²" (2026-10-15)
+    from maths.geometry.items import _demojibake, normalise_question
+    assert _demojibake("The area is 54 cmÂ². Find h.") == "The area is 54 cm². Find h."
+    assert _demojibake("an angle of 90Â° â€” not 45Â°") == "an angle of 90° — not 45°"
+    assert _demojibake("plain 54 cm². Find h.") == "plain 54 cm². Find h."
+    spec, _d = normalise_question({"prompt": "Area 72 cmÂ².", "intro_speech": "It is 72 cmÂ²", "figures": [],
+                                   "steps": [{"kind": "transform", "after": ["h = 6"], "narration": "so 12 cmÂ² each"}]})
+    assert spec["prompt"] == "Area 72 cm²."
+    from maths.geometry.items import _speech
+    assert _speech({"intro_speech": "It is 72 cmÂ²"})["intro"] == "It is 72 cm²"

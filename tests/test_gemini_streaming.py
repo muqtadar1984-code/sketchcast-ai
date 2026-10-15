@@ -278,3 +278,89 @@ def test_a_long_silence_before_the_first_chunk_switches_to_the_lighter_model(str
     monkeypatch.setattr("shared.gemini_client.requests.post", post)
     assert gc.GeminiClient(model="gemini-3.5-flash").analyze("write the lesson")["data"] == {"ok": 1}
     assert "gemini-3.5-flash:stream" in calls[0] and "flash-lite:stream" in calls[1]
+
+
+# ── a stream that never ends is cut ──────────────────────────────────────
+
+
+class _Trickle(_SSE):
+    """A stream that keeps the socket alive without ever finishing:
+    ``filler`` events (blank keep-alive lines, or chunks with no text) every
+    ``gap`` seconds of the patched clock, ``text_every`` of them carrying a
+    text part. Never raises on its own."""
+    def __init__(self, clock, gap, filler="", text_every=None, events_max=100000):
+        super().__init__([])
+        self.clock, self.gap, self.filler, self.text_every, self.events_max = clock, gap, filler, text_every, events_max
+
+    def iter_lines(self, decode_unicode=False):
+        for i in range(self.events_max):
+            self.clock["t"] += self.gap
+            if self.text_every and i % self.text_every == 0:
+                yield "data: " + json.dumps(_chunk("x"))
+            elif self.filler == "":
+                yield ""
+            else:
+                yield "data: " + json.dumps(self.filler)
+
+
+def _clocked(monkeypatch):
+    clock = {"t": 0.0}
+    monkeypatch.setattr("shared.gemini_client.time.monotonic", lambda: clock["t"])
+    return clock
+
+
+def test_a_stream_of_keep_alives_with_no_text_is_cut_at_the_stall_cap_and_retried_on_the_lighter_model(streaming, monkeypatch):
+    """2026-10-14 19:15 → 23:42 UTC: the video job sat inside one streamed
+    call for four and a half hours — the socket never went silent, nothing
+    ever arrived that was text. The stall cap cuts it; the ladder's next
+    attempt, after that long a wait, goes to the lighter model (#217)."""
+    clock = _clocked(monkeypatch)
+    monkeypatch.setattr(gc, "SLOW_DROP_MODEL", "gemini-3.5-flash-lite")
+    calls = _post_returning(monkeypatch, [_Trickle(clock, gap=50.0), _SSE([_chunk('{"ok": 1}', "STOP")])])
+    out = gc.GeminiClient(model="gemini-3.5-flash").analyze("write the lesson")
+    assert out["data"] == {"ok": 1}
+    assert len(calls) == 2 and "gemini-3.5-flash-lite:streamGenerateContent" in calls[1]["url"]
+    assert calls[0]["json"] is not None and calls[0]["stream"] is True
+
+
+def test_thought_only_chunks_count_as_no_text(streaming, monkeypatch):
+    clock = _clocked(monkeypatch)
+    thought = _chunk("thinking…", thought=True)
+    calls = _post_returning(monkeypatch, [_Trickle(clock, gap=100.0, filler=thought)])
+    with pytest.raises(requests.HTTPError):
+        gc.GeminiClient(model="gemini-3.5-flash").analyze("hello", retries=0)
+    assert len(calls) == 1 and clock["t"] <= gc.STREAM_STALL_S + 100.0 + 1e-6, "cut at the first check past the cap"
+
+
+def test_a_stream_that_keeps_trickling_text_is_cut_at_the_total_cap(streaming, monkeypatch):
+    clock = _clocked(monkeypatch)
+    # a text part every 300 s: the stall cap never fires, the total cap does
+    _post_returning(monkeypatch, [_Trickle(clock, gap=300.0, text_every=1)])
+    with pytest.raises(requests.HTTPError):
+        gc.GeminiClient(model="gemini-3.5-flash").analyze("hello", retries=0)
+    assert gc.STREAM_TOTAL_S < clock["t"] <= gc.STREAM_TOTAL_S + 300.0 + 1e-6
+
+
+def test_the_stall_cut_says_how_far_the_reply_got(streaming, monkeypatch, caplog):
+    import logging
+    clock = _clocked(monkeypatch)
+    _post_returning(monkeypatch, [_Trickle(clock, gap=200.0)])
+    with caplog.at_level(logging.WARNING, logger="worker"), pytest.raises(requests.HTTPError) as exc:
+        gc.GeminiClient(model="gemini-3.5-flash").analyze("hello", retries=0)
+    assert "stream stalled" in str(exc.value) and "no text for" in str(exc.value)
+    assert any("stalled" in r.getMessage() for r in caplog.records)
+
+
+def test_a_normal_stream_well_inside_the_caps_is_untouched(streaming, monkeypatch):
+    clock = _clocked(monkeypatch)
+    sse = _SSE([_chunk('{"k": "a'), _chunk('b"}', "STOP", usage={"promptTokenCount": 1, "candidatesTokenCount": 2})])
+    real = sse.iter_lines
+
+    def slow(decode_unicode=False):
+        for line in real(decode_unicode):
+            clock["t"] += 100.0          # 100 s between lines: under both caps
+            yield line
+    sse.iter_lines = slow
+    _post_returning(monkeypatch, [sse])
+    out = gc.GeminiClient(model="gemini-3.5-flash").analyze("hello")
+    assert out["data"] == {"k": "ab"}

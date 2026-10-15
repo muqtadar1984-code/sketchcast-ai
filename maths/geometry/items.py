@@ -270,6 +270,23 @@ def _is_number(v) -> bool:
         return False
 
 
+def _demojibake(s: str) -> str:
+    """UTF-8 read as cp1252 and written back — "cmÂ²", "90Â°", "â€"" —
+    the way the model itself sometimes writes a superscript (two boards of
+    the trapeziums video read "54 cmÂ²", 2026-10-15). Undone where it is
+    seen; text without the tell-tale bytes is returned as it is."""
+    if not isinstance(s, str) or not ("Â" in s or "â€" in s or "Ã" in s):
+        return s
+    try:
+        fixed = s.encode("cp1252").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        fixed = s
+        for bad, good in (("Â²", "²"), ("Â³", "³"), ("Â°", "°"), ("Â½", "½"), ("Â¼", "¼"), ("Â¾", "¾"),
+                          ("Ã—", "×"), ("Ã·", "÷"), ("â€“", "–"), ("â€”", "—"), ("â€™", "’"), ("âˆ’", "−")):
+            fixed = fixed.replace(bad, good)
+    return fixed
+
+
 def _synthesised_prompt(spec: dict) -> str:
     """The question sentence for a reasoning question the model sent WITHOUT
     one (two of the trapeziums video's six examples, 2026-10-14: an empty
@@ -711,7 +728,7 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         # the question text under the key the model chose: three of four kept
         # trapezium questions arrived with no "prompt" (2026-10-14), the
         # text under "question" — an empty problem line on the board
-        "prompt": str(q.get("prompt") or q.get("question") or q.get("text") or q.get("stem") or q.get("problem") or "")[:600],
+        "prompt": _demojibake(str(q.get("prompt") or q.get("question") or q.get("text") or q.get("stem") or q.get("problem") or ""))[:600],
         "figures": figures,
     }
     _letter_long_labels(figures, q)
@@ -745,6 +762,8 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
             v = s.pop(key, None)
             if isinstance(v, str) and v.strip() and not s.get("speech"):
                 s["speech"] = v
+        if isinstance(s.get("speech"), str):
+            s["speech"] = _demojibake(s["speech"])
         if "before" in s and not s["before"]:
             del s["before"]
         for key in ("before", "after"):
@@ -1323,7 +1342,7 @@ def geometry_items(client, *, topic: str, level: Optional[str], language: str, n
 
 def _speech(entry: dict) -> dict:
     def text(v) -> str:
-        return " ".join(str(v).split()) if isinstance(v, (str, int, float)) else ""
+        return _demojibake(" ".join(str(v).split())) if isinstance(v, (str, int, float)) else ""
 
     obs = {}
     for o in entry.get("observations") or []:
