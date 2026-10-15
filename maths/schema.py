@@ -507,18 +507,31 @@ LESSON_SCHEMA = {"type": "object", "properties": {
                  "try_it", "closing"]}
 
 
+def _clean_text(data):
+    """Every string in a reply read back from the model's own mojibake
+    ("using pi â‰ˆ 3.14" on two boards of the circle video, 2026-10-15)."""
+    from maths.notation import demojibake  # noqa: PLC0415 — notation imports nothing of this module
+    if isinstance(data, str):
+        return demojibake(data)
+    if isinstance(data, list):
+        return [_clean_text(x) for x in data]
+    if isinstance(data, dict):
+        return {k: _clean_text(v) for k, v in data.items()}
+    return data
+
+
 def parse_lesson(data) -> Lesson:
     """A Lesson out of a model reply. Pydantic ignores unknown keys and
     coerces what it can; a reply that is not even an object is empty."""
     if not isinstance(data, dict):
         return Lesson()
-    return Lesson.model_validate(data)
+    return Lesson.model_validate(_clean_text(data))
 
 
 def parse_example(data) -> WorkedExample:
     if not isinstance(data, dict):
         return WorkedExample()
-    return WorkedExample.model_validate(data)
+    return WorkedExample.model_validate(_clean_text(data))
 
 
 __all__ = ["Line", "Step", "Mistake", "WorkedExample", "MethodCard", "TryIt", "Lesson",

@@ -770,3 +770,14 @@ def test_a_reply_that_is_not_json_earns_one_further_round_then_says_so():
     with pytest.raises(RuntimeError, match="could not be read as JSON twice"):
         L.verified_lesson(Raw(2), topic="Linear equations", subject=None, level=None, curriculum=None, language="en",
                           episode_context="")
+
+
+def test_the_lessons_own_text_is_read_back_from_the_models_mojibake():
+    # the circle video (2026-10-15): "using pi â‰ˆ 3.14" on two boards came from the lesson's own examples
+    from maths.schema import parse_example, parse_lesson
+    ex = parse_example({"problem": "Find the area, using pi â 3.14. The radius is 5 cmÂ².",
+                        "steps": [{"kind": "transform", "after": ["A = 78.5"], "speech": "Ï€ times twenty-five"}]})
+    assert ex.problem == "Find the area, using pi ≈ 3.14. The radius is 5 cm²."
+    assert ex.steps[0].speech == "π times twenty-five"
+    lesson = parse_lesson({"topic": "Circles", "hook": "a hook", "examples": [{"problem": "90Â° turn"}]})
+    assert lesson.examples[0].problem == "90° turn"
