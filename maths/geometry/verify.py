@@ -37,7 +37,7 @@ from maths.geometry.properties import compute as compute_property
 from maths.geometry.spec import Answer, Asks, QuestionSpec, StepSpec, parse_question
 from maths.geometry.theorems import REASONS, angle_symbol, apply as apply_theorem, length_symbol
 from maths.notation import NotationError, Relation, parse_relation
-from maths.verify import Check, ExampleReport, _pi_match, _states_equivalent, pi_taken_as
+from maths.verify import Check, ExampleReport, _PI_VALUES, _fmt_pi, _pi_match, _states_equivalent, pi_taken_as
 from mathsvc.safety import MathTimeoutError
 
 DISCERN_LEN = 0.5        # sides meant to differ differ by this much (figure units; 5 mm at 1 cm/unit)
@@ -128,10 +128,13 @@ def _measure_substitutions(m: Model, q: QuestionSpec, fid: str) -> dict[sp.Symbo
             xs, ys = coord_symbols(ms.target)
             subs[xs], subs[ys] = ex, ey
             continue
-        e = exact_value(ms.value, where=f"measure.{ms.target}")
+        e = _rational(exact_value(ms.value, where=f"measure.{ms.target}"))
         if ms.kind == "area":
             from maths.geometry.theorems import AREA  # noqa: PLC0415
             subs[AREA] = e                                           # a given area of the shape (2026-10-14)
+        elif ms.kind == "circumference":
+            from maths.geometry.theorems import CIRCUMFERENCE  # noqa: PLC0415
+            subs[CIRCUMFERENCE] = e                                  # a given circumference (2026-10-15)
         elif ms.target in m.solids:
             from maths.geometry.theorems import SURFACE, VOLUME  # noqa: PLC0415
             subs[VOLUME if ms.kind == "volume" else SURFACE] = e     # v3: a given volume / surface area
@@ -145,6 +148,11 @@ def _measure_substitutions(m: Model, q: QuestionSpec, fid: str) -> dict[sp.Symbo
             xs, ys = coord_symbols(pid)
             subs.setdefault(xs, sp.sympify(pt.exact[0]))
             subs.setdefault(ys, sp.sympify(pt.exact[1]))
+    # the circle theorems write r_<circle>: it IS the construction's radius —
+    # a number, or the unknown r the question binds (nothing bound it before
+    # 2026-10-15: "circumference gives Eq(C - 2*pi*r_c1, 0), not C = 2 * 3.14 * 4")
+    for cid, c in m.circles.items():
+        subs.setdefault(sp.Symbol(f"r_{cid}"), c.exact if c.exact is not None else sp.nsimplify(c.radius))
     return subs
 
 
@@ -222,7 +230,7 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
         name = f"step {i} ({st.kind})"
         _check_figure_ops(m, st, name)
         after_rels = [parse_line(x) for x in st.after]
-        after = [_in_degrees(_eq(r).subs(subs)) for r in after_rels]
+        after = [_rational(_in_degrees(_eq(r).subs(subs))) for r in after_rels]
         if st.kind == "deduce":
             if not st.theorem:
                 raise GeometryRefusal("bad_schema", f"{name}: a deduce step names its theorem", name)
@@ -232,11 +240,21 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
                 # the step's own equation names ARE its citation — every
                 # premise of the theorem still runs on them
                 uses += _angles_named(m, st.after)
-            template = [_in_degrees((e.lhs - e.rhs).subs(subs)) for e in apply_theorem(m, st.theorem, uses)]
+            template = [_rational(_in_degrees((e.lhs - e.rhs).subs(subs))) for e in apply_theorem(m, st.theorem, uses)]
             if not after:
                 raise GeometryRefusal("bad_schema", f"{name}: write the equation the theorem gives", name)
             verdict = _equivalent(knowledge, template, after)
             partial = False
+            taken_pi = None
+            if not verdict and any(t.has(sp.pi) for t in template) and not any(a.has(sp.pi) for a in after):
+                # the step wrote the theorem with π already taken as a school
+                # value ("A = 3.14 * 5^2", "C = 2 * 22/7 * 7"): the theorem
+                # under that value is what it states (maths.verify's π rule,
+                # carried into a deduce step 2026-10-15)
+                for q in _PI_VALUES:
+                    if _equivalent([k.subs(sp.pi, q) for k in knowledge], [t.subs(sp.pi, q) for t in template], after):
+                        verdict, taken_pi = True, q
+                        break
             if not verdict and len(after) < len(template):
                 # the step states PART of what the theorem gives — a
                 # line_equation step that writes only "c = -3" before m is
@@ -254,8 +272,11 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
                 raise GeometryRefusal("step_not_equivalent",
                                       f"{name}: {st.theorem} gives {want}, not {'; '.join(st.after)}", name)
             rep.checks.append(Check(name, True, f"{st.theorem}: {REASONS.get(st.theorem, st.theorem)}"
-                                    + (" (part of what the theorem gives)" if partial else "")))
+                                    + (" (part of what the theorem gives)" if partial else "")
+                                    + (f" (π taken as {_fmt_pi(taken_pi)})" if taken_pi is not None else "")))
             rep.reasons_given.append(REASONS.get(st.theorem, st.theorem))
+            if taken_pi is not None:
+                knowledge = [k.subs(sp.pi, taken_pi) for k in knowledge]
             knowledge += after
         elif st.kind == "transform":
             before_rels = [parse_line(x) for x in st.before] if st.before else prev_after
@@ -275,6 +296,10 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
                 alt = _equivalent(knowledge, [_eq(r) for r in b_sub], [_eq(r) for r in a_sub])
                 if alt:
                     verdict, detail = True, f"{detail}; equivalent by the chain's own solver"
+                elif _positive_root_step(m, b_sub, a_sub, variables):
+                    # r² = 25 to r = 5: the negative root is not a length
+                    # (the radius a circle question finds, 2026-10-15)
+                    verdict, detail = True, f"{detail}; the negative root is not a length"
             if verdict is None:
                 raise GeometryRefusal("step_unverifiable", f"{name}: {detail}", name)
             if not verdict:
@@ -324,9 +349,49 @@ def _rounds_to(got, text) -> bool:
     return round(have, decimals) == round(want, decimals)
 
 
+def _positive_root_step(m: Model, before: list[Relation], after: list[Relation], variables: list) -> bool:
+    """``after`` keeps exactly the positive solutions of ``before`` in ONE
+    variable that is a length of the figure — a circle's radius symbol, a
+    symbol a segment's exact length is written in, or a bound symbol — so
+    "r² = 25" to "r = 5" is a step, not a lost root."""
+    if len(variables) != 1:
+        return False
+    v = variables[0]
+    lengths: set = set()
+    for c in m.circles.values():
+        if c.exact is not None:
+            lengths |= sp.sympify(c.exact).free_symbols
+    for sg in m.segments.values():
+        if getattr(sg, "exact", None) is not None:
+            lengths |= sp.sympify(sg.exact).free_symbols
+    lengths |= {sp.Symbol(k) for k in m.bind}
+    if v not in lengths:
+        return False
+    try:
+        sb = {d[v] for d in sp.solve([_eq(r) for r in before], v, dict=True) if v in d}
+        sa = {d[v] for d in sp.solve([_eq(r) for r in after], v, dict=True) if v in d}
+    except Exception:  # noqa: BLE001
+        return False
+    keep = {s for s in sb if getattr(sp.simplify(s), "is_positive", None)}
+    return bool(sa) and sa == keep and len(sb) > len(sa)
+
+
+def _rational(e):
+    """Every decimal written in a line as the exact number it states: 3.14
+    is 157/50, never the binary float that makes 2 × 3.14 × 4 − 25.12 a
+    residue of 10⁻¹⁵ (maths.verify's rule since 2026-10-09; the chain's
+    lines since 2026-10-15)."""
+    try:
+        e = sp.sympify(e)
+        floats = {f: sp.Rational(str(f)) for f in e.atoms(sp.Float)}
+        return e.xreplace(floats) if floats else e
+    except (TypeError, ValueError, AttributeError):
+        return e
+
+
 def _with_subs(r: Relation, subs: dict) -> Relation:
-    lhs = _in_degrees(r.lhs.subs(subs))
-    rhs = _in_degrees(r.rhs.subs(subs)) if r.rhs is not None else None
+    lhs = _rational(_in_degrees(r.lhs.subs(subs)))
+    rhs = _rational(_in_degrees(r.rhs.subs(subs))) if r.rhs is not None else None
     return Relation(lhs, r.op, rhs, r.text, r.data)
 
 
@@ -348,6 +413,11 @@ def _answer_symbols(q: QuestionSpec, fid: str, m: Model) -> list[sp.Symbol]:
     for pt in m.points.values():
         if pt.exact is not None:
             syms |= sp.sympify(pt.exact[0]).free_symbols | sp.sympify(pt.exact[1]).free_symbols
+    # a circle drawn with an unknown radius ("radius": "r", bound to draw it)
+    # makes r the unknown (2026-10-15)
+    for c in m.circles.values():
+        if c.exact is not None:
+            syms |= sp.sympify(c.exact).free_symbols
     # a quantity a theorem establishes (an area, a perimeter, a circumference,
     # a gradient, an intercept) is the question's unknown too — nothing else
     # names it
@@ -360,7 +430,7 @@ def _answer_symbols(q: QuestionSpec, fid: str, m: Model) -> list[sp.Symbol]:
         syms.add(AREA)
     if "perimeter" in cited:
         syms.add(PERIMETER)
-    if "circumference" in cited:
+    if "circumference" in cited and not any(ms.kind == "circumference" for ms in fig.measures):
         syms.add(CIRCUMFERENCE)
     if "gradient" in cited or "line_equation" in cited:
         syms.add(GRADIENT)

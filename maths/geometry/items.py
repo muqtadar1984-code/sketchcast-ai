@@ -23,6 +23,8 @@ import math
 import re
 
 import logging
+
+import sympy as sp
 import os
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -697,6 +699,11 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         _area_measures(fig)
         _place_feet(fig)
         _drop_unused_points(fig)
+        for o in fig["objects"]:
+            if o.get("make") == "circle" and "diameter" in o and not o.get("radius"):
+                # "a circle of diameter 10": the construction takes a radius
+                d = str(o.pop("diameter")).strip()
+                o["radius"] = f"({d})/2" if not re.match(r"^-?\d+(?:\.\d+)?$", d) else str(sp.nsimplify(d) / 2)
         _swap_trapezium_bases(fig)
         for o in fig["objects"]:
             if o.get("make") == "turtle_polygon":
@@ -895,7 +902,7 @@ _SIGNATURES = {
     "regular_polygon": "n, side", "turtle_polygon": "sides:[...], turns:[...] (left turns positive; must close)",
     "polyline_open": "sides, turns (an open path — not a polygon)",
     "quadrilateral_by_angles": "vertices, angles:[A,B,C,D] (sum 360), sides:[AB,BC]",
-    "circle": "id, centre:<point>, radius", "point_on_circle": "id, circle, angle", "chord": "points:[a,b], circle",
+    "circle": "id, centre:<point>, radius (a NUMBER, or the unknown 'r' bound in 'bind' to draw it; a diameter d is radius: d/2)", "point_on_circle": "id, circle, angle", "chord": "points:[a,b], circle",
     "grid_pattern": "rows, cols, cells:[[colour letters, '*' for the blank]], palette:[letters]",
 }
 
@@ -943,6 +950,17 @@ _COORD_RULES = (
     "parallel_gradients / perpendicular_gradients with the TWO segment ids; the gradient theorem's symbol is always "
     "m — never write m1 or m2 (a 'find the y-intercept' question is a reasoning question citing line_equation, not "
     "an evidence question reading coordinates)."
+)
+
+
+_CIRCLE_RULE = (
+    "\n  A CIRCLE question (circumference, area): ONE `circle` with an id and its radius (a diameter is written as"
+    " radius: d/2); area_circle / circumference cite the circle's id in 'uses' and write what the theorem gives"
+    " in the radius's NUMBER ('C = 2 * pi * 4', 'A = pi * 5^2'), or with pi already taken as the syllabus value"
+    " ('C = 2 * 3.14 * 4', 'A = 22/7 * 7^2'); then transform to the number. 'Find the radius' draws the circle"
+    " with radius 'r' (bound in 'bind'), gives the area or circumference as a measure of the circle's id with"
+    " kind 'area' or 'circumference', and the steps solve for r ('78.5 = 3.14 * r^2', 'r^2 = 25', 'r = 5')."
+    " No semicircles, sectors or arcs: the engine draws whole circles."
 )
 
 
@@ -1109,7 +1127,7 @@ def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, 
         "reasoning question sets asks.property to 'none'. Every construction carries its parameters as listed "
         "below — a triangle_sss without 'sides' or a ray_at_angle without 'angle' is thrown away.",
         "CONSTRUCTIONS (the only ones that exist; parameters as listed):\n" + sigs,
-        "THEOREMS a deduce step may cite (the only reasons that exist):\n" + theorems + _COMPOSITE_RULE,
+        "THEOREMS a deduce step may cite (the only reasons that exist):\n" + theorems + _COMPOSITE_RULE + _CIRCLE_RULE,
         "An AREA or PERIMETER question: the shape's sides are given as segment measures, the height (for a "
         "parallelogram or trapezium) is built with perpendicular_from and measured, the deduce step cites the shape "
         "id (and the height segment id) and writes the formula with the numbers in — 'A = 1/2 * (8 + 5) * 4'; "
