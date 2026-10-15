@@ -435,6 +435,42 @@ def _spoken(qid: str, difficulty: int) -> dict:
     return q
 
 
+def _b8_with(q: dict, a: int, b: int) -> dict:
+    """Corpus B8 (parallel lines, x = a + b) asked with other angles: another
+    question, not B8 in other words (the lesson drops repeats by what they
+    ask, 2026-10-15)."""
+    q = copy.deepcopy(q)
+    for ms in q["figure"]["measures"]:
+        if ms["target"] == "angle_gbe":
+            ms["value"] = str(a)
+        elif ms["target"] == "angle_hde":
+            ms["value"] = str(b)
+    swap = {"ang(bek) = 40": f"ang(bek) = {a}", "ang(dek) = 30": f"ang(dek) = {b}",
+            "x = 40 + 30": f"x = {a} + {b}", "x = 70": f"x = {a + b}"}
+    for st in q.get("steps") or []:
+        st["after"] = [swap.get(x, x) for x in st.get("after") or []]
+    q["answer"]["value"] = a + b
+    return q
+
+
+def _b11_with(q: dict, apex: int) -> dict:
+    """Corpus B11 (isosceles, exterior angle x) with another apex angle."""
+    q = copy.deepcopy(q)
+    base = (180 - apex) // 2
+    for ms in q["figure"]["measures"]:
+        if ms["target"] == "angle_bac":
+            ms["value"] = str(apex)
+    for o in q["figure"]["objects"]:
+        if o.get("make") == "triangle_isosceles":
+            o["apex_angle"] = apex
+    swap = {"40 + 2*ang(acb) = 180": f"{apex} + 2*ang(acb) = 180", "ang(acb) = 70": f"ang(acb) = {base}",
+            "70 + x = 180": f"{base} + x = 180", "x = 110": f"x = {180 - base}"}
+    for st in q.get("steps") or []:
+        st["after"] = [swap.get(x, x) for x in st.get("after") or []]
+    q["answer"]["value"] = 180 - base
+    return q
+
+
 def test_a_shapes_lesson_is_a_ladder_of_figures_and_a_fifth_becomes_the_try_it(monkeypatch):
     # 2026-10-14: every verified figure is taught before any algebra example;
     # the algebra ladder only fills what the engine leaves short
@@ -450,9 +486,9 @@ def test_a_shapes_lesson_is_a_ladder_of_figures_and_a_fifth_becomes_the_try_it(m
     assert report["figures"]["try_it_calls"] == 1                            # … and one more ask for the try-it
     monkeypatch.delenv("MATHS_FIGURES_REQUIRED", raising=False)
     # five figures: four examples and the learner's try-it
-    more = [_b1_reply(), _spoken("B8", 2), _spoken("B11", 3), _spoken("B8", 3), _spoken("B11", 4)]
-    more[3]["prompt"] = "Again: " + more[3]["prompt"]      # a new prompt — the call drops a repeated one
-    more[4]["prompt"] = "Again: " + more[4]["prompt"]
+    # other numbers, not other words: the lesson drops a question it already asks (2026-10-15)
+    more = [_b1_reply(), _spoken("B8", 2), _spoken("B11", 3), _b8_with(_spoken("B8", 3), 50, 20),
+            _b11_with(_spoken("B11", 4), 50)]
     c = FakeClient(figures=more)
     lesson, report = L.verified_lesson(c, topic="Angles", subject="Mathematics", level="Class 7", curriculum=None,
                                        language="en", episode_context="")
@@ -518,10 +554,9 @@ def test_the_try_it_on_a_shapes_chapter_is_a_figure_asked_of_the_engine_again_wh
     # pause became "(12 + 18)*6/2" — on a shapes chapter the pause is on a shape
     monkeypatch.delenv("MATHS_FIGURES", raising=False)
     monkeypatch.delenv("MATHS_FIGURES_REQUIRED", raising=False)
-    five = [_b1_reply(), _spoken("B8", 2), _spoken("B11", 3), _spoken("B8", 3), _spoken("B11", 4)]
-    five[3]["prompt"] = "Again: " + five[3]["prompt"]
-    five[4]["prompt"] = "Again: " + five[4]["prompt"]
-    later = _spoken("B8", 2)
+    five = [_b1_reply(), _spoken("B8", 2), _spoken("B11", 3), _b8_with(_spoken("B8", 3), 50, 20),
+            _b11_with(_spoken("B11", 4), 50)]
+    later = _b8_with(_spoken("B8", 2), 35, 45)
     later["prompt"] = "Later: " + later["prompt"]
     real = B.check_figure_try_it
     refused = {"n": 0}
@@ -771,3 +806,21 @@ def test_a_figure_step_without_speech_is_spoken_from_its_reason_and_its_line():
     from maths.geometry.errors import GeometryRefusal
     with _pt.raises(GeometryRefusal, match="spoken"):
         L.figure_example(_item(q), "en")
+
+
+def test_a_lesson_never_teaches_the_same_question_twice(monkeypatch):
+    # the circle video b7caa85b (2026-10-15): one question as three examples and the try-it, reworded
+    monkeypatch.delenv("MATHS_FIGURES", raising=False)
+    monkeypatch.setenv("MATHS_FIGURES_REQUIRED", "0")
+    reworded = [_b1_reply(), _spoken("B8", 2), _spoken("B8", 3), _spoken("B11", 3)]
+    reworded[2]["prompt"] = "Lines AG and CH are parallel; work out the angle BED."
+    c = FakeClient(figures=reworded)
+    lesson, report = L.verified_lesson(c, topic="Angles", subject="Mathematics", level="Class 7", curriculum=None,
+                                       language="en", episode_context="")
+    figs = [e for e in lesson.examples if e.has_figure]
+    assert len({L.example_signature(e) for e in figs}) == len(figs) == 3
+    assert report["figures"]["repeats"] >= 1
+    geo = [k for k in c.calls if "geometry.figure.v1" in k["prompt"]]
+    assert any("ALREADY IN THIS LESSON" in k["prompt"] for k in geo[1:]), "the further call is told what is taught"
+    if lesson.try_it.has_figure:
+        assert L.example_signature(lesson.try_it) not in {L.example_signature(e) for e in lesson.examples}

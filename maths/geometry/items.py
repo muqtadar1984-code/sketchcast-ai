@@ -1248,7 +1248,7 @@ _SPEECH_RULES = (
 
 
 def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, chapter_context: str,
-                    kind: str, focus: Optional[list[str]] = None) -> str:
+                    kind: str, focus: Optional[list[str]] = None, avoid: Optional[list[str]] = None) -> str:
     sigs = "\n".join(f"  - {name}: {sig}" for name, sig in {**_SIGNATURES, **(_SIGNATURES_V2 if v2_enabled() else {}),
                                                           **(_SIGNATURES_V3 if v3_enabled() else {}),
                                                           **(_SIGNATURES_V4 if v4_enabled() else {})}.items())
@@ -1313,7 +1313,13 @@ def geometry_prompt(*, topic: str, level: Optional[str], language: str, n: int, 
         "Prefer examples that teach THESE, where the construction library can draw them (a 'which of these "
         "are polygons?' evidence question for polygons; a shape's lines of symmetry for symmetry); a "
         "concept the library cannot draw (tessellation) is left out, not faked."
-    ] if focus else []) + [
+    ] if focus else []) + ([
+        "ALREADY IN THIS LESSON (never ask these again, not even in other words or with other units): "
+        + " | ".join(str(a)[:140] for a in avoid[:12]) + ". Write DIFFERENT questions: other numbers, and "
+        "another thing given or found."
+    ] if avoid else []) + [
+        "EVERY question differs from the others in its numbers AND in what it asks: never the same shape "
+        "with the same measures twice, never the same quantity found from the same givens twice.",
         "Only questions this TOPIC's own exercises would ask: a chapter on fractions or equations has no diagram "
         "questions — then return {\"questions\": []} rather than a triangle from another chapter.",
         "=== OUTPUT ===\nReturn ONLY one minified JSON object: {\"questions\": [ ... ]}. Unused fields are empty "
@@ -1451,7 +1457,7 @@ def figure_client(client, language: str):
 def geometry_items(client, *, topic: str, level: Optional[str], language: str, n: int,
                    chapter_context: str = "", kind: str = "worksheet",
                    note: Optional[str] = None, rounds: int = 2, render: bool = True,
-                   focus: Optional[list[str]] = None) -> tuple[list[GeometryItem], dict]:
+                   focus: Optional[list[str]] = None, avoid: Optional[list[str]] = None) -> tuple[list[GeometryItem], dict]:
     """Up to ``n`` verified, rendered figure questions; one model call,
     plus one repair round carrying the refusals back when short.
     ``note`` is the "Not drawn to scale" text in the document's language;
@@ -1464,7 +1470,7 @@ def geometry_items(client, *, topic: str, level: Optional[str], language: str, n
     seen_prompts: set[str] = set()
     asked = 0
     base_prompt = geometry_prompt(topic=topic, level=level, language=language, n=min(MAX_PER_CALL, n + 1),
-                                  chapter_context=chapter_context, kind=kind, focus=focus)
+                                  chapter_context=chapter_context, kind=kind, focus=focus, avoid=avoid)
     # A reply that never arrived — cut off, or malformed beyond repair — is
     # not a round the model USED: it earns ONE further round whatever the
     # round count says (the gradient kit, 2026-10-09: the repair round came
@@ -1513,6 +1519,19 @@ def geometry_items(client, *, topic: str, level: Optional[str], language: str, n
     return kept, {"asked": asked, "verified": len(kept), "rejected": rejected}
 
 
+def _resend_key(label: str, spec: dict) -> str:
+    """A question re-sent by the repair round: the same sentence over the
+    same figure numbers. "Find x." over other angles is another question,
+    and is kept (2026-10-15)."""
+    import json as _json  # noqa: PLC0415
+    figs = []
+    for ref in spec.get("figures") or []:
+        f = (ref or {}).get("figure") or {}
+        figs.append({"m": [str(m.get("value")) for m in f.get("measures") or [] if isinstance(m, dict)],
+                     "o": [{k: v for k, v in o.items() if k not in ("id",)} for o in f.get("objects") or [] if isinstance(o, dict)]})
+    return label.lower() + "|" + _json.dumps({"f": figs, "a": spec.get("answer")}, sort_keys=True, default=str)
+
+
 def _speech(entry: dict) -> dict:
     def text(v) -> str:
         return _demojibake(" ".join(str(v).split())) if isinstance(v, (str, int, float)) else ""
@@ -1534,7 +1553,8 @@ def _take(raw: list, n: int, kept: list, rejected: list, seen_prompts: set, note
         spec, difficulty = normalise_question(entry)
         spec["id"] = f"g{i}"
         label = (spec.get("prompt") or spec["id"])[:60]
-        if label.lower() in seen_prompts:
+        key = _resend_key(label, spec)
+        if key in seen_prompts:
             continue   # the repair round re-sent a question already kept
         rep = verify_question(spec)
         if not rep.ok:
@@ -1554,7 +1574,7 @@ def _take(raw: list, n: int, kept: list, rejected: list, seen_prompts: set, note
                 continue
         if len(kept) < n:
             kept.append(item)
-            seen_prompts.add(label.lower())
+            seen_prompts.add(key)
 
 
 # ── the answer key ────────────────────────────────────────────────────────

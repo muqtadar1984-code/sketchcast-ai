@@ -28,6 +28,7 @@ import logging
 import math
 import os
 import re
+from fractions import Fraction
 import uuid
 from datetime import datetime
 
@@ -436,6 +437,96 @@ def figure_try_it(ex: WorkedExample, language: str) -> TryIt:
                  steps=list(ex.steps), answer_speech=ex.answer_speech, figure=ex.figure)
 
 
+_NUM_RE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?:\s*/\s*\d+)?")
+_ID_KEYS = {"id", "make", "vertices", "points", "centre", "circle", "point", "to", "segment", "line", "rays",
+            "uses", "target", "kind", "role", "unit", "label"}
+
+
+def _numbers(value) -> set[str]:
+    """Every number written in ``value`` (a string, or a list / dict of them),
+    as an exact fraction: "3.14" and "157/50" are one number. Digits inside an
+    id ("p_1", "s_ab2") are not numbers."""
+    out: set[str] = set()
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if k not in _ID_KEYS:
+                out |= _numbers(v)
+        return out
+    if isinstance(value, (list, tuple)):
+        for v in value:
+            out |= _numbers(v)
+        return out
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        value = str(value)
+    for m in _NUM_RE.finditer(str(value or "")):
+        try:
+            out.add(str(Fraction(m.group(0).replace(" ", ""))))
+        except (ValueError, ZeroDivisionError):
+            continue
+    return out
+
+
+def example_signature(ex) -> tuple:
+    """What a worked example (or a try-it) ASKS, whatever its wording: the
+    theorems it cites (its task, for algebra), the numbers it is given — in
+    its sentence, its figure's given measures and its constructions — and
+    the numbers of its answer. "A circle has a radius of 5 cm. Find its
+    circumference" and "Find the circumference of the circle shown" over a
+    radius-5 circle are one question; "the circumference is 31.4, find the
+    radius" is another (its given and its answer change places). A question
+    with no numbers at all (an evidence sort) is told apart by its sentence."""
+    fig = getattr(ex, "figure", None)
+    answer = list(getattr(ex, "final_answer", None) or getattr(ex, "answer", None) or [])
+    given = _numbers(getattr(ex, "problem", "")) | _numbers(list(getattr(ex, "givens", None) or []))
+    if isinstance(fig, dict):
+        kinds = frozenset(str(st.get("theorem")) for st in fig.get("steps") or []
+                          if isinstance(st, dict) and st.get("theorem"))
+        if fig.get("asks") or fig.get("parts"):
+            kinds = kinds | {f"asks:{(fig.get('asks') or {}).get('property', '')}"}
+        for ref in fig.get("figures") or []:
+            f = (ref or {}).get("figure") if isinstance(ref, dict) else None
+            if not isinstance(f, dict):
+                continue
+            for ms in f.get("measures") or []:
+                if isinstance(ms, dict) and str(ms.get("role") or "given") == "given":
+                    given |= _numbers(ms.get("value"))
+            for o in f.get("objects") or []:
+                if isinstance(o, dict):
+                    given |= _numbers(o)
+    else:
+        kinds = frozenset({str(getattr(ex, "task", "") or "solve")})
+    got = _numbers(answer)
+    if not given and not got:
+        return ("text", " ".join(str(getattr(ex, "problem", "") or "").lower().split()))
+    return (kinds, frozenset(given), frozenset(got))
+
+
+def distinct_examples(examples: list, taught: list | None = None) -> tuple[list, list]:
+    """``examples`` less every one that asks what ``taught`` (or an earlier
+    one of ``examples``) already asks: (kept, repeats), order kept."""
+    seen = {example_signature(t) for t in taught or [] if getattr(t, "problem", "")}
+    kept, repeats = [], []
+    for ex in examples:
+        sig = example_signature(ex)
+        if sig in seen:
+            repeats.append(ex)
+            continue
+        seen.add(sig)
+        kept.append(ex)
+    return kept, repeats
+
+
+def _taught_problems(lesson_or_examples) -> list[str]:
+    """The sentences the lesson already teaches, for the engine to write
+    around ("already taught: …")."""
+    exs = list(getattr(lesson_or_examples, "examples", lesson_or_examples) or [])
+    out = [str(ex.problem) for ex in exs if getattr(ex, "problem", "")]
+    t = getattr(lesson_or_examples, "try_it", None)
+    if t is not None and getattr(t, "problem", ""):
+        out.append(str(t.problem))
+    return out
+
+
 def figure_pause(client, spare: list[WorkedExample], *, topic: str, level: str | None, language: str,
                  context: str, report: dict, focus: list[str] | None, taught: list[WorkedExample]) -> TryIt | None:
     """The learner's try-it on a shapes chapter is a FIGURE: the first spare
@@ -444,10 +535,10 @@ def figure_pause(client, spare: list[WorkedExample], *, topic: str, level: str |
     problem line, and the pause became an algebra expression — "area of a
     trapezium cannot be explained without a drawing"), the engine is asked
     ONCE more for a try-it; the call's counts join the figures report."""
-    taught_prompts = {str(ex.problem or "").strip().lower() for ex in taught}
+    taught_sigs = {example_signature(ex) for ex in taught}
     for round_ in range(2):
         for ex in spare:
-            if str(ex.problem or "").strip().lower() in taught_prompts:
+            if example_signature(ex) in taught_sigs:
                 continue
             candidate = figure_try_it(ex, language)
             try:
@@ -459,8 +550,8 @@ def figure_pause(client, spare: list[WorkedExample], *, topic: str, level: str |
         if round_ == 0:
             frep: dict = {}
             spare = figure_examples(client, topic=topic, level=level, language=language, context=context, n=2,
-                                    report=frep, focus=focus)
-            spare = [ex for ex in spare if str(ex.problem or "").strip().lower() not in taught_prompts]
+                                    report=frep, focus=focus, avoid=_taught_problems(taught))
+            spare, _rep = distinct_examples(spare, taught)
             report["asked"] = int(report.get("asked") or 0) + int(frep.get("asked") or 0)
             report["verified"] = int(report.get("verified") or 0) + len(spare)
             report["rejected"] = list(report.get("rejected") or []) + list(frep.get("rejected") or [])
@@ -469,14 +560,15 @@ def figure_pause(client, spare: list[WorkedExample], *, topic: str, level: str |
 
 
 def figure_examples(client, *, topic: str, level: str | None, language: str, context: str, n: int,
-                    report: dict, focus: list[str] | None = None) -> list[WorkedExample]:
+                    report: dict, focus: list[str] | None = None,
+                    avoid: list[str] | None = None) -> list[WorkedExample]:
     """Up to ``n`` figure examples from the geometry engine's own call —
     unconstrained JSON on the script model, the shape the worksheet already
     yields from (the lesson's constrained call strips construction
     parameters) — each compiled onto the board once to prove it fits. The
     call's report (asked / verified / rejected) lands in ``report``."""
     items, frep = geometry_items(figure_client(client, language), topic=topic, level=level, language=language,
-                                 n=n, chapter_context=context, kind="lesson", render=False, focus=focus)
+                                 n=n, chapter_context=context, kind="lesson", render=False, focus=focus, avoid=avoid)
     frep["focus"] = list(focus or [])
     out: list[WorkedExample] = []
     for it in items:
@@ -490,6 +582,13 @@ def figure_examples(client, *, topic: str, level: str | None, language: str, con
             frep["rejected"] = list(frep.get("rejected") or []) + [f"{it.prompt[:60]}: {code}: {msg[:200]}"]
             continue
         out.append(ex)
+    out, repeats = distinct_examples(out)
+    if repeats:
+        # the call asked one question twice in other words (the circle video,
+        # 2026-10-15: "radius 5, find the circumference" three times)
+        logger.info("figure examples: %d repeat(s) of a question already in the call dropped: %s", len(repeats),
+                    "; ".join(str(ex.problem)[:60] for ex in repeats))
+        frep["repeats"] = int(frep.get("repeats") or 0) + len(repeats)
     frep["verified"] = len(out)
     report.update(frep)
     return out
@@ -535,14 +634,16 @@ def _extend_with_figures(client, lesson: Lesson, report: dict, *, figures: dict,
     frep: dict = {}
     items = figure_examples(client, topic=str(figures.get("topic") or lesson.topic), level=figures.get("level"),
                             language=language, context=str(figures.get("context") or ""), n=n_add, report=frep,
-                            focus=list(figures.get("focus") or []))
-    taught = {str(ex.problem or "").strip().lower() for ex in lesson.examples}
-    fresh = [ex for ex in items if str(ex.problem or "").strip().lower() not in taught]
+                            focus=list(figures.get("focus") or []), avoid=_taught_problems(lesson))
+    fresh, repeats = distinct_examples(items, list(lesson.examples) + [lesson.try_it])
+    if repeats:
+        frep["repeats"] = int(frep.get("repeats") or 0) + len(repeats)
     fr = report.setdefault("figures", {})
     fr["asked"] = int(fr.get("asked") or 0) + int(frep.get("asked") or 0)
     fr["verified"] = int(fr.get("verified") or 0) + len(fresh)
     fr["rejected"] = list(fr.get("rejected") or []) + list(frep.get("rejected") or [])
     fr["extended_calls"] = int(fr.get("extended_calls") or 0) + 1
+    fr["repeats"] = int(fr.get("repeats") or 0) + int(frep.get("repeats") or 0)
     return fresh[:n_add]
 
 
@@ -593,6 +694,9 @@ def extend_to_floor(client, lesson: Lesson, report: dict, *, minutes: float, ava
         history = report.setdefault("history", [])
         dropped = report.setdefault("dropped", [])
         kept = _verify_examples(client, new, lesson, language, attempts, history, dropped)
+        kept, repeats = distinct_examples(kept, list(lesson.examples) + [lesson.try_it])
+        if repeats:
+            report["repeats"] = int(report.get("repeats") or 0) + len(repeats)
         for i, ex in enumerate(kept, len(lesson.examples) + 1):
             ex.label = f"Example {i}"
         lesson.examples = list(lesson.examples) + kept
@@ -676,8 +780,11 @@ def verified_lesson(client, *, topic: str, subject: str | None, level: str | Non
         # one ladder: EVERY verified figure (by difficulty), then the algebra
         # examples fill what the engine left short; relabelled in the order
         # they are taught
-        merged = (sorted(figures, key=lambda e: e.difficulty)[:MAX_EXAMPLES]
-                  + sorted(kept, key=lambda e: e.difficulty))[:MAX_EXAMPLES]
+        merged, repeats = distinct_examples(sorted(figures, key=lambda e: e.difficulty)[:MAX_EXAMPLES]
+                                            + sorted(kept, key=lambda e: e.difficulty))
+        if repeats and wanted:
+            figures_report["repeats"] = int(figures_report.get("repeats") or 0) + len(repeats)
+        merged = merged[:MAX_EXAMPLES]
         for i, ex in enumerate(merged, 1):
             ex.label = f"Example {i}"
         lesson.examples = merged
