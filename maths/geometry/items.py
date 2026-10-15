@@ -244,6 +244,11 @@ def _area_measures(fig: dict) -> None:
     shapes = {str(o.get("id")) for o in fig.get("objects") or [] if isinstance(o, dict) and o.get("make") in _SHAPE_MAKES}
     kept = []
     for ms in fig.get("measures") or []:
+        if isinstance(ms, dict) and str(ms.get("target")) in shapes and ms.get("kind") in ("area", "circumference")                 and (ms.get("role") == "unknown" or not _is_number(ms.get("value"))):
+            # "find its circumference" written WITH the kind and the unknown's
+            # name ({target: c, value: C, kind: circumference, role: unknown} —
+            # the circle kit's try-it round, 2026-10-15): the theorem supplies it
+            continue
         if isinstance(ms, dict) and str(ms.get("target")) in shapes and not ms.get("kind"):
             value = str(ms.get("value") or "").strip()
             numeric = bool(re.match(r"^-?\d+(?:\.\d+)?(?:\s*/\s*\d+)?$", value))
