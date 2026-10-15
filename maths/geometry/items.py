@@ -428,6 +428,60 @@ def _drop_unused_points(fig: dict) -> None:
         logger.info("geometry figure: %d listed point(s) nothing refers to dropped: %s", len(dropped), dropped)
 
 
+def _circle_radii(fig: dict) -> None:
+    """A radius the model draws as a `line_through` the centre and a point
+    (and measures under the LINE's id), or a diameter as a line through
+    three points with the centre in the middle (live trials 2026-10-15:
+    "measure of 's_oa': no such angle, segment or point"; "s_oa is given
+    as 4 but the figure has 3" — the point sat at the line's own spacing):
+    the rim points go ON the circle, the line becomes the segment the
+    measure names, and a given number sets the construction's radius."""
+    objects = [o for o in fig.get("objects") or [] if isinstance(o, dict)]
+    circles = {str(o.get("centre")): o for o in objects if o.get("make") == "circle" and o.get("centre")}
+    if not circles:
+        return
+    seg_ids = {str(s.get("id")) for s in fig.get("segments") or [] if isinstance(s, dict) and s.get("id")}
+    measures = {str(m.get("target")): m for m in fig.get("measures") or [] if isinstance(m, dict)}
+    on_circle = {str(o.get("id")) for o in objects if o.get("make") == "point_on_circle"}
+    keep: list[dict] = []
+    added: list[dict] = []
+    for o in objects:
+        pts = [str(p) for p in o.get("points") or []]
+        oid = str(o.get("id") or "")
+        kind = None
+        if o.get("make") in ("line_through", "segment", "line") and oid:
+            if len(pts) == 2 and (pts[0] in circles) != (pts[1] in circles):
+                centre = pts[0] if pts[0] in circles else pts[1]
+                rim = [p for p in pts if p != centre]
+                kind = "radius"
+            elif len(pts) == 3 and pts[1] in circles and pts[0] not in circles and pts[2] not in circles:
+                centre, rim, kind = pts[1], [pts[0], pts[2]], "diameter"
+        if not kind:
+            keep.append(o)
+            continue
+        c = circles[centre]
+        if not c.get("id"):
+            c["id"] = "c1"
+        for i, p in enumerate(rim):
+            if p not in on_circle:
+                added.append({"id": p, "make": "point_on_circle", "circle": c["id"], "angle": "0" if i == 0 else "180", "draw": True})
+                on_circle.add(p)
+        if oid not in seg_ids:
+            fig.setdefault("segments", []).append({"id": oid, "points": rim if kind == "diameter" else [centre, rim[0]]})
+            seg_ids.add(oid)
+        ms = measures.get(oid)
+        if ms and str(ms.get("role") or "given") == "given" and _is_number(ms.get("value")):
+            r = sp.nsimplify(str(ms["value"]))
+            if kind == "diameter":
+                r = r / 2
+            if not (_is_number(c.get("radius")) and sp.nsimplify(str(c["radius"])) == r):
+                c["radius"] = str(r)
+        logger.info("geometry figure: %s %r read as the circle's %s (point on the circle, segment, radius %s)",
+                    o.get("make"), oid, kind, c.get("radius"))
+    if added:
+        fig["objects"] = keep + added
+
+
 def _place_feet(fig: dict) -> None:
     """A listed point no construction places, joined by one segment to a
     vertex of a trapezium or parallelogram, is the FOOT of that shape's
@@ -584,6 +638,11 @@ def _measure(m: dict) -> dict:
     # (the trapeziums kit, 2026-10-14: "measures.0.id: Extra inputs are
     # not permitted" took three figures of six)
     out = _strip({k: v for k, v in dict(m).items() if k in _MEASURE_KEYS})
+    if str(out.get("role")) in ("area", "circumference", "volume", "surface_area"):
+        # the KIND written in the role's slot ({target: c1, value: 31.4,
+        # role: circumference} — live trial 2026-10-15): a given of that kind
+        out.setdefault("kind", out["role"])
+        out["role"] = "given"
     if "unit" in out:
         unit = _unit(out.get("unit"))
         if unit:
@@ -696,6 +755,7 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         fig["segments"] = [_strip(_keep(s, _SEGMENT_KEYS)) for s in (fig.get("segments") or []) if isinstance(s, dict)]
         fig["measures"] = [_measure(m) for m in (fig.get("measures") or []) if isinstance(m, dict)]
         _resolve_side_names(fig)
+        _circle_radii(fig)
         _area_measures(fig)
         _place_feet(fig)
         _drop_unused_points(fig)

@@ -255,6 +255,33 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
                     if _equivalent([k.subs(sp.pi, q) for k in knowledge], [t.subs(sp.pi, q) for t in template], after):
                         verdict, taken_pi = True, q
                         break
+            stated = None
+            if not verdict and after_rels:
+                # the step states the theorem with its quantity as a NUMBER no
+                # measure gave ("31.4 = 2 * 3.14 * r" to find r, the
+                # circumference nowhere else — live trial 2026-10-15): the
+                # theorem under C = 31.4 is what it states, and C is now known
+                from maths.geometry.theorems import AREA, CIRCUMFERENCE, PERIMETER, SURFACE, VOLUME  # noqa: PLC0415
+                t_syms = set().union(*(t.free_symbols for t in template))
+                a_syms = set().union(*(a.free_symbols for a in after))
+                missing = [s for s in (AREA, CIRCUMFERENCE, PERIMETER, VOLUME, SURFACE) if s in t_syms and s not in a_syms]
+                r0 = after_rels[0]
+                number = None
+                if r0.rhs is not None:
+                    if not r0.lhs.free_symbols and r0.lhs.is_number:
+                        number = r0.lhs
+                    elif not r0.rhs.free_symbols and r0.rhs.is_number:
+                        number = r0.rhs
+                if len(missing) == 1 and number is not None:
+                    s_val = _rational(number)
+                    tpl = [t.subs(missing[0], s_val) for t in template]
+                    if _equivalent(knowledge, tpl, after):
+                        verdict, stated = True, (missing[0], s_val)
+                    else:
+                        for q in _PI_VALUES:
+                            if _equivalent([k.subs(sp.pi, q) for k in knowledge], [t.subs(sp.pi, q) for t in tpl], after):
+                                verdict, taken_pi, stated = True, q, (missing[0], s_val)
+                                break
             if not verdict and len(after) < len(template):
                 # the step states PART of what the theorem gives — a
                 # line_equation step that writes only "c = -3" before m is
@@ -277,6 +304,8 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
             rep.reasons_given.append(REASONS.get(st.theorem, st.theorem))
             if taken_pi is not None:
                 knowledge = [k.subs(sp.pi, taken_pi) for k in knowledge]
+            if stated is not None:
+                knowledge.append(stated[0] - stated[1])
             knowledge += after
         elif st.kind == "transform":
             before_rels = [parse_line(x) for x in st.before] if st.before else prev_after
@@ -395,6 +424,32 @@ def _with_subs(r: Relation, subs: dict) -> Relation:
     return Relation(lhs, r.op, rhs, r.text, r.data)
 
 
+def _stated_quantities(q: QuestionSpec) -> set:
+    """The theorem quantities a deduce step STATES as a number instead of
+    naming ("31.4 = 2 * 3.14 * r" for the circumference): known, not
+    unknown (2026-10-15)."""
+    from maths.geometry.theorems import AREA, CIRCUMFERENCE, PERIMETER, SURFACE, VOLUME  # noqa: PLC0415
+    out: set = set()
+    for st in q.steps:
+        if st.kind != "deduce" or not st.theorem or not st.after:
+            continue
+        t = st.theorem
+        sym = (CIRCUMFERENCE if t == "circumference" else AREA if t.startswith("area") else PERIMETER if t == "perimeter"
+               else VOLUME if t.startswith("volume") else SURFACE if t.startswith("surface_area") else None)
+        if sym is None:
+            continue
+        try:
+            rels = [parse_line(x) for x in st.after]
+        except Exception:  # noqa: BLE001
+            continue
+        if any(sym in r.free_symbols for r in rels):
+            continue
+        r0 = rels[0]
+        if r0.rhs is not None and ((not r0.lhs.free_symbols and r0.lhs.is_number) or (not r0.rhs.free_symbols and r0.rhs.is_number)):
+            out.add(sym)
+    return out
+
+
 def _answer_symbols(q: QuestionSpec, fid: str, m: Model) -> list[sp.Symbol]:
     """The unknowns the chain must establish: every symbol a measure
     mentions. A given written as ``2x`` makes x an unknown as much as an
@@ -425,12 +480,13 @@ def _answer_symbols(q: QuestionSpec, fid: str, m: Model) -> list[sp.Symbol]:
                                          VERTICES, VOLUME)
 
     cited = {st.theorem for st in q.steps if st.kind == "deduce" and st.theorem}
+    stated = _stated_quantities(q)
     given_area = any(ms.kind == "area" for ms in fig.measures)
-    if any(t.startswith("area_") for t in cited) and not given_area:
+    if any(t.startswith("area_") for t in cited) and not given_area and AREA not in stated:
         syms.add(AREA)
-    if "perimeter" in cited:
+    if "perimeter" in cited and PERIMETER not in stated:
         syms.add(PERIMETER)
-    if "circumference" in cited and not any(ms.kind == "circumference" for ms in fig.measures):
+    if "circumference" in cited and not any(ms.kind == "circumference" for ms in fig.measures) and CIRCUMFERENCE not in stated:
         syms.add(CIRCUMFERENCE)
     if "gradient" in cited or "line_equation" in cited:
         syms.add(GRADIENT)

@@ -98,3 +98,66 @@ def test_a_lost_root_that_is_not_a_length_is_still_refused():
     spec, _d = normalise_question(raw)
     rep = verify_question(spec)
     assert not rep.ok and rep.refusal["code"] in ("step_not_equivalent", "bad_schema")
+
+
+def _model_circle(prompt, radius, line, measures, steps, answer, bind=None):
+    """The shape the live model writes (2026-10-15): the radius or diameter
+    as a line_through the centre, measured under the line's id."""
+    fig = {"units": "cm", "points": [{"id": p, "label": p[-1].upper()} for p in ["p_o"] + [q for q in line["points"] if q != "p_o"]],
+           "objects": [{"id": "c1", "make": "circle", "centre": "p_o", "radius": radius}, line],
+           "measures": measures}
+    if bind:
+        fig["bind"] = bind
+    return {"id": "q", "figure_role": "reasoning", "prompt": prompt, "figures": [{"id": "f", "figure": fig}],
+            "steps": steps, "answer": {"kind": "number", "value": answer, "unit": "cm"}}
+
+
+def test_a_radius_or_diameter_drawn_as_a_line_through_the_centre_is_read():
+    # the radius as a line_through, its measure under the line's id; the construction's radius followed the number
+    raw = _model_circle("A circle has a radius of 4 cm. Find its circumference.", 3,
+                        {"id": "s_oa", "make": "line_through", "points": ["p_o", "p_a"]},
+                        [{"target": "s_oa", "value": "4", "unit": "cm", "role": "given"}, {"target": "c1", "value": "C", "role": "unknown"}],
+                        [{"kind": "deduce", "theorem": "circumference", "uses": ["c1"], "after": ["C = 2 * 3.14 * 4"]},
+                         {"kind": "transform", "after": ["C = 25.12"]}], "25.12")
+    spec, _d = normalise_question(copy.deepcopy(raw))
+    fig = spec["figures"][0]["figure"]
+    assert fig["objects"][0]["radius"] == "4"
+    assert [o["make"] for o in fig["objects"]] == ["circle", "point_on_circle"]
+    assert {"id": "s_oa", "points": ["p_o", "p_a"]} in fig["segments"]
+    assert str(_ok(raw).proved["C"]) == "628/25"
+    # a diameter as a line through three points
+    raw = _model_circle("A circle has a diameter of 14 cm. Find its area using pi = 22/7.", 7,
+                        {"id": "l_ab", "make": "line_through", "points": ["p_a", "p_o", "p_b"]},
+                        [{"target": "l_ab", "value": "14", "unit": "cm", "role": "given"}],
+                        [{"kind": "deduce", "theorem": "area_circle", "uses": ["c1"], "after": ["A = 22/7 * 7^2"]},
+                         {"kind": "transform", "after": ["A = 154"]}], "154")
+    spec, _d = normalise_question(copy.deepcopy(raw))
+    fig = spec["figures"][0]["figure"]
+    assert [o["make"] for o in fig["objects"]] == ["circle", "point_on_circle", "point_on_circle"]
+    assert {"id": "l_ab", "points": ["p_a", "p_b"]} in fig["segments"]
+    assert str(_ok(raw).proved["A"]) == "154"
+    # the kind written in the role's slot, the radius unknown and measured on the line
+    raw = _model_circle("The circumference of a circle is 31.4 cm. Find its radius.", "r",
+                        {"id": "s_oa", "make": "line_through", "points": ["p_o", "p_a"]},
+                        [{"target": "c1", "value": "31.4", "role": "circumference"}, {"target": "s_oa", "value": "r", "role": "unknown"}],
+                        [{"kind": "deduce", "theorem": "circumference", "uses": ["c1"], "after": ["31.4 = 2 * 3.14 * r"]},
+                         {"kind": "transform", "after": ["31.4 = 6.28 * r", "r = 5"]}], "5", bind={"r": 5})
+    spec, _d = normalise_question(copy.deepcopy(raw))
+    ms = [m for m in spec["figures"][0]["figure"]["measures"] if m["target"] == "c1"][0]
+    assert ms["kind"] == "circumference" and ms["role"] == "given"
+    assert str(_ok(raw).proved["r"]) == "5"
+
+
+def test_a_deduce_step_that_states_the_theorems_quantity_establishes_it():
+    # no measure gives the circumference; the step says "31.4 = 2 * 3.14 * r"
+    q = _circle_q(radius="r", bind={"r": 5}, prompt="The circumference of a circle is 31.4 cm. Find its radius.",
+                  steps=[{"kind": "deduce", "theorem": "circumference", "uses": ["c1"], "after": ["31.4 = 2 * 3.14 * r"]},
+                         {"kind": "transform", "after": ["r = 5"]}], answer="5")
+    rep = _ok(q)
+    assert str(rep.proved["r"]) == "5"
+    # a wrong number for it is still wrong
+    q["steps"][0]["after"] = ["30 = 2 * 3.14 * r"]
+    q["steps"][1]["after"] = ["r = 4.78"]
+    spec, _d = normalise_question(copy.deepcopy(q))
+    rep = verify_question(spec)
+    assert not rep.ok
