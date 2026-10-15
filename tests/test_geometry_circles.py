@@ -246,3 +246,24 @@ def test_a_radius_or_diameter_as_a_bare_segment_is_read_and_a_given_number_takes
     spec, _d = normalise_question(copy.deepcopy(raw))
     assert [m for m in spec["figures"][0]["figure"]["measures"] if m["target"] == "c1"][0]["kind"] == "area"
     assert str(_ok(raw).proved["C"]) == "44"
+
+
+def test_a_radius_or_diameter_written_as_a_measure_of_the_circle_sets_its_radius():
+    # live trial on the article's context (2026-10-15): {target: c_1, value: 14, kind: diameter}
+    raw = _circle_q(radius="7", prompt="Find the circumference of a circle with a diameter of 14 cm.",
+                    measures=[{"target": "c1", "value": "14", "unit": "cm", "role": "given", "kind": "diameter"},
+                              {"target": "c1", "value": "C", "role": "unknown"}],
+                    steps=[{"kind": "deduce", "theorem": "circumference", "uses": ["c1"], "after": ["C = pi * 14"]},
+                           {"kind": "transform", "after": ["C = 14 * pi"]}], answer="44")
+    spec, _d = normalise_question(copy.deepcopy(raw))
+    fig = spec["figures"][0]["figure"]
+    assert fig["objects"][0]["radius"] == "7" and fig.get("measures", []) == []
+    assert str(_ok(raw).proved["C"]) == "14*pi"
+    # the radius as such a measure, the construction's radius following it
+    raw = _circle_q(radius="3", prompt="Find the area of a circle with a radius of 6 cm.",
+                    measures=[{"target": "c1", "value": "6", "unit": "cm", "role": "given", "kind": "radius"}],
+                    steps=[{"kind": "deduce", "theorem": "area_circle", "uses": ["c1"], "after": ["A = 3.14 * 6^2"]},
+                           {"kind": "transform", "after": ["A = 113.04"]}], answer="113.04")
+    spec, _d = normalise_question(copy.deepcopy(raw))
+    assert spec["figures"][0]["figure"]["objects"][0]["radius"] == "6"
+    assert str(_ok(raw).proved["A"]) == "2826/25"
