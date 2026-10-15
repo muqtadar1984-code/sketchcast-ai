@@ -105,7 +105,9 @@ class MeasureSpec(_Strict):
     # surface area, given — "the volume is 72, find the height"; 2026-10-14:
     # the AREA of a 2D shape (target = the polygon's id), given — "the
     # trapezium's area is 72, find its height"
-    kind: Optional[Literal["volume", "surface_area", "area"]] = None
+    # 2026-10-15: the AREA or CIRCUMFERENCE of a circle (target = the
+    # circle's id), given — "a circle has an area of 78.5, find its radius"
+    kind: Optional[Literal["volume", "surface_area", "area", "circumference"]] = None
 
 
 class RelationSpec(BaseModel):
