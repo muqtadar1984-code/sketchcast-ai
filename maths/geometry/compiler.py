@@ -101,7 +101,7 @@ def compile_figure(spec: FigureSpec, resolve: Optional[Resolver] = None, *,
             if ms.kind == "area" and ms.target not in m.polygons and ms.target not in m.circles:
                 raise GeometryRefusal("bad_reference", f"measure of {ms.target!r}: kind 'area' needs a polygon's or a circle's id", ms.target)
             if ms.role != "given":
-                raise GeometryRefusal("bad_schema", f"measure of {ms.target!r}: an {ms.kind} is given; the unknown is a side", ms.target)
+                raise GeometryRefusal("bad_schema", f"measure of {ms.target!r}: {'an area' if ms.kind == 'area' else 'a circumference'} is given; the unknown is a side", ms.target)
             exact_value(ms.value, where=f"measure.{ms.target}")
             continue
         if ms.target in m.solids:

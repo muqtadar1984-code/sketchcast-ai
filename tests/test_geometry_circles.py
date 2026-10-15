@@ -267,3 +267,43 @@ def test_a_radius_or_diameter_written_as_a_measure_of_the_circle_sets_its_radius
     spec, _d = normalise_question(copy.deepcopy(raw))
     assert spec["figures"][0]["figure"]["objects"][0]["radius"] == "6"
     assert str(_ok(raw).proved["A"]) == "2826/25"
+
+
+def test_an_unknown_written_with_its_kind_is_the_theorems_to_supply():
+    # the circle kit's try-it round (2026-10-15): {target: c1, value: C, kind: circumference, role: unknown}
+    raw = _circle_q(radius="3", prompt="A circular coin has a radius of 3 cm. Find its circumference.",
+                    measures=[{"target": "c1", "value": "C", "kind": "circumference", "role": "unknown"}],
+                    steps=[{"kind": "deduce", "theorem": "circumference", "uses": ["c1"], "after": ["C = 2 * 3.14 * 3"]},
+                           {"kind": "transform", "after": ["C = 18.84"]}], answer="18.84")
+    spec, _d = normalise_question(copy.deepcopy(raw))
+    assert spec["figures"][0]["figure"].get("measures", []) == []
+    assert str(_ok(raw).proved["C"]) == "471/25"
+    raw = _circle_q(radius="7", prompt="A circular plate has a radius of 7 cm. Find its area.",
+                    measures=[{"target": "c1", "value": "A", "kind": "area", "role": "unknown"}],
+                    steps=[{"kind": "deduce", "theorem": "area_circle", "uses": ["c1"], "after": ["A = 22/7 * 7^2"]},
+                           {"kind": "transform", "after": ["A = 154"]}], answer="154")
+    assert str(_ok(raw).proved["A"]) == "154"
+
+
+def test_a_large_circle_alone_fits_the_board_at_half_the_scale_floor():
+    # the circle kit's try-it round (2026-10-15): "the figure (20.0×20.0 units) does not fit the board panel"
+    from maths import board as B
+    from maths import lesson as L
+    from maths.geometry.items import GeometryItem
+    raw = _circle_q(radius="10", prompt="Find the area of a circle with a radius of 10 cm. Take pi as 3.14.",
+                    measures=[{"target": "s_or", "value": "10", "unit": "cm", "role": "given"}],
+                    steps=[{"kind": "deduce", "theorem": "area_circle", "uses": ["c1"], "after": ["A = 3.14 * 10^2"],
+                            "speech": "The area is pi times the radius squared: three point one four times ten squared."},
+                           {"kind": "transform", "after": ["A = 314"], "speech": "That is three hundred and fourteen."}], answer="314")
+    raw["figures"][0]["figure"]["points"].append({"id": "p_r", "label": "R"})
+    raw["figures"][0]["figure"]["segments"] = [{"id": "s_or", "points": ["p_o", "p_r"]}]
+    raw["intro_speech"] = "Here is a circle of radius ten centimetres."
+    raw["answer_speech"] = "So the area is three hundred and fourteen square centimetres."
+    spec, difficulty = normalise_question(copy.deepcopy(raw))
+    rep = verify_question(spec)
+    assert rep.ok, rep.refusal
+    item = GeometryItem(spec["id"], spec["prompt"], spec["figure_role"], difficulty, spec, rep,
+                        speech={"intro": raw["intro_speech"], "answer": raw["answer_speech"], "observations": {}})
+    ex = L.figure_example(item, "en")
+    B.check_figure_example(ex, "en")                       # drawn, not refused
+    B.check_figure_try_it(L.figure_try_it(ex, "en"), "en")

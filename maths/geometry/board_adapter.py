@@ -128,6 +128,13 @@ def _min_px(m: Model) -> float:
     step = m.axes.step if m.axes is not None else (m.number_line.step if m.number_line is not None else 1.0)
     if float(step) > 1.0:
         return MIN_PX_PER_UNIT / float(step)
+    if m.circles and not m.polygons and not m.angle_ids and not _gridded(m):
+        # a circle alone (its centre, a radius or a diameter): nothing in it
+        # is finer than its outline, so it may draw at half the floor — a
+        # radius-10 circle is 20 units across, which no panel holds at
+        # 18 px/unit ("the figure (20.0×20.0 units) does not fit the board
+        # panel", the circle kit's try-it round, 2026-10-15)
+        return MIN_PX_PER_UNIT / 2
     return MIN_PX_PER_UNIT
 
 
