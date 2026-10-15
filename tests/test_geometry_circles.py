@@ -161,3 +161,88 @@ def test_a_deduce_step_that_states_the_theorems_quantity_establishes_it():
     spec, _d = normalise_question(copy.deepcopy(q))
     rep = verify_question(spec)
     assert not rep.ok
+
+
+def test_a_chord_through_the_centre_is_a_radius_and_a_chord_as_long_as_the_diameter_is_one():
+    # live trial 2026-10-15: "point 'p_o' is placed twice"; "s_ab is given as 14 but the figure has 12.12"
+    raw = _model_circle("Find the circumference of a circle of radius 4 cm.", "4",
+                        {"id": "s_or", "make": "chord", "points": ["p_o", "p_r"], "circle": "c1"},
+                        [{"target": "s_or", "value": "4", "unit": "cm", "role": "given"}, {"target": "c1", "value": "C", "role": "unknown"}],
+                        [{"kind": "deduce", "theorem": "circumference", "uses": ["c1"], "after": ["C = 2 * 3.14 * 4"]},
+                         {"kind": "transform", "after": ["C = 25.12"]}], "25.12")
+    spec, _d = normalise_question(copy.deepcopy(raw))
+    assert [o["make"] for o in spec["figures"][0]["figure"]["objects"]] == ["circle", "point_on_circle"]
+    assert str(_ok(raw).proved["C"]) == "628/25"
+    raw = _model_circle("Find the area of a circle of diameter 14 cm.", "7",
+                        {"id": "s_ab", "make": "chord", "points": ["p_a", "p_b"], "circle": "c1"},
+                        [{"target": "s_ab", "value": "14", "unit": "cm", "role": "given"}],
+                        [{"kind": "deduce", "theorem": "area_circle", "uses": ["c1"], "after": ["A = 22/7 * 7^2"]},
+                         {"kind": "transform", "after": ["A = 154"]}], "154")
+    spec, _d = normalise_question(copy.deepcopy(raw))
+    chord = [o for o in spec["figures"][0]["figure"]["objects"] if o["make"] == "chord"][0]
+    assert chord["angles"] == ["0", "180"]
+    assert str(_ok(raw).proved["A"]) == "154"
+
+
+def test_a_measure_of_the_centre_is_the_radius_symbol_and_a_deduce_step_may_solve_on():
+    # live trial 2026-10-15: {target: p_o, value: r} ("a coordinate pair is written (x, y)");
+    # the deduce step "154 = 22/7 * r^2", "r^2 = 49", "r = 7" in one step
+    q = _circle_q(radius="r", bind={"r": 7}, prompt="Find the circumference of a circle whose area is 154 cm².",
+                  measures=[{"target": "c1", "value": "154", "role": "area"}, {"target": "p_o", "value": "r", "role": "unknown"},
+                            {"target": "c1", "value": "C", "role": "unknown"}],
+                  steps=[{"kind": "deduce", "theorem": "area_circle", "uses": ["c1"], "after": ["154 = 22/7 * r^2", "r^2 = 49", "r = 7"]},
+                         {"kind": "deduce", "theorem": "circumference", "uses": ["c1"], "after": ["C = 2 * 22/7 * 7"]},
+                         {"kind": "transform", "after": ["C = 44"]}], answer="44")
+    spec, _d = normalise_question(copy.deepcopy(q))
+    assert all(m["target"] != "p_o" for m in spec["figures"][0]["figure"]["measures"])
+    rep = _ok(q)
+    assert str(rep.proved["C"]) == "44"
+    assert any("2 line(s) of working" in c.detail for c in rep.checks if c.name.startswith("step 1"))
+    # a wrong line of working inside the step is still wrong
+    q["steps"][0]["after"] = ["154 = 22/7 * r^2", "r^2 = 48", "r = 7"]
+    spec, _d = normalise_question(copy.deepcopy(q))
+    rep = verify_question(spec)
+    assert not rep.ok and rep.refusal["code"] == "step_not_equivalent" and "line 2" in rep.refusal["message"]
+
+
+def test_a_radius_or_diameter_as_a_bare_segment_is_read_and_a_given_number_takes_its_kind_from_the_step():
+    # live trial 2026-10-15: segments [p_o, p_r] / [p_a, p_b] with no object placing the points; the
+    # circumference given as a kind-less number of the circle
+    def q(prompt, radius, segment, measures, steps, answer, bind=None):
+        fig = {"units": "cm", "points": [{"id": p, "label": p[-1].upper()} for p in ["p_o"] + [x for x in segment["points"] if x != "p_o"]],
+               "objects": [{"id": "c1", "make": "circle", "centre": "p_o", "radius": radius}], "segments": [segment], "measures": measures}
+        if bind:
+            fig["bind"] = bind
+        return {"id": "q", "figure_role": "reasoning", "prompt": prompt, "figures": [{"id": "f", "figure": fig}],
+                "steps": steps, "answer": {"kind": "number", "value": answer, "unit": "cm"}}
+    raw = q("Find the circumference of a circle of radius 4 cm.", 4, {"id": "s_or", "points": ["p_o", "p_r"]},
+            [{"target": "s_or", "value": "4", "unit": "cm", "role": "given"}, {"target": "c1", "value": "C", "role": "unknown"}],
+            [{"kind": "deduce", "theorem": "circumference", "uses": ["c1", "s_or"], "after": ["C = 2 * 3.14 * 4"]},
+             {"kind": "transform", "after": ["C = 25.12"]}], "25.12")
+    spec, _d = normalise_question(copy.deepcopy(raw))
+    assert [o["make"] for o in spec["figures"][0]["figure"]["objects"]] == ["circle", "point_on_circle"]
+    assert str(_ok(raw).proved["C"]) == "628/25"
+    raw = q("Find the area of a circle of diameter 14 cm.", 7, {"id": "s_ab", "points": ["p_a", "p_b"]},
+            [{"target": "s_ab", "value": "14", "unit": "cm", "role": "given"}],
+            [{"kind": "deduce", "theorem": "area_circle", "uses": ["c1", "s_ab"], "after": ["A = 22/7 * 7^2"]},
+             {"kind": "transform", "after": ["A = 154"]}], "154")
+    spec, _d = normalise_question(copy.deepcopy(raw))
+    assert [o["make"] for o in spec["figures"][0]["figure"]["objects"]] == ["circle", "point_on_circle", "point_on_circle"]
+    assert str(_ok(raw).proved["A"]) == "154"
+    raw = q("The circumference of a circle is 31.4 cm. Find its radius.", "r", {"id": "s_or", "points": ["p_o", "p_r"]},
+            [{"target": "c1", "value": "31.4", "role": "given"}, {"target": "s_or", "value": "r", "role": "unknown"}],
+            [{"kind": "deduce", "theorem": "circumference", "uses": ["c1", "s_or"], "after": ["31.4 = 2 * 3.14 * r"]},
+             {"kind": "transform", "after": ["r = 5"]}], "5", bind={"r": "5"})
+    spec, _d = normalise_question(copy.deepcopy(raw))
+    ms = [m for m in spec["figures"][0]["figure"]["measures"] if m["target"] == "c1"][0]
+    assert ms["kind"] == "circumference"
+    assert str(_ok(raw).proved["r"]) == "5"
+    raw = q("Find the circumference of a circle whose area is 154 cm².", "r", {"id": "s_or", "points": ["p_o", "p_r"]},
+            [{"target": "c1", "value": "154", "role": "given"}, {"target": "s_or", "value": "r", "role": "unknown"}],
+            [{"kind": "deduce", "theorem": "area_circle", "uses": ["c1", "s_or"], "after": ["154 = 22/7 * r^2"]},
+             {"kind": "transform", "after": ["r = 7"]},
+             {"kind": "deduce", "theorem": "circumference", "uses": ["c1", "s_or"], "after": ["C = 2 * 22/7 * 7"]},
+             {"kind": "transform", "after": ["C = 44"]}], "44", bind={"r": "7"})
+    spec, _d = normalise_question(copy.deepcopy(raw))
+    assert [m for m in spec["figures"][0]["figure"]["measures"] if m["target"] == "c1"][0]["kind"] == "area"
+    assert str(_ok(raw).proved["C"]) == "44"

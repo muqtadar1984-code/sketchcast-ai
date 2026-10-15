@@ -445,11 +445,29 @@ def _circle_radii(fig: dict) -> None:
     on_circle = {str(o.get("id")) for o in objects if o.get("make") == "point_on_circle"}
     keep: list[dict] = []
     added: list[dict] = []
+    centres = set(circles)
+    # a measure OF THE CENTRE that is no coordinate pair is the radius symbol
+    # the model had nowhere else to put ({target: p_o, value: r}); the
+    # construction's radius already says it
+    fig["measures"] = [m for m in fig.get("measures") or []
+                       if not (isinstance(m, dict) and str(m.get("target")) in centres
+                               and not str(m.get("value") or "").strip().startswith("("))]
     for o in objects:
         pts = [str(p) for p in o.get("points") or []]
         oid = str(o.get("id") or "")
         kind = None
-        if o.get("make") in ("line_through", "segment", "line") and oid:
+        if o.get("make") == "chord" and oid and len(pts) == 2 and pts[0] not in centres and pts[1] not in centres:
+            # a chord as long as the diameter IS the diameter: its ends antipodal
+            by_id = {str(x.get("id")): x for x in circles.values() if x.get("id")}
+            c = by_id.get(str(o.get("circle"))) or next(iter(circles.values()))
+            ms = measures.get(oid)
+            if (c is not None and ms and _is_number(ms.get("value")) and _is_number(c.get("radius"))
+                    and sp.nsimplify(str(ms["value"])) == 2 * sp.nsimplify(str(c["radius"]))):
+                o["angles"] = ["0", "180"]
+                logger.info("geometry figure: chord %r as long as the diameter drawn through the centre", oid)
+            keep.append(o)
+            continue
+        if o.get("make") in ("line_through", "segment", "line", "chord") and oid:
             if len(pts) == 2 and (pts[0] in circles) != (pts[1] in circles):
                 centre = pts[0] if pts[0] in circles else pts[1]
                 rim = [p for p in pts if p != centre]
@@ -478,8 +496,71 @@ def _circle_radii(fig: dict) -> None:
                 c["radius"] = str(r)
         logger.info("geometry figure: %s %r read as the circle's %s (point on the circle, segment, radius %s)",
                     o.get("make"), oid, kind, c.get("radius"))
+    # the radius as a bare SEGMENT [centre, p] with nothing placing p, or the
+    # diameter as a segment between two such points (live trial 2026-10-15:
+    # "point 'p_r' is listed but no construction places it")
+    placed: set[str] = set(centres) | on_circle
+    for o in keep + added:
+        for v in o.values():
+            if isinstance(v, str):
+                placed.add(v)
+            elif isinstance(v, list):
+                placed.update(str(x) for x in v if isinstance(x, str))
+    for s in fig.get("segments") or []:
+        if not isinstance(s, dict) or not s.get("id"):
+            continue
+        pts = [str(p) for p in s.get("points") or []]
+        if len(pts) != 2:
+            continue
+        sid = str(s["id"])
+        ms = measures.get(sid)
+        if (pts[0] in centres) != (pts[1] in centres):
+            centre = pts[0] if pts[0] in centres else pts[1]
+            rim = pts[1] if pts[0] in centres else pts[0]
+            if rim in placed:
+                continue
+            c = circles[centre]
+            if not c.get("id"):
+                c["id"] = "c1"
+            added.append({"id": rim, "make": "point_on_circle", "circle": c["id"], "angle": "0", "draw": True})
+            placed.add(rim)
+            if ms and str(ms.get("role") or "given") == "given" and _is_number(ms.get("value")):
+                r = sp.nsimplify(str(ms["value"]))
+                if not (_is_number(c.get("radius")) and sp.nsimplify(str(c["radius"])) == r):
+                    c["radius"] = str(r)
+            logger.info("geometry figure: segment %r read as the circle's radius (point on the circle, radius %s)", sid, c.get("radius"))
+        elif pts[0] not in placed and pts[1] not in placed and len(circles) == 1 and ms and _is_number(ms.get("value")):
+            c = next(iter(circles.values()))
+            if _is_number(c.get("radius")) and sp.nsimplify(str(ms["value"])) == 2 * sp.nsimplify(str(c["radius"])):
+                if not c.get("id"):
+                    c["id"] = "c1"
+                added.append({"id": pts[0], "make": "point_on_circle", "circle": c["id"], "angle": "0", "draw": True})
+                added.append({"id": pts[1], "make": "point_on_circle", "circle": c["id"], "angle": "180", "draw": True})
+                placed.update(pts)
+                logger.info("geometry figure: segment %r as long as the diameter read as the diameter", sid)
     if added:
         fig["objects"] = keep + added
+
+
+def _given_circle_kinds(fig: dict, steps: list) -> None:
+    """A kind-less NUMBER given of a circle is its area — unless the step
+    that uses it cites the circumference: "31.4 given, '31.4 = 2 * 3.14 * r'
+    under circumference" is C (live trial 2026-10-15)."""
+    circle_ids = {str(o.get("id")) for o in fig.get("objects") or [] if isinstance(o, dict) and o.get("make") == "circle" and o.get("id")}
+    if not circle_ids:
+        return
+    for ms in fig.get("measures") or []:
+        if not (isinstance(ms, dict) and str(ms.get("target")) in circle_ids and not ms.get("kind")
+                and str(ms.get("role") or "given") == "given" and _is_number(ms.get("value"))):
+            continue
+        value = str(ms["value"]).strip()
+        for st in steps or []:
+            if not (isinstance(st, dict) and st.get("kind") == "deduce" and st.get("theorem")):
+                continue
+            text = " ".join(str(x) for x in st.get("after") or [])
+            if re.search(r"(?<![\d.])" + re.escape(value) + r"(?![\d.])", text):
+                ms["kind"] = "circumference" if st["theorem"] == "circumference" else "area"
+                break
 
 
 def _place_feet(fig: dict) -> None:
@@ -756,6 +837,7 @@ def normalise_question(raw: dict) -> tuple[dict, int]:
         fig["measures"] = [_measure(m) for m in (fig.get("measures") or []) if isinstance(m, dict)]
         _resolve_side_names(fig)
         _circle_radii(fig)
+        _given_circle_kinds(fig, raw_steps)
         _area_measures(fig)
         _place_feet(fig)
         _drop_unused_points(fig)

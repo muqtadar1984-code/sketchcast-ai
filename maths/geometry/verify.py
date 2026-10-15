@@ -243,55 +243,17 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
             template = [_rational(_in_degrees((e.lhs - e.rhs).subs(subs))) for e in apply_theorem(m, st.theorem, uses)]
             if not after:
                 raise GeometryRefusal("bad_schema", f"{name}: write the equation the theorem gives", name)
-            verdict = _equivalent(knowledge, template, after)
-            partial = False
-            taken_pi = None
-            if not verdict and any(t.has(sp.pi) for t in template) and not any(a.has(sp.pi) for a in after):
-                # the step wrote the theorem with π already taken as a school
-                # value ("A = 3.14 * 5^2", "C = 2 * 22/7 * 7"): the theorem
-                # under that value is what it states (maths.verify's π rule,
-                # carried into a deduce step 2026-10-15)
-                for q in _PI_VALUES:
-                    if _equivalent([k.subs(sp.pi, q) for k in knowledge], [t.subs(sp.pi, q) for t in template], after):
-                        verdict, taken_pi = True, q
-                        break
-            stated = None
-            if not verdict and after_rels:
-                # the step states the theorem with its quantity as a NUMBER no
-                # measure gave ("31.4 = 2 * 3.14 * r" to find r, the
-                # circumference nowhere else — live trial 2026-10-15): the
-                # theorem under C = 31.4 is what it states, and C is now known
-                from maths.geometry.theorems import AREA, CIRCUMFERENCE, PERIMETER, SURFACE, VOLUME  # noqa: PLC0415
-                t_syms = set().union(*(t.free_symbols for t in template))
-                a_syms = set().union(*(a.free_symbols for a in after))
-                missing = [s for s in (AREA, CIRCUMFERENCE, PERIMETER, VOLUME, SURFACE) if s in t_syms and s not in a_syms]
-                r0 = after_rels[0]
-                number = None
-                if r0.rhs is not None:
-                    if not r0.lhs.free_symbols and r0.lhs.is_number:
-                        number = r0.lhs
-                    elif not r0.rhs.free_symbols and r0.rhs.is_number:
-                        number = r0.rhs
-                if len(missing) == 1 and number is not None:
-                    s_val = _rational(number)
-                    tpl = [t.subs(missing[0], s_val) for t in template]
-                    if _equivalent(knowledge, tpl, after):
-                        verdict, stated = True, (missing[0], s_val)
-                    else:
-                        for q in _PI_VALUES:
-                            if _equivalent([k.subs(sp.pi, q) for k in knowledge], [t.subs(sp.pi, q) for t in tpl], after):
-                                verdict, taken_pi, stated = True, q, (missing[0], s_val)
-                                break
-            if not verdict and len(after) < len(template):
-                # the step states PART of what the theorem gives — a
-                # line_equation step that writes only "c = -3" before m is
-                # known (the gradient kit, 2026-10-09: "line_equation gives
-                # m - 1/2 = 0; c - 3 = 0, not c = 3"). A true consequence,
-                # weaker than the whole: accepted, and the knowledge gains
-                # only what was written
-                partial = bool(_implies(knowledge + template, after))
-                if partial:
-                    verdict = True
+            verdict, taken_pi, stated, partial = _deduce_verdict(knowledge, template, after, after_rels)
+            tail_rels: list[Relation] = []
+            if not verdict and len(after_rels) > 1:
+                # the step wrote the theorem's line and SOLVED ON in further
+                # lines ("154 = 22/7 * r^2", "r^2 = 49", "r = 7" — live trial
+                # 2026-10-15): the first line is the theorem's, the rest are
+                # transforms from it, checked as the transform branch checks
+                head = after[:1]
+                verdict, taken_pi, stated, partial = _deduce_verdict(knowledge, template, head, after_rels[:1])
+                if verdict:
+                    tail_rels = after_rels[1:]
             if verdict is None:
                 raise GeometryRefusal("step_unverifiable", f"{name}: could not compare the line with {st.theorem}", name)
             if not verdict:
@@ -300,35 +262,34 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
                                       f"{name}: {st.theorem} gives {want}, not {'; '.join(st.after)}", name)
             rep.checks.append(Check(name, True, f"{st.theorem}: {REASONS.get(st.theorem, st.theorem)}"
                                     + (" (part of what the theorem gives)" if partial else "")
-                                    + (f" (π taken as {_fmt_pi(taken_pi)})" if taken_pi is not None else "")))
+                                    + (f" (π taken as {_fmt_pi(taken_pi)})" if taken_pi is not None else "")
+                                    + (f" (then {len(tail_rels)} line(s) of working)" if tail_rels else "")))
             rep.reasons_given.append(REASONS.get(st.theorem, st.theorem))
             if taken_pi is not None:
                 knowledge = [k.subs(sp.pi, taken_pi) for k in knowledge]
             if stated is not None:
                 knowledge.append(stated[0] - stated[1])
-            knowledge += after
+            if tail_rels:
+                knowledge += after[:1]
+                prev = after_rels[:1]
+                for j, cur in enumerate(tail_rels, 2):
+                    tv, tdetail = _transform_verdict(m, knowledge, prev, [cur], subs)
+                    if tv is None:
+                        raise GeometryRefusal("step_unverifiable", f"{name}, line {j}: {tdetail}", name)
+                    if not tv:
+                        raise GeometryRefusal("step_not_equivalent", f"{name}, line {j}: {tdetail}", name)
+                    taken = pi_taken_as(tdetail)
+                    if taken is not None:
+                        knowledge = [k.subs(sp.pi, taken) for k in knowledge]
+                    knowledge.append(_rational(_in_degrees(_eq(cur).subs(subs))))
+                    prev = [cur]
+            else:
+                knowledge += after
         elif st.kind == "transform":
             before_rels = [parse_line(x) for x in st.before] if st.before else prev_after
             if not before_rels or not after_rels:
                 raise GeometryRefusal("bad_schema", f"{name}: a transform needs a line before and after", name)
-            b_sub = [_with_subs(r, subs) for r in before_rels]
-            a_sub = [_with_subs(r, subs) for r in after_rels]
-            variables = sorted(set().union(*(r.free_symbols for r in b_sub + a_sub)), key=str)
-            try:
-                verdict, detail = _states_equivalent(b_sub, a_sub, variables, "any")
-            except MathTimeoutError:
-                verdict, detail = None, "SymPy timed out"
-            if not verdict:
-                # v4: an inverse trig step — tan(x) = 3/4 to x = atan(3/4) — is
-                # one solution of a periodic set; the chain's own implication
-                # (sp.solve, principal values) decides it, both ways
-                alt = _equivalent(knowledge, [_eq(r) for r in b_sub], [_eq(r) for r in a_sub])
-                if alt:
-                    verdict, detail = True, f"{detail}; equivalent by the chain's own solver"
-                elif _positive_root_step(m, b_sub, a_sub, variables):
-                    # r² = 25 to r = 5: the negative root is not a length
-                    # (the radius a circle question finds, 2026-10-15)
-                    verdict, detail = True, f"{detail}; the negative root is not a length"
+            verdict, detail = _transform_verdict(m, knowledge, before_rels, after_rels, subs)
             if verdict is None:
                 raise GeometryRefusal("step_unverifiable", f"{name}: {detail}", name)
             if not verdict:
@@ -376,6 +337,81 @@ def _rounds_to(got, text) -> bool:
     except (TypeError, ValueError):
         return False
     return round(have, decimals) == round(want, decimals)
+
+
+def _transform_verdict(m: Model, knowledge: list[sp.Expr], before_rels: list[Relation], after_rels: list[Relation],
+                       subs: dict) -> tuple[Optional[bool], str]:
+    """One line of working to the next: the states equivalent (maths.verify),
+    else equivalent by the chain's own solver (v4: inverse trig), else a
+    length's negative root dropped. (verdict, detail) — None when SymPy
+    could not decide."""
+    b_sub = [_with_subs(r, subs) for r in before_rels]
+    a_sub = [_with_subs(r, subs) for r in after_rels]
+    variables = sorted(set().union(*(r.free_symbols for r in b_sub + a_sub)), key=str)
+    try:
+        verdict, detail = _states_equivalent(b_sub, a_sub, variables, "any")
+    except MathTimeoutError:
+        verdict, detail = None, "SymPy timed out"
+    if not verdict:
+        # v4: an inverse trig step — tan(x) = 3/4 to x = atan(3/4) — is
+        # one solution of a periodic set; the chain's own implication
+        # (sp.solve, principal values) decides it, both ways
+        alt = _equivalent(knowledge, [_eq(r) for r in b_sub], [_eq(r) for r in a_sub])
+        if alt:
+            verdict, detail = True, f"{detail}; equivalent by the chain's own solver"
+        elif _positive_root_step(m, b_sub, a_sub, variables):
+            # r² = 25 to r = 5: the negative root is not a length
+            # (the radius a circle question finds, 2026-10-15)
+            verdict, detail = True, f"{detail}; the negative root is not a length"
+    return verdict, detail
+
+
+def _deduce_verdict(knowledge: list[sp.Expr], template: list[sp.Expr], after: list[sp.Expr],
+                    after_rels: list[Relation]) -> tuple[Optional[bool], Optional[sp.Rational], Optional[tuple], bool]:
+    """``after`` against the theorem's ``template``: equivalent as written;
+    else with π taken as a school value in the template (and the knowledge);
+    else with the theorem's quantity (A, C, P, V, S) set to the NUMBER the
+    line states when no measure gave it; else a true PART of what the
+    theorem gives. (verdict, π taken, (symbol, value) stated, partial)."""
+    from maths.geometry.theorems import AREA, CIRCUMFERENCE, PERIMETER, SURFACE, VOLUME  # noqa: PLC0415
+    verdict = _equivalent(knowledge, template, after)
+    taken_pi: Optional[sp.Rational] = None
+    stated: Optional[tuple] = None
+    partial = False
+    if not verdict and any(t.has(sp.pi) for t in template) and not any(a.has(sp.pi) for a in after):
+        for q in _PI_VALUES:
+            if _equivalent([k.subs(sp.pi, q) for k in knowledge], [t.subs(sp.pi, q) for t in template], after):
+                verdict, taken_pi = True, q
+                break
+    if not verdict and after_rels:
+        t_syms = set().union(*(t.free_symbols for t in template))
+        a_syms = set().union(*(a.free_symbols for a in after))
+        missing = [s for s in (AREA, CIRCUMFERENCE, PERIMETER, VOLUME, SURFACE) if s in t_syms and s not in a_syms]
+        r0 = after_rels[0]
+        number = None
+        if r0.rhs is not None:
+            if not r0.lhs.free_symbols and r0.lhs.is_number:
+                number = r0.lhs
+            elif not r0.rhs.free_symbols and r0.rhs.is_number:
+                number = r0.rhs
+        if len(missing) == 1 and number is not None:
+            s_val = _rational(number)
+            tpl = [t.subs(missing[0], s_val) for t in template]
+            if _equivalent(knowledge, tpl, after):
+                verdict, stated = True, (missing[0], s_val)
+            else:
+                for q in _PI_VALUES:
+                    if _equivalent([k.subs(sp.pi, q) for k in knowledge], [t.subs(sp.pi, q) for t in tpl], after):
+                        verdict, taken_pi, stated = True, q, (missing[0], s_val)
+                        break
+    if not verdict and len(after) < len(template):
+        # the step states PART of what the theorem gives — a line_equation
+        # step that writes only "c = -3" before m is known (the gradient
+        # kit, 2026-10-09). A true consequence, weaker than the whole
+        partial = bool(_implies(knowledge + template, after))
+        if partial:
+            verdict = True
+    return verdict, taken_pi, stated, partial
 
 
 def _positive_root_step(m: Model, before: list[Relation], after: list[Relation], variables: list) -> bool:
@@ -468,11 +504,6 @@ def _answer_symbols(q: QuestionSpec, fid: str, m: Model) -> list[sp.Symbol]:
     for pt in m.points.values():
         if pt.exact is not None:
             syms |= sp.sympify(pt.exact[0]).free_symbols | sp.sympify(pt.exact[1]).free_symbols
-    # a circle drawn with an unknown radius ("radius": "r", bound to draw it)
-    # makes r the unknown (2026-10-15)
-    for c in m.circles.values():
-        if c.exact is not None:
-            syms |= sp.sympify(c.exact).free_symbols
     # a quantity a theorem establishes (an area, a perimeter, a circumference,
     # a gradient, an intercept) is the question's unknown too — nothing else
     # names it
@@ -499,6 +530,20 @@ def _answer_symbols(q: QuestionSpec, fid: str, m: Model) -> list[sp.Symbol]:
         syms.add(SURFACE)
     if "euler_solids" in cited:
         syms.add(EDGES)          # F and N are counted by the theorem itself
+    radius_syms: set = set()
+    for c in m.circles.values():
+        if c.exact is not None:
+            radius_syms |= sp.sympify(c.exact).free_symbols
+    quantity = syms & {AREA, PERIMETER, CIRCUMFERENCE, GRADIENT, INTERCEPT, VOLUME, SURFACE, EDGES}
+    if quantity:
+        # a theorem's quantity is what the question finds: the circle's radius
+        # r, however it was written (the construction, a measure of the radius
+        # segment), is only the way there (2026-10-15)
+        syms -= radius_syms
+    elif not syms:
+        # a circle drawn with an unknown radius ("radius": "r", bound to draw
+        # it) makes r the unknown
+        syms |= radius_syms
     return sorted(syms, key=str)
 
 
