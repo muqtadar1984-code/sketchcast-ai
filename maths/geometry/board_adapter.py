@@ -67,6 +67,8 @@ class FigureBoard:
     scale: float = 1.0
     prefix: str = "fig"
     origin: tuple[float, float] = (0.0, 0.0)   # board = origin + (x, -y) * scale
+    # (text, size px) -> (w, h) px with the face the board draws, when known
+    text_metric: Optional[Callable[[str, float], tuple[float, float]]] = None
 
     def to_board(self, pt) -> list[float]:
         return [round(self.origin[0] + pt[0] * self.scale, 1), round(self.origin[1] - pt[1] * self.scale, 1)]
@@ -151,21 +153,29 @@ def _declared_hidden(spec: FigureSpec) -> set[str]:
 
 def _with_hidden(m: Model, spec: FigureSpec, label_size: float, px_per_unit: Optional[float] = None,
                  text_metric: Optional[Callable[[str, float], tuple[float, float]]] = None) -> Drawing:
-    # on a coordinate figure, a quarter of a label around every label: the
-    # board's handwriting face runs wider than the measuring font and its
-    # audit counts a touch as an overlap (a coordinate tag against its
-    # point's name, 2026-10-08). A v1 figure keeps print's clearance — a
-    # narrow wedge (B8's 30°) has no room for more, and never overlapped.
+    # a quarter of a label around every label, measured with the board's
+    # own face: the handwriting face runs wider than the measuring font and
+    # the audit counts a touch as an overlap (a coordinate tag against its
+    # point's name, 2026-10-08; four measure labels against the vertex O
+    # of a fan of angles, 2026-10-15 — print's clearance had passed them
+    # all). A figure the larger clearance cannot lay out (a narrow wedge,
+    # B8's 30°) falls back to print's, as it was laid out before; a
+    # coordinate figure keeps the board's, as since 2026-10-08.
     measure = None
-    if text_metric is not None and px_per_unit and _gridded(m):
+    if text_metric is not None and px_per_unit:
         # the board's own face, in figure units: the print font's cap height
         # under-measured the handwriting face by half, and a point's name
         # was placed touching its coordinate tag
         def measure(text: str, size: float, _k: float = px_per_unit) -> tuple[float, float]:
             w, h = text_metric(text, size * _k)
             return (w / _k, h / _k)
-    d = build_drawing(m, spec, policy="instructional_metric", label_size=label_size,
-                      label_pad=label_size * 0.25 if _gridded(m) else None, measure=measure)
+    try:
+        d = build_drawing(m, spec, policy="instructional_metric", label_size=label_size,
+                          label_pad=label_size * 0.25 if measure is not None else None, measure=measure)
+    except GeometryRefusal as exc:
+        if exc.code != "layout_collision" or measure is None or _gridded(m):
+            raise
+        d = build_drawing(m, spec, policy="instructional_metric", label_size=label_size)
     x0, y0, x1, y1 = d.bbox
     for lid in sorted(_declared_hidden(spec)):
         ln = m.lines.get(lid)
@@ -188,7 +198,7 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
     """The figure's elements and its initial draw/write actions. ``cue``
     times the first stroke to the narration; the rest follow in sequence.
     ``max_scale`` (px per unit) lets a row of figures share one scale."""
-    fb = FigureBoard(prefix=prefix)
+    fb = FigureBoard(prefix=prefix, text_metric=text_metric)
     # the label size is chosen in board pixels, so it is converted to figure
     # units with a provisional scale from the bare model, then the drawing
     # (labels included) is fitted
@@ -409,6 +419,11 @@ def op_actions(fb: FigureBoard, m: Model, op: dict, *, cue: Optional[dict] = Non
             text = f"{value}°" if is_angle and value.replace(".", "").isdigit() else value
             eid = f"{prefix}_m{len(fb.elements) + len(elements) + 1}"
             anchor = next((e.get("anchor", "mm") for e in fb.elements if e["id"] == old), "mm")
+            # the value is wider than the symbol it replaces ("126°" over
+            # "z"): written at the symbol's spot it ran into the vertex O
+            # (2026-10-15). It steps away from the vertex (or its segment)
+            # until its box clears every other label on the figure.
+            x, y = _clear_spot(fb, m, target, (x, y), text, anchor, skip=(old,) + tuple(e["id"] for e in elements))
             elements.append({"id": eid, "type": "text", "text": text, "size": LABEL_PX, "at": [x, y],
                              "anchor": anchor, "role": "label", "color": "accent", "fixed": True})
             if old:
@@ -428,6 +443,63 @@ def op_actions(fb: FigureBoard, m: Model, op: dict, *, cue: Optional[dict] = Non
             actions.append({"verb": "draw", "target": eid, "duration": 0.5, **(at if i == 0 else {})})
     # unhighlight: a highlight is a sweep, nothing persists to undo
     return elements, actions
+
+
+TOUCH_PX = 6.0      # the renderer counts boxes within 4 px as one word; keep further
+
+
+def _px_box(fb: FigureBoard, text: str, size: float, at: tuple[float, float], anchor: str) -> Rect:
+    if fb.text_metric is not None:
+        w, h = fb.text_metric(text, size)
+    else:
+        w, h = len(text) * size * 0.6, size * 1.3
+    ax, ay = at
+    x0 = ax - (w if anchor[0] == "r" else w / 2 if anchor[0] == "m" else 0)
+    y0 = ay - (h if anchor[1] == "b" else h / 2 if anchor[1] == "m" else 0)
+    return (x0, y0, x0 + w, y0 + h)
+
+
+def _clear_spot(fb: FigureBoard, m: Model, target: str, at: tuple[float, float], text: str, anchor: str,
+                skip: tuple[str, ...] = ()) -> tuple[float, float]:
+    """Where a label of ``text`` goes so its box clears the figure's other
+    labels: ``at`` when it already does, else stepped outward from the
+    angle's vertex (or the segment's midpoint) along the line through
+    ``at``. The last step is kept when none clears."""
+    others = [_px_box(fb, e["text"], float(e["size"]), tuple(e["at"]), e.get("anchor", "mm"))
+              for e in fb.elements if e["type"] == "text" and e["id"] not in skip]
+
+    def clear(p):
+        x0, y0, x1, y1 = _px_box(fb, text, LABEL_PX, p, anchor)
+        g = TOUCH_PX
+        return not any(x0 - g < b[2] and x1 + g > b[0] and y0 - g < b[3] and y1 + g > b[1] for b in others)
+
+    if clear(at):
+        return at
+    key = m.angle_ids.get(target)
+    if key is not None:
+        c = fb.to_board(m.xy(key[0]))
+    else:
+        seg = m.segment_ids.get(target)
+        if seg is None:
+            return at
+        a, b = tuple(seg)
+        (ax, ay), (bx, by) = m.xy(a), m.xy(b)
+        c = fb.to_board(((ax + bx) / 2, (ay + by) / 2))
+    dx, dy = at[0] - c[0], at[1] - c[1]
+    L = (dx * dx + dy * dy) ** 0.5
+    ux, uy = (dx / L, dy / L) if L > 1e-6 else (0.0, -1.0)
+    nx, ny = -uy, ux
+    p = at
+    # outward a quarter-label at a time, a little to either side at each
+    # step; the nearest clear spot wins
+    for k in range(1, 13):
+        step = LABEL_PX * 0.25 * k
+        for side in (0.0, 0.5, -0.5):
+            sx, sy = nx * LABEL_PX * side, ny * LABEL_PX * side
+            p = (round(at[0] + ux * step + sx, 1), round(at[1] + uy * step + sy, 1))
+            if clear(p):
+                return p
+    return p
 
 
 __all__ = ["FigureBoard", "figure_board", "figure_targets", "op_actions", "targets_for", "LABEL_PX"]
