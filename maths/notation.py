@@ -321,3 +321,32 @@ def is_notation(text: str) -> bool:
 __all__ = ["normalise", "Relation", "NotationError", "parse_relation", "parse_data", "parse_state", "Point", "parse_point",
            "symbols_named", "is_notation", "strip_task_verb", "strip_leading_words", "has_word_symbols",
            "notation_of"]
+
+
+def demojibake(s: str) -> str:
+    """UTF-8 read as cp1252 and written back — "cmÂ²", "90Â°", "â€"" —
+    the way the model itself sometimes writes a superscript (two boards of
+    the trapeziums video read "54 cmÂ²", 2026-10-15). Undone where it is
+    seen; text without the tell-tale bytes is returned as it is."""
+    if not isinstance(s, str) or not any(0xC2 <= ord(ch) <= 0xF4 for ch in s):
+        # a UTF-8 lead byte read as a glyph is the tell-tale: "Â²" is ², "â‰ˆ"
+        # is ≈, "Ï€" is π (the circle video's Examples 8 and 9 read "using
+        # pi â‰ˆ 3.14", 2026-10-15). Genuine accented prose ("é" before
+        # ASCII) is no valid UTF-8 and comes back as it is
+        return s
+    fixed = None
+    for enc in ("cp1252", "latin-1"):
+        # cp1252 for "Â²" / "Ï€"; latin-1 for the C1 controls the model's "≈"
+        # arrives as (â followed by U+0089 U+0088 — bytes, not glyphs)
+        try:
+            fixed = s.encode(enc).decode("utf-8")
+            break
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+    if fixed is None:
+        fixed = s
+        for bad, good in (("Â²", "²"), ("Â³", "³"), ("Â°", "°"), ("Â½", "½"), ("Â¼", "¼"), ("Â¾", "¾"),
+                          ("Ã—", "×"), ("Ã·", "÷"), ("â€“", "–"), ("â€”", "—"), ("â€™", "’"), ("âˆ’", "−"),
+                          ("â‰ˆ", "≈"), ("Ï€", "π"), ("â‰¤", "≤"), ("â‰¥", "≥"), ("âˆš", "√")):
+            fixed = fixed.replace(bad, good)
+    return fixed

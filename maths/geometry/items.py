@@ -35,6 +35,7 @@ from maths.geometry.properties import PROPERTIES
 from maths.geometry.realise import realise
 from maths.geometry.render_static import render_figure
 from maths.geometry.spec import SCHEMA_VERSION, parse_question
+from maths.notation import demojibake
 from maths.geometry.theorems import REASONS, THEOREMS, reason
 from maths.geometry.verify import QuestionReport, verify_question
 from maths.pretty import pretty
@@ -277,21 +278,7 @@ def _is_number(v) -> bool:
         return False
 
 
-def _demojibake(s: str) -> str:
-    """UTF-8 read as cp1252 and written back — "cmÂ²", "90Â°", "â€"" —
-    the way the model itself sometimes writes a superscript (two boards of
-    the trapeziums video read "54 cmÂ²", 2026-10-15). Undone where it is
-    seen; text without the tell-tale bytes is returned as it is."""
-    if not isinstance(s, str) or not ("Â" in s or "â€" in s or "Ã" in s):
-        return s
-    try:
-        fixed = s.encode("cp1252").decode("utf-8")
-    except (UnicodeEncodeError, UnicodeDecodeError):
-        fixed = s
-        for bad, good in (("Â²", "²"), ("Â³", "³"), ("Â°", "°"), ("Â½", "½"), ("Â¼", "¼"), ("Â¾", "¾"),
-                          ("Ã—", "×"), ("Ã·", "÷"), ("â€“", "–"), ("â€”", "—"), ("â€™", "’"), ("âˆ’", "−")):
-            fixed = fixed.replace(bad, good)
-    return fixed
+_demojibake = demojibake      # maths.notation: shared with the lesson's own text
 
 
 def _synthesised_prompt(spec: dict) -> str:

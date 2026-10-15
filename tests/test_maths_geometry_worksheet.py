@@ -554,3 +554,11 @@ def test_a_superscript_the_model_wrote_as_mojibake_is_read_back():
     assert spec["prompt"] == "Area 72 cm²."
     from maths.geometry.items import _speech
     assert _speech({"intro_speech": "It is 72 cmÂ²"})["intro"] == "It is 72 cm²"
+
+
+def test_the_models_approximately_equals_written_as_mojibake_is_read_back():
+    # the circle video's Examples 8 and 9 (2026-10-15): "using pi â‰ˆ 3.14"
+    from maths.geometry.items import _demojibake
+    assert _demojibake("Find its circumference, using pi â 3.14.") == "Find its circumference, using pi ≈ 3.14."
+    assert _demojibake("Ï€ â‰ˆ 3.14") == "π ≈ 3.14"
+    assert _demojibake("a plain â in prose stays") == "a plain â in prose stays"
