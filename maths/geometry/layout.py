@@ -883,13 +883,18 @@ def _parallel_arrow(d: Drawing, m: Model, ref, count: int) -> None:
 
 def _try_place(d: Drawing, candidates: list[tuple[float, float, str]], text: str, size: float, boxes: list,
                role: str, what: str, tag: Optional[str] = None) -> None:
-    for (x, y, anchor) in candidates:
-        box = text_box(x, y, text, size, anchor, d.label_pad, d.measure)
-        if _box_clear(box, d.strokes, boxes):
-            t = Text(x, y, text, size, role=role, anchor=anchor, box=box, tag=tag)
-            d.texts.append(t)
-            boxes.append(box)
-            return
+    # the board's clearance first; a label with no room at that clearance
+    # (a 24° wedge's own measure) takes print's, so ONE tight label does not
+    # send the whole figure back to print's metric (2026-10-15)
+    pads = (d.label_pad,) if d.label_pad <= LABEL_PAD else (d.label_pad, LABEL_PAD)
+    for pad in pads:
+        for (x, y, anchor) in candidates:
+            box = text_box(x, y, text, size, anchor, pad, d.measure)
+            if _box_clear(box, d.strokes, boxes):
+                t = Text(x, y, text, size, role=role, anchor=anchor, box=box, tag=tag)
+                d.texts.append(t)
+                boxes.append(box)
+                return
     raise GeometryRefusal("layout_collision", f"no room for the label {text!r} on {what}", what)
 
 
@@ -904,6 +909,17 @@ def _place_angle_label(d: Drawing, m: Model, key, text: str, size: float, boxes:
     for extra in (0.42, 0.62, 0.85, 1.1, 1.4, 1.75, 2.1):
         r = base + extra
         for off in (0.0, 14.0, -14.0):
+            a = math.radians(bis_deg + off)
+            cands.append((v[0] + math.cos(a) * r, v[1] + math.sin(a) * r, "middle"))
+    # a wedge too narrow for its label anywhere inside it (24° between two
+    # rays, measured with the board's face, 2026-10-15): the label sits just
+    # past the mouth of the wedge on the bisector, as a textbook writes a
+    # small angle's measure outside it
+    bx0, by0, bx1, by1 = text_box(0.0, 0.0, text, size, "middle", d.label_pad, d.measure)
+    reach = max((math.dist(v, m.xy(a)) for a in key[1] if a in m.points), default=0.0)
+    far = reach + RAY_OVERHANG + math.hypot(bx1 - bx0, by1 - by0) / 2 + 0.1
+    for r in (far, far + 0.35, far + 0.7):
+        for off in (0.0, 10.0, -10.0):
             a = math.radians(bis_deg + off)
             cands.append((v[0] + math.cos(a) * r, v[1] + math.sin(a) * r, "middle"))
     _try_place(d, cands, text, size, boxes, "label", what, tag=f"anglelabel:{angle_tag(key)}")
@@ -938,6 +954,19 @@ def _place_segment_label(d: Drawing, m: Model, key, text: str, size: float, boxe
     _try_place(d, cands, text, size, boxes, "label", what, tag=f"seglabel:{a}|{b}")
 
 
+def _fan_arms(m: Model, pid: str) -> list[str]:
+    """The arm points of every angle whose vertex is ``pid`` (a fan of
+    angles round a point, two angles on a line), in no particular order."""
+    arms: list[str] = []
+    for key in m.angle_ids.values():
+        if key[0] != pid:
+            continue
+        for a in key[1]:
+            if a not in arms and a in m.points:
+                arms.append(a)
+    return arms
+
+
 def _place_point_label(d: Drawing, m: Model, pid: str, text: str, size: float, boxes: list, centroid: Vec) -> None:
     x, y = m.xy(pid)
     away = _unit(_sub((x, y), centroid))
@@ -948,6 +977,35 @@ def _place_point_label(d: Drawing, m: Model, pid: str, text: str, size: float, b
         r = math.radians(a)
         dirs.append((math.cos(r), math.sin(r)))
     cands = []
+    arms = _fan_arms(m, pid)
+    n_ang = sum(1 for k in m.angle_ids.values() if k[0] == pid)
+    if n_ang >= 2 and len(arms) >= 2:
+        # THE VERTEX OF A FAN (angles round a point, angles on a line): rays
+        # leave it in every direction, the arcs ring it, and the measure
+        # labels sit on the bisectors beyond the arcs. The ring of near
+        # candidates below put O on a measure label (four overlaps on the
+        # "Types of Angles" video, 2026-10-15) or nowhere at all. A textbook
+        # writes O just outside the arcs BESIDE a ray, between two measure
+        # labels: that is where the room is, so those places come first.
+        base = ARC_RADIUS + 0.12 * max(0, n_ang - 1)
+        bx0, by0, bx1, by1 = text_box(0.0, 0.0, text, size, "middle", d.label_pad, d.measure)
+        bw, bh = bx1 - bx0, by1 - by0
+        rays = []
+        for a in arms:
+            u = _unit(_sub(m.xy(a), (x, y)))
+            rays.append((-(u[0] * away[0] + u[1] * away[1]), u))
+        rays.sort(key=lambda t: t[0])                  # the ray nearest "away" first
+        for r in (base + 0.3, base + 0.55, base + 0.85, base + 1.2, base + 1.6):
+            for _k, u in rays:
+                n = (-u[1], u[0])
+                shift = (bw * abs(n[0]) + bh * abs(n[1])) / 2 + 0.06
+                for sgn in (1.0, -1.0):
+                    cands.append((x + u[0] * r + n[0] * shift * sgn, y + u[1] * r + n[1] * shift * sgn, "middle"))
+        for off in (base + 0.9, base + 1.3, base + 1.7):
+            for ux, uy in dirs:
+                cands.append((x + ux * off, y + uy * off, "middle"))
+        _try_place(d, cands, text, size, boxes, "point", pid, tag=f"point:{pid}")
+        return
     # a vertex ringed by arcs (a reflex angle and its interior, E3) needs
     # its label beyond the arcs
     for off in (0.45, 0.7, 0.95, 1.2):
