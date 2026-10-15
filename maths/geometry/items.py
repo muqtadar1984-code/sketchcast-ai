@@ -446,6 +446,27 @@ def _circle_radii(fig: dict) -> None:
     keep: list[dict] = []
     added: list[dict] = []
     centres = set(circles)
+    # the radius or diameter written as a MEASURE of the circle with that
+    # kind ({target: c_1, value: 14, kind: diameter} — live trial on the
+    # article's context, 2026-10-15): it is the construction's radius, not
+    # a measure the spec knows
+    by_id = {str(c.get("id")): c for c in circles.values() if c.get("id")}
+    kept_ms = []
+    for ms in fig.get("measures") or []:
+        c = by_id.get(str(ms.get("target"))) if isinstance(ms, dict) else None
+        kind = str(ms.get("kind") or ms.get("role") or "") if isinstance(ms, dict) else ""
+        if c is not None and kind in ("radius", "diameter"):
+            v = str(ms.get("value") or "").strip()
+            if v and str(ms.get("role")) != "unknown":
+                if _is_number(v):
+                    r = sp.nsimplify(v) / 2 if kind == "diameter" else sp.nsimplify(v)
+                    c["radius"] = str(r)
+                elif not c.get("radius"):
+                    c["radius"] = f"({v})/2" if kind == "diameter" else v
+            logger.info("geometry figure: the circle's %s written as a measure of %r → radius %s", kind, c.get("id"), c.get("radius"))
+            continue
+        kept_ms.append(ms)
+    fig["measures"] = kept_ms
     # a measure OF THE CENTRE that is no coordinate pair is the radius symbol
     # the model had nowhere else to put ({target: p_o, value: r}); the
     # construction's radius already says it
