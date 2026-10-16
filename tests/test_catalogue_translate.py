@@ -69,6 +69,21 @@ class TestNumerals:
         assert C.code_tokens("covers 7Gg.12 and cbse:7:GEO:01") == ["7Gg.12", "cbse:7:GEO:01"]
 
 
+class TestMathsSpans:
+    def test_a_hyphenated_word_and_a_bare_dash_are_not_maths(self):
+        assert C.maths_spans("Match each circle-related term to its correct description.") == []
+        assert C.maths_spans("Label the x-axis and the well-known centre.") == []
+        ok, lost = C.prose_maths_equivalent("Match each circle-related term to its correct description.", "طابق كل مصطلح متعلق بالدائرة مع وصفه الصحيح.")
+        assert ok and lost == []
+
+    def test_real_maths_still_counts(self):
+        assert C.maths_spans("Use π = 3.14 here") == ["π = 3.14"]
+        assert C.maths_spans("Solve 2x + 3 = 11 for x.") == ["2x + 3 = 11", "x"] or "2x + 3 = 11" in C.maths_spans("Solve 2x + 3 = 11 for x.")
+        assert C.maths_spans("the value of x - 2 when x = 5") == ["x - 2", "x = 5"]
+        assert "x-2" in C.maths_spans("find x-2 if x = 5")[0]
+        assert C.maths_spans("A circle has a radius of 7 cm.") == ["7"]
+
+
 class TestEnglishLeftover:
     def test_latin_letters_in_an_arabic_target_are_flagged_but_protected_maths_is_not(self):
         assert C.english_leftover("The perimeter of the semicircle is", "ar") is not None
