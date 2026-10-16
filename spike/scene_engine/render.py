@@ -132,45 +132,72 @@ def _hand_covers(sample: str) -> bool:
 _NEUTRAL_PUNCT = frozenset(".,:;!?،؛؟۔")
 
 
-def _run_class(c: str) -> str | None:
-    """The face family ONE character needs, or None when it is neutral.
-    ``hand`` when the handwriting face draws it (Latin letters and the
-    punctuation and signs Caveat carries: = + × ( ) ² …), else the script
-    face (``arab`` / ``deva`` / ``telu``), else ``other`` — the sans face
-    that has everything else (π, ≠, ∞)."""
-    if c.isspace() or c.isdigit() or c in _NEUTRAL_PUNCT:
-        return None
+_SCRIPT_FACES = frozenset({"arab", "deva", "telu"})
+
+
+def _sign_face(c: str) -> str | None:
+    """For a non-letter sign sitting in a SCRIPT-face run: the face that
+    draws it, or None to leave it where it is. The Noto script faces carry
+    no "=", "(", "²", "×" or "…" (probed glyph by glyph, 2026-10-16), so a
+    sign the hand face has goes to a hand run and a Greek letter or maths
+    operator (π, ≠, ∞) to the sans run; the script's own punctuation (the
+    Devanagari danda, the Arabic comma) stays."""
     if _hand_covers(c):
         return "hand"
-    return _face_class(c)
+    o = ord(c)
+    if 0x0370 <= o <= 0x03FF or 0x2200 <= o <= 0x22FF or o in (0x00B2, 0x00B3, 0x00D7, 0x00F7):
+        return "other"
+    return None
 
 
 def _script_runs(disp: str) -> list[str]:
     """A display string split into runs by the face each needs
-    ("SketchCast AI से बनाया गया" -> two runs). Neutral characters (spaces,
-    digits, sentence punctuation) join the run they follow. One run when
-    the whole string is one kind — the common case.
+    ("SketchCast AI से बनाया गया" -> two runs). Letters choose the run;
+    everything else joins the letter run around it. One run when the whole
+    string is one kind — the common case, and ALWAYS the case for a Latin
+    line: a Latin line with a sign the hand face lacks falls to the sans
+    face whole (_face_class), never a mixed-typeface bubble.
 
-    Until 2026-10-16 only LETTERS chose a run and every other character
-    rode along, so in an Arabic caption the "=" of "π = 3.14", the "("
-    of a word problem and a "²" were handed to Noto Sans Arabic, which has
-    no glyph for any of them: boxes on the first translated video (the
-    Circle kit's Arabic board). Now a sign the hand face carries forms a
-    hand run, and a letter no face class owns (π) a sans run."""
+    The exception (2026-10-16): inside an Arabic / Devanagari / Telugu run
+    a sign the script face cannot draw — the "=" of "π = 3.14", the "("
+    of a word problem, a "²" — goes to the face that can, else it is a box
+    (the first translated video, the Circle kit's Arabic board). The first
+    cut handed every sign to its own run in EVERY script, and an English
+    geometry proof with one "∠" grew into two faces and off its board
+    (test_a_five_step_figure_proof_stays_on_one_board)."""
+    n = len(disp)
+    cls: list[str | None] = [None] * n
+    for i, c in enumerate(disp):
+        if c.isalpha():
+            cls[i] = "hand" if _hand_covers(c) else _face_class(c)
+    if all(k is None for k in cls):
+        return [disp]                     # no letters: one run, as before
+    last: str | None = None               # a non-letter takes the previous letter's face…
+    for i in range(n):
+        if cls[i] is None:
+            cls[i] = last
+        else:
+            last = cls[i]
+    nxt: str | None = None                # …or the next letter's when it leads the string
+    for i in range(n - 1, -1, -1):
+        if cls[i] is None:
+            cls[i] = nxt
+        else:
+            nxt = cls[i]
+    for i, c in enumerate(disp):
+        if cls[i] in _SCRIPT_FACES and not c.isalpha() and not (c.isspace() or c.isdigit() or c in _NEUTRAL_PUNCT):
+            face = _sign_face(c)
+            if face is not None:
+                cls[i] = face
     runs: list[str] = []
-    kind: str | None = None
-    cur = ""
-    for c in disp:
-        k = _run_class(c)
-        if k is None or kind is None or k == kind:
-            cur += c
-            if k is not None:
-                kind = k
-            continue
-        runs.append(cur)
-        cur, kind = c, k
-    if cur:
-        runs.append(cur)
+    cur = disp[0]
+    for i in range(1, n):
+        if cls[i] == cls[i - 1]:
+            cur += disp[i]
+        else:
+            runs.append(cur)
+            cur = disp[i]
+    runs.append(cur)
     return runs if len(runs) > 1 else [disp]
 
 

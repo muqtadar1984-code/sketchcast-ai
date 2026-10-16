@@ -171,6 +171,13 @@ def test_mixed_script_text_draws_each_run_with_its_own_face():
     assert any("π" in r and not any("؀" <= c <= "ۿ" for c in r) for r in runs), runs
     assert "".join(runs) == "مساحة الدائرة = π × 6² سم. (استخدم π = 3.14)"
     assert _script_runs("نصف القطر 6 سم.") == ["نصف القطر 6 سم."], "digits and the full stop stay in the Arabic run"
+    # a LATIN line keeps one run whatever signs it carries — a sign the hand
+    # face lacks sends the whole line to the sans face, never a mixed bubble
+    # (an English geometry proof with one "∠" split in two and ran off its board)
+    assert _script_runs("so ∠ABC = 60° and ∠ACB ≅ ∠ABC") == ["so ∠ABC = 60° and ∠ACB ≅ ∠ABC"]
+    assert _script_runs("Use π = 3.14 here") == ["Use ", "π = 3.14 ", "here"], "a Greek letter still takes the sans run, as before"
+    assert _script_runs("(استخدم π = 3.14)")[0] == "(", "a leading bracket before Arabic leaves the Arabic run"
+    assert _script_runs("यह ∠ABC है।")[-1].endswith("।"), "the danda stays with the Devanagari"
     r = SceneRenderer(Scene.model_validate({"id": "t", "narration": "x", "elements": [
         {"id": "a", "type": "text", "text": "SketchCast AI से बनाया गया", "at": [60, 150], "role": "title", "size": 40, "anchor": "lt"}],
         "actions": [{"verb": "write", "target": "a", "duration": 1.0}]}))
