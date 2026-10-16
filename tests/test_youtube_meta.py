@@ -101,7 +101,8 @@ class TestDescription:
         assert blocks[3].startswith("Key terms: cell membrane, cytoplasm, nucleus")
         from shared.outro import DESCRIPTION_CTA
         assert blocks[4] == DESCRIPTION_CTA
-        assert blocks[5] == Y.SKETCHCAST_LINE + "\nhttps://sketchcast.app/?utm_source=youtube"
+        # 2026-10-16 (plan §5.6): the link line reads "Full kit: <the lesson page>"
+        assert blocks[5] == Y.SKETCHCAST_LINE + "\nFull kit: https://sketchcast.app/?utm_source=youtube"
         assert blocks[6].startswith("#CellMembrane #Cytoplasm") and blocks[6].endswith("#Science #SketchCast")
 
     def test_the_stored_intro_terms_and_tags_replace_the_defaults(self):

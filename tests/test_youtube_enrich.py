@@ -22,6 +22,56 @@ def _description(hashtags=("Cells", "Organelles", "Science", "CambridgeStage7", 
                                next_title=None, link=LINK)
 
 
+class TestTheLessonPageLink:
+    """Plan §5.6: every description links to the lesson's OWN public page,
+    "Full kit: https://sketchcast.app/topics/<slug>?utm…" — composed into
+    new publications, and written onto the videos already posted by the
+    enrich pass, which replaces the old homepage link line in place."""
+
+    NEW = "https://sketchcast.app/topics/cells?utm_source=youtube&utm_medium=video&utm_campaign=topic_catalogue&utm_content=cells_part1"
+
+    def test_topic_link_is_the_lesson_page_when_the_topic_has_a_slug_else_the_homepage(self):
+        from catalogue.publish import topic_link
+        assert topic_link({"canonical_key": "cells", "slug": "cells"}, 1) == self.NEW
+        assert topic_link({"canonical_key": "cells", "slug": "cells"}, 2).endswith("utm_content=cells_part2")
+        assert topic_link({"canonical_key": "cells"}, 1) == LINK + "&utm_medium=video&utm_campaign=topic_catalogue&utm_content=cells_part1"
+        assert topic_link({"canonical_key": "cells", "slug": "Not A Slug"}, 1).startswith("https://sketchcast.app/?")
+
+    def test_a_new_description_carries_the_full_kit_line_under_the_sketchcast_paragraph(self):
+        from catalogue.youtube_meta import kit_link_line
+        text = _description()
+        para = next(p for p in text.split("\n\n") if p.startswith(SKETCHCAST_LINE))
+        assert para.split("\n")[1] == kit_link_line(LINK) == "Full kit: " + LINK
+
+    def test_enrich_replaces_the_old_homepage_line_in_place(self):
+        old = _description().replace("Full kit: " + LINK, LINK)   # how every video read before 2026-10-16
+        assert "\n" + LINK + "\n" in old + "\n" or old.split("\n\n")[-2].endswith(LINK)
+        after = E.with_topic_link(old, self.NEW)
+        paras_before, paras_after = old.split("\n\n"), after.split("\n\n")
+        assert len(paras_before) == len(paras_after)
+        changed = [(a, b) for a, b in zip(paras_before, paras_after) if a != b]
+        assert len(changed) == 1
+        a, b = changed[0]
+        assert a.startswith(SKETCHCAST_LINE) and b == a.replace(LINK, "Full kit: " + self.NEW)
+        assert LINK + "\n" not in after + "\n" and after.count("Full kit:") == 1
+
+    def test_enrich_is_idempotent_and_replaces_a_stale_slug(self):
+        once = E.with_topic_link(_description(), self.NEW)
+        assert E.with_topic_link(once, self.NEW) == once
+        moved = E.with_topic_link(once, self.NEW.replace("/topics/cells?", "/topics/the-cell?"))
+        assert moved.count("Full kit:") == 1 and "/topics/the-cell?" in moved and "/topics/cells?" not in moved
+
+    def test_a_hand_written_description_without_our_paragraph_gets_the_line_above_the_hashtags(self):
+        assert E.with_topic_link("Intro.\n\n#A #B", self.NEW).split("\n\n") == ["Intro.", "Full kit: " + self.NEW, "#A #B"]
+        assert E.with_topic_link("Intro.", self.NEW) == "Intro.\n\nFull kit: " + self.NEW
+        assert E.with_topic_link("Intro.", "") == "Intro."
+
+    def test_enrich_description_threads_the_link_and_keeps_the_limit(self):
+        out = E.enrich_description(_description(), discipline="biology", subject="Science", boards=BOARDS,
+                                   playlist_id="PL-bio", link=self.NEW)
+        assert "Full kit: " + self.NEW in out and "More Biology lessons" in out and len(out) <= DESCRIPTION_MAX
+
+
 class TestThePlaylistLine:
     def test_goes_directly_above_the_sketchcast_line_and_nothing_else_moves(self):
         before = _description()
