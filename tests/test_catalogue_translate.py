@@ -248,6 +248,26 @@ class TestItems:
         assert T._item_hash(a, "kit-1") == T._item_hash({"item_type": "mcq", "stem": "  ما هو نصف قطر الدائرة  "}, "kit-1")
         assert T._item_hash(a, "kit-1") != T._item_hash(a, "kit-2"), "a re-translation for a new kit must not collide with the retired kit's items"
 
+    def test_a_match_items_pairs_read_the_same_in_options_and_answer(self):
+        pairs = [{"left": "Radius", "right": "centre to the boundary"}, {"left": "Chord", "right": "two boundary points"}]
+        src = {"id": "m-1", "item_type": "match", "answer_mode": "objective", "marks": 2, "difficulty": 1,
+               "cognitive_level": "recall", "objective_ref": "o1", "stem": "Match each term to its description.",
+               "options": {"pairs": [dict(p) for p in pairs]}, "answer": {"pairs": [dict(p) for p in pairs]},
+               "marking_scheme": [], "distractor_rationale": None, "explanation": None}
+        seen: dict[str, int] = {}
+
+        def numbered(s: str) -> str:            # a different rendering every time it is asked (no digits: those are checked)
+            seen[s] = seen.get(s, 0) + 1
+            return f"ترجمة {s} {'ـ' * seen[s]}"
+
+        c = FakeTranslator(numbered)
+        words = T.item_text_items(src)
+        got = T.translate_strings(c, [w for _, w in words], "ar", context=T.ITEM_RULE)
+        dst = T.translated_item(src, list(zip([p for p, _ in words], got)))
+        assert dst["options"]["pairs"] == dst["answer"]["pairs"], "the same term must read the same twice"
+        assert all(n == 1 for n in seen.values()), "each distinct string is asked once"
+        assert C.check_item(src, dst)["ok"]
+
     def test_fidelity_scores_a_faithful_back_translation_high_and_flags_a_stray_one(self):
         rep = C.fidelity_report([("s1", "The cell is the smallest unit of life", "The cell is the smallest unit of life."),
                                  ("s2", "Plants have a cell wall and chloroplasts", "The weather was fine today")])

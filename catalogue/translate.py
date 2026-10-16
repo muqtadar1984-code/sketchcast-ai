@@ -177,10 +177,18 @@ def translate_strings(client, items: list[str], language: str, *, terms: Optiona
     """Translate ``items`` into ``language`` — a list in, the same list out,
     position for position. Empty strings come back empty without a call."""
     out: list[Optional[str]] = [None] * len(items)
-    todo = [(i, s) for i, s in enumerate(items) if _s(s)]
+    # Each DISTINCT string is translated once and its translation reused at
+    # every position: a term that appears twice in one item (a match item's
+    # pairs sit in both ``options`` and ``answer``; a label repeats in a
+    # marking point) must read the same twice, or grading by text breaks.
+    first: dict[str, int] = {}
+    todo: list[tuple[int, str]] = []
     for i, s in enumerate(items):
         if not _s(s):
             out[i] = s
+        elif s not in first:
+            first[s] = i
+            todo.append((i, s))
     protected = [p for p in (protect or []) if _s(p)]
     for start in range(0, len(todo), CHUNK):
         batch = todo[start:start + CHUNK]
@@ -201,6 +209,9 @@ def translate_strings(client, items: list[str], language: str, *, terms: Optiona
         got = _ask_items(client, prompt, len(payload))
         for (i, _), t in zip(batch, got):
             out[i] = t
+    for i, s in enumerate(items):
+        if out[i] is None and s in first:
+            out[i] = out[first[s]]
     return [x if x is not None else "" for x in out]
 
 
