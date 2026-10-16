@@ -140,6 +140,22 @@ class TestCheckScript:
         assert not C.check_script(SRC, dst, language="ar")["ok"]
         assert C.check_script(SRC, dst, language="ar", strict=False)["ok"]
 
+    def test_the_lenient_mode_flags_a_retypeset_board_expression_instead_of_blocking(self):
+        # the Circle pilot (2026-10-16): the Arabic board was recompiled by a
+        # newer compiler and typeset the same maths a little differently —
+        # the record itself was intact, so this is the reviewer's to judge
+        dst = _translated(SRC)
+        dst["segments"][0]["scene"]["elements"][1]["expr"] = "P = π·r + 2·r"
+        strict = C.check_script(SRC, dst, language="ar")
+        assert any(f["what"] == "protected expression altered" for f in strict["blocking"])
+        lenient = C.check_script(SRC, dst, language="ar", strict=False)
+        assert lenient["ok"]
+        assert any(f["what"].startswith("board expressions typeset differently") and f["examples"] == ["P = πr + 2r"]
+                   for f in lenient["flags"])
+        # a caller-protected expression (the record's own problem) still blocks
+        refused = C.check_script(SRC, dst, language="ar", strict=False, protected={"s001": ["P = πr + 2r"]})
+        assert not refused["ok"]
+
     def test_the_lenient_mode_still_catches_a_lost_number(self):
         dst = _translated(SRC, lambda s: _arabize(s.replace("41.12", "")))
         r = C.check_script(SRC, dst, language="ar", strict=False)
@@ -388,6 +404,20 @@ class TestTranslateJob:
         k = next(k for k in sb.tables["topic_kits"] if k.get("source_kit_id") == "kit-1")
         assert k["status"] == "failed" and k["translation_status"] == "failed" and "cannot be found" in k["notes"]
         assert not [g for g in sb.tables["generations"] if g["params"].get("kit_id") == k["id"]], "nothing was queued to render"
+
+    def test_a_pre_check_refusal_leaves_its_findings_on_the_kit(self, monkeypatch, tmp_path):
+        sb = _job_sb()
+        _uploads(monkeypatch)
+        monkeypatch.setattr("spike.scene_engine.raster_assets.cache_dir_for", lambda key, cache_dir=None: tmp_path / "nocache" / key)
+        c = FakeTranslator(lambda s: _arabize(s.replace("five", "5").replace("x equals 5", "x equals 6")) if "equals" in s else _arabize(s))
+
+        assert T.run_translate_job(sb, sb.tables["jobs"][0], client=c) is None
+
+        k = next(k for k in sb.tables["topic_kits"] if k.get("source_kit_id") == "kit-1")
+        assert k["status"] == "failed" and k["translation_status"] == "failed"
+        assert k["precheck"]["ok"] is False and k["precheck"]["part"] == 1
+        assert any(f["what"] == "numbers differ" for f in k["precheck"]["blocking"])
+        assert "pre-check A" in sb.tables["jobs"][0]["error"]
 
     @pytest.mark.parametrize("params, why", [
         ({"source_kit_id": "kit-1", "language": "en"}, "already English"),
