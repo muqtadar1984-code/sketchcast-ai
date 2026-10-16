@@ -400,6 +400,95 @@ def check_maths_lesson(source: dict, target: dict) -> dict:
     return {"check": "A-maths", "ok": not blocking, "blocking": blocking, "flags": flags}
 
 
+# ── question-bank items (D4) ─────────────────────────────────────────────
+
+
+def _opt_list(options) -> list[dict]:
+    return [o for o in (options if isinstance(options, list) else []) if isinstance(o, dict)]
+
+
+def check_item(source: dict, target: dict) -> dict:
+    """A translated bank item against its English source. The maths of an
+    item is its SHAPE — type, mode, marks, option keys, the answer key, the
+    label and pair counts — and must be identical; its words must carry the
+    same numbers; and the translated options must still be distinct (two
+    English distractors can collapse into one word in another language,
+    which leaves a multiple-choice question with no single answer).
+    Blocking findings mean the item is not staged."""
+    blocking: list[dict] = []
+    flags: list[dict] = []
+    sid = str(source.get("id") or "item")
+    for key in ("item_type", "answer_mode", "marks", "difficulty", "cognitive_level", "objective_ref"):
+        if source.get(key) != target.get(key):
+            blocking.append(_finding(sid, f"{key} changed", source=source.get(key), target=target.get(key)))
+    s_opts, t_opts = _opt_list(source.get("options")), _opt_list(target.get("options"))
+    if [o.get("key") for o in s_opts] != [o.get("key") for o in t_opts]:
+        blocking.append(_finding(sid, "option keys differ"))
+    texts = [" ".join(str(o.get("text") or "").split()).casefold() for o in t_opts]
+    if len(texts) != len(set(t for t in texts if t)) and any(texts):
+        blocking.append(_finding(sid, "translated options are no longer distinct", options=texts))
+    s_ans, t_ans = source.get("answer") or {}, target.get("answer") or {}
+    if isinstance(s_ans, dict) and isinstance(t_ans, dict):
+        if s_ans.get("key") != t_ans.get("key"):
+            blocking.append(_finding(sid, "answer key changed", source=s_ans.get("key"), target=t_ans.get("key")))
+        if s_ans.get("value") is not None and s_ans.get("value") != t_ans.get("value"):
+            blocking.append(_finding(sid, "numerical answer changed", source=s_ans.get("value"), target=t_ans.get("value")))
+        for list_key in ("labels", "pairs"):
+            if len(s_ans.get(list_key) or []) != len(t_ans.get(list_key) or []):
+                blocking.append(_finding(sid, f"{list_key} count differs"))
+    if len(source.get("marking_scheme") or []) != len(target.get("marking_scheme") or []):
+        blocking.append(_finding(sid, "marking scheme length differs"))
+    src_text = " ".join([str(source.get("stem") or "")] + [str(o.get("text") or "") for o in s_opts]
+                        + [str(pt.get("point") or "") for pt in (source.get("marking_scheme") or []) if isinstance(pt, dict)])
+    dst_text = " ".join([str(target.get("stem") or "")] + [str(o.get("text") or "") for o in t_opts]
+                        + [str(pt.get("point") or "") for pt in (target.get("marking_scheme") or []) if isinstance(pt, dict)])
+    ok, missing, extra = numbers_equivalent(src_text, dst_text)
+    if not ok:
+        blocking.append(_finding(sid, "numbers differ", missing=missing, extra=extra))
+    ok_m, lost = prose_maths_equivalent(str(source.get("stem") or ""), str(target.get("stem") or ""))
+    if not ok_m:
+        blocking.append(_finding(sid, "maths in the stem altered", lost=lost))
+    if not str(target.get("stem") or "").strip():
+        blocking.append(_finding(sid, "stem emptied"))
+    return {"check": "A-item", "ok": not blocking, "blocking": blocking, "flags": flags}
+
+
+# ── pre-check B: meaning, by back-translation ────────────────────────────
+
+_WORD_RE = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
+_STOP = frozenset("the and of to is that with for are was this from have which their there what when "
+                  "how you we our its into than then them they will can let now here also each".split())
+FIDELITY_FLAG = 0.30
+
+
+def content_overlap(a: str, b: str) -> float:
+    """Share of the source's content words that the back-translation keeps
+    (case-folded, stop words out). A rough fidelity score: 1.0 is the same
+    sentence, 0.3 and below is a different one."""
+    wa = {w.casefold() for w in _WORD_RE.findall(str(a or ""))} - _STOP
+    wb = {w.casefold() for w in _WORD_RE.findall(str(b or ""))} - _STOP
+    if not wa:
+        return 1.0
+    return len(wa & wb) / len(wa)
+
+
+def fidelity_report(samples: list[tuple[str, str, str]]) -> dict:
+    """``samples`` = ``[(where, source, back_translation)]``. Flags the ones
+    whose back-translation keeps too little of the source; never blocks
+    (decision D3 — meaning is the reviewer's to judge)."""
+    flags: list[dict] = []
+    scores: list[float] = []
+    for where, src, back in samples:
+        score = content_overlap(src, back)
+        scores.append(score)
+        if score < FIDELITY_FLAG:
+            flags.append(_finding(where, "back-translation keeps little of the source",
+                                  score=round(score, 2), source=src[:200], back=back[:200]))
+    return {"check": "B", "ok": True, "samples": len(samples),
+            "mean_score": round(sum(scores) / len(scores), 2) if scores else None,
+            "blocking": [], "flags": flags}
+
+
 # ── pre-check C: after the render ────────────────────────────────────────
 
 DRIFT_FLAG_S = 4.0
@@ -448,7 +537,7 @@ def merge_reports(*reports: dict) -> dict:
 
 
 __all__ = ["DRIFT_FLAG_S", "LESSON_INVARIANT_KEYS", "LESSON_PROSE_MATHS_KEYS", "LESSON_TEXT_KEYS",
-           "check_maths_lesson", "check_script", "code_tokens", "english_leftover", "has_prose", "maths_spans",
-           "merge_reports",
+           "check_item", "check_maths_lesson", "check_script", "code_tokens", "content_overlap", "english_leftover",
+           "fidelity_report", "has_prose", "maths_spans", "merge_reports",
            "normalize_numerals", "number_values", "numbers_equivalent", "post_render", "prose_maths_equivalent",
            "script_of"]

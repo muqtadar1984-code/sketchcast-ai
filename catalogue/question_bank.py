@@ -77,7 +77,11 @@ def render_question_bank(sb, gen: dict, generation_id: str, out_dir: Path, base:
     language = (str(language or params.get("language") or "en")).strip().lower()
     topic = _one(sb, "topics", topic_id) or {}
 
-    items = _sorted(load_bank(sb, topic_id, language))
+    # Kit Translator: a translated kit prints its own STAGED items (promoted
+    # with the kit); params.translation.kit_id names the kit.
+    translation = params.get("translation") if isinstance(params.get("translation"), dict) else None
+    staged_for = (str(translation.get("kit_id") or params.get("kit_id") or "") or None) if translation else None
+    items = _sorted(load_bank(sb, topic_id, language, staged_for=staged_for))
     if not items:
         raise RuntimeError(f"topic {topic_id} has no approved {language} questions to print")
 
