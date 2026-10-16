@@ -236,3 +236,64 @@ def test_write_worksheet_orders_kinds_and_keeps_match_whole(tmp_path):
     payload = json.loads((tmp_path / "questions.json").read_text(encoding="utf-8"))
     assert [q["type"] for q in payload["questions"]] == ["fill_blank", "true_false", "match", "short"]
     assert payload["questions"][1]["answer"] is True  # true_false coerced to bool
+
+
+# ── docgen.quiz_sheet: a sheet and its key from a questions.json payload ────
+
+def test_write_worksheet_carries_the_working_of_a_ladder_question(tmp_path):
+    short = [{"q": "Solve: 3x + 5 = 20", "answer": "x = 5", "working": ["3x = 15", "x = 5", "Answer: x = 5"]},
+             {"q": "Name the longest chord.", "answer": "the diameter"}]
+    questions.write_worksheet(tmp_path, "Worksheet", "Answer.", [], [], [], short)
+    qs = json.loads((tmp_path / "questions.json").read_text(encoding="utf-8"))["questions"]
+    assert qs[0]["type"] == "fill_blank" and qs[0]["working"] == ["3x = 15", "x = 5", "Answer: x = 5"]
+    assert qs[1]["type"] == "short" and "working" not in qs[1]
+
+
+_PNG_1X1 = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAA"
+            "AABJRU5ErkJggg==")
+_QUIZ_PAYLOAD = {"title": "Worksheet — Circles", "instructions": "Answer every question.", "questions": [
+    {"id": "q1", "type": "fill_blank", "prompt": "The longest chord of a circle is called the ____.", "answer": "diameter", "marks": 1},
+    {"id": "q2", "type": "true_false", "prompt": "A radius of 7 cm gives a diameter of 14 cm.", "answer": True, "marks": 1},
+    {"id": "q3", "type": "match", "prompt": "Match each term to its meaning.", "marks": 2,
+     "pairs": [{"left": "radius", "right": "centre to the edge"}, {"left": "chord", "right": "a line across the circle"}]},
+    {"id": "q4", "type": "fill_blank", "prompt": "Solve: 3x + 5 = 20", "answer": "x = 5", "accept": ["5"], "marks": 1,
+     "working": ["3x = 15", "x = 5", "Answer: x = 5"]},
+    {"id": "q5", "type": "fill_blank", "prompt": "Find x in the diagram.", "answer": "40", "marks": 2, "image": _PNG_1X1},
+]}
+
+
+def _all_text(path):
+    doc = Document(str(path))
+    parts = [p.text for p in doc.paragraphs]
+    for t in doc.tables:
+        for row in t.rows:
+            for cell in row.cells:
+                parts.extend(p.text for p in cell.paragraphs)
+    return "\n".join(parts)
+
+
+def test_quiz_sheet_sections_the_payload_prints_the_picture_and_keys_the_working(tmp_path):
+    from docgen import quiz_sheet
+
+    assert [quiz_sheet.section_of(q) for q in _QUIZ_PAYLOAD["questions"]] == ["fill", "tf", "match", "problem", "figure"]
+    sheet, key = quiz_sheet.write_sheet(tmp_path, _QUIZ_PAYLOAD, language="en")
+    assert sheet.name == "worksheet.docx" and key.name == "worksheet_answer_key.docx"
+    s = _all_text(sheet)
+    assert "The longest chord" in s and "Solve: 3x + 5 = 20" in s and "Find x in the diagram." in s
+    assert "centre to the edge" in s and "1. radius" in s, "the matching table on the sheet"
+    assert "x = 5" not in s and "diameter" not in s.replace("diameter of 14", ""), "the key is a separate document"
+    assert len(Document(str(sheet)).inline_shapes) == 1, "the figure question prints its picture"
+    k = _all_text(key)
+    assert "diameter" in k and "True" in k and "3x = 15" in k and "Answer: x = 5" in k and "40" in k
+    assert "Solve: 3x + 5 = 20" not in k, "the key repeats no stem"
+
+
+def test_quiz_sheet_in_arabic_is_right_to_left_on_every_run(tmp_path):
+    import zipfile
+    from docgen import quiz_sheet
+
+    sheet, key = quiz_sheet.write_sheet(tmp_path, {**_QUIZ_PAYLOAD, "title": "ورقة عمل — الدوائر"}, language="ar")
+    for path in (sheet, key):
+        xml = zipfile.ZipFile(str(path)).read("word/document.xml").decode("utf-8")
+        assert "<w:rtl/>" in xml and "<w:bidi/>" in xml
+    assert "ورقة عمل — الدوائر" in _all_text(sheet)

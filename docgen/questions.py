@@ -167,9 +167,19 @@ def write_worksheet(out_dir: Path, title: str, instructions, fill, tf, match, sh
                 item = {"id": f"q{i}", "type": "fill_blank", "prompt": str(q.get("q", "")), "answer": forms[0], "marks": 1}
                 if len(forms) > 1:
                     item["accept"] = forms[1:]
-                qs.append(item)
             else:
-                qs.append({"id": f"q{i}", "type": "short", "prompt": str(q.get("q", "")), "answer": answer, "marks": 1})
+                item = {"id": f"q{i}", "type": "short", "prompt": str(q.get("q", "")), "answer": answer, "marks": 1}
+            # the key's WORKING (a maths ladder question: each step's result
+            # with its operation, then the answer) rides beside the item, so
+            # a sheet rendered from this file again (the Kit Translator's
+            # translated worksheet, docgen.quiz_sheet) prints the same key.
+            # The app's stripQuiz builds the student payload field by field,
+            # so the lines never reach a learner.
+            working = [str(w) for w in (q.get("working") or []) if str(w or "").strip()] \
+                if isinstance(q.get("working"), list) else []
+            if working:
+                item["working"] = working
+            qs.append(item)
     # prebuilt questions in the player's own schema — the maths figure
     # questions, each with its picture as a data URL — numbered on
     for q in (extra or []):

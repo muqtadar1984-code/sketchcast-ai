@@ -35,6 +35,14 @@ topic_id?}}``, generation_id NULL — an observer job on the catalogue lane
               spoken lines and recompiles the board in the language (the
               maths stays maths); the science path translates the segment
               text fields in place;
+  worksheet   (T1.5) a maths worksheet's VERIFIED questions, read from the
+              source generation's ``questions_json`` artifact: the words of
+              each question translated, every number and expression kept
+              (check_question), the surviving set staged as a file the
+              render side turns into the .docx and its key without a model
+              or the verifier (worker/process.py → render_translated_
+              worksheet). A question the checks refuse twice is dropped
+              with a flag; a sheet with none left is not made.
   check A     catalogue.translate_check — structure, protected expressions,
               numeric equivalence, English leftovers, glossary use. A
               blocking finding retries the part once, then fails the job;
@@ -1110,6 +1118,228 @@ def fidelity_stage(client, scripts: list[dict], source_bodies: list[dict], items
 
 # ── generations ─────────────────────────────────────────────────────────
 
+# ── the worksheet (T1.5): translated from its verified questions ─────────
+
+WORKSHEET_QUESTIONS_FILE = "worksheet_questions.json"
+QUESTION_RULE = ("Each string is a line of a school MATHS worksheet or its answer key: translate the words only; keep "
+                 "every number, unit symbol, variable, equation, expression and the π symbol exactly as written, in "
+                 "the same place; a line that is only working (an equation, a value) is copied unchanged; option "
+                 "texts stay DISTINCT; a one-word answer stays one word.")
+
+
+def question_text_items(q: dict) -> list[tuple[str, str]]:
+    """The WORDS of a worksheet question: the prompt always (``Solve: 3x + 5
+    = 20`` has a verb to translate), a text answer, the accepted spellings,
+    the options, the pairs and the working lines when they are prose — a
+    string that is notation (check.is_maths) is never sent."""
+    out: list[tuple[str, str]] = [("prompt", str(q.get("prompt") or ""))]
+    if isinstance(q.get("answer"), str) and not check.is_maths(q["answer"]):
+        out.append(("answer", q["answer"]))
+    for i, x in enumerate(q.get("accept") or [] if isinstance(q.get("accept"), list) else []):
+        if isinstance(x, str) and not check.is_maths(x):
+            out.append((f"accept[{i}]", x))
+    for i, o in enumerate(q.get("options") or [] if isinstance(q.get("options"), list) else []):
+        if isinstance(o, str) and not check.is_maths(o):
+            out.append((f"options[{i}]", o))
+    for i, pair in enumerate(q.get("pairs") or [] if isinstance(q.get("pairs"), list) else []):
+        if isinstance(pair, dict):
+            for side in ("left", "right"):
+                if isinstance(pair.get(side), str) and not check.is_maths(pair[side]):
+                    out.append((f"pairs[{i}].{side}", pair[side]))
+    for i, w in enumerate(q.get("working") or [] if isinstance(q.get("working"), list) else []):
+        if isinstance(w, str) and not check.is_maths(w):
+            out.append((f"working[{i}]", w))
+    return [(path, text) for path, text in out if _s(text)]
+
+
+def _question_protected(q: dict) -> list[str]:
+    spans: list[str] = []
+    for _, text in question_text_items(q):
+        for sp in check.maths_spans(text):
+            if sp not in spans:
+                spans.append(sp)
+    return spans
+
+
+def translate_questions(client, questions: list[dict], language: str, terms, *, context: str) -> tuple[list[dict], list[dict]]:
+    """Every question's words in one call (a retry for the ones the check
+    refused, told why); returns ``(kept, dropped)`` — the translated
+    questions in the source order, and ``{id, findings}`` for each the
+    checks refused twice."""
+    def attempt(batch: list[dict], rule: str) -> list[tuple[dict, dict, dict]]:
+        flat: list[tuple[int, str, str]] = []
+        protect: list[str] = []
+        for i, q in enumerate(batch):
+            for path, text in question_text_items(q):
+                flat.append((i, path, text))
+            for sp in _question_protected(q):
+                if sp not in protect:
+                    protect.append(sp)
+        got = translate_strings(client, [t for _, _, t in flat], language, terms=terms,
+                                context=f"{context}\n{rule}", protect=protect) if flat else []
+        by_q: dict[int, list[tuple[str, str]]] = {}
+        for (i, path, _), t in zip(flat, got):
+            by_q.setdefault(i, []).append((path, t))
+        out = []
+        for i, src in enumerate(batch):
+            dst = apply_strings(src, by_q.get(i, []))
+            out.append((src, dst, check.check_question(src, dst)))
+        return out
+
+    first = attempt(questions, QUESTION_RULE)
+    refused = [(src, rep) for src, _, rep in first if not rep["ok"]]
+    second: dict[str, tuple[dict, dict]] = {}
+    if refused:
+        why = "; ".join(sorted({str(f.get("what") or "") for _, rep in refused for f in rep["blocking"]}))
+        again = attempt([src for src, _ in refused],
+                        QUESTION_RULE + f"\nA previous translation of these strings was refused ({why}). Translate the "
+                                        "WORDS only: add no number, symbol or unit the English does not have; every "
+                                        "equation, expression and value stays exactly as written.")
+        second = {str(src.get("id")): (dst, rep) for src, dst, rep in again}
+    kept: list[dict] = []
+    dropped: list[dict] = []
+    for src, dst, report in first:
+        qid = str(src.get("id"))
+        if not report["ok"]:
+            dst2, report2 = second.get(qid, (None, None))
+            if dst2 is None or report2 is None or not report2["ok"]:
+                findings = report["blocking"][:3] + [{**f, "where": f"{f.get('where')} (retry)"}
+                                                     for f in (report2 or {}).get("blocking", [])[:3]]
+                dropped.append({"id": qid, "findings": findings})
+                continue
+            dst = dst2
+        kept.append(dst)
+    return kept, dropped
+
+
+def source_questions(sb, source: dict, tmp: Path) -> Optional[dict]:
+    """The source kit's worksheet ``questions_json`` payload, or None when
+    the kit has no worksheet or the worksheet has no such artifact (a
+    science worksheet: rebuilt from the article instead)."""
+    docs = source["kit"].get("doc_generation_ids") if isinstance(source["kit"].get("doc_generation_ids"), dict) else {}
+    gen_id = _s(docs.get("worksheet"))
+    if not gen_id:
+        return None
+    rows = _rows(sb.table("artifacts").select("storage_path").eq("generation_id", gen_id)
+                 .eq("kind", "questions_json").limit(1).execute())
+    path = _s((rows or [{}])[0].get("storage_path"))
+    if not path:
+        return None
+    local = db.download_artifact(sb, path, Path(tmp) / "source_questions.json")
+    payload = json.loads(Path(local).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("questions"), list):
+        raise TranslateRefused(f"the source worksheet's questions_json ({path}) is not a questions payload")
+    return payload
+
+
+def staged_questions_path(owner_id: str, kit_id: str) -> str:
+    return f"{owner_id}/{kit_id}/translated/{WORKSHEET_QUESTIONS_FILE}"
+
+
+def worksheet_stage(sb, client, source: dict, kit: dict, language: str, terms, *, title: Optional[str],
+                    context: str, tmp: Path) -> Optional[dict]:
+    """Translate the source worksheet's verified questions and stage them
+    for the render side. Returns None when the source has no maths
+    worksheet (nothing to do: the document is rebuilt), else a summary
+    ``{questions, kept, dropped, path}`` — ``path`` is None when no
+    question survived (the generations stage then flags the document)."""
+    payload = source_questions(sb, source, tmp)
+    if payload is None:
+        return None
+    questions = [q for q in payload["questions"] if isinstance(q, dict)]
+    kept, dropped = translate_questions(client, questions, language, terms, context=context) if questions else ([], [])
+    summary: dict = {"questions": len(questions), "kept": len(kept), "dropped": dropped, "path": None}
+    if not kept:
+        return summary
+    from docgen.strings import _t as _doc_t
+    # the sheet's title: the document word in the language and the translated
+    # topic title (the article stage's); without one, the English title translated
+    if _s(title):
+        heading = f"{_doc_t('doc_worksheet', language)} — {_s(title)}"
+    else:
+        heading = translate_strings(client, [_s(payload.get("title")) or "Worksheet"], language,
+                                    terms=terms, context=context)[0]
+    staged = {"title": heading, "instructions": _doc_t("ws_instructions", language), "language": language,
+              "questions": kept,
+              "source": {"kit_id": source["kit"]["id"], "language": SOURCE_LANGUAGE, "title": payload.get("title"),
+                         "questions": len(questions), "dropped": [d["id"] for d in dropped]}}
+    local = Path(tmp) / WORKSHEET_QUESTIONS_FILE
+    local.write_text(json.dumps(staged, ensure_ascii=False, indent=2), encoding="utf-8")
+    owner = _s(source["presentation"].get("owner_id"))
+    dest = staged_questions_path(owner, str(kit["id"]))
+    db.upload_artifact(sb, str(local), dest)
+    summary["path"] = dest
+    return summary
+
+
+def worksheet_flags(summary: Optional[dict]) -> list[dict]:
+    """The reviewer's flags for the worksheet stage: one per dropped
+    question, and one for a sheet that could not be made at all."""
+    if not summary:
+        return []
+    kept, total = int(summary.get("kept") or 0), int(summary.get("questions") or 0)
+    flags = []
+    for d in summary.get("dropped") or []:
+        why = "; ".join(sorted({str(f.get("what") or "") for f in d.get("findings") or []})) or "translation refused"
+        flags.append({"where": f"worksheet {d.get('id')}", "what": DOCUMENT_FLAG,
+                      "detail": f"question {d.get('id')} dropped from the translated worksheet ({why}); "
+                                f"{kept} of {total} question(s) kept"})
+    if not summary.get("path"):
+        flags.append({"where": "worksheet", "what": DOCUMENT_FLAG,
+                      "detail": f"no question of the verified maths worksheet could be kept in the language "
+                                f"({total} tried); the online quiz and the question bank carry the assessment"})
+    return flags
+
+
+def render_translated_worksheet(sb, gen: dict, generation_id: str, out_dir: Path, base: str, branding: dict,
+                                language: str) -> str:
+    """The render side (worker/process.py, the catalogue branch): a
+    translated worksheet generation names its staged questions in
+    ``params.translation.questions``; the sheet and its key are written
+    from them (docgen.quiz_sheet) with no model call and no verifier, and
+    uploaded exactly as the document block does — the ``docx`` row, the
+    answer key under its own kind, the questions for the quiz player."""
+    from docgen.quiz_sheet import write_sheet
+    from docgen.docx_builder import header_lines_of
+
+    params = gen.get("params") if isinstance(gen.get("params"), dict) else {}
+    translation = params.get("translation") if isinstance(params.get("translation"), dict) else {}
+    path = _s(translation.get("questions"))
+    if not path:
+        raise RuntimeError("translated worksheet generation has no params.translation.questions")
+    local = db.download_artifact(sb, path, Path(out_dir) / "staged_questions.json")
+    payload = json.loads(Path(local).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not payload.get("questions"):
+        raise RuntimeError(f"staged questions {path} hold no question")
+    language = (_s(language) or _s(payload.get("language")) or "en").lower()
+    topic = _s(params.get("topic_id"))
+    subtitle = ""
+    if topic:
+        rows = _rows(sb.table("topics").select("subject").eq("id", topic).limit(1).execute())
+        subtitle = _s((rows or [{}])[0].get("subject"))
+    paths = write_sheet(Path(out_dir), payload, language=language, template=(branding or {}).get("docx_template"),
+                        header_lines=header_lines_of(params.get("curriculum_header")), subtitle=subtitle)
+    dest = f"{base}/worksheet.docx"
+    db.upload_artifact(sb, str(paths[0]), dest)
+    db.add_artifact_row(sb, generation_id, "docx", dest)
+    key_dest = f"{base}/answer_key.docx"
+    db.upload_artifact(sb, str(paths[1]), key_dest)
+    try:
+        db.add_artifact_row(sb, generation_id, "answer_key_docx", key_dest)
+    except Exception as exc:  # noqa: BLE001 — a missing enum value must not fail the sheet
+        log.warning("answer_key_docx row skipped for %s: %s", generation_id, exc)
+    try:
+        qlocal = Path(out_dir) / "questions.json"
+        qlocal.write_text(json.dumps({"title": payload.get("title"), "instructions": payload.get("instructions"),
+                                      "questions": payload["questions"]}, ensure_ascii=False, indent=2), encoding="utf-8")
+        qdest = f"{base}/worksheet_questions.json"
+        db.upload_artifact(sb, str(qlocal), qdest)
+        db.add_artifact_row(sb, generation_id, "questions_json", qdest)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("questions_json skipped for %s: %s", generation_id, exc)
+    return _s(payload.get("title")) or "Worksheet"
+
+
 # The authored document kinds a translated kit rebuilds from its translated
 # article (the model, in the language — plan 5.2 step 12's fallback is the
 # path: our .docx are many-run paragraphs, and a rebuild keeps styles, RTL
@@ -1163,13 +1393,20 @@ def generation_params(source: dict, kit: dict, language: str, article_id: str) -
 
 
 def generations_stage(sb, source: dict, kit: dict, language: str, article_id: str, script_paths: list[str],
-                      quiz: Optional[dict] = None) -> dict:
+                      quiz: Optional[dict] = None, worksheet: Optional[dict] = None) -> dict:
     """Every piece of the translated kit as a queued generation: the
     presentation (with the staged scripts), the deck, the authored
     documents the source kit has, the printable question bank, and the
     quiz — a composed worksheet with no kit_id (as the source's) whose
     ``params.translation.kit_id`` ties its completion to the kit. The kit
-    row is pointed at all of them; the lifecycle adds the lesson plan."""
+    row is pointed at all of them; the lifecycle adds the lesson plan.
+
+    ``worksheet`` is the worksheet stage's summary (T1.5): a maths
+    worksheet's verified questions, translated and staged under ``path``.
+    Its generation carries that path in ``params.translation.questions``
+    and renders without a model (render_translated_worksheet); a question
+    the checks dropped is a flag, a sheet with none left is not made and
+    the document is flagged as not translated."""
     owner = _s(source["presentation"].get("owner_id"))
     if not owner:
         raise RuntimeError("the source presentation has no owner")
@@ -1186,14 +1423,16 @@ def generations_stage(sb, source: dict, kit: dict, language: str, article_id: st
     for kind in DOC_KINDS_REBUILT:
         if not src_docs.get(kind):
             continue
-        if kind == "worksheet" and _has_artifact(sb, _s(src_docs.get(kind)), "questions_json"):
+        if kind == "worksheet" and (worksheet is not None or _has_artifact(sb, _s(src_docs.get(kind)), "questions_json")):
             # A maths worksheet: its questions were VERIFIED in English (the
-            # verifier reads English back); a rebuild in the language fails
-            # that gate (2026-10-16, the Circle kit). The composed quiz and
-            # the printed bank carry the assessment; the worksheet waits for
-            # the artifact-translation path (T1.5).
-            skipped.append({"where": kind, "what": DOCUMENT_FLAG,
-                            "detail": "a verified maths worksheet is not rebuilt in the language; the online quiz and the question bank carry the assessment"})
+            # verifier reads English back), so a rebuild in the language
+            # fails that gate (2026-10-16, the Circle kit). T1.5: the sheet
+            # is translated from the artifact instead — the worksheet stage
+            # staged the surviving questions; the render side draws the
+            # documents from them. No survivor (or no stage run): flagged.
+            skipped += worksheet_flags(worksheet or {"questions": 0, "kept": 0, "dropped": [], "path": None})
+            if worksheet and worksheet.get("path"):
+                rows.append(row(kind, {**base, "translation": {**base["translation"], "questions": worksheet["path"]}}))
             continue
         rows.append(row(kind, base))
     if src_docs.get("question_bank"):
@@ -1361,13 +1600,19 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
         items_dst = {str(r.get("source_item_id")): r for r in dst_rows}
         fidelity = fidelity_stage(client, [s for _, _, s in scripts], bodies, src_items, items_dst, language)
 
+        # the worksheet (T1.5): a maths worksheet's verified questions, translated
+        stage["step"] = "worksheet"
+        db.set_stage(sb, job_id, dict(stage))
+        db.set_progress(sb, job_id, 87)
+        worksheet = worksheet_stage(sb, client, source, kit, language, terms, title=title, context=context, tmp=tmp)
+
         # generations
         stage["step"] = "generations"
         db.set_stage(sb, job_id, dict(stage))
         db.set_progress(sb, job_id, 90)
         owner = _s(source["presentation"].get("owner_id"))
         paths = upload_staged_scripts(sb, owner, kit["id"], scripts, language, tmp)
-        ids = generations_stage(sb, source, kit, language, article_id, paths, quiz=quiz)
+        ids = generations_stage(sb, source, kit, language, article_id, paths, quiz=quiz, worksheet=worksheet)
 
     usage = getattr(client, "session_usage", None)
     precheck = check.merge_reports(*[{k: v for k, v in r.items() if k != "part"} for r in reports], fidelity)
@@ -1375,14 +1620,17 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
                           "flags": len(r.get("flags") or [])} for r in reports]
     if bank_summary.get("dropped"):
         precheck["flags"] = list(precheck.get("flags") or []) + bank_flags(bank_summary)
-    # the documents stage's flags (a worksheet not rebuilt) are already on
-    # the kit; this final write replaces the whole value, so carry them
+    # the documents stage's flags (a worksheet question dropped, a sheet not
+    # made) are already on the kit; this final write replaces the whole
+    # value, so carry them
     precheck["flags"] = list(precheck.get("flags") or []) + document_flags(sb, str(kit["id"]))
     precheck["bank"] = {k: v for k, v in bank_summary.items() if k != "dropped"}
     sb.table("topic_kits").update({"precheck": precheck}).eq("id", kit["id"]).execute()
     kit = _save_translation(sb, kit, {
         "stage": {"script": {"parts": n}, "assets": {"found": len(found), "keys": len(keys)},
                   "quiz": quiz, "fidelity": {"mean_score": fidelity.get("mean_score"), "samples": fidelity.get("samples")},
+                  "worksheet": ({k: v for k, v in worksheet.items() if k != "dropped"} | {"dropped": [d["id"] for d in worksheet["dropped"]]})
+                  if worksheet else None,
                   "generations": ids},
         "scripts": paths, "source_scripts": [{"path": b["_path"], "sha256": b["_sha256"]} for b in bodies],
         "assets": found, "model": str(getattr(client, "model", "") or ""),
@@ -1451,5 +1699,6 @@ __all__ = ["JOB_TYPE", "TranslateRefused", "apply_strings", "article_text_items"
            "fidelity_stage", "generation_params", "generations_stage", "glossary_stage", "item_text_items",
            "lesson_from_record", "lesson_text_items", "load_source", "load_staged_scripts", "quiz_stage",
            "recompile_maths", "record_post_render", "resolve_assets", "run_translate_job", "scene_asset_keys",
+           "question_text_items", "render_translated_worksheet", "translate_questions", "worksheet_flags", "worksheet_stage",
            "segment_text_items", "staged_script_path", "translate_episode", "translate_kit", "translate_segments",
            "translate_strings", "translated_item"]

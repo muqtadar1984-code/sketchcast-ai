@@ -461,6 +461,77 @@ def check_item(source: dict, target: dict) -> dict:
     return {"check": "A-item", "ok": not blocking, "blocking": blocking, "flags": flags}
 
 
+# ── a worksheet's questions (T1.5) ───────────────────────────────────────
+# The maths worksheet's ``questions_json`` (docgen.questions): the sheet
+# rendered again in the language from its own verified questions, words
+# translated, every number and expression kept.
+
+
+def is_maths(text: str) -> bool:
+    """Whether a string is NOTATION rather than words — ``x = 5``, ``9π cm``,
+    ``3x + 5 = 20``, ``7``: once its maths spans are taken out no word of two
+    or more letters remains. Such a string is copied, never translated. A
+    unit word (``cm``) alone does not make a string prose: ``9π cm`` is maths."""
+    t = str(text or "").strip()
+    if not t:
+        return True
+    from docgen.questions import numeric_forms
+    if numeric_forms(t) is not None:
+        return True
+    rest = _SPAN_RE.sub(" ", _WORD_HYPHEN_RE.sub("‐", normalize_numerals(t)))
+    return not _PROSE_WORD_RE.search(rest)
+
+
+QUESTION_INVARIANT_KEYS = ("id", "type", "marks", "image")
+
+
+def _q_strings(q: dict) -> list[str]:
+    out = [str(q.get("prompt") or "")]
+    if isinstance(q.get("answer"), str):
+        out.append(q["answer"])
+    out += [str(x) for x in (q.get("accept") or []) if isinstance(q.get("accept"), list)]
+    out += [str(o) for o in (q.get("options") or []) if isinstance(q.get("options"), list)]
+    out += [f"{p.get('left')} {p.get('right')}" for p in (q.get("pairs") or []) if isinstance(p, dict)]
+    out += [str(w) for w in (q.get("working") or []) if isinstance(q.get("working"), list)]
+    return out
+
+
+def check_question(source: dict, target: dict) -> dict:
+    """A translated worksheet question against its English source. The id,
+    type, marks and picture are identical; a true/false answer is the same
+    truth; the option, pair and working-line COUNTS match; every number
+    across the question (prompt, answers, options, pairs, working) is
+    equivalent; every maths span of the prompt and of each working line
+    survives verbatim; the options stay distinct. Blocking findings drop the
+    question from the translated sheet."""
+    blocking: list[dict] = []
+    qid = str(source.get("id") or "question")
+    for key in QUESTION_INVARIANT_KEYS:
+        if source.get(key) != target.get(key):
+            blocking.append(_finding(qid, f"{key} changed"))
+    if source.get("type") == "true_false" and bool(source.get("answer")) != bool(target.get("answer")):
+        blocking.append(_finding(qid, "answer changed", source=source.get("answer"), target=target.get("answer")))
+    for list_key in ("options", "pairs", "working", "accept"):
+        if len(source.get(list_key) or []) != len(target.get(list_key) or []):
+            blocking.append(_finding(qid, f"{list_key} count differs"))
+    opts = [" ".join(str(o).split()).casefold() for o in (target.get("options") or [])]
+    if opts and len(opts) != len(set(opts)):
+        blocking.append(_finding(qid, "translated options are no longer distinct", options=opts))
+    ok, missing, extra = numbers_equivalent(" ".join(_q_strings(source)), " ".join(_q_strings(target)))
+    if not ok:
+        blocking.append(_finding(qid, "numbers differ", missing=missing, extra=extra))
+    ok_m, lost = prose_maths_equivalent(str(source.get("prompt") or ""), str(target.get("prompt") or ""))
+    if not ok_m:
+        blocking.append(_finding(qid, "maths in the question altered", lost=lost))
+    for i, (sw, tw) in enumerate(zip(source.get("working") or [], target.get("working") or [])):
+        ok_w, lost_w = prose_maths_equivalent(str(sw), str(tw))
+        if not ok_w:
+            blocking.append(_finding(f"{qid} working[{i}]", "maths in the working altered", lost=lost_w))
+    if not str(target.get("prompt") or "").strip():
+        blocking.append(_finding(qid, "question emptied"))
+    return {"check": "A-question", "ok": not blocking, "blocking": blocking, "flags": []}
+
+
 # ── pre-check B: meaning, by back-translation ────────────────────────────
 
 _WORD_RE = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
