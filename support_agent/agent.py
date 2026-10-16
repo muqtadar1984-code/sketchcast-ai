@@ -243,6 +243,7 @@ def _what(gen: dict | None, issue: dict) -> str:
     kind = str((gen or {}).get("kind") or "")
     names = {"presentation": "lesson video", "exam_paper": "test paper", "lesson_plan": "lesson plan",
              "case_study": "case study", "deck": "slide deck", "worksheet": "worksheet",
+             "question_bank": "question bank",
              "activity": "activities", "index_book": "book"}
     return names.get(kind, kind or str(issue.get("category") or "request").replace("_", " "))
 

@@ -854,6 +854,41 @@ class TestProcessCatalogue:
         assert gen["status"] == "done" and gen["title"] == "Cells · Worksheet (question bank)"
         assert sb.tables["jobs"][0]["status"] == "done" and ("select", "books") not in sb.calls
 
+    def test_a_question_bank_renders_through_its_renderer_with_no_analysis(self, monkeypatch):
+        # Phase D: the kit's printable bank — a kit piece (kit_id set, article
+        # approved) that never analyses or authors anything.
+        sb = _sb(statuses={"gen-p": "done", "gen-a": "done", "gen-c": "done", "gen-w": "done", "gen-d": "done"})
+        sb.tables["topic_kits"][0]["doc_generation_ids"] = {**KIT["doc_generation_ids"], "lesson_plan": "gen-l", "question_bank": "gen-qb"}
+        sb.tables["generations"].append({**_gen("gen-l", "done"), "kind": "lesson_plan"})
+        sb.tables["generations"].append({**_gen("gen-qb", "processing"), "kind": "question_bank"})
+        sb.tables["jobs"] = [_job("job-qb", "gen-qb", "question_bank")]
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+        seen: list = []
+        mod = types.ModuleType("catalogue.question_bank")
+
+        def render_question_bank(sb_, gen, generation_id, out_dir, base, branding, language):
+            seen.append((gen["id"], gen["kind"], gen["params"]["curriculum_header"], generation_id, isinstance(out_dir, Path), base, language))
+            return "Cells · Question Bank"
+
+        mod.render_question_bank = render_question_bank
+        monkeypatch.setitem(sys.modules, "catalogue.question_bank", mod)
+        monkeypatch.setattr("docgen.generate_document", lambda **k: pytest.fail("the bank renders from approved items, not docgen"))
+
+        process.process_generation(sb, sb.tables["jobs"][0], "gen-qb")
+
+        assert analysis_calls == [], "approved bank items need no analysis call"
+        assert seen == [("gen-qb", "question_bank", HEADER, "gen-qb", True, "sys/gen-qb", "en")]
+        gen = next(g for g in sb.tables["generations"] if g["id"] == "gen-qb")
+        assert gen["status"] == "done" and gen["title"] == "Cells · Question Bank"
+        assert sb.tables["jobs"][0]["status"] == "done" and ("select", "books") not in sb.calls
+        # the bank was the kit's last unfinished piece → the kit completes like any other
+        assert _kit(sb)["status"] == "in_review"
+
+    def test_prepare_accepts_the_question_bank_kind(self):
+        sb = _sb()
+        prepared = kit.prepare(sb, {**_gen("gen-qb"), "kind": "question_bank"})
+        assert prepared.kit_id == "kit-1" and prepared.language == "en"
+
     def test_an_unapproved_article_fails_before_any_model_call(self, monkeypatch):
         sb = _sb(article={**ARTICLE, "status": "draft"})
         sb.tables["jobs"] = [_job("job-a", "gen-a", "activity")]

@@ -49,6 +49,10 @@ SECTION_KEY = {
     "numerical": "sec_numerical", "diagram_label": "sec_diagram_label",
 }
 KEYS = ("A", "B", "C", "D")
+# The printable bank's difficulty bands over topic_questions.difficulty (1–5):
+# 1–2 easy, 3 medium, 4–5 hard — three sub-headings a teacher can photocopy
+# by, not five. Keyed by the docgen.strings label key.
+DIFF_BANDS = (("diff_easy", (1, 2)), ("diff_medium", (3,)), ("diff_hard", (4, 5)))
 MIN_LINES, MAX_LINES = 2, 16
 # One ruled line holds roughly forty seconds of a learner's handwriting.
 SECONDS_PER_LINE = 40.0
@@ -86,6 +90,25 @@ def group_items(items: list[dict]) -> list[tuple[str, list[dict]]]:
         if t in SECTION_KEY:
             by_type.setdefault(t, []).append(it)
     return [(t, by_type[t]) for t in TYPE_ORDER if t in by_type]
+
+
+def band_of(item: dict) -> str:
+    """The DIFF_BANDS key for an item; an unknown or missing difficulty counts
+    as medium rather than vanishing from the bank."""
+    d = _int(item.get("difficulty"), 3)
+    for key, levels in DIFF_BANDS:
+        if d in levels:
+            return key
+    return "diff_medium"
+
+
+def group_by_band(items: list[dict]) -> list[tuple[str, list[dict]]]:
+    """``[(band_key, [items…])]`` easy → hard, empty bands skipped, each
+    band's items in the order given."""
+    by: dict[str, list[dict]] = {}
+    for it in items:
+        by.setdefault(band_of(it), []).append(it)
+    return [(k, by[k]) for k, _levels in DIFF_BANDS if k in by]
 
 
 def _answer(item: dict) -> dict:
@@ -267,5 +290,70 @@ def write_set(out_dir: Path, title: str, subtitle: str, items: list[dict], *,
     return [sheet_path, key_path]
 
 
-__all__ = ["TYPE_ORDER", "SUBJECTIVE_TYPES", "SECTION_KEY", "answer_lines", "group_items", "answer_text",
+def write_bank(out_dir: Path, title: str, subtitle: str, items: list[dict], *,
+               header_lines, language: str, template) -> list[Path]:
+    """Render the printable QUESTION BANK of a topic (catalogue Phase D):
+    ``[bank_path, key_path]``.
+
+    The same primitives and the same student/key split as ``write_set``, with
+    one more level of grouping: inside each item-type section the items sit
+    under difficulty sub-headings (easy / medium / hard, ``DIFF_BANDS``),
+    numbered from 1 within each band on BOTH documents, so "Section B,
+    medium, item 3" names the same question on the sheet and in the key. A
+    bank is a reference document, not a paper: match tables keep the bank's
+    own fixed order (seed 0) so two renders of a grown bank line up, and no
+    blueprint name is printed."""
+    rng = random.Random(0)
+    language = (language or "en").strip().lower()
+    letters = dx.letters(language)
+    sections = group_items(items)
+    orders: dict[int, list[int]] = {}
+    for t, group in sections:
+        if t == "match":
+            for it in group:
+                order = list(range(len(_pairs(it))))
+                rng.shuffle(order)
+                orders[id(it)] = order
+    meta = f"{dx._t('n_questions', language).format(n=len(items))} · " \
+        f"{dx._t('total_marks', language)}: {total_marks(items)}"
+
+    def band_heading(key: str) -> str:
+        return f"{dx._t('difficulty', language)}: {dx._t(key, language)}"
+
+    doc = dx.new_doc(title, subtitle, template=template, kind="question_bank",
+                     language=language, header_lines=header_lines)
+    dx.para(doc, meta, bold=True)
+    for si, (t, group) in enumerate(sections):
+        if si > 0:
+            dx.page_break(doc)
+        dx.heading(doc, dx.section_heading(language, si, SECTION_KEY[t]), 1)
+        for key, band in group_by_band(group):
+            dx.heading(doc, band_heading(key), 2)
+            _render_section(doc, t, band, language, letters, orders)
+
+    key_doc = dx.new_doc(f"{title} — {dx._t('answer_key', language)}", subtitle,
+                         template=template, kind="question_bank", language=language,
+                         header_lines=header_lines)
+    dx.para(key_doc, dx._t("teacher_only", language), italic=True)
+    dx.para(key_doc, meta, bold=True)
+    for si, (t, group) in enumerate(sections):
+        dx.heading(key_doc, dx.section_heading(language, si, SECTION_KEY[t]), 2)
+        for key, band in group_by_band(group):
+            dx.heading(key_doc, band_heading(key), 3)
+            for i, it in enumerate(band, 1):
+                dx.question(key_doc, f"{i}. {answer_text(it, language, letters, orders.get(id(it)))}", first=(i == 1))
+                scheme = _scheme_text(it)
+                if scheme and (t in SUBJECTIVE_TYPES or len(it.get("marking_scheme") or []) > 1):
+                    dx.labelled(key_doc, dx._t("marking_scheme", language), scheme)
+                if _s(it.get("explanation")):
+                    dx.labelled(key_doc, dx._t("explanation", language), _s(it.get("explanation")))
+
+    out_dir = Path(out_dir)
+    bank_path = dx.save(doc, out_dir / "question_bank.docx")
+    key_path = dx.save(key_doc, out_dir / "question_bank_answer_key.docx")
+    return [bank_path, key_path]
+
+
+__all__ = ["TYPE_ORDER", "SUBJECTIVE_TYPES", "SECTION_KEY", "DIFF_BANDS", "answer_lines", "group_items", "answer_text",
+           "band_of", "group_by_band", "write_bank",
            "total_marks", "write_set"]

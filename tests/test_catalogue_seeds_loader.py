@@ -346,9 +346,12 @@ class TestNodeKind:
             if "cambridge_ls_maths_0862" in f.name:
                 from collections import Counter
                 counts = Counter(kinds.values())
-                # the ALGEBRA strand only (partial seed): 3 stages × (1 strand +
-                # 2 sub-strands), 14 objectives a stage = 51 nodes.
-                assert counts == {"objective": 46, "sub_strand": 7, "strand": 4}
+                # the ALGEBRA strand (partial seed): 3 stages × (1 strand +
+                # 2 sub-strands), 14 objectives a stage = 51 nodes — plus the
+                # geometry nodes of PR #232 (2026-10-16): stage 7 "Geometry and
+                # measure" strand, its 7Gg sub-strand, 7Gg.12, 7Gg.13 and 9Gg.10
+                # = 56 nodes.
+                assert counts == {"objective": 49, "sub_strand": 8, "strand": 5}
 
 
 class TestDryRun:

@@ -148,6 +148,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "te": "జవాబుల పట్టిక", "mr": "उत्तरसूची", "hi": "उत्तर कुंजी",
         "ms-arab": "سکيما جواڤن",
     },
+    "question_bank": {  # the printable bank's title label (catalogue Phase D)
+        "en": "Question Bank", "ms": "Bank Soalan", "ar": "بنك الأسئلة",
+        "fr": "Banque de questions", "es": "Banco de preguntas", "pt": "Banco de questões",
+        "te": "ప్రశ్నల బ్యాంకు", "mr": "प्रश्नसंच", "hi": "प्रश्न बैंक",
+        "ms-arab": "بڠک سوءالن",
+    },
     "column": {  # {letter} ← letters(lang)
         "en": "Column {letter}", "ms": "Lajur {letter}", "ar": "العمود {letter}",
         "fr": "Colonne {letter}", "es": "Columna {letter}", "pt": "Coluna {letter}",

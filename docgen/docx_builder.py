@@ -110,6 +110,7 @@ STYLE_BY_KIND: dict[str, str] = {
     "exam": "exam_board",
     "worksheet": "workbook",
     "activity": "workbook",
+    "question_bank": "workbook",
     "lesson_plan": "classroom",
     "case_study": "classroom",
 }

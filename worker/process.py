@@ -1446,6 +1446,23 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
         db.set_generation_title(sb, generation_id, title)
         return _Built(client=client, title=title, parts=[])
 
+    if catalogue is not None and kind == "question_bank":
+        # The PRINTABLE QUESTION BANK (catalogue Phase D): every approved
+        # topic_questions item of the kit's topic and language, grouped by
+        # type then difficulty, as a student document plus a separate answer
+        # key. Nothing is authored — the items were reviewed one by one — so,
+        # like the composed worksheet above, the model is never called and
+        # the renderer uploads exactly as the document block below would.
+        from catalogue.question_bank import render_question_bank
+
+        branding = load_branding(sb, owner_id, Path(tmp))
+        base = f"{owner_id}/{generation_id}"
+        title = render_question_bank(sb, {**gen, "params": _catalogue_doc_params(gen, catalogue)},
+                                     generation_id, Path(tmp), base, branding, lesson_lang)
+        db.set_progress(sb, job_id, 96)
+        db.set_generation_title(sb, generation_id, title)
+        return _Built(client=client, title=title, parts=[])
+
     if catalogue is not None and getattr(catalogue, "chapter", None) is None:
         # Only the composed branch above may run without an article chapter.
         # Anything else reaching here would analyse an EMPTY stub chapter —

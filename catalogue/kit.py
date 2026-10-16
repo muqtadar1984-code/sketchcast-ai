@@ -114,7 +114,10 @@ PAUSED_FOR_USERS = "paused: builder jobs queued"
 # The one kind the composer renders from a question set (decision 9).
 COMPOSED_KIND = "worksheet"
 # Kinds a kit's generations may carry (decision 1 + the worker-inserted plan).
-KIT_KINDS = frozenset({"presentation", "activity", "case_study", "worksheet", "deck", "lesson_plan"})
+KIT_KINDS = frozenset({"presentation", "activity", "case_study", "worksheet", "deck", "lesson_plan",
+                       # Phase D: the printable question bank, rendered from approved
+                       # topic_questions with no model call (catalogue.question_bank).
+                       "question_bank"})
 SYNTHETIC_AUTHOR = "SketchCast"
 ARTICLE_APPROVED = "approved"
 KIT_GENERATING = "generating"
