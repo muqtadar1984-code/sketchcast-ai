@@ -268,6 +268,48 @@ class TestItems:
         assert all(n == 1 for n in seen.values()), "each distinct string is asked once"
         assert C.check_item(src, dst)["ok"]
 
+    def test_a_refused_item_is_translated_once_more_with_the_reason_and_a_second_refusal_drops_it(self):
+        sb = _job_sb()
+        sb.tables["topic_questions"] = [_item(1), _item(2), _item(3)]
+        sb.tables["topic_kits"][0]["doc_generation_ids"] = {"deck": "gen-deck"}   # no bank piece: the floor does not bind
+        asked: list[str] = []
+
+        def flaky(s: str) -> str:
+            # item 1's stem gains a number the FIRST time it is asked (the
+            # retry gets it right); item 2's stem gains one EVERY time
+            asked.append(s)
+            if s.startswith("Which part of a cell is the nucleus") and asked.count(s) == 1:
+                return _arabize(s) + " 42"
+            if s.startswith("The membrane of a cell"):
+                return _arabize(s) + " 7"
+            return _arabize(s)
+
+        c = FakeTranslator(flaky)
+        kit = {"id": "kit-ar", "topic_id": "t-cell"}
+        mapping, summary = T.bank_stage(sb, c, {"kit": sb.tables["topic_kits"][0]}, kit, "ar", [], "art-ar")
+        assert len(c.calls) == 2, "one call for the bank, one retry call"
+        assert "A previous translation of these strings was refused" in c.calls[1] and "numbers differ" in c.calls[1]
+        assert "q-1" in mapping, "the retry fixed item 1"
+        assert summary["retried"] >= 1 and summary["staged"] == len(mapping)
+        if "q-2" not in mapping:
+            d = next(d for d in summary["dropped"] if d["source_item_id"] == "q-2")
+            assert any(f["what"] == "numbers differ" for f in d["findings"])
+            flags = T.bank_flags(summary)
+            assert flags and flags[0]["what"] == "bank item not staged" and "numbers differ" in flags[0]["detail"]
+
+    def test_a_failed_translation_retires_the_items_it_staged(self):
+        sb = FakeSB()
+        sb.tables["topic_kits"] = [{"id": "kit-ar", "status": "generating", "translation_status": "staged"}]
+        sb.tables["topic_questions"] = [
+            {"id": "a", "translation_kit_id": "kit-ar", "status": "staged"},
+            {"id": "b", "translation_kit_id": "kit-ar", "status": "approved"},
+            {"id": "c", "translation_kit_id": "kit-other", "status": "staged"},
+        ]
+        T._fail_translation(sb, {"id": "kit-ar"}, "translation failed: x")
+        by = {q["id"]: q["status"] for q in sb.tables["topic_questions"]}
+        assert by == {"a": "retired", "b": "approved", "c": "staged"}
+        assert sb.tables["topic_kits"][0]["translation_status"] == "failed"
+
     def test_fidelity_scores_a_faithful_back_translation_high_and_flags_a_stray_one(self):
         rep = C.fidelity_report([("s1", "The cell is the smallest unit of life", "The cell is the smallest unit of life."),
                                  ("s2", "Plants have a cell wall and chloroplasts", "The weather was fine today")])
@@ -574,7 +616,7 @@ class TestTranslateJob:
         assert k["presentation_generation_id"] == labels["presentation"]["id"]
         assert set(k["doc_generation_ids"]) == {"deck", "activity", "case_study", "worksheet", "question_bank", "quiz"}
         # pre-check B ran on a sample and flagged nothing (the fake keeps the words)
-        assert k["precheck"]["bank"] == {"source_items": 12, "staged": 12, "reused": 0}
+        assert k["precheck"]["bank"] == {"source_items": 12, "staged": 12, "reused": 0, "retried": 0}
         fid = next(c for c in k["precheck"]["checks"] if c.get("check") == "B")
         assert fid["samples"] >= 4 and fid["mean_score"] is not None and fid["mean_score"] > 0.9
         # the staged script: the translated lesson, Arabic board words

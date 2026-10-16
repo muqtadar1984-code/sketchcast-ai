@@ -618,6 +618,9 @@ def _fail_translation(sb, kit: Optional[dict], note: str, report: Optional[dict]
         return
     try:
         mark_kit_failed(sb, kit["id"], note)
+        # its staged items step out of the bank (approve/reject would have
+        # promoted or retired them; a failed kit never reaches either)
+        sb.table("topic_questions").update({"status": "retired"}).eq("translation_kit_id", kit["id"]).eq("status", "staged").execute()
         patch: dict = {"translation_status": TRANSLATION_FAILED}
         if isinstance(report, dict):
             # the pre-check that refused, on the kit, so the Translations
@@ -914,29 +917,56 @@ def bank_stage(sb, client, source: dict, kit: dict, language: str, terms, articl
     topic_id = str(kit["topic_id"])
     items = load_bank(sb, topic_id, SOURCE_LANGUAGE)
     if not items:
-        return {}, {"source_items": 0, "staged": 0, "reused": 0, "dropped": []}
+        return {}, {"source_items": 0, "staged": 0, "reused": 0, "retried": 0, "dropped": []}
     mapping = existing_staged(sb, kit["id"])
     todo = [it for it in items if str(it.get("id")) not in mapping]
-    flat: list[tuple[int, str, str]] = []
-    for i, it in enumerate(todo):
-        for path, text in item_text_items(it):
-            flat.append((i, path, text))
-    got = translate_strings(client, [t for _, _, t in flat], language, terms=terms, context=ITEM_RULE) if flat else []
-    by_item: dict[int, list[tuple[str, str]]] = {}
-    for (i, path, _), t in zip(flat, got):
-        by_item.setdefault(i, []).append((path, t))
+
+    def attempt(batch: list[dict], context: str) -> list[tuple[dict, dict, dict]]:
+        """Translate every text field of ``batch`` in one call and check each
+        item: ``(source, translated, report)`` per item."""
+        flat: list[tuple[int, str, str]] = []
+        for i, it in enumerate(batch):
+            for path, text in item_text_items(it):
+                flat.append((i, path, text))
+        got = translate_strings(client, [t for _, _, t in flat], language, terms=terms, context=context) if flat else []
+        by_item: dict[int, list[tuple[str, str]]] = {}
+        for (i, path, _), t in zip(flat, got):
+            by_item.setdefault(i, []).append((path, t))
+        out = []
+        for i, src in enumerate(batch):
+            dst = translated_item(src, by_item.get(i, []))
+            out.append((src, dst, check.check_item(src, dst)))
+        return out
+
+    first = attempt(todo, ITEM_RULE)
+    # One retry for the items the check refused, told what was wrong: a
+    # number the model added, an option it merged, a key it moved. A second
+    # refusal drops the item, with both findings on the kit for the reviewer.
+    refused = [(src, rep) for src, _, rep in first if not rep["ok"]]
+    second: dict[str, tuple[dict, dict]] = {}
+    if refused:
+        why = "; ".join(sorted({str(f.get("what") or "") for _, rep in refused for f in rep["blocking"]}))
+        again = attempt([src for src, _ in refused],
+                        ITEM_RULE + f"\nA previous translation of these strings was refused ({why}). Translate the WORDS only: "
+                                    "add no number, symbol, unit or explanation that the English does not have; keep every "
+                                    "option distinct; a key, a number and a formula stay exactly as written.")
+        second = {str(src.get("id")): (dst, rep) for src, dst, rep in again}
+
     dropped: list[dict] = []
     staged = 0
-    for i, src in enumerate(todo):
-        dst = translated_item(src, by_item.get(i, []))
-        report = check.check_item(src, dst)
+    for src, dst, report in first:
+        sid = str(src.get("id"))
         if not report["ok"]:
-            dropped.append({"source_item_id": str(src.get("id")), "findings": report["blocking"][:4]})
-            continue
+            dst2, report2 = second.get(sid, (None, None))
+            if dst2 is None or report2 is None or not report2["ok"]:
+                findings = (report["blocking"][:3]) + ([{**f, "where": f"{sid} (retry)"} for f in (report2 or {}).get("blocking", [])[:3]])
+                dropped.append({"source_item_id": sid, "findings": findings})
+                continue
+            dst = dst2
         row = {k: src.get(k) for k in ITEM_COPY_KEYS}
         row.update({
             "article_id": article_id, "language": language, "status": "staged",
-            "source_item_id": str(src.get("id")), "translation_kit_id": kit["id"],
+            "source_item_id": sid, "translation_kit_id": kit["id"],
             **{k: dst.get(k) for k in ITEM_FIELDS},
         })
         row["content_hash"] = _item_hash(row, str(kit["id"]))
@@ -948,15 +978,15 @@ def bank_stage(sb, client, source: dict, kit: dict, language: str, terms, articl
                 raise
             # a twin: the same stem in the language already (two English
             # items that translate to one sentence), or a resume's rerun
-            again = _rows(sb.table("topic_questions").select("id").eq("translation_kit_id", kit["id"])
-                          .eq("source_item_id", str(src.get("id"))).execute())
-            new_id = str((again or [{}])[0].get("id") or "")
+            again_rows = _rows(sb.table("topic_questions").select("id").eq("translation_kit_id", kit["id"])
+                               .eq("source_item_id", sid).execute())
+            new_id = str((again_rows or [{}])[0].get("id") or "")
             if not new_id:
-                dropped.append({"source_item_id": str(src.get("id")),
-                                "findings": [{"where": str(src.get("id")), "what": "translated stem duplicates another item"}]})
+                dropped.append({"source_item_id": sid,
+                                "findings": [{"where": sid, "what": "translated stem duplicates another item"}]})
                 continue
         if new_id:
-            mapping[str(src.get("id"))] = new_id
+            mapping[sid] = new_id
             staged += 1
     total = len(mapping)
     # The floor binds only where the bank is one of the source kit's pieces
@@ -969,13 +999,22 @@ def bank_stage(sb, client, source: dict, kit: dict, language: str, terms, articl
         raise TranslateRefused(f"only {total} bank item(s) survived translation of {len(items)}; "
                                f"the source kit's bank needs at least {BANK_FLOOR}")
     return mapping, {"source_items": len(items), "staged": staged, "reused": len(items) - len(todo),
-                     "dropped": dropped}
+                     "retried": len(refused), "dropped": dropped}
+
+
+def bank_flags(summary: dict) -> list[dict]:
+    """The dropped items of a bank summary as pre-check flags: what the
+    reviewer sees on the kit, whether or not the job went on to finish."""
+    return [{"where": f"item {str(d.get('source_item_id') or '')[:8]}", "what": "bank item not staged",
+             "detail": "; ".join(str(f.get("what") or "") for f in (d.get("findings") or []))}
+            for d in (summary.get("dropped") or [])]
 
 
 # ── the quiz set (the explicit-ids rule, revision 3) ─────────────────────
 
 
-def quiz_stage(sb, source: dict, kit: dict, language: str, mapping: dict[str, str]) -> Optional[dict]:
+def quiz_stage(sb, source: dict, kit: dict, language: str, mapping: dict[str, str],
+               dropped: Optional[dict[str, str]] = None) -> Optional[dict]:
     """The English kit's composed quiz, question for question: its
     question_sets row's ordered ids mapped through ``source_item_id`` to the
     staged items, written as a new question_sets row in the language (same
@@ -1000,7 +1039,8 @@ def quiz_stage(sb, source: dict, kit: dict, language: str, mapping: dict[str, st
     src_ids = [str(i) for i in (qset.get("question_ids") or []) if i]
     missing = [i for i in src_ids if i not in mapping]
     if missing:
-        raise TranslateRefused(f"{len(missing)} quiz question(s) have no staged translation: {missing[:4]}")
+        raise TranslateRefused(f"{len(missing)} quiz question(s) have no staged translation: "
+                               + "; ".join(f"{q[:8]} ({(dropped or {}).get(q) or 'not translated'})" for q in missing[:4]))
     new_set = {
         "blueprint_id": qset.get("blueprint_id"), "topic_ids": qset.get("topic_ids") or [kit["topic_id"]],
         "language": language, "question_ids": [mapping[i] for i in src_ids],
@@ -1234,11 +1274,18 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
         db.set_progress(sb, job_id, 78)
         mapping, bank_summary = bank_stage(sb, client, source, kit, language, terms, article_id)
         kit = _save_translation(sb, kit, {"stage": {"bank": {k: v for k, v in bank_summary.items() if k != "dropped"}}})
+        if bank_summary.get("dropped"):
+            # on the kit NOW, so a later stage's failure keeps the reasons
+            sb.table("topic_kits").update({"precheck": {"ok": None, "blocking": [], "flags": bank_flags(bank_summary),
+                                                        "bank": {k: v for k, v in bank_summary.items() if k != "dropped"}}}
+                                          ).eq("id", kit["id"]).execute()
 
         # the quiz: the same questions, by id
         stage["step"] = "quiz"
         db.set_stage(sb, job_id, dict(stage))
-        quiz = quiz_stage(sb, source, kit, language, mapping)
+        quiz = quiz_stage(sb, source, kit, language, mapping,
+                          dropped={d["source_item_id"]: "; ".join(str(f.get("what") or "") for f in d["findings"])
+                                   for d in bank_summary.get("dropped") or []})
 
         # pre-check B: meaning, on a sample
         stage["step"] = "fidelity"
@@ -1263,9 +1310,7 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
     precheck["parts"] = [{"part": r["part"], "ok": r.get("ok"), "blocking": len(r.get("blocking") or []),
                           "flags": len(r.get("flags") or [])} for r in reports]
     if bank_summary.get("dropped"):
-        precheck["flags"] = list(precheck.get("flags") or []) + [
-            {"where": f"item {d['source_item_id'][:8]}", "what": "bank item not staged",
-             "detail": "; ".join(f.get("what", "") for f in d["findings"])} for d in bank_summary["dropped"]]
+        precheck["flags"] = list(precheck.get("flags") or []) + bank_flags(bank_summary)
     precheck["bank"] = {k: v for k, v in bank_summary.items() if k != "dropped"}
     sb.table("topic_kits").update({"precheck": precheck}).eq("id", kit["id"]).execute()
     kit = _save_translation(sb, kit, {
