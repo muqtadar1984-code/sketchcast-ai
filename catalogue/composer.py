@@ -19,7 +19,17 @@ decision 9 (2026-09-06). No model call anywhere in this module.
     bucket (mode, difficulty, need, have). NEVER padded from another
     difficulty: a "hard" blueprint that quietly served easy items would lie
     to the teacher who chose it, and the portal's ``canCompose`` pre-check
-    exists so the reviewer sees the shortfall before a generation is spent.
+    exists so the reviewer sees the shortfall before a generation is spent;
+  * EXCEPT when the spec says ``"fill": "nearest"`` (the catalogue's standard
+    "Online quiz" blueprint, Phase D, 2026-10-16): the difficulty mix is then
+    a PREFERENCE, not a promise — every bucket is filled as above and a short
+    bucket's remainder is drawn from the same mode's leftover items nearest
+    in difficulty (ties: easier first, then the shuffled order). Only the
+    MODE total can be short, and that still raises. A kit's quiz is composed
+    unattended on approval; a strict mix would refuse most banks (the 51
+    current kits have 8–123 approved objective items, almost all at
+    difficulty 1–3), and "ten mixed questions" is what the blueprint
+    promises, not "exactly three of difficulty 3".
 
 ``render_question_set(sb, gen, generation_id, out_dir, base, branding,
 language)`` is what ``worker/process.py``'s catalogue branch calls for a
@@ -30,8 +40,14 @@ paper instead of composing a different one), renders through
 ``docgen.bank_worksheet.write_set`` with the curriculum block from
 ``params.curriculum_header``, and uploads ``{base}/worksheet.docx`` (kind
 ``docx``) and ``{base}/answer_key.docx`` (kind ``answer_key_docx``) exactly
-as the document block of process.py does. Returns the generation title
-``"<topic title> · <blueprint name>"``.
+as the document block of process.py does — then, Phase D, the set's
+OBJECTIVE items as ``{base}/worksheet_questions.json`` (kind
+``questions_json``, the quiz engine's marking scheme, ``docgen.questions.
+write_bank_set``), which is what makes a copy of the set gradable online
+once a teacher assigns it (app ``/api/quiz``: the key never leaves the
+server, three attempts, server-side score). Subjective items stay print-only;
+a set with no objective item writes no questions.json. Returns the
+generation title ``"<topic title> · <blueprint name>"``.
 """
 
 from __future__ import annotations
@@ -113,6 +129,17 @@ def _difficulty(item: dict) -> Optional[int]:
     return d if d in DIFFICULTIES else None
 
 
+FILL_EXACT, FILL_NEAREST = "exact", "nearest"
+
+
+def fill_mode(spec: Optional[dict]) -> str:
+    """``spec.fill``: ``nearest`` when the difficulty mix is a preference
+    (see the module docstring), else ``exact`` — the default, and what every
+    blueprint before 2026-10-16 means."""
+    spec = spec if isinstance(spec, dict) else {}
+    return FILL_NEAREST if str(spec.get("fill") or "").strip().lower() == FILL_NEAREST else FILL_EXACT
+
+
 def parse_spec(spec: Optional[dict]) -> tuple[int, float, dict]:
     """``(count, objective_ratio, difficulty_mix)`` from a blueprint spec,
     tolerant of the JSON shapes the portal writes: string keys "1".."5",
@@ -174,6 +201,7 @@ def compose(items: list[dict], spec: dict, seed) -> list[dict]:
     chosen: list[dict] = []
     used: set[str] = set()
     shortfalls: list[dict] = []
+    nearest = fill_mode(spec) == FILL_NEAREST
     for mode, diff, n in bucket_plan(spec):
         cands = [it for it in pool
                  if str(it.get("id")) not in used and mode_of(it) == mode
@@ -196,6 +224,25 @@ def compose(items: list[dict], spec: dict, seed) -> list[dict]:
             shortfalls.append({"mode": mode, "difficulty": diff, "need": n, "have": len(picked)})
         chosen.extend(picked)
         used.update(str(it.get("id")) for it in picked)
+    if shortfalls and nearest:
+        # The mix was a preference: top each short bucket up from the same
+        # mode's leftovers, nearest difficulty first. Deterministic — the
+        # leftovers are taken in one more seeded shuffle, then stably sorted
+        # by distance (so equal distances keep that shuffled order).
+        still_short: list[dict] = []
+        for short in shortfalls:
+            want = short["need"] - short["have"]
+            left = [it for it in pool if str(it.get("id")) not in used and mode_of(it) == short["mode"]]
+            rng.shuffle(left)
+            target = short["difficulty"]
+            if target is not None:
+                left.sort(key=lambda it: (abs((_difficulty(it) or 3) - target), (_difficulty(it) or 3)))
+            extra = left[:want]
+            chosen.extend(extra)
+            used.update(str(it.get("id")) for it in extra)
+            if len(extra) < want:
+                still_short.append({**short, "have": short["have"] + len(extra)})
+        shortfalls = still_short
     if shortfalls:
         raise Unsatisfiable(shortfalls)
     return chosen
@@ -312,11 +359,31 @@ def render_question_set(sb, gen: dict, generation_id: str, out_dir: Path, base: 
         db.add_artifact_row(sb, generation_id, "answer_key_docx", key_dest)
     except Exception as exc:  # noqa: BLE001 — a missing enum value must not fail the set
         log.warning("answer_key_docx row skipped for %s: %s", generation_id, exc)
+
+    # Phase D: the ONLINE quiz — the objective items in the player's schema,
+    # under the same path and kind the document block gives a worksheet
+    # (``{base}/worksheet_questions.json``, ``questions_json``). The file
+    # carries the answers; that is the engine's contract (the app's
+    # stripQuiz builds the student payload field by field and the route
+    # grades server-side). Written after both documents so a set whose
+    # documents fail has no half-quiz; best-effort like the document block,
+    # so a storage hiccup degrades to "print-only", never a failed set.
+    from docgen.questions import write_bank_set
+
+    try:
+        qpath = write_bank_set(Path(out_dir), title, _t("quiz_instructions", language), items, language)
+        if qpath is not None:
+            qdest = f"{base}/worksheet_questions.json"
+            db.upload_artifact(sb, str(qpath), qdest)
+            db.add_artifact_row(sb, generation_id, "questions_json", qdest)
+            log.info("question set %s: online quiz written (%d item(s) in the set)", set_id, len(items))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("questions_json skipped for %s: %s", generation_id, exc)
     return title
 
 
 __all__ = [
     "OBJECTIVE_TYPES", "SUBJECTIVE_TYPES", "MODES", "DIFFICULTIES", "STATUS_APPROVED", "MAX_COUNT",
-    "Unsatisfiable", "largest_remainder", "mode_of", "parse_spec", "bucket_plan", "compose",
+    "FILL_EXACT", "FILL_NEAREST", "fill_mode", "Unsatisfiable", "largest_remainder", "mode_of", "parse_spec", "bucket_plan", "compose",
     "load_bank", "load_items_by_id", "render_question_set",
 ]

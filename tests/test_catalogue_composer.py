@@ -204,10 +204,14 @@ def test_render_composes_writes_the_ids_back_first_then_uploads_both_documents(t
     # The write-back precedes every artifact write: a crash after it re-renders THIS paper.
     kinds = [(e[0], e[1]) for e in sb.log]
     assert kinds.index(("update", "question_sets")) < kinds.index(("insert", "artifacts"))
+    # The two documents first, then (Phase D) the online quiz — same path and
+    # kind the document block gives a worksheet's questions.json.
     assert uploads == [(str(tmp_path / "worksheet.docx"), "owner/gen-ws/worksheet.docx"),
-                       (str(tmp_path / "worksheet_answer_key.docx"), "owner/gen-ws/answer_key.docx")]
+                       (str(tmp_path / "worksheet_answer_key.docx"), "owner/gen-ws/answer_key.docx"),
+                       (str(tmp_path / "questions.json"), "owner/gen-ws/worksheet_questions.json")]
     assert [(a["generation_id"], a["kind"], a["storage_path"]) for a in sb.tables["artifacts"]] == [
-        ("gen-ws", "docx", "owner/gen-ws/worksheet.docx"), ("gen-ws", "answer_key_docx", "owner/gen-ws/answer_key.docx")]
+        ("gen-ws", "docx", "owner/gen-ws/worksheet.docx"), ("gen-ws", "answer_key_docx", "owner/gen-ws/answer_key.docx"),
+        ("gen-ws", "questions_json", "owner/gen-ws/worksheet_questions.json")]
     with zipfile.ZipFile(tmp_path / "worksheet.docx") as z:
         xml = z.read("word/document.xml").decode("utf-8")
     assert "Cells · Quick check" in xml and "Cambridge 0893 · 7Bs.01" in xml and "6 questions" in xml
@@ -230,6 +234,8 @@ def test_render_with_question_ids_renders_exactly_those_in_order_and_composes_no
         xml = z.read("word/document.xml").decode("utf-8")
     assert "Stem 4 " in xml and "Stem 1 " in xml and "Stem 6 " in xml and "Stem 2 " not in xml
     assert "3 questions" in xml
+    # q004/q006 are subjective and the fixture's q001 (a true_false whose
+    # answer is prose) is not gradable: no questions.json, two uploads.
     assert len(uploads) == 2
 
 
@@ -295,4 +301,139 @@ def test_render_survives_a_missing_answer_key_kind(tmp_path, uploads, monkeypatc
     monkeypatch.setattr(composer.db, "add_artifact_row", flaky)
     sb = _sb(_bank(n_per=1, difficulties=(1, 2)), SET, BLUEPRINT)
     assert render_question_set(sb, GEN, "gen-ws", tmp_path, "b", {}, "en") == "Cells · Quick check"
-    assert [a["kind"] for a in sb.tables["artifacts"]] == ["docx"] and len(uploads) == 2
+    assert [a["kind"] for a in sb.tables["artifacts"]] == ["docx", "questions_json"] and len(uploads) == 3
+
+
+# ── Phase D: the online quiz (questions_json) and the nearest fill ────────
+
+
+def _objective_bank(spec_items):
+    """``[(item_type, difficulty, answer, extra)]`` → approved rows with
+    sentinel answers (XQZ…) so a leak is greppable in the saved files."""
+    rows = []
+    for i, (t, d, answer, extra) in enumerate(spec_items, 1):
+        row = {"id": f"b{i:03d}", "topic_id": "t-cell", "language": "en", "status": "approved",
+               "item_type": t, "answer_mode": "objective" if t in OBJ else "subjective", "difficulty": d,
+               "objective_ref": f"o{i % 3}", "marks": 1, "est_seconds": 60, "stem": f"Stem {i} {t}",
+               "answer": answer, "marking_scheme": [], "explanation": f"XQZEXPL{i}"}
+        row.update(extra)
+        rows.append(row)
+    return rows
+
+
+def _obj(difficulty, n, prefix):
+    """``n`` approved OBJECTIVE items of one difficulty, ids ``<prefix><i>``."""
+    base = [it for it in _bank(n_per=n, objectives=("o1", "o2"), difficulties=(difficulty,)) if it["answer_mode"] == "objective"][:n]
+    return [{**it, "id": f"{prefix}{i}"} for i, it in enumerate(base)]
+
+
+QUIZ_BLUEPRINT = {"id": "bp-quiz", "name": "Online quiz", "scope": "worksheet", "min_maturity": "basic",
+                  "spec": {"preset": "quiz", "count": 6, "objective_ratio": 1.0, "fill": "nearest",
+                           "difficulty_mix": {"1": 0.5, "2": 0.5}, "total_marks": 6}}
+
+
+def test_nearest_fill_tops_a_short_bucket_up_from_the_closest_difficulty_and_stays_deterministic():
+    # 6 wanted: 3 of d1, 3 of d2. The bank has 1 × d1, 2 × d2, 4 × d3, 2 × d5.
+    bank = _obj(1, 1, "a") + _obj(2, 2, "b") + _obj(3, 4, "c") + _obj(5, 2, "e")
+    assert sorted(composer._difficulty(it) for it in bank) == [1, 2, 2, 3, 3, 3, 3, 5, 5]
+    with pytest.raises(Unsatisfiable):
+        compose(bank, {**QUIZ_BLUEPRINT["spec"], "fill": "exact"}, 5)
+    got = compose(bank, QUIZ_BLUEPRINT["spec"], 5)
+    assert len(got) == 6 and len({it["id"] for it in got}) == 6
+    diffs = sorted(composer._difficulty(it) for it in got)
+    # every d1 and d2 item, then d3s (nearest to both short buckets) — never a d5
+    assert diffs == [1, 2, 2, 3, 3, 3]
+    assert [it["id"] for it in compose(bank, QUIZ_BLUEPRINT["spec"], 5)] == [it["id"] for it in got]
+    assert [it["id"] for it in compose(list(reversed(bank)), QUIZ_BLUEPRINT["spec"], 5)] == [it["id"] for it in got]
+    # a different seed is a different paper, the same shape
+    other = compose(bank, QUIZ_BLUEPRINT["spec"], 6)
+    assert sorted(composer._difficulty(it) for it in other) == diffs
+
+
+def test_nearest_fill_still_raises_when_the_mode_total_is_short():
+    bank = _obj(1, 1, "a") + _obj(2, 1, "b")
+    with pytest.raises(Unsatisfiable) as exc:
+        compose(bank, QUIZ_BLUEPRINT["spec"], 1)
+    assert sum(sf["need"] - sf["have"] for sf in exc.value.shortfalls) == 4
+
+
+def test_fill_mode_defaults_to_exact():
+    assert composer.fill_mode(None) == "exact"
+    assert composer.fill_mode({"fill": "NEAREST"}) == "nearest"
+    assert composer.fill_mode({"fill": "padded"}) == "exact"
+
+
+def test_questions_json_carries_only_the_objective_items_in_the_players_schema(tmp_path, uploads):
+    import json
+
+    bank = _objective_bank([
+        ("mcq", 1, {"key": "B"}, {"options": [{"key": k, "text": f"Opt{k}1" if k != "B" else "XQZMCQ"} for k in "ABCD"]}),
+        ("true_false", 1, {"value": False}, {}),
+        ("fill_blank", 2, {"text": "XQZFILL", "accept": ["XQZALT"]}, {}),
+        ("match", 2, {"pairs": []}, {"options": {"pairs": [{"left": "Nucleus", "right": "XQZRIGHT1"}, {"left": "Vacuole", "right": "XQZRIGHT2"}, {"left": "Wall", "right": "XQZRIGHT3"}]}}),
+        ("assertion_reason", 1, {"key": "D"}, {"options": [{"key": k, "text": f"AR{k}" if k != "D" else "XQZAR"} for k in "ABCD"]}),
+        ("short_answer", 2, {"text": "XQZSHORT"}, {"marks": 2}),
+        ("long_answer", 1, {"text": "XQZLONG"}, {"marks": 5}),
+    ])
+    ids = [it["id"] for it in bank]
+    sb = _sb(bank, {**SET, "question_ids": ids}, BLUEPRINT)
+    render_question_set(sb, GEN, "gen-ws", tmp_path, "owner/gen-ws", {}, "en")
+    data = json.loads((tmp_path / "questions.json").read_text(encoding="utf-8"))
+    assert data["title"] == "Cells · Quick check" and data["instructions"]
+    qs = data["questions"]
+    assert [q["type"] for q in qs] == ["mcq", "true_false", "fill_blank", "match", "mcq"]
+    assert [q["id"] for q in qs] == ["q1", "q2", "q3", "q4", "q5"]
+    assert qs[0]["options"] == ["OptA1", "XQZMCQ", "OptC1", "OptD1"] and qs[0]["answer"] == "XQZMCQ" and qs[0]["marks"] == 1
+    assert qs[1]["answer"] is False
+    assert qs[2]["answer"] == "XQZFILL" and qs[2]["accept"] == ["XQZALT"]
+    assert qs[3]["pairs"] == [{"left": "Nucleus", "right": "XQZRIGHT1"}, {"left": "Vacuole", "right": "XQZRIGHT2"}, {"left": "Wall", "right": "XQZRIGHT3"}]
+    assert qs[3]["marks"] == 3
+    assert qs[4]["options"][3] == "XQZAR" and qs[4]["answer"] == "XQZAR"
+    raw = (tmp_path / "questions.json").read_text(encoding="utf-8")
+    # The subjective items are print-only: neither their stems nor their answers are in the quiz.
+    for leak in ("XQZSHORT", "XQZLONG", "Stem 6 short_answer", "Stem 7 long_answer", "XQZEXPL"):
+        assert leak not in raw
+    # The leak gate holds for the composed set too: no answer in the student sheet,
+    # every answer in the key.
+    with zipfile.ZipFile(tmp_path / "worksheet.docx") as z:
+        student = z.read("word/document.xml").decode("utf-8")
+    with zipfile.ZipFile(tmp_path / "worksheet_answer_key.docx") as z:
+        key = z.read("word/document.xml").decode("utf-8")
+    for sentinel in ("XQZFILL", "XQZSHORT", "XQZLONG"):
+        assert sentinel not in student and sentinel in key
+    # MCQ option texts print on the sheet (the answer is the letter, which only the key carries).
+    assert "XQZMCQ" in student
+
+
+def test_an_all_subjective_set_writes_documents_but_no_online_quiz(tmp_path, uploads):
+    bank = _objective_bank([("short_answer", 1, {"text": "XQZS1"}, {}), ("long_answer", 2, {"text": "XQZL2"}, {"marks": 5})])
+    sb = _sb(bank, {**SET, "question_ids": [it["id"] for it in bank]}, BLUEPRINT)
+    render_question_set(sb, GEN, "gen-ws", tmp_path, "owner/gen-ws", {}, "en")
+    assert not (tmp_path / "questions.json").exists()
+    assert [a["kind"] for a in sb.tables["artifacts"]] == ["docx", "answer_key_docx"] and len(uploads) == 2
+
+
+def test_a_malformed_objective_item_is_left_off_the_quiz_not_marked_free():
+    from docgen.questions import bank_item_to_question, bank_questions
+
+    assert bank_item_to_question({"item_type": "mcq", "stem": "S", "options": [{"key": "A", "text": "x"}], "answer": {"key": "B"}}) is None
+    assert bank_item_to_question({"item_type": "true_false", "stem": "S", "answer": {"value": "yes"}}) is None
+    assert bank_item_to_question({"item_type": "fill_blank", "stem": "S", "answer": {}}) is None
+    assert bank_item_to_question({"item_type": "match", "stem": "S", "answer": {"pairs": [{"left": "a", "right": "b"}]}}) is None
+    assert bank_item_to_question({"item_type": "numerical", "stem": "S", "answer": {"value": 3}}) is None
+    good = {"item_type": "true_false", "stem": "S", "answer": {"value": True}, "marks": "2"}
+    assert bank_questions([{"item_type": "mcq", "stem": "bad"}, good]) == [{"id": "q1", "type": "true_false", "prompt": "S", "answer": True, "marks": 2}]
+
+
+def test_a_quiz_upload_failure_degrades_to_print_only(tmp_path, uploads, monkeypatch):
+    real = composer.db.upload_artifact
+
+    def flaky(sb, local_path, dest_path):
+        if dest_path.endswith("questions.json"):
+            raise RuntimeError("storage 503")
+        return real(sb, local_path, dest_path)
+
+    monkeypatch.setattr(composer.db, "upload_artifact", flaky)
+    sb = _sb(_bank(n_per=1, difficulties=(1, 2)), SET, BLUEPRINT)
+    assert render_question_set(sb, GEN, "gen-ws", tmp_path, "b", {}, "en") == "Cells · Quick check"
+    assert [a["kind"] for a in sb.tables["artifacts"]] == ["docx", "answer_key_docx"]

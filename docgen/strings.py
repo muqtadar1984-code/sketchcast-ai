@@ -226,6 +226,18 @@ _STRINGS: dict[str, dict[str, str]] = {
         "pt": "(escreva apenas o número)", "hi": "(केवल संख्या लिखें)", "mr": "(फक्त संख्या लिहा)",
         "te": "(సంఖ్య మాత్రమే రాయండి)", "ms-arab": "(توليس نومبورڽ سهاج)",
     },
+    "quiz_instructions": {  # the online quiz's instruction line (a composed bank set)
+        "en": "Answer every question. Marks are shown in brackets.",
+        "ms": "Jawab setiap soalan. Markah ditunjukkan dalam kurungan.",
+        "ar": "أجب عن جميع الأسئلة. الدرجات موضحة بين قوسين.",
+        "fr": "Répondez à toutes les questions. Les points sont indiqués entre crochets.",
+        "es": "Responde todas las preguntas. Los puntos se indican entre corchetes.",
+        "pt": "Responda a todas as questões. Os pontos estão entre colchetes.",
+        "te": "ప్రతి ప్రశ్నకు జవాబు ఇవ్వండి. మార్కులు బ్రాకెట్లలో చూపబడ్డాయి.",
+        "mr": "प्रत्येक प्रश्नाचे उत्तर द्या. गुण कंसात दाखवले आहेत.",
+        "hi": "सभी प्रश्नों के उत्तर दीजिए। अंक कोष्ठक में दिए गए हैं।",
+        "ms-arab": "جواب ستياڤ سوءالن. مرکه دتونجوقکن دالم کوروڠن.",
+    },
     "quiz": {  # questions.json fallback title
         "en": "Quiz", "ms": "Kuiz", "ar": "اختبار قصير", "fr": "Quiz",
         "es": "Cuestionario", "pt": "Questionário", "te": "క్విజ్",
