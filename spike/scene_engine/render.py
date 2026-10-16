@@ -127,25 +127,48 @@ def _hand_covers(sample: str) -> bool:
     return all((ord(c) in _HAND_CMAP and (ord(c) <= 0x2014 or ord(c) in _HAND_MATHS)) or c.isspace() for c in sample)
 
 
+# Characters that join whichever run they follow: every face draws them
+# (spaces, digits, the sentence punctuation Noto Sans Arabic carries).
+_NEUTRAL_PUNCT = frozenset(".,:;!?،؛؟۔")
+
+
+def _run_class(c: str) -> str | None:
+    """The face family ONE character needs, or None when it is neutral.
+    ``hand`` when the handwriting face draws it (Latin letters and the
+    punctuation and signs Caveat carries: = + × ( ) ² …), else the script
+    face (``arab`` / ``deva`` / ``telu``), else ``other`` — the sans face
+    that has everything else (π, ≠, ∞)."""
+    if c.isspace() or c.isdigit() or c in _NEUTRAL_PUNCT:
+        return None
+    if _hand_covers(c):
+        return "hand"
+    return _face_class(c)
+
+
 def _script_runs(disp: str) -> list[str]:
-    """A display string split into runs the handwriting face can draw and
-    runs it cannot ("SketchCast AI से बनाया गया" -> two runs). Neutral
-    characters (spaces, digits, punctuation) join the run they follow. One
-    run when the whole string is one kind — the common case."""
+    """A display string split into runs by the face each needs
+    ("SketchCast AI से बनाया गया" -> two runs). Neutral characters (spaces,
+    digits, sentence punctuation) join the run they follow. One run when
+    the whole string is one kind — the common case.
+
+    Until 2026-10-16 only LETTERS chose a run and every other character
+    rode along, so in an Arabic caption the "=" of "π = 3.14", the "("
+    of a word problem and a "²" were handed to Noto Sans Arabic, which has
+    no glyph for any of them: boxes on the first translated video (the
+    Circle kit's Arabic board). Now a sign the hand face carries forms a
+    hand run, and a letter no face class owns (π) a sans run."""
     runs: list[str] = []
-    kind: bool | None = None
+    kind: str | None = None
     cur = ""
     for c in disp:
-        if not c.isalpha():
+        k = _run_class(c)
+        if k is None or kind is None or k == kind:
             cur += c
+            if k is not None:
+                kind = k
             continue
-        k = _hand_covers(c)
-        if kind is None or k == kind:
-            cur += c
-            kind = k
-        else:
-            runs.append(cur)
-            cur, kind = c, k
+        runs.append(cur)
+        cur, kind = c, k
     if cur:
         runs.append(cur)
     return runs if len(runs) > 1 else [disp]

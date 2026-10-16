@@ -162,6 +162,34 @@ class TestCheckScript:
         assert any(f["what"] == "numbers differ" for f in r["blocking"])
 
 
+class TestQuestionProse:
+    def test_maths_spans_keep_the_maths_and_free_the_words(self):
+        assert C.maths_spans("Find the area of a circle with a radius of 6 cm. (Use π = 3.14)") == ["6", "π = 3.14"]
+        assert C.maths_spans("Solve 2x + 3 = 11 for x.") == ["2x + 3 = 11"]
+        assert C.maths_spans("A semicircle has a radius of 8 cm. Find its total perimeter.") == ["8"]
+        assert C.maths_spans("Identify which of these shapes represents a circle") == []
+
+    def test_a_translated_question_passes_when_its_maths_survives_and_blocks_when_not(self):
+        src = "Find the area of a circle with a radius of 6 cm. (Use π = 3.14)"
+        ok, lost = C.prose_maths_equivalent(src, "أوجد مساحة دائرة نصف قطرها 6 سم. (استخدم π = 3.14)")
+        assert ok and lost == []
+        ok, lost = C.prose_maths_equivalent(src, "أوجد مساحة دائرة نصف قطرها ٦ سم. (استخدم π = ٣٫١٤)")
+        assert ok, "Arabic-Indic numerals are the same values"
+        ok, lost = C.prose_maths_equivalent(src, "أوجد مساحة دائرة نصف قطرها 6 سم. (استخدم باي = 3.14)")
+        assert not ok and lost == ["π = 3.14"], "the symbol was spelled out — the board would lose the expression"
+        ok, lost = C.prose_maths_equivalent("Solve 2x + 3 = 11 for x.", "حل 2x + 3 = 12 بالنسبة إلى x.")
+        assert not ok and "2x + 3 = 11" in lost
+
+    def test_check_maths_lesson_judges_the_question_by_its_spans(self):
+        src = {"examples": [{"label": "Example 1", "problem": "Find the area of a circle with a radius of 6 cm. (Use π = 3.14)",
+                             "steps": [], "final_answer": ["A = 113.04"]}]}
+        good = C.check_maths_lesson(src, {"examples": [{**src["examples"][0], "label": "مثال 1",
+                                                        "problem": "أوجد مساحة دائرة نصف قطرها 6 سم. (استخدم π = 3.14)"}]})
+        assert good["ok"], good
+        bad = C.check_maths_lesson(src, {"examples": [{**src["examples"][0], "problem": "أوجد مساحة دائرة نصف قطرها 7 سم."}]})
+        assert any(f["what"] == "maths in the question altered" for f in bad["blocking"])
+
+
 class TestCheckMathsLesson:
     LESSON = {"topic": "Linear equations", "hook": [{"who": "teacher", "line": "Double it and add 5 gives 21."}],
               "examples": [{"label": "Example 1", "problem": "2x + 3 = 11", "steps": [
@@ -225,7 +253,15 @@ class TestFieldSelection:
         assert "hook[0].line" in paths and "method.steps[0]" in paths and "closing" in paths
         assert "examples[0].steps[0].speech" in paths and "try_it.speech" in paths
         assert any(p.endswith("common_mistake.why_wrong") for p in paths) and any(p.endswith("common_mistake.speech") for p in paths)
-        assert not any(p.endswith((".problem", ".before[0]", ".after[0]", ".final_answer[0]", ".operation")) for p in paths)
+        # a QUESTION with words is translated (the founder's review of the
+        # first Arabic video); a bare equation ("3x + 5 = 20", this fixture)
+        # is typeset and stays; the working stays maths
+        assert not any(p.endswith(".problem") for p in paths), "the fixture's questions are bare equations"
+        import copy as _copy
+        prose = _copy.deepcopy(LESSON)
+        prose["examples"][0]["problem"] = "A coin has a radius of 4 cm. Find its circumference. (Use π = 3.14)"
+        assert "examples[0].problem" in [p for p, _ in T.lesson_text_items(prose)]
+        assert not any(p.endswith((".before[0]", ".after[0]", ".final_answer[0]", ".operation", ".givens[0]")) for p in paths)
 
     def test_article_text_items_leave_ids_codes_and_figure_keys(self):
         paths = [p for p, _ in T.article_text_items(ARTICLE)]

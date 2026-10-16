@@ -261,11 +261,17 @@ def article_text_items(article: dict) -> list[tuple[str, str]]:
 def lesson_text_items(lesson: dict) -> list[tuple[str, str]]:
     """The SPOKEN and WRITTEN words of a maths Lesson record — never its
     maths (translate_check.LESSON_INVARIANT_KEYS)."""
-    text_keys = set(check.LESSON_TEXT_KEYS) | {"steps"}
+    # the spoken fields, the method card's steps, and the QUESTION itself: a
+    # word problem is prose with maths inside, translated as words and
+    # checked span by span (translate_check.prose_maths_equivalent)
+    text_keys = set(check.LESSON_TEXT_KEYS) | set(check.LESSON_PROSE_MATHS_KEYS) | {"steps"}
 
     def want(key: str, value: str) -> bool:
         if key in check.LESSON_INVARIANT_KEYS:
             return False
+        if key in check.LESSON_PROSE_MATHS_KEYS:
+            # a bare equation ("4x + 3 = 19") is typeset, not translated
+            return check.has_prose(value)
         return key in text_keys
 
     items = []
@@ -367,20 +373,34 @@ def translate_segments(client, segments: list[dict], language: str, terms, *, co
 
 
 def _lesson_protected(lesson: dict) -> list[str]:
-    """The expressions a maths lesson's spoken lines quote: the problems and
-    the answers. Named to the translator so ``2x + 3 = 11`` is left alone."""
+    """The expressions a maths lesson's spoken lines quote — the answers and
+    the working — plus the maths SPANS of every question ("π = 3.14",
+    "2x + 3 = 11"). Named to the translator so they are left alone while
+    the words around them change."""
     out: list[str] = []
     for path, value in check._walk(lesson):
-        if isinstance(value, str) and _s(value) and check._leaf_key(path) in ("problem", "final_answer", "after"):
+        if not (isinstance(value, str) and _s(value)):
+            continue
+        key = check._leaf_key(path)
+        if key in ("final_answer", "after"):
             if value not in out:
                 out.append(value)
-    return out[:40]
+        elif key in check.LESSON_PROSE_MATHS_KEYS:
+            for span in check.maths_spans(value):
+                if span not in out:
+                    out.append(span)
+    return out[:60]
+
+
+_QUESTION_RULE = ("A string that is a QUESTION or word problem is translated as words: every number, unit "
+                  "symbol, variable letter, equation and expression in it stays exactly as written "
+                  "(e.g. 'π = 3.14', '2x + 3 = 11', '6 cm' keeps the 6; the unit word may be translated).")
 
 
 def translate_lesson(client, lesson: dict, language: str, terms, *, context: str) -> dict:
     items = lesson_text_items(lesson)
-    got = translate_strings(client, [t for _, t in items], language, terms=terms, context=context,
-                            protect=_lesson_protected(lesson))
+    got = translate_strings(client, [t for _, t in items], language, terms=terms,
+                            context=(context + " " + _QUESTION_RULE).strip(), protect=_lesson_protected(lesson))
     return apply_strings(lesson, [(p, t) for (p, _), t in zip(items, got)])
 
 
