@@ -384,16 +384,35 @@ def translate_lesson(client, lesson: dict, language: str, terms, *, context: str
     return apply_strings(lesson, [(p, t) for (p, _), t in zip(items, got)])
 
 
+def lesson_from_record(lesson: dict):
+    """A ``maths.schema.Lesson`` from a STORED record with every example it
+    carries. The schema's ``_four`` validator keeps the first four examples
+    of a model reply — but the English kit's record was EXTENDED after
+    validation (maths.lesson.extend_to_floor appends verified examples to
+    reach the length floor), so a rendered lesson may hold eight. Validating
+    the dump whole silently drops examples 5..n and the recompiled board
+    teaches half the lesson (the Circle pilot, 2026-10-16: 8 examples in the
+    record, 4 on the Arabic board, 15 numbers missing). So the record is
+    validated with its examples detached, and each example is validated and
+    attached on its own."""
+    from maths.schema import Lesson, WorkedExample
+
+    body = dict(lesson or {})
+    examples = [e for e in (body.pop("examples", None) or []) if isinstance(e, (dict, WorkedExample))]
+    built = Lesson.model_validate(body)
+    built.examples = [e if isinstance(e, WorkedExample) else WorkedExample.model_validate(e) for e in examples]
+    return built
+
+
 def recompile_maths(script: dict, lesson: dict, language: str, title: str) -> dict:
     """The translated Lesson record back onto the board in the language —
     maths.lesson.to_episode_script, the SAME compiler the English kit used,
     so the board's own words (METHOD, Try it, the reasons) come from
     maths.i18n and the expressions are typeset from the record."""
     from maths.lesson import to_episode_script
-    from maths.schema import Lesson
 
     maths = script.get("maths") or {}
-    ep = to_episode_script(Lesson.model_validate(lesson), dict(maths.get("verification") or {}),
+    ep = to_episode_script(lesson_from_record(lesson), dict(maths.get("verification") or {}),
                            book_id=str(script.get("book_id") or ""), chapter_num=int(script.get("chapter_num") or -1),
                            episode_num=int(script.get("episode_num") or 1), title=title,
                            avatars=script.get("avatars"), language=language)

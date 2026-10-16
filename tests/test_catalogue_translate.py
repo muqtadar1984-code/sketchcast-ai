@@ -285,6 +285,31 @@ class TestTranslateEpisodeMaths:
         from agent3_scripts.models import EpisodeScript
         EpisodeScript.model_validate(dst)
 
+    def test_every_example_of_an_extended_record_reaches_the_recompiled_board(self):
+        """The English kit's record may hold more than the schema's four
+        examples (the length floor appends verified ones after validation);
+        the recompile must keep them all — the Circle pilot lost four."""
+        import copy as _copy
+        from maths.schema import Lesson
+        from tests.test_maths_lesson import LESSON
+        rec = _copy.deepcopy(LESSON)
+        base = rec["examples"][0]
+        rec["examples"] = [{**_copy.deepcopy(base), "label": f"Example {i}", "problem": f"{i}x + 1 = {i * 3 + 1}",
+                            "final_answer": ["x = 3"]} for i in range(1, 7)]
+        assert len(Lesson.model_validate(rec).examples) == 4, "the schema caps a model reply at four"
+        built = T.lesson_from_record(rec)
+        assert [e.label for e in built.examples] == [f"Example {i}" for i in range(1, 7)]
+        body = {"part": 1, "of": 1, "language": "en", "avatars": {}, "video": {},
+                "script": {"script_id": "sc", "book_id": "b", "chapter_num": -1, "episode_num": 1,
+                           "episode_title": "Linear", "generated_at": "now", "narrator_persona": "x",
+                           "segments": [], "visual_plan": None, "avatars": None,
+                           "maths": {"lesson": rec, "verification": {}, "language": "en"},
+                           "total_estimated_duration_seconds": 1, "question_hook_count": 0}}
+        dst = T.recompile_maths(body["script"], rec, "ar", "خطي")
+        board = " ".join(e.get("expr") or "" for s in dst["segments"]
+                         for e in ((s.get("scene") or {}).get("elements") or []) if e.get("type") == "math")
+        assert all(f"{i}x + 1 = {i * 3 + 1}" in board for i in range(1, 7)), board
+
     def test_a_translation_that_changes_a_spoken_number_is_retried_then_refused(self):
         body = _maths_body()
         c = FakeTranslator(lambda s: _arabize(s.replace("five", "5").replace("x equals 5", "x equals 6")) if "equals" in s else _arabize(s))
