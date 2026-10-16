@@ -120,8 +120,11 @@ KIT_KINDS = frozenset({"presentation", "activity", "case_study", "worksheet", "d
                        "question_bank"})
 SYNTHETIC_AUTHOR = "SketchCast"
 ARTICLE_APPROVED = "approved"
-# A translated article awaiting its kit's review (Kit Translator, 0134).
+# A translated article awaiting its kit's review (Kit Translator, 0134),
+# and the translated kit's own lifecycle column while it builds / reviews.
 ARTICLE_STAGED = "staged"
+TRANSLATION_STAGED = "staged"
+TRANSLATION_IN_REVIEW = "in_review"
 KIT_GENERATING = "generating"
 KIT_IN_REVIEW = "in_review"
 KIT_FAILED = "failed"
@@ -954,7 +957,18 @@ def sync_kit_completion(sb, kit: dict) -> bool:
     if any(statuses.get(i) != "done" for i in ids):
         return False
     moved = _guarded_status(sb, "topic_kits", kit["id"], KIT_GENERATING, KIT_IN_REVIEW)
-    if moved and kit.get("topic_id"):
+    if moved and kit.get("translation_status"):
+        # Kit Translator (0134): a TRANSLATED kit's own lifecycle follows the
+        # kit's — approve_topic_kit's translation branch accepts
+        # `in_review` only, and the panel reads this column. Guarded on the
+        # value the worker set when it staged the kit.
+        sb.table("topic_kits").update({"translation_status": TRANSLATION_IN_REVIEW}) \
+          .eq("id", kit["id"]).eq("translation_status", TRANSLATION_STAGED).execute()
+    if moved and kit.get("topic_id") and not kit.get("translation_status"):
+        # The topic follows its ENGLISH kit only. A translation's topic is
+        # wherever the English kit put it (published, say); and were an
+        # English kit regenerating at the same time, a translation finishing
+        # first must not flip the topic to in_review under it.
         _guarded_status(sb, "topics", str(kit["topic_id"]), TOPIC_GENERATING, TOPIC_IN_REVIEW)
     return moved
 
