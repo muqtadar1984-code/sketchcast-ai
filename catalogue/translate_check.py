@@ -311,6 +311,12 @@ _SPAN_TOKEN = (rf"(?:\d+(?:[.,]\d+)?|(?<![{_LETTER}])[A-Za-zα-ωΑ-Ω](?![{_LET
                r"|[=+−\-×÷*/^√<>≤≥≠]|[²³]|\(|\))")
 _SPAN_RE = re.compile(rf"{_SPAN_TOKEN}(?:\s*{_SPAN_TOKEN})*")
 _SPAN_CORE_RE = re.compile(r"\d|[=+−\-×÷*/^√<>≤≥≠]")
+# A hyphen between two LETTERS joins a word ("circle-related", "x-axis",
+# "well-known") and is no operator; the detector reads it as a plain hyphen
+# (U+2010), which the operator class does not hold. "x - 2" and "x-2" keep
+# their minus. (The second Circle re-run, 2026-10-16: the match item's stem
+# "Match each circle-related term…" was refused twice for a lost "-".)
+_WORD_HYPHEN_RE = re.compile(r"(?<=[^\W\d_])-(?=[^\W\d_])", re.UNICODE)
 _PROSE_WORD_RE = re.compile(r"[^\W\d_]{2,}", re.UNICODE)
 
 
@@ -324,9 +330,11 @@ def has_prose(text: str) -> bool:
 def maths_spans(text: str) -> list[str]:
     """The maths spans of a sentence, whitespace-normalised, in order."""
     out: list[str] = []
-    for m in _SPAN_RE.finditer(normalize_numerals(str(text or ""))):
+    for m in _SPAN_RE.finditer(_WORD_HYPHEN_RE.sub("‐", normalize_numerals(str(text or "")))):
         span = " ".join(m.group(0).split()).strip("() ")
-        if span and _SPAN_CORE_RE.search(span):
+        # maths carries a digit, or a variable WITH an operator — a bare
+        # operator between words ("A - B" in prose, a stray dash) is not
+        if span and _SPAN_CORE_RE.search(span) and (re.search(r"\d", span) or re.search(r"[A-Za-zα-ωΑ-Ω]", span)):
             out.append(span)
     return out
 
