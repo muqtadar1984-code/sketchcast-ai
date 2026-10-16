@@ -9,8 +9,10 @@ import json
 import pytest
 
 from maths import lesson as L
+from shared.languages import is_rtl
 from maths.speech import has_notation
 from spike.scene_engine.director import parse_scene_response
+from spike.scene_engine.schema import WORLD_W
 from spike.scene_engine.render import SceneRenderer
 
 GOOD_EX1 = {
@@ -533,7 +535,12 @@ def test_tall_and_wide_scripts_keep_the_board_free_of_overlaps():
             for eid in ("wb_p0", "wb_p1", "wb_p2", "q0", "q1", "wb_h"):
                 b = r.bound.get(eid)
                 if b is not None and b.text is not None:
-                    assert b.box[2] <= CARD_X - 16, (lang, s["segment_id"], eid, b.box)
+                    if is_rtl(lang) and s["segment_id"] != "s001" and any(e["id"] == "card_box" for e in s["scene"]["elements"])                             and max(p[0] for p in box["points"]) < WORLD_W / 2:
+                        # a right-to-left card is mirrored (2026-10-16): the method
+                        # card sits at the LEFT, the points at the right edge
+                        assert b.box[0] >= WORLD_W - (CARD_X - 16), (lang, s["segment_id"], eid, b.box)
+                    else:
+                        assert b.box[2] <= CARD_X - 16, (lang, s["segment_id"], eid, b.box)
 
 
 # ── the length floor: stated, measured, extended — never rewritten ──────────

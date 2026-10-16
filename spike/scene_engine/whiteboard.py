@@ -32,9 +32,77 @@ def _short(text: str, cap: int = _MAX_POINT_CHARS) -> str:
     return t if len(t) <= cap else t[:cap - 3].rstrip() + "..."
 
 
+def _mx(x: float) -> float:
+    return float(WORLD_W) - float(x)
+
+
+_ANCHOR_MIRROR = {"l": "r", "r": "l"}
+
+
+def _mirror_point_spec(spec):
+    """A Point ([x, y]) or an AnchorRef ({el, edge, dx, dy}) mirrored."""
+    if isinstance(spec, dict):
+        out = dict(spec)
+        edge = str(out.get("edge") or "")
+        if edge == "left":
+            out["edge"] = "right"
+        elif edge == "right":
+            out["edge"] = "left"
+        if "dx" in out and isinstance(out["dx"], (int, float)):
+            out["dx"] = -out["dx"]
+        return out
+    if isinstance(spec, (list, tuple)) and len(spec) == 2:
+        return [_mx(spec[0]), spec[1]]
+    return spec
+
+
+def _is_speaker_or_caption(eid) -> bool:
+    """Avatars and their speech captions keep their founder-approved places
+    in either direction — the teacher at the right, the student at the
+    left, their bubbles above them (ids of both start with ``__``)."""
+    return str(eid or "").startswith("__")
+
+
+def mirror_scene_for_rtl(scene: dict) -> dict:
+    """The WRITTEN content of a card mirrored for a right-to-left lesson:
+    every x becomes WORLD_W - x, left anchors become right anchors (and the
+    other way round), shapes' points, ellipse centres and arrow ends move
+    with them. So a heading and its points sit at the RIGHT edge with the
+    dash bullets to the right of each line — reading order for Arabic,
+    Urdu and Jawi (founder, 2026-10-16: "bullet points, if any, should be
+    right to left; this rule should apply for all languages"). The avatars
+    and the caption stream are left where they are (_is_speaker_or_caption),
+    so the board keeps the composition every lesson has today; the camera
+    and timing are untouched. Returns a new dict; never mutates."""
+    out = {**scene, "elements": []}
+    for e in scene.get("elements") or []:
+        if not isinstance(e, dict) or _is_speaker_or_caption(e.get("id")):
+            out["elements"].append(e)
+            continue
+        m = dict(e)
+        if isinstance(m.get("at"), (list, tuple)) and len(m["at"]) == 2:
+            m["at"] = [_mx(m["at"][0]), m["at"][1]]
+        a = str(m.get("anchor") or "")
+        if a and a[0] in _ANCHOR_MIRROR:
+            m["anchor"] = _ANCHOR_MIRROR[a[0]] + a[1:]
+        if isinstance(m.get("points"), list):
+            m["points"] = [[_mx(pt[0]), pt[1]] if isinstance(pt, (list, tuple)) and len(pt) == 2 else pt
+                           for pt in m["points"]]
+        if isinstance(m.get("center"), (list, tuple)) and len(m["center"]) == 2:
+            m["center"] = [_mx(m["center"][0]), m["center"][1]]
+        for key in ("tail", "head"):
+            if key in m:
+                m[key] = _mirror_point_spec(m[key])
+        if isinstance(m.get("after"), dict):
+            m["after"] = dict(m["after"])          # the renderer chains RTL by itself
+        out["elements"].append(m)
+    return out
+
+
 def build_whiteboard_scene(segment: dict,
                            avatars: dict | None = None,
-                           sketches: bool = True) -> dict | None:
+                           sketches: bool = True,
+                           direction: str = "ltr") -> dict | None:
     """A sceneless segment as a whiteboard moment. `avatars` casts the
     persistent teacher (and, when the segment carries dialogue, the student).
     Never returns None any more — the teacher + narration stream make even a
@@ -42,14 +110,18 @@ def build_whiteboard_scene(segment: dict,
 
     `sketches=False` keeps the narration-driven corner sketches off the card:
     the maths profile's lexicon switch (shared.subject_profile), where "root"
-    is not a plant and "table" is not furniture."""
+    is not a plant and "table" is not furniture.
+
+    `direction="rtl"` mirrors the written content (mirror_scene_for_rtl):
+    heading, points and their dashes at the right edge, quiz options too."""
     heading = _short(segment.get("slide_heading") or "", 60)
     visual = segment.get("slide_visual") or {}
     kind = visual.get("kind") if isinstance(visual, dict) else None
     seg_type = str(segment.get("type") or "explore")
 
     if kind == "quiz" and isinstance(visual, dict):
-        return _quiz_scene(segment, heading, visual, avatars)
+        quiz = _quiz_scene(segment, heading, visual, avatars)
+        return mirror_scene_for_rtl(quiz) if direction == "rtl" else quiz
 
     points: list[str] = []
     if kind == "takeaways" and isinstance(visual, dict):
@@ -115,6 +187,8 @@ def build_whiteboard_scene(segment: dict,
              "elements": elements, "actions": actions}
     if sketches:
         _add_sketches(segment, scene, heading_taken=bool(heading or points))
+    if direction == "rtl":
+        scene = mirror_scene_for_rtl(scene)
     if heading:
         # The underline is appended LAST, and on a card with points it is
         # NOT cued: it simply follows the last bullet. It used to be cued at

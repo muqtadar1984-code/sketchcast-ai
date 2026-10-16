@@ -922,9 +922,9 @@ def compose_episode_videos(
                 try:
                     from spike.scene_engine.whiteboard import build_whiteboard_scene
                     if script_seg.get("no_sketches"):
-                        scene_dict = build_whiteboard_scene(script_seg, avatars=_avatars, sketches=False)
+                        scene_dict = build_whiteboard_scene(script_seg, avatars=_avatars, sketches=False, direction=direction)
                     else:
-                        scene_dict = build_whiteboard_scene(script_seg, avatars=_avatars)
+                        scene_dict = build_whiteboard_scene(script_seg, avatars=_avatars, direction=direction)
                     attempt = "whiteboard"
                 except Exception:  # noqa: BLE001
                     logger.exception("whiteboard fallback build failed for %s", seg_id)
@@ -976,7 +976,7 @@ def compose_episode_videos(
                             script_seg, text, audio_path,
                             duration if audio_path else 0.0, out_mp4,
                             direction,
-                            scene_dict=build_whiteboard_scene(script_seg, avatars=_avatars),
+                            scene_dict=build_whiteboard_scene(script_seg, avatars=_avatars, direction=direction),
                             avatars=_avatars)
                         attempt = "whiteboard"
                     except Exception:  # noqa: BLE001
