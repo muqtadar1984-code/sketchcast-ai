@@ -346,8 +346,10 @@ def _job_sb(*, kit_status="approved", with_assets=True):
     sb.files[("artifacts", SCRIPT_PATH)] = json.dumps(body).encode("utf-8")
     sb.tables["topic_term_translations"] = []
     # the roster rows as the library keeps them: asset_key = the ROSTER key,
-    # the face key's suffix = the first hex characters of the row id
-    from catalogue.key import canonical_key as _ck
+    # canonical_key = the LIBRARY normaliser's spelling (avatar_female_teacher,
+    # not the topic-key one's), the face key's suffix = the row id's prefix
+    from shared.asset_keys import canonical_key as _ck
+    assert _ck("avatar_teacher_female") == "avatar_female_teacher"
     sb.tables["visual_assets"] = ([{"id": "f1a2b3c4-0000-4000-8000-000000000001", "asset_key": "avatar_teacher_female",
                                     "canonical_key": _ck("avatar_teacher_female"), "storage_path": "lib/f1.png", "status": "approved"},
                                    {"id": "m1a2b3c4-0000-4000-8000-000000000002", "asset_key": "avatar_student_male",
