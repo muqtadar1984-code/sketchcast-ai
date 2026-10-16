@@ -115,7 +115,7 @@ OBSERVER_JOB_TYPES = ["support_diagnose", "issue_resolve", "topic_harvest", "top
                       "figure_render", "topic_questions", "topic_publish", "kit_translate"]
 CATALOGUE_JOB_TYPES = ["topic_harvest", "topic_derive", "topic_article", "figure_render", "topic_questions",
                        "topic_publish", "topic_supersede", "youtube_playlists",
-                       "youtube_enrich", "announcement_email",
+                       "youtube_enrich", "kit_previews", "announcement_email",
                        # Kit Translator (T0): text calls only; the render it
                        # queues is an ordinary kit presentation on the kit lane
                        "kit_translate"]  # the last lane
@@ -606,6 +606,10 @@ def run_once(sb) -> bool:
             from catalogue.youtube_enrich import run_enrich_job
 
             run_enrich_job(sb, job)  # self-contained: finishes its own row, done or error
+        elif job_type == "kit_previews":
+            from catalogue.previews import run_previews_job
+
+            run_previews_job(sb, job)  # self-contained: finishes its own row, done or error
         elif job_type == "announcement_email":
             from shared.announcement import run_announcement_job
 
