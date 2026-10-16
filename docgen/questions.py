@@ -15,7 +15,16 @@ Unified schema:
      {"id","type":"short","prompt","answer","marks"},
      {"id","type":"subjective","prompt","answer_outline","marks"}]}
 Objective types (fill_blank/true_false/match/mcq) are auto-gradable; short and
-subjective are graded by the teacher. ``mcq`` (catalogue Phase D, 2026-10-16)
+subjective are graded by the teacher. A ``short`` item whose answer is a
+NUMBER — a bare number, a fraction, a π-expression, with or without a unit,
+one or several joined by " or " — is written as ``fill_blank`` instead
+(``numeric_forms``, 2026-10-16): a maths worksheet's "calculate the
+circumference" items used to reach the player as ``short`` and were never
+auto-marked (a student answered all ten of a Circle worksheet correctly and
+scored 0/10 until the teacher graded it by hand). Its ``accept`` list carries
+the obvious spellings ("9pi", "9 pi", the number without its unit), and the
+app's grader also compares numerically (π/pi folded, units dropped when one
+side has none). Prose short answers stay ``short``. ``mcq`` (catalogue Phase D, 2026-10-16)
 carries its options IN THE BANK'S ORDER and the correct option's TEXT as the
 answer; the app strips ``answer`` and grades a submitted option text against
 it. ``accept`` on a fill_blank lists alternative spellings the key also takes.
@@ -25,6 +34,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 from docgen.strings import _t, match_instruction
@@ -69,6 +79,64 @@ def write_exam(out_dir: Path, title: str, instructions, fill, tf, match, subj,
     return _write(out_dir, title, instructions, qs, language)
 
 
+# ── numeric short answers ────────────────────────────────────────────────────
+# One answer: an optional "x =" lead, a sign, a number or a fraction, an
+# optional π (with or without a multiplication sign), an optional "/n" after
+# the π (9π/2), an optional unit (cm, cm², m^3, °, %). A number or a π is
+# required, so "cm" or "chlorophyll" never qualifies.
+_NUMERIC_RE = re.compile(
+    r"^\s*(?:[a-zA-Z]\s*=\s*)?(?P<sign>[-−+]?)\s*"
+    r"(?P<num>\d+(?:[.,]\d+)?)?\s*(?:/\s*(?P<den>\d+))?"
+    r"\s*(?P<pi>[×x*·]?\s*(?:π|pi))?\s*(?:/\s*(?P<pden>\d+))?"
+    r"\s*(?P<unit>[a-zA-Z°%]+(?:\^?[23²³])?)?\s*$", re.IGNORECASE)
+_OR_SPLIT = re.compile(r"\s+or\s+|\s*;\s*", re.IGNORECASE)
+
+
+def _numeric_parts(answer: str) -> list[dict] | None:
+    parts = [p for p in _OR_SPLIT.split(str(answer or "").strip()) if p.strip()]
+    if not parts:
+        return None
+    out = []
+    for part in parts:
+        m = _NUMERIC_RE.match(part)
+        if not m or (m.group("num") is None and m.group("pi") is None):
+            return None
+        unit = m.group("unit") or ""
+        if unit.lower() in ("pi", "x", "or"):
+            return None
+        out.append({"sign": "-" if m.group("sign") in ("-", "−") else "", "num": (m.group("num") or "").replace(",", "."),
+                    "den": m.group("den"), "pi": bool(m.group("pi")), "pden": m.group("pden"), "unit": unit})
+    return out
+
+
+def numeric_forms(answer) -> list[str] | None:
+    """The accepted spellings of a NUMERIC short answer, the given spelling
+    first, or None when the answer is prose (anything that is not a number,
+    a fraction or a π-expression, optionally with a unit, one or several
+    joined by " or "). Pure."""
+    parts = _numeric_parts(str(answer or ""))
+    if parts is None:
+        return None
+    forms: list[str] = [str(answer).strip()]
+    for p in parts:
+        core = f"{p['sign']}{p['num']}" + (f"/{p['den']}" if p["den"] else "")
+        if p["pi"]:
+            pi_forms = [f"{core}π", f"{core}pi", f"{core} pi"] if core else ["π", "pi"]
+            if p["pden"]:
+                pi_forms = [f"{f}/{p['pden']}" for f in pi_forms]
+        else:
+            pi_forms = [core]
+        for f in pi_forms:
+            forms.append(f)
+            if p["unit"]:
+                forms.append(f"{f} {p['unit']}")
+    seen: list[str] = []
+    for f in forms:
+        if f and f not in seen:
+            seen.append(f)
+    return seen
+
+
 def write_worksheet(out_dir: Path, title: str, instructions, fill, tf, match, short,
                     language: str = "en", extra: list[dict] | None = None) -> Path:
     """Typed, grouped worksheet → the quiz player's unified schema. Mirrors
@@ -92,7 +160,16 @@ def write_worksheet(out_dir: Path, title: str, instructions, fill, tf, match, sh
     for q in (short or []):
         if isinstance(q, dict) and str(q.get("q", "")).strip():
             i += 1
-            qs.append({"id": f"q{i}", "type": "short", "prompt": str(q.get("q", "")), "answer": str(q.get("answer", "")), "marks": 1})
+            answer = str(q.get("answer", ""))
+            forms = numeric_forms(answer)
+            if forms:
+                # a number is auto-markable: fill_blank, the other spellings accepted
+                item = {"id": f"q{i}", "type": "fill_blank", "prompt": str(q.get("q", "")), "answer": forms[0], "marks": 1}
+                if len(forms) > 1:
+                    item["accept"] = forms[1:]
+                qs.append(item)
+            else:
+                qs.append({"id": f"q{i}", "type": "short", "prompt": str(q.get("q", "")), "answer": answer, "marks": 1})
     # prebuilt questions in the player's own schema — the maths figure
     # questions, each with its picture as a data URL — numbered on
     for q in (extra or []):
