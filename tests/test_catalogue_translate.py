@@ -563,6 +563,25 @@ class TestScriptOverrideRender:
         assert gen["status"] == "done"
         assert ("select", "books") not in sb.calls
 
+    def test_a_translated_kit_in_review_carries_translation_status_in_review(self):
+        """approve_topic_kit's translation branch accepts in_review only, so
+        the lifecycle column follows the kit's status; an English kit (no
+        translation_status) is untouched."""
+        from catalogue import kit as K
+        sb = _render_sb()
+        k = sb.tables["topic_kits"][1]
+        k["doc_generation_ids"] = {"deck": "gen-dar", "lesson_plan": "gen-lar"}
+        for gid in ("gen-par", "gen-dar"):
+            next(g for g in sb.tables["generations"] if g["id"] == gid)["status"] = "done"
+        sb.tables["generations"].append({"id": "gen-lar", "kind": "lesson_plan", "status": "done", "owner_id": "sys",
+                                         "book_id": None, "chapter_ref": None, "params": {}})
+        assert K.sync_kit_completion(sb, k) is True
+        row = next(r for r in sb.tables["topic_kits"] if r["id"] == "kit-ar")
+        assert (row["status"], row["translation_status"]) == ("in_review", "in_review")
+        assert sb.tables["topics"][0]["status"] == "generating", "the topic is not a translation's to move"
+        en = sb.tables["topic_kits"][0]
+        assert "translation_status" not in en or en["translation_status"] is None
+
     def test_a_staged_article_is_accepted_only_for_a_translation(self):
         from catalogue import kit as K
         sb = _render_sb()
