@@ -1,0 +1,988 @@
+"""The ``kit_translate`` job: an approved ENGLISH catalogue kit becomes the
+SAME kit in another lesson language (Kit Translator plan, revision 3,
+2026-10-16 — phase T0: article, glossary, video and deck).
+
+Decision D1: translate the finished artifacts, never regenerate. The source
+kit's presentation uploaded a ``script_json`` beside every video part; that
+script carries the narration, the dialogue, the on-screen text AND the
+compiled scene plan (or, for a maths kit, the verified lesson record the
+board is compiled from). This job rewrites the WORDS and leaves everything
+else — segment ids, speaker turns, asset keys, geometry, the maths — exactly
+as it was; the worker then renders the translated script through the
+ordinary presentation build with ``script_override`` (worker/process.py),
+which skips analysis and script generation and enters at the slides: new
+voices, measured timing, the same pictures.
+
+Job shape: ``{id, type: 'kit_translate', params: {source_kit_id, language,
+topic_id?}}``, generation_id NULL — an observer job on the catalogue lane
+(run.py). Stages, each resumable through the kit row's ``translation.stage``:
+
+  load        the source kit (approved, English), its presentation and the
+              script_json of every part, the approved article, the topic;
+  kit         the translated ``topic_kits`` row — ``status generating``,
+              ``translation_status staged``, ``source_kit_id`` = the source
+              (R3 lineage) — created once, found again on a resume;
+  glossary    the article's glossary terms, translated FIRST and pinned as a
+              directive for every later call (R1); reused across topics by
+              (language, subject, sense) from ``topic_term_translations``,
+              a reviewer's row never overwritten;
+  article     the article's text fields, one call, same shape back; written
+              as a ``topic_articles`` row in the language, status ``staged``
+              (R2 — promoted by ``approve_topic_kit`` with the kit), with the
+              source's ``article_figures`` copied so the deck and the video
+              find the same reviewed artwork;
+  script      every part: the maths path translates the LESSON RECORD's
+              spoken lines and recompiles the board in the language (the
+              maths stays maths); the science path translates the segment
+              text fields in place;
+  check A     catalogue.translate_check — structure, protected expressions,
+              numeric equivalence, English leftovers, glossary use. A
+              blocking finding retries the part once, then fails the job;
+  assets      every picture the scenes reference must already exist — in the
+              worker's cache or the visual library — or the job FAILS naming
+              the key (reviewer safeguard, revision 3): nothing is ever
+              regenerated or substituted;
+  generations the translated ``presentation`` and ``deck`` generations
+              (owner = the catalogue account, ``params.catalogue``,
+              ``params.translation`` naming the staged scripts), the kit
+              pointed at them, provenance on ``topic_kits.translation``.
+
+The kit lifecycle (catalogue.kit) then runs unchanged: the presentation
+records its timestamps and inserts the lesson plan from the translated
+article, the deck follows its video, and the kit moves to ``in_review``
+with ``translation_status in_review``. Approval is the reviewer's, through
+the RPC's translation branch (migration 0134).
+
+A kit of a NON-ENGLISH source, a source that is not approved, a language
+the registry does not know, or the source's own language are refused before
+any model call (``TranslateRefused``).
+"""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import logging
+import re
+from pathlib import Path
+from typing import Callable, Iterable, Optional
+
+from catalogue import translate_check as check
+from catalogue.article import load_article, load_topic
+from catalogue.key import canonical_key
+from catalogue.kit import (KIT_FAILED, KIT_GENERATING, default_teacher_voice, load_kit, mark_kit_failed,
+                           student_voice_for)
+from shared.languages import LANGUAGES, get_language
+from worker import client as db
+
+log = logging.getLogger("worker.translate")
+
+JOB_TYPE = "kit_translate"
+PROMPT_VERSION = 1
+SOURCE_LANGUAGE = "en"
+TRANSLATION_STAGED = "staged"
+TRANSLATION_FAILED = "failed"
+ARTICLE_STAGED = "staged"
+STAGE_ORDER = ("load", "kit", "glossary", "article", "script", "assets", "generations")
+# One translation call carries at most this many strings: a part's segments
+# fit, a whole article fits, and a reply that drifts in count is small
+# enough to ask for again.
+CHUNK = 120
+MAX_TOKENS = 16000
+TERM_SOURCE_MODEL = "model"
+TERM_SOURCE_REVIEWER = "reviewer"
+
+# Text fields of an article row that are WORDS. Everything else (ids,
+# figure_keys, covers, codes, specs, asset ids, labels of baked pictures) is
+# copied verbatim.
+ARTICLE_TEXT_KEYS = frozenset({"title", "heading", "body_md", "text", "definition", "term", "misconception",
+                               "correction", "problem", "solution_md", "claim", "statement", "caption",
+                               "description", "summary", "why", "name", "depth_rationale"})
+ARTICLE_STRING_LISTS = frozenset({"objectives", "misconceptions", "claims", "key_points"})
+# A science segment's words.
+SEGMENT_TEXT_KEYS = ("text", "slide_heading")
+SCENE_TEXT_MAX = 80   # schema.TextElement clamps text at 80 characters
+
+SYSTEM_PROMPT = (
+    "You are a careful translator of school lessons. You translate the WORDS of a lesson into the target "
+    "language for learners of that language, keeping every number, unit of measurement, variable name, "
+    "formula, equation and curriculum code exactly as written. You never add, drop, merge or reorder items. "
+    "You reply with JSON only."
+)
+ITEMS_SCHEMA = {
+    "type": "object",
+    "properties": {"items": {"type": "array", "items": {"type": "string"}}},
+    "required": ["items"],
+}
+
+
+class TranslateRefused(RuntimeError):
+    """The job must not proceed; the message says why."""
+
+
+def _s(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _rows(res) -> list[dict]:
+    return list(getattr(res, "data", None) or [])
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+# ── strings in, strings out ─────────────────────────────────────────────
+
+
+def _lang_name(language: str) -> str:
+    lang = get_language(language)
+    return f"{lang.name} ({lang.native})"
+
+
+def term_directive(terms: list[tuple[str, str]]) -> str:
+    if not terms:
+        return ""
+    lines = "\n".join(f"- {en} → {t}" for en, t in terms[:200])
+    return ("Use EXACTLY these translations for these terms, every time they occur "
+            "(the glossary this topic was approved with):\n" + lines + "\n")
+
+
+def _ask_items(client, prompt: str, n: int, *, grace: int = 2) -> list[str]:
+    """``{"items": [...]}`` of exactly ``n`` strings, or RuntimeError after
+    the grace calls. A reply the client could not read as JSON arrives as
+    ``{"raw_text": ...}`` — asked again, as the article job does."""
+    last = None
+    for attempt in range(grace + 1):
+        reply = client.analyze(prompt, system=SYSTEM_PROMPT, max_tokens=MAX_TOKENS, response_schema=ITEMS_SCHEMA)
+        data = reply.get("data") if isinstance(reply, dict) and "data" in reply else reply
+        items = data.get("items") if isinstance(data, dict) else None
+        if isinstance(items, list) and len(items) == n and all(isinstance(x, str) for x in items):
+            return items
+        last = (len(items) if isinstance(items, list) else type(data).__name__)
+        log.warning("translate: reply had %s item(s), %d wanted; asking again (%d/%d)", last, n, attempt + 1, grace)
+    raise RuntimeError(f"translation reply did not return {n} items (got {last})")
+
+
+def translate_strings(client, items: list[str], language: str, *, terms: Optional[list[tuple[str, str]]] = None,
+                      context: str = "", protect: Optional[Iterable[str]] = None) -> list[str]:
+    """Translate ``items`` into ``language`` — a list in, the same list out,
+    position for position. Empty strings come back empty without a call."""
+    out: list[Optional[str]] = [None] * len(items)
+    todo = [(i, s) for i, s in enumerate(items) if _s(s)]
+    for i, s in enumerate(items):
+        if not _s(s):
+            out[i] = s
+    protected = [p for p in (protect or []) if _s(p)]
+    for start in range(0, len(todo), CHUNK):
+        batch = todo[start:start + CHUNK]
+        payload = [s for _, s in batch]
+        prompt = "\n".join(filter(None, [
+            f"Translate each string below into {_lang_name(language)}.",
+            context,
+            term_directive(terms or []),
+            ("These expressions must appear UNCHANGED in the translation: "
+             + "; ".join(protected[:60])) if protected else "",
+            "Rules: keep every number, unit, variable, formula, equation and curriculum code exactly as written; "
+            "keep the register of a teacher speaking to a class; translate the whole string, never summarise; "
+            "return exactly one translated string per input string, in the same order, as "
+            '{"items": [...]} with ' + f"{len(payload)} items.",
+            "INPUT:",
+            json.dumps(payload, ensure_ascii=False),
+        ]))
+        got = _ask_items(client, prompt, len(payload))
+        for (i, _), t in zip(batch, got):
+            out[i] = t
+    return [x if x is not None else "" for x in out]
+
+
+# ── collecting and applying text fields ─────────────────────────────────
+
+
+def _walk_strings(obj, want: Callable[[str, object], bool], path: str = "", parent_key: str = ""):
+    """(path, string) for every string leaf ``want(key, value)`` accepts.
+    ``path`` is a dotted/indexed locator ``apply_strings`` understands."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield from _walk_strings(v, want, f"{path}.{k}" if path else str(k), str(k))
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            yield from _walk_strings(v, want, f"{path}[{i}]", parent_key)
+    elif isinstance(obj, str):
+        if want(parent_key, obj):
+            yield path, obj
+
+
+_PATH_RE = re.compile(r"\.?([^.\[\]]+)|\[(\d+)\]")
+
+
+def _set_path(obj, path: str, value) -> None:
+    parts = [(m.group(1), m.group(2)) for m in _PATH_RE.finditer(path)]
+    cur = obj
+    for n, (key, idx) in enumerate(parts):
+        last = n == len(parts) - 1
+        if idx is not None:
+            i = int(idx)
+            if last:
+                cur[i] = value
+            else:
+                cur = cur[i]
+        else:
+            if last:
+                cur[key] = value
+            else:
+                cur = cur[key]
+
+
+def apply_strings(obj, pairs: Iterable[tuple[str, str]]):
+    """A deep copy of ``obj`` with each ``(path, text)`` written back."""
+    out = copy.deepcopy(obj)
+    for path, text in pairs:
+        _set_path(out, path, text)
+    return out
+
+
+def article_text_items(article: dict) -> list[tuple[str, str]]:
+    def want(key: str, value: str) -> bool:
+        return key in ARTICLE_TEXT_KEYS or key in ARTICLE_STRING_LISTS
+
+    return list(_walk_strings({k: article.get(k) for k in ("title", "objectives", "sections", "glossary",
+                                                            "misconceptions", "worked_examples", "claims",
+                                                            "depth_rationale") if k in article}, want))
+
+
+def lesson_text_items(lesson: dict) -> list[tuple[str, str]]:
+    """The SPOKEN and WRITTEN words of a maths Lesson record — never its
+    maths (translate_check.LESSON_INVARIANT_KEYS)."""
+    text_keys = set(check.LESSON_TEXT_KEYS) | {"steps"}
+
+    def want(key: str, value: str) -> bool:
+        if key in check.LESSON_INVARIANT_KEYS:
+            return False
+        return key in text_keys
+
+    items = []
+    for path, text in _walk_strings(lesson, want):
+        # method.steps are words ("Collect like terms"); an example's steps
+        # are objects, whose string leaves were already filtered by key.
+        if ".steps[" in path and not path.startswith("method."):
+            if not re.search(r"\.(speech|student|explanation|why_wrong)$", path):
+                continue
+        items.append((path, text))
+    return items
+
+
+def segment_text_items(segment: dict) -> list[tuple[str, str]]:
+    """A science segment's words: narration, dialogue lines, heading,
+    bullets, the slide visual's words, the scene's text elements."""
+    items: list[tuple[str, str]] = []
+    for k in SEGMENT_TEXT_KEYS:
+        if _s(segment.get(k)):
+            items.append((k, str(segment[k])))
+    for i, p in enumerate(segment.get("slide_points") or []):
+        if _s(p):
+            items.append((f"slide_points[{i}]", str(p)))
+    for i, d in enumerate(segment.get("dialogue") or []):
+        if isinstance(d, dict) and _s(d.get("line")):
+            items.append((f"dialogue[{i}].line", str(d["line"])))
+    sv = segment.get("slide_visual")
+    if isinstance(sv, dict):
+        for k in ("heading", "caption", "title"):
+            if _s(sv.get(k)):
+                items.append((f"slide_visual.{k}", str(sv[k])))
+        for i, it in enumerate(sv.get("items") or []):
+            if isinstance(it, str) and _s(it):
+                items.append((f"slide_visual.items[{i}]", it))
+            elif isinstance(it, dict):
+                for k in ("text", "label", "caption"):
+                    if _s(it.get(k)):
+                        items.append((f"slide_visual.items[{i}].{k}", str(it[k])))
+    scene = segment.get("scene")
+    if isinstance(scene, dict):
+        for i, e in enumerate(scene.get("elements") or []):
+            if isinstance(e, dict) and e.get("type") == "text" and _s(e.get("text")):
+                items.append((f"scene.elements[{i}].text", str(e["text"])))
+    return items
+
+
+def _protected_of_segment(segment: dict) -> list[str]:
+    scene = segment.get("scene") if isinstance(segment.get("scene"), dict) else {}
+    return [str(e.get("expr")) for e in (scene.get("elements") or [])
+            if isinstance(e, dict) and e.get("type") == "math" and _s(e.get("expr"))]
+
+
+def _finish_segment(seg: dict) -> dict:
+    """After the words are written back: the narration IS the dialogue's
+    concatenation (what the two voices read), the ElevenLabs copy follows
+    the text, scene text keeps the schema's length."""
+    dialogue = [d for d in (seg.get("dialogue") or []) if isinstance(d, dict)]
+    if dialogue:
+        seg["text"] = " ".join(_s(d.get("line")) for d in dialogue if _s(d.get("line")))
+    seg["elevenlabs_text"] = seg.get("text") or ""
+    scene = seg.get("scene")
+    if isinstance(scene, dict):
+        for e in scene.get("elements") or []:
+            if isinstance(e, dict) and e.get("type") == "text" and isinstance(e.get("text"), str):
+                e["text"] = e["text"].strip()[:SCENE_TEXT_MAX]
+    seg["estimated_duration_seconds"] = max(int(seg.get("estimated_duration_seconds") or 0),
+                                            _spoken_seconds(seg.get("text") or ""))
+    return seg
+
+
+def _spoken_seconds(text: str) -> int:
+    # 130 words a minute, as catalogue.kit._spoken_seconds; scripts in
+    # non-Latin scripts count characters-per-word about the same
+    return max(2, round(len(str(text).split()) / 130 * 60))
+
+
+# ── the science path ──────────────────────────────────────────────────────
+
+
+def translate_segments(client, segments: list[dict], language: str, terms, *, context: str) -> list[dict]:
+    items: list[tuple[int, str, str]] = []
+    protected: list[str] = []
+    for i, seg in enumerate(segments):
+        protected += _protected_of_segment(seg)
+        for path, text in segment_text_items(seg):
+            items.append((i, path, text))
+    got = translate_strings(client, [t for _, _, t in items], language, terms=terms, context=context,
+                            protect=protected)
+    out = copy.deepcopy(segments)
+    by_seg: dict[int, list[tuple[str, str]]] = {}
+    for (i, path, _), t in zip(items, got):
+        by_seg.setdefault(i, []).append((path, t))
+    for i, pairs in by_seg.items():
+        out[i] = _finish_segment(apply_strings(out[i], pairs))
+    return out
+
+
+# ── the maths path ────────────────────────────────────────────────────────
+
+
+def _lesson_protected(lesson: dict) -> list[str]:
+    """The expressions a maths lesson's spoken lines quote: the problems and
+    the answers. Named to the translator so ``2x + 3 = 11`` is left alone."""
+    out: list[str] = []
+    for path, value in check._walk(lesson):
+        if isinstance(value, str) and _s(value) and check._leaf_key(path) in ("problem", "final_answer", "after"):
+            if value not in out:
+                out.append(value)
+    return out[:40]
+
+
+def translate_lesson(client, lesson: dict, language: str, terms, *, context: str) -> dict:
+    items = lesson_text_items(lesson)
+    got = translate_strings(client, [t for _, t in items], language, terms=terms, context=context,
+                            protect=_lesson_protected(lesson))
+    return apply_strings(lesson, [(p, t) for (p, _), t in zip(items, got)])
+
+
+def recompile_maths(script: dict, lesson: dict, language: str, title: str) -> dict:
+    """The translated Lesson record back onto the board in the language —
+    maths.lesson.to_episode_script, the SAME compiler the English kit used,
+    so the board's own words (METHOD, Try it, the reasons) come from
+    maths.i18n and the expressions are typeset from the record."""
+    from maths.lesson import to_episode_script
+    from maths.schema import Lesson
+
+    maths = script.get("maths") or {}
+    ep = to_episode_script(Lesson.model_validate(lesson), dict(maths.get("verification") or {}),
+                           book_id=str(script.get("book_id") or ""), chapter_num=int(script.get("chapter_num") or -1),
+                           episode_num=int(script.get("episode_num") or 1), title=title,
+                           avatars=script.get("avatars"), language=language)
+    return ep.model_dump()
+
+
+def _splice_framing(source_segments: list[dict], compiled: list[dict], client, language: str, terms, context: str) -> list[dict]:
+    """A multi-part kit's RECAP / OUTRO segments were added by the worker
+    around the compiled lesson (catalogue.kit): they are not in the record,
+    so they are translated as text and put back where they were."""
+    ids = {str(s.get("segment_id") or "") for s in compiled}
+    extra = [s for s in source_segments if str(s.get("segment_id") or "") not in ids]
+    if not extra:
+        return compiled
+    translated = translate_segments(client, extra, language, terms, context=context)
+    first_id = str((source_segments[0] if source_segments else {}).get("segment_id") or "")
+    out = list(compiled)
+    for seg in translated:
+        if str(seg.get("segment_id") or "") == first_id:
+            out.insert(0, seg)       # the recap opened the part
+        else:
+            out.append(seg)          # the outro closed it
+    return out
+
+
+# ── one part ─────────────────────────────────────────────────────────────
+
+
+def translate_episode(client, body: dict, language: str, terms, *, title: Optional[str] = None,
+                      context: str = "") -> tuple[dict, dict]:
+    """``body`` is a script_json artifact; returns (translated script dict,
+    pre-check A report). Raises TranslateRefused when the check blocks
+    after one retry."""
+    src = body.get("script") if isinstance(body.get("script"), dict) else {}
+    if not src.get("segments"):
+        raise TranslateRefused("the source script has no segments")
+    maths = src.get("maths") if isinstance(src.get("maths"), dict) else {}
+    lesson = maths.get("lesson") if isinstance(maths.get("lesson"), dict) else None
+    ep_title = title or translate_strings(client, [str(src.get("episode_title") or "")], language,
+                                          terms=terms, context=context)[0]
+    report: dict = {}
+    dst: dict = {}
+    for attempt in range(2):
+        if lesson is not None:
+            new_lesson = translate_lesson(client, lesson, language, terms, context=context)
+            r_lesson = check.check_maths_lesson(lesson, new_lesson)
+            dst = recompile_maths(src, new_lesson, language, ep_title)
+            dst["segments"] = _splice_framing(src.get("segments") or [], dst.get("segments") or [], client,
+                                              language, terms, context)
+            r_script = check.check_script(src, dst, language=language, glossary=terms, strict=False)
+            report = check.merge_reports(r_lesson, r_script)
+        else:
+            dst = copy.deepcopy(src)
+            dst["segments"] = translate_segments(client, src.get("segments") or [], language, terms, context=context)
+            dst["episode_title"] = ep_title
+            report = check.merge_reports(check.check_script(src, dst, language=language, glossary=terms))
+        if report.get("ok"):
+            break
+        log.warning("translate: pre-check A blocked part %s (%d finding(s)); %s", body.get("part"),
+                    len(report.get("blocking") or []), "asking again" if attempt == 0 else "giving up")
+    if not report.get("ok"):
+        heads = "; ".join(f"{f.get('where')}: {f.get('what')}" for f in (report.get("blocking") or [])[:5])
+        raise TranslateRefused(f"translation of part {body.get('part')} failed pre-check A: {heads}")
+    # The script's own label of its language, read by the renderer's RTL and
+    # font choices, and by the deck.
+    if isinstance(dst.get("maths"), dict):
+        dst["maths"]["language"] = language
+    return dst, report
+
+
+# ── loading the source ───────────────────────────────────────────────────
+
+
+def _part_of_path(path: str) -> int:
+    m = re.search(r"script(?:_part(\d+))?\.json$", str(path or ""))
+    return int(m.group(1)) if m and m.group(1) else 1
+
+
+def load_source(sb, source_kit_id: str) -> dict:
+    kit = load_kit(sb, source_kit_id)
+    if kit is None:
+        raise TranslateRefused(f"source kit {source_kit_id} not found")
+    if _s(kit.get("status")) != "approved":
+        raise TranslateRefused(f"source kit {source_kit_id} is {kit.get('status') or 'unknown'}, not approved — "
+                               "only an approved kit is translated")
+    if _s(kit.get("language")).lower() != SOURCE_LANGUAGE:
+        raise TranslateRefused(f"source kit {source_kit_id} is in {kit.get('language')}; translations start from English")
+    if kit.get("translation_status"):
+        raise TranslateRefused(f"source kit {source_kit_id} is itself a translation")
+    pres_id = _s(kit.get("presentation_generation_id"))
+    if not pres_id:
+        raise TranslateRefused(f"source kit {source_kit_id} has no presentation")
+    gen_rows = _rows(sb.table("generations").select("id,owner_id,status,params,kind").eq("id", pres_id).limit(1).execute())
+    if not gen_rows or _s(gen_rows[0].get("status")) != "done":
+        raise TranslateRefused(f"source presentation {pres_id} is not done")
+    arts = _rows(sb.table("artifacts").select("kind,storage_path").eq("generation_id", pres_id).eq("kind", "script_json").execute())
+    scripts = sorted((_s(a.get("storage_path")) for a in arts if _s(a.get("storage_path"))), key=_part_of_path)
+    if not scripts:
+        raise TranslateRefused(f"source presentation {pres_id} uploaded no script_json — a kit rendered before "
+                               "decision 4 (Phase 3) cannot be translated; regenerate it first")
+    article = load_article(sb, _s(kit.get("article_id")))
+    if article is None or _s(article.get("status")) != "approved":
+        raise TranslateRefused(f"source article {kit.get('article_id')} is not the approved version")
+    topic = load_topic(sb, _s(kit.get("topic_id")))
+    if topic is None:
+        raise TranslateRefused(f"topic {kit.get('topic_id')} not found")
+    return {"kit": kit, "presentation": gen_rows[0], "script_paths": scripts, "article": article, "topic": topic}
+
+
+def download_scripts(sb, paths: list[str], tmp: Path) -> list[dict]:
+    bodies = []
+    for p in paths:
+        dest = db.download_artifact(sb, p, Path(tmp) / Path(p).name)
+        body = json.loads(Path(dest).read_text(encoding="utf-8"))
+        body["_path"] = p
+        body["_sha256"] = _sha(Path(dest).read_bytes())
+        body.setdefault("part", _part_of_path(p))
+        bodies.append(body)
+    bodies.sort(key=lambda b: int(b.get("part") or 1))
+    return bodies
+
+
+# ── the kit row ─────────────────────────────────────────────────────────
+
+
+def find_translation_kit(sb, source_kit_id: str, language: str) -> Optional[dict]:
+    rows = _rows(sb.table("topic_kits").select("*").eq("source_kit_id", source_kit_id).eq("language", language)
+                 .eq("status", KIT_GENERATING).execute())
+    rows = [r for r in rows if r.get("translation_status") == TRANSLATION_STAGED]
+    return rows[0] if rows else None
+
+
+def create_translation_kit(sb, source: dict, language: str, job_id: str) -> dict:
+    kit = source["kit"]
+    avatar = _s(kit.get("teacher_avatar")) or "female"
+    teacher = default_teacher_voice(language, avatar)
+    student, fallback = student_voice_for(teacher, language, None)
+    row = {
+        "topic_id": kit["topic_id"], "article_id": kit["article_id"], "language": language,
+        "source_kit_id": kit["id"], "teacher_avatar": avatar,
+        "voice_pair": {"teacher": teacher, "student": student},
+        "status": KIT_GENERATING, "translation_status": TRANSLATION_STAGED,
+        "translation": {"job_id": job_id, "source_kit_id": kit["id"], "source_language": SOURCE_LANGUAGE,
+                        "source_article_id": kit["article_id"],
+                        "source_generation_id": source["presentation"]["id"],
+                        "student_voice_fallback": bool(fallback), "prompt_version": PROMPT_VERSION,
+                        "stage": {}},
+    }
+    ins = sb.table("topic_kits").insert(row).execute()
+    rows = _rows(ins)
+    if not rows or not rows[0].get("id"):
+        raise RuntimeError("topic_kits insert returned no id")
+    return rows[0]
+
+
+def _save_translation(sb, kit: dict, patch: dict) -> dict:
+    tr = dict(kit.get("translation") or {})
+    for k, v in patch.items():
+        if k == "stage":
+            tr["stage"] = {**dict(tr.get("stage") or {}), **v}
+        else:
+            tr[k] = v
+    sb.table("topic_kits").update({"translation": tr}).eq("id", kit["id"]).execute()
+    kit["translation"] = tr
+    return kit
+
+
+def _fail_translation(sb, kit: Optional[dict], note: str) -> None:
+    if not kit:
+        return
+    try:
+        mark_kit_failed(sb, kit["id"], note)
+        sb.table("topic_kits").update({"translation_status": TRANSLATION_FAILED}).eq("id", kit["id"]).execute()
+    except Exception:  # noqa: BLE001
+        log.exception("translation kit %s could not be marked failed", kit.get("id"))
+
+
+# ── glossary (R1) ──────────────────────────────────────────────────────
+
+
+def _glossary_terms(article: dict) -> list[str]:
+    out: list[str] = []
+    for g in article.get("glossary") or []:
+        term = _s(g.get("term")) if isinstance(g, dict) else _s(g)
+        if term and term not in out:
+            out.append(term)
+    return out
+
+
+def glossary_stage(sb, client, topic: dict, article: dict, language: str) -> tuple[list[tuple[str, str]], dict]:
+    """Term pairs ``[(term_en, term)]`` for the directive, reusing rows for
+    the same (language, subject, sense) and writing the new ones."""
+    terms = _glossary_terms(article)
+    subject = _s(topic.get("subject")).lower() or "general"
+    senses = {t: canonical_key(t) for t in terms}
+    existing: dict[str, dict] = {}
+    if senses:
+        rows = _rows(sb.table("topic_term_translations").select("*").eq("language", language).eq("subject", subject)
+                     .in_("sense", sorted(set(senses.values()))).execute())
+        for r in rows:
+            cur = existing.get(r["sense"])
+            # a reviewer's row always wins over a model's
+            if cur is None or (r.get("source") == TERM_SOURCE_REVIEWER and cur.get("source") != TERM_SOURCE_REVIEWER):
+                existing[r["sense"]] = r
+    todo = [t for t in terms if senses[t] not in existing]
+    got = translate_strings(client, todo, language,
+                            context=f"These are glossary TERMS (one to four words each) of a {subject} topic "
+                                    f"titled '{_s(topic.get('title'))}'. Give the standard school term.") if todo else []
+    written = 0
+    for t, tr in zip(todo, got):
+        if not _s(tr):
+            continue
+        row = {"language": language, "subject": subject, "sense": senses[t], "term_en": t, "term": _s(tr),
+               "source": TERM_SOURCE_MODEL, "topic_id": topic.get("id")}
+        try:
+            sb.table("topic_term_translations").insert(row).execute()
+            written += 1
+            existing[senses[t]] = row
+        except Exception as exc:  # noqa: BLE001 — a sibling job wrote it first
+            if "23505" not in str(exc) and str(getattr(exc, "code", "")) != "23505":
+                raise
+            again = _rows(sb.table("topic_term_translations").select("*").eq("language", language)
+                          .eq("subject", subject).eq("sense", senses[t]).execute())
+            if again:
+                existing[senses[t]] = again[0]
+    pairs = [(t, _s(existing[senses[t]].get("term"))) for t in terms if senses[t] in existing and _s(existing[senses[t]].get("term"))]
+    return pairs, {"terms": len(terms), "reused": len(terms) - len(todo), "written": written}
+
+
+# ── article (R2) ────────────────────────────────────────────────────────
+
+
+def _article_structure(article: dict) -> dict:
+    return {
+        "sections": [(_s(s.get("id")), list(s.get("figure_keys") or []), list(s.get("covers") or []))
+                     for s in (article.get("sections") or []) if isinstance(s, dict)],
+        "glossary": len(article.get("glossary") or []),
+        "misconceptions": len(article.get("misconceptions") or []),
+        "worked_examples": len(article.get("worked_examples") or []),
+        "claims": len(article.get("claims") or []),
+        "objectives": len(article.get("objectives") or []),
+    }
+
+
+def _word_count(sections: list) -> int:
+    n = 0
+    for s in sections or []:
+        if isinstance(s, dict):
+            n += len(str(s.get("body_md") or "").split())
+    return n
+
+
+def article_stage(sb, client, source: dict, language: str, terms, kit: dict) -> tuple[str, dict]:
+    article = source["article"]
+    topic = source["topic"]
+    items = article_text_items(article)
+    got = translate_strings(client, [t for _, t in items], language, terms=terms,
+                            context=f"These are the fields of a knowledge article on '{_s(article.get('title'))}' "
+                                    f"({_s(topic.get('subject'))}) for school students. Section bodies are "
+                                    "markdown-free prose; keep paragraph breaks.")
+    translated = apply_strings({k: article.get(k) for k in ("title", "objectives", "sections", "glossary",
+                                                            "misconceptions", "worked_examples", "claims",
+                                                            "depth_rationale") if k in article},
+                               [(p, t) for (p, _), t in zip(items, got)])
+    if _article_structure(article) != _article_structure(translated):
+        raise TranslateRefused("the translated article's structure differs from the source")
+    versions = _rows(sb.table("topic_articles").select("version").eq("topic_id", article["topic_id"]).eq("language", language).execute())
+    version = max([int(v.get("version") or 0) for v in versions] + [0]) + 1
+    row = {
+        "topic_id": article["topic_id"], "version": version, "language": language,
+        "source_article_id": article["id"], "title": translated.get("title") or article.get("title"),
+        "objectives": translated.get("objectives") or [], "sections": translated.get("sections") or [],
+        "glossary": translated.get("glossary") or [], "misconceptions": translated.get("misconceptions") or [],
+        "worked_examples": translated.get("worked_examples") or [], "claims": translated.get("claims") or [],
+        "depth_node_id": article.get("depth_node_id"), "depth_rationale": translated.get("depth_rationale") or None,
+        "word_count": _word_count(translated.get("sections") or []), "status": ARTICLE_STAGED,
+        "author": "model", "notes": f"translated from v{article.get('version')} ({SOURCE_LANGUAGE}) by kit_translate",
+    }
+    ins = sb.table("topic_articles").insert(row).execute()
+    rows = _rows(ins)
+    if not rows or not rows[0].get("id"):
+        raise RuntimeError("topic_articles insert returned no id")
+    new_id = str(rows[0]["id"])
+    # The reviewed artwork travels with the article: same specs, same
+    # visual assets, the captions in the language.
+    figs = _rows(sb.table("article_figures").select("*").eq("article_id", article["id"]).order("sort").execute())
+    captions = translate_strings(client, [_s(f.get("caption")) for f in figs], language, terms=terms,
+                                 context="Figure captions of the same article.") if figs else []
+    for f, cap in zip(figs, captions):
+        sb.table("article_figures").insert({
+            "article_id": new_id, "figure_key": f.get("figure_key"), "caption": cap or f.get("caption"),
+            "spec": f.get("spec") or {}, "visual_asset_id": f.get("visual_asset_id"),
+            "labels": f.get("labels") or [], "sort": f.get("sort") or 0, "status": f.get("status") or "draft",
+        }).execute()
+    sb.table("topic_kits").update({"article_id": new_id}).eq("id", kit["id"]).execute()
+    kit["article_id"] = new_id
+    return new_id, {"article_id": new_id, "version": version, "figures": len(figs), "title": row["title"]}
+
+
+# ── assets (revision 3 safeguard) ───────────────────────────────────────
+
+
+def scene_asset_keys(scripts: list[dict]) -> list[str]:
+    keys: list[str] = []
+    for script in scripts:
+        for k in (script.get("avatars") or {}).values():
+            if _s(k) and k not in keys:
+                keys.append(str(k))
+        for seg in script.get("segments") or []:
+            scene = seg.get("scene") if isinstance(seg, dict) and isinstance(seg.get("scene"), dict) else {}
+            for e in scene.get("elements") or []:
+                if isinstance(e, dict) and e.get("type") == "illustration" and _s(e.get("asset")):
+                    k = str(e["asset"])
+                    if k not in keys:
+                        keys.append(k)
+    return keys
+
+
+def resolve_assets(sb, keys: list[str]) -> tuple[list[dict], list[str]]:
+    """Where each picture already IS: the worker's cache (hashed) or an
+    approved library row (by storage path). Missing keys are returned, not
+    invented."""
+    from spike.scene_engine.raster_assets import cache_dir_for, colour_key
+
+    found: list[dict] = []
+    missing: list[str] = []
+    for key in keys:
+        hit = None
+        for k in dict.fromkeys([key, colour_key(key)]):
+            png = cache_dir_for(k) / "asset.png"
+            if png.exists():
+                hit = {"key": key, "source": "cache", "cache_key": k, "sha256": _sha(png.read_bytes())}
+                break
+        if hit is None:
+            hit = _library_row(sb, key)
+        if hit is None:
+            missing.append(key)
+        else:
+            found.append(hit)
+    return found, missing
+
+
+def _library_row(sb, key: str) -> Optional[dict]:
+    try:
+        from shared.visual_library import face_id_of
+        fid = face_id_of(key) if key.startswith("avatar") else None
+    except Exception:  # noqa: BLE001
+        fid = None
+    queries = []
+    if fid:
+        queries.append(("id", fid))
+    queries += [("asset_key", key), ("canonical_key", canonical_key(key))]
+    for col, val in queries:
+        if not val:
+            continue
+        rows = _rows(sb.table("visual_assets").select("id,asset_key,canonical_key,storage_path,status")
+                     .eq(col, val).limit(5).execute())
+        rows = [r for r in rows if _s(r.get("status")) in ("approved", "") and _s(r.get("storage_path"))]
+        if rows:
+            r = rows[0]
+            return {"key": key, "source": "library", "id": r.get("id"), "storage_path": r.get("storage_path")}
+    return None
+
+
+# ── generations ─────────────────────────────────────────────────────────
+
+
+def staged_script_path(owner_id: str, kit_id: str, part: int) -> str:
+    return f"{owner_id}/{kit_id}/translated/script{'' if part == 1 else f'_part{part}'}.json"
+
+
+def upload_staged_scripts(sb, owner_id: str, kit_id: str, scripts: list[tuple[int, int, dict]], language: str,
+                          tmp: Path) -> list[str]:
+    paths = []
+    for part, of, script in scripts:
+        body = {"part": part, "of": of, "language": language, "script": script}
+        local = Path(tmp) / f"translated_{part}.json"
+        local.write_text(json.dumps(body, ensure_ascii=False, default=str), encoding="utf-8")
+        dest = staged_script_path(owner_id, kit_id, part)
+        db.upload_artifact(sb, str(local), dest)
+        paths.append(dest)
+    return paths
+
+
+def load_staged_scripts(sb, translation: dict, tmp) -> list[dict]:
+    """For the presentation build (worker/process.py): the translated
+    EpisodeScript dicts in part order, from the paths the job staged."""
+    out = []
+    for p in list((translation or {}).get("scripts") or []):
+        dest = db.download_artifact(sb, p, Path(tmp) / f"override_{Path(p).name}")
+        body = json.loads(Path(dest).read_text(encoding="utf-8"))
+        script = body.get("script") if isinstance(body, dict) and isinstance(body.get("script"), dict) else body
+        out.append((int((body or {}).get("part") or _part_of_path(p)), script))
+    out.sort(key=lambda t: t[0])
+    return [s for _, s in out]
+
+
+def generation_params(source: dict, kit: dict, language: str, article_id: str) -> dict:
+    src_params = dict(source["presentation"].get("params") or {})
+    pair = dict(kit.get("voice_pair") or {})
+    return {
+        "catalogue": True, "topic_id": kit["topic_id"], "kit_id": kit["id"], "article_id": article_id,
+        "language": language, "narration_style": src_params.get("narration_style") or "dialogue",
+        "teacher_avatar": kit.get("teacher_avatar") or src_params.get("teacher_avatar") or "female",
+        "tts_voice": pair.get("teacher"), "student_voice": pair.get("student"),
+        "curriculum_header": list(src_params.get("curriculum_header") or []),
+        "translation": {"source_kit_id": source["kit"]["id"], "source_generation_id": source["presentation"]["id"],
+                        "source_language": SOURCE_LANGUAGE},
+    }
+
+
+def generations_stage(sb, source: dict, kit: dict, language: str, article_id: str, script_paths: list[str]) -> dict:
+    owner = _s(source["presentation"].get("owner_id"))
+    if not owner:
+        raise RuntimeError("the source presentation has no owner")
+    base = generation_params(source, kit, language, article_id)
+    pres = {**base, "translation": {**base["translation"], "scripts": list(script_paths)}}
+    rows = [
+        {"owner_id": owner, "kind": "presentation", "status": "queued", "book_id": None, "chapter_ref": None,
+         "school_id": None, "params": pres},
+        {"owner_id": owner, "kind": "deck", "status": "queued", "book_id": None, "chapter_ref": None,
+         "school_id": None, "params": base},
+    ]
+    ins = sb.table("generations").insert(rows).execute()
+    made = _rows(ins)
+    ids = {str(r.get("kind")): str(r.get("id")) for r in made if r.get("id")}
+    if "presentation" not in ids or "deck" not in ids:
+        raise RuntimeError(f"generations insert returned {sorted(ids)}; presentation and deck expected")
+    sb.table("topic_kits").update({"presentation_generation_id": ids["presentation"],
+                                   "doc_generation_ids": {"deck": ids["deck"]}}).eq("id", kit["id"]).execute()
+    return ids
+
+
+# ── the job ─────────────────────────────────────────────────────────────
+
+
+def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
+    """The job proper. Returns the summary also written to ``jobs.stage``;
+    raises on any failure (``run_translate_job`` records it)."""
+    import tempfile
+
+    source_kit_id = _s(params.get("source_kit_id"))
+    language = _s(params.get("language")).lower()
+    if not source_kit_id:
+        raise TranslateRefused("kit_translate job without params.source_kit_id")
+    if language not in LANGUAGES:
+        raise TranslateRefused(f"language {language!r} is not a lesson language")
+    if language == SOURCE_LANGUAGE:
+        raise TranslateRefused("the source is already English")
+
+    stage: dict = {"phase": "translate", "step": "load", "source_kit_id": source_kit_id, "language": language}
+    db.set_stage(sb, job_id, dict(stage))
+    db.set_progress(sb, job_id, 3)
+    source = load_source(sb, source_kit_id)
+    if client is None:
+        from shared.llm import client_for
+        client = client_for(language)
+
+    kit = find_translation_kit(sb, source_kit_id, language) or create_translation_kit(sb, source, language, job_id)
+    done = dict((kit.get("translation") or {}).get("stage") or {})
+    stage["kit_id"] = kit["id"]
+    topic = source["topic"]
+    context = (f"The lesson is '{_s(source['article'].get('title'))}' ({_s(topic.get('subject'))}) for school "
+               f"students; the teacher speaks to a class.")
+
+    with tempfile.TemporaryDirectory() as _tmp:
+        tmp = Path(tmp or _tmp)
+        bodies = download_scripts(sb, source["script_paths"], tmp)
+
+        # glossary
+        stage["step"] = "glossary"
+        db.set_stage(sb, job_id, dict(stage))
+        db.set_progress(sb, job_id, 10)
+        terms = [tuple(x) for x in (done.get("glossary") or {}).get("pairs") or []]
+        if not terms:
+            terms, g_summary = glossary_stage(sb, client, topic, source["article"], language)
+            kit = _save_translation(sb, kit, {"stage": {"glossary": {**g_summary, "pairs": terms}}})
+            done = dict(kit["translation"]["stage"])
+
+        # article
+        stage["step"] = "article"
+        db.set_stage(sb, job_id, dict(stage))
+        db.set_progress(sb, job_id, 25)
+        article_id = _s((done.get("article") or {}).get("article_id"))
+        if not article_id:
+            article_id, a_summary = article_stage(sb, client, source, language, terms, kit)
+            kit = _save_translation(sb, kit, {"stage": {"article": a_summary}})
+            done = dict(kit["translation"]["stage"])
+        title = _s((done.get("article") or {}).get("title")) or None
+
+        # scripts + pre-check A
+        stage["step"] = "script"
+        db.set_stage(sb, job_id, dict(stage))
+        db.set_progress(sb, job_id, 40)
+        n = len(bodies)
+        scripts: list[tuple[int, int, dict]] = []
+        reports: list[dict] = []
+        for i, body in enumerate(bodies):
+            part = int(body.get("part") or i + 1)
+            db.set_stage(sb, job_id, {**stage, "part": part, "total": n})
+            dst, report = translate_episode(client, body, language, terms, title=title if n == 1 else None,
+                                            context=context)
+            scripts.append((part, n, dst))
+            reports.append({"part": part, **report})
+            db.set_progress(sb, job_id, 40 + round(35 * (i + 1) / n))
+
+        # assets
+        stage["step"] = "assets"
+        db.set_stage(sb, job_id, dict(stage))
+        keys = scene_asset_keys([s for _, _, s in scripts])
+        found, missing = resolve_assets(sb, keys)
+        if missing:
+            raise TranslateRefused(f"{len(missing)} scene asset(s) of the source video cannot be found and will not "
+                                   f"be regenerated: {', '.join(missing[:6])}")
+
+        # generations
+        stage["step"] = "generations"
+        db.set_stage(sb, job_id, dict(stage))
+        db.set_progress(sb, job_id, 85)
+        owner = _s(source["presentation"].get("owner_id"))
+        paths = upload_staged_scripts(sb, owner, kit["id"], scripts, language, tmp)
+        ids = generations_stage(sb, source, kit, language, article_id, paths)
+
+    usage = getattr(client, "session_usage", None)
+    precheck = check.merge_reports(*[{k: v for k, v in r.items() if k != "part"} for r in reports])
+    precheck["parts"] = [{"part": r["part"], "ok": r.get("ok"), "blocking": len(r.get("blocking") or []),
+                          "flags": len(r.get("flags") or [])} for r in reports]
+    sb.table("topic_kits").update({"precheck": precheck}).eq("id", kit["id"]).execute()
+    kit = _save_translation(sb, kit, {
+        "stage": {"script": {"parts": n}, "assets": {"found": len(found), "keys": len(keys)},
+                  "generations": ids},
+        "scripts": paths, "source_scripts": [{"path": b["_path"], "sha256": b["_sha256"]} for b in bodies],
+        "assets": found, "model": str(getattr(client, "model", "") or ""),
+        "cost": {"translation": {"usage": usage if isinstance(usage, dict) else None}, "conversion": {}},
+        "glossary_pairs": len(terms),
+    })
+    if isinstance(usage, dict) and usage.get("calls"):
+        db.set_job_usage(sb, job_id, usage)
+    summary = {"phase": "translate", "step": "done", "kit_id": kit["id"], "language": language,
+               "source_kit_id": source_kit_id, "article_id": article_id, "parts": n,
+               "generations": ids, "assets": len(found), "glossary": len(terms),
+               "precheck_ok": precheck.get("ok"), "flags": len(precheck.get("flags") or [])}
+    db.set_progress(sb, job_id, 100)
+    return summary
+
+
+def run_translate_job(sb, job: dict, client=None) -> Optional[dict]:
+    """Entry point for run.py. Self-contained: finishes the job row itself
+    (done with the summary in ``stage``; error with the message) and marks
+    the translation kit failed on the way out."""
+    job_id = job["id"]
+    params = job.get("params") or {}
+    kit = None
+    try:
+        summary = translate_kit(sb, job_id, params, client=client)
+        db.set_stage(sb, job_id, summary)
+        db.finish_job(sb, job_id)
+        return summary
+    except Exception as exc:  # noqa: BLE001
+        log.exception("kit_translate %s failed", job_id)
+        try:
+            kit = find_translation_kit(sb, _s(params.get("source_kit_id")), _s(params.get("language")).lower())
+        except Exception:  # noqa: BLE001
+            kit = None
+        _fail_translation(sb, kit, f"translation failed: {exc}")
+        db.finish_job(sb, job_id, error=str(exc))
+        return None
+
+
+# ── after the render (pre-check C) ──────────────────────────────────────
+
+
+def record_post_render(sb, kit_id: Optional[str], parts: list[dict]) -> Optional[dict]:
+    """Merge the per-part post-render reports the presentation build
+    computed into ``topic_kits.precheck.post_render``. Best-effort."""
+    if not kit_id:
+        return None
+    reps = [p.get("post_render") for p in parts if isinstance(p, dict) and isinstance(p.get("post_render"), dict)]
+    if not reps:
+        return None
+    try:
+        kit = load_kit(sb, kit_id)
+        pre = dict((kit or {}).get("precheck") or {})
+        merged = check.merge_reports(*reps)
+        pre["post_render"] = merged
+        pre["ok"] = bool(pre.get("ok", True)) and bool(merged.get("ok"))
+        sb.table("topic_kits").update({"precheck": pre}).eq("id", kit_id).execute()
+        return merged
+    except Exception:  # noqa: BLE001
+        log.exception("post-render report not recorded for kit %s", kit_id)
+        return None
+
+
+__all__ = ["JOB_TYPE", "TranslateRefused", "apply_strings", "article_text_items", "download_scripts",
+           "generation_params", "glossary_stage", "lesson_text_items", "load_source", "load_staged_scripts",
+           "recompile_maths", "record_post_render", "resolve_assets", "run_translate_job", "scene_asset_keys",
+           "segment_text_items", "staged_script_path", "translate_episode", "translate_kit", "translate_segments",
+           "translate_strings"]

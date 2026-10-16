@@ -117,6 +117,8 @@ COMPOSED_KIND = "worksheet"
 KIT_KINDS = frozenset({"presentation", "activity", "case_study", "worksheet", "deck", "lesson_plan"})
 SYNTHETIC_AUTHOR = "SketchCast"
 ARTICLE_APPROVED = "approved"
+# A translated article awaiting its kit's review (Kit Translator, 0134).
+ARTICLE_STAGED = "staged"
 KIT_GENERATING = "generating"
 KIT_IN_REVIEW = "in_review"
 KIT_FAILED = "failed"
@@ -132,7 +134,11 @@ OUTRO_ID = "outro"
 # whitelist, not a copy: telemetry the worker merged in (coverage, tts_*),
 # and anything a later kind adds, must not travel.
 _INHERITED_PARAMS = ("catalogue", "topic_id", "kit_id", "article_id", "language", "narration_style",
-                     "teacher_avatar", "tts_voice", "student_voice", "curriculum_header")
+                     "teacher_avatar", "tts_voice", "student_voice", "curriculum_header",
+                     # Kit Translator: the lesson plan of a translated kit is
+                     # one too (it reads the staged article) — the marker
+                     # travels, the staged scripts (presentation-only) do not
+                     "translation")
 _TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
 
 
@@ -639,6 +645,10 @@ class Prepared:
     # "Is a user builder live?" — set by the worker's catalogue branch; the
     # presentation loop polls it between parts (yield_to_users).
     contention_probe: Optional[Callable[[], bool]] = None
+    # Kit Translator (T0): ``params.translation`` of a TRANSLATED kit's
+    # generation — the source kit and, on the presentation, the staged
+    # translated scripts the build renders instead of writing its own.
+    translation: Optional[dict] = None
 
     @property
     def chapter_title(self) -> str:
@@ -672,6 +682,7 @@ def prepare(sb, gen: dict) -> Prepared:
     kit_id = str(params.get("kit_id") or "").strip() or None
     kit = article = None
     article_id = str(params.get("article_id") or "").strip() or None
+    translation = params.get("translation") if isinstance(params.get("translation"), dict) else None
     if question_set_id is not None:
         # A question_set_id switches the kit/article gates OFF (its items were
         # approved one by one), so it may only ever arrive on the one kind the
@@ -702,7 +713,17 @@ def prepare(sb, gen: dict) -> Prepared:
             mark_kit_failed(sb, kit_id, f"article {article_id} not found")
             raise CatalogueRefused(f"article {article_id} not found")
         status = str(article.get("status") or "")
-        if status != ARTICLE_APPROVED:
+        # A TRANSLATED kit (Kit Translator, R2) builds from its translated
+        # article while that article is still ``staged``: the English
+        # original it was made from passed the human gate, and the kit's
+        # review approves the translation and promotes the article with it.
+        # Only a kit that IS a translation (source_kit_id, params.translation)
+        # of an article that IS one (source_article_id) may read a staged
+        # article; everything else still needs ``approved``.
+        is_translation = (translation is not None and kit.get("source_kit_id")
+                          and article.get("source_article_id"))
+        allowed = {ARTICLE_APPROVED, ARTICLE_STAGED} if is_translation else {ARTICLE_APPROVED}
+        if status not in allowed:
             mark_kit_failed(sb, kit_id, f"article {article_id} is {status or 'unreviewed'}, not approved")
             raise CatalogueRefused(f"article {article_id} is {status or 'unreviewed'}, not approved — "
                                    "a kit is built only from an approved article")
@@ -742,7 +763,7 @@ def prepare(sb, gen: dict) -> Prepared:
         band=student_band_for(grade), book=synthetic_book(topic, grade, curriculum_name, language),
         curriculum_header=header, kit_id=kit_id, kit=kit, article_id=article_id, article=article,
         question_set_id=question_set_id, teacher_avatar=teacher_avatar, tts_voice=tts_voice,
-        student_voice=student_voice, student_voice_fallback=fallback,
+        student_voice=student_voice, student_voice_fallback=fallback, translation=translation,
     )
     if article is not None:
         figures = load_rendered_figures(sb, article_id) if article_id else []
@@ -834,6 +855,9 @@ def insert_lesson_plan(sb, gen: dict, kit: dict) -> Optional[str]:
             log.warning("kit %s: lesson_plan %s cites clips the re-rendered video no longer has; a new plan is inserted",
                         kit["id"], existing)
     params = _inherited_params(dict(gen.get("params") or {}))
+    if isinstance(params.get("translation"), dict):
+        # the marker without the presentation's staged scripts
+        params["translation"] = {k: v for k, v in params["translation"].items() if k != "scripts"}
     params.update({"catalogue": True, "kit_id": kit["id"], "lesson_modes": True, "clips": clips})
     params.setdefault("curriculum_header", [])
     row = {"owner_id": gen.get("owner_id"), "kind": "lesson_plan", "status": "queued",

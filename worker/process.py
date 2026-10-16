@@ -974,6 +974,13 @@ class _Unit:
     chunks_override: list[dict] | None = None
     level: str = DEFAULT_LEVEL
     catalogue: object = None
+    # Kit Translator (T0, 2026-10-16): the TRANSLATED EpisodeScript dicts,
+    # one per part, and the generation's ``params.translation``. With an
+    # override the build makes no analysis and no script call: it validates
+    # each script and enters at the slides — new voices, measured timing,
+    # the same scene plan and the same pictures as the English kit.
+    script_override: list[dict] | None = None
+    translation: dict | None = None
 
 
 @dataclass
@@ -1032,12 +1039,17 @@ def _catalogue_doc_params(gen: dict, catalogue) -> dict:
     return params
 
 
-def _catalogue_unit(prepared, tmp: str | Path) -> _Unit:
+def _catalogue_unit(prepared, tmp: str | Path, sb: Client | None = None) -> _Unit:
     """The catalogue's stand-in for the book prelude: nothing is downloaded,
     structured, healed or measured — ``catalogue.kit.prepare`` already read
     the approved article into a chapter and chunked it. Only the per-lesson
     client (routed by the lesson's script) is created here, as the prelude
-    does for a book."""
+    does for a book.
+
+    A TRANSLATED presentation (Kit Translator: ``params.translation.scripts``)
+    also reads its staged scripts back out of storage here, into the job's
+    temp dir, as ``script_override`` — the deck and the lesson plan of the
+    same kit carry the marker without scripts and build as any kit piece."""
     from shared.languages import get_language
     from shared.llm import client_for
 
@@ -1046,12 +1058,23 @@ def _catalogue_unit(prepared, tmp: str | Path) -> _Unit:
         "chapter_num": -1, "title": prepared.book.get("title") or "Topic", "start_page": 0,
         "end_page": 0, "sections": [], "images": [], "key_boxes": [],
     }
+    translation = getattr(prepared, "translation", None)
+    override = None
+    if isinstance(translation, dict) and translation.get("scripts"):
+        if sb is None:
+            raise RuntimeError("a translated presentation needs the client to read its staged scripts")
+        from catalogue.translate import load_staged_scripts
+
+        override = load_staged_scripts(sb, translation, tmp) or None
+        if not override:
+            raise RuntimeError("translated presentation names staged scripts that could not be read")
     return _Unit(
         book=dict(prepared.book), book_id=prepared.synthetic_book_id, client=client_for(lang.code),
         chapter=chapter, chapter_num=int(chapter.get("chapter_num", -1)),
         chapter_title=chapter.get("title") or prepared.book.get("title") or "Topic",
         lesson_lang=lang.code, lesson_dir=lang.direction, jawi=lang.code == "ms-arab",
         chunks_override=list(prepared.chunks) or None, level=prepared.level, catalogue=prepared,
+        script_override=override, translation=translation if isinstance(translation, dict) else None,
     )
 
 
@@ -1426,6 +1449,7 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
     part_chunk, pk = unit.part_chunk, unit.pk
     lesson_lang, lesson_dir, jawi = unit.lesson_lang, unit.lesson_dir, unit.jawi
     catalogue = unit.catalogue
+    override = unit.script_override          # Kit Translator: the translated scripts, or None
     built_parts: list[dict] = []
 
     if catalogue is not None and kind == "worksheet" and getattr(catalogue, "question_set_id", None):
@@ -1473,7 +1497,20 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             generation_id, analysis.get("language") or "en", lesson_lang,
         )
         analysis = None
-    if analysis is not None:
+    if override is not None:
+        # Kit Translator: the lesson was analysed, planned and verified in
+        # English; this build only RENDERS its translation. No analysis call
+        # (the kit's deck is its own generation, built from the translated
+        # article; the slides read the script). The episodes shape below is
+        # what the presentation loop counts its parts from.
+        analysis = {"language": lesson_lang, "translated": True,
+                    "episodes": {"episodes": [
+                        {"episode_num": i, "title": str(s.get("episode_title") or chapter_title),
+                         "sections_covered": []}
+                        for i, s in enumerate(override, start=1)]}}
+        logger.info("generation %s: translated build (%s), %d part(s) — no analysis, no script call",
+                    generation_id, lesson_lang, len(override))
+    elif analysis is not None:
         logger.info("generation %s: reusing cached analysis for %s ch%s", generation_id, book_id, chapter_num)
     else:
         # Fresh multi-part analysis is the LONGEST phase — advance 20→43
@@ -1627,6 +1664,11 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                                student_voice=student_voice)
         logger.info("avatars cast for %s (seed %s): %s (voice %s)",
                     generation_id, cast_seed, avatars, effective_voice)
+        if override is not None and isinstance((override[0] or {}).get("avatars"), dict) and override[0]["avatars"]:
+            # the faces the ENGLISH kit cast: the same teacher and the same
+            # student in every language of one lesson
+            avatars = dict(override[0]["avatars"])
+            logger.info("avatars kept from the source kit for %s: %s", generation_id, avatars)
 
         episodes_plan = (analysis.get("episodes") or {}).get("episodes") or []
         n_parts = max(len(episodes_plan), 1)
@@ -1726,8 +1768,22 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             # slide text and the scene plan, and on the Lite its length was
             # bimodal on identical input (219.4 vs 108.0 chars per analysed
             # topic — a 5.9-minute lesson and a 2.4-minute one).
-            _script_client = script_client(lesson_lang)
-            if profile.worked_examples:
+            _script_client = None if override is not None else script_client(lesson_lang)
+            if override is not None:
+                # Kit Translator: this part's TRANSLATED script, validated
+                # through the same model the generators return (a field the
+                # translator broke fails here, before a character of TTS).
+                # No coverage, depth or length gate: the English script
+                # passed them, and the translation was checked against it
+                # (catalogue.translate_check) before it was staged.
+                from agent3_scripts.models import EpisodeScript as _EpisodeScript
+
+                script = _EpisodeScript.model_validate(override[part_idx - 1])
+                script_dict = script.model_dump()
+                coverage_reports.append({"kind": "presentation", "part": part_idx, "of": n_parts,
+                                         "gated": False, "translated": True, "language": lesson_lang,
+                                         "segments": len(script_dict.get("segments") or [])})
+            elif profile.worked_examples:
                 # Maths: the lesson is generated AS STRUCTURE, verified step
                 # by step with SymPy, and compiled onto the algebra board
                 # (maths.lesson). Verification is this path's coverage gate:
@@ -1921,11 +1977,11 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                 save_script(script)
             # Attach matched textbook figures to this part's segments (semantic
             # match via the model, keyword fallback).
-            if chapter_figures and not profile.maths:
+            if override is None and chapter_figures and not profile.maths:
                 attach_figures_to_segments(
                     script_dict.get("segments", []), chapter_figures, used_figures, client
                 )
-            if catalogue is not None and n_parts > 1:
+            if catalogue is not None and n_parts > 1 and override is None:
                 # Decision 3: every part but the first opens with a RECAP of
                 # what came before, every part but the last closes with a
                 # CONTINUATION outro — authored text, no model call, teacher
@@ -2065,6 +2121,19 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                     raise RuntimeError(
                         f"lesson failed acceptance: {_accept['summary']}")
 
+            # Kit Translator pre-check C: the translated narration against the
+            # clips it was cut to — drift, silence, the overlaps acceptance
+            # saw. Flags for the reviewer; recorded on the kit by the
+            # catalogue branch (catalogue.translate.record_post_render).
+            _post_render = None
+            if override is not None:
+                try:
+                    from catalogue import translate_check as _tc
+                    _post_render = _tc.post_render(
+                        script_dict, video, overlaps=(_accept or {}).get("overlaps") if _accept else None)
+                except Exception:  # noqa: BLE001 — a report, never a failed video
+                    logger.warning("post-render check not computed for part %d", part_idx, exc_info=True)
+
             suffix = "" if part_idx == 1 else f"_part{part_idx}"
             # deck_path is None when DECK_IN_PRESENTATION=0 (build_deck
             # above) — the deck is then the 'deck' generation's artifact.
@@ -2104,6 +2173,8 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                         "plan": _ts.part_plan_entry(part_idx, episode.get("sections_covered") or [], _total),
                         # the words the YouTube metadata is written from
                         "narration": _ym.narration_excerpt(script_dict),
+                        # Kit Translator pre-check C (None for an English kit)
+                        "post_render": _post_render,
                     })
                     # The thumbnail, drawn NOW and stored beside the video
                     # (kind thumbnail_png, app 0121) so the library shows the
@@ -2489,6 +2560,19 @@ def _set_patient_assets(generation_id: str, on: bool) -> None:
         pass
 
 
+def _set_generation_forbidden(generation_id: str, on: bool) -> None:
+    """Kit Translator safeguard (plan revision 3): THIS generation renders a
+    translated script and reuses the English kit's pictures — the scene
+    engine may read its cache and the library, never call an image model.
+    A picture it cannot find is a hole the acceptance gate refuses, not a
+    different picture for one language. Best-effort like its neighbours."""
+    try:
+        from spike.scene_engine.raster_assets import set_generation_forbidden
+        set_generation_forbidden(on, generation_id)
+    except Exception:  # noqa: BLE001 — the flag must never break the pipeline
+        pass
+
+
 def _process_catalogue(sb: Client, job: dict, generation_id: str, gen: dict, *,
                        allow_premium: bool, tier_info: dict, canary_provider: str | None) -> None:
     """The catalogue branch of process_generation (Phase 3): prepare from the
@@ -2534,8 +2618,11 @@ def _process_catalogue(sb: Client, job: dict, generation_id: str, gen: dict, *,
         prepared.contention_probe = probe
         _set_user_yield(generation_id, _yield_for_images)
         _set_patient_assets(generation_id, True)
+        _translation = getattr(prepared, "translation", None)
+        if _translation:
+            _set_generation_forbidden(generation_id, True)
         with tempfile.TemporaryDirectory() as tmp:
-            unit = _catalogue_unit(prepared, tmp)
+            unit = _catalogue_unit(prepared, tmp, sb)
             built = _build_from_analysis(
                 sb, job, generation_id, gen, unit, tmp, allow_premium=allow_premium,
                 tier_info=tier_info, canary_provider=canary_provider,
@@ -2544,6 +2631,10 @@ def _process_catalogue(sb: Client, job: dict, generation_id: str, gen: dict, *,
         if (gen.get("kind") or "presentation") == "presentation":
             recorded = catalogue_kit.record_presentation(
                 sb, gen, prepared.kit_id, {"kind": "presentation", "parts": built.parts})
+            if _translation:
+                from catalogue.translate import record_post_render
+
+                record_post_render(sb, prepared.kit_id, built.parts)
         db.finish_job(sb, job_id, generation_id)
     except db.DeferredJob:
         raise                                 # a wait is not a failure
@@ -2563,6 +2654,7 @@ def _process_catalogue(sb: Client, job: dict, generation_id: str, gen: dict, *,
     finally:
         _set_user_yield(generation_id, None)
         _set_patient_assets(generation_id, False)
+        _set_generation_forbidden(generation_id, False)
     logger.info("Catalogue generation %s (%s) done — %s", generation_id, gen.get("kind"),
                 built.client.session_usage)
     catalogue_kit.after_generation(sb, gen, prepared.kit_id,
