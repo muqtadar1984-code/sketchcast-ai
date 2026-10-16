@@ -292,10 +292,54 @@ def check_script(source: dict, target: dict, *, language: str,
 
 # Fields of maths.schema.Lesson that are MATHS, not words: copied verbatim
 # by the translator, verified identical here.
-LESSON_INVARIANT_KEYS = ("problem", "givens", "target", "before", "after", "final_answer",
+LESSON_INVARIANT_KEYS = ("givens", "target", "before", "after", "final_answer",
                          "operation", "theorem", "uses", "figure_ops", "figure", "chart",
                          "from_state", "wrong_state", "kind", "task", "difficulty", "precision",
                          "answer")
+# Fields that are PROSE WITH MATHS INSIDE — a word problem: "Find the area
+# of a circle with a radius of 6 cm. (Use π = 3.14)". Translated as words,
+# then every maths span must survive verbatim (prose_maths_equivalent).
+# The founder's review of the first Arabic video (2026-10-16): the question
+# stayed English on the board.
+LESSON_PROSE_MATHS_KEYS = ("problem",)
+# A maths span: a run of numbers, single-letter variables (Latin or Greek),
+# operators, powers and brackets — "π = 3.14", "2x + 3 = 11", "r = 6" —
+# that carries at least one digit or operator. Unit words ("cm") are two
+# or more letters, so they end a span and are free to be translated.
+_LETTER = r"A-Za-zͰ-Ͽ"
+_SPAN_TOKEN = (rf"(?:\d+(?:[.,]\d+)?|(?<![{_LETTER}])[A-Za-zα-ωΑ-Ω](?![{_LETTER}])"
+               r"|[=+−\-×÷*/^√<>≤≥≠]|[²³]|\(|\))")
+_SPAN_RE = re.compile(rf"{_SPAN_TOKEN}(?:\s*{_SPAN_TOKEN})*")
+_SPAN_CORE_RE = re.compile(r"\d|[=+−\-×÷*/^√<>≤≥≠]")
+_PROSE_WORD_RE = re.compile(r"[^\W\d_]{2,}", re.UNICODE)
+
+
+def has_prose(text: str) -> bool:
+    """Whether a question carries WORDS to translate — two or more words of
+    two or more letters. ``4x + 3 = 19`` has none and stays as it is (the
+    board typesets it as an equation); ``Solve 2x + 3 = 11 for x.`` does."""
+    return len(_PROSE_WORD_RE.findall(str(text or ""))) >= 2
+
+
+def maths_spans(text: str) -> list[str]:
+    """The maths spans of a sentence, whitespace-normalised, in order."""
+    out: list[str] = []
+    for m in _SPAN_RE.finditer(normalize_numerals(str(text or ""))):
+        span = " ".join(m.group(0).split()).strip("() ")
+        if span and _SPAN_CORE_RE.search(span):
+            out.append(span)
+    return out
+
+
+def prose_maths_equivalent(source: str, target: str) -> tuple[bool, list[str]]:
+    """Every maths span of the source appears in the target (whitespace and
+    numerals normalised) and the numbers are equivalent. Returns (ok, the
+    spans the target lost)."""
+    tgt = " ".join(normalize_numerals(str(target or "")).split())
+    tgt_compact = tgt.replace(" ", "")
+    lost = [s for s in maths_spans(source) if s not in tgt and s.replace(" ", "") not in tgt_compact]
+    ok_numbers, missing, extra = numbers_equivalent(source, target)
+    return (not lost and ok_numbers), lost + [f"number {m}" for m in missing]
 # Fields that are SPOKEN or WRITTEN words: translated, then checked for
 # numeric equivalence.
 LESSON_TEXT_KEYS = ("line", "speech", "student", "explanation", "intro_speech", "student_question",
@@ -339,6 +383,13 @@ def check_maths_lesson(source: dict, target: dict) -> dict:
         if key in LESSON_INVARIANT_KEYS or key == "who":
             if sv != tv:
                 blocking.append(_finding(path, "protected field altered", source=sv, target=tv))
+            continue
+        if key in LESSON_PROSE_MATHS_KEYS and isinstance(sv, str) and isinstance(tv, str):
+            ok, lost = prose_maths_equivalent(sv, tv)
+            if not ok:
+                blocking.append(_finding(path, "maths in the question altered", lost=lost, source=sv, target=tv))
+            elif sv.strip() and not tv.strip():
+                blocking.append(_finding(path, "question emptied"))
             continue
         if isinstance(sv, str) and isinstance(tv, str):
             ok, missing, extra = numbers_equivalent(sv, tv)
@@ -396,6 +447,8 @@ def merge_reports(*reports: dict) -> dict:
             "checks": [{k: v for k, v in r.items() if k not in ("blocking", "flags")} for r in parts]}
 
 
-__all__ = ["DRIFT_FLAG_S", "LESSON_INVARIANT_KEYS", "LESSON_TEXT_KEYS", "check_maths_lesson", "check_script",
-           "code_tokens", "english_leftover", "merge_reports", "normalize_numerals", "number_values",
-           "numbers_equivalent", "post_render", "script_of"]
+__all__ = ["DRIFT_FLAG_S", "LESSON_INVARIANT_KEYS", "LESSON_PROSE_MATHS_KEYS", "LESSON_TEXT_KEYS",
+           "check_maths_lesson", "check_script", "code_tokens", "english_leftover", "has_prose", "maths_spans",
+           "merge_reports",
+           "normalize_numerals", "number_values", "numbers_equivalent", "post_render", "prose_maths_equivalent",
+           "script_of"]

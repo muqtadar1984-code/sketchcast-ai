@@ -161,6 +161,16 @@ def test_mixed_script_text_draws_each_run_with_its_own_face():
     assert _script_runs("SketchCast AI से बनाया गया") == ["SketchCast AI ", "से बनाया गया"]
     assert _script_runs("sketchcast.app पर जाइए।") == ["sketchcast.app ", "पर जाइए।"]
     assert _script_runs("only latin 123") == ["only latin 123"]
+    # Arabic prose with maths inside (the first translated video, 2026-10-16):
+    # "=", "(" and "²" are signs the hand face draws and Noto Sans Arabic
+    # does not; "π" belongs to neither and takes the sans face. None of them
+    # may sit in the Arabic run; digits and sentence punctuation stay with it.
+    runs = _script_runs("مساحة الدائرة = π × 6² سم. (استخدم π = 3.14)")
+    arab = [r for r in runs if any("؀" <= c <= "ۿ" for c in r)]
+    assert arab and all(not any(c in "=(²π×" for c in r) for r in arab), runs
+    assert any("π" in r and not any("؀" <= c <= "ۿ" for c in r) for r in runs), runs
+    assert "".join(runs) == "مساحة الدائرة = π × 6² سم. (استخدم π = 3.14)"
+    assert _script_runs("نصف القطر 6 سم.") == ["نصف القطر 6 سم."], "digits and the full stop stay in the Arabic run"
     r = SceneRenderer(Scene.model_validate({"id": "t", "narration": "x", "elements": [
         {"id": "a", "type": "text", "text": "SketchCast AI से बनाया गया", "at": [60, 150], "role": "title", "size": 40, "anchor": "lt"}],
         "actions": [{"verb": "write", "target": "a", "duration": 1.0}]}))
