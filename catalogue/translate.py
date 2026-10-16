@@ -1160,9 +1160,20 @@ def generations_stage(sb, source: dict, kit: dict, language: str, article_id: st
 
     rows = [row("presentation", {**base, "translation": {**base["translation"], "scripts": list(script_paths)}}),
             row("deck", base)]
+    skipped: list[dict] = []
     for kind in DOC_KINDS_REBUILT:
-        if src_docs.get(kind):
-            rows.append(row(kind, base))
+        if not src_docs.get(kind):
+            continue
+        if kind == "worksheet" and _has_artifact(sb, _s(src_docs.get(kind)), "questions_json"):
+            # A maths worksheet: its questions were VERIFIED in English (the
+            # verifier reads English back); a rebuild in the language fails
+            # that gate (2026-10-16, the Circle kit). The composed quiz and
+            # the printed bank carry the assessment; the worksheet waits for
+            # the artifact-translation path (T1.5).
+            skipped.append({"where": kind, "what": DOCUMENT_FLAG,
+                            "detail": "a verified maths worksheet is not rebuilt in the language; the online quiz and the question bank carry the assessment"})
+            continue
+        rows.append(row(kind, base))
     if src_docs.get("question_bank"):
         rows.append(row("question_bank", base))
     if quiz:
@@ -1183,7 +1194,38 @@ def generations_stage(sb, source: dict, kit: dict, language: str, article_id: st
     docs = {k: v for k, v in ids.items() if k != "presentation"}
     sb.table("topic_kits").update({"presentation_generation_id": ids["presentation"],
                                    "doc_generation_ids": docs}).eq("id", kit["id"]).execute()
+    if skipped:
+        append_flags(sb, str(kit["id"]), skipped)
     return ids
+
+
+DOCUMENT_FLAG = "document not translated"
+
+
+def append_flags(sb, kit_id: str, flags: list[dict]) -> None:
+    """Add ``flags`` to the kit's CURRENT precheck (read back, never from a
+    stale row in hand) — the bank's and the documents' flags are written at
+    different stages and each must survive the other."""
+    rows = _rows(sb.table("topic_kits").select("precheck").eq("id", kit_id).limit(1).execute())
+    precheck = (rows or [{}])[0].get("precheck")
+    precheck = dict(precheck) if isinstance(precheck, dict) else {}
+    precheck["flags"] = list(precheck.get("flags") or []) + list(flags)
+    sb.table("topic_kits").update({"precheck": precheck}).eq("id", kit_id).execute()
+
+
+def document_flags(sb, kit_id: str) -> list[dict]:
+    """The 'document not translated' flags already on the kit."""
+    rows = _rows(sb.table("topic_kits").select("precheck").eq("id", kit_id).limit(1).execute())
+    precheck = (rows or [{}])[0].get("precheck")
+    flags = precheck.get("flags") if isinstance(precheck, dict) else None
+    return [f for f in (flags or []) if isinstance(f, dict) and f.get("what") == DOCUMENT_FLAG]
+
+
+def _has_artifact(sb, generation_id: str, kind: str) -> bool:
+    if not generation_id:
+        return False
+    rows = _rows(sb.table("artifacts").select("id").eq("generation_id", generation_id).eq("kind", kind).limit(1).execute())
+    return bool(rows)
 
 
 # ── the job ─────────────────────────────────────────────────────────────
@@ -1311,6 +1353,9 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
                           "flags": len(r.get("flags") or [])} for r in reports]
     if bank_summary.get("dropped"):
         precheck["flags"] = list(precheck.get("flags") or []) + bank_flags(bank_summary)
+    # the documents stage's flags (a worksheet not rebuilt) are already on
+    # the kit; this final write replaces the whole value, so carry them
+    precheck["flags"] = list(precheck.get("flags") or []) + document_flags(sb, str(kit["id"]))
     precheck["bank"] = {k: v for k, v in bank_summary.items() if k != "dropped"}
     sb.table("topic_kits").update({"precheck": precheck}).eq("id", kit["id"]).execute()
     kit = _save_translation(sb, kit, {

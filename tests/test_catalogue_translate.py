@@ -347,6 +347,22 @@ class TestItems:
         assert {r["id"] for r in CO.load_bank(sb, "t", "ar")} == {"a"}
 
 
+class TestOptionalDocuments:
+    def test_a_verified_maths_worksheet_is_not_rebuilt_but_flagged(self):
+        sb = _job_sb()
+        ws = KIT["doc_generation_ids"]["worksheet"]
+        sb.tables["artifacts"].append({"id": "a-q", "generation_id": ws, "kind": "questions_json", "storage_path": "sys/ws/questions.json"})
+        res = T.run_translate_job(sb, sb.tables["jobs"][0], client=FakeTranslator())
+        assert res is not None
+        k = next(k for k in sb.tables["topic_kits"] if k["language"] == "ar")
+        assert "worksheet" not in k["doc_generation_ids"] and "quiz" in k["doc_generation_ids"] and "question_bank" in k["doc_generation_ids"]
+        gens = [g for g in sb.tables["generations"] if (g["params"].get("translation") or {}).get("kit_id") == k["id"]]
+        assert not any(g["kind"] == "worksheet" and not g["params"].get("question_set_id") for g in gens), "no rebuilt worksheet"
+        flag = next(f for f in k["precheck"]["flags"] if f["where"] == "worksheet")
+        assert flag["what"] == "document not translated" and "quiz" in flag["detail"]
+        assert k["precheck"]["ok"] is True, "a skipped document is a flag, never a block"
+
+
 class TestPostRender:
     def test_drift_and_silence_flag_and_a_silent_segment_blocks(self):
         script = {"segments": [{"segment_id": "s1", "text": "a"}, {"segment_id": "s2", "text": "b"},

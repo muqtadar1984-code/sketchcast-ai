@@ -526,6 +526,30 @@ class TestAfterGeneration:
         assert sb.tables["topics"][0]["status"] == "generating"
         assert not [g for g in sb.tables["generations"] if g["kind"] == "lesson_plan"]
 
+    def test_a_translations_rebuilt_document_that_fails_is_dropped_and_the_kit_still_reaches_review(self):
+        # Kit Translator T1: the Arabic worksheet's rebuild was refused by the
+        # maths verifier; the piece leaves the kit with a flag, and the kit
+        # (every other piece done, plan present) goes to review
+        tr_kit = {**KIT, "language": "ar", "source_kit_id": "kit-en", "translation_status": "staged",
+                  "doc_generation_ids": {**KIT["doc_generation_ids"], "lesson_plan": "gen-lp"}}
+        sb = _sb(kit_row=tr_kit)
+        sb.tables["generations"].append({**_gen("gen-lp", "done"), "kind": "lesson_plan"})
+        res = kit.after_generation(sb, _gen("gen-w", translation={"kit_id": "kit-1", "source_kit_id": "kit-en"}), "kit-1",
+                                   {"status": "failed", "kind": "worksheet", "error": "no worksheet question could be verified"})
+        assert res["dropped"] is True and res["failed"] is False and res["in_review"] is True
+        k = _kit(sb)
+        assert "worksheet" not in k["doc_generation_ids"] and k["status"] == "in_review" and k["translation_status"] == "in_review"
+        assert k["precheck"]["flags"][0]["where"] == "worksheet" and "could be verified" in k["precheck"]["flags"][0]["detail"]
+        assert sb.tables["topics"][0]["status"] == "generating", "a translation never moves the topic"
+        # an ENGLISH kit's failed worksheet is still the kit's failure
+        sb2 = _sb()
+        res2 = kit.after_generation(sb2, _gen("gen-w"), "kit-1", {"status": "failed", "kind": "worksheet", "error": "x"})
+        assert res2["failed"] is True and "dropped" not in res2
+        # and a translation's VIDEO failing is fatal too
+        sb3 = _sb(kit_row=tr_kit)
+        res3 = kit.after_generation(sb3, _gen("gen-p", translation={"kit_id": "kit-1"}), "kit-1", {"status": "failed", "kind": "presentation", "error": "x"})
+        assert res3["failed"] is True
+
     def test_a_failure_never_relabels_a_reviewed_kit(self):
         sb = _sb(kit_row={**KIT, "status": "in_review"})
         res = kit.after_generation(sb, _gen("gen-w"), "kit-1", {"status": "failed", "kind": "worksheet", "error": "late"})
