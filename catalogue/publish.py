@@ -346,12 +346,21 @@ def chapter_lines(chapters: list[dict]) -> list[str]:
 
 
 def topic_link(topic: dict, part: int = 1) -> str:
-    """The sketchcast.app link with UTM parameters. ``utm_content`` is the
-    topic's canonical key and the part, so the analytics say which video sent
-    the visitor. No personal data ever reaches a query string."""
+    """The sketchcast.app link with UTM parameters — the topic's OWN public
+    lesson page (sketchcast.app/topics/<slug>, catalogue plan §5.6: "Full kit:
+    …") when the topic has a slug, the homepage otherwise (a topic that
+    predates slugs, or a test row). ``utm_content`` is the topic's canonical
+    key and the part, so the analytics say which video sent the visitor. No
+    personal data ever reaches a query string."""
     key = _s(topic.get("canonical_key")) or "topic"
     params = {**UTM, "utm_content": f"{key}_part{int(part)}"}
-    return LINK_BASE + "/?" + "&".join(f"{k}={v}" for k, v in params.items())
+    query = "&".join(f"{k}={v}" for k, v in params.items())
+    slug = _s(topic.get("slug"))
+    base = f"{LINK_BASE}/topics/{slug}" if _SLUG_RE.match(slug) else LINK_BASE + "/"
+    return f"{base}?{query}"
+
+
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 
 
 def build_title(topic_title: object, part: int, total: int, *, meta: Optional[dict] = None,

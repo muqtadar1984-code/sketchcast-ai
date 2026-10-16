@@ -59,6 +59,16 @@ TITLE_TERMS = 3          # key terms in the title's middle block
 MIN_CHAPTERS = 3         # YouTube ignores a chapter list shorter than this or not at 0:00
 NARRATION_EXCERPT_CHARS = 6000
 
+# The link line under the SketchCast paragraph: "Full kit: <the lesson's own
+# public page>" (catalogue plan §5.6). ONE prefix, so the enrich pass can find
+# and replace the line on every video already posted.
+KIT_LINK_PREFIX = "Full kit: "
+
+
+def kit_link_line(link: object) -> str:
+    return f"{KIT_LINK_PREFIX}{str(link or '').strip()}"
+
+
 SKETCHCAST_LINE = ("This lesson was generated with SketchCast. Upload a textbook chapter and get a "
                    "whiteboard video, slide deck, lesson plan, activities, worksheet, test paper and "
                    "case study in one click.")
@@ -308,7 +318,7 @@ def compose_description(*, topic_title: object, summary: object, meta: Optional[
     # 2026-09-25): where most clicks come from
     from shared.outro import DESCRIPTION_CTA
     blocks.append([DESCRIPTION_CTA])
-    blocks.append([SKETCHCAST_LINE, link])
+    blocks.append([SKETCHCAST_LINE, kit_link_line(link)])
 
     tags = [t for t in (hashtags or []) if t]
     if tags:
