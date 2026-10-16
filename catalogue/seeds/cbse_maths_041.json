@@ -189,6 +189,66 @@
       "description": "Surface areas and volumes of cubes, cuboids, spheres (including hemispheres) and right circular cylinders and cones.",
       "parent_code": "cbse:9:U5",
       "sort": 18
+    },
+    {
+      "code": "cbse:7:GEO",
+      "grade": "7",
+      "strand": "Geometry",
+      "sub_strand": null,
+      "title": "Geometry",
+      "description": null,
+      "parent_code": null,
+      "sort": 101
+    },
+    {
+      "code": "cbse:7:GEO:01",
+      "grade": "7",
+      "strand": "Geometry",
+      "sub_strand": null,
+      "title": "Lines and Angles",
+      "description": "Complementary and supplementary angles; adjacent angles, linear pairs and vertically opposite angles (equal); angles made by a transversal with two lines, and the corresponding/alternate/co-interior angle properties when the lines are parallel. (Paraphrased from the NCERT Class 7 Mathematics chapter; not verbatim.)",
+      "parent_code": "cbse:7:GEO",
+      "sort": 102
+    },
+    {
+      "code": "cbse:7:GEO:02",
+      "grade": "7",
+      "strand": "Geometry",
+      "sub_strand": null,
+      "title": "The Triangle and its Properties",
+      "description": "Medians and altitudes; exterior angle of a triangle and its property; angle sum property; two special triangles (equilateral, isosceles); the sum of two sides exceeds the third; right-angled triangles and the Pythagoras property, including its converse. (Paraphrased from the NCERT Class 7 Mathematics chapter; not verbatim.)",
+      "parent_code": "cbse:7:GEO",
+      "sort": 103
+    },
+    {
+      "code": "cbse:9:U4",
+      "grade": "9",
+      "strand": "Geometry",
+      "sub_strand": null,
+      "title": "Geometry",
+      "description": null,
+      "parent_code": null,
+      "sort": 104
+    },
+    {
+      "code": "cbse:9:U4:01",
+      "grade": "9",
+      "strand": "Geometry",
+      "sub_strand": null,
+      "title": "Lines and Angles",
+      "description": "If a ray stands on a line, the adjacent angles sum to 180° and the converse; vertically opposite angles are equal when two lines intersect; corresponding and alternate angles with a transversal across parallel lines, and the converse. (Paraphrased from the CBSE Class IX Mathematics syllabus; not verbatim.)",
+      "parent_code": "cbse:9:U4",
+      "sort": 105
+    },
+    {
+      "code": "cbse:9:U4:02",
+      "grade": "9",
+      "strand": "Geometry",
+      "sub_strand": null,
+      "title": "Triangles",
+      "description": "Congruence of triangles (SAS, ASA, SSS, RHS); angles opposite equal sides are equal and the converse. (Paraphrased from the CBSE Class IX Mathematics syllabus; not verbatim.)",
+      "parent_code": "cbse:9:U4",
+      "sort": 106
     }
   ]
 }
