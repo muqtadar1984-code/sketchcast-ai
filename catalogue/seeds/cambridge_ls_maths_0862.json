@@ -579,6 +579,56 @@
       "description": "Identify reflective symmetry in 3D shapes.",
       "parent_code": "9/Gg",
       "sort": 57
+    },
+    {
+      "code": "7/Geometry and measure",
+      "grade": "7",
+      "strand": "Geometry and measure",
+      "sub_strand": null,
+      "title": "Geometry and measure",
+      "description": null,
+      "parent_code": null,
+      "sort": 60
+    },
+    {
+      "code": "7/Gg",
+      "grade": "7",
+      "strand": "Geometry and measure",
+      "sub_strand": "Geometrical reasoning, shapes and measurements",
+      "title": "Geometrical reasoning, shapes and measurements",
+      "description": null,
+      "parent_code": "7/Geometry and measure",
+      "sort": 61
+    },
+    {
+      "code": "7Gg.12",
+      "grade": "7",
+      "strand": "Geometry and measure",
+      "sub_strand": "Geometrical reasoning, shapes and measurements",
+      "title": "Know that the sum of the angles around a point is 360°, and use this to calculate missing angles.",
+      "description": "Know that the sum of the angles around a point is 360°, and use this to calculate missing angles.",
+      "parent_code": "7/Gg",
+      "sort": 62
+    },
+    {
+      "code": "7Gg.13",
+      "grade": "7",
+      "strand": "Geometry and measure",
+      "sub_strand": "Geometrical reasoning, shapes and measurements",
+      "title": "Recognise the properties of angles on: parallel lines and transversals; perpendicular lines; intersecting lines.",
+      "description": "Recognise the properties of angles on: – parallel lines and transversals – perpendicular lines – intersecting lines.",
+      "parent_code": "7/Gg",
+      "sort": 63
+    },
+    {
+      "code": "9Gg.10",
+      "grade": "9",
+      "strand": "Geometry and measure",
+      "sub_strand": "Geometrical reasoning, shapes and measurements",
+      "title": "Know and use Pythagoras' theorem.",
+      "description": "Know and use Pythagoras' theorem.",
+      "parent_code": "9/Gg",
+      "sort": 64
     }
   ]
 }
