@@ -26,8 +26,10 @@ def _body(groups):
 class FakeCF:
     """Refuses any window wider than ``keeps`` days, like the real API."""
 
-    def __init__(self, days: dict[str, tuple], keeps: int = 30):
+    def __init__(self, days: dict[str, tuple], keeps: int = 30, paths: dict[str, list] | None = None, keeps_paths: int = 7):
         self.days, self.keeps, self.asked = days, keeps, []
+        # per-path groups: day → [(path, requests, visits)]; None = the plan has no adaptive dataset
+        self.path_days, self.keeps_paths, self.asked_paths = paths, keeps_paths, []
 
     def daily(self, since: date, until: date):
         self.asked.append((since, until))
@@ -35,6 +37,16 @@ class FakeCF:
             raise C.CloudflareRefused(f"cannot request data older than {self.keeps} days")
         groups = [_group(d, *v) for d, v in self.days.items() if since.isoformat() <= d <= until.isoformat()]
         return C.parse_response(_body(groups))
+
+    def paths(self, since: date, until: date):
+        self.asked_paths.append((since, until))
+        if self.path_days is None:
+            raise C.CloudflareRefused("unknown field httpRequestsAdaptiveGroups")
+        if (until - since).days + 1 > self.keeps_paths:
+            raise C.CloudflareRefused(f"cannot request data older than {self.keeps_paths} days")
+        groups = [{"count": n, "sum": {"visits": v}, "dimensions": {"date": d, "clientRequestPath": p}}
+                  for d, rows in self.path_days.items() if since.isoformat() <= d <= until.isoformat() for p, n, v in rows]
+        return C.parse_paths_response({"data": {"viewer": {"zones": [{"httpRequestsAdaptiveGroups": groups}]}}})
 
 
 def _sb():
@@ -68,11 +80,53 @@ def test_backfill_shrinks_the_window_until_cloudflare_answers_and_upserts_by_day
     # 400, 180 and 90 refused; 30 answered.
     assert [(u - s).days + 1 for s, u in cf.asked] == [400, 180, 90, 30]
     assert summary == {"zone": "sketchcast.app", "days_asked": 30, "rows": 2,
-                       "first_day": "2026-09-20", "last_day": "2026-09-21"}
-    op, table, rows, kw = sb.log[-1]
+                       "first_day": "2026-09-20", "last_day": "2026-09-21", "path_rows": 0,
+                       "path_error": "CloudflareRefused: unknown field httpRequestsAdaptiveGroups"}
+    op, table, rows, kw = [e for e in sb.log if e[1] == C.TABLE][-1]
     assert (op, table, kw) == ("upsert", C.TABLE, {"on_conflict": "zone,day"})
     assert rows[1]["day"] == "2026-09-21" and rows[1]["uniques"] == 15 and rows[1]["zone"] == "sketchcast.app"
     assert rows[1]["countries"] == [{"country": "MY", "requests": 50}]
+
+
+class TestPaths:
+    """Per-path page views (2026-10-16): the funnel's first step."""
+
+    def test_normalise_path_makes_one_row_per_page(self):
+        for raw, want in [("/topics/cells.html", "/topics/cells"), ("/Topics/Cells/", "/topics/cells"),
+                          ("/ar/topics/cells.html?x=1", "/ar/topics/cells"), ("/", "/"), ("", "/"),
+                          ("/index.html", "/"), ("/ar/index.html", "/ar"), ("topics", "/topics")]:
+            assert C.normalise_path(raw) == want, raw
+
+    def test_parse_merges_spellings_and_sorts_by_day_then_requests(self):
+        rows = C.parse_paths_response({"data": {"viewer": {"zones": [{"httpRequestsAdaptiveGroups": [
+            {"count": 7, "sum": {"visits": 5}, "dimensions": {"date": "2026-10-16", "clientRequestPath": "/topics/cells"}},
+            {"count": 3, "sum": {"visits": 2}, "dimensions": {"date": "2026-10-16", "clientRequestPath": "/topics/cells.html"}},
+            {"count": 20, "sum": {"visits": 9}, "dimensions": {"date": "2026-10-16", "clientRequestPath": "/"}},
+            {"count": 1, "sum": {"visits": 1}, "dimensions": {"date": "2026-10-15", "clientRequestPath": "/pricing"}},
+        ]}]}}})
+        assert rows == [{"day": "2026-10-15", "path": "/pricing", "requests": 1, "visits": 1},
+                        {"day": "2026-10-16", "path": "/", "requests": 20, "visits": 9},
+                        {"day": "2026-10-16", "path": "/topics/cells", "requests": 10, "visits": 7}]
+
+    def test_poll_writes_the_path_rows_beside_the_totals(self):
+        cf = FakeCF({"2026-09-21": (120, 40, 15)}, keeps=30,
+                    paths={"2026-09-21": [("/topics/cells", 12, 9), ("/", 30, 20)], "2026-09-10": [("/old", 1, 1)]}, keeps_paths=7)
+        sb = _sb()
+        summary = C.poll(sb, cf, backfill=True, zone="sketchcast.app", now=NOW)
+        # 30 refused for paths; 7 answered — and only the days in the window came back
+        assert [(u - s).days + 1 for s, u in cf.asked_paths] == [30, 7]
+        assert summary["path_rows"] == 2 and summary["path_days_asked"] == 7 and "path_error" not in summary
+        op, table, rows, kw = [e for e in sb.log if e[1] == C.PATH_TABLE][-1]
+        assert (op, kw) == ("upsert", {"on_conflict": "zone,day,path"})
+        assert sorted((r["path"], r["requests"], r["visits"], r["zone"]) for r in rows) == [
+            ("/", 30, 20, "sketchcast.app"), ("/topics/cells", 12, 9, "sketchcast.app")]
+
+    def test_a_plan_without_the_dataset_keeps_the_totals_and_notes_the_refusal(self):
+        cf = FakeCF({"2026-09-21": (120, 40, 15)}, keeps=30, paths=None)
+        sb = _sb()
+        summary = C.poll(sb, cf, backfill=False, zone="sketchcast.app", now=NOW)
+        assert summary["rows"] == 1 and summary["path_rows"] == 0 and "unknown field" in summary["path_error"]
+        assert not [e for e in sb.log if e[1] == C.PATH_TABLE]
 
 
 def test_refresh_asks_for_the_last_three_days_only():
