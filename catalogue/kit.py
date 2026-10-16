@@ -1036,7 +1036,15 @@ def after_generation(sb, gen: dict, kit_id: Optional[str], outcome: dict,
     raises on the success path."""
     result = _result(kit_id)
     if not kit_id:
-        return result                    # a composed worksheet: no kit lifecycle
+        # A composed worksheet belongs to no kit — except a TRANSLATED kit's
+        # quiz, whose params.translation names the kit it was composed for
+        # (Kit Translator): its completion is the kit's to count.
+        params = gen.get("params") if isinstance(gen.get("params"), dict) else {}
+        tr = params.get("translation") if isinstance(params.get("translation"), dict) else {}
+        kit_id = str(tr.get("kit_id") or "").strip() or None
+        result = _result(kit_id)
+        if not kit_id:
+            return result                # a composed worksheet: no kit lifecycle
     kind = str(outcome.get("kind") or gen.get("kind") or "")
     if str(outcome.get("status") or "") != "done":
         note = f"{kind or 'generation'} failed: {str(outcome.get('error') or 'unknown error')}"

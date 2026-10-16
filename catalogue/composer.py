@@ -260,15 +260,33 @@ def _chunks(seq: list, n: int) -> Iterable[list]:
         yield seq[i:i + n]
 
 
-def load_bank(sb, topic_id: str, language: str) -> list[dict]:
+STATUS_STAGED = "staged"
+
+
+def _staged_ok(row: dict, staged_for: Optional[str]) -> bool:
+    """Kit Translator (0134): an item ``staged`` for THIS translation kit
+    counts as approved while the kit is being built — its English source
+    was approved item by item, and the kit's own approval promotes it."""
+    return bool(staged_for) and str(row.get("status") or "") == STATUS_STAGED \
+        and str(row.get("translation_kit_id") or "") == str(staged_for)
+
+
+def load_bank(sb, topic_id: str, language: str, *, staged_for: Optional[str] = None) -> list[dict]:
     """The APPROVED items of a topic in a language — the only items a set may
-    contain (per-item approval is the route's guarded UPDATE)."""
-    return _rows(sb.table("topic_questions").select("*").eq("topic_id", topic_id)
-                 .eq("language", language).eq("status", STATUS_APPROVED).execute())
+    contain (per-item approval is the route's guarded UPDATE). With
+    ``staged_for`` (a translation kit id), that kit's STAGED items too."""
+    approved = _rows(sb.table("topic_questions").select("*").eq("topic_id", topic_id)
+                     .eq("language", language).eq("status", STATUS_APPROVED).execute())
+    if not staged_for:
+        return approved
+    staged = _rows(sb.table("topic_questions").select("*").eq("topic_id", topic_id)
+                   .eq("language", language).eq("status", STATUS_STAGED)
+                   .eq("translation_kit_id", str(staged_for)).execute())
+    return approved + staged
 
 
 def load_items_by_id(sb, ids: list[str], *, topic_id: Optional[str] = None,
-                     language: Optional[str] = None) -> list[dict]:
+                     language: Optional[str] = None, staged_for: Optional[str] = None) -> list[dict]:
     """The rows for ``ids`` in the ORDER of ``ids``; a missing id raises —
     a set that names a deleted item cannot be rendered as itself.
 
@@ -286,7 +304,8 @@ def load_items_by_id(sb, ids: list[str], *, topic_id: Optional[str] = None,
     missing = [i for i in ids if str(i) not in by_id]
     if missing:
         raise RuntimeError(f"question set names {len(missing)} item(s) that no longer exist: {missing[:5]}")
-    withdrawn = [i for i in ids if str(by_id[str(i)].get("status") or "") != STATUS_APPROVED]
+    withdrawn = [i for i in ids if str(by_id[str(i)].get("status") or "") != STATUS_APPROVED
+                 and not _staged_ok(by_id[str(i)], staged_for)]
     if withdrawn:
         states = sorted({str(by_id[str(i)].get("status") or "?") for i in withdrawn})
         raise RuntimeError(f"question set names {len(withdrawn)} item(s) no longer approved "
@@ -327,11 +346,15 @@ def render_question_set(sb, gen: dict, generation_id: str, out_dir: Path, base: 
     topic = _one(sb, "topics", str(topic_id)) or {}
     seed = int(qset.get("seed") or 0)
 
+    # Kit Translator: a translated kit's set is composed of the kit's STAGED
+    # items (promoted with the kit); params.translation.kit_id names the kit.
+    staged_for = str(((params.get("translation") or {}) if isinstance(params.get("translation"), dict) else {})
+                     .get("kit_id") or "") or None
     ids = [str(i) for i in (qset.get("question_ids") or []) if i]
     if ids:
-        items = load_items_by_id(sb, ids, topic_id=str(topic_id), language=language)
+        items = load_items_by_id(sb, ids, topic_id=str(topic_id), language=language, staged_for=staged_for)
     else:
-        items = compose(load_bank(sb, str(topic_id), language), blueprint.get("spec") or {}, seed)
+        items = compose(load_bank(sb, str(topic_id), language, staged_for=staged_for), blueprint.get("spec") or {}, seed)
         ids = [str(it.get("id")) for it in items]
         # Written BEFORE rendering: from here a re-run renders THIS paper.
         sb.table("question_sets").update({"question_ids": ids}).eq("id", set_id).execute()

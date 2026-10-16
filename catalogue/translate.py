@@ -65,6 +65,7 @@ import hashlib
 import json
 import logging
 import re
+import unicodedata
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -176,10 +177,18 @@ def translate_strings(client, items: list[str], language: str, *, terms: Optiona
     """Translate ``items`` into ``language`` — a list in, the same list out,
     position for position. Empty strings come back empty without a call."""
     out: list[Optional[str]] = [None] * len(items)
-    todo = [(i, s) for i, s in enumerate(items) if _s(s)]
+    # Each DISTINCT string is translated once and its translation reused at
+    # every position: a term that appears twice in one item (a match item's
+    # pairs sit in both ``options`` and ``answer``; a label repeats in a
+    # marking point) must read the same twice, or grading by text breaks.
+    first: dict[str, int] = {}
+    todo: list[tuple[int, str]] = []
     for i, s in enumerate(items):
         if not _s(s):
             out[i] = s
+        elif s not in first:
+            first[s] = i
+            todo.append((i, s))
     protected = [p for p in (protect or []) if _s(p)]
     for start in range(0, len(todo), CHUNK):
         batch = todo[start:start + CHUNK]
@@ -200,6 +209,9 @@ def translate_strings(client, items: list[str], language: str, *, terms: Optiona
         got = _ask_items(client, prompt, len(payload))
         for (i, _), t in zip(batch, got):
             out[i] = t
+    for i, s in enumerate(items):
+        if out[i] is None and s in first:
+            out[i] = out[first[s]]
     return [x if x is not None else "" for x in out]
 
 
@@ -831,7 +843,217 @@ def _library_row(sb, key: str) -> Optional[dict]:
         return None
 
 
+# ── the question bank (D4) ───────────────────────────────────────────────
+
+ITEM_TEXT_KEYS = frozenset({"stem", "text", "caption", "label", "left", "right", "point", "why_wrong", "explanation"})
+ITEM_FIELDS = ("stem", "options", "answer", "marking_scheme", "distractor_rationale", "explanation")
+ITEM_COPY_KEYS = ("topic_id", "objective_ref", "claim_ref", "item_type", "answer_mode", "difficulty",
+                  "cognitive_level", "marks", "est_seconds", "tags")
+BANK_FLOOR = 10          # under this many staged items the bank is not worth a kit piece
+ITEM_RULE = ("Each string is a field of a school test question: translate the words; keep every number, unit "
+             "symbol, variable, equation and expression exactly as written; keep option texts DISTINCT from "
+             "each other; a one-word answer stays one word.")
+
+
+def item_text_items(item: dict) -> list[tuple[str, str]]:
+    """The words of a bank item: stem, option texts, text answers, labels,
+    pairs, marking-scheme points, distractor rationales, explanation —
+    never keys, figure keys, units or numeric values."""
+    def want(key: str, value: str) -> bool:
+        return key in ITEM_TEXT_KEYS
+
+    body = {k: item.get(k) for k in ITEM_FIELDS if item.get(k) is not None}
+    return list(_walk_strings(body, want))
+
+
+def translated_item(item: dict, pairs: Iterable[tuple[str, str]]) -> dict:
+    body = {k: item.get(k) for k in ITEM_FIELDS if item.get(k) is not None}
+    return {**item, **apply_strings(body, pairs)}
+
+
+def _item_hash(row: dict, kit_id: str) -> str:
+    """The content_hash of a TRANSLATED item. Not ``catalogue.questions.
+    content_hash``: that canonicalises the stem through the catalogue key,
+    which keeps only Latin word characters — an Arabic, Hindi or Telugu stem
+    reduces to "" and every item of the bank would share one hash under
+    the (topic_id, language, content_hash) unique. Instead the stem is
+    folded script-agnostically (NFKC, lower-case, punctuation and runs of
+    space collapsed) and the hash is scoped to the KIT: a re-translation
+    of the same source for a new kit legitimately produces the same
+    sentence, and the superseded kit's items keep theirs as ``retired``.
+    Within one kit, two source items that translate to one sentence are
+    one item (the insert's twin path drops the second with a flag)."""
+    itype = str(row.get("item_type") or "")
+    stem = unicodedata.normalize("NFKC", str(row.get("stem") or "")).casefold()
+    stem = " ".join(_STEM_PUNCT.sub(" ", stem).split())
+    material = ["translation", str(kit_id), itype, stem]
+    answer = row.get("answer") if isinstance(row.get("answer"), dict) else {}
+    if itype == "match" and answer.get("pairs"):
+        material.append(",".join(sorted(f"{p.get('left')}={p.get('right')}" for p in answer["pairs"] if isinstance(p, dict))))
+    return hashlib.sha1("|".join(material).encode("utf-8")).hexdigest()
+
+
+_STEM_PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
+
+
+def existing_staged(sb, kit_id: str) -> dict[str, str]:
+    """``{source_item_id: id}`` of the items already staged for this kit — a
+    resume stages nothing twice (the unique index would refuse it anyway)."""
+    rows = _rows(sb.table("topic_questions").select("id,source_item_id").eq("translation_kit_id", kit_id).execute())
+    return {str(r.get("source_item_id")): str(r.get("id")) for r in rows if r.get("source_item_id")}
+
+
+def bank_stage(sb, client, source: dict, kit: dict, language: str, terms, article_id: str) -> tuple[dict[str, str], dict]:
+    """Translate the topic's APPROVED English items and stage them for the
+    kit (status ``staged``, ``source_item_id``, ``translation_kit_id``);
+    returns the source → translated id mapping and a summary with the items
+    the checks refused (flags, not blocks — a bank short of a few items is
+    still a bank; one under BANK_FLOOR is refused)."""
+    from catalogue.composer import load_bank
+
+    topic_id = str(kit["topic_id"])
+    items = load_bank(sb, topic_id, SOURCE_LANGUAGE)
+    if not items:
+        return {}, {"source_items": 0, "staged": 0, "reused": 0, "dropped": []}
+    mapping = existing_staged(sb, kit["id"])
+    todo = [it for it in items if str(it.get("id")) not in mapping]
+    flat: list[tuple[int, str, str]] = []
+    for i, it in enumerate(todo):
+        for path, text in item_text_items(it):
+            flat.append((i, path, text))
+    got = translate_strings(client, [t for _, _, t in flat], language, terms=terms, context=ITEM_RULE) if flat else []
+    by_item: dict[int, list[tuple[str, str]]] = {}
+    for (i, path, _), t in zip(flat, got):
+        by_item.setdefault(i, []).append((path, t))
+    dropped: list[dict] = []
+    staged = 0
+    for i, src in enumerate(todo):
+        dst = translated_item(src, by_item.get(i, []))
+        report = check.check_item(src, dst)
+        if not report["ok"]:
+            dropped.append({"source_item_id": str(src.get("id")), "findings": report["blocking"][:4]})
+            continue
+        row = {k: src.get(k) for k in ITEM_COPY_KEYS}
+        row.update({
+            "article_id": article_id, "language": language, "status": "staged",
+            "source_item_id": str(src.get("id")), "translation_kit_id": kit["id"],
+            **{k: dst.get(k) for k in ITEM_FIELDS},
+        })
+        row["content_hash"] = _item_hash(row, str(kit["id"]))
+        try:
+            ins = _rows(sb.table("topic_questions").insert(row).execute())
+            new_id = str((ins or [{}])[0].get("id") or "")
+        except Exception as exc:  # noqa: BLE001
+            if "23505" not in str(exc) and str(getattr(exc, "code", "")) != "23505":
+                raise
+            # a twin: the same stem in the language already (two English
+            # items that translate to one sentence), or a resume's rerun
+            again = _rows(sb.table("topic_questions").select("id").eq("translation_kit_id", kit["id"])
+                          .eq("source_item_id", str(src.get("id"))).execute())
+            new_id = str((again or [{}])[0].get("id") or "")
+            if not new_id:
+                dropped.append({"source_item_id": str(src.get("id")),
+                                "findings": [{"where": str(src.get("id")), "what": "translated stem duplicates another item"}]})
+                continue
+        if new_id:
+            mapping[str(src.get("id"))] = new_id
+            staged += 1
+    total = len(mapping)
+    # The floor binds only where the bank is one of the source kit's pieces
+    # (the app inserts a question_bank at approval when the topic's bank is
+    # at least basic): a kit whose topic has few or no approved English
+    # items has no bank to mirror, and its items (if any) simply ride with
+    # the kit's approval.
+    docs = source["kit"].get("doc_generation_ids") if isinstance(source["kit"].get("doc_generation_ids"), dict) else {}
+    if docs.get("question_bank") and total < BANK_FLOOR:
+        raise TranslateRefused(f"only {total} bank item(s) survived translation of {len(items)}; "
+                               f"the source kit's bank needs at least {BANK_FLOOR}")
+    return mapping, {"source_items": len(items), "staged": staged, "reused": len(items) - len(todo),
+                     "dropped": dropped}
+
+
+# ── the quiz set (the explicit-ids rule, revision 3) ─────────────────────
+
+
+def quiz_stage(sb, source: dict, kit: dict, language: str, mapping: dict[str, str]) -> Optional[dict]:
+    """The English kit's composed quiz, question for question: its
+    question_sets row's ordered ids mapped through ``source_item_id`` to the
+    staged items, written as a new question_sets row in the language (same
+    blueprint, same seed). None when the source kit has no quiz. A source
+    item that did not survive the bank checks fails the stage: the quiz
+    must be the same quiz."""
+    docs = source["kit"].get("doc_generation_ids") if isinstance(source["kit"].get("doc_generation_ids"), dict) else {}
+    quiz_gen_id = _s(docs.get("quiz"))
+    if not quiz_gen_id:
+        return None
+    rows = _rows(sb.table("generations").select("id,kind,params").eq("id", quiz_gen_id).limit(1).execute())
+    if not rows:
+        raise TranslateRefused(f"the source kit's quiz generation {quiz_gen_id} is missing")
+    params = rows[0].get("params") if isinstance(rows[0].get("params"), dict) else {}
+    set_id = _s(params.get("question_set_id"))
+    if not set_id:
+        raise TranslateRefused(f"the source kit's quiz {quiz_gen_id} names no question set")
+    sets = _rows(sb.table("question_sets").select("*").eq("id", set_id).limit(1).execute())
+    if not sets:
+        raise TranslateRefused(f"the source kit's question set {set_id} is missing")
+    qset = sets[0]
+    src_ids = [str(i) for i in (qset.get("question_ids") or []) if i]
+    missing = [i for i in src_ids if i not in mapping]
+    if missing:
+        raise TranslateRefused(f"{len(missing)} quiz question(s) have no staged translation: {missing[:4]}")
+    new_set = {
+        "blueprint_id": qset.get("blueprint_id"), "topic_ids": qset.get("topic_ids") or [kit["topic_id"]],
+        "language": language, "question_ids": [mapping[i] for i in src_ids],
+        "seed": qset.get("seed"), "requested_by": None,
+    }
+    ins = _rows(sb.table("question_sets").insert(new_set).execute())
+    new_id = str((ins or [{}])[0].get("id") or "")
+    if not new_id:
+        raise RuntimeError("question_sets insert returned no id")
+    return {"question_set_id": new_id, "source_set_id": set_id, "blueprint_id": qset.get("blueprint_id"),
+            "seed": qset.get("seed"), "questions": len(src_ids),
+            "source_params": {k: params.get(k) for k in ("curriculum_header",) if k in params}}
+
+
+# ── pre-check B: meaning ──────────────────────────────────────────────────
+
+FIDELITY_SEGMENTS = 6
+FIDELITY_ITEMS = 3
+
+
+def fidelity_stage(client, scripts: list[dict], source_bodies: list[dict], items_src: list[dict],
+                   items_dst: dict[str, dict], language: str) -> dict:
+    """Back-translate a sample of the translated narration and stems into
+    English and score how much of the source each keeps. Flags only."""
+    samples: list[tuple[str, str, str]] = []   # (where, source, translated)
+    for body, dst in zip(source_bodies, scripts):
+        src_segs = {str(s.get("segment_id")): s for s in ((body.get("script") or {}).get("segments") or []) if isinstance(s, dict)}
+        dst_segs = [s for s in (dst.get("segments") or []) if isinstance(s, dict) and _s(s.get("text"))]
+        pick = dst_segs[:FIDELITY_SEGMENTS // 2] + dst_segs[-(FIDELITY_SEGMENTS - FIDELITY_SEGMENTS // 2):]
+        for seg in pick:
+            src = src_segs.get(str(seg.get("segment_id")))
+            if src and _s(src.get("text")):
+                samples.append((f"part {body.get('part')} {seg.get('segment_id')}", str(src["text"]), str(seg["text"])))
+    for it in items_src[:FIDELITY_ITEMS]:
+        dst = items_dst.get(str(it.get("id")))
+        if dst and _s(dst.get("stem")):
+            samples.append((f"item {str(it.get('id'))[:8]}", str(it.get("stem") or ""), str(dst.get("stem"))))
+    if not samples:
+        return check.fidelity_report([])
+    back = translate_strings(client, [t for _, _, t in samples], SOURCE_LANGUAGE,
+                             context=f"These are {_lang_name(language)} sentences from a school lesson. Translate each "
+                                     "back into plain English as literally as you can; do not improve or shorten.")
+    return check.fidelity_report([(w, s, b) for (w, s, _), b in zip(samples, back)])
+
+
 # ── generations ─────────────────────────────────────────────────────────
+
+# The authored document kinds a translated kit rebuilds from its translated
+# article (the model, in the language — plan 5.2 step 12's fallback is the
+# path: our .docx are many-run paragraphs, and a rebuild keeps styles, RTL
+# and the maths ladder). The lesson plan is the lifecycle's; the quiz and
+# the question bank are composed from the staged items.
+DOC_KINDS_REBUILT = ("activity", "case_study", "worksheet")
 
 
 def staged_script_path(owner_id: str, kit_id: str, part: int) -> str:
@@ -874,29 +1096,53 @@ def generation_params(source: dict, kit: dict, language: str, article_id: str) -
         "tts_voice": pair.get("teacher"), "student_voice": pair.get("student"),
         "curriculum_header": list(src_params.get("curriculum_header") or []),
         "translation": {"source_kit_id": source["kit"]["id"], "source_generation_id": source["presentation"]["id"],
-                        "source_language": SOURCE_LANGUAGE},
+                        "source_language": SOURCE_LANGUAGE, "kit_id": kit["id"]},
     }
 
 
-def generations_stage(sb, source: dict, kit: dict, language: str, article_id: str, script_paths: list[str]) -> dict:
+def generations_stage(sb, source: dict, kit: dict, language: str, article_id: str, script_paths: list[str],
+                      quiz: Optional[dict] = None) -> dict:
+    """Every piece of the translated kit as a queued generation: the
+    presentation (with the staged scripts), the deck, the authored
+    documents the source kit has, the printable question bank, and the
+    quiz — a composed worksheet with no kit_id (as the source's) whose
+    ``params.translation.kit_id`` ties its completion to the kit. The kit
+    row is pointed at all of them; the lifecycle adds the lesson plan."""
     owner = _s(source["presentation"].get("owner_id"))
     if not owner:
         raise RuntimeError("the source presentation has no owner")
     base = generation_params(source, kit, language, article_id)
-    pres = {**base, "translation": {**base["translation"], "scripts": list(script_paths)}}
-    rows = [
-        {"owner_id": owner, "kind": "presentation", "status": "queued", "book_id": None, "chapter_ref": None,
-         "school_id": None, "params": pres},
-        {"owner_id": owner, "kind": "deck", "status": "queued", "book_id": None, "chapter_ref": None,
-         "school_id": None, "params": base},
-    ]
+    src_docs = source["kit"].get("doc_generation_ids") if isinstance(source["kit"].get("doc_generation_ids"), dict) else {}
+
+    def row(kind: str, params: dict) -> dict:
+        return {"owner_id": owner, "kind": kind, "status": "queued", "book_id": None, "chapter_ref": None,
+                "school_id": None, "params": params}
+
+    rows = [row("presentation", {**base, "translation": {**base["translation"], "scripts": list(script_paths)}}),
+            row("deck", base)]
+    for kind in DOC_KINDS_REBUILT:
+        if src_docs.get(kind):
+            rows.append(row(kind, base))
+    if src_docs.get("question_bank"):
+        rows.append(row("question_bank", base))
+    if quiz:
+        qparams = {k: v for k, v in base.items() if k != "kit_id"}
+        qparams.update({"question_set_id": quiz["question_set_id"], "blueprint_id": quiz.get("blueprint_id"),
+                        "seed": quiz.get("seed")})
+        rows.append(row("worksheet", qparams))        # the quiz: a composed set, no kit_id (as the source's)
     ins = sb.table("generations").insert(rows).execute()
     made = _rows(ins)
-    ids = {str(r.get("kind")): str(r.get("id")) for r in made if r.get("id")}
+    ids: dict[str, str] = {}
+    for r, spec in zip(made, rows):
+        if not r.get("id"):
+            continue
+        label = "quiz" if (spec["kind"] == "worksheet" and spec["params"].get("question_set_id")) else spec["kind"]
+        ids[label] = str(r["id"])
     if "presentation" not in ids or "deck" not in ids:
         raise RuntimeError(f"generations insert returned {sorted(ids)}; presentation and deck expected")
+    docs = {k: v for k, v in ids.items() if k != "presentation"}
     sb.table("topic_kits").update({"presentation_generation_id": ids["presentation"],
-                                   "doc_generation_ids": {"deck": ids["deck"]}}).eq("id", kit["id"]).execute()
+                                   "doc_generation_ids": docs}).eq("id", kit["id"]).execute()
     return ids
 
 
@@ -982,21 +1228,49 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
             raise TranslateRefused(f"{len(missing)} scene asset(s) of the source video cannot be found and will not "
                                    f"be regenerated: {', '.join(missing[:6])}")
 
+        # the bank (D4): staged for the kit, checked item by item
+        stage["step"] = "bank"
+        db.set_stage(sb, job_id, dict(stage))
+        db.set_progress(sb, job_id, 78)
+        mapping, bank_summary = bank_stage(sb, client, source, kit, language, terms, article_id)
+        kit = _save_translation(sb, kit, {"stage": {"bank": {k: v for k, v in bank_summary.items() if k != "dropped"}}})
+
+        # the quiz: the same questions, by id
+        stage["step"] = "quiz"
+        db.set_stage(sb, job_id, dict(stage))
+        quiz = quiz_stage(sb, source, kit, language, mapping)
+
+        # pre-check B: meaning, on a sample
+        stage["step"] = "fidelity"
+        db.set_stage(sb, job_id, dict(stage))
+        db.set_progress(sb, job_id, 84)
+        from catalogue.composer import load_bank as _load_bank
+        src_items = _load_bank(sb, str(kit["topic_id"]), SOURCE_LANGUAGE)
+        dst_rows = _rows(sb.table("topic_questions").select("id,source_item_id,stem").eq("translation_kit_id", kit["id"]).execute())
+        items_dst = {str(r.get("source_item_id")): r for r in dst_rows}
+        fidelity = fidelity_stage(client, [s for _, _, s in scripts], bodies, src_items, items_dst, language)
+
         # generations
         stage["step"] = "generations"
         db.set_stage(sb, job_id, dict(stage))
-        db.set_progress(sb, job_id, 85)
+        db.set_progress(sb, job_id, 90)
         owner = _s(source["presentation"].get("owner_id"))
         paths = upload_staged_scripts(sb, owner, kit["id"], scripts, language, tmp)
-        ids = generations_stage(sb, source, kit, language, article_id, paths)
+        ids = generations_stage(sb, source, kit, language, article_id, paths, quiz=quiz)
 
     usage = getattr(client, "session_usage", None)
-    precheck = check.merge_reports(*[{k: v for k, v in r.items() if k != "part"} for r in reports])
+    precheck = check.merge_reports(*[{k: v for k, v in r.items() if k != "part"} for r in reports], fidelity)
     precheck["parts"] = [{"part": r["part"], "ok": r.get("ok"), "blocking": len(r.get("blocking") or []),
                           "flags": len(r.get("flags") or [])} for r in reports]
+    if bank_summary.get("dropped"):
+        precheck["flags"] = list(precheck.get("flags") or []) + [
+            {"where": f"item {d['source_item_id'][:8]}", "what": "bank item not staged",
+             "detail": "; ".join(f.get("what", "") for f in d["findings"])} for d in bank_summary["dropped"]]
+    precheck["bank"] = {k: v for k, v in bank_summary.items() if k != "dropped"}
     sb.table("topic_kits").update({"precheck": precheck}).eq("id", kit["id"]).execute()
     kit = _save_translation(sb, kit, {
         "stage": {"script": {"parts": n}, "assets": {"found": len(found), "keys": len(keys)},
+                  "quiz": quiz, "fidelity": {"mean_score": fidelity.get("mean_score"), "samples": fidelity.get("samples")},
                   "generations": ids},
         "scripts": paths, "source_scripts": [{"path": b["_path"], "sha256": b["_sha256"]} for b in bodies],
         "assets": found, "model": str(getattr(client, "model", "") or ""),
@@ -1008,6 +1282,7 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
     summary = {"phase": "translate", "step": "done", "kit_id": kit["id"], "language": language,
                "source_kit_id": source_kit_id, "article_id": article_id, "parts": n,
                "generations": ids, "assets": len(found), "glossary": len(terms),
+               "bank": precheck["bank"], "quiz": bool(quiz), "fidelity": fidelity.get("mean_score"),
                "precheck_ok": precheck.get("ok"), "flags": len(precheck.get("flags") or [])}
     db.set_progress(sb, job_id, 100)
     return summary
@@ -1060,8 +1335,9 @@ def record_post_render(sb, kit_id: Optional[str], parts: list[dict]) -> Optional
         return None
 
 
-__all__ = ["JOB_TYPE", "TranslateRefused", "apply_strings", "article_text_items", "download_scripts",
-           "generation_params", "glossary_stage", "lesson_text_items", "load_source", "load_staged_scripts",
+__all__ = ["JOB_TYPE", "TranslateRefused", "apply_strings", "article_text_items", "bank_stage", "download_scripts",
+           "fidelity_stage", "generation_params", "generations_stage", "glossary_stage", "item_text_items",
+           "lesson_from_record", "lesson_text_items", "load_source", "load_staged_scripts", "quiz_stage",
            "recompile_maths", "record_post_render", "resolve_assets", "run_translate_job", "scene_asset_keys",
            "segment_text_items", "staged_script_path", "translate_episode", "translate_kit", "translate_segments",
-           "translate_strings"]
+           "translate_strings", "translated_item"]

@@ -212,6 +212,84 @@ class TestCheckMathsLesson:
         assert any(f["what"] == "numbers differ" for f in C.check_maths_lesson(self.LESSON, dst)["blocking"])
 
 
+class TestItems:
+    SRC = {"id": "q-1", "item_type": "mcq", "answer_mode": "objective", "marks": 1, "difficulty": 2, "cognitive_level": "recall",
+           "objective_ref": "o1", "stem": "A circle has a radius of 7 cm. Its diameter is?",
+           "options": [{"key": "A", "text": "14 cm"}, {"key": "B", "text": "7 cm"}, {"key": "C", "text": "3.5 cm"}, {"key": "D", "text": "22 cm"}],
+           "answer": {"key": "A"}, "marking_scheme": [], "distractor_rationale": {"B": {"why_wrong": "that is the radius"}},
+           "explanation": "The diameter is twice the radius."}
+
+    def test_item_text_items_take_the_words_and_leave_the_keys(self):
+        paths = [p for p, _ in T.item_text_items(self.SRC)]
+        assert "stem" in paths and "options[0].text" in paths and "distractor_rationale.B.why_wrong" in paths and "explanation" in paths
+        assert not any(p.endswith(".key") for p in paths)
+        dst = T.translated_item(self.SRC, [(p, _arabize(t)) for p, t in T.item_text_items(self.SRC)])
+        assert dst["options"][0]["key"] == "A" and dst["options"][0]["text"].startswith("ترجمة") and dst["answer"] == {"key": "A"}
+        assert C.check_item(self.SRC, dst)["ok"]
+
+    def test_check_item_blocks_a_changed_number_a_changed_key_and_collapsed_options(self):
+        dst = T.translated_item(self.SRC, [(p, _arabize(t)) for p, t in T.item_text_items(self.SRC)])
+        dst["options"][0]["text"] = "ترجمة 15 cm"
+        assert any(f["what"] == "numbers differ" for f in C.check_item(self.SRC, dst)["blocking"])
+        dst = T.translated_item(self.SRC, [(p, _arabize(t)) for p, t in T.item_text_items(self.SRC)])
+        dst["answer"] = {"key": "B"}
+        assert any(f["what"] == "answer key changed" for f in C.check_item(self.SRC, dst)["blocking"])
+        dst = T.translated_item(self.SRC, [(p, _arabize(t)) for p, t in T.item_text_items(self.SRC)])
+        dst["options"][1]["text"] = dst["options"][0]["text"]
+        r = C.check_item(self.SRC, dst)
+        assert any(f["what"] == "translated options are no longer distinct" for f in r["blocking"])
+
+    def test_a_translated_items_hash_tells_arabic_stems_apart_and_is_scoped_to_the_kit(self):
+        # catalogue.key.canonical_key folds non-Latin text to "" — the stock
+        # content_hash would give every Arabic item of the bank one hash
+        a = {"item_type": "mcq", "stem": "ما هو نصف قطر الدائرة؟"}
+        b = {"item_type": "mcq", "stem": "ما هي مساحة الدائرة؟"}
+        assert T._item_hash(a, "kit-1") != T._item_hash(b, "kit-1")
+        assert T._item_hash(a, "kit-1") == T._item_hash({"item_type": "mcq", "stem": "  ما هو نصف قطر الدائرة  "}, "kit-1")
+        assert T._item_hash(a, "kit-1") != T._item_hash(a, "kit-2"), "a re-translation for a new kit must not collide with the retired kit's items"
+
+    def test_a_match_items_pairs_read_the_same_in_options_and_answer(self):
+        pairs = [{"left": "Radius", "right": "centre to the boundary"}, {"left": "Chord", "right": "two boundary points"}]
+        src = {"id": "m-1", "item_type": "match", "answer_mode": "objective", "marks": 2, "difficulty": 1,
+               "cognitive_level": "recall", "objective_ref": "o1", "stem": "Match each term to its description.",
+               "options": {"pairs": [dict(p) for p in pairs]}, "answer": {"pairs": [dict(p) for p in pairs]},
+               "marking_scheme": [], "distractor_rationale": None, "explanation": None}
+        seen: dict[str, int] = {}
+
+        def numbered(s: str) -> str:            # a different rendering every time it is asked (no digits: those are checked)
+            seen[s] = seen.get(s, 0) + 1
+            return f"ترجمة {s} {'ـ' * seen[s]}"
+
+        c = FakeTranslator(numbered)
+        words = T.item_text_items(src)
+        got = T.translate_strings(c, [w for _, w in words], "ar", context=T.ITEM_RULE)
+        dst = T.translated_item(src, list(zip([p for p, _ in words], got)))
+        assert dst["options"]["pairs"] == dst["answer"]["pairs"], "the same term must read the same twice"
+        assert all(n == 1 for n in seen.values()), "each distinct string is asked once"
+        assert C.check_item(src, dst)["ok"]
+
+    def test_fidelity_scores_a_faithful_back_translation_high_and_flags_a_stray_one(self):
+        rep = C.fidelity_report([("s1", "The cell is the smallest unit of life", "The cell is the smallest unit of life."),
+                                 ("s2", "Plants have a cell wall and chloroplasts", "The weather was fine today")])
+        assert rep["ok"] and rep["samples"] == 2 and [f["where"] for f in rep["flags"]] == ["s2"]
+
+    def test_the_composer_accepts_staged_items_of_the_kit_only(self):
+        from catalogue import composer as CO
+        sb = FakeSB()
+        sb.tables["topic_questions"] = [
+            {"id": "a", "topic_id": "t", "language": "ar", "status": "approved"},
+            {"id": "b", "topic_id": "t", "language": "ar", "status": "staged", "translation_kit_id": "kit-ar"},
+            {"id": "c", "topic_id": "t", "language": "ar", "status": "staged", "translation_kit_id": "kit-other"},
+        ]
+        assert [r["id"] for r in CO.load_items_by_id(sb, ["a", "b"], topic_id="t", language="ar", staged_for="kit-ar")] == ["a", "b"]
+        with pytest.raises(RuntimeError, match="no longer approved"):
+            CO.load_items_by_id(sb, ["a", "b"], topic_id="t", language="ar")
+        with pytest.raises(RuntimeError, match="no longer approved"):
+            CO.load_items_by_id(sb, ["c"], topic_id="t", language="ar", staged_for="kit-ar")
+        assert {r["id"] for r in CO.load_bank(sb, "t", "ar", staged_for="kit-ar")} == {"a", "b"}
+        assert {r["id"] for r in CO.load_bank(sb, "t", "ar")} == {"a"}
+
+
 class TestPostRender:
     def test_drift_and_silence_flag_and_a_silent_segment_blocks(self):
         script = {"segments": [{"segment_id": "s1", "text": "a"}, {"segment_id": "s2", "text": "b"},
@@ -393,7 +471,40 @@ def _job_sb(*, kit_status="approved", with_assets=True):
                                   if with_assets else [])
     sb.tables["jobs"] = [{"id": "job-t", "type": "kit_translate", "status": "processing", "generation_id": None,
                           "params": {"source_kit_id": "kit-1", "language": "ar"}}]
+    # the English bank: 12 approved items (two kinds), and the source kit's
+    # composed quiz — a worksheet with a question set of 4 of them
+    sb.tables["topic_questions"] = [_item(i) for i in range(1, 13)]
+    sb.tables["topic_kits"][0]["doc_generation_ids"] = {**KIT["doc_generation_ids"], "quiz": "gen-quiz", "question_bank": "gen-bank"}
+    sb.tables["question_sets"] = [{"id": "set-en", "blueprint_id": "bp-1", "topic_ids": ["t-cell"], "language": "en",
+                                   "question_ids": ["q-3", "q-1", "q-8", "q-5"], "seed": 42}]
+    sb.tables["generations"] += [
+        {"id": "gen-quiz", "kind": "worksheet", "status": "done", "owner_id": "sys", "book_id": None, "chapter_ref": None,
+         "params": {"catalogue": True, "topic_id": "t-cell", "article_id": "art-1", "language": "en",
+                    "question_set_id": "set-en", "blueprint_id": "bp-1", "seed": 42}},
+        {"id": "gen-bank", "kind": "question_bank", "status": "done", "owner_id": "sys", "book_id": None, "chapter_ref": None,
+         "params": {**PARAMS}},
+    ]
     return sb
+
+
+_PARTS = ["nucleus", "membrane", "wall", "vacuole", "ribosome", "cytoplasm",
+          "chloroplast", "mitochondrion", "lysosome", "nucleolus", "vesicle", "centriole"]
+
+
+def _item(i: int) -> dict:
+    # stems differ in WORDS, not only in a number: content_hash canonicalises
+    # the stem, so two stems that differ only by a digit are one item
+    mcq = i % 2 == 1
+    part = _PARTS[(i - 1) % len(_PARTS)]
+    return {"id": f"q-{i}", "topic_id": "t-cell", "article_id": "art-1", "language": "en", "status": "approved",
+            "item_type": "mcq" if mcq else "fill_blank", "answer_mode": "objective", "difficulty": 1 + i % 3,
+            "cognitive_level": "recall", "marks": 1, "est_seconds": 60, "objective_ref": "o1", "claim_ref": None,
+            "stem": f"Which part of a cell is the {part} and what does it do?" if mcq else f"The {part} of a cell is ____.",
+            "options": ([{"key": "A", "text": "a nucleus"}, {"key": "B", "text": "a wall"},
+                         {"key": "C", "text": "a membrane"}, {"key": "D", "text": "a vacuole"}] if mcq else None),
+            "answer": {"key": "A"} if mcq else {"text": "a nucleus"},
+            "marking_scheme": [], "distractor_rationale": ({"B": {"why_wrong": "walls are plant only"}} if mcq else None),
+            "explanation": "Because the nucleus holds the DNA.", "tags": [], "content_hash": f"h{i}"}
 
 
 def _uploads(monkeypatch):
@@ -437,16 +548,35 @@ class TestTranslateJob:
         terms = sb.tables["topic_term_translations"]
         assert {t["term_en"] for t in terms} == {"cell", "organelle"} and all(t["language"] == "ar" and t["source"] == "model" for t in terms)
         assert "cell → ترجمة cell" in c.calls[-1] or any("cell → ترجمة cell" in p for p in c.calls)
-        # the generations: a presentation that names the staged scripts, a deck
-        gens = [g for g in sb.tables["generations"] if g["params"].get("kit_id") == k["id"]]
-        kinds = {g["kind"]: g for g in gens}
-        assert set(kinds) == {"presentation", "deck"}
-        p = kinds["presentation"]["params"]
+        # the bank (D4): every English item staged for THIS kit, by source id
+        staged = [q for q in sb.tables["topic_questions"] if q.get("translation_kit_id") == k["id"]]
+        assert len(staged) == 12 and all(q["status"] == "staged" and q["language"] == "ar" and q["article_id"] == arts[0]["id"] for q in staged)
+        by_src = {q["source_item_id"]: q for q in staged}
+        assert by_src["q-1"]["stem"].startswith("ترجمة") and by_src["q-1"]["answer"] == {"key": "A"}
+        assert [o["key"] for o in by_src["q-1"]["options"]] == ["A", "B", "C", "D"] and by_src["q-1"]["options"][0]["text"].startswith("ترجمة")
+        assert by_src["q-2"]["answer"]["text"].startswith("ترجمة"), "a text answer is translated"
+        assert by_src["q-1"]["content_hash"] != "h1", "the hash is the translated stem's"
+        # the quiz: the SAME four questions, by id, in the source set's order
+        sets = [s for s in sb.tables["question_sets"] if s["language"] == "ar"]
+        assert len(sets) == 1 and sets[0]["question_ids"] == [by_src[i]["id"] for i in ("q-3", "q-1", "q-8", "q-5")]
+        assert sets[0]["blueprint_id"] == "bp-1" and sets[0]["seed"] == 42
+        # the generations: every piece of the source kit
+        gens = [g for g in sb.tables["generations"] if (g["params"].get("translation") or {}).get("kit_id") == k["id"]]
+        labels = {("quiz" if g["params"].get("question_set_id") else g["kind"]): g for g in gens}
+        assert set(labels) == {"presentation", "deck", "activity", "case_study", "worksheet", "question_bank", "quiz"}
+        p = labels["presentation"]["params"]
         assert p["catalogue"] is True and p["language"] == "ar" and p["tts_voice"] == "g-ar-f" and p["article_id"] == arts[0]["id"]
         assert p["translation"]["source_kit_id"] == "kit-1" and p["translation"]["scripts"] == [f"sys/{k['id']}/translated/script.json"]
-        assert "scripts" not in kinds["deck"]["params"]["translation"]
-        assert kinds["presentation"]["owner_id"] == "sys" and kinds["presentation"]["book_id"] is None
-        assert k["presentation_generation_id"] == kinds["presentation"]["id"] and k["doc_generation_ids"] == {"deck": kinds["deck"]["id"]}
+        assert "scripts" not in labels["deck"]["params"]["translation"]
+        assert labels["presentation"]["owner_id"] == "sys" and labels["presentation"]["book_id"] is None
+        q = labels["quiz"]["params"]
+        assert "kit_id" not in q and q["question_set_id"] == sets[0]["id"] and q["translation"]["kit_id"] == k["id"], "a composed set has no kit_id; the marker ties it to the kit"
+        assert k["presentation_generation_id"] == labels["presentation"]["id"]
+        assert set(k["doc_generation_ids"]) == {"deck", "activity", "case_study", "worksheet", "question_bank", "quiz"}
+        # pre-check B ran on a sample and flagged nothing (the fake keeps the words)
+        assert k["precheck"]["bank"] == {"source_items": 12, "staged": 12, "reused": 0}
+        fid = next(c for c in k["precheck"]["checks"] if c.get("check") == "B")
+        assert fid["samples"] >= 4 and fid["mean_score"] is not None and fid["mean_score"] > 0.9
         # the staged script: the translated lesson, Arabic board words
         assert [d for d, _ in uploads] == [f"sys/{k['id']}/translated/script.json"]
         staged = uploads[0][1]
