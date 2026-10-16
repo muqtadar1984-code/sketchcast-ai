@@ -979,6 +979,36 @@ def sync_kit_completion(sb, kit: dict) -> bool:
     return moved
 
 
+# The documents a translated kit REBUILDS in its language (catalogue/translate
+# DOC_KINDS_REBUILT) — optional pieces: a refusal drops them (after_generation).
+TRANSLATION_OPTIONAL_DOCS = frozenset({"activity", "case_study", "worksheet"})
+
+
+def _is_translation_gen(gen: dict) -> bool:
+    params = gen.get("params") if isinstance(gen.get("params"), dict) else {}
+    return isinstance(params.get("translation"), dict) and bool(params["translation"].get("kit_id") or params.get("kit_id"))
+
+
+def drop_translation_piece(sb, kit_id: str, kind: str, why: str) -> bool:
+    """Take ``kind`` out of the kit's ``doc_generation_ids`` and put the reason
+    on ``precheck.flags``; returns whether the kit row changed. The failed
+    generation row stays as it is (its error is the audit trail)."""
+    kit = load_kit(sb, kit_id)
+    if kit is None:
+        return False
+    docs = dict(kit.get("doc_generation_ids") or {}) if isinstance(kit.get("doc_generation_ids"), dict) else {}
+    if kind not in docs:
+        return False
+    docs.pop(kind, None)
+    precheck = dict(kit.get("precheck") or {}) if isinstance(kit.get("precheck"), dict) else {}
+    flags = list(precheck.get("flags") or [])
+    flags.append({"where": kind, "what": "document not translated", "detail": why[:600]})
+    precheck["flags"] = flags
+    sb.table("topic_kits").update({"doc_generation_ids": docs, "precheck": precheck}).eq("id", kit_id).execute()
+    log.warning("translation kit %s: %s dropped — %s", kit_id, kind, why[:200])
+    return True
+
+
 def _result(kit_id: Optional[str]) -> dict:
     return {"kit": kit_id, "timestamps": False, "lesson_plan": None, "in_review": False, "failed": False}
 
@@ -1054,6 +1084,22 @@ def after_generation(sb, gen: dict, kit_id: Optional[str], outcome: dict,
     kind = str(outcome.get("kind") or gen.get("kind") or "")
     if str(outcome.get("status") or "") != "done":
         note = f"{kind or 'generation'} failed: {str(outcome.get('error') or 'unknown error')}"
+        if _is_translation_gen(gen) and kind in TRANSLATION_OPTIONAL_DOCS:
+            # Kit Translator T1: an authored document REBUILT in the target
+            # language (activity, case study, worksheet) is the kit's extra,
+            # not its spine — the video, deck, plan, bank and quiz are. A
+            # rebuild the generator refuses (a maths worksheet's verifier
+            # reads English only, 2026-10-16) drops the piece with a flag the
+            # reviewer sees, and the kit goes on to review without it.
+            try:
+                result["dropped"] = drop_translation_piece(sb, kit_id, kind, note)
+                kit = load_kit(sb, kit_id)
+                if kit is not None:
+                    result["in_review"] = sync_kit_completion(sb, kit)
+                return result
+            except Exception as exc:  # noqa: BLE001
+                log.exception("kit %s could not drop its %s", kit_id, kind)
+                note = f"{note}; and the piece could not be dropped: {exc}"
         result["failed"] = mark_kit_failed(sb, kit_id, note)
         return result
     if kind == "presentation":
@@ -1078,7 +1124,7 @@ def after_generation(sb, gen: dict, kit_id: Optional[str], outcome: dict,
 
 
 __all__ = ["CatalogueRefused", "ContentionProbe", "NARRATION_STYLE", "PAUSED_FOR_USERS", "Prepared",
-           "after_generation", "catalogue_window_open", "curriculum_header_lines", "header_lines", "is_catalogue",
+           "TRANSLATION_OPTIONAL_DOCS", "after_generation", "drop_translation_piece", "catalogue_window_open", "curriculum_header_lines", "header_lines", "is_catalogue",
            "level_for_grade", "mark_kit_failed", "outro_segment", "part_chars_budget",
            "part_words_budget", "prepare",
            "presentation_margin_minutes", "recap_segment", "record_presentation", "student_voice_for",
