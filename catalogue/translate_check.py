@@ -206,10 +206,25 @@ def check_script(source: dict, target: dict, *, language: str,
             blocking.append(_finding("segments", "segment count differs too much",
                                      source=len(s_segs), target=len(t_segs)))
         src_blob, dst_blob = _blob(s_segs), _blob(t_segs)
-        prot = [p for v in protected.values() for p in v] + [p for s in s_segs for p in _scene_protected(s)]
-        for p in prot:
-            if p and p not in dst_blob and p not in " ".join(p2 for s in t_segs for p2 in _scene_protected(s)):
+        # The caller's protected expressions (the record's own problems and
+        # answers) must survive; the ENGLISH board's typeset expressions are
+        # another matter. The target board was recompiled from the verified
+        # record — already checked field by field by check_maths_lesson — by
+        # today's compiler, and a compiler that has moved on since the English
+        # render typesets the same maths a little differently. So a typeset
+        # expression the Arabic board no longer shows verbatim is a FLAG for
+        # the reviewer, never a block (the Circle pilot, 2026-10-16: eight
+        # such findings failed a translation whose record was intact).
+        own = [p for v in protected.values() for p in v]
+        dst_scene = " ".join(p2 for s in t_segs for p2 in _scene_protected(s))
+        for p in own:
+            if p and p not in dst_blob and p not in dst_scene:
                 blocking.append(_finding("script", "protected expression altered", expression=p))
+        typeset_lost = [p for s in s_segs for p in _scene_protected(s) if p and p not in dst_blob and p not in dst_scene]
+        if typeset_lost:
+            flags.append(_finding("script", "board expressions typeset differently from the English render",
+                                  count=len(typeset_lost), examples=typeset_lost[:6]))
+        prot = own + [p for s in s_segs for p in _scene_protected(s)]
         ok, missing, extra = numbers_equivalent(src_blob, dst_blob)
         if not ok:
             # the recompiled board repeats a value where the English one

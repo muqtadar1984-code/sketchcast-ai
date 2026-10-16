@@ -118,7 +118,13 @@ ITEMS_SCHEMA = {
 
 
 class TranslateRefused(RuntimeError):
-    """The job must not proceed; the message says why."""
+    """The job must not proceed; the message says why. ``report`` carries the
+    pre-check that refused (when one did) so the kit row keeps the findings
+    a reviewer needs to see why."""
+
+    def __init__(self, message: str, report: Optional[dict] = None):
+        super().__init__(message)
+        self.report = report
 
 
 def _s(value: object) -> str:
@@ -450,7 +456,8 @@ def translate_episode(client, body: dict, language: str, terms, *, title: Option
                     len(report.get("blocking") or []), "asking again" if attempt == 0 else "giving up")
     if not report.get("ok"):
         heads = "; ".join(f"{f.get('where')}: {f.get('what')}" for f in (report.get("blocking") or [])[:5])
-        raise TranslateRefused(f"translation of part {body.get('part')} failed pre-check A: {heads}")
+        raise TranslateRefused(f"translation of part {body.get('part')} failed pre-check A: {heads}",
+                               report={"part": body.get("part"), **report})
     # The script's own label of its language, read by the renderer's RTL and
     # font choices, and by the deck.
     if isinstance(dst.get("maths"), dict):
@@ -555,12 +562,18 @@ def _save_translation(sb, kit: dict, patch: dict) -> dict:
     return kit
 
 
-def _fail_translation(sb, kit: Optional[dict], note: str) -> None:
+def _fail_translation(sb, kit: Optional[dict], note: str, report: Optional[dict] = None) -> None:
     if not kit:
         return
     try:
         mark_kit_failed(sb, kit["id"], note)
-        sb.table("topic_kits").update({"translation_status": TRANSLATION_FAILED}).eq("id", kit["id"]).execute()
+        patch: dict = {"translation_status": TRANSLATION_FAILED}
+        if isinstance(report, dict):
+            # the pre-check that refused, on the kit, so the Translations
+            # panel shows WHICH expressions or numbers drifted — not only
+            # the one-line error
+            patch["precheck"] = report
+        sb.table("topic_kits").update(patch).eq("id", kit["id"]).execute()
     except Exception:  # noqa: BLE001
         log.exception("translation kit %s could not be marked failed", kit.get("id"))
 
@@ -952,7 +965,7 @@ def run_translate_job(sb, job: dict, client=None) -> Optional[dict]:
             kit = find_translation_kit(sb, _s(params.get("source_kit_id")), _s(params.get("language")).lower())
         except Exception:  # noqa: BLE001
             kit = None
-        _fail_translation(sb, kit, f"translation failed: {exc}")
+        _fail_translation(sb, kit, f"translation failed: {exc}", report=getattr(exc, "report", None))
         db.finish_job(sb, job_id, error=str(exc))
         return None
 
