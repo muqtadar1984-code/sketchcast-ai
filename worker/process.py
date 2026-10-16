@@ -1452,6 +1452,28 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
     override = unit.script_override          # Kit Translator: the translated scripts, or None
     built_parts: list[dict] = []
 
+    _translation = getattr(catalogue, "translation", None) if catalogue is not None else None
+    if kind == "worksheet" and isinstance(_translation, dict) and _translation.get("questions"):
+        # A TRANSLATED maths worksheet (Kit Translator T1.5): the translate
+        # job read the English sheet's VERIFIED questions (its questions_json
+        # artifact), translated their words under the numeric and maths
+        # checks, and staged the survivors in storage; params.translation.
+        # questions names the file. The verifier reads English back, so the
+        # sheet is never rebuilt — it is drawn from those questions with no
+        # model call (catalogue.translate.render_translated_worksheet →
+        # docgen.quiz_sheet) and uploaded exactly as the document block
+        # below would: the docx row, the key under its own kind, the
+        # questions for the quiz player.
+        from catalogue.translate import render_translated_worksheet
+
+        branding = load_branding(sb, owner_id, Path(tmp))
+        base = f"{owner_id}/{generation_id}"
+        title = render_translated_worksheet(sb, {**gen, "params": _catalogue_doc_params(gen, catalogue)},
+                                            generation_id, Path(tmp), base, branding, lesson_lang)
+        db.set_progress(sb, job_id, 96)
+        db.set_generation_title(sb, generation_id, title)
+        return _Built(client=client, title=title, parts=[])
+
     if catalogue is not None and kind == "worksheet" and getattr(catalogue, "question_set_id", None):
         # A COMPOSED worksheet (Phase 3, decision 9): the portal picked
         # approved question-bank items for a blueprint and inserted this row

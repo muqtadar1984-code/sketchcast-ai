@@ -347,20 +347,160 @@ class TestItems:
         assert {r["id"] for r in CO.load_bank(sb, "t", "ar")} == {"a"}
 
 
-class TestOptionalDocuments:
-    def test_a_verified_maths_worksheet_is_not_rebuilt_but_flagged(self):
-        sb = _job_sb()
-        ws = KIT["doc_generation_ids"]["worksheet"]
-        sb.tables["artifacts"].append({"id": "a-q", "generation_id": ws, "kind": "questions_json", "storage_path": "sys/ws/questions.json"})
-        res = T.run_translate_job(sb, sb.tables["jobs"][0], client=FakeTranslator())
-        assert res is not None
-        k = next(k for k in sb.tables["topic_kits"] if k["language"] == "ar")
-        assert "worksheet" not in k["doc_generation_ids"] and "quiz" in k["doc_generation_ids"] and "question_bank" in k["doc_generation_ids"]
+# ── the worksheet (T1.5): translated from its verified questions ─────────
+
+PNG_1X1 = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAA"
+           "AABJRU5ErkJggg==")
+WS_PATH = "sys/gen-w/worksheet_questions.json"
+# the English maths worksheet's questions_json (docgen.questions.write_worksheet):
+# a fact fill-in, a true/false, a matching item, two ladder problems with their
+# working (one with accepted spellings), a figure question with its picture
+WS_QUESTIONS = {
+    "title": "Worksheet — Circles", "instructions": "Answer every question.",
+    "questions": [
+        {"id": "q1", "type": "fill_blank", "prompt": "The longest chord of a circle is called the ____.",
+         "answer": "diameter", "marks": 1},
+        {"id": "q2", "type": "true_false", "prompt": "A radius of 7 cm gives a diameter of 14 cm.", "answer": True, "marks": 1},
+        {"id": "q3", "type": "match", "prompt": "Match each term to its meaning.", "marks": 2,
+         "pairs": [{"left": "radius", "right": "centre to the edge"},
+                   {"left": "chord", "right": "a line joining two points on the circle"}]},
+        {"id": "q4", "type": "fill_blank", "prompt": "Solve: 3x + 5 = 20", "answer": "x = 5", "accept": ["5"], "marks": 1,
+         "working": ["3x = 15   (subtract 5 from both sides)", "x = 5", "Check: 3(5) + 5 = 20", "Answer: x = 5"]},
+        {"id": "q5", "type": "fill_blank", "prompt": "Find the circumference of a circle with a radius of 6 cm. (Use π = 3.14)",
+         "answer": "37.68 cm", "accept": ["37.68"], "marks": 1, "working": ["C = 2 × 3.14 × 6", "Answer: 37.68 cm"]},
+        {"id": "q6", "type": "fill_blank", "prompt": "Find x in the diagram. Give the number only.", "answer": "40",
+         "marks": 2, "image": PNG_1X1},
+    ],
+}
+WS_WORDS = {text for q in WS_QUESTIONS["questions"] for _, text in T.question_text_items(q)}
+
+
+def _ws_job_sb():
+    """The job fixture with a MATHS worksheet: the source worksheet generation
+    carries a questions_json artifact (the verifier's English questions)."""
+    sb = _job_sb()
+    sb.tables["artifacts"].append({"id": "a-q", "generation_id": KIT["doc_generation_ids"]["worksheet"],
+                                   "kind": "questions_json", "storage_path": WS_PATH})
+    sb.files[("artifacts", WS_PATH)] = json.dumps(WS_QUESTIONS, ensure_ascii=False).encode("utf-8")
+    return sb
+
+
+def _ws_run(sb, monkeypatch, tmp_path, client):
+    uploads = _uploads(monkeypatch)
+    monkeypatch.setattr("spike.scene_engine.raster_assets.cache_dir_for", lambda key, cache_dir=None: tmp_path / "nocache" / key)
+    res = T.run_translate_job(sb, sb.tables["jobs"][0], client=client)
+    assert res is not None, sb.tables["jobs"][0].get("error")
+    k = next(k for k in sb.tables["topic_kits"] if k["language"] == "ar")
+    staged = [body for dest, body in uploads if dest.endswith("/translated/worksheet_questions.json")]
+    return k, staged, uploads
+
+
+class TestQuestionCheck:
+    def test_is_maths_tells_notation_from_words(self):
+        for s in ("x = 5", "9π cm", "3x + 5 = 20", "7", "37.68", "C = 2 × 3.14 × 6", ""):
+            assert C.is_maths(s), s
+        for s in ("diameter", "Solve: 3x + 5 = 20", "Answer: x = 5", "3x = 15   (subtract 5 from both sides)",
+                  "centre to the edge", "cm"):
+            assert not C.is_maths(s), s
+
+    def test_question_text_items_take_the_words_and_leave_the_notation(self):
+        paths = dict(T.question_text_items(WS_QUESTIONS["questions"][3]))
+        assert set(paths) == {"prompt", "working[0]", "working[2]", "working[3]"}, "x = 5 and the accepted 5 are copied"
+        assert dict(T.question_text_items(WS_QUESTIONS["questions"][2])) == {
+            "prompt": "Match each term to its meaning.", "pairs[0].left": "radius", "pairs[0].right": "centre to the edge",
+            "pairs[1].left": "chord", "pairs[1].right": "a line joining two points on the circle"}
+        assert "answer" not in dict(T.question_text_items(WS_QUESTIONS["questions"][4])), "37.68 cm is notation"
+        assert dict(T.question_text_items(WS_QUESTIONS["questions"][0]))["answer"] == "diameter"
+
+    def test_check_question_blocks_a_changed_number_a_lost_span_and_a_changed_picture(self):
+        src = WS_QUESTIONS["questions"][3]
+        ok = T.apply_strings(src, [(p, _arabize(t)) for p, t in T.question_text_items(src)])
+        assert C.check_question(src, ok)["ok"] is True
+        bad = {**ok, "prompt": "ترجمة Solve: ٣x + ٥ = ٢١"}
+        whats = {f["what"] for f in C.check_question(src, bad)["blocking"]}
+        assert {"numbers differ", "maths in the question altered"} <= whats
+        lost = {**ok, "working": [*ok["working"][:2], "ترجمة Check: ٣(٥) + ٥", ok["working"][3]]}
+        assert any(f["what"] == "maths in the working altered" for f in C.check_question(src, lost)["blocking"])
+        fig = WS_QUESTIONS["questions"][5]
+        swapped = {**fig, "prompt": _arabize(fig["prompt"]), "image": "data:image/png;base64,AAAA"}
+        assert any(f["what"] == "image changed" for f in C.check_question(fig, swapped)["blocking"])
+        tf = WS_QUESTIONS["questions"][1]
+        assert any(f["what"] == "answer changed" for f in C.check_question(tf, {**tf, "answer": False})["blocking"])
+
+
+class TestTranslatedWorksheet:
+    def test_a_verified_maths_worksheet_is_translated_from_its_questions_and_rendered_as_a_kit_piece(self, monkeypatch, tmp_path):
+        sb = _ws_job_sb()
+        c = FakeTranslator()
+        k, staged, uploads = _ws_run(sb, monkeypatch, tmp_path, c)
+
+        assert len(staged) == 1
+        body = staged[0]
+        qs = {q["id"]: q for q in body["questions"]}
+        assert list(qs) == ["q1", "q2", "q3", "q4", "q5", "q6"] and body["language"] == "ar"
+        art = next(a for a in sb.tables["topic_articles"] if a["language"] == "ar")
+        assert body["title"].endswith(art["title"]) and body["title"] != art["title"], "the sheet's title: the document word, the translated topic"
+        assert body["source"] == {"kit_id": "kit-1", "language": "en", "title": "Worksheet — Circles", "questions": 6, "dropped": []}
+        # the words translated, every number equivalent, the notation copied
+        assert all(q["prompt"].startswith("ترجمة") for q in qs.values())
+        assert qs["q1"]["answer"].startswith("ترجمة"), "a word answer is translated"
+        assert qs["q4"]["answer"] == "x = 5" and qs["q4"]["accept"] == ["5"], "notation is copied"
+        assert qs["q5"]["answer"] == "37.68 cm" and qs["q2"]["answer"] is True and qs["q6"]["image"] == PNG_1X1
+        assert qs["q4"]["working"][1] == "x = 5" and qs["q5"]["working"][0] == "C = 2 × 3.14 × 6", "pure working stays verbatim"
+        assert qs["q4"]["working"][0].startswith("ترجمة") and qs["q4"]["working"][3].startswith("ترجمة"), "a working line with words is translated"
+        for src, dst in zip(WS_QUESTIONS["questions"], body["questions"]):
+            assert C.numbers_equivalent(" ".join(C._q_strings(src)), " ".join(C._q_strings(dst)))[0], src["id"]
+            assert (src["id"], src["type"], src["marks"]) == (dst["id"], dst["type"], dst["marks"])
+        assert [p["left"] for p in qs["q3"]["pairs"]] == ["ترجمة radius", "ترجمة chord"]
+        # the protected expressions travelled with the call
+        assert any("3x + 5 = 20" in call and "UNCHANGED" in call for call in c.calls)
+        # the piece: a worksheet generation of the kit, rendered from the staged file, no flag
+        assert "worksheet" in k["doc_generation_ids"]
+        g = next(g for g in sb.tables["generations"] if g["id"] == k["doc_generation_ids"]["worksheet"])
+        assert g["kind"] == "worksheet" and g["status"] == "queued" and g["params"]["kit_id"] == k["id"]
+        assert g["params"]["translation"]["questions"] == f"sys/{k['id']}/translated/worksheet_questions.json"
+        assert g["params"]["translation"]["source_kit_id"] == "kit-1" and "question_set_id" not in g["params"]
+        assert not [f for f in k["precheck"]["flags"] if f["what"] == T.DOCUMENT_FLAG]
+        assert k["precheck"]["ok"] is True
+        assert k["translation"]["stage"]["worksheet"] == {"questions": 6, "kept": 6, "dropped": [],
+                                                           "path": g["params"]["translation"]["questions"]}
+        assert set(k["doc_generation_ids"]) == {"deck", "activity", "case_study", "worksheet", "question_bank", "quiz"}
+
+    def test_a_question_whose_translation_changes_a_number_is_dropped_with_a_flag_and_the_rest_rendered(self, monkeypatch, tmp_path):
+        sb = _ws_job_sb()
+        c = FakeTranslator(lambda s: _arabize(s.replace("20", "21")) if s == "Solve: 3x + 5 = 20" else _arabize(s))
+        k, staged, _ = _ws_run(sb, monkeypatch, tmp_path, c)
+
+        body = staged[0]
+        assert [q["id"] for q in body["questions"]] == ["q1", "q2", "q3", "q5", "q6"] and body["source"]["dropped"] == ["q4"]
+        assert "worksheet" in k["doc_generation_ids"], "the sheet is still made"
+        flags = [f for f in k["precheck"]["flags"] if f["what"] == T.DOCUMENT_FLAG]
+        assert len(flags) == 1 and flags[0]["where"] == "worksheet q4"
+        assert "numbers differ" in flags[0]["detail"] and "5 of 6" in flags[0]["detail"]
+        assert k["precheck"]["ok"] is True, "a dropped question is a flag, never a block"
+        assert k["translation"]["stage"]["worksheet"]["dropped"] == ["q4"]
+        # asked once more with the reason before it was dropped
+        assert any("refused" in call and "numbers differ" in call and "3x + 5 = 20" in call for call in c.calls)
+
+    def test_a_worksheet_with_no_surviving_question_is_not_made_but_flagged(self, monkeypatch, tmp_path):
+        sb = _ws_job_sb()
+        c = FakeTranslator(lambda s: _arabize(s + " 99") if s in WS_WORDS else _arabize(s))
+        k, staged, _ = _ws_run(sb, monkeypatch, tmp_path, c)
+
+        assert staged == [] and "worksheet" not in k["doc_generation_ids"]
         gens = [g for g in sb.tables["generations"] if (g["params"].get("translation") or {}).get("kit_id") == k["id"]]
         assert not any(g["kind"] == "worksheet" and not g["params"].get("question_set_id") for g in gens), "no rebuilt worksheet"
         flag = next(f for f in k["precheck"]["flags"] if f["where"] == "worksheet")
-        assert flag["what"] == "document not translated" and "quiz" in flag["detail"]
-        assert k["precheck"]["ok"] is True, "a skipped document is a flag, never a block"
+        assert flag["what"] == T.DOCUMENT_FLAG and "quiz" in flag["detail"] and "6 tried" in flag["detail"]
+        assert len([f for f in k["precheck"]["flags"] if f["what"] == T.DOCUMENT_FLAG]) == 7, "one per question, one for the sheet"
+        assert k["precheck"]["ok"] is True and "quiz" in k["doc_generation_ids"] and "question_bank" in k["doc_generation_ids"]
+
+    def test_a_science_worksheet_without_questions_json_is_still_rebuilt(self, monkeypatch, tmp_path):
+        sb = _job_sb()
+        k, staged, _ = _ws_run(sb, monkeypatch, tmp_path, FakeTranslator())
+        assert staged == [] and k["translation"]["stage"]["worksheet"] is None
+        g = next(g for g in sb.tables["generations"] if g["id"] == k["doc_generation_ids"]["worksheet"])
+        assert "questions" not in g["params"]["translation"], "rebuilt from the article, as before"
 
 
 class TestPostRender:
@@ -832,3 +972,92 @@ class TestScriptOverrideRender:
         sb.tables["topic_kits"][1]["source_kit_id"] = None
         with pytest.raises(K.CatalogueRefused, match="not approved"):
             K.prepare(sb, plain)
+
+
+# ── the render: a translated worksheet in worker.process ────────────────
+
+STAGED_QUESTIONS_PATH = "sys/kit-ar/translated/worksheet_questions.json"
+
+
+def _staged_arabic_questions() -> dict:
+    kept, dropped = T.translate_questions(FakeTranslator(), WS_QUESTIONS["questions"], "ar", [], context="")
+    assert len(kept) == 6 and dropped == []
+    return {"title": "ورقة عمل — الدوائر", "instructions": "أجب عن كل سؤال.", "language": "ar", "questions": kept,
+            "source": {"kit_id": "kit-1", "language": "en", "title": "Worksheet — Circles", "questions": 6, "dropped": []}}
+
+
+def _render_ws_sb():
+    sb = _render_sb()
+    pres = next(g for g in sb.tables["generations"] if g["id"] == "gen-par")
+    tr = {k: v for k, v in pres["params"]["translation"].items() if k != "scripts"}
+    sb.tables["generations"].append({"id": "gen-war", "kind": "worksheet", "status": "processing", "owner_id": "sys",
+                                     "book_id": None, "chapter_ref": None,
+                                     "params": {**pres["params"], "translation": {**tr, "questions": STAGED_QUESTIONS_PATH}}})
+    sb.tables["topic_kits"][1]["doc_generation_ids"]["worksheet"] = "gen-war"
+    sb.files[("artifacts", STAGED_QUESTIONS_PATH)] = json.dumps(_staged_arabic_questions(), ensure_ascii=False).encode("utf-8")
+    job = _job("job-war", "gen-war", "worksheet")
+    job["params"]["kit_id"] = "kit-ar"
+    sb.tables["jobs"] = [job]
+    return sb
+
+
+def _docx_text(raw: bytes) -> str:
+    import io
+    from docx import Document
+    doc = Document(io.BytesIO(raw))
+    parts = [p.text for p in doc.paragraphs]
+    for t in doc.tables:
+        for row in t.rows:
+            for cell in row.cells:
+                parts.extend(p.text for p in cell.paragraphs)
+    return "\n".join(parts)
+
+
+class TestTranslatedWorksheetRender:
+    def test_the_sheet_and_its_key_are_drawn_from_the_staged_questions_with_no_model_call(self, monkeypatch):
+        import io
+        import zipfile
+        sb = _render_ws_sb()
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+
+        process.process_generation(sb, sb.tables["jobs"][0], "gen-war")
+
+        assert analysis_calls == [], "a translated sheet is never analysed"
+        dests = [d for _, d, _ in uploads]
+        assert dests == ["sys/gen-war/worksheet.docx", "sys/gen-war/answer_key.docx", "sys/gen-war/worksheet_questions.json"]
+        rows = [a for a in sb.tables["artifacts"] if a["generation_id"] == "gen-war"]
+        assert [a["kind"] for a in rows] == ["docx", "answer_key_docx", "questions_json"]
+        sheet = _docx_text(uploads[0][2])
+        key = _docx_text(uploads[1][2])
+        # the student sheet: every question in Arabic, the maths intact, the key not on it
+        assert "ترجمة Solve: ٣x + ٥ = ٢٠" in sheet and "ترجمة The longest chord" in sheet and "ترجمة radius" in sheet
+        assert "x = 5" not in sheet and "ترجمة diameter" not in sheet, "the answers are not on the student sheet"
+        # the key: the working lines and the answers
+        assert "ترجمة ٣x = ١٥" in key and "x = 5" in key and "C = 2 × 3.14 × 6" in key, "working with words translated, pure working verbatim"
+        assert "ترجمة diameter" in key and "ترجمة Answer: ٣٧.٦٨ cm" in key and "40" in key
+        # the figure question carries its picture
+        from docx import Document
+        assert len(Document(io.BytesIO(uploads[0][2])).inline_shapes) == 1
+        # RTL: bidi paragraphs and <w:rtl/> on the runs
+        xml = zipfile.ZipFile(io.BytesIO(uploads[0][2])).read("word/document.xml").decode("utf-8")
+        assert "<w:rtl/>" in xml and "<w:bidi/>" in xml
+        # the quiz player's file: the staged questions, answers included
+        quiz = json.loads(uploads[2][2].decode("utf-8"))
+        assert [q["id"] for q in quiz["questions"]] == ["q1", "q2", "q3", "q4", "q5", "q6"] and quiz["questions"][3]["answer"] == "x = 5"
+        gen = next(g for g in sb.tables["generations"] if g["id"] == "gen-war")
+        assert gen["status"] == "done" and gen["title"] == "ورقة عمل — الدوائر"
+        assert ("select", "books") not in sb.calls
+
+    def test_a_staged_file_with_no_question_fails_the_piece_before_any_upload(self, monkeypatch):
+        sb = _render_ws_sb()
+        sb.files[("artifacts", STAGED_QUESTIONS_PATH)] = json.dumps({"title": "x", "questions": []}).encode("utf-8")
+        process, uploads, _ = _worker_env(monkeypatch, sb)
+        with pytest.raises(Exception, match="no question"):
+            process.process_generation(sb, sb.tables["jobs"][0], "gen-war")
+        assert uploads == []
+        # the lifecycle's drop-with-flag (PR #251): the piece leaves the kit, the reason stays for the reviewer
+        k = next(k for k in sb.tables["topic_kits"] if k["id"] == "kit-ar")
+        assert "worksheet" not in k["doc_generation_ids"] and "deck" in k["doc_generation_ids"]
+        flag = next(f for f in k["precheck"]["flags"] if f["where"] == "worksheet")
+        assert flag["what"] == T.DOCUMENT_FLAG and "no question" in flag["detail"]
+        assert k["status"] == "generating", "one document is not the kit"

@@ -365,7 +365,9 @@ def build(book: dict, chapter: dict, analysis: dict, client, params: dict, out_d
     # true/false per figure; "classify each" -> match; a count -> fill_blank.
     try:
         from docgen.questions import write_worksheet
-        short = [{"q": _problem_text(ex), "answer": " or ".join(pretty(a) for a in ex.final_answer)}
+        short = [{"q": _problem_text(ex), "answer": " or ".join(pretty(a) for a in ex.final_answer),
+                  "working": worked_solution(ex, pretty, check=dx._t("sol_check", language),
+                                             answer=dx._t("sol_answer", language), or_word=dx._t("sol_or", language))}
                  for ex in questions]
         fill = [{"q": f.q, "answer": f.answer} for f in facts if f.format == "fill_blank"]
         tf = [{"statement": f.q, "answer": f.truth} for f in facts if f.format == "true_false"]
