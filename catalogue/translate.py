@@ -773,6 +773,11 @@ def _library_row(sb, key: str) -> Optional[dict]:
     fails for any reason is a MISSING picture, reported as such, never a
     crashed stage."""
     try:
+        # The LIBRARY's normaliser (shared.asset_keys), not the catalogue's
+        # topic-key one (catalogue.key): "avatar_teacher_female" is stored as
+        # "avatar_female_teacher", "plant_cell" as "cell_plant". The fourth
+        # Circle run (2026-10-16) found neither face with the wrong one.
+        from shared.asset_keys import canonical_key as asset_key_of
         from shared.visual_library import base_avatar_key, face_id_of
 
         cols = "id,asset_key,canonical_key,storage_path,status"
@@ -780,7 +785,7 @@ def _library_row(sb, key: str) -> Optional[dict]:
             fid = (face_id_of(key) or "").lower()
             base = base_avatar_key(key)
             rows = _rows(sb.table("visual_assets").select(cols).eq("status", "approved")
-                         .eq("canonical_key", canonical_key(base)).execute())
+                         .eq("canonical_key", asset_key_of(base)).execute())
             rows = [r for r in rows if _s(r.get("storage_path"))]
             if fid:
                 exact = [r for r in rows if str(r.get("id") or "").lower().replace("-", "").startswith(fid)]
@@ -792,7 +797,7 @@ def _library_row(sb, key: str) -> Optional[dict]:
                 r = rows[0]
                 return {"key": key, "source": "library", "id": r.get("id"), "storage_path": r.get("storage_path")}
             return None
-        for col, val in (("asset_key", key), ("canonical_key", canonical_key(key))):
+        for col, val in (("asset_key", key), ("canonical_key", asset_key_of(key))):
             if not val:
                 continue
             rows = _rows(sb.table("visual_assets").select(cols).eq(col, val).limit(5).execute())
