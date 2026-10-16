@@ -60,6 +60,19 @@ ZONE_ID_ENV = "CLOUDFLARE_ZONE_ID"
 ZONE_NAME_ENV = "CLOUDFLARE_ZONE_NAME"
 ZONE_NAME_DEFAULT = "sketchcast.app"
 TABLE = "cloudflare_daily_stats"
+# PER PATH (2026-10-16, catalogue plan §5.5): which pages were viewed. The
+# zone totals above cannot say how many people read ONE lesson page, and
+# that is the catalogue funnel's first step (lesson page → signup). Cloudflare's
+# adaptive HTTP dataset carries the request path, so the same poll also writes
+# one row per (day, path) of HTML requests into cloudflare_path_stats (app
+# migration 0139): requests, and Cloudflare's "visits" (a request whose
+# referrer is not this zone — its own measure of a page view that began
+# elsewhere). Sampled by Cloudflare on busy days; exact on ours. Paths only,
+# never query strings: the dataset does not carry them, and nothing personal
+# ever reaches this table.
+PATH_TABLE = "cloudflare_path_stats"
+PATH_LIMIT = 2000                             # (day, path) rows a query may return
+PATH_WINDOWS = (30, 7, 3)                     # the adaptive dataset keeps less than the daily one
 GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql"
 
 BACKFILL_WINDOWS = (400, 180, 90, 30, 7, 3)  # days; shrunk until Cloudflare answers
@@ -81,6 +94,25 @@ query SiteDaily($zone: String!, $since: Date!, $until: Date!) {
 """
 
 
+PATH_QUERY = """
+query SitePaths($zone: String!, $since: Date!, $until: Date!, $limit: Int!) {
+  viewer {
+    zones(filter: { zoneTag: $zone }) {
+      httpRequestsAdaptiveGroups(
+        limit: $limit,
+        filter: { date_geq: $since, date_leq: $until, edgeResponseContentTypeName: "html", edgeResponseStatus_lt: 400 },
+        orderBy: [count_DESC]
+      ) {
+        count
+        sum { visits }
+        dimensions { date clientRequestPath }
+      }
+    }
+  }
+}
+"""
+
+
 # ── the transport ────────────────────────────────────────────────────────────
 
 class CloudflareRefused(Exception):
@@ -94,6 +126,11 @@ class StatsTransport(Protocol):
         ``{day, requests, page_views, uniques, bytes, threats, countries}``,
         ``countries`` a list of ``{country, requests}``. Raises
         CloudflareRefused when the API says no."""
+
+    def paths(self, since: date, until: date) -> list[dict]:
+        """One dict per (day, path) of HTML requests in [since, until]:
+        ``{day, path, requests, visits}``. Raises CloudflareRefused when
+        the API says no (a plan without the adaptive dataset included)."""
 
 
 class _GraphQL:
@@ -113,6 +150,18 @@ class _GraphQL:
         except ValueError as exc:
             raise CloudflareRefused(f"HTTP {res.status_code}: not JSON") from exc
         return parse_response(body)
+
+    def paths(self, since: date, until: date) -> list[dict]:
+        import requests
+        res = requests.post(self._url, json={"query": PATH_QUERY, "variables": {
+            "zone": self._zone, "since": since.isoformat(), "until": until.isoformat(), "limit": PATH_LIMIT}},
+            headers={"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"},
+            timeout=self._timeout)
+        try:
+            body = res.json()
+        except ValueError as exc:
+            raise CloudflareRefused(f"HTTP {res.status_code}: not JSON") from exc
+        return parse_paths_response(body)
 
 
 def parse_response(body: dict) -> list[dict]:
@@ -137,6 +186,46 @@ def parse_response(body: dict) -> list[dict]:
                     "uniques": _int((g.get("uniq") or {}).get("uniques")),
                     "bytes": _int(s.get("bytes")), "threats": _int(s.get("threats")), "countries": countries})
     out.sort(key=lambda r: r["day"])
+    return out
+
+
+def normalise_path(raw: object) -> str:
+    """The path as the site names it: lower-case, no trailing slash (except
+    the root), the generator's ``.html`` dropped so a page is ONE row
+    however it was requested. Anything over 200 characters is cut."""
+    p = str(raw or "").strip()
+    if not p.startswith("/"):
+        p = "/" + p
+    p = p.split("?", 1)[0].split("#", 1)[0].lower()
+    if p.endswith("/index.html"):
+        p = p[: -len("index.html")]
+    elif p.endswith(".html"):
+        p = p[:-5]
+    if len(p) > 1 and p.endswith("/"):
+        p = p[:-1]
+    return p[:200] or "/"
+
+
+def parse_paths_response(body: dict) -> list[dict]:
+    """The GraphQL envelope → one flat dict per (day, path), paths
+    normalised and merged. Pure."""
+    errors = body.get("errors") or []
+    if errors:
+        raise CloudflareRefused("; ".join(str(e.get("message") or e) for e in errors))
+    zones = (((body.get("data") or {}).get("viewer") or {}).get("zones")) or []
+    if not zones:
+        raise CloudflareRefused("no zone in the answer (wrong zone id, or the token cannot read it)")
+    merged: dict[tuple[str, str], dict] = {}
+    for g in zones[0].get("httpRequestsAdaptiveGroups") or []:
+        dims = g.get("dimensions") or {}
+        day = str(dims.get("date") or "")[:10]
+        if not day:
+            continue
+        p = normalise_path(dims.get("clientRequestPath"))
+        row = merged.setdefault((day, p), {"day": day, "path": p, "requests": 0, "visits": 0})
+        row["requests"] += _int(g.get("count"))
+        row["visits"] += _int((g.get("sum") or {}).get("visits"))
+    out = sorted(merged.values(), key=lambda r: (r["day"], -r["requests"], r["path"]))
     return out
 
 
@@ -198,8 +287,37 @@ def poll(sb, transport: StatsTransport, *, backfill: bool, zone: Optional[str] =
                 "countries": r["countries"], "captured_at": moment.isoformat()} for r in rows]
     if payload:
         sb.table(TABLE).upsert(payload, on_conflict="zone,day").execute()
-    return {"zone": name, "days_asked": days, "rows": len(payload),
-            "first_day": payload[0]["day"] if payload else None, "last_day": payload[-1]["day"] if payload else None}
+    summary = {"zone": name, "days_asked": days, "rows": len(payload),
+               "first_day": payload[0]["day"] if payload else None, "last_day": payload[-1]["day"] if payload else None,
+               "path_rows": 0}
+    # The per-path pull rides the same poll but never fails it: a plan
+    # without the adaptive dataset, or a window it does not keep, is a log
+    # line, and the zone totals above are already written.
+    try:
+        prows, pdays = fetch_paths_window(transport, today, PATH_WINDOWS if backfill else (REFRESH_DAYS,))
+        ppayload = [{"zone": name, "day": r["day"], "path": r["path"], "requests": r["requests"],
+                     "visits": r["visits"], "captured_at": moment.isoformat()} for r in prows]
+        if ppayload:
+            sb.table(PATH_TABLE).upsert(ppayload, on_conflict="zone,day,path").execute()
+        summary["path_rows"] = len(ppayload)
+        summary["path_days_asked"] = pdays
+    except Exception as exc:  # noqa: BLE001 — the totals are written; the paths are a bonus
+        logger.warning("Cloudflare path stats skipped: %s", exc)
+        summary["path_error"] = f"{type(exc).__name__}: {exc}"[:200]
+    return summary
+
+
+def fetch_paths_window(transport: StatsTransport, today: date, windows=PATH_WINDOWS) -> tuple[list[dict], int]:
+    """fetch_window's twin for the per-path dataset."""
+    last: Optional[Exception] = None
+    for days in windows:
+        try:
+            return transport.paths(today - timedelta(days=days - 1), today), days
+        except CloudflareRefused as exc:
+            last = exc
+            logger.info("Cloudflare path stats: %d-day window refused (%s); trying a shorter one", days, exc)
+    assert last is not None
+    raise last
 
 
 # ── the timer the worker's loop calls ────────────────────────────────────────
