@@ -156,6 +156,7 @@ rather than being rendered over — Retry it inside the window).
 | `CATALOGUE_PRESENTATION_MARGIN_MIN` | 60 | A presentation is claimed only while the window stays open this long; documents and decks need no margin. |
 | `CATALOGUE_YIELD_POLL_SECONDS` | 20 | How often a rendering kit re-asks whether a user builder is live. |
 | `CATALOGUE_YIELD_MAX_SECONDS` | 1800 | How long it waits before giving the contended work up (an image is skipped; a part boundary fails the kit). |
+| `GITHUB_LANDING_TOKEN` | unset | Optional. A fine-grained GitHub PAT scoped to the **sketchcast-landing** repo only (Contents: read & write) — the same token the app holds in Vercel. With it set, the end of a `topic_publish` run that put a part **public**, and of a `topic_supersede` run that stamped the old row, sends the landing repo a `repository_dispatch` (`catalogue-changed`) so sketchcast.app/topics rebuilds within minutes instead of at its nightly run (`catalogue/landing.py`). Unset ⇒ nothing is sent and nothing breaks. |
 
 ## Project Structure
 
