@@ -97,6 +97,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Protocol, runtime_checkable
 
 from catalogue.harvest import clean_heading
+from catalogue.landing import REASON_PUBLISH, request_landing_rebuild
 from worker import client as db
 
 log = logging.getLogger("worker.publish")
@@ -1151,6 +1152,13 @@ def run_publish_job(sb, job: dict, transport: Optional[YouTubeTransport] = None)
         else:
             db.finish_job(sb, job_id)  # no generation: an observer job owns none
             log.info("publish %s: %s", summary.get("kit_id"), summary)
+        # A part that went PUBLIC this run is in the public catalogue from this
+        # moment (0128 catalogue_current_kits reads topic_publications), so the
+        # landing site is told once — after the row above is finished, never
+        # per part, and even when another part failed (that video is still up).
+        # Dormant without GITHUB_LANDING_TOKEN; catalogue/landing.py.
+        if summary.get("published") and _s(summary.get("privacy")).lower() == PRIVACY_PUBLIC:
+            request_landing_rebuild(REASON_PUBLISH)
         return summary
     except db.DeferredJob as exc:
         log.info("publish job %s waits %ds: %s", job_id, exc.seconds, exc.note)

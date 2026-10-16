@@ -36,6 +36,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, Protocol
 
+from catalogue.landing import REASON_SUPERSEDE, request_landing_rebuild
 from catalogue.publish import (PRIVACY_PUBLIC, PRIVACY_UNLISTED, _rows, _s,
                                build_youtube_service, load_kit)
 from catalogue.youtube_meta import DESCRIPTION_MAX
@@ -217,6 +218,12 @@ def run_supersede_job(sb, job: dict, transport: Optional[SupersedeTransport] = N
         db.set_stage(sb, job_id, summary)
         db.finish_job(sb, job_id)
         log.info("supersede job %s: %s", job_id, summary)
+        # The old row now carries superseded_by, so it no longer counts for
+        # the public catalogue (0128 catalogue_current_kits) — tell the landing
+        # site once, after the job row is finished. A run that found the pair
+        # already stamped changed nothing. Dormant without GITHUB_LANDING_TOKEN.
+        if not summary.get("already"):
+            request_landing_rebuild(REASON_SUPERSEDE)
         return summary
     except SupersedeRefused as exc:
         log.warning("supersede job %s refused: %s", job_id, exc)
