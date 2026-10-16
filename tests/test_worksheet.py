@@ -192,6 +192,39 @@ def test_numbering_restarts_per_section_and_key_matches_paper(tmp_path):
         assert right_by_letter[letter] == _NUMBERING_PAYLOAD["match_column"][i]["right"]
 
 
+def test_numeric_forms_recognises_numbers_fractions_pi_and_units_but_never_prose():
+    nf = questions.numeric_forms
+    assert nf("44") == ["44"]
+    assert nf("9π") == ["9π", "9pi", "9 pi"]
+    assert nf("9π cm²") == ["9π cm²", "9π", "9pi", "9pi cm²", "9 pi", "9 pi cm²"]
+    assert nf("56.52") == ["56.52"]
+    assert nf("22/7")[0] == "22/7" and "22/7" in nf("22/7")
+    assert nf("9π/2") == ["9π/2", "9pi/2", "9 pi/2"]
+    assert nf("−3") == ["−3", "-3"]
+    assert nf("x = 3 or x = -3") == ["x = 3 or x = -3", "3", "-3"]
+    assert nf("45°") == ["45°", "45", "45 °"]
+    assert nf("π") == ["π", "pi"]
+    for prose in ("because", "chlorophyll", "cm", "two", "", None, "3 cats and a dog"):
+        assert nf(prose) is None, prose
+
+
+def test_write_worksheet_types_numeric_short_answers_as_fill_blank_with_accepts(tmp_path):
+    questions.write_worksheet(
+        tmp_path, "T", "i", fill=[], tf=[], match=[],
+        short=[
+            {"q": "Circumference, r = 7 cm, pi = 22/7?", "answer": "44"},
+            {"q": "Area, r = 3 cm, in terms of pi?", "answer": "9π"},
+            {"q": "Why are plant cells rigid?", "answer": "because of the cell wall"},
+        ],
+    )
+    payload = json.loads((tmp_path / "questions.json").read_text(encoding="utf-8"))
+    qs = payload["questions"]
+    assert [q["type"] for q in qs] == ["fill_blank", "fill_blank", "short"]
+    assert qs[0] == {"id": "q1", "type": "fill_blank", "prompt": "Circumference, r = 7 cm, pi = 22/7?", "answer": "44", "marks": 1}
+    assert qs[1]["answer"] == "9π" and qs[1]["accept"] == ["9pi", "9 pi"]
+    assert "accept" not in qs[2] and qs[2]["answer"] == "because of the cell wall"
+
+
 def test_write_worksheet_orders_kinds_and_keeps_match_whole(tmp_path):
     questions.write_worksheet(
         tmp_path, "T", "i",
