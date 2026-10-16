@@ -345,10 +345,14 @@ def _job_sb(*, kit_status="approved", with_assets=True):
     body = _maths_body()
     sb.files[("artifacts", SCRIPT_PATH)] = json.dumps(body).encode("utf-8")
     sb.tables["topic_term_translations"] = []
-    sb.tables["visual_assets"] = ([{"id": "f1", "asset_key": "avatar_teacher_female__face_f1", "canonical_key": "avatar_teacher_female",
-                                    "storage_path": "lib/f1.png", "status": "approved"},
-                                   {"id": "m1", "asset_key": "avatar_student_male__face_m1", "canonical_key": "avatar_student_male",
-                                    "storage_path": "lib/m1.png", "status": "approved"}] if with_assets else [])
+    # the roster rows as the library keeps them: asset_key = the ROSTER key,
+    # the face key's suffix = the first hex characters of the row id
+    from catalogue.key import canonical_key as _ck
+    sb.tables["visual_assets"] = ([{"id": "f1a2b3c4-0000-4000-8000-000000000001", "asset_key": "avatar_teacher_female",
+                                    "canonical_key": _ck("avatar_teacher_female"), "storage_path": "lib/f1.png", "status": "approved"},
+                                   {"id": "m1a2b3c4-0000-4000-8000-000000000002", "asset_key": "avatar_student_male",
+                                    "canonical_key": _ck("avatar_student_male"), "storage_path": "lib/m1.png", "status": "approved"}]
+                                  if with_assets else [])
     sb.tables["jobs"] = [{"id": "job-t", "type": "kit_translate", "status": "processing", "generation_id": None,
                           "params": {"source_kit_id": "kit-1", "language": "ar"}}]
     return sb
