@@ -763,25 +763,47 @@ def resolve_assets(sb, keys: list[str]) -> tuple[list[dict], list[str]]:
 
 
 def _library_row(sb, key: str) -> Optional[dict]:
+    """The approved library row a scene key resolves to, the way the renderer
+    resolves it (shared.visual_library): a plain key by its asset_key or
+    canonical key; an avatar FACE key (``avatar_teacher_female__face_c9f95497``,
+    the roster key plus the first eight hex characters of the row id) by the
+    roster key's canonical key and then the id PREFIX — the suffix is not a
+    uuid and must never be compared with the id column (the third Circle
+    run, 2026-10-16: ``invalid input syntax for type uuid``). A lookup that
+    fails for any reason is a MISSING picture, reported as such, never a
+    crashed stage."""
     try:
-        from shared.visual_library import face_id_of
-        fid = face_id_of(key) if key.startswith("avatar") else None
-    except Exception:  # noqa: BLE001
-        fid = None
-    queries = []
-    if fid:
-        queries.append(("id", fid))
-    queries += [("asset_key", key), ("canonical_key", canonical_key(key))]
-    for col, val in queries:
-        if not val:
-            continue
-        rows = _rows(sb.table("visual_assets").select("id,asset_key,canonical_key,storage_path,status")
-                     .eq(col, val).limit(5).execute())
-        rows = [r for r in rows if _s(r.get("status")) in ("approved", "") and _s(r.get("storage_path"))]
-        if rows:
-            r = rows[0]
-            return {"key": key, "source": "library", "id": r.get("id"), "storage_path": r.get("storage_path")}
-    return None
+        from shared.visual_library import base_avatar_key, face_id_of
+
+        cols = "id,asset_key,canonical_key,storage_path,status"
+        if key.startswith("avatar"):
+            fid = (face_id_of(key) or "").lower()
+            base = base_avatar_key(key)
+            rows = _rows(sb.table("visual_assets").select(cols).eq("status", "approved")
+                         .eq("canonical_key", canonical_key(base)).execute())
+            rows = [r for r in rows if _s(r.get("storage_path"))]
+            if fid:
+                exact = [r for r in rows if str(r.get("id") or "").lower().replace("-", "").startswith(fid)]
+                if exact:
+                    rows = exact
+                elif rows:
+                    log.warning("translate: face %s of %s is gone from the library; the oldest face stands in", fid, base)
+            if rows:
+                r = rows[0]
+                return {"key": key, "source": "library", "id": r.get("id"), "storage_path": r.get("storage_path")}
+            return None
+        for col, val in (("asset_key", key), ("canonical_key", canonical_key(key))):
+            if not val:
+                continue
+            rows = _rows(sb.table("visual_assets").select(cols).eq(col, val).limit(5).execute())
+            rows = [r for r in rows if _s(r.get("status")) in ("approved", "") and _s(r.get("storage_path"))]
+            if rows:
+                r = rows[0]
+                return {"key": key, "source": "library", "id": r.get("id"), "storage_path": r.get("storage_path")}
+        return None
+    except Exception as exc:  # noqa: BLE001 — a lookup we cannot make is a picture we cannot find
+        log.warning("translate: library lookup failed for %s: %s", key, exc)
+        return None
 
 
 # ── generations ─────────────────────────────────────────────────────────
