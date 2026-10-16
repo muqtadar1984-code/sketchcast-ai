@@ -112,10 +112,13 @@ DOC_JOB_TYPES = ["lesson_plan", "activity", "worksheet", "exam_paper", "case_stu
 # wants — so it takes the last lane too, and re-checks builder_queued between
 # parts the way figure_render does before every generation.
 OBSERVER_JOB_TYPES = ["support_diagnose", "issue_resolve", "topic_harvest", "topic_derive", "topic_article",
-                      "figure_render", "topic_questions", "topic_publish"]
+                      "figure_render", "topic_questions", "topic_publish", "kit_translate"]
 CATALOGUE_JOB_TYPES = ["topic_harvest", "topic_derive", "topic_article", "figure_render", "topic_questions",
                        "topic_publish", "topic_supersede", "youtube_playlists",
-                       "youtube_enrich", "announcement_email"]  # the last lane
+                       "youtube_enrich", "announcement_email",
+                       # Kit Translator (T0): text calls only; the render it
+                       # queues is an ordinary kit presentation on the kit lane
+                       "kit_translate"]  # the last lane
 
 
 def _claim_catalogue_generation(sb):
@@ -587,6 +590,10 @@ def run_once(sb) -> bool:
             from catalogue.publish import run_publish_job
 
             run_publish_job(sb, job)  # self-contained: finishes its own row, done or error
+        elif job_type == "kit_translate":
+            from catalogue.translate import run_translate_job
+
+            run_translate_job(sb, job)  # self-contained: finishes its own row, done or error
         elif job_type == "topic_supersede":
             from catalogue.supersede import run_supersede_job
 

@@ -627,7 +627,10 @@ def _new_bucket() -> dict:
             "yield": None, "yield_gave_up": False, "yield_skipped": 0,
             # patient mode (set_patient_assets): a batch lesson waits a
             # deferral out rather than shipping the board without the picture
-            "patient": None, "patience_spent": 0.0, "patience_waits": 0}
+            "patient": None, "patience_spent": 0.0, "patience_waits": 0,
+            # Kit Translator (set_generation_forbidden): a translated render
+            # reuses the English kit's pictures and may generate none
+            "forbid_generate": False}
 
 
 def _bucket() -> dict:
@@ -781,6 +784,29 @@ def patience_state() -> dict:
                 "budget": (p or {}).get("budget"),
                 "spent": float(b.get("patience_spent") or 0.0),
                 "waits": int(b.get("patience_waits") or 0)}
+
+
+def set_generation_forbidden(on: bool, generation_id: str | None = None) -> None:
+    """Kit Translator safeguard (plan revision 3, 2026-10-16): THIS generation
+    renders a translated script and must reuse the English kit's pictures —
+    the cache and the library may answer, an image model may not. With the
+    flag on, every resolve behaves as ``allow_generate=False``: a key nobody
+    has drawn resolves to nothing, the acceptance gate counts the hole, and
+    the job fails instead of quietly drawing a different picture for one
+    language. The translate job already checked every key exists before it
+    queued the render; this is the belt to that brace."""
+    gid = current_generation() if generation_id is None else str(generation_id)
+    with _IMAGE_BUDGET_LOCK:
+        b = _STATE.get(gid)
+        if b is None:
+            b = _STATE[gid] = _new_bucket()
+        b["forbid_generate"] = bool(on)
+        b["touched"] = time.monotonic()
+
+
+def generation_forbidden() -> bool:
+    with _IMAGE_BUDGET_LOCK:
+        return bool(_bucket().get("forbid_generate"))
 
 
 # Indirected so a test drives it without sleeping. Ticks are short so the
@@ -2266,6 +2292,8 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
     # character's coverage ceiling.
     is_color = key.startswith("avatar_")
     is_colour_board = is_colour_key(key)
+    if allow_generate and generation_forbidden():
+        allow_generate = False       # a translated render: cache and library only
     cache = cache_dir_for(key, cache_dir)
     png, meta = cache / "asset.png", cache / "meta.json"
     names = part_names_from_prompt(prompt)
@@ -2598,7 +2626,12 @@ def make_resolver(prompts: dict[str, str], prefer_ai: bool = True,
             if ra is not None and ra.trace:
                 last_reason.pop(key, None)
                 return ("raster", ra)
-            if not allow_generate:
+            if generation_forbidden():
+                # a translated render (set_generation_forbidden): the English
+                # kit drew this picture and we could not find it again — the
+                # honest cause, so the report never says "rate limited"
+                reason = "translation_no_generate"
+            elif not allow_generate:
                 # the child-process path: it may only read the cache, so a
                 # miss here means the parent's warm-up did not land the file
                 # -- unless the parent already told us the provider refused it
