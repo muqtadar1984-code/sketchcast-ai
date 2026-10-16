@@ -42,7 +42,7 @@ from shared.text_shaping import contains_arabic, display_text
 from spike.scene_engine.render import (_CAVEAT_MATHS, _HAND_SIZE_COMP, _hand_face, _hand_font, _script_runs,
                                        ascii_punct)
 from spike.scene_engine.schema import WORLD_W, Scene
-from spike.scene_engine.whiteboard import build_whiteboard_scene
+from spike.scene_engine.whiteboard import build_whiteboard_scene, mirror_scene_for_rtl
 
 # ── geometry ────────────────────────────────────────────────────────────
 Q_AT = (60.0, 40.0)
@@ -974,8 +974,20 @@ def _dialogue_lines(items: list[Line], lang: str = "en") -> list[Line]:
 def hook_segment(lesson: Lesson, seg_id: str, avatars: dict | None, lang: str = "en") -> dict:
     lines = _dialogue_lines(lesson.hook, lang) or [Line(line=_bt("today", lang, topic=lesson.topic))]
     seg = _segment(seg_id, "hook", lines, heading=_short(lesson.topic, 60), points=[])
-    seg["scene"] = build_whiteboard_scene(seg, avatars=avatars, sketches=False)
+    seg["scene"] = build_whiteboard_scene(seg, avatars=avatars, sketches=False, direction=_dir(lang))
     return seg
+
+
+def _dir(lang: str) -> str:
+    """The board's writing direction for a lesson language — the card
+    builders mirror their written content for Arabic, Urdu and Jawi
+    (whiteboard.mirror_scene_for_rtl)."""
+    from shared.languages import is_rtl
+    return "rtl" if is_rtl(lang) else "ltr"
+
+
+def _card_scene(scene: dict, lang: str) -> dict:
+    return mirror_scene_for_rtl(scene) if _dir(lang) == "rtl" else scene
 
 
 def _point_rows(points: list[str], heading: str) -> list[tuple[str, float, float]]:
@@ -1012,8 +1024,8 @@ def concept_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
     cels, cacts = card_elements(lesson.method, present=False, lang=lang)
     els += cels
     acts += cacts
-    seg["scene"] = {"id": f"mc_{seg_id}", "compiled": True, "scene_type": "generic", "narration": narration,
-                    "elements": _pin_text(els), "actions": acts}
+    seg["scene"] = _card_scene({"id": f"mc_{seg_id}", "compiled": True, "scene_type": "generic", "narration": narration,
+                                "elements": _pin_text(els), "actions": acts}, lang)
     return seg
 
 
@@ -1038,8 +1050,8 @@ def recap_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
     els += cels
     # a pulse, not a circle: the ellipse around a 5-line card crossed its frame
     acts.append({"verb": "pulse", "target": "card_box", "times": 2, "duration": 1.2, "at": {"frac": 0.9}})
-    seg["scene"] = {"id": f"mr_{seg_id}", "compiled": True, "scene_type": "generic", "narration": seg["text"],
-                    "elements": _pin_text(els), "actions": acts}
+    seg["scene"] = _card_scene({"id": f"mr_{seg_id}", "compiled": True, "scene_type": "generic", "narration": seg["text"],
+                                "elements": _pin_text(els), "actions": acts}, lang)
     return seg
 
 
@@ -1142,8 +1154,8 @@ def closing_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
     els += cels
     if cels:
         acts.append({"verb": "pulse", "target": "card_box", "times": 2, "duration": 1.2, "at": {"frac": 0.55}})
-    seg["scene"] = {"id": f"mz_{seg_id}", "compiled": True, "scene_type": "generic", "narration": seg["text"],
-                    "elements": _pin_text(els), "actions": acts}
+    seg["scene"] = _card_scene({"id": f"mz_{seg_id}", "compiled": True, "scene_type": "generic", "narration": seg["text"],
+                                "elements": _pin_text(els), "actions": acts}, lang)
     return seg
 
 

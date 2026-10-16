@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 
 import pytest
 
@@ -312,18 +313,34 @@ class TestItems:
             flags = T.bank_flags(summary)
             assert flags and flags[0]["what"] == "bank item not staged" and "numbers differ" in flags[0]["detail"]
 
-    def test_a_failed_translation_retires_the_items_it_staged(self):
+    def test_a_translation_that_fails_before_any_piece_is_removed_with_its_items_and_article(self):
         sb = FakeSB()
-        sb.tables["topic_kits"] = [{"id": "kit-ar", "status": "generating", "translation_status": "staged"}]
+        sb.tables["topic_kits"] = [{"id": "kit-ar", "status": "generating", "translation_status": "staged", "language": "ar",
+                                    "article_id": "art-ar", "presentation_generation_id": None, "doc_generation_ids": {}},
+                                   {"id": "kit-other", "status": "approved", "translation_status": "approved", "language": "ar",
+                                    "article_id": "art-other", "presentation_generation_id": "g", "doc_generation_ids": {}}]
+        sb.tables["topic_articles"] = [{"id": "art-ar", "status": "staged", "language": "ar"},
+                                       {"id": "art-other", "status": "approved", "language": "ar"}]
         sb.tables["topic_questions"] = [
             {"id": "a", "translation_kit_id": "kit-ar", "status": "staged"},
-            {"id": "b", "translation_kit_id": "kit-ar", "status": "approved"},
-            {"id": "c", "translation_kit_id": "kit-other", "status": "staged"},
+            {"id": "b", "translation_kit_id": "kit-ar", "status": "retired"},
+            {"id": "c", "translation_kit_id": "kit-other", "status": "approved"},
         ]
+        T._fail_translation(sb, {"id": "kit-ar"}, "translation failed: x", report={"ok": False})
+        assert [k["id"] for k in sb.tables["topic_kits"]] == ["kit-other"]
+        assert [a["id"] for a in sb.tables["topic_articles"]] == ["art-other"]
+        assert [q["id"] for q in sb.tables["topic_questions"]] == ["c"]
+
+    def test_a_translation_that_fails_with_pieces_is_kept_as_failed_for_the_retry(self):
+        sb = FakeSB()
+        sb.tables["topic_kits"] = [{"id": "kit-ar", "status": "generating", "translation_status": "staged", "language": "ar",
+                                    "article_id": "art-ar", "presentation_generation_id": "gen-p", "doc_generation_ids": {"deck": "gen-d"}}]
+        sb.tables["topic_articles"] = [{"id": "art-ar", "status": "staged", "language": "ar"}]
+        sb.tables["topic_questions"] = [{"id": "a", "translation_kit_id": "kit-ar", "status": "staged"}]
         T._fail_translation(sb, {"id": "kit-ar"}, "translation failed: x")
-        by = {q["id"]: q["status"] for q in sb.tables["topic_questions"]}
-        assert by == {"a": "retired", "b": "approved", "c": "staged"}
-        assert sb.tables["topic_kits"][0]["translation_status"] == "failed"
+        k = sb.tables["topic_kits"][0]
+        assert k["status"] == "failed" and k["translation_status"] == "failed"
+        assert sb.tables["topic_questions"][0]["status"] == "retired" and sb.tables["topic_articles"]
 
     def test_fidelity_scores_a_faithful_back_translation_high_and_flags_a_stray_one(self):
         rep = C.fidelity_report([("s1", "The cell is the smallest unit of life", "The cell is the smallest unit of life."),
@@ -671,23 +688,28 @@ class TestTranslateJob:
 
         job = sb.tables["jobs"][0]
         assert job["status"] == "error" and "cannot be found" in job["error"] and "avatar_teacher_female__face_f1" in job["error"]
-        k = next(k for k in sb.tables["topic_kits"] if k.get("source_kit_id") == "kit-1")
-        assert k["status"] == "failed" and k["translation_status"] == "failed" and "cannot be found" in k["notes"]
-        assert not [g for g in sb.tables["generations"] if g["params"].get("kit_id") == k["id"]], "nothing was queued to render"
+        # a translation that failed before any piece is not kept (founder,
+        # 2026-10-16): no kit row, no staged article, no staged items — the
+        # job's error is the record
+        assert not [k for k in sb.tables["topic_kits"] if k.get("source_kit_id") == "kit-1"]
+        assert not [a for a in sb.tables["topic_articles"] if a.get("language") == "ar"]
+        assert not [q for q in sb.tables.get("topic_questions", []) if q.get("translation_kit_id")]
+        assert not [g for g in sb.tables["generations"] if (g["params"].get("translation") or {}).get("source_kit_id") == "kit-1"], "nothing was queued to render"
 
-    def test_a_pre_check_refusal_leaves_its_findings_on_the_kit(self, monkeypatch, tmp_path):
+    def test_a_pre_check_refusal_names_its_findings_and_removes_the_kit(self, monkeypatch, tmp_path, caplog):
         sb = _job_sb()
         _uploads(monkeypatch)
         monkeypatch.setattr("spike.scene_engine.raster_assets.cache_dir_for", lambda key, cache_dir=None: tmp_path / "nocache" / key)
         c = FakeTranslator(lambda s: _arabize(s.replace("five", "5").replace("x equals 5", "x equals 6")) if "equals" in s else _arabize(s))
 
-        assert T.run_translate_job(sb, sb.tables["jobs"][0], client=c) is None
+        with caplog.at_level(logging.WARNING, logger="worker.translate"):
+            assert T.run_translate_job(sb, sb.tables["jobs"][0], client=c) is None
 
-        k = next(k for k in sb.tables["topic_kits"] if k.get("source_kit_id") == "kit-1")
-        assert k["status"] == "failed" and k["translation_status"] == "failed"
-        assert k["precheck"]["ok"] is False and k["precheck"]["part"] == 1
-        assert any(f["what"] == "numbers differ" for f in k["precheck"]["blocking"])
-        assert "pre-check A" in sb.tables["jobs"][0]["error"]
+        # the kit is gone (a failed translation is not stored); the job's error
+        # and the log carry the findings
+        assert not [k for k in sb.tables["topic_kits"] if k.get("source_kit_id") == "kit-1"]
+        assert "pre-check A" in sb.tables["jobs"][0]["error"] and "numbers differ" in sb.tables["jobs"][0]["error"]
+        assert "refused" in caplog.text and "numbers differ" in caplog.text
 
     @pytest.mark.parametrize("params, why", [
         ({"source_kit_id": "kit-1", "language": "en"}, "already English"),

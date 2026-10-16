@@ -720,7 +720,7 @@ class TestFacesWarmOnceBeforeThePool:
         monkeypatch.setattr(vc, "_render_scene_segment", render)
         monkeypatch.setattr(vc, "render_native_segment", lambda *a, **k: True)
         monkeypatch.setattr("spike.scene_engine.whiteboard.build_whiteboard_scene",
-                            lambda seg, avatars=None: {"stub": True})
+                            lambda seg, avatars=None, **kw: {"stub": True})
 
         def fake_synth(text, out, *, report=None, **kw):
             Path(out).parent.mkdir(parents=True, exist_ok=True)

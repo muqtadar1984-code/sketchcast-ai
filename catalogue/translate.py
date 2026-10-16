@@ -614,22 +614,44 @@ def _save_translation(sb, kit: dict, patch: dict) -> dict:
 
 
 def _fail_translation(sb, kit: Optional[dict], note: str, report: Optional[dict] = None) -> None:
+    """A translation that failed BEFORE it had any piece is not kept
+    (founder, 2026-10-16: "remove all the failed translation kits from the
+    portal; we don't need to store them"): its staged items, its staged
+    article and the kit row are deleted; the job keeps the error, and the
+    Translations panel shows that job's line. A kit that already holds
+    generations (a failure after the pieces were queued) is marked failed
+    instead, so the console's Retry still has something to retry."""
     if not kit:
         return
+    kit_id = str(kit.get("id") or "")
+    if not kit_id:
+        return
     try:
-        mark_kit_failed(sb, kit["id"], note)
-        # its staged items step out of the bank (approve/reject would have
-        # promoted or retired them; a failed kit never reaches either)
-        sb.table("topic_questions").update({"status": "retired"}).eq("translation_kit_id", kit["id"]).eq("status", "staged").execute()
-        patch: dict = {"translation_status": TRANSLATION_FAILED}
+        rows = _rows(sb.table("topic_kits").select("id,article_id,language,presentation_generation_id,doc_generation_ids")
+                     .eq("id", kit_id).limit(1).execute())
+        row = (rows or [None])[0]
+        if row is None:
+            return
+        docs = row.get("doc_generation_ids") if isinstance(row.get("doc_generation_ids"), dict) else {}
+        has_pieces = bool(row.get("presentation_generation_id")) or any(bool(v) for v in docs.values())
         if isinstance(report, dict):
-            # the pre-check that refused, on the kit, so the Translations
-            # panel shows WHICH expressions or numbers drifted — not only
-            # the one-line error
-            patch["precheck"] = report
-        sb.table("topic_kits").update(patch).eq("id", kit["id"]).execute()
+            log.warning("translation kit %s refused: %s", kit_id, json.dumps(report, ensure_ascii=False)[:4000])
+        if has_pieces:
+            mark_kit_failed(sb, kit_id, note)
+            sb.table("topic_questions").update({"status": "retired"}).eq("translation_kit_id", kit_id).eq("status", "staged").execute()
+            patch: dict = {"translation_status": TRANSLATION_FAILED}
+            if isinstance(report, dict):
+                patch["precheck"] = report
+            sb.table("topic_kits").update(patch).eq("id", kit_id).execute()
+            return
+        sb.table("topic_questions").delete().eq("translation_kit_id", kit_id).execute()
+        article_id = _s(row.get("article_id"))
+        if article_id and _s(row.get("language")) != SOURCE_LANGUAGE:
+            sb.table("topic_articles").delete().eq("id", article_id).eq("status", ARTICLE_STAGED).execute()
+        sb.table("topic_kits").delete().eq("id", kit_id).execute()
+        log.info("translation kit %s removed after a failure: %s", kit_id, note[:200])
     except Exception:  # noqa: BLE001
-        log.exception("translation kit %s could not be marked failed", kit.get("id"))
+        log.exception("translation kit %s could not be cleared after its failure", kit_id)
 
 
 # ── glossary (R1) ──────────────────────────────────────────────────────
