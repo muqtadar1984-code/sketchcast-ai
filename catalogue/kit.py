@@ -957,6 +957,12 @@ def sync_kit_completion(sb, kit: dict) -> bool:
     if any(statuses.get(i) != "done" for i in ids):
         return False
     moved = _guarded_status(sb, "topic_kits", kit["id"], KIT_GENERATING, KIT_IN_REVIEW)
+    if moved:
+        # Plan §4.4: the public page's preview cards are rendered from the
+        # finished documents — one kit_previews job the moment the kit is
+        # whole (best effort; a refusal here never holds the kit back).
+        from catalogue.previews import enqueue_for_kit
+        enqueue_for_kit(sb, kit["id"])
     if moved and kit.get("translation_status"):
         # Kit Translator (0134): a TRANSLATED kit's own lifecycle follows the
         # kit's — approve_topic_kit's translation branch accepts
