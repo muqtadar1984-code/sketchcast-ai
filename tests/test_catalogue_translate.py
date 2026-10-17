@@ -91,6 +91,16 @@ class TestNumerals:
                                 "final_answer": ["x = 4", "x = -2"]}]}
         assert C.check_maths_lesson(lesson, target)["ok"]
 
+    def test_a_refused_script_quotes_the_target_around_each_invented_number(self):
+        samples = C.number_samples("نبدأ من س = -٩ ثم نعود إلى -٩ مرة أخرى، والجذر ٥.", ["-9", "5"])
+        assert len(samples) == 2 and "-9" in samples[0] and "5" in samples[1]
+        assert C.number_samples("لا أرقام هنا", ["7"]) == []
+        src = {"segments": [{"segment_id": "s1", "text": "Factorise and set each factor to zero."}]}
+        dst = {"segments": [{"segment_id": "s1", "text": "حلّل ثم ساوِ كل عامل بالصفر، فيكون س = -٩."}]}
+        rep = C.check_script(src, dst, language="ar", strict=False)
+        f = next(b for b in rep["blocking"] if b["what"] == "numbers differ")
+        assert f["extra"] == ["-9"] and f["target_samples"] and "-9" in f["target_samples"][0]
+
     def test_a_number_before_a_full_stop_is_a_number(self):
         assert C.number_values("So x equals 6.") == ["6"]
         assert C.number_values("إذن س تساوي ٦.") == ["6"]

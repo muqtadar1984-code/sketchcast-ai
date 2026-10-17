@@ -207,6 +207,31 @@ def board_numbers(lesson: dict) -> list[str]:
     return out
 
 
+def number_samples(text: str, values: Iterable[str], width: int = 60, limit: int = 6) -> list[str]:
+    """A short window of ``text`` around the first place each value in
+    ``values`` is written (digits of any script, sign included) — what the
+    reviewer, or the next fix, needs to see. Distinct values only."""
+    out: list[str] = []
+    norm = normalize_numerals(str(text or ""))
+    seen: set[str] = set()
+    for v in values:
+        v = str(v)
+        if v in seen or len(out) >= limit:
+            continue
+        seen.add(v)
+        for m in _NUMBER_RE.finditer(norm):
+            tok = m.group(0).replace(",", "")
+            try:
+                same = format(Decimal(tok).normalize(), "f").rstrip("0").rstrip(".") == v or tok == v or str(int(Decimal(tok))) == v
+            except (InvalidOperation, ValueError):
+                same = False
+            if same:
+                a, b = max(0, m.start() - width), min(len(norm), m.end() + width)
+                out.append(("…" if a else "") + norm[a:b].replace(chr(10), " ") + ("…" if b < len(norm) else ""))
+                break
+    return out
+
+
 def numbers_equivalent(source: str, target: str, board: Iterable[str] = ()) -> tuple[bool, list[str], list[str]]:
     """Same multiset of numeric VALUES on both sides. Returns (ok, missing,
     extra) — what the target lost and what it invented.
@@ -376,7 +401,12 @@ def check_script(source: dict, target: dict, *, language: str,
             lost = [v for v in missing if v not in number_values(dst_blob)]
             invented = [v for v in extra if v not in number_values(src_blob)]
             if lost or invented:
-                blocking.append(_finding("script", "numbers differ", missing=lost, extra=invented))
+                # QUOTE the target around each invented value: a refused
+                # translation is deleted with its kit, so this report is the
+                # only trace of what the model wrote (Quadratic kit, 2026-10-17:
+                # "-9" twice, in no English line, and nothing to read).
+                blocking.append(_finding("script", "numbers differ", missing=lost, extra=invented,
+                                         target_samples=number_samples(dst_blob, invented)))
         if code_tokens(src_blob) != code_tokens(dst_blob):
             blocking.append(_finding("script", "curriculum codes differ",
                                      source=code_tokens(src_blob), target=code_tokens(dst_blob)))
