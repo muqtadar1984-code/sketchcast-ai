@@ -379,7 +379,7 @@ _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 
 
 def build_title(topic_title: object, part: int, total: int, *, meta: Optional[dict] = None,
-                key_terms: Iterable[str] = (), audience: str = "") -> str:
+                key_terms: Iterable[str] = (), audience: str = "", language: str = DEFAULT_LANGUAGE) -> str:
     """``<Topic> Explained | <key terms> | <audience>`` (``— Part k of N`` for a
     multi-part kit) — the stored ``youtube_meta.title`` when the library holds
     one, else composed; a bare topic when there are neither terms nor an
@@ -387,12 +387,13 @@ def build_title(topic_title: object, part: int, total: int, *, meta: Optional[di
     by the portal's preview, and it is what keeps the part label under
     YouTube's 100 characters."""
     from catalogue.youtube_meta import compose_title
-    return compose_title(topic_title, meta=meta, key_terms=key_terms, audience=audience, part=part, total=total)
+    return compose_title(topic_title, meta=meta, key_terms=key_terms, audience=audience, part=part, total=total,
+                         language=language)
 
 
 def build_description(topic: dict, header_lines: list[str], chapters: list[dict], part: int, total: int,
                       *, next_title: Optional[str] = None, meta: Optional[dict] = None,
-                      boards: Iterable[tuple[str, str]] = ()) -> str:
+                      boards: Iterable[tuple[str, str]] = (), language: str = DEFAULT_LANGUAGE) -> str:
     """The description YouTube shows — ONE structure for every video
     (catalogue.youtube_meta): the hook paragraph (the stored intro, else the
     summary), "Aligned to" + the curriculum lines every document carries,
@@ -406,7 +407,7 @@ def build_description(topic: dict, header_lines: list[str], chapters: list[dict]
         topic_title=topic.get("title"), summary=topic.get("summary"), meta=meta, header_lines=header_lines,
         chapter_lines_=_chapter_lines(chapters, hhmmss), key_terms=terms,
         hashtags=effective_hashtags(meta, terms, boards, topic.get("subject")),
-        part=part, total=total, next_title=next_title, link=topic_link(topic, part))
+        part=part, total=total, next_title=next_title, link=topic_link(topic, part), language=language)
 
 
 def srt_time(seconds: object) -> str:
@@ -572,6 +573,12 @@ class YouTubeTransport(Protocol):
     def add_to_playlist(self, video_id: str, playlist_id: str) -> None:
         ...
 
+    def update_words(self, video_id: str, *, title: str, description: str, tags: Optional[list[str]] = None,
+                     language: str = DEFAULT_LANGUAGE) -> None:
+        """Rewrite the title, description and tags of a video already on the
+        channel (videos.update on the snippet); privacy, category and the
+        file are never touched."""
+
 
 @dataclass(frozen=True)
 class Credentials:
@@ -686,6 +693,24 @@ class _GoogleTransport:
         body = {"snippet": {"playlistId": playlist_id,
                             "resourceId": {"kind": "youtube#video", "videoId": video_id}}}
         self._service.playlistItems().insert(part="snippet", body=body).execute()
+
+    def update_words(self, video_id: str, *, title: str, description: str, tags: Optional[list[str]] = None,
+                     language: str = DEFAULT_LANGUAGE) -> None:
+        from catalogue.youtube_meta import youtube_safe
+        res = self._service.videos().list(part="snippet", id=video_id).execute() or {}
+        items = res.get("items") or []
+        if not items:
+            raise RuntimeError(f"video {video_id} is not on the channel")
+        # videos.update replaces the whole snippet: the category and the
+        # languages go back as read (or as the kit says), the words change
+        snippet = dict(items[0].get("snippet") or {})
+        body = {k: v for k, v in snippet.items()
+                if k in ("title", "description", "tags", "categoryId", "defaultLanguage", "defaultAudioLanguage")}
+        body.update({"title": youtube_safe(title), "description": youtube_safe(description),
+                     "tags": list(tags or []), "categoryId": body.get("categoryId") or "27",
+                     "defaultLanguage": body.get("defaultLanguage") or language,
+                     "defaultAudioLanguage": body.get("defaultAudioLanguage") or language})
+        self._service.videos().update(part="snippet", body={"id": video_id, "snippet": body}).execute()
 
 
 # ── database edges ─────────────────────────────────────────────────────
@@ -976,36 +1001,39 @@ def caption_file(sb, gen_id: str, part: int, work: Path) -> Optional[Path]:
     return out
 
 
-def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, total: int,
-                 work: Path) -> dict:
-    """Upload ONE part and return its ``topic_publications`` row. The video is
-    the deliverable: captions, the thumbnail and the playlists are recorded
-    when they succeed and noted when they do not, and never fail the part."""
-    idx = int(part["part"])
-    kit, topic = target.kit, target.topic
-    gen_id = _s(kit.get("presentation_generation_id"))
+def compose_words(sb, target: Target, idx: int, total: int) -> tuple[str, str, list[str]]:
+    """``(title, description, tags)`` of part ``idx`` — ONE structure for
+    every video (catalogue.youtube_meta), in the VIDEO's language.
 
-    from catalogue.youtube_meta import audience_tag, effective_terms
+    An English kit reads the stored words (title, intro, key terms, hashtags)
+    the reviewer saw in the library. A translated kit (Kit Translator) reads
+    its stored words when they were written in its language (the model
+    writes them from the translated narration, headed by the translated
+    article's title: youtube_meta.write_for_kit) — words written in English
+    before that existed are left off, and the deterministic defaults in the
+    language take over: the translated title, the localised block labels,
+    the measured (translated) chapters and the links. The audience tag (the
+    boards) is the same Latin block on every video. Founder, 2026-10-17:
+    "the same approach for title and description for all translated videos"."""
+    topic = target.topic
+    from catalogue.youtube_meta import audience_tag, effective_terms, meta_in_language
 
-    local = download_artifact(sb, part["storage_path"], work / f"lesson_part{idx}.mp4")
-    if target.language != DEFAULT_LANGUAGE:
-        # A translated video is titled in ITS language — the translated
-        # article's title — with no English key-term or audience block; the
-        # description keeps the measured (translated) chapters and the links,
-        # and the English summary and stored English words stay off it.
+    language = target.language
+    audience = audience_tag(target.boards, topic.get("subject"))
+    if language != DEFAULT_LANGUAGE:
         topic = {**topic, "title": _s(target.article.get("title")) or topic.get("title"), "summary": None}
-        meta = None
-        terms: list[str] = []
-        audience = ""
+        meta = target.meta if meta_in_language(target.meta, language) else None
+        terms = effective_terms(meta, None)
     else:
         meta = target.meta
         terms = effective_terms(meta, topic.get("summary"))
-        audience = audience_tag(target.boards, topic.get("subject"))
-    title = build_title(topic.get("title"), idx, total, meta=meta, key_terms=terms, audience=audience)
-    next_title = (build_title(topic.get("title"), idx + 1, total, meta=meta, key_terms=terms, audience=audience)
-                  if idx < total else None)
-    description = build_description(topic, target.header_lines, chapters_of(kit.get("chapters"), idx),
-                                    idx, total, next_title=next_title, meta=meta, boards=target.boards)
+    title = build_title(topic.get("title"), idx, total, meta=meta, key_terms=terms, audience=audience,
+                        language=language)
+    next_title = (build_title(topic.get("title"), idx + 1, total, meta=meta, key_terms=terms, audience=audience,
+                              language=language) if idx < total else None)
+    description = build_description(topic, target.header_lines, chapters_of(target.kit.get("chapters"), idx),
+                                    idx, total, next_title=next_title, meta=meta, boards=target.boards,
+                                    language=language)
     # the discipline playlist line, the board and class hashtags and the
     # tags field (catalogue/youtube_enrich.py) — the same words the enrich
     # job puts on the videos already posted
@@ -1014,9 +1042,64 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
     playlists = configured_playlists(target.channel, sb)
     discipline = discipline_key(target.codes)
     description = enrich_description(description, discipline=discipline, subject=topic.get("subject"),
-                                     boards=target.boards, playlist_id=_s(playlists.get(discipline)))
+                                     boards=target.boards, playlist_id=_s(playlists.get(discipline)),
+                                     language=language)
     tags = video_tags(topic_title=topic.get("title"), key_terms=terms, discipline=discipline,
                       subject=topic.get("subject"), boards=target.boards)
+    return title, description, tags
+
+
+def narration_parts(sb, target: Target) -> list[dict]:
+    """``[{part, chapters, narration}]`` for youtube_meta.write_for_kit, read
+    back from the scripts the video was rendered from: a translated kit's
+    staged scripts (the presentation's params.translation.scripts) or an
+    English kit's script_json artifacts. Both carry ``{"part", "script"}``."""
+    from catalogue.youtube_meta import narration_excerpt
+
+    kit = target.kit
+    gen_id = _s(kit.get("presentation_generation_id"))
+    paths: list[str] = []
+    rows = _rows(sb.table("generations").select("params").eq("id", gen_id).limit(1).execute())
+    params = (rows[0] if rows else {}).get("params") if rows else None
+    tr = params.get("translation") if isinstance(params, dict) and isinstance(params.get("translation"), dict) else {}
+    if tr.get("scripts"):
+        paths = [str(p) for p in tr["scripts"] if _s(p)]
+    else:
+        paths = [str(a.get("storage_path")) for a in load_artifacts(sb, gen_id, SCRIPT_KIND) if _s(a.get("storage_path"))]
+    out: list[dict] = []
+    work = Path(tempfile.mkdtemp(prefix="rewords-"))
+    try:
+        for p in paths:
+            try:
+                local = download_artifact(sb, p, work / Path(p).name)
+                body = json.loads(Path(local).read_text(encoding="utf-8"))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("rewords: script %s unreadable (%s)", p, exc)
+                continue
+            script = body.get("script") if isinstance(body, dict) and isinstance(body.get("script"), dict) else body
+            part = int((body.get("part") if isinstance(body, dict) else None) or script_part_number(p) or 1)
+            out.append({"part": part, "chapters": chapters_of(kit.get("chapters"), part),
+                        "narration": narration_excerpt(script if isinstance(script, dict) else {})})
+    finally:
+        _clean(work)
+    return sorted(out, key=lambda d: int(d["part"]))
+
+
+def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, total: int,
+                 work: Path) -> dict:
+    """Upload ONE part and return its ``topic_publications`` row. The video is
+    the deliverable: captions, the thumbnail and the playlists are recorded
+    when they succeed and noted when they do not, and never fail the part."""
+    idx = int(part["part"])
+    kit, topic = target.kit, target.topic
+    if target.language != DEFAULT_LANGUAGE:
+        # the thumbnail card and the playlist keys read the TRANSLATED title
+        topic = {**topic, "title": _s(target.article.get("title")) or topic.get("title")}
+    gen_id = _s(kit.get("presentation_generation_id"))
+
+    local = download_artifact(sb, part["storage_path"], work / f"lesson_part{idx}.mp4")
+    title, description, tags = compose_words(sb, target, idx, total)
+    playlists = configured_playlists(target.channel, sb)
     video_id = _s(transport.upload_video(local, title=title, description=description,
                                          privacy=target.privacy, language=target.language, tags=tags))
     if not video_id:
@@ -1171,6 +1254,61 @@ def publish_kit(sb, job_id: str, params: dict, transport: Optional[YouTubeTransp
     return summary
 
 
+REWORDS_ACTION = "rewords"
+
+
+def rewords_kit(sb, job_id: str, params: dict, transport: Optional[YouTubeTransport] = None, *,
+                client_factory=None) -> dict:
+    """``params.action == "rewords"``: the title, description and tags of the
+    parts ALREADY on the channel are composed again and written back
+    (videos.update) — no upload, no privacy change. A kit whose stored words
+    are not in its language (a translation posted before 2026-10-17, or
+    none at all) has them written first (youtube_meta.write_for_kit, from
+    the scripts the video was rendered from). Same gate as a publish."""
+    target = load_target(sb, params)
+    kit_id = _s(target.kit.get("id"))
+    total = len(target.parts)
+    stage: dict = {"phase": "publish", "step": REWORDS_ACTION, "kit_id": kit_id,
+                   "topic_id": target.kit.get("topic_id"), "language": target.language, "channel": target.channel,
+                   "total": total, "reworded": [], "failed": [], "meta": "kept"}
+    db.set_stage(sb, job_id, dict(stage))
+    db.set_progress(sb, job_id, 5)
+    existing = load_publications(sb, kit_id, target.channel)
+    rows = [(idx, row) for idx, row in sorted(existing.items()) if _s((row or {}).get("youtube_video_id"))]
+    if not rows:
+        stage["note"] = "no part of this kit is on the channel; nothing to re-word"
+        return stage
+
+    from catalogue.youtube_meta import clean_meta, meta_in_language, write_for_kit
+    if not meta_in_language(target.meta, target.language):
+        parts = narration_parts(sb, target)
+        written = write_for_kit(sb, target.kit, parts, client_factory=client_factory) if parts else None
+        target.meta = clean_meta(written)
+        stage["meta"] = "written" if target.meta else "unavailable"
+        db.set_stage(sb, job_id, dict(stage))
+    if transport is None:
+        transport = default_transport(target.channel)
+
+    errors: list[str] = []
+    for n, (idx, row) in enumerate(rows, 1):
+        try:
+            title, description, tags = compose_words(sb, target, idx, total)
+            transport.update_words(_s(row["youtube_video_id"]), title=title, description=description, tags=tags,
+                                   language=target.language)
+            stage["reworded"].append(idx)
+            log.info("rewords: kit %s part %d (%s) now titled %r", kit_id, idx, row["youtube_video_id"], title)
+        except Exception as exc:  # noqa: BLE001 — the next part still runs
+            detail = f"part {idx}: {type(exc).__name__}: {exc}"[:300]
+            errors.append(detail)
+            stage["failed"].append(idx)
+            log.warning("rewords failed — %s", detail)
+        db.set_stage(sb, job_id, dict(stage))
+        db.set_progress(sb, job_id, 5 + int(90 * n / max(1, len(rows))))
+    if errors:
+        stage["errors"] = errors[:5]
+    return stage
+
+
 def _clean(work: Path) -> None:
     """The downloaded mp4s are hundreds of MB; Railway's disk is not."""
     try:
@@ -1179,7 +1317,8 @@ def _clean(work: Path) -> None:
         log.debug("publish: work dir %s not removed: %s", work, exc)
 
 
-def run_publish_job(sb, job: dict, transport: Optional[YouTubeTransport] = None) -> Optional[dict]:
+def run_publish_job(sb, job: dict, transport: Optional[YouTubeTransport] = None, *,
+                    client_factory=None) -> Optional[dict]:
     """Entry point for run.py. Self-contained: finishes the job row itself
     (done with the summary in ``stage``; error with the message) and raises
     only ``db.DeferredJob`` — the one outcome that is not a finish: run.py
@@ -1189,6 +1328,19 @@ def run_publish_job(sb, job: dict, transport: Optional[YouTubeTransport] = None)
     job_id = job["id"]
     try:
         params = job.get("params") if isinstance(job.get("params"), dict) else {}
+        if _s(params.get("action")).lower() == REWORDS_ACTION:
+            summary = {**rewords_kit(sb, job_id, params, transport=transport, client_factory=client_factory),
+                       "step": "done"}
+            db.set_stage(sb, job_id, summary)
+            if summary.get("failed"):
+                first = (summary.get("errors") or ["?"])[0]
+                db.finish_job(sb, job_id, None, error=(
+                    f"{len(summary['failed'])} of {len(summary['reworded']) + len(summary['failed'])} parts could "
+                    f"not be re-worded. First: {first}")[:4000])
+            else:
+                db.finish_job(sb, job_id)
+            log.info("rewords %s: %s", summary.get("kit_id"), summary)
+            return summary
         summary = publish_kit(sb, job_id, params, transport=transport, waited=db.deferred_seconds(job))
         db.set_stage(sb, job_id, summary)
         if summary.get("failed"):
@@ -1242,5 +1394,6 @@ __all__ = [
     "caption_cues", "build_srt", "playlist_keys", "resolve_playlists", "read_credentials",
     "default_transport", "load_kit", "load_topic", "load_article", "load_artifacts", "load_publications",
     "write_publication", "generation_format_version", "builders_are_queued", "download_artifact", "check_privacy", "load_target",
-    "build_thumbnail", "caption_file", "publish_part", "publish_kit", "run_publish_job",
+    "build_thumbnail", "caption_file", "compose_words", "narration_parts", "publish_part", "publish_kit",
+    "REWORDS_ACTION", "rewords_kit", "run_publish_job",
 ]

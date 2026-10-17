@@ -869,9 +869,12 @@ def test_a_translated_kit_publishes_in_its_language_on_the_english_channel_when_
     assert summary["published"] == [1] and summary["language"] == "ar" and summary["channel"] == "en"
     up = yt.uploads[0]
     assert up["language"] == "ar", "defaultAudioLanguage is the video's language"
-    assert up["title"] == "الخلايا", "the translated article's title, with no English blocks"
+    # the English structure in Arabic (2026-10-17): the Arabic headline, no
+    # stored English words, the Latin audience block; the labels in Arabic
+    assert up["title"] == "شرح الخلايا | Cambridge Stage 7 Biology", "the translated article's title in the headline, no English words"
     assert "Every living thing" not in up["description"], "the English summary stays off an Arabic video"
-    assert "0:00" in up["description"], "the measured chapters stay"
+    assert "0:00" in up["description"] and "الفصول" in up["description"], "the measured chapters stay, labelled in Arabic"
+    assert "Aligned to" not in up["description"] and "Chapters" not in up["description"]
     assert yt.captions and yt.captions[0]["language"] == "ar"
     row = _pubs(sb)[1]
     assert row["channel_language"] == "en" and row["youtube_video_id"] == "yt-1"

@@ -40,8 +40,9 @@ from catalogue.harvest import clean_heading
 from catalogue.publish import (DEFAULT_LANGUAGE, LINK_BASE, _rows, _s, configured_playlists, discipline_key,
                                load_kit, load_topic, topic_link)
 from catalogue.youtube_backfill import SNIPPET_FIELDS, SnippetTransport, default_snippet_transport
-from catalogue.youtube_meta import (DESCRIPTION_MAX, KIT_LINK_PREFIX, SKETCHCAST_LINE, _camel, board_label,
-                                    boards_of, clean_hashtags, clean_meta, effective_terms, kit_link_line)
+from catalogue.youtube_meta import (DESCRIPTION_MAX, WORDS, _camel, board_label, boards_of, clean_hashtags,
+                                    clean_meta, effective_terms, is_kit_link_line, is_sketchcast_line,
+                                    kit_link_line, words_for)
 from worker import client as db
 
 log = logging.getLogger(__name__)
@@ -51,7 +52,24 @@ HASHTAG_LIMIT = 15        # YouTube ignores every hashtag on a video that carrie
 TAGS_CHAR_LIMIT = 500     # the tags field, counting quotes around a tag with spaces and the commas
 TAG_MAX_LEN = 30
 PLAYLIST_URL = "https://www.youtube.com/playlist?list="
-_PLAYLIST_LINE = re.compile(r"^More .+ lessons: " + re.escape(PLAYLIST_URL))
+
+
+def _playlist_line_patterns() -> list[re.Pattern]:
+    """One pattern per language's "More <discipline> lessons: <url>" template
+    (youtube_meta.WORDS), so a re-run in any language finds its own line."""
+    out: list[re.Pattern] = []
+    for w in WORDS.values():
+        head, _, tail = w["more_lessons"].partition("{discipline}")
+        out.append(re.compile("^" + re.escape(head) + r".+" + re.escape(tail) + re.escape(PLAYLIST_URL)))
+    return out
+
+
+_PLAYLIST_LINES = _playlist_line_patterns()
+
+
+def is_playlist_line(paragraph: object) -> bool:
+    p = str(paragraph or "").strip()
+    return PLAYLIST_URL in p and any(rx.match(p) for rx in _PLAYLIST_LINES)
 _FORM_HASHTAGS = ("WhiteboardAnimation",)
 _FORM_TAGS = ("whiteboard animation", "animated lesson", "SketchCast")
 
@@ -63,8 +81,13 @@ def discipline_name(discipline: str, subject: object) -> str:
     return clean_heading(discipline).title() if _s(discipline) else (clean_heading(subject) or "Science")
 
 
-def playlist_line(discipline: str, subject: object, playlist_id: str) -> str:
-    return f"More {discipline_name(discipline, subject)} lessons: {PLAYLIST_URL}{_s(playlist_id)}" if _s(playlist_id) else ""
+def playlist_line(discipline: str, subject: object, playlist_id: str, language: str = DEFAULT_LANGUAGE) -> str:
+    """``"More Biology lessons: <url>"`` in the video's language (the
+    discipline keeps its English name — it is the playlist's)."""
+    if not _s(playlist_id):
+        return ""
+    head = words_for(language)["more_lessons"].format(discipline=discipline_name(discipline, subject))
+    return f"{head}{PLAYLIST_URL}{_s(playlist_id)}"
 
 
 def with_playlist_line(description: object, line: str) -> str:
@@ -77,10 +100,10 @@ def with_playlist_line(description: object, line: str) -> str:
         return text
     paras = text.split("\n\n") if text else []
     for i, p in enumerate(paras):
-        if _PLAYLIST_LINE.match(p.strip()):
+        if is_playlist_line(p):
             paras[i] = line
             return "\n\n".join(paras)
-    at = next((i for i, p in enumerate(paras) if p.lstrip().startswith(SKETCHCAST_LINE)), None)
+    at = next((i for i, p in enumerate(paras) if is_sketchcast_line(p)), None)
     if at is None and paras and paras[-1].lstrip().startswith("#"):
         at = len(paras) - 1
     if at is None:
@@ -96,7 +119,7 @@ def with_playlist_line(description: object, line: str) -> str:
 _OLD_LINK_LINE = re.compile(r"^" + re.escape(LINK_BASE) + r"/?\?utm_source=youtube\S*$")
 
 
-def with_topic_link(description: object, link: str) -> str:
+def with_topic_link(description: object, link: str, language: str = DEFAULT_LANGUAGE) -> str:
     """The description with "Full kit: <link>" as the line under the
     SketchCast paragraph (catalogue plan §5.6). The old homepage-with-UTM line
     is replaced; an existing "Full kit:" line is replaced (so a slug change is
@@ -106,19 +129,19 @@ def with_topic_link(description: object, link: str) -> str:
     text = str(description or "").replace("\r\n", "\n").strip()
     if not _s(link):
         return text
-    wanted = kit_link_line(link)
+    wanted = kit_link_line(link, language)
     paras = text.split("\n\n") if text else []
     for i, p in enumerate(paras):
         lines = p.split("\n")
         for j, ln in enumerate(lines):
             s = ln.strip()
-            if s.startswith(KIT_LINK_PREFIX) or _OLD_LINK_LINE.match(s):
+            if is_kit_link_line(s) or _OLD_LINK_LINE.match(s):
                 if s == wanted:
                     return text
                 lines[j] = wanted
                 paras[i] = "\n".join(lines)
                 return "\n\n".join(paras)
-    at = next((i for i, p in enumerate(paras) if p.lstrip().startswith(SKETCHCAST_LINE)), None)
+    at = next((i for i, p in enumerate(paras) if is_sketchcast_line(p)), None)
     if at is not None:
         paras[at] = paras[at].rstrip() + "\n" + wanted
         return "\n\n".join(paras)
@@ -236,13 +259,14 @@ def video_tags(*, topic_title: object, key_terms: Iterable[str], discipline: str
 
 
 def enrich_description(description: object, *, discipline: str, subject: object,
-                       boards: Iterable[tuple[str, str]], playlist_id: str = "", link: str = "") -> str:
+                       boards: Iterable[tuple[str, str]], playlist_id: str = "", link: str = "",
+                       language: str = DEFAULT_LANGUAGE) -> str:
     """The description with the playlist line, the lesson-page link line and
-    the merged hashtag line. Returned UNCHANGED when the result would pass
-    YouTube's limit."""
+    the merged hashtag line — the two lines in the video's ``language``.
+    Returned UNCHANGED when the result would pass YouTube's limit."""
     text = str(description or "").replace("\r\n", "\n").strip()
-    out = with_playlist_line(text, playlist_line(discipline, subject, playlist_id))
-    out = with_topic_link(out, link)
+    out = with_playlist_line(text, playlist_line(discipline, subject, playlist_id, language))
+    out = with_topic_link(out, link, language)
     out = with_hashtags(out, merge_hashtags(hashtags_in(out), extra_hashtags(discipline, subject, boards)))
     return out if len(out) <= DESCRIPTION_MAX else text
 
@@ -265,6 +289,7 @@ def video_context(sb, publication: dict, playlists: dict[str, str]) -> Optional[
     meta = clean_meta(kit.get("youtube_meta"))
     return {"title": _s(topic.get("title")), "subject": topic.get("subject"), "boards": boards_of(mappings),
             "discipline": discipline, "key_terms": effective_terms(meta, topic.get("summary")),
+            "language": _s(kit.get("language")).lower() or DEFAULT_LANGUAGE,
             "playlist_id": _s((playlists or {}).get(discipline)),
             # The lesson's own public page (plan §5.6); the homepage for a
             # topic without a slug — the pass then only normalises the line.
@@ -277,7 +302,8 @@ def wanted_snippet(snippet: dict, ctx: dict) -> dict:
     body = {k: v for k, v in snippet.items() if k in SNIPPET_FIELDS}
     body["description"] = enrich_description(snippet.get("description"), discipline=ctx["discipline"],
                                              subject=ctx["subject"], boards=ctx["boards"],
-                                             playlist_id=ctx["playlist_id"], link=ctx.get("link", ""))
+                                             playlist_id=ctx["playlist_id"], link=ctx.get("link", ""),
+                                             language=ctx.get("language") or DEFAULT_LANGUAGE)
     body["tags"] = video_tags(topic_title=ctx["title"], key_terms=ctx["key_terms"], discipline=ctx["discipline"],
                               subject=ctx["subject"], boards=ctx["boards"],
                               existing=[str(t) for t in (snippet.get("tags") or [])])
