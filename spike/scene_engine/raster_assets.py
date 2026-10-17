@@ -786,7 +786,8 @@ def patience_state() -> dict:
                 "waits": int(b.get("patience_waits") or 0)}
 
 
-def set_generation_forbidden(on: bool, generation_id: str | None = None) -> None:
+def set_generation_forbidden(on: bool, generation_id: str | None = None, *,
+                             allow_keys=None) -> None:
     """Kit Translator safeguard (plan revision 3, 2026-10-16): THIS generation
     renders a translated script and must reuse the English kit's pictures —
     the cache and the library may answer, an image model may not. With the
@@ -794,19 +795,31 @@ def set_generation_forbidden(on: bool, generation_id: str | None = None) -> None
     has drawn resolves to nothing, the acceptance gate counts the hole, and
     the job fails instead of quietly drawing a different picture for one
     language. The translate job already checked every key exists before it
-    queued the render; this is the belt to that brace."""
+    queued the render; this is the belt to that brace.
+
+    ``allow_keys`` (Kit Translator, founder 2026-10-17): the scene keys the
+    translate job could find in neither the library nor the cache — the
+    English video's picture is gone — which THIS render may draw afresh from
+    the English prompt; every other key stays cache-and-library only. The
+    translate job flags each such key on the kit for the reviewer."""
     gid = current_generation() if generation_id is None else str(generation_id)
     with _IMAGE_BUDGET_LOCK:
         b = _STATE.get(gid)
         if b is None:
             b = _STATE[gid] = _new_bucket()
         b["forbid_generate"] = bool(on)
+        b["redraw_keys"] = {str(k) for k in (allow_keys or ()) if str(k)} if on else set()
         b["touched"] = time.monotonic()
 
 
-def generation_forbidden() -> bool:
+def generation_forbidden(key: str | None = None) -> bool:
+    """Whether THIS generation may not draw ``key`` (or anything, when no key
+    is given) — a translated render with the key outside its redraw list."""
     with _IMAGE_BUDGET_LOCK:
-        return bool(_bucket().get("forbid_generate"))
+        b = _bucket()
+        if not b.get("forbid_generate"):
+            return False
+        return not (key is not None and str(key) in (b.get("redraw_keys") or set()))
 
 
 # Indirected so a test drives it without sleeping. Ticks are short so the
@@ -2292,7 +2305,7 @@ def _get_raster_asset(key: str, prompt: str, cache_dir: Path | None = None,
     # character's coverage ceiling.
     is_color = key.startswith("avatar_")
     is_colour_board = is_colour_key(key)
-    if allow_generate and generation_forbidden():
+    if allow_generate and generation_forbidden(key):
         allow_generate = False       # a translated render: cache and library only
     cache = cache_dir_for(key, cache_dir)
     png, meta = cache / "asset.png", cache / "meta.json"
@@ -2626,7 +2639,7 @@ def make_resolver(prompts: dict[str, str], prefer_ai: bool = True,
             if ra is not None and ra.trace:
                 last_reason.pop(key, None)
                 return ("raster", ra)
-            if generation_forbidden():
+            if generation_forbidden(key):
                 # a translated render (set_generation_forbidden): the English
                 # kit drew this picture and we could not find it again — the
                 # honest cause, so the report never says "rate limited"

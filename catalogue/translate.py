@@ -72,6 +72,7 @@ import copy
 import hashlib
 import json
 import logging
+import os
 import re
 import unicodedata
 from pathlib import Path
@@ -1397,7 +1398,8 @@ def generation_params(source: dict, kit: dict, language: str, article_id: str) -
 
 
 def generations_stage(sb, source: dict, kit: dict, language: str, article_id: str, script_paths: list[str],
-                      quiz: Optional[dict] = None, worksheet: Optional[dict] = None) -> dict:
+                      quiz: Optional[dict] = None, worksheet: Optional[dict] = None,
+                      redraw: Optional[list[str]] = None) -> dict:
     """Every piece of the translated kit as a queued generation: the
     presentation (with the staged scripts), the deck, the authored
     documents the source kit has, the printable question bank, and the
@@ -1421,7 +1423,10 @@ def generations_stage(sb, source: dict, kit: dict, language: str, article_id: st
         return {"owner_id": owner, "kind": kind, "status": "queued", "book_id": None, "chapter_ref": None,
                 "school_id": None, "params": params}
 
-    rows = [row("presentation", {**base, "translation": {**base["translation"], "scripts": list(script_paths)}}),
+    pres_translation = {**base["translation"], "scripts": list(script_paths)}
+    if redraw:
+        pres_translation["redraw"] = list(redraw)     # the render may draw THESE afresh (raster_assets)
+    rows = [row("presentation", {**base, "translation": pres_translation}),
             row("deck", base)]
     skipped: list[dict] = []
     for kind in DOC_KINDS_REBUILT:
@@ -1465,6 +1470,12 @@ def generations_stage(sb, source: dict, kit: dict, language: str, article_id: st
 
 
 DOCUMENT_FLAG = "document not translated"
+REDRAW_FLAG = "picture redrawn"
+REDRAW_ENV = "TRANSLATE_REDRAW_MISSING"      # "0" restores the refusal: a missing picture fails the job
+
+
+def redraw_missing_enabled() -> bool:
+    return str(os.getenv(REDRAW_ENV, "1") or "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def append_flags(sb, kit_id: str, flags: list[dict]) -> None:
@@ -1479,11 +1490,12 @@ def append_flags(sb, kit_id: str, flags: list[dict]) -> None:
 
 
 def document_flags(sb, kit_id: str) -> list[dict]:
-    """The 'document not translated' flags already on the kit."""
+    """The flags earlier stages left on the kit that the final write must
+    carry: 'document not translated' and 'picture redrawn'."""
     rows = _rows(sb.table("topic_kits").select("precheck").eq("id", kit_id).limit(1).execute())
     precheck = (rows or [{}])[0].get("precheck")
     flags = precheck.get("flags") if isinstance(precheck, dict) else None
-    return [f for f in (flags or []) if isinstance(f, dict) and f.get("what") == DOCUMENT_FLAG]
+    return [f for f in (flags or []) if isinstance(f, dict) and f.get("what") in (DOCUMENT_FLAG, REDRAW_FLAG)]
 
 
 def _has_artifact(sb, generation_id: str, kind: str) -> bool:
@@ -1571,7 +1583,21 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
         db.set_stage(sb, job_id, dict(stage))
         keys = scene_asset_keys([s for _, _, s in scripts])
         found, missing = resolve_assets(sb, keys)
-        if missing:
+        redraw: list[str] = []
+        if missing and redraw_missing_enabled():
+            # Founder, 2026-10-17: a picture that exists nowhere but inside
+            # the English video (generated at its render, never published,
+            # the cache long gone) is drawn afresh by the translated render
+            # from the English prompt — and every such picture is a flag the
+            # reviewer sees, because the two videos then differ there.
+            redraw = list(missing)
+            append_flags(sb, str(kit["id"]), [{"where": k, "what": REDRAW_FLAG,
+                                                "detail": "the English video's picture is in neither the library nor "
+                                                          "the cache; the translation draws a new one from the same "
+                                                          "prompt — compare the scene with the English video"}
+                                               for k in missing])
+            log.warning("translation kit %s: %d picture(s) will be redrawn: %s", kit["id"], len(missing), ", ".join(missing[:6]))
+        elif missing:
             raise TranslateRefused(f"{len(missing)} scene asset(s) of the source video cannot be found and will not "
                                    f"be regenerated: {', '.join(missing[:6])}")
 
@@ -1616,7 +1642,8 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
         db.set_progress(sb, job_id, 90)
         owner = _s(source["presentation"].get("owner_id"))
         paths = upload_staged_scripts(sb, owner, kit["id"], scripts, language, tmp)
-        ids = generations_stage(sb, source, kit, language, article_id, paths, quiz=quiz, worksheet=worksheet)
+        ids = generations_stage(sb, source, kit, language, article_id, paths, quiz=quiz, worksheet=worksheet,
+                                redraw=redraw)
 
     usage = getattr(client, "session_usage", None)
     precheck = check.merge_reports(*[{k: v for k, v in r.items() if k != "part"} for r in reports], fidelity)
@@ -1631,7 +1658,7 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
     precheck["bank"] = {k: v for k, v in bank_summary.items() if k != "dropped"}
     sb.table("topic_kits").update({"precheck": precheck}).eq("id", kit["id"]).execute()
     kit = _save_translation(sb, kit, {
-        "stage": {"script": {"parts": n}, "assets": {"found": len(found), "keys": len(keys)},
+        "stage": {"script": {"parts": n}, "assets": {"found": len(found), "keys": len(keys), "redraw": redraw},
                   "quiz": quiz, "fidelity": {"mean_score": fidelity.get("mean_score"), "samples": fidelity.get("samples")},
                   "worksheet": ({k: v for k, v in worksheet.items() if k != "dropped"} | {"dropped": [d["id"] for d in worksheet["dropped"]]})
                   if worksheet else None,

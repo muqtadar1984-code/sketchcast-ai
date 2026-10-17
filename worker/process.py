@@ -2599,7 +2599,7 @@ def _set_patient_assets(generation_id: str, on: bool) -> None:
         pass
 
 
-def _set_generation_forbidden(generation_id: str, on: bool) -> None:
+def _set_generation_forbidden(generation_id: str, on: bool, allow_keys=None) -> None:
     """Kit Translator safeguard (plan revision 3): THIS generation renders a
     translated script and reuses the English kit's pictures — the scene
     engine may read its cache and the library, never call an image model.
@@ -2607,7 +2607,7 @@ def _set_generation_forbidden(generation_id: str, on: bool) -> None:
     different picture for one language. Best-effort like its neighbours."""
     try:
         from spike.scene_engine.raster_assets import set_generation_forbidden
-        set_generation_forbidden(on, generation_id)
+        set_generation_forbidden(on, generation_id, allow_keys=allow_keys)
     except Exception:  # noqa: BLE001 — the flag must never break the pipeline
         pass
 
@@ -2659,7 +2659,10 @@ def _process_catalogue(sb: Client, job: dict, generation_id: str, gen: dict, *,
         _set_patient_assets(generation_id, True)
         _translation = getattr(prepared, "translation", None)
         if _translation:
-            _set_generation_forbidden(generation_id, True)
+            # the pictures the translate job could not find: this render may
+            # draw THOSE afresh (params.translation.redraw); nothing else
+            _set_generation_forbidden(generation_id, True,
+                                      allow_keys=_translation.get("redraw") if isinstance(_translation, dict) else None)
         with tempfile.TemporaryDirectory() as tmp:
             unit = _catalogue_unit(prepared, tmp, sb)
             built = _build_from_analysis(
