@@ -342,6 +342,13 @@ def _scene_protected(seg: dict) -> list[str]:
             if isinstance(e, dict) and e.get("type") == "math" and e.get("expr")]
 
 
+def _compiled(seg: dict) -> bool:
+    """Whether the segment's scene is the maths compiler's (maths/board.py
+    stamps ``scene.compiled``), not a translated or model-written one."""
+    scene = seg.get("scene") if isinstance(seg.get("scene"), dict) else {}
+    return bool(scene.get("compiled"))
+
+
 def _blob(segs: Iterable[dict]) -> str:
     return " ".join(_segment_text(s) + " " + " ".join(str(e.get("text") or "") for e in _scene_text_elements(s))
                     for s in segs)
@@ -404,8 +411,15 @@ def check_script(source: dict, target: dict, *, language: str,
         # parabola's vertex "(7/2, -9/4)"; the English render of 2026-09-28
         # predates that label). Such a difference is a FLAG for the reviewer,
         # with the target quoted, never a block.
-        src_speech = " ".join(_segment_text(s) for s in s_segs)
-        dst_speech = " ".join(_segment_text(s) for s in t_segs)
+        # A COMPILED segment (maths/board.py stamps scene.compiled) is the
+        # compiler's through and through — its spoken text comes from the
+        # record's speech fields, already checked by check_maths_lesson, and
+        # today's compiler may speak a value the English compiler of the day
+        # did not (the vertex label, read aloud). The translator's own words
+        # are the FRAMING segments (recap, outro: _splice_framing), and those
+        # are held strictly.
+        src_speech = " ".join(_segment_text(s) for s in s_segs if not _compiled(s))
+        dst_speech = " ".join(_segment_text(s) for s in t_segs if not _compiled(s))
         ok, missing, extra = numbers_equivalent(src_speech, dst_speech, board=board)
         if not ok:
             # the recompiled board repeats a value where the English one

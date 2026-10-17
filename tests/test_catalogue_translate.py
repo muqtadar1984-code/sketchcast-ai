@@ -112,11 +112,20 @@ class TestNumerals:
         assert rep["ok"], rep["blocking"]
         f = next(x for x in rep["flags"] if x["what"].startswith("board numbers differ"))
         assert "-9" in f["extra"] and f["target_samples"]
-        # the same new value SPOKEN is still invented
+        # the same new value SPOKEN in a FRAMING segment (the translator's words) is still invented
         dst2 = {"segments": [{"segment_id": "s1", "text": "حلّ س² − ٧س + ١٠ = ٠، والرأس عند -٩/٤.",
                               "scene": {"elements": [{"type": "text", "text": "x = 2, x = 5"}]}}]}
         rep2 = C.check_script(src, dst2, language="ar", strict=False)
         assert not rep2["ok"] and rep2["blocking"][0]["extra"] == ["-9", "4"]
+        # … but spoken by a COMPILED board segment (scene.compiled, the compiler's own speech
+        # from the verified record) it is the compiler's: a flag, not a block
+        src3 = {"segments": [{"segment_id": "s9", "text": "The curve cuts the x-axis at x equals two and five.",
+                              "scene": {"compiled": True, "elements": [{"type": "text", "text": "x = 2, x = 5"}]}}]}
+        dst3 = {"segments": [{"segment_id": "s9", "text": "يقطع المنحنى المحور السيني عند س = ٢ و ٥. رأسه عند (7/2, -9/4).",
+                              "scene": {"compiled": True, "elements": [{"type": "text", "text": "x = 2, x = 5 (7/2, -9/4)"}]}}]}
+        rep3 = C.check_script(src3, dst3, language="ar", strict=False)
+        assert rep3["ok"], rep3["blocking"]
+        assert any(f["what"].startswith("board numbers differ") for f in rep3["flags"])
 
     def test_a_number_before_a_full_stop_is_a_number(self):
         assert C.number_values("So x equals 6.") == ["6"]
