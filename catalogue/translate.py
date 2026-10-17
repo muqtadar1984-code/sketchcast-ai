@@ -1836,6 +1836,50 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
     return summary
 
 
+# ── T2: one translation at a time (decision D7) ────────────────────────────
+# The bulk button queues one kit_translate job per ready kit at once; the
+# WORKER spaces them. A translation is "in flight" from the moment its job is
+# claimed until every piece of the translated kit has rendered (the kit's
+# status leaves `generating`). While one is in flight the observer lane does
+# not claim the next kit_translate (worker/run.py), so a 48-kit sweep is 48
+# kits in a row, each one's video and pictures done before the next one's
+# model calls begin — never a burst on the shared Vertex pool, and the
+# founder sees one kit land at a time in the review queue.
+
+
+def translations_queued(sb) -> bool:
+    """Whether any kit_translate job is waiting — the gate is only worth
+    its two reads while a sweep is on."""
+    try:
+        rows = _rows(sb.table("jobs").select("id").eq("type", "kit_translate").eq("status", "queued")
+                     .limit(1).execute())
+    except Exception as exc:  # noqa: BLE001
+        log.warning("translate lane: queue unreadable (%s)", exc)
+        return False
+    return bool(rows)
+
+
+def translation_in_flight(sb) -> Optional[str]:
+    """Why the next translation must wait, or None: a kit_translate job is
+    processing (its text calls are running), or a translated kit is still
+    `generating` (its video, deck, documents, bank or quiz are rendering).
+    An unreadable database counts as in flight: no sweep step starts on a
+    guess."""
+    try:
+        jobs = _rows(sb.table("jobs").select("id").eq("type", "kit_translate").eq("status", "processing")
+                     .limit(1).execute())
+        if jobs:
+            return f"translation job {jobs[0].get('id')} is staging"
+        kits = _rows(sb.table("topic_kits").select("id,language").eq("status", "generating").execute())
+        for k in kits:
+            if _s(k.get("language")).lower() not in ("", "en"):
+                return f"translated kit {k.get('id')} is rendering"
+    except Exception as exc:  # noqa: BLE001
+        log.warning("translate lane: in-flight check unreadable (%s)", exc)
+        return "the database did not answer"
+    return None
+
+
 def run_translate_job(sb, job: dict, client=None) -> Optional[dict]:
     """Entry point for run.py. Self-contained: finishes the job row itself
     (done with the summary in ``stage``; error with the message) and marks

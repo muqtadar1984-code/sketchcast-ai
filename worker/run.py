@@ -165,6 +165,34 @@ def _claim_catalogue_generation(sb):
     return db.claim_catalogue_kit_job(sb, exclude, MAX_CATALOGUE_KITS)
 
 
+_translate_wait_logged: str | None = None
+
+
+def _catalogue_observer_types(sb) -> list:
+    """The observer types this poll may claim. Kit Translator T2 (decision
+    D7, one kit at a time): while a translation is in flight — its job
+    staging, or its kit still rendering — the next kit_translate waits, so a
+    sweep of many kits runs one after another and never bursts the image
+    pool. The two reads happen only while a kit_translate is queued."""
+    global _translate_wait_logged
+    try:
+        from catalogue.translate import translation_in_flight, translations_queued
+        if not translations_queued(sb):
+            _translate_wait_logged = None
+            return CATALOGUE_JOB_TYPES
+        why = translation_in_flight(sb)
+    except Exception as exc:  # noqa: BLE001 — the gate must never stop the lane
+        log.warning("translate lane gate failed open: %s", exc)
+        return CATALOGUE_JOB_TYPES
+    if not why:
+        _translate_wait_logged = None
+        return CATALOGUE_JOB_TYPES
+    if why != _translate_wait_logged:
+        log.info("translate lane: next translation waits — %s", why)
+        _translate_wait_logged = why
+    return [t for t in CATALOGUE_JOB_TYPES if t != "kit_translate"]
+
+
 def _is_catalogue_job(job: dict | None) -> bool:
     """The one reading of the kit flag (worker.client.is_catalogue_params) —
     nothing from the catalogue package, so the failure path stays importable
@@ -534,7 +562,7 @@ def run_once(sb) -> bool:
         db.claim_next_job(sb, job_type=["support_diagnose", "issue_resolve"], catalogue=False)
         or db.claim_next_job(sb, job_type=DOC_JOB_TYPES, catalogue=False)
         or db.claim_next_job(sb, exclude_types=_user_builder_exclusions(), catalogue=False)  # every user builder, videos capped
-        or db.claim_catalogue_observer_job(sb, CATALOGUE_JOB_TYPES, MAX_CATALOGUE_JOBS)  # harvest / derive / …: only when nothing else waits; MAX_CATALOGUE_JOBS at once, decided in the database
+        or db.claim_catalogue_observer_job(sb, _catalogue_observer_types(sb), MAX_CATALOGUE_JOBS)  # harvest / derive / …: only when nothing else waits; MAX_CATALOGUE_JOBS at once, decided in the database
         or _claim_catalogue_generation(sb)                          # kits: no live user builder + off-peak
     )
     if not job:

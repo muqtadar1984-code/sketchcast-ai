@@ -188,3 +188,50 @@ class TestWiring:
         assert S.JOB_TYPE in db.OBSERVER_JOB_TYPES, "it owns no generation"
         src = Path(run.__file__).read_text(encoding="utf-8")
         assert 'job_type == "topic_supersede"' in src and "run_supersede_job(sb, job)" in src
+
+
+class TestTranslationsFollowTheOldKit:
+    """Kit Translator T2 (0134, plan P2): the superseded English kit's
+    translations go stale (cosmetic) or blocked (correction); the old kit
+    records the reason. Only approved, current translations move."""
+
+    def _with_translations(self, sb):
+        sb.tables["topic_kits"] += [
+            {"id": "kit-ar", "topic_id": "topic-1", "language": "ar", "status": "approved",
+             "translation_status": "approved", "source_kit_id": "kit-old"},
+            {"id": "kit-ms", "topic_id": "topic-1", "language": "ms", "status": "approved",
+             "translation_status": "approved", "source_kit_id": "kit-old"},
+            {"id": "kit-hi-review", "topic_id": "topic-1", "language": "hi", "status": "in_review",
+             "translation_status": "in_review", "source_kit_id": "kit-old"},
+            {"id": "kit-ar-of-new", "topic_id": "topic-1", "language": "ar", "status": "approved",
+             "translation_status": "approved", "source_kit_id": "kit-new"},
+        ]
+        return sb
+
+    def _kit(self, sb, kid):
+        return next(k for k in sb.tables["topic_kits"] if k["id"] == kid)
+
+    def test_a_cosmetic_replacement_leaves_them_approved_but_stale(self):
+        sb, yt = self._with_translations(_sb()), _yt()
+        out = S.run_supersede_job(sb, sb.tables["jobs"][0], transport=yt)      # no reason → cosmetic
+        assert out["translations"] == {"reason": "cosmetic", "status": "stale", "kits": ["kit-ar", "kit-ms"]}
+        for kid in ("kit-ar", "kit-ms"):
+            assert self._kit(sb, kid)["status"] == "approved" and self._kit(sb, kid)["translation_status"] == "stale"
+        assert self._kit(sb, "kit-hi-review")["translation_status"] == "in_review", "a translation still in review is the reviewer's"
+        assert self._kit(sb, "kit-ar-of-new")["translation_status"] == "approved", "the NEW kit's translations are untouched"
+        assert self._kit(sb, "kit-old")["supersede_reason"] == "cosmetic"
+
+    def test_a_correction_blocks_them(self):
+        sb, yt = self._with_translations(_sb()), _yt()
+        sb.tables["jobs"][0]["params"]["reason"] = "correction"
+        out = S.run_supersede_job(sb, sb.tables["jobs"][0], transport=yt)
+        assert out["translations"]["status"] == "blocked" and out["translations"]["kits"] == ["kit-ar", "kit-ms"]
+        assert self._kit(sb, "kit-ar")["translation_status"] == "blocked"
+        assert self._kit(sb, "kit-old")["supersede_reason"] == "correction"
+
+    def test_an_unknown_reason_is_cosmetic_and_no_translations_is_fine(self):
+        assert S.supersede_reason("typo") == "cosmetic" and S.supersede_reason(None) == "cosmetic"
+        assert S.supersede_reason("CORRECTION") == "correction"
+        sb, yt = _sb(), _yt()
+        out = S.run_supersede_job(sb, sb.tables["jobs"][0], transport=yt)
+        assert out["translations"] == {"reason": "cosmetic", "status": "stale", "kits": []}

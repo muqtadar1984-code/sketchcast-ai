@@ -1341,3 +1341,38 @@ class TestTranslatedWorksheetRender:
         flag = next(f for f in k["precheck"]["flags"] if f["where"] == "worksheet")
         assert flag["what"] == T.DOCUMENT_FLAG and "no question" in flag["detail"]
         assert k["status"] == "generating", "one document is not the kit"
+
+
+class TestOneTranslationAtATime:
+    """T2 (decision D7): the observer lane claims the next kit_translate only
+    when no translation is in flight — none staging, none rendering."""
+
+    def _sb(self, *, queued=True, processing=False, rendering=None):
+        sb = FakeSB()
+        if queued:
+            sb.tables["jobs"].append({"id": "jt-q", "type": "kit_translate", "status": "queued", "params": {}})
+        if processing:
+            sb.tables["jobs"].append({"id": "jt-p", "type": "kit_translate", "status": "processing", "params": {}})
+        sb.tables["topic_kits"] += [{"id": "kit-en", "language": "en", "status": "generating"}]
+        if rendering:
+            sb.tables["topic_kits"].append({"id": "kit-ar", "language": rendering, "status": "generating"})
+        return sb
+
+    def test_the_two_reads(self):
+        assert T.translations_queued(self._sb()) and not T.translations_queued(self._sb(queued=False))
+        assert T.translation_in_flight(self._sb()) is None, "an English kit rendering is not a translation"
+        assert "staging" in T.translation_in_flight(self._sb(processing=True))
+        assert "rendering" in T.translation_in_flight(self._sb(rendering="ar"))
+
+    def test_the_lane_drops_kit_translate_while_one_is_in_flight(self, monkeypatch):
+        from worker import run as R
+        assert "kit_translate" in R._catalogue_observer_types(self._sb()), "nothing in flight: the full list"
+        assert "kit_translate" not in R._catalogue_observer_types(self._sb(processing=True))
+        assert "kit_translate" not in R._catalogue_observer_types(self._sb(rendering="ar"))
+        assert "topic_article" in R._catalogue_observer_types(self._sb(rendering="ar")), "the other observers still run"
+        assert "kit_translate" in R._catalogue_observer_types(self._sb(queued=False, rendering="ar")), "no sweep queued: no gate"
+
+        class Boom:
+            def table(self, *a, **k):
+                raise RuntimeError("down")
+        assert "kit_translate" in R._catalogue_observer_types(Boom()), "a failed gate fails open"
