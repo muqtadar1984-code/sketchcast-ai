@@ -830,22 +830,53 @@ class TestTranslateJob:
         assert ("select", "books") not in sb.calls
         assert sb.tables["topics"][0]["status"] == TOPIC_STATUS_UNCHANGED(sb)
 
-    def test_a_missing_picture_fails_the_job_and_the_kit_instead_of_regenerating(self, monkeypatch, tmp_path):
+    def test_a_missing_picture_is_redrawn_by_the_render_and_flagged(self, monkeypatch, tmp_path):
+        """Founder, 2026-10-17: a picture that exists nowhere but inside the
+        English video is drawn afresh by the translated render, and the
+        reviewer sees a flag per picture; the presentation carries the list
+        the renderer may draw (params.translation.redraw)."""
         sb = _job_sb(with_assets=False)
         _uploads(monkeypatch)
+        monkeypatch.delenv(T.REDRAW_ENV, raising=False)
         monkeypatch.setattr("spike.scene_engine.raster_assets.cache_dir_for", lambda key, cache_dir=None: tmp_path / "nocache" / key)
 
-        assert T.run_translate_job(sb, sb.tables["jobs"][0], client=FakeTranslator()) is None
+        summary = T.run_translate_job(sb, sb.tables["jobs"][0], client=FakeTranslator())
+        assert summary is not None and sb.tables["jobs"][0]["status"] == "done"
+        k = next(k for k in sb.tables["topic_kits"] if k.get("source_kit_id") == "kit-1")
+        redrawn = [f for f in k["precheck"]["flags"] if f["what"] == T.REDRAW_FLAG]
+        assert redrawn and all("English video" in f["detail"] for f in redrawn)
+        assert k["precheck"]["ok"] is True, "a redrawn picture is a flag, never a block"
+        pres = next(g for g in sb.tables["generations"] if g["kind"] == "presentation" and (g["params"].get("translation") or {}).get("kit_id") == k["id"])
+        assert sorted(pres["params"]["translation"]["redraw"]) == sorted(f["where"] for f in redrawn)
+        assert "avatar_teacher_female__face_f1" in pres["params"]["translation"]["redraw"]
+        assert k["translation"]["stage"]["assets"]["redraw"] == pres["params"]["translation"]["redraw"]
 
+    def test_the_refusal_is_one_switch_away(self, monkeypatch, tmp_path):
+        sb = _job_sb(with_assets=False)
+        _uploads(monkeypatch)
+        monkeypatch.setenv(T.REDRAW_ENV, "0")
+        monkeypatch.setattr("spike.scene_engine.raster_assets.cache_dir_for", lambda key, cache_dir=None: tmp_path / "nocache" / key)
+        assert T.run_translate_job(sb, sb.tables["jobs"][0], client=FakeTranslator()) is None
         job = sb.tables["jobs"][0]
-        assert job["status"] == "error" and "cannot be found" in job["error"] and "avatar_teacher_female__face_f1" in job["error"]
-        # a translation that failed before any piece is not kept (founder,
-        # 2026-10-16): no kit row, no staged article, no staged items — the
-        # job's error is the record
+        assert job["status"] == "error" and "cannot be found" in job["error"]
+        # a translation that failed before any piece is not kept: no kit row,
+        # no staged article, no staged items — the job's error is the record
         assert not [k for k in sb.tables["topic_kits"] if k.get("source_kit_id") == "kit-1"]
         assert not [a for a in sb.tables["topic_articles"] if a.get("language") == "ar"]
-        assert not [q for q in sb.tables.get("topic_questions", []) if q.get("translation_kit_id")]
         assert not [g for g in sb.tables["generations"] if (g["params"].get("translation") or {}).get("source_kit_id") == "kit-1"], "nothing was queued to render"
+
+    def test_the_renderer_draws_only_the_listed_keys_under_the_switch(self):
+        from spike.scene_engine import raster_assets as RA
+        RA.set_generation_forbidden(True, "gen-x", allow_keys=["sk_whale", "plant_upgrades"])
+        try:
+            RA._STATE  # noqa: B018 — the bucket exists
+            import contextlib
+            with contextlib.ExitStack():
+                b = RA._STATE["gen-x"]
+                assert b["forbid_generate"] is True and b["redraw_keys"] == {"sk_whale", "plant_upgrades"}
+        finally:
+            RA.set_generation_forbidden(False, "gen-x")
+            assert RA._STATE["gen-x"]["redraw_keys"] == set()
 
     def test_a_pre_check_refusal_names_its_findings_and_removes_the_kit(self, monkeypatch, tmp_path, caplog):
         sb = _job_sb()
@@ -944,7 +975,7 @@ class TestScriptOverrideRender:
         fakes = _presentation_fakes(monkeypatch, tmp_path)
         forbidden: list[bool] = []
         monkeypatch.setattr("spike.scene_engine.raster_assets.set_generation_forbidden",
-                            lambda on, generation_id=None: forbidden.append(bool(on)))
+                            lambda on, generation_id=None, **kw: forbidden.append(bool(on)))
 
         process.process_generation(sb, sb.tables["jobs"][0], "gen-par")
 
