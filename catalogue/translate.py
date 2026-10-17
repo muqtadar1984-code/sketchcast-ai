@@ -75,6 +75,7 @@ import logging
 import os
 import re
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -906,6 +907,63 @@ BANK_FLOOR = 10          # under this many staged items the bank is not worth a 
 ITEM_RULE = ("Each string is a field of a school test question: translate the words; keep every number, unit "
              "symbol, variable, equation and expression exactly as written; keep option texts DISTINCT from "
              "each other; a one-word answer stays one word.")
+# The bank is the translation's OUTPUT-heavy stage: the Cells kit's 289 items
+# were ~1,500 distinct strings ≈ 13 calls of 120 strings, run one after the
+# other — about 20 of the job's 36 minutes (2026-10-17, job 5c22720b). The
+# calls are independent (each is a list of strings in, the same list out), so
+# they run side by side; smaller chunks make more of them and keep a drifted
+# reply's re-ask small. Both knobs are environment variables so a rate-limit
+# squeeze is one variable away from the old serial behaviour (workers=1).
+BANK_CHUNK_ENV = "TRANSLATE_BANK_CHUNK"        # strings per bank call
+BANK_WORKERS_ENV = "TRANSLATE_BANK_WORKERS"    # bank calls in flight at once
+BANK_CHUNK_DEFAULT = 60
+BANK_WORKERS_DEFAULT = 3
+BANK_WORKERS_MAX = 8
+UNUSABLE_REPLY = "translation reply unusable"
+
+
+def _env_int(name: str, default: int, lo: int, hi: int) -> int:
+    raw = str(os.getenv(name, "") or "").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        value = default
+    return max(lo, min(hi, value))
+
+
+def bank_chunk() -> int:
+    return _env_int(BANK_CHUNK_ENV, BANK_CHUNK_DEFAULT, 10, CHUNK)
+
+
+def bank_workers() -> int:
+    return _env_int(BANK_WORKERS_ENV, BANK_WORKERS_DEFAULT, 1, BANK_WORKERS_MAX)
+
+
+def batch_items(items: list[dict], chunk: int) -> list[list[dict]]:
+    """Whole items grouped so that no batch carries more than ``chunk``
+    distinct strings — an item is never split across two calls, so a batch
+    whose reply cannot be used maps back to exactly its items. An item with
+    more strings than ``chunk`` is a batch of its own."""
+    batches: list[list[dict]] = []
+    current: list[dict] = []
+    seen: set[str] = set()
+    for it in items:
+        words = {t for _, t in item_text_items(it) if _s(t)}
+        new = words - seen
+        if current and len(seen) + len(new) > chunk:
+            batches.append(current)
+            current, seen = [], set()
+            new = words
+        current.append(it)
+        seen |= new
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _model_calls(client) -> Optional[int]:
+    usage = getattr(client, "session_usage", None)
+    return int(usage.get("calls") or 0) if isinstance(usage, dict) else None
 
 
 def item_text_items(item: dict) -> list[tuple[str, str]]:
@@ -970,15 +1028,44 @@ def bank_stage(sb, client, source: dict, kit: dict, language: str, terms, articl
         return {}, {"source_items": 0, "staged": 0, "reused": 0, "retried": 0, "dropped": []}
     mapping = existing_staged(sb, kit["id"])
     todo = [it for it in items if str(it.get("id")) not in mapping]
+    chunk, workers = bank_chunk(), bank_workers()
+    calls_before = _model_calls(client)
+    tally = {"chunk": chunk, "workers": workers, "batches": 0, "batch_calls": 0,
+             "fallback_items": 0, "fallback_failed": 0}
 
-    def attempt(batch: list[dict], context: str) -> list[tuple[dict, dict, dict]]:
+    def one_item(src: dict, context: str) -> tuple[dict, dict, dict]:
+        """One item in its own call — the fallback for a batch whose reply
+        could not be used. A reply unusable even for one item drops it with
+        a finding the reviewer sees (``bank item not staged``)."""
+        words = item_text_items(src)
+        try:
+            got = translate_strings(client, [t for _, t in words], language, terms=terms, context=context) if words else []
+        except RuntimeError as exc:
+            sid = str(src.get("id") or "item")
+            return src, src, {"check": "A-item", "ok": False, "flags": [],
+                              "blocking": [{"where": sid, "what": UNUSABLE_REPLY, "error": str(exc)[:200]}]}
+        dst = translated_item(src, list(zip([p for p, _ in words], got)))
+        return src, dst, check.check_item(src, dst)
+
+    def one_batch(batch: list[dict], context: str) -> tuple[list[tuple[dict, dict, dict]], int]:
         """Translate every text field of ``batch`` in one call and check each
-        item: ``(source, translated, report)`` per item."""
+        item: ``(source, translated, report)`` per item, and how many items
+        fell back. A reply that cannot be used — the count still drifts after
+        the grace re-asks, or the JSON never parses — falls back to one call
+        per item for THIS batch only; the other batches are untouched. A
+        provider failure propagates as before (the job fails and a resume
+        stages nothing twice). Runs on a pool thread: it returns its counts
+        rather than touching shared state."""
         flat: list[tuple[int, str, str]] = []
         for i, it in enumerate(batch):
             for path, text in item_text_items(it):
                 flat.append((i, path, text))
-        got = translate_strings(client, [t for _, _, t in flat], language, terms=terms, context=context) if flat else []
+        try:
+            got = translate_strings(client, [t for _, _, t in flat], language, terms=terms, context=context) if flat else []
+        except RuntimeError as exc:
+            log.warning("translate: bank batch of %d item(s) had no usable reply (%s); translating them one by one",
+                        len(batch), exc)
+            return [one_item(src, context) for src in batch], len(batch)
         by_item: dict[int, list[tuple[str, str]]] = {}
         for (i, path, _), t in zip(flat, got):
             by_item.setdefault(i, []).append((path, t))
@@ -986,7 +1073,27 @@ def bank_stage(sb, client, source: dict, kit: dict, language: str, terms, articl
         for i, src in enumerate(batch):
             dst = translated_item(src, by_item.get(i, []))
             out.append((src, dst, check.check_item(src, dst)))
-        return out
+        return out, 0
+
+    def attempt(batch: list[dict], context: str) -> list[tuple[dict, dict, dict]]:
+        """``one_batch`` over the items in chunks of at most ``chunk`` distinct
+        strings, ``workers`` chunks in flight at once; results in item order.
+        Nothing here touches the database — the inserts below run in the
+        job's own thread once every translation is back — and the tally is
+        updated here, in that thread, from what each batch returns."""
+        batches = batch_items(batch, chunk)
+        if len(batches) <= 1 or workers <= 1:
+            results = [one_batch(b, context) for b in batches]
+        else:
+            with ThreadPoolExecutor(max_workers=min(workers, len(batches)), thread_name_prefix="bank-translate") as pool:
+                results = list(pool.map(lambda b: one_batch(b, context), batches))
+        rows = [row for got, _ in results for row in got]
+        tally["batches"] += len(batches)
+        tally["batch_calls"] += len(batches)
+        tally["fallback_items"] += sum(n for _, n in results)
+        tally["fallback_failed"] += sum(1 for _, _, rep in rows
+                                        if any(f.get("what") == UNUSABLE_REPLY for f in rep.get("blocking") or []))
+        return rows
 
     first = attempt(todo, ITEM_RULE)
     # One retry for the items the check refused, told what was wrong: a
@@ -1001,6 +1108,9 @@ def bank_stage(sb, client, source: dict, kit: dict, language: str, terms, articl
                                     "add no number, symbol, unit or explanation that the English does not have; keep every "
                                     "option distinct; a key, a number and a formula stay exactly as written.")
         second = {str(src.get("id")): (dst, rep) for src, dst, rep in again}
+    calls_after = _model_calls(client)
+    if calls_before is not None and calls_after is not None:
+        tally["model_calls"] = calls_after - calls_before
 
     dropped: list[dict] = []
     staged = 0
@@ -1049,7 +1159,7 @@ def bank_stage(sb, client, source: dict, kit: dict, language: str, terms, articl
         raise TranslateRefused(f"only {total} bank item(s) survived translation of {len(items)}; "
                                f"the source kit's bank needs at least {BANK_FLOOR}")
     return mapping, {"source_items": len(items), "staged": staged, "reused": len(items) - len(todo),
-                     "retried": len(refused), "dropped": dropped}
+                     "retried": len(refused), "dropped": dropped, "batching": tally}
 
 
 def bank_flags(summary: dict) -> list[dict]:

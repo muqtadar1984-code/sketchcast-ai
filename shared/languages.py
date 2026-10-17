@@ -56,6 +56,31 @@ def is_rtl(code: str | None) -> bool:
     return get_language(code).direction == "rtl"
 
 
+# The lesson languages written in a script other than Latin, by script. One
+# table, read by the translation pre-check (which script a target must be
+# in) and by the analyzer's output budget below.
+NON_LATIN_SCRIPTS: dict[str, str] = {"ar": "arab", "ur": "arab", "ms-arab": "arab",
+                                     "hi": "deva", "mr": "deva", "te": "telu"}
+# A reply in Arabic, Devanagari or Telugu is roughly TWICE the tokens of the
+# same reply in English (the Cells kit's Arabic analysis ran to ~33k chars
+# against a 16,000-token cap sized for English, 2026-10-17). Callers that
+# size an OUTPUT budget for a reply the model writes in the lesson language
+# multiply by this.
+OUTPUT_TOKEN_FACTOR_NON_LATIN = 2.0
+
+
+def script_of(code: str | None) -> str | None:
+    """``"arab"``, ``"deva"`` or ``"telu"`` for a lesson language written in
+    that script; None for the Latin-script languages (and for English)."""
+    return NON_LATIN_SCRIPTS.get((code or "").strip().lower())
+
+
+def output_token_factor(code: str | None) -> float:
+    """How much more output budget a reply in ``code`` needs than one in
+    English: 1.0 for a Latin script, OUTPUT_TOKEN_FACTOR_NON_LATIN otherwise."""
+    return OUTPUT_TOKEN_FACTOR_NON_LATIN if script_of(code) else 1.0
+
+
 # ── Detection (pure, deterministic, $0) ──────────────────────────────────────
 # Arabic is identified by script; the Latin-script languages by distinctive
 # stopword frequency. Words chosen to SEPARATE the pairs that share vocabulary
