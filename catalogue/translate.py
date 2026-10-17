@@ -652,11 +652,15 @@ def _fail_translation(sb, kit: Optional[dict], note: str, report: Optional[dict]
                 patch["precheck"] = report
             sb.table("topic_kits").update(patch).eq("id", kit_id).execute()
             return
+        # Order matters: the kit row references its article
+        # (topic_kits.article_id → topic_articles, no cascade), so the kit
+        # goes before the article — the first science run (2026-10-17, kit
+        # c84faaee) hit 23503 the other way round and the row survived.
         sb.table("topic_questions").delete().eq("translation_kit_id", kit_id).execute()
+        sb.table("topic_kits").delete().eq("id", kit_id).execute()
         article_id = _s(row.get("article_id"))
         if article_id and _s(row.get("language")) != SOURCE_LANGUAGE:
             sb.table("topic_articles").delete().eq("id", article_id).eq("status", ARTICLE_STAGED).execute()
-        sb.table("topic_kits").delete().eq("id", kit_id).execute()
         log.info("translation kit %s removed after a failure: %s", kit_id, note[:200])
     except Exception:  # noqa: BLE001
         log.exception("translation kit %s could not be cleared after its failure", kit_id)
