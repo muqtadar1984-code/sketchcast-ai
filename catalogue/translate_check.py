@@ -167,6 +167,11 @@ def english_number_words(text: str) -> list[str]:
             pass                               # "three hundred AND sixty"
         elif w == "point" and in_number and i + 1 < len(words) and words[i + 1] in _UNITS:
             in_decimals = True
+        elif w in _POWERS:
+            # "x squared" is written x² — the exponent is a digit on the board
+            # and in a translation that writes the maths; it stands alone
+            flush()
+            out.append(_POWERS[w])
         else:
             flush()
         i += 1
@@ -174,11 +179,47 @@ def english_number_words(text: str) -> list[str]:
     return out
 
 
-def numbers_equivalent(source: str, target: str) -> tuple[bool, list[str], list[str]]:
+_POWERS = {"squared": "2", "cubed": "3"}
+
+
+def _abs(value: str) -> str:
+    """A number's value without its sign: "negative three" is spoken, "-3"
+    is written, "x minus four" is spoken and "x − 4" (or "x-4") is written —
+    the sign of a DIGIT in a translation follows the writing, not the
+    speech, so an absorbed digit is matched by magnitude."""
+    return str(value or "").lstrip("-")
+
+
+def board_numbers(lesson: dict) -> list[str]:
+    """Every number written on the lesson's board — the problems, the
+    before/after lines, the answers (LESSON_INVARIANT_KEYS and
+    LESSON_PROSE_MATHS_KEYS) — as values. A spoken line may quote any of
+    them: "set each factor equal to zero" restated as "… = 0", "x squared
+    minus two x" as "x² − 2x". The pool is a SET: the board is quoted, not
+    counted."""
+    out: list[str] = []
+    for path, v in _walk(lesson or {}):
+        key = _leaf_key(path)
+        if isinstance(v, str) and (key in LESSON_INVARIANT_KEYS or key in LESSON_PROSE_MATHS_KEYS):
+            for n in number_values(v):
+                if n not in out:
+                    out.append(n)
+    return out
+
+
+def numbers_equivalent(source: str, target: str, board: Iterable[str] = ()) -> tuple[bool, list[str], list[str]]:
     """Same multiset of numeric VALUES on both sides. Returns (ok, missing,
-    extra) — what the target lost and what it invented. A value the English
-    source spells out in words ("three hundred and sixty") may stand for a
-    digit on the target side; it is never required there."""
+    extra) — what the target lost and what it invented.
+
+    A digit the target carries that the source does not is NOT invented when
+    the source speaks it: a value the English spells out in words ("three
+    hundred and sixty", "negative three", "x squared") stands for one digit
+    on the target side, matched by magnitude (_abs) — the Quadratic kit
+    (2026-10-17) wrote "negative three" as -3 and "x squared" as x². Nor
+    when it is written on the ``board`` (the lesson's problems, working
+    lines and answers): a spoken line may quote the board — "… = 0". A
+    spoken value is never REQUIRED on the target side; a digit the source
+    writes still is."""
     a, b = number_values(source), number_values(target)
     missing = list(a)
     extra: list[str] = []
@@ -188,10 +229,14 @@ def numbers_equivalent(source: str, target: str) -> tuple[bool, list[str], list[
         else:
             extra.append(v)
     if extra:
-        spelt = english_number_words(source)
+        spelt = [_abs(x) for x in english_number_words(source)]
+        pool = {_abs(x) for x in (board or ())}
         for v in list(extra):
-            if v in spelt:
-                spelt.remove(v)
+            av = _abs(v)
+            if av in spelt:
+                spelt.remove(av)
+                extra.remove(v)
+            elif av in pool:
                 extra.remove(v)
     return (not missing and not extra), missing, extra
 
@@ -280,7 +325,7 @@ def _blob(segs: Iterable[dict]) -> str:
 def check_script(source: dict, target: dict, *, language: str,
                  glossary: Optional[list[tuple[str, str]]] = None,
                  protected: Optional[dict[str, list[str]]] = None,
-                 strict: bool = True) -> dict:
+                 strict: bool = True, board: Iterable[str] = ()) -> dict:
     """Pre-check A over two EpisodeScript dicts. ``glossary`` is
     ``[(term_en, term)]``; ``protected`` maps a segment id to expressions
     that must survive verbatim (the maths path adds the lesson's).
@@ -324,7 +369,7 @@ def check_script(source: dict, target: dict, *, language: str,
             flags.append(_finding("script", "board expressions typeset differently from the English render",
                                   count=len(typeset_lost), examples=typeset_lost[:6]))
         prot = own + [p for s in s_segs for p in _scene_protected(s)]
-        ok, missing, extra = numbers_equivalent(src_blob, dst_blob)
+        ok, missing, extra = numbers_equivalent(src_blob, dst_blob, board=board)
         if not ok:
             # the recompiled board repeats a value where the English one
             # did not (or the reverse); a value that VANISHED is the defect
@@ -478,6 +523,7 @@ def check_maths_lesson(source: dict, target: dict) -> dict:
     flags: list[dict] = []
     s = dict(_walk(source))
     t = dict(_walk(target))
+    board = board_numbers(source)
     if set(s) != set(t):
         only_s = sorted(set(s) - set(t))[:20]
         only_t = sorted(set(t) - set(s))[:20]
@@ -499,7 +545,7 @@ def check_maths_lesson(source: dict, target: dict) -> dict:
                 blocking.append(_finding(path, "question emptied"))
             continue
         if isinstance(sv, str) and isinstance(tv, str):
-            ok, missing, extra = numbers_equivalent(sv, tv)
+            ok, missing, extra = numbers_equivalent(sv, tv, board=board)
             if not ok:
                 blocking.append(_finding(path, "numbers differ", missing=missing, extra=extra))
             if sv.strip() and not tv.strip():

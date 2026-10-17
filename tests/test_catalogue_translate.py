@@ -58,6 +58,39 @@ class TestNumerals:
         ok, missing, extra = C.numbers_equivalent("3.14 and 2,500 and 7", "٣٫١٤ و ٢٥٠٠ و ٧")
         assert ok and not missing and not extra
 
+    def test_a_spoken_sign_or_exponent_is_matched_by_magnitude(self):
+        # the Quadratic kit (2026-10-17): "negative three" → -٣, "x squared" → س²
+        assert C.english_number_words("x squared minus two x minus eight equals zero") == ["2", "2", "8", "0"]
+        en = "Subtracting three from both sides gives x equals negative three. Subtracting five gives x equals negative five."
+        ar = "بطرح ٣ من الطرفين نحصل على س = -٣. وبطرح ٥ نحصل على س = -٥."
+        ok, missing, extra = C.numbers_equivalent(en, ar)
+        assert ok, (missing, extra)
+        ok, missing, extra = C.numbers_equivalent("x squared minus two x", "س² − ٢س")
+        assert ok, (missing, extra)
+        # a digit the English neither writes nor speaks is still invented
+        ok, missing, extra = C.numbers_equivalent("x equals negative three", "س = -٣ أو س = ٧")
+        assert not ok and extra == ["7"]
+
+    def test_a_spoken_line_may_quote_the_board(self):
+        lesson = {"examples": [{"problem": "x^2 - 2x = 8",
+                                "steps": [{"before": ["x^2 - 2x = 8"], "after": ["x^2 - 2x - 8 = 0"],
+                                           "speech": "We subtract eight from both sides so the right side is zero."}],
+                                "final_answer": ["x = 4", "x = -2"]}]}
+        assert C.board_numbers(lesson) == ["2", "8", "0", "4", "-2"]
+        # the translation restates the equation in digits: every digit is on the board
+        ok, missing, extra = C.numbers_equivalent(lesson["examples"][0]["steps"][0]["speech"],
+                                                  "نطرح ٨ من الطرفين: س² − ٢س − ٨ = ٠.", board=C.board_numbers(lesson))
+        assert ok, (missing, extra)
+        # a value on no board and in no words is invented
+        ok, missing, extra = C.numbers_equivalent("so the right side is zero", "فيصبح الطرف الأيمن ٠ والجذر ٩", board=["0"])
+        assert not ok and extra == ["9"]
+        # and the whole-lesson check reads the board for every spoken line
+        target = {"examples": [{"problem": "x^2 - 2x = 8",
+                                "steps": [{"before": ["x^2 - 2x = 8"], "after": ["x^2 - 2x - 8 = 0"],
+                                           "speech": "نطرح ٨: س² − ٢س − ٨ = ٠."}],
+                                "final_answer": ["x = 4", "x = -2"]}]}
+        assert C.check_maths_lesson(lesson, target)["ok"]
+
     def test_a_number_before_a_full_stop_is_a_number(self):
         assert C.number_values("So x equals 6.") == ["6"]
         assert C.number_values("إذن س تساوي ٦.") == ["6"]

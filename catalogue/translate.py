@@ -504,7 +504,8 @@ def translate_episode(client, body: dict, language: str, terms, *, title: Option
             dst = recompile_maths(src, new_lesson, language, ep_title)
             dst["segments"] = _splice_framing(src.get("segments") or [], dst.get("segments") or [], client,
                                               language, terms, context)
-            r_script = check.check_script(src, dst, language=language, glossary=terms, strict=False)
+            r_script = check.check_script(src, dst, language=language, glossary=terms, strict=False,
+                                          board=check.board_numbers(lesson))
             report = check.merge_reports(r_lesson, r_script)
         else:
             dst = copy.deepcopy(src)
