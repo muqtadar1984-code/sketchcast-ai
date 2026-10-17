@@ -58,6 +58,11 @@ class TestNumerals:
         ok, missing, extra = C.numbers_equivalent("3.14 and 2,500 and 7", "٣٫١٤ و ٢٥٠٠ و ٧")
         assert ok and not missing and not extra
 
+    def test_a_number_before_a_full_stop_is_a_number(self):
+        assert C.number_values("So x equals 6.") == ["6"]
+        assert C.number_values("إذن س تساوي ٦.") == ["6"]
+        assert C.number_values("the ratio is 2.5. Then 3") == ["2.5", "3"]
+
     def test_a_french_decimal_comma_is_a_decimal_mark(self):
         assert C.number_values("1,5 cm") == ["1.5"]
         assert C.number_values("41,120 people") == ["41120"]
@@ -65,6 +70,31 @@ class TestNumerals:
     def test_a_changed_number_is_caught_either_way(self):
         ok, missing, extra = C.numbers_equivalent("x = 5", "س = ٦")
         assert not ok and missing == ["5"] and extra == ["6"]
+
+    def test_english_number_words_parse_to_values(self):
+        # the Angles kit's spoken lines (2026-10-17): the voice reads words
+        assert C.english_number_words("they must sum to three hundred and sixty degrees") == ["360"]
+        assert C.english_number_words("angle AOC is one hundred and thirty-five degrees, and BOD is three z") == ["135", "3"]
+        assert C.english_number_words("ninety-five plus one hundred and thirty-five plus two x equals three hundred and sixty") == ["95", "135", "2", "360"]
+        assert C.english_number_words("two x minus ten equals one hundred and ten") == ["2", "10", "110"]
+        assert C.english_number_words("x equals forty-five; two point five metres; twelve thousand and six") == ["45", "2.5", "12006"]
+        assert C.english_number_words("a hundred ways, and hundreds of them") == []
+        assert C.english_number_words("one of the angles and the point O") == ["1"]
+
+    def test_a_number_the_english_spells_out_may_be_a_digit_in_the_translation(self):
+        en = "Adding the given angles gives two hundred and seventy. Subtracting two hundred and seventy from three hundred and sixty, we find y equals ninety."
+        ar = "بجمع الزاويتين المعطاتين نحصل على ٢٧٠. وبطرح ٢٧٠ من ٣٦٠ نجد أن y تساوي ٩٠."
+        ok, missing, extra = C.numbers_equivalent(en, ar)
+        assert ok and not missing and not extra
+        # … but it is never REQUIRED there: "one of the angles" need not become a digit
+        ok, missing, extra = C.numbers_equivalent("one of the angles is 40 degrees", "إحدى الزوايا تساوي ٤٠ درجة")
+        assert ok and not missing and not extra
+        # and a digit the English never spoke is still an invented number
+        ok, missing, extra = C.numbers_equivalent("three z equals one hundred and thirty-five", "٣ ع = ١٣٥ أي ع = ٤٥")
+        assert not ok and extra == ["45"] and not missing
+        # a spelt number absorbs ONE digit, not two
+        ok, missing, extra = C.numbers_equivalent("two x", "٢ س و ٢ ص")
+        assert not ok and extra == ["2"]
 
     def test_curriculum_codes_are_invariant_tokens(self):
         assert C.code_tokens("covers 7Gg.12 and cbse:7:GEO:01") == ["7Gg.12", "cbse:7:GEO:01"]

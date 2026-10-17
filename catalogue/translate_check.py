@@ -45,9 +45,12 @@ _DIGIT_MAP.update({
     ord("–"): "-",
 })
 
-# A coefficient counts too ("2r", "3x"): only another digit or a point may
-# touch a number, letters may follow it.
-_NUMBER_RE = re.compile(r"(?<![\d.])-?\d[\d,]*(?:\.\d+)?(?![\d.])")
+# A coefficient counts too ("2r", "3x"): only another digit or a decimal
+# point may touch a number, letters may follow it. A full stop that ENDS the
+# sentence ("x equals 6.") is not a decimal point — until 2026-10-17 the
+# lookahead refused it and a number before a full stop was invisible to
+# every check.
+_NUMBER_RE = re.compile(r"(?<![\d.])-?\d[\d,]*(?:\.\d+)?(?!\d|\.\d)")
 _THOUSANDS_RE = re.compile(r"^-?\d{1,3}(?:,\d{3})+(?:\.\d+)?$")
 # "7Gg.12", "9Gg.10", "7Bs.01": an objective code; "cbse:7:GEO:01": a seeded
 # node code. Both are invariant across languages.
@@ -85,9 +88,97 @@ def code_tokens(text: str) -> list[str]:
     return sorted(set(_CODE_RE.findall(str(text or ""))))
 
 
+# ── numbers the ENGLISH source spells out ─────────────────────────────────
+# A maths lesson's spoken lines are written for the voice: "three hundred and
+# sixty degrees", "three z", "two x minus ten" (shared/tts: a digit string is
+# read unevenly). The Arabic translation of the Angles kit (2026-10-17, kit
+# dee8ed26) wrote those as digits — ٣٦٠, ٣، ٢، ١٠ — and every one of them
+# was reported as an invented number, twenty findings, the kit refused.
+# These words are parsed to values and may ABSORB digits on the target side;
+# they never count as missing (an English "one of the angles" is not a
+# number the translation must keep), so this only ever removes false
+# "extra" findings and never adds a finding of its own.
+_UNITS = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+          "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+          "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19}
+_TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90}
+_SCALES = {"hundred": 100, "thousand": 1000, "million": 1_000_000}
+_WORD_RE = re.compile(r"[A-Za-z]+")
+
+
+def english_number_words(text: str) -> list[str]:
+    """The values of the numbers ``text`` spells out in English words, as
+    canonical decimal strings, in order: "one hundred and thirty-five" →
+    "135", "three z" → "3", "two point five" → "2.5". An "and" counts only
+    inside a number ("three hundred and sixty"); "a hundred" is not parsed."""
+    words = [w.lower() for w in _WORD_RE.findall(str(text or "").replace("-", " "))]
+    out: list[str] = []
+    total = 0
+    current = 0
+    in_number = False
+    decimals: list[str] = []
+    in_decimals = False
+
+    def flush():
+        nonlocal total, current, in_number, decimals, in_decimals
+        if in_number:
+            value = total + current
+            if in_decimals and decimals:
+                out.append(f"{value}.{''.join(decimals)}".rstrip("0").rstrip(".") if any(d != "0" for d in decimals)
+                           else str(value))
+            else:
+                out.append(str(value))
+        total = current = 0
+        in_number = in_decimals = False
+        decimals = []
+
+    i = 0
+    while i < len(words):
+        w = words[i]
+        if in_decimals:
+            if w in _UNITS and _UNITS[w] <= 9:
+                decimals.append(str(_UNITS[w]))
+                i += 1
+                continue
+            flush()
+            continue
+        if w in _UNITS:
+            if in_number and current % 10 != 0:
+                flush()                        # "three two": two numbers spoken in a row
+            current += _UNITS[w]
+            in_number = True
+        elif w in _TENS:
+            if in_number and current % 100 != 0:
+                flush()                        # "three twenty": two numbers in a row
+            current += _TENS[w]
+            in_number = True
+        elif w in _SCALES:
+            if not in_number:
+                i += 1
+                continue                       # "a hundred", "hundreds of": not a value
+            scale = _SCALES[w]
+            if scale == 100:
+                current = (current or 1) * 100
+            else:
+                total += (current or 1) * scale
+                current = 0
+        elif w == "and" and in_number and (total or current >= 100) and i + 1 < len(words) \
+                and (words[i + 1] in _UNITS or words[i + 1] in _TENS):
+            pass                               # "three hundred AND sixty"
+        elif w == "point" and in_number and i + 1 < len(words) and words[i + 1] in _UNITS:
+            in_decimals = True
+        else:
+            flush()
+        i += 1
+    flush()
+    return out
+
+
 def numbers_equivalent(source: str, target: str) -> tuple[bool, list[str], list[str]]:
     """Same multiset of numeric VALUES on both sides. Returns (ok, missing,
-    extra) — what the target lost and what it invented."""
+    extra) — what the target lost and what it invented. A value the English
+    source spells out in words ("three hundred and sixty") may stand for a
+    digit on the target side; it is never required there."""
     a, b = number_values(source), number_values(target)
     missing = list(a)
     extra: list[str] = []
@@ -96,6 +187,12 @@ def numbers_equivalent(source: str, target: str) -> tuple[bool, list[str], list[
             missing.remove(v)
         else:
             extra.append(v)
+    if extra:
+        spelt = english_number_words(source)
+        for v in list(extra):
+            if v in spelt:
+                spelt.remove(v)
+                extra.remove(v)
     return (not missing and not extra), missing, extra
 
 
