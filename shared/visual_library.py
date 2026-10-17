@@ -621,6 +621,14 @@ def is_tabular_asset(key: str, description: str | None = None) -> bool:
     return bool(set(text.split()) & _TABULAR_TOKENS)
 
 
+def _is_colour_row(row: dict[str, Any] | None) -> bool:
+    """A colour-shelf row: keyed by a colour key (board colour phase 2)."""
+    from spike.scene_engine.colour import is_colour_key
+    if not isinstance(row, dict):
+        return False
+    return is_colour_key(row.get("asset_key")) or is_colour_key(row.get("canonical_key"))
+
+
 def row_is_tabular(row: dict[str, Any] | None) -> bool:
     if not row:
         return False
@@ -1035,6 +1043,83 @@ def _index_identity(row: dict[str, Any]) -> tuple[str, str]:
             row_format(row))
 
 
+# ── the colour shelf ─────────────────────────────────────────────────────────
+# A coloured board picture (board colour phase 2, <key>__colour) carries no
+# text — labels are board text — so one kit's coloured picture is language-
+# neutral, and the SAME picture serves the English render, a retry of it, and
+# the translated render in every language. Until 2026-10-17 it existed only
+# in the worker's local cache (gone at every redeploy), so the Kit Translator
+# redrew every board picture of a translated science kit: ~12 images, ~15
+# minutes, ~$0.5-0.8 per kit, and a reviewer flag on each. Across the Arabic
+# sweep's 24 science kits and the eight languages that follow, the same
+# pictures would have been drawn ~2,300 times.
+#
+# The shelf is the visual library, with its rows keyed by the COLOUR key
+# (the suffix kept, `quality` naming the colour contract). It is read and
+# written by EXACT key only — `find_colour` — never scored, never aliased:
+# `canonical_key` folds a colour key's words like any other's (plant_cell__
+# colour -> colour_plant; plant__colour -> colour_plant), so a canonical
+# lookup could hand one coloured picture to another key, and the ink path's
+# scorer would rate plant_cell__colour a confident match for plant_cell. Both
+# directions stay closed: the ink path never sees a colour row (best_match
+# refuses one before scoring, register_local never indexes one, the local
+# hydrate refuses one), and the colour path never reads an ink row.
+#
+# VISUAL_LIBRARY_COLOUR_SHELF=0 turns the shelf off — one variable, no
+# deploy: a colour key is then drawn fresh and cached locally, as before.
+COLOUR_SHELF_ENV = "VISUAL_LIBRARY_COLOUR_SHELF"
+# what a shelf row says it passed: the colour cutout's coverage ceiling and
+# the no-text checks (raster_assets), under the colour style
+COLOUR_QUALITY = "renderer_validated_colour"
+
+
+def colour_shelf_enabled() -> bool:
+    return str(os.getenv(COLOUR_SHELF_ENV, "1") or "1").strip().lower() \
+        not in ("0", "false", "no", "off")
+
+
+def find_colour(key: str, *, sb=None) -> dict[str, Any] | None:
+    """The shelf row for a COLOUR key — by exact asset_key, never by meaning,
+    never by canonical key, never a variant spelling. None for a key that is
+    not a colour key, when the shelf is off, offline, or on a miss. The
+    oldest approved row wins, so the picture every language has already
+    been reviewed with stays the picture. `sb` lets the Kit Translator ask
+    with the client it already holds."""
+    from spike.scene_engine.colour import is_colour_key
+    k = str(key or "")
+    if not is_colour_key(k) or not colour_shelf_enabled():
+        return None
+    sb = sb if sb is not None else _sb()
+    if sb is None:
+        return None
+    try:
+        rows = (sb.table("visual_assets").select("*")
+                .eq("status", "approved").eq("asset_key", k)
+                .order("created_at").limit(ROSTER_LIMIT).execute().data or [])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("visual library colour shelf lookup failed for %s: %s", k, exc)
+        return None
+    for row in rows:
+        # belt and braces with the query: the row must BE this colour key and
+        # hold bytes the renderer can use (a PNG; the colour path has no SVG)
+        if (str(row.get("asset_key") or "") == k and row.get("storage_path")
+                and row_format(row) == "png"):
+            return {**row, "match_score": 1.0, "match_source": "exact"}
+    return None
+
+
+def hydrate_colour(key: str, prompt: str, cache_dir: Path,
+                   context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Put the shelf's picture for a colour key where the renderer looks, or
+    return None so the caller may draw. The download and the meta.json are
+    `hydrate`'s (provenance visual_library, the vision payload lifted the
+    same way); only the LOOKUP differs — exact, see find_colour."""
+    hit = find_colour(key)
+    if not hit:
+        return None
+    return hydrate(key, prompt, cache_dir, context, asset_format="png", hit=hit)
+
+
 def register_local(row: dict[str, Any]) -> None:
     """Register metadata locally; safe to call from every generation.
 
@@ -1074,6 +1159,12 @@ def find(key: str, prompt: str, context: dict[str, Any] | None = None,
     is aliased — nothing here changes a stored key, and the hit comes back
     verbatim, so `hydrate` still files it under the key the CALLER asked for.
     """
+    from spike.scene_engine.colour import is_colour_key
+    if is_colour_key(key):
+        # the colour shelf is exact-key only (find_colour); a scored lookup
+        # for a colour key would reach the ink rows the guard admits
+        logger.debug("visual library: %s is a colour key; find() does not serve it", key)
+        return None
     hit = _find_one(key, prompt, context, min_score=min_score,
                     asset_format=asset_format)
     if hit is not None:
@@ -1283,6 +1374,11 @@ def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
                 logger.info("visual library: refusing %s for %s — a table, "
                             "chart or grid is not a picture",
                             r.get("asset_key"), key)
+                continue
+            # a shelf row (the colour shelf, find_colour) is not an ink
+            # picture: refused before scoring, remote rows included, so an
+            # ink lesson can never be handed a coloured picture
+            if _is_colour_row(r):
                 continue
             kept.append(r)
         candidates = kept
@@ -1832,6 +1928,12 @@ def publish_generated(asset_key: str, prompt: str, asset_path: Path,
     # not a roster identity: what gets published — when it gets published at
     # all — is the roster key, so the duplicate check below sees the family.
     asset_key = base_avatar_key(str(asset_key))
+    from spike.scene_engine.colour import is_colour_key
+    colour = is_colour_key(asset_key)
+    if colour and not colour_shelf_enabled():
+        logger.info("visual library: colour shelf is off (%s); not publishing %s",
+                    COLOUR_SHELF_ENV, asset_key)
+        return False
     if is_tabular_asset(asset_key, prompt):
         logger.warning("visual library: refusing to publish %s — a table, "
                        "chart or grid is not a picture and would be served "
@@ -1921,9 +2023,12 @@ def publish_generated(asset_key: str, prompt: str, asset_path: Path,
         # what the asset actually passed, not a generic word: an SVG cleared
         # the publish contract above, a PNG cleared the renderer's coverage
         # and baked-text checks
+        # a colour-shelf row says so here: the key carries the suffix and
+        # the row carries the contract it passed (asset_type stays 'visual';
+        # its check constraint admits nothing else)
         "quality": md.get(
             "quality", "svg_contract_validated" if fmt == "svg"
-            else "renderer_validated"),
+            else COLOUR_QUALITY if colour else "renderer_validated"),
         "asset_format": fmt,
         "group_ids": group_ids,
         "group_count": len(group_ids),

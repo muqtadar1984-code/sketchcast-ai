@@ -1006,3 +1006,127 @@ class TestTheRefusedFormatFilterIsAskedOnce:
             def table(self, name): return Q()
         vl._remote_rows(SB(), "svg")
         assert vl._FORMAT_FILTER_UNAVAILABLE is False
+
+
+class TestTheColourShelfInTheLibrary:
+    """shared.visual_library's half of the colour shelf (the wrapper's half
+    is in tests/test_board_colour.py::TestTheColourShelf): the exact-key
+    lookup, the publish mark, the ink scorer's refusal, the switch."""
+
+    @staticmethod
+    def _png(tmp_path, name="a.png"):
+        from PIL import Image
+        p = tmp_path / name
+        Image.new("RGBA", (40, 30), (220, 40, 40, 255)).save(p)
+        return p
+
+    @staticmethod
+    def _sb(rows):
+        calls = {"inserts": [], "filters": []}
+
+        class Q:
+            def __init__(self):
+                self.f = []
+                self.payload = None
+
+            def select(self, *a, **k): return self
+            def insert(self, payload): self.payload = payload; return self
+            def eq(self, c, v): self.f.append((c, v)); return self
+            def neq(self, *a): return self
+            def or_(self, *a): return self
+            def order(self, *a, **k): return self
+            def range(self, *a): return self
+            def limit(self, n): return self
+
+            def execute(self):
+                if self.payload is not None:
+                    calls["inserts"].append(dict(self.payload))
+                    return type("R", (), {"data": [self.payload]})()
+                calls["filters"].append(list(self.f))
+                return type("R", (), {"data": [r for r in rows if all(r.get(c) == v for c, v in self.f)]})()
+
+        class SB:
+            def table(self, _n): return Q()
+            @property
+            def storage(self): return self
+            def from_(self, _b): return self
+            def upload(self, path, fh, _o=None): calls.setdefault("uploads", []).append(path)
+            def download(self, path): return b"\x89PNG"
+        return SB(), calls
+
+    def test_find_colour_is_exact_and_only_for_a_colour_key(self, monkeypatch):
+        import shared.visual_library as vl
+        monkeypatch.delenv(vl.COLOUR_SHELF_ENV, raising=False)
+        rows = [{"id": "r1", "asset_key": "sk_cone__colour", "canonical_key": "colour_cone_sk", "status": "approved",
+                 "storage_path": "generated/colour_cone_sk/aa.png", "asset_format": "png", "created_at": "2026-10-01"},
+                {"id": "r0", "asset_key": "sk_cone__colour", "canonical_key": "colour_cone_sk", "status": "approved",
+                 "storage_path": None, "asset_format": "png"},
+                {"id": "r2", "asset_key": "sk_cone__colour", "canonical_key": "colour_cone_sk", "status": "retired",
+                 "storage_path": "generated/colour_cone_sk/bb.png", "asset_format": "png"},
+                {"id": "r3", "asset_key": "sk_cone", "canonical_key": "cone_sk", "status": "approved",
+                 "storage_path": "generated/cone_sk/ink.png", "asset_format": "png"}]
+        sb, calls = self._sb(rows)
+        monkeypatch.setattr(vl, "_sb", lambda: sb)
+        hit = vl.find_colour("sk_cone__colour")
+        assert hit is not None and hit["id"] == "r1" and hit["match_source"] == "exact" and hit["match_score"] == 1.0
+        assert calls["filters"] == [[("status", "approved"), ("asset_key", "sk_cone__colour")]], "status and EXACT key, nothing else"
+        assert vl.find_colour("sk_cone") is None and len(calls["filters"]) == 1, "a plain key asks nothing"
+        assert vl.find_colour("sk_cube__colour") is None, "a miss is a miss"
+        # the caller's own client is used when given
+        sb2, calls2 = self._sb(rows)
+        assert vl.find_colour("sk_cone__colour", sb=sb2)["id"] == "r1" and calls2["filters"]
+        # the switch
+        monkeypatch.setenv(vl.COLOUR_SHELF_ENV, "off")
+        assert vl.find_colour("sk_cone__colour") is None
+        # offline
+        monkeypatch.delenv(vl.COLOUR_SHELF_ENV, raising=False)
+        monkeypatch.setattr(vl, "_sb", lambda: None)
+        assert vl.find_colour("sk_cone__colour") is None
+
+    def test_a_colour_row_is_never_a_candidate_for_the_ink_scorer(self, monkeypatch, tmp_path):
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "idx")
+        monkeypatch.delenv("VISUAL_LIBRARY_MIN_SCORE", raising=False)
+        colour_row = {"id": "c1", "asset_key": "plant_cell__colour", "canonical_key": "colour_plant",
+                      "description": "A plant cell with its wall, membrane and chloroplasts", "status": "approved",
+                      "asset_type": "visual", "asset_format": "png", "storage_path": "generated/colour_plant/aa.png",
+                      "subject": "biology", "grade": "k12", "curriculum": "generic", "topic": "plant cell", "concepts": []}
+        ink_row = {**colour_row, "id": "i1", "asset_key": "plant_cell", "canonical_key": "cell_plant",
+                   "storage_path": "generated/cell_plant/bb.png"}
+        sb, _ = self._sb([colour_row])
+        monkeypatch.setattr(vl, "_sb", lambda: sb)
+        assert vl._is_colour_row(colour_row) and not vl._is_colour_row(ink_row)
+        assert vl.best_match("plant_cell", "A plant cell", asset_format="png") == (None, 0.0, "none")
+        assert vl.best_match("plant_cell", "A plant cell", asset_format="png", guarded=True) == (None, 0.0, "none")
+        sb, _ = self._sb([colour_row, ink_row])
+        monkeypatch.setattr(vl, "_sb", lambda: sb)
+        best, score, source = vl.best_match("plant_cell", "A plant cell", asset_format="png")
+        assert best["id"] == "i1" and score > 0 and source == "remote", "the ink row still serves the ink key"
+
+    def test_publish_keeps_the_colour_key_and_marks_the_row(self, monkeypatch, tmp_path):
+        import shared.visual_library as vl
+        from shared.asset_keys import canonical_key
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "idx")
+        monkeypatch.delenv(vl.COLOUR_SHELF_ENV, raising=False)
+        sb, calls = self._sb([])
+        monkeypatch.setattr(vl, "_sb", lambda: sb)
+        png = self._png(tmp_path)
+        assert vl.publish_generated("sk_cone__colour", "A simple cone", png, {"provenance": "generated"}, None) is True
+        (row,) = calls["inserts"]
+        assert row["asset_key"] == "sk_cone__colour" and row["canonical_key"] == canonical_key("sk_cone__colour")
+        assert row["canonical_key"] != canonical_key("sk_cone")
+        assert row["quality"] == vl.COLOUR_QUALITY and row["asset_type"] == "visual" and row["asset_format"] == "png"
+        assert calls["uploads"] == [row["storage_path"]]
+        assert not (tmp_path / "idx" / "index.json").exists(), "never in the ink scoring index"
+        # an ink publish is untouched
+        assert vl.publish_generated("sk_cone", "A simple cone", self._png(tmp_path, "b.png"), {"provenance": "generated"}, None) is True
+        assert calls["inserts"][-1]["quality"] == "renderer_validated" and calls["inserts"][-1]["asset_key"] == "sk_cone"
+
+    def test_publish_refuses_a_colour_key_with_the_shelf_off(self, monkeypatch, tmp_path):
+        import shared.visual_library as vl
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "idx")
+        monkeypatch.setenv(vl.COLOUR_SHELF_ENV, "0")
+        sb, calls = self._sb([])
+        monkeypatch.setattr(vl, "_sb", lambda: sb)
+        assert vl.publish_generated("sk_cone__colour", "A simple cone", self._png(tmp_path), {"provenance": "generated"}, None) is False
+        assert calls["inserts"] == [] and "uploads" not in calls

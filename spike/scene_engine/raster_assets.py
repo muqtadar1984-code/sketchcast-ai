@@ -144,9 +144,11 @@ _WHITE_PAGE_CLAUSE = (
 )
 
 # A coloured board picture is a DIFFERENT asset from the ink one: its own
-# cache directory, never a library candidate. The suffix is on the key, so
-# every layer keyed by the key (the lock, the cache, the deferral map, the
-# library wrapper) tells the two apart without learning a new argument.
+# cache directory, never a candidate for an ink request, shelved in the
+# library under its own key (visual_library.find_colour, exact). The suffix
+# is on the key, so every layer keyed by the key (the lock, the cache, the
+# deferral map, the library wrapper) tells the two apart without learning a
+# new argument.
 from .colour import COLOUR_KEY_SUFFIX, is_colour_key  # noqa: E402  (the library shares them)
 
 
@@ -826,11 +828,15 @@ def generation_forbidden(key: str | None = None) -> bool:
 
     Under the board-colour pictures switch a board picture is fetched under
     its colour key and is NEVER served from the ink library
-    (visual_library_integration: a coloured picture is not an ink one), so a
-    translated render can only ever draw it: every board picture is then a
-    redraw, and the translate stage predicts and flags exactly that
-    (catalogue.translate.resolve_assets). Measured on the Cells kit
-    (2026-10-17): eleven board pictures refused in six seconds."""
+    (visual_library_integration: a coloured picture is not an ink one). It
+    may be served from the colour SHELF — the library row keyed by its exact
+    colour key (shared.visual_library.find_colour), hydrated by the wrapper
+    BEFORE this module is asked — so a board key stays drawable here: a
+    shelf hit never reaches generation, and a shelf miss still renders (as a
+    redraw the translate stage predicted and flagged,
+    catalogue.translate.resolve_assets). Measured on the Cells kit
+    (2026-10-17): eleven board pictures refused in six seconds, before the
+    shelf existed."""
     with _IMAGE_BUDGET_LOCK:
         b = _bucket()
         if not b.get("forbid_generate"):

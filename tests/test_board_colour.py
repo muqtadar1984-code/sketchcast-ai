@@ -394,20 +394,27 @@ class TestThePictures:
         th.join()
         assert seen == {"colour": False, "pictures": False}
 
-    def test_the_library_never_sees_a_coloured_key(self):
+    def test_the_ink_library_never_sees_a_coloured_key(self):
         """Source-level: the wrapper renames BEFORE the lock, and a colour key
-        goes straight to the generator — no scoring, no hydrate, no publish,
-        no decision line."""
+        takes the colour SHELF's own decision (_decide_colour) — no scoring,
+        no ink hydrate, no local-index hydrate, no refresh from the ink
+        library. What it keeps is the exact-key shelf (hydrate_colour), the
+        publish under the colour key, and the decision line."""
         from pathlib import Path
         import shared.visual_library_integration as vli
         src = Path(vli.__file__).read_text(encoding="utf-8")
         rename = src.index("key = ra.colour_key(key)")
         lock = src.index("with ra.asset_lock(key):", rename)
         assert rename < lock
-        bypass = src.index("if ra.is_colour_key(key):\n            return original(key, prompt, cache, allow_generate)")
-        for later in ("best_match(", "hydrate(key", "_hydrate_local_library(", "publish_generated(", "log_decision("):
+        bypass = src.index("if ra.is_colour_key(key):\n            return _decide_colour(key, prompt, cache, allow_generate)")
+        for later in ("best_match(", "hydrate(key", "_hydrate_local_library(", "_refresh_from_library(key"):
             assert src.index(later, bypass) > bypass, later
-        assert src.index("_refresh_from_library(key", bypass) > bypass
+        body_start = src.index("def _decide_colour(")
+        body = src[body_start:src.index("def wrapped_get_svg_asset(", body_start)]
+        for never in ("best_match(", "hydrate(key", "_hydrate_local_library(", "_refresh_from_library(", "find("):
+            assert never not in body, never
+        for kept in ("hydrate_colour(", "publish_generated(", "log_decision(", "colour_shelf_enabled()"):
+            assert kept in body, kept
 
     def test_the_format_changelog_names_the_pictures(self):
         from shared import video_format as VF
@@ -491,6 +498,264 @@ class TestTheLeaksTheFirstPhase2DemoFound:
         monkeypatch.setattr(vl, "find", lambda *a, **k: {"asset_key": "sk_cone__colour", "local_cache_path": str(src), "match_score": 1.4})
         assert vli._hydrate_local_library("sk_cone", "A simple cone", tmp_path / "cache") is False
         assert not list((tmp_path / "cache").glob("**/asset.png")) if (tmp_path / "cache").exists() else True
+
+
+class _ShelfSB:
+    """A visual_assets table and its bucket, as the shelf's lookups and the
+    publisher use them: `eq` filters are honoured (the exact-key read is the
+    whole point), everything else is accepted and ignored."""
+
+    def __init__(self, rows=(), blobs=None):
+        self.rows = [dict(r) for r in rows]
+        self.blobs = dict(blobs or {})
+        self.uploads: list[str] = []
+        self.inserts: list[dict] = []
+        self.queries: list[list] = []
+
+    # the table
+    def table(self, _name):
+        sb = self
+
+        class Q:
+            def __init__(self):
+                self.filters: list = []
+                self.payload = None
+
+            def select(self, *_a, **_k):
+                return self
+
+            def insert(self, payload):
+                self.payload = payload
+                return self
+
+            def eq(self, col, val):
+                self.filters.append((col, val))
+                return self
+
+            def neq(self, *_a):
+                return self
+
+            def or_(self, *_a):
+                return self
+
+            def order(self, *_a, **_k):
+                return self
+
+            def range(self, *_a):
+                return self
+
+            def limit(self, _n):
+                return self
+
+            def execute(self):
+                if self.payload is not None:
+                    sb.inserts.append(dict(self.payload))
+                    sb.rows.append({**self.payload, "id": self.payload.get("id") or f"row-{len(sb.rows) + 1}"})
+                    return type("R", (), {"data": [sb.rows[-1]]})()
+                sb.queries.append(list(self.filters))
+                data = [r for r in sb.rows if all(r.get(c) == v for c, v in self.filters)]
+                return type("R", (), {"data": data})()
+        return Q()
+
+    # the bucket
+    @property
+    def storage(self):
+        return self
+
+    def from_(self, _bucket):
+        return self
+
+    def download(self, path):
+        return self.blobs[path]
+
+    def upload(self, path, fh, _opts=None):
+        self.uploads.append(path)
+        self.blobs[path] = fh.read()
+
+
+class TestTheColourShelf:
+    """A kit's coloured board pictures are drawn ONCE and shelved in the
+    visual library under their colour key, so every later render of the
+    same key — the translated renders of the same kit in every language, a
+    retry of the English kit — reuses them. Exact key only, both ways: an
+    ink lesson never receives a coloured picture, a colour lesson never
+    receives an ink one. VISUAL_LIBRARY_COLOUR_SHELF=0 is the rollback."""
+
+    KEY = "plant_cell"
+    CKEY = "plant_cell__colour"
+
+    @staticmethod
+    def _cutout_png() -> bytes:
+        """What the shelf holds: the renderer's cutout (to_color_art), not
+        the raw model page — the cache stores the cutout and the publisher
+        uploads the cache file."""
+        import io
+        from spike.scene_engine import raster_assets as ra
+        buf = io.BytesIO()
+        ra.to_color_art(TestThePictures._filled_art()).save(buf, "PNG")
+        return buf.getvalue()
+
+    def _shelf(self, monkeypatch, tmp_path, rows=(), blobs=None):
+        import shared.visual_library as vl
+        sb = _ShelfSB(rows, blobs)
+        monkeypatch.setattr(vl, "_sb", lambda: sb)
+        monkeypatch.setattr(vl, "LIBRARY_DIR", tmp_path / "idx")
+        monkeypatch.setattr(vl, "DECISION_LOG", tmp_path / "decisions.jsonl")
+        monkeypatch.delenv(colour.FLAG, raising=False)
+        monkeypatch.delenv(colour.PICTURES_FLAG, raising=False)
+        monkeypatch.delenv(vl.COLOUR_SHELF_ENV, raising=False)
+        monkeypatch.delenv("VISUAL_LIBRARY_MIN_SCORE", raising=False)
+        return sb
+
+    @staticmethod
+    def _decisions(tmp_path) -> list[dict]:
+        import json
+        p = tmp_path / "decisions.jsonl"
+        return [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()] if p.exists() else []
+
+    def _row(self, key=CKEY, path="generated/colour_plant/aa.png", **extra) -> dict:
+        from shared.asset_keys import canonical_key
+        return {"id": "c0100000-0000-4000-8000-000000000001", "asset_key": key, "canonical_key": canonical_key(key),
+                "status": "approved", "storage_path": path, "asset_format": "png", "asset_type": "visual",
+                "description": "A plant cell", "created_at": "2026-10-17T00:00:00Z", **extra}
+
+    def _colour_fetch(self, tmp_path, key=KEY, prompt="A plant cell"):
+        from spike.scene_engine import raster_assets as ra
+        t = colour.set_pin(True, True)
+        try:
+            return ra.get_raster_asset(key, prompt, tmp_path / "cache")
+        finally:
+            colour.reset_pin(t)
+
+    def test_a_freshly_drawn_colour_picture_is_published_under_its_colour_key(self, tmp_path, monkeypatch):
+        import shared.visual_library as vl
+        from shared.asset_keys import canonical_key
+        from spike.scene_engine import raster_assets as ra
+        sb = self._shelf(monkeypatch, tmp_path)
+        seen = TestThePictures._stub_generation(monkeypatch, TestThePictures._filled_art())
+        asset = self._colour_fetch(tmp_path)
+        assert asset is not None and asset.key == self.CKEY and asset.wash is not None
+        assert "prompt" in seen, "a shelf miss is drawn"
+        # one row, keyed by the COLOUR key, distinct from the ink key's identity
+        assert [r["asset_key"] for r in sb.inserts] == [self.CKEY]
+        row = sb.inserts[0]
+        assert row["canonical_key"] == canonical_key(self.CKEY) != canonical_key(self.KEY)
+        assert row["quality"] == vl.COLOUR_QUALITY and row["asset_type"] == "visual"
+        assert row["status"] == "approved" and row["provenance"] == "generated"
+        assert sb.uploads == [row["storage_path"]] and row["storage_path"].startswith(f"generated/{canonical_key(self.CKEY)}/")
+        assert sb.blobs[row["storage_path"]] == (ra.cache_dir_for(self.CKEY, tmp_path / "cache") / "asset.png").read_bytes(), \
+            "the shelf holds the cache file: the cutout the renderer binds"
+        # the local index is the INK scoring index; a colour row never enters it
+        assert not (tmp_path / "idx" / "index.json").exists()
+        # one decision line, as the ink path writes
+        (line,) = self._decisions(tmp_path)
+        assert line["requested_key"] == self.CKEY and line["outcome"] == "generated"
+        assert line["ai_generated"] is True and line["published"] is True
+        assert line["colour"] is True and line["colour_shelf"] is True and line["library_hit"] is False
+
+    def test_a_shelf_row_is_hydrated_by_exact_key_and_nothing_is_drawn(self, tmp_path, monkeypatch):
+        from spike.scene_engine import raster_assets as ra
+        sb = self._shelf(monkeypatch, tmp_path, rows=[self._row()],
+                         blobs={"generated/colour_plant/aa.png": self._cutout_png()})
+        seen = TestThePictures._stub_generation(monkeypatch, TestThePictures._filled_art(fill=(0, 200, 0)))
+        asset = self._colour_fetch(tmp_path)
+        assert asset is not None and asset.key == self.CKEY
+        assert "prompt" not in seen, "the shelf answered; no image call"
+        assert asset.wash is not None and TestThePictures._red_pixels(asset.wash) > 1000, "the shelf's picture, in colour"
+        import json
+        md = json.loads((ra.cache_dir_for(self.CKEY, tmp_path / "cache") / "meta.json").read_text(encoding="utf-8"))
+        assert md["provenance"] == "visual_library" and md["library_asset_id"] == "c0100000-0000-4000-8000-000000000001"
+        # the read was by exact key, and nothing was published back
+        assert any(("asset_key", self.CKEY) in q for q in sb.queries)
+        assert sb.inserts == [] and sb.uploads == []
+        (line,) = self._decisions(tmp_path)
+        assert line["outcome"] == "library_hit" and line["library_hit"] is True
+        assert line["match_source"] == "exact" and line["match_score"] == 1.0
+        assert line["matched_key"] == self.CKEY and line["matched_id"] == "c0100000-0000-4000-8000-000000000001"
+        assert line["asset_provenance"] == "visual_library" and line["ai_generated"] is False and line["published"] is False
+        assert line["colour"] is True
+        # a second ask is the local cache, no shelf read
+        before = len(sb.queries)
+        again = self._colour_fetch(tmp_path)
+        assert again is not None and len(sb.queries) == before
+        assert self._decisions(tmp_path)[-1]["outcome"] == "local_cache"
+
+    def test_the_shelf_is_exact_never_canonical_or_a_variant_spelling(self, tmp_path, monkeypatch):
+        """plant_cell__colour folds to colour_plant, as plant__colour would;
+        and the lookup aliases (plant_cell__color) that serve the ink path
+        never serve the shelf."""
+        import shared.visual_library as vl
+        from shared.asset_keys import canonical_key
+        sb = self._shelf(monkeypatch, tmp_path, rows=[
+            self._row(key="plant__colour", path="generated/colour_plant/bb.png"),
+            self._row(key="plant_cell__color", path="generated/color_plant/cc.png"),
+            self._row(key=self.KEY, path="generated/cell_plant/ink.png"),
+        ], blobs={"generated/colour_plant/bb.png": self._cutout_png(),
+                  "generated/color_plant/cc.png": self._cutout_png(),
+                  "generated/cell_plant/ink.png": self._cutout_png()})
+        assert canonical_key("plant__colour") == canonical_key(self.CKEY), "the fold the exact rule exists for"
+        assert vl.find_colour(self.CKEY) is None
+        seen = TestThePictures._stub_generation(monkeypatch, TestThePictures._filled_art())
+        asset = self._colour_fetch(tmp_path)
+        assert asset is not None and "prompt" in seen, "nothing on the shelf matched exactly: drawn"
+        assert sb.inserts and sb.inserts[0]["asset_key"] == self.CKEY
+
+    def test_an_ink_lesson_never_receives_the_shelf_s_picture(self, tmp_path, monkeypatch):
+        import shared.visual_library as vl
+        from spike.scene_engine import raster_assets as ra
+        sb = self._shelf(monkeypatch, tmp_path, rows=[self._row()],
+                         blobs={"generated/colour_plant/aa.png": self._cutout_png()})
+        # the scorer: a colour row is refused BEFORE scoring, remote included
+        assert vl.best_match(self.KEY, "A plant cell", asset_format="png") == (None, 0.0, "none")
+        assert vl.find(self.KEY, "A plant cell", asset_format="png") is None
+        assert vl.find(self.CKEY, "A plant cell", asset_format="png") is None, "find() does not serve the shelf"
+        # end to end, pictures OFF: the ink key is drawn in ink
+        seen = TestThePictures._stub_generation(monkeypatch, TestThePictures._filled_art(fill=None))
+        asset = ra.get_raster_asset(self.KEY, "A plant cell", tmp_path / "cache")
+        assert asset is not None and asset.key == self.KEY and "prompt" in seen
+        assert asset.wash is None and TestThePictures._red_pixels(asset.ink) == 0
+        assert not (ra.cache_dir_for(self.CKEY, tmp_path / "cache") / "asset.png").exists()
+        line = self._decisions(tmp_path)[-1]
+        assert line["requested_key"] == self.KEY and line["outcome"] == "generated" and line["matched_key"] is None
+        assert "colour" not in line
+
+    def test_a_colour_lesson_never_receives_an_ink_row(self, tmp_path, monkeypatch):
+        import shared.visual_library as vl
+        sb = self._shelf(monkeypatch, tmp_path, rows=[self._row(key=self.KEY, path="generated/cell_plant/ink.png")],
+                         blobs={"generated/cell_plant/ink.png": self._cutout_png()})
+        assert vl.find_colour(self.CKEY) is None
+        asked = len(sb.queries)
+        assert vl.find_colour(self.KEY) is None and len(sb.queries) == asked, "a plain key is not a shelf question"
+        seen = TestThePictures._stub_generation(monkeypatch, TestThePictures._filled_art())
+        asset = self._colour_fetch(tmp_path)
+        assert asset is not None and "prompt" in seen and asset.wash is not None
+
+    def test_the_shelf_is_one_variable_away(self, tmp_path, monkeypatch):
+        import shared.visual_library as vl
+        sb = self._shelf(monkeypatch, tmp_path, rows=[self._row()],
+                         blobs={"generated/colour_plant/aa.png": self._cutout_png()})
+        monkeypatch.setenv(vl.COLOUR_SHELF_ENV, "0")
+        assert vl.colour_shelf_enabled() is False and vl.find_colour(self.CKEY) is None
+        seen = TestThePictures._stub_generation(monkeypatch, TestThePictures._filled_art())
+        asset = self._colour_fetch(tmp_path)
+        assert asset is not None and "prompt" in seen, "drawn fresh, as before the shelf"
+        assert sb.queries == [] and sb.inserts == [] and sb.uploads == [], "neither read nor written"
+        (line,) = self._decisions(tmp_path)
+        assert line["outcome"] == "generated" and line["published"] is False and line["colour_shelf"] is False
+
+    def test_a_hydrated_picture_the_renderer_threw_away_is_not_a_hit(self, tmp_path, monkeypatch):
+        """The shelf's bytes are corrupt: the renderer draws again in place
+        and stamps `generated`; the line says library_asset_regenerated and
+        the redraw goes back on the shelf."""
+        sb = self._shelf(monkeypatch, tmp_path, rows=[self._row()],
+                         blobs={"generated/colour_plant/aa.png": b"\x89PNG not really"})
+        seen = TestThePictures._stub_generation(monkeypatch, TestThePictures._filled_art())
+        asset = self._colour_fetch(tmp_path)
+        assert asset is not None and "prompt" in seen
+        (line,) = self._decisions(tmp_path)
+        assert line["outcome"] == "library_asset_regenerated" and line["library_hit"] is False
+        assert line["library_discarded"] == "regenerated" and line["published"] is True
+        assert [r["asset_key"] for r in sb.inserts] == [self.CKEY]
 
 
 class TestTheWash:
