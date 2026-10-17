@@ -1400,12 +1400,17 @@ class ClaudeClient:
             "total_tokens": total,
             "estimated_cost_usd": round(cost, 6),
         }
-        self.session_usage["calls"] += 1
-        self.session_usage["input_tokens"] += inp
-        self.session_usage["output_tokens"] += out
-        self.session_usage["cache_read_input_tokens"] += cache_read
-        self.session_usage["cache_creation_input_tokens"] += cache_write
-        self.session_usage["cost_usd"] = round(self.session_usage["cost_usd"] + cost, 6)
+        # Under the lock: the translator's bank stage runs several calls of
+        # one client side by side (catalogue.translate.bank_stage), and a
+        # read-add-store on a dict entry from two threads loses a count —
+        # jobs.usage and the kit's cost line would then undercount.
+        with _USAGE_LOCK:
+            self.session_usage["calls"] += 1
+            self.session_usage["input_tokens"] += inp
+            self.session_usage["output_tokens"] += out
+            self.session_usage["cache_read_input_tokens"] += cache_read
+            self.session_usage["cache_creation_input_tokens"] += cache_write
+            self.session_usage["cost_usd"] = round(self.session_usage["cost_usd"] + cost, 6)
         self._log_usage(usage)
         return usage
 

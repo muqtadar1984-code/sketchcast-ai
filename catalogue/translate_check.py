@@ -24,6 +24,8 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Iterable, Optional
 
+from shared.languages import NON_LATIN_SCRIPTS
+
 # ── numerals ─────────────────────────────────────────────────────────────
 
 # Digit runs of the scripts the lesson languages write in, each mapped onto
@@ -105,7 +107,7 @@ _SCRIPT_RE = {
     "telu": re.compile(r"[ఀ-౿]"),
 }
 _LATIN_RE = re.compile(r"[A-Za-z]")
-_LANGUAGE_SCRIPT = {"ar": "arab", "ur": "arab", "ms-arab": "arab", "hi": "deva", "mr": "deva", "te": "telu"}
+_LANGUAGE_SCRIPT = NON_LATIN_SCRIPTS      # shared.languages: one table for the check and the analyzer's budget
 # A target in a non-Latin script may keep this share of Latin letters (a
 # variable name, a unit, a proper noun) before the segment is flagged.
 LATIN_SHARE_FLAG = 0.25

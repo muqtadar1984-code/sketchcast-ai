@@ -423,6 +423,131 @@ def _ws_run(sb, monkeypatch, tmp_path, client):
     return k, staged, uploads
 
 
+class TestBankBatching:
+    """The bank stage's calls run side by side in whole-item batches; a batch
+    whose reply cannot be used falls back to one call per item for that batch
+    only; the kit-scoped twin rule and the "bank item not staged" flags are
+    exactly what they were."""
+
+    def _sb(self, n=12):
+        sb = _job_sb()
+        sb.tables["topic_questions"] = [_item(i) for i in range(1, n + 1)]
+        sb.tables["topic_kits"][0]["doc_generation_ids"] = {"deck": "gen-deck"}   # no bank piece: the floor does not bind
+        return sb
+
+    def test_batch_items_never_splits_an_item_and_counts_a_shared_string_once(self):
+        items = [_item(i) for i in range(1, 13)]
+        batches = T.batch_items(items, 10)
+        assert [it["id"] for b in batches for it in b] == [it["id"] for it in items], "every item, once, in order"
+        for b in batches[:-1]:
+            distinct = {t for it in b for _, t in T.item_text_items(it)}
+            assert len(distinct) <= 10, "a batch holds at most the chunk's distinct strings"
+        assert len(batches) >= 3, "the shared option texts and explanation are counted once per batch, so a batch holds several items"
+        huge = {**_item(1), "stem": "x", "options": [{"key": k, "text": f"option {k}"} for k in "ABCDEFGHIJKLMNOP"]}
+        assert T.batch_items([huge, _item(2)], 5) == [[huge], [_item(2)]], "an item wider than the chunk is a batch of its own"
+        assert T.batch_items([], 10) == []
+
+    def test_the_knobs_are_read_from_the_environment_and_clamped(self, monkeypatch):
+        monkeypatch.delenv(T.BANK_CHUNK_ENV, raising=False)
+        monkeypatch.delenv(T.BANK_WORKERS_ENV, raising=False)
+        assert T.bank_chunk() == T.BANK_CHUNK_DEFAULT and T.bank_workers() == T.BANK_WORKERS_DEFAULT
+        monkeypatch.setenv(T.BANK_CHUNK_ENV, "1000")
+        monkeypatch.setenv(T.BANK_WORKERS_ENV, "0")
+        assert T.bank_chunk() == T.CHUNK and T.bank_workers() == 1
+        monkeypatch.setenv(T.BANK_CHUNK_ENV, "abc")
+        monkeypatch.setenv(T.BANK_WORKERS_ENV, "99")
+        assert T.bank_chunk() == T.BANK_CHUNK_DEFAULT and T.bank_workers() == T.BANK_WORKERS_MAX
+
+    def test_the_bank_is_translated_in_concurrent_batches_and_the_tally_is_recorded(self, monkeypatch):
+        import threading
+        monkeypatch.setenv(T.BANK_CHUNK_ENV, "10")
+        monkeypatch.setenv(T.BANK_WORKERS_ENV, "3")
+        sb = self._sb()
+        threads: list[str] = []
+
+        class Threaded(FakeTranslator):
+            def analyze(self, prompt, **k):
+                threads.append(threading.current_thread().name)
+                return super().analyze(prompt, **k)
+
+        c = Threaded()
+        kit = {"id": "kit-ar", "topic_id": "t-cell"}
+        expected = len(T.batch_items([_item(i) for i in range(1, 13)], 10))   # before the run stages 12 more rows
+        mapping, summary = T.bank_stage(sb, c, {"kit": sb.tables["topic_kits"][0]}, kit, "ar", [], "art-ar")
+        assert expected >= 3 and len(mapping) == 12 and summary["staged"] == 12 and summary["dropped"] == []
+        assert len(c.calls) == expected, "one call per batch, no retry"
+        assert summary["batching"] == {"chunk": 10, "workers": 3, "batches": expected, "batch_calls": expected,
+                                       "fallback_items": 0, "fallback_failed": 0, "model_calls": expected}
+        assert any(t.startswith("bank-translate") for t in threads), "the batches ran on the pool"
+        staged = [r for r in sb.tables["topic_questions"] if r.get("translation_kit_id") == "kit-ar"]
+        assert len(staged) == 12 and all(r["status"] == "staged" and r["stem"].startswith("ترجمة") for r in staged)
+        assert len({r["content_hash"] for r in staged}) == 12, "the kit-scoped hash tells every item apart"
+
+    def test_a_batch_whose_reply_is_unusable_falls_back_to_one_call_per_item_for_that_batch_only(self, monkeypatch):
+        monkeypatch.setenv(T.BANK_CHUNK_ENV, "10")
+        monkeypatch.setenv(T.BANK_WORKERS_ENV, "2")
+        sb = self._sb()
+        bad_stem = _item(6)["stem"]                     # "The cytoplasm of a cell is ____."
+        batches = T.batch_items(sb.tables["topic_questions"], 10)
+        bad_batch = next(b for b in batches if any(it["id"] == "q-6" for it in b))
+        assert len(bad_batch) >= 2, "the failing batch has company"
+
+        class Garbled(FakeTranslator):
+            def analyze(self, prompt, **k):
+                # any reply that would carry item 6 comes back as prose the
+                # client could not read — the whole batch, and item 6 alone
+                if bad_stem in prompt:
+                    self.calls.append(prompt)
+                    self.session_usage["calls"] += 1
+                    return {"data": {"raw_text": "عذراً، لا يمكنني"}, "usage": {}}
+                return super().analyze(prompt, **k)
+
+        c = Garbled()
+        kit = {"id": "kit-ar", "topic_id": "t-cell"}
+        mapping, summary = T.bank_stage(sb, c, {"kit": sb.tables["topic_kits"][0]}, kit, "ar", [], "art-ar")
+        # every item but the garbled one is staged — the rest of its batch by its own call
+        assert set(mapping) == {f"q-{i}" for i in range(1, 13)} - {"q-6"}
+        for it in bad_batch:
+            if it["id"] != "q-6":
+                own = [p for p in c.calls if it["stem"] in p and bad_stem not in p]
+                assert len(own) == 1, f"{it['id']} was translated once on its own after the batch failed"
+        for it in batches[0]:
+            if it not in bad_batch:
+                assert sum(1 for p in c.calls if it["stem"] in p) == 1, "a batch that worked was asked exactly once"
+        # item 6: dropped with the reason, after the one retry the stage gives a refused item
+        assert summary["retried"] == 1 and summary["batching"]["fallback_items"] == len(bad_batch) + 1
+        assert summary["batching"]["fallback_failed"] == 2, "once in the first pass, once in the retry"
+        d = next(d for d in summary["dropped"] if d["source_item_id"] == "q-6")
+        assert [f["what"] for f in d["findings"]] == [T.UNUSABLE_REPLY, T.UNUSABLE_REPLY]
+        assert d["findings"][1]["where"].endswith("(retry)")
+        flags = T.bank_flags(summary)
+        assert flags == [{"where": "item q-6", "what": "bank item not staged",
+                          "detail": f"{T.UNUSABLE_REPLY}; {T.UNUSABLE_REPLY}"}], "the flag is the one the reviewer already knows"
+        # the tally: one call per batch, plus the fallback and retry calls
+        assert summary["batching"]["batches"] == len(batches) + 1 and summary["batching"]["batch_calls"] == len(batches) + 1
+        assert summary["batching"]["model_calls"] == len(c.calls)
+
+    def test_two_items_that_translate_to_one_sentence_are_still_one_item_with_the_twin_flag(self, monkeypatch):
+        monkeypatch.setenv(T.BANK_CHUNK_ENV, "10")
+        sb = self._sb()
+        same = _arabize(_item(1)["stem"])
+
+        def collapse(s: str) -> str:
+            # item 3's stem comes back as item 1's sentence (both mcq): one
+            # Arabic question, two English sources
+            return same if s == _item(3)["stem"] else _arabize(s)
+
+        c = FakeTranslator(collapse)
+        kit = {"id": "kit-ar", "topic_id": "t-cell"}
+        mapping, summary = T.bank_stage(sb, c, {"kit": sb.tables["topic_kits"][0]}, kit, "ar", [], "art-ar")
+        assert "q-1" in mapping and "q-3" not in mapping and len(mapping) == 11
+        d = next(d for d in summary["dropped"] if d["source_item_id"] == "q-3")
+        assert d["findings"] == [{"where": "q-3", "what": "translated stem duplicates another item"}]
+        assert T.bank_flags(summary) == [{"where": "item q-3", "what": "bank item not staged",
+                                          "detail": "translated stem duplicates another item"}]
+        assert summary["retried"] == 0, "a twin is a database fact, not a translation fault — no retry"
+
+
 class TestQuestionCheck:
     def test_is_maths_tells_notation_from_words(self):
         for s in ("x = 5", "9π cm", "3x + 5 = 20", "7", "37.68", "C = 2 × 3.14 × 6", ""):
@@ -834,7 +959,11 @@ class TestTranslateJob:
         assert k["presentation_generation_id"] == labels["presentation"]["id"]
         assert set(k["doc_generation_ids"]) == {"deck", "activity", "case_study", "worksheet", "question_bank", "quiz"}
         # pre-check B ran on a sample and flagged nothing (the fake keeps the words)
-        assert k["precheck"]["bank"] == {"source_items": 12, "staged": 12, "reused": 0, "retried": 0}
+        bank = dict(k["precheck"]["bank"])
+        batching = bank.pop("batching")
+        assert bank == {"source_items": 12, "staged": 12, "reused": 0, "retried": 0}
+        assert batching["batches"] >= 1 and batching["batch_calls"] == batching["batches"] and batching["fallback_items"] == 0
+        assert k["translation"]["stage"]["bank"]["batching"] == batching, "the stage record carries the batch tally"
         fid = next(c for c in k["precheck"]["checks"] if c.get("check") == "B")
         assert fid["samples"] >= 4 and fid["mean_score"] is not None and fid["mean_score"] > 0.9
         # the staged script: the translated lesson, Arabic board words

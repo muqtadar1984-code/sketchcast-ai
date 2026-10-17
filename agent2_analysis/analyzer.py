@@ -25,6 +25,20 @@ from shared.claude_client import ClaudeClient, artifact_model
 
 ANALYSIS_DIR = Path(__file__).resolve().parent.parent / "storage" / "analysis"
 
+# The combined analysis call's output budget, sized for an ENGLISH reply. A
+# reply in a non-Latin script is about twice the tokens: every document of
+# the Arabic Cells kit (2026-10-17) hit this cap at 16,000, parsed as
+# nothing, and paid the doubled streamed retry — ~16k wasted tokens and
+# 4–5 minutes per document. The budget follows the lesson language's script
+# (shared.languages.output_token_factor) so the first call fits; the
+# client's truncation retry stays underneath as the safety net.
+ANALYSIS_MAX_TOKENS = 16000
+
+
+def analysis_max_tokens(language: str | None) -> int:
+    from shared.languages import output_token_factor
+    return int(ANALYSIS_MAX_TOKENS * output_token_factor(language))
+
 # Per-analysis-call content budget (chars). This used to be a silent truncation
 # of the WHOLE chapter (`full_content[:15000]`); it is now the chunk size —
 # chapters longer than this become multiple parts, each fully analysed.
@@ -327,7 +341,7 @@ def run_full_analysis(
             content=chunk["text"],
         ) + lang_directive
 
-        result = client.analyze(prompt, max_tokens=16000)
+        result = client.analyze(prompt, max_tokens=analysis_max_tokens(language))
         data = result["data"]
         part_usage = result.get("usage", {})
         usage_chapter["total_tokens"] += part_usage.get("total_tokens", 0)

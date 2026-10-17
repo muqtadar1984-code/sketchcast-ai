@@ -41,6 +41,7 @@ import requests
 from shared import model_env, text_models
 from shared.claude_client import (
     _RETRY_STATUS,
+    _USAGE_LOCK,
     ClaudeClient,
     _backoff_seconds,
     _ensure_google_credentials,
@@ -597,10 +598,11 @@ class GeminiClient:
             "total_tokens": inp + out,
             "estimated_cost_usd": round(cost, 6),
         }
-        self.session_usage["calls"] += 1
-        self.session_usage["input_tokens"] += inp
-        self.session_usage["output_tokens"] += out
-        self.session_usage["cost_usd"] = round(self.session_usage["cost_usd"] + cost, 6)
+        with _USAGE_LOCK:   # concurrent callers of one client (the bank stage) — see ClaudeClient.track_tokens
+            self.session_usage["calls"] += 1
+            self.session_usage["input_tokens"] += inp
+            self.session_usage["output_tokens"] += out
+            self.session_usage["cost_usd"] = round(self.session_usage["cost_usd"] + cost, 6)
         ClaudeClient._log_usage(usage)
         return usage
 
