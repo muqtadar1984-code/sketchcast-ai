@@ -110,6 +110,7 @@ AUDIT_FLAG = "YOUTUBE_COMPLIANCE_AUDIT_PASSED"
 
 KIT_APPROVED = "approved"
 ARTICLE_APPROVED = "approved"
+TRANSLATION_APPROVED = "approved"   # topic_kits.translation_status of a publishable translation (0134)
 BANK_NONE = "none"
 
 PRIVACY_PRIVATE = "private"
@@ -222,6 +223,20 @@ def refresh_token_env(language: str) -> str:
     """The env var holding the channel's refresh token — one channel per
     language (plan decision 9), so one variable per language."""
     return f"{REFRESH_TOKEN_ENV_PREFIX}{_lang(language).upper()}"
+
+
+def channel_for(language: str) -> str:
+    """The channel a video in ``language`` is posted to: the language's own
+    channel when its refresh token is configured, else the default (English)
+    channel. Kit Translator T1 (founder, 2026-10-17): translated videos reach
+    YouTube by the same free path as the English ones; until a language has a
+    channel of its own, they go on the one channel we have, titled and
+    tagged in their language (``defaultAudioLanguage``), filed under the same
+    discipline playlists."""
+    lang = _lang(language)
+    if lang == DEFAULT_LANGUAGE or str(os.getenv(refresh_token_env(lang), "") or "").strip():
+        return lang
+    return DEFAULT_LANGUAGE
 
 
 def playlists_env(language: str) -> str:
@@ -691,7 +706,7 @@ def load_topic(sb, topic_id: str) -> Optional[dict]:
 
 
 def load_article(sb, article_id: str) -> Optional[dict]:
-    rows = _rows(sb.table("topic_articles").select("id,topic_id,language,version,status")
+    rows = _rows(sb.table("topic_articles").select("id,topic_id,language,version,status,title")
                  .eq("id", article_id).limit(1).execute())
     return rows[0] if rows else None
 
@@ -769,10 +784,14 @@ class Target:
     kit: dict
     topic: dict
     article: dict
-    language: str
+    language: str            # the VIDEO's language (the kit's): title, captions, defaultAudioLanguage
     privacy: str
     header_lines: list[str]
     parts: list[dict]
+    # the CHANNEL the parts go to — the language's own when it has a refresh
+    # token, else the default channel (channel_for); topic_publications rows
+    # carry this as channel_language
+    channel: str = DEFAULT_LANGUAGE
     # (curriculum name, grade) per mapped curriculum — the title's audience
     # block and the default hashtags (catalogue.youtube_meta).
     boards: list = field(default_factory=list)
@@ -809,7 +828,6 @@ def load_target(sb, params: dict) -> Target:
     kit_id = params.get("kit_id")
     if not isinstance(kit_id, str) or not kit_id:
         raise PublishRefused("topic_publish job without params.kit_id")
-    language = _lang(params.get("language"))
     privacy = check_privacy(params.get("privacy"))
 
     kit = load_kit(sb, kit_id)
@@ -819,6 +837,15 @@ def load_target(sb, params: dict) -> Target:
         raise PublishRefused(
             f"kit {kit_id} is {kit.get('status') or 'unknown'}, not approved; a human approves the video "
             "before anything reaches YouTube")
+    # The video's language is the KIT's. A translated kit (Kit Translator,
+    # 0134) is published only once its translation is approved — the English
+    # original's approval does not carry over, the reviewer's does.
+    language = _lang(kit.get("language") or params.get("language"))
+    translation_status = _s(kit.get("translation_status"))
+    if translation_status and translation_status != TRANSLATION_APPROVED:
+        raise PublishRefused(
+            f"translation {kit_id} is {translation_status}, not approved; a reviewer approves the translation "
+            "before it reaches YouTube")
 
     topic = load_topic(sb, _s(kit.get("topic_id")))
     if not topic:
@@ -861,7 +888,8 @@ def load_target(sb, params: dict) -> Target:
     mappings = load_mappings(sb, _s(kit.get("topic_id")))
     return Target(kit=kit, topic=topic, article=article, language=language, privacy=privacy,
                   header_lines=_header_lines(mappings), parts=parts, boards=boards_of(mappings),
-                  meta=clean_meta(kit.get("youtube_meta")), codes=[m.code for m in mappings if m.code])
+                  meta=clean_meta(kit.get("youtube_meta")), codes=[m.code for m in mappings if m.code],
+                  channel=channel_for(language))
 
 
 # ── the thumbnail (local, no image quota) ──────────────────────────────
@@ -960,19 +988,30 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
     from catalogue.youtube_meta import audience_tag, effective_terms
 
     local = download_artifact(sb, part["storage_path"], work / f"lesson_part{idx}.mp4")
-    terms = effective_terms(target.meta, topic.get("summary"))
-    audience = audience_tag(target.boards, topic.get("subject"))
-    title = build_title(topic.get("title"), idx, total, meta=target.meta, key_terms=terms, audience=audience)
-    next_title = (build_title(topic.get("title"), idx + 1, total, meta=target.meta, key_terms=terms, audience=audience)
+    if target.language != DEFAULT_LANGUAGE:
+        # A translated video is titled in ITS language — the translated
+        # article's title — with no English key-term or audience block; the
+        # description keeps the measured (translated) chapters and the links,
+        # and the English summary and stored English words stay off it.
+        topic = {**topic, "title": _s(target.article.get("title")) or topic.get("title"), "summary": None}
+        meta = None
+        terms: list[str] = []
+        audience = ""
+    else:
+        meta = target.meta
+        terms = effective_terms(meta, topic.get("summary"))
+        audience = audience_tag(target.boards, topic.get("subject"))
+    title = build_title(topic.get("title"), idx, total, meta=meta, key_terms=terms, audience=audience)
+    next_title = (build_title(topic.get("title"), idx + 1, total, meta=meta, key_terms=terms, audience=audience)
                   if idx < total else None)
     description = build_description(topic, target.header_lines, chapters_of(kit.get("chapters"), idx),
-                                    idx, total, next_title=next_title, meta=target.meta, boards=target.boards)
+                                    idx, total, next_title=next_title, meta=meta, boards=target.boards)
     # the discipline playlist line, the board and class hashtags and the
     # tags field (catalogue/youtube_enrich.py) — the same words the enrich
     # job puts on the videos already posted
     from catalogue.youtube_enrich import enrich_description, video_tags
 
-    playlists = configured_playlists(target.language, sb)
+    playlists = configured_playlists(target.channel, sb)
     discipline = discipline_key(target.codes)
     description = enrich_description(description, discipline=discipline, subject=topic.get("subject"),
                                      boards=target.boards, playlist_id=_s(playlists.get(discipline)))
@@ -984,7 +1023,7 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
         raise RuntimeError(f"part {idx}: the upload returned no video id")
     log.info("publish: kit %s part %d uploaded as %s (%s)", kit.get("id"), idx, video_id, target.privacy)
 
-    row = {"topic_kit_id": kit.get("id"), "part": idx, "channel_language": target.language,
+    row = {"topic_kit_id": kit.get("id"), "part": idx, "channel_language": target.channel,
            "youtube_video_id": video_id, "privacy": target.privacy, "playlist_ids": [],
            "captions_uploaded": [], "thumbnail_set": False,
            "published_at": datetime.now(timezone.utc).isoformat(), "error": None,
@@ -1056,14 +1095,14 @@ def publish_kit(sb, job_id: str, params: dict, transport: Optional[YouTubeTransp
     kit_id = _s(target.kit.get("id"))
     total = len(target.parts)
     stage: dict = {"phase": "publish", "step": "upload", "kit_id": kit_id, "topic_id": target.kit.get("topic_id"),
-                   "language": target.language, "privacy": target.privacy, "total": total,
+                   "language": target.language, "channel": target.channel, "privacy": target.privacy, "total": total,
                    "published": [], "already": [], "deferred": [], "failed": [], "paused": None}
     db.set_stage(sb, job_id, dict(stage))
     db.set_progress(sb, job_id, 5)
 
     # IDEMPOTENCY: a part that already carries a youtube_video_id is done, so
     # a re-run FINISHES an interrupted publish and never uploads a video twice.
-    existing = load_publications(sb, kit_id, target.language)
+    existing = load_publications(sb, kit_id, target.channel)
     cap = max_parts_per_run()
     pending: list[dict] = []
     for p in target.parts:
@@ -1076,7 +1115,7 @@ def publish_kit(sb, job_id: str, params: dict, transport: Optional[YouTubeTransp
     # needs uploading — a run that finds every part published makes no network
     # call and needs no credentials.
     if pending and transport is None:
-        transport = default_transport(target.language)
+        transport = default_transport(target.channel)
 
     errors: list[str] = []
     work = Path(tempfile.mkdtemp(prefix=f"publish-{job_id}-"))
@@ -1104,7 +1143,7 @@ def publish_kit(sb, job_id: str, params: dict, transport: Optional[YouTubeTransp
                 stage["failed"].append(idx)
                 try:
                     write_publication(sb, {"topic_kit_id": kit_id, "part": idx,
-                                           "channel_language": target.language, "privacy": target.privacy,
+                                           "channel_language": target.channel, "privacy": target.privacy,
                                            "error": detail[:1000]})
                 except Exception as exc2:  # noqa: BLE001
                     log.error("publish: could not record part %d's failure: %s", idx, exc2)

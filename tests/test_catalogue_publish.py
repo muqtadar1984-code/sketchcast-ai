@@ -844,3 +844,61 @@ def test_the_publish_job_never_writes_the_generation_it_reads_from():
     P.run_publish_job(sb, _job(), transport=FakeYouTube())
     assert [e for e in sb.log if e[1] == "generations"] == []
     assert sb.tables["generations"][0]["status"] == "done"
+
+
+# ── a TRANSLATED kit (Kit Translator T1, 2026-10-17) ───────────────────────
+
+
+def _arabic(sb: FakeSB, translation_status: str = "approved") -> FakeSB:
+    """The approved kit becomes an Arabic translation of an English kit: its
+    own approved Arabic article, translation_status on the row."""
+    sb.tables["topic_articles"].append({"id": "art-ar", "topic_id": TOPIC, "language": "ar", "version": 1,
+                                        "status": "approved", "title": "الخلايا"})
+    kit = sb.tables["topic_kits"][0]
+    kit.update({"language": "ar", "article_id": "art-ar", "source_kit_id": "kit-en",
+                "translation_status": translation_status})
+    sb.tables["jobs"][0]["params"] = {"kit_id": KIT, "language": "en"}   # the route's old constant: ignored
+    return sb
+
+
+def test_a_translated_kit_publishes_in_its_language_on_the_english_channel_when_it_has_none(monkeypatch):
+    monkeypatch.delenv("YOUTUBE_REFRESH_TOKEN_AR", raising=False)
+    sb = _arabic(_sb(parts=(1,)))
+    yt = FakeYouTube()
+    summary = P.run_publish_job(sb, _job(language="en"), transport=yt)
+    assert summary["published"] == [1] and summary["language"] == "ar" and summary["channel"] == "en"
+    up = yt.uploads[0]
+    assert up["language"] == "ar", "defaultAudioLanguage is the video's language"
+    assert up["title"] == "الخلايا", "the translated article's title, with no English blocks"
+    assert "Every living thing" not in up["description"], "the English summary stays off an Arabic video"
+    assert "0:00" in up["description"], "the measured chapters stay"
+    assert yt.captions and yt.captions[0]["language"] == "ar"
+    row = _pubs(sb)[1]
+    assert row["channel_language"] == "en" and row["youtube_video_id"] == "yt-1"
+
+
+def test_a_translated_kit_goes_to_its_own_channel_when_that_channel_is_configured(monkeypatch):
+    monkeypatch.setenv("YOUTUBE_REFRESH_TOKEN_AR", "token-present")
+    sb = _arabic(_sb(parts=(1,)))
+    yt = FakeYouTube()
+    summary = P.run_publish_job(sb, _job(), transport=yt)
+    assert summary["channel"] == "ar" and _pubs(sb)[1]["channel_language"] == "ar"
+    assert P.channel_for("ar") == "ar" and P.channel_for("en") == "en"
+    monkeypatch.delenv("YOUTUBE_REFRESH_TOKEN_AR")
+    assert P.channel_for("ar") == "en" and P.channel_for("hi") == "en"
+
+
+def test_a_translation_still_in_review_is_refused_before_any_upload():
+    sb = _arabic(_sb(parts=(1,)), translation_status="in_review")
+    yt = FakeYouTube()
+    assert P.run_publish_job(sb, _job(), transport=yt) is None
+    assert yt.uploads == [] and "not approved" in _job_row(sb)["error"]
+
+
+def test_a_translated_rerun_skips_the_part_already_on_the_channel(monkeypatch):
+    monkeypatch.delenv("YOUTUBE_REFRESH_TOKEN_AR", raising=False)
+    sb = _arabic(_sb(parts=(1,), publications=[{"topic_kit_id": KIT, "part": 1, "channel_language": "en",
+                                                "youtube_video_id": "yt-old", "privacy": "private"}]))
+    yt = FakeYouTube()
+    summary = P.run_publish_job(sb, _job(), transport=yt)
+    assert summary["already"] == [1] and yt.uploads == []
