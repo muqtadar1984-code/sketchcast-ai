@@ -823,13 +823,28 @@ def resolve_assets(sb, keys: list[str]) -> tuple[list[dict], list[str]]:
             if png.exists():
                 hit = {"key": key, "source": "cache", "cache_key": k, "sha256": _sha(png.read_bytes())}
                 break
-        if hit is None:
+        if hit is None and not (board_pictures_in_colour() and not key.startswith("avatar")):
+            # the INK library: under the board-colour pictures switch a board
+            # picture is fetched in colour and the ink library is never
+            # consulted for it (raster_assets.generation_forbidden), so a row
+            # here would promise a picture the render cannot use
             hit = _library_row(sb, key)
         if hit is None:
             missing.append(key)
         else:
             found.append(hit)
     return found, missing
+
+
+def board_pictures_in_colour() -> bool:
+    """Whether the renderer draws board pictures in colour (FEATURE_BOARD_
+    COLOUR_PICTURES) — then a translated render redraws every board picture
+    the cache does not hold, and the translate stage flags each one."""
+    try:
+        from spike.scene_engine import colour as _colour
+        return bool(_colour.pictures_enabled())
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _library_row(sb, key: str) -> Optional[dict]:
@@ -1640,10 +1655,10 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
         mapping, bank_summary = bank_stage(sb, client, source, kit, language, terms, article_id)
         kit = _save_translation(sb, kit, {"stage": {"bank": {k: v for k, v in bank_summary.items() if k != "dropped"}}})
         if bank_summary.get("dropped"):
-            # on the kit NOW, so a later stage's failure keeps the reasons
-            sb.table("topic_kits").update({"precheck": {"ok": None, "blocking": [], "flags": bank_flags(bank_summary),
-                                                        "bank": {k: v for k, v in bank_summary.items() if k != "dropped"}}}
-                                          ).eq("id", kit["id"]).execute()
+            # on the kit NOW, so a later stage's failure keeps the reasons —
+            # APPENDED: the assets stage's 'picture redrawn' flags are already
+            # there (the Cells kit lost its six to a replacing write here)
+            append_flags(sb, str(kit["id"]), bank_flags(bank_summary))
 
         # the quiz: the same questions, by id
         stage["step"] = "quiz"
