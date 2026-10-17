@@ -47,6 +47,18 @@ log = logging.getLogger(__name__)
 JOB_TYPE = "topic_supersede"
 UPDATED_LINE_PREFIX = "An updated version of this lesson is available:"
 
+# Kit Translator (0134, plan 5.1 and pushback P2): WHY the old kit is being
+# replaced decides what happens to its translations. A cosmetic replacement
+# (a better render, the same facts) leaves them APPROVED but marks them
+# `stale` — still served, flagged for a retranslation when convenient. A
+# correction (the English was wrong) marks them `blocked` — hidden from the
+# catalogue (catalogue_current_kits excludes blocked) until retranslated,
+# because a wrong lesson in ten languages is ten wrong lessons. The portal
+# asks the reason on Supersede and passes it as params.reason.
+SUPERSEDE_REASONS = ("cosmetic", "correction")
+DEFAULT_REASON = "cosmetic"
+TRANSLATION_STATUS_BY_REASON = {"cosmetic": "stale", "correction": "blocked"}
+
 
 class SupersedeRefused(RuntimeError):
     """A reason the supersede cannot proceed, in one sentence for the portal."""
@@ -163,7 +175,46 @@ def check_pair(sb, old: Optional[dict], new: Optional[dict]) -> tuple[dict, dict
     return old, new
 
 
-def supersede(sb, transport: SupersedeTransport, old: dict, new: dict, *, keep_privacy: bool = False) -> dict:
+def supersede_reason(value: object) -> str:
+    """``cosmetic`` or ``correction``; anything else (or nothing) is cosmetic —
+    the gentler outcome, the one that hides nothing."""
+    v = _s(value).lower()
+    return v if v in SUPERSEDE_REASONS else DEFAULT_REASON
+
+
+def cascade_translations(sb, old_kit_id: str, reason: str) -> dict:
+    """The translations of the superseded English kit follow it: every kit
+    with ``source_kit_id`` = the old kit that is approved and current becomes
+    `stale` (cosmetic) or `blocked` (correction); the old kit records the
+    reason (``supersede_reason``, 0134). Returns ``{reason, status, kits}``.
+    Best effort: a database fault here is logged and reported on the summary,
+    never a failed supersede — the YouTube side is already done."""
+    reason = supersede_reason(reason)
+    status = TRANSLATION_STATUS_BY_REASON[reason]
+    out = {"reason": reason, "status": status, "kits": []}
+    if not _s(old_kit_id):
+        return out
+    try:
+        rows = _rows(sb.table("topic_kits").select("id,language,status,translation_status")
+                     .eq("source_kit_id", _s(old_kit_id)).execute())
+        ids = [str(r.get("id")) for r in rows
+               if _s(r.get("language")).lower() not in ("", "en")
+               and _s(r.get("status")) == "approved" and _s(r.get("translation_status")) == "approved"]
+        for kid in ids:
+            sb.table("topic_kits").update({"translation_status": status}).eq("id", kid).execute()
+        sb.table("topic_kits").update({"supersede_reason": reason}).eq("id", _s(old_kit_id)).execute()
+        out["kits"] = ids
+        if ids:
+            log.info("supersede: kit %s replaced (%s) — %d translation(s) now %s: %s",
+                     old_kit_id, reason, len(ids), status, ", ".join(ids))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("supersede: translations of kit %s not cascaded (%s)", old_kit_id, exc)
+        out["error"] = f"{type(exc).__name__}: {exc}"[:300]
+    return out
+
+
+def supersede(sb, transport: SupersedeTransport, old: dict, new: dict, *, keep_privacy: bool = False,
+              reason: str = DEFAULT_REASON) -> dict:
     """The three steps, in the order that leaves the least mess if one fails:
     description first (harmless if the rest fails), then privacy (unless
     ``keep_privacy``), then the row — so a row that reads superseded is one
@@ -199,6 +250,9 @@ def supersede(sb, transport: SupersedeTransport, old: dict, new: dict, *, keep_p
     }).eq("id", _s(old.get("id"))).execute()
     log.info("supersede: video %s (publication %s) now points at %s; privacy %s",
              old_id, summary["old_publication"], new_id, summary["privacy"])
+    # Kit Translator: the old kit's translations follow it — stale for a
+    # cosmetic replacement, blocked for a correction (0134, plan P2).
+    summary["translations"] = cascade_translations(sb, _s(old.get("topic_kit_id")), reason)
     return summary
 
 
@@ -214,7 +268,8 @@ def run_supersede_job(sb, job: dict, transport: Optional[SupersedeTransport] = N
         old, new = check_pair(sb, old, new)
         if transport is None:
             transport = default_transport(_s(old.get("channel_language")) or "en")
-        summary = supersede(sb, transport, old, new, keep_privacy=bool(params.get("keep_privacy")))
+        summary = supersede(sb, transport, old, new, keep_privacy=bool(params.get("keep_privacy")),
+                            reason=supersede_reason(params.get("reason")))
         db.set_stage(sb, job_id, summary)
         db.finish_job(sb, job_id)
         log.info("supersede job %s: %s", job_id, summary)
