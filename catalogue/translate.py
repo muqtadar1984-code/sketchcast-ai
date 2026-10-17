@@ -1370,6 +1370,38 @@ def upload_staged_scripts(sb, owner_id: str, kit_id: str, scripts: list[tuple[in
     return paths
 
 
+def validate_translated_script(raw: dict):
+    """The staged (translated) EpisodeScript through the generators' model,
+    with the slide visuals the PIPELINE attaches after the model kept intact.
+    ``slide_visual.kind = "figure"`` (a textbook figure, agent5_slides/
+    figures.py, FEATURE_TEXTBOOK_FIGURES) is written onto the dumped English
+    script after validation and is not in SlideVisual's Literal; validating
+    the translation verbatim refused the Cells kit (2026-10-17: "Input should
+    be 'flow', 'cycle', …, input_value='figure'"). Those visuals are lifted
+    out, the rest is validated, and they are put back on the dump — the
+    slide builders read the dict and know the kind. Returns ``(model,
+    dump)``; ``dump`` is what the render uses."""
+    import copy
+    from typing import get_args
+
+    from agent3_scripts.models import EpisodeScript, SlideVisual
+
+    known = set(get_args(SlideVisual.model_fields["kind"].annotation))
+    body = copy.deepcopy(raw)
+    kept: dict[int, dict] = {}
+    for i, seg in enumerate(body.get("segments") or []):
+        sv = seg.get("slide_visual") if isinstance(seg, dict) else None
+        if isinstance(sv, dict) and sv.get("kind") not in known:
+            kept[i] = sv
+            seg["slide_visual"] = None
+    model = EpisodeScript.model_validate(body)
+    dump = model.model_dump()
+    for i, sv in kept.items():
+        if i < len(dump.get("segments") or []):
+            dump["segments"][i]["slide_visual"] = sv
+    return model, dump
+
+
 def load_staged_scripts(sb, translation: dict, tmp) -> list[dict]:
     """For the presentation build (worker/process.py): the translated
     EpisodeScript dicts in part order, from the paths the job staged."""
@@ -1732,4 +1764,4 @@ __all__ = ["JOB_TYPE", "TranslateRefused", "apply_strings", "article_text_items"
            "recompile_maths", "record_post_render", "resolve_assets", "run_translate_job", "scene_asset_keys",
            "question_text_items", "render_translated_worksheet", "translate_questions", "worksheet_flags", "worksheet_stage",
            "segment_text_items", "staged_script_path", "translate_episode", "translate_kit", "translate_segments",
-           "translate_strings", "translated_item"]
+           "translate_strings", "translated_item", "validate_translated_script"]
