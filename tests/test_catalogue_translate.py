@@ -101,6 +101,23 @@ class TestNumerals:
         f = next(b for b in rep["blocking"] if b["what"] == "numbers differ")
         assert f["extra"] == ["-9"] and f["target_samples"] and "-9" in f["target_samples"][0]
 
+    def test_a_recompiled_board_number_is_a_flag_but_a_spoken_number_still_blocks(self):
+        # the Quadratic kit (2026-10-17): today's chart labels the vertex (7/2, -9/4);
+        # the English render of 2026-09-28 predates the label
+        src = {"segments": [{"segment_id": "s1", "text": "Solve x squared minus seven x plus ten equals zero.",
+                             "scene": {"elements": [{"type": "text", "text": "x = 2, x = 5"}]}}]}
+        dst = {"segments": [{"segment_id": "s1", "text": "حلّ س² − ٧س + ١٠ = ٠.",
+                             "scene": {"elements": [{"type": "text", "text": "x = 2, x = 5 رأسه عند (7/2, -9/4)"}]}}]}
+        rep = C.check_script(src, dst, language="ar", strict=False)
+        assert rep["ok"], rep["blocking"]
+        f = next(x for x in rep["flags"] if x["what"].startswith("board numbers differ"))
+        assert "-9" in f["extra"] and f["target_samples"]
+        # the same new value SPOKEN is still invented
+        dst2 = {"segments": [{"segment_id": "s1", "text": "حلّ س² − ٧س + ١٠ = ٠، والرأس عند -٩/٤.",
+                              "scene": {"elements": [{"type": "text", "text": "x = 2, x = 5"}]}}]}
+        rep2 = C.check_script(src, dst2, language="ar", strict=False)
+        assert not rep2["ok"] and rep2["blocking"][0]["extra"] == ["-9", "4"]
+
     def test_a_number_before_a_full_stop_is_a_number(self):
         assert C.number_values("So x equals 6.") == ["6"]
         assert C.number_values("إذن س تساوي ٦.") == ["6"]
