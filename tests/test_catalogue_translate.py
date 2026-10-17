@@ -326,7 +326,18 @@ class TestItems:
             {"id": "b", "translation_kit_id": "kit-ar", "status": "retired"},
             {"id": "c", "translation_kit_id": "kit-other", "status": "approved"},
         ]
+        order: list[str] = []
+        real_table = sb.table
+
+        def spy(name):
+            order.append(name)
+            return real_table(name)
+
+        sb.table = spy
         T._fail_translation(sb, {"id": "kit-ar"}, "translation failed: x", report={"ok": False})
+        sb.table = real_table
+        deletes = [n for n in order if n in ("topic_kits", "topic_articles")]
+        assert deletes.index("topic_kits") < deletes.index("topic_articles") or deletes[-2:] == ["topic_kits", "topic_articles"],             "the kit (which references the article) is deleted BEFORE the article — the live FK refused the other order"
         assert [k["id"] for k in sb.tables["topic_kits"]] == ["kit-other"]
         assert [a["id"] for a in sb.tables["topic_articles"]] == ["art-other"]
         assert [q["id"] for q in sb.tables["topic_questions"]] == ["c"]
