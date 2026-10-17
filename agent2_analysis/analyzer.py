@@ -60,6 +60,12 @@ MAX_ANALYSIS_CHARS = 15000
 # the video taught the topic, every following day stood on ground the video
 # never covered. Digital books mostly escaped it: their sections arrive as
 # separate units, so this budget could actually fire.
+# The analyzer's generation, stamped on every MasterAnalysis. Both caches
+# (chapter_grounding for a book, topic_article_analyses for a catalogue
+# article) refuse a row from another version. Bump it when the analysis
+# PROMPT or SHAPE changes in a way a cached row must not survive.
+ANALYZER_VERSION = 2  # chunked full-coverage analyzer — cache-reusable
+
 MAX_PART_WORDS = 1950
 
 # The video-duration ceiling that MAX_PART_WORDS is derived from. A part is
@@ -471,7 +477,7 @@ def run_full_analysis(
         chapter_title=chapter_title,
         difficulty_level_requested=level,
         analyzed_at=datetime.now(timezone.utc).isoformat(),
-        analyzer_version=2,  # chunked full-coverage analyzer — cache-reusable
+        analyzer_version=ANALYZER_VERSION,
         token_usage=token_usage,
         concepts=concept_result,
         difficulty_assessments=difficulty_assessments,

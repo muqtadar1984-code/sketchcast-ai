@@ -63,6 +63,9 @@ class PhaseClock:
         self._lock = threading.Lock()
         self.phases: dict[str, float] = {}
         self.counts: dict[str, int] = {}
+        # Facts about the run that are neither seconds nor tallies
+        # (``reused_analysis``): persisted beside the phases, top level.
+        self.flags: dict[str, object] = {}
 
     # ── recording ────────────────────────────────────────────────────────
     def add(self, name: str, seconds: float) -> None:
@@ -74,6 +77,10 @@ class PhaseClock:
     def count(self, name: str, n: int = 1) -> None:
         with self._lock:
             self.counts[name] = self.counts.get(name, 0) + int(n)
+
+    def flag(self, name: str, value: object = True) -> None:
+        with self._lock:
+            self.flags[str(name)] = value
 
     @contextmanager
     def phase(self, name: str) -> Iterator[None]:
@@ -93,6 +100,7 @@ class PhaseClock:
         with self._lock:
             phases = {k: round(v, 1) for k, v in self.phases.items()}
             counts = dict(self.counts)
+            flags = dict(self.flags)
         out = {
             "total_s": round(self.elapsed(), 1),
             "phases": phases,
@@ -101,6 +109,8 @@ class PhaseClock:
         }
         if outcome:
             out["outcome"] = outcome
+        for k, v in flags.items():
+            out.setdefault(k, v)      # never over a reserved key
         return out
 
     def line(self) -> str:
@@ -163,6 +173,12 @@ def stop(generation_id: str) -> Optional[PhaseClock]:
 
 
 # ── module-level conveniences (no clock → no-op) ─────────────────────────
+def flag(name: str, value: object = True, generation_id: str | None = None) -> None:
+    pc = get(generation_id)
+    if pc is not None:
+        pc.flag(name, value)
+
+
 @contextmanager
 def phase(name: str, generation_id: str | None = None) -> Iterator[None]:
     pc = get(generation_id)
