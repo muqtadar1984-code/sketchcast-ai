@@ -83,7 +83,7 @@ def _clean_env(monkeypatch):
               "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_APPLICATION_CREDENTIALS_JSON", "VERTEX_PROJECT_ID",
               "VIDEO_ENGINE", "SEMANTIC_PLAN", "FEATURE_TEXTBOOK_FIGURES", "FEATURE_CHAPTER_HEAL",
               "DECK_IN_PRESENTATION", "CATALOGUE_PART_TARGET_MIN", "CATALOGUE_WINDOW_UTC",
-              "SUPPORT_AGENT_ENABLED", "TTS_PREMIUM_CANARY_OWNERS"):
+              "SUPPORT_AGENT_ENABLED", "TTS_PREMIUM_CANARY_OWNERS", "CATALOGUE_SHARED_ANALYSIS"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -1290,3 +1290,275 @@ class TestTheLengthFloor:
         reports = gen["params"]["coverage"]
         assert [r["length"]["under"] for r in reports] == [False, False]
         assert all("retries" not in r for r in reports)
+
+
+# ── one analysis per article (catalogue/analysis_cache, migration 0140) ──
+
+
+def _cache_rows(sb) -> list:
+    return sb.tables.get("topic_article_analyses", [])
+
+
+def _english_hash(sb) -> str:
+    """The key the worker computes for the English Cells article: the chunks
+    prepare() hands the analyzer, its level, the lesson language."""
+    from catalogue import analysis_cache
+    p = kit.prepare(sb, _gen("gen-a"))
+    return analysis_cache.source_hash(language="en", level=p.level, chunks=p.chunks, chapter=p.chapter)
+
+
+def _cached(sb, *, status="ready", language="en", holder="gen-old", lease_started_at=None,
+            article_updated_at=None, analysis=None, hash_=None) -> dict:
+    row = {"article_id": "art-1", "language": language, "analyzer_version": 2,
+           "source_hash": hash_ if hash_ is not None else _english_hash(sb), "status": status,
+           "holder_generation_id": holder, "lease_started_at": lease_started_at,
+           "analysis": analysis if analysis is not None else {**ANALYSIS, "language": language},
+           "analysed_at": "2026-10-16T00:00:00+00:00", "article_updated_at": article_updated_at,
+           "updated_at": "2026-10-16T00:00:00+00:00"}
+    sb.tables["topic_article_analyses"] = [row]
+    return row
+
+
+def _ago(seconds: float) -> str:
+    from datetime import timedelta
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+
+
+class TestSharedAnalysis:
+    """A catalogue kit's pieces share ONE analysis of their article. Before
+    this (the Arabic Cells kit 427aa1ac, 2026-10-17) the deck, activity, case
+    study and lesson plan each ran it — 248 s, 566 s, 540 s and 578 s, three
+    of them at once, since the kit's jobs are claimed together. Now the first
+    piece holds a lease and analyses, a sibling that starts meanwhile is
+    deferred (as a deck waits for its video), and later pieces reuse the
+    stored dict. A translated presentation never analyses at all."""
+
+    def _two_docs(self):
+        sb = _sb(statuses={"gen-a": "processing", "gen-c": "processing"})
+        sb.tables["jobs"] = [_job("job-a", "gen-a", "activity"), _job("job-c", "gen-c", "case_study")]
+        return sb
+
+    def test_two_document_jobs_of_one_kit_analyse_once(self, monkeypatch):
+        sb = self._two_docs()
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+        seen_a, seen_c = {}, {}
+        monkeypatch.setattr("docgen.generate_document", _fake_doc(seen_a))
+        process.process_generation(sb, sb.tables["jobs"][0], "gen-a")
+        monkeypatch.setattr("docgen.generate_document", _fake_doc(seen_c))
+        process.process_generation(sb, sb.tables["jobs"][1], "gen-c")
+
+        assert len(analysis_calls) == 1, "the second piece read the first's analysis instead of calling the model"
+        (row,) = _cache_rows(sb)
+        assert (row["article_id"], row["status"], row["language"], row["analyzer_version"], row["holder_generation_id"]) == \
+            ("art-1", "ready", "en", 2, "gen-a")
+        assert row["source_hash"] == _english_hash(sb) and row["analysed_at"]
+        # the SAME dict reaches both builders: concepts, episodes, the language stamp
+        assert seen_c["analysis"] == seen_a["analysis"]
+        assert seen_c["analysis"]["language"] == "en" and seen_c["analysis"]["episodes"] == ANALYSIS["episodes"]
+        assert seen_c["analysis"]["concepts"] == ANALYSIS["concepts"]
+        gens = {g["id"]: g for g in sb.tables["generations"]}
+        assert gens["gen-a"]["status"] == gens["gen-c"]["status"] == "done"
+        # the saving is measurable: the reuse is flagged on the reusing generation only
+        assert gens["gen-c"]["params"]["timings"]["reused_analysis"] is True
+        assert "reused_analysis" not in gens["gen-a"]["params"]["timings"]
+        assert "analysis" not in gens["gen-c"]["params"]["timings"]["phases"], "no analysis phase was clocked"
+        # both documents were built and uploaded as before
+        kinds = sorted(r["storage_path"] for r in sb.tables["artifacts"])
+        assert kinds == ["sys/gen-a/activity.docx", "sys/gen-a/answer_key.docx",
+                         "sys/gen-c/answer_key.docx", "sys/gen-c/case_study.docx"]
+        assert _kit(sb)["status"] == "generating", "the kit lifecycle is untouched (no lesson plan yet, so not in review)"
+
+    def test_the_english_presentation_seeds_the_cache_for_the_documents(self, monkeypatch, tmp_path):
+        sb = _sb(statuses={"gen-p": "processing", "gen-a": "processing"})
+        sb.tables["jobs"] = [_job("job-p", "gen-p", "presentation"), _job("job-a", "gen-a", "activity")]
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+        fx = _presentation_fakes(monkeypatch, tmp_path)
+        process.process_generation(sb, sb.tables["jobs"][0], "gen-p")
+        assert len(fx["renders"]) == 2 and len(analysis_calls) == 1
+        seen: dict = {}
+        monkeypatch.setattr("docgen.generate_document", _fake_doc(seen))
+        process.process_generation(sb, sb.tables["jobs"][1], "gen-a")
+
+        assert len(analysis_calls) == 1, "the video's analysis served the activity"
+        assert _cache_rows(sb)[0]["holder_generation_id"] == "gen-p"
+        assert seen["analysis"]["episodes"] == ANALYSIS["episodes"] and seen["analysis"]["language"] == "en"
+        gen = next(g for g in sb.tables["generations"] if g["id"] == "gen-a")
+        assert gen["params"]["timings"]["reused_analysis"] is True
+
+    @pytest.mark.parametrize("cached_language, calls", [("en", 0), ("ms", 1)])
+    def test_a_ready_row_is_reused_only_in_the_lessons_language(self, monkeypatch, cached_language, calls):
+        sb = _sb(statuses={"gen-a": "processing"})
+        sb.tables["jobs"] = [_job("job-a", "gen-a", "activity")]
+        _cached(sb, language=cached_language)        # same text, same version — only the language may differ
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+        seen: dict = {}
+        monkeypatch.setattr("docgen.generate_document", _fake_doc(seen))
+
+        process.process_generation(sb, sb.tables["jobs"][0], "gen-a")
+
+        assert len(analysis_calls) == calls
+        (row,) = _cache_rows(sb)
+        assert row["language"] == "en" and row["status"] == "ready"
+        assert row["holder_generation_id"] == ("gen-old" if calls == 0 else "gen-a")
+        assert seen["analysis"]["language"] == "en", "a Malay analysis never grounds an English document"
+        gen = next(g for g in sb.tables["generations"] if g["id"] == "gen-a")
+        assert gen["params"]["timings"].get("reused_analysis") is (True if calls == 0 else None)
+
+    @pytest.mark.parametrize("cached_for, calls", [("2026-10-17T10:00:00+00:00", 0), ("2026-10-17T09:00:00+00:00", 1)])
+    def test_an_article_edited_after_its_analysis_is_re_analysed(self, monkeypatch, cached_for, calls):
+        sb = _sb(article={**ARTICLE, "updated_at": "2026-10-17T10:00:00+00:00"}, statuses={"gen-a": "processing"})
+        sb.tables["jobs"] = [_job("job-a", "gen-a", "activity")]
+        _cached(sb, article_updated_at=cached_for)
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+        monkeypatch.setattr("docgen.generate_document", _fake_doc({}))
+
+        process.process_generation(sb, sb.tables["jobs"][0], "gen-a")
+
+        assert len(analysis_calls) == calls
+        (row,) = _cache_rows(sb)
+        assert row["article_updated_at"] == "2026-10-17T10:00:00+00:00" and row["status"] == "ready"
+
+    def test_a_row_from_another_analyzer_version_is_re_analysed(self, monkeypatch):
+        sb = _sb(statuses={"gen-a": "processing"})
+        sb.tables["jobs"] = [_job("job-a", "gen-a", "activity")]
+        _cached(sb)["analyzer_version"] = 1
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+        monkeypatch.setattr("docgen.generate_document", _fake_doc({}))
+        process.process_generation(sb, sb.tables["jobs"][0], "gen-a")
+        assert len(analysis_calls) == 1 and _cache_rows(sb)[0]["analyzer_version"] == 2
+
+    def test_a_sibling_waits_while_the_article_is_being_analysed(self, monkeypatch):
+        from worker import client as db
+        sb = _sb(statuses={"gen-a": "processing"})
+        sb.tables["jobs"] = [_job("job-a", "gen-a", "activity")]
+        _cached(sb, status="analysing", holder="gen-x", lease_started_at=_ago(120), analysis=None)
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+        monkeypatch.setattr("docgen.generate_document", lambda **k: pytest.fail("nothing is built while waiting"))
+
+        with pytest.raises(db.DeferredJob) as exc:
+            process.process_generation(sb, sb.tables["jobs"][0], "gen-a")
+
+        assert exc.value.seconds == 60 and exc.value.note == "waiting for the article's analysis (generation gen-x)"
+        assert analysis_calls == [] and uploads == []
+        (row,) = _cache_rows(sb)
+        assert row["holder_generation_id"] == "gen-x" and row["status"] == "analysing", "the lease is the holder's"
+        assert _kit(sb)["status"] == "generating", "a wait is not a failure"
+        gen = next(g for g in sb.tables["generations"] if g["id"] == "gen-a")
+        assert "timings" not in gen["params"], "a deferred run is not clocked"
+
+    def test_a_stale_lease_is_taken_over(self, monkeypatch):
+        sb = _sb(statuses={"gen-a": "processing"})
+        sb.tables["jobs"] = [_job("job-a", "gen-a", "activity")]
+        _cached(sb, status="analysing", holder="gen-x", lease_started_at=_ago(2 * 3600), analysis=None)
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+        monkeypatch.setattr("docgen.generate_document", _fake_doc({}))
+
+        process.process_generation(sb, sb.tables["jobs"][0], "gen-a")
+
+        assert len(analysis_calls) == 1
+        (row,) = _cache_rows(sb)
+        assert (row["holder_generation_id"], row["status"]) == ("gen-a", "ready")
+        assert row["analysis"]["language"] == "en"
+
+    def test_a_sibling_that_has_waited_the_lease_out_analyses_on_its_own(self, monkeypatch):
+        sb = _sb(statuses={"gen-a": "processing"})
+        job = _job("job-a", "gen-a", "activity")
+        job["params"]["deferred_since"] = (datetime.now(timezone.utc) - __import__("datetime").timedelta(hours=1)
+                                           ).strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+        sb.tables["jobs"] = [job]
+        _cached(sb, status="analysing", holder="gen-x", lease_started_at=_ago(120), analysis=None)
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+        monkeypatch.setattr("docgen.generate_document", _fake_doc({}))
+
+        process.process_generation(sb, sb.tables["jobs"][0], "gen-a")
+
+        assert len(analysis_calls) == 1
+        (row,) = _cache_rows(sb)
+        assert (row["holder_generation_id"], row["status"]) == ("gen-x", "analysing"), \
+            "the holder's lease is left alone — it may still finish"
+
+    def test_a_failed_analysis_releases_the_lease_for_the_next_sibling(self, monkeypatch):
+        sb = _sb(statuses={"gen-a": "processing"})
+        sb.tables["jobs"] = [_job("job-a", "gen-a", "activity")]
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+
+        def boom(**kw):
+            raise RuntimeError("analysis exploded")
+
+        monkeypatch.setattr("agent2_analysis.analyzer.run_full_analysis", boom)
+        with pytest.raises(RuntimeError, match="analysis exploded"):
+            process.process_generation(sb, sb.tables["jobs"][0], "gen-a")
+        assert _cache_rows(sb) == [], "no lease survives its holder's failure"
+        assert _kit(sb)["status"] == "failed"
+
+    def test_a_translated_presentation_still_makes_no_analysis_call(self, monkeypatch, tmp_path):
+        from tests.test_catalogue_translate import _render_sb
+        sb = _render_sb()
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+        fx = _presentation_fakes(monkeypatch, tmp_path)
+
+        process.process_generation(sb, sb.tables["jobs"][0], "gen-par")
+
+        assert analysis_calls == [] and fx["scripts"] == []
+        assert _cache_rows(sb) == [] and ("select", "topic_article_analyses") not in sb.calls, \
+            "the override branch never consults the cache"
+        assert next(g for g in sb.tables["generations"] if g["id"] == "gen-par")["status"] == "done"
+
+    def test_a_translated_kits_documents_share_the_arabic_articles_analysis(self, monkeypatch):
+        from tests.test_catalogue_translate import _render_sb
+        sb = _render_sb()
+        kit_ar = next(k for k in sb.tables["topic_kits"] if k["id"] == "kit-ar")
+        deck = next(g for g in sb.tables["generations"] if g["id"] == "gen-dar")
+        for gid, kind in (("gen-aar", "activity"), ("gen-car", "case_study")):
+            sb.tables["generations"].append({**deck, "id": gid, "kind": kind, "status": "processing"})
+        kit_ar["doc_generation_ids"] = {"deck": "gen-dar", "activity": "gen-aar", "case_study": "gen-car"}
+        jobs = [_job("job-aar", "gen-aar", "activity"), _job("job-car", "gen-car", "case_study")]
+        for j in jobs:
+            j["params"]["kit_id"] = "kit-ar"
+        sb.tables["jobs"] = jobs
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+        seen_a, seen_c = {}, {}
+        monkeypatch.setattr("docgen.generate_document", _fake_doc(seen_a))
+        process.process_generation(sb, jobs[0], "gen-aar")
+        monkeypatch.setattr("docgen.generate_document", _fake_doc(seen_c))
+        process.process_generation(sb, jobs[1], "gen-car")
+
+        assert len(analysis_calls) == 1 and analysis_calls[0]["language"] == "ar"
+        (row,) = _cache_rows(sb)
+        assert (row["article_id"], row["language"], row["status"]) == ("art-ar", "ar", "ready"), \
+            "keyed by the TRANSLATED article, never the English one"
+        assert seen_a["language"] == seen_c["language"] == "ar"
+        assert seen_c["analysis"] == seen_a["analysis"] and seen_c["analysis"]["language"] == "ar"
+        gens = {g["id"]: g for g in sb.tables["generations"]}
+        assert gens["gen-car"]["params"]["timings"]["reused_analysis"] is True
+
+    def test_the_rollback_flag_restores_one_analysis_per_piece(self, monkeypatch):
+        monkeypatch.setenv("CATALOGUE_SHARED_ANALYSIS", "0")
+        sb = self._two_docs()
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+        monkeypatch.setattr("docgen.generate_document", _fake_doc({}))
+        process.process_generation(sb, sb.tables["jobs"][0], "gen-a")
+        process.process_generation(sb, sb.tables["jobs"][1], "gen-c")
+        assert len(analysis_calls) == 2 and _cache_rows(sb) == []
+        assert all(g["status"] == "done" for g in sb.tables["generations"] if g["id"] in ("gen-a", "gen-c"))
+
+    def test_a_database_without_the_table_builds_as_before(self, monkeypatch):
+        """A worker deployed before 0140 is applied: every cache call fails,
+        every piece analyses, nothing else changes."""
+        sb = self._two_docs()
+        real_table = sb.table
+
+        def table(name):
+            if name == "topic_article_analyses":
+                raise RuntimeError('relation "public.topic_article_analyses" does not exist')
+            return real_table(name)
+
+        monkeypatch.setattr(sb, "table", table)
+        process, uploads, analysis_calls = _worker_env(monkeypatch, sb)
+        monkeypatch.setattr("docgen.generate_document", _fake_doc({}))
+        process.process_generation(sb, sb.tables["jobs"][0], "gen-a")
+        process.process_generation(sb, sb.tables["jobs"][1], "gen-c")
+        assert len(analysis_calls) == 2
+        gens = {g["id"]: g for g in sb.tables["generations"]}
+        assert gens["gen-a"]["status"] == gens["gen-c"]["status"] == "done"
+        assert "reused_analysis" not in gens["gen-c"]["params"]["timings"]

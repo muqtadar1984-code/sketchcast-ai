@@ -128,3 +128,15 @@ def test_restarting_a_generation_replaces_its_account():
     first.add("script", 99)
     second = phase_clock.start("gen-r")
     assert second is not first and phase_clock.get("gen-r").phases == {}
+
+
+def test_a_flag_lands_at_the_summarys_top_level_and_never_over_a_reserved_key():
+    fake = _Fake()
+    pc = phase_clock.start("gen-f", clock=fake)
+    phase_clock.flag("reused_analysis")              # the module convenience, for the current clock
+    pc.flag("total_s", "nope")                       # a reserved key keeps its own value
+    s = pc.summary(outcome="done")
+    assert s["reused_analysis"] is True and isinstance(s["total_s"], float)
+    assert "flags" not in s and phase_clock.start("gen-g", clock=fake).summary().get("reused_analysis") is None
+    phase_clock.stop("gen-f"); phase_clock.stop("gen-g")
+    phase_clock.flag("reused_analysis")              # no clock → no-op, no error

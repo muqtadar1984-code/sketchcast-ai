@@ -1536,6 +1536,19 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
             generation_id, analysis.get("language") or "en", lesson_lang,
         )
         analysis = None
+    # A catalogue kit's pieces share ONE analysis of their article
+    # (catalogue/analysis_cache, migration 0140). Measured before it, on the
+    # Arabic Cells kit 427aa1ac (2026-10-17): four analyses of the same
+    # article — 248 s, 566 s, 540 s and 578 s, ~$0.3–0.6 each — three of them
+    # running at once, since the kit's jobs are claimed together. Now the
+    # first piece to arrive holds a lease and analyses, a sibling that starts
+    # meanwhile WAITS (the job is deferred, as a deck waits for its video)
+    # and every later piece reuses the stored dict — the same shape the
+    # chapter_grounding cache hands a book's later artifacts. A book, a part
+    # job and the translated presentation (the override branch: no analysis
+    # call) never touch it.
+    _shared = None
+    _cache = None
     if override is not None:
         # Kit Translator: the lesson was analysed, planned and verified in
         # English; this build only RENDERS its translation. No analysis call
@@ -1552,34 +1565,66 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
     elif analysis is not None:
         logger.info("generation %s: reusing cached analysis for %s ch%s", generation_id, book_id, chapter_num)
     else:
-        # Fresh multi-part analysis is the LONGEST phase — advance 20→43
-        # per chunk (and label the stage) so a 4-part chapter never looks
-        # "stuck at 20%".
-        def _analysis_tick(part: int, total: int) -> None:
-            db.set_progress(sb, job_id, 20 + round(23 * part / total))
-            if total > 1:
-                db.set_stage(sb, job_id, {"phase": "analysis", "part": part, "total": total, "part_pct": 100})
+        if catalogue is not None and getattr(catalogue, "article_id", None):
+            from catalogue import analysis_cache as _cache
 
-        with phase_clock.phase("analysis"):
-            analysis = run_full_analysis(
-                # unit.level is DEFAULT_LEVEL for a book; a catalogue kit sets it
-                # from the depth node's grade (catalogue.kit.level_for_grade).
-                book_id=book_id, chapter_content=chapter, level=unit.level,
-                # Its OWN client, on the `analysis` role. The analyzer makes
-                # exactly one model call — the combined analysis — and on
-                # 2026-09-08 the artifact model returned it malformed, leaving a
-                # whole kit "grounded in nothing but the title". That role now
-                # names a model that can hold the call; everything else on this
-                # path keeps the cheaper artifact one. See shared/text_models.
-                client=analysis_client(lesson_lang),
-                on_progress=_analysis_tick,
-                # Part jobs analyze THEIR chunk verbatim — never re-chunked. A
-                # catalogue kit likewise hands over its own parts, chunked with
-                # the longer YouTube budget (unit.chunks_override; None for a book).
-                chunks_override=[part_chunk] if part_ref is not None else unit.chunks_override,
-                language=lesson_lang,
-            ).model_dump()
-        analysis["language"] = lesson_lang  # stamps the cache (see reuse guard above)
+            _shared = _cache.claim(
+                sb, article_id=catalogue.article_id, article=getattr(catalogue, "article", None),
+                generation_id=generation_id, language=lesson_lang, level=unit.level,
+                chunks=unit.chunks_override or [], chapter=chapter,
+                waited_seconds=db.deferred_seconds(job))
+            if _shared.action == "wait":
+                logger.info("generation %s: article %s is being analysed by %s — waiting",
+                            generation_id, catalogue.article_id, _shared.holder)
+                raise _DeferredJob(_cache.poll_seconds(),
+                                   f"waiting for the article's analysis (generation {str(_shared.holder)[:8]})")
+            if _shared.action == "reuse":
+                analysis = _shared.analysis
+                phase_clock.flag("reused_analysis", True)
+                logger.info("generation %s: reusing the shared analysis of article %s (%s)",
+                            generation_id, catalogue.article_id, analysis.get("language") or "en")
+            else:
+                logger.info("generation %s: analysing article %s — %s",
+                            generation_id, catalogue.article_id, _shared.reason)
+        if analysis is None:
+            # Fresh multi-part analysis is the LONGEST phase — advance 20→43
+            # per chunk (and label the stage) so a 4-part chapter never looks
+            # "stuck at 20%".
+            def _analysis_tick(part: int, total: int) -> None:
+                db.set_progress(sb, job_id, 20 + round(23 * part / total))
+                if total > 1:
+                    db.set_stage(sb, job_id, {"phase": "analysis", "part": part, "total": total, "part_pct": 100})
+
+            try:
+                with phase_clock.phase("analysis"):
+                    analysis = run_full_analysis(
+                        # unit.level is DEFAULT_LEVEL for a book; a catalogue kit sets it
+                        # from the depth node's grade (catalogue.kit.level_for_grade).
+                        book_id=book_id, chapter_content=chapter, level=unit.level,
+                        # Its OWN client, on the `analysis` role. The analyzer makes
+                        # exactly one model call — the combined analysis — and on
+                        # 2026-09-08 the artifact model returned it malformed, leaving a
+                        # whole kit "grounded in nothing but the title". That role now
+                        # names a model that can hold the call; everything else on this
+                        # path keeps the cheaper artifact one. See shared/text_models.
+                        client=analysis_client(lesson_lang),
+                        on_progress=_analysis_tick,
+                        # Part jobs analyze THEIR chunk verbatim — never re-chunked. A
+                        # catalogue kit likewise hands over its own parts, chunked with
+                        # the longer YouTube budget (unit.chunks_override; None for a book).
+                        chunks_override=[part_chunk] if part_ref is not None else unit.chunks_override,
+                        language=lesson_lang,
+                    ).model_dump()
+            except BaseException:
+                # the holder's failure must not park its siblings until the
+                # lease expires: drop it, then fail (or defer) as before
+                if _shared is not None and _shared.held:
+                    _cache.release(sb, article_id=catalogue.article_id, generation_id=generation_id)
+                raise
+            analysis["language"] = lesson_lang  # stamps the cache (see reuse guard above)
+            if _shared is not None and _shared.held:
+                _cache.store(sb, article_id=catalogue.article_id, generation_id=generation_id,
+                             analysis=analysis)
     db.set_progress(sb, job_id, 45)
     # Analysis stage is over for every kind; the presentation loop writes
     # its own per-part stages, doc kinds stay stage-less.
