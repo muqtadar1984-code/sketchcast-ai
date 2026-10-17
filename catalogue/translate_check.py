@@ -394,19 +394,37 @@ def check_script(source: dict, target: dict, *, language: str,
             flags.append(_finding("script", "board expressions typeset differently from the English render",
                                   count=len(typeset_lost), examples=typeset_lost[:6]))
         prot = own + [p for s in s_segs for p in _scene_protected(s)]
-        ok, missing, extra = numbers_equivalent(src_blob, dst_blob, board=board)
+        # NUMBERS: the SPOKEN lines are the translator's and are held strictly
+        # (what the voice says must be what the English voice said). The
+        # BOARD's text elements are the compiler's — recompiled in the
+        # language from the verified record, which check_maths_lesson has
+        # already compared field by field — and a compiler that has moved on
+        # since the English render writes values the English board never
+        # showed (Quadratic kit, 2026-10-17: today's chart labels the
+        # parabola's vertex "(7/2, -9/4)"; the English render of 2026-09-28
+        # predates that label). Such a difference is a FLAG for the reviewer,
+        # with the target quoted, never a block.
+        src_speech = " ".join(_segment_text(s) for s in s_segs)
+        dst_speech = " ".join(_segment_text(s) for s in t_segs)
+        ok, missing, extra = numbers_equivalent(src_speech, dst_speech, board=board)
         if not ok:
             # the recompiled board repeats a value where the English one
             # did not (or the reverse); a value that VANISHED is the defect
-            lost = [v for v in missing if v not in number_values(dst_blob)]
-            invented = [v for v in extra if v not in number_values(src_blob)]
+            lost = [v for v in missing if v not in number_values(dst_speech)]
+            invented = [v for v in extra if v not in number_values(src_speech)]
             if lost or invented:
                 # QUOTE the target around each invented value: a refused
                 # translation is deleted with its kit, so this report is the
-                # only trace of what the model wrote (Quadratic kit, 2026-10-17:
-                # "-9" twice, in no English line, and nothing to read).
+                # only trace of what the model wrote.
                 blocking.append(_finding("script", "numbers differ", missing=lost, extra=invented,
-                                         target_samples=number_samples(dst_blob, invented)))
+                                         target_samples=number_samples(dst_speech, invented)))
+        b_ok, b_missing, b_extra = numbers_equivalent(src_blob, dst_blob, board=board)
+        if not b_ok:
+            b_lost = [v for v in b_missing if v not in number_values(dst_blob)]
+            b_new = [v for v in b_extra if v not in number_values(src_blob)]
+            if b_lost or b_new:
+                flags.append(_finding("script", "board numbers differ from the English render", missing=b_lost,
+                                      extra=b_new, target_samples=number_samples(dst_blob, b_new)))
         if code_tokens(src_blob) != code_tokens(dst_blob):
             blocking.append(_finding("script", "curriculum codes differ",
                                      source=code_tokens(src_blob), target=code_tokens(dst_blob)))
