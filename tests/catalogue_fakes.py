@@ -364,6 +364,7 @@ class FakeYouTube:
         self.captions = []
         self.thumbnails = []
         self.playlist_adds = []
+        self.rewords = []
 
     def _maybe_fail(self, name):
         if name in self.fail_on:
@@ -392,6 +393,11 @@ class FakeYouTube:
     def add_to_playlist(self, video_id, playlist_id):
         self._maybe_fail("add_to_playlist")
         self.playlist_adds.append({"video_id": video_id, "playlist_id": playlist_id})
+
+    def update_words(self, video_id, *, title, description, tags=None, language="en"):
+        self._maybe_fail("update_words")
+        self.rewords.append({"video_id": video_id, "title": title, "description": description,
+                             "tags": list(tags or []), "language": language})
 
 
 def _read_bytes(path):

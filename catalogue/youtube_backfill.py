@@ -33,7 +33,7 @@ from typing import Optional, Protocol
 
 from catalogue.publish import (DEFAULT_LANGUAGE, PublishRefused, _lang, _rows, _s,
                                build_youtube_service, read_credentials)
-from catalogue.youtube_meta import DESCRIPTION_MAX, SKETCHCAST_LINE
+from catalogue.youtube_meta import DESCRIPTION_MAX, cta_line, is_sketchcast_line
 from shared.outro import DESCRIPTION_CTA
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ def with_cta(description: object, cta: str = DESCRIPTION_CTA) -> str:
     if not text:
         return cta
     paras = text.split("\n\n")
-    at = next((i for i, p in enumerate(paras) if p.lstrip().startswith(SKETCHCAST_LINE)), None)
+    at = next((i for i, p in enumerate(paras) if is_sketchcast_line(p)), None)
     if at is None and paras[-1].lstrip().startswith("#"):
         at = len(paras) - 1
     if at is None:
@@ -129,11 +129,13 @@ def channel_languages(sb) -> list[str]:
 
 
 def backfill(sb, transport: SnippetTransport, *, language: str = DEFAULT_LANGUAGE,
-             cta: str = DESCRIPTION_CTA) -> dict:
+             cta: Optional[str] = None) -> dict:
     """One pass over one channel. Returns ``{language, checked, updated,
     already, missing, too_long, errors}``; a video whose update fails is
-    reported and the pass goes on to the next."""
+    reported and the pass goes on to the next. ``cta`` defaults to the ask
+    in the CHANNEL's language (youtube_meta.cta_line)."""
     lang = _lang(language)
+    cta = cta or cta_line(lang)
     summary = {"language": lang, "checked": 0, "updated": 0, "already": 0,
                "missing": [], "too_long": [], "errors": []}
     ids = published_video_ids(sb, lang)
