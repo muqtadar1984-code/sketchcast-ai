@@ -531,6 +531,25 @@ class TestTranslatedWorksheet:
         assert "questions" not in g["params"]["translation"], "rebuilt from the article, as before"
 
 
+class TestTranslatedScriptValidation:
+    def test_a_textbook_figure_slide_survives_the_models_round_trip(self):
+        body = _maths_body()["script"]
+        seg = body["segments"][0]
+        seg["slide_visual"] = {"kind": "figure", "src": "books/x/fig3.png", "attribution": "p. 12", "caption": "خلية نباتية"}
+        body["segments"][1]["slide_visual"] = {"kind": "icons", "items": [{"icon": "cell", "label": "خلية"}]}
+        model, dump = T.validate_translated_script(body)
+        assert dump["segments"][0]["slide_visual"] == seg["slide_visual"], "the figure is kept verbatim"
+        assert dump["segments"][1]["slide_visual"]["kind"] == "icons", "a model kind goes through the model"
+        assert model.segments[0].slide_visual is None, "the model itself never saw the figure"
+        assert body["segments"][0]["slide_visual"]["kind"] == "figure", "the input is not mutated"
+
+    def test_a_broken_field_still_fails_validation(self):
+        body = _maths_body()["script"]
+        body["segments"][0]["type"] = "not_a_type"
+        with pytest.raises(Exception):
+            T.validate_translated_script(body)
+
+
 class TestPostRender:
     def test_drift_and_silence_flag_and_a_silent_segment_blocks(self):
         script = {"segments": [{"segment_id": "s1", "text": "a"}, {"segment_id": "s2", "text": "b"},

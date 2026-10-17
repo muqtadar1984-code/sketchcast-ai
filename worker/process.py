@@ -1815,10 +1815,11 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                 # No coverage, depth or length gate: the English script
                 # passed them, and the translation was checked against it
                 # (catalogue.translate_check) before it was staged.
-                from agent3_scripts.models import EpisodeScript as _EpisodeScript
+                from catalogue.translate import validate_translated_script
 
-                script = _EpisodeScript.model_validate(override[part_idx - 1])
-                script_dict = script.model_dump()
+                # a textbook-figure slide (kind "figure") is attached after
+                # the model and survives the round trip (translate.py)
+                script, script_dict = validate_translated_script(override[part_idx - 1])
                 coverage_reports.append({"kind": "presentation", "part": part_idx, "of": n_parts,
                                          "gated": False, "translated": True, "language": lesson_lang,
                                          "segments": len(script_dict.get("segments") or [])})
