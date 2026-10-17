@@ -403,3 +403,26 @@ class TestWhatTheLessonAsksFor:
         assert "order_segments_by_pending" in src
         assert "warm_lesson_assets" in src
         assert 'sorted(_order) != list(range(total))' in src
+
+
+class TestTheWarmPassTakesTheLibraryWrapper:
+    """The warm pass has no fetch of its own: the composer hands it
+    raster_assets.get_raster_asset, which the visual library wrapper
+    replaced at package import — so a colour key warmed up front takes the
+    colour SHELF's decision (hydrate by exact key before any image call,
+    publish after a fresh draw) exactly as a segment's own ask would. No
+    second path to keep in step."""
+
+    def test_the_composer_s_fetch_is_the_wrapped_resolver(self):
+        from pathlib import Path
+        import spike.scene_engine  # noqa: F401 — installs the wrapper
+        import agent6_animation.video_composer as vc
+        from spike.scene_engine import raster_assets as ra
+        assert ra.get_raster_asset.__name__ == "wrapped_get_raster_asset"
+        src = Path(vc.__file__).read_text(encoding="utf-8")
+        i = src.index("def _warm_fetch(key: str, prompt: str):")
+        assert "got = get_raster_asset(key, prompt)" in src[i:i + 400]
+        j = src.rindex("from spike.scene_engine.raster_assets import", 0, i)
+        assert "get_raster_asset" in src[j:i], "the package attribute, not a private copy"
+        import spike.scene_engine.asset_warm as aw
+        assert "get_raster_asset" not in Path(aw.__file__).read_text(encoding="utf-8"), "the warm pass fetches nothing itself"

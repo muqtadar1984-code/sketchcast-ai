@@ -1029,6 +1029,7 @@ class TestTranslateJob:
         assert k["precheck"]["bank"]["staged"] == 12 and len(redrawn) == len(pres["params"]["translation"]["redraw"]),             "the bank stage's write did not replace the assets stage's flags"
         assert "avatar_teacher_female__face_f1" in pres["params"]["translation"]["redraw"]
         assert k["translation"]["stage"]["assets"]["redraw"] == pres["params"]["translation"]["redraw"]
+        assert k["translation"]["stage"]["assets"]["shelf"] == [], "nothing came from the colour shelf"
 
     def test_the_refusal_is_one_switch_away(self, monkeypatch, tmp_path):
         sb = _job_sb(with_assets=False)
@@ -1089,6 +1090,33 @@ class TestTranslateJob:
         monkeypatch.setattr(COL, "pictures_enabled", lambda: True)
         found, missing = T.resolve_assets(sb, ["sk_whale", "avatar_teacher_female__face_f1"])
         assert [f["key"] for f in found] == ["avatar_teacher_female__face_f1"] and missing == ["sk_whale"], "the avatar still comes from the roster"
+        # the colour SHELF (2026-10-17): the library row keyed by the exact
+        # colour key is the picture the render will hydrate — found, not a
+        # redraw; the ink row is still not it
+        import shared.visual_library as VL
+        monkeypatch.delenv(VL.COLOUR_SHELF_ENV, raising=False)
+        sb.tables["visual_assets"].append({"id": "c0a0b0c0-0000-4000-8000-00000000000c", "asset_key": "sk_whale" + COL.COLOUR_KEY_SUFFIX,
+                                           "canonical_key": asset_key_of("sk_whale" + COL.COLOUR_KEY_SUFFIX),
+                                           "storage_path": "lib/whale_colour.png", "status": "approved", "asset_format": "png"})
+        found, missing = T.resolve_assets(sb, ["sk_whale", "avatar_teacher_female__face_f1"])
+        assert missing == [] and [f["key"] for f in found] == ["sk_whale", "avatar_teacher_female__face_f1"]
+        whale = found[0]
+        assert whale["source"] == "library" and whale["colour"] is True and whale["cache_key"] == "sk_whale" + COL.COLOUR_KEY_SUFFIX
+        assert whale["id"] == "c0a0b0c0-0000-4000-8000-00000000000c" and whale["storage_path"] == "lib/whale_colour.png"
+        assert "colour" not in found[1], "the avatar is the roster's, not the shelf's"
+        # a retired shelf row, or one without bytes, is a miss
+        sb.tables["visual_assets"][-1]["status"] = "retired"
+        assert T.resolve_assets(sb, ["sk_whale"])[1] == ["sk_whale"]
+        sb.tables["visual_assets"][-1]["status"] = "approved"
+        # the shelf is one variable away: off, every board picture is a redraw again
+        monkeypatch.setenv(VL.COLOUR_SHELF_ENV, "0")
+        assert T.resolve_assets(sb, ["sk_whale"])[1] == ["sk_whale"]
+        monkeypatch.delenv(VL.COLOUR_SHELF_ENV, raising=False)
+        # with the pictures switch OFF the shelf row is not consulted: the
+        # render asks for the ink key, and only the ink row answers
+        monkeypatch.setattr(COL, "pictures_enabled", lambda: False)
+        found, _ = T.resolve_assets(sb, ["sk_whale"])
+        assert found[0]["id"] == "b0a0b0c0-0000-4000-8000-00000000000b" and "colour" not in found[0]
         # (the job-level flag and redraw list for a missing key are pinned by
         # test_a_missing_picture_is_redrawn_by_the_render_and_flagged; this
         # fixture is a maths kit whose scenes are recompiled, so a board

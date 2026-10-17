@@ -810,9 +810,13 @@ def scene_asset_keys(scripts: list[dict]) -> list[str]:
 
 
 def resolve_assets(sb, keys: list[str]) -> tuple[list[dict], list[str]]:
-    """Where each picture already IS: the worker's cache (hashed) or an
-    approved library row (by storage path). Missing keys are returned, not
-    invented."""
+    """Where each picture already IS: the worker's cache (hashed), an
+    approved library row (by storage path), or — for a board picture under
+    the board-colour pictures switch — the colour SHELF's row for its exact
+    colour key (shared.visual_library.find_colour; ``colour: True``, the
+    cache key the render will ask for). Missing keys are returned, not
+    invented: a board picture the shelf does not hold is a redraw, and a
+    flag, as before (translate_kit)."""
     from spike.scene_engine.raster_assets import cache_dir_for, colour_key
 
     found: list[dict] = []
@@ -824,17 +828,41 @@ def resolve_assets(sb, keys: list[str]) -> tuple[list[dict], list[str]]:
             if png.exists():
                 hit = {"key": key, "source": "cache", "cache_key": k, "sha256": _sha(png.read_bytes())}
                 break
-        if hit is None and not (board_pictures_in_colour() and not key.startswith("avatar")):
-            # the INK library: under the board-colour pictures switch a board
-            # picture is fetched in colour and the ink library is never
-            # consulted for it (raster_assets.generation_forbidden), so a row
-            # here would promise a picture the render cannot use
-            hit = _library_row(sb, key)
+        if hit is None:
+            ck = colour_key(key)
+            if ck != key:
+                # a board picture under the pictures switch: the render asks
+                # for the COLOUR key and the ink library is never consulted
+                # for it (raster_assets.generation_forbidden) — only the
+                # colour shelf, by exact key, can answer; an ink row here
+                # would promise a picture the render cannot use
+                hit = _colour_shelf_row(sb, key, ck)
+            else:
+                hit = _library_row(sb, key)
         if hit is None:
             missing.append(key)
         else:
             found.append(hit)
     return found, missing
+
+
+def _colour_shelf_row(sb, key: str, ck: str) -> Optional[dict]:
+    """The shelf row for a board key's colour key — exact asset_key only,
+    through the library's own lookup (so the translate stage and the render
+    answer from the same row), with the client this job holds. Off when the
+    shelf is off (VISUAL_LIBRARY_COLOUR_SHELF=0): then every board picture
+    is a redraw, as before the shelf. A lookup that fails is a MISSING
+    picture, never a crashed stage."""
+    try:
+        from shared.visual_library import find_colour
+        row = find_colour(ck, sb=sb)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("translate: colour shelf lookup failed for %s: %s", ck, exc)
+        return None
+    if not row:
+        return None
+    return {"key": key, "source": "library", "colour": True, "cache_key": ck,
+            "id": row.get("id"), "storage_path": row.get("storage_path")}
 
 
 def board_pictures_in_colour() -> bool:
@@ -1815,7 +1843,9 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
     precheck["bank"] = {k: v for k, v in bank_summary.items() if k != "dropped"}
     sb.table("topic_kits").update({"precheck": precheck}).eq("id", kit["id"]).execute()
     kit = _save_translation(sb, kit, {
-        "stage": {"script": {"parts": n}, "assets": {"found": len(found), "keys": len(keys), "redraw": redraw},
+        "stage": {"script": {"parts": n}, "assets": {"found": len(found), "keys": len(keys), "redraw": redraw,
+                                                     # the board pictures the colour shelf answered for
+                                                     "shelf": [f["key"] for f in found if f.get("colour")]},
                   "quiz": quiz, "fidelity": {"mean_score": fidelity.get("mean_score"), "samples": fidelity.get("samples")},
                   "worksheet": ({k: v for k, v in worksheet.items() if k != "dropped"} | {"dropped": [d["id"] for d in worksheet["dropped"]]})
                   if worksheet else None,

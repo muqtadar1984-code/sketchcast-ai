@@ -253,7 +253,8 @@ def _patch() -> None:
         return
     from spike.scene_engine import raster_assets as ra
     from spike.scene_engine import svg_assets as sa
-    from shared.visual_library import (best_match, hydrate, hydrate_avatar,
+    from shared.visual_library import (best_match, colour_shelf_enabled,
+                                       hydrate, hydrate_avatar, hydrate_colour,
                                        is_avatar_key, key_guard_ok,
                                        log_decision, publish_generated,
                                        threshold_now)
@@ -285,15 +286,14 @@ def _patch() -> None:
                 allow_generate: bool):
         cache = cache_dir or ra.CACHE_DIR
         cache.mkdir(parents=True, exist_ok=True)
-        # Board colour, phase 2: a COLOURED board picture is drawn fresh under
-        # its own key and cached locally, and that is all. It is never scored
-        # against the ink library (a confident ink match would put an ink
-        # picture in a colour lesson), never hydrated from it, and never
-        # published into it (an ink lesson must never receive a coloured
-        # picture). The wrapper's log line is skipped with the rest: the
-        # decision it describes was not taken.
+        # Board colour, phase 2: a COLOURED board picture is its own decision
+        # (_decide_colour) — the colour SHELF, by exact key. It is never
+        # scored against the ink library (a confident ink match would put an
+        # ink picture in a colour lesson) and never hydrated from an ink row;
+        # an ink lesson never receives a coloured picture (best_match refuses
+        # a colour row before scoring).
         if ra.is_colour_key(key):
-            return original(key, prompt, cache, allow_generate)
+            return _decide_colour(key, prompt, cache, allow_generate)
         # Asked of the renderer, which also answers with the directory of the
         # SAME WORD spelled the other way — so the two halves of one decision
         # can never disagree about which file is this key's cache entry.
@@ -442,6 +442,110 @@ def _patch() -> None:
             "library_asset_id": final.get("library_asset_id"),
             # a raster asset has vision-annotated regions, not groups
             "group_count": None,
+        })
+        return result
+
+    def _decide_colour(key: str, prompt: str, cache: Path,
+                       allow_generate: bool):
+        """The colour shelf's half of the decision (visual_library.find_colour).
+
+        Smaller than the ink path on purpose. No scoring: the only row that
+        may serve a colour key is the row keyed EXACTLY by it, so there is no
+        threshold to judge and no near-miss to record. No local index: the
+        renderer's own cache entry for the key IS the local tier. No
+        library-over-generated-cache refresh: what this worker generated is
+        what it published, byte for byte. What is kept is the shape of the
+        decision — look, hydrate, generate, publish, log — under the same
+        per-key lock, with the same provenance reading, so the decision log
+        reads the same for a coloured picture as for an ink one.
+
+        VISUAL_LIBRARY_COLOUR_SHELF=0 is the rollback: no hydrate, no
+        publish, the picture is drawn fresh and cached locally as before
+        the shelf existed (the line is still logged, as `generated`)."""
+        shelf = colour_shelf_enabled()
+        asset_dir = ra.cache_dir_for(key, cache)
+        png = asset_dir / "asset.png"
+        existed_before = png.exists()
+        hit = None
+        if not existed_before and shelf:
+            try:
+                hit = hydrate_colour(key, prompt, cache, context())
+            except Exception as exc:  # noqa: BLE001 — reuse is an optimisation, never a failure
+                logger.debug("visual library colour shelf lookup failed for %s: %s", key, exc)
+            if hit is not None:
+                # re-ask, as the ink path does after a refresh: everything
+                # below must look at the file the renderer is about to bind
+                asset_dir = ra.cache_dir_for(key, cache)
+                png = asset_dir / "asset.png"
+
+        hydrated = (not existed_before) and png.exists()
+        published = False
+        result = original(key, prompt, cache, allow_generate)
+
+        # A freshly drawn, validated colour picture goes on the shelf under
+        # its colour key, through the same publisher as an ink one (the
+        # tabular and vision gates apply; the row carries COLOUR_QUALITY).
+        # A hydrated file is never re-published, unless the renderer threw it
+        # away and drew again (provenance then reads "generated").
+        if shelf and not existed_before and result is not None and png.exists():
+            try:
+                md = json.loads((asset_dir / "meta.json").read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                md = {}
+            if md.get("provenance") == "generated" and not md.get("baked_text"):
+                try:
+                    published = bool(publish_generated(key, prompt, png, md, context()))
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("visual library colour publish failed for %s: %s", key, exc)
+
+        final: dict[str, Any] = {}
+        if png.exists():
+            try:
+                final = json.loads((asset_dir / "meta.json").read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                final = {}
+        provenance = str(final.get("provenance") or ("absent" if not png.exists() else "unknown"))
+        served_by_library, library_discarded = _library_outcome(
+            hydrated, provenance, result is not None)
+        if existed_before:
+            outcome = "local_cache"
+        elif served_by_library:
+            outcome = "library_hit"
+        elif library_discarded:
+            outcome = f"library_asset_{library_discarded}"
+        elif provenance == "generated":
+            outcome = "generated"
+        elif not png.exists():
+            outcome = "failed"
+        else:
+            outcome = provenance
+        log_decision({
+            "tier": "raster",
+            "requested_key": key,
+            "canonical_key": ra.canonical_key(key),
+            "requested_prompt": prompt[:300],
+            "outcome": outcome,
+            "library_hit": bool(served_by_library),
+            "library_discarded": library_discarded,
+            "matched_key": (hit or {}).get("asset_key"),
+            "matched_id": (hit or {}).get("id"),
+            # an exact key is the whole score: 1.0 or nothing
+            "match_score": 1.0 if hit is not None else 0.0,
+            "match_source": "exact" if hit is not None else "none",
+            "threshold": threshold_now(),
+            "cleared_threshold": hit is not None,
+            "key_guard_passed": hit is not None,
+            "ai_generated": provenance == "generated" and not existed_before,
+            "published": published,
+            "asset_used": str(png) if png.exists() else None,
+            "asset_provenance": provenance,
+            "asset_format": "png" if png.exists() else None,
+            "library_asset_id": final.get("library_asset_id"),
+            "group_count": None,
+            # so a reader can split the shelf's reuse rate from the ink
+            # library's, and see whether the switch was on for this request
+            "colour": True,
+            "colour_shelf": shelf,
         })
         return result
 
