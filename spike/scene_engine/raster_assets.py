@@ -808,18 +808,42 @@ def set_generation_forbidden(on: bool, generation_id: str | None = None, *,
         if b is None:
             b = _STATE[gid] = _new_bucket()
         b["forbid_generate"] = bool(on)
-        b["redraw_keys"] = {str(k) for k in (allow_keys or ()) if str(k)} if on else set()
+        b["redraw_keys"] = {_plain_key(k) for k in (allow_keys or ()) if str(k)} if on else set()
         b["touched"] = time.monotonic()
+
+
+def _plain_key(key) -> str:
+    """A board picture's key without the colour suffix: the allow-list is
+    kept by the key the SCRIPT names, and the renderer asks for the colour
+    key under the pictures switch (colour_key) — the same picture."""
+    k = str(key or "")
+    return k[:-len(COLOUR_KEY_SUFFIX)] if is_colour_key(k) else k
 
 
 def generation_forbidden(key: str | None = None) -> bool:
     """Whether THIS generation may not draw ``key`` (or anything, when no key
-    is given) — a translated render with the key outside its redraw list."""
+    is given) — a translated render with the key outside its redraw list.
+
+    Under the board-colour pictures switch a board picture is fetched under
+    its colour key and is NEVER served from the ink library
+    (visual_library_integration: a coloured picture is not an ink one), so a
+    translated render can only ever draw it: every board picture is then a
+    redraw, and the translate stage predicts and flags exactly that
+    (catalogue.translate.resolve_assets). Measured on the Cells kit
+    (2026-10-17): eleven board pictures refused in six seconds."""
     with _IMAGE_BUDGET_LOCK:
         b = _bucket()
         if not b.get("forbid_generate"):
             return False
-        return not (key is not None and str(key) in (b.get("redraw_keys") or set()))
+        if key is None:
+            return True
+        k = str(key)
+        if _plain_key(k) in (b.get("redraw_keys") or set()):
+            return False
+    from . import colour as _colour
+    if _colour.pictures_enabled() and is_board_key(k):
+        return False
+    return True
 
 
 # Indirected so a test drives it without sleeping. Ticks are short so the

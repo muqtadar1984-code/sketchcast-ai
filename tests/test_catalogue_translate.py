@@ -867,6 +867,7 @@ class TestTranslateJob:
         assert k["precheck"]["ok"] is True, "a redrawn picture is a flag, never a block"
         pres = next(g for g in sb.tables["generations"] if g["kind"] == "presentation" and (g["params"].get("translation") or {}).get("kit_id") == k["id"])
         assert sorted(pres["params"]["translation"]["redraw"]) == sorted(f["where"] for f in redrawn)
+        assert k["precheck"]["bank"]["staged"] == 12 and len(redrawn) == len(pres["params"]["translation"]["redraw"]),             "the bank stage's write did not replace the assets stage's flags"
         assert "avatar_teacher_female__face_f1" in pres["params"]["translation"]["redraw"]
         assert k["translation"]["stage"]["assets"]["redraw"] == pres["params"]["translation"]["redraw"]
 
@@ -884,18 +885,55 @@ class TestTranslateJob:
         assert not [a for a in sb.tables["topic_articles"] if a.get("language") == "ar"]
         assert not [g for g in sb.tables["generations"] if (g["params"].get("translation") or {}).get("source_kit_id") == "kit-1"], "nothing was queued to render"
 
-    def test_the_renderer_draws_only_the_listed_keys_under_the_switch(self):
+    def test_the_renderer_draws_only_the_listed_keys_under_the_switch(self, monkeypatch):
+        from spike.scene_engine import colour as COL
         from spike.scene_engine import raster_assets as RA
-        RA.set_generation_forbidden(True, "gen-x", allow_keys=["sk_whale", "plant_upgrades"])
+        monkeypatch.setattr(COL, "pictures_enabled", lambda: False)
+        token = RA._GENERATION_VAR.set("gen-x")
         try:
-            RA._STATE  # noqa: B018 — the bucket exists
-            import contextlib
-            with contextlib.ExitStack():
-                b = RA._STATE["gen-x"]
-                assert b["forbid_generate"] is True and b["redraw_keys"] == {"sk_whale", "plant_upgrades"}
+            RA.set_generation_forbidden(True, "gen-x", allow_keys=["sk_whale", "plant_upgrades" + COL.COLOUR_KEY_SUFFIX])
+            b = RA._STATE["gen-x"]
+            assert b["forbid_generate"] is True and b["redraw_keys"] == {"sk_whale", "plant_upgrades"}, "kept by the script's plain key"
+            assert RA.generation_forbidden("sk_whale") is False
+            assert RA.generation_forbidden("sk_whale" + COL.COLOUR_KEY_SUFFIX) is False, "the colour key is the same picture"
+            assert RA.generation_forbidden("plant_upgrades") is False
+            assert RA.generation_forbidden("eukaryotic_factory") is True, "a board key off the list stays forbidden"
+            assert RA.generation_forbidden("avatar_teacher__face_1") is True
+            assert RA.generation_forbidden() is True
+            # the board-colour pictures switch: the ink library cannot serve a
+            # colour picture, so every BOARD key may be drawn; avatars never
+            monkeypatch.setattr(COL, "pictures_enabled", lambda: True)
+            assert RA.generation_forbidden("eukaryotic_factory") is False
+            assert RA.generation_forbidden("eukaryotic_factory" + COL.COLOUR_KEY_SUFFIX) is False
+            assert RA.generation_forbidden("avatar_teacher__face_1") is True
         finally:
             RA.set_generation_forbidden(False, "gen-x")
+            RA._GENERATION_VAR.reset(token)
             assert RA._STATE["gen-x"]["redraw_keys"] == set()
+
+    def test_under_colour_pictures_every_board_picture_is_a_redraw_and_a_flag(self, monkeypatch, tmp_path):
+        from spike.scene_engine import colour as COL
+        sb = _job_sb(with_assets=True)
+        # a board picture the ink LIBRARY holds — found when pictures are ink,
+        # a redraw when they are coloured (the render cannot use the ink row)
+        from shared.asset_keys import canonical_key as asset_key_of
+        sb.tables["visual_assets"].append({"id": "b0a0b0c0-0000-4000-8000-00000000000b", "asset_key": "sk_whale",
+                                           "canonical_key": asset_key_of("sk_whale"), "storage_path": "lib/whale.png", "status": "approved"})
+        body = json.loads(sb.files[("artifacts", SCRIPT_PATH)].decode("utf-8"))
+        body["script"]["segments"][0].setdefault("scene", {"id": "x", "elements": [], "actions": []})
+        body["script"]["segments"][0]["scene"]["elements"].append({"id": "pic", "type": "illustration", "asset": "sk_whale", "at": [600, 380], "scale": 1.0})
+        sb.files[("artifacts", SCRIPT_PATH)] = json.dumps(body).encode("utf-8")
+        monkeypatch.setattr("spike.scene_engine.raster_assets.cache_dir_for", lambda key, cache_dir=None: tmp_path / "nocache" / key)
+        monkeypatch.setattr(COL, "pictures_enabled", lambda: False)
+        found, missing = T.resolve_assets(sb, ["sk_whale", "avatar_teacher_female__face_f1"])
+        assert [f["key"] for f in found] == ["sk_whale", "avatar_teacher_female__face_f1"] and missing == []
+        monkeypatch.setattr(COL, "pictures_enabled", lambda: True)
+        found, missing = T.resolve_assets(sb, ["sk_whale", "avatar_teacher_female__face_f1"])
+        assert [f["key"] for f in found] == ["avatar_teacher_female__face_f1"] and missing == ["sk_whale"], "the avatar still comes from the roster"
+        # (the job-level flag and redraw list for a missing key are pinned by
+        # test_a_missing_picture_is_redrawn_by_the_render_and_flagged; this
+        # fixture is a maths kit whose scenes are recompiled, so a board
+        # picture injected here would not survive to the assets stage)
 
     def test_a_pre_check_refusal_names_its_findings_and_removes_the_kit(self, monkeypatch, tmp_path, caplog):
         sb = _job_sb()
