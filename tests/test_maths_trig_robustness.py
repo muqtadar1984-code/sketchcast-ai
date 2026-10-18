@@ -108,3 +108,33 @@ def test_a_figure_with_a_chosen_orientation_is_not_turned():
     with pytest.raises(GeometryRefusal):
         figure_board(m, ref.figure, panel=(B.Q_AT[0], 200.0, B.FIG_RIGHT, B.WORK_BOTTOM), prefix="fig",
                      text_metric=B._M.text_box)
+
+
+# ── 3. the drawn-size floor (ungridded figures) ────────────────────────
+# The rerun of the same kit (2026-10-18, after #276) failed on "the figure
+# (27.5×12.5 units) does not fit the board panel": a 7-24-25 right triangle
+# needed 495 px at 18 px/unit in a 410 px panel, whichever way it was turned.
+
+from maths.geometry.board_adapter import MIN_FIGURE_PX, MIN_PX_PER_UNIT, _min_px  # noqa: E402
+
+
+@pytest.mark.parametrize("legs", [["24", "7"], ["7", "24"], ["25", "12.5"]])
+def test_a_triangle_with_big_side_lengths_scales_down_to_fit(legs):
+    for top in (120.0, 200.0):
+        m, fb = _board(legs, top=top)
+        x0, y0, x1, y1 = m.bbox()
+        drawn = max(x1 - x0, y1 - y0) * fb.scale
+        assert drawn >= MIN_FIGURE_PX - 1, f"still legible: its longest side draws {drawn:.0f} px"
+
+
+def test_a_small_figure_keeps_the_per_unit_floor():
+    m, fb = _board(["4", "3"], top=120.0)
+    assert _min_px(m) == MIN_PX_PER_UNIT and fb.scale == 70.0, "unchanged: the floor only ever lowers"
+
+
+def test_a_gridded_figure_keeps_the_per_unit_floor():
+    from tests.test_geometry_corpus_v4 import R1
+    rep = verify_question(copy.deepcopy(R1))
+    m = next(iter(rep.models.values()))
+    assert m.axes is not None
+    assert _min_px(m) == MIN_PX_PER_UNIT, "on a grid the units are numbers the eye reads"
