@@ -62,6 +62,7 @@ verifies exactly; a wrong approximation (π as 3.1) still fails.
 
 from __future__ import annotations
 
+import contextvars
 import math
 import re
 from dataclasses import dataclass, field
@@ -918,6 +919,38 @@ def _states_equivalent(before: list[Relation], after: list[Relation], variables:
     return False, f"solutions before: {_fmt_solutions(sb)}; after: {_fmt_solutions(sa)}"
 
 
+# ── degree-mode trigonometry ────────────────────────────────────────────
+# School trigonometry is in DEGREES. SymPy's sin(30) is thirty RADIANS, so
+# "10 sin 30° = 5" was "WRONG — solutions before: {10*sin(30)}; after: {5}"
+# and five of the first English trigonometry lesson's worked examples were
+# dropped (2026-10-18, kit 22754aae). An example whose words or working
+# mention degrees is read in degrees: sin/cos/tan take degrees, and
+# asin/acos/atan return them. One that says radians, or none of it, is
+# read as before.
+_DEGREES: contextvars.ContextVar[bool] = contextvars.ContextVar("verify_degrees", default=False)
+_DEGREE_WORDS = re.compile(r"°|\bdeg(?:ree|rees|s)?\b", re.I)
+_TRIG_WORDS = re.compile(r"\b(?:a(?:rc)?)?(?:sin|cos|tan)\b|\b(?:sine|cosine|tangent)\b", re.I)
+
+
+def _degree_mode(ex: WorkedExample) -> bool:
+    parts = [ex.problem or "", *(ex.givens or []), *(ex.final_answer or [])]
+    for st in ex.steps or []:
+        parts += [st.operation or "", *(st.before or []), *(st.after or [])]
+    text = " ".join(str(p) for p in parts)
+    if "radian" in text.lower():
+        return False
+    return bool(_DEGREE_WORDS.search(text)) and bool(_TRIG_WORDS.search(text))
+
+
+def _in_degrees(e):
+    """sin/cos/tan of degrees, asin/acos/atan in degrees — exact (π/180)."""
+    if not isinstance(e, sp.Basic) or not e.has(sp.sin, sp.cos, sp.tan, sp.asin, sp.acos, sp.atan):
+        return e
+    k = sp.pi / 180
+    e = e.replace(sp.asin, lambda a: sp.asin(a) / k).replace(sp.acos, lambda a: sp.acos(a) / k)          .replace(sp.atan, lambda a: sp.atan(a) / k)
+    return e.replace(sp.sin, lambda a: sp.sin(a * k)).replace(sp.cos, lambda a: sp.cos(a * k))             .replace(sp.tan, lambda a: sp.tan(a * k))
+
+
 def _parse(lines: list[str], what: str) -> tuple[Optional[list[Relation]], str]:
     """The lines as relations — less any ``pi = 3.14`` line, which declares
     the approximation in force (_pi_values reads it) and is no equation."""
@@ -934,7 +967,10 @@ def _exact_relation(r: Relation) -> Relation:
     float 2.84e-14 by the time _zero saw it."""
     if r.data is not None:
         return r
-    return Relation(_exact(r.lhs), r.op, None if r.rhs is None else _exact(r.rhs), r.text)
+    lhs, rhs = _exact(r.lhs), None if r.rhs is None else _exact(r.rhs)
+    if _DEGREES.get():
+        lhs, rhs = _in_degrees(lhs), (None if rhs is None else _in_degrees(rhs))
+    return Relation(lhs, r.op, rhs, r.text)
 
 
 # ── rounding and estimation ──────────────────────────────────────────────
@@ -1074,6 +1110,126 @@ def _variables(ex: WorkedExample, givens: Optional[list[Relation]]) -> list[sp.S
     return sorted(free, key=str) or symbols_named(ex.variables)
 
 
+# ── rounded evaluation (degree-mode trigonometry) ──────────────────────────
+# A calculator step: "12 / cos 35° = 12 / 0.8192 = 14.65". The ratio is
+# replaced by its rounding, then the quotient is rounded. Exact equivalence
+# can never hold, and five worked examples of the first English trigonometry
+# lesson were dropped on it (2026-10-18). Accepted ONLY when every new
+# decimal is the CORRECT rounding, at the decimals it writes, of a value the
+# line before determines exactly: a trig ratio in it, or the value itself.
+# A whole number is never a rounding (as for answers, verify._rounds_to in
+# the geometry engine): "14.65" is 12/cos 35° rounded, "15" reads as exact.
+_DECIMAL = re.compile(r"(?<![\w.])-?\d+\.\d+(?![\w.])")
+
+
+def _decimals_in(texts) -> list[tuple[Fraction, int]]:
+    out = []
+    for t in texts:
+        for m in _DECIMAL.finditer(str(t)):
+            out.append((Fraction(m.group()), len(m.group().split(".")[1])))
+    return out
+
+
+def _correct_rounding(exact, value: Fraction, places: int) -> bool:
+    try:
+        x = Fraction(str(sp.N(exact, 40)))
+    except (TypeError, ValueError):
+        return False
+    return _round_to(x, Fraction(1, 10 ** places)) == value
+
+
+def _one_value_each(sols, variables: list) -> Optional[dict]:
+    """``_solution_set``'s answer as {variable: value} when it is exactly
+    one numeric value per variable — a FiniteSet of one (one unknown) or a
+    single solution dict (a system) — else None."""
+    if isinstance(sols, sp.FiniteSet) and len(variables) == 1:
+        if len(sols) != 1:
+            return None
+        d = {variables[0]: next(iter(sols))}
+    elif isinstance(sols, list) and len(sols) == 1:
+        d = dict(sols[0])
+    else:
+        return None
+    if not d or any(getattr(v, "free_symbols", True) for v in d.values()):
+        return None
+    return d
+
+
+def _single_values(rels: list[Relation], variables: list) -> Optional[dict]:
+    try:
+        sols = _timed(_solution_set, rels, variables, "any")
+    except Exception:  # noqa: BLE001
+        return None
+    return _one_value_each(sols, variables)
+
+
+def _rounded_evaluation(before: list[Relation], after: list[Relation], variables: list) -> Optional[str]:
+    """The step's new decimals are correct roundings of exact values the
+    line before fixes, and the values it reaches are the before's with those
+    roundings in. A reason, or None (the step stays WRONG)."""
+    if not _DEGREES.get():
+        return None
+    b_vals, a_vals = _single_values(before, variables), _single_values(after, variables)
+    if b_vals is None or a_vals is None or set(b_vals) != set(a_vals):
+        return None
+    old = {d for d, _ in _decimals_in(r.text for r in before)}
+    new = [(d, k) for d, k in _decimals_in(r.text for r in after) if d not in old]
+    if not new:
+        return None
+    ratios = set()
+    for r in before:
+        for side in (r.lhs, r.rhs):
+            if isinstance(side, sp.Basic):
+                ratios |= {a for a in side.atoms(sp.sin, sp.cos, sp.tan) if not a.free_symbols}
+    roundings = []
+    for d, k in new:
+        if any(_correct_rounding(t, d, k) for t in ratios):
+            roundings.append(f"{_fmt_num(d)} is a ratio rounded to {k} d.p.")
+        elif any(_correct_rounding(v, d, k) for v in b_vals.values()):
+            roundings.append(f"{_fmt_num(d)} is the value rounded to {k} d.p.")
+        else:
+            return None
+    # the reached values: the before's own, or with the rounded ratios in
+    for var, va in a_vals.items():
+        vb = b_vals[var]
+        if _timed(_zero, va - vb):
+            continue
+        if not any(_correct_rounding(vb, d, k) for d, k in new):
+            sub = vb
+            for t in ratios:
+                hit = next((d for d, k in new if _correct_rounding(t, d, k)), None)
+                if hit is not None:
+                    sub = sub.subs(t, sp.Rational(hit.numerator, hit.denominator))
+            if not _timed(_zero, sp.nsimplify(sub) - va):
+                return None
+    return "; ".join(roundings)
+
+
+def _rounded_answer(expected, actual, answers: list[str], variables: list) -> Optional[str]:
+    """Every answer value is its exact value rounded correctly to the
+    decimals it writes (degree-mode trigonometry only)."""
+    if not _DEGREES.get():
+        return None
+    exp, act = _one_value_each(expected, variables), _one_value_each(actual, variables)
+    if exp is None or act is None or set(exp) != set(act):
+        return None
+    written = _decimals_in(answers)
+    if not written:
+        return None
+    for var, va in act.items():
+        vb = exp[var]
+        if getattr(vb, "free_symbols", None):
+            return None
+        try:
+            fa = Fraction(str(sp.nsimplify(va)))
+        except (TypeError, ValueError):
+            return None
+        hit = next((k for d, k in written if d == fa), None)
+        if hit is None or not _correct_rounding(vb, fa, hit):
+            return None
+    return "the exact value correctly rounded"
+
+
 def _mode(ex: WorkedExample) -> str:
     return "all" if ex.task == "solve_system" else "any"
 
@@ -1114,6 +1270,10 @@ def _check_step(i: int, st: Step, ex: WorkedExample, variables: list[sp.Symbol])
                                  "brought in from the problem's words, not a transformation")
     ok, detail = _states_equivalent(before, after, variables, _mode(ex), ex.task,
                                     operation=st.operation, problem=ex.problem, ex=ex)
+    if ok is False:
+        why = _rounded_evaluation(before, after, variables)
+        if why:
+            ok, detail = True, f"evaluated and correctly rounded ({why})"
     return Check(name, ok, f"{st.operation}: {detail}" if st.operation else detail)
 
 
@@ -1228,6 +1388,9 @@ def _check_answer(ex: WorkedExample, givens: Optional[list[Relation]], variables
         approx = _pi_sets_match(expected, actual, ex)
         if approx:
             return Check("answer", True, f"answer verified ({approx}): {_fmt_solutions(actual)}")
+        rounded = _rounded_answer(expected, actual, answers, variables)
+        if rounded:
+            return Check("answer", True, f"answer verified ({rounded}): {_fmt_solutions(actual)}")
         if _proper_subset(actual, expected):
             reasons = " ".join(s.operation for s in ex.steps if s.kind == "transform")
             ok, why = _discard_allowed(expected, actual, reasons, ex.problem)
@@ -1789,6 +1952,14 @@ def _verify_figure_example(ex: WorkedExample) -> ExampleReport:
 
 
 def verify_example(ex: WorkedExample) -> ExampleReport:
+    token = _DEGREES.set(_degree_mode(ex))
+    try:
+        return _verify_example(ex)
+    finally:
+        _DEGREES.reset(token)
+
+
+def _verify_example(ex: WorkedExample) -> ExampleReport:
     if ex.figure:
         return _verify_figure_example(ex)
     if ex.task in LINE_TASKS:
