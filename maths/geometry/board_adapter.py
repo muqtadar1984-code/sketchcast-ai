@@ -198,6 +198,35 @@ def _with_hidden(m: Model, spec: FigureSpec, label_size: float, px_per_unit: Opt
     return d
 
 
+def _turn_to_fit(m: Model, spec: FigureSpec, panel: Rect) -> bool:
+    """Lay a figure on its side when it is too tall for the panel and its
+    orientation carries no meaning: no axes, number line or chart (they fix
+    the orientation), no solid or net (one projection draws every solid),
+    and no orientation the author chose. The first English trigonometry kit
+    (2026-10-18) lost its try-it to "the figure (5.0×12.0 units) does not
+    fit the board panel": a right triangle standing on its 5 cm leg under a
+    two-line question, while the same triangle on its 12 cm leg fits at
+    29 px/unit. The rotation is IN PLACE because the board's later steps
+    reveal labels from this same model, and it happens once per model (the
+    evidence row calls figure_board twice). True when the model was turned."""
+    if getattr(m, "_turned_to_fit", False) or spec.orientation:
+        return False
+    if _gridded(m) or m.solids or m.nets:
+        return False
+    x0, y0, x1, y1 = m.bbox()
+    w, h = x1 - x0, y1 - y0
+    pw, ph = panel[2] - panel[0], panel[3] - panel[1]
+    # only when turning makes the figure's shape match the panel's: a tall
+    # figure in a landscape panel
+    if h <= w or ph >= pw:
+        return False
+    from maths.geometry.compiler import _rotate  # noqa: PLC0415 — compiler imports the drawing side
+
+    _rotate(m, -90.0)
+    m._turned_to_fit = True  # type: ignore[attr-defined]
+    return True
+
+
 def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig",
                  cue: Optional[dict] = None, label_px: float = LABEL_PX,
                  max_scale: Optional[float] = None,
@@ -206,15 +235,24 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
     times the first stroke to the narration; the rest follow in sequence.
     ``max_scale`` (px per unit) lets a row of figures share one scale."""
     fb = FigureBoard(prefix=prefix, text_metric=text_metric)
-    # the label size is chosen in board pixels, so it is converted to figure
-    # units with a provisional scale from the bare model, then the drawing
-    # (labels included) is fitted
-    bx0, by0, bx1, by1 = m.bbox()
-    prov = min((panel[2] - panel[0]) / max(1e-6, bx1 - bx0), (panel[3] - panel[1]) / max(1e-6, by1 - by0),
-               MAX_PX_PER_UNIT)
     floor = _min_px(m)
-    d = _with_hidden(m, spec, label_px / max(prov, floor), max(prov, floor), text_metric)
-    s, ox, oy = _fit(d, panel, max_scale, floor)
+
+    def first_pass():
+        # the label size is chosen in board pixels, so it is converted to figure
+        # units with a provisional scale from the bare model, then the drawing
+        # (labels included) is fitted
+        bx0, by0, bx1, by1 = m.bbox()
+        prov = min((panel[2] - panel[0]) / max(1e-6, bx1 - bx0), (panel[3] - panel[1]) / max(1e-6, by1 - by0),
+                   MAX_PX_PER_UNIT)
+        dd = _with_hidden(m, spec, label_px / max(prov, floor), max(prov, floor), text_metric)
+        return (dd, *_fit(dd, panel, max_scale, floor))
+
+    try:
+        d, s, ox, oy = first_pass()
+    except GeometryRefusal as exc:
+        if exc.code != "layout_collision" or not _turn_to_fit(m, spec, panel):
+            raise
+        d, s, ox, oy = first_pass()
     # the labels widen the box, so the fitted scale is smaller than the
     # provisional one and the labels come out small: one more pass at the
     # true scale settles them within a pixel

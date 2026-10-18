@@ -20,7 +20,11 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+import logging
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+
+_log = logging.getLogger("worker")
 
 StepKind = Literal["transform", "setup", "check", "round", "deduce"]
 Task = Literal["solve", "solve_system", "solve_inequality", "simplify", "expand",
@@ -442,7 +446,25 @@ class Lesson(BaseModel):
     @field_validator("examples", mode="before")
     @classmethod
     def _dict_examples(cls, v):
-        return [x for x in (v or []) if isinstance(x, (dict, WorkedExample))] if isinstance(v, (list, tuple)) else []
+        """Each example on its own: one the engine cannot read is DROPPED,
+        never the lesson. The first English trigonometry kit (2026-10-18,
+        on Claude) wrote ``task: "find missing side"`` for one example and
+        the whole worksheet failed on that one literal. An example whose
+        task is not one of TASKS could not be verified anyway; the others
+        go on to the verifier, which tops the set up to its floor."""
+        if not isinstance(v, (list, tuple)):
+            return []
+        kept = []
+        for i, x in enumerate(v):
+            if isinstance(x, WorkedExample):
+                kept.append(x)
+            elif isinstance(x, dict):
+                try:
+                    kept.append(WorkedExample.model_validate(x))
+                except ValidationError as exc:
+                    _log.warning("maths lesson: example %d dropped — %s", i + 1,
+                                 "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors()[:3]))
+        return kept
 
     @field_validator("examples")
     @classmethod
@@ -529,9 +551,21 @@ def parse_lesson(data) -> Lesson:
 
 
 def parse_example(data) -> WorkedExample:
+    """One example out of a model reply; EMPTY (no steps) when it cannot be
+    read. Every caller already treats an example with no steps as one the
+    model failed to give: the question set counts it as a rejection, the
+    extension round drops it, a regeneration keeps the example it was
+    replacing. A ValidationError used to escape instead and fail the whole
+    build — the first English trigonometry worksheet (2026-10-18, on
+    Claude) died on one question's ``task: "find missing side"``."""
     if not isinstance(data, dict):
         return WorkedExample()
-    return WorkedExample.model_validate(_clean_text(data))
+    try:
+        return WorkedExample.model_validate(_clean_text(data))
+    except ValidationError as exc:
+        _log.warning("maths example unreadable, treated as not given — %s",
+                     "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors()[:3]))
+        return WorkedExample()
 
 
 __all__ = ["Line", "Step", "Mistake", "WorkedExample", "MethodCard", "TryIt", "Lesson",
