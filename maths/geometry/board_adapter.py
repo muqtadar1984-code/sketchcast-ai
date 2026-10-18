@@ -28,6 +28,10 @@ Rect = tuple[float, float, float, float]   # x0, y0, x1, y1 in board pixels
 
 MAX_PX_PER_UNIT = 70.0      # a 3-unit figure is not blown up to fill a panel
 MIN_PX_PER_UNIT = 18.0
+# An UNGRIDDED figure's units are only its side lengths — 7, 24 and 25 cm
+# draw the same triangle as 0.7, 2.4 and 2.5 — so its legibility is its DRAWN
+# size, not pixels per unit: its longest side must reach this many pixels.
+MIN_FIGURE_PX = 240.0
 STROKE_PX = 3.2
 MARK_PX = 2.2
 AXIS_PX = 2.0               # a symmetry axis drawn across the figure
@@ -128,14 +132,29 @@ def _min_px(m: Model) -> float:
     step = m.axes.step if m.axes is not None else (m.number_line.step if m.number_line is not None else 1.0)
     if float(step) > 1.0:
         return MIN_PX_PER_UNIT / float(step)
-    if m.circles and not m.polygons and not m.angle_ids and not _gridded(m):
+    if _gridded(m):
+        # axes, a number line, a chart, a solid: units are numbers the eye
+        # reads off the grid, so the floor stays per unit
+        return MIN_PX_PER_UNIT
+    floor = MIN_PX_PER_UNIT
+    if m.circles and not m.polygons and not m.angle_ids:
         # a circle alone (its centre, a radius or a diameter): nothing in it
         # is finer than its outline, so it may draw at half the floor — a
         # radius-10 circle is 20 units across, which no panel holds at
         # 18 px/unit ("the figure (20.0×20.0 units) does not fit the board
         # panel", the circle kit's try-it round, 2026-10-15)
-        return MIN_PX_PER_UNIT / 2
-    return MIN_PX_PER_UNIT
+        floor = MIN_PX_PER_UNIT / 2
+    # ungridded: legible when its longest side draws MIN_FIGURE_PX, however
+    # many units that is. A 7-24-25 right triangle is 27.5 units wide with
+    # its labels and needed 495 px at 18 px/unit, so it never fitted the
+    # 410 px try-it panel (the first English trigonometry kit, 2026-10-18,
+    # failed twice on it); at the drawn-size floor it draws ~400 px wide.
+    # Small figures keep the per-unit floor: it only ever LOWERS.
+    x0, y0, x1, y1 = m.bbox()
+    longest = max(x1 - x0, y1 - y0)
+    if longest > 0:
+        floor = min(floor, MIN_FIGURE_PX / longest)
+    return floor
 
 
 def _fit(d: Drawing, panel: Rect, max_scale: Optional[float] = None,
