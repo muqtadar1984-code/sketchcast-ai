@@ -31,7 +31,7 @@ from __future__ import annotations
 import string
 
 # RTL lesson languages (mirrors shared/languages.py without importing it).
-RTL_LANGS = {"ar", "ms-arab"}
+RTL_LANGS = {"ar", "ms-arab", "ur"}
 
 # Abjad enumeration for Arabic-script documents (أبجد هوز order). 28 letters —
 # comfortably above MAX_MATCH (26) and any section/MCQ count.
@@ -41,11 +41,22 @@ _ABJAD = [
 ]
 
 
+# Urdu papers enumerate in the same abjad order with Urdu letter forms —
+# (الف) (ب) (ج) (د) … — the first written out as its name, as Urdu papers do.
+_ABJAD_UR = [
+    "الف", "ب", "ج", "د", "ہ", "و", "ز", "ح", "ط", "ی", "ک", "ل", "م", "ن",
+    "س", "ع", "ف", "ص", "ق", "ر", "ش", "ت", "ث", "خ", "ذ", "ض", "ظ", "غ",
+]
+
+
 def letters(lang: str) -> list[str]:
     """The enumeration sequence for a language: abjad for Arabic-script docs,
     A–Z otherwise. Use EVERYWHERE letters appear (sections, marks table,
     match options, MCQ options, answer keys) so paper and key always agree."""
-    if (lang or "en").strip().lower() in RTL_LANGS:
+    code = (lang or "en").strip().lower()
+    if code == "ur":
+        return list(_ABJAD_UR)
+    if code in RTL_LANGS:
         return list(_ABJAD)
     return list(string.ascii_uppercase)
 
@@ -801,3 +812,61 @@ def difficulty_label(value, lang: str) -> str:
     if lang in ("", "en") or key is None:
         return str(value)
     return _t(key, lang)
+
+
+# ── Urdu (اردو) — Kit Translator §5.10, 2026-10-19 ─────────────────────────
+# One block per table, so a native reader reviews every Urdu string in one
+# place. Standard Urdu letters (ک ی ہ ے, never ك ي ه), the Urdu full stop ۔,
+# Western digits. A key missing from the table above raises at import.
+_UR = {
+    "section": "حصہ", "marks": "نمبر", "total": "کل",
+    "tf_box_cue": "ہر خانے میں {t} یا {f} لکھیں۔",
+    "end_of_paper": "پرچہ ختم",
+    "true": "درست", "false": "غلط",
+    "sec_mcq": "کثیر الانتخابی سوالات", "sec_fill_blank": "خالی جگہ پُر کریں", "sec_true_false": "درست یا غلط",
+    "sec_match": "کالموں کا ملان کریں", "sec_short": "مختصر جوابات", "sec_long": "تفصیلی جوابات",
+    "answer_key": "جوابی کلید", "question_bank": "سوالیہ بینک",
+    "column": "کالم {letter}",
+    "match_instruction": "{a} کے ہر جزو کو {b} کے درست جزو سے ملائیں۔",
+    "marks_bracket": "[{n} نمبر]",
+    "doc_worksheet": "ورک شیٹ", "doc_test_paper": "ٹیسٹ پیپر", "doc_exam": "امتحان",
+    "doc_lesson_plan": "سبق کا منصوبہ", "doc_activities": "جماعتی سرگرمیاں", "doc_case_study": "کیس اسٹڈی",
+    "chapter": "باب",
+    "quiz_number_only": "(صرف عدد لکھیں)",
+    "quiz_instructions": "تمام سوالات کے جواب دیں۔ نمبر قوسین میں دیے گئے ہیں۔",
+    "quiz": "کوئز",
+    "difficulty": "مشکل کی سطح", "diff_easy": "آسان", "diff_medium": "درمیانہ", "diff_hard": "مشکل", "diff_mixed": "ملا جلا",
+    "duration": "دورانیہ", "n_minutes": "{n} منٹ",
+    "paper_covers": "یہ پرچہ ان موضوعات پر مشتمل ہے:",
+    "teacher_only": "صرف استاد کے لیے — طلبہ میں تقسیم نہ کریں۔",
+    "learning_objectives": "تعلیمی مقاصد", "materials": "ضروری سامان", "key_vocabulary": "اہم الفاظ",
+    "lesson_flow": "سبق کی ترتیب", "assessment": "جائزہ", "homework": "گھر کا کام", "differentiation": "تفریقی تدریس",
+    "term": "اصطلاح", "definition": "تعریف", "phase": "مرحلہ", "min_col": "منٹ",
+    "teacher_does": "استاد کا کردار", "students_do": "طلبہ کا کردار", "support": "معاونت", "challenge": "چیلنج",
+    "activity": "سرگرمی", "objective": "مقصد", "grouping": "گروہ بندی", "steps": "مراحل",
+    "teacher_facilitation": "استاد کی رہنمائی", "success_looks_like": "کامیابی کی علامات",
+    "background": "پس منظر", "scenario": "منظرنامہ", "discussion_questions": "بحث کے لیے سوالات",
+    "concepts_applied": "لاگو کیے گئے تصورات", "teacher_notes": "استاد کے لیے نوٹس — جوابات کی رہنمائی",
+    "mode": "طریقۂ کار", "mode_full_lesson": "مکمل سبق", "mode_micro_clips": "کلاس میں مختصر کلپس",
+    "mode_flipped": "فلپڈ کلاس / پیشگی مشاہدہ", "pre_watch": "کلاس سے پہلے",
+    "sec_assertion_reason": "دعویٰ اور وجہ", "sec_numerical": "عددی سوالات", "sec_diagram_label": "شکل کے حصوں کے نام لکھیں",
+    "marking_scheme": "مارکنگ اسکیم", "explanation": "وضاحت", "total_marks": "کل نمبر", "n_questions": "{n} سوالات",
+    "ws_warm_up": "ابتدائی مشق", "ws_practice": "مشق", "ws_challenge": "چیلنج", "ws_stretch": "مزید گہرائی",
+    "difficulty_1": "آسان ترین", "difficulty_2": "درمیانہ", "difficulty_3": "مشکل", "difficulty_4": "انتہائی مشکل",
+    "verb_solve": "حل کریں", "verb_simplify": "مختصر کریں", "verb_expand": "پھیلائیں",
+    "verb_factorise": "اجزائے ضربی بنائیں", "verb_evaluate": "قیمت معلوم کریں", "verb_round": "راؤنڈ آف کریں",
+    "verb_estimate": "اندازہ لگائیں", "verb_mean": "اوسط معلوم کریں", "verb_median": "وسطانیہ معلوم کریں",
+    "verb_mode": "عادہ معلوم کریں", "verb_range": "وسعت معلوم کریں",
+    "ws_instructions": "ہر سوال کا مکمل حل لکھیں۔ سوالات بتدریج مشکل ہوتے جاتے ہیں؛ ہر جواب کو واپس رکھ کر جانچیں۔",
+    "exam_instructions": "تمام سوالات کے جواب دیں۔ نمبر قوسین میں دیے گئے ہیں۔ مکمل حل لکھیں — درست مراحل پر طریقے کے نمبر دیے جاتے ہیں۔",
+    "cas_note": "نیچے دیا گیا ہر حل کمپیوٹر الجبرا سسٹم سے مرحلہ وار جانچا گیا ہے۔",
+    "facts_note": "نیچے خالی جگہ، درست/غلط اور ملان کے ہر جواب کو ریاضیاتی حقائق کے جدول سے جانچا گیا ہے۔",
+    "sec_figures": "اشکال",
+    "figures_note": "نیچے اشکال والا ہر سوال جیومیٹری انجن نے بنایا اور جانچا ہے؛ ہر شکل درست پیمانے پر ہے، سوائے اس کے جس پر 'پیمانے کے مطابق نہیں' لکھا ہو۔",
+    "not_to_scale": "پیمانے کے مطابق نہیں",
+    "ws_total_marks": "کل: {n} نمبر",
+    "marks_scheme": " — {m} نمبر: طریقے کے لیے {method}، جواب کے لیے 1",
+    "sol_check": "جانچ", "sol_answer": "جواب", "sol_or": "یا",
+}
+for _k, _v in _UR.items():
+    _STRINGS[_k]["ur"] = _v

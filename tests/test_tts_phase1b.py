@@ -59,6 +59,9 @@ class TestGoogleEntries:
         "g-mr-m": ("mr-IN-Chirp3-HD-Achird", "m", "mr"),
         "g-hi-f": ("hi-IN-Chirp3-HD-Achernar", "f", "hi"),
         "g-hi-m": ("hi-IN-Chirp3-HD-Achird", "m", "hi"),
+        # Urdu (2026-10-19, read from the live voices.list): ur-IN only
+        "g-ur-f": ("ur-IN-Chirp3-HD-Achernar", "f", "ur"),
+        "g-ur-m": ("ur-IN-Chirp3-HD-Achird", "m", "ur"),
     }
 
     def test_every_google_entry_is_pinned(self):

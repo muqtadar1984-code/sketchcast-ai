@@ -121,9 +121,9 @@ _DOT_GREY = "C7CFCE"   # dotted separators (workbook)
 # Complex-script (w:cs) font per script family: Georgia/Times/Calibri carry no
 # Arabic — Word needs an explicit cs font or it substitutes unpredictably.
 _CS_FONTS = {
-    "exam_board": {"ar": "Traditional Arabic", "ms-arab": "Traditional Arabic",
+    "exam_board": {"ar": "Traditional Arabic", "ms-arab": "Traditional Arabic", "ur": "Urdu Typesetting",
                    "hi": "Nirmala UI", "mr": "Nirmala UI", "te": "Nirmala UI"},
-    "_default": {"ar": "Arial", "ms-arab": "Arial",
+    "_default": {"ar": "Arial", "ms-arab": "Arial", "ur": "Arial",
                  "hi": "Nirmala UI", "mr": "Nirmala UI", "te": "Nirmala UI"},
 }
 

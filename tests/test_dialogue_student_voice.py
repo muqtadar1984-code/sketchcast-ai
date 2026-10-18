@@ -30,6 +30,9 @@ STUDENTS = {
     "g-fr-student-m": ("fr-FR-Chirp3-HD-Puck", "m", "fr"),
     "g-es-student-f": ("es-ES-Chirp3-HD-Leda", "f", "es"),
     "g-es-student-m": ("es-ES-Chirp3-HD-Puck", "m", "es"),
+    # Urdu (2026-10-19): ur-IN lists Leda and Puck in the live voices.list
+    "g-ur-student-f": ("ur-IN-Chirp3-HD-Leda", "f", "ur"),
+    "g-ur-student-m": ("ur-IN-Chirp3-HD-Puck", "m", "ur"),
 }
 
 

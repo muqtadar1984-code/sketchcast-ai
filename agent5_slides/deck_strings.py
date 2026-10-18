@@ -157,7 +157,7 @@ _FROM_DOCS = {
     "meaning": "definition",
 }
 
-LANGS = ("en", "ms", "ms-arab", "ar", "fr", "es", "pt", "hi", "mr", "te")
+LANGS = ("en", "ms", "ms-arab", "ar", "fr", "es", "pt", "hi", "mr", "te", "ur")
 
 
 def T(lang: str | None, key: str, **fmt) -> str:
@@ -168,3 +168,21 @@ def T(lang: str | None, key: str, **fmt) -> str:
         row = _STRINGS[key]
         text = row.get(code) or row["en"]
     return text.format(**fmt) if fmt else text
+
+
+# ── Urdu (اردو) — Kit Translator §5.10, 2026-10-19 ─────────────────────────
+# One block per table, so a native reader reviews every Urdu string in one
+# place. Standard Urdu letters (ک ی ہ ے, never ك ي ه), the Urdu full stop ۔,
+# Western digits. A key missing from the table above raises at import.
+_UR = {
+    "by_end": "اس سبق کے اختتام تک", "check": "جانچ", "remember": "یاد رکھیں", "watch_out": "خیال رکھیں",
+    "misunderstandings": "عام غلط فہمیاں", "learners_think": "طلبہ اکثر سمجھتے ہیں", "in_fact": "دراصل",
+    "worked_example": "حل شدہ مثال", "worked_example_n": "حل شدہ مثال {n}", "words_to_know": "اہم الفاظ",
+    "zoom_in": "قریب سے دیکھیں", "compare": "موازنہ کریں", "side_by_side": "ساتھ ساتھ",
+    "only_second_has": "صرف دوسرے میں ہے:", "shared": "مشترک:", "name_each": "ہر حصے کا نام لکھیں",
+    "continued": "(جاری)", "ready": "پڑھانے کے لیے تیار۔",
+    "notes_line": "ہر سلائیڈ کے اسپیکر نوٹس میں بیانیہ موجود ہے۔",
+    "answer": "جواب", "answer_not_given": "جواب نہیں دیا گیا۔", "labelled_here": "یہاں نشان زد:", "answers": "جوابات:",
+}
+for _k, _v in _UR.items():
+    _STRINGS[_k]["ur"] = _v
