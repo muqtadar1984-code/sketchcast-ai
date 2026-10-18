@@ -2857,6 +2857,11 @@ def _generate(sb: Client, job: dict, generation_id: str) -> None:
     # make an import-time fault in the catalogue fail every book generation
     # before get_book. The book path must never need the catalogue package.
     catalogue_run = db.is_catalogue_params(gen.get("params") or {})
+    if catalogue_run:
+        # The GENERATION's flag is the authority; run.py set the text seam
+        # from the job row's copy (migration 0115). Only ever widened here.
+        from shared.llm import set_catalogue_scope
+        set_catalogue_scope(True)
     book = None if catalogue_run else db.get_book(sb, gen["book_id"])
     # Console takedown racing a queued job: taken-down content must not be
     # (re)generated. Columns arrive with app migration 0015 — .get() is safe

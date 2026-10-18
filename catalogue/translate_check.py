@@ -747,7 +747,7 @@ def check_question(source: dict, target: dict) -> dict:
 
 # ── pre-check B: meaning, by back-translation ────────────────────────────
 
-_WORD_RE = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
+_CONTENT_WORD_RE = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
 _STOP = frozenset("the and of to is that with for are was this from have which their there what when "
                   "how you we our its into than then them they will can let now here also each".split())
 FIDELITY_FLAG = 0.30
@@ -757,8 +757,8 @@ def content_overlap(a: str, b: str) -> float:
     """Share of the source's content words that the back-translation keeps
     (case-folded, stop words out). A rough fidelity score: 1.0 is the same
     sentence, 0.3 and below is a different one."""
-    wa = {w.casefold() for w in _WORD_RE.findall(str(a or ""))} - _STOP
-    wb = {w.casefold() for w in _WORD_RE.findall(str(b or ""))} - _STOP
+    wa = {w.casefold() for w in _CONTENT_WORD_RE.findall(str(a or ""))} - _STOP
+    wb = {w.casefold() for w in _CONTENT_WORD_RE.findall(str(b or ""))} - _STOP
     if not wa:
         return 1.0
     return len(wa & wb) / len(wa)
