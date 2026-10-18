@@ -3260,17 +3260,24 @@ class TestASpilledLabelNeverCrossesTheTitle:
         warns = r.audit()["warnings"]
         assert not any(w.startswith("TEXT_OVERLAP") for w in warns), warns
 
-    def test_a_label_with_nowhere_left_says_so(self):
+    def test_a_label_with_nowhere_left_is_wrapped_or_shrunk_first(self):
         """A label too wide for any column AND for every row above the title
-        keeps its authored box and is REPORTED, rather than being clamped
-        onto the title as if there had been room."""
+        used to keep its authored box and be REPORTED (TEXT_OVER_ART). It
+        now takes the ladder first — wrapped onto two lines, then set a size
+        smaller, floor 70% — and only a label that fits NOWHERE on it stays
+        put. These three fit once wrapped and shrunk; none is clamped onto
+        the title as if there had been room, and none is on the picture."""
         r = _annotated_board(["Chloroplasts trap the sunlight energy from "
                               "the sun for photosynthesis"] * 3)
         ttl = r.bound["ttl"].box
+        art = r._root_art_box()
         warns = r.audit()["warnings"]
-        assert any(w.startswith("TEXT_OVER_ART") for w in warns), warns
+        assert any(w.startswith(("LABEL_WRAPPED", "LABEL_SHRUNK")) for w in warns), warns
+        assert not any(w.startswith(("TEXT_OVER_ART", "TEXT_OVERLAP")) for w in warns), warns
         for i in range(3):
             assert _overlap(r.bound[f"l{i}"].box, ttl) == 0.0, i
+            assert r._overlap_frac(r.bound[f"l{i}"].box, art) <= 0.15, i
+            assert r.bound[f"l{i}"].text.size >= 27 * 0.7 - 1e-6, i
 
 
 class TestTheEdgeLeaderReachesThePicture:

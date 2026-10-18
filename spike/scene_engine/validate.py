@@ -189,6 +189,12 @@ def validate_visual_language(video_manifest: dict,
         # report said the lesson was clean
         "text_over_art": _pick("TEXT_OVER_ART"),
         "text_moved_off_art": _pick("TEXT_MOVED_OFF_ART"),
+        # a part label wider than the margin beside its picture, wrapped onto
+        # two lines or set a size smaller so it could take the column — the
+        # Arabic labels of a translated kit run about twice the English width
+        "labels_refit": _pick("LABEL_WRAPPED") + _pick("LABEL_SHRUNK"),
+        # …and one that fitted nowhere on that ladder and stayed where it was
+        "labels_unplaced": _pick("LABEL_UNPLACED"),
         # a label whose part could not be located: it gets a leader to the
         # picture's edge rather than a confident line to the wrong structure
         "anchor_edge_fallbacks": _pick("ANCHOR_EDGE_FALLBACK"),
