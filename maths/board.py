@@ -167,8 +167,27 @@ def _fit_text(text: str, size: float, max_w: float, *, bold: bool = False, min_s
         size = max(min_size, size - 1.5)
         w, _h = _M.text_box(t, size, bold)
     if w > max_w and len(t) > 8:
-        t = _short(t, max(8, int(len(t) * max_w / w) - 1))
+        t = _cut_to_width(t, size, max_w, bold=bold)
     return t, size
+
+
+def _cut_to_width(text: str, size: float, max_w: float, *, bold: bool = False, min_chars: int = 8) -> str:
+    """``text`` shortened until its MEASURED box is ``max_w`` wide or less
+    (or it is down to ``min_chars``). The cut is re-measured each time and
+    taken from the whole text, so a marker is never cut into. The character
+    cap here comes from a measurement, so it does not get _short's 1.6
+    script allowance — that allowance once turned a fitting cut of an Arabic
+    word problem's second line back into 1.6x its length, and it ran 245 px
+    under the method card (TEXT_OVERLAP card_0+q1, card_1+q1 in four scenes
+    of the Arabic trigonometry kit, 2026-10-18)."""
+    src = " ".join(str(text or "").split())
+    t, cap = src, len(src)
+    w = _M.text_box(t, size, bold)[0]
+    while w > max_w and cap > min_chars:
+        cap = max(min_chars, min(int(cap * max_w / w) - 1, cap - 1))
+        t = _short(src, cap, script_allowance=False)
+        w = _M.text_box(t, size, bold)[0]
+    return t
 
 
 def _wrap_text(text: str, size: float, max_w: float, max_lines: int, *, bold: bool = False) -> list[str]:
@@ -261,17 +280,19 @@ def _non_latin(text: str) -> bool:
     return bool(_NON_LATIN_RE.search(str(text or "")))
 
 
-def _short(text: str, cap: int) -> str:
+def _short(text: str, cap: int, *, script_allowance: bool = True) -> str:
     """``text`` cut to ``cap`` characters with a marker. The marker is "…"
     for a Latin text and "..." for a script text: the Noto script faces have
     no U+2026 and drew a box after the Arabic method lines (Substitution
     kit, 2026-10-17); "." is in every face (_NEUTRAL_PUNCT). A script text
     also gets a longer cap — a character is not a width, and Arabic says
     the same in roughly 1.6× the characters; the MEASURED fit (_fit_text)
-    still has the last word."""
+    still has the last word. A cap that already comes from a measurement
+    passes ``script_allowance=False`` (_cut_to_width)."""
     t = " ".join(str(text or "").split())
     if _non_latin(t):
-        cap = int(cap * 1.6)
+        if script_allowance:
+            cap = int(cap * 1.6)
         marker = "..."
     else:
         marker = "…"
@@ -591,7 +612,7 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
         size -= 1.5
         w = _M.text_width(note, size)
     if x + w > NOTE_RIGHT:
-        note = _short(note, max(12, int(len(note) * (NOTE_RIGHT - x) / w)))
+        note = _cut_to_width(note, size, NOTE_RIGHT - x, min_chars=12)
         w = _M.text_width(note, size)
     if x + w > NOTE_RIGHT:
         return          # a wide line left no room before the card: no note beats one across it
