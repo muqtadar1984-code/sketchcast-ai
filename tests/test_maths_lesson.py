@@ -847,3 +847,30 @@ class TestANoteNeverRisesIntoTheQuestion:
         q_bottom = max(b[3] for b in qs)
         for nb in notes:
             assert nb[1] >= q_bottom + 4, (nb, q_bottom)
+
+
+class TestNotesInOneColumnDoNotTouch:
+    """Quadratic kit, Arabic (2026-10-18): pushed below a typeset question,
+    the first Arabic note came within 3 px of the next step's note — inside
+    the audit's 4 px touch (TEXT_OVERLAP n2+n4)."""
+
+    def test_consecutive_arabic_notes_keep_clear_of_each_other(self):
+        from maths import board as B
+        from maths.schema import MethodCard, WorkedExample
+        ex = WorkedExample.model_validate({
+            "label": "مثال 1", "problem": "(x + 3)(x + 4)", "target": "expand", "givens": [],
+            "final_answer": ["x^2 + 7x + 12"], "answer_speech": "الناتج.", "intro_speech": "نوسّع.", "steps": [
+                {"kind": "transform", "operation": "اضرب الحدود باستخدام FOIL", "before": ["(x + 3)(x + 4)"],
+                 "after": ["x^2 + 4x + 3x + 12"], "explanation": "", "speech": "نضرب."},
+                {"kind": "transform", "operation": "اجمع الحدود المتشابهة", "before": ["x^2 + 4x + 3x + 12"],
+                 "after": ["x^2 + 7x + 12"], "explanation": "", "speech": "نجمع."}]})
+        scene, _ = B.example_scene(ex, MethodCard(), "s003", has_card=False, lang="ar")
+        notes = []
+        for e in scene["elements"]:
+            if e.get("type") == "text" and e["id"].startswith("n"):
+                w, h = B._M.text_box(e["text"], e["size"])
+                notes.append((e["at"][1] - h / 2, e["at"][1] + h / 2))
+        notes.sort()
+        assert len(notes) >= 2
+        for (t0, b0), (t1, _b1) in zip(notes, notes[1:]):
+            assert t1 >= b0 + 4, (b0, t1)
