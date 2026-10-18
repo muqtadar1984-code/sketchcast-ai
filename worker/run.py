@@ -30,6 +30,7 @@ load_dotenv()  # also pick up a repo-root .env if present
 
 from worker import client as db  # noqa: E402
 from worker.process import index_book, process_generation  # noqa: E402
+from shared.llm import set_catalogue_scope  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 # httpx logs every request at INFO — one line per Supabase poll, and the
@@ -198,6 +199,13 @@ def _is_catalogue_job(job: dict | None) -> bool:
     nothing from the catalogue package, so the failure path stays importable
     without its dependencies."""
     return db.is_catalogue_params((job or {}).get("params"))
+
+
+def _catalogue_text_scope(job: dict | None) -> bool:
+    """Is this job CATALOGUE work for the text-provider seam (shared/llm.
+    set_catalogue_scope)? A catalogue job type (topic_*, kit_translate, …)
+    or a builder job carrying the kit flag. A teacher's book job never is."""
+    return (job or {}).get("type") in CATALOGUE_JOB_TYPES or _is_catalogue_job(job)
 
 
 def _fail_catalogue_kit(sb, job: dict, error: str) -> None:
@@ -581,6 +589,10 @@ def run_once(sb) -> bool:
     gen_id = job.get("generation_id")
     _inflight_add(job)
     log.info("Claimed %s job %s (generation=%s book=%s)", job_type, job["id"], gen_id, job.get("book_id"))
+    # Which provider this job's TEXT calls take (shared/llm: the catalogue
+    # seam, CATALOGUE_TEXT_PROVIDER). Set on EVERY job — the thread is reused —
+    # and cleared in the finally below.
+    set_catalogue_scope(_catalogue_text_scope(job))
     try:
         if job_type == "index_book":
             index_book(sb, job)
@@ -729,6 +741,7 @@ def run_once(sb) -> bool:
                 and not _is_catalogue_job(job)):
             _auto_file_support_issue(sb, job, str(exc))
     finally:
+        set_catalogue_scope(False)
         _inflight_remove(job["id"])
     return True
 
