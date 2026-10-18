@@ -823,7 +823,9 @@ class TestFieldSelection:
         prose = _copy.deepcopy(LESSON)
         prose["examples"][0]["problem"] = "A coin has a radius of 4 cm. Find its circumference. (Use π = 3.14)"
         assert "examples[0].problem" in [p for p, _ in T.lesson_text_items(prose)]
-        assert not any(p.endswith((".before[0]", ".after[0]", ".final_answer[0]", ".operation", ".givens[0]")) for p in paths)
+        assert not any(p.endswith((".before[0]", ".after[0]", ".final_answer[0]", ".givens[0]")) for p in paths)
+        # a step's operation is the board's muted note: translated (founder, 2026-10-17)
+        assert any(p.endswith(".operation") for p in paths)
 
     def test_article_text_items_leave_ids_codes_and_figure_keys(self):
         paths = [p for p, _ in T.article_text_items(ARTICLE)]
@@ -1473,3 +1475,29 @@ class TestOneTranslationAtATime:
             def table(self, *a, **k):
                 raise RuntimeError("down")
         assert "kit_translate" in R._catalogue_observer_types(Boom()), "a failed gate fails open"
+
+
+class TestStepOperationIsTranslated:
+    """The muted note beside each step of the working is `{operation}
+    {explanation}` (maths/board.py). The Substitution Arabic video showed it
+    in English — "Substitute y and a" — because `operation` was an invariant
+    field. Now it is prose with maths inside, like the problem: translated,
+    its maths spans and numbers checked."""
+
+    def test_a_translated_operation_passes_and_a_lost_number_blocks(self):
+        src = {"examples": [{"problem": "5y - 2a", "steps": [
+            {"kind": "transform", "operation": "Substitute y and a", "before": ["5y - 2a"], "after": ["5(3) - 2(-4)"],
+             "explanation": "", "speech": "We substitute."},
+            {"kind": "transform", "operation": "subtract 3 from both sides", "before": ["x + 3 = 7"], "after": ["x = 4"],
+             "explanation": "", "speech": "Subtract three."}]}]}
+        good = {"examples": [{"problem": "5y - 2a", "steps": [
+            {**src["examples"][0]["steps"][0], "operation": "عوّض y و a", "speech": "نعوّض."},
+            {**src["examples"][0]["steps"][1], "operation": "اطرح 3 من الطرفين", "speech": "نطرح ثلاثة."}]}]}
+        rep = C.check_maths_lesson(src, good)
+        assert rep["ok"], rep["blocking"]
+        bad = {"examples": [{"problem": "5y - 2a", "steps": [
+            good["examples"][0]["steps"][0],
+            {**good["examples"][0]["steps"][1], "operation": "اطرح من الطرفين"}]}]}
+        rep = C.check_maths_lesson(src, bad)
+        assert not rep["ok"] and rep["blocking"][0]["what"] == "maths in the question altered"
+        assert rep["blocking"][0]["where"].endswith("steps[1].operation")

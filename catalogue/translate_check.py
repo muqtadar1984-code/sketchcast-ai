@@ -499,7 +499,7 @@ def check_script(source: dict, target: dict, *, language: str,
 # Fields of maths.schema.Lesson that are MATHS, not words: copied verbatim
 # by the translator, verified identical here.
 LESSON_INVARIANT_KEYS = ("givens", "target", "before", "after", "final_answer",
-                         "operation", "theorem", "uses", "figure_ops", "figure", "chart",
+                         "theorem", "uses", "figure_ops", "figure", "chart",
                          "from_state", "wrong_state", "kind", "task", "difficulty", "precision",
                          "answer")
 # Fields that are PROSE WITH MATHS INSIDE — a word problem: "Find the area
@@ -507,7 +507,13 @@ LESSON_INVARIANT_KEYS = ("givens", "target", "before", "after", "final_answer",
 # then every maths span must survive verbatim (prose_maths_equivalent).
 # The founder's review of the first Arabic video (2026-10-16): the question
 # stayed English on the board.
-LESSON_PROSE_MATHS_KEYS = ("problem",)
+# A step's `operation` ("Substitute y and a", "subtract 3 from both sides")
+# is the muted note the board writes beside the working (maths/board.py
+# `{operation} {explanation}`): words, with the odd maths span — translated
+# like a problem, its spans and numbers checked the same way. Founder,
+# 2026-10-17, on the Substitution Arabic video: "can the greyed out text also
+# be written in Arabic?" The verifier reads it only to label a check.
+LESSON_PROSE_MATHS_KEYS = ("problem", "operation")
 # A maths span: a run of numbers, single-letter variables (Latin or Greek),
 # operators, powers and brackets — "π = 3.14", "2x + 3 = 11", "r = 6" —
 # that carries at least one digit or operator. Unit words ("cm") are two
