@@ -72,6 +72,7 @@ CARD_PITCH_5 = 33.0
 CARD_BOTTOM_MAX = 270.0
 DIM = 0.42
 MAX_NOTE_CHARS = 44
+NOTE_CLEAR = 8.0               # a note's top this far below the question's ink (the audit's touch is 4)
 # the model's notation is capped at 200 chars, a board line at this
 MAX_LINE_CHARS = 60
 # a FIGURE example (geometry.figure.v1): the diagram under the question on
@@ -433,6 +434,10 @@ class _Board:
     state_no: int = 0
     highlight: Optional[tuple[int, str]] = None            # (card line, marker element) in use
     question: Optional["_Row"] = None      # the pinned problem, when it is notation
+    # where the pinned question's ink ends, in BOTH forms (notation or a word
+    # problem's text lines) — a note above the first working line keeps its
+    # measured box below it (_add_note)
+    question_bottom: float = 0.0
     line_x: float = LINE_X                 # the working column (shifted right beside a figure)
     # a long figure proof (B11: five lines, three reasons under them) outgrew
     # the panel and wiped mid-proof; beside a figure the column is narrow and
@@ -458,6 +463,7 @@ def _problem_elements(ex: WorkedExample, board: _Board, cue: Optional[dict]) -> 
         board.next_y = max(FIRST_ROW_Y, Q_AT[1] + max(lay.h, Q_SIZE * 1.1) + PROBLEM_GAP)
         board.top_y = board.next_y
         board.question = _Row("q", problem, Q_AT[1], lay, -1)
+        board.question_bottom = Q_AT[1] + max(lay.h, Q_SIZE * 1.1)
         return
     # a word problem: wrapped by measured width up to the card, pitched by
     # the face's measured height (a Hindi line ran under the card, an
@@ -474,6 +480,7 @@ def _problem_elements(ex: WorkedExample, board: _Board, cue: Optional[dict]) -> 
     # after a wipe once sat on the word problem's second line (maths demo)
     board.next_y = y - 2 + PROBLEM_GAP   # the last line's ink ends ~2 px above y
     board.top_y = board.next_y
+    board.question_bottom = y - 4.0 - 2.0   # the last line's ink (the 4 px pitch is below it)
 
 
 def _add_state(board: _Board, state: list[str], cue: Optional[dict], color: str = "ink",
@@ -584,6 +591,15 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
         w = _M.text_width(note, size)
     if x + w > NOTE_RIGHT:
         return          # a wide line left no room before the card: no note beats one across it
+    # The note is written centred on `y` ("lm"), so its MEASURED height sets
+    # how far its top rises. A Latin note is ~32 px tall and cleared the
+    # question; an Arabic one is ~43 px and its top reached the word
+    # problem's last line on six scenes of the Substitution kit
+    # (TEXT_OVERLAP q0+n2, 2026-10-18, once the step notes were translated).
+    # Kept below the question's ink with the audit's touch margin to spare.
+    h = _M.text_box(note, size)[1]
+    if board.question_bottom:
+        y = max(y, board.question_bottom + h / 2.0 + NOTE_CLEAR)
     nid = board.uid("n")
     board.elements.append({"id": nid, "type": "text", "text": note, "size": size, "color": "muted",
                            "role": "caption", "at": [x, y], "anchor": "lm"})

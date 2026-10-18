@@ -1501,3 +1501,17 @@ class TestStepOperationIsTranslated:
         rep = C.check_maths_lesson(src, bad)
         assert not rep["ok"] and rep["blocking"][0]["what"] == "maths in the question altered"
         assert rep["blocking"][0]["where"].endswith("steps[1].operation")
+
+
+class TestAnOrphanedTranslationResumes:
+    """2026-10-18: a translate job cut off after creating its kit row (a
+    redeploy, then the reaper) must not be blocked by that row."""
+
+    def test_its_own_kit_does_not_count_but_anyone_elses_does(self):
+        sb = FakeSB()
+        sb.tables["jobs"].append({"id": "jt", "type": "kit_translate", "status": "queued",
+                                  "params": {"source_kit_id": "src-1", "language": "ar"}})
+        sb.tables["topic_kits"].append({"id": "orphan", "language": "ar", "status": "generating", "source_kit_id": "src-1"})
+        assert T.translation_in_flight(sb) is None, "the job's own resumable kit is not in flight"
+        sb.tables["topic_kits"].append({"id": "other", "language": "ar", "status": "generating", "source_kit_id": "src-2"})
+        assert "other" in T.translation_in_flight(sb), "another kit still rendering blocks the lane"

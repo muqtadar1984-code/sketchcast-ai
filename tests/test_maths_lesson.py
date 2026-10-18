@@ -807,3 +807,43 @@ class TestShortInAScriptFace:
         assert out == ar
         cut = _short(ar + " ثم بسّط الحدود", 34)
         assert cut.endswith("...") and "…" not in cut and len(cut) == int(34 * 1.6) - 1 + 3
+
+
+class TestANoteNeverRisesIntoTheQuestion:
+    """Substitution kit, Arabic (2026-10-18): TEXT_OVERLAP q0+n2 on six
+    scenes once the step notes were translated — an Arabic note is ~43 px
+    tall and, centred above the first working line, its top reached the
+    word problem's last line."""
+
+    def _boxes(self, scene):
+        from maths.board import _M
+        out = {}
+        for e in scene["elements"]:
+            if e.get("type") != "text":
+                continue
+            w, h = _M.text_box(e["text"], e["size"], e.get("role") == "title")
+            x, y = e["at"]
+            a = e.get("anchor", "lt")
+            y0 = y - h / 2 if a[1] == "m" else (y - h if a[1] == "b" else y)
+            out[e["id"]] = (x, y0, x + w, y0 + h)
+        return out
+
+    def test_an_arabic_word_problem_and_arabic_notes_do_not_touch(self):
+        from maths import board as B
+        from maths.schema import MethodCard, WorkedExample
+        ex = WorkedExample.model_validate({
+            "label": "مثال 2", "problem": "أوجد قيمة 5y - 2a عندما y = 3 و a = -4.", "target": "value",
+            "givens": ["y = 3", "a = -4"], "final_answer": ["23"], "answer_speech": "القيمة ثلاثة وعشرون.",
+            "intro_speech": "نعوّض القيم.", "steps": [
+                {"kind": "transform", "operation": "عوّض قيمتي y و a في العبارة", "before": ["5y - 2a"],
+                 "after": ["5(3) - 2(-4)"], "explanation": "", "speech": "نعوّض."},
+                {"kind": "transform", "operation": "اضرب الحدود", "before": ["5(3) - 2(-4)"],
+                 "after": ["15 - (-8)"], "explanation": "", "speech": "نضرب."}]})
+        scene, _ = B.example_scene(ex, MethodCard(title="طريقة التعويض", steps=["عوّض", "بسّط"]), "s003", lang="ar")
+        boxes = self._boxes(scene)
+        qs = [b for k, b in boxes.items() if k.startswith("q")]
+        notes = [b for k, b in boxes.items() if k.startswith("n")]
+        assert qs and notes
+        q_bottom = max(b[3] for b in qs)
+        for nb in notes:
+            assert nb[1] >= q_bottom + 4, (nb, q_bottom)
