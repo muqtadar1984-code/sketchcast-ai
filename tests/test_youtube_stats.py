@@ -148,3 +148,67 @@ class TestTheTimer:
         src = (Path(__file__).resolve().parent.parent / "worker" / "run.py").read_text(encoding="utf-8")
         i = src.index("def _serve(")
         assert "maybe_poll(sb)" in src[i:]
+
+
+class TestEveryChannel:
+    """2026-10-19: the Arabic channel's videos were made public in Studio and
+    the database still said private, because the timer polled the default
+    channel alone. Every channel with a refresh token is polled now."""
+
+    def test_the_channels_are_the_default_then_every_token_by_name(self):
+        env = {"YOUTUBE_REFRESH_TOKEN_EN": "x", "YOUTUBE_REFRESH_TOKEN_MS": "y",
+               "YOUTUBE_REFRESH_TOKEN_AR": "z", "YOUTUBE_REFRESH_TOKEN_HI": " ",
+               "YOUTUBE_CLIENT_ID": "id", "OTHER": "1"}
+        assert Y.channel_languages(env) == ["en", "ar", "ms"]
+        assert Y.channel_languages({}) == ["en"]
+
+    def test_each_channel_is_polled_with_its_own_transport_and_privacy_syncs(self, monkeypatch):
+        monkeypatch.setenv(Y.POLL_ENV, "60")
+        monkeypatch.setattr(Y, "_last_run", 0.0)
+        monkeypatch.setattr(Y, "channel_languages", lambda environ=None: ["en", "ar"])
+        monkeypatch.setattr(Y, "configured", lambda language="en": True)
+        sb = _sb([("vid-en", "public")])
+        sb.tables["topic_publications"].append({
+            "id": "pub-ar", "topic_kit_id": "kit-ar", "part": 1, "channel_language": "ar",
+            "youtube_video_id": "vid-ar", "privacy": "private", "published_at": "2026-10-18T00:00:00Z"})
+        row = lambda vid, privacy: {"video_id": vid, "title": vid, "privacy": privacy, "views": 3,
+                                    "likes": 0, "comments": 0, "published_at": None}
+        transports = {"en": FakeStats(videos=[row("vid-en", "public")]),
+                      "ar": FakeStats(videos=[row("vid-ar", "public")])}
+        asked = []
+        out = Y.maybe_poll(sb, transport_factory=lambda lang: asked.append(lang) or transports[lang],
+                           clock=lambda: 99_999.0)
+        assert asked == ["en", "ar"]
+        assert transports["en"].asked == [["vid-en"]] and transports["ar"].asked == [["vid-ar"]]
+        assert out["languages"] == ["en", "ar"] and out["videos"] == 2 and out["privacy_updates"] == 1
+        ar = next(r for r in sb.tables["topic_publications"] if r["id"] == "pub-ar")
+        assert ar["privacy"] == "public"
+        langs = sorted(r["channel_language"] for r in sb.tables["youtube_video_stats"])
+        assert langs == ["ar", "en"]
+
+    def test_one_channel_failing_does_not_stop_the_next(self, monkeypatch):
+        monkeypatch.setenv(Y.POLL_ENV, "60")
+        monkeypatch.setattr(Y, "_last_run", 0.0)
+        monkeypatch.setattr(Y, "channel_languages", lambda environ=None: ["en", "ar"])
+        monkeypatch.setattr(Y, "configured", lambda language="en": True)
+        sb = _sb([])
+
+        def factory(lang):
+            if lang == "en":
+                raise RuntimeError("token revoked")
+            return FakeStats(channel={"channel_id": "UC-ar", "title": "AR", "subscribers": 1,
+                                      "views": 2, "videos": 9})
+
+        out = Y.maybe_poll(sb, transport_factory=factory, clock=lambda: 99_999.0)
+        assert out["languages"] == ["ar"] and out["channels"] == 1
+        assert any(e.startswith("en: ") for e in out["errors"])
+
+    def test_a_channel_without_credentials_is_skipped(self, monkeypatch):
+        monkeypatch.setenv(Y.POLL_ENV, "60")
+        monkeypatch.setattr(Y, "_last_run", 0.0)
+        monkeypatch.setattr(Y, "channel_languages", lambda environ=None: ["en", "ar"])
+        monkeypatch.setattr(Y, "configured", lambda language="en": language == "ar")
+        asked = []
+        Y.maybe_poll(_sb([]), transport_factory=lambda lang: asked.append(lang) or FakeStats(),
+                     clock=lambda: 99_999.0)
+        assert asked == ["ar"]
