@@ -1544,11 +1544,20 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
     # first piece to arrive holds a lease and analyses, a sibling that starts
     # meanwhile WAITS (the job is deferred, as a deck waits for its video)
     # and every later piece reuses the stored dict — the same shape the
-    # chapter_grounding cache hands a book's later artifacts. A book, a part
-    # job and the translated presentation (the override branch: no analysis
-    # call) never touch it.
+    # chapter_grounding cache hands a book's later artifacts.
+    #
+    # A book kit's pieces share one analysis the same way (migration 0144,
+    # book_unit_analyses), keyed (book, chapter, part, language). A PART job
+    # never reads chapter_grounding (above), so before this every piece of a
+    # part kit re-analysed the part: on the Bedrock cut-over sample kit
+    # (2026-10-18, Arabic, ch1 part 1) five pieces paid $0.43–0.54 each, all
+    # claimed within one second. A whole-chapter kit whose pieces start
+    # together had the same race, before the first wrote chapter_grounding.
+    # A cumulative paper (several chapters) and the translated presentation
+    # (the override branch: no analysis call) never touch it.
     _shared = None
     _cache = None
+    _unit = None
     if override is not None:
         # Kit Translator: the lesson was analysed, planned and verified in
         # English; this build only RENDERS its translation. No analysis call
@@ -1565,27 +1574,35 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
     elif analysis is not None:
         logger.info("generation %s: reusing cached analysis for %s ch%s", generation_id, book_id, chapter_num)
     else:
+        _chunks = [part_chunk] if part_ref is not None else (unit.chunks_override or [])
         if catalogue is not None and getattr(catalogue, "article_id", None):
             from catalogue import analysis_cache as _cache
 
-            _shared = _cache.claim(
-                sb, article_id=catalogue.article_id, article=getattr(catalogue, "article", None),
-                generation_id=generation_id, language=lesson_lang, level=unit.level,
-                chunks=unit.chunks_override or [], chapter=chapter,
-                waited_seconds=db.deferred_seconds(job))
+            _unit = _cache.article_unit(catalogue.article_id, getattr(catalogue, "article", None))
+            _hash = _cache.source_hash(language=lesson_lang, level=unit.level, chunks=_chunks, chapter=chapter)
+            _wait_noun = "the article's analysis"
+        elif catalogue is None and not is_cumulative and book_id:
+            from catalogue import analysis_cache as _cache
+
+            _unit = _cache.book_unit(book_id, chapter_num, part_ref, lesson_lang)
+            _hash = _cache.book_source_hash(language=lesson_lang, level=unit.level, chunks=_chunks, chapter=chapter)
+            _wait_noun = "the chapter part's analysis" if part_ref is not None else "the chapter's analysis"
+        if _unit is not None:
+            _shared = _cache.claim_unit(sb, _unit, generation_id=generation_id, language=lesson_lang,
+                                        source_hash=_hash, waited_seconds=db.deferred_seconds(job))
             if _shared.action == "wait":
-                logger.info("generation %s: article %s is being analysed by %s — waiting",
-                            generation_id, catalogue.article_id, _shared.holder)
+                logger.info("generation %s: %s is being analysed by %s — waiting",
+                            generation_id, _unit.label, _shared.holder)
                 raise _DeferredJob(_cache.poll_seconds(),
-                                   f"waiting for the article's analysis (generation {str(_shared.holder)[:8]})")
+                                   f"waiting for {_wait_noun} (generation {str(_shared.holder)[:8]})")
             if _shared.action == "reuse":
                 analysis = _shared.analysis
                 phase_clock.flag("reused_analysis", True)
-                logger.info("generation %s: reusing the shared analysis of article %s (%s)",
-                            generation_id, catalogue.article_id, analysis.get("language") or "en")
+                logger.info("generation %s: reusing the shared analysis of %s (%s)",
+                            generation_id, _unit.label, analysis.get("language") or "en")
             else:
-                logger.info("generation %s: analysing article %s — %s",
-                            generation_id, catalogue.article_id, _shared.reason)
+                logger.info("generation %s: analysing %s — %s",
+                            generation_id, _unit.label, _shared.reason)
         if analysis is None:
             # Fresh multi-part analysis is the LONGEST phase — advance 20→43
             # per chunk (and label the stage) so a 4-part chapter never looks
@@ -1619,12 +1636,11 @@ def _build_from_analysis(sb: Client, job: dict, generation_id: str, gen: dict, u
                 # the holder's failure must not park its siblings until the
                 # lease expires: drop it, then fail (or defer) as before
                 if _shared is not None and _shared.held:
-                    _cache.release(sb, article_id=catalogue.article_id, generation_id=generation_id)
+                    _cache.release_unit(sb, _unit, generation_id=generation_id)
                 raise
             analysis["language"] = lesson_lang  # stamps the cache (see reuse guard above)
             if _shared is not None and _shared.held:
-                _cache.store(sb, article_id=catalogue.article_id, generation_id=generation_id,
-                             analysis=analysis)
+                _cache.store_unit(sb, _unit, generation_id=generation_id, analysis=analysis)
     db.set_progress(sb, job_id, 45)
     # Analysis stage is over for every kind; the presentation loop writes
     # its own per-part stages, doc kinds stay stage-less.
