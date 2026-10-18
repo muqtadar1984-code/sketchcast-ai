@@ -1901,10 +1901,22 @@ def translation_in_flight(sb) -> Optional[str]:
                      .limit(1).execute())
         if jobs:
             return f"translation job {jobs[0].get('id')} is staging"
-        kits = _rows(sb.table("topic_kits").select("id,language").eq("status", "generating").execute())
+        kits = _rows(sb.table("topic_kits").select("id,language,source_kit_id").eq("status", "generating").execute())
+        waiting = {(_s((j.get("params") or {}).get("source_kit_id")), _s((j.get("params") or {}).get("language")).lower())
+                   for j in _rows(sb.table("jobs").select("params").eq("type", "kit_translate").eq("status", "queued")
+                                  .execute())}
         for k in kits:
-            if _s(k.get("language")).lower() not in ("", "en"):
-                return f"translated kit {k.get('id')} is rendering"
+            lang = _s(k.get("language")).lower()
+            if lang in ("", "en"):
+                continue
+            # A kit its OWN queued translate job will resume (find_translation_
+            # kit) is not in flight: the job was cut off — a redeploy, the
+            # reaper — after it created the row. Counting it deadlocked the
+            # lane (Algebraic Fractions, 2026-10-18 01:11). The claim function
+            # (0142) then lets only that job through.
+            if (_s(k.get("source_kit_id")), lang) in waiting:
+                continue
+            return f"translated kit {k.get('id')} is rendering"
     except Exception as exc:  # noqa: BLE001
         log.warning("translate lane: in-flight check unreadable (%s)", exc)
         return "the database did not answer"
