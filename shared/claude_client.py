@@ -36,9 +36,16 @@ _DEFAULT_PRICING = (3.0, 15.0)
 
 
 # ── backend selection ────────────────────────────────────────────────────
-# The same Claude models are reachable two ways:
+# The same Claude models are reachable three ways:
 #   "anthropic" — api.anthropic.com, billed to the Anthropic account (default)
 #   "vertex"    — Google Cloud Vertex AI, billed to the GCP project
+#   "bedrock"   — Amazon Bedrock, billed to the AWS account (Activate credits)
+#
+# Vertex never got past Google's partner-model quota (0 for every Claude model,
+# increase auto-denied — see the memory note on GCP credits). Bedrock is the
+# path that works: on 2026-10-18 the account answered on Haiku 4.5, Sonnet 4.6
+# and Sonnet 5, with 1h cache_control, cache reads, thinking-disabled and
+# streaming all verified live against the global inference profiles.
 #
 # Vertex exists for two reasons. It lets GCP credits pay for generation, and it
 # is a SECOND BILLING PATH: on 2026-08-10 the Anthropic balance hit zero and
@@ -64,6 +71,36 @@ _VERTEX_MODEL_IDS = {
 }
 
 _CREDENTIALS_PATH: str | None = None
+
+
+# Bedrock serves current Claude models ONLY through cross-region inference
+# profiles — the bare "anthropic.claude-…" model id is refused for on-demand
+# calls. "global." profiles route to whichever region has capacity and carry
+# the largest quota (verified 2026-10-18: 10k RPM / 5–6M TPM per model).
+#
+# Unlike Vertex, an id ABSENT from this map is NOT sent through unchanged: a
+# first-party id is a 400 on Bedrock. An unmapped model stays on the Anthropic
+# API instead (see ClaudeClient.__init__), so a model Bedrock does not serve
+# keeps working on the old billing path rather than failing every job.
+_BEDROCK_MODEL_IDS = {
+    "claude-haiku-4-5": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "claude-haiku-4-5-20251001": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "claude-sonnet-4-6": "global.anthropic.claude-sonnet-4-6",
+    "claude-sonnet-5": "global.anthropic.claude-sonnet-5",
+}
+
+
+def _bedrock_model_map() -> dict[str, str]:
+    """The built-in id map, overlaid with BEDROCK_MODEL_MAP (JSON) if present.
+    An entry mapped to "" removes that model, sending it back to Anthropic."""
+    mapping = dict(_BEDROCK_MODEL_IDS)
+    raw = os.getenv("BEDROCK_MODEL_MAP", "").strip()
+    if raw:
+        try:
+            mapping.update(json.loads(raw))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"BEDROCK_MODEL_MAP is not valid JSON: {exc}") from exc
+    return {k: v for k, v in mapping.items() if v}
 
 
 def _vertex_model_map() -> dict[str, str]:
@@ -118,6 +155,18 @@ def _build_client(backend: str):
         # per-region capacity error; override for data-residency requirements.
         region = os.getenv("VERTEX_REGION", "global").strip() or "global"
         return AnthropicVertex(project_id=project, region=region)
+    if backend == "bedrock":
+        from anthropic import AnthropicBedrock  # extra: anthropic[bedrock]
+
+        # Credentials come from the standard AWS chain (AWS_ACCESS_KEY_ID /
+        # AWS_SECRET_ACCESS_KEY on Railway). The region only picks the endpoint
+        # the call enters by; a global profile then serves it from anywhere.
+        region = (
+            os.getenv("BEDROCK_REGION", "").strip()
+            or os.getenv("AWS_REGION", "").strip()
+            or "us-east-1"
+        )
+        return AnthropicBedrock(aws_region=region)
     return Anthropic(api_key=_get_api_key())
 
 
@@ -1140,11 +1189,20 @@ class ClaudeClient:
     """Reusable Claude API wrapper with retry, JSON parsing, and token logging."""
 
     def __init__(self, model: str | None = None):
-        self.backend = llm_backend()
-        self.client = _build_client(self.backend)
         # Model is env-selectable (CLAUDE_MODEL) so it can be flipped to
         # claude-sonnet-5 in Railway without a code change; default stays on 4.6.
         self.model = model or os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+        self.backend = llm_backend()
+        if self.backend == "bedrock" and self.model not in _bedrock_model_map():
+            # Per-MODEL routing: Bedrock serves what it is mapped for, anything
+            # else stays on the Anthropic API. Loud, because it means that
+            # model's spend is still landing on the Anthropic balance.
+            logger.warning(
+                "LLM backend=bedrock has no profile for %s; using the Anthropic API "
+                "for this client (add it to BEDROCK_MODEL_MAP to move it)", self.model,
+            )
+            self.backend = "anthropic"
+        self.client = _build_client(self.backend)
         # `model` stays the CANONICAL first-party id and `_api_model` is what
         # goes on the wire. They differ on Vertex, and keeping them apart is
         # load-bearing: track_tokens prices via MODEL_PRICING[self.model], so
@@ -1152,17 +1210,20 @@ class ClaudeClient:
         # Vertex "@version" suffix, silently fall back to _DEFAULT_PRICING
         # (Sonnet's $3/$15), and bill every Haiku call into jobs.usage at ~3x —
         # straight into the cost basis the financial model is built on.
-        self._api_model = (
-            _vertex_model_map().get(self.model, self.model)
-            if self.backend == "vertex"
-            else self.model
-        )
+        if self.backend == "vertex":
+            self._api_model = _vertex_model_map().get(self.model, self.model)
+        elif self.backend == "bedrock":
+            self._api_model = _bedrock_model_map()[self.model]
+        else:
+            self._api_model = self.model
         if self.backend == "vertex":
             logger.info(
                 "LLM backend=vertex project=%s region=%s model %s -> %s",
                 os.getenv("VERTEX_PROJECT_ID"), os.getenv("VERTEX_REGION", "global"),
                 self.model, self._api_model,
             )
+        elif self.backend == "bedrock":
+            logger.info("LLM backend=bedrock model %s -> %s", self.model, self._api_model)
         # Per-instance running total across every call this client makes — the
         # worker persists it per job (jobs.usage) so spend is attributable to a
         # user/book/generation instead of vanishing with the container.
