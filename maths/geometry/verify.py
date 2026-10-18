@@ -363,7 +363,49 @@ def _transform_verdict(m: Model, knowledge: list[sp.Expr], before_rels: list[Rel
             # r² = 25 to r = 5: the negative root is not a length
             # (the radius a circle question finds, 2026-10-15)
             verdict, detail = True, f"{detail}; the negative root is not a length"
+        elif _acute_inverse_trig_step(m, b_sub, a_sub, variables):
+            # tan(x) = 4/3 to x = atan(4/3): one value of a periodic set, and
+            # the ONLY one an acute angle of a right triangle can take
+            verdict, detail = True, f"{detail}; the acute angle of a right triangle (0° < x < 90°)"
     return verdict, detail
+
+
+_TRIG = (sp.sin, sp.cos, sp.tan)
+
+
+def _acute_inverse_trig_step(m: Model, before: list[Relation], after: list[Relation], variables: list) -> bool:
+    """``before`` is ONE sin/cos/tan equation in ONE variable, ``after``
+    gives that variable one value in (0°, 90°) that satisfies it, and the
+    figure is a right triangle with an angle drawn at exactly that value. On
+    (0°, 90°) sin, cos and tan are one-to-one, so the step loses nothing an
+    acute angle could be: equivalent there. The first English trigonometry
+    kit (2026-10-18, on Sonnet 5.5) had every "x = atan(3/4)" refused as
+    "solutions before: Union(ImageSet(...))" — the whole periodic set."""
+    if len(variables) != 1 or len(before) != 1 or len(after) != 1:
+        return False
+    v = variables[0]
+    try:
+        eb = _eq(before[0])
+        trig_atoms = [a for a in eb.atoms(*_TRIG) if v in a.free_symbols]
+        if len(trig_atoms) != 1:
+            return False
+        rest = eb.subs(trig_atoms[0], sp.Symbol("_t"))
+        if v in rest.free_symbols:          # x appears outside the one ratio
+            return False
+        sols = [d[v] for d in sp.solve([_eq(after[0])], v, dict=True) if v in d]
+        if len(sols) != 1 or sols[0].free_symbols:
+            return False
+        value = float(sp.N(sols[0], 30))
+        if not 0.0 < value < 90.0:
+            return False
+        residue = sp.N(eb.subs(v, sols[0]), 30)
+        if residue.free_symbols or abs(float(residue)) > 1e-9:
+            return False
+    except Exception:  # noqa: BLE001 — undecidable here: the step stays unproved
+        return False
+    angles = [m.angle_float(k) for k in m.angles]
+    has_right = any(abs(a - 90.0) <= 1e-6 for a in angles)
+    return has_right and any(abs(a - value) <= 1e-6 for a in angles)
 
 
 def _deduce_verdict(knowledge: list[sp.Expr], template: list[sp.Expr], after: list[sp.Expr],
@@ -580,13 +622,19 @@ def _check_reasoning_answer(rep: QuestionReport, q: QuestionSpec, fid: str, m: M
             approx = f" ({why})"
         rep.proved[name] = got
         rep.checks.append(Check(f"answer {name}", True, f"{name} = {got}{approx}"))
-    # consistency 8a: the bound value is the proved one
+    # consistency 8a: the bound value is the proved one. The rounding rule
+    # reads the bind AS WRITTEN: parsed, "53.13" prints as 53.1300000000000
+    # and its thirteen decimals could never round-match 180·atan(4/3)/π —
+    # the first English trigonometry kit's figures were refused on exactly
+    # that (2026-10-18, on Sonnet 5.5).
+    fig = q.figure_by_id(fid).figure
+    raw_bind = getattr(fig, "bind", None) or {}
     for name, bound in m.bind.items():
         got = rep.proved.get(name)
-        if got is not None and sp.simplify(got - bound) != 0 and not _rounds_to(got, bound):
+        written = raw_bind.get(name, bound) if isinstance(raw_bind, dict) else bound
+        if got is not None and sp.simplify(got - bound) != 0 and not _rounds_to(got, written):
             raise GeometryRefusal("bind_mismatch", f"the figure was drawn with {name} = {bound}, the proof gives {got}")
     # consistency 8b: the drawn unknown agrees with the proof
-    fig = q.figure_by_id(fid).figure
     proved_subs = {sp.Symbol(k): v for k, v in rep.proved.items()}
     for ms in fig.measures:
         if ms.role not in ("unknown", "derived") or ms.target in m.solids or ms.kind == "area":

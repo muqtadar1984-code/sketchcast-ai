@@ -184,6 +184,22 @@ def realised(m: Model, target: str) -> float:
     raise GeometryRefusal("bad_reference", f"{target!r} is not an angle or segment", target)
 
 
+def _written_rounding(have: float, value) -> bool:
+    """A given stated as the figure's exact value ROUNDED to the decimals it
+    writes ("8.66" for 5√3, "36.87" for atan(3/4) in degrees): the rule an
+    answer already follows (verify._rounds_to). Only a value WITH decimals
+    qualifies — "53" on a 3-4-5 triangle (53.13°) is still refused: a whole
+    number reads as exact, and that triangle has no 53° angle."""
+    t = str(value).strip()
+    if "." not in t:
+        return False
+    try:
+        decimals = len(t.split(".")[1].rstrip())
+        return round(float(have), decimals) == round(float(t), decimals)
+    except (TypeError, ValueError):
+        return False
+
+
 def check_given_measures(m: Model, spec: FigureSpec) -> None:
     for ms in spec.measures:
         if ms.role != "given" or ms.target in m.solids or ms.kind in ("area", "circumference"):
@@ -203,8 +219,14 @@ def check_given_measures(m: Model, spec: FigureSpec) -> None:
         e = exact_value(ms.value, where=f"measure.{ms.target}")
         want = to_float(e, m.bind)
         have = realised(m, ms.target)
+        # A correctly ROUNDED given is accepted, and the figure keeps its EXACT
+        # value: the proof works with 5√3, never with the 8.66 written on the
+        # side (2026-10-18, the trig kit: "given as 8.66 but the figure has
+        # 8.66025"). Only an exact given becomes the measure's exact value.
         if ms.target in m.angle_ids:
             if abs(have - want) > ANGLE_TOL_DEG:
+                if _written_rounding(have, ms.value):
+                    continue
                 # six significant digits: a 59.996° built from rounded sides
                 # must not read as "60° but the figure has 60°"
                 raise GeometryRefusal("given_not_realised",
@@ -215,6 +237,8 @@ def check_given_measures(m: Model, spec: FigureSpec) -> None:
                 an.exact = e
         else:
             if abs(have - want) > LENGTH_REL_TOL * max(1.0, abs(want)):
+                if _written_rounding(have, ms.value):
+                    continue
                 raise GeometryRefusal("given_not_realised",
                                       f"{ms.target} is given as {ms.value} = {want:g} but the figure has {have:.6g}",
                                       ms.target)
