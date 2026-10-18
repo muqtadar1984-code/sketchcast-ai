@@ -438,6 +438,9 @@ class _Board:
     # problem's text lines) — a note above the first working line keeps its
     # measured box below it (_add_note)
     question_bottom: float = 0.0
+    # the bottom of the last note written in the notes' column since the last
+    # wipe: the next note keeps its measured box below it (_add_note)
+    last_note_bottom: float = 0.0
     line_x: float = LINE_X                 # the working column (shifted right beside a figure)
     # a long figure proof (B11: five lines, three reasons under them) outgrew
     # the panel and wiped mid-proof; beside a figure the column is narrow and
@@ -507,6 +510,7 @@ def _add_state(board: _Board, state: list[str], cue: Optional[dict], color: str 
         board.annotations = []
         board.next_y = board.top_y
         board.note_x = 0.0
+        board.last_note_bottom = 0.0
         board.wiped = True
         cue = None  # the writes follow the wipe
         if carry:
@@ -600,6 +604,14 @@ def _add_note(board: _Board, row: _Row, note: str, target: Optional[_Row], op_te
     h = _M.text_box(note, size)[1]
     if board.question_bottom:
         y = max(y, board.question_bottom + h / 2.0 + NOTE_CLEAR)
+    # …and below the note above it in the same column. Pushed off the
+    # question, an Arabic first note (~48 px) came within 3 px of the next
+    # step's note — inside the audit's 4 px touch (Quadratic, 2026-10-18,
+    # TEXT_OVERLAP n2+n4). Notes sit in the gaps between working lines, so
+    # this moves a note by a few pixels at most.
+    if board.last_note_bottom:
+        y = max(y, board.last_note_bottom + h / 2.0 + NOTE_CLEAR)
+    board.last_note_bottom = y + h / 2.0
     nid = board.uid("n")
     board.elements.append({"id": nid, "type": "text", "text": note, "size": size, "color": "muted",
                            "role": "caption", "at": [x, y], "anchor": "lm"})
