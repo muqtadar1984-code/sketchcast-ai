@@ -524,6 +524,12 @@ class BText:
     # face no Devanagari/Telugu/Arabic — "SketchCast AI से बनाया गया" drew
     # boxes for one half whichever face was chosen)
     runs: tuple = ()
+    # A label WRAPPED onto two lines by the part-label layout: each entry is
+    # (display string, its script runs). Empty for the ordinary one-line text.
+    # `display`, `w` and `h` then describe the whole block: the full string
+    # (write workloads count every character), the widest line, all lines.
+    # A leader meets the FIRST line, never the block's centre.
+    lines: tuple = ()
 
 
 @dataclass
@@ -754,6 +760,9 @@ class SceneRenderer:
                     # side from where the compiler guessed
                     head_est = self._resolve_point(el.head)
                     bx0, by0, bx1, by1 = tb2.box
+                    if tb2.text.lines:
+                        # a wrapped label: the leader meets its FIRST line
+                        by1 = by0 + (by1 - by0) / len(tb2.text.lines)
                     if head_est[0] >= (bx0 + bx1) / 2:
                         tail = (bx1 + 6.0, (by0 + by1) / 2)
                     else:
@@ -992,24 +1001,9 @@ class SceneRenderer:
         text = el.text if shaped else ascii_punct(el.text)
         disp = display_text(text, rtl_base=rtl) if shaped else text
         bold = el.role in ("title", "term")
-        runs = _script_runs(disp)
-        try:
-            if len(runs) > 1:
-                w, h = 0.0, 0.0
-                for run in runs:
-                    rf = self._font_for(bold, int(el.size), run)
-                    w += rf.getlength(run)
-                    asc, desc = rf.getmetrics()
-                    h = max(h, asc + desc)
-            else:
-                f = self._font_for(bold, int(el.size), disp)
-                w = f.getlength(disp)
-                asc, desc = f.getmetrics()
-                h = asc + desc
-        except Exception:
-            w, h = len(disp) * el.size * 0.6, el.size * 1.3
+        w, h, runs = self._measure_display(bold, el.size, disp)
         b.text = BText(disp, el.at, el.size, el.color, bold, rtl, shaped,
-                       el.anchor, w, h, tuple(runs) if len(runs) > 1 else ())
+                       el.anchor, w, h, runs)
         ax, ay = el.at
         x0 = ax - (w if el.anchor[0] == "r" else w / 2 if el.anchor[0] == "m" else 0)
         y0 = ay - (h if el.anchor[1] == "b" else h / 2 if el.anchor[1] == "m" else 0)
@@ -1074,6 +1068,30 @@ class SceneRenderer:
                 self._warn(f"LABEL_MOVED_OFF_AVATAR {el.id}")
         self._text_boxes.append((x0, y0, x0 + w, y0 + h))
         b.box = (x0, y0, x0 + w, y0 + h)
+
+    def _measure_display(self, bold: bool, size: float,
+                         disp: str) -> tuple[float, float, tuple]:
+        """A display string's box at `size` with the faces that will draw
+        it: (width, height, script runs). Mixed-script text is summed run by
+        run, exactly as _draw_text lays it, so layout and ink agree. The
+        runs come back empty for the common one-face line."""
+        runs = _script_runs(disp)
+        try:
+            if len(runs) > 1:
+                w, h = 0.0, 0.0
+                for run in runs:
+                    rf = self._font_for(bold, int(size), run)
+                    w += rf.getlength(run)
+                    asc, desc = rf.getmetrics()
+                    h = max(h, asc + desc)
+            else:
+                f = self._font_for(bold, int(size), disp)
+                w = f.getlength(disp)
+                asc, desc = f.getmetrics()
+                h = asc + desc
+        except Exception:
+            w, h = len(disp) * size * 0.6, size * 1.3
+        return float(w), float(h), (tuple(runs) if len(runs) > 1 else ())
 
     def _math_font(self, size: float, sample: str):
         """The face a maths run is drawn with: the handwriting face whenever
@@ -1145,17 +1163,23 @@ class SceneRenderer:
         tx = b.text
         if tx is None or tx.shaped:
             return None
-        i = tx.display.find(sub)
-        if i < 0:
-            return None
-        f = self._font_for(tx.bold, int(tx.size), tx.display)
-        try:
-            pre = f.getlength(tx.display[:i])
-            end = f.getlength(tx.display[:i + len(sub)])
-        except Exception:
-            return None
         x0, y0, x1, y1 = b.box
-        return (x0 + pre, y0, x0 + end, y1)
+        # a wrapped label: the line that holds the substring, at that line's
+        # height — the block's box would put the anchor between the lines
+        rows = [d for d, _ in tx.lines] if tx.lines else [tx.display]
+        lh = (y1 - y0) / len(rows)
+        for li, row in enumerate(rows):
+            i = row.find(sub)
+            if i < 0:
+                continue
+            f = self._font_for(tx.bold, int(tx.size), row)
+            try:
+                pre = f.getlength(row[:i])
+                end = f.getlength(row[:i + len(sub)])
+            except Exception:
+                return None
+            return (x0 + pre, y0 + li * lh, x0 + end, y0 + (li + 1) * lh)
+        return None
 
     def _audit_text_overlaps(self) -> None:
         """Report text written over text, on the FINAL boxes.
@@ -1648,18 +1672,99 @@ class SceneRenderer:
                 self._warn(f"TEXT_OVER_ART {eid}")
 
     def _resize_text(self, b: Bound, size: float) -> None:
-        """Re-measure a bound text at a new size, keeping its top-left."""
+        """Re-measure a bound text at a new size, keeping its top-left (and
+        its line breaks, when the label layout wrapped it)."""
         tx = b.text
-        f = self._font_for(tx.bold, int(size), tx.display)
-        try:
-            w = f.getlength(tx.display)
-            asc, desc = f.getmetrics()
-            h = asc + desc
-        except Exception:  # noqa: BLE001 — degrade to the old metrics
-            return
+        self._set_text_layout(b, size, tuple(d for d, _ in tx.lines) or None)
+
+    def _set_text_layout(self, b: Bound, size: float,
+                         line_disps: tuple | None) -> None:
+        """Lay a bound text out again at `size`, as one line (`line_disps`
+        None) or as the given lines, keeping its top-left. The block's width
+        is its widest line; its height every line stacked."""
+        tx = b.text
+        if line_disps:
+            lines, w, lh = [], 0.0, 0.0
+            for disp in line_disps:
+                lw, l_h, runs = self._measure_display(tx.bold, size, disp)
+                lines.append((disp, runs))
+                w, lh = max(w, lw), max(lh, l_h)
+            h, runs, block = lh * len(lines), (), tuple(lines)
+        else:
+            w, h, runs = self._measure_display(tx.bold, size, tx.display)
+            block = ()
         b.text = BText(tx.display, tx.at, size, tx.color, tx.bold, tx.rtl,
-                       tx.shaped, tx.anchor, w, h)
+                       tx.shaped, tx.anchor, w, h, runs, block)
         b.box = (b.box[0], b.box[1], b.box[0] + w, b.box[1] + h)
+
+    # A label is shrunk in steps of this many points…
+    _LABEL_SHRINK_STEP = 3.0
+    # …and never below this share of its authored size (27 -> 24 -> 21 -> 19)
+    _LABEL_SHRINK_FLOOR = 0.7
+
+    def _two_lines(self, b: Bound) -> tuple[str, str] | None:
+        """The label's text broken onto TWO lines at a word boundary, as the
+        display strings to draw — the break that leaves the lines most
+        nearly equal. None for a one-word label. Each half is shaped on its
+        own: bidi order is a property of a line, not of the string."""
+        tx, el = b.text, b.element
+        words = str(getattr(el, "text", "") or "").split()
+        if len(words) < 2:
+            return None
+        best, best_w = None, float("inf")
+        for i in range(1, len(words)):
+            halves = (" ".join(words[:i]), " ".join(words[i:]))
+            disps = tuple(display_text(hf, rtl_base=tx.rtl) if tx.shaped
+                          else ascii_punct(hf) for hf in halves)
+            w = max(self._measure_display(tx.bold, tx.size, d)[0] for d in disps)
+            if w < best_w:
+                best, best_w = disps, w
+        return best
+
+    def _label_refits(self, b: Bound) -> Iterator[tuple[float, tuple | None]]:
+        """Smaller boxes a label may take, in the order to try them: wrapped
+        onto two lines at its own size first, then shrunk in steps (27 -> 24
+        -> 21 -> 19, floor _LABEL_SHRINK_FLOOR), one line before two at each
+        step. Each item is (size, line display strings | None)."""
+        size0 = float(b.text.size)
+        wrap = self._two_lines(b)
+        if wrap:
+            yield (size0, wrap)
+        floor = float(max(10, round(size0 * self._LABEL_SHRINK_FLOOR)))
+        size = size0
+        while size - self._LABEL_SHRINK_STEP >= floor:
+            size -= self._LABEL_SHRINK_STEP
+            yield (size, None)
+            if wrap:
+                yield (size, wrap)
+        if size > floor:
+            yield (floor, None)
+            if wrap:
+                yield (floor, wrap)
+
+    def _refit_label(self, lid: str, b: Bound, fits) -> tuple | None:
+        """Try every refit on the ladder until `fits(w, h)` gives the label a
+        box; the label KEEPS the layout that fitted. None — and the label
+        exactly as it was — when nothing on the ladder fits.
+
+        This is the answer to a translated label twice the width of its
+        English original (Aerobic Respiration, Arabic, 2026-10-17: the
+        margin beside the picture held 280px and the label measured 327).
+        The column refused it, the top row was full, and it "kept its
+        authored box" — which was ON another label. A label that can be
+        wrapped or set a size smaller and then fit must never do that."""
+        tx0, box0 = b.text, b.box
+        for size, lines in self._label_refits(b):
+            self._set_text_layout(b, size, lines)
+            box = fits(b.box[2] - b.box[0], b.box[3] - b.box[1])
+            if box is not None:
+                if lines:
+                    self._warn(f"LABEL_WRAPPED {lid}")
+                if size != tx0.size:
+                    self._warn(f"LABEL_SHRUNK {lid} {tx0.size:g}->{size:g}")
+                return box
+        b.text, b.box = tx0, box0
+        return None
 
     def _audit_text_over_art(self) -> None:
         """Text left sitting on the picture. Nothing measured this before —
@@ -1764,40 +1869,55 @@ class SceneRenderer:
         def place_column(items: list, side: str) -> list:
             items = sorted(items, key=lambda e: e[1][1])   # by target height
             y, spill = y_top, []
+            # the width the column offers: from the picture's edge plus its
+            # 26px gap to the safe edge
+            avail = (SAFE_R - (rx1 + 26.0)) if side == "right" \
+                else ((rx0 - 26.0) - SAFE_L)
             for lid, tgt in items:
                 bb = self.bound[lid]
+
+                def slot(w: float, h: float, y=y) -> tuple | None:
+                    if side == "right":
+                        x0 = min(rx1 + 26.0, SAFE_R - w)
+                    else:
+                        x0 = max(SAFE_L, rx0 - 26.0 - w)
+                    x0 = max(SAFE_L, min(x0, SAFE_R - w))
+                    box = (x0, y, x0 + w, y + h)
+                    # A WIDTH test is not a placement test. Spilling every
+                    # label wider than its side margin sent ordinary labels
+                    # to the top row — across the title — for clipping that
+                    # margin by a few pixels, when clamping them to the safe
+                    # edge (what this did before) left them clear of the
+                    # art. Measure the box the label would actually get,
+                    # against the same 0.15 fraction `_keep_text_off_art`
+                    # treats as "on the picture".
+                    if self._overlap_frac(box, art) > 0.15:
+                        return None
+                    if y + h > self._floor_for(x0, x0 + w):
+                        return None
+                    # The column has to answer `occupied` too. It is built
+                    # from the title and the avatar zones and appended to on
+                    # every placement, but only the SPILL path tested it —
+                    # so a column label could still be lettered across the
+                    # title, or onto the label placed two rows above it.
+                    if self._hits(box, occupied, self._TEXT_GUTTER, self._TEXT_GUTTER_Y):
+                        return None
+                    return box
+
                 w = bb.box[2] - bb.box[0]
-                h = bb.box[3] - bb.box[1]
-                if side == "right":
-                    x0 = min(rx1 + 26.0, SAFE_R - w)
-                else:
-                    x0 = max(SAFE_L, rx0 - 26.0 - w)
-                x0 = max(SAFE_L, min(x0, SAFE_R - w))
-                box = (x0, y, x0 + w, y + h)
-                # A WIDTH test is not a placement test. Spilling every label
-                # wider than its side margin sent ordinary labels to the top
-                # row — across the title — for clipping that margin by a few
-                # pixels, when clamping them to the safe edge (what this did
-                # before) left them clear of the art. Measure the box the
-                # label would actually get, against the same 0.15 fraction
-                # `_keep_text_off_art` treats as "on the picture".
-                if self._overlap_frac(box, art) > 0.15:
-                    spill.append((lid, tgt))
-                    continue
-                if y + h > self._floor_for(x0, x0 + w):
-                    spill.append((lid, tgt))
-                    continue
-                # The column has to answer `occupied` too. It is built from the
-                # title and the avatar zones and appended to on every placement,
-                # but only the SPILL path tested it — so a column label could
-                # still be lettered across the title, or onto the label placed
-                # two rows above it.
-                if self._hits(box, occupied, self._TEXT_GUTTER, self._TEXT_GUTTER_Y):
+                box = slot(w, bb.box[3] - bb.box[1])
+                if box is None and w > avail:
+                    # Wider than the column: wrap it onto two lines, else set
+                    # it smaller, and take the column after all. Spilling was
+                    # the only answer before, and a translated label is
+                    # routinely wider than its English original.
+                    box = self._refit_label(lid, bb, slot)
+                if box is None:
                     spill.append((lid, tgt))
                     continue
                 bb.box = box
                 occupied.append(box)
-                y += max(50.0, h + 16.0)
+                y += max(50.0, (box[3] - box[1]) + 16.0)
             return spill
 
         right = [(l, t) for l, t in entries.items() if t[0] >= rcx]
@@ -1806,20 +1926,41 @@ class SceneRenderer:
         spill = place_column(left + spill, "left")
         # Final spill: rows above the diagram, ordered by target x, taking the
         # first slot that is free of the title, the avatars and the labels
-        # already placed. A label with nowhere left to go keeps its authored
-        # box and `_keep_text_off_art` gets the last word — better than a
-        # clamp that pretends there was room.
-        for lid, tgt in sorted(spill, key=lambda e: e[1][0]):
-            bb = self.bound[lid]
-            w = bb.box[2] - bb.box[0]
-            h = bb.box[3] - bb.box[1]
+        # already placed — at the label's own size first, then wrapped or
+        # shrunk down the ladder. A label with STILL nowhere to go tries
+        # every slot around the picture (the columns again, the top, below)
+        # down the same ladder, because the one outcome this pass must never
+        # choose when something fits is "keep the authored box": on the
+        # Arabic Aerobic Respiration kit that box was on another label, four
+        # times. Only then does it stay put, and says so; `_keep_text_off_art`
+        # gets the last word.
+        def top_slot(w: float, h: float) -> tuple | None:
             for box in self._top_row_slots(w, h, ry0):
                 if self._hits(box, occupied, self._TEXT_GUTTER, self._TEXT_GUTTER_Y) or \
                         self._overlap_frac(box, art) > 0.15:
                     continue
-                bb.box = box
-                occupied.append(box)
-                break
+                return box
+            return None
+
+        def any_slot(w: float, h: float) -> tuple | None:
+            for box in self._text_slots(w, h, art, False):
+                if self._hits(box, occupied, self._TEXT_GUTTER, self._TEXT_GUTTER_Y) or \
+                        self._overlap_frac(box, art) > 0.0:
+                    continue
+                return box
+            return None
+
+        for lid, tgt in sorted(spill, key=lambda e: e[1][0]):
+            bb = self.bound[lid]
+            w = bb.box[2] - bb.box[0]
+            h = bb.box[3] - bb.box[1]
+            box = top_slot(w, h) or self._refit_label(lid, bb, top_slot) \
+                or any_slot(w, h) or self._refit_label(lid, bb, any_slot)
+            if box is None:
+                self._warn(f"LABEL_UNPLACED {lid}")
+                continue
+            bb.box = box
+            occupied.append(box)
 
     def _match_region_names(self, spans: dict, names: list[str]) -> list[str]:
         from .vector_assets import match_layer_ids
@@ -1904,6 +2045,11 @@ class SceneRenderer:
         if b is None:
             return (spec.dx, spec.dy)
         box = b.box
+        if b.text is not None and b.text.lines and not spec.sub:
+            # a label wrapped onto two lines: the anchor is its FIRST line,
+            # so a leader meets the words it names rather than the gap
+            bx0, by0, bx1, by1 = box
+            box = (bx0, by0, bx1, by0 + (by1 - by0) / len(b.text.lines))
         if spec.layer:
             cands = self._layer_instance_boxes(b, spec.layer)
             if cands:
@@ -2916,24 +3062,52 @@ class SceneRenderer:
     def _draw_text(self, d: ImageDraw.ImageDraw, b: Bound, s: _ElState,
                    cam: CameraState, alpha: float) -> None:
         tx = b.text
+        size = max(6, int(tx.size * cam.scale * SS))
+        x0, y0, x1, y1 = b.box
+        col = role_color(tx.color, self.scene.style.ink, self.scene.style.accent)
+        fill = col + (int(255 * alpha),)
+        if tx.lines:
+            # a wrapped label writes line by line: the reveal runs through
+            # the first line, then the second, as a hand would
+            total = sum(len(disp) for disp, _ in tx.lines)
+            k = max(0, min(total, round(s.text_frac * total)))
+            if k == 0:
+                return
+            lh = (y1 - y0) / len(tx.lines)
+            done = 0
+            for i, (disp, runs) in enumerate(tx.lines):
+                ki = max(0, min(len(disp), k - done))
+                done += len(disp)
+                if ki <= 0:
+                    break
+                self._draw_text_line(d, disp, runs, ki, tx, s, cam, size, fill,
+                                     x0, x1, y0 + i * lh)
+            return
         n = len(tx.display)
         k = max(0, min(n, round(s.text_frac * n)))
         if k == 0:
             return
-        shown = tx.display[n - k:] if tx.shaped else tx.display[:k]
-        size = max(6, int(tx.size * cam.scale * SS))
-        x0, y0, x1, y1 = b.box
+        self._draw_text_line(d, tx.display, tx.runs, k, tx, s, cam, size, fill,
+                             x0, x1, y0)
+
+    def _draw_text_line(self, d: ImageDraw.ImageDraw, display: str, runs: tuple,
+                        k: int, tx: BText, s: _ElState, cam: CameraState,
+                        size: int, fill: tuple, x0: float, x1: float,
+                        y0: float) -> None:
+        """One line of a text, its first `k` characters (last `k` for shaped
+        text, which grows leftward from its right edge), at world top `y0`
+        between the block's left and right edges."""
+        n = len(display)
+        shown = display[n - k:] if tx.shaped else display[:k]
         sx, sy = cam.to_screen((x0 + s.offset[0], y0 + s.offset[1]))
-        col = role_color(tx.color, self.scene.style.ink, self.scene.style.accent)
-        fill = col + (int(255 * alpha),)
-        if tx.runs:
+        if runs:
             # the shown part of each run, each with its own face, laid left
             # to right on a common baseline
             pieces: list[tuple[str, object]] = []
             start = n - k if tx.shaped else 0
             end = n if tx.shaped else k
             pos = 0
-            for run in tx.runs:
+            for run in runs:
                 lo, hi = max(start, pos), min(end, pos + len(run))
                 if hi > lo:
                     pieces.append((run[lo - pos:hi - pos], self._font_for(tx.bold, size, run)))
@@ -2955,7 +3129,7 @@ class SceneRenderer:
                 d.text((pos_x, sy * SS + (top - pa)), piece, fill=fill, font=pf)
                 pos_x += pw
             return
-        f = self._font_for(tx.bold, size, tx.display)
+        f = self._font_for(tx.bold, size, display)
         pos_x = sx * SS
         if tx.shaped:  # right edge stays fixed; text grows leftward
             try:
