@@ -87,6 +87,9 @@ _BEDROCK_MODEL_IDS = {
     "claude-haiku-4-5-20251001": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
     "claude-sonnet-4-6": "global.anthropic.claude-sonnet-4-6",
     "claude-sonnet-5": "global.anthropic.claude-sonnet-5",
+    # live 2026-10-18 (thinking off = between_tools, see _thinking_off_for);
+    # NOT in MODEL_PRICING yet, so jobs.usage prices it at the Sonnet default
+    "claude-sonnet-5-5": "global.anthropic.claude-sonnet-5-5",
 }
 
 
@@ -307,6 +310,31 @@ def _backoff_seconds(attempt: int) -> float:
 # also declare its own lower `max_nonstreaming_tokens`, which no formula here
 # can predict.
 _NONSTREAMING_MAX_TOKENS = 20_000
+
+
+# How "thinking off" is spelled is a property of the MODEL. Through the 5.0
+# generation it is {"type": "disabled"}; the 5.5 generation refuses that with
+# a 400 ('To turn thinking off on this model, send "thinking": {"type":
+# "between_tools"} instead of {"type": "disabled"}', live on Bedrock
+# 2026-10-18) — the model then does not think before responding. Before this
+# the non-streamed call fell back to sending NO thinking parameter (thinking
+# left to the model's default, billed as output) and the streamed call — the
+# video script's transport — failed outright, since the 400 arrives when the
+# stream is opened, outside the fallback. Known models are spelled up front;
+# any other model that answers with that 400 is switched once and retried
+# (the request was refused before generating, so nothing was billed).
+_THINKING_DISABLED = {"type": "disabled"}
+_THINKING_BETWEEN_TOOLS = {"type": "between_tools"}
+_BETWEEN_TOOLS_PREFIXES = ("claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5", "claude-fable")
+
+
+def _thinking_off_for(model: str) -> dict:
+    m = (model or "").lower()
+    return dict(_THINKING_BETWEEN_TOOLS if m.startswith(_BETWEEN_TOOLS_PREFIXES) else _THINKING_DISABLED)
+
+
+def _asks_between_tools(exc: BaseException) -> bool:
+    return "between_tools" in str(exc)
 
 
 def _streaming_required(exc: BaseException) -> bool:
@@ -1188,6 +1216,10 @@ def _repair_json(text: str):
 class ClaudeClient:
     """Reusable Claude API wrapper with retry, JSON parsing, and token logging."""
 
+    # set per model in __init__ (_thinking_off_for); this default serves a
+    # client built without __init__ (tests, stubs)
+    _thinking_off: dict = _THINKING_DISABLED
+
     def __init__(self, model: str | None = None):
         # Model is env-selectable (CLAUDE_MODEL) so it can be flipped to
         # claude-sonnet-5 in Railway without a code change; default stays on 4.6.
@@ -1216,6 +1248,7 @@ class ClaudeClient:
             self._api_model = _bedrock_model_map()[self.model]
         else:
             self._api_model = self.model
+        self._thinking_off = _thinking_off_for(self.model)
         if self.backend == "vertex":
             logger.info(
                 "LLM backend=vertex project=%s region=%s model %s -> %s",
@@ -1482,15 +1515,21 @@ class ClaudeClient:
         deterministic small-output JSON (tiny max_tokens, JSON in the first
         block), and thinking-on models (e.g. Sonnet 5) otherwise emit a
         ThinkingBlock and consume the token budget before the answer. Fall back
-        to a plain call if a model rejects the thinking parameter."""
+        to a plain call if a model rejects the thinking parameter (after trying
+        the 5.5 spelling, when the refusal names it)."""
         try:
             return self.client.messages.create(
                 model=self._api_model, max_tokens=max_tokens, system=system,
-                messages=messages, thinking={"type": "disabled"},
+                messages=messages, thinking=self._thinking_off,
             )
         except TypeError:
             pass  # SDK too old for the param
         except Exception as exc:  # noqa: BLE001 — model rejected the param
+            if self._adopt_between_tools(exc):
+                return self.client.messages.create(
+                    model=self._api_model, max_tokens=max_tokens, system=system,
+                    messages=messages, thinking=self._thinking_off,
+                )
             if "thinking" not in str(exc).lower():
                 raise
         return self.client.messages.create(
@@ -1558,7 +1597,7 @@ class ClaudeClient:
         # the rare truncation-retry path; not harmless now that it is the
         # primary transport for every call above _NONSTREAMING_MAX_TOKENS.
         try:
-            manager = self.client.messages.stream(**kwargs, thinking={"type": "disabled"})
+            manager = self.client.messages.stream(**kwargs, thinking=self._thinking_off)
         except TypeError:
             manager = None  # SDK too old for the param
         except Exception as exc:  # noqa: BLE001 — model rejected the param
@@ -1566,10 +1605,28 @@ class ClaudeClient:
                 raise
             manager = None
         if manager is not None:
-            with manager as s:
+            try:
+                with manager as s:
+                    return s.get_final_message()
+            except Exception as exc:  # noqa: BLE001
+                # the request is sent when the stream OPENS: a model that wants
+                # the 5.5 spelling refuses it there, before generating anything
+                if not self._adopt_between_tools(exc):
+                    raise
+            with self.client.messages.stream(**kwargs, thinking=self._thinking_off) as s:
                 return s.get_final_message()
         with self.client.messages.stream(**kwargs) as s:
             return s.get_final_message()
+
+    def _adopt_between_tools(self, exc: BaseException) -> bool:
+        """The model refused {"type": "disabled"} and named "between_tools":
+        switch this client to it (once). True when switched — the caller then
+        re-sends the same request, which was refused before any output."""
+        if self._thinking_off == _THINKING_BETWEEN_TOOLS or not _asks_between_tools(exc):
+            return False
+        logger.warning("%s wants thinking=between_tools to turn thinking off; switching this client", self.model)
+        self._thinking_off = dict(_THINKING_BETWEEN_TOOLS)
+        return True
 
     def _stream_messages(self, system: str, messages: list, max_tokens: int, retries: int):
         """_call_messages, but streamed — same RateLimitError backoff loop.
