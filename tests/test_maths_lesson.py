@@ -788,3 +788,22 @@ def test_the_lessons_own_text_is_read_back_from_the_models_mojibake():
     assert ex.steps[0].speech == "π times twenty-five"
     lesson = parse_lesson({"topic": "Circles", "hook": "a hook", "examples": [{"problem": "90Â° turn"}]})
     assert lesson.examples[0].problem == "90° turn"
+
+
+class TestShortInAScriptFace:
+    """maths/board._short: the Noto script faces carry no "…" (a box drew
+    after the Arabic method lines, 2026-10-17), and a cap in characters
+    cuts Arabic far too early."""
+
+    def test_latin_keeps_the_ellipsis_and_the_cap(self):
+        from maths.board import _short
+        assert _short("Collect like terms on one side", 12) == "Collect lik…"
+        assert _short("short", 12) == "short"
+
+    def test_a_script_text_gets_three_dots_and_a_longer_cap(self):
+        from maths.board import _short
+        ar = "استبدل المتغيرات باستخدام الأقواس دائماً"       # 41 characters
+        out = _short(ar, 34)                                     # Latin cap 34 → script cap 54: untouched
+        assert out == ar
+        cut = _short(ar + " ثم بسّط الحدود", 34)
+        assert cut.endswith("...") and "…" not in cut and len(cut) == int(34 * 1.6) - 1 + 3

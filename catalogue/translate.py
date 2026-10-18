@@ -301,7 +301,7 @@ def lesson_text_items(lesson: dict) -> list[tuple[str, str]]:
         # method.steps are words ("Collect like terms"); an example's steps
         # are objects, whose string leaves were already filtered by key.
         if ".steps[" in path and not path.startswith("method."):
-            if not re.search(r"\.(speech|student|explanation|why_wrong)$", path):
+            if not re.search(r"\.(speech|student|explanation|why_wrong|operation)$", path):
                 continue
         items.append((path, text))
     return items

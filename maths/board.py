@@ -251,9 +251,30 @@ def _cue(speech: str, narration: str, words: int = 5) -> Optional[dict]:
     return None
 
 
+_NON_LATIN_RE = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u0900-\u097F\u0C00-\u0C7F]")
+
+
+def _non_latin(text: str) -> bool:
+    """Arabic, Devanagari or Telugu letters in ``text`` — drawn by a Noto
+    script face (render._sign_face: those faces carry no "…")."""
+    return bool(_NON_LATIN_RE.search(str(text or "")))
+
+
 def _short(text: str, cap: int) -> str:
+    """``text`` cut to ``cap`` characters with a marker. The marker is "…"
+    for a Latin text and "..." for a script text: the Noto script faces have
+    no U+2026 and drew a box after the Arabic method lines (Substitution
+    kit, 2026-10-17); "." is in every face (_NEUTRAL_PUNCT). A script text
+    also gets a longer cap — a character is not a width, and Arabic says
+    the same in roughly 1.6× the characters; the MEASURED fit (_fit_text)
+    still has the last word."""
     t = " ".join(str(text or "").split())
-    return t if len(t) <= cap else t[:cap - 1].rstrip() + "…"
+    if _non_latin(t):
+        cap = int(cap * 1.6)
+        marker = "..."
+    else:
+        marker = "…"
+    return t if len(t) <= cap else t[:cap - 1].rstrip() + marker
 
 
 def _pin_text(elements: list[dict]) -> list[dict]:
