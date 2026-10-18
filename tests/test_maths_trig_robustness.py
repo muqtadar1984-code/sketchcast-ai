@@ -105,9 +105,13 @@ def test_a_figure_with_a_chosen_orientation_is_not_turned():
     rep = verify_question(copy.deepcopy(q))
     m = next(iter(rep.models.values()))
     ref = parse_question(q).figures[0]
-    with pytest.raises(GeometryRefusal):
-        figure_board(m, ref.figure, panel=(B.Q_AT[0], 200.0, B.FIG_RIGHT, B.WORK_BOTTOM), prefix="fig",
-                     text_metric=B._M.text_box)
+    # never turned (the author chose its orientation); since the panel floor
+    # (2026-10-18) it is drawn smaller, upright, instead of refused
+    before = m.bbox()
+    figure_board(m, ref.figure, panel=(B.Q_AT[0], 200.0, B.FIG_RIGHT, B.WORK_BOTTOM), prefix="fig",
+                 text_metric=B._M.text_box)
+    assert m.bbox() == before and not getattr(m, "_turned_to_fit", False)
+    assert GeometryRefusal  # the refusal type stays importable for the other guards
 
 
 # ── 3. the drawn-size floor (ungridded figures) ────────────────────────
@@ -138,3 +142,33 @@ def test_a_gridded_figure_keeps_the_per_unit_floor():
     m = next(iter(rep.models.values()))
     assert m.axes is not None
     assert _min_px(m) == MIN_PX_PER_UNIT, "on a grid the units are numbers the eye reads"
+
+
+# ── 4. the floor follows the panel (evidence grid cells) ───────────────
+# The same kit's third run failed on "the figure (12.0×5.0 units) does not
+# fit the board panel" in a "which of these triangles…" grid: three cells
+# of ~156 px, and a 12-unit triangle held to 18 px/unit needs 216 px.
+
+def _evidence_cell(top: float = 200.0):
+    w = (B.EV_RIGHT - B.Q_AT[0] - B.FIG_GAP * (B.EV_COLS - 1)) / B.EV_COLS
+    return (B.Q_AT[0], top, B.Q_AT[0] + w, B.WORK_BOTTOM - B.FIG_LABEL_SIZE * 1.4)
+
+
+@pytest.mark.parametrize("legs", [["12", "5"], ["5", "12"], ["4", "3"]])
+def test_a_triangle_fits_an_evidence_grid_cell(legs):
+    q = _right_triangle(legs)
+    rep = verify_question(copy.deepcopy(q))
+    m = next(iter(rep.models.values()))
+    ref = parse_question(q).figures[0]
+    cell = _evidence_cell()
+    fb = figure_board(m, ref.figure, panel=cell, prefix="f0", label_px=B.EV_LABEL_PX, text_metric=B._M.text_box)
+    x0, y0, x1, y1 = m.bbox()
+    drawn = max(x1 - x0, y1 - y0) * fb.scale
+    short = min(cell[2] - cell[0], cell[3] - cell[1])
+    assert drawn >= 0.5 * short - 1, f"legible for its cell: {drawn:.0f} px of a {short:.0f} px cell"
+
+
+def test_without_a_panel_the_floor_is_the_fixed_target():
+    m, _fb = _board(["24", "7"], top=120.0)
+    x0, y0, x1, y1 = m.bbox()
+    assert _min_px(m) == pytest.approx(MIN_FIGURE_PX / max(x1 - x0, y1 - y0))

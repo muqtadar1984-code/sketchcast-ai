@@ -124,7 +124,7 @@ def _gridded(m: Model) -> bool:
     return m.axes is not None or m.number_line is not None or m.bar_chart is not None or bool(m.solids) or bool(m.nets)
 
 
-def _min_px(m: Model) -> float:
+def _min_px(m: Model, panel: Optional[Rect] = None) -> float:
     """The smallest scale a figure may draw at: MIN_PX_PER_UNIT — per grid
     STEP on axes, where the step is the pitch the eye reads (a parabola over
     y in [-8, 8] at step 2 is as legible as a line over [-4, 4] at step 1;
@@ -150,10 +150,18 @@ def _min_px(m: Model) -> float:
     # 410 px try-it panel (the first English trigonometry kit, 2026-10-18,
     # failed twice on it); at the drawn-size floor it draws ~400 px wide.
     # Small figures keep the per-unit floor: it only ever LOWERS.
+    # The drawn-size target is capped by the panel: an evidence grid's cell
+    # is ~156 px wide (three to a row), so a 12-unit triangle there was held
+    # to 18 px/unit = 216 px and refused ("the figure (12.0×5.0 units) does
+    # not fit the board panel", the same kit's third run) — 240 px can never
+    # be the floor of a panel narrower than 240 px.
+    target = MIN_FIGURE_PX
+    if panel is not None:
+        target = min(target, 0.5 * min(panel[2] - panel[0], panel[3] - panel[1]))
     x0, y0, x1, y1 = m.bbox()
     longest = max(x1 - x0, y1 - y0)
     if longest > 0:
-        floor = min(floor, MIN_FIGURE_PX / longest)
+        floor = min(floor, target / longest)
     return floor
 
 
@@ -254,6 +262,11 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
     times the first stroke to the narration; the rest follow in sequence.
     ``max_scale`` (px per unit) lets a row of figures share one scale."""
     fb = FigureBoard(prefix=prefix, text_metric=text_metric)
+    # Three tries, best drawing first: as laid out at the fixed floor; the
+    # same figure turned on its side (a tall triangle drawn at 29 px/unit
+    # instead of squeezed to 16); and only then the panel's own floor (a
+    # 12-unit triangle in a 156 px evidence cell). A smaller floor never
+    # changes a figure that already fitted: it only decides a refusal.
     floor = _min_px(m)
 
     def first_pass():
@@ -269,9 +282,22 @@ def figure_board(m: Model, spec: FigureSpec, *, panel: Rect, prefix: str = "fig"
     try:
         d, s, ox, oy = first_pass()
     except GeometryRefusal as exc:
-        if exc.code != "layout_collision" or not _turn_to_fit(m, spec, panel):
+        if exc.code != "layout_collision":
             raise
-        d, s, ox, oy = first_pass()
+        attempt = None
+        if _turn_to_fit(m, spec, panel):
+            try:
+                attempt = first_pass()
+            except GeometryRefusal as exc2:
+                if exc2.code != "layout_collision":
+                    raise
+        if attempt is None:
+            relaxed = _min_px(m, panel)
+            if relaxed >= floor:
+                raise
+            floor = relaxed
+            attempt = first_pass()
+        d, s, ox, oy = attempt
     # the labels widen the box, so the fitted scale is smaller than the
     # provisional one and the labels come out small: one more pass at the
     # true scale settles them within a pixel
