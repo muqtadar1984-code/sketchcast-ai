@@ -874,3 +874,27 @@ class TestNotesInOneColumnDoNotTouch:
         assert len(notes) >= 2
         for (t0, b0), (t1, _b1) in zip(notes, notes[1:]):
             assert t1 >= b0 + 4, (b0, t1)
+
+
+def test_a_long_card_line_is_drawn_at_the_size_it_was_fitted_at():
+    """Telugu Substitution, 2026-10-19: the card's first step fitted only at
+    a smaller size, was drawn at the card's 21 px anyway, ran wider than the
+    card, and the renderer pushed it left over the heading and the question
+    (TEXT_OVERLAP card_0+wb_h, card_0+q0 in four scenes)."""
+    from maths.board import CARD_W, CARD_X, _M, card_elements
+    from maths.schema import MethodCard
+    method = MethodCard(title="ప్రతిక్షేపణ విధానం", steps=[
+        "కుండలీకరణాలు ఉపయోగించి చరరాశులను భర్తీ చేయండి",
+        "ఘాతాంకాలను సరళీకరించండి",
+        "గుణకారం మరియు భాగహారం చేయండి",
+        "కూడిక మరియు తీసివేత చేయండి",
+    ])
+    els, _acts = card_elements(method, present=True, lang="te")
+    lines = [e for e in els if e["id"].startswith("card_") and e["id"][5:].isdigit()]
+    assert lines
+    assert len({e["size"] for e in lines}) == 1, "one size for every line"
+    max_w = CARD_W - 16 - 8
+    for e in lines:
+        w, _h = _M.text_box(e["text"], e["size"])
+        assert w <= max_w + 0.5, (e["id"], w, e["size"], e["text"])
+        assert e["at"][0] == CARD_X
