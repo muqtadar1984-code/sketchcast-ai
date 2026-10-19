@@ -441,6 +441,21 @@ class TestItems:
         assert T._item_hash(a, "kit-1") == T._item_hash({"item_type": "mcq", "stem": "  ما هو نصف قطر الدائرة  "}, "kit-1")
         assert T._item_hash(a, "kit-1") != T._item_hash(a, "kit-2"), "a re-translation for a new kit must not collide with the retired kit's items"
 
+    def test_near_twin_items_with_one_translated_stem_keep_their_own_hashes(self):
+        """Heat Transfer in Portuguese, 2026-10-19: two English MCQs whose
+        stems translated to one sentence but whose options and keys differ
+        were folded into one, and the dropped one was a quiz question."""
+        stem = "Que tipo de superfície é um excelente absorvedor e emissor de radiação infravermelha?"
+        a = {"item_type": "mcq", "stem": stem, "answer": {"key": "C"},
+             "options": [{"key": "A", "text": "Brilhante e clara"}, {"key": "B", "text": "Lisa e refletora"},
+                         {"key": "C", "text": "Opaca, escura e rugosa"}, {"key": "D", "text": "Transparente e polida"}]}
+        b = {"item_type": "mcq", "stem": stem, "answer": {"key": "B"},
+             "options": [{"key": "A", "text": "Brilhante e clara"}, {"key": "B", "text": "Opaca e escura"},
+                         {"key": "C", "text": "Lisa e polida"}, {"key": "D", "text": "Refletora e metálica"}]}
+        assert T._item_hash(a, "kit-1") != T._item_hash(b, "kit-1")
+        assert T._item_hash(a, "kit-1") == T._item_hash(dict(a), "kit-1"), "a resumed job hashes its own row the same"
+        assert T._item_hash(a, "kit-1") == T._item_hash({**a, "stem": "  " + stem.upper() + " "}, "kit-1")
+
     def test_a_match_items_pairs_read_the_same_in_options_and_answer(self):
         pairs = [{"left": "Radius", "right": "centre to the boundary"}, {"left": "Chord", "right": "two boundary points"}]
         src = {"id": "m-1", "item_type": "match", "answer_mode": "objective", "marks": 2, "difficulty": 1,

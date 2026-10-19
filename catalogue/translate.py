@@ -1021,16 +1021,34 @@ def _item_hash(row: dict, kit_id: str) -> str:
     space collapsed) and the hash is scoped to the KIT: a re-translation
     of the same source for a new kit legitimately produces the same
     sentence, and the superseded kit's items keep theirs as ``retired``.
-    Within one kit, two source items that translate to one sentence are
-    one item (the insert's twin path drops the second with a flag)."""
+    Within one kit, two source items that translate to one sentence AND
+    carry the same options and answer are one item (the insert's twin path
+    drops the second with a flag). The options and the answer are part of
+    the hash because a bank holds near-twins: Heat Transfer's English bank
+    has three "Which type of surface is … an excellent absorber and emitter
+    of … radiation?" MCQs with different options and keys. Portuguese wrote
+    two of them as one sentence, the second was dropped as a duplicate, it
+    was a quiz question, and the quiz stage refused the whole kit
+    (2026-10-19). A resumed job still finds its own row by source_item_id."""
     itype = str(row.get("item_type") or "")
-    stem = unicodedata.normalize("NFKC", str(row.get("stem") or "")).casefold()
-    stem = " ".join(_STEM_PUNCT.sub(" ", stem).split())
-    material = ["translation", str(kit_id), itype, stem]
+    material = ["translation", str(kit_id), itype, _fold(row.get("stem"))]
     answer = row.get("answer") if isinstance(row.get("answer"), dict) else {}
     if itype == "match" and answer.get("pairs"):
         material.append(",".join(sorted(f"{p.get('left')}={p.get('right')}" for p in answer["pairs"] if isinstance(p, dict))))
+    options = row.get("options") if isinstance(row.get("options"), list) else []
+    if options:
+        material.append("|".join(f"{o.get('key')}={_fold(o.get('text'))}" if isinstance(o, dict) else _fold(o)
+                                 for o in options))
+    if answer:
+        material.append(json.dumps(answer, sort_keys=True, ensure_ascii=False))
     return hashlib.sha1("|".join(material).encode("utf-8")).hexdigest()
+
+
+def _fold(text) -> str:
+    """A text folded script-agnostically for a hash: NFKC, case-folded,
+    punctuation and runs of space collapsed."""
+    t = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    return " ".join(_STEM_PUNCT.sub(" ", t).split())
 
 
 _STEM_PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
