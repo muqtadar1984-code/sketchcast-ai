@@ -69,7 +69,8 @@ REPAIR_RULE = ("A previous Jawi version of these strings left these Malay words 
 # Rumi: maths function names and unit symbols, which a Jawi page writes in
 # Latin like any other (lower-cased for the comparison).
 LATIN_KEEP = frozenset(
-    "sin cos tan sec csc cot arcsin arccos arctan sinh cosh tanh log ln exp lim max min mod gcd lcm "
+    "sin cos tan sec csc cot arcsin arccos arctan asin acos atan sinh cosh tanh log ln exp lim max min mod gcd lcm "
+    "soh cah toa "
     "mol kpa mpa hpa kwh mwh khz mhz ghz mah kcal cal rpm".split())
 _LATIN_WORD_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{3,}(?![A-Za-z])")
 # H2O, NaCl, HCl, NaOH, CO2: element symbols with a digit or a two-letter
@@ -94,6 +95,11 @@ def latin_leftovers(text: str, protected=()) -> list[str]:
     for m in _LATIN_WORD_RE.finditer(body):
         w = m.group(0)
         if w.lower() in LATIN_KEEP or _formula(w):
+            continue
+        # a figure's points ("triangle ABC", "PQR", "XYZ") — capitals in
+        # alphabet order — stay Latin in a Jawi textbook too (first Jawi
+        # Trig kit, 2026-10-19); an acronym ("DNA") is still a word
+        if w.isupper() and len(w) <= 4 and all(ord(b) - ord(a) == 1 for a, b in zip(w, w[1:])):
             continue
         # a formula with digits ("CO2") reaches here as its letters only
         tail = body[m.end():m.end() + 1]

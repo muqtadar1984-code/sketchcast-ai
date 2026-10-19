@@ -27,7 +27,7 @@ import sympy as sp
 from typing import Optional
 
 from agent5_slides.slide_builder import _font
-from maths.i18n import board_text as _bt, norm_lang, words_for
+from maths.i18n import board_text as _bt, norm_lang, state_text, words_for
 from maths.geometry import GeometryRefusal, parse_question, realise, verify_question
 from maths.geometry.board_adapter import FigureBoard, figure_board, figure_targets, op_actions
 from maths.geometry.constructions import exact_value
@@ -1087,7 +1087,10 @@ def _point_rows(points: list[str], heading: str) -> list[tuple[str, float, float
 
 def concept_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
     lines = _dialogue_lines(lesson.concept, lang) or [Line(line=_bt("method_intro", lang))]
-    points = [_short(p, 64) for p in lesson.concept_points][:3]
+    # a concept point that is a formula ("sin = opp/hyp, cos = adj/hyp")
+    # reaches here verbatim — the translator keeps it as maths — so its
+    # engine words are written in the lesson language like the working's
+    points = [_short(state_text(p, lang), 64) for p in lesson.concept_points][:3]
     seg = _segment(seg_id, "explore", lines, heading=_short(lesson.topic, 60), points=points)
     narration = seg["text"]
     _ht, _hs = _fit_text(lesson.topic, 40, CARD_X - 16 - 24 - 60, bold=True, min_size=26.0, cap=60)
@@ -1211,6 +1214,7 @@ def try_it_solution_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> Op
         ex.chart = chart_for(ex)       # the learner's own system, plotted like any example
     if ex is None or not lesson.try_it.steps:
         return None
+    ex = localised_example(ex, lang)
     ex.label = _bt("try_it_label", lang)
     ex.intro_speech = ex.intro_speech or _bt("solution_intro", lang)
     scene, lines = example_scene(ex, lesson.method, seg_id, has_card=bool(lesson.method.steps), lang=lang)
@@ -1336,7 +1340,24 @@ def _chart_hold(scene: dict, speech: str) -> float:
     return round(max(0.0, pen + 2.0 - spoken), 1)
 
 
+def localised_example(ex: WorkedExample, lang: str = "en") -> WorkedExample:
+    """The example as the board writes it in ``lang``: the engine's own
+    English words in its working lines ("A: scalene", "sin = opp/hyp",
+    "B: false") in the lesson language (maths.i18n.state_text). A copy —
+    the record keeps the English the verifier checked. English: as is."""
+    if norm_lang(lang) == "en":
+        return ex
+    out = ex.model_copy(deep=True)
+    for st in out.steps:
+        st.after = [state_text(x, lang) for x in st.after]
+    out.final_answer = [state_text(x, lang) for x in out.final_answer]
+    if out.common_mistake is not None:
+        out.common_mistake.wrong_state = [state_text(x, lang) for x in out.common_mistake.wrong_state]
+    return out
+
+
 def chart_segment(ex: WorkedExample, seg_id: str, lang: str = "en") -> Optional[dict]:
+    ex = localised_example(ex, lang)
     out = chart_scene(ex, seg_id, lang)
     if out is None:
         return None
@@ -1348,6 +1369,7 @@ def chart_segment(ex: WorkedExample, seg_id: str, lang: str = "en") -> Optional[
 
 
 def example_segment(ex: WorkedExample, lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
+    ex = localised_example(ex, lang)
     scene, lines = example_scene(ex, lesson.method, seg_id, has_card=bool(lesson.method.steps), lang=lang)
     heading = _short(f"{ex.label or 'Example'}: {ex.problem}", 60)
     points = [_short(x, 64) for st in ex.steps for x in st.after[:1]][:4]
@@ -1410,6 +1432,6 @@ def compile_lesson(lesson: Lesson, avatars: dict | None = None, language: str = 
     return segs
 
 
-__all__ = ["say", "example_scene", "example_segment", "check_figure_example", "check_figure_try_it", "hook_segment", "concept_segment", "recap_segment",
+__all__ = ["say", "example_scene", "example_segment", "localised_example", "check_figure_example", "check_figure_try_it", "hook_segment", "concept_segment", "recap_segment",
            "try_it_segment", "try_it_solution_segment", "closing_segment", "compile_lesson", "card_elements",
            "method_step_for"]

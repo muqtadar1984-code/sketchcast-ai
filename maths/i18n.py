@@ -18,6 +18,8 @@ Arabic script, Malay vocabulary.
 
 from __future__ import annotations
 
+import re
+
 LANGS = ("en", "ms", "ms-arab", "ar", "fr", "es", "pt", "hi", "mr", "te", "ur")
 
 
@@ -1137,7 +1139,79 @@ def words_for(lang: str | None) -> dict:
     return table
 
 
-__all__ = ["LANGS", "BOARD", "WORDS", "norm_lang", "board_text", "words_for"]
+# ── the engine's own words inside a board line ──────────────────────────
+# A worked example's working lines (Step.after, final_answer, the mistake's
+# wrong_state) are the ENGINE's: verified maths, kept verbatim by the
+# translator. A few of them carry English WORDS the engine writes itself —
+# a triangle's type ("A: scalene"), a true/false verdict ("B: false"), the
+# trig ratio's sides ("sin = opp/hyp", "tan(x) = opposite/adjacent") — and
+# every translated kit showed them in English, on the board and as slide
+# points (all ten languages, 2026-10-19). The board writes them in the
+# lesson language at compile time; the record keeps the English the
+# verifier checked. Abbreviations become the full word: no language here
+# shares the English opp/hyp/adj. Hindi follows the NCERT names (लंब,
+# आधार, कर्ण). A native reader should review the Jawi and Urdu rows.
+STATE_WORDS: dict[str, dict[str, str]] = {
+    "true": {"ms": "benar", "ms-arab": "بنر", "ar": "صحيح", "fr": "vrai", "es": "verdadero",
+             "pt": "verdadeiro", "hi": "सत्य", "mr": "सत्य", "te": "సత్యం", "ur": "درست"},
+    "false": {"ms": "palsu", "ms-arab": "ڤالسو", "ar": "خطأ", "fr": "faux", "es": "falso",
+              "pt": "falso", "hi": "असत्य", "mr": "असत्य", "te": "అసత్యం", "ur": "غلط"},
+    "equilateral": {"ms": "sama sisi", "ms-arab": "سام سيسي", "ar": "متطابق الأضلاع", "fr": "équilatéral",
+                    "es": "equilátero", "pt": "equilátero", "hi": "समबाहु", "mr": "समभुज", "te": "సమబాహు",
+                    "ur": "مساوی الاضلاع"},
+    "isosceles": {"ms": "sama kaki", "ms-arab": "سام کاکي", "ar": "متطابق الضلعين", "fr": "isocèle",
+                  "es": "isósceles", "pt": "isósceles", "hi": "समद्विबाहु", "mr": "समद्विभुज",
+                  "te": "సమద్విబాహు", "ur": "مساوی الساقین"},
+    "scalene": {"ms": "tak sama sisi", "ms-arab": "تق سام سيسي", "ar": "مختلف الأضلاع", "fr": "quelconque",
+                "es": "escaleno", "pt": "escaleno", "hi": "विषमबाहु", "mr": "विषमभुज", "te": "విషమబాహు",
+                "ur": "مختلف الاضلاع"},
+    "acute": {"ms": "tirus", "ms-arab": "تيروس", "ar": "حاد", "fr": "aigu", "es": "agudo", "pt": "agudo",
+              "hi": "न्यूनकोण", "mr": "लघुकोन", "te": "అల్పకోణ", "ur": "حادہ"},
+    "right": {"ms": "tegak", "ms-arab": "تڬق", "ar": "قائم", "fr": "droit", "es": "recto", "pt": "reto",
+              "hi": "समकोण", "mr": "काटकोन", "te": "లంబకోణ", "ur": "قائمہ"},
+    "obtuse": {"ms": "cakah", "ms-arab": "چاکه", "ar": "منفرج", "fr": "obtus", "es": "obtuso", "pt": "obtuso",
+               "hi": "अधिककोण", "mr": "विशालकोन", "te": "అధికకోణ", "ur": "منفرجہ"},
+    "opposite": {"ms": "bertentangan", "ms-arab": "برتنتڠن", "ar": "المقابل", "fr": "opposé", "es": "opuesto",
+                 "pt": "oposto", "hi": "लंब", "mr": "समोरील", "te": "ఎదుటి", "ur": "مقابل"},
+    "adjacent": {"ms": "bersebelahan", "ms-arab": "برسبلهن", "ar": "المجاور", "fr": "adjacent",
+                 "es": "adyacente", "pt": "adjacente", "hi": "आधार", "mr": "लगतची", "te": "ప్రక్క",
+                 "ur": "ملحقہ"},
+    "hypotenuse": {"ms": "hipotenus", "ms-arab": "هيڤوتنوس", "ar": "الوتر", "fr": "hypoténuse",
+                   "es": "hipotenusa", "pt": "hipotenusa", "hi": "कर्ण", "mr": "कर्ण", "te": "కర్ణం",
+                   "ur": "وتر"},
+}
+STATE_WORDS["opp"] = STATE_WORDS["opposite"]
+STATE_WORDS["adj"] = STATE_WORDS["adjacent"]
+STATE_WORDS["hyp"] = STATE_WORDS["hypotenuse"]
+
+# whole words only, never inside a longer word or a hyphenated one
+# ("right-angled"); "right" only as a label's VALUE ("C: right") — anywhere
+# else it is not the engine's angle type
+_STATE_WORD_RE = re.compile(
+    r"(?<![A-Za-z])(" + "|".join(sorted((w for w in STATE_WORDS if w != "right"), key=len, reverse=True))
+    + r")(?![A-Za-z-])", re.I)
+_STATE_RIGHT_RE = re.compile(r"(?<=:\s)right(?![A-Za-z-])", re.I)
+
+
+def state_text(text: str, lang: str | None) -> str:
+    """A board line with the engine's own English words (STATE_WORDS) in
+    the lesson language; the maths around them untouched. English, and a
+    language without the word, keep the line as written."""
+    code = norm_lang(lang)
+    if code == "en" or not text:
+        return text
+
+    def sub(m: "re.Match[str]") -> str:
+        word = m.group(0)
+        out = (STATE_WORDS.get(word.lower()) or {}).get(code)
+        if not out:
+            return word
+        return out[:1].upper() + out[1:] if word[:1].isupper() else out
+
+    return _STATE_RIGHT_RE.sub(sub, _STATE_WORD_RE.sub(sub, text))
+
+
+__all__ = ["LANGS", "BOARD", "STATE_WORDS", "WORDS", "norm_lang", "board_text", "state_text", "words_for"]
 
 
 # ── Urdu (اردو) — Kit Translator §5.10, 2026-10-19 ─────────────────────────

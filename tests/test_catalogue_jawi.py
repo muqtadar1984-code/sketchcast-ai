@@ -481,3 +481,15 @@ class TestLeftoverFlag:
         script = {"segments": [{"segment_id": "s1", "text": "ini", "elevenlabs_text": "ini", "display_text": "اين",
                                 "slide_heading": "x = 5 cm", "dialogue": [{"who": "teacher", "line": "ini", "display": "اين"}]}]}
         assert J.check_two_scripts(script)["flags"] == []
+
+
+def test_point_names_mnemonics_and_inverse_functions_are_not_leftovers():
+    """The first Jawi Trig kit (2026-10-19) flagged its triangles' names
+    (ABC, PQR, XYZ, DEF), SOH CAH TOA and atan as Malay left in Latin."""
+    from catalogue.jawi import latin_leftovers
+    assert latin_leftovers("سݢي تيݢ ABC دان PQR، XYZ، DEF") == []
+    assert latin_leftovers("ايڠت SOH CAH TOA") == []
+    assert latin_leftovers("x = atan(4/3)، asin، acos") == []
+    # a word stays a leftover, and so does a long acronym
+    assert latin_leftovers("لوݢم Rod") == ["Rod"]
+    assert latin_leftovers("ايکوت BODMAS") == ["BODMAS"]
