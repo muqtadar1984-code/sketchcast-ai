@@ -64,6 +64,13 @@ the RPC's translation branch (migration 0134).
 A kit of a NON-ENGLISH source, a source that is not approved, a language
 the registry does not know, or the source's own language are refused before
 any model call (``TranslateRefused``).
+
+The one exception is Jawi (``ms-arab``, plan §5.11, catalogue.jawi): its
+source is the topic's APPROVED MALAY translation (``params.source_kit_id``
+names the Malay kit, and so does the Jawi kit's ``source_kit_id``). Every
+stage runs as above with Malay as the source language; the script stage
+keeps the Malay narration for the Malay voice and writes Jawi on screen
+(derive_jawi_episode).
 """
 
 from __future__ import annotations
@@ -79,6 +86,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from catalogue import jawi
 from catalogue import translate_check as check
 from catalogue.article import load_article, load_topic
 from catalogue.key import canonical_key
@@ -187,6 +195,9 @@ def translate_strings(client, items: list[str], language: str, *, terms: Optiona
     """Translate ``items`` into ``language`` — a list in, the same list out,
     position for position. Empty strings come back empty without a call."""
     out: list[Optional[str]] = [None] * len(items)
+    # Jawi is a transliteration of the Malay kit (catalogue.jawi): the rule
+    # rides on every ms-arab call, whatever the stage asked for.
+    context = jawi.context_for(language, context)
     # Each DISTINCT string is translated once and its translation reused at
     # every position: a term that appears twice in one item (a match item's
     # pairs sit in both ``options`` and ``answer``; a label repeats in a
@@ -461,15 +472,17 @@ def recompile_maths(script: dict, lesson: dict, language: str, title: str) -> di
     return ep.model_dump()
 
 
-def _splice_framing(source_segments: list[dict], compiled: list[dict], client, language: str, terms, context: str) -> list[dict]:
+def _splice_framing(source_segments: list[dict], compiled: list[dict], client, language: str, terms, context: str,
+                    *, words: Optional[Callable[[list[dict]], list[dict]]] = None) -> list[dict]:
     """A multi-part kit's RECAP / OUTRO segments were added by the worker
     around the compiled lesson (catalogue.kit): they are not in the record,
-    so they are translated as text and put back where they were."""
+    so they are translated as text and put back where they were. ``words``
+    replaces the translation (Jawi: derive_segments)."""
     ids = {str(s.get("segment_id") or "") for s in compiled}
     extra = [s for s in source_segments if str(s.get("segment_id") or "") not in ids]
     if not extra:
         return compiled
-    translated = translate_segments(client, extra, language, terms, context=context)
+    translated = words(extra) if words else translate_segments(client, extra, language, terms, context=context)
     first_id = str((source_segments[0] if source_segments else {}).get("segment_id") or "")
     out = list(compiled)
     for seg in translated:
@@ -491,6 +504,8 @@ def translate_episode(client, body: dict, language: str, terms, *, title: Option
     src = body.get("script") if isinstance(body.get("script"), dict) else {}
     if not src.get("segments"):
         raise TranslateRefused("the source script has no segments")
+    if jawi.is_derived(language):
+        return derive_jawi_episode(client, body, terms, title=title, context=context)
     maths = src.get("maths") if isinstance(src.get("maths"), dict) else {}
     lesson = maths.get("lesson") if isinstance(maths.get("lesson"), dict) else None
     ep_title = title or translate_strings(client, [str(src.get("episode_title") or "")], language,
@@ -527,6 +542,90 @@ def translate_episode(client, body: dict, language: str, terms, *, title: Option
     return dst, report
 
 
+# ── Jawi: the Malay kit in two scripts (plan §5.11, catalogue.jawi) ──────
+
+
+def derive_segments(client, segments: list[dict], terms, *, context: str) -> list[dict]:
+    """The Malay segments with every WRITTEN field in Jawi and a Jawi display
+    copy of every SPOKEN one (``display_text``, ``dialogue[i].display``);
+    the spoken fields, turns, timing and scene plan stay the Malay kit's."""
+    items: list[tuple[int, str, str]] = []
+    protected: list[str] = []
+    for i, seg in enumerate(segments):
+        protected += _protected_of_segment(seg)
+        for path, text in jawi.written_items(seg) + jawi.spoken_items(seg):
+            items.append((i, path, text))
+    got = translate_strings(client, [t for _, _, t in items], jawi.TARGET, terms=terms, context=context,
+                            protect=protected)
+    out = copy.deepcopy(segments)
+    by_seg: dict[int, list[tuple[str, str]]] = {}
+    for (i, path, _), t in zip(items, got):
+        by_seg.setdefault(i, []).append((path, t))
+    for i, pairs in by_seg.items():
+        out[i] = jawi.finish_segment(apply_strings(out[i], pairs), SCENE_TEXT_MAX)
+    return out
+
+
+def derive_jawi_episode(client, body: dict, terms, *, title: Optional[str] = None,
+                        context: str = "") -> tuple[dict, dict]:
+    """One part of a Jawi kit from the Malay kit's script_json: ``(script,
+    pre-check report)``. A maths part transliterates the Malay RECORD and
+    compiles the board twice (catalogue.jawi.merge_compiles): Jawi on the
+    board and in the bubbles, the Rumi compile's words for the voice and its
+    cue phrases for the drawing. A science part is transliterated in place
+    (derive_segments). Pre-check A runs on the WRITTEN side (check_script
+    reads ``display_text``), and check_two_scripts holds the SPOKEN side to
+    Rumi. Raises TranslateRefused when a check blocks after one retry."""
+    src = body.get("script") if isinstance(body.get("script"), dict) else {}
+    maths = src.get("maths") if isinstance(src.get("maths"), dict) else {}
+    lesson = maths.get("lesson") if isinstance(maths.get("lesson"), dict) else None
+    ep_title = title or translate_strings(client, [str(src.get("episode_title") or "")], jawi.TARGET,
+                                          terms=terms, context=context)[0]
+
+    def words(segs: list[dict]) -> list[dict]:
+        return derive_segments(client, segs, terms, context=context)
+
+    report: dict = {}
+    dst: dict = {}
+    for attempt in range(2):
+        if lesson is not None:
+            new_lesson = translate_lesson(client, lesson, jawi.TARGET, terms, context=context)
+            r_lesson = check.check_maths_lesson(lesson, new_lesson)
+            rumi = recompile_maths(src, lesson, jawi.SOURCE, str(src.get("episode_title") or ep_title))
+            board = recompile_maths(src, new_lesson, jawi.TARGET, ep_title)
+            try:
+                dst, merged = jawi.merge_compiles(rumi, board)
+            except jawi.Unpaired as exc:
+                raise TranslateRefused(f"the Jawi board of part {body.get('part')} does not pair with the Malay "
+                                       f"one: {exc}") from exc
+            dst["segments"] = _splice_framing(src.get("segments") or [], dst.get("segments") or [], client,
+                                              jawi.TARGET, terms, context, words=words)
+            r_script = check.check_script(src, dst, language=jawi.TARGET, glossary=terms, strict=False,
+                                          board=check.board_numbers(lesson))
+            report = check.merge_reports(r_lesson, r_script, jawi.check_two_scripts(dst))
+            report["board"] = merged
+            # the record the voice was compiled from, beside the one the
+            # board shows: a re-stage needs both
+            dst["maths"]["lesson_rumi"] = copy.deepcopy(lesson)
+        else:
+            dst = copy.deepcopy(src)
+            dst["segments"] = words(src.get("segments") or [])
+            dst["episode_title"] = ep_title
+            report = check.merge_reports(check.check_script(src, dst, language=jawi.TARGET, glossary=terms),
+                                         jawi.check_two_scripts(dst))
+        if report.get("ok"):
+            break
+        log.warning("translate: Jawi pre-check blocked part %s (%d finding(s)); %s", body.get("part"),
+                    len(report.get("blocking") or []), "asking again" if attempt == 0 else "giving up")
+    if not report.get("ok"):
+        heads = "; ".join(f"{f.get('where')}: {f.get('what')}" for f in (report.get("blocking") or [])[:5])
+        raise TranslateRefused(f"Jawi of part {body.get('part')} failed pre-check A: {heads}",
+                               report={"part": body.get("part"), **report})
+    if isinstance(dst.get("maths"), dict):
+        dst["maths"]["language"] = jawi.TARGET
+    return dst, report
+
+
 # ── loading the source ───────────────────────────────────────────────────
 
 
@@ -535,17 +634,30 @@ def _part_of_path(path: str) -> int:
     return int(m.group(1)) if m and m.group(1) else 1
 
 
-def load_source(sb, source_kit_id: str) -> dict:
+def load_source(sb, source_kit_id: str, language: Optional[str] = None) -> dict:
+    """The source of a translation into ``language``: the approved English
+    kit — or, for Jawi (catalogue.jawi), the topic's APPROVED MALAY
+    translation, whose voice the Jawi kit keeps. ``source["language"]`` is
+    the language the stages translate FROM."""
+    src_lang = jawi.source_language_for(language)
     kit = load_kit(sb, source_kit_id)
     if kit is None:
         raise TranslateRefused(f"source kit {source_kit_id} not found")
     if _s(kit.get("status")) != "approved":
         raise TranslateRefused(f"source kit {source_kit_id} is {kit.get('status') or 'unknown'}, not approved — "
                                "only an approved kit is translated")
-    if _s(kit.get("language")).lower() != SOURCE_LANGUAGE:
-        raise TranslateRefused(f"source kit {source_kit_id} is in {kit.get('language')}; translations start from English")
-    if kit.get("translation_status"):
-        raise TranslateRefused(f"source kit {source_kit_id} is itself a translation")
+    if jawi.is_derived(language):
+        if _s(kit.get("language")).lower() != src_lang:
+            raise TranslateRefused(f"source kit {source_kit_id} is in {kit.get('language')}; Jawi is derived from the "
+                                   "topic's approved Malay kit (its narration stays the Malay voice's Rumi)")
+        if _s(kit.get("translation_status")) != "approved":
+            raise TranslateRefused(f"the Malay kit {source_kit_id} is {kit.get('translation_status') or 'not a translation'}, "
+                                   "not an approved translation — Jawi follows the current approved Malay kit")
+    else:
+        if _s(kit.get("language")).lower() != SOURCE_LANGUAGE:
+            raise TranslateRefused(f"source kit {source_kit_id} is in {kit.get('language')}; translations start from English")
+        if kit.get("translation_status"):
+            raise TranslateRefused(f"source kit {source_kit_id} is itself a translation")
     pres_id = _s(kit.get("presentation_generation_id"))
     if not pres_id:
         raise TranslateRefused(f"source kit {source_kit_id} has no presentation")
@@ -554,6 +666,11 @@ def load_source(sb, source_kit_id: str) -> dict:
         raise TranslateRefused(f"source presentation {pres_id} is not done")
     arts = _rows(sb.table("artifacts").select("kind,storage_path").eq("generation_id", pres_id).eq("kind", "script_json").execute())
     scripts = sorted((_s(a.get("storage_path")) for a in arts if _s(a.get("storage_path"))), key=_part_of_path)
+    if not scripts and jawi.is_derived(language):
+        # a Malay presentation that uploaded no script_json still has the
+        # scripts its translate job staged — exactly what it rendered
+        scripts = sorted((_s(p) for p in ((kit.get("translation") or {}).get("scripts") or []) if _s(p)),
+                         key=_part_of_path)
     if not scripts:
         raise TranslateRefused(f"source presentation {pres_id} uploaded no script_json — a kit rendered before "
                                "decision 4 (Phase 3) cannot be translated; regenerate it first")
@@ -563,7 +680,12 @@ def load_source(sb, source_kit_id: str) -> dict:
     topic = load_topic(sb, _s(kit.get("topic_id")))
     if topic is None:
         raise TranslateRefused(f"topic {kit.get('topic_id')} not found")
-    return {"kit": kit, "presentation": gen_rows[0], "script_paths": scripts, "article": article, "topic": topic}
+    return {"kit": kit, "presentation": gen_rows[0], "script_paths": scripts, "article": article, "topic": topic,
+            "language": src_lang}
+
+
+def _source_language(source: dict) -> str:
+    return _s(source.get("language")) or SOURCE_LANGUAGE
 
 
 def download_scripts(sb, paths: list[str], tmp: Path) -> list[dict]:
@@ -592,14 +714,21 @@ def find_translation_kit(sb, source_kit_id: str, language: str) -> Optional[dict
 def create_translation_kit(sb, source: dict, language: str, job_id: str) -> dict:
     kit = source["kit"]
     avatar = _s(kit.get("teacher_avatar")) or "female"
-    teacher = default_teacher_voice(language, avatar)
-    student, fallback = student_voice_for(teacher, language, None)
+    if jawi.is_derived(language) and (kit.get("voice_pair") or {}).get("teacher"):
+        # Jawi is SPOKEN Malay: the Malay kit's own voices, so the narration
+        # is the approved Malay narration in the same voice
+        pair = dict(kit.get("voice_pair") or {})
+        teacher, student = pair.get("teacher"), pair.get("student")
+        fallback = bool((kit.get("translation") or {}).get("student_voice_fallback")) or not student
+    else:
+        teacher = default_teacher_voice(language, avatar)
+        student, fallback = student_voice_for(teacher, language, None)
     row = {
         "topic_id": kit["topic_id"], "article_id": kit["article_id"], "language": language,
         "source_kit_id": kit["id"], "teacher_avatar": avatar,
         "voice_pair": {"teacher": teacher, "student": student},
         "status": KIT_GENERATING, "translation_status": TRANSLATION_STAGED,
-        "translation": {"job_id": job_id, "source_kit_id": kit["id"], "source_language": SOURCE_LANGUAGE,
+        "translation": {"job_id": job_id, "source_kit_id": kit["id"], "source_language": _source_language(source),
                         "source_article_id": kit["article_id"],
                         "source_generation_id": source["presentation"]["id"],
                         "student_voice_fallback": bool(fallback), "prompt_version": PROMPT_VERSION,
@@ -681,10 +810,23 @@ def _glossary_terms(article: dict) -> list[str]:
     return out
 
 
-def glossary_stage(sb, client, topic: dict, article: dict, language: str) -> tuple[list[tuple[str, str]], dict]:
-    """Term pairs ``[(term_en, term)]`` for the directive, reusing rows for
-    the same (language, subject, sense) and writing the new ones."""
-    terms = _glossary_terms(article)
+def glossary_stage(sb, client, topic: dict, article: dict, language: str,
+                   source_pairs: Optional[list] = None) -> tuple[list[tuple[str, str]], dict]:
+    """Term pairs ``[(source term, term)]`` for the directive, reusing rows
+    for the same (language, subject, sense) and writing the new ones.
+
+    ``source_pairs`` (Jawi): the Malay kit's own glossary pairs ``[(term_en,
+    term_ms)]`` — the Malay term is what is transliterated, the ENGLISH term
+    keys the sense (so ``term_en`` stays English in the table), and the
+    pairs returned are ``(term_ms, term_jawi)``, the words the Malay script
+    actually uses."""
+    if source_pairs:
+        base = [(_s(p[0]), _s(p[1])) for p in source_pairs
+                if isinstance(p, (list, tuple)) and len(p) == 2 and _s(p[0]) and _s(p[1])]
+    else:
+        base = [(t, t) for t in _glossary_terms(article)]
+    text_of = dict(base)
+    terms = list(dict.fromkeys(en for en, _ in base))
     subject = _s(topic.get("subject")).lower() or "general"
     senses = {t: canonical_key(t) for t in terms}
     existing: dict[str, dict] = {}
@@ -697,7 +839,7 @@ def glossary_stage(sb, client, topic: dict, article: dict, language: str) -> tup
             if cur is None or (r.get("source") == TERM_SOURCE_REVIEWER and cur.get("source") != TERM_SOURCE_REVIEWER):
                 existing[r["sense"]] = r
     todo = [t for t in terms if senses[t] not in existing]
-    got = translate_strings(client, todo, language,
+    got = translate_strings(client, [text_of[t] for t in todo], language,
                             context=f"These are glossary TERMS (one to four words each) of a {subject} topic "
                                     f"titled '{_s(topic.get('title'))}'. Give the standard school term.") if todo else []
     written = 0
@@ -717,7 +859,8 @@ def glossary_stage(sb, client, topic: dict, article: dict, language: str) -> tup
                           .eq("subject", subject).eq("sense", senses[t]).execute())
             if again:
                 existing[senses[t]] = again[0]
-    pairs = [(t, _s(existing[senses[t]].get("term"))) for t in terms if senses[t] in existing and _s(existing[senses[t]].get("term"))]
+    pairs = [(text_of[t], _s(existing[senses[t]].get("term"))) for t in terms
+             if senses[t] in existing and _s(existing[senses[t]].get("term"))]
     return pairs, {"terms": len(terms), "reused": len(terms) - len(todo), "written": written}
 
 
@@ -768,7 +911,7 @@ def article_stage(sb, client, source: dict, language: str, terms, kit: dict) -> 
         "worked_examples": translated.get("worked_examples") or [], "claims": translated.get("claims") or [],
         "depth_node_id": article.get("depth_node_id"), "depth_rationale": translated.get("depth_rationale") or None,
         "word_count": _word_count(translated.get("sections") or []), "status": ARTICLE_STAGED,
-        "author": "model", "notes": f"translated from v{article.get('version')} ({SOURCE_LANGUAGE}) by kit_translate",
+        "author": "model", "notes": f"translated from v{article.get('version')} ({_source_language(source)}) by kit_translate",
     }
     ins = sb.table("topic_articles").insert(row).execute()
     rows = _rows(ins)
@@ -1044,15 +1187,14 @@ def existing_staged(sb, kit_id: str) -> dict[str, str]:
 
 
 def bank_stage(sb, client, source: dict, kit: dict, language: str, terms, article_id: str) -> tuple[dict[str, str], dict]:
-    """Translate the topic's APPROVED English items and stage them for the
-    kit (status ``staged``, ``source_item_id``, ``translation_kit_id``);
-    returns the source → translated id mapping and a summary with the items
-    the checks refused (flags, not blocks — a bank short of a few items is
-    still a bank; one under BANK_FLOOR is refused)."""
-    from catalogue.composer import load_bank
-
+    """Translate the topic's APPROVED English items (Jawi: the Malay kit's,
+    source_items) and stage them for the kit (status ``staged``,
+    ``source_item_id``, ``translation_kit_id``); returns the source →
+    translated id mapping and a summary with the items the checks refused
+    (flags, not blocks — a bank short of a few items is still a bank; one
+    under BANK_FLOOR is refused)."""
     topic_id = str(kit["topic_id"])
-    items = load_bank(sb, topic_id, SOURCE_LANGUAGE)
+    items = source_items(sb, source, topic_id)
     if not items:
         return {}, {"source_items": 0, "staged": 0, "reused": 0, "retried": 0, "dropped": []}
     mapping = existing_staged(sb, kit["id"])
@@ -1191,6 +1333,20 @@ def bank_stage(sb, client, source: dict, kit: dict, language: str, terms, articl
                      "retried": len(refused), "dropped": dropped, "batching": tally}
 
 
+def source_items(sb, source: dict, topic_id: str) -> list[dict]:
+    """The approved items a translation translates: the topic's English
+    bank — or, for a kit derived from a TRANSLATION (Jawi from Malay), that
+    translation's own approved items (``translation_kit_id``), so a Jawi
+    item's ``source_item_id`` is the Malay item and the Malay quiz maps."""
+    from catalogue.composer import load_bank
+
+    items = load_bank(sb, topic_id, _source_language(source))
+    if source["kit"].get("translation_status"):
+        sid = str(source["kit"].get("id") or "")
+        items = [it for it in items if str(it.get("translation_kit_id") or "") == sid]
+    return items
+
+
 def bank_flags(summary: dict) -> list[dict]:
     """The dropped items of a bank summary as pre-check flags: what the
     reviewer sees on the kit, whether or not the job went on to finish."""
@@ -1251,27 +1407,32 @@ FIDELITY_ITEMS = 3
 
 
 def fidelity_stage(client, scripts: list[dict], source_bodies: list[dict], items_src: list[dict],
-                   items_dst: dict[str, dict], language: str) -> dict:
+                   items_dst: dict[str, dict], language: str, source_language: str = SOURCE_LANGUAGE) -> dict:
     """Back-translate a sample of the translated narration and stems into
-    English and score how much of the source each keeps. Flags only."""
+    the SOURCE language and score how much of the source each keeps. Flags
+    only. A Jawi kit samples what the viewer reads (``display_text``) and
+    reads it back into Rumi, against the Malay."""
     samples: list[tuple[str, str, str]] = []   # (where, source, translated)
     for body, dst in zip(source_bodies, scripts):
         src_segs = {str(s.get("segment_id")): s for s in ((body.get("script") or {}).get("segments") or []) if isinstance(s, dict)}
-        dst_segs = [s for s in (dst.get("segments") or []) if isinstance(s, dict) and _s(s.get("text"))]
+        dst_segs = [s for s in (dst.get("segments") or []) if isinstance(s, dict)
+                    and _s(s.get("display_text") or s.get("text"))]
         pick = dst_segs[:FIDELITY_SEGMENTS // 2] + dst_segs[-(FIDELITY_SEGMENTS - FIDELITY_SEGMENTS // 2):]
         for seg in pick:
             src = src_segs.get(str(seg.get("segment_id")))
             if src and _s(src.get("text")):
-                samples.append((f"part {body.get('part')} {seg.get('segment_id')}", str(src["text"]), str(seg["text"])))
+                samples.append((f"part {body.get('part')} {seg.get('segment_id')}", str(src["text"]),
+                                str(seg.get("display_text") or seg["text"])))
     for it in items_src[:FIDELITY_ITEMS]:
         dst = items_dst.get(str(it.get("id")))
         if dst and _s(dst.get("stem")):
             samples.append((f"item {str(it.get('id'))[:8]}", str(it.get("stem") or ""), str(dst.get("stem"))))
     if not samples:
         return check.fidelity_report([])
-    back = translate_strings(client, [t for _, _, t in samples], SOURCE_LANGUAGE,
-                             context=f"These are {_lang_name(language)} sentences from a school lesson. Translate each "
-                                     "back into plain English as literally as you can; do not improve or shorten.")
+    back_context = (jawi.BACK_RULE if jawi.is_derived(language) else
+                    f"These are {_lang_name(language)} sentences from a school lesson. Translate each "
+                    "back into plain English as literally as you can; do not improve or shorten.")
+    back = translate_strings(client, [t for _, _, t in samples], source_language, context=back_context)
     return check.fidelity_report([(w, s, b) for (w, s, _), b in zip(samples, back)])
 
 
@@ -1420,7 +1581,7 @@ def worksheet_stage(sb, client, source: dict, kit: dict, language: str, terms, *
                                     terms=terms, context=context)[0]
     staged = {"title": heading, "instructions": _doc_t("ws_instructions", language), "language": language,
               "questions": kept,
-              "source": {"kit_id": source["kit"]["id"], "language": SOURCE_LANGUAGE, "title": payload.get("title"),
+              "source": {"kit_id": source["kit"]["id"], "language": _source_language(source), "title": payload.get("title"),
                          "questions": len(questions), "dropped": [d["id"] for d in dropped]}}
     local = Path(tmp) / WORKSHEET_QUESTIONS_FILE
     local.write_text(json.dumps(staged, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1579,7 +1740,7 @@ def generation_params(source: dict, kit: dict, language: str, article_id: str) -
         "tts_voice": pair.get("teacher"), "student_voice": pair.get("student"),
         "curriculum_header": list(src_params.get("curriculum_header") or []),
         "translation": {"source_kit_id": source["kit"]["id"], "source_generation_id": source["presentation"]["id"],
-                        "source_language": SOURCE_LANGUAGE, "kit_id": kit["id"]},
+                        "source_language": _source_language(source), "kit_id": kit["id"]},
     }
 
 
@@ -1711,7 +1872,7 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
     stage: dict = {"phase": "translate", "step": "load", "source_kit_id": source_kit_id, "language": language}
     db.set_stage(sb, job_id, dict(stage))
     db.set_progress(sb, job_id, 3)
-    source = load_source(sb, source_kit_id)
+    source = load_source(sb, source_kit_id, language)
     if client is None:
         from shared.llm import client_for
         client = client_for(language)
@@ -1733,7 +1894,11 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
         db.set_progress(sb, job_id, 10)
         terms = [tuple(x) for x in (done.get("glossary") or {}).get("pairs") or []]
         if not terms:
-            terms, g_summary = glossary_stage(sb, client, topic, source["article"], language)
+            src_pairs = None
+            if jawi.is_derived(language):
+                src_stage = (source["kit"].get("translation") or {}).get("stage") or {}
+                src_pairs = (src_stage.get("glossary") or {}).get("pairs")
+            terms, g_summary = glossary_stage(sb, client, topic, source["article"], language, source_pairs=src_pairs)
             kit = _save_translation(sb, kit, {"stage": {"glossary": {**g_summary, "pairs": terms}}})
             done = dict(kit["translation"]["stage"])
 
@@ -1810,11 +1975,11 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
         stage["step"] = "fidelity"
         db.set_stage(sb, job_id, dict(stage))
         db.set_progress(sb, job_id, 84)
-        from catalogue.composer import load_bank as _load_bank
-        src_items = _load_bank(sb, str(kit["topic_id"]), SOURCE_LANGUAGE)
+        src_items = source_items(sb, source, str(kit["topic_id"]))
         dst_rows = _rows(sb.table("topic_questions").select("id,source_item_id,stem").eq("translation_kit_id", kit["id"]).execute())
         items_dst = {str(r.get("source_item_id")): r for r in dst_rows}
-        fidelity = fidelity_stage(client, [s for _, _, s in scripts], bodies, src_items, items_dst, language)
+        fidelity = fidelity_stage(client, [s for _, _, s in scripts], bodies, src_items, items_dst, language,
+                                  source_language=_source_language(source))
 
         # the worksheet (T1.5): a maths worksheet's verified questions, translated
         stage["step"] = "worksheet"
@@ -1970,7 +2135,8 @@ def record_post_render(sb, kit_id: Optional[str], parts: list[dict]) -> Optional
         return None
 
 
-__all__ = ["JOB_TYPE", "TranslateRefused", "apply_strings", "article_text_items", "bank_stage", "download_scripts",
+__all__ = ["JOB_TYPE", "TranslateRefused", "apply_strings", "article_text_items", "bank_stage", "derive_jawi_episode",
+           "derive_segments", "download_scripts", "source_items",
            "fidelity_stage", "generation_params", "generations_stage", "glossary_stage", "item_text_items",
            "lesson_from_record", "lesson_text_items", "load_source", "load_staged_scripts", "quiz_stage",
            "recompile_maths", "record_post_render", "resolve_assets", "run_translate_job", "scene_asset_keys",

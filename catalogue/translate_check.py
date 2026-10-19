@@ -324,7 +324,10 @@ def _dialogue_shape(seg: dict) -> list[str]:
 
 
 def _segment_text(seg: dict) -> str:
-    parts = [str(seg.get("text") or ""), str(seg.get("slide_heading") or "")]
+    """The segment's words as the viewer READS them: a two-script kit (Jawi,
+    catalogue.jawi) shows ``display_text`` in its bubbles while the voice
+    reads ``text``; every other kit shows what it says."""
+    parts = [str(seg.get("display_text") or seg.get("text") or ""), str(seg.get("slide_heading") or "")]
     parts += [str(p) for p in (seg.get("slide_points") or [])]
     return " ".join(parts)
 

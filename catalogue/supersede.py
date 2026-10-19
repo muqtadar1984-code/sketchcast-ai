@@ -186,20 +186,33 @@ def cascade_translations(sb, old_kit_id: str, reason: str) -> dict:
     """The translations of the superseded English kit follow it: every kit
     with ``source_kit_id`` = the old kit that is approved and current becomes
     `stale` (cosmetic) or `blocked` (correction); the old kit records the
-    reason (``supersede_reason``, 0134). Returns ``{reason, status, kits}``.
-    Best effort: a database fault here is logged and reported on the summary,
-    never a failed supersede — the YouTube side is already done."""
+    reason (``supersede_reason``, 0134). The cascade runs THROUGH a
+    translation to the kits derived from it — a Jawi kit's source is the
+    Malay kit (plan §5.11, catalogue.jawi), so English → Malay → Jawi all
+    take the same status. Returns ``{reason, status, kits}``. Best effort: a
+    database fault here is logged and reported on the summary, never a
+    failed supersede — the YouTube side is already done."""
     reason = supersede_reason(reason)
     status = TRANSLATION_STATUS_BY_REASON[reason]
     out = {"reason": reason, "status": status, "kits": []}
     if not _s(old_kit_id):
         return out
     try:
-        rows = _rows(sb.table("topic_kits").select("id,language,status,translation_status")
-                     .eq("source_kit_id", _s(old_kit_id)).execute())
-        ids = [str(r.get("id")) for r in rows
-               if _s(r.get("language")).lower() not in ("", "en")
-               and _s(r.get("status")) == "approved" and _s(r.get("translation_status")) == "approved"]
+        ids: list[str] = []
+        frontier, seen = [_s(old_kit_id)], {_s(old_kit_id)}
+        while frontier:
+            rows = _rows(sb.table("topic_kits").select("id,language,status,translation_status")
+                         .in_("source_kit_id", frontier).execute())
+            frontier = []
+            for r in rows:
+                kid = str(r.get("id"))
+                if kid in seen:
+                    continue
+                seen.add(kid)
+                if (_s(r.get("language")).lower() not in ("", "en")
+                        and _s(r.get("status")) == "approved" and _s(r.get("translation_status")) == "approved"):
+                    ids.append(kid)
+                    frontier.append(kid)
         for kid in ids:
             sb.table("topic_kits").update({"translation_status": status}).eq("id", kid).execute()
         sb.table("topic_kits").update({"supersede_reason": reason}).eq("id", _s(old_kit_id)).execute()
