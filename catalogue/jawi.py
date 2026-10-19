@@ -51,11 +51,57 @@ RULE = (
     "The strings are ALREADY Malay (Bahasa Melayu) written in Rumi (Latin letters). Rewrite each one in the JAWI "
     "script: the SAME Malay words, in the same order — a transliteration, not a new translation; do not "
     "paraphrase, shorten, add or explain. Numbers stay as written in Western digits (0-9) — never turn a digit "
-    "into a word or a number word into digits; every variable letter, unit symbol, formula, equation and "
-    "expression stays exactly as written in Latin characters; a proper noun or technical term with no Jawi "
-    "spelling may stay as written."
+    "into a word or a number word into digits. EVERY Malay word is written in Jawi — including loanwords, "
+    "borrowed scientific terms (inframerah → اينفراميره, joule → جول, rod → رود) and abbreviations "
+    "(lwn → لاون). Only these stay in Latin characters, exactly as written: single variable letters (x, y), "
+    "unit SYMBOLS (J, °C, m, kg, cm), chemical formulas (H2O, NaCl), equations, expressions and the "
+    "expressions you are told to keep unchanged."
     + prompt_directive(TARGET)
 )
+# The re-ask for a string that still carries Latin words (translate.
+# translate_strings' Jawi repair pass): ``{words}`` names them.
+REPAIR_RULE = ("A previous Jawi version of these strings left these Malay words in Latin letters: {words}. Write "
+               "EVERY Malay word in Jawi script — loanwords, scientific terms and abbreviations included; only "
+               "variable letters, unit symbols, chemical formulas and the expressions to keep unchanged stay in "
+               "Latin.")
+
+# Latin words of three letters or more that are NOT Malay words left in
+# Rumi: maths function names and unit symbols, which a Jawi page writes in
+# Latin like any other (lower-cased for the comparison).
+LATIN_KEEP = frozenset(
+    "sin cos tan sec csc cot arcsin arccos arctan sinh cosh tanh log ln exp lim max min mod gcd lcm "
+    "mol kpa mpa hpa kwh mwh khz mhz ghz mah kcal cal rpm".split())
+_LATIN_WORD_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{3,}(?![A-Za-z])")
+# H2O, NaCl, HCl, NaOH, CO2: element symbols with a digit or a two-letter
+# element in them — a formula, not a word ("Rod" and "DNA" are words here)
+_FORMULA_RE = re.compile(r"^(?:[A-Z][a-z]?\d*)+$")
+
+
+def _formula(word: str) -> bool:
+    return bool(_FORMULA_RE.match(word)) and (any(c.isdigit() for c in word)
+                                              or bool(re.search(r"[A-Z][a-z]", word)) and sum(c.isupper() for c in word) >= 2)
+
+
+def latin_leftovers(text: str, protected=()) -> list[str]:
+    """The Latin words of three letters or more that a Jawi string still
+    carries — a Malay word the model left in Rumi — once the protected
+    expressions are taken out; maths function names, unit symbols and
+    chemical formulas are not leftovers. In order, each once."""
+    body = str(text or "")
+    for p in sorted((str(x) for x in protected or () if str(x or "").strip()), key=len, reverse=True):
+        body = body.replace(p, " ")
+    out: list[str] = []
+    for m in _LATIN_WORD_RE.finditer(body):
+        w = m.group(0)
+        if w.lower() in LATIN_KEEP or _formula(w):
+            continue
+        # a formula with digits ("CO2") reaches here as its letters only
+        tail = body[m.end():m.end() + 1]
+        if tail.isdigit() and _FORMULA_RE.match(w):
+            continue
+        if w not in out:
+            out.append(w)
+    return out
 BACK_RULE = ("These are Malay sentences written in the JAWI script. Write each in RUMI (Latin) Malay, word for word, "
              "as literally as you can; do not translate it into English, improve or shorten it.")
 
@@ -277,9 +323,40 @@ def check_two_scripts(script: dict) -> dict:
         own, latin = len(_ARABIC_LETTER_RE.findall(shown)), len(_LATIN_LETTER_RE.findall(shown))
         if own + latin >= 12 and latin > own:
             flags.append({"where": sid, "what": "display text still reads as Rumi", "sample": shown[:120]})
+        # word by word: a few Malay words left in Rumi ("لوݢم Rod") pass the
+        # share rule above, so every written surface is read for them —
+        # the bubbles' copies and the board, heading, points and visual
+        left = written_leftovers(seg)
+        if left:
+            flags.append({"where": sid, "what": LEFTOVER_FLAG,
+                          "words": sorted({w for ws in left.values() for w in ws}, key=lambda w: (w.lower(), w)),
+                          "fields": {k: v for k, v in left.items()}})
     return {"check": "A-jawi", "ok": not blocking, "blocking": blocking, "flags": flags}
 
 
-__all__ = ["BACK_RULE", "RULE", "SOURCE", "TARGET", "Unpaired", "check_two_scripts", "context_for",
-           "finish_segment", "is_derived", "merge_compiles", "remap_cues", "source_language_for",
-           "spoken_items", "written_items"]
+LEFTOVER_FLAG = "Latin words left in the Jawi"
+
+
+def written_leftovers(seg: dict) -> dict[str, list[str]]:
+    """``{field path: [Latin words]}`` over every surface of a segment the
+    viewer READS in Jawi: ``display_text``, each line's ``display`` and the
+    written fields (written_items). The scene's typeset expressions are
+    protected."""
+    scene = seg.get("scene") if isinstance(seg.get("scene"), dict) else {}
+    protected = [str(e.get("expr")) for e in (scene.get("elements") or [])
+                 if isinstance(e, dict) and e.get("type") == "math" and str(e.get("expr") or "").strip()]
+    fields: list[tuple[str, str]] = [("display_text", str(seg.get("display_text") or ""))]
+    fields += [(f"dialogue[{i}].display", str(d.get("display") or "")) for i, d in enumerate(seg.get("dialogue") or [])
+               if isinstance(d, dict)]
+    fields += written_items(seg)
+    out: dict[str, list[str]] = {}
+    for path, text in fields:
+        words = latin_leftovers(text, protected)
+        if words:
+            out[path] = words
+    return out
+
+
+__all__ = ["BACK_RULE", "LATIN_KEEP", "LEFTOVER_FLAG", "REPAIR_RULE", "RULE", "SOURCE", "TARGET", "Unpaired",
+           "check_two_scripts", "context_for", "finish_segment", "is_derived", "latin_leftovers", "merge_compiles",
+           "remap_cues", "source_language_for", "spoken_items", "written_items", "written_leftovers"]
