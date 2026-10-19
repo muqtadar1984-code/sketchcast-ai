@@ -98,6 +98,8 @@ VOICES: list[TTSVoice] = [
     TTSVoice("edge-manohar",   "Manohar — मराठी (free)",           "edge", "free", "mr-IN-ManoharNeural",   ("male",), "mr", gender="m"),
     TTSVoice("edge-swara",     "Swara — हिन्दी (free)",             "edge", "free", "hi-IN-SwaraNeural",     ("warm",), "hi"),
     TTSVoice("edge-madhur",    "Madhur — हिन्दी (free)",            "edge", "free", "hi-IN-MadhurNeural",    ("male",), "hi", gender="m"),
+    TTSVoice("edge-uzma",      "Uzma — اردو (free)",               "edge", "free", "ur-PK-UzmaNeural",      ("warm",), "ur"),
+    TTSVoice("edge-asad",      "Asad — اردو (free)",               "edge", "free", "ur-PK-AsadNeural",      ("male",), "ur", gender="m"),
     # Premium — ElevenLabs (key + enabled flag required). lang="*": the
     # configured model is multilingual (eleven_turbo_v2_5 as of 2026-09-03).
     TTSVoice("el-rachel",   "Rachel — natural (premium)",    "elevenlabs", "premium", _EL_DEFAULT_REF,       ("warm", "natural"), "*"),
@@ -130,6 +132,10 @@ VOICES: list[TTSVoice] = [
     TTSVoice("g-mr-m",    "Achird — मराठी (premium)",             "google", "premium", "mr-IN-Chirp3-HD-Achird",   ("male",), "mr", gender="m"),
     TTSVoice("g-hi-f",    "Achernar — हिन्दी (premium)",           "google", "premium", "hi-IN-Chirp3-HD-Achernar", ("warm",), "hi"),
     TTSVoice("g-hi-m",    "Achird — हिन्दी (premium)",             "google", "premium", "hi-IN-Chirp3-HD-Achird",   ("male",), "hi", gender="m"),
+    # Urdu: read from the live voices.list on 2026-10-19 — ur-IN carries the
+    # Chirp 3 HD set (ur-PK has no Google voice at all).
+    TTSVoice("g-ur-f",    "Achernar — اردو (premium)",            "google", "premium", "ur-IN-Chirp3-HD-Achernar", ("warm",), "ur"),
+    TTSVoice("g-ur-m",    "Achird — اردو (premium)",              "google", "premium", "ur-IN-Chirp3-HD-Achird",   ("male",), "ur", gender="m"),
     # Student voices (catalogue Phase 3, 2026-09-06): the SECOND voice of a
     # two-voice dialogue, the one that reads the student's lines. Chirp 3 HD
     # ships the same 30 names in every locale; Leda (female) and Puck (male)
@@ -147,6 +153,10 @@ VOICES: list[TTSVoice] = [
     TTSVoice("g-fr-student-m", "Puck — student, Français (premium)", "google", "premium", "fr-FR-Chirp3-HD-Puck", ("youthful", "male"), "fr", gender="m", role="student"),
     TTSVoice("g-es-student-f", "Leda — student, Español (premium)",  "google", "premium", "es-ES-Chirp3-HD-Leda", ("youthful",), "es", role="student"),
     TTSVoice("g-es-student-m", "Puck — student, Español (premium)",  "google", "premium", "es-ES-Chirp3-HD-Puck", ("youthful", "male"), "es", gender="m", role="student"),
+    # Urdu has its own youthful pair (ur-IN Leda / Puck are listed), so a
+    # translated Urdu dialogue needs no Edge fallback for the student.
+    TTSVoice("g-ur-student-f", "Leda — student, اردو (premium)",     "google", "premium", "ur-IN-Chirp3-HD-Leda", ("youthful",), "ur", role="student"),
+    TTSVoice("g-ur-student-m", "Puck — student, اردو (premium)",     "google", "premium", "ur-IN-Chirp3-HD-Puck", ("youthful", "male"), "ur", gender="m", role="student"),
 ]
 
 STUDENT_ROLE = "student"

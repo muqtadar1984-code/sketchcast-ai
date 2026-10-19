@@ -63,7 +63,7 @@ def test_the_live_split_is_what_we_intend():
     by_provider: dict[str, set[str]] = {}
     for code in LANGUAGES:
         by_provider.setdefault(provider_for(code), set()).add(code)
-    assert by_provider[ANTHROPIC] == {"ar", "ms-arab"}
+    assert by_provider[ANTHROPIC] == {"ar", "ms-arab", "ur"}   # Urdu: Arabic script (2026-10-19)
     assert by_provider[GEMINI] == {"en", "ms", "fr", "es", "pt", "hi", "mr", "te"}
     assert KIMI not in by_provider, "no shipped language may route to Kimi yet"
 

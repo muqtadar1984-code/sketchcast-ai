@@ -39,6 +39,13 @@ LANGUAGES: dict[str, Language] = {
     "te": Language("te", "Telugu", "తెలుగు", "ltr", "edge-shruti"),
     "mr": Language("mr", "Marathi", "मराठी", "ltr", "edge-aarohi"),
     "hi": Language("hi", "Hindi", "हिन्दी", "ltr", "edge-swara"),
+    # Urdu (Kit Translator §5.10, 2026-10-19): Arabic script, RTL — the
+    # same page mirroring and Noto Sans Arabic as Arabic (the font carries
+    # every Urdu letter: ٹ ڈ ڑ ں ھ ہ ے). Free voices are Pakistani Urdu;
+    # the premium ones are ur-IN Chirp 3 HD, the only Urdu Chirp Google
+    # lists. NOT a detection target: an Arabic-script book still detects as
+    # Arabic; Urdu is chosen as an output (a translation, a teacher's pick).
+    "ur": Language("ur", "Urdu", "اردو", "rtl", "edge-uzma"),
     # Jawi — Malay written in the Arabic-derived script (RTL). SAME spoken
     # language as ms, so the voice is the Malay one; the SCRIPT is Arabic, so
     # it reuses the Arabic RTL rendering. Written artifacts only for now (the
@@ -173,6 +180,17 @@ def prompt_directive(code: str | None) -> str:
     lang = get_language(code)
     if lang.code == "en":
         return ""
+    if lang.code == "ur":
+        # Models drift into Arabic spellings of the shared letters (ك for ک,
+        # ي for ی, ه for ہ) and into the Latin full stop; name the Urdu ones.
+        return (
+            "\n\nLANGUAGE & SCRIPT: write ALL output — names, explanations, narration, questions, "
+            "answers — in Urdu (اردو), in standard Urdu orthography: use the Urdu letters "
+            "ک (not ك), ی / ے (not ي), ہ / ھ (not ه), and ٹ ڈ ڑ ں where they belong; end "
+            "sentences with the Urdu full stop ۔ and use the Urdu comma ،. Write digits as "
+            "Western digits (0-9). Keep technical and proper-noun terms as they appear in the "
+            "source. Do not translate the content into English."
+        )
     if lang.code == "ms-arab":
         # Jawi: Malay in the Arabic script. Spell it out — models default to
         # Rumi for Malay, so the instruction must be explicit and name the

@@ -238,3 +238,20 @@ def with_outro(part_scripts: dict, slides: dict, kind: str, language: str | None
 
 __all__ = ["SITE", "SITE_URL", "KIND_CTA", "KIND_SIGNOFF", "KIND_NONE", "KINDS", "SEGMENT_ID", "STRINGS",
            "DESCRIPTION_CTA", "text", "outro_kind", "outro_segment", "with_outro"]
+
+
+# ── Urdu (اردو) — Kit Translator §5.10, 2026-10-19 ─────────────────────────
+# One block per table, so a native reader reviews every Urdu string in one
+# place. Standard Urdu letters (ک ی ہ ے, never ك ي ه), the Urdu full stop ۔,
+# Western digits. A key missing from the table above raises at import.
+_UR = {
+    "cta_1": "اگر یہ سبق مفید لگا تو براہِ کرم لائک، شیئر اور کمنٹ کریں، اور مزید اسباق کے لیے سبسکرائب کریں۔ "
+             "ہم باقاعدگی سے نئے اسباق شائع کرتے ہیں۔",
+    "cta_2": f"کیا آپ اپنی کلاس کے لیے ایسے اسباق چاہتے ہیں؟ {SITE} پر تشریف لائیں۔",
+    "signoff": "SketchCast AI سے تیار کردہ۔",
+    "thanks": "دیکھنے کا شکریہ",
+    "like": "لائک", "share": "شیئر", "comment": "کمنٹ", "subscribe": "سبسکرائب",
+    "made_with": "SketchCast AI سے تیار کردہ",
+}
+for _k, _v in _UR.items():
+    STRINGS[_k]["ur"] = _v

@@ -42,7 +42,7 @@ _SIZING_MARK_OFFSET = 10_000
 # A sentence ends at . ! ? (Latin) or their Arabic / Devanagari counterparts,
 # followed by whitespace. Kept deliberately simple: it only has to split where
 # a caption would start, and the caption track uses the same split.
-_SENT_RE = re.compile(r"(?<=[.!?؟।])\s+")
+_SENT_RE = re.compile(r"(?<=[.!?؟।۔])\s+")   # ۔ = the Urdu full stop
 # Where an oversize sentence may be cut: after clause punctuation.
 _CLAUSE_RE = re.compile(r"(?<=[,;:،؛—–])\s+")
 _TOKEN_RE = re.compile(r"\S+")
