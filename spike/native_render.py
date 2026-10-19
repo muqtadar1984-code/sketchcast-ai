@@ -29,7 +29,7 @@ PX_PER_FRAME = 26  # write speed
 
 
 def _font(bold: bool, size: int):
-    return ImageFont.truetype(str(FONT_DIR / ("DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf")), size)
+    return ImageFont.truetype(str(FONT_DIR / ("DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf")), size, layout_engine=ImageFont.Layout.BASIC)
 
 
 def _wrap(draw, text, font, max_w):

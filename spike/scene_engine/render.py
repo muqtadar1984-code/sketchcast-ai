@@ -91,7 +91,7 @@ def _hand_face(size: int):
     if not _HAND_TTF.exists():
         return None
     try:
-        return ImageFont.truetype(str(_HAND_TTF), size)
+        return ImageFont.truetype(str(_HAND_TTF), size, layout_engine=ImageFont.Layout.BASIC)   # Latin hand face: as before RAQM loaded
     except Exception:
         return None
 
@@ -221,7 +221,7 @@ def _hand_font(bold: bool, size: int, sample: str):
     if not _HAND_TTF.exists() or not _hand_covers(sample):
         return None
     try:
-        f = ImageFont.truetype(str(_HAND_TTF), size)
+        f = ImageFont.truetype(str(_HAND_TTF), size, layout_engine=ImageFont.Layout.BASIC)
         if bold:
             f.set_variation_by_axes([700])
         return f

@@ -76,7 +76,13 @@ def _font(bold: bool, size: int, sample: str = "") -> ImageFont.FreeTypeFont:
             return ImageFont.truetype(str(_FONT_DIR / name), size, layout_engine=ImageFont.Layout.RAQM)
         except Exception:  # noqa: BLE001
             pass
-    return ImageFont.truetype(str(_FONT_DIR / name), size)
+    # BASIC, explicitly: Pillow defaults to RAQM whenever it is available,
+    # and since FriBiDi loads (worker #286) it is — RAQM then re-shapes and
+    # re-orders the Arabic/Urdu/Jawi text that display_text already shaped
+    # and put in visual order, and the line comes out reversed and unjoined
+    # (the first Urdu video, Heat Transfer, 2026-10-19). Only the Indic
+    # faces above ask for RAQM.
+    return ImageFont.truetype(str(_FONT_DIR / name), size, layout_engine=ImageFont.Layout.BASIC)
 
 
 def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_w: int) -> list[str]:

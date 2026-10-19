@@ -33,7 +33,7 @@ from maths.geometry.spec import FigureSpec
 Vec = tuple[float, float]
 
 _FONT_PATH = Path(__file__).resolve().parents[2] / "agent5_slides" / "fonts" / "DejaVuSans.ttf"
-_MEASURE_FONT = ImageFont.truetype(str(_FONT_PATH), 100)
+_MEASURE_FONT = ImageFont.truetype(str(_FONT_PATH), 100, layout_engine=ImageFont.Layout.BASIC)
 
 LINE_OVERHANG = 0.7        # a line is drawn past its last named point
 RAY_OVERHANG = 0.5

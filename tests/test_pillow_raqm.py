@@ -85,3 +85,25 @@ class TestPreloadAndStatus:
     def test_status_reports_and_never_raises(self):
         s = R.status()
         assert "raqm" in s and isinstance(s["raqm"], bool)
+
+
+class TestArabicScriptStaysBasic:
+    """Worker #286 made RAQM available, and Pillow then used it by DEFAULT
+    for every font: the Arabic-script text that display_text pre-shapes into
+    presentation forms in visual order was shaped and re-ordered a second
+    time, and the first Urdu video drew every line reversed and unjoined
+    (Heat Transfer, 2026-10-19). Every face but the Indic ones is BASIC."""
+
+    def test_arabic_urdu_and_latin_faces_are_basic_even_with_raqm_on(self, monkeypatch):
+        from PIL import ImageFont
+        monkeypatch.setattr(sb, "_RAQM", True)
+        for sample in ("کم درجہ حرارت", "انتقال الحرارة", "Heat transfer", ""):
+            f = sb._font(False, 24, sample)
+            assert f.layout_engine == ImageFont.Layout.BASIC, sample
+
+    def test_the_hand_face_is_basic(self):
+        from PIL import ImageFont
+        from spike.scene_engine import render as R
+        f = R._hand_font(False, 30, "Heat transfer")
+        if f is not None:
+            assert f.layout_engine == ImageFont.Layout.BASIC

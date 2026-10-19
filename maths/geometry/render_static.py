@@ -146,7 +146,7 @@ def _png(d: Drawing, tx, w_mm: float, h_mm: float, scale: float, dpi: int) -> by
         dr.ellipse([x - r, y - r, x + r, y + r], fill="#111111")
     for t in d.texts:
         size = max(6, int(round(t.size * scale * px * S)))
-        font = ImageFont.truetype(str(_FONT), size)
+        font = ImageFont.truetype(str(_FONT), size, layout_engine=ImageFont.Layout.BASIC)
         x, y = P((t.x, t.y))
         anchor = {"middle": "mm", "start": "lm", "end": "rm"}[t.anchor]
         dr.text((x, y), t.text, fill="#111111", font=font, anchor=anchor)
