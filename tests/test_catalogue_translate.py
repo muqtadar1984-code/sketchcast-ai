@@ -187,6 +187,21 @@ class TestMathsSpans:
         assert C.maths_spans("Find the side opposite the 38-degree angle.") == ["38"]
         assert C.maths_spans("the 3-step method") == ["3"]
 
+    def test_a_decimal_comma_keeps_the_maths(self):
+        """Heat Transfer in French, 2026-10-19: "subtracting 273.15" written
+        "en soustrayant 273,15" was refused as altered maths."""
+        src = "Celsius is calculated by subtracting 273.15 from the kelvin value."
+        ok, lost = C.prose_maths_equivalent(src, "On obtient les degrés Celsius en soustrayant 273,15 à la valeur en kelvins.")
+        assert ok and lost == []
+        ok, _ = C.prose_maths_equivalent("Use π = 3.14 here", "Utilisez π = 3,14 ici")
+        assert ok
+
+    def test_a_thousands_comma_is_not_a_decimal_point(self):
+        assert C._decimal_points("41,120 et 3,5") == "41,120 et 3.5"
+        assert C._decimal_points("1,000.5") == "1,000.5"
+        ok, lost = C.prose_maths_equivalent("the value 4.12", "la valeur 4,120")
+        assert not ok, "4,120 is four thousand one hundred and twenty, not 4.12"
+
     def test_a_number_before_a_function_or_a_variable_keeps_its_minus(self):
         assert C.maths_spans("simplify 1-cos x") == ["1-"] or "1-" in C.maths_spans("simplify 1-cos x")[0]
         assert "2-sin" not in C.maths_spans("2-sin θ")[0] or C.maths_spans("2-sin θ")[0].startswith("2-")

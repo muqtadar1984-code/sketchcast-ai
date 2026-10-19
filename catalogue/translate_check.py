@@ -561,11 +561,24 @@ def maths_spans(text: str) -> list[str]:
     return out
 
 
+# A decimal COMMA between digits ("273,15", "3,14") is the French, Spanish
+# and Portuguese way to write "273.15" — number_values already reads it so;
+# the span comparison did not, and refused a Heat Transfer bank item in
+# French whose stem said "subtracting 273.15" (2026-10-19). A comma that
+# groups thousands ("41,120") is left alone, as number_values leaves it.
+_DECIMAL_COMMA_RE = re.compile(r"(?<=\d),(?=\d)(?!\d{3}(?!\d))")
+
+
+def _decimal_points(text: str) -> str:
+    """``text`` with every decimal comma between digits written as a point."""
+    return _DECIMAL_COMMA_RE.sub(".", text)
+
+
 def prose_maths_equivalent(source: str, target: str) -> tuple[bool, list[str]]:
     """Every maths span of the source appears in the target (whitespace and
     numerals normalised) and the numbers are equivalent. Returns (ok, the
     spans the target lost)."""
-    tgt = " ".join(normalize_numerals(str(target or "")).split())
+    tgt = _decimal_points(" ".join(normalize_numerals(str(target or "")).split()))
     tgt_compact = tgt.replace(" ", "")
     lost = [s for s in maths_spans(source) if s not in tgt and s.replace(" ", "") not in tgt_compact]
     ok_numbers, missing, extra = numbers_equivalent(source, target)
