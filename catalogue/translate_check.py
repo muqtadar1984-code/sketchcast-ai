@@ -528,7 +528,17 @@ _SPAN_CORE_RE = re.compile(r"\d|[=+−\-×÷*/^√<>≤≥≠]")
 # (U+2010), which the operator class does not hold. "x - 2" and "x-2" keep
 # their minus. (The second Circle re-run, 2026-10-16: the match item's stem
 # "Match each circle-related term…" was refused twice for a lost "-".)
-_WORD_HYPHEN_RE = re.compile(r"(?<=[^\W\d_])-(?=[^\W\d_])", re.UNICODE)
+# The same for a NUMBER joined to a word of three or more letters ("the
+# 90-degree angle", "a 3-step problem", "the 38-degree angle"): an adjective,
+# not "90 minus degree". The translation writes the number and the unit word
+# its own way ("sudut 90 darjah"), so reading "90-" as maths refused every
+# trigonometry bank item that named an angle — five of the Trigonometric
+# Ratios kit's items in Arabic AND in Malay (2026-10-19). A maths function
+# after the hyphen keeps the minus ("1-cos x", "2-sin θ", "3-log x").
+_WORD_HYPHEN_RE = re.compile(
+    r"(?<=[^\W\d_])-(?=[^\W\d_])"
+    r"|(?<=\d)-(?!(?:sin|cos|tan|sec|csc|cot|log|ln|exp|sqrt|arc)[^\W\d_]*\b)(?=[^\W\d_]{3,})",
+    re.UNICODE)
 _PROSE_WORD_RE = re.compile(r"[^\W\d_]{2,}", re.UNICODE)
 
 
