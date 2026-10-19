@@ -29,10 +29,12 @@ channels.list (1 unit) per poll; hourly, that is ~50 units a day against
 the 10,000 the project has, and the uploads share the same quota.
 
 WHEN IT RUNS. Every YOUTUBE_STATS_POLL_MINUTES (default 60; 0 disables)
-from the worker's reaper loop (worker/run.py _serve), only when the
-channel's credentials are configured — a worker without them logs once
-and never tries again. A failed poll is a log line, never a lost job:
-nothing waits on it.
+from the worker's reaper loop (worker/run.py _serve), once per CHANNEL
+whose credentials are configured: the default (English) channel and every
+language with its own YOUTUBE_REFRESH_TOKEN_<LANG> (the Arabic channel
+since 2026-10-17). A worker with none logs once and never tries again. A
+failed poll is a log line, never a lost job: nothing waits on it, and one
+channel's failure does not stop the next.
 
 PRIVACY FROM THE PUBLICATIONS ROW. topic_publications.privacy records what
 the WORKER uploaded (always 'private' — the project is unaudited). The
@@ -51,8 +53,8 @@ import time
 from datetime import datetime, timezone
 from typing import Optional, Protocol
 
-from catalogue.publish import (DEFAULT_LANGUAGE, PublishRefused, _lang, _rows, _s,
-                               read_credentials)
+from catalogue.publish import (DEFAULT_LANGUAGE, REFRESH_TOKEN_ENV_PREFIX, PublishRefused,
+                               _lang, _rows, _s, read_credentials)
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +157,24 @@ def configured(language: str = DEFAULT_LANGUAGE) -> bool:
         return False
 
 
+def channel_languages(environ=None) -> list[str]:
+    """Every channel the worker holds a refresh token for: the default
+    channel first, then each ``YOUTUBE_REFRESH_TOKEN_<LANG>`` with a value,
+    in name order. Publications are filed under the CHANNEL they went to
+    (``channel_language``), so these are exactly the sets to poll — a
+    language without its own token posted to the default channel and is
+    polled there."""
+    env = os.environ if environ is None else environ
+    out = [DEFAULT_LANGUAGE]
+    for name in sorted(env):
+        if not name.startswith(REFRESH_TOKEN_ENV_PREFIX) or not str(env.get(name) or "").strip():
+            continue
+        lang = _lang(name[len(REFRESH_TOKEN_ENV_PREFIX):])
+        if lang.isalpha() and lang not in out:
+            out.append(lang)
+    return out
+
+
 def published_video_ids(sb, language: str = DEFAULT_LANGUAGE) -> list[str]:
     """Every video the catalogue has put on this language's channel, in
     publication order — the set the poll asks YouTube about."""
@@ -241,8 +261,9 @@ _logged_dark = False
 
 
 def maybe_poll(sb, *, transport_factory=default_stats_transport, clock=time.monotonic) -> Optional[dict]:
-    """Called from the reaper tick (every minute). Runs a poll when one is
-    due; returns its summary, or None when nothing ran. Never raises."""
+    """Called from the reaper tick (every minute). Runs a poll of every
+    configured channel when one is due; returns the combined summary, or
+    None when nothing ran. Never raises."""
     global _last_run, _logged_dark
     minutes = poll_minutes()
     if minutes <= 0:
@@ -252,19 +273,29 @@ def maybe_poll(sb, *, transport_factory=default_stats_transport, clock=time.mono
         if not due:
             return None
         _last_run = clock()
-    if not configured():
+    languages = [lang for lang in channel_languages() if configured(lang)]
+    if not languages:
         if not _logged_dark:
             logger.info("YouTube stats: channel credentials not configured; the poll stays dark")
             _logged_dark = True
         return None
-    try:
-        summary = poll(sb, transport_factory(DEFAULT_LANGUAGE))
-    except Exception as exc:  # noqa: BLE001 — a poll must never take the reaper down
-        logger.warning("YouTube stats poll failed: %s", exc)
+    total = {"languages": [], "videos": 0, "channels": 0, "privacy_updates": 0, "errors": []}
+    for lang in languages:
+        try:
+            summary = poll(sb, transport_factory(lang), language=lang)
+        except Exception as exc:  # noqa: BLE001 — a poll must never take the reaper down
+            logger.warning("YouTube stats poll (%s) failed: %s", lang, exc)
+            total["errors"].append(f"{lang}: {exc}")
+            continue
+        total["languages"].append(lang)
+        total["videos"] += summary.get("videos", 0)
+        total["channels"] += 1 if summary.get("channel") else 0
+        total["privacy_updates"] += summary.get("privacy_updates", 0)
+        total["errors"].extend(f"{lang}: {e}" for e in summary.get("errors") or [])
+    if not total["languages"]:
         return None
-    if summary.get("errors"):
-        logger.warning("YouTube stats poll: %s", "; ".join(summary["errors"]))
-    else:
-        logger.info("YouTube stats: %d video(s) and %s channel row snapshotted, %d privacy update(s)",
-                    summary["videos"], "1" if summary["channel"] else "no", summary["privacy_updates"])
-    return summary
+    if total["errors"]:
+        logger.warning("YouTube stats poll: %s", "; ".join(total["errors"]))
+    logger.info("YouTube stats (%s): %d video(s) and %d channel row(s) snapshotted, %d privacy update(s)",
+                ", ".join(total["languages"]), total["videos"], total["channels"], total["privacy_updates"])
+    return total
