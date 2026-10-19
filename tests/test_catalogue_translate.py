@@ -215,6 +215,52 @@ class TestMathsSpans:
         assert "x-2" in C.maths_spans("find x-2 if x = 5")[0]
         assert C.maths_spans("A circle has a radius of 7 cm.") == ["7"]
 
+    def test_a_bracket_the_translation_dropped_from_the_maths_is_caught(self):
+        """Substitution, Malay, 2026-10-19: the heading read "Nilaikan 4x^2 -
+        3(y - 1 apabila x = -2" — the ")" gone — and the check, which
+        stripped every bracket off every span, passed it."""
+        src = "Evaluate 4x^2 - 3(y - 1) when x = -2 and y = 5."
+        assert "4x^2 - 3(y - 1)" in C.maths_spans(src)
+        ok, lost = C.prose_maths_equivalent(src, "Nilaikan 4x^2 - 3(y - 1 apabila x = -2 dan y = 5.")
+        assert not ok
+        assert "4x^2 - 3(y - 1)" in lost
+        assert "unbalanced brackets 4x^2 - 3(y - 1" in lost
+        ok, lost = C.prose_maths_equivalent(src, "Nilaikan 4x^2 - 3(y - 1) apabila x = -2 dan y = 5.")
+        assert ok and lost == []
+        # and the lesson check blocks it, as it blocks any maths the question lost
+        lesson = {"examples": [{"label": "Example 3", "problem": src, "steps": [], "final_answer": ["-2"]}]}
+        bad = C.check_maths_lesson(lesson, {"examples": [{**lesson["examples"][0], "label": "Contoh 3",
+                                                          "problem": "Nilaikan 4x^2 - 3(y - 1 apabila x = -2 dan y = 5."}]})
+        assert any(f["what"] == "maths in the question altered" for f in bad["blocking"])
+
+    def test_a_bracket_round_the_whole_span_or_the_sentence_still_passes(self):
+        src = "Find the area of a circle with a radius of 6 cm. (Use π = 3.14)"
+        assert C.maths_spans(src) == ["6", "π = 3.14"]
+        ok, lost = C.prose_maths_equivalent(src, "Cari luas bulatan dengan jejari 6 cm. (Guna π = 3.14)")
+        assert ok and lost == []
+        assert C.maths_spans("a circle (r = 6) and a square") == ["r = 6"]
+        ok, lost = C.prose_maths_equivalent("a circle (r = 6) and a square", "sebuah bulatan r = 6 dan sebuah segi empat")
+        assert ok and lost == []
+
+    def test_the_maths_own_brackets_kept_verbatim_pass(self):
+        assert C.maths_spans("Expand 2(x + 3) fully.") == ["2(x + 3)"]
+        ok, lost = C.prose_maths_equivalent("Expand 2(x + 3) fully.", "Kembangkan 2(x + 3) sepenuhnya.")
+        assert ok and lost == []
+        assert C.maths_spans("Expand (a + b)(a - b).") == ["(a + b)(a - b)"]
+        ok, lost = C.prose_maths_equivalent("Expand 2(x + 3) fully.", "Kembangkan 2((x + 3) sepenuhnya.")
+        assert not ok, "an extra bracket is as wrong as a lost one"
+
+    def test_a_decimal_comma_inside_the_brackets_is_judged_like_a_point(self):
+        src = "Evaluate 2(x + 3.5) when x = 1.5."
+        ok, lost = C.prose_maths_equivalent(src, "Évaluez 2(x + 3,5) lorsque x = 1,5.")
+        assert ok and lost == []
+        ok, lost = C.prose_maths_equivalent(src, "Évaluez 2(x + 3,5 lorsque x = 1,5.")
+        assert not ok and "unbalanced brackets 2(x + 3.5" in lost
+
+    def test_an_unbalanced_english_span_is_not_the_translations_fault(self):
+        ok, lost = C.prose_maths_equivalent("Evaluate 3(y - 1 when y = 2.", "Nilaikan 3(y - 1 apabila y = 2.")
+        assert ok and lost == []
+
 
 class TestEnglishLeftover:
     def test_latin_letters_in_an_arabic_target_are_flagged_but_protected_maths_is_not(self):

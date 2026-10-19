@@ -549,11 +549,72 @@ def has_prose(text: str) -> bool:
     return len(_PROSE_WORD_RE.findall(str(text or ""))) >= 2
 
 
+def _bracket_depths(span: str) -> tuple[list[int], int]:
+    """The index of each ``(`` with no ``)`` after it, and how many ``)``
+    close nothing."""
+    open_at: list[int] = []
+    unopened = 0
+    for i, ch in enumerate(span):
+        if ch == "(":
+            open_at.append(i)
+        elif ch == ")":
+            if open_at:
+                open_at.pop()
+            else:
+                unopened += 1
+    return open_at, unopened
+
+
+def _wrapped(span: str) -> bool:
+    """Whether the span's first ``(`` is closed by its last ``)`` — the whole
+    span in one pair, as in ``(r = 6)``; ``(a + b)(a - b)`` is not."""
+    if not (span.startswith("(") and span.endswith(")")):
+        return False
+    depth = 0
+    for i, ch in enumerate(span):
+        depth += 1 if ch == "(" else -1 if ch == ")" else 0
+        if depth == 0:
+            return i == len(span) - 1
+    return False
+
+
+def _trim_brackets(span: str) -> str:
+    """A span with the brackets that belong to the SENTENCE taken off its
+    ends — a ``(`` or ``)`` that pairs with nothing inside the span ("(Use
+    π = 3.14)" gives "π = 3.14)"), or one pair round the whole span — and
+    every bracket that belongs to the MATHS kept: "2(x + 3)", "4x^2 - 3(y - 1)".
+    A bracket in the middle is never trimmed, so a translation that drops
+    one ("3(y - 1 apabila") keeps a span that no longer balances."""
+    while True:
+        span = span.strip()
+        if _wrapped(span):
+            span = span[1:-1]
+            continue
+        open_at, unopened = _bracket_depths(span)
+        if span.startswith(")") and unopened:
+            span = span[1:]
+        elif span.endswith("(") and open_at and open_at[-1] == len(span) - 1:
+            span = span[:-1]
+        elif span.endswith(")") and unopened and _bracket_depths(span[:-1])[1] < unopened:
+            span = span[:-1]
+        elif span.startswith("(") and open_at and open_at[0] == 0:
+            span = span[1:]
+        else:
+            return span
+
+
+def balanced(span: str) -> bool:
+    """Whether every bracket of a maths span pairs with another."""
+    open_at, unopened = _bracket_depths(span)
+    return not open_at and not unopened
+
+
 def maths_spans(text: str) -> list[str]:
-    """The maths spans of a sentence, whitespace-normalised, in order."""
+    """The maths spans of a sentence, whitespace-normalised, in order, with
+    the sentence's brackets trimmed off and the maths' own kept."""
     out: list[str] = []
     for m in _SPAN_RE.finditer(_WORD_HYPHEN_RE.sub("‐", normalize_numerals(str(text or "")))):
-        span = " ".join(m.group(0).split()).strip("() ")
+        span = _trim_brackets(" ".join(m.group(0).split()))
         # maths carries a digit, or a variable WITH an operator — a bare
         # operator between words ("A - B" in prose, a stray dash) is not
         if span and _SPAN_CORE_RE.search(span) and (re.search(r"\d", span) or re.search(r"[A-Za-zα-ωΑ-Ω]", span)):
@@ -574,15 +635,34 @@ def _decimal_points(text: str) -> str:
     return _DECIMAL_COMMA_RE.sub(".", text)
 
 
+def _bracket_count(spans: Iterable[str]) -> int:
+    return sum(s.count("(") + s.count(")") for s in spans)
+
+
 def prose_maths_equivalent(source: str, target: str) -> tuple[bool, list[str]]:
-    """Every maths span of the source appears in the target (whitespace and
-    numerals normalised) and the numbers are equivalent. Returns (ok, the
-    spans the target lost)."""
+    """Every maths span of the source appears in the target (whitespace,
+    numerals and decimal commas normalised), every bracket the source's maths carries is still
+    there and still pairs, and the numbers are equivalent. Returns (ok, the
+    spans the target lost — and its spans whose brackets no longer pair).
+
+    The Malay Substitution kit (2026-10-19) wrote "Nilaikan 4x^2 - 3(y - 1
+    apabila x = -2": the ")" was gone, and the check, which stripped every
+    bracket off every span, passed it."""
     tgt = _decimal_points(" ".join(normalize_numerals(str(target or "")).split()))
     tgt_compact = tgt.replace(" ", "")
-    lost = [s for s in maths_spans(source) if s not in tgt and s.replace(" ", "") not in tgt_compact]
+    # the target's spans read from the same decimal-normalised text the
+    # lost-span test reads
+    src_spans, tgt_spans = maths_spans(source), maths_spans(tgt)
+    lost = [s for s in src_spans if s not in tgt and s.replace(" ", "") not in tgt_compact]
+    # a span the source writes unbalanced (a typo in the English) is no
+    # fault of the translation
+    src_unbalanced = {s.replace(" ", "") for s in src_spans if not balanced(s)}
+    unbalanced = [f"unbalanced brackets {s}" for s in tgt_spans
+                  if not balanced(s) and s.replace(" ", "") not in src_unbalanced]
+    if not unbalanced and not src_unbalanced and _bracket_count(tgt_spans) != _bracket_count(src_spans):
+        unbalanced.append(f"brackets {_bracket_count(src_spans)} → {_bracket_count(tgt_spans)}")
     ok_numbers, missing, extra = numbers_equivalent(source, target)
-    return (not lost and ok_numbers), lost + [f"number {m}" for m in missing]
+    return (not lost and not unbalanced and ok_numbers), lost + unbalanced + [f"number {m}" for m in missing]
 # Fields that are SPOKEN or WRITTEN words: translated, then checked for
 # numeric equivalence.
 LESSON_TEXT_KEYS = ("line", "speech", "student", "explanation", "intro_speech", "student_question",
