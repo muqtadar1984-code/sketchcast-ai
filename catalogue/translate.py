@@ -211,12 +211,12 @@ def translate_strings(client, items: list[str], language: str, *, terms: Optiona
             first[s] = i
             todo.append((i, s))
     protected = [p for p in (protect or []) if _s(p)]
-    for start in range(0, len(todo), CHUNK):
-        batch = todo[start:start + CHUNK]
-        payload = [s for _, s in batch]
+
+    def ask(payload: list[str], extra: str = "") -> list[str]:
         prompt = "\n".join(filter(None, [
             f"Translate each string below into {_lang_name(language)}.",
             context,
+            extra,
             term_directive(terms or []),
             ("These expressions must appear UNCHANGED in the translation: "
              + "; ".join(protected[:60])) if protected else "",
@@ -227,13 +227,46 @@ def translate_strings(client, items: list[str], language: str, *, terms: Optiona
             "INPUT:",
             json.dumps(payload, ensure_ascii=False),
         ]))
-        got = _ask_items(client, prompt, len(payload))
+        return _ask_items(client, prompt, len(payload))
+
+    for start in range(0, len(todo), CHUNK):
+        batch = todo[start:start + CHUNK]
+        got = ask([s for _, s in batch])
+        if jawi.is_derived(language):
+            got = _jawi_repair(ask, [s for _, s in batch], got, protected)
         for (i, _), t in zip(batch, got):
             out[i] = t
     for i, s in enumerate(items):
         if out[i] is None and s in first:
             out[i] = out[first[s]]
     return [x if x is not None else "" for x in out]
+
+
+def _jawi_repair(ask: Callable[..., list[str]], sources: list[str], got: list[str], protected: list[str]) -> list[str]:
+    """One repair pass for a Jawi batch: the strings that came back with
+    Malay words still in Latin letters ("لوݢم Rod", "inframerah" — the
+    first live Jawi kit, 2026-10-19) are asked again once, told which words
+    to write in Jawi; each keeps whichever version leaves fewer such words.
+    A re-ask that fails keeps the first answers — the reviewer's flag
+    (jawi.check_two_scripts) still names what is left."""
+    keep = list(protected) + [p for s in sources for p in check.maths_spans(s)]
+    left = [jawi.latin_leftovers(t, keep) for t in got]
+    redo = [k for k, words in enumerate(left) if words]
+    if not redo:
+        return got
+    words = sorted({w for k in redo for w in left[k]}, key=lambda w: (w.lower(), w))
+    try:
+        again = ask([sources[k] for k in redo], jawi.REPAIR_RULE.format(words=", ".join(words[:40])))
+    except RuntimeError as exc:
+        log.warning("translate: Jawi repair re-ask unusable (%s); keeping the first answers", exc)
+        return got
+    out = list(got)
+    for k, t in zip(redo, again):
+        if len(jawi.latin_leftovers(t, keep)) < len(left[k]):
+            out[k] = t
+    log.info("translate: Jawi repair re-asked %d string(s) for %d Latin word(s); %d improved",
+             len(redo), len(words), sum(1 for k in redo if out[k] is not got[k]))
+    return out
 
 
 # ── collecting and applying text fields ─────────────────────────────────

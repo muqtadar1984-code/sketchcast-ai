@@ -379,3 +379,105 @@ class TestJawiOutro:
             assert all(_ARABIC.search(d["display"]) for d in seg["dialogue"]) and _ARABIC.search(seg["display_text"])
             assert _ARABIC.search(seg["slide_heading"])
         assert "display_text" not in O.outro_segment(O.KIND_CTA, "ar")
+
+
+# ── Latin loanwords left in the Jawi (first live Jawi kit b3ca5484, 2026-10-19) ──
+
+
+class TestLatinLeftovers:
+    def test_malay_words_left_in_rumi_are_caught(self):
+        assert J.latin_leftovers("لوݢم Rod دان سينارن inframerah 5 joule") == ["Rod", "inframerah", "joule"]
+        assert J.latin_leftovers("ڤماناسن lwn ڤڽيجوقن") == ["lwn"], "an abbreviation is a word too"
+        assert J.latin_leftovers("DNA دالم نوکليوس") == ["DNA"]
+        assert J.latin_leftovers("Rod rod Rod") == ["Rod", "rod"], "each spelling once, in order"
+
+    def test_variables_units_functions_formulas_and_protected_maths_are_not(self):
+        for ok in ("x + 2 = 5", "سوهو 100 °C", "4200 J", "5 kg دان 3 cm", "sin x = 0.5", "log 100", "tan θ",
+                   "ݢارم NaCl دان H2O", "HCl", "CaCO3", "101 kPa", "2 mol"):
+            assert J.latin_leftovers(ok) == [], ok
+        assert J.latin_leftovers("لواس Area = πr²", protected=["Area = πr²"]) == []
+        assert J.latin_leftovers("لواس Area = πr²") == ["Area"]
+
+    def test_the_rule_asks_for_loanwords_in_jawi(self):
+        assert "loanwords" in J.RULE and "inframerah" in J.RULE and "abbreviations" in J.RULE
+        assert "may stay as written" not in J.RULE, "the escape the model used is gone"
+        assert "{words}" in J.REPAIR_RULE
+
+
+class _LeavesLoanwords(FakeJawi):
+    """Leaves ``keep`` words in Latin on a first Jawi call; a REPAIR call
+    (the prompt names the leftover words) writes them in Jawi too, unless
+    ``stubborn``."""
+
+    def __init__(self, keep=("Rod", "inframerah", "joule"), stubborn=False):
+        super().__init__()
+        self.keep = set(keep)
+        self.stubborn = stubborn
+        self.payloads: list[list[str]] = []
+
+    def analyze(self, prompt, system="", max_tokens=0, response_schema=None, **kw):
+        self.calls.append(prompt)
+        self.session_usage["calls"] += 1
+        payload = json.loads(prompt[prompt.rindex("INPUT:") + len("INPUT:"):].strip())
+        self.payloads.append(payload)
+        repair = "A previous Jawi version" in prompt
+        keep = set() if (repair and not self.stubborn) else self.keep
+        out = [re.sub(r"[A-Za-z]{3,}", lambda m: m.group(0) if m.group(0) in keep else _jawify(m.group(0)), s)
+               for s in payload]
+        if repair and self.stubborn:
+            out = [o + " Rod" for o in out]          # worse than before
+        return {"data": {"items": out}, "usage": {}}
+
+
+class TestRepairPass:
+    def test_strings_with_leftovers_are_asked_again_naming_the_words(self):
+        c = _LeavesLoanwords()
+        got = T.translate_strings(c, ["Logam Rod panas", "Sinaran inframerah", "Air mendidih pada 100 °C"], "ms-arab")
+        assert all(J.latin_leftovers(g) == [] for g in got), got
+        assert len(c.calls) == 2 and c.payloads[1] == ["Logam Rod panas", "Sinaran inframerah"], "only the two with leftovers"
+        assert "Rod" in c.calls[1] and "inframerah" in c.calls[1] and "A previous Jawi version" in c.calls[1]
+        assert "100 °C" in got[2]
+
+    def test_a_worse_repair_keeps_the_first_answer(self):
+        c = _LeavesLoanwords(keep=("joule",), stubborn=True)
+        got = T.translate_strings(c, ["Tenaga 5 joule"], "ms-arab")
+        assert got[0].endswith("joule") and "Rod" not in got[0]
+        assert len(c.calls) == 2
+
+    def test_protected_maths_and_other_languages_are_never_re_asked(self):
+        c = _LeavesLoanwords(keep=("Area",))
+        T.translate_strings(c, ["Luas Area = πr²"], "ms-arab", protect=["Area = πr²"])
+        assert len(c.calls) == 1, "a protected expression is not a leftover"
+        c = _LeavesLoanwords()
+        T.translate_strings(c, ["Logam Rod"], "ar")
+        assert len(c.calls) == 1, "only Jawi has a repair pass"
+
+    def test_the_science_path_repairs_scene_text_and_bubbles(self):
+        c = _LeavesLoanwords(keep=("Nukleus", "menyimpan"))
+        dst, report = T.translate_episode(c, _science_body(), "ms-arab", [], context="")
+        assert report["ok"], report["blocking"]
+        assert not [f for f in report["flags"] if f.get("what") == J.LEFTOVER_FLAG]
+        assert any("A previous Jawi version" in p for p in c.calls)
+        assert J.written_leftovers(dst["segments"][1]) == {}
+
+
+class TestLeftoverFlag:
+    def test_the_reviewer_sees_every_leftover_word_per_segment_and_field(self):
+        script = {"segments": [{
+            "segment_id": "s4", "text": "logam rod", "elevenlabs_text": "logam rod",
+            "display_text": "لوݢم rod", "slide_heading": "ڤماناسن lwn", "slide_points": ["سينارن inframerah"],
+            "dialogue": [{"who": "teacher", "line": "logam rod", "display": "لوݢم rod"}],
+            "scene": {"elements": [{"id": "t", "type": "text", "text": "لوݢم Rod"},
+                                   {"id": "m", "type": "math", "expr": "Q = mc ΔT"},
+                                   {"id": "t2", "type": "text", "text": "Q = mc ΔT, 4200 J, 100 °C, sin x"}]}}]}
+        rep = J.check_two_scripts(script)
+        assert rep["ok"], "a leftover word is a flag, never a block"
+        flag = next(f for f in rep["flags"] if f["what"] == J.LEFTOVER_FLAG)
+        assert flag["where"] == "s4" and flag["words"] == ["inframerah", "lwn", "Rod", "rod"]
+        assert set(flag["fields"]) == {"display_text", "dialogue[0].display", "slide_heading", "slide_points[0]",
+                                       "scene.elements[0].text"}
+
+    def test_a_clean_jawi_segment_has_no_flag(self):
+        script = {"segments": [{"segment_id": "s1", "text": "ini", "elevenlabs_text": "ini", "display_text": "اين",
+                                "slide_heading": "x = 5 cm", "dialogue": [{"who": "teacher", "line": "ini", "display": "اين"}]}]}
+        assert J.check_two_scripts(script)["flags"] == []
