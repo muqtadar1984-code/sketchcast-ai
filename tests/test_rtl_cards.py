@@ -156,5 +156,8 @@ class TestMathsCards:
 def test_the_composer_hands_the_lesson_direction_to_the_whiteboard_fallback():
     from pathlib import Path
     src = Path("agent6_animation/video_composer.py").read_text(encoding="utf-8")
-    calls = re.findall(r"build_whiteboard_scene\(script_seg[^)]*\)", src)
+    # the fallback is built from the DISPLAYED segment (view_seg: a Jawi
+    # lesson's display copy, catalogue.jawi) — every call keeps the direction
+    calls = re.findall(r"build_whiteboard_scene\((?:script_seg|view_seg)[^)]*\)", src)
+    assert len(calls) == 3, calls
     assert calls and all("direction=direction" in c for c in calls), calls

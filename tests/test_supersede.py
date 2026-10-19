@@ -235,3 +235,23 @@ class TestTranslationsFollowTheOldKit:
         sb, yt = _sb(), _yt()
         out = S.run_supersede_job(sb, sb.tables["jobs"][0], transport=yt)
         assert out["translations"] == {"reason": "cosmetic", "status": "stale", "kits": []}
+
+    def test_the_cascade_runs_through_malay_to_its_jawi_kit(self):
+        """Plan §5.11: a Jawi kit's source is the Malay kit, so replacing the
+        English kit moves English → Malay → Jawi together; a Jawi kit still
+        in review and one derived from another Malay kit stay put."""
+        sb, yt = self._with_translations(_sb()), _yt()
+        sb.tables["topic_kits"] += [
+            {"id": "kit-jawi", "topic_id": "topic-1", "language": "ms-arab", "status": "approved",
+             "translation_status": "approved", "source_kit_id": "kit-ms"},
+            {"id": "kit-jawi-review", "topic_id": "topic-1", "language": "ms-arab", "status": "in_review",
+             "translation_status": "in_review", "source_kit_id": "kit-ms"},
+            {"id": "kit-jawi-other", "topic_id": "topic-1", "language": "ms-arab", "status": "approved",
+             "translation_status": "approved", "source_kit_id": "kit-ms-of-new"},
+        ]
+        sb.tables["jobs"][0]["params"]["reason"] = "correction"
+        out = S.run_supersede_job(sb, sb.tables["jobs"][0], transport=yt)
+        assert out["translations"]["kits"] == ["kit-ar", "kit-ms", "kit-jawi"]
+        assert self._kit(sb, "kit-jawi")["translation_status"] == "blocked"
+        assert self._kit(sb, "kit-jawi-review")["translation_status"] == "in_review"
+        assert self._kit(sb, "kit-jawi-other")["translation_status"] == "approved"

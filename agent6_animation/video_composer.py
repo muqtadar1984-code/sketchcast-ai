@@ -172,6 +172,27 @@ def _ffmpeg_exe() -> str:
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
+def displayed_segment(script_seg: dict) -> tuple[dict, str | None]:
+    """What the SCREEN shows of a segment: ``(segment, narration)``. A
+    two-script lesson (Jawi — catalogue.jawi) speaks ``text`` and each
+    dialogue ``line`` in Rumi for the Malay voice, and shows the same words
+    in Jawi from ``display_text`` / each line's ``display``; the copy returned
+    carries those in ``text`` / ``line`` so the speech bubbles, the
+    whiteboard fallback and the scene's narration (the cue fallback,
+    spike.scene_engine.timing) all read Jawi. The measured per-line starts
+    ride along unchanged — the bubbles stay on the voice's clock. Every other
+    segment comes back as itself, with narration None."""
+    shown = strip_ssml(str(script_seg.get("display_text") or "").strip())
+    if not shown:
+        return script_seg, None
+    seg = dict(script_seg)
+    seg["text"] = shown
+    if seg.get("dialogue"):
+        seg["dialogue"] = [{**d, "line": str(d.get("display") or d.get("line") or "")} if isinstance(d, dict) else d
+                           for d in seg["dialogue"]]
+    return seg, shown
+
+
 def _render_scene_segment(script_seg: dict, narration: str, audio_path: str | None,
                           audio_secs: float, out_mp4, direction: str,
                           scene_dict: dict | None = None,
@@ -903,6 +924,12 @@ def compose_episode_videos(
             except Exception as exc:  # noqa: BLE001 — a TTS hiccup must not kill the video
                 logger.error("TTS failed for %s: %s", seg_id, exc)
                 audio_path = None
+        # From here on the segment is DRAWN: a two-script lesson (Jawi)
+        # shows its display copy while the voice above read the Rumi.
+        view_seg, view_text = displayed_segment(script_seg)
+        if view_text:
+            spec["fallback"] = view_text
+        view_text = view_text or text
         hold = float(script_seg.get("hold_secs") or 0.0)
         if audio_path and hold > 0 and _pad_silence(audio_path, hold, ffmpeg):
             duration = _audio_duration(audio_path, ffmpeg) or (duration + hold)
@@ -922,16 +949,16 @@ def compose_episode_videos(
                 try:
                     from spike.scene_engine.whiteboard import build_whiteboard_scene
                     if script_seg.get("no_sketches"):
-                        scene_dict = build_whiteboard_scene(script_seg, avatars=_avatars, sketches=False, direction=direction)
+                        scene_dict = build_whiteboard_scene(view_seg, avatars=_avatars, sketches=False, direction=direction)
                     else:
-                        scene_dict = build_whiteboard_scene(script_seg, avatars=_avatars, direction=direction)
+                        scene_dict = build_whiteboard_scene(view_seg, avatars=_avatars, direction=direction)
                     attempt = "whiteboard"
                 except Exception:  # noqa: BLE001
                     logger.exception("whiteboard fallback build failed for %s", seg_id)
                     scene_dict = None
             if scene_dict:
                 ok = _render_scene_segment(
-                    script_seg, text, audio_path,
+                    view_seg, view_text, audio_path,
                     duration if audio_path else 0.0, out_mp4, direction,
                     scene_dict=scene_dict, avatars=_avatars,
                 )
@@ -955,7 +982,7 @@ def compose_episode_videos(
                                    "same scene once before degrading", seg_id)
                     try:
                         ok = _render_scene_segment(
-                            script_seg, text, audio_path,
+                            view_seg, view_text, audio_path,
                             duration if audio_path else 0.0, out_mp4,
                             direction, scene_dict=scene_dict,
                             avatars=_avatars)
@@ -973,10 +1000,10 @@ def compose_episode_videos(
                     try:
                         from spike.scene_engine.whiteboard import build_whiteboard_scene
                         ok = _render_scene_segment(
-                            script_seg, text, audio_path,
+                            view_seg, view_text, audio_path,
                             duration if audio_path else 0.0, out_mp4,
                             direction,
-                            scene_dict=build_whiteboard_scene(script_seg, avatars=_avatars, direction=direction),
+                            scene_dict=build_whiteboard_scene(view_seg, avatars=_avatars, direction=direction),
                             avatars=_avatars)
                         attempt = "whiteboard"
                     except Exception:  # noqa: BLE001

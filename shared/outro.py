@@ -208,11 +208,21 @@ def outro_segment(kind: str, language: str | None, *, segment_id: str = SEGMENT_
         narration = lines[0]
         scene = _signoff_scene(lang, narration)
         hold = 1.5
-    return {"segment_id": segment_id, "type": "preview", "text": narration, "elevenlabs_text": narration,
-            "dialogue": [{"who": "teacher", "line": ln} for ln in lines],
-            "slide_heading": text("thanks", lang) if kind == KIND_CTA else text("made_with", lang),
-            "slide_points": [], "pause_for_question": False, "no_sketches": True, "hold_secs": hold,
-            "scene": scene, "estimated_duration_seconds": 14 if kind == KIND_CTA else 4}
+    seg = {"segment_id": segment_id, "type": "preview", "text": narration, "elevenlabs_text": narration,
+           "dialogue": [{"who": "teacher", "line": ln} for ln in lines],
+           "slide_heading": text("thanks", lang) if kind == KIND_CTA else text("made_with", lang),
+           "slide_points": [], "pause_for_question": False, "no_sketches": True, "hold_secs": hold,
+           "scene": scene, "estimated_duration_seconds": 14 if kind == KIND_CTA else 4}
+    if lang == "ms-arab":
+        # Jawi is SPOKEN Malay: the Malay voice reads the Rumi lines, and the
+        # bubbles show the Jawi (display copies, catalogue.jawi) — Jawi
+        # handed to the voice would not be read at all
+        keys = ["cta_1", "cta_2"] if kind == KIND_CTA else ["signoff"]
+        spoken = [text(k, "ms") for k in keys]
+        seg["text"] = seg["elevenlabs_text"] = " ".join(spoken)
+        seg["display_text"] = narration
+        seg["dialogue"] = [{"who": "teacher", "line": s, "display": d} for s, d in zip(spoken, lines)]
+    return seg
 
 
 def with_outro(part_scripts: dict, slides: dict, kind: str, language: str | None) -> tuple[dict, dict]:

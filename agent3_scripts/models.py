@@ -80,6 +80,11 @@ class ScriptSegment(BaseModel):
     type: SegmentType
     text: str  # plain text — what the narrator SAYS (audio + presenter notes)
     elevenlabs_text: str  # same text with ElevenLabs <break> markup
+    # A two-script lesson only (Jawi, catalogue.jawi): what the speech
+    # bubbles SHOW while the voice reads `text` — the same Malay words in the
+    # Jawi script. Its dialogue lines carry the same copy as `display`.
+    # Empty everywhere else: the bubbles show `text`.
+    display_text: str = ""
     slide_heading: str = ""  # short on-screen title (chapter content)
     slide_points: List[str] = Field(default_factory=list)  # on-screen bullets (chapter content)
     slide_visual: Optional[SlideVisual] = None  # composable diagram (animated natively)
