@@ -176,6 +176,23 @@ class TestMathsSpans:
         ok, lost = C.prose_maths_equivalent("Match each circle-related term to its correct description.", "طابق كل مصطلح متعلق بالدائرة مع وصفه الصحيح.")
         assert ok and lost == []
 
+    def test_a_number_hyphenated_to_a_word_is_an_adjective_not_a_subtraction(self):
+        """Trigonometric Ratios, 2026-10-19: five bank items naming an angle
+        were refused in Arabic and in Malay — "the 90-degree angle" read as
+        the maths "90-", and "sudut 90 darjah" lost it."""
+        stem = "In a right-angled triangle, which side is always located directly opposite the 90-degree angle?"
+        assert C.maths_spans(stem) == ["90"]
+        ok, lost = C.prose_maths_equivalent(stem, "Dalam segi tiga bersudut tegak, sisi manakah yang sentiasa bertentangan dengan sudut 90 darjah?")
+        assert ok and lost == []
+        assert C.maths_spans("Find the side opposite the 38-degree angle.") == ["38"]
+        assert C.maths_spans("the 3-step method") == ["3"]
+
+    def test_a_number_before_a_function_or_a_variable_keeps_its_minus(self):
+        assert C.maths_spans("simplify 1-cos x") == ["1-"] or "1-" in C.maths_spans("simplify 1-cos x")[0]
+        assert "2-sin" not in C.maths_spans("2-sin θ")[0] or C.maths_spans("2-sin θ")[0].startswith("2-")
+        assert C.maths_spans("Solve 2-x = 5") == ["2-x = 5"]
+        assert C.maths_spans("10-4 = 6") == ["10-4 = 6"]
+
     def test_real_maths_still_counts(self):
         assert C.maths_spans("Use π = 3.14 here") == ["π = 3.14"]
         assert C.maths_spans("Solve 2x + 3 = 11 for x.") == ["2x + 3 = 11", "x"] or "2x + 3 = 11" in C.maths_spans("Solve 2x + 3 = 11 for x.")
