@@ -1389,7 +1389,7 @@ def quiz_image(item: GeometryItem, max_px: int = QUIZ_MAX_PX) -> bytes:
         raise GeometryRefusal("bad_schema", "no figure image to show")
     labelled = any(fi.label for fi in item.images) and len(frames) > 1
     try:
-        font = ImageFont.truetype(str(_FONT), _QUIZ_LABEL_PX)
+        font = ImageFont.truetype(str(_FONT), _QUIZ_LABEL_PX, layout_engine=ImageFont.Layout.BASIC)
     except OSError:
         font = ImageFont.load_default()
     label_h = _QUIZ_LABEL_PX + 12 if labelled else 0
