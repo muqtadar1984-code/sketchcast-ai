@@ -23,6 +23,13 @@ from pathlib import Path
 # Make the agent packages importable regardless of CWD.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# FriBiDi before anything imports Pillow's font module (shared/pillow_raqm.py):
+# Hindi, Marathi and Telugu need RAQM shaping, which Pillow switches off for
+# good if FriBiDi is missing at its first font import.
+from shared import pillow_raqm  # noqa: E402
+
+pillow_raqm.preload()
+
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent / ".env")  # worker/.env
@@ -40,6 +47,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("worker")
+pillow_raqm.report()   # one line at startup: is complex-script shaping on?
 
 POLL_SECONDS = int(os.getenv("WORKER_POLL_SECONDS", "5"))
 # On SIGTERM, how long to let in-flight work FINISH before handing back what

@@ -13,7 +13,11 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+# FriBiDi before Pillow's font module, or RAQM stays off (shared/pillow_raqm.py)
+from shared import pillow_raqm as _raqm
+_raqm.preload()
+
+from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
 from shared.text_shaping import display_text
 from .theme import CANVAS as _BG, GRAPHITE as _MUTED, INK as _INK, LINE as _RULE, TEAL as _GREEN, WHITE as _WHITE
@@ -30,9 +34,11 @@ _MARGIN_X = 90
 
 # Script-aware font selection. DejaVu covers Latin + Arabic presentation
 # forms; Devanagari (Marathi) and Telugu need the bundled Noto families AND
-# HarfBuzz shaping (Pillow's RAQM layout engine — enabled at runtime when
-# libraqm is present; see nixpacks.toml). Without RAQM those scripts render
-# with misplaced vowel signs — we still draw (best-effort) rather than fail.
+# HarfBuzz shaping (Pillow's RAQM layout engine — FriBiDi must load at
+# runtime; see shared/pillow_raqm.py and nixpacks.toml). Without RAQM those
+# scripts render with misplaced vowel signs ("अधिक" as "अधकि"): where shaping
+# is required (production) the font REFUSES them — a garbled Hindi lesson is
+# worse than none — and elsewhere (local Windows) draws best-effort.
 import re as _re
 
 _DEVA_RE = _re.compile(r"[ऀ-ॿ]")
@@ -50,6 +56,10 @@ except Exception:  # noqa: BLE001
 
 
 def _font(bold: bool, size: int, sample: str = "") -> ImageFont.FreeTypeFont:
+    if sample and not _RAQM and (_DEVA_RE.search(sample) or _TELU_RE.search(sample)) and _raqm.required():
+        raise _raqm.ShapingUnavailable(
+            "Devanagari/Telugu text needs HarfBuzz shaping (Pillow RAQM), which is off in this process — "
+            f"refusing to draw it garbled: {sample[:40]!r}")
     if sample and _DEVA_RE.search(sample):
         name = "NotoSansDevanagari-Bold.ttf" if bold else "NotoSansDevanagari-Regular.ttf"
     elif sample and _TELU_RE.search(sample):
