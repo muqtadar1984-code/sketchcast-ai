@@ -354,7 +354,17 @@ def _card_geometry(method, lang: str = "en") -> dict:
     while True:
         title, title_size = _fit_text(method.title or _bt("method", lang), title_size, max_w, bold=True,
                                       min_size=16.0, cap=22)
-        texts = [_fit_text(f"{i + 1}. {s}", line_size, max_w, min_size=15.0, cap=34)[0] for i, s in enumerate(steps)]
+        # Every line is DRAWN at line_size, so a line that only fits smaller
+        # sets the size for all of them (one size reads as one card). The
+        # fitted size used to be dropped: the Telugu Substitution card's
+        # first step fitted at a smaller size, was drawn at 21 px, ran wider
+        # than the card, and the renderer pushed it left over the heading
+        # and the question (TEXT_OVERLAP card_0+wb_h, card_0+q0 in four
+        # scenes, 2026-10-19).
+        raw = [f"{i + 1}. {s}" for i, s in enumerate(steps)]
+        need = min([line_size] + [_fit_text(t, line_size, max_w, min_size=15.0, cap=34)[1] for t in raw])
+        line_size = max(15.0, need)
+        texts = [_fit_text(t, line_size, max_w, min_size=line_size, cap=34)[0] for t in raw]
         title_h = _M.text_box(title, title_size, True)[1]
         line_h = max((_M.text_box(t, line_size)[1] for t in texts), default=line_size * 1.3)
         pitch = max(_card_pitch(len(steps)), line_h + 4.0)
