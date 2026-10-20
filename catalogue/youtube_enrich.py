@@ -37,8 +37,8 @@ import re
 from typing import Iterable, Optional
 
 from catalogue.harvest import clean_heading
-from catalogue.publish import (DEFAULT_LANGUAGE, LINK_BASE, _rows, _s, configured_playlists, discipline_key,
-                               load_kit, load_topic, topic_link)
+from catalogue.publish import (DEFAULT_LANGUAGE, LINK_BASE, _rows, _s, configured_playlists,
+                               load_kit, load_topic, topic_discipline, topic_link)
 from catalogue.youtube_backfill import SNIPPET_FIELDS, SnippetTransport, default_snippet_transport
 from catalogue.youtube_meta import (DESCRIPTION_MAX, WORDS, _camel, board_label, boards_of, clean_hashtags,
                                     clean_meta, effective_terms, is_kit_link_line, is_sketchcast_line,
@@ -285,7 +285,7 @@ def video_context(sb, publication: dict, playlists: dict[str, str]) -> Optional[
     if not topic:
         return None
     mappings = load_mappings(sb, _s(topic.get("id")))
-    discipline = discipline_key([m.code for m in mappings if m.code])
+    discipline = topic_discipline(topic, [m.code for m in mappings if m.code])
     meta = clean_meta(kit.get("youtube_meta"))
     return {"title": _s(topic.get("title")), "subject": topic.get("subject"), "boards": boards_of(mappings),
             "discipline": discipline, "key_terms": effective_terms(meta, topic.get("summary")),

@@ -11,7 +11,7 @@ videos posted before the playlist existed. This job does both, on the
 founder's say-so (one ``youtube_playlists`` job in ``jobs``):
 
   1. for each wanted playlist (``PLAYLISTS``: biology, chemistry, physics,
-     algebra) find the channel's playlist of that title, or create it,
+     algebra, geometry) find the channel's playlist of that title, or create it,
      PUBLIC, unless a configured id already names one;
   2. record the key → id map in platform_settings
      (``youtube_playlists_<lang>``), where ``configured_playlists`` reads it,
@@ -20,9 +20,12 @@ founder's say-so (one ``youtube_playlists`` job in ``jobs``):
      discipline has a playlist to that playlist, skipping the ones already
      in it, and record the id on its ``playlist_ids``.
 
-A topic whose codes name no wanted discipline is REPORTED in the summary
-and left where it is: no video lands in a playlist by guesswork. (Earth
-and space codes file under physics — catalogue.publish._STRAND_DISCIPLINE.) Idempotent: a re-run creates nothing twice and
+A topic whose codes name no discipline takes its SUBJECT's
+(``catalogue.publish.topic_discipline``: Mathematics → geometry, since every
+unmapped maths topic is a shape-and-space one); a topic that still names no
+wanted discipline is REPORTED in the summary and left where it is: no video
+lands in a playlist by guesswork. (Earth and space codes file under physics
+— catalogue.publish._STRAND_DISCIPLINE.) Idempotent: a re-run creates nothing twice and
 adds nothing twice. One video's failure is recorded and the run goes on;
 the job then finishes with an error naming the failures, and a re-run
 picks up exactly the ones left.
@@ -35,7 +38,7 @@ from datetime import datetime, timezone
 from typing import Optional, Protocol
 
 from catalogue.publish import (PRIVACY_PUBLIC, _rows, _s, build_youtube_service, configured_playlists,
-                               discipline_key, load_kit, load_topic, playlists_settings_key)
+                               load_kit, load_topic, playlists_settings_key, topic_discipline)
 from worker import client as db
 
 log = logging.getLogger(__name__)
@@ -54,6 +57,9 @@ PLAYLISTS: dict[str, tuple[str, str]] = {
                 "drawn and narrated by SketchCast."),
     "algebra": ("Algebra", "Algebra lessons for lower secondary (Cambridge stages 7–9, CBSE classes 6–10), "
                 "worked and narrated by SketchCast."),
+    # founder, 2026-10-20: angles, circles, triangles and trigonometry
+    "geometry": ("Geometry", "Geometry lessons for lower secondary (Cambridge stages 7–9, CBSE classes 6–10), "
+                 "drawn and narrated by SketchCast."),
 }
 
 
@@ -68,6 +74,7 @@ PLAYLISTS_BY_LANGUAGE: dict[str, dict[str, tuple[str, str]]] = {
         "chemistry": ("Kimia", f"Pelajaran Kimia {_MS_TAIL}"),
         "physics": ("Fizik", f"Pelajaran Fizik {_MS_TAIL}"),
         "algebra": ("Algebra", f"Pelajaran Algebra {_MS_TAIL}"),
+        "geometry": ("Geometri", f"Pelajaran Geometri {_MS_TAIL}"),   # needs a native read
     },
 }
 PLAYLISTS_BY_LANGUAGE["ms-arab"] = PLAYLISTS_BY_LANGUAGE["ms"]
@@ -79,32 +86,35 @@ PLAYLISTS_BY_LANGUAGE["hi"] = {
     "chemistry": ("रसायन विज्ञान", f"रसायन विज्ञान {_HI_TAIL}"),
     "physics": ("भौतिकी", f"भौतिकी {_HI_TAIL}"),
     "algebra": ("बीजगणित", f"बीजगणित {_HI_TAIL}"),
+    "geometry": ("ज्यामिति", f"ज्यामिति {_HI_TAIL}"),   # needs a native read
 }
 
 # Every other lesson language, ready before its channel exists (founder,
 # 2026-10-20: one channel per language, created in turn). Each needs a
-# native read. Keys: biology, chemistry, physics, algebra.
-_KEYS = ("biology", "chemistry", "physics", "algebra")
+# native read (geometry, added 2026-10-20, most of all). Keys: biology,
+# chemistry, physics, algebra, geometry.
+_KEYS = ("biology", "chemistry", "physics", "algebra", "geometry")
 
 
-def _set(titles: tuple[str, str, str, str], describe) -> dict[str, tuple[str, str]]:
+def _set(titles: tuple[str, ...], describe) -> dict[str, tuple[str, str]]:
+    assert len(titles) == len(_KEYS), titles
     return {k: (t, describe(t)) for k, t in zip(_KEYS, titles)}
 
 
 PLAYLISTS_BY_LANGUAGE.update({
-    "ar": _set(("علم الأحياء", "الكيمياء", "الفيزياء", "الجبر"),
+    "ar": _set(("علم الأحياء", "الكيمياء", "الفيزياء", "الجبر", "الهندسة"),
                lambda t: f"دروس {t} للمرحلة المتوسطة (كامبريدج المراحل 7–9، CBSE الصفوف 6–10)، مرسومة ومشروحة بالعربية من SketchCast."),
-    "es": _set(("Biología", "Química", "Física", "Álgebra"),
+    "es": _set(("Biología", "Química", "Física", "Álgebra", "Geometría"),
                lambda t: f"Lecciones de {t.lower()} para secundaria (Cambridge etapas 7–9, CBSE clases 6–10), dibujadas y narradas por SketchCast."),
-    "fr": _set(("Biologie", "Chimie", "Physique", "Algèbre"),
+    "fr": _set(("Biologie", "Chimie", "Physique", "Algèbre", "Géométrie"),
                lambda t: f"Leçons de {t.lower()} pour le collège (Cambridge niveaux 7–9, CBSE classes 6–10), dessinées et commentées par SketchCast."),
-    "pt": _set(("Biologia", "Química", "Física", "Álgebra"),
+    "pt": _set(("Biologia", "Química", "Física", "Álgebra", "Geometria"),
                lambda t: f"Aulas de {t.lower()} para os anos finais do ensino fundamental (Cambridge estágios 7–9, CBSE classes 6–10), desenhadas e narradas pela SketchCast."),
-    "ur": _set(("حیاتیات", "کیمیا", "طبیعیات", "الجبرا"),
+    "ur": _set(("حیاتیات", "کیمیا", "طبیعیات", "الجبرا", "جیومیٹری"),
                lambda t: f"{t} کے اسباق — CBSE جماعت 6–10 اور کیمبرج اسٹیج 7–9 کے لیے، SketchCast کی جانب سے تصویروں کے ساتھ اردو میں سمجھائے گئے۔"),
-    "te": _set(("జీవశాస్త్రం", "రసాయన శాస్త్రం", "భౌతిక శాస్త్రం", "బీజగణితం"),
+    "te": _set(("జీవశాస్త్రం", "రసాయన శాస్త్రం", "భౌతిక శాస్త్రం", "బీజగణితం", "జ్యామితి"),
                lambda t: f"{t} పాఠాలు — CBSE 6–10 తరగతులు మరియు కేంబ్రిడ్జ్ స్టేజ్ 7–9 కోసం, SketchCast బొమ్మలతో తెలుగులో వివరించినవి."),
-    "mr": _set(("जीवशास्त्र", "रसायनशास्त्र", "भौतिकशास्त्र", "बीजगणित"),
+    "mr": _set(("जीवशास्त्र", "रसायनशास्त्र", "भौतिकशास्त्र", "बीजगणित", "भूमिती"),
                lambda t: f"{t} चे धडे — CBSE इयत्ता 6–10 आणि केंब्रिज स्टेज 7–9 साठी, SketchCast ने चित्रांसह मराठीत समजावलेले."),
 })
 
@@ -250,7 +260,7 @@ def classify(sb, publication: dict) -> tuple[Optional[dict], str]:
     if not topic:
         return None, ""
     codes = [m.code for m in load_mappings(sb, _s(topic.get("id"))) if m.code]
-    return topic, discipline_key(codes)
+    return topic, topic_discipline(topic, codes)
 
 
 def place_videos(sb, transport: PlaylistTransport, playlists: dict[str, dict], publications: list[dict]) -> dict:

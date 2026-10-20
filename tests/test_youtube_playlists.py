@@ -98,6 +98,7 @@ class TestTheDiscipline:
     @pytest.mark.parametrize("code,want", [
         ("7Bs.01", "biology"), ("8Cm.02", "chemistry"), ("9Pf.05", "physics"), ("8ESc.01", "physics"),
         ("9Ae.02", "algebra"), ("7As.04", "algebra"), ("8Ni.01", "number"), ("cbse:8:ALG:03", "algebra"),
+        ("9Gg.01", "geometry"), ("7Gg.13", "geometry"), ("cbse:7:GEO:01", "geometry"),
         ("cbse:9:U2:01", ""), ("", ""), ("Class 9 · Cells", ""),
     ])
     def test_one_code(self, code, want):
@@ -140,12 +141,12 @@ class TestTheStoredMap:
 
 
 class TestTheJob:
-    def test_creates_the_four_playlists_places_every_video_and_records_the_map(self, monkeypatch):
+    def test_creates_the_five_playlists_places_every_video_and_records_the_map(self, monkeypatch):
         monkeypatch.delenv("YOUTUBE_PLAYLISTS_EN", raising=False)
         sb = _sb()
         yt = FakePlaylists()
         summary = PL.run_playlists_job(sb, _job(sb), transport=yt)
-        assert [c["title"] for c in yt.created] == ["Biology", "Chemistry", "Physics", "Algebra"]
+        assert [c["title"] for c in yt.created] == ["Biology", "Chemistry", "Physics", "Algebra", "Geometry"]
         assert all(c["privacy"] == "public" and c["language"] == "en" for c in yt.created)
         assert sorted(yt.adds) == sorted([("vid-cells", "PL-biology"), ("vid-atom", "PL-chemistry"),
                                           ("vid-forces", "PL-physics"), ("vid-matter", "PL-chemistry"),
@@ -158,7 +159,7 @@ class TestTheJob:
         assert _pub(sb, 7)["playlist_ids"] == [], "no video lands in a playlist by guesswork"
         stored = next(r for r in sb.tables["platform_settings"] if r["key"] == "youtube_playlists_en")
         assert stored["value"] == {"biology": "PL-biology", "chemistry": "PL-chemistry",
-                                   "physics": "PL-physics", "algebra": "PL-algebra"}
+                                   "physics": "PL-physics", "algebra": "PL-algebra", "geometry": "PL-geometry"}
         assert P.configured_playlists("en", sb)["physics"] == "PL-physics", "a later publish resolves it"
         job = _job(sb)
         assert job["status"] == "done" and job["stage"]["playlists"]["algebra"]["created"] is True
@@ -171,7 +172,7 @@ class TestTheJob:
         adds = list(yt.adds)
         _job(sb)["status"] = "processing"
         summary = PL.run_playlists_job(sb, _job(sb), transport=yt)
-        assert len(yt.created) == 4 and yt.adds == adds
+        assert len(yt.created) == 5 and yt.adds == adds
         assert summary["counts"] == {"placed": 0, "already": 6, "unplaced": 1, "failed": 0}
         assert _pub(sb, 1)["playlist_ids"] == ["PL-biology"]
 
@@ -180,7 +181,7 @@ class TestTheJob:
         sb = _sb()
         yt = FakePlaylists(existing={"biology": "PL-old-bio"}, members={"PL-old-bio": ["vid-cells"]})
         summary = PL.run_playlists_job(sb, _job(sb), transport=yt)
-        assert [c["title"] for c in yt.created] == ["Chemistry", "Algebra"]
+        assert [c["title"] for c in yt.created] == ["Chemistry", "Algebra", "Geometry"]
         assert summary["playlists"]["biology"] == {"id": "PL-old-bio", "title": "Biology", "created": False,
                                                    "source": "channel"}
         assert summary["playlists"]["physics"]["id"] == "PL-founder-phy"
@@ -332,3 +333,91 @@ def test_every_lesson_language_has_its_own_playlist_set():
         assert [t for t, _ in own.values()] != [PL.PLAYLISTS[k][0] for k in own], lang
     assert PL.playlist_meta("physics", "es")[0] == "Física"
     assert PL.playlist_meta("biology", "fr")[1].startswith("Leçons de biologie")
+
+
+# ── geometry, and a topic whose codes name no discipline (2026-10-20) ─────────
+# The Arabic run (job f7f49728) left three maths videos unplaced: two coded
+# geometry (no geometry playlist yet) and Trigonometric Ratios, which maps to
+# NO curriculum node (none we hold has trigonometry), so its codes named
+# nothing. A maths topic now files under its subject's discipline.
+
+
+class TestTheSubjectFallback:
+    @pytest.mark.parametrize("subject,want", [
+        ("Mathematics", "geometry"), ("maths", "geometry"), ("Physics", "physics"), (" Biology ", "biology"),
+        ("Chemistry", "chemistry"), ("Science", ""), ("", ""), (None, ""),
+    ])
+    def test_one_subject(self, subject, want):
+        assert P.subject_discipline(subject) == want
+
+    def test_a_mapped_code_always_wins_over_the_subject(self):
+        assert P.topic_discipline({"subject": "Mathematics"}, ["9Ae.02"]) == "algebra"
+        assert P.topic_discipline({"subject": "Mathematics"}, ["7Gg.13", "cbse:7:GEO:01", "cbse:9:U4:01"]) == "geometry"
+        assert P.topic_discipline({"subject": "Mathematics"}, []) == "geometry", "Trigonometric Ratios"
+        assert P.topic_discipline({"subject": "Mathematics"}, ["cbse:9:U4:01"]) == "geometry"
+        assert P.topic_discipline({"subject": "Science"}, ["cbse:9:U2:01"]) == "", "Science names no one discipline"
+        assert P.topic_discipline(None, []) == ""
+
+    def test_an_unmapped_maths_topic_has_the_geometry_playlist_key(self):
+        assert P.playlist_keys({"subject": "Mathematics"}, [], []) == ["mathematics", "geometry"]
+        assert P.playlist_keys({"subject": "Mathematics"}, [], ["9Ae.02"]) == ["mathematics", "algebra"]
+
+
+def _add_topic(sb, i, title, subject, codes, video, language):
+    sb.tables["topics"].append({"id": f"topic-{i}", "title": title, "subject": subject, "status": "video_approved"})
+    sb.tables["topic_kits"].append({"id": f"kit-{i}", "topic_id": f"topic-{i}", "status": "approved"})
+    for j, code in enumerate(codes):
+        sb.tables["curriculum_nodes"].append({"id": f"node-{i}-{j}", "curriculum_id": "cur-1", "code": code,
+                                              "kind": "objective"})
+        sb.tables["topic_curriculum_map"].append({"topic_id": f"topic-{i}", "node_id": f"node-{i}-{j}"})
+    sb.tables["topic_publications"].append({
+        "id": f"pub-{i}", "topic_kit_id": f"kit-{i}", "part": 1, "channel_language": language,
+        "youtube_video_id": video, "privacy": "public", "playlist_ids": [], "superseded_by": None})
+
+
+def test_the_arabic_channel_files_every_maths_video_including_the_unmapped_trig_one():
+    sb = FakeSB()
+    sb.tables["curricula"] = [{"id": "cur-1", "code": "cambridge", "name": "Cambridge Lower Secondary Mathematics 0862"}]
+    _add_topic(sb, 1, "Circumference and Area of a Circle", "Mathematics", ["9Gg.01"], "Ik_jqB43zIo", "ar")
+    _add_topic(sb, 2, "Types of Angles", "Mathematics", ["7Gg.13", "cbse:7:GEO:01", "cbse:9:U4:01", "7Gg.12"],
+               "2iFcFN7yfM0", "ar")
+    _add_topic(sb, 3, "Trigonometric Ratios in Right-Angled Triangles", "Mathematics", [], "HrKN4aVaUow", "ar")
+    _add_topic(sb, 4, "Expanding Brackets", "Mathematics", ["9Ae.02"], "vid-brackets-ar", "ar")
+    _add_topic(sb, 5, "Rocks and Fossils", "Science", ["cbse:9:U2:01"], "vid-rocks-ar", "ar")
+    sb.tables["jobs"].append({"id": "job-1", "type": PL.JOB_TYPE, "status": "processing", "attempts": 0,
+                              "params": {"language": "ar"}})
+    yt = FakePlaylists(existing={"الجبر": "PL-ar-alg"})
+    summary = PL.run_playlists_job(sb, _job(sb), transport=yt)
+    geometry = next(c for c in yt.created if c["title"] == "الهندسة")
+    assert geometry["language"] == "ar" and geometry["privacy"] == "public" and geometry["description"]
+    pid = summary["playlists"]["geometry"]["id"]
+    assert sorted(v for v, p in yt.adds if p == pid) == sorted(["Ik_jqB43zIo", "2iFcFN7yfM0", "HrKN4aVaUow"])
+    assert ("vid-brackets-ar", "PL-ar-alg") in yt.adds, "the existing Arabic algebra playlist is reused"
+    assert [u["title"] for u in summary["unplaced"]] == ["Rocks and Fossils"], "no maths video goes unplaced"
+    assert summary["counts"] == {"placed": 4, "already": 0, "unplaced": 1, "failed": 0}
+    trig = next(p for p in summary["placed"] if p["video"] == "HrKN4aVaUow")
+    assert trig["discipline"] == "geometry"
+    stored = next(r for r in sb.tables["platform_settings"] if r["key"] == "youtube_playlists_ar")
+    assert stored["value"]["geometry"] == pid and _job(sb)["status"] == "done"
+
+
+def test_every_language_has_a_localised_geometry_playlist():
+    want = {"en": "Geometry", "ar": "الهندسة", "ms": "Geometri", "ms-arab": "Geometri", "hi": "ज्यामिति",
+            "es": "Geometría", "fr": "Géométrie", "pt": "Geometria", "ur": "جیومیٹری", "te": "జ్యామితి",
+            "mr": "भूमिती"}
+    for lang, title in want.items():
+        got_title, desc = PL.playlist_meta("geometry", lang)
+        assert got_title == title, lang
+        assert desc and len(desc) <= 5000, lang
+    assert PL.playlist_meta("geometry", "es")[1].startswith("Lecciones de geometría")
+    assert "geometry" in PL.wanted_keys({}), "a job with no params creates it"
+
+
+def test_the_enrich_context_names_the_subject_discipline_for_an_unmapped_maths_topic():
+    from catalogue import youtube_enrich as E
+    sb = FakeSB()
+    sb.tables["topics"].append({"id": "topic-1", "title": "Trigonometric Ratios", "subject": "Mathematics",
+                                "slug": "trigonometric-ratios"})
+    sb.tables["topic_kits"].append({"id": "kit-1", "topic_id": "topic-1", "language": "ar"})
+    ctx = E.video_context(sb, {"topic_kit_id": "kit-1", "part": 1}, {"geometry": "PL-geo"})
+    assert ctx["discipline"] == "geometry" and ctx["playlist_id"] == "PL-geo"
