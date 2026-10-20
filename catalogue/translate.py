@@ -221,6 +221,9 @@ def translate_strings(client, items: list[str], language: str, *, terms: Optiona
             ("These expressions must appear UNCHANGED in the translation: "
              + "; ".join(protected[:60])) if protected else "",
             "Rules: keep every number, unit, variable, formula, equation and curriculum code exactly as written; "
+            "write every number as DIGITS, as the source does — 1 and 2 included (never fold a number into a "
+            "word or a dual or singular form: 'exactly 1 proton' keeps its 1), and an ordinal keeps its digits "
+            "('the 50th term' keeps 50, with the language's ordinal marker); "
             "keep the register of a teacher speaking to a class; translate the whole string, never summarise; "
             "return exactly one translated string per input string, in the same order, as "
             '{"items": [...]} with ' + f"{len(payload)} items.",
@@ -545,9 +548,10 @@ def translate_episode(client, body: dict, language: str, terms, *, title: Option
                                           terms=terms, context=context)[0]
     report: dict = {}
     dst: dict = {}
+    ask_context = context
     for attempt in range(2):
         if lesson is not None:
-            new_lesson = translate_lesson(client, lesson, language, terms, context=context)
+            new_lesson = translate_lesson(client, lesson, language, terms, context=ask_context)
             r_lesson = check.check_maths_lesson(lesson, new_lesson)
             dst = recompile_maths(src, new_lesson, language, ep_title)
             dst["segments"] = _splice_framing(src.get("segments") or [], dst.get("segments") or [], client,
@@ -557,13 +561,18 @@ def translate_episode(client, body: dict, language: str, terms, *, title: Option
             report = check.merge_reports(r_lesson, r_script)
         else:
             dst = copy.deepcopy(src)
-            dst["segments"] = translate_segments(client, src.get("segments") or [], language, terms, context=context)
+            dst["segments"] = translate_segments(client, src.get("segments") or [], language, terms,
+                                                 context=ask_context)
             dst["episode_title"] = ep_title
             report = check.merge_reports(check.check_script(src, dst, language=language, glossary=terms))
         if report.get("ok"):
             break
         log.warning("translate: pre-check A blocked part %s (%d finding(s)); %s", body.get("part"),
                     len(report.get("blocking") or []), "asking again" if attempt == 0 else "giving up")
+        # The second ask is told what the first got wrong — asked blind, the
+        # same model wrote the same natural phrasing twice ("بروتون واحد"
+        # for "1 proton") and four Arabic kits failed in a row (2026-10-20).
+        ask_context = (context + " " + retry_note(report)).strip()
     if not report.get("ok"):
         heads = "; ".join(f"{f.get('where')}: {f.get('what')}" for f in (report.get("blocking") or [])[:5])
         raise TranslateRefused(f"translation of part {body.get('part')} failed pre-check A: {heads}",
@@ -576,6 +585,25 @@ def translate_episode(client, body: dict, language: str, terms, *, title: Option
 
 
 # ── Jawi: the Malay kit in two scripts (plan §5.11, catalogue.jawi) ──────
+
+
+def retry_note(report: dict) -> str:
+    """What a failed pre-check A found, said to the translator before the
+    second ask: the fields, and the numbers each one lost or invented."""
+    lines: list[str] = []
+    for f in (report.get("blocking") or [])[:12]:
+        where, what = str(f.get("where") or ""), str(f.get("what") or "")
+        extra = []
+        if f.get("missing"):
+            extra.append("dropped " + ", ".join(str(x) for x in f["missing"][:8]))
+        if f.get("extra"):
+            extra.append("added " + ", ".join(str(x) for x in f["extra"][:8]))
+        lines.append(f"{where}: {what}" + (f" ({'; '.join(extra)})" if extra else ""))
+    if not lines:
+        return ""
+    return ("A FIRST translation of these strings failed the check: " + " | ".join(lines)
+            + ". Write every number of the source as DIGITS in the translation — 1 and 2 included, ordinals "
+              "with their digits — and keep every expression exactly as written.")
 
 
 def derive_segments(client, segments: list[dict], terms, *, context: str) -> list[dict]:

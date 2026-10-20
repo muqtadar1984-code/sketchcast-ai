@@ -62,12 +62,19 @@ def normalize_numerals(text: str) -> str:
     return str(text or "").translate(_DIGIT_MAP)
 
 
+# "2D", "3D", "3-D": a WORD (two-/three-dimensional), not a value. A
+# translation writes the word — Arabic "ثلاثي الأبعاد" — and the digit is
+# gone (Surface Area kit, Arabic, 2026-10-20: five "numbers differ").
+_DIMENSION_RE = re.compile(r"(?<![\w.])\d\s?-?D(?![A-Za-z])")
+
+
 def number_values(text: str) -> list[str]:
     """The numbers a text states, as canonical decimal strings, in order.
     A comma inside a number is a thousands separator when it groups threes
-    (``41,120``) and a decimal mark otherwise (``1,5`` in French prose)."""
+    (``41,120``) and a decimal mark otherwise (``1,5`` in French prose).
+    A dimension ("3D") is a word, not a number."""
     out: list[str] = []
-    for m in _NUMBER_RE.finditer(normalize_numerals(text)):
+    for m in _NUMBER_RE.finditer(_DIMENSION_RE.sub(" ", normalize_numerals(text))):
         tok = m.group(0)
         if _THOUSANDS_RE.match(tok):
             tok = tok.replace(",", "")
