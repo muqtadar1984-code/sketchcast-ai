@@ -72,6 +72,15 @@ PLAYLISTS_BY_LANGUAGE: dict[str, dict[str, tuple[str, str]]] = {
 }
 PLAYLISTS_BY_LANGUAGE["ms-arab"] = PLAYLISTS_BY_LANGUAGE["ms"]
 
+# The Hindi channel (founder, 2026-10-20). Needs a native read.
+_HI_TAIL = "के पाठ — CBSE कक्षा 6–10 और कैम्ब्रिज स्टेज 7–9 के लिए, SketchCast द्वारा चित्र बनाकर हिन्दी में समझाए गए।"
+PLAYLISTS_BY_LANGUAGE["hi"] = {
+    "biology": ("जीवविज्ञान", f"जीवविज्ञान {_HI_TAIL}"),
+    "chemistry": ("रसायन विज्ञान", f"रसायन विज्ञान {_HI_TAIL}"),
+    "physics": ("भौतिकी", f"भौतिकी {_HI_TAIL}"),
+    "algebra": ("बीजगणित", f"बीजगणित {_HI_TAIL}"),
+}
+
 
 def playlist_meta(key: str, language: str) -> tuple[str, str]:
     """(title, description) for ``key`` on the ``language`` channel."""

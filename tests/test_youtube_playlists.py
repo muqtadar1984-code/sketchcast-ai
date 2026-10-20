@@ -308,3 +308,10 @@ def test_malay_and_jawi_channels_get_malay_titles_and_share_them():
     assert PL.playlist_meta("biology", "en")[0] == "Biology"
     assert PL.playlist_meta("biology", "ar")[0] == "Biology"      # no localised set yet: English
     assert set(PL.PLAYLISTS_BY_LANGUAGE["ms"]) == set(PL.PLAYLISTS)
+
+
+def test_hindi_channel_gets_hindi_titles():
+    from catalogue import playlists as PL
+    assert PL.playlist_meta("algebra", "hi")[0] == "बीजगणित"
+    assert set(PL.PLAYLISTS_BY_LANGUAGE["hi"]) == set(PL.PLAYLISTS)
+    assert all(desc for _, desc in PL.PLAYLISTS_BY_LANGUAGE["hi"].values())
