@@ -72,6 +72,42 @@ PLAYLISTS_BY_LANGUAGE: dict[str, dict[str, tuple[str, str]]] = {
 }
 PLAYLISTS_BY_LANGUAGE["ms-arab"] = PLAYLISTS_BY_LANGUAGE["ms"]
 
+# The Hindi channel (founder, 2026-10-20). Needs a native read.
+_HI_TAIL = "के पाठ — CBSE कक्षा 6–10 और कैम्ब्रिज स्टेज 7–9 के लिए, SketchCast द्वारा चित्र बनाकर हिन्दी में समझाए गए।"
+PLAYLISTS_BY_LANGUAGE["hi"] = {
+    "biology": ("जीवविज्ञान", f"जीवविज्ञान {_HI_TAIL}"),
+    "chemistry": ("रसायन विज्ञान", f"रसायन विज्ञान {_HI_TAIL}"),
+    "physics": ("भौतिकी", f"भौतिकी {_HI_TAIL}"),
+    "algebra": ("बीजगणित", f"बीजगणित {_HI_TAIL}"),
+}
+
+# Every other lesson language, ready before its channel exists (founder,
+# 2026-10-20: one channel per language, created in turn). Each needs a
+# native read. Keys: biology, chemistry, physics, algebra.
+_KEYS = ("biology", "chemistry", "physics", "algebra")
+
+
+def _set(titles: tuple[str, str, str, str], describe) -> dict[str, tuple[str, str]]:
+    return {k: (t, describe(t)) for k, t in zip(_KEYS, titles)}
+
+
+PLAYLISTS_BY_LANGUAGE.update({
+    "ar": _set(("علم الأحياء", "الكيمياء", "الفيزياء", "الجبر"),
+               lambda t: f"دروس {t} للمرحلة المتوسطة (كامبريدج المراحل 7–9، CBSE الصفوف 6–10)، مرسومة ومشروحة بالعربية من SketchCast."),
+    "es": _set(("Biología", "Química", "Física", "Álgebra"),
+               lambda t: f"Lecciones de {t.lower()} para secundaria (Cambridge etapas 7–9, CBSE clases 6–10), dibujadas y narradas por SketchCast."),
+    "fr": _set(("Biologie", "Chimie", "Physique", "Algèbre"),
+               lambda t: f"Leçons de {t.lower()} pour le collège (Cambridge niveaux 7–9, CBSE classes 6–10), dessinées et commentées par SketchCast."),
+    "pt": _set(("Biologia", "Química", "Física", "Álgebra"),
+               lambda t: f"Aulas de {t.lower()} para os anos finais do ensino fundamental (Cambridge estágios 7–9, CBSE classes 6–10), desenhadas e narradas pela SketchCast."),
+    "ur": _set(("حیاتیات", "کیمیا", "طبیعیات", "الجبرا"),
+               lambda t: f"{t} کے اسباق — CBSE جماعت 6–10 اور کیمبرج اسٹیج 7–9 کے لیے، SketchCast کی جانب سے تصویروں کے ساتھ اردو میں سمجھائے گئے۔"),
+    "te": _set(("జీవశాస్త్రం", "రసాయన శాస్త్రం", "భౌతిక శాస్త్రం", "బీజగణితం"),
+               lambda t: f"{t} పాఠాలు — CBSE 6–10 తరగతులు మరియు కేంబ్రిడ్జ్ స్టేజ్ 7–9 కోసం, SketchCast బొమ్మలతో తెలుగులో వివరించినవి."),
+    "mr": _set(("जीवशास्त्र", "रसायनशास्त्र", "भौतिकशास्त्र", "बीजगणित"),
+               lambda t: f"{t} चे धडे — CBSE इयत्ता 6–10 आणि केंब्रिज स्टेज 7–9 साठी, SketchCast ने चित्रांसह मराठीत समजावलेले."),
+})
+
 
 def playlist_meta(key: str, language: str) -> tuple[str, str]:
     """(title, description) for ``key`` on the ``language`` channel."""
