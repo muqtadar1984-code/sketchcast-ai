@@ -1070,19 +1070,52 @@ def _card_scene(scene: dict, lang: str) -> dict:
     return mirror_scene_for_rtl(scene) if _dir(lang) == "rtl" else scene
 
 
-def _point_rows(points: list[str], heading: str) -> list[tuple[str, float, float]]:
-    """The board points under a heading: (text, top, size) each, starting
+# A board point is cut by its MEASURED width, never by a character count
+# first: the Malay formula point "sin = sisi bertentangan/hipotenus, …"
+# (77 characters) fitted the gap at the minimum size but lost its tail to
+# the old 64-character cap. This cap only stops a runaway string.
+POINT_CHAR_CAP = 160
+POINT_MAX_LINES = 2
+
+
+def _point_rows(points: list[str], heading: str) -> list[tuple[list[str], float, float]]:
+    """The board points under a heading: (lines, top, size) each, starting
     below the heading's MEASURED height, pitched by their own, and no
-    wider than the gap before the card (Hindi points ran into it)."""
+    wider than the gap before the card (Hindi points ran into it). A point
+    too wide for one line at the minimum size wraps onto a second line
+    rather than losing its end."""
     top = 44.0 + _M.text_box(heading, 40, True)[1] + 16.0
     max_w = CARD_X - 16 - 24 - 110
-    rows: list[tuple[str, float, float]] = []
+    rows: list[tuple[list[str], float, float]] = []
     y = max(124.0, top)
     for p in points:
-        text, size = _fit_text(p, 27, max_w, min_size=20.0, cap=64)
-        rows.append((text, y, size))
-        y += max(58.0, _M.text_box(text, size)[1] + 16.0)
+        src = _short(p, POINT_CHAR_CAP)
+        size = 27.0
+        while _M.text_box(src, size)[0] > max_w and size > 20.0:
+            size = max(20.0, size - 1.5)
+        lines = [src] if _M.text_box(src, size)[0] <= max_w else _wrap_text(src, size, max_w, POINT_MAX_LINES)
+        rows.append((lines, y, size))
+        line_h = max(_M.text_box(ln, size)[1] for ln in lines) + 4.0
+        y += max(58.0, line_h * len(lines) + 12.0)
     return rows
+
+
+def _point_elements(rows: list[tuple[list[str], float, float]], fracs: list[float]) -> tuple[list[dict], list[dict]]:
+    """A dash and the text of each point row; a wrapped point's second line
+    is ``wb_p{i}_2``, written straight after the first."""
+    els: list[dict] = []
+    acts: list[dict] = []
+    for i, (lines, y, size) in enumerate(rows):
+        els.append({"id": f"wb_d{i}", "type": "shape", "shape": "line", "width": 4.0, "color": "accent",
+                    "points": [[64, y + 26], [92, y + 22]]})
+        acts.append({"verb": "draw", "target": f"wb_d{i}", "at": {"frac": fracs[i]}})
+        line_h = max(_M.text_box(ln, size)[1] for ln in lines) + 4.0
+        for j, ln in enumerate(lines):
+            eid = f"wb_p{i}" if j == 0 else f"wb_p{i}_{j + 1}"
+            els.append({"id": eid, "type": "text", "text": ln, "size": size, "role": "caption",
+                        "at": [110, y + j * line_h], "anchor": "lt"})
+            acts.append({"verb": "write", "target": eid})
+    return els, acts
 
 
 def concept_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
@@ -1090,20 +1123,17 @@ def concept_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
     # a concept point that is a formula ("sin = opp/hyp, cos = adj/hyp")
     # reaches here verbatim — the translator keeps it as maths — so its
     # engine words are written in the lesson language like the working's
-    points = [_short(state_text(p, lang), 64) for p in lesson.concept_points][:3]
+    points = [_short(state_text(p, lang), POINT_CHAR_CAP) for p in lesson.concept_points][:3]
     seg = _segment(seg_id, "explore", lines, heading=_short(lesson.topic, 60), points=points)
     narration = seg["text"]
     _ht, _hs = _fit_text(lesson.topic, 40, CARD_X - 16 - 24 - 60, bold=True, min_size=26.0, cap=60)
     els: list[dict] = [{"id": "wb_h", "type": "text", "text": _ht, "role": "title",
                         "size": _hs, "at": [60, 44], "anchor": "lt"}]
     acts: list[dict] = [{"verb": "write", "target": "wb_h"}, {"verb": "underline", "target": "wb_h"}]
-    for i, (p, y, size) in enumerate(_point_rows(points, els[0]["text"])):
-        els.append({"id": f"wb_d{i}", "type": "shape", "shape": "line", "width": 4.0, "color": "accent",
-                    "points": [[64, y + 26], [92, y + 22]]})
-        els.append({"id": f"wb_p{i}", "type": "text", "text": p, "size": size, "role": "caption",
-                    "at": [110, y], "anchor": "lt"})
-        acts.append({"verb": "draw", "target": f"wb_d{i}", "at": {"frac": min(0.45, 0.08 + 0.14 * i)}})
-        acts.append({"verb": "write", "target": f"wb_p{i}"})
+    rows = _point_rows(points, els[0]["text"])
+    pels, pacts = _point_elements(rows, [min(0.45, 0.08 + 0.14 * i) for i in range(len(rows))])
+    els += pels
+    acts += pacts
     cels, cacts = card_elements(lesson.method, present=False, lang=lang)
     els += cels
     acts += cacts
@@ -1114,7 +1144,7 @@ def concept_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
 
 def recap_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
     lines = _dialogue_lines(lesson.recap, lang) or [Line(line=_bt("recap_intro", lang))]
-    points = [_short(p, 64) for p in lesson.misconceptions][:3]
+    points = [_short(p, POINT_CHAR_CAP) for p in lesson.misconceptions][:3]
     # the points name mistakes ("Forgetting to change the sign"), so the
     # heading says so — "Remember" over them read as an instruction to forget
     heading = _bt("common_mistakes", lang)
@@ -1122,13 +1152,10 @@ def recap_segment(lesson: Lesson, seg_id: str, lang: str = "en") -> dict:
     els: list[dict] = [{"id": "wb_h", "type": "text", "text": heading, "role": "title", "size": 40,
                         "at": [60, 44], "anchor": "lt"}]
     acts: list[dict] = [{"verb": "write", "target": "wb_h"}]
-    for i, (p, y, size) in enumerate(_point_rows(points, els[0]["text"])):
-        els.append({"id": f"wb_d{i}", "type": "shape", "shape": "line", "width": 4.0, "color": "accent",
-                    "points": [[64, y + 26], [92, y + 22]]})
-        els.append({"id": f"wb_p{i}", "type": "text", "text": p, "size": size, "role": "caption",
-                    "at": [110, y], "anchor": "lt"})
-        acts.append({"verb": "draw", "target": f"wb_d{i}", "at": {"frac": min(0.75, 0.15 + 0.22 * i)}})
-        acts.append({"verb": "write", "target": f"wb_p{i}"})
+    rows = _point_rows(points, els[0]["text"])
+    pels, pacts = _point_elements(rows, [min(0.75, 0.15 + 0.22 * i) for i in range(len(rows))])
+    els += pels
+    acts += pacts
     cels, _ = card_elements(lesson.method, present=True, lang=lang)
     els += cels
     # a pulse, not a circle: the ellipse around a 5-line card crossed its frame
