@@ -929,7 +929,7 @@ def derive_curriculum(sb, job_id: str, curriculum: dict, nodes: list[dict], clie
 
     usage = getattr(client, "session_usage", None) if client is not None else None
     if isinstance(usage, dict) and usage.get("calls"):
-        db.set_job_usage(sb, job_id, usage)
+        db.set_job_usage(sb, job_id, db.client_usage(client))  # + the model split
     summary = {**stage, "step": "done"}
     if errors:
         summary["errors"] = errors[:5]

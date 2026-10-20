@@ -2101,7 +2101,7 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
         "glossary_pairs": len(terms),
     })
     if isinstance(usage, dict) and usage.get("calls"):
-        db.set_job_usage(sb, job_id, usage)
+        db.set_job_usage(sb, job_id, db.client_usage(client))  # + the model split
     summary = {"phase": "translate", "step": "done", "kit_id": kit["id"], "language": language,
                "source_kit_id": source_kit_id, "article_id": article_id, "parts": n,
                "generations": ids, "assets": len(found), "glossary": len(terms),

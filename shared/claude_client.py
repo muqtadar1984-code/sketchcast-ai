@@ -22,28 +22,79 @@ TOKEN_LOG_PATH = Path(__file__).resolve().parent.parent / "token_log.json"
 
 logger = logging.getLogger(__name__)
 
-# $/1M tokens (standard list price). Sonnet 5's intro discount ($2/$10 through
-# 2026-08-31) is deliberately NOT encoded — pricing at standard keeps the
-# console spend figure a safe upper bound during the promo. Cached reads bill at
-# 0.1x input and cache writes at 2x (1-hour TTL); track_tokens applies those.
+# $/1M tokens, first-party list price (Anthropic pricing table, checked
+# 2026-10-20). Sonnet 5 was booked at $3/$15 while its $2/$10 was an intro
+# offer; $2/$10 is now its list price, the same as Sonnet 5.5's. A model
+# missing here is booked at _DEFAULT_PRICING — Sonnet 5.5 was, for two days
+# after the Bedrock cutover, at 1.5x its real cost.
+#
+# Bedrock's GLOBAL inference profiles are assumed to bill at these rates (the
+# regional profiles carry a premium; we use global ones). The ops IAM user
+# cannot read the AWS Price List API, so this was not machine-checked:
+# BEDROCK_PRICE_FACTOR corrects it without a deploy if the bill disagrees.
+#
+# Cache writes bill at 2x input (1-hour TTL, the only TTL this client sends);
+# cache reads at 0.1x input except where _CACHE_READ_FACTOR says otherwise.
 MODEL_PRICING = {
     "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-sonnet-5": (3.0, 15.0),
+    "claude-sonnet-5": (2.0, 10.0),
     "claude-sonnet-5-5": (2.0, 10.0),
     "claude-haiku-4-5": (1.0, 5.0),
     "claude-haiku-5-5": (0.10, 0.50),
     "claude-opus-4-8": (5.0, 25.0),
+    "claude-opus-5-5": (4.0, 20.0),
 }
 _DEFAULT_PRICING = (3.0, 15.0)
 
-# Models with a second rate card for long prompts: (threshold in prompt tokens,
-# (input, output) above it). Haiku 5.5 bills $0.50/$2.50 once one request's
-# prompt — uncached, cache-read and cache-written tokens together — passes
-# 100K (claude-api pricing, checked 2026-10-20; Bedrock's global profile is
-# assumed to bill the first-party rates, as for every model above).
+# Cache-read rate as a fraction of input, where it is not the usual 0.1x.
+_CACHE_READ_FACTOR = {
+    "claude-opus-5-5": 0.05,
+}
+
+# Models with a second rate card for long prompts: (threshold in prompt
+# tokens, (input, output) above it). Haiku 5.5 bills $0.50/$2.50 once the
+# prompt — uncached, cached and cache-written tokens together — passes 100K.
 _LONG_PROMPT_PRICING = {
     "claude-haiku-5-5": (100_000, (0.50, 2.50)),
 }
+
+
+def _pricing_key(model: str) -> str:
+    """The MODEL_PRICING key for a model id: a dated snapshot
+    ("claude-haiku-4-5-20251001") prices as its alias."""
+    if model in MODEL_PRICING:
+        return model
+    head, _, tail = model.rpartition("-")
+    if head and len(tail) == 8 and tail.isdigit() and head in MODEL_PRICING:
+        return head
+    return model
+
+
+def _backend_price_factor(backend: str) -> float:
+    if backend != "bedrock":
+        return 1.0
+    try:
+        return float(os.getenv("BEDROCK_PRICE_FACTOR", "1.0"))
+    except ValueError:
+        return 1.0
+
+
+def claude_cost_usd(model: str, inp: int, out: int, cache_read: int = 0,
+                    cache_write: int = 0, backend: str = "anthropic") -> float:
+    """What one Claude call cost, in USD. `inp` is the UNCACHED input (the
+    API's input_tokens), so the three input buckets are additive."""
+    key = _pricing_key(model)
+    in_rate, out_rate = MODEL_PRICING.get(key, _DEFAULT_PRICING)
+    long_card = _LONG_PROMPT_PRICING.get(key)
+    if long_card and inp + cache_read + cache_write > long_card[0]:
+        in_rate, out_rate = long_card[1]
+    cost = (
+        inp * in_rate
+        + cache_read * in_rate * _CACHE_READ_FACTOR.get(key, 0.1)
+        + cache_write * in_rate * 2.0
+        + out * out_rate
+    ) / 1_000_000
+    return cost * _backend_price_factor(backend)
 
 
 # ── backend selection ────────────────────────────────────────────────────
@@ -1495,24 +1546,16 @@ class ClaudeClient:
     def track_tokens(self, response) -> dict:
         """Extract token usage and estimate cost from a response.
 
-        Model-aware (MODEL_PRICING) and cache-aware: cached reads bill at 0.1x
-        input, cache writes at 2x (1-hour TTL). `input_tokens` from the API is
+        Model-aware and cache-aware (claude_cost_usd): cached reads bill at
+        0.1x input (0.05x on Opus 5.5), cache writes at 2x (1-hour TTL). `input_tokens` from the API is
         already the UNCACHED remainder, so the three input buckets are additive."""
         u = response.usage
         inp = getattr(u, "input_tokens", 0) or 0
         out = getattr(u, "output_tokens", 0) or 0
         cache_read = getattr(u, "cache_read_input_tokens", 0) or 0
         cache_write = getattr(u, "cache_creation_input_tokens", 0) or 0
-        in_rate, out_rate = MODEL_PRICING.get(self.model, _DEFAULT_PRICING)
-        long_card = _LONG_PROMPT_PRICING.get(self.model)
-        if long_card and inp + cache_read + cache_write > long_card[0]:
-            in_rate, out_rate = long_card[1]
-        cost = (
-            inp * in_rate
-            + cache_read * in_rate * 0.1
-            + cache_write * in_rate * 2.0
-            + out * out_rate
-        ) / 1_000_000
+        cost = claude_cost_usd(self.model, inp, out, cache_read, cache_write,
+                               backend=getattr(self, "backend", "anthropic"))
         total = inp + out + cache_read + cache_write
         usage = {
             "input_tokens": inp,
@@ -1533,7 +1576,12 @@ class ClaudeClient:
             self.session_usage["cache_read_input_tokens"] += cache_read
             self.session_usage["cache_creation_input_tokens"] += cache_write
             self.session_usage["cost_usd"] = round(self.session_usage["cost_usd"] + cost, 6)
-        self._log_usage(usage)
+        # The log line (and the job's ledger behind it) names who served the
+        # call, so Claude and Gemini spend separate without guessing from
+        # dates. Only the LOG entry: the returned dict is summed key by key
+        # by callers (_merge_usage), and a string there would not add.
+        self._log_usage({**usage, "model": self.model,
+                         "backend": getattr(self, "backend", "anthropic")})
         return usage
 
     # ── internals ────────────────────────────────────────────────────

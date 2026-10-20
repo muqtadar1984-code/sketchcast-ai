@@ -141,6 +141,14 @@ def record(chars: int, provider: str, family: str | None = None) -> None:
         )
     else:
         logger.info("TTS usage: provider=%s chars=%d est=$0 (free)", provider, chars)
+    # Onto the job's spend too (jobs.usage.tts_usd): the log line above was
+    # the only record, so a kit's narration cost never reached the database.
+    try:
+        from shared.claude_client import log_external_usage  # noqa: PLC0415 — heavy import, paid once
+        log_external_usage("tts", provider=provider, family=family or None,
+                           chars=max(0, int(chars)), usd=cost)
+    except Exception:  # noqa: BLE001 — accounting never breaks narration
+        pass
 
 
 def settle(reserved: int, billed: int, provider: str, family: str | None = None) -> None:

@@ -81,7 +81,7 @@ def run_support_job(sb, job: dict) -> None:
     finally:
         # Spend attribution even on crashing paths (merged additively with any
         # inline re-index usage already written to this job id).
-        db.set_job_usage(sb, job["id"], client.session_usage)
+        db.set_job_usage(sb, job["id"], db.client_usage(client))
 
 
 def _run(sb, job: dict, issue: dict, client) -> None:

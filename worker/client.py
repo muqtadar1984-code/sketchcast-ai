@@ -730,23 +730,62 @@ def set_stage(sb: Client, job_id: str, stage: Optional[dict]) -> None:
         logging.getLogger("worker").debug("set_stage skipped: %s", exc)
 
 
+_USAGE_TEXT_KEYS = ("calls", "input_tokens", "output_tokens",
+                    "cache_read_input_tokens", "cache_creation_input_tokens", "cost_usd")
+
+
+def _merge_usage_values(prev, new):
+    """Add two jobs.usage values key by key: numbers sum, dicts merge
+    recursively, anything else (a model name, a backend) keeps the newer."""
+    if isinstance(prev, dict) and isinstance(new, dict):
+        out = dict(prev)
+        for k, v in new.items():
+            out[k] = _merge_usage_values(prev.get(k), v) if k in prev else v
+        return out
+    if isinstance(prev, bool) or isinstance(new, bool):
+        return new
+    if isinstance(prev, (int, float)) and isinstance(new, (int, float)):
+        total = prev + new
+        return round(total, 6) if isinstance(total, float) else total
+    return new if new is not None else prev
+
+
+def client_usage(client) -> Optional[dict]:
+    """One client's session total in the jobs.usage shape, with the
+    ``by_model`` entry the ledger would have written: a single client is one
+    model on one backend, so the split is the whole total."""
+    usage = getattr(client, "session_usage", None)
+    if not isinstance(usage, dict):
+        return None
+    model = str(getattr(client, "model", "") or "") or "unknown"
+    backend = str(getattr(client, "backend", "") or "") or "unknown"
+    text = {k: usage.get(k, 0) for k in _USAGE_TEXT_KEYS}
+    return {**text, "by_model": {f"{backend}:{model}": {"backend": backend, "model": model, **text}}}
+
+
 def set_job_usage(sb: Client, job_id: str, usage: Optional[dict]) -> None:
-    """Persist a job's Claude token/cost total (jobs.usage), MERGING additively
-    with any existing value — a support-agent run reuses its job id for an
-    inline re-index, and the expensive half of the spend must not be clobbered
-    by the final write. Best-effort: a deployment whose migration hasn't added
-    the column must not fail the job."""
-    if not usage or not usage.get("calls"):
+    """Persist a job's spend (jobs.usage), MERGING additively with any
+    existing value. Two reasons it must add, never replace: a support-agent
+    run reuses its job id for an inline re-index, and a generation writes
+    once per ATTEMPT (process_generation's finally) — a failed or deferred
+    attempt's spend is real money and must survive the retry that succeeds.
+
+    Shape (shared.usage_ledger): calls / input_tokens / output_tokens /
+    cost_usd are TEXT spend as before; by_model splits it by backend and
+    model; images_usd and tts_usd are pictures and narration; total_usd is
+    the three together, recomputed on every write. Best-effort: a deployment
+    whose migration hasn't added the column must not fail the job."""
+    if not usage or not (usage.get("calls") or usage.get("image_calls") or usage.get("tts_calls")):
         return
     try:
         prev_q = sb.table("jobs").select("usage").eq("id", job_id).maybe_single().execute()
         prev = (getattr(prev_q, "data", None) or {}).get("usage") or {}
-        merged = {
-            "calls": int(prev.get("calls") or 0) + int(usage.get("calls") or 0),
-            "input_tokens": int(prev.get("input_tokens") or 0) + int(usage.get("input_tokens") or 0),
-            "output_tokens": int(prev.get("output_tokens") or 0) + int(usage.get("output_tokens") or 0),
-            "cost_usd": round(float(prev.get("cost_usd") or 0) + float(usage.get("cost_usd") or 0), 6),
-        }
+        merged = _merge_usage_values(prev, {k: v for k, v in usage.items() if k != "total_usd"})
+        for k in ("calls", "input_tokens", "output_tokens"):
+            merged[k] = int(merged.get(k) or 0)
+        merged["cost_usd"] = round(float(merged.get("cost_usd") or 0), 6)
+        merged["total_usd"] = round(merged["cost_usd"] + float(merged.get("images_usd") or 0)
+                                    + float(merged.get("tts_usd") or 0), 6)
         sb.table("jobs").update({"usage": merged}).eq("id", job_id).execute()
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("worker").warning("job usage not persisted for %s: %s", job_id, exc)
