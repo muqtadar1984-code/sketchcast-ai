@@ -561,16 +561,40 @@ def discipline_key(codes: Iterable[object]) -> str:
     return max(votes, key=lambda d: (votes[d], -list(votes).index(d)))
 
 
+# The discipline a topic's SUBJECT names, for a topic whose codes name none.
+# A maths topic with no code is a shape-and-space one: the algebra strands
+# (Cambridge 7A–9A, CBSE ALG) are seeded in full, the geometry ones are not,
+# and no curriculum we hold has a trigonometry node at all — every unmapped
+# maths topic on 2026-10-20 (Trigonometric Ratios, Similar Triangles, 3D
+# Shapes …) is geometry. "Science" names no one discipline and gets none.
+_SUBJECT_DISCIPLINE = {
+    "biology": "biology", "chemistry": "chemistry", "physics": "physics",
+    "mathematics": "geometry", "maths": "geometry", "math": "geometry",
+}
+
+
+def subject_discipline(subject: object) -> str:
+    """The fallback discipline for a subject (``"Mathematics"`` → geometry) or ``""``."""
+    return _SUBJECT_DISCIPLINE.get(_s(subject).lower(), "")
+
+
+def topic_discipline(topic: Optional[dict], codes: Iterable[object]) -> str:
+    """``discipline_key(codes)``; when no code names one, the subject's
+    (``subject_discipline``). A mapped code always wins over the subject."""
+    return discipline_key(codes) or subject_discipline((topic or {}).get("subject"))
+
+
 def playlist_keys(topic: dict, header_lines: list[str], codes: Iterable[object] = ()) -> list[str]:
     """The playlist KEYS a video belongs in: the topic's subject, the
-    discipline its curriculum codes name (``discipline_key``), then one per
+    discipline its curriculum codes name, else its subject's
+    (``topic_discipline``), then one per
     mapped curriculum (the header line's leading name, lowercased). Keys, not
     ids — the ids come from ``configured_playlists``."""
     keys: list[str] = []
     subject = _s(topic.get("subject")).lower()
     if subject:
         keys.append(subject)
-    discipline = discipline_key(codes)
+    discipline = topic_discipline(topic, codes)
     if discipline and discipline not in keys:
         keys.append(discipline)
     for line in (header_lines or []):
@@ -1089,7 +1113,7 @@ def compose_words(sb, target: Target, idx: int, total: int) -> tuple[str, str, l
     from catalogue.youtube_enrich import enrich_description, video_tags
 
     playlists = configured_playlists(target.channel, sb)
-    discipline = discipline_key(target.codes)
+    discipline = topic_discipline(topic, target.codes)
     description = enrich_description(description, discipline=discipline, subject=topic.get("subject"),
                                      boards=target.boards, playlist_id=_s(playlists.get(discipline)),
                                      language=language)
@@ -1439,7 +1463,7 @@ __all__ = [
     "YouTubeTransport", "publish_enabled", "audit_passed", "max_parts_per_run", "refresh_token_env",
     "own_channel", "channel_for", "language_name", "no_channel_why",
     "playlists_env", "playlists_settings_key", "stored_playlists", "configured_playlists",
-    "code_discipline", "discipline_key", "part_number", "script_part_number", "ordered_parts", "hhmmss",
+    "code_discipline", "discipline_key", "subject_discipline", "topic_discipline", "part_number", "script_part_number", "ordered_parts", "hhmmss",
     "chapters_of", "chapter_lines", "topic_link", "build_title", "build_description", "srt_time",
     "caption_cues", "build_srt", "playlist_keys", "resolve_playlists", "read_credentials",
     "default_transport", "load_kit", "load_topic", "load_article", "load_artifacts", "load_publications",
