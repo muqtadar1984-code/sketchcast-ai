@@ -239,18 +239,47 @@ def refresh_token_env(language: str) -> str:
     return f"{REFRESH_TOKEN_ENV_PREFIX}{env_lang(language)}"
 
 
-def channel_for(language: str) -> str:
-    """The channel a video in ``language`` is posted to: the language's own
-    channel when its refresh token is configured, else the default (English)
-    channel. Kit Translator T1 (founder, 2026-10-17): translated videos reach
-    YouTube by the same free path as the English ones; until a language has a
-    channel of its own, they go on the one channel we have, titled and
-    tagged in their language (``defaultAudioLanguage``), filed under the same
-    discipline playlists."""
+def own_channel(language: str) -> bool:
+    """Whether ``language`` has a YouTube channel of its own: English always
+    (the default channel), any other language once its refresh token is set."""
     lang = _lang(language)
-    if lang == DEFAULT_LANGUAGE or str(os.getenv(refresh_token_env(lang), "") or "").strip():
+    return lang == DEFAULT_LANGUAGE or bool(str(os.getenv(refresh_token_env(lang), "") or "").strip())
+
+
+def channel_for(language: str) -> str:
+    """The channel a video in ``language`` lives on: the language's own channel
+    when its refresh token is configured, else the default (English) channel.
+
+    Since 2026-10-20 (founder; Translated Videos YouTube Tab plan §10 decision
+    4) a translation is UPLOADED only to its own channel — load_target refuses
+    the upload before this is reached. The English fallback remains for what
+    is already up: a translation posted to the English channel before that
+    (Kit Translator T1, 2026-10-17) is still found there to re-word or finish."""
+    return _lang(language) if own_channel(language) else DEFAULT_LANGUAGE
+
+
+def language_name(language: str) -> str:
+    """The language's English name for a refusal — the same names the library
+    portal uses (Jawi, not "Malay (Jawi)")."""
+    lang = _lang(language)
+    if lang == "ms-arab":
+        return "Jawi"
+    try:
+        from shared.languages import LANGUAGES
+        entry = LANGUAGES.get(lang)
+        return entry.name if entry else lang
+    except Exception:  # noqa: BLE001 — a name is cosmetic; never fail a refusal over it
         return lang
-    return DEFAULT_LANGUAGE
+
+
+def no_channel_why(language: str) -> str:
+    """The refusal for a translation whose language has no channel — the same
+    sentence the app's publish route and Post button give (app
+    utils/catalogue/youtube-channels.ts noChannelWhy)."""
+    name = language_name(language)
+    return (f"There is no {name} YouTube channel yet — a translation is posted only on its own language's "
+            f"channel, never on the English one. Set up the {name} channel (and its refresh token on the "
+            "worker) first.")
 
 
 def playlists_env(language: str) -> str:
@@ -885,6 +914,12 @@ def load_target(sb, params: dict) -> Target:
         raise PublishRefused(
             f"translation {kit_id} is {translation_status}, not approved; a reviewer approves the translation "
             "before it reaches YouTube")
+    # A translation is uploaded only to its OWN language's channel (founder,
+    # 2026-10-20) — never to the English one. A re-word uploads nothing and
+    # may still mend a video posted to the English channel before this rule.
+    if (language != DEFAULT_LANGUAGE and _s(params.get("action")).lower() != REWORDS_ACTION
+            and not own_channel(language)):
+        raise PublishRefused(no_channel_why(language))
 
     topic = load_topic(sb, _s(kit.get("topic_id")))
     if not topic:
@@ -1402,6 +1437,7 @@ __all__ = [
     "PUBLISH_MAX_WAIT_ENV", "PUBLISH_MAX_WAIT_DEFAULT", "max_publish_wait", "TITLE_MAX",
     "DESCRIPTION_MAX", "MIN_CHAPTERS", "LINK_BASE", "PublishRefused", "Credentials", "Target",
     "YouTubeTransport", "publish_enabled", "audit_passed", "max_parts_per_run", "refresh_token_env",
+    "own_channel", "channel_for", "language_name", "no_channel_why",
     "playlists_env", "playlists_settings_key", "stored_playlists", "configured_playlists",
     "code_discipline", "discipline_key", "part_number", "script_part_number", "ordered_parts", "hhmmss",
     "chapters_of", "chapter_lines", "topic_link", "build_title", "build_description", "srt_time",

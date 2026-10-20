@@ -174,7 +174,7 @@ def _arabic_meta() -> dict:
 
 class TestTranslatedPublish:
     def test_words_written_in_the_kits_language_are_used(self, monkeypatch):
-        monkeypatch.delenv("YOUTUBE_REFRESH_TOKEN_AR", raising=False)
+        monkeypatch.setenv("YOUTUBE_REFRESH_TOKEN_AR", "token-present")
         sb = _arabic(_sb(parts=(1,)))
         sb.tables["topic_kits"][0]["youtube_meta"] = _arabic_meta()
         yt = FakeYouTube()
@@ -189,7 +189,7 @@ class TestTranslatedPublish:
         assert "النواة" in up["tags"], "the key terms reach the tags field"
 
     def test_words_written_in_english_before_the_stamp_are_left_off_an_arabic_video(self, monkeypatch):
-        monkeypatch.delenv("YOUTUBE_REFRESH_TOKEN_AR", raising=False)
+        monkeypatch.setenv("YOUTUBE_REFRESH_TOKEN_AR", "token-present")
         sb = _arabic(_sb(parts=(1,)))
         sb.tables["topic_kits"][0]["youtube_meta"] = {"title": "Cells Explained | Nucleus | Cambridge Stage 7 Biology",
                                                       "intro": "What is a cell?", "key_terms": ["nucleus"],

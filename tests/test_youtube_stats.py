@@ -53,7 +53,7 @@ class TestPoll:
                       channel={"channel_id": "UC1", "title": "SketchCast", "subscribers": 12,
                                "views": 400, "videos": 9})
         out = Y.poll(sb, t, now=NOW)
-        assert out == {"language": "en", "videos": 2, "channel": True, "privacy_updates": 1, "errors": []}
+        assert out == {"language": "en", "videos": 2, "channel": True, "privacy_updates": 1, "status_updates": 0, "errors": []}
         rows = sb.tables["youtube_video_stats"]
         assert {r["video_id"] for r in rows} == {"vid-a", "vid-b"}
         a = next(r for r in rows if r["video_id"] == "vid-a")
@@ -212,6 +212,78 @@ class TestEveryChannel:
         Y.maybe_poll(_sb([]), transport_factory=lambda lang: asked.append(lang) or FakeStats(),
                      clock=lambda: 99_999.0)
         assert asked == ["ar"]
+
+
+class TestStatusColumns:
+    """Y2 (2026-10-20): what privacy cannot say — scheduled, rejected,
+    removed — onto the publications row, only when it changes, and never
+    from a reply that failed."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch):
+        monkeypatch.setattr(Y, "_status_columns", None)
+
+    def _video(self, vid, **over):
+        base = {"video_id": vid, "title": vid, "privacy": "private", "views": 1, "likes": 0, "comments": 0,
+                "published_at": "2026-09-10T00:00:00Z", "publish_at": None, "upload_status": "processed"}
+        return {**base, **over}
+
+    def test_upload_status_carries_the_reason_of_a_rejection_or_failure(self):
+        assert Y.upload_status_of({"uploadStatus": "processed"}) == "processed"
+        assert Y.upload_status_of({"uploadStatus": "rejected", "rejectionReason": "duplicate"}) == "rejected:duplicate"
+        assert Y.upload_status_of({"uploadStatus": "failed", "failureReason": "codec"}) == "failed:codec"
+        assert Y.upload_status_of({}) is None
+
+    def test_schedule_and_upload_status_are_written_and_a_missing_video_is_marked(self):
+        sb = _sb([("vid-a", "private"), ("gone", "public")])
+        t = FakeStats(videos=[self._video("vid-a", publish_at="2026-09-22T09:00:00Z")])
+        out = Y.poll(sb, t, now=NOW)
+        assert out["status_updates"] == 2
+        pubs = {p["youtube_video_id"]: p for p in sb.tables["topic_publications"]}
+        assert pubs["vid-a"]["youtube_publish_at"] == "2026-09-22T09:00:00Z"
+        assert pubs["vid-a"]["youtube_upload_status"] == "processed"
+        assert pubs["vid-a"].get("youtube_missing_since") is None
+        assert pubs["gone"]["youtube_missing_since"] == NOW.isoformat()
+        assert pubs["gone"]["privacy"] == "public", "privacy is left as it was last seen"
+
+    def test_a_quiet_hour_writes_nothing_and_missing_keeps_its_first_time(self):
+        sb = _sb([("vid-a", "private"), ("gone", "public")])
+        t = FakeStats(videos=[self._video("vid-a")])
+        Y.poll(sb, t, now=NOW)
+        later = datetime(2026, 9, 21, 9, 0, tzinfo=timezone.utc)
+        assert Y.poll(sb, t, now=later)["status_updates"] == 0
+        gone = next(p for p in sb.tables["topic_publications"] if p["youtube_video_id"] == "gone")
+        assert gone["youtube_missing_since"] == NOW.isoformat()
+
+    def test_a_video_seen_again_is_no_longer_missing(self):
+        sb = _sb([("vid-a", "private")])
+        sb.tables["topic_publications"][0]["youtube_missing_since"] = "2026-09-20T08:00:00+00:00"
+        out = Y.poll(sb, FakeStats(videos=[self._video("vid-a")]), now=NOW)
+        assert out["status_updates"] == 1
+        assert sb.tables["topic_publications"][0]["youtube_missing_since"] is None
+
+    def test_a_failed_list_marks_nothing_missing(self):
+        sb = _sb([("vid-a", "public")])
+        out = Y.poll(sb, FakeStats(fail={"videos"}), now=NOW)
+        assert out["status_updates"] == 0 and any(e.startswith("videos:") for e in out["errors"])
+        assert sb.tables["topic_publications"][0].get("youtube_missing_since") is None
+
+    def test_a_database_without_the_columns_is_skipped_after_one_try(self, monkeypatch):
+        sb = _sb([("vid-a", "private")])
+        calls = []
+
+        def boom(*a, **k):
+            calls.append(1)
+            raise RuntimeError("PGRST204 Could not find the 'youtube_publish_at' column of 'topic_publications'")
+
+        monkeypatch.setattr(Y, "_rows", boom)
+        assert Y._sync_status(sb, ["vid-a"], [], NOW.isoformat()) == 0
+        assert Y._status_columns is False
+        assert Y._sync_status(sb, ["vid-a"], [], NOW.isoformat()) == 0 and len(calls) == 1
+
+    def test_instants_compare_across_z_and_offset_spellings(self):
+        assert Y._same_value("2026-09-22T09:00:00Z", "2026-09-22T09:00:00+00:00")
+        assert not Y._same_value(None, "2026-09-22T09:00:00Z") and Y._same_value(None, None)
 
 
 class TestJawiChannel:
