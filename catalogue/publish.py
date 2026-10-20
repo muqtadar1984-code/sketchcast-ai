@@ -219,17 +219,24 @@ def max_publish_wait() -> float:
         return float(PUBLISH_MAX_WAIT_DEFAULT) * 60.0
 
 
+def env_lang(language: object) -> str:
+    """A language code as it appears in an environment-variable name: upper
+    case with ``-`` → ``_``. Railway (and every POSIX shell) refuses a hyphen
+    in a variable name, so Jawi (``ms-arab``) is ``MS_ARAB``, never
+    ``MS-ARAB``. ``lang_from_env`` is the inverse."""
+    return _lang(language).upper().replace("-", "_")
+
+
+def lang_from_env(suffix: object) -> str:
+    """The language code an env-name suffix stands for (``MS_ARAB`` → ``ms-arab``)."""
+    return _lang(str(suffix or "").replace("_", "-"))
+
+
 def refresh_token_env(language: str) -> str:
     """The env var holding the channel's refresh token — one channel per
-    language (plan decision 9), so one variable per language. A hyphen in the
-    code is an underscore in the name — an environment variable cannot carry
-    one — so Jawi (``ms-arab``) is ``YOUTUBE_REFRESH_TOKEN_MS_ARAB``."""
-    return f"{REFRESH_TOKEN_ENV_PREFIX}{_lang(language).upper().replace('-', '_')}"
-
-
-def language_from_token_suffix(suffix: str) -> str:
-    """The inverse of refresh_token_env's suffix: ``MS_ARAB`` → ``ms-arab``."""
-    return _lang(suffix).replace("_", "-")
+    language (plan decision 9), so one variable per language. Two languages
+    may share one channel by holding the same token (Malay and Jawi)."""
+    return f"{REFRESH_TOKEN_ENV_PREFIX}{env_lang(language)}"
 
 
 def own_channel(language: str) -> bool:
@@ -276,7 +283,7 @@ def no_channel_why(language: str) -> str:
 
 
 def playlists_env(language: str) -> str:
-    return f"{PLAYLISTS_ENV_PREFIX}{_lang(language).upper()}"
+    return f"{PLAYLISTS_ENV_PREFIX}{env_lang(language)}"
 
 
 def playlists_settings_key(language: str) -> str:
@@ -1430,7 +1437,7 @@ __all__ = [
     "PUBLISH_MAX_WAIT_ENV", "PUBLISH_MAX_WAIT_DEFAULT", "max_publish_wait", "TITLE_MAX",
     "DESCRIPTION_MAX", "MIN_CHAPTERS", "LINK_BASE", "PublishRefused", "Credentials", "Target",
     "YouTubeTransport", "publish_enabled", "audit_passed", "max_parts_per_run", "refresh_token_env",
-    "language_from_token_suffix", "own_channel", "channel_for", "language_name", "no_channel_why",
+    "own_channel", "channel_for", "language_name", "no_channel_why",
     "playlists_env", "playlists_settings_key", "stored_playlists", "configured_playlists",
     "code_discipline", "discipline_key", "part_number", "script_part_number", "ordered_parts", "hhmmss",
     "chapters_of", "chapter_lines", "topic_link", "build_title", "build_description", "srt_time",

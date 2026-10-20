@@ -162,10 +162,6 @@ class TestEveryChannel:
         assert Y.channel_languages(env) == ["en", "ar", "ms"]
         assert Y.channel_languages({}) == ["en"]
 
-    def test_jawi_is_named_with_an_underscore_and_polled_as_ms_arab(self):
-        env = {"YOUTUBE_REFRESH_TOKEN_MS_ARAB": "j", "YOUTUBE_REFRESH_TOKEN_AR": "z", "YOUTUBE_REFRESH_TOKEN_X1": "n"}
-        assert Y.channel_languages(env) == ["en", "ar", "ms-arab"]
-
     def test_each_channel_is_polled_with_its_own_transport_and_privacy_syncs(self, monkeypatch):
         monkeypatch.setenv(Y.POLL_ENV, "60")
         monkeypatch.setattr(Y, "_last_run", 0.0)
@@ -288,3 +284,10 @@ class TestStatusColumns:
     def test_instants_compare_across_z_and_offset_spellings(self):
         assert Y._same_value("2026-09-22T09:00:00Z", "2026-09-22T09:00:00+00:00")
         assert not Y._same_value(None, "2026-09-22T09:00:00Z") and Y._same_value(None, None)
+
+
+class TestJawiChannel:
+    def test_an_underscored_env_name_is_the_hyphenated_language(self):
+        env = {"YOUTUBE_REFRESH_TOKEN_MS": "t", "YOUTUBE_REFRESH_TOKEN_MS_ARAB": "t",
+               "YOUTUBE_REFRESH_TOKEN_NOT-A-LANG!": "x"}
+        assert Y.channel_languages(env) == ["en", "ms", "ms-arab"]

@@ -127,6 +127,22 @@ WORDS: dict[str, dict[str, str]] = {
         "fallback_intro": "{topic} — pelajaran SketchCast.",
         "more_lessons": "Lagi pelajaran {discipline}: ",
     },
+    # Jawi (ms-arab): the Malay row written in Jawi. Needs a native read.
+    "ms-arab": {
+        "explained": "{topic} دجلسکن",
+        "aligned": "سلاراس دڠن",
+        "chapters": "باب",
+        "key_terms": "ايستيله اوتام: ",
+        "part": "بهاݢين {part} درڤد {total}.",
+        "next": "ستروسڽ: ",
+        "full_kit": "کيت ڤنوه: ",
+        "sketchcast": ("ڤلاجرن اين دجان دڠن SketchCast. موات نايق ساتو باب بوکو تيکس دان داڤتکن ۏيديو ڤاڤن "
+                       "ڤوتيه، سلايد، رنچڠن ڤڠاجرن، اکتيۏيتي، لمبرن کرجا، کرتس اوجين دان کاجين کيس "
+                       "دڠن ساتو کليک."),
+        "cta": "جک ڤلاجرن اين ممبنتو، سيلا like، کوڠسي دان کومن، دان لڠݢن — کامي منربيتکن ڤلاجرن بهارو سچارا برکالا.",
+        "fallback_intro": "{topic} — ڤلاجرن SketchCast.",
+        "more_lessons": "لاݢي ڤلاجرن {discipline}: ",
+    },
     "hi": {
         "explained": "{topic} की व्याख्या",
         "aligned": "इनके अनुरूप",

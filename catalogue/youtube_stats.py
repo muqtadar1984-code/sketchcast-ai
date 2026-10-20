@@ -59,14 +59,17 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import threading
 import time
 from datetime import datetime, timezone
 from typing import Optional, Protocol
 
+import re
+
 from catalogue.publish import (DEFAULT_LANGUAGE, REFRESH_TOKEN_ENV_PREFIX, PublishRefused,
-                               _lang, _rows, _s, language_from_token_suffix, read_credentials)
+                               _lang, _rows, _s, lang_from_env, read_credentials)
+
+_LANG_RE = re.compile(r"^[a-z]{2,3}(-[a-z]{2,4})?$")
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +79,6 @@ VIDEO_TABLE = "youtube_video_stats"
 CHANNEL_TABLE = "youtube_channel_stats"
 PUBLICATIONS_TABLE = "topic_publications"
 BATCH = 50  # videos.list accepts up to 50 ids per call
-# a channel's language code as a token names it: "ar", "ms-arab"
-_LANG_CODE = re.compile(r"[a-z]+(?:-[a-z]+)?")
 # the Y2 columns on topic_publications (app migration 0148)
 STATUS_COLUMNS = ("youtube_publish_at", "youtube_upload_status", "youtube_missing_since")
 
@@ -200,9 +201,9 @@ def channel_languages(environ=None) -> list[str]:
     for name in sorted(env):
         if not name.startswith(REFRESH_TOKEN_ENV_PREFIX) or not str(env.get(name) or "").strip():
             continue
-        # MS_ARAB names Jawi (ms-arab): a hyphen cannot be in a variable name
-        lang = language_from_token_suffix(name[len(REFRESH_TOKEN_ENV_PREFIX):])
-        if _LANG_CODE.fullmatch(lang) and lang not in out:
+        # MS_ARAB → ms-arab: env names carry "_" where language codes carry "-".
+        lang = lang_from_env(name[len(REFRESH_TOKEN_ENV_PREFIX):])
+        if _LANG_RE.match(lang) and lang not in out:
             out.append(lang)
     return out
 

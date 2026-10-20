@@ -803,11 +803,6 @@ def test_the_real_transports_four_calls_execute():
     assert svc.p.kw["body"]["snippet"]["resourceId"] == {"kind": "youtube#video", "videoId": "vid-1"}
 
 
-def test_jawi_names_its_token_with_an_underscore_and_round_trips():
-    assert P.refresh_token_env("ms-arab") == "YOUTUBE_REFRESH_TOKEN_MS_ARAB"
-    assert P.language_from_token_suffix("MS_ARAB") == "ms-arab" and P.language_from_token_suffix("AR") == "ar"
-
-
 def test_own_channel_is_english_always_and_a_translation_once_its_token_is_set(monkeypatch):
     monkeypatch.delenv("YOUTUBE_REFRESH_TOKEN_MS_ARAB", raising=False)
     assert P.own_channel("en") and not P.own_channel("ms-arab")
@@ -930,3 +925,18 @@ def test_a_translated_rerun_skips_the_part_already_on_the_channel(monkeypatch):
     yt = FakeYouTube()
     summary = P.run_publish_job(sb, _job(), transport=yt)
     assert summary["already"] == [1] and yt.uploads == []
+
+
+def test_jawi_env_names_use_an_underscore():
+    """Railway refuses a hyphen in a variable name: Jawi (ms-arab) is MS_ARAB."""
+    assert P.refresh_token_env("ms-arab") == "YOUTUBE_REFRESH_TOKEN_MS_ARAB"
+    assert P.playlists_env("ms-arab") == "YOUTUBE_PLAYLISTS_MS_ARAB"
+    assert P.lang_from_env("MS_ARAB") == "ms-arab"
+    assert P.lang_from_env("AR") == "ar"
+
+
+def test_jawi_posts_to_its_own_channel_once_its_token_is_set(monkeypatch):
+    monkeypatch.delenv("YOUTUBE_REFRESH_TOKEN_MS_ARAB", raising=False)
+    assert P.channel_for("ms-arab") == "en"
+    monkeypatch.setenv("YOUTUBE_REFRESH_TOKEN_MS_ARAB", "tok")
+    assert P.channel_for("ms-arab") == "ms-arab"
