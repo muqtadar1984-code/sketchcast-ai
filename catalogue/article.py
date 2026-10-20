@@ -982,7 +982,7 @@ def author_article(sb, job_id: str, params: dict, client=None) -> dict:
     # Recorded once, after the re-ask the length floor may have spent.
     usage = getattr(client, "session_usage", None)
     if isinstance(usage, dict) and usage.get("calls"):
-        db.set_job_usage(sb, job_id, usage)
+        db.set_job_usage(sb, job_id, db.client_usage(client))  # + the model split
 
     stage["step"] = "write"
     db.set_stage(sb, job_id, dict(stage))

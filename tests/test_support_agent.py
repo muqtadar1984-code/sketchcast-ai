@@ -394,7 +394,7 @@ def test_set_job_usage_merges_additively():
     sb = SB({})
     wc.set_job_usage(sb, "j1", {"calls": 2, "input_tokens": 10, "output_tokens": 20, "cost_usd": 0.5})
     merged = [row for t, row in sb.updates if t == "jobs"][0]["usage"]
-    assert merged == {"calls": 7, "input_tokens": 110, "output_tokens": 220, "cost_usd": 1.5}
+    assert merged == {"calls": 7, "input_tokens": 110, "output_tokens": 220, "cost_usd": 1.5, "total_usd": 1.5}
 
 
 # ── diagnosis parsing ─────────────────────────────────────────────────────────

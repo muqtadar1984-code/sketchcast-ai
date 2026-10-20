@@ -603,7 +603,7 @@ class GeminiClient:
             self.session_usage["input_tokens"] += inp
             self.session_usage["output_tokens"] += out
             self.session_usage["cost_usd"] = round(self.session_usage["cost_usd"] + cost, 6)
-        ClaudeClient._log_usage(usage)
+        ClaudeClient._log_usage({**usage, "model": self.model, "backend": self.backend})
         return usage
 
     # ── public surface (mirrors ClaudeClient) ─────────────────────────

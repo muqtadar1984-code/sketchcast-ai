@@ -13,6 +13,11 @@ from worker import client as db
 from worker import process
 import worker.run as run
 
+
+def _text(total: dict) -> dict:
+    """The four original keys of a ledger total — text spend."""
+    return {k: total[k] for k in ("calls", "input_tokens", "output_tokens", "cost_usd")}
+
 VERTEX_429 = '{"error": {"code": 429, "message": "Resource exhausted", "status": "RESOURCE_EXHAUSTED"}}'
 
 
@@ -41,7 +46,7 @@ class TestSpendFromEveryClientAndThread:
         usage_ledger.add({"generation_id": "g1", "input_tokens": 5, "output_tokens": 5, "cost_usd": 0.001})
         usage_ledger.add({"generation_id": "g2", "input_tokens": 999})           # no account: dropped
         usage_ledger.add({"input_tokens": 999})                                    # nowhere to go: dropped
-        assert usage_ledger.total("g1") == {"calls": 2, "input_tokens": 105, "output_tokens": 25, "cost_usd": 0.011}
+        assert _text(usage_ledger.total("g1")) == {"calls": 2, "input_tokens": 105, "output_tokens": 25, "cost_usd": 0.011}
         assert usage_ledger.stop("g1")["calls"] == 2 and usage_ledger.total("g1")["calls"] == 0
 
     def test_a_render_thread_without_labels_is_attributed_through_the_phase_clock(self):
@@ -55,12 +60,15 @@ class TestSpendFromEveryClientAndThread:
         def render_thread():
             tok = phase_clock.bind(gid)
             try:
-                usage_ledger.add({"service": "image.vertex", "estimated_cost_usd": 0.04})
+                usage_ledger.add({"service": "image.vertex", "model": "m", "usd": 0.04, "outcome": "image"})
             finally:
                 phase_clock.unbind(tok)
         with ThreadPoolExecutor(max_workers=1) as ex:
             ex.submit(render_thread).result()
-        assert usage_ledger.total("g-render") == {"calls": 1, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.04}
+        total = usage_ledger.total("g-render")
+        # a picture is picture spend, not a text call
+        assert _text(total) == {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+        assert (total["image_calls"], total["images"], total["images_usd"]) == (1, 1, 0.04)
 
     def test_the_token_log_feeds_the_ledger(self, monkeypatch, tmp_path):
         from shared.claude_client import ClaudeClient, set_usage_context
@@ -72,7 +80,7 @@ class TestSpendFromEveryClientAndThread:
             ClaudeClient._log_usage({"input_tokens": 1, "output_tokens": 1, "estimated_cost_usd": 0.001})
         finally:
             set_usage_context()
-        assert usage_ledger.total("g-log") == {"calls": 2, "input_tokens": 11, "output_tokens": 4, "cost_usd": 0.003}
+        assert _text(usage_ledger.total("g-log")) == {"calls": 2, "input_tokens": 11, "output_tokens": 4, "cost_usd": 0.003}
 
     def test_the_job_row_gets_the_ledger_total_not_one_clients(self, monkeypatch):
         written = {}
@@ -83,10 +91,9 @@ class TestSpendFromEveryClientAndThread:
             # two "clients" and a render thread, as a video really spends
             usage_ledger.add({"generation_id": gid, "input_tokens": 1000, "output_tokens": 500, "estimated_cost_usd": 0.1})
             usage_ledger.add({"generation_id": gid, "input_tokens": 2000, "output_tokens": 100, "estimated_cost_usd": 0.2})
-            db.set_job_usage(sb, job["id"], usage_ledger.total(gid))
         monkeypatch.setattr(process, "_generate", fake_generate)
         process.process_generation(object(), {"id": "j1", "type": "presentation", "created_at": "1"}, GEN)
-        assert written["j1"] == {"calls": 2, "input_tokens": 3000, "output_tokens": 600, "cost_usd": 0.3}
+        assert _text(written["j1"]) == {"calls": 2, "input_tokens": 3000, "output_tokens": 600, "cost_usd": 0.3}
         assert usage_ledger.total(GEN)["calls"] == 0, "the account is closed with the job"
 
     def test_the_worker_no_longer_reports_one_clients_session(self):
@@ -94,7 +101,8 @@ class TestSpendFromEveryClientAndThread:
         src = inspect.getsource(process)
         assert "set_job_usage(sb, job_id, built.client.session_usage)" not in src
         assert "set_job_usage(sb, job_id, client.session_usage)" not in src, "jobs.usage comes from the ledger"
-        assert src.count("usage_ledger.total(generation_id)") == 2
+        # once, in process_generation's finally: every outcome, every attempt
+        assert src.count("usage_ledger.total(generation_id)") == 1
 
 
 # ── claimed_at ──────────────────────────────────────────────────────────

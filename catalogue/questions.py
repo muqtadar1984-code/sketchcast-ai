@@ -1025,7 +1025,7 @@ def author_questions(sb, job_id: str, params: dict, client=None) -> dict:
                  "duplicates": dup2_known + len(race_rows2), "rejected": len(rejected2)}
     usage = getattr(client, "session_usage", None)
     if isinstance(usage, dict) and usage.get("calls"):
-        db.set_job_usage(sb, job_id, usage)
+        db.set_job_usage(sb, job_id, db.client_usage(client))  # + the model split
     db.set_progress(sb, job_id, 95)
 
     stage.pop("topup_objectives", None)

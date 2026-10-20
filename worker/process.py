@@ -2731,7 +2731,6 @@ def _process_catalogue(sb: Client, job: dict, generation_id: str, gen: dict, *,
                 sb, job, generation_id, gen, unit, tmp, allow_premium=allow_premium,
                 tier_info=tier_info, canary_provider=canary_provider,
             )
-        db.set_job_usage(sb, job_id, usage_ledger.total(generation_id))
         if (gen.get("kind") or "presentation") == "presentation":
             recorded = catalogue_kit.record_presentation(
                 sb, gen, prepared.kit_id, {"kind": "presentation", "parts": built.parts})
@@ -2806,6 +2805,16 @@ def process_generation(sb: Client, job: dict, generation_id: str) -> None:
                                            {"timings": clock.summary(outcome=outcome)})
         except Exception:  # noqa: BLE001 — accounting must never fail a lesson
             logger.warning("phase timings not recorded for %s", generation_id, exc_info=True)
+        try:
+            # Spend, on EVERY outcome. This used to be written only on success,
+            # so a failed attempt — two kits each burned 32 minutes of model
+            # calls before failing on a 429 (2026-10-13) — and a deferred one
+            # left nothing on the row, and the retry that succeeded recorded
+            # only its own spend. set_job_usage ADDS to the row, so each
+            # attempt's account (opened afresh above) lands once.
+            db.set_job_usage(sb, job.get("id"), usage_ledger.total(generation_id))
+        except Exception:  # noqa: BLE001 — accounting must never fail a lesson
+            logger.warning("spend not recorded for %s", generation_id, exc_info=True)
         finally:
             phase_clock.stop(generation_id)
             usage_ledger.stop(generation_id)
@@ -2940,8 +2949,8 @@ def _generate(sb: Client, job: dict, generation_id: str) -> None:
         )
     client = built.client
 
-    # Attribute this job's Claude spend to the row (unit economics per lesson).
-    db.set_job_usage(sb, job_id, usage_ledger.total(generation_id))
+    # The job's spend reaches its row from process_generation's finally, on
+    # every outcome — not here, where only a success would record it.
     db.finish_job(sb, job_id, generation_id)
     logger.info("Generation %s (%s) done — %s", generation_id, kind, client.session_usage)
 
@@ -3168,7 +3177,7 @@ def index_book(sb: Client, job: dict) -> None:
     if health is not None:
         db.set_book_health(sb, book_id, health)
     if client is not None:
-        db.set_job_usage(sb, job["id"], client.session_usage)
+        db.set_job_usage(sb, job["id"], db.client_usage(client))
     # Any chapter whose page range CHANGED versus the previously stored list has
     # stale cached OCR (source_text is keyed only by chapter_num, not pages) — clear
     # it so the new pages are transcribed fresh. Covers heal relocations AND plain
