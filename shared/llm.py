@@ -71,7 +71,8 @@ _CATALOGUE: contextvars.ContextVar[bool] = contextvars.ContextVar("catalogue_sco
 #             Claude that upgrade does not apply, so the kind starts strong
 #   <other>   deck, activity, case study, lesson plan — prose from an
 #             analysis already made: the cheaper model, as a book kit's are
-CATALOGUE_SONNET = "claude-sonnet-4-6"
+# Sonnet 5.5 since 2026-10-20 (founder: nothing on Sonnet 4.6).
+CATALOGUE_SONNET = "claude-sonnet-5-5"
 CATALOGUE_HAIKU = "claude-haiku-4-5"
 CATALOGUE_ROLE_ANALYSIS = "analysis"
 CATALOGUE_ROLE_SCRIPT = "script"

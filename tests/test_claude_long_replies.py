@@ -268,7 +268,9 @@ def test_a_genuinely_old_sdk_still_falls_back(monkeypatch):
     out = c._create_stream("sys", [{"role": "user", "content": "p"}], 30_000)
 
     assert out.stop_reason == "end_turn"
-    assert calls == [{"type": "disabled"}, None], "probed, then retried bare"
+    # the probe is the model's own thinking-off spelling (between_tools on the
+    # Sonnet 5.5 default, disabled on older models), then a bare retry
+    assert calls == [cc._thinking_off_for(c.model), None], "probed, then retried bare"
 
 
 def test_the_streamed_retry_is_logged(monkeypatch, caplog):

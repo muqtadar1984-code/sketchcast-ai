@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 MODEL_PRICING = {
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-sonnet-5": (3.0, 15.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
     "claude-haiku-4-5": (1.0, 5.0),
     "claude-haiku-5-5": (0.10, 0.50),
     "claude-opus-4-8": (5.0, 25.0),
@@ -98,7 +99,7 @@ _BEDROCK_MODEL_IDS = {
     "claude-sonnet-4-6": "global.anthropic.claude-sonnet-4-6",
     "claude-sonnet-5": "global.anthropic.claude-sonnet-5",
     # live 2026-10-18 (thinking off = between_tools, see _thinking_off_for);
-    # NOT in MODEL_PRICING yet, so jobs.usage prices it at the Sonnet default
+    # the general default since 2026-10-20 (CLAUDE_MODEL, below)
     "claude-sonnet-5-5": "global.anthropic.claude-sonnet-5-5",
     # live 2026-10-20 (10M TPM global quota; thinking off = disabled, NOT
     # between_tools — see _BETWEEN_TOOLS_PREFIXES)
@@ -194,8 +195,9 @@ def artifact_model(kind: str | None = None) -> str:
 
     Override globally with ARTIFACT_MODEL, or per artifact kind with
     ARTIFACT_MODEL_<KIND> (e.g. ARTIFACT_MODEL_EXAM_PAPER=claude-sonnet-5) to bump a
-    reasoning-heavy kind back to Sonnet if Haiku dips. Revert generation entirely
-    with ARTIFACT_MODEL=claude-sonnet-4-6."""
+    reasoning-heavy kind back to Sonnet if Haiku dips. Put generation entirely on
+    Sonnet with ARTIFACT_MODEL=claude-sonnet-5-5 (Sonnet 4.6 is retired: founder,
+    2026-10-20)."""
     if kind:
         specific = os.getenv("ARTIFACT_MODEL_" + kind.upper())
         if specific:
@@ -1242,9 +1244,11 @@ class ClaudeClient:
     _thinking_off: dict = _THINKING_DISABLED
 
     def __init__(self, model: str | None = None):
-        # Model is env-selectable (CLAUDE_MODEL) so it can be flipped to
-        # claude-sonnet-5 in Railway without a code change; default stays on 4.6.
-        self.model = model or os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+        # Model is env-selectable (CLAUDE_MODEL) so it can be flipped in
+        # Railway without a code change. Sonnet 5.5 since 2026-10-20: nothing
+        # runs on Sonnet 4.6 any more (founder), and a deleted variable must
+        # not fall back to it. 4.6 stays mapped and priced for rollback only.
+        self.model = model or os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
         self.backend = llm_backend()
         if self.backend == "bedrock" and self.model not in _bedrock_model_map():
             # Per-MODEL routing: Bedrock serves what it is mapped for, anything

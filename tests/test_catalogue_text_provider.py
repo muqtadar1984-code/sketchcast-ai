@@ -83,7 +83,7 @@ class TestBookJobsNeverMove:
     def test_arabic_book_job_keeps_the_book_models(self, monkeypatch):
         _claude_on(monkeypatch)
         assert llm.client_for("ar", kind="deck").model == cc.artifact_model("deck")
-        assert llm.client_for("ar").model == "claude-sonnet-4-6"
+        assert llm.client_for("ar").model == "claude-sonnet-5-5"
 
     def test_the_script_fallback_still_serves_a_teachers_job(self, monkeypatch):
         _claude_on(monkeypatch)
