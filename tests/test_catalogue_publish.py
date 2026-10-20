@@ -803,6 +803,18 @@ def test_the_real_transports_four_calls_execute():
     assert svc.p.kw["body"]["snippet"]["resourceId"] == {"kind": "youtube#video", "videoId": "vid-1"}
 
 
+def test_jawi_names_its_token_with_an_underscore_and_round_trips():
+    assert P.refresh_token_env("ms-arab") == "YOUTUBE_REFRESH_TOKEN_MS_ARAB"
+    assert P.language_from_token_suffix("MS_ARAB") == "ms-arab" and P.language_from_token_suffix("AR") == "ar"
+
+
+def test_own_channel_is_english_always_and_a_translation_once_its_token_is_set(monkeypatch):
+    monkeypatch.delenv("YOUTUBE_REFRESH_TOKEN_MS_ARAB", raising=False)
+    assert P.own_channel("en") and not P.own_channel("ms-arab")
+    monkeypatch.setenv("YOUTUBE_REFRESH_TOKEN_MS_ARAB", "token-present")
+    assert P.own_channel("ms-arab") and P.channel_for("ms-arab") == "ms-arab"
+
+
 def test_the_token_variable_is_named_per_channel_language():
     assert P.refresh_token_env("en") == "YOUTUBE_REFRESH_TOKEN_EN"
     assert P.refresh_token_env("ar") == "YOUTUBE_REFRESH_TOKEN_AR"
@@ -861,12 +873,25 @@ def _arabic(sb: FakeSB, translation_status: str = "approved") -> FakeSB:
     return sb
 
 
-def test_a_translated_kit_publishes_in_its_language_on_the_english_channel_when_it_has_none(monkeypatch):
+def test_a_translated_kit_is_refused_while_its_language_has_no_channel(monkeypatch):
+    """Founder, 2026-10-20: a translation is uploaded only to its OWN
+    language's channel, never to the English one (T1's fallback is gone)."""
     monkeypatch.delenv("YOUTUBE_REFRESH_TOKEN_AR", raising=False)
     sb = _arabic(_sb(parts=(1,)))
     yt = FakeYouTube()
+    assert P.run_publish_job(sb, _job(language="en"), transport=yt) is None
+    assert yt.uploads == [] and _pubs(sb) == {}
+    assert _job_row(sb)["error"] == P.no_channel_why("ar")
+    assert "no Arabic YouTube channel yet" in P.no_channel_why("ar")
+    assert P.no_channel_why("ms-arab").startswith("There is no Jawi YouTube channel yet")
+
+
+def test_a_translated_kit_publishes_in_its_language_on_its_own_channel(monkeypatch):
+    monkeypatch.setenv("YOUTUBE_REFRESH_TOKEN_AR", "token-present")
+    sb = _arabic(_sb(parts=(1,)))
+    yt = FakeYouTube()
     summary = P.run_publish_job(sb, _job(language="en"), transport=yt)
-    assert summary["published"] == [1] and summary["language"] == "ar" and summary["channel"] == "en"
+    assert summary["published"] == [1] and summary["language"] == "ar" and summary["channel"] == "ar"
     up = yt.uploads[0]
     assert up["language"] == "ar", "defaultAudioLanguage is the video's language"
     # the English structure in Arabic (2026-10-17): the Arabic headline, no
@@ -877,7 +902,7 @@ def test_a_translated_kit_publishes_in_its_language_on_the_english_channel_when_
     assert "Aligned to" not in up["description"] and "Chapters" not in up["description"]
     assert yt.captions and yt.captions[0]["language"] == "ar"
     row = _pubs(sb)[1]
-    assert row["channel_language"] == "en" and row["youtube_video_id"] == "yt-1"
+    assert row["channel_language"] == "ar" and row["youtube_video_id"] == "yt-1"
 
 
 def test_a_translated_kit_goes_to_its_own_channel_when_that_channel_is_configured(monkeypatch):
@@ -899,8 +924,8 @@ def test_a_translation_still_in_review_is_refused_before_any_upload():
 
 
 def test_a_translated_rerun_skips_the_part_already_on_the_channel(monkeypatch):
-    monkeypatch.delenv("YOUTUBE_REFRESH_TOKEN_AR", raising=False)
-    sb = _arabic(_sb(parts=(1,), publications=[{"topic_kit_id": KIT, "part": 1, "channel_language": "en",
+    monkeypatch.setenv("YOUTUBE_REFRESH_TOKEN_AR", "token-present")
+    sb = _arabic(_sb(parts=(1,), publications=[{"topic_kit_id": KIT, "part": 1, "channel_language": "ar",
                                                 "youtube_video_id": "yt-old", "privacy": "private"}]))
     yt = FakeYouTube()
     summary = P.run_publish_job(sb, _job(), transport=yt)

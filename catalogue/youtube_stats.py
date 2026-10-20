@@ -42,19 +42,31 @@ founder flips videos public by hand in Studio, and the console used to
 have no way of knowing. The poll copies YouTube's current privacyStatus
 back onto the publications row when it differs, so "which of these are
 actually live?" is answerable from the database.
+
+THE STATES PRIVACY CANNOT SAY (2026-10-20, Translated Videos YouTube Tab
+plan Y2). A video scheduled to go public reads `private` until its time,
+one YouTube rejected or failed to process reads whatever it was uploaded
+as, and a deleted one is simply missing from the reply. When the
+publications row has the columns (app migration 0148), the poll also
+writes, ONLY when they change: youtube_publish_at (status.publishAt),
+youtube_upload_status (status.uploadStatus, ":reason" for a rejected or
+failed one) and youtube_missing_since (set the first time a SUCCESSFUL
+videos.list leaves the video out, cleared when it is listed again). A
+database without them keeps the privacy sync alone.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime, timezone
 from typing import Optional, Protocol
 
 from catalogue.publish import (DEFAULT_LANGUAGE, REFRESH_TOKEN_ENV_PREFIX, PublishRefused,
-                               _lang, _rows, _s, read_credentials)
+                               _lang, _rows, _s, language_from_token_suffix, read_credentials)
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +76,10 @@ VIDEO_TABLE = "youtube_video_stats"
 CHANNEL_TABLE = "youtube_channel_stats"
 PUBLICATIONS_TABLE = "topic_publications"
 BATCH = 50  # videos.list accepts up to 50 ids per call
+# a channel's language code as a token names it: "ar", "ms-arab"
+_LANG_CODE = re.compile(r"[a-z]+(?:-[a-z]+)?")
+# the Y2 columns on topic_publications (app migration 0148)
+STATUS_COLUMNS = ("youtube_publish_at", "youtube_upload_status", "youtube_missing_since")
 
 
 # ── the transport ────────────────────────────────────────────────────────────
@@ -74,8 +90,8 @@ class StatsTransport(Protocol):
 
     def video_statistics(self, video_ids: list[str]) -> list[dict]:
         """One dict per video YouTube still knows: ``{video_id, title,
-        privacy, views, likes, comments, published_at}``. A deleted video is
-        simply absent."""
+        privacy, views, likes, comments, published_at, publish_at,
+        upload_status}``. A deleted video is simply absent."""
 
     def channel_statistics(self) -> Optional[dict]:
         """``{channel_id, title, subscribers, views, videos}`` for the
@@ -97,10 +113,14 @@ class _GoogleStats:
                                               id=",".join(chunk), maxResults=BATCH).execute()
             for item in (res or {}).get("items") or []:
                 st = item.get("statistics") or {}
+                status = item.get("status") or {}
                 out.append({
                     "video_id": _s(item.get("id")),
                     "title": _s((item.get("snippet") or {}).get("title")),
-                    "privacy": _s((item.get("status") or {}).get("privacyStatus")).lower() or None,
+                    "privacy": _s(status.get("privacyStatus")).lower() or None,
+                    # a scheduled video: private now, public at this time
+                    "publish_at": status.get("publishAt") or None,
+                    "upload_status": upload_status_of(status),
                     "published_at": (item.get("snippet") or {}).get("publishedAt"),
                     "views": _int(st.get("viewCount")),
                     "likes": _int(st.get("likeCount")),
@@ -126,6 +146,17 @@ def default_stats_transport(language: str = DEFAULT_LANGUAGE) -> StatsTransport:
     """The real transport — the publish module's service, read-only calls."""
     from catalogue.publish import build_youtube_service
     return _GoogleStats(build_youtube_service(language))
+
+
+def upload_status_of(status: dict) -> Optional[str]:
+    """``status.uploadStatus``, with YouTube's reason after a colon when the
+    upload was rejected or failed (``rejected:duplicate``, ``failed:codec``)."""
+    upload = _s(status.get("uploadStatus")).lower()
+    if not upload:
+        return None
+    reason = _s(status.get("rejectionReason") if upload == "rejected" else
+                status.get("failureReason") if upload == "failed" else "")
+    return f"{upload}:{reason}" if reason else upload
 
 
 def _int(value: object) -> Optional[int]:
@@ -169,8 +200,9 @@ def channel_languages(environ=None) -> list[str]:
     for name in sorted(env):
         if not name.startswith(REFRESH_TOKEN_ENV_PREFIX) or not str(env.get(name) or "").strip():
             continue
-        lang = _lang(name[len(REFRESH_TOKEN_ENV_PREFIX):])
-        if lang.isalpha() and lang not in out:
+        # MS_ARAB names Jawi (ms-arab): a hyphen cannot be in a variable name
+        lang = language_from_token_suffix(name[len(REFRESH_TOKEN_ENV_PREFIX):])
+        if _LANG_CODE.fullmatch(lang) and lang not in out:
             out.append(lang)
     return out
 
@@ -195,14 +227,17 @@ def poll(sb, transport: StatsTransport, *, language: str = DEFAULT_LANGUAGE,
     partial poll (the channel read failed, say) still writes what it got."""
     moment = (now or datetime.now(timezone.utc)).isoformat()
     lang = _lang(language)
-    summary = {"language": lang, "videos": 0, "channel": False, "privacy_updates": 0, "errors": []}
+    summary = {"language": lang, "videos": 0, "channel": False, "privacy_updates": 0, "status_updates": 0,
+               "errors": []}
 
     ids = published_video_ids(sb, lang)
     if ids:
+        listed = True
         try:
             stats = transport.video_statistics(ids)
         except Exception as exc:  # noqa: BLE001 — reported, never raised
             stats = []
+            listed = False
             summary["errors"].append(f"videos: {exc}")
         rows = []
         for st in stats:
@@ -219,6 +254,13 @@ def poll(sb, transport: StatsTransport, *, language: str = DEFAULT_LANGUAGE,
             summary["videos"] = len(rows)
             # What YouTube says the video IS, back onto the publications row.
             summary["privacy_updates"] = _sync_privacy(sb, rows)
+        # Scheduled / rejected / gone — only from a reply that came back:
+        # a failed list says nothing about which videos still exist.
+        if listed:
+            try:
+                summary["status_updates"] = _sync_status(sb, ids, stats, moment)
+            except Exception as exc:  # noqa: BLE001 — reported, never raised
+                summary["errors"].append(f"status: {exc}")
 
     try:
         ch = transport.channel_statistics()
@@ -253,6 +295,72 @@ def _sync_privacy(sb, rows: list[dict]) -> int:
     return changed
 
 
+_SCHEMA_MISS = ("pgrst204", "schema cache", "does not exist", "could not find")
+# None = not tried yet; False = this database has no 0148 columns (stop asking)
+_status_columns: Optional[bool] = None
+
+
+def _missing_column(exc: Exception) -> bool:
+    text = f"{exc}".lower()
+    return any(marker in text for marker in _SCHEMA_MISS)
+
+
+def _sync_status(sb, asked: list[str], stats: list[dict], moment: str) -> int:
+    """Write what privacy cannot say onto the publications rows of the videos
+    this poll ASKED about — the schedule time, the upload status, and since
+    when a video has been missing from the reply — and only where it changed,
+    so a quiet hour writes nothing. Returns how many rows changed. A database
+    without the 0148 columns is detected once and skipped from then on."""
+    global _status_columns
+    if _status_columns is False or not asked:
+        return 0
+    rows: list[dict] = []
+    try:
+        # ids travel in the URL — 150 at a time, as the app reads them
+        for i in range(0, len(asked), 150):
+            res = (sb.table(PUBLICATIONS_TABLE).select("id, youtube_video_id, " + ", ".join(STATUS_COLUMNS))
+                   .in_("youtube_video_id", asked[i:i + 150]).execute())
+            rows.extend(_rows(res))
+    except Exception as exc:  # noqa: BLE001
+        if _missing_column(exc):
+            _status_columns = False
+            logger.info("YouTube stats: topic_publications has no status columns yet (migration 0148); "
+                        "scheduled / rejected / missing are not recorded")
+            return 0
+        raise
+    _status_columns = True
+    seen = {_s(st.get("video_id")): st for st in stats if _s(st.get("video_id"))}
+    changed = 0
+    for row in rows:
+        vid = _s(row.get("youtube_video_id"))
+        st = seen.get(vid)
+        if st is not None:
+            want = {"youtube_publish_at": st.get("publish_at") or None,
+                    "youtube_upload_status": st.get("upload_status") or None,
+                    "youtube_missing_since": None}
+        else:
+            # absent from a successful reply: deleted or removed on YouTube
+            want = {"youtube_missing_since": row.get("youtube_missing_since") or moment}
+        patch = {k: v for k, v in want.items() if not _same_value(row.get(k), v)}
+        if patch:
+            sb.table(PUBLICATIONS_TABLE).update(patch).eq("id", row.get("id")).execute()
+            changed += 1
+    return changed
+
+
+def _same_value(a: object, b: object) -> bool:
+    """Timestamps come back from Postgres as '…+00:00' and from YouTube as
+    '…Z'; compare instants, not strings."""
+    if a is None or b is None:
+        return a is None and b is None
+    try:
+        da = datetime.fromisoformat(str(a).replace("Z", "+00:00"))
+        dbv = datetime.fromisoformat(str(b).replace("Z", "+00:00"))
+        return da == dbv
+    except ValueError:
+        return str(a) == str(b)
+
+
 # ── the timer the worker's loop calls ────────────────────────────────────────
 
 _last_run = 0.0
@@ -279,7 +387,7 @@ def maybe_poll(sb, *, transport_factory=default_stats_transport, clock=time.mono
             logger.info("YouTube stats: channel credentials not configured; the poll stays dark")
             _logged_dark = True
         return None
-    total = {"languages": [], "videos": 0, "channels": 0, "privacy_updates": 0, "errors": []}
+    total = {"languages": [], "videos": 0, "channels": 0, "privacy_updates": 0, "status_updates": 0, "errors": []}
     for lang in languages:
         try:
             summary = poll(sb, transport_factory(lang), language=lang)
@@ -291,11 +399,13 @@ def maybe_poll(sb, *, transport_factory=default_stats_transport, clock=time.mono
         total["videos"] += summary.get("videos", 0)
         total["channels"] += 1 if summary.get("channel") else 0
         total["privacy_updates"] += summary.get("privacy_updates", 0)
+        total["status_updates"] += summary.get("status_updates", 0)
         total["errors"].extend(f"{lang}: {e}" for e in summary.get("errors") or [])
     if not total["languages"]:
         return None
     if total["errors"]:
         logger.warning("YouTube stats poll: %s", "; ".join(total["errors"]))
-    logger.info("YouTube stats (%s): %d video(s) and %d channel row(s) snapshotted, %d privacy update(s)",
-                ", ".join(total["languages"]), total["videos"], total["channels"], total["privacy_updates"])
+    logger.info("YouTube stats (%s): %d video(s) and %d channel row(s) snapshotted, %d privacy update(s), "
+                "%d status update(s)", ", ".join(total["languages"]), total["videos"], total["channels"],
+                total["privacy_updates"], total["status_updates"])
     return total
