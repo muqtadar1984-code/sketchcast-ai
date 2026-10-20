@@ -306,7 +306,7 @@ def test_malay_and_jawi_channels_get_malay_titles_and_share_them():
     assert PL.playlist_meta("biology", "ms")[0] == "Biologi"
     assert PL.playlist_meta("physics", "ms-arab")[0] == "Fizik"   # Jawi shares the Malay channel's set
     assert PL.playlist_meta("biology", "en")[0] == "Biology"
-    assert PL.playlist_meta("biology", "ar")[0] == "Biology"      # no localised set yet: English
+    assert PL.playlist_meta("biology", "xx")[0] == "Biology"      # no localised set: English
     assert set(PL.PLAYLISTS_BY_LANGUAGE["ms"]) == set(PL.PLAYLISTS)
 
 
@@ -315,3 +315,20 @@ def test_hindi_channel_gets_hindi_titles():
     assert PL.playlist_meta("algebra", "hi")[0] == "बीजगणित"
     assert set(PL.PLAYLISTS_BY_LANGUAGE["hi"]) == set(PL.PLAYLISTS)
     assert all(desc for _, desc in PL.PLAYLISTS_BY_LANGUAGE["hi"].values())
+
+
+def test_every_lesson_language_has_its_own_playlist_set():
+    from catalogue import playlists as PL
+    from catalogue.youtube_meta import WORDS
+    for lang in WORDS:                       # every language with video wording
+        if lang == "en":
+            continue
+        own = PL.PLAYLISTS_BY_LANGUAGE.get(lang)
+        assert own and set(own) == set(PL.PLAYLISTS), lang
+        for title, desc in own.values():
+            assert title and desc, lang
+            assert len(title) <= 150 and len(desc) <= 5000   # YouTube's limits
+        # localised, not the English set again ("Algebra" is also Malay)
+        assert [t for t, _ in own.values()] != [PL.PLAYLISTS[k][0] for k in own], lang
+    assert PL.playlist_meta("physics", "es")[0] == "Física"
+    assert PL.playlist_meta("biology", "fr")[1].startswith("Leçons de biologie")
