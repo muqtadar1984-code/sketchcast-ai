@@ -299,3 +299,12 @@ class TestWiring:
         assert PL.JOB_TYPE in db.OBSERVER_JOB_TYPES, "it owns no generation"
         src = Path(run.__file__).read_text(encoding="utf-8")
         assert 'job_type == "youtube_playlists"' in src and "run_playlists_job(sb, job)" in src
+
+
+def test_malay_and_jawi_channels_get_malay_titles_and_share_them():
+    from catalogue import playlists as PL
+    assert PL.playlist_meta("biology", "ms")[0] == "Biologi"
+    assert PL.playlist_meta("physics", "ms-arab")[0] == "Fizik"   # Jawi shares the Malay channel's set
+    assert PL.playlist_meta("biology", "en")[0] == "Biology"
+    assert PL.playlist_meta("biology", "ar")[0] == "Biology"      # no localised set yet: English
+    assert set(PL.PLAYLISTS_BY_LANGUAGE["ms"]) == set(PL.PLAYLISTS)

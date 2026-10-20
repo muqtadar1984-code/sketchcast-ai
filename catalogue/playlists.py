@@ -57,6 +57,28 @@ PLAYLISTS: dict[str, tuple[str, str]] = {
 }
 
 
+# The same playlists in a channel's own language (founder, 2026-10-20: the
+# Malay channel). Jawi (ms-arab) shares the Malay channel, so it uses the
+# MALAY titles: ensure_playlists() then finds the Malay playlists by title and
+# both languages file into one set. A language not listed uses PLAYLISTS.
+_MS_TAIL = "untuk sekolah menengah rendah (Cambridge peringkat 7–9, CBSE kelas 6–10), dilukis dan dinaratifkan oleh SketchCast."
+PLAYLISTS_BY_LANGUAGE: dict[str, dict[str, tuple[str, str]]] = {
+    "ms": {
+        "biology": ("Biologi", f"Pelajaran Biologi {_MS_TAIL}"),
+        "chemistry": ("Kimia", f"Pelajaran Kimia {_MS_TAIL}"),
+        "physics": ("Fizik", f"Pelajaran Fizik {_MS_TAIL}"),
+        "algebra": ("Algebra", f"Pelajaran Algebra {_MS_TAIL}"),
+    },
+}
+PLAYLISTS_BY_LANGUAGE["ms-arab"] = PLAYLISTS_BY_LANGUAGE["ms"]
+
+
+def playlist_meta(key: str, language: str) -> tuple[str, str]:
+    """(title, description) for ``key`` on the ``language`` channel."""
+    lang = _s(language).lower() or DEFAULT_LANGUAGE
+    return (PLAYLISTS_BY_LANGUAGE.get(lang) or {}).get(key) or PLAYLISTS[key]
+
+
 class PlaylistsRefused(RuntimeError):
     """A reason the job cannot proceed, in one sentence for the portal."""
 
@@ -139,7 +161,7 @@ def ensure_playlists(transport: PlaylistTransport, keys: list[str], *, language:
     existing: Optional[dict[str, str]] = None
     out: dict[str, dict] = {}
     for key in keys:
-        title, description = PLAYLISTS[key]
+        title, description = playlist_meta(key, language)
         pid = (configured or {}).get(key)
         if pid:
             out[key] = {"id": pid, "title": title, "created": False, "source": "configured"}
