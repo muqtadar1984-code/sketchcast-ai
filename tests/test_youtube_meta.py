@@ -228,3 +228,13 @@ def test_the_title_and_description_never_carry_the_signs_youtube_refuses():
     assert "Solve x + 5 ＞ 12 and show it" in text
     title = compose_title("Solving x > 3", meta={"title": "When is x > 3? | Inequalities"}, part=1, total=1)
     assert title == "When is x ＞ 3? | Inequalities"
+
+
+def test_jawi_has_its_own_words_not_english():
+    """A Jawi video's title and description were falling back to English."""
+    from catalogue import youtube_meta as M
+    jawi, en = M.words_for("ms-arab"), M.words_for("en")
+    assert set(jawi) == set(en)
+    for key in ("explained", "aligned", "key_terms", "full_kit", "more_lessons"):
+        assert jawi[key] != en[key]
+        assert any("؀" <= ch <= "ۿ" for ch in jawi[key]), key

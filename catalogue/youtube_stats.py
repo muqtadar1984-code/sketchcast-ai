@@ -53,8 +53,12 @@ import time
 from datetime import datetime, timezone
 from typing import Optional, Protocol
 
+import re
+
 from catalogue.publish import (DEFAULT_LANGUAGE, REFRESH_TOKEN_ENV_PREFIX, PublishRefused,
-                               _lang, _rows, _s, read_credentials)
+                               _lang, _rows, _s, lang_from_env, read_credentials)
+
+_LANG_RE = re.compile(r"^[a-z]{2,3}(-[a-z]{2,4})?$")
 
 logger = logging.getLogger(__name__)
 
@@ -169,8 +173,9 @@ def channel_languages(environ=None) -> list[str]:
     for name in sorted(env):
         if not name.startswith(REFRESH_TOKEN_ENV_PREFIX) or not str(env.get(name) or "").strip():
             continue
-        lang = _lang(name[len(REFRESH_TOKEN_ENV_PREFIX):])
-        if lang.isalpha() and lang not in out:
+        # MS_ARAB → ms-arab: env names carry "_" where language codes carry "-".
+        lang = lang_from_env(name[len(REFRESH_TOKEN_ENV_PREFIX):])
+        if _LANG_RE.match(lang) and lang not in out:
             out.append(lang)
     return out
 

@@ -56,7 +56,8 @@ CLIENT_SECRET_ENV = "YOUTUBE_CLIENT_SECRET"
 
 def token_env(language: str) -> str:
     """One channel per language (plan decision 9) ⇒ one variable per language."""
-    return f"{TOKEN_ENV_PREFIX}{(language or 'en').strip().upper()}"
+    # "-" → "_": Railway refuses a hyphen in a variable name (Jawi = ms-arab → MS_ARAB).
+    return f"{TOKEN_ENV_PREFIX}{(language or 'en').strip().upper().replace('-', '_')}"
 
 
 def client_config(args) -> dict:
@@ -103,7 +104,8 @@ def mint(config: dict, port: int) -> str:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="Mint a YouTube refresh token for one SketchCast channel.")
-    ap.add_argument("--language", default="en", help="channel language (en, ar, fr, es); default en")
+    ap.add_argument("--language", default="en",
+                    help="channel language code (en, ar, ms, ms-arab, hi, …); default en")
     ap.add_argument("--client-secrets", default=None,
                     help="OAuth client secrets JSON from Google Cloud; defaults to the two env vars")
     ap.add_argument("--port", type=int, default=8765, help="loopback port for the consent redirect")
@@ -118,7 +120,7 @@ def main(argv: list[str]) -> int:
     print(f"  {CLIENT_ID_ENV}, {CLIENT_SECRET_ENV}")
     print("  FEATURE_CATALOGUE_PUBLISH=1        (turns Phase 4 on)")
     print("  YOUTUBE_MAX_PARTS_PER_RUN=5        (optional; parts uploaded per run)")
-    print(f"  YOUTUBE_PLAYLISTS_{args.language.upper()}='{{\"biology\": \"PL…\"}}'   (optional; playlist ids)")
+    print(f"  YOUTUBE_PLAYLISTS_{args.language.upper().replace('-', '_')}='{{\"biology\": \"PL…\"}}'   (optional; playlist ids)")
     print("\nDo NOT commit this token, paste it into an issue, or store it in the database.")
     print("Uploads stay PRIVATE until the YouTube API compliance audit passes.")
     return 0

@@ -212,3 +212,10 @@ class TestEveryChannel:
         Y.maybe_poll(_sb([]), transport_factory=lambda lang: asked.append(lang) or FakeStats(),
                      clock=lambda: 99_999.0)
         assert asked == ["ar"]
+
+
+class TestJawiChannel:
+    def test_an_underscored_env_name_is_the_hyphenated_language(self):
+        env = {"YOUTUBE_REFRESH_TOKEN_MS": "t", "YOUTUBE_REFRESH_TOKEN_MS_ARAB": "t",
+               "YOUTUBE_REFRESH_TOKEN_NOT-A-LANG!": "x"}
+        assert Y.channel_languages(env) == ["en", "ms", "ms-arab"]

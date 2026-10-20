@@ -219,10 +219,24 @@ def max_publish_wait() -> float:
         return float(PUBLISH_MAX_WAIT_DEFAULT) * 60.0
 
 
+def env_lang(language: object) -> str:
+    """A language code as it appears in an environment-variable name: upper
+    case with ``-`` → ``_``. Railway (and every POSIX shell) refuses a hyphen
+    in a variable name, so Jawi (``ms-arab``) is ``MS_ARAB``, never
+    ``MS-ARAB``. ``lang_from_env`` is the inverse."""
+    return _lang(language).upper().replace("-", "_")
+
+
+def lang_from_env(suffix: object) -> str:
+    """The language code an env-name suffix stands for (``MS_ARAB`` → ``ms-arab``)."""
+    return _lang(str(suffix or "").replace("_", "-"))
+
+
 def refresh_token_env(language: str) -> str:
     """The env var holding the channel's refresh token — one channel per
-    language (plan decision 9), so one variable per language."""
-    return f"{REFRESH_TOKEN_ENV_PREFIX}{_lang(language).upper()}"
+    language (plan decision 9), so one variable per language. Two languages
+    may share one channel by holding the same token (Malay and Jawi)."""
+    return f"{REFRESH_TOKEN_ENV_PREFIX}{env_lang(language)}"
 
 
 def channel_for(language: str) -> str:
@@ -240,7 +254,7 @@ def channel_for(language: str) -> str:
 
 
 def playlists_env(language: str) -> str:
-    return f"{PLAYLISTS_ENV_PREFIX}{_lang(language).upper()}"
+    return f"{PLAYLISTS_ENV_PREFIX}{env_lang(language)}"
 
 
 def playlists_settings_key(language: str) -> str:
