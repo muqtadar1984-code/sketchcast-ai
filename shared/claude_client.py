@@ -30,9 +30,19 @@ MODEL_PRICING = {
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-sonnet-5": (3.0, 15.0),
     "claude-haiku-4-5": (1.0, 5.0),
+    "claude-haiku-5-5": (0.10, 0.50),
     "claude-opus-4-8": (5.0, 25.0),
 }
 _DEFAULT_PRICING = (3.0, 15.0)
+
+# Models with a second rate card for long prompts: (threshold in prompt tokens,
+# (input, output) above it). Haiku 5.5 bills $0.50/$2.50 once one request's
+# prompt — uncached, cache-read and cache-written tokens together — passes
+# 100K (claude-api pricing, checked 2026-10-20; Bedrock's global profile is
+# assumed to bill the first-party rates, as for every model above).
+_LONG_PROMPT_PRICING = {
+    "claude-haiku-5-5": (100_000, (0.50, 2.50)),
+}
 
 
 # ── backend selection ────────────────────────────────────────────────────
@@ -90,6 +100,9 @@ _BEDROCK_MODEL_IDS = {
     # live 2026-10-18 (thinking off = between_tools, see _thinking_off_for);
     # NOT in MODEL_PRICING yet, so jobs.usage prices it at the Sonnet default
     "claude-sonnet-5-5": "global.anthropic.claude-sonnet-5-5",
+    # live 2026-10-20 (10M TPM global quota; thinking off = disabled, NOT
+    # between_tools — see _BETWEEN_TOOLS_PREFIXES)
+    "claude-haiku-5-5": "global.anthropic.claude-haiku-5-5",
 }
 
 
@@ -323,9 +336,17 @@ _NONSTREAMING_MAX_TOKENS = 20_000
 # stream is opened, outside the fallback. Known models are spelled up front;
 # any other model that answers with that 400 is switched once and retried
 # (the request was refused before generating, so nothing was billed).
+#
+# Haiku 5.5 is NOT in the 5.5 spelling: it accepts {"type": "disabled"} (at
+# effort high or below; its default is medium and this client sends none) and
+# refuses between_tools with a 400 ('"thinking.type.between_tools" is not
+# supported for this model.', live on Bedrock 2026-10-20). Listed here it was
+# "saved" by the wrong door: the non-streamed call fell back to NO thinking
+# parameter, which on Haiku 5.5 means adaptive thinking ON, and the streamed
+# call raised.
 _THINKING_DISABLED = {"type": "disabled"}
 _THINKING_BETWEEN_TOOLS = {"type": "between_tools"}
-_BETWEEN_TOOLS_PREFIXES = ("claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5", "claude-fable")
+_BETWEEN_TOOLS_PREFIXES = ("claude-sonnet-5-5", "claude-opus-5-5", "claude-fable")
 
 
 def _thinking_off_for(model: str) -> dict:
@@ -1479,6 +1500,9 @@ class ClaudeClient:
         cache_read = getattr(u, "cache_read_input_tokens", 0) or 0
         cache_write = getattr(u, "cache_creation_input_tokens", 0) or 0
         in_rate, out_rate = MODEL_PRICING.get(self.model, _DEFAULT_PRICING)
+        long_card = _LONG_PROMPT_PRICING.get(self.model)
+        if long_card and inp + cache_read + cache_write > long_card[0]:
+            in_rate, out_rate = long_card[1]
         cost = (
             inp * in_rate
             + cache_read * in_rate * 0.1

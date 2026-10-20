@@ -64,7 +64,7 @@ def _client(model):
 
 
 @pytest.mark.parametrize("model,spelling", [
-    ("claude-sonnet-5-5", "between_tools"), ("claude-haiku-5-5", "between_tools"),
+    ("claude-sonnet-5-5", "between_tools"), ("claude-haiku-5-5", "disabled"),
     ("claude-opus-5-5", "between_tools"), ("claude-fable-5-1", "between_tools"),
     ("claude-sonnet-4-6", "disabled"), ("claude-sonnet-5", "disabled"), ("claude-haiku-4-5", "disabled"),
     ("claude-opus-4-8", "disabled"),
