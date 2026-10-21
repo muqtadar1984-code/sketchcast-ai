@@ -20,6 +20,11 @@ decides WHICH kit gets that job and WHEN, from two tables (app migration
                           a 'manual' round is the Library's "Run once more"
                           button (the app inserts it as 'requested').
 
+ONE VIDEO PER LANGUAGE PER DAY holds across a quota wait too: a daily round
+that finishes on a LATER quota day (its last uploads waited out the reset)
+counts as that day's round, and the next round starts the day after
+(``spilled_into`` / ``cover_day``).
+
 One round is open at a time (0150's index), and inside it one upload at a
 time: a kit's job must finish before the next is queued. So the agent never
 competes with itself, and it never starts an upload while a teacher's job
@@ -171,6 +176,49 @@ def oldest_per_language(items: list[dict]) -> list[dict]:
     return out
 
 
+def _parse(ts: object) -> Optional[datetime]:
+    try:
+        t = datetime.fromisoformat(_s(ts).replace("Z", "+00:00"))
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def spilled_into(sb, day: str) -> Optional[dict]:
+    """An earlier day's daily round that FINISHED on quota day ``day`` — it
+    ran past its own day (2026-10-21: the 10-20 round's last six videos
+    waited out the quota reset and went up on 10-21). Founder 2026-10-21: "a
+    round that runs past its quota day counts as that day's round, keeping
+    one video per language per day". Manual rounds are extras by design and
+    never count. Filtered here, not in the query: the window is the last few
+    rounds."""
+    rows = _rows(sb.table(ROUNDS).select("id,trigger,quota_day,status,finished_at").eq("trigger", "daily")
+                 .order("created_at", desc=True).limit(5).execute())
+    for r in rows:
+        finished = _parse(r.get("finished_at"))
+        if (r.get("status") == "done" and finished is not None and _s(r.get("quota_day")) < day
+                and P.quota_day(finished).isoformat() == day):
+            return r
+    return None
+
+
+def cover_day(sb, day: str, by: dict, now: datetime) -> bool:
+    """Record ``day``'s daily round as already covered by the round that
+    spilled into it — a 'done' row, so 0150's one-daily-round-per-day index
+    holds the decision for every worker and the Library reads "today's round
+    ran". False when another worker recorded the day first."""
+    try:
+        sb.table(ROUNDS).insert({"trigger": "daily", "quota_day": day, "status": "done", "created_at": _iso(now),
+                                 "started_at": _iso(now), "finished_at": _iso(now),
+                                 "summary": {"covered_by": by.get("id"), "covered_day": by.get("quota_day"),
+                                             "reason": "the previous daily round ran past its quota day"}}).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        if "23505" in str(exc) or "duplicate" in str(exc).lower():
+            return False
+        raise
+
+
 def create_daily_round(sb, day: str, now: datetime) -> Optional[dict]:
     """Insert today's daily round as 'requested'. Two workers racing get one
     row (0150's unique index on the daily quota day); the loser's 23505 is
@@ -301,6 +349,12 @@ def tick(sb, now: Optional[datetime] = None) -> Optional[str]:
     if rnd is None:
         day = P.quota_day(now).isoformat()
         if daily_due(settings, now) and not has_daily_round(sb, day) and pending_items(sb):
+            spilled = spilled_into(sb, day)
+            if spilled is not None:
+                if cover_day(sb, day, spilled, now):
+                    log.info("publish agent: round %s (%s) ran into %s and counts as its round; next round tomorrow",
+                             spilled.get("id"), spilled.get("quota_day"), day)
+                return f"today's round was the {spilled.get('quota_day')} round that ran past its day"
             rnd = create_daily_round(sb, day, now)
         if rnd is None:
             return None
