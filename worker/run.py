@@ -894,6 +894,16 @@ def _serve(sb, stale_min: int, reap_every: float = 60, grace: float | None = Non
             maybe_poll(sb)
         except Exception as exc:  # noqa: BLE001 — never the reaper's problem
             log.error("YouTube stats tick error: %s", exc)
+        # The Fix Agent (catalogue/fix_agent.py) runs BEFORE the Auto
+        # Translate Agent, so a founder-approved retry takes the free lane
+        # first. It diagnoses failed translations, proposes, and queues a
+        # retry only after the founder approves. Inert without FIX_AGENT=1,
+        # app migration 0151 and platform_settings.fix_agent.enabled.
+        try:
+            from catalogue.fix_agent import maybe_tick as maybe_fix_agent
+            maybe_fix_agent(sb)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Fix agent tick error: %s", exc)
         # The Auto Translate Agent (catalogue/auto_translate.py) rides the
         # same tick: it queues ONE kit_translate when the translation lane is
         # free and no client job needs Bedrock. Inert without AUTO_TRANSLATE=1,

@@ -109,6 +109,7 @@ STAGE_ORDER = ("load", "kit", "glossary", "article", "script", "assets", "genera
 # enough to ask for again.
 CHUNK = 120
 MAX_TOKENS = 16000
+FIX_NOTE_CHARS = 800     # a Fix Agent retry's instruction (params.fix_note), capped
 TERM_SOURCE_MODEL = "model"
 TERM_SOURCE_REVIEWER = "reviewer"
 
@@ -533,10 +534,15 @@ def _splice_framing(source_segments: list[dict], compiled: list[dict], client, l
 
 
 def translate_episode(client, body: dict, language: str, terms, *, title: Optional[str] = None,
-                      context: str = "") -> tuple[dict, dict]:
+                      context: str = "", waivers: Optional[list] = None,
+                      waiver_case: Optional[str] = None) -> tuple[dict, dict]:
     """``body`` is a script_json artifact; returns (translated script dict,
     pre-check A report). Raises TranslateRefused when the check blocks
-    after one retry."""
+    after one retry — its report carries ``evidence``: each blocking
+    finding's English and translated strings, which the Fix Agent reads.
+
+    ``waivers`` are the founder-approved exceptions of ONE Fix Agent case
+    (``waiver_case``): a matching finding becomes a flag (apply_waivers)."""
     src = body.get("script") if isinstance(body.get("script"), dict) else {}
     if not src.get("segments"):
         raise TranslateRefused("the source script has no segments")
@@ -548,6 +554,7 @@ def translate_episode(client, body: dict, language: str, terms, *, title: Option
                                           terms=terms, context=context)[0]
     report: dict = {}
     dst: dict = {}
+    new_lesson: Optional[dict] = None
     ask_context = context
     for attempt in range(2):
         if lesson is not None:
@@ -565,6 +572,8 @@ def translate_episode(client, body: dict, language: str, terms, *, title: Option
                                                  context=ask_context)
             dst["episode_title"] = ep_title
             report = check.merge_reports(check.check_script(src, dst, language=language, glossary=terms))
+        if waivers:
+            report = apply_waivers(report, waivers, waiver_case, lesson=lesson)
         if report.get("ok"):
             break
         log.warning("translate: pre-check A blocked part %s (%d finding(s)); %s", body.get("part"),
@@ -576,7 +585,9 @@ def translate_episode(client, body: dict, language: str, terms, *, title: Option
     if not report.get("ok"):
         heads = "; ".join(f"{f.get('where')}: {f.get('what')}" for f in (report.get("blocking") or [])[:5])
         raise TranslateRefused(f"translation of part {body.get('part')} failed pre-check A: {heads}",
-                               report={"part": body.get("part"), **report})
+                               report={"part": body.get("part"), **report,
+                                       "evidence": finding_evidence(report.get("blocking") or [], src, dst,
+                                                                    lesson, new_lesson)})
     # The script's own label of its language, read by the renderer's RTL and
     # font choices, and by the deck.
     if isinstance(dst.get("maths"), dict):
@@ -604,6 +615,110 @@ def retry_note(report: dict) -> str:
     return ("A FIRST translation of these strings failed the check: " + " | ".join(lines)
             + ". Write every number of the source as DIGITS in the translation — 1 and 2 included, ordinals "
               "with their digits — and keep every expression exactly as written.")
+
+
+# ── the Fix Agent's two inputs (catalogue/fix_agent.py, app migration 0151) ──
+
+# The only finding a waiver may turn into a flag: a number the check thinks a
+# spoken line gained or lost. Never an answer, the working, a question's maths
+# or the structure (founder, Fix Agent plan Rev 3 §8).
+WAIVABLE_FINDINGS = frozenset({"numbers differ"})
+EVIDENCE_FINDINGS = 12
+EVIDENCE_CHARS = 1200
+
+
+def _sub_multiset(have: Iterable, allowed: Iterable) -> bool:
+    pool = [str(x) for x in (allowed or [])]
+    for v in (have or []):
+        if str(v) not in pool:
+            return False
+        pool.remove(str(v))
+    return True
+
+
+def waivable(finding: dict, lesson: Optional[dict] = None) -> bool:
+    """Whether ``finding`` is of a kind a waiver may cover at all."""
+    if _s(finding.get("what")) not in WAIVABLE_FINDINGS:
+        return False
+    key = check._leaf_key(_s(finding.get("where")))
+    return key not in check.LESSON_INVARIANT_KEYS and key not in check.LESSON_PROSE_MATHS_KEYS
+
+
+def apply_waivers(report: dict, waivers: list, case_id: Optional[str], *, lesson: Optional[dict] = None) -> dict:
+    """A blocking finding that an approved waiver covers becomes a FLAG the
+    reviewer still sees (``waived_by``). Covered means: a waivable kind, the
+    same field and finding, and every number it added (dropped) is among the
+    numbers the waiver names — a re-run that adds fewer is covered, one that
+    adds more or different numbers is not. Everything else stays blocking."""
+    keep: list[dict] = []
+    waived: list[dict] = []
+    for f in report.get("blocking") or []:
+        hit = next((w for w in waivers or [] if isinstance(w, dict) and waivable(f, lesson)
+                    and _s(w.get("where")) == _s(f.get("where")) and _s(w.get("what")) == _s(f.get("what"))
+                    and _sub_multiset(f.get("extra"), w.get("extra")) and _sub_multiset(f.get("missing"), w.get("missing"))),
+                   None)
+        if hit is None:
+            keep.append(f)
+        else:
+            waived.append({**f, "waived_by": case_id, "waiver": "approved exception (Fix Agent)"})
+    if not waived:
+        return report
+    log.info("translate: %d finding(s) waived by fix case %s: %s", len(waived), case_id,
+             ", ".join(_s(f.get("where")) for f in waived))
+    return {**report, "ok": not keep, "blocking": keep, "flags": list(report.get("flags") or []) + waived}
+
+
+def _seg_words(seg: dict) -> str:
+    """A segment's spoken words: its text (the dialogue's lines joined), else
+    the lines themselves."""
+    text = _s(seg.get("display_text") or seg.get("text"))
+    if text:
+        return text
+    return " ".join(_s((d or {}).get("line")) for d in (seg.get("dialogue") or []) if isinstance(d, dict))
+
+
+def finding_evidence(findings: list[dict], src: dict, dst: dict, lesson: Optional[dict] = None,
+                     new_lesson: Optional[dict] = None) -> list[dict]:
+    """Each blocking finding with the English string beside the translated
+    one — what a person (or the Fix Agent) needs to judge it, and what was
+    thrown away before (only the error line survived a failed job). A lesson
+    path ("concept[3].line") reads the two Lesson records; a segment id
+    ("s006") reads the two scripts' segments."""
+    s_leaf = dict(check._walk(lesson)) if isinstance(lesson, dict) else {}
+    t_leaf = dict(check._walk(new_lesson)) if isinstance(new_lesson, dict) else {}
+    s_seg = {_s(s.get("segment_id")): s for s in (src.get("segments") or []) if isinstance(s, dict)}
+    t_seg = {_s(s.get("segment_id")): s for s in (dst.get("segments") or []) if isinstance(s, dict)}
+    out: list[dict] = []
+    for f in findings[:EVIDENCE_FINDINGS]:
+        where = _s(f.get("where"))
+        entry = {k: f.get(k) for k in ("where", "what", "missing", "extra") if f.get(k) not in (None, [], "")}
+        if where in s_leaf or where in t_leaf:
+            source, target = s_leaf.get(where), t_leaf.get(where)
+        elif where in s_seg or where in t_seg:
+            source = _seg_words(s_seg[where]) if where in s_seg else None
+            target = _seg_words(t_seg[where]) if where in t_seg else None
+        else:
+            source = target = None
+        if isinstance(source, str):
+            entry["source"] = source[:EVIDENCE_CHARS]
+        if isinstance(target, str):
+            entry["target"] = target[:EVIDENCE_CHARS]
+        out.append(entry)
+    return out
+
+
+def failure_record(report: dict) -> dict:
+    """The compact form of a refusing report kept on the failed job
+    (``jobs.stage.failure``): findings, evidence and the checks' verdicts."""
+    keep = ("where", "what", "missing", "extra", "expression", "lost", "source", "target")
+    return {
+        "part": report.get("part"),
+        "blocking": [{k: f.get(k) for k in keep if f.get(k) not in (None, [], "")}
+                     for f in (report.get("blocking") or [])[:EVIDENCE_FINDINGS]],
+        "flags": len(report.get("flags") or []),
+        "evidence": (report.get("evidence") or [])[:EVIDENCE_FINDINGS],
+        "checks": report.get("checks") or [],
+    }
 
 
 def derive_segments(client, segments: list[dict], terms, *, context: str) -> list[dict]:
@@ -1962,6 +2077,13 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
     topic = source["topic"]
     context = (f"The lesson is '{_s(source['article'].get('title'))}' ({_s(topic.get('subject'))}) for school "
                f"students; the teacher speaks to a class.")
+    # A Fix Agent retry (app 0151): the founder-approved instruction rides on
+    # every ask of this job, and its waivers on pre-check A.
+    fix_note = _s(params.get("fix_note"))[:FIX_NOTE_CHARS]
+    if fix_note:
+        context = f"{context} {fix_note}"
+    waivers = [w for w in (params.get("waivers") or []) if isinstance(w, dict)]
+    waiver_case = _s(params.get("fix_case_id")) or None
 
     with tempfile.TemporaryDirectory() as _tmp:
         tmp = Path(tmp or _tmp)
@@ -2003,7 +2125,7 @@ def translate_kit(sb, job_id: str, params: dict, client=None, tmp=None) -> dict:
             part = int(body.get("part") or i + 1)
             db.set_stage(sb, job_id, {**stage, "part": part, "total": n})
             dst, report = translate_episode(client, body, language, terms, title=title if n == 1 else None,
-                                            context=context)
+                                            context=context, waivers=waivers, waiver_case=waiver_case)
             scripts.append((part, n, dst))
             reports.append({"part": part, **report})
             db.set_progress(sb, job_id, 40 + round(35 * (i + 1) / n))
@@ -2185,9 +2307,25 @@ def run_translate_job(sb, job: dict, client=None) -> Optional[dict]:
             kit = find_translation_kit(sb, _s(params.get("source_kit_id")), _s(params.get("language")).lower())
         except Exception:  # noqa: BLE001
             kit = None
-        _fail_translation(sb, kit, f"translation failed: {exc}", report=getattr(exc, "report", None))
+        report = getattr(exc, "report", None)
+        _fail_translation(sb, kit, f"translation failed: {exc}", report=report)
+        if isinstance(report, dict):
+            # The kit row is deleted with its findings; the job keeps them, so
+            # the Fix Agent (and a person) can see what the check saw.
+            record_failure(sb, job_id, report)
         db.finish_job(sb, job_id, error=str(exc))
         return None
+
+
+def record_failure(sb, job_id: str, report: dict) -> None:
+    """``jobs.stage.failure`` = the refusing report's findings and evidence,
+    beside the stage the job had reached. Best-effort."""
+    try:
+        rows = _rows(sb.table("jobs").select("stage").eq("id", job_id).limit(1).execute())
+        stage = rows[0].get("stage") if rows and isinstance(rows[0].get("stage"), dict) else {}
+        db.set_stage(sb, job_id, {**stage, "failure": failure_record(report)})
+    except Exception as exc:  # noqa: BLE001
+        log.warning("kit_translate %s: failure evidence not kept (%s)", job_id, exc)
 
 
 # ── after the render (pre-check C) ──────────────────────────────────────
