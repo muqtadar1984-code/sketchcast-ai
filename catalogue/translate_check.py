@@ -68,13 +68,23 @@ def normalize_numerals(text: str) -> str:
 _DIMENSION_RE = re.compile(r"(?<![\w.])\d\s?-?D(?![A-Za-z])")
 
 
+# Malay/Indonesian ordinals: "sebutan ke-50", "sebutan ke-n" — the hyphen
+# joins the prefix "ke" to the number; it is no minus (Malay Sequences kit,
+# 2026-10-20: "ke-50" read as -50).
+_KE_ORDINAL_RE = re.compile(r"(?<![^\W\d_])([Kk]e)-(?=\d|[^\W\d_](?![^\W\d_]))")
+
+
+def _ordinal_hyphens(text: str) -> str:
+    return _KE_ORDINAL_RE.sub(r"\1 ", text)
+
+
 def number_values(text: str) -> list[str]:
     """The numbers a text states, as canonical decimal strings, in order.
     A comma inside a number is a thousands separator when it groups threes
     (``41,120``) and a decimal mark otherwise (``1,5`` in French prose).
     A dimension ("3D") is a word, not a number."""
     out: list[str] = []
-    for m in _NUMBER_RE.finditer(_DIMENSION_RE.sub(" ", normalize_numerals(text))):
+    for m in _NUMBER_RE.finditer(_DIMENSION_RE.sub(" ", _ordinal_hyphens(normalize_numerals(text)))):
         tok = m.group(0)
         if _THOUSANDS_RE.match(tok):
             tok = tok.replace(",", "")
@@ -239,6 +249,42 @@ def number_samples(text: str, values: Iterable[str], width: int = 60, limit: int
     return out
 
 
+# Scale words that follow a digit in a translation: "300 juta" is
+# "three hundred million" (Malay Reflection kit, 2026-10-20). Stems, matched
+# at the start of the word after the number.
+_SCALE_WORDS: tuple[tuple[str, int], ...] = (
+    ("thousand", 10**3), ("ribu", 10**3), ("mille", 10**3), ("mil", 10**3), ("ألف", 10**3), ("آلاف", 10**3),
+    ("ہزار", 10**3), ("हज़ार", 10**3), ("हजार", 10**3), ("వేల", 10**3), ("వెయ్యి", 10**3),
+    ("lakh", 10**5), ("लाख", 10**5), ("لاکھ", 10**5), ("లక్ష", 10**5),
+    ("million", 10**6), ("juta", 10**6), ("millón", 10**6), ("millones", 10**6), ("milhão", 10**6),
+    ("milhões", 10**6), ("مليون", 10**6), ("ملايين", 10**6), ("ملین", 10**6), ("मिलियन", 10**6),
+    ("మిలియన్", 10**6),
+    ("crore", 10**7), ("करोड़", 10**7), ("कोटी", 10**7), ("کروڑ", 10**7), ("కోటి", 10**7),
+    ("billion", 10**9), ("bilion", 10**9), ("milliard", 10**9), ("مليار", 10**9), ("ارب", 10**9),
+    ("अरब", 10**9), ("బిలియన్", 10**9),
+)
+_SCALED_RE = re.compile(r"(\d+(?:\.\d+)?)\s*([^\W\d_]+)", re.UNICODE)
+_SIGN_WORD_RE = r"\b(?:negative|minus)\s+{v}(?!\d|\.\d)"
+
+
+def _scaled_values(text: str) -> list[tuple[str, str]]:
+    """(the number as written, its value with the scale word after it) for
+    every number a scale word follows: "300 juta" → ("300", "300000000")."""
+    out: list[tuple[str, str]] = []
+    for m in _SCALED_RE.finditer(_decimal_points(normalize_numerals(str(text or "")))):
+        word = m.group(2).lower()
+        # the longest stem that starts the word — "millones" before "mil"
+        hit = max(((w, s) for w, s in _SCALE_WORDS if word.startswith(w.lower())), key=lambda ws: len(ws[0]),
+                  default=None)
+        if hit is None:
+            continue
+        v = Decimal(m.group(1)) * hit[1]
+        raw = Decimal(m.group(1))
+        out.append((format(raw.normalize(), "f") if raw != raw.to_integral() else str(int(raw)),
+                    format(v.normalize(), "f") if v != v.to_integral() else str(int(v))))
+    return out
+
+
 def numbers_equivalent(source: str, target: str, board: Iterable[str] = ()) -> tuple[bool, list[str], list[str]]:
     """Same multiset of numeric VALUES on both sides. Returns (ok, missing,
     extra) — what the target lost and what it invented.
@@ -260,12 +306,26 @@ def numbers_equivalent(source: str, target: str, board: Iterable[str] = ()) -> t
             missing.remove(v)
         else:
             extra.append(v)
+    # "negative 2" in the English, "-2" in the translation: one number, its
+    # sign written as a word on one side (Linear Equations kit, Arabic,
+    # 2026-10-20: "Dividing by positive 2 instead of negative 2.")
+    for v in list(missing):
+        if "-" + v in extra and re.search(_SIGN_WORD_RE.format(v=re.escape(v)), str(source or ""), re.I):
+            missing.remove(v)
+            extra.remove("-" + v)
     if extra:
         spelt = [_abs(x) for x in english_number_words(source)]
         pool = {_abs(x) for x in (board or ())}
+        scaled = _scaled_values(target)
         for v in list(extra):
             av = _abs(v)
-            if av in spelt:
+            # the number a scale word follows: "300 juta" for "three hundred million"
+            big = next((s for raw, s in scaled if raw == av and s in spelt), None)
+            if big is not None:
+                spelt.remove(big)
+                scaled.remove((av, big))
+                extra.remove(v)
+            elif av in spelt:
                 spelt.remove(av)
                 extra.remove(v)
             elif av in pool:
@@ -533,6 +593,7 @@ _SPAN_TOKEN = (rf"(?:\d+(?:[.,]\d+)?|(?<![{_LETTER}])[A-Za-zα-ωΑ-Ω](?![{_LET
                r"|[=+−\-×÷*/^√<>≤≥≠]|[²³]|\(|\))")
 _SPAN_RE = re.compile(rf"{_SPAN_TOKEN}(?:\s*{_SPAN_TOKEN})*")
 _SPAN_CORE_RE = re.compile(r"\d|[=+−\-×÷*/^√<>≤≥≠]")
+_ARTICLE_RE = re.compile(r"^(?:a|A|I)\s+(?=\d)")
 # A hyphen between two LETTERS joins a word ("circle-related", "x-axis",
 # "well-known") and is no operator; the detector reads it as a plain hyphen
 # (U+2010), which the operator class does not hold. "x - 2" and "x-2" keep
@@ -623,8 +684,12 @@ def maths_spans(text: str) -> list[str]:
     """The maths spans of a sentence, whitespace-normalised, in order, with
     the sentence's brackets trimmed off and the maths' own kept."""
     out: list[str] = []
-    for m in _SPAN_RE.finditer(_WORD_HYPHEN_RE.sub("‐", normalize_numerals(str(text or "")))):
+    for m in _SPAN_RE.finditer(_WORD_HYPHEN_RE.sub("‐", _ordinal_hyphens(normalize_numerals(str(text or ""))))):
         span = _trim_brackets(" ".join(m.group(0).split()))
+        # "a 15-meter pole", "I 3 times": an English article or pronoun set
+        # next to a number with no operator between is not a variable — no
+        # translation keeps it (Pythagoras kit, Arabic, 2026-10-20: "a 15")
+        span = _ARTICLE_RE.sub("", span).strip()
         # maths carries a digit, or a variable WITH an operator — a bare
         # operator between words ("A - B" in prose, a stray dash) is not
         if span and _SPAN_CORE_RE.search(span) and (re.search(r"\d", span) or re.search(r"[A-Za-zα-ωΑ-Ω]", span)):
