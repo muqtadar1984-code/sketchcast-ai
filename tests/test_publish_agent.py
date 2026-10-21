@@ -181,3 +181,40 @@ def test_a_database_without_the_tables_is_logged_once_and_never_raises():
 
     assert A.maybe_tick(_Old(), now=AFTER) is None
     assert A._state["missing_logged"] is True
+
+
+# ── a round that runs past its quota day counts as that day's round ─────
+# (founder 2026-10-21: one video per language per day)
+
+# 2026-10-21 07:40 UTC = 00:40 PDT on the 21st: the 20th's round finished here
+SPILL_FINISH = "2026-10-21T07:40:00+00:00"
+
+
+def test_a_round_that_ran_past_its_day_counts_as_the_next_days_round():
+    sb = _sb(("es-2", "es", 0), ("fr-2", "fr", 1))
+    sb.tables[A.ROUNDS].append({"id": "r20", "trigger": "daily", "quota_day": "2026-10-20", "status": "done",
+                                "finished_at": SPILL_FINISH, "created_at": "2026-10-21T05:01:00+00:00"})
+    out = A.tick(sb, now=AFTER)                      # 01:00 PDT on the 21st
+    assert out and "ran past its day" in out
+    assert _jobs(sb) == [] and all(r["status"] == "pending" for r in sb.tables[A.QUEUE]), "nothing posts today"
+    covered = next(r for r in sb.tables[A.ROUNDS] if r["quota_day"] == "2026-10-21")
+    assert covered["trigger"] == "daily" and covered["status"] == "done"
+    assert covered["summary"]["covered_by"] == "r20"
+    assert A.tick(sb, now=AFTER) is None, "the day stays covered"
+
+
+def test_a_round_that_finished_on_its_own_day_does_not_cover_the_next():
+    sb = _sb(("es-2", "es", 0))
+    sb.tables[A.ROUNDS].append({"id": "r20", "trigger": "daily", "quota_day": "2026-10-20", "status": "done",
+                                "finished_at": "2026-10-21T05:30:00+00:00",   # 22:30 PDT on the 20th
+                                "created_at": "2026-10-21T05:01:00+00:00"})
+    A.tick(sb, now=AFTER)
+    assert _item(sb, "es-2")["status"] == "queued", "the 21st gets its own round"
+
+
+def test_a_manual_round_never_stands_in_for_a_daily_one():
+    sb = _sb(("es-2", "es", 0))
+    sb.tables[A.ROUNDS].append({"id": "m", "trigger": "manual", "quota_day": "2026-10-20", "status": "done",
+                                "finished_at": SPILL_FINISH, "created_at": "2026-10-21T06:00:00+00:00"})
+    A.tick(sb, now=AFTER)
+    assert _item(sb, "es-2")["status"] == "queued"
