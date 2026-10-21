@@ -38,4 +38,8 @@ python-bidi>=0.4.2
 # google-auth-oauthlib is NOT declared: only scripts/youtube_oauth.py needs
 # it, and that runs on the operator's laptop, never on Railway.
 google-api-python-client>=2.100.0
+# YouTube's quota day is Pacific time (catalogue/publish.py quota_day). zoneinfo
+# reads the OS tz database, which a slim image may not have; this package is
+# the pure-Python copy it falls back to. Without either the worker assumes PST.
+tzdata>=2024.1
 fonttools>=4.40

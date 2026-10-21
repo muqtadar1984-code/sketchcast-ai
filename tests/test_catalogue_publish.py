@@ -747,10 +747,13 @@ def test_the_real_transports_four_calls_execute():
     YouTube documents. A NameError in here would otherwise surface on the
     founder's first real publish."""
     class _Req:
+        retries = []
+
         def __init__(self, out):
             self.out = out
 
-        def next_chunk(self):
+        def next_chunk(self, num_retries=0):
+            _Req.retries.append(num_retries)
             return None, self.out
 
         def execute(self):
@@ -789,6 +792,7 @@ def test_the_real_transports_four_calls_execute():
 
     assert transport.upload_video(pathlib.Path("x.mp4"), title="Cells", description="D",
                                   privacy="private", language="en", tags=["Biology"]) == "vid-1"
+    assert _Req.retries == [P.CHUNK_RETRIES], "every chunk is retried by the library on a 5xx or a dropped socket"
     body = svc.v.kw["body"]
     assert body["status"]["privacyStatus"] == "private"
     assert body["snippet"]["categoryId"] == "27", "Education"
@@ -940,3 +944,191 @@ def test_jawi_posts_to_its_own_channel_once_its_token_is_set(monkeypatch):
     assert P.channel_for("ms-arab") == "en"
     monkeypatch.setenv("YOUTUBE_REFRESH_TOKEN_MS_ARAB", "tok")
     assert P.channel_for("ms-arab") == "ms-arab"
+
+
+# ── upload safety (Bulk YouTube Posting plan, Phase 1) ──────────────────
+
+
+class _QuotaError(Exception):
+    """What googleapiclient raises for a daily limit: the reason is in the text."""
+
+    def __init__(self, reason="quotaExceeded"):
+        super().__init__(f"<HttpError 403 returned \"The request cannot be completed because you have exceeded "
+                         f"your quota.\". Details: \"[{{'reason': '{reason}'}}]\">")
+
+
+def test_the_row_carries_a_token_before_the_upload_and_the_video_carries_its_tag():
+    sb = _sb(parts=(1,))
+    seen = {}
+
+    class _Watch(FakeYouTube):
+        def upload_video(self, path, **kw):
+            seen["row"] = dict(_pubs(sb)[1])   # the database AT the moment of the upload
+            return super().upload_video(path, **kw)
+
+    yt = _Watch()
+    P.run_publish_job(sb, _job(), transport=yt)
+    row = seen["row"]
+    assert row.get("upload_token") and not row.get("youtube_video_id"), "the intent is written first"
+    assert yt.uploads[0]["tags"][-1] == P.upload_tag(row["upload_token"]), "the marker is the LAST tag"
+    assert yt.uploads[0]["tags"][0] != P.upload_tag(row["upload_token"]), "the reviewer's tags keep the front"
+    final = _pubs(sb)[1]
+    assert final["youtube_video_id"] == "yt-1" and final["error"] is None
+
+
+def test_the_video_id_is_recorded_before_the_follow_ups_run():
+    sb = _sb(parts=(1,))
+    seen = {}
+
+    class _Watch(FakeYouTube):
+        def insert_caption(self, video_id, path, **kw):
+            seen["row"] = dict(_pubs(sb)[1])
+            return super().insert_caption(video_id, path, **kw)
+
+    P.run_publish_job(sb, _job(), transport=_Watch())
+    assert seen["row"]["youtube_video_id"] == "yt-1", "a crash during captions cannot lose the video"
+
+
+def test_an_interrupted_upload_found_on_the_channel_is_adopted_not_uploaded_again():
+    token = "abc0123456" + "f" * 22
+    interrupted = [{"topic_kit_id": KIT, "part": 1, "channel_language": "en", "youtube_video_id": None,
+                    "privacy": "private", "upload_token": token, "error": P.UPLOADING_NOTE}]
+    sb = _sb(parts=(1,), publications=interrupted)
+    yt = FakeYouTube(channel={"vid-landed": ["Cells", P.upload_tag(token)]})
+    summary = P.run_publish_job(sb, _job(), transport=yt)
+    assert yt.uploads == [], "nothing is uploaded a second time"
+    assert summary["published"] == [1] and summary["adopted"] == [1]
+    row = _pubs(sb)[1]
+    assert row["youtube_video_id"] == "vid-landed" and row["error"] is None
+    assert [c["video_id"] for c in yt.captions] == ["vid-landed"], "the follow-ups run on the adopted video"
+
+
+def test_an_interrupted_upload_that_never_landed_is_uploaded_once():
+    token = "fff0123456" + "0" * 22
+    interrupted = [{"topic_kit_id": KIT, "part": 1, "channel_language": "en", "youtube_video_id": None,
+                    "privacy": "private", "upload_token": token, "error": P.UPLOADING_NOTE}]
+    sb = _sb(parts=(1,), publications=interrupted)
+    yt = FakeYouTube(channel={"someone-else": ["sc-0000000000"]})
+    summary = P.run_publish_job(sb, _job(), transport=yt)
+    assert yt.finds == [P.upload_tag(token)]
+    assert len(yt.uploads) == 1 and summary["published"] == [1] and "adopted" not in summary
+
+
+def test_a_channel_that_cannot_be_read_fails_the_part_rather_than_risk_a_duplicate():
+    interrupted = [{"topic_kit_id": KIT, "part": 1, "channel_language": "en", "youtube_video_id": None,
+                    "privacy": "private", "upload_token": "a" * 32, "error": P.UPLOADING_NOTE}]
+    sb = _sb(parts=(1,), publications=interrupted)
+    yt = FakeYouTube(fail_on=("find_upload",))
+    summary = P.run_publish_job(sb, _job(), transport=yt)
+    assert yt.uploads == [] and summary["failed"] == [1]
+    assert "cannot be posted twice" in _pubs(sb)[1]["error"]
+
+
+def test_a_part_posted_on_another_channel_counts_as_posted():
+    elsewhere = [{"topic_kit_id": KIT, "part": 1, "channel_language": "ar",
+                  "youtube_video_id": "on-another-channel", "privacy": "private"}]
+    sb = _sb(parts=(1,), publications=elsewhere)
+    yt = FakeYouTube()
+    summary = P.run_publish_job(sb, _job(), transport=yt)
+    assert summary["already"] == [1] and yt.uploads == []
+
+
+def test_quota_at_the_upload_waits_for_the_next_quota_day_instead_of_failing():
+    sb = _sb(parts=(1,))
+    yt = FakeYouTube(raise_on={"upload_video": _QuotaError("quotaExceeded")})
+    with pytest.raises(db.DeferredJob) as exc:
+        P.run_publish_job(sb, _job(), transport=yt)
+    assert P.WAITING_QUOTA in exc.value.note and "quotaExceeded" in exc.value.note
+    assert exc.value.seconds > P.QUOTA_GRACE_SECONDS
+    # the builder-wait clock restarts at the wake-up, in the future
+    assert db.deferred_seconds({"params": {"deferred_since": exc.value.extra["deferred_since"]}}) == 0.0
+    row = _pubs(sb)[1]
+    assert row.get("upload_token") is None, "refused at the start: nothing to look for next time"
+    assert not row.get("youtube_video_id") and "waiting for YouTube quota" in row["error"]
+    assert _job_row(sb)["status"] != "error", "a quota wait is not a failure"
+
+
+def test_the_channels_daily_upload_limit_is_a_quota_wait_too(monkeypatch):
+    monkeypatch.setenv(P.MAX_PARTS_ENV, "10")
+    sb = _sb(parts=(1, 2))
+
+    class _SecondRefused(FakeYouTube):
+        def upload_video(self, path, **kw):
+            if self.uploads:
+                raise _QuotaError("uploadLimitExceeded")
+            return super().upload_video(path, **kw)
+
+    with pytest.raises(db.DeferredJob) as exc:
+        P.run_publish_job(sb, _job(), transport=_SecondRefused())
+    assert "uploadLimitExceeded" in exc.value.note
+    assert _pubs(sb)[1]["youtube_video_id"] == "yt-1", "the part already up stays recorded; the re-run skips it"
+
+
+def test_quota_reason_reads_the_text_and_the_body_and_ignores_rate_limits():
+    assert P.quota_reason(_QuotaError("quotaExceeded")) == "quotaExceeded"
+
+    class _Http(Exception):
+        content = b'{"error": {"errors": [{"reason": "dailyLimitExceeded"}]}}'
+
+    assert P.quota_reason(_Http("403")) == "dailyLimitExceeded"
+    assert P.quota_reason(RuntimeError("rateLimitExceeded")) is None
+    assert P.quota_reason(RuntimeError("invalidDescription")) is None
+
+
+def test_the_quota_day_is_pacific_and_resets_at_its_midnight():
+    from datetime import date as _date, datetime as _dt, timezone as _tz
+
+    pdt = _dt(2026, 10, 21, 6, 59, tzinfo=_tz.utc)          # 23:59 PDT on the 20th
+    assert P.quota_day(pdt) == _date(2026, 10, 20)
+    assert P.seconds_to_next_quota_day(pdt) == 60
+    assert P.quota_day(_dt(2026, 10, 21, 7, 0, tzinfo=_tz.utc)) == _date(2026, 10, 21)
+    pst = _dt(2026, 12, 1, 8, 0, tzinfo=_tz.utc)             # midnight PST
+    assert P.quota_day(pst) == _date(2026, 12, 1) and P.seconds_to_next_quota_day(pst) == 86400
+
+
+def test_every_call_is_added_to_the_quota_ledger():
+    sb = _sb(parts=(1,))
+    P.run_publish_job(sb, _job(), transport=FakeYouTube())
+    calls = [p for name, p in sb.rpc_calls if name == P.LEDGER_RPC]
+    methods = [c["p_method"] for c in calls]
+    assert methods[:3] == ["videos.insert", "captions.insert", "thumbnails.set"]
+    insert = calls[0]
+    assert insert["p_uploads"] == 1 and insert["p_units"] == 0 and insert["p_channel"] == "en"
+    assert calls[1]["p_units"] == 400 and calls[1]["p_uploads"] == 0
+    assert insert["p_day"] == P.quota_day().isoformat()
+
+
+def test_a_database_without_the_ledger_never_fails_the_upload():
+    sb = _sb(parts=(1,))   # FakeSB answers PGRST202 for every function but one
+    summary = P.run_publish_job(sb, _job(), transport=FakeYouTube())
+    assert summary["published"] == [1] and _job_row(sb)["status"] == "done"
+
+
+def test_a_database_without_0149_writes_the_row_without_the_safety_columns():
+    written = []
+
+    class _Old:
+        def table(self, name):
+            return self
+
+        def upsert(self, row, on_conflict=None):
+            self.row = row
+            return self
+
+        def execute(self):
+            for col in ("upload_token", "upload_started_at"):
+                if col in self.row:
+                    raise RuntimeError(f"column \"{col}\" of relation \"topic_publications\" does not exist")
+            written.append(dict(self.row))
+
+    P.write_publication(_Old(), {"topic_kit_id": KIT, "part": 1, "channel_language": "en",
+                                 "upload_token": "t", "upload_started_at": "now", "error": "x"})
+    assert written == [{"topic_kit_id": KIT, "part": 1, "channel_language": "en", "error": "x"}]
+
+
+def test_the_marker_always_fits_youtubes_tag_field():
+    tags = [f"tag number {i:02d}" for i in range(60)]   # far more than 500 characters
+    out = P.tags_with_marker(tags, "sc-0123456789")
+    cost = sum(len(t) + (2 if " " in t else 0) + 1 for t in out)
+    assert out[-1] == "sc-0123456789" and cost <= P.TAGS_CHAR_LIMIT
+    assert out[:3] == tags[:3], "the order is kept"

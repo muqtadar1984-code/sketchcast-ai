@@ -81,6 +81,28 @@ Supabase egress, which is bandwidth a teacher's render wants. The last lane
 already means no builder was queued when the job was claimed; ``builder_queued``
 is re-read before each part so a builder that arrives mid-run stops the job
 DONE with the rest deferred, exactly as ``catalogue.figures`` pauses.
+
+UPLOAD SAFETY (Bulk YouTube Posting plan, Phase 1, 2026-10-21). Bulk posting
+runs hundreds of these jobs through deploys and reaper requeues, so:
+
+  * NEVER TWICE. Before ``videos.insert`` the part's row is written with an
+    ``upload_token`` and the video carries the tag ``sc-<token[:10]>``; the
+    moment YouTube answers, the row names the video, before captions or
+    anything else can go wrong. A run that finds a token and no video id was
+    interrupted inside that window (a deploy, the 5-minute reaper), so it
+    looks for the tag among the channel's latest uploads and ADOPTS the
+    video it finds instead of uploading a second copy. When the channel
+    cannot be read, the part fails rather than risk a duplicate. A part
+    posted on ANY channel counts as posted (not only this channel).
+  * RETRIED CHUNKS. A 5xx or a dropped socket mid-upload is retried by the
+    client library (``num_retries``) instead of failing the part and
+    starting again from byte 0 on the next run.
+  * QUOTA IS A WAIT, NOT A FAILURE. ``quotaExceeded`` / ``uploadLimitExceeded``
+    end the run with the rest of the parts deferred; the job goes back to the
+    queue until the next quota day (midnight Pacific, when YouTube resets).
+  * A LEDGER. Every call the run makes is added to ``youtube_quota_ledger``
+    (app migration 0149) for its Pacific quota day — best-effort, and silent
+    on a database without the migration.
 """
 
 from __future__ import annotations
@@ -91,8 +113,9 @@ import os
 import re
 import shutil
 import tempfile
+import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Optional, Protocol, runtime_checkable
 
@@ -148,6 +171,31 @@ PUBLISH_WAIT_SECONDS = 120
 PUBLISH_MAX_WAIT_ENV = "YOUTUBE_PUBLISH_MAX_WAIT_MINUTES"
 PUBLISH_MAX_WAIT_DEFAULT = 12 * 60
 
+# Upload safety (see the module docstring).
+UPLOAD_TAG_PREFIX = "sc-"
+UPLOADING_NOTE = ("upload started; if this note stays, the next run looks for the video on the channel "
+                  "before uploading again")
+FOLLOW_UPS_NOTE = "uploaded; captions, thumbnail and playlists not finished"
+CHUNK_RETRIES = 5        # googleapiclient's own exponential backoff, per chunk
+CALL_RETRIES = 3         # the same for the small calls (captions, thumbnail, playlist, lists)
+RECENT_UPLOADS = 50      # how far back an interrupted upload is looked for (one page)
+TAGS_CHAR_LIMIT = 500    # the tags field, counted as catalogue.youtube_enrich counts it
+
+# The daily-limit reasons YouTube answers with. rateLimitExceeded is NOT one:
+# it is per-second pacing and the client's retry handles it.
+QUOTA_REASONS = ("quotaExceeded", "uploadLimitExceeded", "dailyLimitExceeded")
+WAITING_QUOTA = "waiting: the YouTube quota is used up until the next quota day"
+QUOTA_GRACE_SECONDS = 10 * 60   # wake a little after midnight Pacific, not on the stroke
+QUOTA_TZ = "America/Los_Angeles"
+
+# Documented Data API costs of the calls a publish makes. videos.insert is
+# counted in ``uploads`` and NOT in ``units``: the Heat Transfer pilot
+# (2026-10-21) put 12 uploads through one quota day without a quota error,
+# so uploads do not draw 1,600 units each from this project's 10,000-unit pool.
+UNIT_COSTS = {"videos.insert": 0, "captions.insert": 400, "thumbnails.set": 50, "playlistItems.insert": 50,
+              "videos.update": 50, "videos.list": 1, "channels.list": 1, "playlistItems.list": 1}
+LEDGER_RPC = "youtube_quota_add"
+
 # YouTube's own limits. A title over 100 characters and a description over
 # 5000 are rejected by videos.insert, so both are cut HERE, where the cut can
 # keep the part label.
@@ -176,6 +224,99 @@ class _Pause(Exception):
     def __init__(self, note: str):
         super().__init__(note)
         self.note = note
+
+
+class QuotaExhausted(RuntimeError):
+    """YouTube said the day's quota (or the channel's daily upload limit) is
+    used up. Not the part's fault: the run stops and waits for the next
+    quota day instead of recording a failure."""
+
+    def __init__(self, reason: str):
+        super().__init__(f"YouTube {reason}")
+        self.reason = reason
+
+
+def quota_reason(exc: BaseException) -> Optional[str]:
+    """The daily-limit reason an API error carries, or None. Read from the
+    error's text and, for an HttpError, its body — the reason string is in
+    both, and nothing here imports googleapiclient. Pure."""
+    text = str(exc)
+    content = getattr(exc, "content", None)
+    if isinstance(content, (bytes, bytearray)):
+        text += " " + content.decode("utf-8", "replace")
+    elif content:
+        text += " " + str(content)
+    return next((r for r in QUOTA_REASONS if r in text), None)
+
+
+def _pacific(now: Optional[datetime] = None) -> datetime:
+    """``now`` in Pacific time — YouTube's quota clock. A worker image with no
+    tz database falls back to UTC-8 (PST): at most an hour early in summer,
+    which only makes a quota wait an hour longer."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        from zoneinfo import ZoneInfo
+
+        return now.astimezone(ZoneInfo(QUOTA_TZ))
+    except Exception:  # noqa: BLE001 — no tzdata on the image
+        return now.astimezone(timezone(timedelta(hours=-8)))
+
+
+def quota_day(now: Optional[datetime] = None) -> date:
+    """The quota day ``now`` falls in (the Pacific calendar date)."""
+    return _pacific(now).date()
+
+
+def seconds_to_next_quota_day(now: Optional[datetime] = None) -> int:
+    """Seconds until YouTube resets the quota (the next midnight Pacific)."""
+    local = _pacific(now)
+    midnight = (local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(60, int((midnight - local).total_seconds()))
+
+
+_ledger_missing = {"logged": False}
+
+
+def spend(sb, channel: str, method: str) -> None:
+    """Add one call to ``youtube_quota_ledger`` for today's quota day — one
+    atomic increment in the database (app migration 0149's function), so two
+    workers never lose each other's counts. Best-effort: a ledger that cannot
+    be written never fails an upload, and a database without 0149 is logged
+    once, not once per call."""
+    if sb is None:
+        return
+    try:
+        sb.rpc(LEDGER_RPC, {"p_day": quota_day().isoformat(), "p_channel": _lang(channel), "p_method": method,
+                            "p_units": int(UNIT_COSTS.get(method, 0)),
+                            "p_uploads": 1 if method == "videos.insert" else 0}).execute()
+    except Exception as exc:  # noqa: BLE001
+        if not _ledger_missing["logged"]:
+            _ledger_missing["logged"] = True
+            log.warning("publish: the quota ledger was not written (%s); apply app migration 0149", exc)
+
+
+def upload_tag(token: str) -> str:
+    """The tag an upload carries so an interrupted run can find it again."""
+    return f"{UPLOAD_TAG_PREFIX}{_s(token)[:10]}"
+
+
+def tags_with_marker(tags: Iterable[str], marker: str) -> list[str]:
+    """``tags`` in their order, as many as fit YouTube's 500 characters with
+    room kept for ``marker``, then ``marker`` LAST — the reviewer's tags keep
+    the front of the field. Counted as catalogue.youtube_enrich counts (a tag
+    with a space costs its quotes, every tag its comma). Pure."""
+    out: list[str] = []
+    used = len(marker) + 1
+    for tag in tags or []:
+        tag = _s(tag)
+        if not tag or tag == marker:
+            continue
+        cost = len(tag) + (2 if " " in tag else 0) + 1
+        if used + cost > TAGS_CHAR_LIMIT:
+            continue
+        out.append(tag)
+        used += cost
+    return [*out, marker]
 
 
 # ── environment (never the database) ───────────────────────────────────
@@ -646,6 +787,11 @@ class YouTubeTransport(Protocol):
         channel (videos.update on the snippet); privacy, category and the
         file are never touched."""
 
+    def find_upload(self, tag: str) -> Optional[str]:
+        """The id of the channel's recent upload carrying ``tag`` (an
+        interrupted run's marker), or None. channels.list + playlistItems.list
+        + videos.list: about 3 units."""
+
 
 @dataclass(frozen=True)
 class Credentials:
@@ -728,10 +874,13 @@ class _GoogleTransport:
     @staticmethod
     def _drain(request):
         """Run a resumable request to completion. Chunked so a 200 MB part
-        does not have to succeed in one socket."""
+        does not have to succeed in one socket, and each chunk retried with
+        the library's own backoff on a 5xx or a dropped connection — the
+        resumable session survives, so a blip costs one chunk, not the
+        whole upload. A 4xx (quota, a refused description) is not retried."""
         response = None
         while response is None:
-            _status, response = request.next_chunk()
+            _status, response = request.next_chunk(num_retries=CHUNK_RETRIES)
         return response
 
     def upload_video(self, path: Path, *, title: str, description: str, privacy: str,
@@ -779,6 +928,27 @@ class _GoogleTransport:
                      "defaultAudioLanguage": body.get("defaultAudioLanguage") or language})
         self._service.videos().update(part="snippet", body={"id": video_id, "snippet": body}).execute()
 
+    def find_upload(self, tag: str) -> Optional[str]:
+        # Reads only, so they retry freely; the writes above do not (a
+        # retried insert whose first try landed would post a duplicate
+        # caption track or playlist entry).
+        ch = self._service.channels().list(part="contentDetails", mine=True).execute(num_retries=CALL_RETRIES) or {}
+        items = ch.get("items") or []
+        uploads = (((items[0] if items else {}).get("contentDetails") or {}).get("relatedPlaylists") or {}).get("uploads")
+        if not uploads:
+            raise RuntimeError("the channel's uploads playlist could not be read")
+        page = self._service.playlistItems().list(part="contentDetails", playlistId=uploads,
+                                                  maxResults=RECENT_UPLOADS).execute(num_retries=CALL_RETRIES) or {}
+        ids = [_s((it.get("contentDetails") or {}).get("videoId")) for it in (page.get("items") or [])]
+        ids = [i for i in ids if i]
+        if not ids:
+            return None
+        res = self._service.videos().list(part="snippet", id=",".join(ids)).execute(num_retries=CALL_RETRIES) or {}
+        for it in res.get("items") or []:
+            if tag in ((it.get("snippet") or {}).get("tags") or []):
+                return _s(it.get("id")) or None
+        return None
+
 
 # ── database edges ─────────────────────────────────────────────────────
 
@@ -821,21 +991,36 @@ def load_publications(sb, kit_id: str, language: str) -> dict[int, dict]:
     return out
 
 
+def load_kit_publications(sb, kit_id: str) -> list[dict]:
+    """Every publication row of the kit, whatever channel carried it."""
+    return _rows(sb.table("topic_publications").select("*").eq("topic_kit_id", kit_id).execute())
+
+
+# Columns a database may not have yet, and the migration that adds each. A
+# row is written without the missing ones rather than a video going up
+# unrecorded.
+OPTIONAL_COLUMNS = {"format_version": "0122", "upload_token": "0149", "upload_started_at": "0149"}
+
+
 def write_publication(sb, row: dict) -> None:
     """One ``topic_publications`` row, keyed by the 0112 unique constraint. An
     upsert so a retry of a part that failed updates its row instead of losing
-    the 23505 race with itself. A database without app migration 0122 refuses
-    ``format_version``; the row is then written without it rather than the
-    video going up unrecorded."""
-    try:
-        sb.table("topic_publications").upsert(row, on_conflict="topic_kit_id,part,channel_language").execute()
-    except Exception as exc:  # noqa: BLE001
-        if "format_version" not in row or "format_version" not in str(exc):
-            raise
-        log.warning("topic_publications has no format_version column yet (apply app migration 0122); "
-                    "writing the row without it")
-        slim = {k: v for k, v in row.items() if k != "format_version"}
-        sb.table("topic_publications").upsert(slim, on_conflict="topic_kit_id,part,channel_language").execute()
+    the 23505 race with itself. A database without a column in
+    ``OPTIONAL_COLUMNS`` refuses it by name; the row is then written without
+    it (and without the upload-safety columns, the adopt check simply never
+    fires — the publish behaves as it did before 0149)."""
+    slim = dict(row)
+    while True:
+        try:
+            sb.table("topic_publications").upsert(slim, on_conflict="topic_kit_id,part,channel_language").execute()
+            return
+        except Exception as exc:  # noqa: BLE001
+            missing = [c for c in OPTIONAL_COLUMNS if c in slim and c in str(exc)]
+            if not missing:
+                raise
+            log.warning("topic_publications has no %s column yet (apply app migration %s); writing the row "
+                        "without it", ", ".join(missing), ", ".join(sorted({OPTIONAL_COLUMNS[c] for c in missing})))
+            slim = {k: v for k, v in slim.items() if k not in missing}
 
 
 def generation_format_version(sb, generation_id: str) -> int:
@@ -1158,40 +1343,104 @@ def narration_parts(sb, target: Target) -> list[dict]:
     return sorted(out, key=lambda d: int(d["part"]))
 
 
+def find_interrupted_upload(sb, transport: YouTubeTransport, target: Target, row: dict) -> Optional[str]:
+    """The video an interrupted run uploaded for this row, or None.
+
+    A row with an ``upload_token`` and no video id was written just before a
+    ``videos.insert`` whose answer never reached the database. The upload may
+    or may not have landed, so the channel is asked: the tag the token names
+    among the latest uploads. Raises when the channel cannot be read — the
+    caller fails the part rather than risk posting it twice."""
+    token = _s(row.get("upload_token"))
+    if not token:
+        return None
+    find = getattr(transport, "find_upload", None)
+    if find is None:
+        raise RuntimeError("an interrupted upload cannot be checked: this transport cannot list the channel")
+    try:
+        found = _s(find(upload_tag(token)))
+    except Exception as exc:  # noqa: BLE001
+        reason = quota_reason(exc)
+        if reason:
+            raise QuotaExhausted(reason) from exc
+        raise RuntimeError(f"the channel could not be checked for an interrupted upload ({exc}); "
+                           "nothing was uploaded, so it cannot be posted twice") from exc
+    finally:
+        for method in ("channels.list", "playlistItems.list", "videos.list"):
+            spend(sb, target.channel, method)
+    return found or None
+
+
 def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, total: int,
-                 work: Path) -> dict:
+                 work: Path, *, adopt: Optional[str] = None) -> dict:
     """Upload ONE part and return its ``topic_publications`` row. The video is
     the deliverable: captions, the thumbnail and the playlists are recorded
-    when they succeed and noted when they do not, and never fail the part."""
+    when they succeed and noted when they do not, and never fail the part.
+
+    ``adopt`` is a video an interrupted run already uploaded
+    (``find_interrupted_upload``): nothing is uploaded, the follow-ups run
+    against that video. Otherwise the row is written TWICE before the
+    follow-ups — the intent (token, no video) just before ``videos.insert``
+    and the video id the moment YouTube returns it — so no interruption can
+    leave a video on the channel that the database does not know how to find."""
     idx = int(part["part"])
     kit, topic = target.kit, target.topic
     if target.language != DEFAULT_LANGUAGE:
         # the thumbnail card and the playlist keys read the TRANSLATED title
         topic = {**topic, "title": _s(target.article.get("title")) or topic.get("title")}
     gen_id = _s(kit.get("presentation_generation_id"))
+    key = {"topic_kit_id": kit.get("id"), "part": idx, "channel_language": target.channel,
+           "privacy": target.privacy}
 
-    local = download_artifact(sb, part["storage_path"], work / f"lesson_part{idx}.mp4")
     title, description, tags = compose_words(sb, target, idx, total)
     playlists = configured_playlists(target.channel, sb)
-    video_id = _s(transport.upload_video(local, title=title, description=description,
-                                         privacy=target.privacy, language=target.language, tags=tags))
-    if not video_id:
-        raise RuntimeError(f"part {idx}: the upload returned no video id")
-    log.info("publish: kit %s part %d uploaded as %s (%s)", kit.get("id"), idx, video_id, target.privacy)
+    if adopt:
+        video_id = _s(adopt)
+        log.warning("publish: kit %s part %d adopted %s, uploaded by an interrupted run; not uploaded again",
+                    kit.get("id"), idx, video_id)
+    else:
+        local = download_artifact(sb, part["storage_path"], work / f"lesson_part{idx}.mp4")
+        token = uuid.uuid4().hex
+        write_publication(sb, {**key, "upload_token": token,
+                               "upload_started_at": datetime.now(timezone.utc).isoformat(),
+                               "error": UPLOADING_NOTE})
+        try:
+            video_id = _s(transport.upload_video(local, title=title, description=description,
+                                                 privacy=target.privacy, language=target.language,
+                                                 tags=tags_with_marker(tags, upload_tag(token))))
+        except Exception as exc:  # noqa: BLE001
+            reason = quota_reason(exc)
+            if not reason:
+                raise   # the token stays: the upload may have landed before the error
+            # Refused at the start of the upload, so nothing reached the
+            # channel: the token is cleared and the next run uploads without
+            # first asking the channel.
+            write_publication(sb, {**key, "upload_token": None, "error": f"waiting for YouTube quota ({reason})"})
+            raise QuotaExhausted(reason) from exc
+        if not video_id:
+            raise RuntimeError(f"part {idx}: the upload returned no video id")
+        spend(sb, target.channel, "videos.insert")
+        # Named at once: from here on a re-run skips this part, whatever
+        # happens to the follow-ups.
+        write_publication(sb, {**key, "youtube_video_id": video_id,
+                               "published_at": datetime.now(timezone.utc).isoformat(), "error": FOLLOW_UPS_NOTE})
+        log.info("publish: kit %s part %d uploaded as %s (%s)", kit.get("id"), idx, video_id, target.privacy)
 
-    row = {"topic_kit_id": kit.get("id"), "part": idx, "channel_language": target.channel,
-           "youtube_video_id": video_id, "privacy": target.privacy, "playlist_ids": [],
+    row = {**key, "youtube_video_id": video_id, "playlist_ids": [],
            "captions_uploaded": [], "thumbnail_set": False,
            "published_at": datetime.now(timezone.utc).isoformat(), "error": None,
            # which generation of the pipeline drew it (shared/video_format.py):
            # the portal's outdated-video notice compares this with the current
            "format_version": generation_format_version(sb, gen_id)}
+    if adopt:
+        row.pop("published_at")   # the interrupted run's moment is unknown; the poll reads YouTube's
     notes: list[str] = []
 
     try:
         srt = caption_file(sb, gen_id, idx, work)
         if srt is not None:
             transport.insert_caption(video_id, srt, language=target.language, name="SketchCast")
+            spend(sb, target.channel, "captions.insert")
             row["captions_uploaded"] = [target.language]
         else:
             notes.append("no transcript artifact; captions skipped")
@@ -1207,6 +1456,7 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
             build_thumbnail(topic, idx, total, work / f"thumb_part{idx}.png")
         if thumb is not None:
             transport.set_thumbnail(video_id, thumb)
+            spend(sb, target.channel, "thumbnails.set")
             row["thumbnail_set"] = True
         else:
             notes.append("thumbnail not drawn")
@@ -1218,6 +1468,7 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
     for pid in ids:
         try:
             transport.add_to_playlist(video_id, pid)
+            spend(sb, target.channel, "playlistItems.insert")
             row["playlist_ids"] = [*row["playlist_ids"], pid]
         except Exception as exc:  # noqa: BLE001
             notes.append(f"playlist {pid} failed ({type(exc).__name__}: {exc})")
@@ -1258,12 +1509,24 @@ def publish_kit(sb, job_id: str, params: dict, transport: Optional[YouTubeTransp
 
     # IDEMPOTENCY: a part that already carries a youtube_video_id is done, so
     # a re-run FINISHES an interrupted publish and never uploads a video twice.
-    existing = load_publications(sb, kit_id, target.channel)
+    # Posted on ANY channel counts: a part is one video, wherever it went.
+    rows = load_kit_publications(sb, kit_id)
+    existing: dict[int, dict] = {}
+    posted: set[int] = set()
+    for r in rows:
+        try:
+            idx = int(r.get("part") or 1)
+        except (TypeError, ValueError):
+            continue
+        if _s(r.get("youtube_video_id")):
+            posted.add(idx)
+        if _lang(r.get("channel_language")) == target.channel:
+            existing[idx] = r
     cap = max_parts_per_run()
     pending: list[dict] = []
     for p in target.parts:
         idx = int(p["part"])
-        if _s((existing.get(idx) or {}).get("youtube_video_id")):
+        if idx in posted:
             stage["already"].append(idx)
         else:
             pending.append(p)
@@ -1289,10 +1552,31 @@ def publish_kit(sb, job_id: str, params: dict, transport: Optional[YouTubeTransp
                     raise db.DeferredJob(PUBLISH_WAIT_SECONDS, WAITING_BUILDERS)
                 raise _Pause(PAUSED_BUILDERS)
             try:
-                row = publish_part(sb, transport, target, part, total, work)
+                adopt = find_interrupted_upload(sb, transport, target, existing.get(idx) or {})
+                row = publish_part(sb, transport, target, part, total, work, adopt=adopt)
                 write_publication(sb, row)
                 stage["published"].append(idx)
-                uploaded += 1
+                if adopt:
+                    stage.setdefault("adopted", []).append(idx)
+                else:
+                    uploaded += 1
+            except QuotaExhausted as q:
+                # Not this part's fault and not a failure: every part left
+                # waits for the next quota day. The parts already up are
+                # recorded, so the re-run skips them.
+                left = [int(p["part"]) for p in pending if int(p["part"]) not in set(stage["published"])
+                        | set(stage["failed"])]
+                stage["deferred"] = left
+                db.set_stage(sb, job_id, dict(stage))
+                log.warning("publish job %s: YouTube %s; part(s) %s wait for the next quota day",
+                            job_id, q.reason, ", ".join(str(p) for p in left))
+                # The builder-wait clock (deferred_since) restarts at the
+                # wake-up, so the hours spent waiting for quota never count
+                # against the bound on waiting for a teacher's build.
+                wait = seconds_to_next_quota_day() + QUOTA_GRACE_SECONDS
+                wake = datetime.now(timezone.utc) + timedelta(seconds=wait)
+                raise db.DeferredJob(wait, f"{WAITING_QUOTA} ({q.reason})",
+                                     extra={"deferred_since": db._stamp(wake)}) from q
             except Exception as exc:  # noqa: BLE001 — the next part still runs
                 detail = f"part {idx}: {type(exc).__name__}: {exc}"[:300]
                 errors.append(detail)
@@ -1368,6 +1652,8 @@ def rewords_kit(sb, job_id: str, params: dict, transport: Optional[YouTubeTransp
             title, description, tags = compose_words(sb, target, idx, total)
             transport.update_words(_s(row["youtube_video_id"]), title=title, description=description, tags=tags,
                                    language=target.language)
+            spend(sb, target.channel, "videos.list")
+            spend(sb, target.channel, "videos.update")
             stage["reworded"].append(idx)
             log.info("rewords: kit %s part %d (%s) now titled %r", kit_id, idx, row["youtube_video_id"], title)
         except Exception as exc:  # noqa: BLE001 — the next part still runs
@@ -1470,4 +1756,6 @@ __all__ = [
     "write_publication", "generation_format_version", "builders_are_queued", "download_artifact", "check_privacy", "load_target",
     "build_thumbnail", "caption_file", "compose_words", "narration_parts", "publish_part", "publish_kit",
     "REWORDS_ACTION", "rewords_kit", "run_publish_job",
+    "QuotaExhausted", "quota_reason", "quota_day", "seconds_to_next_quota_day", "spend", "upload_tag",
+    "tags_with_marker", "find_interrupted_upload", "load_kit_publications", "UNIT_COSTS", "WAITING_QUOTA",
 ]
