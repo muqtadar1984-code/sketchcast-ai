@@ -1132,3 +1132,54 @@ def test_the_marker_always_fits_youtubes_tag_field():
     cost = sum(len(t) + (2 if " " in t else 0) + 1 for t in out)
     assert out[-1] == "sc-0123456789" and cost <= P.TAGS_CHAR_LIMIT
     assert out[:3] == tags[:3], "the order is kept"
+
+
+# ── follow-ups cut short by quota wait, and are mended (2026-10-21) ─────
+
+
+def test_quota_on_the_captions_keeps_the_video_and_waits_instead_of_posting_more(monkeypatch):
+    monkeypatch.setenv(P.MAX_PARTS_ENV, "10")
+    sb = _sb(parts=(1, 2))
+    yt = FakeYouTube(raise_on={"insert_caption": _QuotaError("quotaExceeded")})
+    with pytest.raises(db.DeferredJob) as exc:
+        P.run_publish_job(sb, _job(), transport=yt)
+    assert "quotaExceeded" in exc.value.note
+    assert len(yt.uploads) == 1, "no second video goes up without its captions"
+    row = _pubs(sb)[1]
+    assert row["youtube_video_id"] == "yt-1" and row["captions_uploaded"] == []
+    assert yt.thumbnails == [] and yt.playlist_adds == [], "the other follow-ups are not tried once quota is out"
+    assert P.needs_mend(row)
+
+
+def test_the_next_run_mends_the_follow_ups_then_posts_the_rest(monkeypatch):
+    monkeypatch.setenv(P.MAX_PARTS_ENV, "10")
+    monkeypatch.setenv("YOUTUBE_PLAYLISTS_EN", '{"biology": "PL-bio"}')
+    cut = [{"topic_kit_id": KIT, "part": 1, "channel_language": "en", "youtube_video_id": "yt-old",
+            "privacy": "private", "captions_uploaded": [], "thumbnail_set": False, "playlist_ids": [],
+            "error": "captions failed (HttpError: ... 'reason': 'quotaExceeded' ...); waiting for YouTube quota"}]
+    sb = _sb(parts=(1, 2), publications=cut)
+    yt = FakeYouTube()
+    summary = P.run_publish_job(sb, _job(), transport=yt)
+    assert summary["mended"] == [1] and summary["published"] == [2]
+    assert [c["video_id"] for c in yt.captions] == ["yt-old", "yt-1"]
+    assert [u["bytes"] for u in yt.uploads] == [b"mp4-part-2"], "part 1 is not uploaded again"
+    row = _pubs(sb)[1]
+    assert row["captions_uploaded"] == ["en"] and row["playlist_ids"] == ["PL-bio"] and row["error"] is None
+
+
+def test_a_mend_does_not_repeat_what_the_part_already_has(monkeypatch):
+    monkeypatch.setenv("YOUTUBE_PLAYLISTS_EN", '{"biology": "PL-bio"}')
+    cut = [{"topic_kit_id": KIT, "part": 1, "channel_language": "en", "youtube_video_id": "yt-old",
+            "privacy": "private", "captions_uploaded": ["en"], "thumbnail_set": False, "playlist_ids": ["PL-bio"],
+            "error": "thumbnail failed (quotaExceeded)"}]
+    sb = _sb(parts=(1,), publications=cut)
+    yt = FakeYouTube()
+    P.run_publish_job(sb, _job(), transport=yt)
+    assert yt.captions == [] and yt.playlist_adds == [] and len(yt.thumbnails) == 1
+
+
+def test_a_thumbnail_refused_for_an_unverified_channel_is_not_retried_every_run():
+    row = {"youtube_video_id": "v", "error": "thumbnail failed (HttpError 403: The authenticated user doesn't have "
+                                              "permissions to upload and set custom video thumbnails.)"}
+    assert not P.needs_mend(row)
+    assert not P.needs_mend({"youtube_video_id": None, "error": "quotaExceeded"}), "not posted: an upload, not a mend"

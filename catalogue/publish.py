@@ -1393,7 +1393,6 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
            "privacy": target.privacy}
 
     title, description, tags = compose_words(sb, target, idx, total)
-    playlists = configured_playlists(target.channel, sb)
     if adopt:
         video_id = _s(adopt)
         log.warning("publish: kit %s part %d adopted %s, uploaded by an interrupted run; not uploaded again",
@@ -1426,53 +1425,83 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
                                "published_at": datetime.now(timezone.utc).isoformat(), "error": FOLLOW_UPS_NOTE})
         log.info("publish: kit %s part %d uploaded as %s (%s)", kit.get("id"), idx, video_id, target.privacy)
 
-    row = {**key, "youtube_video_id": video_id, "playlist_ids": [],
-           "captions_uploaded": [], "thumbnail_set": False,
-           "published_at": datetime.now(timezone.utc).isoformat(), "error": None,
+    row = {**key, "youtube_video_id": video_id,
+           "published_at": datetime.now(timezone.utc).isoformat(),
            # which generation of the pipeline drew it (shared/video_format.py):
            # the portal's outdated-video notice compares this with the current
            "format_version": generation_format_version(sb, gen_id)}
     if adopt:
         row.pop("published_at")   # the interrupted run's moment is unknown; the poll reads YouTube's
+    row.update(follow_ups(sb, transport, target, topic, idx, total, video_id, work, have={}))
+    return row
+
+
+def follow_ups(sb, transport: YouTubeTransport, target: Target, topic: dict, idx: int, total: int,
+               video_id: str, work: Path, *, have: dict) -> dict:
+    """Captions, the thumbnail and the playlists of one posted part — each the
+    deliverable's garnish: recorded when it succeeds, noted when it does not,
+    never failing the part. ``have`` is the part's existing row: what it
+    already carries is not done again (a re-run MENDING a part whose
+    follow-ups a quota refusal cut short, ``needs_mend``).
+
+    A quota refusal (2026-10-21: the Circle round's captions, thumbnails and
+    playlists were refused once the day's pool ran out, while uploads still
+    went through) stops the remaining follow-ups at once — every later call
+    would be refused too — and is returned as ``_quota`` so the run waits for
+    the next quota day and mends this part then, instead of posting more
+    videos without captions."""
+    gen_id = _s(target.kit.get("presentation_generation_id"))
+    fields: dict = {"captions_uploaded": list(have.get("captions_uploaded") or []),
+                    "thumbnail_set": bool(have.get("thumbnail_set")),
+                    "playlist_ids": list(have.get("playlist_ids") or [])}
     notes: list[str] = []
+    quota: Optional[str] = None
 
-    try:
-        srt = caption_file(sb, gen_id, idx, work)
-        if srt is not None:
-            transport.insert_caption(video_id, srt, language=target.language, name="SketchCast")
-            spend(sb, target.channel, "captions.insert")
-            row["captions_uploaded"] = [target.language]
-        else:
-            notes.append("no transcript artifact; captions skipped")
-    except Exception as exc:  # noqa: BLE001 — captions.insert is 400 of 10,000 units and fails first
-        notes.append(f"captions failed ({type(exc).__name__}: {exc})")
-        log.warning("publish: kit %s part %d captions failed: %s", kit.get("id"), idx, exc)
+    def refused(what: str, exc: Exception) -> None:
+        nonlocal quota
+        notes.append(f"{what} failed ({type(exc).__name__}: {exc})")
+        log.warning("publish: kit %s part %d %s failed: %s", target.kit.get("id"), idx, what, exc)
+        quota = quota or quota_reason(exc)
 
-    try:
-        # The thumbnail the library SHOWED the reviewer — drawn when the video
-        # finished and stored beside it (kind thumbnail_png, the same
-        # ``thumb{suffix}.png`` name) — else drawn now, as before.
-        thumb = stored_thumbnail(sb, gen_id, idx, work) or \
-            build_thumbnail(topic, idx, total, work / f"thumb_part{idx}.png")
-        if thumb is not None:
-            transport.set_thumbnail(video_id, thumb)
-            spend(sb, target.channel, "thumbnails.set")
-            row["thumbnail_set"] = True
-        else:
-            notes.append("thumbnail not drawn")
-    except Exception as exc:  # noqa: BLE001
-        notes.append(f"thumbnail failed ({type(exc).__name__}: {exc})")
-        log.warning("publish: kit %s part %d thumbnail failed: %s", kit.get("id"), idx, exc)
+    if not fields["captions_uploaded"]:
+        try:
+            srt = caption_file(sb, gen_id, idx, work)
+            if srt is not None:
+                transport.insert_caption(video_id, srt, language=target.language, name="SketchCast")
+                spend(sb, target.channel, "captions.insert")
+                fields["captions_uploaded"] = [target.language]
+            else:
+                notes.append("no transcript artifact; captions skipped")
+        except Exception as exc:  # noqa: BLE001 — captions.insert is 400 of 10,000 units and fails first
+            refused("captions", exc)
 
-    ids, unconfigured = resolve_playlists(playlist_keys(topic, target.header_lines, target.codes), playlists)
+    if not fields["thumbnail_set"] and not quota:
+        try:
+            # The thumbnail the library SHOWED the reviewer — drawn when the video
+            # finished and stored beside it (kind thumbnail_png, the same
+            # ``thumb{suffix}.png`` name) — else drawn now, as before.
+            thumb = stored_thumbnail(sb, gen_id, idx, work) or \
+                build_thumbnail(topic, idx, total, work / f"thumb_part{idx}.png")
+            if thumb is not None:
+                transport.set_thumbnail(video_id, thumb)
+                spend(sb, target.channel, "thumbnails.set")
+                fields["thumbnail_set"] = True
+            else:
+                notes.append("thumbnail not drawn")
+        except Exception as exc:  # noqa: BLE001
+            refused("thumbnail", exc)
+
+    ids, unconfigured = resolve_playlists(playlist_keys(topic, target.header_lines, target.codes),
+                                          configured_playlists(target.channel, sb))
     for pid in ids:
+        if pid in fields["playlist_ids"] or quota:
+            continue
         try:
             transport.add_to_playlist(video_id, pid)
             spend(sb, target.channel, "playlistItems.insert")
-            row["playlist_ids"] = [*row["playlist_ids"], pid]
+            fields["playlist_ids"] = [*fields["playlist_ids"], pid]
         except Exception as exc:  # noqa: BLE001
-            notes.append(f"playlist {pid} failed ({type(exc).__name__}: {exc})")
-            log.warning("publish: kit %s part %d playlist %s failed: %s", kit.get("id"), idx, pid, exc)
+            refused(f"playlist {pid}", exc)
     if unconfigured:
         # NOT an error on the row: it is the same on every video until the
         # founder creates the playlists, and a caveat that is always there
@@ -1480,12 +1509,36 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
         log.info("publish: no playlist configured for %s (%s)", ", ".join(unconfigured),
                  playlists_env(target.language))
 
-    if notes:
-        # The video IS published; ``error`` carries what did not follow it up,
-        # so the portal shows a published part with an honest caveat rather
-        # than a green tick that hides a missing caption track.
-        row["error"] = "; ".join(notes)[:1000]
-    return row
+    if quota:
+        notes.append(f"waiting for YouTube quota ({quota}); the next run finishes these")
+    # The video IS published; ``error`` carries what did not follow it up, so
+    # the portal shows a published part with an honest caveat rather than a
+    # green tick that hides a missing caption track.
+    fields["error"] = "; ".join(notes)[:1000] if notes else None
+    fields["_quota"] = quota
+    return fields
+
+
+def needs_mend(row: dict) -> bool:
+    """A posted part whose follow-ups a QUOTA refusal cut short — and only
+    that: a thumbnail refused for an unverified channel is not retried on
+    every run."""
+    return bool(_s(row.get("youtube_video_id"))) and quota_reason(RuntimeError(_s(row.get("error")))) is not None
+
+
+def mend_part(sb, transport: YouTubeTransport, target: Target, part: dict, total: int, work: Path,
+              row: dict) -> dict:
+    """Finish the follow-ups of a part already on YouTube (``needs_mend``)."""
+    idx = int(part["part"])
+    topic = target.topic
+    if target.language != DEFAULT_LANGUAGE:
+        topic = {**topic, "title": _s(target.article.get("title")) or topic.get("title")}
+    key = {"topic_kit_id": target.kit.get("id"), "part": idx, "channel_language": target.channel}
+    out = {**key, **follow_ups(sb, transport, target, topic, idx, total, _s(row.get("youtube_video_id")), work,
+                               have=row)}
+    log.info("publish: kit %s part %d follow-ups mended (%s)", target.kit.get("id"), idx,
+             "quota again" if out.get("_quota") else "done")
+    return out
 
 
 # ── the job ────────────────────────────────────────────────────────────
@@ -1530,16 +1583,46 @@ def publish_kit(sb, job_id: str, params: dict, transport: Optional[YouTubeTransp
             stage["already"].append(idx)
         else:
             pending.append(p)
+    # Posted parts whose follow-ups a quota refusal cut short are finished
+    # first: they cost no upload, and a caption track is worth more than the
+    # next video.
+    mends = [p for p in target.parts if needs_mend(existing.get(int(p["part"])) or {})]
     # The transport is built ONCE, after the gate and only when a part still
-    # needs uploading — a run that finds every part published makes no network
-    # call and needs no credentials.
-    if pending and transport is None:
+    # needs uploading or mending — a run that finds every part published makes
+    # no network call and needs no credentials.
+    if (pending or mends) and transport is None:
         transport = default_transport(target.channel)
+
+    def quota_wait(q: QuotaExhausted):
+        left = [int(p["part"]) for p in pending if int(p["part"]) not in set(stage["published"]) | set(stage["failed"])]
+        stage["deferred"] = left
+        db.set_stage(sb, job_id, dict(stage))
+        log.warning("publish job %s: YouTube %s; part(s) %s wait for the next quota day",
+                    job_id, q.reason, ", ".join(str(p) for p in left) or "none (follow-ups only)")
+        # The builder-wait clock (deferred_since) restarts at the wake-up, so
+        # the hours spent waiting for quota never count against the bound on
+        # waiting for a teacher's build.
+        wait = seconds_to_next_quota_day() + QUOTA_GRACE_SECONDS
+        wake = datetime.now(timezone.utc) + timedelta(seconds=wait)
+        return db.DeferredJob(wait, f"{WAITING_QUOTA} ({q.reason})", extra={"deferred_since": db._stamp(wake)})
 
     errors: list[str] = []
     work = Path(tempfile.mkdtemp(prefix=f"publish-{job_id}-"))
     uploaded = 0
     try:
+        for part in mends:
+            idx = int(part["part"])
+            try:
+                row = mend_part(sb, transport, target, part, total, work, existing[idx])
+                q = row.pop("_quota", None)
+                write_publication(sb, row)
+                stage.setdefault("mended", []).append(idx)
+                if q:
+                    raise QuotaExhausted(q)
+            except QuotaExhausted as q:
+                raise quota_wait(q) from q
+            except Exception as exc:  # noqa: BLE001 — a mend never fails the run
+                log.warning("publish: kit %s part %d could not be mended: %s", kit_id, idx, exc)
         for part in pending:
             idx = int(part["part"])
             if uploaded >= cap:
@@ -1554,29 +1637,22 @@ def publish_kit(sb, job_id: str, params: dict, transport: Optional[YouTubeTransp
             try:
                 adopt = find_interrupted_upload(sb, transport, target, existing.get(idx) or {})
                 row = publish_part(sb, transport, target, part, total, work, adopt=adopt)
+                q = row.pop("_quota", None)
                 write_publication(sb, row)
                 stage["published"].append(idx)
                 if adopt:
                     stage.setdefault("adopted", []).append(idx)
                 else:
                     uploaded += 1
+                if q:
+                    # the video is up, its follow-ups are not: stop here, and
+                    # the re-run after the reset mends this part first
+                    raise QuotaExhausted(q)
             except QuotaExhausted as q:
                 # Not this part's fault and not a failure: every part left
                 # waits for the next quota day. The parts already up are
                 # recorded, so the re-run skips them.
-                left = [int(p["part"]) for p in pending if int(p["part"]) not in set(stage["published"])
-                        | set(stage["failed"])]
-                stage["deferred"] = left
-                db.set_stage(sb, job_id, dict(stage))
-                log.warning("publish job %s: YouTube %s; part(s) %s wait for the next quota day",
-                            job_id, q.reason, ", ".join(str(p) for p in left))
-                # The builder-wait clock (deferred_since) restarts at the
-                # wake-up, so the hours spent waiting for quota never count
-                # against the bound on waiting for a teacher's build.
-                wait = seconds_to_next_quota_day() + QUOTA_GRACE_SECONDS
-                wake = datetime.now(timezone.utc) + timedelta(seconds=wait)
-                raise db.DeferredJob(wait, f"{WAITING_QUOTA} ({q.reason})",
-                                     extra={"deferred_since": db._stamp(wake)}) from q
+                raise quota_wait(q) from q
             except Exception as exc:  # noqa: BLE001 — the next part still runs
                 detail = f"part {idx}: {type(exc).__name__}: {exc}"[:300]
                 errors.append(detail)
