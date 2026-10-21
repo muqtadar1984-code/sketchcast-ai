@@ -359,18 +359,32 @@ class FakeYouTube:
     socket: the real transport is built only by ``default_transport``, which
     needs credentials this suite never sets."""
 
-    def __init__(self, fail_on=(), video_ids=None):
+    def __init__(self, fail_on=(), video_ids=None, raise_on=None, channel=None):
         self.fail_on = set(fail_on or ())
+        # {method: exception} — raised instead of the generic refusal, so a
+        # test can hand the run a quotaExceeded exactly as YouTube words it
+        self.raise_on = dict(raise_on or {})
         self.video_ids = list(video_ids or [])
+        # what is already on the channel: {video_id: [tags]} — read by
+        # find_upload, and every upload lands here too
+        self.channel = dict(channel or {})
         self.uploads = []
         self.captions = []
         self.thumbnails = []
         self.playlist_adds = []
         self.rewords = []
+        self.finds = []
 
     def _maybe_fail(self, name):
+        if name in self.raise_on:
+            raise self.raise_on[name]
         if name in self.fail_on:
             raise RuntimeError(f"{name} refused (fake)")
+
+    def find_upload(self, tag):
+        self._maybe_fail("find_upload")
+        self.finds.append(tag)
+        return next((vid for vid, tags in self.channel.items() if tag in tags), None)
 
     def upload_video(self, path, *, title, description, privacy, language, tags=None):
         self._maybe_fail("upload_video")
@@ -378,6 +392,7 @@ class FakeYouTube:
         self.uploads.append({"path": str(path), "title": title, "description": description,
                              "privacy": privacy, "language": language, "tags": list(tags or []),
                              "video_id": vid, "bytes": _read_bytes(path)})
+        self.channel[vid] = list(tags or [])
         return vid
 
     def set_thumbnail(self, video_id, path):
