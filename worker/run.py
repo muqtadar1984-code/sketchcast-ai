@@ -903,6 +903,15 @@ def _serve(sb, stale_min: int, reap_every: float = 60, grace: float | None = Non
             maybe_auto_translate(sb)
         except Exception as exc:  # noqa: BLE001
             log.error("Auto-translate tick error: %s", exc)
+        # The YouTube Publishing Agent (catalogue/publish_agent.py): one
+        # queued translation per language per day, plus the Library's "Run
+        # once more" rounds, each as an ordinary topic_publish job, one at a
+        # time. Inert without YOUTUBE_PUBLISH_AGENT=1 and app migration 0150.
+        try:
+            from catalogue.publish_agent import maybe_tick as maybe_publish_agent
+            maybe_publish_agent(sb)
+        except Exception as exc:  # noqa: BLE001
+            log.error("YouTube publish agent tick error: %s", exc)
         # Once per boot: the end screen's ask into the descriptions of the
         # videos posted before it existed (catalogue/youtube_backfill.py).
         # Idempotent, so a boot where every description has it costs one read.
