@@ -440,6 +440,59 @@ def mark_kit_failed(sb: Client, kit_id: Optional[str], note: str) -> bool:
         return False
 
 
+_FAIR_UNAVAILABLE = object()
+_FAIR_MUTED_UNTIL = {"t": 0.0}
+
+
+def _fair_claim_enabled() -> bool:
+    return os.environ.get("FAIR_CLAIM", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, "") or default))
+    except ValueError:
+        return default
+
+
+def _claim_fair(sb: Client, job_type, exclude_types, *, user_only: bool):
+    """One ``claim_fair_job`` call: the claimed row, None when nothing may
+    start, or _FAIR_UNAVAILABLE when the database could not answer (the
+    caller then claims the old way — fair-share is an improvement, never a
+    reason to stop building). Logged once a minute."""
+    if isinstance(job_type, (list, tuple, set, frozenset)):
+        types = [str(t) for t in job_type]
+    elif job_type:
+        types = [str(job_type)]
+    else:
+        types = None
+    params = {
+        "p_types": types,
+        "p_exclude_types": [str(t) for t in exclude_types] if exclude_types else None,
+        "p_user_only": bool(user_only),
+        "p_owner_cap": _env_int("FAIR_OWNER_CAP", 3),
+        "p_video_cap": _env_int("FAIR_VIDEO_CAP", 1),
+    }
+    try:
+        res = sb.rpc("claim_fair_job", params).execute()
+    except Exception as exc:  # noqa: BLE001
+        now = time.monotonic()
+        if now >= _FAIR_MUTED_UNTIL["t"]:
+            logging.getLogger("worker").warning("claim_fair_job failed (%s): claiming oldest-first", exc)
+            _FAIR_MUTED_UNTIL["t"] = now + 60.0
+        return _FAIR_UNAVAILABLE
+    rows = getattr(res, "data", None) or []
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not rows:
+        return None
+    claimed = rows[0]
+    # Same rule as the oldest-first claim: the generation reads 'processing'
+    # once the row is ours, and only a BUILDER job may say so.
+    mirror_generation_status(sb, generation_to_mirror(claimed), "processing")
+    return claimed
+
+
 def claim_next_job(sb: Client, job_type=None, exclude_types=None,
                    catalogue: Optional[bool] = None,
                    kit_ids=None) -> Optional[dict]:
@@ -451,6 +504,12 @@ def claim_next_job(sb: Client, job_type=None, exclude_types=None,
     lane, when nothing else is queued). Lets the loop prioritise small/fast
     work (support diagnoses, then documents) over long batch video renders.
 
+    With ``FAIR_CLAIM=1`` the user lanes (``catalogue`` False or None, no
+    kit filter) claim through ``claim_fair_job`` (migration 0153): the same
+    filters, plus queue holds, stop requests, and round-robin by teacher with
+    a per-owner in-flight cap that only bites while someone else is waiting
+    (surge plan, 2026-10-22). Any RPC failure falls back to the claim below.
+
     `catalogue` (Phase 3, 2026-09-06) splits the queue by WHO is waiting.
     Migration 0115 stamps ``jobs.params.catalogue = true`` on every catalogue
     generation job at insert. ``False`` claims only jobs WITHOUT the flag —
@@ -459,6 +518,10 @@ def claim_next_job(sb: Client, job_type=None, exclude_types=None,
     run.py's last lane, which also checks that no user builder is live and
     that the off-peak window is open; ``None`` does not filter (the observer
     lanes, whose jobs never carry the flag)."""
+    if catalogue is not True and kit_ids is None and _fair_claim_enabled():
+        fair = _claim_fair(sb, job_type, exclude_types, user_only=catalogue is False)
+        if fair is not _FAIR_UNAVAILABLE:
+            return fair
     q = sb.table("jobs").select("*").eq("status", "queued")
     if isinstance(job_type, (list, tuple, set, frozenset)):
         q = q.in_("type", list(job_type))
@@ -700,12 +763,27 @@ def heartbeat_jobs(sb: Client, job_ids) -> int:
     return n
 
 
+class JobCancelled(Exception):
+    """Staff (or the console) asked to stop this job: ``jobs.cancel_requested_at``
+    is set (migration 0153). Raised at the next progress write — a stage
+    boundary — so the build stops there instead of rendering to the end and
+    dying on a deleted row. run.py records it as an error WITHOUT filing a
+    support issue; credit_ledger_sync voids the credit as 'staff_cancel'."""
+
+
 def set_progress(sb: Client, job_id: str, progress: int) -> None:
     """Guarded on 'processing': a row a reaper or a departing worker has
     already handed back to the queue must not read "62% built" with nobody
     building it — a non-zero progress on a queued row is exactly what made
-    credit_ledger_void_unconsumed refuse a teacher's refund (2026-08-25)."""
-    sb.table("jobs").update({"progress": progress}).eq("id", job_id).eq("status", "processing").execute()
+    credit_ledger_void_unconsumed refuse a teacher's refund (2026-08-25).
+
+    The UPDATE already returns the row, so a stop request costs no extra
+    round trip: when ``cancel_requested_at`` is set this raises JobCancelled.
+    Before 0153 the column is absent and nothing changes."""
+    res = sb.table("jobs").update({"progress": progress}).eq("id", job_id).eq("status", "processing").execute()
+    rows = getattr(res, "data", None) or []
+    if rows and isinstance(rows[0], dict) and rows[0].get("cancel_requested_at"):
+        raise JobCancelled("Cancelled by SketchCast support before it finished.")
 
 
 def set_book_language(sb: Client, book_id: str, language: Optional[str]) -> None:
