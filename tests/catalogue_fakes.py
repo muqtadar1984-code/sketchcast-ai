@@ -99,6 +99,12 @@ class _Query:
         self.filters.append(("in", col, list(vals)))
         return self
 
+    def gte(self, col, val):
+        """A text comparison, as for the fixed-width UTC stamps the worker
+        writes; a row without the column does not match."""
+        self.filters.append(("gte", col, val))
+        return self
+
     def is_(self, col, val):
         """postgrest ``is_(col, "null")`` — only the null form is modelled."""
         self.filters.append(("is", col, val))
@@ -167,6 +173,8 @@ class _Query:
             if kind == "not_in" and v in val:
                 return False
             if kind == "is" and val == "null" and v is not None:
+                return False
+            if kind == "gte" and (v is None or str(v) < str(val)):
                 return False
         return True
 
