@@ -183,7 +183,9 @@ def _ask_items(client, prompt: str, n: int, *, grace: int = 2) -> list[str]:
     for attempt in range(grace + 1):
         reply = client.analyze(prompt, system=SYSTEM_PROMPT, max_tokens=MAX_TOKENS, response_schema=ITEMS_SCHEMA)
         data = reply.get("data") if isinstance(reply, dict) and "data" in reply else reply
-        items = data.get("items") if isinstance(data, dict) else None
+        # the list itself, without its {"items": …} wrapper, is the same
+        # answer (Hindi kits, 2026-10-22: "did not return 18 items (got list)")
+        items = data.get("items") if isinstance(data, dict) else data if isinstance(data, list) else None
         if isinstance(items, list) and len(items) == n and all(isinstance(x, str) for x in items):
             return items
         last = (len(items) if isinstance(items, list) else type(data).__name__)
@@ -192,9 +194,12 @@ def _ask_items(client, prompt: str, n: int, *, grace: int = 2) -> list[str]:
 
 
 def translate_strings(client, items: list[str], language: str, *, terms: Optional[list[tuple[str, str]]] = None,
-                      context: str = "", protect: Optional[Iterable[str]] = None) -> list[str]:
+                      context: str = "", protect: Optional[Iterable[str]] = None, split: bool = True) -> list[str]:
     """Translate ``items`` into ``language`` — a list in, the same list out,
-    position for position. Empty strings come back empty without a call."""
+    position for position. Empty strings come back empty without a call.
+    ``split``: a batch whose reply is unusable is asked again in halves
+    (ask_split); the bank stage turns it off — it has its own fallback,
+    one call per item, and drops an item that still fails with a reason."""
     out: list[Optional[str]] = [None] * len(items)
     # Jawi is a transliteration of the Malay kit (catalogue.jawi): the rule
     # rides on every ms-arab call, whatever the stage asked for.
@@ -225,6 +230,9 @@ def translate_strings(client, items: list[str], language: str, *, terms: Optiona
             "write every number as DIGITS, as the source does — 1 and 2 included (never fold a number into a "
             "word or a dual or singular form: 'exactly 1 proton' keeps its 1), and an ordinal keeps its digits "
             "('the 50th term' keeps 50, with the language's ordinal marker); "
+            "the English articles 'a'/'an' and words such as 'another' or 'each' are words, not numbers — write "
+            "them as words of the language, never as the digit 1; never add a number, a grade, a year or an "
+            "example the English does not have; "
             "keep the register of a teacher speaking to a class; translate the whole string, never summarise; "
             "return exactly one translated string per input string, in the same order, as "
             '{"items": [...]} with ' + f"{len(payload)} items.",
@@ -233,9 +241,22 @@ def translate_strings(client, items: list[str], language: str, *, terms: Optiona
         ]))
         return _ask_items(client, prompt, len(payload))
 
+    def ask_split(payload: list[str]) -> list[str]:
+        """A batch the model cannot answer whole (a reply that comes back cut
+        off or short: a 98-string Hindi lesson, 2026-10-22) is asked again in
+        two halves, down to one string."""
+        try:
+            return ask(payload)
+        except RuntimeError:
+            if len(payload) <= 1 or not split:
+                raise
+            mid = len(payload) // 2
+            log.warning("translate: %d strings in one reply failed; asking in halves", len(payload))
+            return ask_split(payload[:mid]) + ask_split(payload[mid:])
+
     for start in range(0, len(todo), CHUNK):
         batch = todo[start:start + CHUNK]
-        got = ask([s for _, s in batch])
+        got = ask_split([s for _, s in batch])
         if jawi.is_derived(language):
             got = _jawi_repair(ask, [s for _, s in batch], got, protected)
         for (i, _), t in zip(batch, got):
@@ -614,7 +635,8 @@ def retry_note(report: dict) -> str:
         return ""
     return ("A FIRST translation of these strings failed the check: " + " | ".join(lines)
             + ". Write every number of the source as DIGITS in the translation — 1 and 2 included, ordinals "
-              "with their digits — and keep every expression exactly as written.")
+              "with their digits — but never turn an English article ('a', 'an') into the digit 1, never add a "
+              "number the English does not have, and keep every expression exactly as written.")
 
 
 # ── the Fix Agent's two inputs (catalogue/fix_agent.py, app migration 0151) ──
@@ -1404,7 +1426,8 @@ def bank_stage(sb, client, source: dict, kit: dict, language: str, terms, articl
         a finding the reviewer sees (``bank item not staged``)."""
         words = item_text_items(src)
         try:
-            got = translate_strings(client, [t for _, t in words], language, terms=terms, context=context) if words else []
+            got = translate_strings(client, [t for _, t in words], language, terms=terms, context=context,
+                                    split=False) if words else []
         except RuntimeError as exc:
             sid = str(src.get("id") or "item")
             return src, src, {"check": "A-item", "ok": False, "flags": [],
@@ -1426,7 +1449,8 @@ def bank_stage(sb, client, source: dict, kit: dict, language: str, terms, articl
             for path, text in item_text_items(it):
                 flat.append((i, path, text))
         try:
-            got = translate_strings(client, [t for _, _, t in flat], language, terms=terms, context=context) if flat else []
+            got = translate_strings(client, [t for _, _, t in flat], language, terms=terms, context=context,
+                                    split=False) if flat else []
         except RuntimeError as exc:
             log.warning("translate: bank batch of %d item(s) had no usable reply (%s); translating them one by one",
                         len(batch), exc)

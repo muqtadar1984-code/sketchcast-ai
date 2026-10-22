@@ -938,7 +938,9 @@ class TestFieldSelection:
                 self.calls.append(prompt)
                 return {"data": {"items": ["only one"]}, "usage": {}}
         with pytest.raises(RuntimeError, match="did not return 2 items"):
-            T.translate_strings(Short(), ["a", "b"], "fr")
+            T.translate_strings(Short(), ["a", "b"], "fr", split=False)
+        # by default the batch is asked again in halves, where one string each is the right count
+        assert T.translate_strings(Short(), ["a", "b"], "fr") == ["only one", "only one"]
 
 
 # ── one part: the maths path recompiles the board ───────────────────────
