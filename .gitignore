@@ -15,3 +15,6 @@ dist/
 build/
 .venv/
 venv/
+
+# Pinterest probe output (scripts/pinterest_probe.py) — local only
+probe-out/
