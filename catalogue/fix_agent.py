@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 import threading
 import time
@@ -509,6 +510,85 @@ def maybe_resume(sb, now: datetime) -> bool:
     return True
 
 
+# ── after a deploy: does the CURRENT code already fix an open case? ─────────
+# Each open case's saved English/translation pairs are run through today's
+# check, and its error is matched against failures a shipped change is known
+# to fix — once per deployed commit, no model call. The Library shows the
+# result as a badge ("Passes with the current check (#316)") so the founder
+# can retry a fixed group in one click (Fix Agent plan, Fixes tab v2).
+
+KNOWN_FIXES: tuple[tuple[re.Pattern[str], str], ...] = (
+    # the model's reply as a bare list, not {"items": [...]} (worker #316)
+    (re.compile(r"did not return \d+ items \(got list\)"), "#316"),
+)
+RECHECK_STATUSES = ("proposed", "approved", "needs_founder")
+RECHECK_PER_TICK = 50
+
+
+def current_commit() -> str:
+    return (_s(os.getenv("RAILWAY_GIT_COMMIT_SHA")) or "local")[:7]
+
+
+def saved_findings(case: dict) -> list[dict]:
+    """The case's English/translation pairs: this round's evidence, else the
+    latest earlier round that kept some (a new round starts empty)."""
+    rounds = [case.get("evidence") or {}] + [(h or {}).get("evidence") or {}
+                                             for h in reversed(case.get("history") or []) if isinstance(h, dict)]
+    for ev in rounds:
+        found = [f for f in (ev.get("findings") or []) if isinstance(f, dict)
+                 and isinstance(f.get("source"), str) and isinstance(f.get("target"), str)]
+        if found:
+            return found
+    return []
+
+
+def recheck_case(case: dict, commit: str, now: datetime) -> dict:
+    """Pure: what today's code says about ``case``. ``passes`` is True when
+    every saved pair now passes, False when one still fails, None when there
+    is nothing it can check (no saved strings, or a finding of another kind)."""
+    from catalogue import translate_check as check
+
+    results: list[Optional[bool]] = []
+    for f in saved_findings(case):
+        what = _s(f.get("what"))
+        if what == "numbers differ":
+            results.append(check.numbers_equivalent(f["source"], f["target"])[0])
+        elif what in ("maths in the question altered", "maths in the stem altered"):
+            results.append(check.prose_maths_equivalent(f["source"], f["target"])[0])
+        else:
+            results.append(None)
+    checked = [r for r in results if r is not None]
+    if any(r is False for r in results):
+        passes: Optional[bool] = False
+    elif results and all(r is True for r in results):
+        passes = True
+    else:
+        passes = None
+    error = _s((case.get("outcome") or {}).get("error")) or _s(case.get("issue"))
+    fixed_by = next((pr for rx, pr in KNOWN_FIXES if rx.search(error)), None)
+    return {"at": _iso(now), "commit": commit, "passes": passes, "fixed_by": fixed_by,
+            "checked": len(checked), "passing": sum(1 for r in checked if r)}
+
+
+def recheck_open(sb, now: datetime) -> int:
+    """Re-check the open cases not yet checked against the running commit."""
+    commit = current_commit()
+    done = 0
+    for c in cases(sb, RECHECK_STATUSES):
+        ev = c.get("evidence") if isinstance(c.get("evidence"), dict) else {}
+        if _s((ev.get("recheck") or {}).get("commit")) == commit:
+            continue
+        rc = recheck_case(c, commit, now)
+        if update_case(sb, c["id"], {"evidence": {**ev, "recheck": rc}}, expect=_s(c.get("status"))):
+            done += 1
+            if rc["passes"] or rc["fixed_by"]:
+                logger.info("fix agent: case %s is fixed by the running code (%s)", c["id"],
+                            rc["fixed_by"] or f"passes the check at {commit}")
+        if done >= RECHECK_PER_TICK:
+            break
+    return done
+
+
 def notify(sb, settings: dict, now: datetime) -> int:
     """One email for every proposal (or needs-you) not yet announced."""
     waiting = [c for c in cases(sb, ("proposed", "needs_founder")) if not (c.get("proposal") or {}).get("notified_at")
@@ -616,6 +696,8 @@ def tick(sb, *, now: datetime) -> dict:
                     report["diagnose"] = {c["id"]: moved}
 
     # 5. tell the founder; 6. hand back to the Auto Translate Agent
+    # 5. after a deploy, mark the open cases the running code already fixes
+    report["rechecked"] = recheck_open(sb, now)
     report["emailed"] = notify(sb, settings, now)
     report["resumed"] = maybe_resume(sb, now)
     return report
