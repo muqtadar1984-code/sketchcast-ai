@@ -66,6 +66,7 @@ SCOPES = ("boards:read", "boards:write", "boards:read_secret", "boards:write_sec
           "pins:read", "pins:write", "pins:read_secret", "pins:write_secret", "user_accounts:read")
 CLIENT_ID_ENV = "PINTEREST_CLIENT_ID"
 CLIENT_SECRET_ENV = "PINTEREST_CLIENT_SECRET"
+SANDBOX_TOKEN_ENV = "PINTEREST_SANDBOX_TOKEN"   # optional; generated in the developer portal
 PROBE_LINK = "https://sketchcast.app/topics/cells"
 SCRIPTS = {
     "latin": "Plant and animal cells: a labelled diagram",
@@ -271,9 +272,17 @@ class Api:
         return self._token({"grant_type": "refresh_token", "refresh_token": self._refresh,
                             "continuous_refresh": "true"})
 
+    def _bearer(self) -> str:
+        """The sandbox host does not accept the production OAuth token; it
+        takes the sandbox token from the developer portal, which the operator
+        types in (PINTEREST_SANDBOX_TOKEN). Never printed."""
+        if self.base == API_BASES[1]:
+            return os.getenv(SANDBOX_TOKEN_ENV, "").strip() or self._access
+        return self._access
+
     def call(self, method: str, path: str, **kw):
         r = self._rq.request(method, self.base + path, timeout=60,
-                             headers={"Authorization": f"Bearer {self._access}"}, **kw)
+                             headers={"Authorization": f"Bearer {self._bearer()}"}, **kw)
         try:
             body = r.json() if r.content else None
         except ValueError:

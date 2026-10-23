@@ -140,3 +140,15 @@ def test_consent_ignores_favicon_and_keeps_the_first_callback(monkeypatch):
     assert code == "FIRSTCODE123456"
     assert redirect == "http://localhost:8799/callback"
     assert [h["path"] for h in probe._Catch.hits] == ["/favicon.ico", "/callback"]
+
+
+def test_sandbox_calls_use_the_sandbox_token_and_production_calls_do_not(monkeypatch):
+    api = probe.Api("id", "secret")
+    api._access = "PROD"
+    monkeypatch.setenv(probe.SANDBOX_TOKEN_ENV, "SANDBOX")
+    api.base = probe.API_BASES[0]
+    assert api._bearer() == "PROD"
+    api.base = probe.API_BASES[1]
+    assert api._bearer() == "SANDBOX"
+    monkeypatch.delenv(probe.SANDBOX_TOKEN_ENV)
+    assert api._bearer() == "PROD"
