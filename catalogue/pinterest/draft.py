@@ -214,7 +214,9 @@ def draft_topic(sb, job_id: str, params: dict, *, client=None, link_check: Optio
 
         def check(r) -> tuple[list, list]:
             cp = copies[r["key"]]
-            img_block = PC.image_checks(r["png"], r["meta"], r["c"]["template"])
+            img_block = PC.image_checks(r["png"], r["meta"], r["c"]["template"]) + PC.image_text_checks(
+                PC.image_text(r["c"].get("text_inputs") or {}), template=r["c"]["template"], language=language,
+                source_text=source)
             blocking, warnings = PC.copy_checks(cp, template=r["c"]["template"], language=language,
                                                 source_text=source, link=r["link"], link_check=link_check)
             return img_block + blocking, warnings

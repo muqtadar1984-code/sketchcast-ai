@@ -157,6 +157,38 @@ def copy_checks(copy: dict, *, template: str, language: str, source_text: str, l
     return blocking, warnings
 
 
+def image_text(text_inputs: dict) -> list[str]:
+    """Every word the card draws from content: its title, points and labels."""
+    t = text_inputs or {}
+    return [x for x in [t.get("title"), *(t.get("points") or []), *(t.get("labels") or [])] if C._s(x)]
+
+
+def image_text_checks(texts: list[str], *, template: str, language: str, source_text: str) -> list[str]:
+    """The copy rules over the words ON the image (finding 5): numbers from
+    the article, no children as the audience, the pin's script — plus the
+    layout's fixed words existing in the pin's language. Not copy-fixable:
+    a new copy call does not change the card."""
+    from catalogue.pinterest.templates import missing_strings
+
+    out: list[str] = []
+    missing = missing_strings(template, language)
+    if missing:
+        out.append(f"image: the {template} layout has no {language} text for {', '.join(missing)}")
+    joined = " ".join(C._s(x) for x in texts)
+    if not joined:
+        return out
+    allowed = set(number_values(source_text))
+    stray = [n for n in dict.fromkeys(number_values(joined)) if n not in allowed]
+    if stray:
+        out.append(f"image: number(s) {', '.join(stray[:5])} on the card are not in the article")
+    child = _CHILD.search(joined)
+    if child:
+        out.append(f"image: the card mentions children as the audience (\"{child.group(0)}\")")
+    if not language_ok(joined, language):
+        out.append(f"image: the card's text is not in the pin's language ({language})")
+    return out
+
+
 def copy_fixable(blocking: list[str]) -> list[str]:
     return [b for b in blocking if b.startswith("copy:")]
 

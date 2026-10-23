@@ -63,11 +63,53 @@ SUBJECT_COLOURS = {
 }
 DEFAULT_COLOUR = (38, 50, 56)
 BRAND_TEXT = "sketchcast.app"
-FREE_BAND = "FREE WORKSHEET"
+# THE FIXED WORDS a layout draws, per lesson language. A pin whose layout
+# needs a word this table lacks in its language is REFUSED (StringMissing),
+# never drawn in English on a French or Telugu pin (fail over degrade).
+# Jawi (ms-arab) is the Malay transliterated, as the kits do it. The non-
+# English entries want a native reader's look before P2 turns them on.
+LANGUAGES = ("en", "ar", "ms", "ms-arab", "hi", "mr", "te", "ur", "fr", "es", "pt")
+STRINGS = {
+    "free_worksheet": {
+        "en": "FREE WORKSHEET",
+        "ar": "ورقة عمل مجانية",
+        "ms": "LEMBARAN KERJA PERCUMA",
+        "ms-arab": "لمبرن کرجا ڤرچوما",
+        "hi": "मुफ़्त वर्कशीट",
+        "mr": "मोफत वर्कशीट",
+        "te": "ఉచిత వర్క్‌షీట్",
+        "ur": "مفت ورک شیٹ",
+        "fr": "FICHE D'EXERCICES GRATUITE",
+        "es": "HOJA DE TRABAJO GRATIS",
+        "pt": "FICHA DE EXERCÍCIOS GRÁTIS",
+    },
+}
+TEMPLATE_STRINGS = {"explainer": (), "diagram": (), "worksheet": ("free_worksheet",)}
+FREE_BAND = STRINGS["free_worksheet"]["en"]
 
 
 class TextDoesNotFit(RuntimeError):
     """A text block does not fit its box even at the floor size."""
+
+
+class StringMissing(TextDoesNotFit):
+    """A layout's fixed words do not exist in the pin's language."""
+
+
+def _lang(language: str) -> str:
+    return str(language or "").strip().lower() or "en"
+
+
+def missing_strings(template: str, language: str) -> list[str]:
+    """The fixed words ``template`` needs that the table lacks in ``language``."""
+    return [k for k in TEMPLATE_STRINGS.get(template, ()) if not STRINGS.get(k, {}).get(_lang(language))]
+
+
+def string(key: str, language: str) -> str:
+    text = STRINGS.get(key, {}).get(_lang(language))
+    if not text:
+        raise StringMissing(f"the {key!r} words have no {_lang(language)} text; the pin is not drawn in another language")
+    return text
 
 
 @dataclass
@@ -141,7 +183,8 @@ def _wrap(draw, text: str, font, max_w: int) -> list[str]:
 class _Card:
     """A canvas plus the record of every text block drawn on it."""
 
-    def __init__(self, rtl: bool):
+    def __init__(self, rtl: bool, language: str = "en"):
+        self.language = _lang(language)
         self.img = Image.new("RGB", SIZE, PAPER)
         self.draw = ImageDraw.Draw(self.img)
         self.rtl = rtl
@@ -312,14 +355,14 @@ def _worksheet(card: _Card, inp: Inputs, colour) -> dict:
     _frame(card, inp.title, colour)
     d = card.draw
     d.rectangle([0, TITLE_BAND[3], W, TITLE_BAND[3] + 90], fill=PAPER)
-    card.text("band", [FREE_BAND], (MARGIN, TITLE_BAND[3] + 20, W - MARGIN, TITLE_BAND[3] + 82), fill=colour,
+    card.text("band", [string("free_worksheet", card.language)], (MARGIN, TITLE_BAND[3] + 20, W - MARGIN, TITLE_BAND[3] + 82), fill=colour,
               panel=PAPER, bold=True, start=48, max_lines=1, valign="middle", gap=0)
     slot = (MARGIN, 330, W - MARGIN, 1180)
     pic = inp.preview.convert("RGB")
     box = paste_fit(card.img, pic, slot)
     # a paper edge so the card reads as a page
     d.rectangle([box[0] - 3, box[1] - 3, box[2] + 2, box[3] + 2], outline=(200, 200, 196), width=3)
-    if inp.subject:
+    if inp.subject and card.language == "en":    # the subject's name is English: drawn on English pins only
         card.text("subject", [inp.subject], (MARGIN, 1210, W - MARGIN, BRAND_STRIP[1] - 30), fill=MUTED,
                   panel=PAPER, bold=False, start=44, max_lines=2, valign="middle", gap=0)
     return {"image_coverage": round(_area(box), 3), "diagram_coverage": None}
@@ -332,8 +375,11 @@ def render(template: str, inputs: Inputs, language: str = "en") -> tuple[Image.I
     """One pin card and what the prechecks measure on it."""
     if template not in _LAYOUTS:
         raise ValueError(f"unknown pin template {template!r}")
-    rtl = str(language or "").strip().lower() in RTL_LANGUAGES
-    card = _Card(rtl)
+    rtl = _lang(language) in RTL_LANGUAGES
+    missing = missing_strings(template, language)
+    if missing:
+        raise StringMissing(f"{template}: no {_lang(language)} text for {', '.join(missing)}")
+    card = _Card(rtl, language)
     colour = subject_colour(inputs.subject)
     extra = _LAYOUTS[template](card, inputs, colour)
     # the bottom-right corner carries background only
@@ -345,6 +391,6 @@ def render(template: str, inputs: Inputs, language: str = "en") -> tuple[Image.I
     return card.img, meta
 
 
-__all__ = ["W", "H", "SIZE", "TITLE_BAND", "BRAND_STRIP", "CLEAR_BOX", "FONT_FLOOR", "TEMPLATES", "RTL_LANGUAGES",
+__all__ = ["STRINGS", "LANGUAGES", "TEMPLATE_STRINGS", "StringMissing", "missing_strings", "string", "W", "H", "SIZE", "TITLE_BAND", "BRAND_STRIP", "CLEAR_BOX", "FONT_FLOOR", "TEMPLATES", "RTL_LANGUAGES",
            "TextDoesNotFit", "Inputs", "render", "contrast", "luminance", "dominant_color", "content_crop",
            "paste_fit", "subject_colour"]
