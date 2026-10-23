@@ -49,12 +49,21 @@ from worker import client as db
 
 log = logging.getLogger("worker.pinterest.post")
 
-ADOPT_WINDOW = timedelta(minutes=10)
+ADOPT_WINDOW = timedelta(minutes=3)
 POSTABLE = ("scheduled", "posting")
 
 
 class Refused(RuntimeError):
     """A re-check failed: the pin is failed with this reason, nothing posted."""
+
+
+class Transient(RuntimeError):
+    """A re-check could not be made right now (the link did not answer): the
+    pin goes back to approved, no attempt spent, nothing posted."""
+
+
+class Moved(RuntimeError):
+    """A Pinterest id another row already holds: not this pin's."""
 
 
 def _s(v: object) -> str:
@@ -66,8 +75,13 @@ def load_pin(sb, pin_id: str) -> Optional[dict]:
     return found[0] if found else None
 
 
-def _update(sb, pin_id: str, fields: dict, now: datetime) -> None:
-    sb.table(C.PINS).update({**fields, "updated_at": C.iso(now)}).eq("id", pin_id).execute()
+def _transition(sb, pin_id: str, expected, fields: dict, now: datetime) -> bool:
+    """Write ``fields`` only while the row is still in one of ``expected``;
+    True when exactly that one row moved. An admin's reject or retire between
+    this job's read and its write is never overwritten."""
+    res = (sb.table(C.PINS).update({**fields, "updated_at": C.iso(now)}).eq("id", pin_id)
+           .in_("status", list(expected)).execute())
+    return len(C.rows(res)) == 1
 
 
 def is_platform_admin(sb, user_id: str) -> bool:
@@ -90,8 +104,12 @@ def recheck(sb, pin: dict, *, link_check: Optional[Callable[[str], bool]] = None
             raise Refused(f"the topic is no longer public in {language}, or its kit is no longer approved")
     if not is_platform_admin(sb, _s(pin.get("approved_by"))):
         raise Refused("the approver is no longer a platform admin")
-    check = link_check or C.link_ok
-    if not pin.get("link") or not check(pin["link"]):
+    if not pin.get("link"):
+        raise Refused("the pin has no link")
+    verdict = C.link_verdict((link_check or C.link_ok)(pin["link"]))
+    if verdict == C.LINK_UNKNOWN:
+        raise Transient("the link could not be checked just now")
+    if verdict != C.LINK_OK:
         raise Refused("the link does not answer 200")
     boards = C.rows(sb.table(C.BOARDS).select("*").eq("id", _s(pin.get("board_id"))).limit(1).execute())
     board = boards[0] if boards else None
@@ -128,52 +146,89 @@ def loggable(payload: dict) -> dict:
     return out
 
 
-def find_adoptable(board_pins: list[dict], pin: dict) -> tuple[Optional[str], str]:
-    """(pinterest pin id, matcher) of an earlier run's pin, or (None, "")."""
+def find_adoptable(board_pins: list[dict], pin: dict, taken: Optional[set] = None) -> tuple[Optional[str], str]:
+    """(pinterest pin id, matcher) of an earlier run's pin, or (None, "").
+    ``taken``: Pinterest ids another row already holds — never this pin's.
+    The fallback (same title, created within ADOPT_WINDOW of
+    ``post_started_at``) stays tight so a sibling posted minutes apart is
+    not mistaken for this one."""
     from catalogue.pinterest.common import utm_content
 
+    taken = taken or set()
+    mine = [p for p in board_pins if _s(p.get("id")) and _s(p.get("id")) not in taken]
     content = "utm_content=" + utm_content(_s(pin.get("format")) or C.FORMAT_STATIC, _s(pin.get("id")))
-    for p in board_pins:
+    for p in mine:
         if content in _s(p.get("link")):
-            return _s(p.get("id")) or None, "utm_content"
+            return _s(p.get("id")), "utm_content"
     started = C.when(pin.get("post_started_at"))
     if started is not None:
-        for p in board_pins:
+        for p in mine:
             made = C.when(p.get("created_at"))
             if (_s(p.get("title")) == _s(pin.get("title")) and made is not None
                     and abs(made - started) <= ADOPT_WINDOW):
-                return _s(p.get("id")) or None, "title+time"
+                return _s(p.get("id")), "title+time"
     return None, ""
 
 
+def ids_held_elsewhere(sb, pin_id: str, ids: list[str]) -> set[str]:
+    """The Pinterest ids among ``ids`` that another pin row already holds."""
+    if not ids:
+        return set()
+    found = C.rows(sb.table(C.PINS).select("id,pinterest_pin_id").in_("pinterest_pin_id", ids).execute())
+    return {_s(r.get("pinterest_pin_id")) for r in found if _s(r.get("id")) != _s(pin_id)}
+
+
 def _finish_posted(sb, pin: dict, pinterest_id: str, now: datetime, job_id: Optional[str], *, how: str,
-                   board: Optional[dict] = None, dry: bool = False) -> dict:
-    _update(sb, pin["id"], {"status": "posted", "pinterest_pin_id": pinterest_id, "posted_at": C.iso(now),
-                            "last_error": None, "post_job_id": job_id or None}, now)
+                   board: Optional[dict] = None, dry: bool = False, expected=("posting",)) -> dict:
+    """Record the pin as posted — only from ``expected``. Should an admin have
+    moved the row meanwhile, the Pinterest id is still recorded (the pin IS
+    on Pinterest) but the status they set stands: never resurrected. A 23505
+    on the id (another row holds it) raises ``Moved``."""
+    fields = {"status": "posted", "pinterest_pin_id": pinterest_id, "posted_at": C.iso(now), "last_error": None,
+              "post_job_id": job_id or None}
+    try:
+        moved = not _transition(sb, pin["id"], expected, fields, now)
+        if moved:
+            sb.table(C.PINS).update({"pinterest_pin_id": pinterest_id, "posted_at": C.iso(now),
+                                     "last_error": "posted to Pinterest after the row was changed in the Library",
+                                     "updated_at": C.iso(now)}).eq("id", pin["id"]).execute()
+    except Exception as exc:  # noqa: BLE001
+        if C.is_duplicate(exc):
+            raise Moved(f"Pinterest pin {pinterest_id} is already recorded on another row") from None
+        raise
     C.audit(sb, _s(pin.get("approved_by")), "pinterest_pin_post", _s(pin.get("id")),
             {"pin_row_id": pin.get("id"), "pinterest_pin_id": pinterest_id, "language": pin.get("language"),
              "board": _s((board or {}).get("board_key")) or pin.get("board_id"), "template": pin.get("template"),
-             "round_id": pin.get("round_id"), "how": how, "dry_run": dry})
+             "round_id": pin.get("round_id"), "how": how, "dry_run": dry, "row_moved": moved})
     if not dry:
         C.reset_failures(sb, now)
     return {"step": "done", "pin": pin.get("id"), "pinterest_pin_id": pinterest_id, "how": how, "dry_run": dry}
 
 
-def _not_counted(sb, pin: dict, why: str, now: datetime) -> None:
-    """Back to the approved queue without spending an attempt (a breaker cause)."""
-    _update(sb, pin["id"], {"status": "approved", "round_id": None, "last_error": why[:1000]}, now)
+def _not_counted(sb, pin: dict, why: str, now: datetime, expected=POSTABLE) -> bool:
+    """Back to the approved queue without spending an attempt; ``post_token``
+    is kept so the next run adopts. Only from ``expected``."""
+    return _transition(sb, pin["id"], expected, {"status": "approved", "round_id": None, "last_error": why[:1000]},
+                       now)
 
 
-def _counted(sb, pin: dict, why: str, now: datetime) -> str:
+def _counted(sb, pin: dict, why: str, now: datetime, expected=POSTABLE) -> str:
+    """One more attempt spent: back to approved, or failed at the third —
+    ``approved_at`` and ``post_token`` kept. Only from ``expected``; a row
+    an admin moved is left alone ("moved")."""
     attempts = int(pin.get("attempts") or 0) + 1
     if attempts >= C.MAX_ATTEMPTS:
-        _update(sb, pin["id"], {"status": "failed", "attempts": attempts, "last_error": why[:1000]}, now)
+        ok = _transition(sb, pin["id"], expected, {"status": "failed", "attempts": attempts,
+                                                   "last_error": why[:1000]}, now)
         outcome = "failed"
     else:
-        _update(sb, pin["id"], {"status": "approved", "attempts": attempts, "round_id": None,
-                                "last_error": why[:1000]}, now)
+        ok = _transition(sb, pin["id"], expected, {"status": "approved", "attempts": attempts, "round_id": None,
+                                                   "last_error": why[:1000]}, now)
         outcome = "retry"
-    C.count_failure(sb, now, why)
+    if not ok:
+        return "moved"
+    if C.count_failure(sb, now, why) >= C.BREAKER_FAILURES:
+        C.trip_breaker(sb, f"{C.BREAKER_FAILURES} post failures in a row; last: {why[:200]}", now)
     return outcome
 
 
@@ -192,11 +247,16 @@ def post_pin(sb, job_id: Optional[str], params: dict, *, api: Optional[Api] = No
         # switched off, paused or tripped after this job was queued: the pin
         # stays scheduled and the round resumes with the agent
         return {"step": "skipped", "pin": pin_id, "why": "the Pinterest agent is off, paused or tripped"}
+    expected = (_s(pin.get("status")),)
     try:
         board = recheck(sb, pin, link_check=link_check)
+    except Transient as exc:
+        _not_counted(sb, pin, f"re-check: {exc}", now, expected)
+        log.info("pinterest post %s: %s; back to approved, no attempt spent", pin_id, exc)
+        return {"step": "later", "pin": pin_id, "why": str(exc)}
     except Refused as exc:
         if pin.get("status") in POSTABLE:
-            _update(sb, pin["id"], {"status": "failed", "last_error": f"re-check: {exc}"[:1000]}, now)
+            _transition(sb, pin["id"], expected, {"status": "failed", "last_error": f"re-check: {exc}"[:1000]}, now)
         log.warning("pinterest post %s refused: %s", pin_id, exc)
         return {"step": "refused", "pin": pin_id, "why": str(exc)}
 
@@ -207,8 +267,11 @@ def post_pin(sb, job_id: Optional[str], params: dict, *, api: Optional[Api] = No
         path = _s((pin.get("images") or [{}])[0].get("path"))
         payload = build_payload(pin, board, "")
         payload["media_source"]["data"] = f"<{C.BUCKET}/{path}, not read in a dry run>"
-        _update(sb, pin["id"], {"status": "posting", "post_token": pin.get("post_token") or uuid.uuid4().hex,
-                                "post_started_at": C.iso(now), "post_job_id": job_id or None}, now)
+        if not _transition(sb, pin["id"], expected, {"status": "posting",
+                                                     "post_token": pin.get("post_token") or uuid.uuid4().hex,
+                                                     "post_started_at": C.iso(now), "post_job_id": job_id or None},
+                           now):
+            return {"step": "skipped", "pin": pin_id, "why": "the pin changed in the Library; nothing posted"}
         log.info("pinterest post %s DRY RUN - would POST /v5/pins %s", pin_id, payload)
         return _finish_posted(sb, {**pin}, f"dryrun:{pin['id']}", now, job_id, how="dry_run", board=board, dry=True)
 
@@ -218,14 +281,26 @@ def post_pin(sb, job_id: Optional[str], params: dict, *, api: Optional[Api] = No
         if api is None:
             api = Api(tokens.access_token(sb, now=now))
         if _s(pin.get("post_token")):
-            found, how = find_adoptable(api.list_board_pins(_s(board.get("pinterest_board_id")), page_size=25), pin)
-            log.info("pinterest post %s: adopt check after an interrupted run — %s", pin_id,
+            # an earlier attempt may have reached Pinterest: LOOK before posting again
+            listed = api.list_board_pins(_s(board.get("pinterest_board_id")), page_size=25)
+            taken = ids_held_elsewhere(sb, pin["id"], [_s(p.get("id")) for p in listed if _s(p.get("id"))])
+            found, how = find_adoptable(listed, pin, taken)
+            log.info("pinterest post %s: adopt check after an earlier attempt - %s", pin_id,
                      f"matched by {how}" if found else "no earlier pin on the board")
             if found:
-                return _finish_posted(sb, pin, found, now, job_id, how=f"adopted:{how}", board=board)
+                try:
+                    return _finish_posted(sb, pin, found, now, job_id, how=f"adopted:{how}", board=board,
+                                          expected=expected)
+                except Moved as exc:
+                    log.warning("pinterest post %s: %s; not ours", pin_id, exc)
         token = uuid.uuid4().hex
-        _update(sb, pin["id"], {"status": "posting", "post_token": token, "post_started_at": C.iso(now),
-                                "post_job_id": job_id or None}, now)
+        if not _transition(sb, pin["id"], expected, {"status": "posting", "post_token": token,
+                                                     "post_started_at": C.iso(now), "post_job_id": job_id or None},
+                           now):
+            log.warning("pinterest post %s: the row left %s before the intent write; nothing posted", pin_id,
+                        expected[0])
+            return {"step": "skipped", "pin": pin_id, "why": "the pin changed in the Library; nothing posted"}
+        expected = ("posting",)
         pin = {**pin, "status": "posting", "post_token": token, "post_started_at": C.iso(now)}
         path = _s((pin.get("images") or [{}])[0].get("path"))
         png = sb.storage.from_(C.BUCKET).download(path)
@@ -237,19 +312,21 @@ def post_pin(sb, job_id: Optional[str], params: dict, *, api: Optional[Api] = No
         pinterest_id = _s(made.get("id"))
         if not pinterest_id:
             raise PinterestError(200, None, "Pinterest answered without a pin id", "/pins")
-        return _finish_posted(sb, pin, pinterest_id, now, job_id, how="created", board=board)
+        return _finish_posted(sb, pin, pinterest_id, now, job_id, how="created", board=board, expected=expected)
     except db.DeferredJob:
         # a rate-limit wait: the pin stays where it is; the token, if any,
         # lets the next run adopt rather than double-post
         raise
     except (TokenInvalid, TrialAccessOnly, Forbidden) as exc:
         why = str(exc)
-        _not_counted(sb, pin, why, now)
+        _not_counted(sb, pin, why, now, expected)
         C.trip_breaker(sb, f"pin {pin_id}: {why}", now)
         return {"step": "breaker", "pin": pin_id, "why": why[:300]}
-    except Exception as exc:  # noqa: BLE001 — 5xx after retries, a 4xx, storage
+    except Exception as exc:  # noqa: BLE001 — an ambiguous create, a 4xx, storage
+        # post_token stays on the row: if the create reached Pinterest, the
+        # next attempt finds it on the board before it posts anything
         why = f"{type(exc).__name__}: {exc}"
-        outcome = _counted(sb, pin, why, now)
+        outcome = _counted(sb, pin, why, now, expected)
         log.error("pinterest post %s failed (%s): %s", pin_id, outcome, why)
         return {"step": outcome, "pin": pin_id, "why": why[:300]}
 
@@ -262,7 +339,7 @@ def run_post_job(sb, job: dict, *, api: Optional[Api] = None, link_check=None) -
         params = job.get("params") if isinstance(job.get("params"), dict) else {}
         summary = post_pin(sb, job_id, params, api=api, link_check=link_check)
         db.set_stage(sb, job_id, summary)
-        if summary.get("step") in ("done", "skipped"):
+        if summary.get("step") in ("done", "skipped", "later"):
             db.finish_job(sb, job_id)
         else:
             db.finish_job(sb, job_id, None, error=f"pin not posted ({summary.get('step')}): "
@@ -281,4 +358,4 @@ def run_post_job(sb, job: dict, *, api: Optional[Api] = None, link_check=None) -
 
 
 __all__ = ["run_post_job", "post_pin", "recheck", "build_payload", "loggable", "find_adoptable",
-           "is_platform_admin", "Refused", "ADOPT_WINDOW"]
+           "is_platform_admin", "ids_held_elsewhere", "Refused", "Transient", "Moved", "ADOPT_WINDOW"]

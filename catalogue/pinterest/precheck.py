@@ -148,9 +148,12 @@ def copy_checks(copy: dict, *, template: str, language: str, source_text: str, l
     if len(_HASHTAGS.findall(desc)) > 2:
         warnings.append("copy: more than two hashtags in the description")
     if link is not None:
-        check = link_check or C.link_ok
-        if not link or not check(link):
+        verdict = C.link_verdict((link_check or C.link_ok)(link)) if link else C.LINK_DEAD
+        if verdict == C.LINK_DEAD:
             blocking.append(f"{LINK_PREFIX} the topic page does not answer 200")
+        elif verdict == C.LINK_UNKNOWN:
+            # no answer is not a dead page; the post job checks again before posting
+            warnings.append(f"{LINK_PREFIX} the topic page could not be checked just now")
     return blocking, warnings
 
 

@@ -139,7 +139,7 @@ def test_the_adopt_fallback_matches_title_and_time():
     sb = _sb(dry=False, status="posting", post_token="old", post_started_at="2026-10-23T21:00:00+00:00")
     api = FakeApi(board_pins=[
         {"id": "too-old", "title": "Plant cell parts", "link": "https://x", "created_at": "2026-10-23T20:30:00"},
-        {"id": "ours", "title": "Plant cell parts", "link": "https://x", "created_at": "2026-10-23T21:04:00"}])
+        {"id": "ours", "title": "Plant cell parts", "link": "https://x", "created_at": "2026-10-23T21:02:00"}])
     out = _post(sb, api)
     assert out["how"] == "adopted:title+time" and _pin(sb)["pinterest_pin_id"] == "ours" and api.created == []
 

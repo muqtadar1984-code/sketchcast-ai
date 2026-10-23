@@ -246,16 +246,49 @@ def pin_link(slug: str, language: str, fmt: str, pin_id: str) -> str:
     return canonical_url(slug, language) + "?" + urllib.parse.urlencode(utm_for(fmt, pin_id, language))
 
 
-def link_ok(url: str, *, timeout: int = LINK_TIMEOUT) -> bool:
-    """HEAD answers 200 (after redirects). A network failure is a no."""
-    try:
-        import requests
+LINK_OK, LINK_DEAD, LINK_UNKNOWN = "ok", "dead", "unknown"
+_HEAD_REFUSED = (403, 405, 501)
 
-        r = requests.head(url, timeout=timeout, allow_redirects=True)
-        return int(getattr(r, "status_code", 0)) == 200
+
+def link_status(url: str, *, timeout: int = LINK_TIMEOUT, http=None) -> str:
+    """``ok`` (200 after redirects), ``dead`` (the page answers, and not with
+    200: a 404, a 410, another 4xx) or ``unknown`` (no answer, a timeout, a
+    5xx, a 429 — nothing to hold against the pin). A host that refuses HEAD
+    (403 / 405 / 501) is asked again with GET."""
+    try:
+        if http is None:
+            import requests as http  # noqa: N813
+        r = http.head(url, timeout=timeout, allow_redirects=True)
+        code = int(getattr(r, "status_code", 0) or 0)
+        if code in _HEAD_REFUSED:
+            r = http.get(url, timeout=timeout, allow_redirects=True, stream=True)
+            code = int(getattr(r, "status_code", 0) or 0)
+            close = getattr(r, "close", None)
+            if callable(close):
+                close()
     except Exception as exc:  # noqa: BLE001
-        log.info("pinterest: link check failed for %s: %s", url.split("?")[0], exc)
-        return False
+        log.info("pinterest: link check could not reach %s: %s", url.split("?")[0], type(exc).__name__)
+        return LINK_UNKNOWN
+    if code == 200:
+        return LINK_OK
+    if code == 0 or code >= 500 or code == 429:
+        return LINK_UNKNOWN
+    return LINK_DEAD
+
+
+def link_verdict(answer) -> str:
+    """A link checker's answer read as ok / dead / unknown: a checker answers
+    with a verdict string or a plain bool (True ok, False dead)."""
+    if answer is True or answer == LINK_OK:
+        return LINK_OK
+    if answer is None or answer == LINK_UNKNOWN:
+        return LINK_UNKNOWN
+    return LINK_DEAD
+
+
+def link_ok(url: str, *, timeout: int = LINK_TIMEOUT) -> str:
+    """The default checker: a verdict (``link_status``)."""
+    return link_status(url, timeout=timeout)
 
 
 LinkCheck = Callable[[str], bool]
