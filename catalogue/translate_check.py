@@ -285,6 +285,36 @@ def _scaled_values(text: str) -> list[tuple[str, str]]:
     return out
 
 
+# Thousands grouped with a point, a space or a thin space: "300.000" and
+# "1 500" in Spanish, French and Portuguese (Sound Waves bank item, three
+# languages; Pressure, Portuguese "1 000 Pascal" — Fix Agent cases,
+# 2026-10-22). Read as written they are 300 and "1", "500". A group is read
+# as ONE number only when the English states that value — "1.500" is never
+# taken for 1500 unless the source says 1,500 or "one thousand five hundred".
+_GROUPED_RE = re.compile(r"(?<![\d.,])\d{1,3}(?:[.   ]\d{3})+(?![\d,]|\.\d)")
+
+
+def _grouped_thousands(text: str, wanted: set[str]) -> str:
+    def join(m: "re.Match[str]") -> str:
+        digits = re.sub(r"[.   ]", "", m.group(0))
+        return digits if str(int(digits)) in wanted else m.group(0)
+    return _GROUPED_RE.sub(join, text)
+
+
+# English words that say "one" without a digit: the articles, "another",
+# "each", "single", "the other". A translator told to write every number in
+# digits writes them "1 meter", "1 lagi", "setiap 1" (Malay Algebraic
+# Identities and Pressure, 2026-10-21/22). A "1" in the translation used as
+# a DETERMINER — followed by a word — is matched against these, one for one.
+_ONE_WORDS_RE = re.compile(r"\b(?:a|an|another|each|single|other)\b", re.I)
+_DETERMINER_ONE_RE = re.compile(r"(?<![\d.,\-])1(?=\s+[^\W\d_])", re.UNICODE)
+# Spelled ordinals: "the first power" written "la puissance 1" (French
+# Linear Equations bank item, 2026-10-22). They only ABSORB digits.
+_ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7,
+             "eighth": 8, "ninth": 9, "tenth": 10}
+_ORDINAL_RE = re.compile(r"\b(" + "|".join(_ORDINALS) + r")\b", re.I)
+
+
 def numbers_equivalent(source: str, target: str, board: Iterable[str] = ()) -> tuple[bool, list[str], list[str]]:
     """Same multiset of numeric VALUES on both sides. Returns (ok, missing,
     extra) — what the target lost and what it invented.
@@ -297,8 +327,16 @@ def numbers_equivalent(source: str, target: str, board: Iterable[str] = ()) -> t
     when it is written on the ``board`` (the lesson's problems, working
     lines and answers): a spoken line may quote the board — "… = 0". A
     spoken value is never REQUIRED on the target side; a digit the source
-    writes still is."""
-    a, b = number_values(source), number_values(target)
+    writes still is.
+
+    Thousands the target groups with a point or a space are read whole when
+    the English states that value (_grouped_thousands), and a "1" written as
+    a determiner is matched against an English "a", "another", "each"
+    (_ONE_WORDS_RE)."""
+    a = number_values(source)
+    target = _grouped_thousands(normalize_numerals(str(target or "")),
+                                set(a) | set(english_number_words(source)))
+    b = number_values(target)
     missing = list(a)
     extra: list[str] = []
     for v in b:
@@ -315,6 +353,9 @@ def numbers_equivalent(source: str, target: str, board: Iterable[str] = ()) -> t
             extra.remove("-" + v)
     if extra:
         spelt = [_abs(x) for x in english_number_words(source)]
+        spelt += [str(_ORDINALS[w.lower()]) for w in _ORDINAL_RE.findall(str(source or ""))]
+        ones = min(len(_ONE_WORDS_RE.findall(str(source or ""))), len(_DETERMINER_ONE_RE.findall(target)))
+        spelt += ["1"] * ones
         pool = {_abs(x) for x in (board or ())}
         scaled = _scaled_values(target)
         for v in list(extra):
@@ -588,7 +629,10 @@ LESSON_PROSE_MATHS_KEYS = ("problem", "operation")
 # operators, powers and brackets — "π = 3.14", "2x + 3 = 11", "r = 6" —
 # that carries at least one digit or operator. Unit words ("cm") are two
 # or more letters, so they end a span and are free to be translated.
-_LETTER = r"A-Za-zͰ-Ͽ"
+# Accented Latin letters belong to words too: without them "dá" (Portuguese
+# "gives") read as the variable "d" beside a stray "á", glued onto the maths
+# before it — "(x + q) dá" (Quadratic Expressions, Portuguese, 2026-10-22).
+_LETTER = r"A-Za-zÀ-ÖØ-öø-ɏͰ-Ͽ"
 _SPAN_TOKEN = (rf"(?:\d+(?:[.,]\d+)?|(?<![{_LETTER}])[A-Za-zα-ωΑ-Ω](?![{_LETTER}])"
                r"|[=+−\-×÷*/^√<>≤≥≠]|[²³]|\(|\))")
 _SPAN_RE = re.compile(rf"{_SPAN_TOKEN}(?:\s*{_SPAN_TOKEN})*")
@@ -611,6 +655,24 @@ _WORD_HYPHEN_RE = re.compile(
     r"|(?<=\d)-(?!(?:sin|cos|tan|sec|csc|cot|log|ln|exp|sqrt|arc)[^\W\d_]*\b)(?=[^\W\d_]{3,})",
     re.UNICODE)
 _PROSE_WORD_RE = re.compile(r"[^\W\d_]{2,}", re.UNICODE)
+# A one-letter CONJUNCTION — Spanish "y" (and), "o"/"u" (or), Portuguese "e"
+# (and) — is a word, not a variable, where it joins maths to more words or
+# maths: after a closing bracket or a digit, before a bracket, a point label
+# ("B(4, 11)"), a word or a number; or opening a bracket before a word ("(o
+# Grupo 18)"). Read as a variable it glued "A(0, 3) y B(4, 11)" into one
+# span whose brackets no longer paired, and refused six correct Spanish and
+# Portuguese translations (Fix Agent cases, 2026-10-22). A letter next to an
+# operator ("x + y", "y = 3") is still a variable.
+_CONJUNCTION_RE = re.compile(
+    r"(?<=[\d)])(\s+)[yeou](?=\s+(?:\(|[A-Za-z]\(|[^\W\d_]{2,}|\d))"
+    r"|(?<=\()[yeou](?=\s+[^\W\d_]{2,})",
+    re.UNICODE)
+
+
+def _conjunctions_as_words(text: str) -> str:
+    """``text`` with every one-letter conjunction written as a word the span
+    reader stops at."""
+    return _CONJUNCTION_RE.sub(lambda m: (m.group(1) or "") + "and", text)
 
 
 def has_prose(text: str) -> bool:
@@ -684,7 +746,8 @@ def maths_spans(text: str) -> list[str]:
     """The maths spans of a sentence, whitespace-normalised, in order, with
     the sentence's brackets trimmed off and the maths' own kept."""
     out: list[str] = []
-    for m in _SPAN_RE.finditer(_WORD_HYPHEN_RE.sub("‐", _ordinal_hyphens(normalize_numerals(str(text or ""))))):
+    text = _conjunctions_as_words(_ordinal_hyphens(normalize_numerals(str(text or ""))))
+    for m in _SPAN_RE.finditer(_WORD_HYPHEN_RE.sub("‐", text)):
         span = _trim_brackets(" ".join(m.group(0).split()))
         # "a 15-meter pole", "I 3 times": an English article or pronoun set
         # next to a number with no operator between is not a variable — no
