@@ -442,3 +442,58 @@ class TestTick:
         assert db.case()["status"] == "new" and db.case()["diagnosis"]["attempts"] == 1
         fa.tick(db, now=NOW + timedelta(minutes=1))
         assert db.case()["status"] == "needs_founder"
+
+
+# ── after a deploy: the running code re-checks the open cases ──────────────
+
+MALAY_PAIR = {"where": "s006", "what": "numbers differ", "extra": ["1", "1"],
+              "source": "because a metre has one hundred centimetres? A square metre is a grid.",
+              "target": "kerana 1 meter ada 100 sentimeter? 1 meter persegi ialah grid."}
+
+
+class TestRecheck:
+    def test_a_pair_the_current_check_accepts_passes(self):
+        rc = fa.recheck_case({"evidence": {"findings": [MALAY_PAIR]}}, "abc1234", NOW)
+        assert rc["passes"] is True and rc["checked"] == 1 and rc["passing"] == 1 and rc["commit"] == "abc1234"
+
+    def test_a_real_error_still_fails(self):
+        bad = {**MALAY_PAIR, "target": "kerana 1 meter ada 1000 sentimeter? 1 meter persegi ialah grid."}
+        assert fa.recheck_case({"evidence": {"findings": [bad]}}, "c", NOW)["passes"] is False
+
+    def test_a_maths_question_pair(self):
+        f = {"where": "examples[3].problem", "what": "maths in the question altered",
+             "source": "A line passes through the points A(0, 3) and B(4, 11).",
+             "target": "Una recta pasa por los puntos A(0, 3) y B(4, 11)."}
+        assert fa.recheck_case({"evidence": {"findings": [f]}}, "c", NOW)["passes"] is True
+
+    def test_nothing_to_check_is_unknown_not_a_pass(self):
+        assert fa.recheck_case({"evidence": {}}, "c", NOW)["passes"] is None
+        other = {**MALAY_PAIR, "what": "protected field altered"}
+        assert fa.recheck_case({"evidence": {"findings": [other]}}, "c", NOW)["passes"] is None
+
+    def test_the_latest_round_with_strings_is_used(self):
+        case = {"evidence": {}, "history": [{"evidence": {"findings": [MALAY_PAIR]}}, {"evidence": {}}]}
+        assert fa.recheck_case(case, "c", NOW)["passes"] is True
+
+    def test_a_known_fixed_error_names_its_fix(self):
+        case = {"issue": "x", "outcome": {"error": "translation reply did not return 18 items (got list)"}}
+        rc = fa.recheck_case(case, "c", NOW)
+        assert rc["fixed_by"] == "#316" and rc["passes"] is None
+        assert fa.recheck_case({"issue": "did not return 98 items (got dict)"}, "c", NOW)["fixed_by"] is None
+
+    def test_the_tick_checks_each_open_case_once_per_commit(self, db, monkeypatch):
+        monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "40cda5993b")
+        db.tables["fix_cases"] = [
+            {"id": "c1", "status": "needs_founder", "evidence": {"findings": [MALAY_PAIR]}, "history": []},
+            {"id": "c2", "status": "resolved", "evidence": {"findings": [MALAY_PAIR]}},
+            {"id": "c3", "status": "approved", "evidence": {}, "issue": "did not return 10 items (got list)"},
+        ]
+        assert fa.recheck_open(db, NOW) == 2
+        c1, c2, c3 = db.tables["fix_cases"]
+        assert c1["evidence"]["recheck"]["passes"] is True and c1["evidence"]["recheck"]["commit"] == "40cda59"
+        assert c1["evidence"]["findings"] == [MALAY_PAIR], "the saved evidence is kept"
+        assert "recheck" not in c2["evidence"], "a closed case is left alone"
+        assert c3["evidence"]["recheck"]["fixed_by"] == "#316"
+        assert fa.recheck_open(db, NOW) == 0, "once per commit"
+        monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "ffff0000")
+        assert fa.recheck_open(db, NOW) == 2, "a new deploy checks again"
