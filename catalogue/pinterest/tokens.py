@@ -28,12 +28,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from catalogue.pinterest import common as C
-from catalogue.pinterest.api import Api, PinterestError, TokenInvalid, is_sandbox
+from catalogue.pinterest.api import Api, PinterestError, TokenInvalid, TokenUnavailable, is_sandbox
 
 log = logging.getLogger("worker.pinterest.tokens")
 
@@ -43,6 +45,18 @@ ALERT_DAYS = 14
 PAUSE_DAYS = 3
 DEFAULT_ACCESS_SECONDS = 30 * 86400
 DEFAULT_REFRESH_SECONDS = 60 * 86400
+SAVE_TRIES = 3
+SAVE_BACKOFF = 1.0
+TRANSIENT_WAIT_SECONDS = 300
+
+# One refresh at a time in this process: Pinterest ROTATES the refresh token,
+# so two threads refreshing with the same old one would leave one of them
+# holding a token Pinterest has already replaced.
+_refresh_lock = threading.Lock()
+# A refreshed token the database has not accepted yet. Pinterest has already
+# retired the old refresh token, so losing this one would lose the account:
+# it is kept here and saved again on the next call.
+_unsaved: dict = {"token": None}
 
 
 class TokenKeyMissing(TokenInvalid):
@@ -146,31 +160,76 @@ def _note_error(sb, text: str) -> None:
         log.warning("pinterest tokens: last_error not written: %s", exc)
 
 
+def save_with_retry(sb, token: Token, now: datetime, *, sleep=time.sleep) -> bool:
+    """``save``, up to SAVE_TRIES times with backoff. False when every try
+    failed — the caller keeps the token in memory (``_unsaved``)."""
+    for i in range(SAVE_TRIES):
+        try:
+            save(sb, token, now)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            log.error("pinterest tokens: the refreshed token was not stored (try %d of %d): %s",
+                      i + 1, SAVE_TRIES, type(exc).__name__)
+            if i + 1 < SAVE_TRIES:
+                sleep(SAVE_BACKOFF * (2 ** i))
+    return False
+
+
+def _current(sb, now: datetime, sleep) -> Optional[Token]:
+    """The newest token: one still waiting to be saved wins over the row."""
+    pending = _unsaved.get("token")
+    if pending is not None:
+        if save_with_retry(sb, pending, now, sleep=sleep):
+            _unsaved["token"] = None
+        return pending
+    return load(sb)
+
+
 def access_token(sb, *, now: Optional[datetime] = None, api_factory: Optional[Callable[..., Api]] = None,
-                 base: Optional[str] = None) -> str:
+                 base: Optional[str] = None, sleep=time.sleep) -> str:
     """A usable bearer, refreshing (and re-storing BOTH tokens) when the
-    access token has fewer than five days left. Raises ``TokenInvalid`` with
-    a message that names no secret."""
+    access token has fewer than five days left. One refresh at a time per
+    process, re-reading the row once the lock is held. Raises
+    ``TokenInvalid`` when the grant is bad (re-consent), ``DeferredJob``
+    when the token endpoint is only unavailable; no message names a secret."""
+    from worker import client as db
+
     now = now or datetime.now(timezone.utc)
-    token = load(sb)
+    token = _current(sb, now, sleep)
     if token is None:
         raise TokenInvalid(401, None, "no Pinterest token is stored; run scripts/pinterest_oauth.py", "tokens")
     if is_sandbox(base) and token.sandbox_access_token:
         return token.sandbox_access_token
-    if token.access_expires_at - now > timedelta(days=REFRESH_WITHIN_DAYS) and token.access_token:
+
+    def fresh_enough(t: Token) -> bool:
+        return bool(t.access_token) and t.access_expires_at - now > timedelta(days=REFRESH_WITHIN_DAYS)
+
+    if fresh_enough(token):
         return token.access_token
-    if not token.refresh_token or token.refresh_expires_at <= now:
-        _note_error(sb, "the refresh token has expired; run scripts/pinterest_oauth.py")
-        raise TokenInvalid(401, None, "the refresh token has expired; the founder must re-consent", "tokens")
-    factory = api_factory or Api
-    try:
-        body = factory().refresh(token.refresh_token)
-    except PinterestError as exc:
-        _note_error(sb, f"refresh failed: HTTP {exc.status} {exc.code}: {exc.message[:200]}")
-        raise TokenInvalid(exc.status or 401, exc.code, f"the token refresh was refused: {exc.message[:200]}",
-                           "/oauth/token") from None
-    fresh = from_grant(body, now, previous=token)
-    save(sb, fresh, now)
+    with _refresh_lock:
+        token = _current(sb, now, sleep) or token     # another thread may have refreshed meanwhile
+        if fresh_enough(token):
+            return token.access_token
+        if not token.refresh_token or token.refresh_expires_at <= now:
+            _note_error(sb, "the refresh token has expired; run scripts/pinterest_oauth.py")
+            raise TokenInvalid(401, None, "the refresh token has expired; the founder must re-consent", "tokens")
+        factory = api_factory or Api
+        try:
+            body = factory().refresh(token.refresh_token)
+        except TokenInvalid as exc:
+            _note_error(sb, f"refresh refused: HTTP {exc.status} {exc.code}: {exc.message[:200]}")
+            raise TokenInvalid(exc.status or 401, exc.code, f"the token refresh was refused: {exc.message[:200]}",
+                               "/oauth/token") from None
+        except (TokenUnavailable, PinterestError) as exc:
+            _note_error(sb, f"refresh unavailable: HTTP {exc.status}: {exc.message[:200]}")
+            raise db.DeferredJob(TRANSIENT_WAIT_SECONDS, "the Pinterest token endpoint is unavailable; "
+                                                         "refreshing later") from None
+        fresh = from_grant(body, now, previous=token)
+        if save_with_retry(sb, fresh, now, sleep=sleep):
+            _unsaved["token"] = None
+        else:
+            _unsaved["token"] = fresh
+            log.error("pinterest tokens: the rotated token is held in memory until the database takes it")
     log.info("pinterest tokens: refreshed; access valid until %s, refresh until %s",
              fresh.access_expires_at.date(), fresh.refresh_expires_at.date())
     return fresh.access_token

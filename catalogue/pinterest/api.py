@@ -11,7 +11,11 @@ WHY THESE READINGS (probe results, 2026-10-23):
     Standard-access request (F9), not a retry.
   * any other 403 → ``Forbidden`` (an account-level block reads like this):
     the breaker trips; the engine never retries its way past a refusal.
-  * 5xx / a dropped connection → two more tries with jitter.
+  * 5xx / a dropped connection on a READ (GET) → two more tries with jitter.
+    A WRITE (POST) is sent exactly ONCE: a timeout, a reset connection or a
+    5xx on ``POST /pins`` may still have created the pin, so it raises
+    ``AmbiguousWrite`` and the caller adopts (lists the board) before it ever
+    posts again. A blind retry is how a pin gets posted twice.
 
 Every refusal keeps Pinterest's own ``{code, message}``. Nothing here ever
 logs, raises or returns a token outside ``exchange_code`` / ``refresh``,
@@ -44,6 +48,7 @@ CLIENT_ID_ENV = "PINTEREST_CLIENT_ID"
 CLIENT_SECRET_ENV = "PINTEREST_CLIENT_SECRET"
 TIMEOUT = 60
 RETRIES_5XX = 2
+IDEMPOTENT_METHODS = ("GET", "HEAD", "DELETE")
 MIN_DEFER = 30
 TRIAL_CODE = 29
 
@@ -73,6 +78,17 @@ class TrialAccessOnly(PinterestError):
 
 class Forbidden(PinterestError):
     """Any other 403 — an account-level refusal. Trips the breaker."""
+
+
+class AmbiguousWrite(PinterestError):
+    """A write whose outcome is unknown (no answer, or a 5xx): it may have
+    landed. Never retried here; the caller looks before it writes again."""
+
+
+class TokenUnavailable(PinterestError):
+    """The token endpoint did not answer usefully (5xx, a dropped connection,
+    an unexpected status). Transient: wait and refresh later — the token is
+    not known to be bad, so this never trips the breaker."""
 
 
 def api_base() -> str:
@@ -140,21 +156,31 @@ class Api:
 
     # ── the one transport ──
     def _send(self, method: str, url: str, path: str, **kw):
+        """One request; a READ is retried twice on a dropped connection or a
+        5xx, a WRITE never is (``AmbiguousWrite``: it may have landed)."""
+        retry = method.upper() in IDEMPOTENT_METHODS
         tries = 0
         while True:
             tries += 1
             try:
                 resp = self._session.request(method, url, timeout=TIMEOUT, **kw)
-            except Exception as exc:  # noqa: BLE001 — a dropped connection is a 5xx for retrying
-                if tries <= RETRIES_5XX:
+            except Exception as exc:  # noqa: BLE001
+                if retry and tries <= RETRIES_5XX:
                     self._sleep(random.uniform(1.0, 3.0) * tries)
                     continue
-                raise PinterestError(0, None, f"{type(exc).__name__}: {exc}", path) from None
+                cls = PinterestError if retry else AmbiguousWrite
+                raise cls(0, None, f"{type(exc).__name__}: {exc}", path) from None
             status = int(getattr(resp, "status_code", 0) or 0)
             self.last_ratelimit = rate_headers(getattr(resp, "headers", {}))
-            if 500 <= status < 600 and tries <= RETRIES_5XX:
-                self._sleep(random.uniform(1.0, 3.0) * tries)
-                continue
+            if 500 <= status < 600:
+                if retry and tries <= RETRIES_5XX:
+                    self._sleep(random.uniform(1.0, 3.0) * tries)
+                    continue
+                if not retry:
+                    body = _body(resp)
+                    raise AmbiguousWrite(status, body.get("code") if isinstance(body, dict) else None,
+                                         (body.get("message") if isinstance(body, dict) else "") or "server error",
+                                         path)
             return resp, status
 
     def _raise_for(self, resp, status: int, path: str) -> None:
@@ -223,21 +249,29 @@ class Api:
 
     # ── the token endpoint (Basic auth with the app's id and secret) ──
     def _token_call(self, data: dict) -> dict:
+        """One POST to the token endpoint. 400 / 401 → ``TokenInvalid`` (the
+        grant is bad: re-consent); 429 → ``DeferredJob``; anything else —
+        5xx, a dropped connection — → ``TokenUnavailable`` (try later)."""
         if not (self._client_id and self._client_secret):
             raise TokenInvalid(401, None, f"{CLIENT_ID_ENV} / {CLIENT_SECRET_ENV} are not set", "/oauth/token")
         basic = base64.b64encode(f"{self._client_id}:{self._client_secret}".encode()).decode()
-        resp, status = self._send("POST", oauth_base() + "/oauth/token", "/oauth/token", data=data,
-                                  headers={"Authorization": f"Basic {basic}"})
-        if not 200 <= status < 300:
-            if status in (400, 401):
-                body = _body(resp)
-                raise TokenInvalid(status, body.get("code") if isinstance(body, dict) else None,
-                                   (body.get("message") if isinstance(body, dict) else "") or "token call refused",
-                                   "/oauth/token")
-            self._raise_for(resp, status, "/oauth/token")
+        try:
+            resp, status = self._send("POST", oauth_base() + "/oauth/token", "/oauth/token", data=data,
+                                      headers={"Authorization": f"Basic {basic}"})
+        except AmbiguousWrite as exc:
+            raise TokenUnavailable(exc.status, exc.code, exc.message, "/oauth/token") from None
         body = _body(resp)
+        code = body.get("code") if isinstance(body, dict) else None
+        message = (body.get("message") if isinstance(body, dict) else "") or ""
+        if status in (400, 401):
+            raise TokenInvalid(status, code, message or "token call refused", "/oauth/token")
+        if status == 429:
+            self._raise_for(resp, status, "/oauth/token")
+        if not 200 <= status < 300:
+            raise TokenUnavailable(status, code, message or "the token endpoint answered unexpectedly",
+                                   "/oauth/token")
         if not isinstance(body, dict) or not body.get("access_token"):
-            raise TokenInvalid(status, None, "the token call answered without an access token", "/oauth/token")
+            raise TokenUnavailable(status, None, "the token call answered without an access token", "/oauth/token")
         return body
 
     def refresh(self, refresh_token: str) -> dict:
@@ -249,5 +283,6 @@ class Api:
                                  "continuous_refresh": "true"})
 
 
-__all__ = ["Api", "PinterestError", "TokenInvalid", "TrialAccessOnly", "Forbidden", "api_base", "oauth_base",
+__all__ = ["Api", "PinterestError", "TokenInvalid", "TrialAccessOnly", "Forbidden", "AmbiguousWrite",
+           "TokenUnavailable", "api_base", "oauth_base",
            "is_sandbox", "rate_headers", "reset_seconds"]

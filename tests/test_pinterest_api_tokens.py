@@ -169,7 +169,7 @@ def test_a_refused_refresh_is_token_invalid_and_records_no_secret():
     with pytest.raises(A.TokenInvalid) as e:
         TK.access_token(sb, now=NOW, api_factory=r)
     row = sb.tables[C.OAUTH][0]
-    assert "refresh failed" in row["last_error"] and SECRET_REFRESH not in row["last_error"]
+    assert "refresh refused" in row["last_error"] and SECRET_REFRESH not in row["last_error"]
     assert SECRET_REFRESH not in str(e.value)
 
 
