@@ -43,7 +43,10 @@ SYSTEM = ("You write Pinterest pin copy for SketchCast, an education company, fo
 
 IMAGE_WORDS = {
     "explainer": "a topic explainer card: the title band reads {title!r}; below it {extra}",
-    "diagram": "a labelled diagram card: the title band reads {title!r}; the picture is {caption}; "
+    # The parts are listed in a legend UNDER the picture, not written on it:
+    # the copy must not promise a "labelled diagram" the card does not show.
+    "diagram": "a diagram card with a parts legend (the picture itself carries no labels, so never call it "
+               "a labelled diagram): the title band reads {title!r}; the picture is {caption}; "
                "the legend under it names the parts: {labels}",
     "worksheet": "a worksheet card: the title band reads {title!r}, a band says FREE WORKSHEET, and under it "
                  "a preview of page 1 of the student worksheet",
