@@ -187,6 +187,11 @@ def post_pin(sb, job_id: Optional[str], params: dict, *, api: Optional[Api] = No
     if pin.get("status") == "posted" or _s(pin.get("pinterest_pin_id")):
         return {"step": "skipped", "why": "already posted", "pinterest_pin_id": pin.get("pinterest_pin_id")}
     settings = C.read_settings(sb)
+    br = settings.get("breaker") if isinstance(settings.get("breaker"), dict) else {}
+    if settings.get("enabled") is not True or settings.get("paused") or br.get("tripped"):
+        # switched off, paused or tripped after this job was queued: the pin
+        # stays scheduled and the round resumes with the agent
+        return {"step": "skipped", "pin": pin_id, "why": "the Pinterest agent is off, paused or tripped"}
     try:
         board = recheck(sb, pin, link_check=link_check)
     except Refused as exc:

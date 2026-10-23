@@ -247,9 +247,11 @@ def _visual_bucket() -> str:
         return "visual-assets"
 
 
-def next_topic(sb, language: str, settings: Optional[dict] = None) -> Optional[str]:
+def next_topic(sb, language: str, settings: Optional[dict] = None, exclude: Optional[set] = None) -> Optional[str]:
     """The next topic to draft in ``language``: public there, with no pin row
-    in that language yet, oldest approved kit first."""
+    in that language yet, oldest approved kit first. ``exclude``: topics the
+    feeder tried recently (a topic that yields no pin is not retried every
+    tick)."""
     kits = sorted(visible_kits(sb, language), key=lambda r: (_s(r.get("approved_at")), _s(r.get("topic_id"))))
     if not kits:
         return None
@@ -257,7 +259,7 @@ def next_topic(sb, language: str, settings: Optional[dict] = None) -> Optional[s
                                                      .execute())}
     for r in kits:
         tid = _s(r.get("topic_id"))
-        if tid and tid not in drafted:
+        if tid and tid not in drafted and tid not in (exclude or set()):
             return tid
     return None
 

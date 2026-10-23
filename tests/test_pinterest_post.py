@@ -236,3 +236,12 @@ def test_the_job_row_is_finished_with_the_outcome():
     sb.tables["jobs"].append(job)
     P.run_post_job(sb, job, api=FakeApi(), link_check=lambda u: True)
     assert job["status"] == "done" and job["stage"]["pinterest_pin_id"] == f"dryrun:{PIN}"
+
+
+@pytest.mark.parametrize("change", [{"paused": True}, {"enabled": False}, {"breaker": {"tripped": True}}])
+def test_a_job_claimed_after_a_pause_posts_nothing_and_keeps_the_pin_scheduled(change):
+    sb = _sb(dry=False)
+    sb.set_settings(**change)
+    api = FakeApi()
+    out = _post(sb, api)
+    assert out["step"] == "skipped" and api.calls == [] and _pin(sb)["status"] == "scheduled"
