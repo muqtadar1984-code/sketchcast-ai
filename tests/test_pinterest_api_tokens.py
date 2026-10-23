@@ -214,3 +214,21 @@ def test_plenty_of_time_says_nothing():
     sb = PinSB()
     _store(sb, refresh_days=40)
     assert TK.check_expiry(sb, C.read_settings(sb), NOW) is None
+
+
+# ── the one-time consent script ─────────────────────────────────────────
+
+
+def test_the_consent_script_generates_a_usable_key_and_asks_for_the_engines_scopes(capsys):
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "pinterest_oauth.py"
+    spec = importlib.util.spec_from_file_location("pinterest_oauth", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.main(["--generate-key"]) == 0
+    key = capsys.readouterr().out.splitlines()[0]
+    Fernet(key.encode())   # a valid Fernet key
+    url = mod.authorize_url("1628460", "http://localhost:8765/callback", "st")
+    assert "pins%3Awrite" in url and "boards%3Awrite" in url and "redirect_uri=http%3A%2F%2Flocalhost%3A8765" in url
