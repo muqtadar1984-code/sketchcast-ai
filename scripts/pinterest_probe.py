@@ -246,8 +246,12 @@ class Api:
             body = r.json() if r.content else None
         except ValueError:
             body = {"raw": r.text[:300]}
-        self.calls.append({"method": method, "path": path, "status": r.status_code,
-                           "ratelimit": rate_headers(r.headers)})
+        entry = {"method": method, "base": self.base, "path": path, "status": r.status_code,
+                 "ratelimit": rate_headers(r.headers)}
+        if r.status_code >= 400:
+            # Pinterest's own reason ({code, message}) is the whole point of a refusal.
+            entry["error"] = redact(body)
+        self.calls.append(entry)
         return r.status_code, body
 
 
@@ -289,13 +293,32 @@ def probe_api(args, out: Path) -> dict:
     if not card.exists():
         report["fonts_for_api"] = probe_fonts(out)
     link = utm_link(PROBE_LINK, content=f"static-probe{stamp[-6:]}")
-    status, pin = api.call("POST", "/pins", json={
-        "board_id": board_id, "title": "SketchCast probe pin", "description": "API probe; deleted after the run.",
+    pin_body = {
+        "title": "SketchCast probe pin", "description": "API probe; deleted after the run.",
         "alt_text": "A white test card with one line of text.", "link": link,
         "media_source": {"source_type": "image_base64", "content_type": "image/png",
-                         "data": base64.b64encode(card.read_bytes()).decode()}})
+                         "data": base64.b64encode(card.read_bytes()).decode()}}
+    status, pin = api.call("POST", "/pins", json={"board_id": board_id, **pin_body})
+    report["pin_create"] = {"base": api.base, "status": status, "id": (pin or {}).get("id"), "sent_link": link,
+                            "error": None if status in (200, 201) else redact(pin)}
+
+    # Trial-tier apps may have to WRITE pins through the sandbox host. If the
+    # production host refuses, try the sandbox with its own board (sandbox
+    # objects are separate), and carry on there.
+    if status == 403 and api.base != API_BASES[1]:
+        prod_board = board_id
+        api.base = API_BASES[1]
+        s_status, s_board = api.call("POST", "/boards", json={
+            "name": f"sc-probe-{stamp}", "description": "SketchCast API probe (sandbox).", "privacy": "PUBLIC"})
+        report["sandbox_board_create"] = {"status": s_status, "id": (s_board or {}).get("id"),
+                                          "error": None if s_status in (200, 201) else redact(s_board)}
+        if (s_board or {}).get("id"):
+            board_id = s_board["id"]
+            status, pin = api.call("POST", "/pins", json={"board_id": board_id, **pin_body})
+            report["sandbox_pin_create"] = {"status": status, "id": (pin or {}).get("id"),
+                                            "error": None if status in (200, 201) else redact(pin)}
+        report["prod_board_id"] = prod_board
     pin_id = (pin or {}).get("id")
-    report["pin_create"] = {"status": status, "id": pin_id, "sent_link": link}
     if pin_id:
         _, one = api.call("GET", f"/pins/{pin_id}")
         report["link_via_get_pin"] = compare_links(link, (one or {}).get("link"))
@@ -310,11 +333,15 @@ def probe_api(args, out: Path) -> dict:
     report["refresh"] = api.refresh()
 
     if args.keep:
-        report["kept"] = {"board_id": board_id, "pin_id": pin_id}
+        report["kept"] = {"base": api.base, "board_id": board_id, "pin_id": pin_id}
     else:
         if pin_id:
             report["pin_delete"] = api.call("DELETE", f"/pins/{pin_id}")[0]
         report["board_delete"] = api.call("DELETE", f"/boards/{board_id}")[0]
+    if report.get("prod_board_id"):
+        # the production-host board from before the sandbox switch: always ours to remove
+        api.base = API_BASES[0]
+        report["prod_board_delete"] = api.call("DELETE", f"/boards/{report['prod_board_id']}")[0]
     report["calls"] = api.calls
     return report
 
