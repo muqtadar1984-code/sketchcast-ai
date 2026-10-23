@@ -121,8 +121,13 @@ def rate_headers(headers) -> dict:
 def redact(value):
     """Belt and braces for the report: no token-looking field ever leaves."""
     if isinstance(value, dict):
-        return {k: ("<redacted>" if "token" in k.lower() or k.lower() in {"code", "client_secret"} else redact(v))
-                for k, v in value.items()}
+        def secret(k: str, v) -> bool:
+            if "token" in k.lower() or k.lower() == "client_secret":
+                return True
+            # an OAuth authorization code is a long string; Pinterest's error
+            # bodies also carry a short numeric "code" that must stay readable
+            return k.lower() == "code" and isinstance(v, str) and len(v) > 12
+        return {k: ("<redacted>" if secret(k, v) else redact(v)) for k, v in value.items()}
     if isinstance(value, list):
         return [redact(v) for v in value]
     return value
@@ -172,10 +177,19 @@ def probe_fonts(out: Path) -> dict:
 
 class _Catch(http.server.BaseHTTPRequestHandler):
     result: dict = {}
+    hits: list = []          # every path the browser asked for (no query strings)
 
     def do_GET(self):  # noqa: N802
-        q = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query))
-        _Catch.result = q
+        parts = urllib.parse.urlsplit(self.path)
+        _Catch.hits.append({"path": parts.path, "at": round(time.time(), 1)})
+        if parts.path != "/callback":
+            # favicon and other browser extras: answer and keep waiting
+            self.send_response(404)
+            self.end_headers()
+            return
+        q = dict(urllib.parse.parse_qsl(parts.query))
+        if not _Catch.result:  # the FIRST callback wins; a repeat cannot overwrite it
+            _Catch.result = q
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
@@ -189,16 +203,27 @@ def consent(client_id: str, port: int) -> tuple[str, str]:
     """Returns (code, redirect_uri). The code is short-lived and single-use."""
     redirect = f"http://localhost:{port}/callback"
     state = secrets.token_urlsafe(16)
+    _Catch.result, _Catch.hits = {}, []
     server = http.server.HTTPServer(("127.0.0.1", port), _Catch)
-    thread = threading.Thread(target=server.handle_request, daemon=True)
+    server.timeout = 1
+
+    def serve():
+        deadline = time.time() + 300
+        while not _Catch.result and time.time() < deadline:
+            server.handle_request()
+
+    thread = threading.Thread(target=serve, daemon=True)
     thread.start()
     url = authorize_url(client_id, redirect, state)
     print("Opening Pinterest's consent screen; sign in as the SketchCast business account.")
     print(f"If no browser opens, visit:\n  {url}\n")
+    opened = time.time()
     webbrowser.open(url)
-    thread.join(timeout=300)
+    thread.join(timeout=310)
     server.server_close()
     got = _Catch.result
+    print(f"[diag] callback after {time.time() - opened:.1f}s; browser requests: "
+          f"{[h['path'] for h in _Catch.hits]}; code length {len(got.get('code', ''))}")
     if got.get("state") != state:
         raise SystemExit("consent failed: state mismatch or no callback within 5 minutes")
     if "code" not in got:
@@ -211,6 +236,7 @@ class Api:
         import requests
 
         self._rq = requests
+        self._client_id = client_id
         self._basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         self.base = API_BASES[0]
         self._access = ""
@@ -220,9 +246,15 @@ class Api:
     def _token(self, data: dict) -> dict:
         r = self._rq.post(self.base + TOKEN_PATH, data=data, timeout=30,
                           headers={"Authorization": f"Basic {self._basic}"})
-        body = r.json() if r.content else {}
+        try:
+            body = r.json() if r.content else {}
+        except ValueError:
+            body = {"raw": r.text[:300]}
         if r.status_code != 200:
-            raise SystemExit(f"token call failed: HTTP {r.status_code} {redact(body)}")
+            sent = sorted(k for k in data if k not in ("code", "refresh_token"))
+            raise SystemExit(f"token call failed: HTTP {r.status_code} {redact(body)} "
+                             f"[diag: host {self.base}, grant {data.get('grant_type')}, also sent {sent}, "
+                             f"redirect_uri {data.get('redirect_uri')}, client id length {len(self._client_id)}]")
         self._access = body.get("access_token", "")
         new_refresh = body.get("refresh_token", "")
         rotated = bool(new_refresh) and bool(self._refresh) and new_refresh != self._refresh

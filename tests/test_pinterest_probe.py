@@ -58,10 +58,10 @@ def test_rate_headers_keeps_only_the_three():
 
 def test_redact_removes_every_token_like_field_at_any_depth():
     body = {"access_token": "a", "nested": {"refresh_token": "b", "keep": 1},
-            "list": [{"code": "c"}], "client_secret": "d", "scope": "pins:write"}
+            "list": [{"code": "c" * 30}], "client_secret": "d", "scope": "pins:write"}
     out = probe.redact(body)
     text = json.dumps(out)
-    assert all(v not in text for v in ('"a"', '"b"', '"c"', '"d"'))
+    assert all(v not in text for v in ('"a"', '"b"', '"' + "c" * 30 + '"', '"d"'))
     assert out["nested"]["keep"] == 1 and out["scope"] == "pins:write"
 
 
@@ -106,3 +106,37 @@ def test_fonts_probe_draws_every_script(tmp_path):
     for name, entry in report["cards"].items():
         # Either drawn, or a named failure: never a silent broken card.
         assert entry["ok"] or entry["error"], name
+
+
+def test_redact_keeps_pinterests_numeric_error_code():
+    out = probe.redact({"code": 283, "message": "The authorization grant is invalid"})
+    assert out["code"] == 283
+    assert probe.redact({"code": "a" * 40})["code"] == "<redacted>"
+
+
+def test_consent_ignores_favicon_and_keeps_the_first_callback(monkeypatch):
+    import threading
+    import urllib.request
+
+    seen = {}
+
+    def fake_open(url):
+        q = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
+        seen["state"] = q["state"]
+
+        def browser():
+            base = "http://127.0.0.1:8799"
+            try:
+                urllib.request.urlopen(base + "/favicon.ico", timeout=5)
+            except Exception:  # noqa: BLE001 — the 404 is expected
+                pass
+            urllib.request.urlopen(f"{base}/callback?code=FIRSTCODE123456&state={q['state']}", timeout=5).read()
+
+        threading.Thread(target=browser, daemon=True).start()
+        return True
+
+    monkeypatch.setattr(probe.webbrowser, "open", fake_open)
+    code, redirect = probe.consent("123", 8799)
+    assert code == "FIRSTCODE123456"
+    assert redirect == "http://localhost:8799/callback"
+    assert [h["path"] for h in probe._Catch.hits] == ["/favicon.ico", "/callback"]
