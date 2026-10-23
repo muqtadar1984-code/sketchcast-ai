@@ -362,8 +362,6 @@ def probe_api(args, out: Path) -> dict:
     if args.video:
         report["video"] = probe_video(api, board_id, Path(args.video), stamp)
 
-    report["refresh"] = api.refresh()
-
     if args.keep:
         report["kept"] = {"base": api.base, "board_id": board_id, "pin_id": pin_id}
     else:
@@ -374,6 +372,15 @@ def probe_api(args, out: Path) -> dict:
         # the production-host board from before the sandbox switch: always ours to remove
         api.base = API_BASES[0]
         report["prod_board_delete"] = api.call("DELETE", f"/boards/{report['prod_board_id']}")[0]
+
+    # The token belongs to the production host whichever host the pins went
+    # to, so the refresh always goes there; and it runs LAST and never aborts
+    # the report — everything above is already learned.
+    api.base = API_BASES[0]
+    try:
+        report["refresh"] = api.refresh()
+    except SystemExit as exc:
+        report["refresh"] = {"error": str(exc)}
     report["calls"] = api.calls
     return report
 
