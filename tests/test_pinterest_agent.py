@@ -252,13 +252,135 @@ def test_the_feeder_follows_the_catalogue_window(monkeypatch):
     assert _jobs(sb, "pin_draft") == []
 
 
-def test_an_edited_pin_is_rechecked_by_the_tick(monkeypatch):
+def _edited(sb, pid="e1"):
+    sb.pins().append({"id": pid, "topic_id": "t-e", "language": "en", "status": "in_review",
+                      "precheck": {"blocking": [], "warnings": [], "edited_at": "2026-10-23T10:00:00+00:00"}})
+
+
+def test_an_edited_pin_queues_one_pin_recheck_job():
     sb = world()
-    seen = []
-    monkeypatch.setattr("catalogue.pinterest.draft.recheck_pending",
-                        lambda sb, link_check=None, limit=3, now=None: seen.append(1) or 1)
+    _edited(sb)
     out = AG.tick(sb, now=BEFORE)
-    assert seen and "re-checked 1 pin(s)" in out
+    assert "queued pin_recheck" in out and len(_jobs(sb, "pin_recheck")) == 1
+    AG.tick(sb, now=BEFORE)
+    assert len(_jobs(sb, "pin_recheck")) == 1, "one live pin_recheck"
+    assert sb.pins()[-1]["precheck"].get("checked_at") is None, "the tick itself re-checks nothing"
+
+
+def test_the_tick_makes_no_outbound_call(monkeypatch):
+    """Finding 4: link checks, storage reads, emails and token calls run in
+    last-lane jobs, never in the reaper loop."""
+    def boom(*a, **k):
+        raise AssertionError("outbound call in the tick")
+
+    monkeypatch.setattr(C, "link_ok", boom)
+    monkeypatch.setattr(C, "link_status", boom)
+    monkeypatch.setattr(C, "send_email", boom)
+    monkeypatch.setattr("catalogue.pinterest.tokens.check_expiry", boom)
+    monkeypatch.setattr("catalogue.pinterest.tokens.access_token", boom)
+    sb = world(boards="approved")
+    sb.files.clear()                    # any storage read would fail too
+    _edited(sb)
+    _approved(sb, "p1")
+    sb.set_settings(breaker={"tripped": False, "failures": 3})
+    assert AG.tick(sb, now=AFTER) == "breaker tripped"     # the backstop trips WITHOUT an email
+    sb.set_settings(breaker={"tripped": False, "failures": 0}, paused=False)
+    AG.tick(sb, now=AFTER)
+    assert _jobs(sb, "pin_recheck") and _jobs(sb, "pin_boards") and _jobs(sb, "pin_post")
+
+
+def test_the_recheck_job_does_the_work_on_the_last_lane(monkeypatch):
+    from catalogue.pinterest import draft as D
+
+    sb = world()
+    _edited(sb)
+    seen = []
+    monkeypatch.setattr(D, "recheck_pending", lambda sb, link_check=None, limit=3, now=None: seen.append(limit) or 1)
+    job = {"id": "rj", "type": "pin_recheck", "status": "processing", "params": {}}
+    sb.tables["jobs"].append(job)
+    out = D.run_recheck_job(sb, job)
+    assert out == {"step": "done", "rechecked": 1} and seen == [D.RECHECK_BATCH] and job["status"] == "done"
+    monkeypatch.setattr(C, "builders_queued", lambda sb, exclude_job_id=None: True)
+    from worker import client as db
+
+    with pytest.raises(db.DeferredJob):
+        D.run_recheck_job(sb, {**job, "status": "processing"})
+
+
+# ── finding 3: a pin stuck in posting does not block its round ──────────
+
+
+def test_a_posting_pin_whose_job_died_is_resumed_through_the_adopt_path():
+    sb = world()
+    _quiet(sb)
+    sb.tables[C.ROUNDS].append({"id": "r1", "trigger": "daily", "day": "2026-10-23", "status": "running",
+                                "created_at": "2026-10-23T21:00:00+00:00"})
+    _approved(sb, "stuck", status="posting", round_id="r1", post_token="tok",
+              post_started_at="2026-10-23T21:01:00+00:00")
+    sb.tables["jobs"].append({"id": "dead", "type": "pin_post", "status": "error",
+                              "params": {"pin_row_id": "stuck", "round_id": "r1"}})
+    out = AG.tick(sb, now=AFTER)
+    assert "resumed the interrupted post of stuck" in out
+    live = [j for j in _jobs(sb, "pin_post") if j["status"] == "queued"]
+    assert len(live) == 1 and live[0]["params"]["pin_row_id"] == "stuck"
+    assert _pin(sb, "stuck")["post_token"] == "tok", "the token stays: the job adopts before posting"
+    assert AG.tick(sb, now=AFTER) == "waiting: a post is running"
+
+
+def test_a_resumed_post_lets_the_round_settle():
+    from catalogue.pinterest import post as P
+
+    sb = world()
+    _quiet(sb)
+    sb.tables[C.ROUNDS].append({"id": "r1", "trigger": "daily", "day": "2026-10-23", "status": "running",
+                                "created_at": "2026-10-23T21:00:00+00:00"})
+    _approved(sb, "stuck", status="posting", round_id="r1", post_token="tok", board_id="b-biology",
+              link="https://sketchcast.app/topics/plant-cells", images=[{"path": "x.png"}],
+              post_started_at="2026-10-23T21:01:00+00:00")
+    AG.tick(sb, now=AFTER)
+    job = next(j for j in _jobs(sb, "pin_post") if j["status"] == "queued")
+    job["status"] = "processing"
+    P.run_post_job(sb, job, api=None, link_check=lambda u: True)      # dry run: no Pinterest call
+    assert _pin(sb, "stuck")["status"] == "posted"
+    assert AG.tick(sb, now=AFTER).endswith("round done")
+
+
+# ── finding 9: dry runs never count toward a gap; the cooldown reads newest first ──
+
+
+def test_dry_run_posts_count_toward_neither_gap():
+    sb = world()
+    _approved(sb, "dry", status="posted", pinterest_pin_id="dryrun:dry", posted_at="2026-10-23T21:29:00+00:00")
+    _approved(sb, "real", topic="t-real", status="posted", pinterest_pin_id="123",
+              posted_at="2026-10-20T21:00:00+00:00")
+    assert AG.last_posted_map(sb) == {"t-real|en": "2026-10-20T21:00:00+00:00"}
+    assert AG.last_post_time(sb).isoformat().startswith("2026-10-20T21:00")
+
+
+def test_the_redraft_cooldown_asks_for_the_newest_jobs_first():
+    sb = world()
+    AG.recently_drafted_topics(sb, "en", BEFORE)
+    sb2_calls = []
+
+    class _Spy:
+        def __init__(self, q):
+            self.q = q
+
+        def __getattr__(self, name):
+            attr = getattr(self.q, name)
+            if name == "order":
+                def order(*a, **k):
+                    sb2_calls.append((a, k))
+                    return _Spy(attr(*a, **k))
+                return order
+            if callable(attr):
+                return lambda *a, **k: (lambda r: _Spy(r) if r is self.q else r)(attr(*a, **k))
+            return attr
+
+    orig = sb.table
+    sb.table = lambda name: _Spy(orig(name)) if name == "jobs" else orig(name)
+    AG.recently_drafted_topics(sb, "en", BEFORE)
+    assert (("created_at",), {"desc": True}) in sb2_calls
 
 
 # ── boards ──────────────────────────────────────────────────────────────

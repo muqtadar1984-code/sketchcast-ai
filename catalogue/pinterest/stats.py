@@ -1,7 +1,9 @@
 """The daily analytics poll for OUR pins (guide §12, decision D8: our own
 pins' daily metrics, nothing about anyone else).
 
-``maybe_poll`` rides the reaper loop. Once per UTC day, after 02:00, it asks
+``maybe_poll`` rides the reaper loop and only decides: when work is due it
+inserts one ``pin_stats`` job, and that job (last lane) makes every call.
+Once per UTC day, after 02:00, the job asks
 Pinterest for the last 30 days of IMPRESSION / SAVE / PIN_CLICK /
 OUTBOUND_CLICK of every pin posted in the last 90 days (Pinterest's own
 window), skipping dry-run pins (``dryrun:<id>`` was never on Pinterest), and
@@ -11,9 +13,9 @@ unverified (probe Q4 could not run on Trial), so the last two days are
 
 It runs while the breaker is tripped (reading is not posting) but not when
 the agent is switched off. A rate limit stops the pass and resumes it after
-the reset; a refused token stops it for the day — the agent's own tick
-deals with the token. On Mondays it emails the founder the week: the top
-pins, and totals by template and by language.
+the reset; a refused token stops it for the day. The same job runs the
+token's daily expiry countdown (``tokens.check_expiry``), and on Mondays it
+emails the founder the week: the top pins, totals by template and language.
 """
 
 from __future__ import annotations
@@ -154,9 +156,79 @@ def weekly_summary(sb, now: datetime) -> Optional[tuple[str, str]]:
     return f"Pinterest week: {total} impressions on {len(per_pin)} pin(s)", "\n".join(lines)
 
 
-def maybe_poll(sb, *, clock=time.monotonic, now: Optional[datetime] = None, api=None) -> Optional[str]:
-    """The reaper loop's entry. Dark without ``PINTEREST_AGENT=1`` and the
-    settings switch; never raises; a database without 0154 is logged once."""
+def weekly_due(stats: dict, now: datetime) -> bool:
+    utc = now.astimezone(timezone.utc)
+    today = utc.date().isoformat()
+    return utc.weekday() == 0 and _s(stats.get("polled_on")) == today and _s(stats.get("weekly_on")) != today
+
+
+def token_check_due(settings: dict, now: datetime) -> bool:
+    return _s(settings.get("token_checked_on")) != now.astimezone(timezone.utc).date().isoformat()
+
+
+def work_due(settings: dict, now: datetime) -> bool:
+    stats = settings.get("stats") if isinstance(settings.get("stats"), dict) else {}
+    return due(stats, now) or weekly_due(stats, now) or token_check_due(settings, now)
+
+
+def run_stats(sb, now: datetime, *, api=None) -> str:
+    """What one ``pin_stats`` job does: the token countdown (once a day),
+    the analytics poll when due, Monday's summary when due."""
+    settings = C.read_settings(sb)
+    if settings.get("enabled") is not True:
+        return "off"
+    out: list[str] = []
+    if token_check_due(settings, now):
+        from catalogue.pinterest import tokens
+
+        did = tokens.check_expiry(sb, settings, now)
+        C.merge_settings(sb, {"token_checked_on": now.astimezone(timezone.utc).date().isoformat()}, now)
+        if did:
+            out.append(f"token expiry: {did}")
+        settings = C.read_settings(sb)
+    stats = settings.get("stats") if isinstance(settings.get("stats"), dict) else {}
+    if due(stats, now):
+        out.append(poll(sb, settings, now, api=api))
+        settings = C.read_settings(sb)
+        stats = settings.get("stats") if isinstance(settings.get("stats"), dict) else {}
+    if weekly_due(stats, now):
+        built = weekly_summary(sb, now)
+        C.merge_settings(sb, {"stats": {**stats, "weekly_on": now.astimezone(timezone.utc).date().isoformat()}}, now)
+        if built:
+            C.send_email(settings, *built)
+            out.append("weekly summary sent")
+    return "; ".join(out) or "nothing due"
+
+
+def run_stats_job(sb, job: dict, *, api=None, now: Optional[datetime] = None) -> Optional[dict]:
+    """The ``pin_stats`` job (last lane). Yields to builders; finishes its
+    own row; raises only ``DeferredJob``."""
+    job_id = job["id"]
+    try:
+        C.yield_to_builders(sb, job_id)
+        out = run_stats(sb, now or datetime.now(timezone.utc), api=api)
+        summary = {"step": "done", "result": out}
+        db.set_stage(sb, job_id, summary)
+        db.finish_job(sb, job_id)
+        log.info("pinterest stats: %s", out)
+        return summary
+    except db.DeferredJob:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        log.error("pin_stats %s failed: %s", job_id, exc)
+        try:
+            db.finish_job(sb, job_id, None, error=f"{type(exc).__name__}: {exc}"[:4000])
+        except Exception as exc2:  # noqa: BLE001
+            log.error("pin_stats %s: could not record the failure: %s", job_id, exc2)
+        return None
+
+
+def maybe_poll(sb, *, clock=time.monotonic, now: Optional[datetime] = None) -> Optional[str]:
+    """The reaper loop's entry: it only DECIDES — when a poll, the token
+    countdown or the weekly email is due it inserts one ``pin_stats`` job;
+    the network calls run on the last lane. Dark without
+    ``PINTEREST_AGENT=1`` and the settings switch; runs while the breaker is
+    tripped; never raises; a database without 0154 is logged once."""
     if not C.enabled_by_env():
         return None
     t = clock()
@@ -166,24 +238,10 @@ def maybe_poll(sb, *, clock=time.monotonic, now: Optional[datetime] = None, api=
     now = now or datetime.now(timezone.utc)
     try:
         settings = C.read_settings(sb)
-        if settings.get("enabled") is not True:
+        if settings.get("enabled") is not True or not work_due(settings, now):
             return None
-        stats = settings.get("stats") if isinstance(settings.get("stats"), dict) else {}
-        out = None
-        if due(stats, now):
-            out = poll(sb, settings, now, api=api)
-            log.info("pinterest stats: %s", out)
-            settings = C.read_settings(sb)
-            stats = settings.get("stats") if isinstance(settings.get("stats"), dict) else {}
-        today = now.astimezone(timezone.utc).date().isoformat()
-        if now.astimezone(timezone.utc).weekday() == 0 and _s(stats.get("polled_on")) == today \
-                and _s(stats.get("weekly_on")) != today:
-            built = weekly_summary(sb, now)
-            C.merge_settings(sb, {"stats": {**stats, "weekly_on": today}}, now)
-            if built:
-                C.send_email(settings, *built)
-                out = (out + "; " if out else "") + "weekly summary sent"
-        return out
+        job = C.queue_once(sb, C.JOB_STATS, {})
+        return f"queued pin_stats {job}" if job else None
     except Exception as exc:  # noqa: BLE001
         if C.table_missing(exc):
             if not _state["missing_logged"]:
@@ -191,8 +249,8 @@ def maybe_poll(sb, *, clock=time.monotonic, now: Optional[datetime] = None, api=
                 log.warning("pinterest stats: its tables are not in this database (apply app migration 0154): %s",
                             exc)
             return None
-        log.error("pinterest stats poll failed: %s", exc)
+        log.error("pinterest stats tick failed: %s", exc)
         return None
 
 
-__all__ = ["maybe_poll", "poll", "due", "pins_to_poll", "daily_rows", "weekly_summary", "METRICS"]
+__all__ = ["maybe_poll", "run_stats", "run_stats_job", "work_due", "poll", "due", "pins_to_poll", "daily_rows", "weekly_summary", "METRICS"]

@@ -33,7 +33,9 @@ AUDIT = "platform_audit_log"
 JOB_DRAFT = "pin_draft"
 JOB_POST = "pin_post"
 JOB_BOARDS = "pin_boards"
-JOB_TYPES = (JOB_DRAFT, JOB_POST, JOB_BOARDS)
+JOB_RECHECK = "pin_recheck"    # re-check edited pins (link HEAD, storage read)
+JOB_STATS = "pin_stats"        # analytics poll, token expiry, the weekly email
+JOB_TYPES = (JOB_DRAFT, JOB_POST, JOB_BOARDS, JOB_RECHECK, JOB_STATS)
 LIVE_JOB = ("queued", "processing")
 
 FORMAT_STATIC = "static"
@@ -155,7 +157,7 @@ def library_url(path: str = "/library/pinterest") -> str:
         return "https://library.sketchcast.app" + path
 
 
-def trip_breaker(sb, reason: str, now: datetime, *, failures: Optional[int] = None) -> dict:
+def trip_breaker(sb, reason: str, now: datetime, *, failures: Optional[int] = None, notify: bool = True) -> dict:
     """Stop all posting: breaker tripped, agent paused, the founder emailed.
     Nothing resumes it but the Library's Clear breaker / Resume."""
     current = read_settings(sb)
@@ -165,6 +167,8 @@ def trip_breaker(sb, reason: str, now: datetime, *, failures: Optional[int] = No
                                    "breaker": {"tripped": True, "failures": fails, "reason": reason[:300],
                                                "tripped_at": iso(now)}}, now)
     log.error("pinterest: BREAKER TRIPPED — %s", reason)
+    if not notify:
+        return settings
     send_email(settings, "Pinterest agent PAUSED: breaker tripped",
                f"The Pinterest agent stopped posting.\n\n{reason}\n\n"
                f"Nothing posts until you clear the breaker and resume on {library_url('/library/pinterest/scheduled')}.")
@@ -203,6 +207,15 @@ def queue_job(sb, job_type: str, params: dict) -> Optional[str]:
             return None
         raise
     return _s((rows(res) or [{}])[0].get("id")) or None
+
+
+def queue_once(sb, job_type: str, params: dict) -> Optional[str]:
+    """A job of a type 0154 has no one-live index for: inserted only when
+    none is queued or processing. (Two replicas racing can both insert; the
+    job itself is idempotent, so a second run finds nothing to do.)"""
+    if live_jobs(sb, job_type):
+        return None
+    return queue_job(sb, job_type, params)
 
 
 def live_jobs(sb, job_type: str) -> list[dict]:

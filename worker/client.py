@@ -67,7 +67,7 @@ OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "issue_resolve", "topic_harv
                                 "kit_translate",
                                 # the Pinterest Pin Engine (app 0154): they read
                                 # catalogue rows and write pinterest_* tables
-                                "pin_draft", "pin_post", "pin_boards"})
+                                "pin_draft", "pin_post", "pin_boards", "pin_recheck", "pin_stats"})
 
 
 def generation_to_mirror(job: Optional[dict]) -> Optional[str]:

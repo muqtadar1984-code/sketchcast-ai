@@ -13,8 +13,9 @@ paused does nothing; a live user build does nothing (never starve).
 
 EACH TICK, in order:
   1. a ``pin_boards`` job when a board is approved and not yet created;
-  2. re-checks of pins a Library edit left without ``checked_at`` (inline:
-     no model call);
+  2. a ``pin_recheck`` job for pins a Library edit left without
+     ``checked_at`` (the tick itself makes NO outbound call: no link check,
+     no storage read, no email — those run as last-lane jobs);
   3. the drafting feeder: at most ONE live ``pin_draft``, and only for a
      language with fewer than ``max_waiting_per_language`` pins in review or
      approved — the review queue never floods. A pin the Library sent back
@@ -26,7 +27,9 @@ EACH TICK, in order:
      approved pins, never two of one topic and never a topic posted in that
      language within ``min_topic_gap_days`` — the app's ``nextRoundPreview``
      rule, so the panel shows what the round will do;
-  5. posting: one ``pin_post`` at a time, ``post_gap_minutes`` apart;
+  5. posting: one ``pin_post`` at a time, ``post_gap_minutes`` apart (dry-run
+     posts do not count toward either gap); a pin left ``posting`` by a job
+     that died is resumed first, through the adopt check;
   6. settling: a round with nothing scheduled or posting is ``done``;
   7. the breaker: three post failures in a row trip it (pause + email).
 """
@@ -122,9 +125,16 @@ def pins_with(sb, statuses, cols: str = "*") -> list[dict]:
     return C.rows(sb.table(C.PINS).select(cols).in_("status", list(statuses)).execute())
 
 
+def real_posts(sb, cols: str) -> list[dict]:
+    """Posted pins that are on Pinterest: a dry run (``dryrun:<id>``) posted
+    nothing, so it counts toward neither the topic gap nor the post gap."""
+    return [p for p in pins_with(sb, ["posted"], cols + ",pinterest_pin_id")
+            if not _s(p.get("pinterest_pin_id")).startswith("dryrun:")]
+
+
 def last_posted_map(sb) -> dict[str, str]:
     out: dict[str, str] = {}
-    for p in pins_with(sb, ["posted"], "id,topic_id,language,posted_at"):
+    for p in real_posts(sb, "id,topic_id,language,posted_at"):
         if not p.get("topic_id") or not p.get("posted_at"):
             continue
         k = f"{_s(p.get('topic_id'))}|{_s(p.get('language')).lower()}"
@@ -134,7 +144,7 @@ def last_posted_map(sb) -> dict[str, str]:
 
 
 def last_post_time(sb) -> Optional[datetime]:
-    times = [C.when(p.get("posted_at")) for p in pins_with(sb, ["posted"], "id,posted_at")]
+    times = [C.when(p.get("posted_at")) for p in real_posts(sb, "id,posted_at")]
     times = [t for t in times if t is not None]
     return max(times) if times else None
 
@@ -142,7 +152,8 @@ def last_post_time(sb) -> Optional[datetime]:
 def recently_drafted_topics(sb, language: str, now: datetime) -> set[str]:
     """Topics a ``pin_draft`` ran for in the last week: a topic that yields no
     pin (no board yet, nothing pinnable) is not re-drafted every tick."""
-    found = C.rows(sb.table("jobs").select("params,created_at,status").eq("type", C.JOB_DRAFT).limit(1000).execute())
+    found = C.rows(sb.table("jobs").select("params,created_at,status").eq("type", C.JOB_DRAFT)
+                   .order("created_at", desc=True).limit(500).execute())
     since = now - timedelta(days=REDRAFT_COOLDOWN_DAYS)
     out = set()
     for j in found:
@@ -162,6 +173,18 @@ def queue_boards(sb) -> Optional[str]:
         return None
     job = C.queue_job(sb, C.JOB_BOARDS, {})
     return f"queued pin_boards {job}" if job else None
+
+
+def queue_rechecks(sb) -> Optional[str]:
+    """A ``pin_recheck``job when a Library edit left a pin without
+    ``checked_at``. The re-check itself (a link HEAD, a storage read) runs
+    on the last lane, never in this tick."""
+    from catalogue.pinterest.draft import needs_recheck
+
+    if not any(needs_recheck(p) for p in pins_with(sb, ["in_review"], "id,status,precheck")):
+        return None
+    job = C.queue_once(sb, C.JOB_RECHECK, {})
+    return f"queued pin_recheck {job}" if job else None
 
 
 def feed(sb, settings: dict, now: datetime) -> Optional[str]:
@@ -229,8 +252,18 @@ def start_round(sb, rnd: dict, settings: dict, now: datetime) -> dict:
 
 def advance(sb, rnd: dict, settings: dict, now: datetime) -> str:
     pins = C.rows(sb.table(C.PINS).select("*").eq("round_id", rnd["id"]).execute())
-    if any(p.get("status") == "posting" for p in pins) or C.live_jobs(sb, C.JOB_POST):
+    if C.live_jobs(sb, C.JOB_POST):
         return "waiting: a post is running"
+    stuck = sorted((p for p in pins if p.get("status") == "posting"), key=lambda p: _s(p.get("post_started_at")))
+    if stuck:
+        # its job died mid-post (reaped, or crashed before it could settle the
+        # pin): a new pin_post resumes it — the token is set, so it ADOPTS from
+        # the board before it would ever post again
+        job = C.queue_job(sb, C.JOB_POST, {"pin_row_id": stuck[0]["id"], "round_id": rnd["id"], "resume": True})
+        if not job:
+            return "waiting: a pin_post is already live"
+        sb.table(C.PINS).update({"post_job_id": job, "updated_at": C.iso(now)}).eq("id", stuck[0]["id"]).execute()
+        return f"resumed the interrupted post of {stuck[0]['id']} as {job}"
     scheduled = sorted((p for p in pins if p.get("status") == "scheduled"),
                        key=lambda p: (_s(p.get("approved_at")), _s(p.get("id"))))
     if not scheduled:
@@ -273,7 +306,7 @@ def rounds(sb, settings: dict, now: datetime) -> Optional[str]:
     return advance(sb, rnd, settings, now)
 
 
-def tick(sb, now: Optional[datetime] = None, *, link_check=None) -> Optional[str]:
+def tick(sb, now: Optional[datetime] = None) -> Optional[str]:
     """One pass. None when the agent is off or had nothing to do."""
     now = now or datetime.now(timezone.utc)
     settings = C.read_settings(sb)
@@ -283,26 +316,17 @@ def tick(sb, now: Optional[datetime] = None, *, link_check=None) -> Optional[str
     if br.get("tripped"):
         return "breaker tripped: stats only"
     if int(br.get("failures") or 0) >= C.BREAKER_FAILURES:
-        C.trip_breaker(sb, f"{br.get('failures')} post failures in a row; last: {br.get('last_failure') or '?'}", now)
+        # the post job trips (and emails) at its third failure; this is the
+        # backstop, and the tick sends no email — it makes no outbound call
+        C.trip_breaker(sb, f"{br.get('failures')} post failures in a row; last: {br.get('last_failure') or '?'}", now,
+                       notify=False)
         return "breaker tripped"
-    try:
-        from catalogue.pinterest import tokens
-
-        if tokens.check_expiry(sb, settings, now) == "pause":
-            return "paused: the token is about to expire"
-    except Exception as exc:  # noqa: BLE001 — the countdown never stops a tick
-        log.warning("pinterest agent: token expiry check failed: %s", exc)
     if settings.get("paused"):
         return None
     if C.builders_queued(sb):
         return "waiting: a teacher's job is live"
 
-    from catalogue.pinterest.draft import recheck_pending
-
-    done = [x for x in (queue_boards(sb),) if x]
-    n = recheck_pending(sb, link_check=link_check, limit=2, now=now)
-    if n:
-        done.append(f"re-checked {n} pin(s)")
+    done = [x for x in (queue_boards(sb), queue_rechecks(sb)) if x]
     fed = feed(sb, settings, now)
     if fed:
         done.append(fed)

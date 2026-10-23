@@ -345,5 +345,31 @@ def recheck_pending(sb, *, link_check=None, limit: int = 3, now: Optional[dateti
     return min(len(pins), limit)
 
 
-__all__ = ["run_draft_job", "draft_topic", "render_candidate", "storage_path", "pin_key", "board_key_for",
+RECHECK_BATCH = 20
+
+
+def run_recheck_job(sb, job: dict, *, link_check=None) -> Optional[dict]:
+    """The ``pin_recheck`` job (last lane): every pin a Library edit left
+    without ``checked_at``, up to RECHECK_BATCH. Yields to builders first;
+    finishes its own row; raises only ``DeferredJob``."""
+    job_id = job["id"]
+    try:
+        C.yield_to_builders(sb, job_id)
+        n = recheck_pending(sb, link_check=link_check, limit=RECHECK_BATCH)
+        summary = {"step": "done", "rechecked": n}
+        db.set_stage(sb, job_id, summary)
+        db.finish_job(sb, job_id)
+        return summary
+    except db.DeferredJob:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        log.error("pin_recheck %s failed: %s", job_id, exc)
+        try:
+            db.finish_job(sb, job_id, None, error=f"{type(exc).__name__}: {exc}"[:4000])
+        except Exception as exc2:  # noqa: BLE001
+            log.error("pin_recheck %s: could not record the failure: %s", job_id, exc2)
+        return None
+
+
+__all__ = ["run_draft_job", "run_recheck_job", "draft_topic", "render_candidate", "storage_path", "pin_key", "board_key_for",
            "needs_recheck", "recheck_pin", "recheck_pending", "WAITING_WINDOW"]
