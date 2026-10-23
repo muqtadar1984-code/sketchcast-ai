@@ -45,6 +45,8 @@ UNIQUE = {
     "platform_settings": lambda r: (r.get("key"),),
     "topic_article_analyses": lambda r: (r.get("article_id"),),      # 0140: one row per article
     "book_unit_analyses": lambda r: (r.get("unit_key"),),            # 0144: one row per book unit
+    "pinterest_pin_stats": lambda r: (r.get("pin_row_id"), r.get("day")),   # app 0154: primary key
+    "pinterest_oauth": lambda r: (r.get("id"),),                            # app 0154: one row, id = 1
 }
 
 

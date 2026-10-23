@@ -120,14 +120,21 @@ DOC_JOB_TYPES = ["lesson_plan", "activity", "worksheet", "exam_paper", "case_stu
 # Supabase egress out and up to YouTube, which is bandwidth a teacher's render
 # wants — so it takes the last lane too, and re-checks builder_queued between
 # parts the way figure_render does before every generation.
+# The Pinterest Pin Engine (app 0154) adds pin_draft / pin_post / pin_boards:
+# local Pillow cards, one small text call per topic, a few HTTP calls — and
+# nobody waiting on any of them — so they are excluded from the user lanes
+# here and claimed only on the last lane (catalogue/pinterest/).
 OBSERVER_JOB_TYPES = ["support_diagnose", "issue_resolve", "topic_harvest", "topic_derive", "topic_article",
-                      "figure_render", "topic_questions", "topic_publish", "kit_translate"]
+                      "figure_render", "topic_questions", "topic_publish", "kit_translate",
+                      "pin_draft", "pin_post", "pin_boards", "pin_recheck", "pin_stats"]
 CATALOGUE_JOB_TYPES = ["topic_harvest", "topic_derive", "topic_article", "figure_render", "topic_questions",
                        "topic_publish", "topic_supersede", "youtube_playlists",
                        "youtube_enrich", "kit_previews", "announcement_email",
                        # Kit Translator (T0): text calls only; the render it
                        # queues is an ordinary kit presentation on the kit lane
-                       "kit_translate"]  # the last lane
+                       "kit_translate",
+                       # Pinterest Pin Engine (app 0154)
+                       "pin_draft", "pin_post", "pin_boards", "pin_recheck", "pin_stats"]  # the last lane
 
 
 def _claim_catalogue_generation(sb):
@@ -658,6 +665,26 @@ def run_once(sb) -> bool:
             from catalogue.previews import run_previews_job
 
             run_previews_job(sb, job)  # self-contained: finishes its own row, done or error
+        elif job_type == "pin_draft":
+            from catalogue.pinterest.draft import run_draft_job
+
+            run_draft_job(sb, job)  # self-contained: finishes its own row, done or error
+        elif job_type == "pin_post":
+            from catalogue.pinterest.post import run_post_job
+
+            run_post_job(sb, job)  # self-contained: finishes its own row, done or error
+        elif job_type == "pin_boards":
+            from catalogue.pinterest.boards import run_boards_job
+
+            run_boards_job(sb, job)  # self-contained: finishes its own row, done or error
+        elif job_type == "pin_recheck":
+            from catalogue.pinterest.draft import run_recheck_job
+
+            run_recheck_job(sb, job)  # self-contained: finishes its own row, done or error
+        elif job_type == "pin_stats":
+            from catalogue.pinterest.stats import run_stats_job
+
+            run_stats_job(sb, job)  # self-contained: finishes its own row, done or error
         elif job_type == "announcement_email":
             from shared.announcement import run_announcement_job
 
@@ -922,6 +949,23 @@ def _serve(sb, stale_min: int, reap_every: float = 60, grace: float | None = Non
             maybe_publish_agent(sb)
         except Exception as exc:  # noqa: BLE001
             log.error("YouTube publish agent tick error: %s", exc)
+        # The Pinterest Pin Engine (catalogue/pinterest/): the agent decides
+        # what to draft, schedule and post (pins a platform admin approved one
+        # by one), and the stats tick decides when OUR pins' analytics are
+        # read. Both only read the database and insert last-lane jobs — no
+        # outbound call runs in this loop. Each is inert
+        # without PINTEREST_AGENT=1 and platform_settings.pinterest_agent
+        # .enabled, and logs a database without app migration 0154 once.
+        try:
+            from catalogue.pinterest.agent import maybe_tick as maybe_pinterest_agent
+            maybe_pinterest_agent(sb)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Pinterest agent tick error: %s", exc)
+        try:
+            from catalogue.pinterest.stats import maybe_poll as maybe_pinterest_stats
+            maybe_pinterest_stats(sb)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Pinterest stats tick error: %s", exc)
         # Once per boot: the end screen's ask into the descriptions of the
         # videos posted before it existed (catalogue/youtube_backfill.py).
         # Idempotent, so a boot where every description has it costs one read.
