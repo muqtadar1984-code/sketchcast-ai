@@ -701,6 +701,17 @@ def run_once(sb) -> bool:
             log.info("Job %s deferred %ds: %s", job["id"], exc.seconds, exc.note)
         else:
             log.warning("Job %s asked to defer but the row had moved; left as is", job["id"])
+    except db.JobCancelled as exc:
+        # Staff asked to stop it (jobs.cancel_requested_at, 0153). Not a fault:
+        # recorded as an error so the Library stops the spinner and the credit
+        # is voided as 'staff_cancel', but no support issue is filed — nobody
+        # needs a diagnosis of a stop they asked for.
+        log.info("Job %s stopped on request: %s", job["id"], exc)
+        try:
+            db.finish_job(sb, job["id"], db.generation_to_mirror(job), error=str(exc))
+        except Exception:  # noqa: BLE001
+            pass
+        _fail_catalogue_kit(sb, job, str(exc))
     except db.TransientTierError as exc:
         # The account's plan could not be read right now, though the RPC is
         # known good. Rendering FREE would hand a paying customer the wrong
