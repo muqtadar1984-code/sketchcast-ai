@@ -52,7 +52,9 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-    conn = localdb.connect()
+    # The runner and the queue check talk only to production (GET, plus the
+    # runner's allow-listed inserts); they never need the local database.
+    conn = None if args.cmd in ("stage-c-run", "queue-check") else localdb.connect()
     if args.cmd == "migrate":
         print(localdb.migrate(conn))
     elif args.cmd == "snapshot":
