@@ -621,12 +621,30 @@ def is_tabular_asset(key: str, description: str | None = None) -> bool:
     return bool(set(text.split()) & _TABULAR_TOKENS)
 
 
-def _is_colour_row(row: dict[str, Any] | None) -> bool:
-    """A colour-shelf row: keyed by a colour key (board colour phase 2)."""
+# The deck shelf (agent5_slides/director/assets.py): photographs and
+# presentation illustrations a slide deck drew or licensed, keyed
+# <key>__deck. Like the colour shelf it is EXACT-KEY only and never an ink
+# picture — a full-colour photograph handed to the whiteboard path would be
+# traced into a black smear on the board.
+DECK_KEY_SUFFIX = "__deck"
+
+
+def is_deck_key(key: object) -> bool:
+    return str(key or "").endswith(DECK_KEY_SUFFIX)
+
+
+def is_shelf_key(key: object) -> bool:
+    """A key on a shelf the ink library must never serve (colour or deck)."""
     from spike.scene_engine.colour import is_colour_key
+    return is_colour_key(key) or is_deck_key(key)
+
+
+def _is_colour_row(row: dict[str, Any] | None) -> bool:
+    """A shelf row the ink path refuses: a colour key (board colour phase 2)
+    or a deck key (the deck shelf)."""
     if not isinstance(row, dict):
         return False
-    return is_colour_key(row.get("asset_key")) or is_colour_key(row.get("canonical_key"))
+    return is_shelf_key(row.get("asset_key")) or is_shelf_key(row.get("canonical_key"))
 
 
 def row_is_tabular(row: dict[str, Any] | None) -> bool:
@@ -1128,8 +1146,7 @@ def register_local(row: dict[str, Any]) -> None:
     bootstrap indexed the demo's coloured pictures, and the render child's
     plain-key requests matched them at score 1.40 — a coloured picture
     hydrated into the ink cache for every later lesson on that container."""
-    from spike.scene_engine.colour import is_colour_key
-    if is_colour_key(row.get("asset_key")) or is_colour_key(row.get("canonical_key")):
+    if is_shelf_key(row.get("asset_key")) or is_shelf_key(row.get("canonical_key")):
         return
     rows = _local_candidates()
     ident = _index_identity(row)
@@ -1159,11 +1176,11 @@ def find(key: str, prompt: str, context: dict[str, Any] | None = None,
     is aliased — nothing here changes a stored key, and the hit comes back
     verbatim, so `hydrate` still files it under the key the CALLER asked for.
     """
-    from spike.scene_engine.colour import is_colour_key
-    if is_colour_key(key):
-        # the colour shelf is exact-key only (find_colour); a scored lookup
-        # for a colour key would reach the ink rows the guard admits
-        logger.debug("visual library: %s is a colour key; find() does not serve it", key)
+    if is_shelf_key(key):
+        # the colour and deck shelves are exact-key only (find_colour, the
+        # deck shelf); a scored lookup for a shelf key would reach the ink
+        # rows the guard admits
+        logger.debug("visual library: %s is a shelf key; find() does not serve it", key)
         return None
     hit = _find_one(key, prompt, context, min_score=min_score,
                     asset_format=asset_format)

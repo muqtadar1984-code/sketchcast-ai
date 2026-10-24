@@ -725,15 +725,24 @@ def storyboard(model: LessonModel, label_pt: float = mx.LABEL_PT) -> list[Slide]
         # question ran past the 120-character cap and was cut off mid-clause —
         # a slide asking a question it does not finish asking. It goes in the
         # band instead, which wraps and is sized to be read from the back.
-        out.append(Slide(kind=WORKED, kicker=T(lang, "worked_example"),
-                         heading=(T(lang, "worked_example_n", n=i) if len(model.worked_examples) > 1
-                                  else T(lang, "worked_example")),
-                         key_idea=problem,
-                         # a maths figure example brings the engine's own picture
-                         figure=model.figures.get(model.worked_figures.get(i - 1, "")),
-                         blocks=_paginate(_clean_blocks(solution),
-                                          mx.BODY_H_IN
-                                          - mx.key_idea_height_in(problem))[0]))
+        heading = (T(lang, "worked_example_n", n=i) if len(model.worked_examples) > 1
+                   else T(lang, "worked_example"))
+        # EVERY page of the working. This kept `_paginate(...)[0]` — the
+        # first page only — so a seven-step solution taller than one slide
+        # silently lost its last steps and its answer. The rest continue on
+        # full-height slides under the same heading; the problem band leads
+        # the first page only, like a section's key idea.
+        (first, *_), rest = _paginate_ex(_clean_blocks(solution),
+                                         mx.BODY_H_IN - mx.key_idea_height_in(problem), max_pages=1)
+        pages = [first] + ([] if not rest else _paginate(rest, mx.BODY_H_IN))
+        for p_i, blocks in enumerate(pages):
+            out.append(Slide(kind=WORKED, kicker=T(lang, "worked_example"),
+                             heading=heading + (f"  {T(lang, 'continued')}" if p_i else ""),
+                             key_idea=problem if p_i == 0 else "",
+                             # a maths figure example brings the engine's own picture
+                             figure=(model.figures.get(model.worked_figures.get(i - 1, ""))
+                                     if p_i == 0 else None),
+                             blocks=blocks, continued=p_i > 0))
 
     # Zoom on the parts the ARTICLE has words for. `Picture.crop_*` makes a
     # focus view the same image with different crop fractions, so these cost

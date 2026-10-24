@@ -846,8 +846,12 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
         model = dg.model_from_article(sb, article, Path(tmp) / "deck")
         deck_art.decorate(model, sb=sb, tmp=Path(tmp) / "deck", video_segments=video_segments,
                           context=art_context or {}, job_id=job_id, exclude_job_id=job_id)
-        deck_path = str(dg.build_lesson_deck(model, Path(tmp) / "deck" / "deck.pptx",
-                                             direction=lesson_dir, branding=branding))
+        # build_deck == build_lesson_deck unless DECK_AI_DIRECTOR=1
+        deck_path = str(dg.build_deck(model, Path(tmp) / "deck" / "deck.pptx",
+                                      direction=lesson_dir, branding=branding, sb=sb, job_id=job_id,
+                                      client=client, article=article, maths_lesson=maths_lesson,
+                                      subject=str(book.get("subject") or ""), art_context=art_context,
+                                      tmp=Path(tmp) / "deck", generation_id=generation_id))
         db.set_progress(sb, job_id, 90)
         dest = f"{base}/deck.pptx"
         db.upload_artifact(sb, deck_path, dest)
@@ -871,11 +875,14 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
             n_ex = dg.apply_maths_lesson(model, maths_lesson, Path(tmp) / "deck", lesson_lang)
             logger.info("deck %s: %d verified maths example(s), %d with a figure", generation_id, n_ex,
                         len(model.worked_figures))
+        _book_ctx = art_context or deck_art.book_context(book, unit_label, analysis)
         deck_art.decorate(model, sb=sb, tmp=Path(tmp) / "deck", video_segments=video_segments,
-                          context=art_context or deck_art.book_context(book, unit_label, analysis),
-                          job_id=job_id, exclude_job_id=job_id)
-        deck_path = str(dg.build_lesson_deck(model, Path(tmp) / "deck" / "deck.pptx",
-                                             direction=lesson_dir, branding=branding))
+                          context=_book_ctx, job_id=job_id, exclude_job_id=job_id)
+        deck_path = str(dg.build_deck(model, Path(tmp) / "deck" / "deck.pptx",
+                                      direction=lesson_dir, branding=branding, sb=sb, job_id=job_id,
+                                      client=client, article=article, maths_lesson=maths_lesson,
+                                      subject=str(book.get("subject") or ""), art_context=_book_ctx,
+                                      tmp=Path(tmp) / "deck", generation_id=generation_id))
         if not Path(deck_path).exists():
             raise RuntimeError("deck build produced no file")
         try:

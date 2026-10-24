@@ -215,6 +215,67 @@ def apply_maths_lesson(model: LessonModel, lesson: dict, tmp: Path, language: st
     return len(model.worked_examples)
 
 
+# ── the AI Presentation Director (DECK_AI_DIRECTOR=1) ─────────────────
+
+def build_deck(model: LessonModel, out_path: Path, *, direction: str = "ltr",
+               branding: Optional[dict] = None, sb=None, job_id: str = "", client=None,
+               article: Optional[dict] = None, maths_lesson: Optional[dict] = None,
+               subject: str = "", art_context: Optional[dict] = None, tmp: Optional[Path] = None,
+               generation_id: str = "") -> Path:
+    """The deck job's one render call. With DECK_AI_DIRECTOR unset (the
+    default) this IS `build_lesson_deck`, unchanged. With it set, the
+    Director designs the deck; ANY failure there — a refused spec, a model
+    outage, a render fault — falls back to the storyboard, so the flag can
+    cost a deck its design but never cost a teacher their deck.
+
+    Every Director run records `generations.params.deck_director` — slides,
+    the QA renderer and verdict, money, time and where the pictures came
+    from, or the reason it fell back — so production evidence needs no log
+    access."""
+    from . import director
+    if not director.enabled() or client is None:
+        return build_lesson_deck(model, out_path, direction=direction, branding=branding)
+    try:
+        from .director import assets as dir_assets
+        from .director.pipeline import build_director_deck
+        from .deck_art import user_builders_live
+
+        work = Path(tmp or Path(out_path).parent) / "director"
+        shelf = dir_assets.LibraryShelf(sb, work) if sb is not None else None
+        res = build_director_deck(
+            model, client=client, vision_client=client, out_path=Path(out_path), tmp=work, shelf=shelf,
+            article=article, subject=subject, maths_lesson=maths_lesson, branding=branding,
+            direction=direction, library_context=art_context,
+            yield_to_users=(lambda: user_builders_live(sb, job_id)) if sb is not None else (lambda: False),
+            # a worker has no PowerPoint; LibreOffice renders when installed
+            render_preview=os.getenv("DECK_DIRECTOR_RENDER_QA", "1") != "0")
+        logger.info("deck (director) %s: %d slides, $%.3f, %ss, assets %s", Path(res.path).name,
+                    res.report.get("slides", 0), res.report["usage"]["total_usd"],
+                    res.report["timings_s"].get("total"), res.report["assets"]["counts"])
+        _record_director(sb, generation_id, {
+            "route": "director", "slides": res.report.get("slides"),
+            "qa": res.report["qa"]["summary"], "qa_renderer": res.report["qa"]["renderer"],
+            "usd": res.report["usage"]["total_usd"], "seconds": res.report["timings_s"].get("total"),
+            "assets": res.report["assets"]["counts"], "coverage": res.report.get("coverage")})
+        return res.path
+    except Exception as exc:  # noqa: BLE001 — the storyboard is the fallback, by design
+        logger.warning("deck director failed (%s: %s); building the storyboard deck instead",
+                       type(exc).__name__, exc)
+        _record_director(sb, generation_id, {"route": "storyboard_fallback",
+                                             "reason": f"{type(exc).__name__}: {str(exc)[:300]}"})
+        return build_lesson_deck(model, out_path, direction=direction, branding=branding)
+
+
+def _record_director(sb, generation_id: str, summary: dict) -> None:
+    if sb is None or not generation_id:
+        return
+    try:
+        from worker import client as db
+        db.merge_generation_params(sb, generation_id, {"deck_director": summary})
+    except Exception as exc:  # noqa: BLE001 — telemetry never costs a deck
+        logger.warning("deck director summary not recorded: %s", exc)
+
+
 # ── render ────────────────────────────────────────────────────────────
 
 def build_lesson_deck(model: LessonModel, out_path: Path, direction: str = "ltr",
