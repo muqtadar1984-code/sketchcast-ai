@@ -188,7 +188,9 @@ def _precondition_ok(http, job: dict) -> str | None:
     return None
 
 
-def run_plan(plan_path: Path, env_file: Path, log_path: Path) -> None:
+def run_plan(plan_path: Path, env_file: Path, log_path: Path, *, allow_peak: bool = False) -> None:
+    """`allow_peak` = the founder lifted the off-peak window for this run; the
+    empty-queue check still applies before every job."""
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     done_path = plan_path.with_suffix(".done.json")
     done = json.loads(done_path.read_text(encoding="utf-8")) if done_path.exists() else {}
@@ -206,7 +208,7 @@ def run_plan(plan_path: Path, env_file: Path, log_path: Path) -> None:
             if k in done:
                 continue
             while True:
-                if not in_off_peak():
+                if not allow_peak and not in_off_peak():
                     time.sleep(300)
                     continue
                 busy = _busy(http)

@@ -44,6 +44,8 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
     sr = sub.add_parser("stage-c-run", help="run a founder-approved Stage C plan, one job at a time, off-peak")
     sr.add_argument("plan", type=Path)
+    sr.add_argument("--allow-peak", action="store_true",
+                    help="founder-approved: do not wait for 20:00 UTC (the empty-queue check still applies)")
     sr.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
     q = sub.add_parser("queue-check")
     q.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
@@ -75,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         print(build_plan(conn, args.books, OUT / "stage-c", args.env_file))
     elif args.cmd == "stage-c-run":
         from publishing.stage_c import run_plan
-        run_plan(args.plan, args.env_file, args.plan.with_suffix(".log"))
+        run_plan(args.plan, args.env_file, args.plan.with_suffix(".log"), allow_peak=args.allow_peak)
     elif args.cmd == "report":
         from publishing.report import write_reports
         for path in write_reports(conn):
