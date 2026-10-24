@@ -184,3 +184,32 @@ class TestTheReply:
         assert "never as the digit 1" in prompts[0] and "never add a number" in prompts[0]
         note = T.retry_note({"blocking": [{"where": "s006", "what": "numbers differ", "extra": ["1"]}]})
         assert "never turn an English article" in note
+
+
+class TestJawiOrdinal:
+    """Jawi writes the Malay ordinal "ke-50" as "كى-50" (or "کى-50"): the
+    hyphen joins the prefix to the number and is no minus (Jawi Sequences
+    kit, Fix Agent case 2026-10-23)."""
+
+    MS = "Bagi jujukan dengan sebutan ke-n 6n - 5, cari sebutan ke-50."
+
+    @pytest.mark.parametrize("target", [
+        "باݢي جوجوكن دڠن سبوتن كى-n 6n - 5، چاري سبوتن كى-50.",
+        "باݢي جوجوکن دڠن سبوتن کى-n 6n - 5، چاري سبوتن کى-50.",
+        "باݢي جوجوکن دڠن سبوتن کي-n 6n - 5، چاري سبوتن کی-50.",
+    ])
+    def test_the_jawi_prefix_is_no_minus(self, target):
+        ok, lost = C.prose_maths_equivalent(self.MS, target)
+        assert ok, lost
+        assert "-50" not in C.number_values(target) and "50" in C.number_values(target)
+
+    def test_the_hundredth_term(self):
+        ok, missing, extra = C.numbers_equivalent("Cari sebutan ke-100 bagi jujukan dengan formula am t = 5n - 8",
+                                                  "چاري سبوتن كى-100 باݢي جوجوكن دڠن فورمولا ام t = 5n - 8")
+        assert ok, (missing, extra)
+
+    def test_a_real_minus_in_jawi_still_counts(self):
+        # a minus after a space, or after a number, is still a minus
+        assert C.number_values("x = -50") == ["-50"]
+        assert not C.numbers_equivalent("t = 5n - 8", "t = 5n - 9")[0]
+        assert not C.prose_maths_equivalent(self.MS, "باݢي جوجوكن دڠن سبوتن كى-n 6n - 5، چاري سبوتن كى-60.")[0]

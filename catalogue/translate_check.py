@@ -70,8 +70,12 @@ _DIMENSION_RE = re.compile(r"(?<![\w.])\d\s?-?D(?![A-Za-z])")
 
 # Malay/Indonesian ordinals: "sebutan ke-50", "sebutan ke-n" — the hyphen
 # joins the prefix "ke" to the number; it is no minus (Malay Sequences kit,
-# 2026-10-20: "ke-50" read as -50).
-_KE_ORDINAL_RE = re.compile(r"(?<![^\W\d_])([Kk]e)-(?=\d|[^\W\d_](?![^\W\d_]))")
+# 2026-10-20: "ke-50" read as -50). Jawi writes the same prefix "كى-50" /
+# "کى-50" (kaf or keheh, then alef maksura, yeh or Farsi yeh): read as -50
+# and -100, it refused the Jawi Sequences kit twice (Fix Agent case,
+# 2026-10-23) — the "maths in the question" findings it raised cannot be
+# waived, so only the rule could fix it.
+_KE_ORDINAL_RE = re.compile(r"(?<![^\W\d_])([Kk]e|[كک][ىيی])-(?=\d|[^\W\d_](?![^\W\d_]))")
 
 
 def _ordinal_hyphens(text: str) -> str:
