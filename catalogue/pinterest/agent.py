@@ -47,7 +47,11 @@ log = logging.getLogger("worker.pinterest.agent")
 
 TICK_SECONDS = 55
 DEFAULT_DAILY_AT = "21:00"
-REDRAFT_COOLDOWN_DAYS = 7
+# A topic whose last draft produced no pin in review or beyond (every pin
+# failed before review, or nothing could be drawn) may be drafted again a
+# day later — the first live drafts (2026-10-24) failed on a bug, and a week
+# of lock-out would have kept those topics off the board for nothing.
+REDRAFT_COOLDOWN_HOURS = 24
 OPEN_ROUND = ("requested", "running")
 IN_ROUND = ("scheduled", "posting")
 
@@ -150,11 +154,13 @@ def last_post_time(sb) -> Optional[datetime]:
 
 
 def recently_drafted_topics(sb, language: str, now: datetime) -> set[str]:
-    """Topics a ``pin_draft`` ran for in the last week: a topic that yields no
-    pin (no board yet, nothing pinnable) is not re-drafted every tick."""
+    """Topics a ``pin_draft`` ran for in the last REDRAFT_COOLDOWN_HOURS: a
+    topic that yields no pin (no board yet, nothing pinnable, every pin failed
+    before review) is not re-drafted every tick, but is eligible again after
+    a day. A topic that DID produce a pin is excluded by ``next_topic``."""
     found = C.rows(sb.table("jobs").select("params,created_at,status").eq("type", C.JOB_DRAFT)
                    .order("created_at", desc=True).limit(500).execute())
-    since = now - timedelta(days=REDRAFT_COOLDOWN_DAYS)
+    since = now - timedelta(hours=REDRAFT_COOLDOWN_HOURS)
     out = set()
     for j in found:
         p = j.get("params") if isinstance(j.get("params"), dict) else {}
