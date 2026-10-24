@@ -38,7 +38,14 @@ class CatalogueView:
         self.topic_by_id = {t["id"]: t for t in self.topics}
         self.topic_by_slug = {t["slug"]: t for t in self.topics}
         self.node_by_id = {n["id"]: n for n in self.nodes}
-        self.node_by_code = {n["code"]: n for n in self.nodes}
+        # Codes are unique only WITHIN a curriculum: CBSE maths and CBSE
+        # science both use codes like cbse:9:U2:01. Membership tests use
+        # node_by_code; anything that needs a title must pick the node
+        # from nodes_by_code by curriculum.
+        self.nodes_by_code = defaultdict(list)
+        for n in self.nodes:
+            self.nodes_by_code[n["code"]].append(n)
+        self.node_by_code = {c: ns[0] for c, ns in self.nodes_by_code.items()}
         self.curriculum_by_id = {c["id"]: c for c in self.curricula}
         self.map_by_topic = defaultdict(list)
         for m in self.tcm:

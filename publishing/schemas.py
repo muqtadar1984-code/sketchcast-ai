@@ -49,6 +49,18 @@ class ReadinessPolicy(BaseModel):
         return cls.model_validate(json.loads(p.read_text(encoding="utf-8")))
 
 
+class Directives(BaseModel):
+    """Founder scope decisions for one book (Gate B review). Binding on the
+    model, and checked deterministically after it replies."""
+    decided: str
+    notes: list[str] = []
+    must_include: list[str] = []             # objective codes that must be taught
+    must_exclude: list[str] = []             # objective codes that must be excluded
+    required_new_topics: list[str] = []      # exact proposed titles (e.g. a topic shared by two books)
+    forbidden_new_topics: list[str] = []     # titles no proposal may resemble
+    blocked_until: str | None = None         # the book may not be blueprinted until this is true
+
+
 class BookBrief(BaseModel):
     """Stage A input: what the founder wants the book to be."""
     slug: str
@@ -64,6 +76,7 @@ class BookBrief(BaseModel):
     crosswalk_prefixes: list[str] = []       # e.g. ["ALG"]
     extra_node_codes: list[str] = []         # single objectives from another strand
     catalogue_subjects: list[str]            # topics.subject values offered to the model
+    directives: Directives | None = None
 
 
 class RequiredTopic(BaseModel):

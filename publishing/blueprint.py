@@ -98,11 +98,22 @@ def build_prompt(cat: CatalogueView, brief: BookBrief) -> tuple[str, str, dict]:
     card = (PROMPTS / BLUEPRINT_CARD).read_text(encoding="utf-8").format(
         capability_kinds=", ".join(sorted(CAPABILITY_KINDS)))
     ctx = {
-        "book_brief": brief.model_dump(exclude={"strand_prefixes", "crosswalk_prefixes", "extra_node_codes"}),
+        "book_brief": brief.model_dump(exclude={"strand_prefixes", "crosswalk_prefixes", "extra_node_codes",
+                                                "directives", "catalogue_subjects"}),
         "in_scope_objectives": [{"code": n["code"], "grade": n["grade"], "title": n["title"]} for n in nodes],
         "crosswalk_objectives": [{"code": n["code"], "title": n["title"]} for n in cross],
         "catalogue_topics": pool,
     }
+    d = brief.directives
+    if d and (d.notes or d.must_include or d.must_exclude or d.required_new_topics or d.forbidden_new_topics):
+        # The founder's Gate B decisions. They outrank the card's defaults.
+        ctx["founder_scope_decisions_BINDING"] = {
+            "decisions": d.notes,
+            "objectives_that_must_be_taught": d.must_include,
+            "objectives_that_must_be_excluded": d.must_exclude,
+            "new_topics_to_propose_with_exactly_these_titles": d.required_new_topics,
+            "do_not_propose_topics_like": d.forbidden_new_topics,
+        }
     prompt = card + "\n\nINPUT:\n" + json.dumps(ctx, ensure_ascii=False, indent=1)
     return system, prompt, {"in_scope": [n["code"] for n in nodes], "crosswalk": [n["code"] for n in cross],
                             "pool": [t["slug"] for t in pool]}
@@ -174,6 +185,19 @@ def check_blueprint(bp: Blueprint, cat: CatalogueView, brief: BookBrief, in_scop
     dup_existing = [(a, b) for a in proposed for b in pool if similar(a, b)]
     res["no_duplicate_proposals"] = {"ok": not dup_new and not dup_existing,
                                      "detail": {"within_book": dup_new, "vs_existing": dup_existing}}
+
+    d = brief.directives
+    if d:
+        missing_inc = sorted(set(d.must_include) - used)
+        wrongly_used = sorted(set(d.must_exclude) & used)
+        not_excluded = sorted(set(d.must_exclude) - excluded)
+        absent_titles = [t for t in d.required_new_topics if t not in proposed]
+        forbidden = [(p, f) for p in proposed for f in d.forbidden_new_topics if similar(p, f, 0.5)]
+        res["founder_directives"] = {
+            "ok": not (missing_inc or wrongly_used or not_excluded or absent_titles or forbidden),
+            "detail": {"must_include_missing": missing_inc, "must_exclude_used": wrongly_used,
+                       "must_exclude_not_listed": not_excluded, "required_titles_absent": absent_titles,
+                       "forbidden_proposals": forbidden}}
 
     needs = [k for ch in bp.chapters for k in ch.illustration_needs]
     unknown_kinds = sorted({n for n in needs if capability_kind(n) is None})
@@ -361,6 +385,9 @@ def run_blueprints(conn, slug: str, *, provider: str, env_file: Path, allow_peak
     out = []
     for brief in load_briefs():
         if slug not in ("all", brief.slug):
+            continue
+        if brief.directives and brief.directives.blocked_until:
+            _log.warning("%s is blocked until: %s", brief.slug, brief.directives.blocked_until)
             continue
         require_quiet(env_file, allow_peak=allow_peak)     # checked before EVERY model call
         result = generate(cat, brief, provider)

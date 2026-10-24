@@ -250,6 +250,41 @@ def test_v02_checks_catch_scope_hygiene_problems():
     assert ("Topic One", "Topic One") in dup["vs_existing"]
 
 
+def test_founder_directives_are_enforced():
+    from publishing.schemas import Directives
+    cat = CatalogueView(**base_catalogue())
+    cat.nodes.append({"id": "n2", "curriculum_id": "c1", "code": "7Xx.02", "grade": "7", "title": "O2"})
+    cat.__post_init__()
+    chapters = _bp().model_dump()["chapters"]
+    chapters[3]["required_topics"].append(dict(topic_slug=None, proposed_title="Turning Forces", role="core",
+                                               node_codes=["7Xx.01"], rationale="r"))
+    bp = _bp(chapters=chapters)
+    brief = BRIEF.model_copy(update={"directives": Directives(
+        decided="2026-10-24", must_include=["7Xx.02"], must_exclude=["7Xx.01"],
+        required_new_topics=["Shared Vacuum Topic"], forbidden_new_topics=["Turning Forces and Moments"])})
+    d = check_blueprint(bp, cat, brief, ["7Xx.01", "7Xx.02"])["founder_directives"]
+    assert not d["ok"]
+    assert d["detail"]["must_include_missing"] == ["7Xx.02"]
+    assert d["detail"]["must_exclude_used"] == ["7Xx.01"]
+    assert d["detail"]["required_titles_absent"] == ["Shared Vacuum Topic"]
+    assert d["detail"]["forbidden_proposals"]
+
+
+def test_blocked_brief_is_skipped(monkeypatch):
+    from publishing import blueprint as bpmod
+    from publishing.schemas import Directives
+    blocked = BRIEF.model_copy(update={"directives": Directives(decided="d", blocked_until="seed loaded")})
+    monkeypatch.setattr(bpmod, "load_briefs", lambda: [blocked])
+    monkeypatch.setattr(bpmod, "_load_model_env", lambda p: None)
+    monkeypatch.setattr(bpmod.CatalogueView, "load", classmethod(lambda cls, conn, sid=None: None))
+    called = []
+    monkeypatch.setattr(bpmod, "generate", lambda *a, **k: called.append(1))
+    import publishing.guard as guard
+    monkeypatch.setattr(guard, "require_quiet", lambda *a, **k: called.append("guard"))
+    assert bpmod.run_blueprints(None, "all", provider="x", env_file=Path(".")) == []
+    assert called == []
+
+
 def test_supply_reason_pattern():
     assert SUPPLY_REASON.search("not yet in the catalogue")
     assert not SUPPLY_REASON.search("Belongs to the statistics book; outside this book's theme")
