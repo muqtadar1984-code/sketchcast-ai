@@ -25,8 +25,8 @@ _log = logging.getLogger(__name__)
 
 PROMPTS = ROOT / "prompts"
 CONSTITUTION = "constitution_v0_1.md"
-BLUEPRINT_CARD = "blueprint_card_v0_1.md"
-PROMPT_VERSIONS = {"constitution": "0.1", "blueprint_card": "0.1"}
+BLUEPRINT_CARD = "blueprint_card_v0_2.md"
+PROMPT_VERSIONS = {"constitution": "0.1", "blueprint_card": "0.2"}
 MAX_TOKENS = 24000
 
 # Exclusion reasons that plan to the SUPPLY rather than to the learner.
@@ -140,7 +140,7 @@ def check_blueprint(bp: Blueprint, cat: CatalogueView, brief: BookBrief, in_scop
                              "detail": {"unknown_slugs": bad_slugs, "chapters_with_empty_topic": bad_rt}}
 
     empty = [ch.number for ch in bp.chapters if not ch.required_topics]
-    review_like = [ch.number for ch in bp.chapters if re.search(r"review|revision|mastery", ch.title, re.I)]
+    review_like = [ch.number for ch in bp.chapters if REVIEW_TITLE.search(ch.title)]
     res["chapters_have_topics"] = {"ok": all(n in review_like for n in empty), "detail": empty}
 
     numbers = [ch.number for ch in bp.chapters]
@@ -157,12 +157,81 @@ def check_blueprint(bp: Blueprint, cat: CatalogueView, brief: BookBrief, in_scop
     res["size_bounds"] = {"ok": 6 <= len(bp.chapters) <= 16 and 60 <= bp.estimated_pages <= 400,
                           "detail": {"chapters": len(bp.chapters), "pages": bp.estimated_pages}}
 
-    kinds = {k for ch in bp.chapters for k in ch.illustration_needs}
-    unknown_kinds = sorted(kinds - CAPABILITY_KINDS)
+    # Proposed curriculum codes must look like the curriculum's own codes
+    # (no invented placeholders such as "proposed:F.01").
+    shapes = {_shape(n["code"]) for n in cat.nodes if n["curriculum_id"] == _curriculum_id(cat, brief)}
+    bad_codes = sorted(p.code for p in bp.proposed_curriculum_nodes if _shape(p.code) not in shapes)
+    res["proposed_codes_official_format"] = {"ok": not bad_codes, "detail": bad_codes}
+
+    review_new = [ch.number for ch in bp.chapters if REVIEW_TITLE.search(ch.title)
+                  and any(not rt.topic_slug for rt in ch.required_topics)]
+    res["review_chapters_reuse_topics"] = {"ok": not review_new, "detail": review_new}
+
+    proposed = sorted({rt.proposed_title for ch in bp.chapters for rt in ch.required_topics
+                       if not rt.topic_slug and rt.proposed_title})
+    dup_new = [(a, b) for i, a in enumerate(proposed) for b in proposed[i + 1:] if similar(a, b)]
+    pool = [t["title"] for t in cat.topics if t["subject"] in brief.catalogue_subjects and t["status"] != "retired"]
+    dup_existing = [(a, b) for a in proposed for b in pool if similar(a, b)]
+    res["no_duplicate_proposals"] = {"ok": not dup_new and not dup_existing,
+                                     "detail": {"within_book": dup_new, "vs_existing": dup_existing}}
+
+    needs = [k for ch in bp.chapters for k in ch.illustration_needs]
+    unknown_kinds = sorted({n for n in needs if capability_kind(n) is None})
     res["capability_kinds"] = {"ok": not unknown_kinds, "detail": unknown_kinds}
 
     res["all_ok"] = all(v["ok"] for v in res.values())
     return res
+
+
+REVIEW_TITLE = re.compile(r"\b(review|revision|mastery|consolidation|exam practice)\b", re.I)
+_STOP = {"and", "the", "of", "a", "an", "in", "to", "for", "with", "on", "their", "its", "using"}
+
+
+def _tokens(title: str) -> set[str]:
+    return {_word(w) for w in re.split(r"[^a-z0-9]+", title.lower()) if w and w not in _STOP}
+
+
+def similar(a: str, b: str, threshold: float = 0.6) -> bool:
+    """Token overlap (Jaccard) between two topic titles."""
+    ta, tb = _tokens(a), _tokens(b)
+    return bool(ta and tb) and len(ta & tb) / len(ta | tb) >= threshold
+
+
+def _shape(code: str) -> str:
+    """'8Gg.04' -> '9Aa.99': the format of a curriculum code, not its value."""
+    return re.sub(r"[a-z]", "a", re.sub(r"[A-Z]", "A", re.sub(r"[0-9]", "9", code)))
+
+
+def _curriculum_id(cat: CatalogueView, brief: BookBrief) -> str | None:
+    return next((c["id"] for c in cat.curricula if c["code"] == brief.primary_curriculum), None)
+
+
+def capability_kind(need: str) -> str | None:
+    """The capability kind an illustration need starts with.
+
+    Models write either the bare kind ("chart") or the kind followed by what
+    to draw ("Apparatus illustration of a friction experiment"). The leading
+    words decide; the longest matching kind wins. None = not a known kind
+    (a capability gap)."""
+    words = [_word(w) for w in re.split(r"[^a-z0-9]+", need.lower()) if w]
+    best = None                                   # (-length, position, kind): longest kind wins
+    for k in CAPABILITY_KINDS:
+        parts = [_word(p) for p in k.split("_")]   # same folding on both sides
+        for i in range(len(words) - len(parts) + 1):
+            if words[i:i + len(parts)] == parts:
+                cand = (-len(parts), i, k)
+                best = min(best, cand) if best else cand
+                break
+    return best[2] if best else None
+
+
+_ALIASES = {"photograph": "photo", "photographs": "photo", "graph": "chart", "graphs": "chart"}
+
+
+def _word(w: str) -> str:
+    """Alias, then fold a plain plural ("diagrams" -> "diagram")."""
+    w = _ALIASES.get(w, w)
+    return w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith(("ss", "us")) else w
 
 
 def _has_cycle(graph: dict[int, set[int]]) -> list[int]:

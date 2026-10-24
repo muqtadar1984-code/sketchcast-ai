@@ -228,9 +228,44 @@ def test_blueprint_flags_unassigned_and_supply_exclusions():
     assert res["coverage_complete"]["ok"] and not res["no_supply_exclusions"]["ok"]
 
 
+def test_v02_checks_catch_scope_hygiene_problems():
+    cat = CatalogueView(**base_catalogue())
+    chapters = _bp().model_dump()["chapters"]
+    chapters[5]["title"] = "Review and Exam Practice"
+    chapters[5]["required_topics"] = [dict(topic_slug=None, proposed_title="Topic Review and Practice",
+                                           role="core", node_codes=[], rationale="r")]
+    chapters[4]["required_topics"] = [dict(topic_slug=None, proposed_title="Density: Mass and Volume", role="core",
+                                           node_codes=["7Xx.01"], rationale="r"),
+                                      dict(topic_slug=None, proposed_title="Mass and Volume: Density",
+                                           role="core", node_codes=["7Xx.01"], rationale="r"),
+                                      dict(topic_slug=None, proposed_title="Topic One", role="core",
+                                           node_codes=["7Xx.01"], rationale="r")]
+    bp = _bp(chapters=chapters, proposed_curriculum_nodes=[{"code": "proposed:F.01", "title": "t", "reason": "r"},
+                                                           {"code": "7Xx.05", "title": "t", "reason": "r"}])
+    res = check_blueprint(bp, cat, BRIEF, ["7Xx.01"])
+    assert res["proposed_codes_official_format"]["detail"] == ["proposed:F.01"]
+    assert res["review_chapters_reuse_topics"]["detail"] == [6]
+    dup = res["no_duplicate_proposals"]["detail"]
+    assert ("Density: Mass and Volume", "Mass and Volume: Density") in dup["within_book"]
+    assert ("Topic One", "Topic One") in dup["vs_existing"]
+
+
 def test_supply_reason_pattern():
     assert SUPPLY_REASON.search("not yet in the catalogue")
     assert not SUPPLY_REASON.search("Belongs to the statistics book; outside this book's theme")
+
+
+def test_capability_kind_reads_the_leading_kind():
+    from publishing.blueprint import capability_kind
+    assert capability_kind("chart") == "chart"
+    assert capability_kind("Apparatus illustration of a friction experiment") == "apparatus_illustration"
+    assert capability_kind("geometry_figure for exterior angles") == "geometry_figure"
+    assert capability_kind("chem_equation: word equations") == "chem_equation"
+    assert capability_kind("hologram of an atom") is None
+    assert capability_kind("Force diagrams showing friction opposing motion") == "force_diagram"
+    assert capability_kind("Photographs of tools") == "photo"
+    assert capability_kind("Summary table of formulas") == "table"
+    assert capability_kind("Concept-map style process diagram") == "process_diagram"
 
 
 def test_cycle_detection():
