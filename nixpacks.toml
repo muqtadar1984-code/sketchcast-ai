@@ -11,7 +11,15 @@
 # libraqm: Pillow loads it dynamically at runtime (8.2+) to enable HarfBuzz
 # complex-text shaping — required for correct Devanagari (Marathi) and Telugu
 # slide text. Without it those scripts render with misplaced vowel signs.
-aptPkgs = ["ffmpeg", "libraqm0", "libfribidi0", "libharfbuzz0b"]
+#
+# libreoffice-impress + poppler-utils: the deck Director's visual QA renders
+# every slide to an image (soffice → PDF → pdftoppm) before a vision model
+# looks at it (agent5_slides/director/qa.py). fonts-crosextra-carlito is
+# metrically identical to Calibri, the decks' font, so a slide lays out on the
+# server exactly as in PowerPoint; fonts-noto-core covers Arabic/Jawi,
+# Devanagari and Telugu. Without these QA falls back to its geometric checks.
+aptPkgs = ["ffmpeg", "libraqm0", "libfribidi0", "libharfbuzz0b",
+           "libreoffice-impress", "poppler-utils", "fonts-crosextra-carlito", "fonts-noto-core"]
 
 [start]
 cmd = "python -m worker.run"
