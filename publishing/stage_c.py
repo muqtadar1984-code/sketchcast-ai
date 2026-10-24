@@ -146,6 +146,31 @@ def build_plan(conn, books: list[str], out_dir: Path, env_file: Path) -> Path:
     return path
 
 
+def build_draft_figure_plan(article_ids: list[str], out_path: Path, env_file: Path) -> Path:
+    """figure_render jobs for draft articles awaiting review, re-read LIVE."""
+    url, key = load_env(env_file)
+    jobs = []
+    with read_client(url, key) as http:
+        for aid in article_ids:
+            a = http.get("/topic_articles", params={"select": "id,topic_id,version,status", "id": f"eq.{aid}"}).json()[0]
+            t = http.get("/topics", params={"select": "slug", "id": f"eq.{a['topic_id']}"}).json()[0]
+            figs = http.get("/article_figures", params={"select": "figure_key,status", "article_id": f"eq.{aid}"}).json()
+            todo = [f["figure_key"] for f in figs if f["status"] not in ("rendered", "approved")]
+            if not todo:
+                continue
+            jobs.append({"type": "figure_render", "topic_id": a["topic_id"], "slug": t["slug"], "book": "batch1-drafts",
+                         "params": {"article_id": aid},
+                         "audit": {"verb": "figures_render", "detail": {"figures": len(todo), "version": a["version"],
+                                                                        "article_id": aid}},
+                         "precondition": {"article_id": aid, "article_status_in": ["draft", "in_review"]},
+                         "figures": todo, "version": a["version"]})
+    for i, j in enumerate(jobs, 1):
+        j["n"] = i
+    out_path.write_text(json.dumps({"books": ["batch1-drafts"], "built_at": datetime.now(timezone.utc).isoformat(),
+                                    "jobs": jobs}, indent=1, ensure_ascii=False), encoding="utf-8")
+    return out_path
+
+
 # -- run --------------------------------------------------------------------------
 def _write_client(url: str, key: str) -> httpx.Client:
     def guard(request: httpx.Request) -> None:
@@ -181,6 +206,12 @@ def _precondition_ok(http, job: dict) -> str | None:
         return "the approved article changed since the plan was built"
     if pre.get("no_approved_article") and arts:
         return "an approved article now exists"
+    if "article_status_in" in pre:
+        # A draft waiting for review: render only while it is still a draft or
+        # in review (a rejected or superseded version must not cost images).
+        a = http.get("/topic_articles", params={"select": "status", "id": f"eq.{pre['article_id']}"}).json()
+        if not a or a[0]["status"] not in pre["article_status_in"]:
+            return f"article status is {a[0]['status'] if a else 'missing'}"
     if "topic_status_in" in pre:
         t = http.get("/topics", params={"select": "status", "id": f"eq.{job['topic_id']}"}).json()
         if not t or t[0]["status"] not in pre["topic_status_in"]:
