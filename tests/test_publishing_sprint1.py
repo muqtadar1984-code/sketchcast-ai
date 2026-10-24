@@ -351,3 +351,26 @@ def test_engine_code_has_no_subject_branches():
             if words.search(code):
                 offenders.append(f"{f.name}:{n}: {line.strip()}")
     assert offenders == []
+
+
+# -- Stage C runner ----------------------------------------------------------------
+def test_stage_c_write_client_allows_only_job_and_audit_inserts():
+    from publishing.stage_c import NotAllowed, _write_client
+    c = _write_client("https://example.supabase.co", "k")
+    c._transport = httpx.MockTransport(lambda r: httpx.Response(201, json=[{"id": "j1"}]))
+    assert c.post("/jobs", json={"type": "topic_article", "params": {}}).status_code == 201
+    assert c.post("/jobs", json={"type": "figure_render", "params": {}}).status_code == 201
+    assert c.post("/platform_audit_log", json={"action": "library_article_generate"}).status_code == 201
+    for bad in [lambda: c.post("/jobs", json={"type": "presentation"}),
+                lambda: c.post("/topics", json={}),
+                lambda: c.patch("/jobs", json={}),
+                lambda: c.delete("/jobs")]:
+        with pytest.raises(NotAllowed):
+            bad()
+
+
+def test_stage_c_hints_name_each_gap():
+    from publishing.stage_c import _hints_for
+    h = _hints_for({"detail": "640 words < 1000; 1 worked examples < 3; sections do not cover ['7Ae.02']",
+                    "word_count": 640}, {"7Ae.02": "Laws of arithmetic"}, "maths", "chapter 2 'X' — y")
+    assert "1,000 words (now 640)" in h and "at least 3 fully worked" in h and "7Ae.02: Laws of arithmetic" in h

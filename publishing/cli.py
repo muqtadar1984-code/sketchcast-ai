@@ -39,6 +39,12 @@ def main(argv: list[str] | None = None) -> int:
     a = sub.add_parser("audit")
     a.add_argument("slug")
     sub.add_parser("report")
+    sp = sub.add_parser("stage-c-plan", help="build (not send) the Stage C job list for approved books")
+    sp.add_argument("books", nargs="+")
+    sp.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
+    sr = sub.add_parser("stage-c-run", help="run a founder-approved Stage C plan, one job at a time, off-peak")
+    sr.add_argument("plan", type=Path)
+    sr.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
     q = sub.add_parser("queue-check")
     q.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
     args = p.parse_args(argv)
@@ -63,6 +69,13 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "audit":
         from publishing.audit import run_audits
         run_audits(conn, args.slug)
+    elif args.cmd == "stage-c-plan":
+        from publishing.report import OUT
+        from publishing.stage_c import build_plan
+        print(build_plan(conn, args.books, OUT / "stage-c", args.env_file))
+    elif args.cmd == "stage-c-run":
+        from publishing.stage_c import run_plan
+        run_plan(args.plan, args.env_file, args.plan.with_suffix(".log"))
     elif args.cmd == "report":
         from publishing.report import write_reports
         for path in write_reports(conn):
