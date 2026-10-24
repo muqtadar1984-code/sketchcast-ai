@@ -1,0 +1,148 @@
+[
+  {
+    "slug": "mastering-linear-equations",
+    "working_title": "Algebra: Mastering Linear Equations",
+    "intent": "A complete study guide that takes a learner from the language of algebra to confidently forming, solving and graphing linear equations, linear inequalities and simultaneous linear equations.",
+    "subject_strand": "mathematics/algebra",
+    "profile": "maths",
+    "primary_curriculum": "cambridge_ls_maths_0862",
+    "crosswalk_curricula": [
+      "cbse_maths_041"
+    ],
+    "grades": [
+      "7",
+      "8",
+      "9"
+    ],
+    "age_band": "11-14",
+    "strand_prefixes": [
+      "Ae",
+      "As"
+    ],
+    "crosswalk_prefixes": [
+      "ALG",
+      "U2",
+      "U3"
+    ],
+    "catalogue_subjects": [
+      "Mathematics"
+    ]
+  },
+  {
+    "slug": "angles-triangles-geometric-reasoning",
+    "working_title": "Geometry: Angles, Triangles and Geometric Reasoning",
+    "intent": "A complete study guide on angle facts, parallel lines, triangles, polygons, congruence and similarity, constructions, Pythagoras' theorem and multi-step geometric reasoning with justified answers.",
+    "subject_strand": "mathematics/geometry",
+    "profile": "maths",
+    "primary_curriculum": "cambridge_ls_maths_0862",
+    "crosswalk_curricula": [
+      "cbse_maths_041"
+    ],
+    "grades": [
+      "7",
+      "8",
+      "9"
+    ],
+    "age_band": "11-14",
+    "strand_prefixes": [
+      "Gg"
+    ],
+    "crosswalk_prefixes": [
+      "GEO",
+      "U4"
+    ],
+    "catalogue_subjects": [
+      "Mathematics"
+    ]
+  },
+  {
+    "slug": "forces-and-motion",
+    "working_title": "Physics: Forces and Motion",
+    "intent": "A complete study guide on forces and their effects: measuring forces, gravity, mass and weight, friction and air resistance, balanced and unbalanced forces, speed and distance-time graphs, turning forces, pressure, and density with floating and sinking.",
+    "subject_strand": "science/physics",
+    "profile": "science",
+    "primary_curriculum": "cambridge_ls_science_0893",
+    "crosswalk_curricula": [
+      "cbse_science_086"
+    ],
+    "grades": [
+      "7",
+      "8",
+      "9"
+    ],
+    "age_band": "11-14",
+    "strand_prefixes": [
+      "Pf"
+    ],
+    "crosswalk_prefixes": [],
+    "extra_node_codes": [
+      "9Cp.02",
+      "9Cp.03"
+    ],
+    "catalogue_subjects": [
+      "Science",
+      "Physics",
+      "Chemistry",
+      "Biology"
+    ]
+  },
+  {
+    "slug": "atoms-elements-chemical-reactions",
+    "working_title": "Chemistry: Atoms, Elements and Chemical Reactions",
+    "intent": "A complete study guide from the particle model and atomic structure through elements, the periodic table, compounds and mixtures, to chemical reactions, word and symbol equations, conservation of mass, energy changes, rates, reactivity of metals and acids and alkalis.",
+    "subject_strand": "science/chemistry",
+    "profile": "science",
+    "primary_curriculum": "cambridge_ls_science_0893",
+    "crosswalk_curricula": [
+      "cbse_science_086"
+    ],
+    "grades": [
+      "7",
+      "8",
+      "9"
+    ],
+    "age_band": "11-14",
+    "strand_prefixes": [
+      "Cm",
+      "Cc",
+      "Cp"
+    ],
+    "crosswalk_prefixes": [],
+    "catalogue_subjects": [
+      "Science",
+      "Physics",
+      "Chemistry",
+      "Biology"
+    ]
+  },
+  {
+    "slug": "cells-structure-function-organisation",
+    "working_title": "Biology: Cells - Structure, Function and Organisation",
+    "intent": "A complete study guide on cells as the unit of life: microscopy, animal and plant cell structures and their functions, specialised cells, movement of substances into and out of cells, and the organisation of cells into tissues, organs and organ systems.",
+    "subject_strand": "science/biology",
+    "profile": "science",
+    "primary_curriculum": "cambridge_ls_science_0893",
+    "crosswalk_curricula": [
+      "cbse_science_086"
+    ],
+    "grades": [
+      "7",
+      "8",
+      "9"
+    ],
+    "age_band": "11-14",
+    "strand_prefixes": [
+      "Bs"
+    ],
+    "crosswalk_prefixes": [],
+    "extra_node_codes": [
+      "8Pf.07"
+    ],
+    "catalogue_subjects": [
+      "Science",
+      "Physics",
+      "Chemistry",
+      "Biology"
+    ]
+  }
+]

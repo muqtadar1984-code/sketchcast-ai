@@ -1,0 +1,10 @@
+{
+  "id": "v1-2026-10-24",
+  "languages": ["en", "ms"],
+  "min_words": 1000,
+  "min_worked_examples": {"maths": 3, "science": 1},
+  "min_bank_maturity": "good",
+  "require_figures_rendered": true,
+  "thumbnail_warning_ok": true,
+  "notes": "D12 approved 2026-10-24: thumbnail-only publication errors are warnings. D14 approved 2026-10-24: balanced depth policy."
+}
