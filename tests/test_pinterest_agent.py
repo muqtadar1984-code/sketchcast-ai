@@ -236,11 +236,11 @@ def test_no_drafting_in_a_language_without_a_created_board():
     assert _jobs(sb, "pin_draft") == []
 
 
-def test_a_topic_drafted_this_week_is_not_drafted_again():
+def test_a_topic_drafted_in_the_last_day_is_not_drafted_again():
     sb = world()
     sb.tables["jobs"].append({"id": "old", "type": "pin_draft", "status": "done",
                               "params": {"topic_id": TOPIC, "language": "en"},
-                              "created_at": "2026-10-22T00:00:00+00:00"})
+                              "created_at": "2026-10-23T18:00:00+00:00"})
     AG.tick(sb, now=BEFORE)
     assert len(_jobs(sb, "pin_draft")) == 1
 

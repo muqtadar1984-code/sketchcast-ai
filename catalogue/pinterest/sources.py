@@ -247,16 +247,29 @@ def _visual_bucket() -> str:
         return "visual-assets"
 
 
+# A pin in one of these states has been through (or is in) review: its topic
+# has PRODUCED, and a re-draft could not touch it anyway.
+PRODUCED = ("in_review", "approved", "scheduled", "posting", "posted", "rejected", "retired")
+
+
+def settled(pin: dict) -> bool:
+    """True unless the row is one a re-draft may overwrite: ``draft``, or
+    ``failed`` before any review (no ``approved_at``)."""
+    status = _s(pin.get("status"))
+    return status in PRODUCED or (status == "failed" and bool(pin.get("approved_at")))
+
+
 def next_topic(sb, language: str, settings: Optional[dict] = None, exclude: Optional[set] = None) -> Optional[str]:
-    """The next topic to draft in ``language``: public there, with no pin row
-    in that language yet, oldest approved kit first. ``exclude``: topics the
+    """The next topic to draft in ``language``: public there, with no
+    settled pin in that language (only failed-before-review or draft rows
+    count as not drafted), oldest approved kit first. ``exclude``: topics the
     feeder tried recently (a topic that yields no pin is not retried every
     tick)."""
     kits = sorted(visible_kits(sb, language), key=lambda r: (_s(r.get("approved_at")), _s(r.get("topic_id"))))
     if not kits:
         return None
-    drafted = {_s(r.get("topic_id")) for r in C.rows(sb.table(C.PINS).select("topic_id").eq("language", language)
-                                                     .execute())}
+    drafted = {_s(r.get("topic_id")) for r in C.rows(sb.table(C.PINS).select("topic_id,status,approved_at")
+                                                     .eq("language", language).execute()) if settled(r)}
     for r in kits:
         tid = _s(r.get("topic_id"))
         if tid and tid not in drafted and tid not in (exclude or set()):
@@ -265,4 +278,4 @@ def next_topic(sb, language: str, settings: Optional[dict] = None, exclude: Opti
 
 
 __all__ = ["visible_kits", "current_kit_row", "is_public", "kit_approved", "load_context", "candidates",
-           "next_topic", "figure_labels", "model_made", "PREVIEW_BUCKET", "WORKSHEET_BOARD"]
+           "next_topic", "settled", "PRODUCED", "figure_labels", "model_made", "PREVIEW_BUCKET", "WORKSHEET_BOARD"]

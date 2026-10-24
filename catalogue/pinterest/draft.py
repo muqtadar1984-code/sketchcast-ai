@@ -86,15 +86,33 @@ def _image(sb, ref: Optional[dict]):
     return Image.open(io.BytesIO(_download(sb, ref["bucket"], ref["path"]))).convert("RGBA")
 
 
-def render_candidate(sb, c: dict) -> tuple[bytes, dict]:
-    """The PNG and the template's measurements. Raises on a missing picture,
-    text that does not fit, or shaping that is not available."""
-    t = c.get("text_inputs") or {}
+def load_images(sb, c: dict) -> dict:
+    """The candidate's pictures, read BEFORE the copy call: a pin whose
+    artwork is missing is failed without spending a model call on it."""
     imgs = c.get("image_inputs") or {}
-    inputs = T.Inputs(title=_s(t.get("title")), points=list(t.get("points") or []), labels=list(t.get("labels") or []),
-                      subject=_s(t.get("subject")), figure=_image(sb, imgs.get("figure")),
-                      preview=_image(sb, imgs.get("preview")))
-    img, meta = T.render(c["template"], inputs, c.get("language") or "en")
+    return {"figure": _image(sb, imgs.get("figure")), "preview": _image(sb, imgs.get("preview"))}
+
+
+def card_texts(c: dict, copy: dict) -> list[str]:
+    """Every word the card will draw: the model's card text and, on a
+    diagram, the figure's APPROVED part names (never model-written)."""
+    t = c.get("text_inputs") or {}
+    labels = list(t.get("labels") or []) if c.get("template") == "diagram" else []
+    points = list(copy.get("card_points") or []) if c.get("template") == "explainer" else []
+    return [x for x in [copy.get("card_title"), *points, *labels] if _s(x)]
+
+
+def render_candidate(c: dict, images: dict, copy: dict) -> tuple[bytes, dict]:
+    """The PNG and the template's measurements, drawn with the MODEL'S card
+    text (``card_title``, ``card_points``) — never the long source strings.
+    Raises ``TextDoesNotFit`` (naming the line) or ``StringMissing``."""
+    t = c.get("text_inputs") or {}
+    template = c["template"]
+    inputs = T.Inputs(title=_s(copy.get("card_title")),
+                      points=list(copy.get("card_points") or []) if template == "explainer" else [],
+                      labels=list(t.get("labels") or []) if template == "diagram" else [],
+                      subject=_s(t.get("subject")), figure=images.get("figure"), preview=images.get("preview"))
+    img, meta = T.render(template, inputs, c.get("language") or "en")
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue(), meta
@@ -119,14 +137,31 @@ def hash_taken(sb, digest: str, pin_id: str) -> bool:
     return any(_s(r.get("id")) != _s(pin_id) for r in found)
 
 
+REDRAWABLE = ("draft", "failed")
+
+
+def redrawable(row: Optional[dict]) -> bool:
+    """A row a new draft may overwrite: a Library Re-render (``draft``), or a
+    pin that FAILED BEFORE REVIEW (``failed`` and never approved). A pin a
+    human reviewed, approved or posted is never touched."""
+    if not row:
+        return False
+    if row.get("status") == "draft":
+        return True
+    return row.get("status") == "failed" and not row.get("approved_at") and not _s(row.get("pinterest_pin_id"))
+
+
 def _write(sb, pin_id: str, existed: bool, row: dict, now: datetime) -> bool:
-    """Insert a new row or redraw a ``draft`` one. False on a 23505 race."""
+    """Insert a new row, or redraw a redrawable one (guarded in the WHERE so
+    a row reviewed meanwhile is never overwritten). False on a 23505 race or
+    when the row is no longer redrawable."""
     row = {**row, "updated_at": C.iso(now)}
     try:
         if existed:
-            sb.table(C.PINS).update(row).eq("id", pin_id).eq("status", "draft").execute()
-        else:
-            sb.table(C.PINS).insert({"id": pin_id, **row}).execute()
+            res = (sb.table(C.PINS).update(row).eq("id", pin_id).in_("status", list(REDRAWABLE))
+                   .is_("approved_at", "null").execute())
+            return len(C.rows(res)) == 1
+        sb.table(C.PINS).insert({"id": pin_id, **row}).execute()
         return True
     except Exception as exc:  # noqa: BLE001
         if C.is_duplicate(exc):
@@ -167,11 +202,11 @@ def draft_topic(sb, job_id: str, params: dict, *, client=None, link_check: Optio
         return summary
     boards = _boards(sb, language)
 
-    rendered: list[dict] = []
+    # 1. what can be drawn: a board exists, the row is new or redrawable, the artwork reads
+    ready: list[dict] = []
     for c in S.candidates(sb, topic_id, language, ctx):
-        key = pin_key(c)
-        ex = existing.get(key)
-        if ex and ex.get("status") != "draft":
+        ex = existing.get(pin_key(c))
+        if ex and not redrawable(ex):
             summary["skipped"].append(f"{c['template']} {c['source_ref']}: already drafted ({ex.get('status')})")
             continue
         board = boards.get(board_key_for(c))
@@ -181,80 +216,100 @@ def draft_topic(sb, job_id: str, params: dict, *, client=None, link_check: Optio
             continue
         pin_id = _s(ex.get("id")) if ex else str(uuid.uuid4())
         try:
-            png, meta = render_candidate(sb, c)
-        except Exception as exc:  # noqa: BLE001 — a pin that cannot be drawn is a failed draft, not a crash
-            why = f"render: {type(exc).__name__}: {exc}"
-            _write(sb, pin_id, bool(ex), _fail_row(c, why, job_id), now)
-            summary["failed"].append({"pin": pin_id, "template": c["template"], "why": why[:300]})
+            images = load_images(sb, c)
+        except Exception as exc:  # noqa: BLE001 — missing artwork: no pin, no stand-in, no model call
+            why = f"render: the artwork could not be read ({type(exc).__name__}: {exc})"
+            if _write(sb, pin_id, bool(ex), _fail_row(c, why, job_id), now):
+                summary["failed"].append({"pin": pin_id, "template": c["template"], "why": why[:300]})
             continue
-        path = storage_path(language, ctx["slug"], c["template"], c["source_ref"])
-        _upload(sb, path, png)
-        rendered.append({"c": c, "pin_id": pin_id, "existed": bool(ex), "png": png, "meta": meta, "path": path,
-                         "board": board, "link": C.pin_link(ctx["slug"], language, C.FORMAT_STATIC, pin_id)})
-    if not rendered:
+        ready.append({"c": c, "pin_id": pin_id, "existed": bool(ex), "images": images, "board": board,
+                      "key": f"p{len(ready) + 1}", "link": C.pin_link(ctx["slug"], language, C.FORMAT_STATIC, pin_id),
+                      "path": storage_path(language, ctx["slug"], c["template"], c["source_ref"])})
+    if not ready:
         return summary
 
-    # the second never-starve check, right before the text call
+    # 2. ONE copy call (after the second never-starve check) that also writes the card text
     C.yield_to_builders(sb, job_id)
     client = client or K.make_client(language)
     grounding = K.article_grounding(ctx["english_article"], ctx["codes"])
     glossary = K.load_glossary(sb, language, topic_id, ctx.get("subject") or "")
-    specs = [{"key": f"p{i + 1}", "template": r["c"]["template"], "image": K.describe_image(r["c"])}
-             for i, r in enumerate(rendered)]
-    for spec, r in zip(specs, rendered):
-        r["key"] = spec["key"]
+    specs = {r["key"]: {"key": r["key"], "template": r["c"]["template"], "image": K.describe_image(r["c"])}
+             for r in ready}
     source = PC.article_text(ctx["article"], [*ctx["codes"], ctx.get("grade_band") or ""])
-    try:
+    copies: dict = {}
+    invalid: dict = {}
+
+    def ask(keys: list[str], failures: Optional[dict] = None) -> None:
         try:
-            copies = K.write_copy(client, grounding=grounding, pins=specs, language=language, glossary=glossary)
+            copies.update(K.write_copy(client, grounding=grounding, pins=[specs[k] for k in keys],
+                                       language=language, glossary=glossary, failures=failures))
+            for k in keys:
+                invalid.pop(k, None)
         except K.CopyInvalid as exc:
-            copies = K.write_copy(client, grounding=grounding, pins=specs, language=language, glossary=glossary,
-                                  failures={s["key"]: [f"the reply was unusable: {exc}"] for s in specs})
-            summary["retried"] = True
+            for k in keys:
+                invalid[k] = f"copy: {exc}"
 
-        def check(r) -> tuple[list, list]:
-            cp = copies[r["key"]]
-            img_block = PC.image_checks(r["png"], r["meta"], r["c"]["template"]) + PC.image_text_checks(
-                PC.image_text(r["c"].get("text_inputs") or {}), template=r["c"]["template"], language=language,
-                source_text=source)
-            blocking, warnings = PC.copy_checks(cp, template=r["c"]["template"], language=language,
-                                                source_text=source, link=r["link"], link_check=link_check)
-            return img_block + blocking, warnings
+    # 3. draw each card with the model's text, then every check
+    def evaluate(r: dict) -> None:
+        cp = copies[r["key"]]
+        r.pop("png", None)
+        try:
+            r["png"], r["meta"] = render_candidate(r["c"], r["images"], cp)
+        except T.StringMissing as exc:
+            r["blocking"], r["warnings"] = [f"image: {exc}"], []
+            return
+        except T.TextDoesNotFit as exc:
+            r["blocking"], r["warnings"] = [f"card: {exc}"], []
+            return
+        img_block = PC.image_checks(r["png"], r["meta"], r["c"]["template"]) + PC.image_text_checks(
+            card_texts(r["c"], cp), template=r["c"]["template"], language=language, source_text=source)
+        blocking, warnings = PC.copy_checks(cp, template=r["c"]["template"], language=language,
+                                            source_text=source, link=r["link"], link_check=link_check)
+        r["blocking"], r["warnings"] = img_block + blocking, warnings
 
-        results = {r["key"]: check(r) for r in rendered}
-        fixable = {k: PC.copy_fixable(b) for k, (b, _w) in results.items() if PC.copy_fixable(b)}
-        if fixable and not summary.get("retried"):
+    try:
+        keys = [r["key"] for r in ready]
+        ask(keys)
+        for r in ready:
+            if r["key"] not in invalid:
+                evaluate(r)
+        # 4. ONE varied retry for whatever the model can fix, naming the failure
+        fixable = {r["key"]: [f"the reply was unusable: {invalid[r['key']]}"] for r in ready if r["key"] in invalid}
+        fixable.update({r["key"]: PC.copy_fixable(r["blocking"]) for r in ready
+                        if r["key"] not in invalid and PC.copy_fixable(r.get("blocking") or [])})
+        if fixable:
             summary["retried"] = True
-            retry_specs = [s for s in specs if s["key"] in fixable]
-            again = K.write_copy(client, grounding=grounding, pins=retry_specs, language=language,
-                                 glossary=glossary, failures=fixable)
-            copies.update(again)
-            for r in rendered:
-                if r["key"] in fixable:
-                    results[r["key"]] = check(r)
-    except K.CopyInvalid as exc:
-        for r in rendered:
-            why = f"copy: {exc}"
-            _write(sb, r["pin_id"], r["existed"], {**_fail_row(r["c"], why, job_id), "images": _images(r)}, now)
-            summary["failed"].append({"pin": r["pin_id"], "template": r["c"]["template"], "why": why[:300]})
-        return summary
+            ask(sorted(fixable), failures=fixable)
+            for r in ready:
+                if r["key"] in fixable and r["key"] not in invalid:
+                    evaluate(r)
     finally:
         K.record_usage(sb, job_id, client)
 
-    for r in rendered:
-        cp = copies[r["key"]]
-        blocking, warnings = results[r["key"]]
-        digest = PC.content_hash(r["png"], cp["title"], cp["description"])
-        if hash_taken(sb, digest, r["pin_id"]):
-            blocking = [*blocking, "duplicate: another pin has the same image and copy"]
+    # 5. rows: in_review, or failed with the reason
+    for r in ready:
         c = r["c"]
+        if r["key"] in invalid:
+            why = invalid[r["key"]]
+            if _write(sb, r["pin_id"], r["existed"], _fail_row(c, why, job_id), now):
+                summary["failed"].append({"pin": r["pin_id"], "template": c["template"], "why": why[:300]})
+            continue
+        cp = copies[r["key"]]
+        blocking, warnings = list(r["blocking"]), list(r["warnings"])
+        digest = None
+        if "png" in r:
+            _upload(sb, r["path"], r["png"])
+            digest = PC.content_hash(r["png"], cp["title"], cp["description"])
+            if hash_taken(sb, digest, r["pin_id"]):
+                blocking.append("duplicate: another pin has the same image and copy")
+                digest = None
         row = {"source_kind": c["source_kind"], "source_ref": c["source_ref"], "topic_id": c.get("topic_id"),
                "kit_id": c.get("kit_id") or None, "language": language, "format": C.FORMAT_STATIC,
                "template": c["template"], "board_id": r["board"]["id"], "grade_band": c.get("grade_band"),
                "title": cp["title"], "description": cp["description"], "alt_text": cp["alt_text"],
                "link": r["link"], "utm": C.utm_for(C.FORMAT_STATIC, r["pin_id"], language),
                "back_translation": cp.get("back_translation"), "ai_modified": bool(c.get("ai_modified")),
-               "images": _images(r), "content_hash": None if blocking and blocking[-1].startswith("duplicate") else digest,
+               "images": _images(r, cp) if "png" in r else [], "content_hash": None if blocking else digest,
                "status": "failed" if blocking else "in_review", "precheck": PC.result(blocking, warnings, now),
                "last_error": ("failed: " + blocking[0])[:1000] if blocking else None, "edited": False,
                "draft_job_id": job_id or None}
@@ -263,15 +318,16 @@ def draft_topic(sb, job_id: str, params: dict, *, client=None, link_check: Optio
                 r["pin_id"] if not blocking else {"pin": r["pin_id"], "template": c["template"],
                                                   "why": blocking[0][:300]})
         else:
-            summary["skipped"].append(f"{c['template']} {c['source_ref']}: lost a uniqueness race")
+            summary["skipped"].append(f"{c['template']} {c['source_ref']}: not written (a race, or the row moved)")
     log.info("pinterest draft %s/%s: %d in review, %d failed, %d skipped", topic_id, language,
              len(summary["drafted"]), len(summary["failed"]), len(summary["skipped"]))
     return summary
 
 
-def _images(r: dict) -> list[dict]:
+def _images(r: dict, cp: Optional[dict] = None) -> list[dict]:
+    card = {"title": (cp or {}).get("card_title"), "points": (cp or {}).get("card_points") or []}
     return [{"path": r["path"], "width": T.W, "height": T.H, "bytes": len(r["png"]),
-             "dominant_color": r["meta"].get("dominant_color")}]
+             "dominant_color": r["meta"].get("dominant_color"), "card": card}]
 
 
 def run_draft_job(sb, job: dict, *, client=None, link_check=None) -> Optional[dict]:
@@ -373,5 +429,5 @@ def run_recheck_job(sb, job: dict, *, link_check=None) -> Optional[dict]:
         return None
 
 
-__all__ = ["run_draft_job", "run_recheck_job", "draft_topic", "render_candidate", "storage_path", "pin_key", "board_key_for",
+__all__ = ["run_draft_job", "run_recheck_job", "draft_topic", "render_candidate", "load_images", "card_texts", "redrawable", "storage_path", "pin_key", "board_key_for",
            "needs_recheck", "recheck_pin", "recheck_pending", "WAITING_WINDOW"]

@@ -59,7 +59,7 @@ def test_next_topic_is_the_oldest_public_topic_with_no_pin_yet():
     sb.current_kits.insert(0, {"topic_id": "t-new", "language": "en", "topic_kit_id": "k2",
                                "approved_at": "2026-10-10T00:00:00+00:00"})
     assert S.next_topic(sb, "en") == TOPIC, "oldest approved kit first"
-    sb.pins().append({"id": "p", "topic_id": TOPIC, "language": "en"})
+    sb.pins().append({"id": "p", "topic_id": TOPIC, "language": "en", "status": "in_review"})
     assert S.next_topic(sb, "en") == "t-new"
     assert S.next_topic(sb, "fr") is None
 
@@ -87,14 +87,18 @@ def test_a_reply_missing_a_pin_or_a_field_is_invalid():
     with pytest.raises(K.CopyInvalid):
         K.parse_reply("not json", ["p1"], "en")
     with pytest.raises(K.CopyInvalid, match="back-translation"):
-        K.parse_reply({"pins": [{"key": "p1", "title": "t", "description": "d", "alt_text": "a"}]}, ["p1"], "fr")
+        K.parse_reply({"pins": [{"key": "p1", "title": "t", "description": "d", "alt_text": "a",
+                                  "card_title": "c"}]}, ["p1"], "fr")
 
 
 def test_a_non_english_set_keeps_the_english_back_translation():
     raw = {"pins": [{"key": "p1", "title": "Cellules", "description": "Une cellule.", "alt_text": "Un schéma",
-                     "english": {"title": "Cells", "description": "A cell.", "alt_text": "A diagram"}}]}
+                     "card_title": "Les cellules",
+                     "english": {"title": "Cells", "description": "A cell.", "alt_text": "A diagram",
+                                 "card_title": "Cells"}}]}
     out = K.parse_reply(raw, ["p1"], "fr")
-    assert out["p1"]["back_translation"] == {"title": "Cells", "description": "A cell.", "alt_text": "A diagram"}
+    assert out["p1"]["back_translation"] == {"title": "Cells", "description": "A cell.", "alt_text": "A diagram",
+                                             "card_title": "Cells"}
     prompt = K.build_prompt(grounding=GROUND, pins=SPECS[:1], language="fr", glossary=[{"en": "cell", "term": "cellule"}])
     assert "cell → cellule" in prompt and "\"english\"" in prompt
 
