@@ -507,26 +507,30 @@ def _auto_file_support_issue(sb, job: dict, error: str) -> None:
         )
         if getattr(open_q, "data", None):
             return  # an open auto-issue already covers this generation
-        ins = (
-            sb.table("platform_issues")
-            .insert(
-                {
-                    "reporter_id": gen_d["owner_id"],
-                    "category": "generation_failed",
-                    "trigger_source": "auto",
-                    "title": f"Generation failed: {gen_d.get('kind') or 'lesson'}",
-                    "description": None,
-                    "generation_id": gen_id,
-                    "book_id": gen_d.get("book_id"),
-                    "job_id": job["id"],
-                    # The whole point of this row: the reporter is waiting
-                    # and a human (or the diagnosis agent) reads this line.
-                    "context": {"error": _evidence(error), **snapshot},
-                }
-            )
-            .execute()
+        # A burst of failures with one cause is ONE issue, one diagnosis, one
+        # email (2026-10-22: 17 issues for 3 causes) — support_agent/burst.py
+        # attaches a repeat to the open issue, or files one burst issue to
+        # staff, and only a genuinely new cause comes back as "new".
+        from support_agent.burst import file_or_attach
+
+        outcome = file_or_attach(
+            sb, owner_id=gen_d["owner_id"], book_id=gen_d.get("book_id"), gen_id=gen_id, job=job,
+            error_text=_evidence(error),
+            new_issue_row={
+                "reporter_id": gen_d["owner_id"],
+                "category": "generation_failed",
+                "trigger_source": "auto",
+                "title": f"Generation failed: {gen_d.get('kind') or 'lesson'}",
+                "description": None,
+                "generation_id": gen_id,
+                "book_id": gen_d.get("book_id"),
+                "job_id": job["id"],
+                # The whole point of this row: the reporter is waiting
+                # and a human (or the diagnosis agent) reads this line.
+                "context": {"error": _evidence(error), **snapshot},
+            },
         )
-        issue_id = (getattr(ins, "data", None) or [{}])[0].get("id")
+        issue_id = outcome.get("issue_id") if outcome.get("action") == "new" else None
         if issue_id:
             sb.table("jobs").insert(
                 {"type": "support_diagnose", "status": "queued", "issue_id": issue_id,
