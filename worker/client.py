@@ -1249,6 +1249,31 @@ def set_book_chapters(sb: Client, book_id: str, chapters: list[dict], status: st
     sb.table("books").update({"chapters": chapters, "status": status}).eq("id", book_id).execute()
 
 
+def sweep_orphaned_parts(sb: Client, book_id: str) -> int:
+    """Cancel the book's queued, never-started generations whose part the
+    freshly written map no longer has. Best-effort; never raises; returns the
+    number cancelled.
+
+    Call it after ANY write that can shrink a part map (index_book, and a
+    generation measuring a scanned chapter's OCR). Sara's Sci 7 (2026-10-22):
+    a re-index cut two chapters from 4→3 and 8→6 parts while Generate all's
+    part-4/7/8 kits sat queued — each one could only fail. The SQL side
+    (migration 0152) locks the jobs first and deletes the generations, so the
+    credit is refunded exactly as the teacher's own cancel would.
+    """
+    try:
+        res = sb.rpc("sweep_orphaned_parts", {"p_book": book_id}).execute()
+        n = int(res.data or 0)
+        if n:
+            logging.getLogger("worker").info(
+                "part map for %s shrank: cancelled %d queued generation(s) for parts it no longer has",
+                book_id, n)
+        return n
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("worker").warning("orphaned parts not swept for %s: %s", book_id, exc)
+        return 0
+
+
 def set_chapter_parts(sb: Client, book_id: str, chapter_num: int, parts: list[dict],
                       expect_start: Optional[int] = None,
                       expect_end: Optional[int] = None) -> bool:

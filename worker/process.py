@@ -475,6 +475,8 @@ def _persist_measured_parts(sb: Client, book_id: str, chapter_num: int,
                 book_id, chapter_num, len(measured), len(old),
                 "estimated" if any(isinstance(p, dict) and p.get("estimated") for p in old) else "unset",
             )
+            if len(measured) < len(old):
+                db.sweep_orphaned_parts(sb, book_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning("measured part map skipped for %s ch%s: %s", book_id, chapter_num, exc)
 
@@ -1363,9 +1365,13 @@ def _book_prelude(sb: Client, job_id: str, gen: dict, book: dict, tmp: str | Pat
         all_parts = build_chapter_parts(chapter)
         part_total = len(all_parts)
         if part_ref < 1 or part_ref > part_total:
+            # Not "re-index it": a re-index is what usually shrinks the map
+            # under a queued kit (Sara's Sci 7, 2026-10-22), and the support
+            # agent repeated that advice back to the teacher five times.
             raise RuntimeError(
-                f"'{chapter_title}' has {part_total} part(s) — part {part_ref} does not exist. "
-                "If the book's chapters changed, re-index it to refresh the part map."
+                f"'{chapter_title}' now has {part_total} part(s), so part {part_ref} no longer exists — "
+                "the chapter's part map changed after this was queued. "
+                "Generate from the chapter's current parts instead; re-indexing will not bring it back."
             )
         pk = all_parts[part_ref - 1]
         if part_total > 1:
@@ -3312,6 +3318,9 @@ def index_book(sb: Client, job: dict) -> None:
         logger.warning("part map skipped for %s: %s", book_id, exc)
 
     db.set_book_chapters(sb, book_id, chapters, "ready")
+    # A kit queued against the OLD map for a part this one no longer has can
+    # only fail — cancel (and refund) it now rather than let it error later.
+    db.sweep_orphaned_parts(sb, book_id)
     # This fresh list is now authoritative, so drop any generation-time relocation
     # overrides (consulted before book.chapters) that a prior run persisted.
     db.clear_book_heal(sb, book_id)
