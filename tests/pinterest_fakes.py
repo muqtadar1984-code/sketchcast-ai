@@ -173,9 +173,23 @@ def world(*, language="en", figures=True, parts=True, preview=True, boards="crea
     return sb
 
 
+class Wrapped(dict):
+    """A reply already in the client's own shape (a test that needs
+    ``truncated: true`` or ``{"raw_text": ...}`` returns one of these)."""
+
+
+def wrap(parsed, truncated=False) -> Wrapped:
+    """What ``ClaudeClient.analyze`` / ``GeminiClient.analyze`` really return
+    (shared/claude_client.py, shared/gemini_client.py)."""
+    return Wrapped({"data": parsed, "usage": {"input_tokens": 100, "output_tokens": 50},
+                    "truncated": bool(truncated)})
+
+
 class FakeCopyClient:
     """The text client: answers ``analyze`` from ``replies`` (a callable of
-    the prompt, or a list consumed in order) and records every prompt."""
+    the prompt, or a list consumed in order) and records every prompt. Every
+    answer comes back in the REAL wrapper, ``{data, usage, truncated}`` —
+    the first live drafts failed because an earlier fake returned bare JSON."""
 
     def __init__(self, replies=None, model="claude-haiku-4-5", backend="bedrock"):
         self.replies = replies
@@ -189,23 +203,35 @@ class FakeCopyClient:
         self.session_usage["input_tokens"] += 100
         self.session_usage["output_tokens"] += 50
         self.session_usage["cost_usd"] += 0.001
-        if callable(self.replies):
-            return self.replies(prompt)
-        return self.replies.pop(0)
+        reply = self.replies(prompt) if callable(self.replies) else self.replies.pop(0)
+        return reply if isinstance(reply, Wrapped) else wrap(reply)
+
+
+def prompt_pins(prompt: str) -> list[tuple[str, str]]:
+    """(key, template) of every pin a copy prompt asks for."""
+    return [(line.split()[2].rstrip(":"), line.split()[4].rstrip(";")) for line in prompt.splitlines()
+            if line.startswith("- key p")]
+
+
+CARD = {"explainer": ("Plant and animal cells", ["A cell is the unit of life", "Plant cells have a cell wall",
+                                                 "Compare plant and animal cells"]),
+        "diagram": ("Parts of a plant cell", []), "worksheet": ("Plant cells worksheet", [])}
 
 
 def good_copy(prompt: str) -> dict:
-    """A clean answer for every pin key the prompt names."""
-    keys = [(line.split()[2].rstrip(":"), line.split()[4].rstrip(";")) for line in prompt.splitlines()
-            if line.startswith("- key p")]
+    """A clean answer for every pin key the prompt names, card text included."""
     pins = []
-    for k, template in keys:
-        pins.append({"key": k, "title": f"Plant cell parts explained ({template})",
-                     "description": "A clear guide to the 3 main parts of a plant cell for science teachers. "
-                                    "Compare plant and animal cells with a labelled diagram. "
-                                    "See the full lesson on SketchCast.",
-                     "alt_text": "A labelled diagram of a plant cell showing the cell wall, nucleus and chloroplast.",
-                     "keywords": ["plant cell diagram", "cell biology"]})
+    for k, template in prompt_pins(prompt):
+        card_title, card_points = CARD.get(template, ("Plant cells", []))
+        pin = {"key": k, "title": f"Plant cell parts explained ({template})",
+               "description": "A clear guide to the 3 main parts of a plant cell for science teachers. "
+                              "Compare plant and animal cells with a labelled diagram. "
+                              "See the full lesson on SketchCast.",
+               "alt_text": f"A card titled {card_title} showing a plant cell.",
+               "keywords": ["plant cell diagram", "cell biology"], "card_title": card_title}
+        if template == "explainer":
+            pin["card_points"] = list(card_points)
+        pins.append(pin)
     return {"pins": pins}
 
 

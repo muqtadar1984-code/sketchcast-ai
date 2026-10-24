@@ -220,8 +220,9 @@ class _Card:
             got = self._fits(blocks, box, size, bold, max_lines, gap)
             if got:
                 return (*got, size)
-        raise TextDoesNotFit(f"{name}: {blocks[0][:60]!r} does not fit {box[2] - box[0]}x{box[3] - box[1]} px "
-                             f"even at {floor} px")
+        longest = max(blocks, key=len)
+        raise TextDoesNotFit(f"{name}: the line {longest[:80]!r} ({len(longest)} characters) is too long — "
+                             f"the {name} does not fit {box[2] - box[0]}x{box[3] - box[1]} px even at {floor} px")
 
     def text(self, name: str, blocks: list[str], box, *, fill, panel, bold: bool, start: int,
              floor: int = FONT_FLOOR, max_lines: int = 2, bullets: bool = False, valign: str = "top",

@@ -67,15 +67,33 @@ def test_clean_image_text_passes():
                                 source_text=SOURCE) == []
 
 
-def test_a_draft_whose_card_breaks_a_rule_fails_and_no_copy_retry_can_cure_it(monkeypatch):
+def test_the_card_rules_run_on_the_models_card_text_and_one_retry_may_cure_it(monkeypatch):
+    """The card shows the model's card_title / card_points (live fix,
+    2026-10-24), so the card rules judge THAT text, and a breach is sent back
+    once, named."""
+    from tests.pinterest_fakes import good_copy as clean
+
     monkeypatch.setattr(C, "builders_queued", lambda sb, exclude_job_id=None: False)
     monkeypatch.setenv("CATALOGUE_WINDOW_UTC", "always")
+
+    def kids(prompt):
+        r = clean(prompt)
+        for p in r["pins"]:
+            if "card_points" in p:
+                p["card_points"] = ["Teach kids the cell", "Plant cells have walls", "Compare the cells"]
+        return r
+
     sb = world()
-    sb.tables["topic_articles"][0]["objectives"][0]["text"] = "Teach kids the parts of a plant cell"
-    client = FakeCopyClient(good_copy)
+    client = FakeCopyClient(kids)
     D.draft_topic(sb, "job-1", {"topic_id": TOPIC, "language": "en"}, client=client, link_check=lambda u: True)
     explainer = next(p for p in sb.pins() if p["template"] == "explainer")
     assert explainer["status"] == "failed" and any("card mentions children" in b
                                                    for b in explainer["precheck"]["blocking"])
-    assert len(client.prompts) == 1, "an image problem is not sent back to the copy model"
+    assert len(client.prompts) == 2 and "card mentions children" in client.prompts[1]
     assert next(p for p in sb.pins() if p["template"] == "diagram")["status"] == "in_review"
+
+    replies = [kids, clean]
+    sb = world()
+    D.draft_topic(sb, "job-2", {"topic_id": TOPIC, "language": "en"},
+                  client=FakeCopyClient(lambda p: replies.pop(0)(p)), link_check=lambda u: True)
+    assert all(p["status"] == "in_review" for p in sb.pins())

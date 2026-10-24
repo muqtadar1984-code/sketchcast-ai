@@ -166,8 +166,9 @@ def image_text(text_inputs: dict) -> list[str]:
 def image_text_checks(texts: list[str], *, template: str, language: str, source_text: str) -> list[str]:
     """The copy rules over the words ON the image (finding 5): numbers from
     the article, no children as the audience, the pin's script — plus the
-    layout's fixed words existing in the pin's language. Not copy-fixable:
-    a new copy call does not change the card."""
+    layout's fixed words existing in the pin's language. The card text is
+    the model's own (``card_title``, ``card_points``), so a ``card:`` failure
+    IS fixable by the varied retry; a missing fixed word (``image:``) is not."""
     from catalogue.pinterest.templates import missing_strings
 
     out: list[str] = []
@@ -180,17 +181,19 @@ def image_text_checks(texts: list[str], *, template: str, language: str, source_
     allowed = set(number_values(source_text))
     stray = [n for n in dict.fromkeys(number_values(joined)) if n not in allowed]
     if stray:
-        out.append(f"image: number(s) {', '.join(stray[:5])} on the card are not in the article")
+        out.append(f"card: number(s) {', '.join(stray[:5])} on the card are not in the article")
     child = _CHILD.search(joined)
     if child:
-        out.append(f"image: the card mentions children as the audience (\"{child.group(0)}\")")
+        out.append(f"card: the card mentions children as the audience (\"{child.group(0)}\")")
     if not language_ok(joined, language):
-        out.append(f"image: the card's text is not in the pin's language ({language})")
+        out.append(f"card: the card's text is not in the pin's language ({language})")
     return out
 
 
 def copy_fixable(blocking: list[str]) -> list[str]:
-    return [b for b in blocking if b.startswith("copy:")]
+    """What one more copy call can cure: the copy fields and the card text
+    the model wrote (``card:`` — a rule broken, or a line too long to fit)."""
+    return [b for b in blocking if b.startswith(("copy:", "card:"))]
 
 
 def result(blocking: list[str], warnings: list[str], now: Optional[datetime] = None) -> dict:
