@@ -105,13 +105,15 @@
       "decided": "2026-10-24",
       "notes": [
         "Turning forces and moments (8Pf.04) stay inside the existing topic 'forces-and-motion', which will be revised to cover what forces are, balanced and unbalanced forces, and moments. Do not propose a separate moments topic.",
-        "The vacuum objective (7Pf.04) is taught by ONE topic shared with the Chemistry book. Use exactly this proposed title: 'Vacuum: Space Without Matter and Motion Without Air Resistance'."
+        "The vacuum objective (7Pf.04) is taught by ONE topic shared with the Chemistry book. Use exactly this proposed title: 'Vacuum: Space Without Matter and Motion Without Air Resistance'.",
+        "Density (9Cp.02, 9Cp.03) is taught by a topic shared with the Chemistry book. Use exactly this proposed title: 'Density: Mass in a Given Volume'."
       ],
       "must_include": [
         "8Pf.04",
         "7Pf.04"
       ],
       "required_new_topics": [
+        "Density: Mass in a Given Volume",
         "Vacuum: Space Without Matter and Motion Without Air Resistance"
       ],
       "forbidden_new_topics": [
@@ -152,7 +154,9 @@
       "notes": [
         "Keep the bonding chapter: molecules and covalent bonds, ions and ionic bonds, simple and giant structures (9Cm.02-05, 9Cp.04).",
         "Vacuum (7Cm.05), electrostatic attraction inside the atom (8Cm.03) and purity/impure products (8Cm.04, 8Cc.04) each stay a separate, lesson-sized new topic.",
-        "The vacuum topic is shared with the Physics book. Use exactly this proposed title: 'Vacuum: Space Without Matter and Motion Without Air Resistance'."
+        "The vacuum topic is shared with the Physics book. Use exactly this proposed title: 'Vacuum: Space Without Matter and Motion Without Air Resistance'.",
+        "Solutions and concentration (8Cp.01), solubility of salts with temperature (8Cc.05) and inert substances (8Cc.06) belong to another book: Solutions and Separation.",
+        "Density (9Cp.02, 9Cp.03) is taught ONCE, by a topic shared with the Physics book. Use exactly this proposed title: 'Density: Mass in a Given Volume'."
       ],
       "must_include": [
         "9Cm.02",
@@ -166,7 +170,13 @@
         "8Cc.04"
       ],
       "required_new_topics": [
+        "Density: Mass in a Given Volume",
         "Vacuum: Space Without Matter and Motion Without Air Resistance"
+      ],
+      "must_exclude": [
+        "8Cc.05",
+        "8Cc.06",
+        "8Cp.01"
       ]
     }
   },

@@ -218,7 +218,20 @@ def _tokens(title: str) -> set[str]:
 def similar(a: str, b: str, threshold: float = 0.6) -> bool:
     """Token overlap (Jaccard) between two topic titles."""
     ta, tb = _tokens(a), _tokens(b)
-    return bool(ta and tb) and len(ta & tb) / len(ta | tb) >= threshold
+    if not (ta and tb) or len(ta & tb) / len(ta | tb) < threshold:
+        return False
+    # Different head concepts are different topics even when the tails match:
+    # "Density of Solids, Liquids and Gases" is not "Pressure in Solids,
+    # Liquids and Gases". Each leading with a word the other lacks = distinct.
+    ha, hb = _head(a), _head(b)
+    return not (ha and hb and ha not in tb and hb not in ta)
+
+
+def _head(title: str) -> str | None:
+    for w in re.split(r"[^a-z0-9]+", title.lower()):
+        if w and w not in _STOP:
+            return _word(w)
+    return None
 
 
 def _shape(code: str) -> str:

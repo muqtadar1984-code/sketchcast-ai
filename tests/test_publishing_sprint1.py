@@ -285,6 +285,13 @@ def test_blocked_brief_is_skipped(monkeypatch):
     assert called == []
 
 
+def test_similarity_respects_head_concept():
+    from publishing.blueprint import similar
+    assert not similar("Density of Solids, Liquids and Gases", "Pressure in Solids, Liquids and Gases")
+    assert similar("Density: Mass and Volume", "Mass and Volume: Density")
+    assert similar("Friction and Air Resistance", "Air Resistance and Friction")
+
+
 def test_supply_reason_pattern():
     assert SUPPLY_REASON.search("not yet in the catalogue")
     assert not SUPPLY_REASON.search("Belongs to the statistics book; outside this book's theme")
