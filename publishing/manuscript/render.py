@@ -43,6 +43,13 @@ def _download(http, base: str, path: str) -> bytes:
     return r.content
 
 
+def asset_bytes(http, base: str, asset: dict) -> bytes:
+    """A library asset from storage, or a book asset from the local store."""
+    if asset.get("local_path"):
+        return Path(asset["local_path"]).read_bytes()
+    return _download(http, base, asset["storage_path"])
+
+
 def figure_svg(png: bytes, vision: dict, labels: list[str]) -> tuple[str, list[str]]:
     """The picture with its labels as vector overlays. Returns (svg, unplaced)."""
     w, h = float(vision.get("w") or 0), float(vision.get("h") or 0)
@@ -64,6 +71,11 @@ def figure_svg(png: bytes, vision: dict, labels: list[str]) -> tuple[str, list[s
         right = max(centres, key=lambda c: c[0])
         side = "L" if left[0] < IMG_W - right[0] else "R"
         sides[side].append((lab, left if side == "L" else right))
+    if not sides["L"] and not sides["R"]:
+        # nothing to label: no reserved columns, the picture alone
+        b64 = base64.b64encode(png).decode()
+        return (f'<svg viewBox="0 0 {IMG_W} {ih:.0f}" role="img"><image href="data:image/png;base64,{b64}" '
+                f'x="0" y="0" width="{IMG_W}" height="{ih:.1f}"/></svg>'), unplaced
     total_w = IMG_W + 2 * COL_W
     height = ih
     parts = []
@@ -83,14 +95,39 @@ def figure_svg(png: bytes, vision: dict, labels: list[str]) -> tuple[str, list[s
                          f'<circle cx="{px:.1f}" cy="{cy:.1f}" r="2.2" class="dot"/>'
                          f'<text x="{tx:.1f}" y="{ly:.1f}" text-anchor="{anchor}" class="lab">{html.escape(lab)}</text>')
     b64 = base64.b64encode(png).decode()
-    svg = (f'<svg viewBox="0 0 {total_w} {height:.0f}" width="{total_w}" role="img">'
+    svg = (f'<svg viewBox="0 0 {total_w} {height:.0f}" role="img">'
            f'<image href="data:image/png;base64,{b64}" x="{COL_W}" y="0" width="{IMG_W}" height="{ih:.1f}"/>'
            + "".join(parts) + "</svg>")
     return svg, unplaced
 
 
 CSS = """
-@page { size: A4; margin: 18mm 17mm 20mm; }
+@page { size: A4; margin: 18mm 17mm 20mm;
+  @top-right { font: 8pt 'Segoe UI', Arial, sans-serif; color: #8a94a6; }
+  @bottom-center { content: counter(page); font: 9pt 'Segoe UI', Arial, sans-serif; color: #5b6475; } }
+figure.place { margin: 2pt 0 8pt; break-inside: avoid; }
+figure.place svg { width: 100%; height: auto; display: block; }
+figure.beside-right { float: right; margin-left: 12pt; clear: right; }
+figure.beside-left { float: left; margin-right: 12pt; clear: left; }
+figure.w-third { width: 34%; } figure.w-half { width: 46%; } figure.w-two-thirds { width: 62%; }
+figure.full, figure.centre { width: 100%; text-align: center; }
+figure.centre svg { max-width: 62%; margin: 0 auto; }
+h2 { clear: both; }
+.group svg text.gl { font: 600 12px 'Segoe UI', Arial, sans-serif; fill: #1d2433; }
+.group svg text.gs { font: 10.5px 'Segoe UI', Arial, sans-serif; fill: #5b6475; }
+.group svg .rel { stroke: #0f766e; stroke-width: 1.6; fill: none; }
+.group svg .relh { fill: #0f766e; }
+.group svg .zoom { stroke: #0f766e; stroke-width: 2; fill: none; }
+table.match { border-collapse: collapse; margin: 4pt 0 0 6pt; width: 96%; }
+table.match td { padding: 2pt 8pt 2pt 0; vertical-align: top; }
+table.match td.n { width: 1.6em; font-weight: 700; } table.match td.l { width: 30%; }
+.sortbox { display: flex; gap: 10pt; margin: 4pt 0; } .sortbox .cat { flex: 1; border: 1pt dashed var(--line);
+  border-radius: 5pt; padding: 4pt 7pt; min-height: 46pt; font-weight: 600; }
+.sortitems { margin: 4pt 0; font-size: 10.5pt; }
+.photos.tiles figure img { height: 150px; width: 100%; object-fit: cover; }
+.photos .ctx { display: block; font-size: 9pt; color: var(--ink); margin-top: 2pt; }
+.think-answers { font-size: 10pt; } .think-answers li { margin-bottom: 4pt; }
+.credits a { color: inherit; }
 :root { --ink:#1d2433; --muted:#5b6475; --brand:#0f766e; --soft:#e7f4f2; --warn:#fff4e5; --line:#c9d3cf; }
 body { font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif; color: var(--ink); font-size: 11pt; line-height: 1.5; margin: 0; }
 .chapter-head { border-bottom: 3px solid var(--brand); margin-bottom: 14pt; padding-bottom: 8pt; }
@@ -157,10 +194,71 @@ def _match(x: dict) -> tuple[str, str]:
     pairs = x.get("pairs") or []
     order = _scramble(x.get("xid", ""), len(pairs))
     letters = "ABCDEFGH"
-    left = "".join(f"<li>{md(p['left'])}</li>" for p in pairs)
-    right = "".join(f"<li>{md(pairs[j]['right'])}</li>" for j in order)
+    rows = "".join(f'<tr><td class="n">{i + 1}.</td><td class="l">{md(pairs[i]["left"])}</td>'
+                   f'<td class="n">{letters[k]}.</td><td>{md(pairs[order[k]]["right"])}</td></tr>'
+                   for i, k in zip(range(len(pairs)), range(len(pairs))))
     key = ", ".join(f"{i + 1}–{letters[order.index(i)]}" for i in range(len(pairs)))
-    return (f'<div class="match"><ol class="ma">{left}</ol><ol class="mb">{right}</ol></div>', key)
+    return (f'<table class="match">{rows}</table>', key)
+
+
+def _place(b: dict) -> str:
+    """CSS classes from the author's layout intent (D5). The intent comes from
+    the content; the renderer only enforces sane widths."""
+    lay = b.get("layout") or {}
+    p = lay.get("placement") if lay.get("placement") in ("beside-right", "beside-left", "full", "centre") else "centre"
+    w = {"third": "w-third", "half": "w-half", "two-thirds": "w-two-thirds"}.get(lay.get("width"), "w-half")
+    return f"place {p}" + (f" {w}" if p.startswith("beside") else "")
+
+
+def _group(b: dict, figs: dict) -> str:
+    """Several related pictures composed into ONE visual (D5): sources on the
+    top row, the things they relate to beneath them, joined by teal arrows; a
+    'zoom' target sits in a magnifier circle. Labels are vector text, outside
+    the pictures and editable."""
+    items = [i for i in b.get("items") or [] if figs.get(i.get("ref"))]
+    if len(items) < 2:
+        return ""
+    rel = [r for r in b.get("relations") or [] if 0 <= r.get("from", -1) < len(items) and 0 <= r.get("to", -1) < len(items)]
+    targets = {r["to"] for r in rel}
+    top = [i for i in range(len(items)) if i not in targets]
+    below = {t: [r["to"] for r in rel if r["from"] == t] for t in top}
+    cols = max(1, len(top))
+    cw, ih, gap, circ = 200, 150, 70, 120
+    two_rows = bool(rel)
+    H = 30 + ih + 34 + ((gap + circ + 40) if two_rows else 0)
+    W = cols * cw
+    out = [f'<svg viewBox="0 0 {W} {H}" role="img">',
+           '<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" '
+           'orient="auto-start-reverse"><path class="relh" d="M0,0 L10,5 L0,10 z"/></marker></defs>']
+
+    def pic(i, cx, cy, w, h, clip=None):
+        f = figs[items[i]["ref"]]
+        cid = f"c{abs(hash((items[i]['ref'], cx, cy))) % 10**8}"
+        clip_el = (f'<clipPath id="{cid}"><circle cx="{cx}" cy="{cy}" r="{clip}"/></clipPath>' if clip else "")
+        return (clip_el + f'<image href="{f["img"]}" x="{cx - w / 2:.0f}" y="{cy - h / 2:.0f}" width="{w}" height="{h}" '
+                f'preserveAspectRatio="xMidYMid meet"' + (f' clip-path="url(#{cid})"' if clip else "") + "/>")
+
+    for c, i in enumerate(top):
+        cx, cy = c * cw + cw / 2, 30 + ih / 2
+        out.append(pic(i, cx, cy, cw - 30, ih))
+        out.append(f'<text class="gl" x="{cx}" y="{30 + ih + 22}" text-anchor="middle">'
+                   f'{html.escape(items[i].get("label") or "")}</text>')
+        for k, t in enumerate(below.get(i, [])[:1]):
+            ty = 30 + ih + 34 + gap + circ / 2
+            r = next(x for x in rel if x["from"] == i and x["to"] == t)
+            zoom = r.get("kind") == "zoom"
+            out.append(f'<path class="rel" d="M{cx},{30 + ih + 30} L{cx},{ty - circ / 2 - 4}" marker-end="url(#ah)"/>')
+            if r.get("label"):
+                out.append(f'<text class="gs" x="{cx + 8}" y="{30 + ih + 34 + gap / 2}">{html.escape(r["label"])}</text>')
+            out.append(pic(t, cx, ty, circ, circ, clip=circ / 2 - 2 if zoom else None))
+            if zoom:
+                out.append(f'<circle class="zoom" cx="{cx}" cy="{ty}" r="{circ / 2}"/>')
+            out.append(f'<text class="gl" x="{cx}" y="{ty + circ / 2 + 20}" text-anchor="middle">'
+                       f'{html.escape(items[t].get("label") or "")}</text>')
+    out.append("</svg>")
+    credits = "".join(_credit(figs[i["ref"]]) for i in items)
+    return (f'<figure class="{_place(b)} group">{"".join(out)}<figcaption>{md(b.get("caption"))}{credits}'
+            f'</figcaption></figure>')
 
 
 def _block(b: dict, figs: dict) -> str:
@@ -180,6 +278,8 @@ def _block(b: dict, figs: dict) -> str:
                 f'<strong>Answer:</strong> {md(b.get("answer"))}</div>')
     if t == "think":
         return f'<div class="box think"><strong>Think about it.</strong> {md(b.get("text"))}</div>'
+    if t == "figure_group":
+        return _group(b, figs)
     if t == "list":
         return "<ul>" + "".join(f"<li>{md(i)}</li>" for i in b.get("items") or []) + "</ul>"
     if t == "extension":
@@ -191,8 +291,8 @@ def _block(b: dict, figs: dict) -> str:
             return f'<div class="gap">Figure {html.escape(str(b.get("ref")))} is missing.</div>'
         miss = (f'<div class="missing-labels">Labels with no detected region (not placed): '
                 f'{html.escape(", ".join(f["unplaced"]))}</div>' if f["unplaced"] else "")
-        return (f'<figure>{f["svg"]}<figcaption>{md(b.get("caption") or f["caption"])}{_credit(f)}</figcaption>'
-                f'{miss}</figure>')
+        return (f'<figure class="{_place(b)}">{f["svg"]}<figcaption>{md(b.get("caption") or f["caption"])}'
+                f'{_credit(f)}</figcaption>{miss}</figure>')
     return f"<p>{md(json.dumps(b))}</p>"
 
 
@@ -206,9 +306,11 @@ def _figures(doc: dict, dossier: dict, env_file: Path) -> dict:
         prose = " ".join(str(v) for b in s.get("blocks") or [] for k, v in b.items()
                          if k not in ("type", "source_refs", "ref")).lower()
         for b in s.get("blocks") or []:
-            if b.get("type") == "figure":
-                want.add(b.get("ref"))
-                context[b.get("ref")] = context.get(b.get("ref"), "") + " " + prose
+            refs = ([b.get("ref")] if b.get("type") == "figure" else
+                    [i.get("ref") for i in b.get("items") or []] if b.get("type") == "figure_group" else [])
+            for r in refs:
+                want.add(r)
+                context[r] = context.get(r, "") + " " + prose
     for x in doc["exercises"]:
         for r in [x.get("figure_ref")] + list(x.get("figure_refs") or []):
             if r:
@@ -220,6 +322,8 @@ def _figures(doc: dict, dossier: dict, env_file: Path) -> dict:
             src[f["id"]] = (f["_asset"], [l["label"] for l in f["_labels"]], f["caption"], None)
     for a in dossier["library_assets"]:
         talk = context.get(a["id"], "")
+        if a.get("identity") and a.get("credit"):
+            a["credit"] = {**a["credit"], "title": a["identity"].get("source_title")}
         # the asset's description is a generation brief ("…Name the layer groups
         # exactly: …"); only its first sentence describes the picture
         first = re.split(r"(?<=[.!?])\s", (a["description"] or "").strip(), maxsplit=1)[0]
@@ -232,66 +336,118 @@ def _figures(doc: dict, dossier: dict, env_file: Path) -> dict:
             if ref not in src or not src[ref][0]:
                 continue
             asset, labels, caption, credit = src[ref]
-            png = _download(http, url, asset["storage_path"])
+            png = asset_bytes(http, url, asset)
             svg, unplaced = figure_svg(png, asset.get("vision") or {"w": 1, "h": 1}, labels)
             out[ref] = {"svg": svg, "unplaced": unplaced, "caption": caption, "credit": credit,
                         "img": "data:image/png;base64," + base64.b64encode(png).decode()}
     return out
 
 
-def _photo_row(refs: list[str], figs: dict) -> str:
+def _photo_row(refs: list[str], figs: dict, context: dict | None = None) -> str:
+    """Uniform tiles, lettered, each with what the question says about it."""
     tiles = []
     for i, r in enumerate(refs):
         f = figs.get(r)
         if f:
-            tiles.append(f'<figure><img src="{f["img"]}" alt=""><figcaption><span class="pl">{"ABCDEFGH"[i]}</span>'
-                         f'{_credit(f)}</figcaption></figure>')
-    return f'<div class="photos">{"".join(tiles)}</div>' if tiles else ""
+            letter = "ABCDEFGH"[i]
+            ctx = (context or {}).get(letter)
+            tiles.append(f'<figure><img src="{f["img"]}" alt=""><figcaption><span class="pl">{letter}</span>'
+                         + (f'<span class="ctx">{md(ctx)}</span>' if ctx else "") + f'{_credit(f)}</figcaption></figure>')
+    return f'<div class="photos tiles">{"".join(tiles)}</div>' if tiles else ""
+
+
+LICENCE_URL = {"cc0": "https://creativecommons.org/publicdomain/zero/1.0/",
+               "public domain": "https://creativecommons.org/publicdomain/mark/1.0/"}
+
+
+def licence_url(lic: str) -> str:
+    m = re.match(r"cc (by(?:-sa)?)\s*(\d\.\d)?", (lic or "").lower())
+    if m:
+        return f"https://creativecommons.org/licenses/{m.group(1)}/{m.group(2) or '4.0'}/"
+    return LICENCE_URL.get((lic or "").lower(), "")
+
+
+def credit_line(c: dict) -> str:
+    """Title, Author, Source, Licence (+ link), and the change we made (TASL)."""
+    title = f'“{html.escape(c["title"])}”' if c.get("title") else "Untitled"
+    who = html.escape(c.get("author") or "unknown author")
+    src = f'<a href="{html.escape(c.get("url") or "")}">{html.escape(str(c.get("provider") or "source"))}</a>'
+    lic = html.escape(c.get("licence") or "")
+    lu = licence_url(c.get("licence") or "")
+    lic = f'<a href="{lu}">{lic}</a>' if lu else lic
+    return f"{title} by {who}, {src}, {lic}. Resized for print."
+
+
+def _sort(x: dict) -> tuple[str, str]:
+    import hashlib
+    items = sorted(x.get("items") or [], key=lambda i: hashlib.sha1(f"{x.get('xid')}:{i.get('text')}".encode()).hexdigest())
+    cats = "".join(f'<div class="cat">{md(c)}</div>' for c in x.get("categories") or [])
+    q = (f'<div class="sortitems">{" · ".join(md(i.get("text")) for i in items)}</div>'
+         f'<div class="sortbox">{cats}</div>')
+    key = "; ".join(f'{md(c)}: ' + ", ".join(md(i["text"]) for i in x.get("items") or [] if i.get("category") == c)
+                    for c in x.get("categories") or [])
+    return q, key
 
 
 def chapter_html(doc: dict, figs: dict) -> str:
     ch, w = doc["chapter"], doc["work"]
+    running = f'Chapter {ch["number"]} · {ch["title"]}'.replace('"', "'")
     body = [f'<div class="chapter-head"><div class="num">Chapter {ch["number"]}</div><h1>{md(ch["title"])}</h1>'
             f'<div class="meta">{md(w["title"])} · ages {md(w["age_band"])} · Cambridge Lower Secondary '
             f'{", ".join(ch["node_codes"])}</div></div>', f'<p class="opening">{md(doc["plan"].get("opening"))}</p>']
-    for s in doc["sections"]:
-        body.append(f"<h2>{md(s['heading'])}</h2>")
-        body += [_block(b, figs) for b in s.get("blocks") or []]
     if doc.get("videos"):
         links = " · ".join(f'<a href="https://www.youtube.com/watch?v={v.split(":", 1)[1]}">'
-                           f'youtu.be/{v.split(":", 1)[1]}</a>' for v in doc["videos"])
-        body.append(f'<div class="watch"><strong>Watch the lesson:</strong> {links}</div>')
+                           f'youtube.com/watch?v={v.split(":", 1)[1]}</a>' for v in doc["videos"])
+        body.append(f'<div class="watch"><strong>Watch the SketchCast lesson on this topic:</strong> {links}</div>')
+    thinks = []
+    for s in doc["sections"]:
+        body.append(f"<h2>{md(s['heading'])}</h2>")
+        for b in s.get("blocks") or []:
+            if b.get("type") == "think" and b.get("answer"):
+                thinks.append((s["heading"], b))
+            body.append(_block(b, figs))
     body.append("<h2>Practice</h2>")
     for tier, name in (("guided", "Getting started"), ("independent", "On your own"), ("challenge", "Challenge")):
         xs = [x for x in doc["exercises"] if x.get("tier") == tier]
         if not xs:
             continue
         body.append(f"<h3>{name}</h3>")
-        for n, x in enumerate(xs, 1):
+        for x in xs:
             if x.get("item_type") == "match" and x.get("pairs"):
                 opts, _ = _match(x)
+            elif x.get("item_type") == "sort" and x.get("items"):
+                opts, _ = _sort(x)
             else:
                 opts = ("<ol class='opts'>" + "".join(f"<li>{md(o)}</li>" for o in x["options"]) + "</ol>"
                         if x.get("options") else "")
             fig = _block({"type": "figure", "ref": x["figure_ref"]}, figs) if x.get("figure_ref") else ""
-            fig += _photo_row(x.get("figure_refs") or [], figs)
+            fig += _photo_row(x.get("figure_refs") or [], figs, x.get("figure_context"))
             body.append(f'<div class="ex"><strong>{x["xid"].upper()}.</strong> {md(x["stem"])} '
                         f'<span class="marks">[{x.get("marks")}]</span>{opts}{fig}</div>')
     body.append('<div class="answers"><h2>Answers and worked solutions</h2>')
+    if thinks:
+        body.append('<h3>Think about it</h3><ol class="think-answers">' +
+                    "".join(f'<li><em>{md(b.get("text"))}</em><br>{md(b.get("answer"))}</li>' for _, b in thinks) +
+                    "</ol><h3>Practice</h3>")
     for x in doc["exercises"]:
-        answer = _match(x)[1] if x.get("item_type") == "match" and x.get("pairs") else md(x["answer"])
+        if x.get("item_type") == "match" and x.get("pairs"):
+            answer = _match(x)[1]
+        elif x.get("item_type") == "sort" and x.get("items"):
+            answer = _sort(x)[1]
+        else:
+            answer = md(x["answer"])
         scheme = "".join(f'<li>{md(p.get("point"))} <span class="marks">({p.get("marks")})</span></li>'
                          for p in x.get("marking_scheme") or [])
         body.append(f'<div class="ex"><strong>{x["xid"].upper()}.</strong> <strong>{answer}</strong><br>'
                     f'{md(x.get("worked_solution"))}<div class="marks">Mark scheme:</div><ul>{scheme}</ul></div>')
     body.append("</div>")
-    credits = sorted({f'{c["author"] or "Unknown"}, {c["licence"]}, {c.get("provider")} — {c.get("url")}'
-                      for f in figs.values() if (c := f.get("credit"))})
+    credits = sorted({credit_line(c) for f in figs.values() if (c := f.get("credit"))})
     if credits:
-        body.append('<div class="credits"><strong>Picture credits.</strong> ' +
-                    "; ".join(html.escape(c) for c in credits) + "</div>")
+        body.append('<div class="credits"><strong>Picture credits.</strong><ul>' +
+                    "".join(f"<li>{c}</li>" for c in credits) + "</ul></div>")
+    page_style = f'@page {{ @top-right {{ content: "{html.escape(running)}"; }} }} @page :first {{ @top-right {{ content: none; }} }}'
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'><title>{html.escape(ch['title'])}</title>"
-            f"<style>{CSS}</style></head><body>{''.join(body)}</body></html>")
+            f"<style>{CSS}{page_style}</style></head><body>{''.join(body)}</body></html>")
 
 
 def review_html(doc: dict) -> str:
@@ -319,10 +475,31 @@ def review_html(doc: dict) -> str:
                   for c in g.get("coverage") or [])
     ass = "".join(f"<tr><td>{a.get('xid')}</td><td>{a.get('verdict')}</td><td>{html.escape(', '.join(a.get('failed') or []))}"
                   f"</td><td>{md(a.get('fix'))}</td></tr>" for a in g.get("assessment") or [])
-    gates = (f"<h2>The two compulsory gates</h2><p><strong>Content coverage: {g.get('coverage_gate', '?').upper()}"
-             f"</strong> · <strong>Assessment validity: {g.get('assessment_gate', '?').upper()}</strong> · "
-             f"<strong>{verdict}</strong></p><table><tr><th>objective</th><th>component</th><th>taught in</th>"
-             f"<th>verdict</th></tr>{cov}</table><table><tr><th>exercise</th><th>verdict</th><th>failed</th>"
+    vis = g.get("visual") or {}
+    vrows = "".join(
+        f"<tr><td>{html.escape(str(v.get('unit')))}</td><td>{html.escape(str(v.get('ref'))[:22])}</td>"
+        f"<td>{md(v.get('shows'))}</td><td>{'✓' if v.get('identity_consistent') else '✗'} identity · "
+        f"{'✓' if v.get('text_consistent') else '✗'} text · {'✓' if v.get('suitable') else '✗'} suitable · "
+        f"{'✓' if v.get('labels_ok') else '✗'} labels</td><td>{v.get('confidence')}</td></tr>"
+        for v in vis.get("figures") or [])
+    xrows = "".join(
+        f"<tr><td>{html.escape(str(v.get('xid')))}</td><td>{'✓' if v.get('answer_inferable') else '✗'} inferable · "
+        f"{'✓' if v.get('scheme_matches_pictures') else '✗'} scheme</td><td>"
+        + "; ".join(f"{p.get('label')}: {html.escape(str(p.get('shows')))}" for p in v.get("per_picture") or [])
+        + f"</td><td>{v.get('confidence')}</td></tr>" for v in vis.get("exercises") or [])
+    hr = "".join(f"<li>{html.escape(str(h.get('unit')))} {html.escape(str(h.get('ref') or ''))}: {md(h.get('why'))}</li>"
+                 for h in doc["review"].get("human_review") or [])
+    gates = (f"<h2>The three independent gates</h2><p><strong>Content: {str(g.get('coverage_gate', '?')).upper()}"
+             f"</strong> · <strong>Visual: {str(g.get('visual_gate', '?')).upper()}</strong> · "
+             f"<strong>Assessment: {str(g.get('assessment_gate', '?')).upper()}</strong> · <strong>{verdict}</strong></p>"
+             f"<h3>Needs a person (the gates could not judge with confidence)</h3><ul>{hr or '<li>none</li>'}</ul>"
+             f"<h3>Content: objective coverage</h3><table><tr><th>objective</th><th>component</th><th>taught in</th>"
+             f"<th>verdict</th></tr>{cov}</table>"
+             f"<h3>Visual: every placed picture, as printed</h3><table><tr><th>unit</th><th>picture</th><th>what it "
+             f"shows</th><th>checks</th><th>conf.</th></tr>{vrows}</table>"
+             f"<h3>Visual: every question picture against its key</h3><table><tr><th>ex</th><th>checks</th>"
+             f"<th>what each picture shows</th><th>conf.</th></tr>{xrows}</table>"
+             f"<h3>Assessment validity</h3><table><tr><th>exercise</th><th>verdict</th><th>failed</th>"
              f"<th>fix</th></tr>{ass}</table>")
     return (f"<!doctype html><html><head><meta charset='utf-8'><title>Gate D review — ch {doc['chapter']['number']}</title>"
             "<style>body{font-family:Segoe UI,Arial,sans-serif;margin:24px;color:#1d2433}table{border-collapse:collapse;"
@@ -351,4 +528,10 @@ def render(doc: dict, dossier: dict, env_file: Path, out_dir: Path) -> dict:
     subprocess.run([EDGE, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
                     f"--print-to-pdf={pdf}", page.resolve().as_uri()], check=True, timeout=120,
                    capture_output=True)
-    return {"html": str(page), "pdf": str(pdf), "review": str(packet)}
+    from publishing.manuscript.layout_check import diagnose, report_html
+    diag = diagnose(str(pdf))
+    packet.write_text(review_html(doc).replace("</body></html>", report_html(diag) + "</body></html>"),
+                      encoding="utf-8")
+    (out_dir / f"ch{n:02d}-diagnostics.json").write_text(json.dumps(diag, indent=1), encoding="utf-8")
+    return {"html": str(page), "pdf": str(pdf), "review": str(packet), "hard_defects": len(diag["hard"]),
+            "pages": diag["page_count"]}

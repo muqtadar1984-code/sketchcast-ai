@@ -23,6 +23,14 @@ dropped, even if the dossier mentions it; record it in `source_gaps` as
 "belongs to chapter N". Mention such ideas at most in passing, as a pointer
 forward ("you will meet … in Chapter N").
 
+PICTURES. This is a full-colour book. Prefer, in order: a real photo (its
+SOURCE identity must fit), a colour illustration, an accurate diagram, and a
+whiteboard drawing only when nothing else fits. Each picture must teach
+something the others do not: never show the same organism or object twice
+unless the two pictures contrast something. A relationship between things
+(an organism and its cells; before and after) is planned as ONE figure_group.
+Put the definition of each key term in exactly one section.
+
 For each section give its purpose (one sentence), the curriculum node codes it
 teaches (only the chapter's own codes), the dossier ids it will draw on, and
 the figure ids (fig:/asset:) it will place, if any. A picture the blueprint

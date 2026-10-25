@@ -39,7 +39,23 @@ def check_sections(sections: list[dict], valid_ids: set[str], figure_ids: set[st
                 if b.get("ref") not in figure_ids:
                     out.append({"unit": where, "check": "figure_exists", "verdict": "fail",
                                 "detail": f"figure {b.get('ref')!r} is not a pinned figure or approved asset"})
-        prose = " ".join(_text(b) for b in s.get("blocks") or [] if b.get("type") != "figure")
+            if b.get("type") == "figure_group":
+                has_fig = True
+                items = b.get("items") or []
+                bad = [i.get("ref") for i in items if i.get("ref") not in figure_ids]
+                if len(items) < 2 or bad:
+                    out.append({"unit": where, "check": "figure_exists", "verdict": "fail",
+                                "detail": f"figure group needs 2+ known pictures; unknown: {bad}"})
+                for r in b.get("relations") or []:
+                    if not all(isinstance(r.get(k), int) and 0 <= r[k] < len(items) for k in ("from", "to")):
+                        out.append({"unit": where, "check": "figure_exists", "verdict": "fail",
+                                    "detail": f"relation {r} points outside the group"})
+            if b.get("type") == "think" and not str(b.get("answer") or "").strip():
+                out.append({"unit": where, "check": "think", "verdict": "fail",
+                            "detail": "a think box needs its answer (printed at the end of the chapter)"})
+        if sum(1 for b in s.get("blocks") or [] if b.get("type") == "think") > 1:
+            out.append({"unit": sid, "check": "think", "verdict": "fail", "detail": "more than one think box"})
+        prose = " ".join(_text(b) for b in s.get("blocks") or [] if b.get("type") not in ("figure", "figure_group"))
         m = DEICTIC.search(prose)
         if m and not has_fig:
             out.append({"unit": sid, "check": "deictic", "verdict": "fail",
@@ -81,6 +97,15 @@ def check_assessment(x: dict) -> list[dict]:
         if not opts or not (letter and ord(ans) - 97 < len(opts) or any(ans == o or ans.endswith(o) for o in opts)):
             out.append({"unit": xid, "check": "assessment", "verdict": "fail",
                         "detail": f"the answer {x.get('answer')!r} is not one of the options"})
+    if x.get("item_type") == "sort":
+        cats = [_norm(c) for c in x.get("categories") or []]
+        its = x.get("items") or []
+        if len(cats) < 2 or len(its) < 4 or any(_norm(i.get("category")) not in cats for i in its):
+            out.append({"unit": xid, "check": "assessment", "verdict": "fail",
+                        "detail": "a sort task needs 2+ categories and 4+ items, each in one of the categories"})
+    if len(x.get("figure_refs") or []) >= 2 and len(x.get("figure_context") or {}) < len(x["figure_refs"]):
+        out.append({"unit": xid, "check": "assessment", "verdict": "fail",
+                    "detail": "an observation task must say where each sample came from (figure_context)"})
     for p in x.get("marking_scheme") or []:
         if len(str(p.get("point") or "").split()) < 4:
             out.append({"unit": xid, "check": "assessment", "verdict": "fail",
@@ -99,6 +124,14 @@ def check_exercises(exercises: list[dict], valid_ids: set[str], figure_ids: set[
         if x.get("skill_code") and x["skill_code"] not in skills:
             out.append({"unit": x.get("xid", "?"), "check": "coverage", "verdict": "warn",
                         "detail": f"skill {x['skill_code']!r} is not one of {sorted(skills)}"})
+    tf = [x for x in exercises if x.get("item_type") == "true_false"]
+    if len(tf) > 1:
+        out.append({"unit": "exercises", "check": "assessment", "verdict": "fail",
+                    "detail": f"{len(tf)} true/false items; at most one"})
+    closed = [_norm(x.get("answer")) for x in exercises if x.get("item_type") in ("true_false", "mcq")]
+    if len(closed) >= 3 and len(set(closed)) == 1:
+        out.append({"unit": "exercises", "check": "assessment", "verdict": "fail",
+                    "detail": f"every closed item has the same answer ({closed[0]!r}); a guessable pattern"})
     if len(photo_ids) >= 2 and not any(len(set(x.get("figure_refs") or []) & photo_ids) >= 2 for x in exercises):
         out.append({"unit": "exercises", "check": "observation", "verdict": "fail",
                     "detail": "no observation exercise uses two or more of the chapter's real photographs"})

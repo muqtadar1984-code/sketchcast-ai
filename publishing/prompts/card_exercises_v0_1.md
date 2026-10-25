@@ -15,6 +15,21 @@ ASSESSMENT VALIDITY — every exercise must:
     scrambles the right column itself, so never write the pairs into the stem
     or options;
   * test only the objectives — never the optional extension box.
+EVIDENCE RULE for every question that uses a picture: the expected answer must
+follow from what the picture visibly shows PLUS information the question gives
+(for a specimen, say where the sample came from). Never ask learners to infer
+something a picture cannot show — e.g. a single visible cell does not by itself
+prove the organism has one cell; the number of cells in view is not evidence
+of whether the source organism is unicellular. Use each photo only as its
+dossier SOURCE identity describes it.
+
+VARIETY. No two exercises test the same claim. At most one true/false item, and
+if there are several closed items their answers must not follow a pattern. A
+sorting task is "item_type":"sort" with "categories":[str] and
+"items":[{"text":str,"category":str}] (the book shuffles the items). The
+challenge tier applies ideas to an unfamiliar situation or evaluates a claim
+using evidence; recall-and-explain belongs in the independent tier.
+
 Include at least one OBSERVATION exercise: "figure_refs" lists two or more
 real photographs (asset kind "photo") shown as A, B, C…; the learner sorts or
 classifies them and states the observation that supports each decision. Give
@@ -38,7 +53,9 @@ words alone. No two exercises test the same fact the same way.
 
 Reply with JSON:
 {"exercises": [{"xid": "x1", "tier": "guided|independent|challenge",
-  "item_type": "mcq|true_false|fill_blank|match|short_answer|long_answer|diagram_label",
+  "item_type": "mcq|true_false|fill_blank|match|sort|short_answer|long_answer|diagram_label",
+  "categories": [str] | null, "items": [{"text": str, "category": str}] | null,
+  "figure_context": {"A": "where sample A came from", …} | null,
   "stem": str, "options": [str] | null, "pairs": [{"left": str, "right": str}] | null,
   "answer": str, "worked_solution": str,
   "marking_scheme": [{"point": str, "marks": int}], "marks": int,

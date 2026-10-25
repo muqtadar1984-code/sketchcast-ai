@@ -145,18 +145,36 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) 
         return [{k: v for k, v in x.items() if k in ("xid", "tier", "item_type", "stem", "options", "pairs",
                                                       "figure_ref", "figure_refs")} for x in exercises]
 
-    def do_review(unit):
+    def do_review(unit, fig=None):
+        """Three independent gates (founder 2026-10-25, D1): CONTENT, VISUAL,
+        ASSESSMENT. The visual gate looks at the actual pictures, figures and
+        question pictures alike, and flags what it cannot judge with confidence."""
+        nonlocal figure_ids
+        if fig is None:                    # after a revision: the sections may place new pictures
+            fig = figure_fit(run, sections, env_file)
+            figure_ids -= fig["removed"]
+        vex = visual_exercises(run, exercises, env_file)
         r = run.call("reviewer", "review", head + "Drafted chapter:\n" + json.dumps(
             {"opening": plan.get("opening"), "sections": sections, "exercises": blind()}, ensure_ascii=False,
             indent=1), 12000, unit)
-        # the two compulsory gates (founder 2026-10-25): coverage + assessment validity
         r["gates"] = run.call("reviewer", "gates", head + "Chapter to gate:\n" + json.dumps(
             {"sections": sections, "exercises": exercises}, ensure_ascii=False, indent=1), 9000, f"{unit}:gates")
+        visual_fail = [f for f in fig["findings"] if f.get("severity") == "blocker"] + vex["findings"]
+        r["gates"]["visual"] = {"figures": fig["verdicts"], "exercises": vex["verdicts"], "removed": sorted(fig["removed"]),
+                                "gaps": fig["gaps"], "failures": visual_fail}
+        r["gates"]["visual_gate"] = "fail" if visual_fail else "pass"
+        if vex["findings"]:
+            r["gates"]["assessment_gate"] = "fail"
+        r["gates"]["content_gate"] = r["gates"].get("coverage_gate")
+        r["human_review"] = fig["human_review"] + vex["human_review"]
+        r.setdefault("findings", []).extend(fig["findings"] + vex["findings"])
+        plan.setdefault("visual_gaps", []).extend(g for g in fig["gaps"] if g not in plan.get("visual_gaps", []))
         return r
 
     def is_ready(r, fs):
         g = r.get("gates") or {}
         return (g.get("coverage_gate") == "pass" and g.get("assessment_gate") == "pass"
+                and g.get("visual_gate") == "pass"
                 and not any(f["verdict"] == "fail" for f in fs)
                 and not any(f.get("severity") == "blocker" for f in r.get("findings") or []))
 
@@ -178,7 +196,7 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) 
 
     fold_extension_sections(sections, plan)
     findings = checks()
-    review = do_review("review")
+    review = do_review("review", fig=fit)
     rounds = []
     # REVISE (§4 review → revise), at most twice: the author resolves every
     # blocker and major finding, failed gate item and failed check; the chapter
@@ -217,8 +235,6 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) 
         findings = checks()
         review = do_review(f"review:{rnd + 1}")
     review["rounds"] = rounds
-
-    review.setdefault("findings", []).extend(fit["findings"])
     review["ready_for_gate_d"] = is_ready(review, findings)
     chapter_doc = {"chapter": ch, "work": d["work"], "plan": plan, "sections": sections, "exercises": exercises,
                    "checks": findings, "review": review, "costs": run.costs,
@@ -263,57 +279,173 @@ def dedupe(sections: list[dict]) -> None:
         s["blocks"] = keep
 
 
-FIT_PROMPT = """You are checking a picture for a children's science study guide (ages {age}).
-Section: "{heading}". The author's draft caption: "{caption}".
-Judge the PICTURE, not the draft caption. Answer with JSON:
+FIT_PROMPT = """You are the VISUAL GATE of an educational publisher (learners aged {age}).
+Section: "{heading}". What the text around this picture says: "{context}".
+The author's caption: "{caption}". Labels to be drawn on it: {labels}.
+The picture's IDENTITY RECORD (from its source, not from us): {identity}.
+Judge the PICTURE as it will be printed. Answer with JSON:
 {{"shows": "what the picture actually shows, in one sentence",
-  "accurate": true|false,   // scientifically correct, nothing misleading for a child
-  "relevant": true|false,   // genuinely helps teach this section
+  "identity_consistent": true|false, // what you see agrees with the identity record (true when there is none and nothing contradicts)
+  "accurate": true|false,     // scientifically correct and not misleading for a learner
+  "relevant": true|false,     // it genuinely helps teach what the text says here
+  "text_consistent": true|false, // the text and caption say nothing about this picture that it does not show
+  "suitable": true|false,     // appropriate for the age (no disease/medical imagery unless the text is about it)
+  "labels_ok": true|false,    // every label names something visible in the picture
   "caption": "an accurate caption (max 25 words) that says only what the picture shows",
-  "not_to_scale": true|false, // things of very different real sizes drawn at similar sizes (e.g. a bacterium beside a person)
-  "problem": "why it is inaccurate or irrelevant, if it is"}}"""
+  "not_to_scale": true|false, // things of very different real sizes drawn at similar sizes
+  "confidence": 0.0-1.0,      // how sure you are of these judgements
+  "problem": "what is wrong, if anything"}}"""
+
+EXERCISE_PROMPT = """You are the VISUAL GATE for one exercise (learners aged {age}). The image shows the
+exercise's pictures side by side, labelled {letters}.
+Question: "{stem}"
+Information the question gives about each picture: {context}
+Identity records (from each picture's source): {identity}
+Expected answer: "{answer}"
+Marking scheme: {scheme}
+Decide whether a learner could reach the expected answer from what each picture visibly shows plus the
+information given — and nothing else. Answer with JSON:
+{{"per_picture": [{{"label": "A", "shows": str, "consistent_with_identity": true|false,
+                   "supports_expected": true|false}}],
+  "answer_inferable": true|false, "scheme_matches_pictures": true|false,
+  "confidence": 0.0-1.0, "problem": "what is wrong, if anything"}}"""
+
+CONFIDENT = 0.7
 
 
-def figure_fit(run: Run, sections: list[dict], env_file: Path) -> dict:
-    """Vision check of every placed figure (§8 ladder step 5). An unfit picture
-    is REMOVED from the draft and becomes a visual gap and a finding — a wrong
-    picture is worse than no picture."""
-    from publishing.manuscript.render import _download
+def _sources(run: "Run") -> dict:
+    src = {f["id"]: (f["_asset"], f.get("caption"), [l["label"] for l in f.get("_labels") or []], None)
+           for t in run.d["topics"] for f in t["figures"]}
+    src |= {a["id"]: (a["_asset"], a.get("description"), [], a.get("identity")) for a in run.d["library_assets"]}
+    return src
+
+
+def figure_fit(run: "Run", sections: list[dict], env_file: Path) -> dict:
+    """VISUAL GATE, figures (D1/D2): every placed picture — alone or inside a
+    figure group — is checked as printed against its identity record, its
+    caption, its labels and the text around it. A wrong picture is removed (a
+    visual gap); an uncertain judgement is kept and flagged for human review,
+    never passed as certain."""
+    from publishing.manuscript.render import asset_bytes
     from publishing.snapshot import client, load_env
 
-    src = {f["id"]: f["_asset"] for t in run.d["topics"] for f in t["figures"]}
-    src |= {a["id"]: a["_asset"] for a in run.d["library_assets"]}
+    src = _sources(run)
     url, key = load_env(env_file)
-    gaps, findings, removed = [], [], set()
+    gaps, findings, removed, verdicts, human = [], [], set(), [], []
     with client(url, key) as http:
+        def check(s, ref, caption, labels, context):
+            asset, _, base_labels, idn = src[ref]
+            v = run.look(asset_bytes(http, url, asset), FIT_PROMPT.format(
+                age=run.d["work"]["age_band"], heading=s.get("heading"), context=context[:900],
+                caption=caption, labels=json.dumps(labels or base_labels), identity=json.dumps(idn or "none")),
+                s["sid"])
+            v["ref"], v["unit"] = ref, s["sid"]
+            verdicts.append(v)
+            return v
+
         for s in sections:
+            context = " ".join(str(b.get("text") or "") for b in s.get("blocks") or [])
             keep = []
             for b in s.get("blocks") or []:
-                if b.get("type") == "figure" and src.get(b.get("ref")):
-                    png = _download(http, url, src[b["ref"]]["storage_path"])
-                    v = run.look(png, FIT_PROMPT.format(age=run.d["work"]["age_band"], heading=s.get("heading"),
-                                                        caption=b.get("caption")), s["sid"])
+                refs = ([b.get("ref")] if b.get("type") == "figure" else
+                        [i.get("ref") for i in b.get("items") or []] if b.get("type") == "figure_group" else [])
+                refs = [r for r in refs if r in src]
+                if not refs:
+                    keep.append(b)
+                    continue
+                bad = []
+                for r in refs:
+                    labels = [i.get("label") for i in b.get("items") or [] if i.get("ref") == r]
+                    v = check(s, r, b.get("caption"), labels, context)
                     if not v.get("shows"):
-                        # the vision call answered nothing: no evidence against the
-                        # picture, so it stays — flagged for the person at Gate D
-                        findings.append({"unit": s["sid"], "kind": "figure", "severity": "minor",
-                                         "quote": b.get("caption"), "detail": f"{b['ref']}: fit check unanswered"})
-                        keep.append(b)
+                        human.append({"unit": s["sid"], "ref": r, "why": "the visual gate gave no answer"})
                         continue
-                    if v.get("accurate") is True and v.get("relevant") is True and v.get("caption"):
-                        b["caption"] = v["caption"]           # say only what the picture shows
+                    hard = [k for k in ("identity_consistent", "accurate", "relevant", "suitable")
+                            if v.get(k) is not True]
+                    if hard:
+                        bad.append((r, v, hard))
+                    elif float(v.get("confidence") or 0) < CONFIDENT:
+                        human.append({"unit": s["sid"], "ref": r, "why": f"low confidence {v.get('confidence')}: "
+                                      f"{v.get('problem') or v.get('shows')}"})
+                    if v.get("text_consistent") is False or v.get("labels_ok") is False:
+                        findings.append({"unit": s["sid"], "kind": "figure", "severity": "blocker",
+                                         "quote": b.get("caption"),
+                                         "detail": f"{r}: the text, caption or labels claim what the picture does not "
+                                                   f"show — it shows {v.get('shows')!r}. {v.get('problem') or ''}"})
+                    if b.get("type") == "figure" and not hard and v.get("caption"):
+                        b["caption"] = v["caption"]
                         if v.get("not_to_scale") is True and "not to scale" not in b["caption"].lower():
                             b["caption"] = b["caption"].rstrip(". ") + " (not to scale)."
-                    if not (v.get("accurate") is True and v.get("relevant") is True):
-                        gaps.append({"need": b.get("caption"), "why": f"{b['ref']} removed: shows {v.get('shows')!r}; "
-                                     f"{v.get('problem') or 'did not pass the fit check'}"})
-                        findings.append({"unit": s["sid"], "kind": "figure", "severity": "major",
-                                         "quote": b.get("caption"), "detail": f"removed {b['ref']}: {v.get('shows')}"})
-                        removed.add(b["ref"])
+                    if b.get("type") == "figure_group" and v.get("not_to_scale") is True \
+                            and "not to scale" not in str(b.get("caption")).lower():
+                        b["caption"] = str(b.get("caption") or "").rstrip(". ") + " Not to scale."
+                for r, v, hard in bad:
+                    removed.add(r)
+                    gaps.append({"need": b.get("caption"), "why": f"{r} removed ({', '.join(hard)} failed): "
+                                 f"shows {v.get('shows')!r}; {v.get('problem') or ''}"})
+                    findings.append({"unit": s["sid"], "kind": "figure", "severity": "major",
+                                     "quote": b.get("caption"), "detail": f"removed {r}: {v.get('shows')}"})
+                if b.get("type") == "figure" and bad:
+                    continue
+                if b.get("type") == "figure_group":
+                    b["items"] = [i for i in b.get("items") or [] if i.get("ref") not in removed]
+                    if len(b["items"]) < 2:
                         continue
                 keep.append(b)
             s["blocks"] = keep
-    return {"gaps": gaps, "findings": findings, "removed": removed}
+    return {"gaps": gaps, "findings": findings, "removed": removed, "verdicts": verdicts, "human_review": human}
+
+
+def visual_exercises(run: "Run", exercises: list[dict], env_file: Path) -> dict:
+    """VISUAL GATE, questions (D2): the reviewer sees the question's actual
+    pictures together with the stem, what the question says about each
+    picture, the identity records, the expected answer and the marking scheme."""
+    import io
+
+    from PIL import Image, ImageDraw
+
+    from publishing.manuscript.render import asset_bytes
+    from publishing.snapshot import client, load_env
+
+    src = _sources(run)
+    url, key = load_env(env_file)
+    findings, human, verdicts = [], [], []
+    with client(url, key) as http:
+        for x in exercises:
+            refs = [r for r in ([x["figure_ref"]] if x.get("figure_ref") else []) + list(x.get("figure_refs") or [])
+                    if r in src]
+            if not refs:
+                continue
+            tiles = [Image.open(io.BytesIO(asset_bytes(http, url, src[r][0]))).convert("RGB") for r in refs]
+            h = 420
+            tiles = [t.resize((max(1, int(t.width * h / t.height)), h)) for t in tiles]
+            sheet = Image.new("RGB", (sum(t.width for t in tiles) + 20 * (len(tiles) + 1), h + 60), "white")
+            xpos, draw = 20, ImageDraw.Draw(sheet)
+            letters = "ABCDEFGH"[:len(tiles)]
+            for t, letter in zip(tiles, letters):
+                sheet.paste(t, (xpos, 10))
+                draw.text((xpos + t.width // 2, h + 25), letter, fill="black")
+                xpos += t.width + 20
+            buf = io.BytesIO()
+            sheet.save(buf, "PNG")
+            idn = {letters[i]: src[r][3] for i, r in enumerate(refs)}
+            v = run.look(buf.getvalue(), EXERCISE_PROMPT.format(
+                age=run.d["work"]["age_band"], letters=", ".join(letters), stem=x.get("stem"),
+                context=json.dumps(x.get("figure_context") or {}), identity=json.dumps(idn),
+                answer=x.get("answer"), scheme=json.dumps(x.get("marking_scheme"))), x["xid"])
+            v["xid"] = x["xid"]
+            verdicts.append(v)
+            if not v.get("per_picture") and v.get("answer_inferable") is None:
+                human.append({"unit": x["xid"], "why": "the visual gate gave no answer"})
+            elif v.get("answer_inferable") is not True or v.get("scheme_matches_pictures") is not True or \
+                    any(p.get("supports_expected") is not True or p.get("consistent_with_identity") is not True
+                        for p in v.get("per_picture") or []):
+                findings.append({"unit": x["xid"], "kind": "assessment", "severity": "blocker",
+                                 "detail": "the pictures do not support the expected answer: "
+                                           f"{v.get('problem') or json.dumps(v.get('per_picture'))[:400]}"})
+            elif float(v.get("confidence") or 0) < CONFIDENT:
+                human.append({"unit": x["xid"], "why": f"low confidence {v.get('confidence')}: {v.get('problem')}"})
+    return {"findings": findings, "human_review": human, "verdicts": verdicts}
 
 
 def store(conn, d: dict, doc: dict) -> None:

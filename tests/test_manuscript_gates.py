@@ -58,6 +58,47 @@ def test_a_generated_image_never_poses_as_a_photo():
     assert D.usable_library_asset(drawing) == (True, None, "illustration")
 
 
+def test_a_sort_task_must_be_well_formed():
+    good = _x(item_type="sort", pairs=None, categories=["unicellular", "multicellular"],
+              items=[{"text": t, "category": c} for t, c in (("Amoeba", "unicellular"), ("human", "multicellular"),
+                                                             ("bacterium", "unicellular"), ("pea plant", "multicellular"))])
+    bad = _x(item_type="sort", pairs=None, categories=["unicellular"], items=[{"text": "x", "category": "y"}])
+    assert not V.check_assessment(good) and V.check_assessment(bad)
+
+
+def test_an_observation_task_says_where_each_sample_came_from():
+    x = _x(item_type="short_answer", pairs=None, figure_refs=["asset:a", "asset:b"], figure_context={"A": "pond water"})
+    assert any("figure_context" in f["detail"] for f in V.check_assessment(x))
+
+
+def test_true_false_items_are_limited_and_patterns_refused():
+    tf = [_x(xid=f"x{i}", item_type="true_false", pairs=None, answer="True") for i in range(3)]
+    f = V.check_exercises(tf, set(), set(), {"7Bs.01"})
+    assert any("true/false items" in c["detail"] for c in f) and any("same answer" in c["detail"] for c in f)
+
+
+def test_a_think_box_carries_its_answer_and_appears_once():
+    s = {"sid": "s1", "blocks": [{"type": "think", "text": "Why?", "source_refs": ["claim:a"]},
+                                 {"type": "think", "text": "And?", "answer": "Because", "source_refs": ["claim:a"]}]}
+    f = V.check_sections([s], {"claim:a"}, set())
+    assert any("answer" in c["detail"] for c in f) and any("more than one think" in c["detail"] for c in f)
+
+
+def test_identity_flags_medical_sources_and_licence_links_resolve():
+    from publishing.manuscript import identity as I
+    assert I.MEDICAL.search("Amebic colitis (H&E)") and I.MEDICAL.search("Red blood cells infected with malaria")
+    assert not I.MEDICAL.search("Paramecium bursaria - 400x")
+    assert R.licence_url("CC BY 2.0") == "https://creativecommons.org/licenses/by/2.0/"
+    assert R.licence_url("CC0").startswith("https://creativecommons.org/publicdomain/zero")
+
+
+def test_book_selection_prefers_photos_then_colour():
+    assert D.representation({"provenance": "flickr"}) == "photo"
+    assert D.representation({"provenance": "generated", "asset_key": "plant_cell__colour"}) == "colour_illustration"
+    assert D.representation({"provenance": "generated", "asset_key": "plant_cell"}) == "whiteboard"
+    assert D.REPRESENTATION_ORDER.index("photo") < D.REPRESENTATION_ORDER.index("whiteboard")
+
+
 def test_an_observation_task_is_required_when_photos_exist():
     xs = [_x()]
     f = V.check_exercises(xs, {"claim:a"}, set(), {"7Bs.01"}, photo_ids={"asset:p1", "asset:p2"})

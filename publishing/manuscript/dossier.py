@@ -69,6 +69,21 @@ def usable_library_asset(a: dict) -> tuple[bool, dict | None, str]:
     return (lic is not None), lic, "photo" if lic else "unlicensed"
 
 
+# The BOOK selection policy (founder 2026-10-25, D4): one shared semantic
+# library, a different representation per use. The video engine keeps choosing
+# whiteboard art exactly as before; a full-colour book prefers, in order:
+REPRESENTATION_ORDER = ("photo", "colour_illustration", "diagram_vector", "whiteboard")
+
+
+def representation(a: dict) -> str:
+    prov = str(a.get("provenance") or "")
+    if prov == "book":
+        return a.get("representation") or "colour_illustration"
+    if prov.startswith("generated"):
+        return "colour_illustration" if str(a.get("asset_key") or "").endswith("__colour") else "whiteboard"
+    return "photo"
+
+
 def _q(http, path, **params):
     r = http.get(path, params=params)
     r.raise_for_status()
@@ -165,23 +180,46 @@ def build(conn, slug: str, chapter: int, env_file: Path) -> dict:
         out["chapter"]["skills"] = [{"code": r["code"], "text": r["title"]} for r in rows if r["code"] not in nodes]
 
         seen, refused = set(), []
-        for need in out["chapter"]["illustration_needs"]:
-            for w in _kw(need.split(":", 1)[-1]):
-                # the source URL names the file in English even when a Malay deck keyed the asset
-                for a in _q(http, "/visual_assets", select="id,asset_key,description,group_ids,storage_path,vision,"
-                            "provenance,source,asset_format", status="eq.approved", asset_format="eq.png",
-                            **{"or": f"(asset_key.ilike.*{w}*,topic.ilike.*{w}*,source.ilike.*{w}*)"}, limit="8"):
-                    if a["id"] in seen:
+        words = list(dict.fromkeys(w for need in out["chapter"]["illustration_needs"] + [ch["title"]]
+                                   for w in _kw(need.split(":", 1)[-1])))
+        for w in words:
+            # the source URL names the file in English even when a Malay deck keyed the asset
+            for a in _q(http, "/visual_assets", select="id,asset_key,description,group_ids,storage_path,vision,"
+                        "provenance,source,asset_format", status="eq.approved", asset_format="eq.png",
+                        **{"or": f"(asset_key.ilike.*{w}*,topic.ilike.*{w}*,source.ilike.*{w}*)"}, limit="14"):
+                if a["id"] in seen:
+                    continue
+                seen.add(a["id"])
+                ok, lic, kind = usable_library_asset(a)
+                if not ok:
+                    refused.append({"id": f"asset:{a['id']}", "why": kind})
+                    continue
+                entry = {"id": f"asset:{a['id']}", "key": a["asset_key"], "kind": kind,
+                         "representation": representation(a), "credit": lic, "parts": a.get("group_ids") or [],
+                         "description": (a.get("description") or "")[:300], "_asset": a}
+                if kind == "photo":
+                    # identity from the SOURCE, never from our label (decision 1)
+                    from publishing.manuscript.identity import identity
+                    idn = identity(conn, entry["id"], (lic or {}).get("url"), (lic or {}).get("licence", ""))
+                    if idn["suitability"] == "medical":
+                        refused.append({"id": entry["id"], "why": f"source says: {idn['title']!r} (medical/pathology)"})
                         continue
-                    seen.add(a["id"])
-                    ok, lic, kind = usable_library_asset(a)
-                    if not ok:
-                        refused.append({"id": f"asset:{a['id']}", "why": kind})
-                        continue
-                    out["library_assets"].append({"id": f"asset:{a['id']}", "key": a["asset_key"], "kind": kind,
-                                                  "description": (a.get("description") or "")[:300],
-                                                  "credit": lic, "parts": a.get("group_ids") or [],
-                                                  "for_need": need, "_asset": a})
+                    entry["identity"] = {"source_title": idn["title"], "source_description": idn["description"][:300],
+                                         "verified": idn["suitability"] == "ok",
+                                         "licence_recorded": idn["licence_recorded"],
+                                         "licence_seen_now": idn["licence_seen"]}
+                    entry["description"] = (f"SOURCE: {idn['title']}. {idn['description'][:200]}" if idn["title"]
+                                            else "UNVERIFIED identity: " + entry["description"])
+                out["library_assets"].append(entry)
+        # book representations kept locally (decision 6): offered like any asset
+        for b in conn.execute("select * from pub.book_assets").fetchall():
+            if any(w in (b["concept"] + " " + (b["description"] or "")).lower() for w in words):
+                out["library_assets"].append({"id": b["key"], "key": b["key"], "kind": "illustration",
+                                              "representation": b["representation"], "credit": None, "parts": [],
+                                              "description": b["description"] or b["concept"],
+                                              "_asset": {"local_path": b["path"], "provenance": "book"}})
+        rank = {r: i for i, r in enumerate(REPRESENTATION_ORDER)}
+        out["library_assets"].sort(key=lambda e: rank.get(e["representation"], 9))
         out["refused_assets"] = refused
     return out
 
