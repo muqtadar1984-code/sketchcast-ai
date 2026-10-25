@@ -47,7 +47,9 @@ def diagnose(pdf_path: str) -> dict:
                 if ox > 2 and oy > 3 and not same:   # a stroke drawn over its own fill is one glyph run
                     hard.append({"page": i, "check": "text overlaps text",
                                  "detail": f"{spans[a_i]['text'][:30]!r} / {spans[b_i]['text'][:30]!r}"})
-        for tb in text_boxes:
+        # measured on SPANS: a diagram's left and right labels share a line and merge into one text
+        # block that spans the picture between them, which is not text drawn over the picture
+        for tb in [sp["bbox"] for sp in spans]:
             for im in imgs:
                 bx = im["bbox"]
                 ox = min(tb[2], bx[2]) - max(tb[0], bx[0])

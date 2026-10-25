@@ -23,7 +23,7 @@ from publishing.snapshot import client, load_env
 
 BUCKET = "visual-assets"
 EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-IMG_W, COL_W, LINE_H = 330, 140, 19
+IMG_W, COL_W, LINE_H = 330, 140, 23
 
 
 def md(text: str) -> str:
@@ -131,7 +131,7 @@ def figure_svg(png: bytes, vision: dict, labels: list[str]) -> tuple[str, list[s
         b64 = base64.b64encode(png).decode()
         return (f'<svg viewBox="0 0 {IMG_W} {ih:.0f}" role="img"><image href="data:image/png;base64,{b64}" '
                 f'x="0" y="0" width="{IMG_W}" height="{ih:.1f}"/></svg>'), unplaced
-    col = max([COL_W] + [len(lab) * 7.2 + 18 for items in sides.values() for lab, _ in items])
+    col = max([COL_W] + [len(lab) * 8.4 + 18 for items in sides.values() for lab, _ in items])
     total_w = IMG_W + 2 * col
     height = ih
     parts = []
@@ -172,6 +172,7 @@ figure.beside-right > svg, figure.beside-left > svg { max-height: 72mm; width: a
 figure.w-third { width: 34%; } figure.w-half { width: 46%; } figure.w-two-thirds { width: 62%; }
 figure.full, figure.centre { width: 100%; text-align: center; }
 figure.centre svg { max-width: 62%; margin: 0 auto; }
+figure.labelled svg { max-width: 72%; max-height: 105mm; }
 figure.full svg { max-height: 95mm; width: auto; max-width: 85%; margin: 0 auto; }
 h2 { clear: both; }
 .group svg text.gl { font: 600 12px 'Segoe UI', Arial, sans-serif; fill: var(--ink); }
@@ -208,7 +209,7 @@ h3 { font-size: 12.5pt; margin: 14pt 0 4pt; break-after: avoid; }
 .worked { border: 1pt solid var(--line); }
 figure { margin: 10pt 0; text-align: center; break-inside: avoid; }
 figure svg { max-width: 100%; height: auto; }
-.leader { stroke: #334155; stroke-width: .8; } .dot { fill: #334155; } .lab { font-size: 10.5px; font-family: 'Segoe UI', Arial, sans-serif; fill: #111827; }
+.leader { stroke: #334155; stroke-width: .8; } .dot { fill: #334155; } .lab { font-size: 15px; font-family: 'Segoe UI', Arial, sans-serif; fill: #111827; }
 figcaption { font-size: 9.5pt; color: var(--muted); margin-top: 3pt; }
 .missing-labels { font-size: 8.5pt; color: #b45309; }
 .watch { background: var(--soft); border-left: 4pt solid var(--accent); padding: 7pt 10pt; border-radius: 6pt; font-size: 10pt; margin-top: 12pt; }
@@ -391,7 +392,9 @@ def _block(b: dict, figs: dict) -> str:
         miss = (f'<div class="missing-labels">Labels with no detected region (not placed): '
                 f'{html.escape(", ".join(f["unplaced"]))}</div>' if f["unplaced"] else "")
         num = f'<span class="fignum">{b["_fig"]}</span> ' if b.get("_fig") else ""
-        return (f'<figure class="{_place(b)} {f.get("kind", "illustration")}">{f["svg"]}<figcaption>{num}'
+        # a labelled diagram is never squeezed beside the text: its labels must print at a readable size
+        cls = "place centre labelled" if 'class="lab"' in f["svg"] else _place(b)
+        return (f'<figure class="{cls} {f.get("kind", "illustration")}">{f["svg"]}<figcaption>{num}'
                 f'{md(b.get("caption") or f["caption"])}{_credit(f)}</figcaption>{miss}</figure>')
     return f"<p>{md(json.dumps(b))}</p>"
 
@@ -624,7 +627,7 @@ strong { color: var(--brand-dark); }
 .opener.dense .op-card { font-size: 8.4pt; padding: 3mm 4mm; } .opener.dense .op-card li { margin-bottom: .6mm; }
 .opener.dense .op-card p { margin: 0 0 1.6mm; } .opener.dense .op-cards { margin-bottom: 3mm; }
 .opener.dense .watch { font-size: 8.4pt; padding: 2mm 4mm; } .opener.dense .op-words span { font-size: 8.4pt; }
-.opener.dense .op-numeral { margin-top: 4mm; height: 22mm; width: 34mm; } .opener.dense .op-title { font-size: 22pt; }
+.opener.dense .op-title { font-size: 22pt; }
 .opener.dense .op-cards { grid-template-columns: 1fr; gap: 3mm; }
 .opener.dense .op-card { columns: 2; column-gap: 7mm; } .opener.dense .op-card h4 { column-span: all; }
 .opener.dense .op-card p, .opener.dense .op-card li { break-inside: avoid; } .op-words h4 { margin: 0 0 2mm; font: 600 8pt var(--bfont); letter-spacing: .16em; text-transform: uppercase; color: var(--brand); }
