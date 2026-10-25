@@ -546,10 +546,26 @@ def review_html(doc: dict) -> str:
             f"<th>out</th><th>usd</th><th>time</th></tr>{calls}</table></body></html>")
 
 
-def _print(page: Path, pdf: Path) -> None:
+def _print(page: Path, pdf: Path) -> Path:
+    """Print to a NEW file, prove it was written, then put it in place. Edge
+    exits 0 even when it cannot write (ch 1, 2026-10-25: the PDF was open in a
+    viewer, so the old file silently survived and was measured as the new
+    one). A locked target gets a timestamped sibling instead, never a stale file."""
+    import os
+    import time
+    tmp = pdf.with_name(f"{pdf.stem}.printing-{os.getpid()}-{int(time.time() * 1000)}.pdf")
     subprocess.run([EDGE, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
-                    f"--print-to-pdf={pdf}", page.resolve().as_uri()], check=True, timeout=120,
+                    f"--print-to-pdf={tmp}", page.resolve().as_uri()], check=True, timeout=120,
                    capture_output=True)
+    if not tmp.exists() or tmp.stat().st_size < 1000:
+        raise RuntimeError(f"Edge did not write {tmp.name}")
+    try:
+        os.replace(tmp, pdf)
+        return pdf
+    except PermissionError:
+        alt = pdf.with_name(f"{pdf.stem}-{time.strftime('%H%M%S')}.pdf")
+        os.replace(tmp, alt)
+        return alt
 
 
 def _layout_score(diag: dict) -> float:
@@ -591,12 +607,11 @@ def render(doc: dict, dossier: dict, env_file: Path, out_dir: Path) -> dict:
     tried = []
     for name, cand in _alternatives(doc):
         page.write_text(chapter_html(cand, figs), encoding="utf-8")
-        _print(page, pdf)
-        d = diagnose(str(pdf))
+        d = diagnose(str(_print(page, pdf)))
         tried.append((_layout_score(d), name, cand))
     best = min(tried, key=lambda t: t[0])
     page.write_text(chapter_html(best[2], figs), encoding="utf-8")
-    _print(page, pdf)
+    pdf = _print(page, pdf)
     doc["layout_choice"] = {"chosen": best[1], "candidates": [(name, round(score, 3)) for score, name, _ in tried]}
     packet = out_dir / f"ch{n:02d}-gate-d-review.html"
     packet.write_text(review_html(doc), encoding="utf-8")

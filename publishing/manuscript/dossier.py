@@ -211,9 +211,12 @@ def build(conn, slug: str, chapter: int, env_file: Path) -> dict:
                     entry["description"] = (f"SOURCE: {idn['title']}. {idn['description'][:200]}" if idn["title"]
                                             else "UNVERIFIED identity: " + entry["description"])
                 out["library_assets"].append(entry)
-        # book representations kept locally (decision 6): offered like any asset
+        # book representations kept locally (decision 6): made FOR this book, so
+        # every chapter is offered all of them (a keyword filter dropped the cell
+        # renders once their descriptions changed); relevance is the author's
+        # and the scope rule's call
         for b in conn.execute("select * from pub.book_assets").fetchall():
-            if any(w in (b["concept"] + " " + (b["description"] or "")).lower() for w in words):
+            if True:
                 out["library_assets"].append({"id": b["key"], "key": b["key"], "kind": "illustration",
                                               "representation": b["representation"], "credit": None, "parts": [],
                                               "description": b["description"] or b["concept"],
