@@ -27,6 +27,12 @@ it belongs to ("part of a larger living thing", "a whole organism") when that
 category is what the learner must decide. Mix the pictures so the categories
 are not all the same.
 
+Every picture a question uses (figure_ref or figure_refs) is printed as a
+lettered tile with its figure_context only — no caption — so the stem must
+refer to it by its letter and give its origin through figure_context. MCQ
+distractors are plausible errors at the learner's level; never use a term from
+the optional extension box or one the chapter does not teach.
+
 VARIETY. No two exercises test the same claim. At most one true/false item, and
 if there are several closed items their answers must not follow a pattern. A
 sorting task is "item_type":"sort" with "categories":[str] and

@@ -105,7 +105,8 @@ CSS = """
 @page { size: A4; margin: 18mm 17mm 20mm;
   @top-right { font: 8pt 'Segoe UI', Arial, sans-serif; color: #8a94a6; }
   @bottom-center { content: counter(page); font: 9pt 'Segoe UI', Arial, sans-serif; color: #5b6475; } }
-figure.place { margin: 2pt 0 8pt; break-inside: avoid; }
+figure.place { margin: 2pt 0 8pt; break-inside: avoid; background: #fff; }
+.box, .watch, .ex { display: flow-root; }   /* a box sits BESIDE a floated figure, never under it */
 figure.place svg { width: 100%; height: auto; display: block; }
 figure.beside-right { float: right; margin-left: 12pt; clear: right; }
 figure.beside-left { float: left; margin-right: 12pt; clear: left; }
@@ -225,7 +226,7 @@ def _group(b: dict, figs: dict) -> str:
     cols = max(1, len(top))
     cw, ih, gap, circ = 200, 150, 70, 120
     two_rows = bool(rel)
-    H = 30 + ih + 34 + ((gap + circ + 40) if two_rows else 0)
+    H = 30 + ih + 50 + ((gap + circ + 56) if two_rows else 0)
     W = cols * cw
     out = [f'<svg viewBox="0 0 {W} {H}" role="img">',
            '<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" '
@@ -238,23 +239,39 @@ def _group(b: dict, figs: dict) -> str:
         return (clip_el + f'<image href="{f["img"]}" x="{cx - w / 2:.0f}" y="{cy - h / 2:.0f}" width="{w}" height="{h}" '
                 f'preserveAspectRatio="xMidYMid meet"' + (f' clip-path="url(#{cid})"' if clip else "") + "/>")
 
+    def lines(text, cls, x, y, width_chars):
+        """Centred label text wrapped INSIDE its own column: labels can never
+        run into the next column (ch 1: 'onion bCheek cells')."""
+        words, rows, cur = str(text or "").split(), [], ""
+        for w_ in words:
+            if cur and len(cur) + 1 + len(w_) > width_chars:
+                rows.append(cur)
+                cur = w_
+            else:
+                cur = f"{cur} {w_}".strip()
+        if cur:
+            rows.append(cur)
+        return "".join(f'<text class="{cls}" x="{x}" y="{y + 14 * k}" text-anchor="middle">{html.escape(r_)}</text>'
+                       for k, r_ in enumerate(rows[:3]))
+
+    label_chars = max(10, int(cw / 7.2))
     for c, i in enumerate(top):
         cx, cy = c * cw + cw / 2, 30 + ih / 2
         out.append(pic(i, cx, cy, cw - 30, ih))
-        out.append(f'<text class="gl" x="{cx}" y="{30 + ih + 22}" text-anchor="middle">'
-                   f'{html.escape(items[i].get("label") or "")}</text>')
+        out.append(lines(items[i].get("label"), "gl", cx, 30 + ih + 20, label_chars))
         for k, t in enumerate(below.get(i, [])[:1]):
             ty = 30 + ih + 34 + gap + circ / 2
             r = next(x for x in rel if x["from"] == i and x["to"] == t)
             zoom = r.get("kind") == "zoom"
             out.append(f'<path class="rel" d="M{cx},{30 + ih + 30} L{cx},{ty - circ / 2 - 4}" marker-end="url(#ah)"/>')
             if r.get("label"):
-                out.append(f'<text class="gs" x="{cx + 8}" y="{30 + ih + 34 + gap / 2}">{html.escape(r["label"])}</text>')
+                out.append(f'<rect x="{cx - cw / 2 + 12}" y="{30 + ih + 34 + gap / 2 - 13}" width="{cw - 24}" '
+                           f'height="{18 if len(r["label"]) <= label_chars + 6 else 32}" fill="#fff"/>')
+                out.append(lines(r["label"], "gs", cx, 30 + ih + 34 + gap / 2, label_chars + 6))
             out.append(pic(t, cx, ty, circ, circ, clip=circ / 2 - 2 if zoom else None))
             if zoom:
                 out.append(f'<circle class="zoom" cx="{cx}" cy="{ty}" r="{circ / 2}"/>')
-            out.append(f'<text class="gl" x="{cx}" y="{ty + circ / 2 + 20}" text-anchor="middle">'
-                       f'{html.escape(items[t].get("label") or "")}</text>')
+            out.append(lines(items[t].get("label"), "gl", cx, ty + circ / 2 + 20, label_chars))
     out.append("</svg>")
     credits = "".join(_credit(figs[i["ref"]]) for i in items)
     return (f'<figure class="{_place(b)} group">{"".join(out)}<figcaption>{md(b.get("caption"))}{credits}'
@@ -326,7 +343,8 @@ def _figures(doc: dict, dossier: dict, env_file: Path) -> dict:
             a["credit"] = {**a["credit"], "title": a["identity"].get("source_title")}
         # the asset's description is a generation brief ("…Name the layer groups
         # exactly: …"); only its first sentence describes the picture
-        first = re.split(r"(?<=[.!?])\s", (a["description"] or "").strip(), maxsplit=1)[0]
+        first = re.split(r"(?<=[.!?])\s", re.sub(r"^(SOURCE|UNVERIFIED identity):\s*", "",
+                                                  (a["description"] or "").strip()), maxsplit=1)[0]
         parts = [] if a.get("kind") == "photo" else [p for p in a["parts"] if _norm(p) and _norm(p) in talk]
         src[a["id"]] = (a["_asset"], parts, first, a.get("credit"))
     url, key = load_env(env_file)
@@ -420,8 +438,10 @@ def chapter_html(doc: dict, figs: dict) -> str:
             else:
                 opts = ("<ol class='opts'>" + "".join(f"<li>{md(o)}</li>" for o in x["options"]) + "</ol>"
                         if x.get("options") else "")
-            fig = _block({"type": "figure", "ref": x["figure_ref"]}, figs) if x.get("figure_ref") else ""
-            fig += _photo_row(x.get("figure_refs") or [], figs, x.get("figure_context"))
+            # a question's pictures print as tiles with what the question says about
+            # them, never with a caption (a caption can give the answer away)
+            refs = ([x["figure_ref"]] if x.get("figure_ref") else []) + list(x.get("figure_refs") or [])
+            fig = _photo_row(refs, figs, x.get("figure_context"))
             body.append(f'<div class="ex"><strong>{x["xid"].upper()}.</strong> {md(x["stem"])} '
                         f'<span class="marks">[{x.get("marks")}]</span>{opts}{fig}</div>')
     body.append('<div class="answers"><h2>Answers and worked solutions</h2>')

@@ -103,13 +103,31 @@ def check_assessment(x: dict) -> list[dict]:
         if len(cats) < 2 or len(its) < 4 or any(_norm(i.get("category")) not in cats for i in its):
             out.append({"unit": xid, "check": "assessment", "verdict": "fail",
                         "detail": "a sort task needs 2+ categories and 4+ items, each in one of the categories"})
-    if len(x.get("figure_refs") or []) >= 2 and len(x.get("figure_context") or {}) < len(x["figure_refs"]):
+    pics = ([x["figure_ref"]] if x.get("figure_ref") else []) + list(x.get("figure_refs") or [])
+    if pics and len(x.get("figure_context") or {}) < len(pics):
         out.append({"unit": xid, "check": "assessment", "verdict": "fail",
-                    "detail": "an observation task must say where each sample came from (figure_context)"})
+                    "detail": "a question with pictures must say for each (A, B, …) where it came from (figure_context)"})
     for p in x.get("marking_scheme") or []:
         if len(str(p.get("point") or "").split()) < 4:
             out.append({"unit": xid, "check": "assessment", "verdict": "fail",
                         "detail": f"mark point {p.get('point')!r} does not say what earns the mark"})
+    return out
+
+
+def check_picture_reuse(sections: list[dict]) -> list[dict]:
+    """In the teaching text each picture appears once (founder 2026-10-25: no
+    repetition to add visual density). Exercises may reuse a picture."""
+    seen, out = {}, []
+    for s in sections:
+        for b in s.get("blocks") or []:
+            refs = ([b.get("ref")] if b.get("type") == "figure" else
+                    [i.get("ref") for i in b.get("items") or []] if b.get("type") == "figure_group" else [])
+            for r in refs:
+                if r in seen:
+                    out.append({"unit": s.get("sid", "?"), "check": "picture_reuse", "verdict": "fail",
+                                "detail": f"{r} is already shown in {seen[r]}; refer back to it instead"})
+                else:
+                    seen[r] = s.get("sid", "?")
     return out
 
 

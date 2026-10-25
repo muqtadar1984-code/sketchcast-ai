@@ -34,6 +34,18 @@ def diagnose(pdf_path: str) -> dict:
                 warn.append({"page": i, "check": "raster below print target", "detail": f"{round(dpi)} dpi"})
             if x0 < -1 or y0 < -1 or x1 > W + 1 or y1 > H + 1:
                 hard.append({"page": i, "check": "picture clipped by the page edge", "detail": str(info["bbox"])})
+        # text on text: two separate text runs drawn over each other (e.g. labels
+        # from neighbouring columns colliding) — measured on spans, a hard defect
+        spans = [s for b in page.get_text("dict")["blocks"] for l in b.get("lines", []) for s in l.get("spans", [])
+                 if s.get("text", "").strip()]
+        for a_i in range(len(spans)):
+            for b_i in range(a_i + 1, len(spans)):
+                a, b = spans[a_i]["bbox"], spans[b_i]["bbox"]
+                ox = min(a[2], b[2]) - max(a[0], b[0])
+                oy = min(a[3], b[3]) - max(a[1], b[1])
+                if ox > 2 and oy > 3:
+                    hard.append({"page": i, "check": "text overlaps text",
+                                 "detail": f"{spans[a_i]['text'][:30]!r} / {spans[b_i]['text'][:30]!r}"})
         for tb in text_boxes:
             for im in imgs:
                 bx = im["bbox"]

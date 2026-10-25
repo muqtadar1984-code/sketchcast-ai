@@ -143,13 +143,22 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) 
 
     def checks():
         return (V.check_sections(sections, valid, figure_ids)
+                + V.check_picture_reuse(sections)
                 + V.check_exercises(exercises, valid, figure_ids, nodes, photo_ids, skills)
                 + V.check_extension(sections, exercises)
                 + V.check_coverage(sections, exercises, plan, nodes))
 
     def blind():
-        return [{k: v for k, v in x.items() if k in ("xid", "tier", "item_type", "stem", "options", "pairs",
-                                                      "figure_ref", "figure_refs")} for x in exercises]
+        # everything the learner sees, nothing of the key: a sort task's items and
+        # categories are printed, so the reviewer must see them too
+        out = []
+        for x in exercises:
+            b = {k: v for k, v in x.items() if k in ("xid", "tier", "item_type", "stem", "options", "pairs",
+                                                      "categories", "figure_ref", "figure_refs", "figure_context")}
+            if x.get("items"):
+                b["items"] = [i.get("text") for i in x["items"]]
+            out.append(b)
+        return out
 
     def do_review(unit, fig=None):
         """Three independent gates (founder 2026-10-25, D1): CONTENT, VISUAL,
@@ -297,7 +306,7 @@ Judge the PICTURE as it will be printed. Answer with JSON:
   "text_consistent": true|false, // the text and caption say nothing about this picture that it does not show
   "suitable": true|false,     // appropriate for the age (no disease/medical imagery unless the text is about it)
   "labels_ok": true|false,    // every label names something visible in the picture
-  "caption": "an accurate caption (max 25 words) that says only what the picture shows",
+  "caption": "an accurate caption (max 25 words) that says only what the picture shows, using only words the text around it uses (name no structure the text does not teach)",
   "not_to_scale": true|false, // things of very different real sizes drawn at similar sizes
   "confidence": 0.0-1.0,      // how sure you are of these judgements
   "problem": "what is wrong, if anything"}}"""
