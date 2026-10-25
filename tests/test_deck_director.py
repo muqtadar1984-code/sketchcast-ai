@@ -721,3 +721,44 @@ def test_the_answer_bar_drops_the_whole_instruction_sentence():
         == "The value of y is 100 degrees."
     assert D.notation_answer("State the final answers with correct units. The area is 77 square centimetres.") \
         == "The area is 77 cm²."
+
+
+def test_a_worked_example_owns_its_column(tmp_path, model):
+    """Live deck, Real-Life Graphs slide 10: chips under the steps hid step 3."""
+    from agent5_slides.director import render as R
+    ctx = C.build(model, article=ARTICLE)
+    raw = spec_raw()
+    col = raw["slides"][6]["rows"][0]["cols"][0]
+    col["elements"][0]["items"] = []
+    col["elements"][0]["to_step"] = 4
+    col["elements"].append({"type": "chips", "items": [{"label": f"Part {i}", "value": "a value " * 4}
+                                                       for i in range(4)]})
+    col["elements"].append({"type": "paragraph", "text": "A long paragraph that will not fit here. " * 6})
+    deck = S.normalise(raw)
+    D.resolve_steps(deck, ctx)
+    path, reports = R.build(deck, {}, {}, tmp_path / "d.pptx")
+    sl = next(s for s in deck.slides if s.id == "we1")
+    rep = next(r for r in reports if r.id == "we1")
+    assert [e["type"] for e in sl.elements()] == ["steps"]
+    assert "Part 0" in sl.notes
+    assert not [i for i in Q.check_slide(rep, "x") if i["severity"] == "high"]
+
+
+def test_a_deck_with_layout_faults_falls_back_to_the_storyboard(tmp_path, model, monkeypatch):
+    from agent5_slides import deck_generator as dg
+    from agent5_slides.director import pipeline as Pl
+    from worker import client as db
+    seen = []
+    monkeypatch.setattr(db, "merge_generation_params", lambda sb, gid, patch: seen.append(patch))
+    monkeypatch.setenv("DECK_AI_DIRECTOR", "1")
+    monkeypatch.setattr("agent5_slides.deck_art.user_builders_live", lambda sb, j: False)
+
+    class Res:
+        path = tmp_path / "director.pptx"
+        report = {"blocking_layout": {"s10": ["'a' overlaps 'b'"]}, "usage": {"total_usd": 0.4},
+                  "timings_s": {"total": 300}}
+    monkeypatch.setattr(Pl, "build_director_deck", lambda *a, **k: Res())
+    out = dg.build_deck(model, tmp_path / "d.pptx", client=StubClient(spec_raw()), article=ARTICLE,
+                        sb=object(), generation_id="g")
+    assert out == tmp_path / "d.pptx" and out.exists()                # the storyboard deck
+    assert seen[0]["deck_director"]["route"] == "storyboard_fallback"

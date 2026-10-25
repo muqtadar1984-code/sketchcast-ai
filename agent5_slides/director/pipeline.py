@@ -207,6 +207,14 @@ def build_director_deck(model: LessonModel, *, client, out_path: Path, tmp: Path
         "budget": budget.__dict__,
         "renderer_faults": {r.id: r.faults for r in reports if r.faults},
         "budget_stops": stops,
+        # objective layout faults still present in the deck being returned:
+        # the worker does not ship such a deck (deck_generator.build_deck)
+        "blocking_layout": {sid: [i["detail"] for i in its if i.get("severity") == "high"
+                                  and i.get("source", "det") == "det"
+                                  and i.get("category") in ("overlap", "bounds", "layout")]
+                            for sid, its in Q.check_deck(deck, reports).items()
+                            if any(i.get("severity") == "high" and i.get("source", "det") == "det"
+                                   and i.get("category") in ("overlap", "bounds", "layout") for i in its)},
     }
     return Result(path=path, report=report, images=images)
 
