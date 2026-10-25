@@ -771,3 +771,25 @@ def test_the_progress_bar_moves_through_the_director(tmp_path, model):
                           article=ARTICLE, generate=lambda p, a: (None, "", 0.0), photos=lambda q, http=None: [],
                           render_preview=False, progress=seen.append)
     assert seen[0] == 50 and seen == sorted(seen) and max(seen) <= 88 and len(set(seen)) >= 4
+
+
+def test_a_word_wider_than_its_box_breaks_instead_of_failing(tmp_path, model):
+    """Live deck, Using a Microscope slide 9: one word too wide for its box at
+    the smallest type size sent the whole deck to the storyboard."""
+    from agent5_slides.director import render as R
+    assert R.breakable("fits fine", 3.0, 14) == "fits fine"
+    assert R.breakable("Mikroskop/Microscope", 1.0, 14) == "Mikroskop / Microscope"
+    assert R.breakable("123456789012345678", 0.5, 14) == "123456789012345678"   # digits never split
+    for el in ({"type": "statement", "text": "Pembesaran/Magnification/Pembesaran"},
+               {"type": "paragraph", "text": "Use the Pneumonoultramicroscopicsilico lens carefully."},
+               {"type": "formula", "expr": "Magnification=image÷actual", "caption": "Magnification"}):
+        raw = spec_raw()
+        raw["slides"][2]["rows"] = [{"weight": 1, "cols": [{"weight": 1, "elements": [dict(el)]}
+                                                           for _ in range(4)]}]
+        deck = S.normalise(raw)
+        sid = deck.slides[2].id
+        _, reports = R.build(deck, {}, {}, tmp_path / "d.pptx")
+        rep = next(r for r in reports if r.id == sid)
+        assert not [f for f in rep.faults if "wider than its box" in f], el["type"]
+        texts = [b.text for b in rep.boxes if b.kind == "text"]
+        assert el.get("text", el.get("expr")) in texts   # the record (and QA) keeps the plain text

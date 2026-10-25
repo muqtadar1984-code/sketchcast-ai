@@ -201,6 +201,8 @@ class Canvas:
         from pptx.util import Pt
         if isinstance(runs, str):
             runs = [(runs, {})]
+        shown = "".join(t for t, _ in runs)
+        runs = [(breakable(t, w / BOLD_WIDTH if fmt.get("bold", bold) else w, pt), fmt) for t, fmt in runs]
         tb = self.s.shapes.add_textbox(int(x * IN), int(y * IN), int(w * IN), int(h * IN))
         tf = tb.text_frame
         tf.word_wrap = True
@@ -224,7 +226,7 @@ class Canvas:
             r.font.color.rgb = _rgb(fmt.get("color", color))
             if spacing:
                 r.font._element.set("spc", str(int(spacing)))  # noqa: SLF001 — rPr letter spacing
-        self.rep.boxes.append(Box("text", x, y, w, h, "".join(t for t, _ in runs), pt, role, color,
+        self.rep.boxes.append(Box("text", x, y, w, h, shown, pt, role, color,
                                   bg or self.bg, bold=bool(bold)))
         return tb
 
@@ -297,7 +299,9 @@ def _wrapped_lines(text: str, w: float, pt: float) -> int:
     cap = max(0.5, w) * 72 / pt                 # ems one line holds
     space = mx.text_width_em(" ")
     lines, used = 1, 0.0
-    for word in (text or "").split():
+    for word in _BREAKS.split(text or ""):
+        if not word:
+            continue
         ww = mx.text_width_em(word)
         if used and used + space + ww > cap:
             lines += 1
@@ -312,12 +316,73 @@ def _wrapped_lines(text: str, w: float, pt: float) -> int:
 
 def _h(text: str, w: float, pt: float) -> float:
     w = max(0.5, w)
-    longest = max((mx.text_width_em(word) for word in (text or "").split()), default=0.0)
+    text = breakable(text, w, pt)
+    longest = max((mx.text_width_em(word) for word in _BREAKS.split(text or "")), default=0.0)
     if longest * pt / 72 * 1.06 > w:
         _UNFIT[0] += 1
     if _MATH_SYMBOLS.search(text or ""):
         return _wrapped_lines(text, w / 1.12, pt) * pt * mx.LINE / 72 * 1.3
     return _wrapped_lines(text, w, pt) * pt * mx.LINE / 72
+
+
+# A word wider than its box breaks where a reader expects it to, not where
+# PowerPoint would cut it ("Magnificat / ion"): first at a joining mark, which
+# gets a space each side ("Mikroskop / Microscope", "M = I ÷ O"); then — only
+# at the smallest type scale, where the alternative is the whole deck falling
+# back to the storyboard — a long Latin-script word is hyphenated into pieces
+# that each fill a line (first live fallback, Using a Microscope slide 9,
+# 2026-10-25). Only spaces and hyphens: PowerPoint does not wrap at a
+# zero-width space (checked in a PowerPoint render). Digits never split.
+_HARD_BREAK = [False]             # set while a column is measured/drawn at SCALES[-1]
+_BREAKS = re.compile(r"\s+|(?<=[-–])(?=\S)")
+_JOINS = re.compile(r"(?<=[^\s\d/=÷·+])([/=÷·+])(?=[^\s\d/=÷·+])")
+_LETTERS = "A-Za-zÀ-ɏ"
+_HYPHENABLE = re.compile(f"([^{_LETTERS}]*)([{_LETTERS}]{{7,}})([^{_LETTERS}]*)")
+
+
+def _fits_word(word: str, w: float, pt: float) -> bool:
+    return all(mx.text_width_em(s) * pt / 72 * 1.06 <= w for s in _BREAKS.split(word) if s)
+
+
+def _hyphenate(seg: str, w: float, pt: float) -> str:
+    m = _HYPHENABLE.fullmatch(seg)
+    if not m:
+        return seg
+    lead, word, tail = m.groups()
+    cap = w * 72 / pt / 1.06                    # ems one line holds
+    pieces, cur, n = [], lead, 0
+    for i, ch in enumerate(word):
+        if n >= 3 and len(word) - i >= 3 and mx.text_width_em(cur + ch + "-") > cap:
+            pieces.append(cur + "-")
+            cur, n = "", 0
+        cur += ch
+        n += 1
+    # the mark after the word ("Pembesaran=") rides on the last piece: if that
+    # makes it too wide, its last three letters start a line of their own
+    if tail and n >= 6 and mx.text_width_em(cur + tail) > cap:
+        pieces.append(cur[:-3] + "-")
+        cur = cur[-3:]
+    pieces.append(cur + tail)
+    return "".join(pieces)
+
+
+def breakable(text: str, w: float, pt: float) -> str:
+    """`text` with break opportunities in any word too wide for a `w`-inch
+    box at `pt`; words that fit are left exactly as they are."""
+    if not text or pt <= 0:
+        return text
+    out = []
+    for tok in re.split(r"(\s+)", text):
+        if not tok or tok.isspace() or _fits_word(tok, w, pt):
+            out.append(tok)
+            continue
+        tok = _JOINS.sub(r" \1 ", tok)
+        if _HARD_BREAK[0]:
+            tok = re.sub(r"\S+", lambda m: "".join(
+                s if _fits_word(s, w, pt) else _hyphenate(s, w, pt)
+                for s in re.split(r"(?<=[-–])(?=\S)", m.group())), tok)
+        out.append(tok)
+    return "".join(out)
 
 
 def caps(text: str) -> str:
@@ -993,7 +1058,9 @@ def _measure(col: S.Column, w: float, env: Env):
     """(laid, need, flex count). `need` is infinite when any word met during
     the measurement is wider than its box — that layout does not fit."""
     _UNFIT[0] = 0
+    _HARD_BREAK[0] = env.scale <= SCALES[-1] + 1e-9
     laid = [(e, *lay(e, w, env)) for e in col.elements]
+    _HARD_BREAK[0] = False
     laid = [(e, hh, d) for e, hh, d in laid if hh > 0]
     fixed = sum(hh for e, hh, _ in laid if e["type"] not in FLEX)
     flex_n = sum(1 for e, _, _ in laid if e["type"] in FLEX)
@@ -1202,10 +1269,14 @@ def _layout_column(col: S.Column, x, y, w, h, env: Env, canvas: Canvas, rep: Sli
     flex_extra = spare / flex_n if flex_n else 0.0
     total = need + (spare if flex_n else 0)
     yy = y + (h - total) / 2 if not flex_n else y
-    for e, hh, draw in laid:
-        eh = (max(hh, FLEX_MIN) + flex_extra) if e["type"] in FLEX else hh
-        draw(canvas, x, yy, w, eh)
-        yy += eh + STACK_GAP
+    _HARD_BREAK[0] = env.scale <= SCALES[-1] + 1e-9
+    try:
+        for e, hh, draw in laid:
+            eh = (max(hh, FLEX_MIN) + flex_extra) if e["type"] in FLEX else hh
+            draw(canvas, x, yy, w, eh)
+            yy += eh + STACK_GAP
+    finally:
+        _HARD_BREAK[0] = False
     env.scale = 1.0
 
 
