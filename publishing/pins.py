@@ -54,15 +54,39 @@ def drift(cat: CatalogueView, pin: dict) -> list[str]:
 
 
 def dry_run_pins(conn, cat: CatalogueView, run_id: int, work_uid: str, topic_ids: list[str],
-                 languages: list[str]) -> int:
+                 languages: list[str], *, dry_run: bool = True) -> int:
     n = 0
     for tid in topic_ids:
         for r in pin_rows(cat, tid, languages):
             conn.execute(
                 "insert into pub.source_pins (work_uid, run_id, dry_run, topic_id, language, article_id, "
                 "article_version, kit_id, publication_ids, youtube_video_ids, item_ids_count, figure_ids) "
-                "values (%s,%s,true,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                (work_uid, run_id, r["topic_id"], r["language"], r["article_id"], r["article_version"], r["kit_id"],
-                 r["publication_ids"], r["youtube_video_ids"], r["item_ids_count"], r["figure_ids"]))
+                "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (work_uid, run_id, dry_run, r["topic_id"], r["language"], r["article_id"], r["article_version"],
+                 r["kit_id"], r["publication_ids"], r["youtube_video_ids"], r["item_ids_count"], r["figure_ids"]))
             n += 1
     return n
+
+
+def gate_r(conn, slug: str) -> dict:
+    """Phase 6: re-audit the book from a FRESH snapshot and, only when every
+    required topic is complete under the current policy, write the real pins
+    and open the edition. A not-ready book changes nothing."""
+    from publishing.audit import run_audits
+    from publishing.schemas import ReadinessPolicy
+
+    policy = ReadinessPolicy.load()
+    [run_id] = run_audits(conn, slug)
+    snap = conn.execute("select * from pub.readiness_snapshots where run_id=%s", (run_id,)).fetchone()
+    work = conn.execute("select * from pub.works where slug=%s", (slug,)).fetchone()
+    if not snap["ready"]:
+        return {"ready": False, "run_id": run_id, "pct": float(snap["pct"]), "outstanding": snap["outstanding"]}
+    conn.execute("update pub.source_pins set dry_run=false where run_id=%s", (run_id,))
+    ed = conn.execute(
+        "insert into pub.editions (work_uid, language, edition_no, pin_run_id) values (%s,'en',1,%s) "
+        "on conflict (work_uid, language, edition_no) do update set pin_run_id=excluded.pin_run_id returning id",
+        (work["uid"], run_id)).fetchone()["id"]
+    conn.execute("update pub.works set status='drafting' where uid=%s", (work["uid"],))
+    conn.commit()
+    pins = conn.execute("select count(*) n from pub.source_pins where run_id=%s and not dry_run", (run_id,)).fetchone()
+    return {"ready": True, "run_id": run_id, "edition_id": ed, "pins": pins["n"], "policy": policy.id}

@@ -39,6 +39,16 @@ def main(argv: list[str] | None = None) -> int:
     a = sub.add_parser("audit")
     a.add_argument("slug")
     sub.add_parser("report")
+    g = sub.add_parser("gate-r", help="Phase 6: re-audit one book; pin its sources only if 100%% ready")
+    g.add_argument("slug")
+    c = sub.add_parser("chapter", help="Stage E: draft, check, review and render one chapter (local + model calls)")
+    c.add_argument("slug")
+    c.add_argument("number", type=int)
+    c.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
+    rc = sub.add_parser("render-chapter", help="re-render a drafted chapter from its saved files")
+    rc.add_argument("slug")
+    rc.add_argument("number", type=int)
+    rc.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
     sp = sub.add_parser("stage-c-plan", help="build (not send) the Stage C job list for approved books")
     sp.add_argument("books", nargs="+")
     sp.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
@@ -73,6 +83,20 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "audit":
         from publishing.audit import run_audits
         run_audits(conn, args.slug)
+    elif args.cmd == "gate-r":
+        from publishing.pins import gate_r
+        print(json.dumps(gate_r(conn, args.slug), indent=1, default=str))
+    elif args.cmd in ("chapter", "render-chapter"):
+        from publishing.manuscript.author import draft_chapter
+        from publishing.manuscript.render import render
+        from publishing.report import OUT
+        out = OUT / "manuscripts" / args.slug
+        if args.cmd == "chapter":
+            doc = draft_chapter(conn, args.slug, args.number, args.env_file, out)
+        else:
+            doc = json.loads((out / f"ch{args.number:02d}-draft.json").read_text(encoding="utf-8"))
+        full = json.loads((out / f"ch{args.number:02d}-dossier-full.json").read_text(encoding="utf-8"))
+        print(json.dumps(render(doc, full, args.env_file, out), indent=1))
     elif args.cmd == "stage-c-plan":
         from publishing.report import OUT
         from publishing.stage_c import build_plan
