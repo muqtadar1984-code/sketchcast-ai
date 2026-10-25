@@ -77,7 +77,8 @@ def build_director_deck(model: LessonModel, *, client, out_path: Path, tmp: Path
                         yield_to_users: Callable[[], bool] = lambda: False,
                         generate: Callable = A.default_generate, photos: Callable = A.default_photos,
                         render_preview: bool = True, http=None, library_context: Optional[dict] = None,
-                        log: Callable[[str], None] = lambda m: None) -> Result:
+                        log: Callable[[str], None] = lambda m: None,
+                        progress: Callable[[int], None] = lambda pct: None) -> Result:
     budget = budget or A.Budget.from_env()
     spend = A.Spend()
     clock = _Clock()
@@ -118,10 +119,26 @@ def build_director_deck(model: LessonModel, *, client, out_path: Path, tmp: Path
             return True
         return False
 
+    # The job's progress bar: the worker hands in `db.set_progress`. Without
+    # it the bar sat at 45% for the whole Director run (5-12 minutes) and
+    # the founder read the deck as stuck (2026-10-25).
+    shown_pct = [0]
+
+    def tick(pct: int) -> None:
+        if pct <= shown_pct[0]:
+            return                     # never backwards
+        shown_pct[0] = pct
+        try:
+            progress(pct)
+        except Exception:  # noqa: BLE001 — a progress write never costs a deck
+            pass
+
+    tick(50)
     with clock("design"):
         deck = D.design(ctx, client)
     log(f"design: {len(deck.slides)} slides, {len(deck.assets)} asset needs — {deck.rationale[:140]}")
 
+    tick(58)
     with clock("grounding"):
         shown = ground(deck, ctx)
         problems = D.check(deck, ctx)
@@ -139,6 +156,7 @@ def build_director_deck(model: LessonModel, *, client, out_path: Path, tmp: Path
         spec_first = deck.to_dict()
 
     def pictures_and_render(tag: str):
+        tick(64 if tag == "first" else min(86, 76 + 4 * len(rounds)))
         # images may use what the total ceiling still allows, never more
         budget.max_image_usd = min(budget.max_image_usd,
                                    max(0.0, budget.max_total_usd - spent() + spend.image_usd))
@@ -160,6 +178,7 @@ def build_director_deck(model: LessonModel, *, client, out_path: Path, tmp: Path
     vis: dict = {}
     issues: dict = {}
     for qa_round in range(budget.corrections + 1):
+        tick(min(88, 72 + 6 * qa_round))
         with clock("qa"):
             det = Q.check_deck(deck, reports)
             if render_preview:
