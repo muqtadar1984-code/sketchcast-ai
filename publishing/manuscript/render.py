@@ -627,6 +627,9 @@ figure.photo > svg { background: #fff; padding: 1.4mm; border: .6pt solid #cfd6c
 figure.group.photo > svg { background: transparent; padding: 0; border: none; box-shadow: none; }
 .credit { font-size: 7.2pt; color: #8b958e; }
 
+/* reviewer-only notes (e.g. labels the figure engine could not place) belong in the Gate D packet, never on the page */
+.missing-labels, .gap { display: none; }
+
 /* comparison tables: header in the brand wash, first column as row labels */
 figure.tbl { margin: 4mm 0; break-inside: avoid; }
 figure.tbl table { width: 100%; border-collapse: collapse; font-size: 9.4pt; line-height: 1.4; }
