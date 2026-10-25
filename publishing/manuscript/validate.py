@@ -151,9 +151,14 @@ def check_exercises(exercises: list[dict], valid_ids: set[str], figure_ids: set[
     if len(closed) >= 3 and len(set(closed)) == 1:
         out.append({"unit": "exercises", "check": "assessment", "verdict": "fail",
                     "detail": f"every closed item has the same answer ({closed[0]!r}); a guessable pattern"})
+    # photo_ids are the real photographs this chapter may use (not shown in another chapter): when there are
+    # two, an observation task must use them; when there are not, two or more drawings serve, and none is a warning
     if len(photo_ids) >= 2 and not any(len(set(x.get("figure_refs") or []) & photo_ids) >= 2 for x in exercises):
         out.append({"unit": "exercises", "check": "observation", "verdict": "fail",
                     "detail": "no observation exercise uses two or more of the chapter's real photographs"})
+    elif len(photo_ids) < 2 and not any(len(x.get("figure_refs") or []) >= 2 for x in exercises):
+        out.append({"unit": "exercises", "check": "observation", "verdict": "warn",
+                    "detail": "no observation exercise compares two or more pictures"})
     for x in exercises:
         xid = x.get("xid", "?")
         for f in ("stem", "answer", "worked_solution"):

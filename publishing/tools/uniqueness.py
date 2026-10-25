@@ -134,7 +134,8 @@ def _ask(cli, prompt: str, max_tokens: int) -> dict:
     return data
 
 
-def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, threshold: float = 0.5) -> dict:
+def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, threshold: float = 0.5,
+        regate: bool = False) -> dict:
     from publishing import localdb
     from publishing.blueprint import _load_model_env, author_client
     from publishing.guard import production_queue
@@ -285,7 +286,7 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, thresho
             rep["thinks_rewritten"] = sorted(todo_t)
 
         # ── gates on what changed ───────────────────────────────────────────────
-        if changed or todo_x or todo_t:
+        if changed or todo_x or todo_t or regate:
             touched = [s for s in doc["sections"] if any(
                 (b.get("ref") in {c["new"] for c in changed.values()}) or
                 any(isinstance(i, dict) and i.get("ref") in {c["new"] for c in changed.values()} for i in b.get("items") or [])
@@ -298,9 +299,39 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, thresho
             valid = D.ids(full)
             fids = {f["id"] for t in full["topics"] for f in t["figures"]} | {a["id"] for a in full["library_assets"]}
             skills = {o["code"] for o in ch.get("skills") or []}
-            photos = {a["id"] for a in full["library_assets"] if a.get("kind") == "photo"}
+            others = {r for m, d in docs.items() if m != n for r in _refs(d)}
+            photos = {a["id"] for a in full["library_assets"] if a.get("kind") == "photo" and a["id"] not in others}
             checks = (V.check_sections(doc["sections"], valid, fids) + V.check_picture_reuse(doc["sections"]) +
                       V.check_exercises(doc["exercises"], valid, fids, set(ch["node_codes"]), photos, skills))
+            for rnd in (1, 2):
+                bad = {}
+                for f in vex["findings"]:
+                    bad.setdefault(str(f.get("unit")), []).append(f.get("detail"))
+                for c in checks:
+                    if c["verdict"] == "fail" and c["unit"] in {x["xid"] for x in doc["exercises"]}:
+                        bad.setdefault(c["unit"], []).append(f"{c['check']}: {c['detail']}")
+                    elif c["verdict"] == "fail" and c["unit"] == "exercises" and c["check"] == "assessment":
+                        for xid in rep.get("questions_rewritten") or []:
+                            bad.setdefault(xid, []).append(c["detail"])
+                if not bad:
+                    break
+                got = _ask(cli, REWRITE.format(
+                    n=n, title=ch["title"],
+                    todo=json.dumps({k: {"gate findings to resolve": v,
+                                         "rule": "a question may only refer to what its pictures actually show: never "
+                                                 "to numbers, letters or markings that are not in the picture; keep "
+                                                 "the picture refs"} for k, v in bad.items()}, ensure_ascii=False, indent=1),
+                    pics="{}", earlier="(see above; still do not repeat earlier chapters)",
+                    exercises=json.dumps(doc["exercises"], ensure_ascii=False)), 20000).get("exercises") or []
+                by = {x.get("xid"): x for x in got}
+                doc["exercises"] = [by.get(x["xid"], x) if x["xid"] in bad else x for x in doc["exercises"]]
+                rep.setdefault("repaired", []).append(sorted(bad))
+                vex = A.visual_exercises(run_, doc["exercises"], env_file)
+                checks = (V.check_sections(doc["sections"], valid, fids) + V.check_picture_reuse(doc["sections"]) +
+                          V.check_exercises(doc["exercises"], valid, fids, set(ch["node_codes"]), photos, skills))
+            gates = run_.call("reviewer", "gates", "Chapter to gate:
+" + json.dumps(
+                {"sections": doc["sections"], "exercises": doc["exercises"]}, ensure_ascii=False), 9000, "uniqueness:regate")
             fails = [f for f in fit["findings"] if f.get("severity") == "blocker"] + vex["findings"]
             g = doc["review"].setdefault("gates", {})
             g["uniqueness"] = {"visual_failures": fails, "assessment_gate": gates.get("assessment_gate"),
@@ -330,10 +361,11 @@ def main() -> None:
     a.add_argument("first", type=int)
     a.add_argument("last", type=int)
     a.add_argument("--max-busy", type=int, default=0)
+    a.add_argument("--regate", action="store_true", help="gate and repair every chapter in range, changed or not")
     a.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
     x = a.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    print(json.dumps(run(x.slug, x.first, x.last, x.env_file, x.max_busy), indent=1, default=str))
+    print(json.dumps(run(x.slug, x.first, x.last, x.env_file, x.max_busy, regate=x.regate), indent=1, default=str))
 
 
 if __name__ == "__main__":
