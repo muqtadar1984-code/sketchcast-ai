@@ -172,7 +172,10 @@ def _figures(doc: dict, dossier: dict, env_file: Path) -> dict:
             src[f["id"]] = (f["_asset"], [l["label"] for l in f["_labels"]], f["caption"])
     for a in dossier["library_assets"]:
         talk = context.get(a["id"], "")
-        src[a["id"]] = (a["_asset"], [p for p in a["parts"] if _norm(p) and _norm(p) in talk], a["description"])
+        # the asset's description is a generation brief ("…Name the layer groups
+        # exactly: …"); only its first sentence describes the picture
+        first = re.split(r"(?<=[.!?])\s", (a["description"] or "").strip(), maxsplit=1)[0]
+        src[a["id"]] = (a["_asset"], [p for p in a["parts"] if _norm(p) and _norm(p) in talk], first)
     url, key = load_env(env_file)
     out = {}
     with client(url, key) as http:
