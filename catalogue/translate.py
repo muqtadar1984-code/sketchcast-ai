@@ -2280,17 +2280,36 @@ def translations_queued(sb) -> bool:
     return bool(rows)
 
 
-def translation_in_flight(sb) -> Optional[str]:
-    """Why the next translation must wait, or None: a kit_translate job is
-    processing (its text calls are running), or a translated kit is still
-    `generating` (its video, deck, documents, bank or quiz are rendering).
-    An unreadable database counts as in flight: no sweep step starts on a
-    guess."""
+def translate_slots(sb) -> int:
+    """How many translations may be in flight at once:
+    ``platform_settings.auto_translate.parallel`` (founder 2026-10-25: use the
+    four catalogue kit slots). A translation makes no image calls, so its
+    renders cannot starve the image pool. Missing or unreadable = 1, the
+    original one-at-a-time rule; app migration 0154 reads the same key."""
     try:
-        jobs = _rows(sb.table("jobs").select("id").eq("type", "kit_translate").eq("status", "processing")
-                     .limit(1).execute())
-        if jobs:
-            return f"translation job {jobs[0].get('id')} is staging"
+        rows = _rows(sb.table("platform_settings").select("value").eq("key", "auto_translate").limit(1).execute())
+        n = int(((rows[0].get("value") or {}) if rows else {}).get("parallel") or 1)
+    except Exception:  # noqa: BLE001 — the safe reading is the old rule
+        return 1
+    return max(1, min(n, 8))
+
+
+def translation_in_flight(sb) -> Optional[str]:
+    """Why the next translation must wait, or None: ``translate_slots``
+    translations are already in flight — a kit_translate job processing (its
+    text calls are running) or a translated kit still `generating` (its video,
+    deck, documents, bank or quiz are rendering). A staging job and the kit row
+    it created are ONE translation, keyed (source kit, language). An unreadable
+    database counts as in flight: no sweep step starts on a guess."""
+    try:
+        slots = translate_slots(sb)
+        busy: dict[tuple, str] = {}
+        for j in _rows(sb.table("jobs").select("id,params").eq("type", "kit_translate").eq("status", "processing")
+                       .execute()):
+            p = j.get("params") or {}
+            key = ((_s(p.get("source_kit_id")), _s(p.get("language")).lower()) if p.get("source_kit_id")
+                   else ("job", _s(j.get("id"))))
+            busy[key] = f"translation job {j.get('id')} is staging"
         kits = _rows(sb.table("topic_kits").select("id,language,source_kit_id").eq("status", "generating").execute())
         waiting = {(_s((j.get("params") or {}).get("source_kit_id")), _s((j.get("params") or {}).get("language")).lower())
                    for j in _rows(sb.table("jobs").select("params").eq("type", "kit_translate").eq("status", "queued")
@@ -2299,18 +2318,22 @@ def translation_in_flight(sb) -> Optional[str]:
             lang = _s(k.get("language")).lower()
             if lang in ("", "en"):
                 continue
+            key = (_s(k.get("source_kit_id")), lang)
             # A kit its OWN queued translate job will resume (find_translation_
             # kit) is not in flight: the job was cut off — a redeploy, the
             # reaper — after it created the row. Counting it deadlocked the
             # lane (Algebraic Fractions, 2026-10-18 01:11). The claim function
-            # (0142) then lets only that job through.
-            if (_s(k.get("source_kit_id")), lang) in waiting:
+            # (0142) then lets that job through first.
+            if key in waiting:
                 continue
-            return f"translated kit {k.get('id')} is rendering"
+            busy.setdefault(key, f"translated kit {k.get('id')} is rendering")
     except Exception as exc:  # noqa: BLE001
         log.warning("translate lane: in-flight check unreadable (%s)", exc)
         return "the database did not answer"
-    return None
+    if len(busy) < slots:
+        return None
+    first = next(iter(busy.values()))
+    return first if slots == 1 else f"{len(busy)} of {slots} translations in flight ({first})"
 
 
 def run_translate_job(sb, job: dict, client=None) -> Optional[dict]:

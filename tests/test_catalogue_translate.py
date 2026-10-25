@@ -1572,6 +1572,47 @@ class TestOneTranslationAtATime:
         assert "kit_translate" in R._catalogue_observer_types(Boom()), "a failed gate fails open"
 
 
+class TestParallelTranslations:
+    """Founder 2026-10-25: translations use the four catalogue kit slots —
+    ``platform_settings.auto_translate.parallel``. Unset = one at a time."""
+
+    def _sb(self, parallel=None, *, staging=(), rendering=()):
+        sb = FakeSB()
+        if parallel is not None:
+            sb.tables["platform_settings"] = [{"key": "auto_translate", "value": {"enabled": True, "parallel": parallel}}]
+        sb.tables["jobs"].append({"id": "jt-q", "type": "kit_translate", "status": "queued",
+                                  "params": {"source_kit_id": "src-q", "language": "ms"}})
+        for src in staging:
+            sb.tables["jobs"].append({"id": f"jt-{src}", "type": "kit_translate", "status": "processing",
+                                      "params": {"source_kit_id": src, "language": "ms"}})
+        for src in rendering:
+            sb.tables["topic_kits"].append({"id": f"kit-{src}", "language": "ms", "status": "generating",
+                                            "source_kit_id": src})
+        return sb
+
+    def test_unset_is_one_at_a_time(self):
+        assert T.translate_slots(self._sb()) == 1
+        assert T.translation_in_flight(self._sb(rendering=["a"])) == "translated kit kit-a is rendering"
+
+    def test_four_slots_fill_then_hold(self):
+        assert T.translate_slots(self._sb(4)) == 4
+        assert T.translation_in_flight(self._sb(4, rendering=["a", "b", "c"])) is None, "a fourth may start"
+        why = T.translation_in_flight(self._sb(4, staging=["d"], rendering=["a", "b", "c"]))
+        assert why and why.startswith("4 of 4 translations in flight")
+
+    def test_a_staging_job_and_its_own_kit_are_one_translation(self):
+        assert T.translation_in_flight(self._sb(2, staging=["a"], rendering=["a"])) is None
+
+    def test_the_worker_lane_follows_the_slots(self):
+        from worker import run as R
+        assert "kit_translate" in R._catalogue_observer_types(self._sb(4, rendering=["a", "b"]))
+        assert "kit_translate" not in R._catalogue_observer_types(self._sb(2, rendering=["a", "b"]))
+
+    def test_a_bad_setting_reads_as_one(self):
+        sb = self._sb("lots", rendering=["a"])
+        assert T.translate_slots(sb) == 1 and T.translation_in_flight(sb)
+
+
 class TestStepOperationIsTranslated:
     """The muted note beside each step of the working is `{operation}
     {explanation}` (maths/board.py). The Substitution Arabic video showed it
