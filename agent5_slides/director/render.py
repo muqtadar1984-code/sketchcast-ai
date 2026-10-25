@@ -1151,6 +1151,23 @@ def fit_or_degrade(col: S.Column, w: float, h: float, env: Env, spill: list[str]
             col.elements[:] = trial.elements
             spill.extend(moved)
             return
+    # A worked example OWNS its column: everything else in it goes to the
+    # notes before a step row may be hidden (first live deck, Real-Life
+    # Graphs slide 10: a row of chips sat on the third step).
+    if any(e["type"] == "steps" for e in col.elements) and len(col.elements) > 1:
+        trial = copy.deepcopy(col)
+        moved = []
+        for e in [x for x in trial.elements if x["type"] != "steps"]:
+            text = e.get("text") or "; ".join(
+                " ".join(x for x in (it.get("label"), it.get("value"), it.get("title"), it.get("body")) if x)
+                for it in e.get("items") or [])
+            if text:
+                moved.append(text)
+        trial.elements = [x for x in trial.elements if x["type"] == "steps"]
+        if fits(trial):
+            col.elements[:] = trial.elements
+            spill.extend(moved)
+            return
     # Last: secondary elements at the END of the column leave for the notes,
     # one at a time, until it fits — never the column's first (main) element.
     SECONDARY = ("callout", "paragraph", "chips", "bullets", "statement")

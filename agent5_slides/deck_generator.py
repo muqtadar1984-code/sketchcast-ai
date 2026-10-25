@@ -249,6 +249,18 @@ def build_deck(model: LessonModel, out_path: Path, *, direction: str = "ltr",
             yield_to_users=(lambda: user_builders_live(sb, job_id)) if sb is not None else (lambda: False),
             # a worker has no PowerPoint; LibreOffice renders when installed
             render_preview=os.getenv("DECK_DIRECTOR_RENDER_QA", "1") != "0")
+        blocking = res.report.get("blocking_layout") or {}
+        if blocking:
+            # Fail over degrade: a deck with a hidden step or text running off
+            # a slide is worse than the storyboard deck — which is what the
+            # teacher gets. The Director's spend and reason are recorded.
+            _record_director(sb, generation_id, {
+                "route": "storyboard_fallback", "reason": "layout faults after correction",
+                "blocking_layout": {k: v[:3] for k, v in list(blocking.items())[:6]},
+                "usd": res.report["usage"]["total_usd"], "seconds": res.report["timings_s"].get("total")})
+            logger.warning("deck director: layout faults on %s after correction; building the storyboard deck",
+                           sorted(blocking))
+            return build_lesson_deck(model, out_path, direction=direction, branding=branding)
         logger.info("deck (director) %s: %d slides, $%.3f, %ss, assets %s", Path(res.path).name,
                     res.report.get("slides", 0), res.report["usage"]["total_usd"],
                     res.report["timings_s"].get("total"), res.report["assets"]["counts"])
