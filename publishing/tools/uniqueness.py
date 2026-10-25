@@ -336,7 +336,7 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, thresho
             g["uniqueness"] = {"visual_failures": fails, "assessment_gate": gates.get("assessment_gate"),
                                "assessment": [a for a in gates.get("assessment") or [] if a.get("verdict") == "fail"],
                                "checks_failed": [c for c in checks if c["verdict"] == "fail"]}
-            g["visual_gate"] = "fail" if fails else g.get("visual_gate", "pass")
+            g["visual_gate"] = "fail" if fails else "pass"
             if gates.get("assessment_gate"):
                 g["assessment_gate"] = gates["assessment_gate"]
             doc["review"]["human_review"] = (doc["review"].get("human_review") or []) + fit["human_review"] + vex["human_review"]
