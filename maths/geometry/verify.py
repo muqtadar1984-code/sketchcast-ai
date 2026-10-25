@@ -215,6 +215,18 @@ def _check_figure_ops(m: Model, st: StepSpec, name: str) -> None:
             raise GeometryRefusal("bad_reference", f"{name}: figure_ops target {target!r} does not exist", name)
 
 
+def _residual(e, theorem: str, name: str) -> sp.Expr:
+    """lhs - rhs of what a theorem gives. On a coordinate figure both sides can
+    be numbers already (perpendicular gradients: Eq(-1, -1)) and sympy folds the
+    equation to True — it holds and says nothing new, so 0; a False one means the
+    figure contradicts the theorem (live, 2026-10-25: this crashed a whole video)."""
+    if e is sp.true:
+        return sp.Integer(0)
+    if e is sp.false:
+        raise GeometryRefusal("step_not_equivalent", f"{name}: {theorem} does not hold on this figure", name)
+    return e.lhs - e.rhs
+
+
 def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list[sp.Expr]:
     subs = _measure_substitutions(m, q, fid)
     # one symbol per angle: an alias spelling (angle_cab for angle_bac)
@@ -240,7 +252,8 @@ def _run_chain(rep: QuestionReport, q: QuestionSpec, fid: str, m: Model) -> list
                 # the step's own equation names ARE its citation — every
                 # premise of the theorem still runs on them
                 uses += _angles_named(m, st.after)
-            template = [_rational(_in_degrees((e.lhs - e.rhs).subs(subs))) for e in apply_theorem(m, st.theorem, uses)]
+            template = [_rational(_in_degrees(_residual(e, st.theorem, name).subs(subs)))
+                        for e in apply_theorem(m, st.theorem, uses)]
             if not after:
                 raise GeometryRefusal("bad_schema", f"{name}: write the equation the theorem gives", name)
             verdict, taken_pi, stated, partial = _deduce_verdict(knowledge, template, after, after_rels)

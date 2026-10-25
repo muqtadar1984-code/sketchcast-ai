@@ -1561,7 +1561,12 @@ def _take(raw: list, n: int, kept: list, rejected: list, seen_prompts: set, note
         key = _resend_key(label, spec)
         if key in seen_prompts:
             continue   # the repair round re-sent a question already kept
-        rep = verify_question(spec)
+        try:
+            rep = verify_question(spec)
+        except Exception as exc:   # noqa: BLE001 — one bad question must never fail the lesson
+            logger.warning("geometry question rejected (verifier_error): %r — %s: %s", label, type(exc).__name__, exc)
+            rejected.append(f"{label}: verifier_error: {type(exc).__name__}: {str(exc)[:160]}")
+            continue
         if not rep.ok:
             code = (rep.refusal or {}).get("code")
             msg = (rep.refusal or {}).get("message", "")
