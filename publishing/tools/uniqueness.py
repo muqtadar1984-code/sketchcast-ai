@@ -159,8 +159,10 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, thresho
             report[n] = {"skipped": "approved at Gate D"}
             continue
         earlier = {m: docs[m] for m in docs if m < n}
-        used_before = {r for d in earlier.values() for r in _refs(d)}
-        used_anywhere = {r for d in docs.values() for r in _refs(d)}
+        # every chapter's opener art counts as used: it is that chapter's picture too
+        heroes = {f"book:hero_ch{m:02d}" for m in docs}
+        used_before = {r for d in earlier.values() for r in _refs(d)} | (heroes - {f"book:hero_ch{n:02d}"})
+        used_anywhere = {r for d in docs.values() for r in _refs(d)} | heroes
         earlier_q = [(m, xid, c, x) for m, d in earlier.items() for xid, c, x in _questions(d)]
         full = json.loads((out / f"ch{n:02d}-dossier-full.json").read_text(encoding="utf-8"))
         run_ = A.Run(full)
@@ -240,8 +242,15 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, thresho
         # ── questions ─────────────────────────────────────────────────────────
         flagged = {}
         for xid, c, x in _questions(doc):
-            best = max(((similar(c, ec), m, exid, ex) for m, exid, ec, ex in earlier_q), default=(0, 0, "", {}),
-                       key=lambda t: t[0])
+            # alike in substance (stem, options, pairs, answer) OR alike to the eye (the stem as printed)
+            stem = _norm(x.get("stem") or x.get("text"))
+
+            def score(ec, ex):
+                look = SequenceMatcher(None, stem, _norm(ex.get("stem") or ex.get("text"))).ratio()
+                return max(similar(c, ec), look if look >= 0.8 else 0.0)
+
+            best = max(((score(ec, ex), m, exid, ex) for m, exid, ec, ex in earlier_q),
+                       default=(0, 0, "", {}), key=lambda t: t[0])
             if best[0] >= threshold:
                 flagged[xid] = {"repeats": f"chapter {best[1]} {best[2]}", "score": round(best[0], 2),
                                 "earlier": (best[3].get("stem") or best[3].get("text"))}
