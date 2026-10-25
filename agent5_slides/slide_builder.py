@@ -427,23 +427,52 @@ def build_episode_deck(
     return path
 
 
+# Arabic-script characters (Arabic, Jawi): a run holding any of them is
+# tagged as Arabic so PowerPoint applies bidi to its paragraph.
+_ARABIC_SCRIPT = _re.compile("[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]")
+# A Latin/number token ending in a sub/superscript ("CO₂", "cm²", "x²"):
+# the trailing neutral digit is pulled to the wrong side of the token in an
+# RTL paragraph ("₂CO") unless a LEFT-TO-RIGHT MARK follows it.
+_LTR_TOKEN_TAIL = _re.compile("([A-Za-z0-9][A-Za-z0-9]*[\u2070-\u209F\u00B2\u00B3\u00B9])(?!\u200E)")
+
+
 def _mirror_deck_rtl(pptx_path: Path) -> None:
+    """Right-align and set the RTL base direction on every paragraph, and
+    tag Arabic-script runs with an Arabic language.
+
+    `rtl="1"` on the paragraph is NOT enough on its own: rendered by
+    PowerPoint, a paragraph whose runs carry no Arabic language is laid out
+    with a left-to-right base — "الحيوانات :تأكل" with the colon on the wrong
+    word and every parenthesis reversed (measured 2026-10-24 on the Arabic
+    Photosynthesis and Jawi decks; true of storyboard decks too, which share
+    this pass). `lang="ar-SA"` on the run fixes the bidi; it is the tag
+    PowerPoint reads, for Jawi as well (there is no Jawi proofing language)."""
     from pptx import Presentation
     from pptx.enum.text import PP_ALIGN
 
-    def mirror(tf) -> None:
+    def mirror(tf, keep_align: bool = False) -> None:
         for p in tf.paragraphs:
-            # Centred paragraphs (number badges, title slides) stay centred.
-            if p.alignment != PP_ALIGN.CENTER:
+            # Centred paragraphs (number badges, title slides) stay centred;
+            # a "keep-align" shape (a figure label aligned towards its leader
+            # line) keeps the side it was given.
+            if p.alignment != PP_ALIGN.CENTER and not keep_align:
                 p.alignment = PP_ALIGN.RIGHT
             # python-pptx has no first-class rtl API — set the OOXML attr.
             p._p.get_or_add_pPr().set("rtl", "1")  # noqa: SLF001
+            if not any(_ARABIC_SCRIPT.search(r.text or "") for r in p.runs):
+                continue
+            for r in p.runs:
+                rpr = r.font._element  # noqa: SLF001 — the run's a:rPr
+                rpr.set("lang", "ar-SA")
+                rpr.set("altLang", "en-US")
+                if r.text and _LTR_TOKEN_TAIL.search(r.text):
+                    r.text = _LTR_TOKEN_TAIL.sub("\\1\u200e", r.text)
 
     prs = Presentation(str(pptx_path))
     for slide in prs.slides:
         for shape in slide.shapes:
             if getattr(shape, "has_text_frame", False):
-                mirror(shape.text_frame)
+                mirror(shape.text_frame, keep_align=str(shape.name or "").startswith("keep-align"))
             # A table is a GraphicFrame: no text_frame of its own, and the
             # legacy deck never had one to worry about. The storyboard deck
             # carries a glossary and a misconceptions table on every lesson,

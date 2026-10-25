@@ -34,3 +34,22 @@ import os
 
 def enabled() -> bool:
     return os.getenv("DECK_AI_DIRECTOR", "0").strip() == "1"
+
+
+def vision_client(fallback=None):
+    """The judge for pictures and rendered slides: Gemini on Vertex
+    (DECK_DIRECTOR_VISION_MODEL, default gemini-3.5-flash — the judge the
+    founder-approved samples were scored by), whatever model DESIGNED the deck.
+
+    Not the design client: on the matrix run a catalogue deck was designed
+    AND judged by Haiku, which passed a medieval artefact as "scissors
+    showing an angle" and scored slides on a different scale from the
+    approved samples. One fixed judge keeps the gate and the scores
+    comparable. Falls back to `fallback` when Vertex is not configured."""
+    if not os.getenv("VERTEX_PROJECT_ID", "").strip():
+        return fallback
+    try:
+        from shared.gemini_client import GeminiClient
+        return GeminiClient(model=os.getenv("DECK_DIRECTOR_VISION_MODEL", "gemini-3.5-flash").strip())
+    except Exception:  # noqa: BLE001 — a missing judge is the design client, not a failed deck
+        return fallback

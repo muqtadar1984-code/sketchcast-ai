@@ -176,6 +176,11 @@ def build(model: LessonModel, *, article: Optional[dict] = None, subject: str = 
 
     figures: dict[str, dict] = {}
     for key, f in model.figures.items():
+        # Only a figure with artwork ON DISK is offered: an article may DECLARE
+        # figures that were never drawn (the Arabic Photosynthesis article has
+        # three, none rendered), and a slide planned around one shows a hole.
+        if not (f.png and Path(str(f.png)).exists()):
+            continue
         figures[key] = {"caption": f.caption, "parts": list(f.located() or f.parts),
                         "png": str(f.png) if f.png else "", "regions": f.regions, "w": f.w, "h": f.h,
                         "labellable": f.annotatable}

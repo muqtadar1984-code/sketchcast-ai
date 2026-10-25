@@ -91,6 +91,33 @@ def build_director_deck(model: LessonModel, *, client, out_path: Path, tmp: Path
                       curriculum=curriculum, age_band=age_band, shelf=shelf_pictures, branding=branding)
     log(f"context: {len(ctx.sources)} worked examples, {len(ctx.figures)} figures, age {ctx.age_band or '?'}")
 
+    # The deck's running spend against DECK_DIRECTOR_TOTAL_USD. Text and
+    # vision come from the clients' own meters (from a baseline, so a client
+    # that served earlier calls is not charged to this deck), images from
+    # `spend`. The ceiling is enforced at every point that can still spend:
+    # correction rounds stop, the vision review is skipped (geometry QA
+    # still runs), and images get only what is left.
+    separate_vision = vision_client is not None and vision_client is not client
+
+    def _usd(c) -> float:
+        return float(_usage(c).get("cost_usd") or 0)
+
+    base_text = _usd(client)
+    base_vis = _usd(vision_client) if separate_vision else 0.0
+    stops: list[str] = []
+
+    def spent() -> float:
+        t = _usd(client) - base_text
+        v = (_usd(vision_client) - base_vis) if separate_vision else 0.0
+        return t + v + spend.image_usd
+
+    def over(what: str, share: float = 1.0) -> bool:
+        if spent() >= budget.max_total_usd * share:
+            stops.append(f"{what}: ${spent():.3f} of ${budget.max_total_usd:.2f}")
+            log(f"budget: {stops[-1]}")
+            return True
+        return False
+
     with clock("design"):
         deck = D.design(ctx, client)
     log(f"design: {len(deck.slides)} slides, {len(deck.assets)} asset needs — {deck.rationale[:140]}")
@@ -99,7 +126,7 @@ def build_director_deck(model: LessonModel, *, client, out_path: Path, tmp: Path
         shown = ground(deck, ctx)
         problems = D.check(deck, ctx)
         n = 0
-        while problems and n < budget.corrections:
+        while problems and n < budget.corrections and not over("grounding correction skipped", 0.6):
             n += 1
             log(f"grounding round {n}: {sum(len(v) for v in problems.values())} problems on {len(problems)} slides")
             rounds.append({"stage": "grounding", "round": n, "problems": problems})
@@ -112,6 +139,9 @@ def build_director_deck(model: LessonModel, *, client, out_path: Path, tmp: Path
         spec_first = deck.to_dict()
 
     def pictures_and_render(tag: str):
+        # images may use what the total ceiling still allows, never more
+        budget.max_image_usd = min(budget.max_image_usd,
+                                   max(0.0, budget.max_total_usd - spent() + spend.image_usd))
         with clock("assets"):
             rep = A.resolve(deck, tmp=tmp / "assets", shelf=shelf, ctx=ctx, budget=budget, spend=spend,
                             vision_client=vision_client, generate=generate, photos=photos,
@@ -121,7 +151,7 @@ def build_director_deck(model: LessonModel, *, client, out_path: Path, tmp: Path
         credits = sorted({p.credit for p in rep.pictures.values() if p.credit})
         with clock("render"):
             path, reports = R.build(deck, rep.pictures, ctx.figures, out_path, branding=branding,
-                                    direction=direction, credits=credits)
+                                    direction=direction, credits=credits, language=ctx.language)
         return rep, path, reports
 
     arep, path, reports = pictures_and_render("first")
@@ -134,14 +164,15 @@ def build_director_deck(model: LessonModel, *, client, out_path: Path, tmp: Path
             det = Q.check_deck(deck, reports)
             if render_preview:
                 images, renderer = Q.render_images(path, tmp / f"qa_{qa_round}")
-                if images and vision_client is not None:
+                if images and vision_client is not None and not over("vision review skipped", 0.85):
                     vis = Q.vision_review(vision_client, images, deck, ctx.age_band, budget.vision_qa_slides)
             issues = Q.merge(det, vis)
             block = Q.blocking(issues)
         log(f"qa round {qa_round}: {Q.summary(issues, vis)}; blocking on {len(block)} slides")
         rounds.append({"stage": "qa", "round": qa_round, "renderer": renderer,
                        "summary": Q.summary(issues, vis), "blocking": block})
-        if not block or qa_round >= budget.corrections or spend.elapsed() > budget.max_seconds:
+        done = not block or qa_round >= budget.corrections or spend.elapsed() > budget.max_seconds
+        if done or over("qa correction skipped", 0.75):
             break
         with clock("correction"):
             D.correct(deck, ctx, client, block)
@@ -153,8 +184,8 @@ def build_director_deck(model: LessonModel, *, client, out_path: Path, tmp: Path
 
     text_usage = _usage(client)
     vision_usage = _usage(vision_client) if vision_client is not None and vision_client is not client else {}
-    text_usd = float(text_usage.get("cost_usd") or 0)
-    vision_usd = float(vision_usage.get("cost_usd") or 0)
+    text_usd = float(text_usage.get("cost_usd") or 0) - base_text
+    vision_usd = float(vision_usage.get("cost_usd") or 0) - base_vis
     report = {
         "title": deck.title,
         "slides": len(deck.slides) + (1 if any(p.credit for p in arep.pictures.values()) else 0),
@@ -175,6 +206,7 @@ def build_director_deck(model: LessonModel, *, client, out_path: Path, tmp: Path
                   "total_usd": round(text_usd + vision_usd + spend.image_usd, 4)},
         "budget": budget.__dict__,
         "renderer_faults": {r.id: r.faults for r in reports if r.faults},
+        "budget_stops": stops,
     }
     return Result(path=path, report=report, images=images)
 

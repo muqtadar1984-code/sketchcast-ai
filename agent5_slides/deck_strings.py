@@ -146,6 +146,51 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Answers:", "ms": "Jawapan:", "ms-arab": "جواڤن:", "ar": "الإجابات:", "fr": "Réponses :",
         "es": "Respuestas:", "pt": "Respostas:", "hi": "उत्तर:", "mr": "उत्तरे:", "te": "సమాధానాలు:",
     },
+    # ── the AI Presentation Director's chrome (2026-10-25; ms-arab, ur,
+    # mr and te want a native reader like the rest of this table) ──
+    "result": {
+        "en": "Result", "ms": "Keputusan", "ms-arab": "کڤوتوسن", "ar": "النتيجة", "fr": "Résultat",
+        "es": "Resultado", "pt": "Resultado", "hi": "परिणाम", "mr": "निकाल", "te": "ఫలితం",
+    },
+    "tip": {
+        "en": "Tip", "ms": "Petua", "ms-arab": "ڤتوا", "ar": "نصيحة", "fr": "Astuce",
+        "es": "Consejo", "pt": "Dica", "hi": "सुझाव", "mr": "टीप", "te": "చిట్కా",
+    },
+    "key_rule": {
+        "en": "Key rule", "ms": "Peraturan utama", "ms-arab": "ڤراتورن اوتام", "ar": "قاعدة أساسية",
+        "fr": "Règle clé", "es": "Regla clave", "pt": "Regra-chave", "hi": "मुख्य नियम", "mr": "मुख्य नियम",
+        "te": "ముఖ్య నియమం",
+    },
+    "think": {
+        "en": "Think", "ms": "Fikir", "ms-arab": "فيکير", "ar": "فكّر", "fr": "Réfléchis",
+        "es": "Piensa", "pt": "Pense", "hi": "सोचो", "mr": "विचार करा", "te": "ఆలోచించండి",
+    },
+    "note": {
+        "en": "Note", "ms": "Nota", "ms-arab": "نوت", "ar": "ملاحظة", "fr": "Note",
+        "es": "Nota", "pt": "Nota", "hi": "ध्यान दें", "mr": "टीप", "te": "గమనిక",
+    },
+    "image_credits": {
+        "en": "Image credits", "ms": "Kredit imej", "ms-arab": "کريديت ايميج", "ar": "مصادر الصور",
+        "fr": "Crédits des images", "es": "Créditos de las imágenes", "pt": "Créditos das imagens",
+        "hi": "चित्र श्रेय", "mr": "चित्र श्रेय", "te": "చిత్ర క్రెడిట్లు",
+    },
+    "figure_key": {
+        "en": "Figure key:", "ms": "Petunjuk rajah:", "ms-arab": "ڤتونجوق راجه:", "ar": "مفتاح الشكل:",
+        "fr": "Légende de la figure :", "es": "Leyenda de la figura:", "pt": "Legenda da figura:",
+        "hi": "चित्र कुंजी:", "mr": "आकृती सूची:", "te": "చిత్ర సూచిక:",
+    },
+    "full_working": {
+        "en": "Full working", "ms": "Jalan kerja penuh", "ms-arab": "جالن کرجا ڤنوه", "ar": "الحل الكامل",
+        "fr": "Résolution complète", "es": "Resolución completa", "pt": "Resolução completa",
+        "hi": "पूरा हल", "mr": "संपूर्ण उकल", "te": "పూర్తి సాధన",
+    },
+    "in_full": {
+        "en": "Shortened on the slide; in full:", "ms": "Diringkaskan di slaid; selengkapnya:",
+        "ms-arab": "دريڠکسکن دي سلايد؛ سلڠکڤڽ:", "ar": "مختصر على الشريحة؛ بالتفصيل:",
+        "fr": "Abrégé sur la diapositive ; en entier :", "es": "Resumido en la diapositiva; completo:",
+        "pt": "Resumido no slide; completo:", "hi": "स्लाइड पर संक्षेप में; पूरा:",
+        "mr": "स्लाइडवर थोडक्यात; संपूर्ण:", "te": "స్లైడ్‌పై సంక్షిప్తంగా; పూర్తిగా:",
+    },
 }
 
 # Keys the document builders already localise; the deck says the same thing
@@ -183,6 +228,9 @@ _UR = {
     "continued": "(جاری)", "ready": "پڑھانے کے لیے تیار۔",
     "notes_line": "ہر سلائیڈ کے اسپیکر نوٹس میں بیانیہ موجود ہے۔",
     "answer": "جواب", "answer_not_given": "جواب نہیں دیا گیا۔", "labelled_here": "یہاں نشان زد:", "answers": "جوابات:",
+    "result": "نتیجہ", "tip": "مشورہ", "key_rule": "اہم اصول", "think": "سوچیں", "note": "نوٹ",
+    "image_credits": "تصاویر کے حوالہ جات", "figure_key": "شکل کی کلید:", "full_working": "مکمل حل",
+    "in_full": "سلائیڈ پر مختصر؛ مکمل:",
 }
 for _k, _v in _UR.items():
     _STRINGS[_k]["ur"] = _v

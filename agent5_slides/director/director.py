@@ -31,6 +31,7 @@ import re
 from typing import Any, Optional
 
 from . import maths_check as mc
+from ..deck_strings import T
 from . import prompt as P
 from . import spec as S
 from .context import LessonContext
@@ -38,6 +39,10 @@ from .context import LessonContext
 logger = logging.getLogger(__name__)
 
 MAX_TOKENS = 30000
+# A whole lesson in fewer slides than this is a summary, not a deck: Haiku
+# designed Arabic Photosynthesis in six (matrix round 3; the brief says
+# 12-20). Re-asked once; a second short reply is used as it is.
+DESIGN_MIN_SLIDES = 10
 WORD_BUDGET = 60            # visible words per slide; the brief says ~45
 SHAPE_RETRIES = 1
 
@@ -75,6 +80,9 @@ def design(ctx: LessonContext, client, *, max_tokens: int = MAX_TOKENS) -> S.Dec
         _dump(f"design_{attempt + 1}", reply)
         try:
             deck = S.normalise(_payload(reply))
+            if len(deck.slides) < DESIGN_MIN_SLIDES and attempt < SHAPE_RETRIES:
+                raise S.SpecInvalid(f"only {len(deck.slides)} slides for a whole lesson; design "
+                                    f"12-20, one idea per slide")
             logger.info("director: %d slides, %d assets — %s", len(deck.slides), len(deck.assets),
                         deck.rationale[:160])
             return deck
@@ -125,7 +133,9 @@ def notation_answer(text: str) -> str:
     """The source's answer sentence in the notation the slide uses:
     "14 times pi cm" → "14π cm", "77 square centimetres" → "77 cm²"."""
     t = " ".join((text or "").split())
-    t = re.sub(r"^(state the final answers?( with (the )?correct units)?\.?\s*)", "", t, flags=re.I)
+    # the whole instruction sentence goes, however it ends ("… clearly with
+    # units.", "… with correct units.") — not just the words we expected
+    t = re.sub(r"^state (the|your) final answers?[^.]*\.\s*", "", t, flags=re.I)
     t = re.sub(r"(\d+(?:\.\d+)?)\s+times\s+pi\b", r"\1π", t, flags=re.I)
     t = re.sub(r"\bsquare (centi)?metres\b", lambda m: "cm²" if m.group(1) else "m²", t, flags=re.I)
     t = re.sub(r"\bcentimetres\b", "cm", t, flags=re.I)
@@ -215,7 +225,7 @@ def resolve_steps(deck: S.DeckSpec, ctx: LessonContext) -> dict[str, set[int]]:
             # slide compresses, the teacher has every step under it.
             full = "\n".join(f"Step {i}: {src.steps[i - 1]['line']}" for i in range(a, b + 1))
             if full not in sl.notes:
-                sl.notes = (sl.notes + "\n\n" if sl.notes else "") + f"Full working ({src.id}):\n{full}"
+                sl.notes = (sl.notes + "\n\n" if sl.notes else "") + f"{T(ctx.language, 'full_working')} ({src.id}):\n{full}"
     return shown
 
 
@@ -304,6 +314,31 @@ def tidy(deck: S.DeckSpec, ctx: LessonContext) -> list[str]:
             deck.slides.pop(i)
             notes.append(f"slide {sl.id}: answer-only slide merged into {prev.id}")
             continue
+        steps = [e for e in sl.elements() if e["type"] == "steps"]
+        # One example written as TWO steps blocks on one slide (Haiku, the
+        # Types of Angles matrix run): each printed the problem band and the
+        # two collided. They become one block spanning both ranges.
+        by_src: dict[str, list[dict]] = {}
+        for e in steps:
+            by_src.setdefault(e.get("source", ""), []).append(e)
+        for src_id, group in by_src.items():
+            if len(group) < 2:
+                continue
+            keep = group[0]
+            keep["from_step"] = min((g.get("from_step") or 1) for g in group)
+            ends = [g.get("to_step") or 0 for g in group]
+            keep["to_step"] = 0 if 0 in ends else max(ends)
+            items = [it for g in group for it in (g.get("items") or [])]
+            keep["items"] = items if all(g.get("items") for g in group) else []
+            keep["show_answer"] = any(g.get("show_answer", True) for g in group)
+            keep.pop("dup", None)          # re-judged (and trimmed) by the next resolve
+            drop = [id(g) for g in group[1:]]
+            for r in sl.rows:
+                for c in r.cols:
+                    c.elements = [x for x in c.elements if id(x) not in drop]
+                r.cols = [c for c in r.cols if c.elements]
+            sl.rows = [r for r in sl.rows if r.cols]
+            notes.append(f"slide {sl.id}: merged {len(group)} steps blocks of {src_id}")
         steps = [e for e in sl.elements() if e["type"] == "steps"]
         if not steps:
             i += 1
@@ -396,6 +431,10 @@ def _new_numbers(sl: S.SlideSpec, ctx: LessonContext) -> set[str]:
     return mc.numbers(text) - mc.numbers(ctx.corpus) - {str(i) for i in range(0, 11)}
 
 
+def is_maths(ctx: LessonContext) -> bool:
+    return "math" in (ctx.subject or "").lower() or any(s.verified for s in ctx.sources.values())
+
+
 def check(deck: S.DeckSpec, ctx: LessonContext) -> dict[str, list[str]]:
     """slide id -> problems a redesign must fix."""
     problems: dict[str, list[str]] = {}
@@ -417,6 +456,11 @@ def check(deck: S.DeckSpec, ctx: LessonContext) -> dict[str, list[str]]:
                 ok, why = mc.chain_ok(e["expr"])
                 if not ok:
                     add(sl.id, f"formula {e['expr']!r} does not hold ({why})")
+            if e["type"] == "maths_diagram" and not is_maths(ctx):
+                # an exact circle standing in for "the pH scale" (Acids and
+                # Alkalis, matrix round 2): the diagram is maths, not décor
+                add(sl.id, "maths_diagram is for circle geometry in a maths lesson; use a photo, "
+                           "illustration, flow, chips or cards for this subject instead")
             if e["type"] == "figure" and e["figure_key"] not in ctx.figures:
                 add(sl.id, f"figure {e['figure_key']!r} is not one of the lesson's figures "
                            f"({', '.join(ctx.figures) or 'none'})")
@@ -522,8 +566,8 @@ def drop_unfixable(deck: S.DeckSpec, problems: dict[str, list[str]], ctx: Option
     removed = []
     for sid, probs in problems.items():
         sl = next((s for s in deck.slides if s.id == sid), None)
-        if sl is None or not any(p.startswith(("numbers not in", "the answer", "formula", "figure"))
-                                 for p in probs):
+        if sl is None or not any(p.startswith(("numbers not in", "the answer", "formula", "figure",
+                                               "maths_diagram")) for p in probs):
             continue
         answers = [(it.get("answer") or "").strip().lower() for e in sl.elements() if e["type"] == "questions"
                    for it in e.get("items") or [] if len((it.get("answer") or "").strip()) >= 2]
@@ -534,6 +578,8 @@ def drop_unfixable(deck: S.DeckSpec, problems: dict[str, list[str]], ctx: Option
                 return False
             t = _element_text(e)
             if e["type"] == "formula" and not mc.chain_ok(e.get("expr", ""))[0]:
+                return True
+            if e["type"] == "maths_diagram" and ctx and not is_maths(ctx):
                 return True
             if e["type"] == "figure" and ctx and e.get("figure_key") not in ctx.figures:
                 return True

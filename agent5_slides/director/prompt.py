@@ -86,7 +86,9 @@ ELEMENT types and their fields:
   answer {label, text, tone}            — the result bar
   callout {kind: tip|rule|warning|think|note, text}
   image {asset, caption}                — a declared asset
-  figure {figure_key, parts:[part names to label], caption}
+  figure {figure_key, parts:[part names to label], labels:[{part, text}], caption}
+        — `parts` are the figure's own part names; on a NON-ENGLISH deck give `labels` for EVERY part,
+          in the deck's language (use the lesson's glossary terms), or the label shows as a number
   maths_diagram {shape: circle|semicircle|quarter, show:[centre, radius, diameter, chord, tangent,
         circumference, arc, area], labels:[{part, text}], highlight: perimeter|area|""}
   table {header:[...], rows:[[...]]}    — max 4 columns, 6 rows

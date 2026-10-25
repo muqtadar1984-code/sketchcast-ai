@@ -523,7 +523,7 @@ def test_an_overfull_column_degrades_instead_of_overflowing(tmp_path, model):
     rep = next(r for r in reports if r.id == "anatomy")
     assert not [i for i in Q.check_slide(rep, "x") if i["severity"] == "high"]
     assert rep.degraded                                   # what moved is recorded…
-    assert "On the slide in short" in next(s for s in deck.slides if s.id == "anatomy").notes  # …and kept
+    assert "Shortened on the slide" in next(s for s in deck.slides if s.id == "anatomy").notes  # …and kept
 
 
 def test_labels_keep_maths_case_and_long_words_never_break():
@@ -587,3 +587,137 @@ def test_a_fallback_is_recorded_on_the_generation(tmp_path, model, monkeypatch):
                   sb=object(), generation_id="gen-1")
     assert seen and seen[0][0] == "gen-1"
     assert seen[0][1]["deck_director"]["route"] == "storyboard_fallback"
+
+
+def test_the_total_budget_stops_corrections_and_vision(tmp_path, model):
+    """DECK_DIRECTOR_TOTAL_USD is enforced: a deck whose design alone spent
+    the ceiling gets no correction round and no paid vision review."""
+    class Costly(StubClient):
+        def analyze(self, prompt, **kw):
+            self.session_usage["cost_usd"] += 2.0             # one call = the whole ceiling
+            return super().analyze(prompt, **kw)
+    raw = spec_raw()
+    raw["slides"] = raw["slides"] + [dict(s, id=s["id"] + "_x") for s in raw["slides"][1:4]]   # a full deck
+    raw["slides"][3]["rows"][0]["cols"][1]["elements"].append(
+        {"type": "statement", "text": "A wheel is 622 mm across."})   # a grounding problem to correct
+    client = Costly(raw)
+    res = P.build_director_deck(model, client=client, out_path=tmp_path / "o.pptx", tmp=tmp_path / "w",
+                                article=ARTICLE, generate=lambda p, a: (None, "", 0.0),
+                                photos=lambda q, http=None: [], render_preview=False,
+                                budget=A.Budget(max_total_usd=1.5, corrections=2))
+    assert len(client.calls) == 1                             # the design call only
+    assert any("grounding correction skipped" in s for s in res.report["budget_stops"])
+
+
+def test_rtl_pass_tags_arabic_runs_and_pins_subscripts(tmp_path):
+    """PowerPoint lays out an rtl paragraph with an LTR base unless its runs
+    carry an Arabic language — every colon and bracket on the wrong side."""
+    from pptx import Presentation
+    from pptx.util import Inches
+    from agent5_slides.slide_builder import _mirror_deck_rtl
+    prs = Presentation()
+    s = prs.slides.add_slide(prs.slide_layouts[6])
+    tb = s.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1))
+    tb.text_frame.text = "النباتات: تصنع سكريات من CO₂ والماء"
+    tb2 = s.shapes.add_textbox(Inches(1), Inches(3), Inches(6), Inches(1))
+    tb2.text_frame.text = "A = πr²"                         # a Latin-only box keeps its language
+    p = tmp_path / "rtl.pptx"
+    prs.save(p)
+    _mirror_deck_rtl(p)
+    prs = Presentation(p)
+    r = prs.slides[0].shapes[0].text_frame.paragraphs[0].runs[0]
+    assert r.font._element.get("lang") == "ar-SA"
+    assert "CO₂\u200e" in r.text
+    r2 = prs.slides[0].shapes[1].text_frame.paragraphs[0].runs[0]
+    assert r2.font._element.get("lang") != "ar-SA"
+
+
+def test_two_steps_blocks_of_one_example_on_a_slide_become_one(model):
+    ctx = C.build(model, article=ARTICLE)
+    raw = spec_raw()
+    col = raw["slides"][6]["rows"][0]["cols"][0]
+    col["elements"] = [{"type": "steps", "source": "W1", "from_step": 1, "to_step": 2},
+                       {"type": "steps", "source": "W1", "from_step": 3, "to_step": 4}]
+    deck = S.normalise(raw)
+    D.tidy(deck, ctx)
+    sl = next(s for s in deck.slides if s.id == "we1")
+    blocks = [e for e in sl.elements() if e["type"] == "steps"]
+    assert len(blocks) == 1 and (blocks[0]["from_step"], blocks[0]["to_step"]) == (1, 4)
+
+
+def test_a_licensed_hit_that_is_not_the_thing_itself_is_refused():
+    base = {"shows_subject": True, "relevance": 8, "quality": 8, "classroom_safe": True}
+    assert A.verdict_ok(base | {"is_the_thing_itself": True}, "licensed")
+    assert not A.verdict_ok(base | {"is_the_thing_itself": False}, "licensed")
+    assert not A.verdict_ok(base | {"relevance": 6}, "licensed")          # 6 is not enough for a search hit
+    assert A.verdict_ok(base | {"relevance": 6}, "generated")
+
+
+def test_english_figure_labels_become_numbers_on_a_jawi_deck(tmp_path, model):
+    from pptx import Presentation
+    from agent5_slides.director import render as R
+    png = _png(tmp_path / "cell.png", 800, 600)
+    figs = {"cell": {"caption": "", "parts": ["nucleus", "cell membrane"], "png": str(png),
+                     "regions": {"nucleus": [[300, 200, 420, 320]], "cell membrane": [[100, 80, 700, 540]]},
+                     "w": 800, "h": 600, "labellable": True}}
+    raw = spec_raw()
+    raw["slides"][3]["rows"] = [{"cols": [{"elements": [{"type": "figure", "figure_key": "cell",
+                                                        "parts": ["nucleus", "cell membrane"],
+                                                        "labels": [{"part": "nucleus", "text": "نوکليوس"}]}]}]}]
+    deck = S.normalise(raw)
+    path, reports = R.build(deck, {}, figs, tmp_path / "d.pptx", language="ms-arab", direction="rtl")
+    slide = Presentation(path).slides[3]
+    texts = [sh.text_frame.text for sh in slide.shapes if sh.has_text_frame]
+    assert "نوکليوس" in texts and "cell membrane" not in texts and "1" in texts
+    assert "1 = cell membrane" in slide.notes_slide.notes_text_frame.text
+    rep = next(r for r in reports if r.id == "anatomy")
+    assert not [i for i in Q.check_slide(rep, "x") if i["category"] == "bounds"]
+
+
+def test_a_maths_diagram_outside_maths_is_corrected_then_removed(model):
+    ctx = C.build(model, article=ARTICLE, subject="chemistry")
+    raw = spec_raw()
+    raw["slides"][4]["rows"][0]["cols"][1]["elements"].append({"type": "callout", "kind": "tip", "text": "Square units."})
+    deck = S.normalise(raw)
+    probs = D.check(deck, ctx)
+    assert any("maths_diagram" in p for p in probs.get("area", []))
+    D.drop_unfixable(deck, {k: v for k, v in probs.items() if k == "area"}, ctx)
+    sl = next(s for s in deck.slides if s.id == "area")
+    assert not any(e["type"] == "maths_diagram" for e in sl.elements())
+
+
+def test_rows_rebalance_before_anything_shrinks():
+    from agent5_slides.director import render as R
+    env = R.Env(R.Theme.make("indigo"), {}, {}, dark=False)
+    long = {"type": "bullets", "items": [{"body": "A point that needs a full line of room " * 6}] * 5}
+    rows = [S.Row(1, [S.Column(1, [long])]), S.Row(1, [S.Column(1, [{"type": "statement", "text": "Short."}])])]
+    h = R.row_heights(rows, 5.0, env)
+    assert h[0] > h[1] and abs(sum(h) - 5.0) < 1e-6
+
+
+def test_a_missing_picture_is_pruned_before_layout(tmp_path, model):
+    from agent5_slides.director import render as R
+    deck = S.normalise(spec_raw())
+    sl = next(s for s in deck.slides if s.id == "anatomy")
+    sl.rows[0].cols.append(S.Column(1, [{"type": "image", "asset": "A_missing", "tone": "accent"}]))
+    _, reports = R.build(deck, {}, {}, tmp_path / "d.pptx")
+    assert not any(c.elements and c.elements[0].get("asset") == "A_missing" for r in sl.rows for c in r.cols)
+    rep = next(r for r in reports if r.id == "anatomy")
+    assert not [f for f in rep.faults if "unavailable" in f]
+
+
+def test_a_whole_lesson_in_six_slides_is_asked_again(model):
+    ctx = C.build(model, article=ARTICLE)
+    short, full = spec_raw(), spec_raw()
+    full["slides"] = full["slides"] + [dict(s, id=s["id"] + "_x") for s in full["slides"][1:4]]
+    replies = iter([short, full])
+    client = StubClient(lambda prompt: next(replies))
+    deck = D.design(ctx, client)
+    assert len(client.calls) == 2 and len(deck.slides) >= 10
+
+
+def test_the_answer_bar_drops_the_whole_instruction_sentence():
+    assert D.notation_answer("State the final answer clearly with units. The value of y is 100 degrees.") \
+        == "The value of y is 100 degrees."
+    assert D.notation_answer("State the final answers with correct units. The area is 77 square centimetres.") \
+        == "The area is 77 cm²."

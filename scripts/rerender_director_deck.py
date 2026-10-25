@@ -60,9 +60,17 @@ def main():
                       generate=lambda p, a: (None, "", 0.0), photos=lambda q, http=None: [])
     pics.update(again.pictures)
     credits = sorted({p.credit for p in pics.values() if p.credit})
-    path, reports = R.build(deck, pics, ctx.figures, sample / f"{cfg['file']}.pptx", credits=credits)
+    branding = None
+    target = sample / f"{cfg['file']}.pptx"
+    for arg in sys.argv:
+        if arg.startswith("--branding="):
+            # a school's template, logo and accent (worker/process.py `branding`)
+            branding = json.loads(Path(arg.split("=", 1)[1]).read_text("utf-8"))
+            target = sample / f"{cfg['file']}_branded.pptx"
+    path, reports = R.build(deck, pics, ctx.figures, target, credits=credits, branding=branding)
     det = Q.check_deck(deck, reports)
-    images, how = Q.render_images(path, sample / "slides", pdf=sample / f"{cfg['file']}.pdf")
+    images, how = Q.render_images(path, sample / ("slides_branded" if branding else "slides"),
+                                  pdf=path.with_suffix(".pdf"))
     vis = {}
     client = None
     if vision and images:
@@ -75,6 +83,9 @@ def main():
     rep["rerender"] = {"degraded": {r.id: r.degraded for r in reports if r.degraded},
                        "vision_usd": (getattr(client, "session_usage", {}) or {}).get("cost_usd", 0)}
     rep["usage"]["total_usd"] = round(rep["usage"]["total_usd"] + (rep["rerender"]["vision_usd"] or 0), 4)
+    if branding:
+        print(json.dumps({"branded": str(path), "qa": Q.summary(issues, vis)}, indent=1))
+        return
     (sample / "report.json").write_text(json.dumps(rep, indent=1, ensure_ascii=False, default=str), "utf-8")
     print(json.dumps({"slides": len(images), "renderer": how, "qa": rep["qa"]["summary"],
                       "degraded": rep["rerender"]["degraded"]}, indent=1, ensure_ascii=False))
