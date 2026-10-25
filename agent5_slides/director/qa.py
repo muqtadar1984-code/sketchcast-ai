@@ -37,7 +37,7 @@ from .render import Box, SlideReport, W_IN, H_IN
 logger = logging.getLogger(__name__)
 
 SMALL_OK = {"kicker", "badge", "chip_label", "caption", "credit", "step_number", "question_number",
-            "answer_label", "callout_label", "diagram_label"}
+            "answer_label", "callout_label", "diagram_label", "figure_label"}
 MIN_PT = 14.0
 
 
@@ -87,7 +87,7 @@ def check_slide(rep: SlideReport, title: str = "") -> list[dict]:
                 add("high", "overlap", f"'{a.text[:25]}' overlaps '{b.text[:25]}'")
         for p in pics:
             ov = _inter(a.rect, p.rect)
-            if a.role not in ("diagram_label",) and ov > 0.08 * _area(a.rect):
+            if a.role not in ("diagram_label", "figure_label") and ov > 0.08 * _area(a.rect):
                 add("high", "overlap", f"text '{a.text[:25]}' sits on a picture")
         if a.pt and a.pt < MIN_PT and a.role not in SMALL_OK:
             add("medium", "type", f"{a.role} at {a.pt}pt (floor {MIN_PT}pt): '{a.text[:30]}'")

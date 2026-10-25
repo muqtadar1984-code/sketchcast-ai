@@ -432,7 +432,10 @@ def default_generate(prompt: str, aspect: str) -> tuple[Optional[bytes], str, fl
 VISION_PROMPT = (
     "You are checking a picture before it goes on a classroom slide for learners aged {age}.\n"
     "The slide needs: {subject}. Purpose: {purpose}. It must show: {must}.\n"
-    "Reply JSON only: {{\"shows_subject\": true|false, \"relevance\": 0-10, \"quality\": 0-10, "
+    "`is_the_thing_itself` is true only if the picture shows the actual thing named — not a museum "
+    "artefact, artwork, toy, statue, cartoon, or a different object that merely resembles it.\n"
+    "Reply JSON only: {{\"shows_subject\": true|false, \"is_the_thing_itself\": true|false, "
+    "\"relevance\": 0-10, \"quality\": 0-10, "
     "\"has_text\": true|false, \"scientifically_wrong\": true|false, \"classroom_safe\": true|false, "
     "\"problems\": [\"...\"]}}"
 )
@@ -458,6 +461,13 @@ def verdict_ok(v: dict, origin: str) -> bool:
         return False
     if origin == "generated" and v.get("has_text"):
         return False                     # baked-in text: garbled labels on a projected slide
+    if origin == "licensed":
+        # a search hit is held to more: "open scissors showing an angle"
+        # passed at 6 as a medieval artefact on a museum scale bar (matrix
+        # cover, Types of Angles) — the thing itself, and clearly relevant
+        if v.get("is_the_thing_itself") is False:
+            return False
+        return int(v.get("relevance") or 0) >= 7 and int(v.get("quality") or 0) >= 6
     return int(v.get("relevance") or 0) >= 6 and int(v.get("quality") or 0) >= 5
 
 

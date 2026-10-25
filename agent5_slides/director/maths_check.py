@@ -28,10 +28,19 @@ import re
 _NUM = re.compile(r"(?<![A-Za-z])\d+(?:\.\d+)?")
 
 
+# Arabic-Indic and Extended (Persian/Urdu) digits, read as the same values:
+# an Arabic deck numbering its cards ١ ٢ ٣ ٤ was "new numbers" against a lesson
+# written with Western digits, and lost the cards (matrix round 3).
+_DIGITS = str.maketrans("\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669"
+                        "\u06F0\u06F1\u06F2\u06F3\u06F4\u06F5\u06F6\u06F7\u06F8\u06F9",
+                        "01234567890123456789")
+
+
 def numbers(text: str) -> set[str]:
-    """Numbers by VALUE as written: "01" is 1 (a card badge), "44.0" is 44."""
+    """Numbers by VALUE as written: "01" is 1 (a card badge), "44.0" is 44,
+    "١٢" is 12."""
     out = set()
-    for m in _NUM.findall(text or ""):
+    for m in _NUM.findall((text or "").translate(_DIGITS)):
         n = m.rstrip("0").rstrip(".") if "." in m else m
         n = n.lstrip("0") or "0"
         if n.startswith("."):

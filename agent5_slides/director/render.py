@@ -40,7 +40,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from shared.lesson_model import display_part
+
 from .. import metrics as mx
+from ..deck_strings import T
 from . import spec as S
 
 logger = logging.getLogger(__name__)
@@ -276,12 +279,45 @@ class Canvas:
 _UNFIT = [0]
 
 
+# Mathematical operators (∠ ≠ ≤ ≥ ∑ √ ∞ …) are not in Calibri; PowerPoint
+# draws them in a fallback maths font whose line is taller and wider, and a
+# card title above an "∠AOD + ∠DOB" line overlapped it (Types of Angles,
+# matrix round 4). Text holding one is measured with that allowance.
+BOLD_WIDTH = 1.15         # bold runs this much wider than the regular-weight em table
+_MATH_SYMBOLS = re.compile("[∀-⋿⟀-⟯⦀-⧿]")
+
+
+def _wrapped_lines(text: str, w: float, pt: float) -> int:
+    """Lines `text` takes in a `w`-inch box at `pt`, wrapping WORD BY WORD
+    as PowerPoint does. `metrics.text_height_in` divides total width by a
+    line capacity floored at 4 em, which is right for the storyboard's wide
+    columns and wrong in a narrow card: "Line AB" in a 2.5-em flow card was
+    one line by that estimate and two on the slide, and sat on the text
+    below it (Types of Angles, matrix round 4)."""
+    cap = max(0.5, w) * 72 / pt                 # ems one line holds
+    space = mx.text_width_em(" ")
+    lines, used = 1, 0.0
+    for word in (text or "").split():
+        ww = mx.text_width_em(word)
+        if used and used + space + ww > cap:
+            lines += 1
+            used = ww
+        else:
+            used += (space if used else 0.0) + ww
+        while used > cap:                       # a word longer than a line breaks (and is flagged)
+            lines += 1
+            used -= cap
+    return lines
+
+
 def _h(text: str, w: float, pt: float) -> float:
     w = max(0.5, w)
     longest = max((mx.text_width_em(word) for word in (text or "").split()), default=0.0)
     if longest * pt / 72 * 1.06 > w:
         _UNFIT[0] += 1
-    return mx.text_height_in(text, w, pt)
+    if _MATH_SYMBOLS.search(text or ""):
+        return _wrapped_lines(text, w / 1.12, pt) * pt * mx.LINE / 72 * 1.3
+    return _wrapped_lines(text, w, pt) * pt * mx.LINE / 72
 
 
 def caps(text: str) -> str:
@@ -314,6 +350,13 @@ FLEX = {"image", "figure", "maths_diagram"}
 FLEX_MIN = 1.7
 
 
+ARABIC_SCRIPT_LANGS = ("ar", "ms-arab", "ur", "fa")
+
+
+def text_for_box(lab: dict, labels: dict) -> str:
+    return labels.get(lab["part"]) or display_part(lab["part"])
+
+
 @dataclass
 class Env:
     theme: Theme
@@ -322,6 +365,14 @@ class Env:
     dark: bool
     scale: float = 1.0
     faults: list = field(default_factory=list)
+    language: str = "en"
+    notes: list = field(default_factory=list)       # lines the renderer adds to the slide's notes
+
+    def script_mismatch(self, text: str) -> bool:
+        """A Latin-script word on an Arabic-script deck."""
+        if self.language not in ARABIC_SCRIPT_LANGS:
+            return False
+        return bool(re.search("[A-Za-z]", text or "")) and not re.search("[؀-ۿ]", text or "")
 
     def pt(self, base: float, floor: float) -> float:
         return max(floor, round(base * self.scale * 2) / 2)
@@ -392,10 +443,14 @@ def _card_parts(it, cw, env, numbered, n):
         parts.append(("num", f"{n:02d}", env.pt(26, 20), 0.5))
     if it.get("badge"):
         parts.append(("badge", caps(it["badge"]), badge_pt, _h(it["badge"], inner, badge_pt)))
+    # Titles and expressions are BOLD, and bold glyphs run ~15% wider than
+    # the em table's regular weight: "Line AB" wrapped to two lines in a
+    # narrow flow card the estimate gave one, and sat on the line below it
+    # (Types of Angles, matrix round 4). Measured in a 15% narrower box.
     if it.get("title"):
-        parts.append(("title", it["title"], title_pt, _h(it["title"], inner, title_pt)))
+        parts.append(("title", it["title"], title_pt, _h(it["title"], inner / BOLD_WIDTH, title_pt)))
     if it.get("expr"):
-        parts.append(("expr", it["expr"], env.pt(22, 18), _h(it["expr"], inner, env.pt(22, 18))))
+        parts.append(("expr", it["expr"], env.pt(22, 18), _h(it["expr"], inner / BOLD_WIDTH, env.pt(22, 18))))
     if it.get("body"):
         parts.append(("body", it["body"], body_pt, _h(it["body"], inner, body_pt)))
     return pad, inner, parts
@@ -552,7 +607,7 @@ def _lay_steps(e, w, env):
             yy += 0.22 - gap
             good = TONES["good"][0]
             c.rect(x, yy, ww, ah, fill=good, radius=0.12)
-            c.text(x + 0.3, yy, 1.6, ah, "ANSWER", env.pt(12, 11), WHITE, bold=True, anchor="m", spacing=120,
+            c.text(x + 0.3, yy, 1.6, ah, caps(T(env.language, "answer")), env.pt(12, 11), WHITE, bold=True, anchor="m", spacing=120,
                    role="answer_label", bg=good)
             c.text(x + 1.9, yy, ww - 2.2, ah, ans_short, env.pt(19, 16), WHITE, bold=True, anchor="m",
                    role="answer", bg=good)
@@ -563,8 +618,10 @@ def _answer_short(ans: str) -> str:
     """A prose 'Step 7: State the final answers…' sentence trimmed to what an
     answer bar says."""
     a = " ".join((ans or "").split())
-    a = re.sub(r"^(state the final answers?( with correct units)?\.?\s*)", "", a, flags=re.I)
-    return a[:140]
+    a = re.sub(r"^state (the|your) final answers?[^.]*\.\s*", "", a, flags=re.I)
+    # never cut: "The tertiary consume" ended an answer bar mid-word (food
+    # chains matrix run); the bar is measured to fit what it says
+    return a
 
 
 def _lay_answer(e, w, env):
@@ -575,18 +632,19 @@ def _lay_answer(e, w, env):
 
     def draw(c, x, y, ww, hh):
         c.rect(x, y, ww, h, fill=strong, radius=0.12)
-        c.text(x + 0.3, y, 1.6, h, (e.get("title") or "RESULT").upper(), env.pt(12, 11), WHITE, bold=True,
+        c.text(x + 0.3, y, 1.6, h, caps(e.get("title") or T(env.language, "result")), env.pt(12, 11), WHITE, bold=True,
                anchor="m", spacing=120, role="answer_label", bg=strong)
         c.text(x + 1.9, y, ww - 2.2, h, text, pt, WHITE, bold=True, anchor="m", role="answer", bg=strong)
     return h, draw
 
 
-_CALLOUT = {"tip": ("TIP", "info"), "rule": ("KEY RULE", "warm"), "warning": ("WATCH OUT", "bad"),
-            "think": ("THINK", "plum"), "note": ("NOTE", "neutral")}
+_CALLOUT = {"tip": ("tip", "info"), "rule": ("key_rule", "warm"), "warning": ("watch_out", "bad"),
+            "think": ("think", "plum"), "note": ("note", "neutral")}
 
 
 def _lay_callout(e, w, env):
-    label, tone = _CALLOUT.get(e.get("kind", "note"), ("NOTE", "neutral"))
+    key, tone = _CALLOUT.get(e.get("kind", "note"), ("note", "neutral"))
+    label = caps(T(env.language, key))
     pt = env.pt(17, 14)
     lab_w = 1.25
     h = max(0.56, _h(e["text"], w - lab_w - 0.6, pt) + 0.3)
@@ -642,13 +700,51 @@ def _lay_figure(e, w, env):
         parts = [p for p in (e.get("parts") or []) if p]
         labellable = fig.get("labellable") and parts
         if labellable:
+            label_pt = env.pt(16, 14)
+            # The annotator hangs its label gutters OUTSIDE the picture's
+            # frame, so the frame handed to it is the cell minus a gutter on
+            # each side — handed the whole cell, labels ran off the slide
+            # ("cell memb", the RTL Jawi deck, 2026-10-24).
+            gut = max(1.3, min(2.3, ww * 0.26))
+            frame = (x + gut + 0.3, y + 0.15, max(1.0, ww - 2 * gut - 0.6), fh - 0.3)
+            labels = e.get("labels") or {}
+            keyed: list[str] = []
+
+            def text_for(g):
+                part = g["part"]
+                t = labels.get(part) or labels.get(part.lower())
+                if t:
+                    return t
+                if env.script_mismatch(part):
+                    # an English part name on an Arabic-script slide: a number
+                    # on the picture, the name in the notes — never English
+                    # in the middle of a Jawi lesson
+                    keyed.append(part)
+                    return str(len(keyed))
+                return display_part(part)
+
             geo = af.figure_geometry(parts, fig["regions"], fig["w"], fig["h"])
+            before = len(c.s.shapes)
             rep = af.add_annotated_figure(c.s, fig["png"], geo, fig["w"], fig["h"],
-                                          frame=((x + 0.15) * IN, (y + 0.15) * IN, (ww - 0.3) * IN,
-                                                 (fh - 0.3) * IN), label_pt=env.pt(16, 14))
-            env.faults.extend(af.validate(rep, label_pt=env.pt(16, 14)))
-            c.rep.boxes.append(Box("picture", x + 0.15, y + 0.15, ww - 0.3, fh - 0.3, role="figure",
+                                          frame=tuple(v * IN for v in frame), label_pt=label_pt,
+                                          label_text=text_for, gutter=gut * IN)
+            # A figure label is aligned TOWARDS its leader on either side of
+            # the picture; the RTL pass must not right-align the right-hand
+            # ones away from their lines (Jawi Forces, matrix round 2).
+            for sh in list(c.s.shapes)[before:]:
+                if getattr(sh, "has_text_frame", False):
+                    sh.name = "keep-align label"
+            env.faults.extend(af.validate(rep, label_pt=label_pt))
+            px_, py_, pw_, ph_ = (v / IN for v in rep["picture"])
+            c.rep.boxes.append(Box("picture", px_, py_, pw_, ph_, role="figure",
                                    px=(int(fig["w"]), int(fig["h"]))))
+            for lab in rep["labels"]:
+                lx, ly, lw, lh = (v / IN for v in lab["label"])
+                c.rep.boxes.append(Box("text", lx, ly, lw, lh, text_for_box(lab, labels), label_pt,
+                                       "figure_label", INK, WHITE))
+            if keyed:
+                env.notes.append(T(env.language, "figure_key") + " " + "; ".join(f"{i} = {display_part(p)}"
+                                                            for i, p in enumerate(keyed, 1)))
         else:
             c.picture(fig["png"], x + 0.15, y + 0.15, ww - 0.3, fh - 0.3, int(fig["w"] or 0),
                       int(fig["h"] or 0), role="figure")
@@ -924,6 +1020,67 @@ def best_scale(col: S.Column, w: float, h: float, env: Env) -> float:
     return SCALES[-1]
 
 
+def prune_missing(sl: S.SlideSpec, pictures: dict, figures: dict) -> list[str]:
+    """Take out what has no picture BEFORE layout, so the rest of the slide
+    takes the room: an image element whose asset could not be had, a figure
+    with no artwork, a card's or compare side's missing picture. Drawn
+    after the fact it left an empty cell and a fault on every slide of the
+    no-images matrix case. Returns what was taken out."""
+    gone = []
+
+    def has_pic(aid):
+        return bool(aid) and aid in pictures
+
+    for r in sl.rows:
+        for c in r.cols:
+            kept = []
+            for e in c.elements:
+                if e["type"] == "image" and not has_pic(e.get("asset")):
+                    gone.append(f"image {e.get('asset')}")
+                    continue
+                if e["type"] == "figure" and not (figures.get(e.get("figure_key")) or {}).get("png"):
+                    gone.append(f"figure {e.get('figure_key')}")
+                    continue
+                for it in e.get("items") or []:
+                    if it.get("asset") and not has_pic(it["asset"]):
+                        it.pop("asset")
+                for k in ("left", "right"):
+                    if isinstance(e.get(k), dict) and e[k].get("asset") and not has_pic(e[k]["asset"]):
+                        e[k]["asset"] = ""
+                kept.append(e)
+            c.elements = kept
+        r.cols = [c for c in r.cols if c.elements]
+    sl.rows = [r for r in sl.rows if r.cols]
+    return gone
+
+
+def _col_widths(r: S.Row) -> list[float]:
+    cw_sum = sum(cc.weight for cc in r.cols)
+    cg = GUTTER * (len(r.cols) - 1)
+    return [(W_IN - 2 * MARGIN - cg) * c.weight / cw_sum for c in r.cols]
+
+
+def row_heights(rows: list[S.Row], avail: float, env: Env) -> list[float]:
+    """Row heights for the slide. The model's weights first; but a row whose
+    content cannot fit its weighted share even at the smallest type size,
+    while another row has room to spare, gets its MEASURED minimum and the
+    rest share what is left by weight. Most "column needs 1.68in of 1.43in"
+    faults on the matrix were a cramped row beside a roomy one."""
+    wsum = sum(r.weight for r in rows) or 1.0
+    by_weight = [avail * r.weight / wsum for r in rows]
+    need = []
+    for r in rows:
+        env.scale = SCALES[-1]
+        n = max((_measure(c, w, env)[1] for c, w in zip(r.cols, _col_widths(r))), default=0.0)
+        env.scale = 1.0
+        need.append(n)
+    if all(n <= h + 0.02 for n, h in zip(need, by_weight)) or any(n == float("inf") for n in need) \
+            or sum(need) > avail:
+        return by_weight                   # fits as designed, or cannot be helped by moving room
+    spare = avail - sum(need)
+    return [n + spare * r.weight / wsum for n, r in zip(need, rows)]
+
+
 def fit_or_degrade(col: S.Column, w: float, h: float, env: Env, spill: list[str]) -> None:
     """The renderer's last resort when a column does not fit its cell at the
     smallest type size and the Director's correction rounds did not fix it
@@ -990,6 +1147,20 @@ def fit_or_degrade(col: S.Column, w: float, h: float, env: Env, spill: list[str]
         moved: list[str] = []
         for step in steps:
             moved += step(trial)
+        if fits(trial):
+            col.elements[:] = trial.elements
+            spill.extend(moved)
+            return
+    # Last: secondary elements at the END of the column leave for the notes,
+    # one at a time, until it fits — never the column's first (main) element.
+    SECONDARY = ("callout", "paragraph", "chips", "bullets", "statement")
+    trial = copy.deepcopy(col)
+    moved = []
+    while len(trial.elements) > 1 and trial.elements[-1]["type"] in SECONDARY:
+        e = trial.elements.pop()
+        text = e.get("text") or "; ".join(it.get("body") or it.get("value") or "" for it in e.get("items") or [])
+        if text:
+            moved.append(text)
         if fits(trial):
             col.elements[:] = trial.elements
             spill.extend(moved)
@@ -1102,7 +1273,7 @@ def _cover(prs, sl: S.SlideSpec, deck: S.DeckSpec, env: Env, rep: SlideReport):
 
 def build(deck: S.DeckSpec, pictures: dict, figures: dict, out_path: Path, *,
           branding: Optional[dict] = None, direction: str = "ltr",
-          credits: Optional[list[str]] = None) -> tuple[Path, list[SlideReport]]:
+          credits: Optional[list[str]] = None, language: str = "en") -> tuple[Path, list[SlideReport]]:
     from ..deck_render import _base
     from ..deck_render import _ACCENT as _legacy_accent
 
@@ -1111,10 +1282,12 @@ def build(deck: S.DeckSpec, pictures: dict, figures: dict, out_path: Path, *,
     theme.templated = bool(_legacy_accent.get("templated"))
     _legacy_accent["templated"] = False
     reports: list[SlideReport] = []
+    for sl in deck.slides:
+        prune_missing(sl, pictures, figures)
     for i, sl in enumerate(deck.slides, 1):
         rep = SlideReport(sl.id, i)
         dark = sl.background == "dark"
-        env = Env(theme, pictures, figures, dark=dark)
+        env = Env(theme, pictures, figures, dark=dark, language=(language or "en").lower())
         try:
             if i == 1 and dark:
                 s = _cover(prs, sl, deck, env, rep)
@@ -1136,10 +1309,9 @@ def build(deck: S.DeckSpec, pictures: dict, figures: dict, out_path: Path, *,
                 if rows:
                     avail = bottom - top
                     gaps = GUTTER * (len(rows) - 1)
-                    wsum = sum(r.weight for r in rows)
+                    heights = row_heights(rows, avail - gaps, env)
                     yy = top
-                    for r in rows:
-                        rh = (avail - gaps) * r.weight / wsum
+                    for r, rh in zip(rows, heights):
                         cw_sum = sum(cc.weight for cc in r.cols)
                         cg = GUTTER * (len(r.cols) - 1)
                         cols = list(r.cols)[::-1] if theme.rtl else list(r.cols)
@@ -1149,7 +1321,7 @@ def build(deck: S.DeckSpec, pictures: dict, figures: dict, out_path: Path, *,
                             fit_or_degrade(col, cw, rh, env, spill)
                         if spill:
                             sl.notes = (sl.notes + "\n\n" if sl.notes else "") + \
-                                "On the slide in short; in full:\n" + "\n".join(f"- {x}" for x in spill)
+                                T(language, "in_full") + "\n" + "\n".join(f"- {x}" for x in spill)
                             rep.degraded.extend(spill)
                         # ONE scale per row: two columns side by side at
                         # different type sizes read as two different decks
@@ -1163,9 +1335,11 @@ def build(deck: S.DeckSpec, pictures: dict, figures: dict, out_path: Path, *,
                     s.shapes.add_picture(theme.logo, int(12.05 * IN), int(6.95 * IN), height=int(0.4 * IN))
             rep.faults.extend(env.faults)
             notes = sl.notes or ""
+            if env.notes:
+                notes = "\n\n".join(x for x in [notes] + env.notes if x)
             qs = [it for e in sl.elements() if e["type"] == "questions" for it in e.get("items") or []]
             if qs and any(it.get("answer") for it in qs):
-                notes += "\n\nAnswers: " + "; ".join(f"{n}. {it.get('answer') or '—'}"
+                notes += "\n\n" + T(language, "answers") + " " + "; ".join(f"{n}. {it.get('answer') or '—'}"
                                                      for n, it in enumerate(qs, 1))
             if notes.strip():
                 s.notes_slide.notes_text_frame.text = notes.strip()
@@ -1178,7 +1352,7 @@ def build(deck: S.DeckSpec, pictures: dict, figures: dict, out_path: Path, *,
         s = prs.slides.add_slide(prs.slide_layouts[6] if len(prs.slide_layouts) > 6 else prs.slide_layouts[-1])
         _background(s, WHITE)
         c = Canvas(s, theme, rep, WHITE)
-        c.text(MARGIN, 0.55, 8, 0.5, "Image credits", 24, INK, bold=True, role="title")
+        c.text(MARGIN, 0.55, 8, 0.5, T(language, "image_credits"), 24, INK, bold=True, role="title")
         y = 1.35
         for line in credits[:14]:
             h_ = _h(line, W_IN - 2 * MARGIN, 11)

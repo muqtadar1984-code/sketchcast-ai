@@ -243,7 +243,7 @@ def build_deck(model: LessonModel, out_path: Path, *, direction: str = "ltr",
         work = Path(tmp or Path(out_path).parent) / "director"
         shelf = dir_assets.LibraryShelf(sb, work) if sb is not None else None
         res = build_director_deck(
-            model, client=client, vision_client=client, out_path=Path(out_path), tmp=work, shelf=shelf,
+            model, client=client, vision_client=director.vision_client(client), out_path=Path(out_path), tmp=work, shelf=shelf,
             article=article, subject=subject, maths_lesson=maths_lesson, branding=branding,
             direction=direction, library_context=art_context,
             yield_to_users=(lambda: user_builders_live(sb, job_id)) if sb is not None else (lambda: False),

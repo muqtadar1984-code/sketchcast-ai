@@ -258,6 +258,11 @@ def _element(raw: Any, repairs: list[str], where: str) -> dict | None:
         if not e.get("figure_key"):
             return None
         e["parts"] = [_t(p) for p in _clip_list(raw.get("parts"), 12) if _t(p)]
+        # the label to SHOW for a part, in the deck's language (the part
+        # names are the figure's own English identifiers)
+        e["labels"] = {_t(lab.get("part")): _t(lab.get("text"))[:40]
+                       for lab in _clip_list(raw.get("labels"), 12)
+                       if isinstance(lab, dict) and _t(lab.get("part")) and _t(lab.get("text"))}
     if typ == "maths_diagram":
         shape = _t(raw.get("shape")).lower()
         e["shape"] = shape if shape in DIAGRAM_SHAPES else "circle"
