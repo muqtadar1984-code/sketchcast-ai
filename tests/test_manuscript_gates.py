@@ -164,3 +164,20 @@ def test_expansion_keeps_every_approved_block_verbatim():
     assert [f["check"] for f in check_preserved(old, reworded)] == ["preserved"]
     swapped = [{"sid": "s1", "heading": "H", "blocks": list(reversed(old[0]["blocks"]))}]
     assert check_preserved(old, swapped)
+
+
+def test_restore_locked_undoes_a_reworded_or_dropped_block():
+    from publishing.manuscript.validate import check_preserved, restore_locked
+    old = [{"sid": "s1", "heading": "H", "blocks": [
+        {"type": "figure", "ref": "asset:p", "caption": "A photograph of a Paramecium, made of one cell."},
+        {"type": "paragraph", "text": "The photograph shows Paramecium, a microorganism that is only one cell."},
+        {"type": "key_idea", "text": "Keep me."}]}]
+    new = [{"sid": "s1", "heading": "H2", "blocks": [
+        {"type": "paragraph", "text": "Added first."},
+        {"type": "figure", "ref": "book:amoeba", "caption": "A drawing of an Amoeba, made of one cell."},
+        {"type": "paragraph", "text": "The drawing shows Amoeba, a microorganism that is only one cell."},
+        {"type": "paragraph", "text": "Added later."}]}]
+    fixed = restore_locked(old, new)
+    assert check_preserved(old, fixed) == []
+    texts = [b.get("text") or b.get("ref") for b in fixed[0]["blocks"]]
+    assert texts[0] == "Added first." and "Added later." in texts and "book:amoeba" not in texts

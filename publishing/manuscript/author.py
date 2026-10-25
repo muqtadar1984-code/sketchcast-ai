@@ -360,7 +360,7 @@ def expand_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path,
         with ThreadPoolExecutor(max_workers=4) as pool:
             work["sections"] = list(pool.map(one, old_sections))
         save()
-    sections = work["sections"]
+    sections = V.restore_locked(old_sections, work["sections"])
     for sec in sections:                   # a picture block names its picture in `ref`, whatever key the model used
         for blk in sec.get("blocks") or []:
             if blk.get("type") == "figure" and not blk.get("ref"):
@@ -418,7 +418,7 @@ def expand_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path,
                             "\nCurrent expansion:\n" + json.dumps(sec, ensure_ascii=False) + "\nFindings:\n" +
                             json.dumps(fs, ensure_ascii=False), 9000, f"{sec['sid']}:revise{rnd}")
         with ThreadPoolExecutor(max_workers=4) as pool:
-            sections = list(pool.map(fix, zip(sections, old_sections)))
+            sections = V.restore_locked(old_sections, list(pool.map(fix, zip(sections, old_sections))))
         findings, rv = checks(), review(f"review:{rnd + 1}")
     # the visual gate may tidy a caption; an APPROVED caption is locked text, so it wins
     for new, old in zip(sections, old_sections):
@@ -428,6 +428,7 @@ def expand_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path,
             k = (b.get("type"), b.get("ref") or json.dumps(b.get("items"), sort_keys=True))
             if k in approved_caps:
                 b["caption"] = approved_caps[k]
+    sections = V.restore_locked(old_sections, sections)
     findings = checks()
     work.update(final_sections=sections, review=rv, rounds=rounds, checks=findings)
     save()

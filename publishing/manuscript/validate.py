@@ -283,3 +283,40 @@ def check_preserved(approved: list[dict], expanded: list[dict]) -> list[dict]:
                             "detail": f"approved {b.get('type')} block changed, moved or dropped; restore it "
                                       f"exactly: {key(b)[:400]}"})
     return out
+
+
+def restore_locked(approved: list[dict], expanded: list[dict]) -> list[dict]:
+    """Put every locked block back, verbatim and in order (a model told to keep a
+    block may still 'improve' it; the lock is enforced here, not by the prompt).
+    A new block that is a reworded or re-pictured locked block is replaced by the
+    locked one; a locked block that went missing is re-inserted after the locked
+    block before it. New blocks keep their places."""
+    from difflib import SequenceMatcher
+
+    def key(b):
+        return json.dumps({k: b.get(k) for k in LOCKED_FIELDS if k in b}, sort_keys=True, ensure_ascii=False)
+
+    def body(b):
+        return " ".join(str(b.get(k) or "") for k in ("text", "term", "wrong", "right", "caption"))
+
+    old_by_sid = {s["sid"]: s for s in approved}
+    out = []
+    for sec in expanded:
+        old = old_by_sid.get(sec["sid"])
+        if not old:
+            out.append(sec)
+            continue
+        O, at, blocks = old.get("blocks") or [], 0, []
+        for b in sec.get("blocks") or []:
+            j = next((i for i in range(at, len(O)) if key(O[i]) == key(b)), None)
+            if j is None:
+                j = next((i for i in range(at, len(O)) if O[i].get("type") == b.get("type") and body(b) and
+                          SequenceMatcher(None, body(O[i]), body(b)).ratio() >= 0.6), None)
+            if j is None:
+                blocks.append(b)                     # genuinely new
+                continue
+            blocks.extend(O[at:j + 1])               # anything skipped, then the locked block itself
+            at = j + 1
+        blocks.extend(O[at:])
+        out.append({**sec, "heading": old.get("heading", sec.get("heading")), "blocks": blocks})
+    return out

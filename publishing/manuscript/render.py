@@ -548,7 +548,7 @@ strong { color: var(--brand-dark); }
 .op-head { display: grid; grid-template-columns: 1fr 46%; gap: 4mm; align-items: center; height: 96mm; }
 .op-kicker { font: 600 8pt var(--bfont); letter-spacing: .22em; text-transform: uppercase; color: var(--brand); }
 .op-numeral { display: block; width: 42mm; height: 27mm; margin: 8mm 0 3mm; overflow: visible; }
-.op-title { font-size: 30pt; line-height: 1.08; color: var(--brand-dark); margin: 0 0 3mm; font-weight: 600; }
+.op-title { font-size: 30pt; line-height: 1.18; font-variant-ligatures: none; color: var(--brand-dark); margin: 0 0 3mm; font-weight: 600; }
 .op-meta { font-size: 8.6pt; color: var(--muted); letter-spacing: .02em; }
 .op-meta .chip { display: inline-block; border: .8pt solid var(--line); border-radius: 10pt; padding: 0 6pt; margin: 0 4pt 3pt 0;
   background: rgba(255,255,255,.55); }
