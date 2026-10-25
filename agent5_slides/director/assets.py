@@ -128,6 +128,10 @@ class Picture:
     cost_usd: float = 0.0
     regions: dict = field(default_factory=dict)
     provider: str = ""
+    # what the SOURCE says the picture is (title / description), kept apart
+    # from what the deck ASKED for (subject / purpose) — 2026-10-25
+    source_title: str = ""
+    source_description: str = ""
 
     @property
     def credit(self) -> str:
@@ -265,11 +269,16 @@ class LibraryShelf:
 
 
 def _row(pic: Picture, digest: str, context: dict) -> dict:
+    # A found photograph is described by what its SOURCE says it is; the
+    # request is kept beside it in `deck`. Labelling a found photo by the
+    # request put "Amebic colitis (H&E)" — a colon biopsy — on the shelf as
+    # "Amoeba seen under a microscope" (2026-10-25 impact report).
+    said = ". ".join(x for x in (pic.source_title, pic.source_description) if x).strip()
     return {
         "asset_key": pic.key,
         "canonical_key": pic.key,
         "asset_type": "visual",
-        "description": f"{pic.subject}. {pic.purpose}".strip(),
+        "description": (said or f"{pic.subject}. {pic.purpose}").strip()[:600],
         "subject": context.get("subject"), "curriculum": context.get("curriculum"),
         "grade": context.get("grade"), "topic": context.get("topic"),
         "concepts": context.get("concepts") or [],
@@ -280,7 +289,9 @@ def _row(pic: Picture, digest: str, context: dict) -> dict:
         "quality": "deck_validated",
         "content_hash": digest,
         "asset_format": "png",
-        "deck": {"visual_type": pic.need, "purpose": pic.purpose, "model": pic.model,
+        "deck": {"visual_type": pic.need, "purpose": pic.purpose, "requested": pic.subject,
+                 "source_title": pic.source_title, "source_description": pic.source_description,
+                 "model": pic.model,
                  "prompt": pic.prompt, "prompt_version": PROMPT_VERSION, "labels": [],
                  "language_dependent": False, "usage_rights": pic.licence or "sketchcast-generated",
                  "w": pic.w, "h": pic.h, "aspect": f"{pic.w}:{pic.h}",
@@ -307,6 +318,41 @@ def licence_ok(short: str) -> bool:
     if "sa" in tokens and not any("sa" in a.split() for a in allowed):
         return False
     return any(s.startswith(a) for a in allowed)
+
+
+# ── identity: what the source says the picture IS ─────────────────────
+
+# Medical / pathology content a classroom slide must not get by accident: a
+# found photo whose own title or description names one of these is refused
+# unless the request itself asks for it. Generic, not subject-specific
+# (2026-10-25: a colon biopsy, malaria-infected and congested-lung slides
+# were shelved as an amoeba, healthy red cells and a blood smear).
+MEDICAL_TERMS = re.compile(
+    r"\b(histopatholog\w*|patholog\w*|colitis|biops\w*|malaria\w*|parasit\w*|infected|infections?|"
+    r"carcinoma\w*|cancer\w*|tumou?r\w*|lesions?|autops\w*|necros\w*|siderophag\w*|congestion|"
+    r"diseased?|syndrome|lymphoma\w*|leuka?emi\w*|metasta\w*|abscess\w*|ulcer\w*|gangren\w*|wounds?|"
+    r"trophozoit\w*|amebic|amoebic)\b", re.I)
+
+
+def source_name(title: str) -> str:
+    """A readable name from a source title ("File:Red_blood_cells_infected_with_malaria.jpg")."""
+    t = re.sub(r"^file:", "", str(title or "").strip(), flags=re.I)
+    t = re.sub(r"\.(jpe?g|png|gif|tiff?|webp|svg)$", "", t, flags=re.I)
+    return " ".join(t.replace("_", " ").split())
+
+
+def need_text(need) -> str:
+    return " ".join([need.subject or "", need.purpose or "", *(need.must_show or []), *(need.search_terms or [])])
+
+
+def identity_conflict(title: str, description: str, need) -> str:
+    """Why a found picture's OWN identity disqualifies it for this need, or "".
+    Medical or pathology content named by the source and not by the request."""
+    said = f"{source_name(title)} {description or ''}"
+    asked = need_text(need).lower()
+    hits = sorted({m.group(0).lower() for m in MEDICAL_TERMS.finditer(said)} - {""})
+    hits = [h for h in hits if h not in asked]
+    return f"the source names {', '.join(hits)}" if hits else ""
 
 
 def _strip_html(s: str) -> str:
@@ -434,20 +480,33 @@ VISION_PROMPT = (
     "The slide needs: {subject}. Purpose: {purpose}. It must show: {must}.\n"
     "`is_the_thing_itself` is true only if the picture shows the actual thing named — not a museum "
     "artefact, artwork, toy, statue, cartoon, or a different object that merely resembles it.\n"
+    "{source}"
     "Reply JSON only: {{\"shows_subject\": true|false, \"is_the_thing_itself\": true|false, "
+    "\"source_agrees\": true|false, "
     "\"relevance\": 0-10, \"quality\": 0-10, "
     "\"has_text\": true|false, \"scientifically_wrong\": true|false, \"classroom_safe\": true|false, "
     "\"problems\": [\"...\"]}}"
 )
 
 
-def vision_verdict(client, png: Path, need: AssetNeed, age: str) -> dict:
+SOURCE_LINE = (
+    "The picture's SOURCE calls it: \"{name}\"{desc}. `source_agrees` is true only if the thing the source "
+    "names IS the thing the slide needs — a diseased, infected or parasite-laden specimen is not a healthy "
+    "one, and a tissue section from a patient is not a free-living organism.\n")
+
+
+def vision_verdict(client, png: Path, need: AssetNeed, age: str, source: Optional[dict] = None) -> dict:
     if client is None or not hasattr(client, "analyze_image"):
         return {"skipped": "no vision client"}
+    line = ""
+    if source and (source.get("title") or source.get("description")):
+        desc = str(source.get("description") or "").strip()
+        line = SOURCE_LINE.format(name=source_name(source.get("title", "")),
+                                  desc=f" ({desc[:200]})" if desc and desc != source.get("title") else "")
     try:
         r = client.analyze_image(str(png), VISION_PROMPT.format(
             age=age or "11-14", subject=need.subject, purpose=need.purpose or "-",
-            must=", ".join(need.must_show) or "-"), max_tokens=800)
+            must=", ".join(need.must_show) or "-", source=line), max_tokens=800)
         d = r.get("data") if isinstance(r, dict) else None
         return d if isinstance(d, dict) else {"error": "unparsed"}
     except Exception as exc:  # noqa: BLE001
@@ -465,7 +524,7 @@ def verdict_ok(v: dict, origin: str) -> bool:
         # a search hit is held to more: "open scissors showing an angle"
         # passed at 6 as a medieval artefact on a museum scale bar (matrix
         # cover, Types of Angles) — the thing itself, and clearly relevant
-        if v.get("is_the_thing_itself") is False:
+        if v.get("is_the_thing_itself") is False or v.get("source_agrees") is False:
             return False
         return int(v.get("relevance") or 0) >= 7 and int(v.get("quality") or 0) >= 6
     return int(v.get("relevance") or 0) >= 6 and int(v.get("quality") or 0) >= 5
@@ -533,6 +592,22 @@ def resolve(deck: DeckSpec, *, tmp: Path, shelf, ctx, budget: Budget, spend: Spe
         key = deck_key(need)
         row = shelf.find(key) if shelf is not None else None
         if row:
+            # a shelved photo meets the same identity rule as a fresh one: its
+            # recorded source title (or the file name in its source url)
+            # the library keeps deck metadata under vision.deck (LibraryShelf.save); a local row under deck
+            vis = row.get("vision") if isinstance(row.get("vision"), dict) else {}
+            deck_meta = vis.get("deck") if isinstance(vis.get("deck"), dict) else \
+                (row.get("deck") if isinstance(row.get("deck"), dict) else {})
+            try:
+                src0 = json.loads(row.get("source") or "{}") if str(row.get("source") or "").startswith("{") else {}
+            except ValueError:
+                src0 = {}
+            said = deck_meta.get("source_title") or str(src0.get("url") or "").rsplit("/", 1)[-1]
+            why = identity_conflict(said, deck_meta.get("source_description", ""), need)
+            if why:
+                note(f"{aid}: shelf {key} not reused ({why})")
+                row = None
+        if row:
             w, h, _ = _png_info(Path(row["path"]).read_bytes())
             # A reused photograph keeps its licence: the shelf row carries the
             # url / licence / author it was taken under (`_row`), and a CC BY
@@ -565,6 +640,10 @@ def resolve(deck: DeckSpec, *, tmp: Path, shelf, ctx, budget: Budget, spend: Spe
                 for c in cands:
                     if not licence_ok(c["licence"]):
                         continue
+                    why = identity_conflict(c.get("title", ""), c.get("description", ""), need)
+                    if why:
+                        note(f"{aid}: refused {c.get('title')} ({why})")
+                        continue
                     if not c.get("url") or not str(c.get("mime", "")).startswith("image/") or \
                             min(c.get("w") or 0, c.get("h") or 0) < 600:
                         continue
@@ -581,7 +660,8 @@ def resolve(deck: DeckSpec, *, tmp: Path, shelf, ctx, budget: Budget, spend: Spe
                     png = tmp / "pics" / f"{aid}_wm.png"
                     png.write_bytes(data)
                     spend.vision_calls += 1
-                    v = vision_verdict(vision_client, png, need, ctx.age_band)
+                    v = vision_verdict(vision_client, png, need, ctx.age_band,
+                                       source={"title": c.get("title", ""), "description": c.get("description", "")})
                     if not verdict_ok(v, "licensed"):
                         note(f"{aid}: rejected {c['title']} ({v.get('problems') or v})")
                         continue
@@ -589,7 +669,9 @@ def resolve(deck: DeckSpec, *, tmp: Path, shelf, ctx, budget: Budget, spend: Spe
                     got = Picture(aid, key, str(png), w, h, "licensed", need.need, provenance=provider.lower(),
                                   provider=provider,
                                   licence=c["licence"], author=c["author"], source_url=c["page"],
-                                  subject=need.subject, purpose=need.purpose, validation=v)
+                                  subject=need.subject, purpose=need.purpose, validation=v,
+                                  source_title=source_name(c.get("title", "")),
+                                  source_description=str(c.get("description") or "")[:300])
                     note(f"{aid}: {provider} {c['title']} ({c['licence']})")
                     break
         # 3 — a generation
