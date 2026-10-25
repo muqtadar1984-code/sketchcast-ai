@@ -103,3 +103,19 @@ def test_an_observation_task_is_required_when_photos_exist():
     xs = [_x()]
     f = V.check_exercises(xs, {"claim:a"}, set(), {"7Bs.01"}, photo_ids={"asset:p1", "asset:p2"})
     assert any(c["check"] == "observation" for c in f)
+
+
+def test_every_book_gets_a_theme_from_data():
+    from publishing.manuscript import theme as T
+    assert T.for_work("cells-structure-function-organisation")["name"] == "life"
+    assert T.for_work("angles-triangles-geometric-reasoning")["name"] == "geometry"
+    assert T.for_work("no-such-book")["name"]                      # falls back to the default, never fails
+    assert T.motif_svg(T.for_work("angles-triangles-geometric-reasoning")).startswith("<svg")
+
+
+def test_image_style_is_chosen_by_genre_not_subject():
+    from publishing.manuscript import book_assets as B
+    s = B.styles()
+    assert {"natural_history", "scientific_3d", "apparatus", "process", "never_generate"} <= set(s["genres"])
+    p = B.prompt_for("a ripple tank", "apparatus", {"image_palette": "deep blues"})
+    assert s["genres"]["apparatus"]["style"] in p and "deep blues" in p and "no text" in p.lower()

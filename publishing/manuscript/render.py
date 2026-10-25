@@ -114,11 +114,11 @@ figure.w-third { width: 34%; } figure.w-half { width: 46%; } figure.w-two-thirds
 figure.full, figure.centre { width: 100%; text-align: center; }
 figure.centre svg { max-width: 62%; margin: 0 auto; }
 h2 { clear: both; }
-.group svg text.gl { font: 600 12px 'Segoe UI', Arial, sans-serif; fill: #1d2433; }
+.group svg text.gl { font: 600 12px 'Segoe UI', Arial, sans-serif; fill: var(--ink); }
 .group svg text.gs { font: 10.5px 'Segoe UI', Arial, sans-serif; fill: #5b6475; }
-.group svg .rel { stroke: #0f766e; stroke-width: 1.6; fill: none; }
-.group svg .relh { fill: #0f766e; }
-.group svg .zoom { stroke: #0f766e; stroke-width: 2; fill: none; }
+.group svg .rel { stroke: var(--brand); stroke-width: 1.6; fill: none; }
+.group svg .relh { fill: var(--brand); }
+.group svg .zoom { stroke: var(--brand); stroke-width: 2; fill: none; }
 table.match { border-collapse: collapse; margin: 4pt 0 0 6pt; width: 96%; }
 table.match td { padding: 2pt 8pt 2pt 0; vertical-align: top; }
 table.match td.n { width: 1.6em; font-weight: 700; } table.match td.l { width: 30%; }
@@ -129,36 +129,38 @@ table.match td.n { width: 1.6em; font-weight: 700; } table.match td.l { width: 3
 .photos .ctx { display: block; font-size: 9pt; color: var(--ink); margin-top: 2pt; }
 .think-answers { font-size: 10pt; } .think-answers li { margin-bottom: 4pt; }
 .credits a { color: inherit; }
-:root { --ink:#1d2433; --muted:#5b6475; --brand:#0f766e; --soft:#e7f4f2; --warn:#fff4e5; --line:#c9d3cf; }
-body { font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif; color: var(--ink); font-size: 11pt; line-height: 1.5; margin: 0; }
-.chapter-head { border-bottom: 3px solid var(--brand); margin-bottom: 14pt; padding-bottom: 8pt; }
+body { font-family: var(--bfont); color: var(--ink); font-size: 11pt; line-height: 1.5; margin: 0; }
+.chapter-head { position: relative; background: var(--soft); border-radius: 10pt; padding: 16pt 18pt 12pt; margin-bottom: 14pt; overflow: hidden; border-bottom: 4px solid var(--brand); }
+.chapter-head svg.motif { position: absolute; inset: 0; width: 100%; height: 100%; }
+.chapter-head > * { position: relative; }
 .chapter-head .num { color: var(--brand); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: 10pt; }
-h1 { font-size: 24pt; margin: 2pt 0 6pt; line-height: 1.15; }
+h1 { font-family: var(--hfont); color: var(--brand-dark); font-size: 25pt; margin: 2pt 0 6pt; line-height: 1.15; }
 .meta { color: var(--muted); font-size: 9.5pt; }
 .opening { font-size: 12pt; font-style: italic; margin: 10pt 0 14pt; }
-h2 { font-size: 15pt; color: var(--brand); margin: 18pt 0 6pt; break-after: avoid; }
+h2 { font-family: var(--hfont); font-size: 15pt; color: var(--brand); border-bottom: 1.5pt solid var(--line); padding-bottom: 2pt; margin: 18pt 0 6pt; break-after: avoid; }
 h3 { font-size: 12.5pt; margin: 14pt 0 4pt; break-after: avoid; }
 .box { border-radius: 6pt; padding: 7pt 10pt; margin: 8pt 0; break-inside: avoid; }
 .key_term { background: var(--soft); border-left: 4pt solid var(--brand); }
 .key_idea { background: var(--soft); font-weight: 600; }
-.misconception { background: var(--warn); border-left: 4pt solid #d97706; }
+.misconception { background: var(--warn); border-left: 4pt solid var(--warn-edge); }
 .misconception .wrong { text-decoration: line-through; color: #9a3412; }
-.think { border: 1.5pt dashed var(--brand); }
+.think { border: 1.5pt dashed var(--think); }
 .worked { border: 1pt solid var(--line); }
 figure { margin: 10pt 0; text-align: center; break-inside: avoid; }
 figure svg { max-width: 100%; height: auto; }
 .leader { stroke: #334155; stroke-width: .8; } .dot { fill: #334155; } .lab { font-size: 10.5px; font-family: 'Segoe UI', Arial, sans-serif; fill: #111827; }
 figcaption { font-size: 9.5pt; color: var(--muted); margin-top: 3pt; }
 .missing-labels { font-size: 8.5pt; color: #b45309; }
-.watch { background: #f1f5f9; padding: 7pt 10pt; border-radius: 6pt; font-size: 10pt; margin-top: 12pt; }
+.watch { background: var(--soft); border-left: 4pt solid var(--accent); padding: 7pt 10pt; border-radius: 6pt; font-size: 10pt; margin-top: 12pt; }
 .ex { margin: 6pt 0 8pt; break-inside: avoid; }
+.key_idea { border-left: 4pt solid var(--accent); }
 .ex .tag { font-size: 8.5pt; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 .ex ol.opts { list-style: upper-alpha; margin: 3pt 0 0 18pt; padding: 0; }
 .answers { break-before: page; }
 .answers .ex { font-size: 10pt; }
 .marks { color: var(--muted); font-size: 9pt; }
 .gap { background: #fde2e2; padding: 6pt 9pt; border-radius: 6pt; font-size: 9.5pt; margin: 8pt 0; }
-.extension { border: 1pt solid #a5b4fc; background: #eef2ff; font-size: 10pt; }
+.extension { border: 1pt solid var(--ext-edge); background: var(--ext); font-size: 10pt; }
 .tag { font-size: 8.5pt; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 .credit { display: block; font-size: 8pt; color: #8a94a6; margin-top: 2pt; }
 .match { display: flex; gap: 24pt; margin: 4pt 0 0 6pt; }
@@ -413,8 +415,11 @@ def _sort(x: dict) -> tuple[str, str]:
 
 def chapter_html(doc: dict, figs: dict) -> str:
     ch, w = doc["chapter"], doc["work"]
+    from publishing.manuscript.theme import css_vars, for_work, motif_svg
+    theme = for_work(w["slug"])
     running = f'Chapter {ch["number"]} · {ch["title"]}'.replace('"', "'")
-    body = [f'<div class="chapter-head"><div class="num">Chapter {ch["number"]}</div><h1>{md(ch["title"])}</h1>'
+    body = [f'<div class="chapter-head">{motif_svg(theme)}<div class="num">Chapter {ch["number"]}</div>'
+            f'<h1>{md(ch["title"])}</h1>'
             f'<div class="meta">{md(w["title"])} · ages {md(w["age_band"])} · Cambridge Lower Secondary '
             f'{", ".join(ch["node_codes"])}</div></div>', f'<p class="opening">{md(doc["plan"].get("opening"))}</p>']
     if doc.get("videos"):
@@ -471,7 +476,7 @@ def chapter_html(doc: dict, figs: dict) -> str:
                     "".join(f"<li>{c}</li>" for c in credits) + "</ul></div>")
     page_style = f'@page {{ @top-right {{ content: "{html.escape(running)}"; }} }} @page :first {{ @top-right {{ content: none; }} }}'
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'><title>{html.escape(ch['title'])}</title>"
-            f"<style>{CSS}{page_style}</style></head><body>{''.join(body)}</body></html>")
+            f"<style>{css_vars(theme)}{CSS}{page_style}</style></head><body>{''.join(body)}</body></html>")
 
 
 def review_html(doc: dict) -> str:

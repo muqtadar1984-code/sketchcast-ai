@@ -1,0 +1,87 @@
+{
+  "version": "v1-2026-10-25",
+  "notes": "Founder 2026-10-25: each book gets a design theme suited to it. A brief may name its theme (briefs.json `theme`); otherwise the first `by_strand` prefix matching the book's subject_strand picks it; `default` last. Adding a book or a subject adds a theme here, never code.",
+  "by_strand": {
+    "science/biology": "life",
+    "science/chemistry": "chemistry",
+    "science/physics": "physics",
+    "mathematics/geometry": "geometry",
+    "mathematics/algebra": "algebra",
+    "mathematics": "algebra",
+    "geography": "earth",
+    "history": "heritage"
+  },
+  "default": "life",
+  "themes": {
+    "life": {
+      "label": "Living world",
+      "brand": "#1f7a4d", "brand_dark": "#145236", "brand_soft": "#e6f3ea", "accent": "#e08a1e",
+      "ink": "#1b2a22", "muted": "#5f6f66", "line": "#cfe0d5", "warn": "#fff3e3", "warn_edge": "#d9821a",
+      "think": "#1f7a4d", "extension": "#eef4ff", "extension_edge": "#9bb6e8",
+      "heading_font": "'Segoe UI Semibold', 'Segoe UI', 'Noto Sans', Arial, sans-serif",
+      "body_font": "'Segoe UI', 'Noto Sans', Arial, sans-serif",
+      "motif": "organic",
+      "image_palette": "natural greens and warm earth tones with soft pink-violet for animal tissue"
+    },
+    "chemistry": {
+      "label": "Matter and change",
+      "brand": "#6b3fa0", "brand_dark": "#46296a", "brand_soft": "#f1ebf8", "accent": "#e2632b",
+      "ink": "#221a2b", "muted": "#6a6075", "line": "#ddd2ea", "warn": "#fff1e8", "warn_edge": "#e2632b",
+      "think": "#6b3fa0", "extension": "#eef7f6", "extension_edge": "#8cc7c0",
+      "heading_font": "'Segoe UI Semibold', 'Segoe UI', 'Noto Sans', Arial, sans-serif",
+      "body_font": "'Segoe UI', 'Noto Sans', Arial, sans-serif",
+      "motif": "particles",
+      "image_palette": "conventional CPK-like element colours, glassware clarity, violet and warm orange accents"
+    },
+    "physics": {
+      "label": "Forces and energy",
+      "brand": "#1d4f91", "brand_dark": "#12345f", "brand_soft": "#e8eef8", "accent": "#f2a900",
+      "ink": "#18202c", "muted": "#5c6676", "line": "#d3dcea", "warn": "#fff6df", "warn_edge": "#d99a00",
+      "think": "#1d4f91", "extension": "#eef7f1", "extension_edge": "#93c9a8",
+      "heading_font": "'Segoe UI Semibold', 'Segoe UI', 'Noto Sans', Arial, sans-serif",
+      "body_font": "'Segoe UI', 'Noto Sans', Arial, sans-serif",
+      "motif": "waves",
+      "image_palette": "deep blues and steel greys with amber highlights for energy and motion"
+    },
+    "geometry": {
+      "label": "Shape and space",
+      "brand": "#3b3fa8", "brand_dark": "#262970", "brand_soft": "#ecedfa", "accent": "#e4572e",
+      "ink": "#1c1d2e", "muted": "#60627a", "line": "#d6d8f0", "warn": "#fdf0ea", "warn_edge": "#e4572e",
+      "think": "#3b3fa8", "extension": "#eef6f9", "extension_edge": "#8fc0d6",
+      "heading_font": "'Segoe UI Semibold', 'Segoe UI', 'Noto Sans', Arial, sans-serif",
+      "body_font": "'Segoe UI', 'Noto Sans', Arial, sans-serif",
+      "motif": "grid",
+      "image_palette": "indigo construction lines on drafting-paper white with a single coral highlight"
+    },
+    "algebra": {
+      "label": "Number and pattern",
+      "brand": "#0f6e8c", "brand_dark": "#0a4b60", "brand_soft": "#e5f2f6", "accent": "#e85d75",
+      "ink": "#17242a", "muted": "#5a6a71", "line": "#cfe3ea", "warn": "#fdeef1", "warn_edge": "#e85d75",
+      "think": "#0f6e8c", "extension": "#f3f0fb", "extension_edge": "#b4a6e0",
+      "heading_font": "'Segoe UI Semibold', 'Segoe UI', 'Noto Sans', Arial, sans-serif",
+      "body_font": "'Segoe UI', 'Noto Sans', Arial, sans-serif",
+      "motif": "dots",
+      "image_palette": "teal and rose accents on clean white"
+    },
+    "earth": {
+      "label": "Our planet",
+      "brand": "#2f6f6a", "brand_dark": "#1e4a46", "brand_soft": "#e7f2f0", "accent": "#c7782a",
+      "ink": "#1b2624", "muted": "#5e6d6a", "line": "#d3e3e0", "warn": "#fbf0e4", "warn_edge": "#c7782a",
+      "think": "#2f6f6a", "extension": "#eef2fb", "extension_edge": "#9fb0dc",
+      "heading_font": "'Segoe UI Semibold', 'Segoe UI', 'Noto Sans', Arial, sans-serif",
+      "body_font": "'Segoe UI', 'Noto Sans', Arial, sans-serif",
+      "motif": "contours",
+      "image_palette": "landscape greens, ocean blues and ochre earth tones"
+    },
+    "heritage": {
+      "label": "People and the past",
+      "brand": "#8a3b2e", "brand_dark": "#5c271f", "brand_soft": "#f6ebe7", "accent": "#b88a2a",
+      "ink": "#2a1d1a", "muted": "#6e605c", "line": "#e8d8d2", "warn": "#fbf3e2", "warn_edge": "#b88a2a",
+      "think": "#8a3b2e", "extension": "#eef2f6", "extension_edge": "#a7b6c6",
+      "heading_font": "Georgia, 'Times New Roman', serif",
+      "body_font": "'Segoe UI', 'Noto Sans', Arial, sans-serif",
+      "motif": "rule",
+      "image_palette": "warm parchment, brick red and antique gold"
+    }
+  }
+}
