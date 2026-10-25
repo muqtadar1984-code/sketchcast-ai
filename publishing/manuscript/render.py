@@ -158,9 +158,11 @@ figure.place { margin: 2pt 0 8pt; break-inside: avoid; background: #fff; }
 figure.place svg { width: 100%; height: auto; display: block; }
 figure.beside-right { float: right; margin-left: 12pt; clear: right; }
 figure.beside-left { float: left; margin-right: 12pt; clear: left; }
+figure.beside-right > svg, figure.beside-left > svg { max-height: 72mm; width: auto; max-width: 100%; margin: 0 auto; }  /* a side picture stays a side picture: it must fit beside its text */
 figure.w-third { width: 34%; } figure.w-half { width: 46%; } figure.w-two-thirds { width: 62%; }
 figure.full, figure.centre { width: 100%; text-align: center; }
 figure.centre svg { max-width: 62%; margin: 0 auto; }
+figure.full svg { max-height: 95mm; width: auto; max-width: 85%; margin: 0 auto; }
 h2 { clear: both; }
 .group svg text.gl { font: 600 12px 'Segoe UI', Arial, sans-serif; fill: var(--ink); }
 .group svg text.gs { font: 10.5px 'Segoe UI', Arial, sans-serif; fill: #5b6475; }
@@ -258,6 +260,9 @@ def _place(b: dict) -> str:
     lay = b.get("layout") or {}
     if isinstance(lay, str):               # a bare placement ("beside-right") is a layout too
         lay = {"placement": lay}
+    synonyms = {"full-width": "full", "fullwidth": "full", "wide": "full", "center": "centre",
+                "right": "beside-right", "left": "beside-left", "beside": "beside-right"}
+    lay = {**lay, "placement": synonyms.get(str(lay.get("placement") or "").lower(), lay.get("placement"))}
     p = lay.get("placement") if lay.get("placement") in ("beside-right", "beside-left", "full", "centre") else "centre"
     w = {"third": "w-third", "half": "w-half", "two-thirds": "w-two-thirds"}.get(lay.get("width"), "w-half")
     return f"place {p}" + (f" {w}" if p.startswith("beside") else "")
@@ -426,7 +431,7 @@ def _figures(doc: dict, dossier: dict, env_file: Path) -> dict:
             png = asset_bytes(http, url, asset)
             kind = kinds.get(ref, "illustration")
             # illustrations are matted onto the paper; a photograph is never altered
-            shown = _feather(matte(png) or png) if kind == "illustration" else png
+            shown = _trim(_feather(matte(png) or png)) if kind == "illustration" else png
             svg, unplaced = figure_svg(shown, asset.get("vision") or {"w": 1, "h": 1}, labels)
             out[ref] = {"svg": svg, "unplaced": unplaced, "caption": caption, "credit": credit, "kind": kind,
                         "img": "data:image/png;base64," + base64.b64encode(shown).decode()}
@@ -447,6 +452,29 @@ def hero_image(slug: str, chapter: int) -> str | None:
         return None
     png = Path(row["path"]).read_bytes()
     return "data:image/png;base64," + base64.b64encode(_vignette(matte(png) or png)).decode()
+
+
+def _trim(png: bytes, pad: float = 0.03) -> bytes:
+    """Crop a matted illustration to what is drawn (plus a little air): empty
+    transparent canvas around a subject is page space the layout cannot use."""
+    import io
+    import numpy as np
+    from PIL import Image
+    im = Image.open(io.BytesIO(png))
+    if im.mode != "RGBA":
+        return png
+    a = np.asarray(im)[..., 3]
+    ys, xs = np.where(a > 12)
+    if not len(xs):
+        return png
+    h, w = a.shape
+    px, py = int(w * pad), int(h * pad)
+    box = (max(0, xs.min() - px), max(0, ys.min() - py), min(w, xs.max() + px + 1), min(h, ys.max() + py + 1))
+    if (box[2] - box[0]) * (box[3] - box[1]) > 0.92 * w * h:
+        return png
+    out = io.BytesIO()
+    im.crop(box).save(out, "PNG")
+    return out.getvalue()
 
 
 def _feather(png: bytes, margin: float = 0.07) -> bytes:
@@ -922,7 +950,24 @@ def _alternatives(doc: dict) -> list[tuple[str, dict]]:
                 # a beside figure precedes the text it sits beside: move it before the paragraph that introduces it
                 blocks.insert(max(0, bi - 1), blk)
                 out.append((f"{s['sid']} picture row beside the text", alt))
-    return out[:4]
+        for bi, b in enumerate(s.get("blocks") or []):
+            lay = b.get("layout") if isinstance(b.get("layout"), dict) else {}
+            # a beside picture that cannot fit beside its text may fit at a third of the width
+            if b.get("type") == "figure" and str(lay.get("placement", "")).startswith("beside") and \
+                    lay.get("width", "half") != "third":
+                alt = copy.deepcopy(doc)
+                alt["sections"][si]["blocks"][bi]["layout"] = {**lay, "width": "third"}
+                out.append((f"{s['sid']} {b.get('ref')} beside at a third", alt))
+                # a beside picture that does not fit where it stands is pushed to the next page while its
+                # text flows on without it: let it start one or two paragraphs earlier, still beside its text
+                for up in (1, 2):
+                    if bi - up >= 0 and all(x.get("type") in ("paragraph", "list")
+                                            for x in s["blocks"][bi - up:bi]):
+                        alt = copy.deepcopy(doc)
+                        blocks = alt["sections"][si]["blocks"]
+                        blocks.insert(bi - up, blocks.pop(bi))
+                        out.append((f"{s['sid']} {b.get('ref')} {up} paragraph(s) earlier", alt))
+    return out[:10]
 
 
 def render(doc: dict, dossier: dict, env_file: Path, out_dir: Path) -> dict:

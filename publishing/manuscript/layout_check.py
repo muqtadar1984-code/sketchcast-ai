@@ -61,7 +61,24 @@ def diagnose(pdf_path: str) -> dict:
         # 'no ink' is measured against the page's own paper (ivory, tinted bands), not white
         from collections import Counter
         paper = Counter(v for r in rows[top:bottom] for v in r).most_common(1)[0][0]
-        blank = sum(1 for r in rows[top:bottom] if min(r) >= paper - 10) / max(1, bottom - top)
+        # per HALF of the page: an empty column beside a picture is unused space too
+        # (a full-width-row measure cannot see it)
+        mid = pix.width // 2
+        lo, hi = int(pix.width * 0.1), int(pix.width * 0.9)
+        # only HOLES count: an empty stretch taller than ~8 mm (the gaps between lines are not unused space)
+        hole = max(3, round(8 / 25.4 * 36))
+
+        def holes(a, b):
+            run = total = 0
+            for r in rows[top:bottom] + [None]:
+                if r is not None and min(r[a:b]) >= paper - 10:
+                    run += 1
+                    continue
+                total += run if run >= hole else 0
+                run = 0
+            return total / max(1, bottom - top)
+
+        blank = (holes(lo, mid) + holes(mid, hi)) / 2
         pages.append({"page": i, "unused_share": round(blank, 2), "images": imgs, "text_blocks": len(text_boxes)})
     return {"pages": pages, "hard": hard, "warnings": warn, "page_count": len(doc)}
 
