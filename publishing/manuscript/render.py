@@ -712,7 +712,7 @@ def _lines(x: dict, pitch: float) -> str:
     return f'<div class="lines" style="--pitch:{pitch}mm">' + "<i></i>" * n + "</div>"
 
 
-def chapter_html(doc: dict, figs: dict, edition: str = "digital") -> str:
+def chapter_html(doc: dict, figs: dict, edition: str = "digital", first_page: int = 1) -> str:
     from publishing.manuscript.theme import css_vars, for_work, page, page_css
     ch, w = doc["chapter"], doc["work"]
     theme = for_work(w["slug"])
@@ -812,6 +812,8 @@ def chapter_html(doc: dict, figs: dict, edition: str = "digital") -> str:
                     'SketchCast artwork. Photographs:<ul>' + "".join(f"<li>{c}</li>" for c in credits) + "</ul></div>")
     body.append("</div></section>")
     css = css_vars(theme) + CSS + BOOK_CSS + page_css(theme, n, ch["title"], w["title"], edition)
+    if first_page != 1:                     # inside a whole book the folios run on from the chapter before
+        css += f"html {{ counter-reset: page {first_page - 1}; }}"
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'><title>{html.escape(ch['title'])}</title>"
             f"<style>{css}</style></head><body>{''.join(body)}</body></html>")
 
