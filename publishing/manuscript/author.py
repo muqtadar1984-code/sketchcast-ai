@@ -349,19 +349,70 @@ def figure_fit(run: "Run", sections: list[dict], env_file: Path) -> dict:
             verdicts.append(v)
             return v
 
+        def near(blocks, j):
+            """The text a reader sees beside this picture: two blocks either side,
+            not the whole section (a section with two photos must not have one
+            judged against the other's sentence)."""
+            return " ".join(str(x.get("text") or x.get("term") or "") for x in blocks[max(0, j - 2):j + 3]
+                            if x.get("type") not in ("figure", "figure_group"))
+
+        def check_group(s, b, context):
+            """A figure group is printed as ONE visual, so it is judged as one: its
+            pictures composed with their labels, against its caption."""
+            import io
+
+            from PIL import Image, ImageDraw
+            items = [i for i in b.get("items") or [] if i.get("ref") in src]
+            tiles = [Image.open(io.BytesIO(asset_bytes(http, url, src[i["ref"]][0]))).convert("RGB").resize((300, 300))
+                     for i in items]
+            sheet = Image.new("RGB", (310 * len(tiles) + 10, 350), "white")
+            draw = ImageDraw.Draw(sheet)
+            for k, (t, i) in enumerate(zip(tiles, items)):
+                sheet.paste(t, (10 + k * 310, 10))
+                draw.text((10 + k * 310 + 20, 320), str(i.get("label") or ""), fill="black")
+            buf = io.BytesIO()
+            sheet.save(buf, "PNG")
+            rel = "; ".join(f"{items[r['from']].get('label')} → {items[r['to']].get('label')} ({r.get('kind')})"
+                            for r in b.get("relations") or [] if r.get("from", 99) < len(items) and r.get("to", 99) < len(items))
+            v = run.look(buf.getvalue(), FIT_PROMPT.format(
+                age=run.d["work"]["age_band"], heading=s.get("heading"), context=context[:900],
+                caption=f"{b.get('caption')} [This is a composed figure: the pictures above, printed together; "
+                        f"relations drawn as arrows: {rel or 'none'}]",
+                labels=json.dumps([i.get("label") for i in items]),
+                identity=json.dumps({i.get("label"): src[i["ref"]][3] or "illustration" for i in items})), s["sid"])
+            v["ref"], v["unit"] = "group:" + ",".join(i["ref"] for i in items), s["sid"]
+            verdicts.append(v)
+            return v
+
         for s in sections:
-            context = " ".join(str(b.get("text") or "") for b in s.get("blocks") or [])
+            blocks = s.get("blocks") or []
             keep = []
-            for b in s.get("blocks") or []:
-                refs = ([b.get("ref")] if b.get("type") == "figure" else
-                        [i.get("ref") for i in b.get("items") or []] if b.get("type") == "figure_group" else [])
-                refs = [r for r in refs if r in src]
+            for j, b in enumerate(blocks):
+                context = near(blocks, j)
+                if b.get("type") == "figure_group":
+                    v = check_group(s, b, context)
+                    if not v.get("shows"):
+                        human.append({"unit": s["sid"], "ref": "figure group", "why": "the visual gate gave no answer"})
+                    elif any(v.get(k) is not True for k in ("accurate", "relevant", "suitable")):
+                        findings.append({"unit": s["sid"], "kind": "figure", "severity": "blocker",
+                                         "quote": b.get("caption"), "detail": f"figure group: {v.get('problem')}"})
+                    elif v.get("text_consistent") is False or v.get("labels_ok") is False:
+                        findings.append({"unit": s["sid"], "kind": "figure", "severity": "blocker",
+                                         "quote": b.get("caption"),
+                                         "detail": f"figure group caption or labels: {v.get('problem')}"})
+                    elif float(v.get("confidence") or 0) < CONFIDENT:
+                        human.append({"unit": s["sid"], "ref": "figure group", "why": f"low confidence: {v.get('problem')}"})
+                    if v.get("not_to_scale") is True and "not to scale" not in str(b.get("caption")).lower():
+                        b["caption"] = str(b.get("caption") or "").rstrip(". ") + ". Not to scale."
+                    keep.append(b)
+                    continue
+                refs = [b.get("ref")] if b.get("type") == "figure" and b.get("ref") in src else []
                 if not refs:
                     keep.append(b)
                     continue
                 bad = []
                 for r in refs:
-                    labels = [i.get("label") for i in b.get("items") or [] if i.get("ref") == r]
+                    labels = []
                     v = check(s, r, b.get("caption"), labels, context)
                     if not v.get("shows"):
                         human.append({"unit": s["sid"], "ref": r, "why": "the visual gate gave no answer"})
