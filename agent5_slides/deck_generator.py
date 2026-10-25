@@ -248,7 +248,8 @@ def build_deck(model: LessonModel, out_path: Path, *, direction: str = "ltr",
             direction=direction, library_context=art_context,
             yield_to_users=(lambda: user_builders_live(sb, job_id)) if sb is not None else (lambda: False),
             # a worker has no PowerPoint; LibreOffice renders when installed
-            render_preview=os.getenv("DECK_DIRECTOR_RENDER_QA", "1") != "0")
+            render_preview=os.getenv("DECK_DIRECTOR_RENDER_QA", "1") != "0",
+            progress=_progress(sb, job_id))
         blocking = res.report.get("blocking_layout") or {}
         if blocking:
             # Fail over degrade: a deck with a hidden step or text running off
@@ -276,6 +277,13 @@ def build_deck(model: LessonModel, out_path: Path, *, direction: str = "ltr",
         _record_director(sb, generation_id, {"route": "storyboard_fallback",
                                              "reason": f"{type(exc).__name__}: {str(exc)[:300]}"})
         return build_lesson_deck(model, out_path, direction=direction, branding=branding)
+
+
+def _progress(sb, job_id: str):
+    if sb is None or not job_id:
+        return lambda pct: None
+    from worker import client as db
+    return lambda pct: db.set_progress(sb, job_id, int(pct))
 
 
 def _record_director(sb, generation_id: str, summary: dict) -> None:

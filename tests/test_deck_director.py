@@ -762,3 +762,12 @@ def test_a_deck_with_layout_faults_falls_back_to_the_storyboard(tmp_path, model,
                         sb=object(), generation_id="g")
     assert out == tmp_path / "d.pptx" and out.exists()                # the storyboard deck
     assert seen[0]["deck_director"]["route"] == "storyboard_fallback"
+
+
+def test_the_progress_bar_moves_through_the_director(tmp_path, model):
+    """The bar sat at 45% for the whole run and the deck looked stuck."""
+    seen = []
+    P.build_director_deck(model, client=StubClient(spec_raw()), out_path=tmp_path / "o.pptx", tmp=tmp_path / "w",
+                          article=ARTICLE, generate=lambda p, a: (None, "", 0.0), photos=lambda q, http=None: [],
+                          render_preview=False, progress=seen.append)
+    assert seen[0] == 50 and seen == sorted(seen) and max(seen) <= 88 and len(set(seen)) >= 4
