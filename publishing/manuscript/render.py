@@ -953,7 +953,7 @@ def _print(page: Path, pdf: Path) -> Path:
         with tempfile.TemporaryDirectory(prefix="edge-print-") as profile:
             subprocess.run([EDGE, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
                             f"--user-data-dir={profile}", f"--print-to-pdf={tmp}", page.resolve().as_uri()],
-                           check=True, timeout=180, capture_output=True)
+                           check=False, timeout=180, capture_output=True)   # success = the file exists (checked below)
         if tmp.exists() and tmp.stat().st_size >= 1000:
             break
         time.sleep(3 * attempt)
