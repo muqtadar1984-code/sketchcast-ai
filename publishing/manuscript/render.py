@@ -110,44 +110,54 @@ def figure_svg(png: bytes, vision: dict, labels: list[str]) -> tuple[str, list[s
     scale = IMG_W / w
     ih = h * scale
     regions = {_norm(k): v for k, v in (vision.get("regions") or {}).items()}
+    # Each label points at the NEAR EDGE of its structure, at the label's own height (founder 2026-10-26:
+    # leaders aimed at box centres crossed, and an enclosing structure's centre — a wall, a membrane — is
+    # the middle of something else). Labels on a side are ordered by height, so their near-horizontal
+    # leaders cannot cross.
     sides = {"L": [], "R": []}
     unplaced = []
     for lab in labels:
-        boxes = regions.get(_norm(lab))
+        boxes = [[v * scale for v in b] for b in regions.get(_norm(lab)) or [] if len(b) == 4]
         if not boxes:
             unplaced.append(lab)
             continue
-        centres = [((b[0] + b[2]) / 2 * scale, (b[1] + b[3]) / 2 * scale) for b in boxes]
-        left = min(centres, key=lambda c: c[0])
-        right = max(centres, key=lambda c: c[0])
-        side = "L" if left[0] < IMG_W - right[0] else "R"
-        sides[side].append((lab, left if side == "L" else right))
+        # the side whose edge the structure comes closest to; the box nearest that edge
+        lbox = min(boxes, key=lambda b: b[0])
+        rbox = max(boxes, key=lambda b: b[2])
+        side = "L" if lbox[0] <= IMG_W - rbox[2] else "R"
+        sides[side].append((lab, lbox if side == "L" else rbox))
     if not sides["L"] and not sides["R"]:
         # nothing to label: no reserved columns, the picture alone
         b64 = base64.b64encode(png).decode()
         return (f'<svg viewBox="0 0 {IMG_W} {ih:.0f}" role="img"><image href="data:image/png;base64,{b64}" '
                 f'x="0" y="0" width="{IMG_W}" height="{ih:.1f}"/></svg>'), unplaced
-    total_w = IMG_W + 2 * COL_W
+    col = max([COL_W] + [len(lab) * 7.2 + 18 for items in sides.values() for lab, _ in items])
+    total_w = IMG_W + 2 * col
     height = ih
     parts = []
     for side, items in sides.items():
-        items.sort(key=lambda t: t[1][1])
-        y = 0.0
-        for lab, (cx, cy) in items:
-            y = max(y + LINE_H, cy)
+        items.sort(key=lambda t: (t[1][1] + t[1][3]) / 2)
+        y = -LINE_H
+        for lab, (x0, y0, x1, y1) in items:
+            want = (y0 + y1) / 2
+            y = max(y + LINE_H, want)
             ly = min(y, ih + LINE_H * len(items))
             height = max(height, ly + 8)
+            inset_x = min(6.0, (x1 - x0) * 0.08)
+            inset_y = min(4.0, (y1 - y0) * 0.2)
+            ay = min(max(ly - 4, y0 + inset_y), y1 - inset_y)         # level with the label where the box allows
+            ax = (x0 + inset_x) if side == "L" else (x1 - inset_x)    # just inside the structure's near edge
             if side == "L":
-                tx, anchor, lx = COL_W - 8, "end", COL_W - 4
+                tx, anchor, lx = col - 8, "end", col - 4
             else:
-                tx, anchor, lx = COL_W + IMG_W + 8, "start", COL_W + IMG_W + 4
-            px = COL_W + cx
-            parts.append(f'<line x1="{lx:.1f}" y1="{ly - 4:.1f}" x2="{px:.1f}" y2="{cy:.1f}" class="leader"/>'
-                         f'<circle cx="{px:.1f}" cy="{cy:.1f}" r="2.2" class="dot"/>'
+                tx, anchor, lx = col + IMG_W + 8, "start", col + IMG_W + 4
+            px = col + ax
+            parts.append(f'<line x1="{lx:.1f}" y1="{ly - 4:.1f}" x2="{px:.1f}" y2="{ay:.1f}" class="leader"/>'
+                         f'<circle cx="{px:.1f}" cy="{ay:.1f}" r="2.2" class="dot"/>'
                          f'<text x="{tx:.1f}" y="{ly:.1f}" text-anchor="{anchor}" class="lab">{html.escape(lab)}</text>')
     b64 = base64.b64encode(png).decode()
     svg = (f'<svg viewBox="0 0 {total_w} {height:.0f}" role="img">'
-           f'<image href="data:image/png;base64,{b64}" x="{COL_W}" y="0" width="{IMG_W}" height="{ih:.1f}"/>'
+           f'<image href="data:image/png;base64,{b64}" x="{col}" y="0" width="{IMG_W}" height="{ih:.1f}"/>'
            + "".join(parts) + "</svg>")
     return svg, unplaced
 
@@ -431,8 +441,13 @@ def _figures(doc: dict, dossier: dict, env_file: Path) -> dict:
             png = asset_bytes(http, url, asset)
             kind = kinds.get(ref, "illustration")
             # illustrations are matted onto the paper; a photograph is never altered
-            shown = _trim(_feather(matte(png) or png)) if kind == "illustration" else png
-            svg, unplaced = figure_svg(shown, asset.get("vision") or {"w": 1, "h": 1}, labels)
+            vision = asset.get("vision") or {"w": 1, "h": 1}
+            if kind == "illustration":
+                shown, box = _trim(_feather(matte(png) or png), with_box=True)
+                vision = _crop_vision(vision, png, box)      # label regions move with the crop
+            else:
+                shown = png
+            svg, unplaced = figure_svg(shown, vision, labels)
             out[ref] = {"svg": svg, "unplaced": unplaced, "caption": caption, "credit": credit, "kind": kind,
                         "img": "data:image/png;base64," + base64.b64encode(shown).decode()}
     return out
@@ -454,7 +469,22 @@ def hero_image(slug: str, chapter: int) -> str | None:
     return "data:image/png;base64," + base64.b64encode(_vignette(matte(png) or png)).decode()
 
 
-def _trim(png: bytes, pad: float = 0.03) -> bytes:
+def _crop_vision(vision: dict, png: bytes, box: tuple | None) -> dict:
+    """Shift detected label regions into a cropped picture's coordinates."""
+    if not box or not vision.get("regions"):
+        return vision
+    from PIL import Image
+    import io
+    pw, ph = Image.open(io.BytesIO(png)).size
+    vw, vh = float(vision.get("w") or pw), float(vision.get("h") or ph)
+    fx, fy = vw / pw, vh / ph                       # picture pixels -> the regions' own units
+    x0, y0, x1, y1 = box[0] * fx, box[1] * fy, box[2] * fx, box[3] * fy
+    regions = {k: [[b[0] - x0, b[1] - y0, b[2] - x0, b[3] - y0] for b in v if len(b) == 4]
+               for k, v in vision["regions"].items()}
+    return {**vision, "w": x1 - x0, "h": y1 - y0, "regions": regions}
+
+
+def _trim(png: bytes, pad: float = 0.03, with_box: bool = False):
     """Crop a matted illustration to what is drawn (plus a little air): empty
     transparent canvas around a subject is page space the layout cannot use."""
     import io
@@ -462,19 +492,19 @@ def _trim(png: bytes, pad: float = 0.03) -> bytes:
     from PIL import Image
     im = Image.open(io.BytesIO(png))
     if im.mode != "RGBA":
-        return png
+        return (png, None) if with_box else png
     a = np.asarray(im)[..., 3]
     ys, xs = np.where(a > 12)
     if not len(xs):
-        return png
+        return (png, None) if with_box else png
     h, w = a.shape
     px, py = int(w * pad), int(h * pad)
     box = (max(0, xs.min() - px), max(0, ys.min() - py), min(w, xs.max() + px + 1), min(h, ys.max() + py + 1))
     if (box[2] - box[0]) * (box[3] - box[1]) > 0.92 * w * h:
-        return png
+        return (png, None) if with_box else png
     out = io.BytesIO()
     im.crop(box).save(out, "PNG")
-    return out.getvalue()
+    return (out.getvalue(), box) if with_box else out.getvalue()
 
 
 def _feather(png: bytes, margin: float = 0.07) -> bytes:
@@ -748,6 +778,9 @@ def chapter_html(doc: dict, figs: dict, edition: str = "digital", first_page: in
     hero = hero_image(w["slug"], n) if pg["opener"].get("hero") else None
     objectives = "".join(f'<p><span class="code">{html.escape(o["code"])}</span>{md(o["text"])}</p>'
                          for o in ch.get("objectives") or [])
+    if len(ch.get("objectives") or []) > 4:   # a review chapter revisits the book's objectives: show their codes
+        objectives = '<p class="codes">' + " ".join(f'<span class="code">{html.escape(o["code"])}</span>'
+                                                     for o in ch["objectives"]) + "</p>"
     contents = "".join(f'<li><span class="sn">{n}.{i}</span>{md(s["heading"])}</li>'
                        for i, s in enumerate(doc["sections"], 1))
     video = ""
