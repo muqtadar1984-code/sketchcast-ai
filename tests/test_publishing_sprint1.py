@@ -19,7 +19,12 @@ from publishing.planner import measured_costs, plan_topic, publish_days
 from publishing.schemas import Blueprint, BookBrief, ReadinessPolicy
 from publishing.snapshot import WriteAttempt, client
 
-POLICY = ReadinessPolicy.load()
+# A fixed EN+MS policy: these tests prove the Malay checks, whatever the live
+# config says (founder 2026-10-25 set the live policy to English only).
+POLICY = ReadinessPolicy.model_validate({
+    "id": "test-en-ms", "languages": ["en", "ms"], "min_words": 1000,
+    "min_worked_examples": {"maths": 3, "science": 1}, "min_bank_maturity": "good",
+    "require_figures_rendered": True, "thumbnail_warning_ok": True})
 
 
 def base_catalogue() -> dict:

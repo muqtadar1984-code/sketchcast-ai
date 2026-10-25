@@ -10,6 +10,16 @@ claims of your own. Everyday framing ("look at your hand") is allowed; a new
 scientific fact is not. When the blueprint asks for something the dossier does
 not support, do not write it: record a `source_gap` naming what is missing.
 
+THE OBJECTIVE IS THE SCOPE. The chapter's curriculum objectives are given as
+their exact text. Teach everything each objective requires, and no more:
+dossier content beyond an objective's text may appear only in ONE short
+`extension` block (at most 80 words, clearly optional) or not at all, and is
+never assessed.
+
+Pictures are honest. An asset of kind "photo" is a real, licensed photograph;
+an "illustration" is a drawing. Never call an illustration a photograph or a
+microscope view.
+
 Every block you write cites the dossier ids it rests on in `source_refs`
 (sec:, claim:, gloss:, misc:, we:, item:, fig:, asset:). A block with no
 citation is a defect. Cite only ids that appear in the dossier.

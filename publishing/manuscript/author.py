@@ -29,7 +29,7 @@ log = logging.getLogger("publishing.manuscript")
 PROMPTS = ROOT / "prompts"
 CONSTITUTION = "constitution_v0_2"
 CARDS = {"plan": "card_chapter_plan_v0_1", "section": "card_draft_section_v0_1",
-         "exercises": "card_exercises_v0_1", "review": "card_review_v0_1"}
+         "exercises": "card_exercises_v0_1", "review": "card_review_v0_1", "gates": "card_gates_v0_1"}
 AUTHOR, REVIEWER = "anthropic", "gemini"
 
 
@@ -105,7 +105,13 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) 
     head = (f"Book: {d['work']['title']} — ages {d['work']['age_band']}, grades {d['work']['grade_band']}, "
             f"{d['work']['curriculum']}.\nChapter {ch['number']}: {ch['title']} (curriculum codes {ch['node_codes']}).\n"
             f"The whole book (teach ONLY this chapter's ideas; anything another chapter teaches is left to it, "
-            f"even when a dossier section mentions it):\n{toc}\n")
+            f"even when a dossier section mentions it):\n{toc}\n"
+            f"Curriculum objectives of THIS chapter (exact text — the scope):\n" +
+            "".join(f"  {o['code']}: {o['text']}\n" for o in ch.get("objectives") or []) +
+            "Skills its exercises may practise:\n" +
+            "".join(f"  {o['code']}: {o['text']}\n" for o in ch.get("skills") or []))
+    photo_ids = {a["id"] for a in d["library_assets"] if a.get("kind") == "photo"}
+    skills = {o["code"] for o in ch.get("skills") or []}
 
     plan = run.call("author", "plan", head + "Plan this chapter. Blueprint intent:\n" +
                     json.dumps({k: ch[k] for k in ("purpose", "blueprint_sections", "assessment", "illustration_needs")},
@@ -129,56 +135,91 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) 
                   "\nSection headings: " + json.dumps([s["heading"] for s in sections]), 9000, "exercises")
     exercises = ex.get("exercises") or []
 
-    findings = (V.check_sections(sections, valid, figure_ids)
-                + V.check_exercises(exercises, valid, figure_ids, nodes)
+    def checks():
+        return (V.check_sections(sections, valid, figure_ids)
+                + V.check_exercises(exercises, valid, figure_ids, nodes, photo_ids, skills)
+                + V.check_extension(sections, exercises)
                 + V.check_coverage(sections, exercises, plan, nodes))
+
     def blind():
-        return [{k: v for k, v in x.items() if k in ("xid", "tier", "item_type", "stem", "options", "figure_ref")}
-                for x in exercises]
+        return [{k: v for k, v in x.items() if k in ("xid", "tier", "item_type", "stem", "options", "pairs",
+                                                      "figure_ref", "figure_refs")} for x in exercises]
 
     def do_review(unit):
-        return run.call("reviewer", "review", head + "Drafted chapter:\n" + json.dumps(
+        r = run.call("reviewer", "review", head + "Drafted chapter:\n" + json.dumps(
             {"opening": plan.get("opening"), "sections": sections, "exercises": blind()}, ensure_ascii=False,
             indent=1), 12000, unit)
+        # the two compulsory gates (founder 2026-10-25): coverage + assessment validity
+        r["gates"] = run.call("reviewer", "gates", head + "Chapter to gate:\n" + json.dumps(
+            {"sections": sections, "exercises": exercises}, ensure_ascii=False, indent=1), 9000, f"{unit}:gates")
+        return r
 
+    def is_ready(r, fs):
+        g = r.get("gates") or {}
+        return (g.get("coverage_gate") == "pass" and g.get("assessment_gate") == "pass"
+                and not any(f["verdict"] == "fail" for f in fs)
+                and not any(f.get("severity") == "blocker" for f in r.get("findings") or []))
+
+    def to_fix(r, fs):
+        """Every blocker/major finding, failed gate item and failed check, by unit."""
+        serious = [f for f in r.get("findings") or [] if f.get("severity") in ("blocker", "major")]
+        g = r.get("gates") or {}
+        serious += [{"unit": a["xid"], "kind": "assessment", "severity": "blocker", "detail": a.get("fix"),
+                     "failed": a.get("failed")} for a in g.get("assessment") or [] if a.get("verdict") == "fail"]
+        serious += [{"unit": b.get("unit"), "kind": "scope", "severity": "major", "quote": b.get("quote"),
+                     "detail": "beyond the objectives: cut it, or fold it into the single extension box"}
+                    for b in g.get("beyond_scope") or []]
+        serious += [{"unit": f["unit"].split(".")[0], "kind": f"check:{f['check']}", "severity": "blocker",
+                     "detail": f["detail"]} for f in fs if f["verdict"] == "fail"]
+        out: dict[str, list] = {}
+        for f in serious:
+            out.setdefault(str(f.get("unit")), []).append(f)
+        return out
+
+    fold_extension_sections(sections, plan)
+    findings = checks()
     review = do_review("review")
-    # REVISE once (§4 review → revise): the author resolves every blocker and
-    # major finding, then the reviewer reads the chapter again. What is left
-    # goes to the person at Gate D.
-    serious = [f for f in review.get("findings") or [] if f.get("severity") in ("blocker", "major")]
-    by_unit: dict[str, list] = {}
-    for f in serious:
-        by_unit.setdefault(str(f.get("unit")), []).append(f)
-    first_review = review
-    if by_unit:
-        def fix(i_sec):
-            i, sec = i_sec
+    rounds = []
+    # REVISE (§4 review → revise), at most twice: the author resolves every
+    # blocker and major finding, failed gate item and failed check; the chapter
+    # is then checked, reviewed and gated again. What is left goes to Gate D.
+    for rnd in (1, 2):
+        if is_ready(review, findings):
+            break
+        by_unit = to_fix(review, findings)
+        if not by_unit:
+            break
+        rounds.append({"round": rnd, "findings": review.get("findings"), "gates": review.get("gates"),
+                       "checks": findings})
+
+        def fix(sec, by_unit=by_unit, rnd=rnd):
             fs = by_unit.get(sec["sid"])
             if not fs:
                 return sec
-            spec = next(p for p in plan["sections"] if p["sid"] == sec["sid"])
-            return run.call("author", "section", head + "Revise this section so that every reviewer finding below is "
+            spec = next((p for p in plan["sections"] if p["sid"] == sec["sid"]), {})
+            return run.call("author", "section", head + "Revise this section so that every finding below is "
                             "resolved, staying inside the dossier. Keep what is right; change only what the findings "
                             "require; keep every figure block you still need.\nPlan entry:\n" +
                             json.dumps(spec, ensure_ascii=False) + "\nCurrent draft:\n" +
                             json.dumps(sec, ensure_ascii=False) + "\nFindings:\n" + json.dumps(fs, ensure_ascii=False),
-                            5000, f"{sec['sid']}:revise")
+                            5000, f"{sec['sid']}:revise{rnd}")
         with ThreadPoolExecutor(max_workers=4) as pool:
-            sections = list(pool.map(fix, enumerate(sections)))
+            sections = list(pool.map(fix, sections))
         dedupe(sections)
-        ex_fs = [f for u, fs in by_unit.items() if u.startswith("x") for f in fs]
+        fold_extension_sections(sections, plan)
+        ex_fs = [f for u, fs in by_unit.items() if u.startswith("x") or u in ("exercises", "chapter") for f in fs]
         if ex_fs:
             ex = run.call("author", "exercises", head + "Revise the exercises so every finding below is resolved; "
-                          "return the full set.\nCurrent exercises:\n" + json.dumps(exercises, ensure_ascii=False) +
-                          "\nFindings:\n" + json.dumps(ex_fs, ensure_ascii=False), 9000, "exercises:revise")
+                          "return the full set. Never assess the optional extension box.\nCurrent exercises:\n" +
+                          json.dumps(exercises, ensure_ascii=False) + "\nFindings:\n" +
+                          json.dumps(ex_fs, ensure_ascii=False), 9000, f"exercises:revise{rnd}")
             exercises = ex.get("exercises") or exercises
-        findings = (V.check_sections(sections, valid, figure_ids)
-                    + V.check_exercises(exercises, valid, figure_ids, nodes)
-                    + V.check_coverage(sections, exercises, plan, nodes))
-        review = do_review("review:2")
-        review["first_round"] = first_review.get("findings")
+        findings = checks()
+        review = do_review(f"review:{rnd + 1}")
+    review["rounds"] = rounds
 
     review.setdefault("findings", []).extend(fit["findings"])
+    review["ready_for_gate_d"] = is_ready(review, findings)
     chapter_doc = {"chapter": ch, "work": d["work"], "plan": plan, "sections": sections, "exercises": exercises,
                    "checks": findings, "review": review, "costs": run.costs,
                    "videos": sorted({v for t in d["topics"] for v in t["videos"]}),
@@ -187,6 +228,22 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) 
                                                           encoding="utf-8")
     store(conn, d, chapter_doc)
     return chapter_doc
+
+
+def fold_extension_sections(sections: list[dict], plan: dict) -> None:
+    """A section made only of an extension box is folded onto the end of the
+    section before it and removed (ch 1, 2026-10-25): extension is a glimpse
+    inside a section, never a section of its own."""
+    i = 1
+    while i < len(sections):
+        kinds = {b.get("type") for b in sections[i].get("blocks") or []}
+        if kinds and kinds <= {"extension", "figure"}:
+            moved = [b for b in sections[i]["blocks"] if b.get("type") == "extension"]
+            sections[i - 1]["blocks"] = (sections[i - 1].get("blocks") or []) + moved
+            gone = sections.pop(i)["sid"]
+            plan["sections"] = [p for p in plan["sections"] if p["sid"] != gone]
+            continue
+        i += 1
 
 
 def dedupe(sections: list[dict]) -> None:
@@ -213,6 +270,7 @@ Judge the PICTURE, not the draft caption. Answer with JSON:
   "accurate": true|false,   // scientifically correct, nothing misleading for a child
   "relevant": true|false,   // genuinely helps teach this section
   "caption": "an accurate caption (max 25 words) that says only what the picture shows",
+  "not_to_scale": true|false, // things of very different real sizes drawn at similar sizes (e.g. a bacterium beside a person)
   "problem": "why it is inaccurate or irrelevant, if it is"}}"""
 
 
@@ -244,6 +302,8 @@ def figure_fit(run: Run, sections: list[dict], env_file: Path) -> dict:
                         continue
                     if v.get("accurate") is True and v.get("relevant") is True and v.get("caption"):
                         b["caption"] = v["caption"]           # say only what the picture shows
+                        if v.get("not_to_scale") is True and "not to scale" not in b["caption"].lower():
+                            b["caption"] = b["caption"].rstrip(". ") + " (not to scale)."
                     if not (v.get("accurate") is True and v.get("relevant") is True):
                         gaps.append({"need": b.get("caption"), "why": f"{b['ref']} removed: shows {v.get('shows')!r}; "
                                      f"{v.get('problem') or 'did not pass the fit check'}"})

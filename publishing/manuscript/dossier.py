@@ -28,7 +28,45 @@ from publishing.snapshot import client, load_env
 
 STOP = {"a", "an", "the", "of", "and", "or", "in", "on", "with", "as", "to", "by", "for", "from", "its", "their",
         "e.g", "eg", "seen", "through", "beside", "indicated", "showing", "labelled", "illustration", "photo",
-        "diagram", "simple", "typical", "different", "which", "under", "into", "each", "cells", "cell"}
+        "diagram", "simple", "typical", "different", "which", "under", "into", "each"}
+
+
+# D7: what a printed book may use from outside, attributed. NC/ND never.
+LICENCE_OK = re.compile(r"^(cc0|public domain|cc by(?: \d\.\d)?|cc by-sa(?: \d\.\d)?)$", re.I)
+# A picture that claims to be a photograph or micrograph must BE one. A
+# generated image presented as microscope evidence is a fabrication (ch 1
+# review, 2026-10-25: an AI "Amoeba seen under a microscope" was placed).
+PHOTO_WORDS = re.compile(r"photo|micrograph|seen under|under a (?:school )?microscope|microscope view", re.I)
+# Thinking and Working Scientifically skills a chapter may practise through
+# its exercises, beside its content objectives.
+TWS_SKILLS = ("TWSc.01", "TWSa.05")
+
+
+def licence_of(asset: dict) -> dict | None:
+    """The asset's licence record, or None when it has none we may print."""
+    src = asset.get("source")
+    if isinstance(src, str) and src.strip().startswith("{"):
+        try:
+            src = json.loads(src)
+        except ValueError:
+            return None
+    if not isinstance(src, dict):
+        return None
+    lic = str(src.get("licence") or "").strip()
+    return {"licence": lic, "author": str(src.get("author") or "").strip()[:80], "url": src.get("url"),
+            "provider": asset.get("provenance")} if LICENCE_OK.match(lic) else None
+
+
+def usable_library_asset(a: dict) -> tuple[bool, dict | None, str]:
+    """(usable, licence, kind). External = licensed real photo; generated = an
+    illustration, never offered when it poses as a photo."""
+    prov = str(a.get("provenance") or "")
+    if prov.startswith("generated"):
+        if PHOTO_WORDS.search(f"{a.get('asset_key')} {a.get('description')}"):
+            return False, None, "generated image posing as a photograph"
+        return True, None, "illustration"
+    lic = licence_of(a)
+    return (lic is not None), lic, "photo" if lic else "unlicensed"
 
 
 def _q(http, path, **params):
@@ -118,18 +156,33 @@ def build(conn, slug: str, chapter: int, env_file: Path) -> dict:
                                 "explanation": (q["explanation"] or "")[:400], "claim": f"claim:{s}:{q['claim_ref']}"}
                                for q in items],
             })
-        seen = set()
+        # the exact curriculum objective text: what the chapter MUST teach, and
+        # the line beyond which dossier content is extension only
+        codes = sorted(nodes) + [f"{g}{s}" for g in sorted({n[0] for n in nodes}) for s in TWS_SKILLS]
+        rows = _q(http, "/curriculum_nodes", select="code,title,curricula!inner(code)",
+                  **{"curricula.code": f"eq.{work['primary_curriculum_code']}"}, code=f"in.({','.join(codes)})")
+        out["chapter"]["objectives"] = [{"code": r["code"], "text": r["title"]} for r in rows if r["code"] in nodes]
+        out["chapter"]["skills"] = [{"code": r["code"], "text": r["title"]} for r in rows if r["code"] not in nodes]
+
+        seen, refused = set(), []
         for need in out["chapter"]["illustration_needs"]:
             for w in _kw(need.split(":", 1)[-1]):
+                # the source URL names the file in English even when a Malay deck keyed the asset
                 for a in _q(http, "/visual_assets", select="id,asset_key,description,group_ids,storage_path,vision,"
-                            "provenance,asset_format", status="eq.approved", asset_format="eq.png",
-                            **{"or": f"(asset_key.ilike.*{w}*,topic.ilike.*{w}*)"}, limit="4"):
+                            "provenance,source,asset_format", status="eq.approved", asset_format="eq.png",
+                            **{"or": f"(asset_key.ilike.*{w}*,topic.ilike.*{w}*,source.ilike.*{w}*)"}, limit="8"):
                     if a["id"] in seen:
                         continue
                     seen.add(a["id"])
-                    out["library_assets"].append({"id": f"asset:{a['id']}", "key": a["asset_key"],
+                    ok, lic, kind = usable_library_asset(a)
+                    if not ok:
+                        refused.append({"id": f"asset:{a['id']}", "why": kind})
+                        continue
+                    out["library_assets"].append({"id": f"asset:{a['id']}", "key": a["asset_key"], "kind": kind,
                                                   "description": (a.get("description") or "")[:300],
-                                                  "parts": a.get("group_ids") or [], "for_need": need, "_asset": a})
+                                                  "credit": lic, "parts": a.get("group_ids") or [],
+                                                  "for_need": need, "_asset": a})
+        out["refused_assets"] = refused
     return out
 
 

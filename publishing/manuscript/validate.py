@@ -50,8 +50,58 @@ def check_sections(sections: list[dict], valid_ids: set[str], figure_ids: set[st
     return out
 
 
-def check_exercises(exercises: list[dict], valid_ids: set[str], figure_ids: set[str], nodes: set[str]) -> list[dict]:
+def _norm(s) -> str:
+    return re.sub(r"\W+", " ", str(s or "").lower()).strip()
+
+
+def check_assessment(x: dict) -> list[dict]:
+    """The deterministic half of the ASSESSMENT VALIDITY gate (ch 1 review,
+    2026-10-25: a match task printed its terms beside their own definitions)."""
+    xid, out = x.get("xid", "?"), []
+    if x.get("item_type") == "match":
+        pairs = x.get("pairs") or []
+        if len(pairs) < 3:
+            out.append({"unit": xid, "check": "assessment", "verdict": "fail",
+                        "detail": "a match task needs structured pairs (3+) so the book can scramble them"})
+        shown = _norm(f"{x.get('stem')} {' '.join(map(str, x.get('options') or []))}")
+        leaked = [p for p in pairs if _norm(p.get("right")) and _norm(p.get("right")) in shown
+                  and _norm(p.get("left")) in shown]
+        if len(leaked) >= 2:
+            out.append({"unit": xid, "check": "assessment", "verdict": "fail",
+                        "detail": f"the stem/options already show {len(leaked)} correct pairings (answer given away)"})
+        rights = [_norm(p.get("right")) for p in pairs]
+        if len(set(rights)) < len(rights):
+            out.append({"unit": xid, "check": "assessment", "verdict": "fail",
+                        "detail": "a match task repeats an answer in column B; that is a sorting task — use distinct "
+                                  "descriptions, or set it as a sort"})
+    if x.get("item_type") == "mcq":
+        opts = [_norm(o) for o in x.get("options") or []]
+        ans = _norm(x.get("answer"))
+        letter = re.fullmatch(r"[a-h]", ans or "")
+        if not opts or not (letter and ord(ans) - 97 < len(opts) or any(ans == o or ans.endswith(o) for o in opts)):
+            out.append({"unit": xid, "check": "assessment", "verdict": "fail",
+                        "detail": f"the answer {x.get('answer')!r} is not one of the options"})
+    for p in x.get("marking_scheme") or []:
+        if len(str(p.get("point") or "").split()) < 4:
+            out.append({"unit": xid, "check": "assessment", "verdict": "fail",
+                        "detail": f"mark point {p.get('point')!r} does not say what earns the mark"})
+    return out
+
+
+def check_exercises(exercises: list[dict], valid_ids: set[str], figure_ids: set[str], nodes: set[str],
+                    photo_ids: set[str] = frozenset(), skills: set[str] = frozenset()) -> list[dict]:
     out = []
+    for x in exercises:
+        out += check_assessment(x)
+        for r in x.get("figure_refs") or []:
+            if r not in figure_ids:
+                out.append({"unit": x.get("xid", "?"), "check": "figure_exists", "verdict": "fail", "detail": f"{r!r}"})
+        if x.get("skill_code") and x["skill_code"] not in skills:
+            out.append({"unit": x.get("xid", "?"), "check": "coverage", "verdict": "warn",
+                        "detail": f"skill {x['skill_code']!r} is not one of {sorted(skills)}"})
+    if len(photo_ids) >= 2 and not any(len(set(x.get("figure_refs") or []) & photo_ids) >= 2 for x in exercises):
+        out.append({"unit": "exercises", "check": "observation", "verdict": "fail",
+                    "detail": "no observation exercise uses two or more of the chapter's real photographs"})
     for x in exercises:
         xid = x.get("xid", "?")
         for f in ("stem", "answer", "worked_solution"):
@@ -71,7 +121,7 @@ def check_exercises(exercises: list[dict], valid_ids: set[str], figure_ids: set[
             out.append({"unit": xid, "check": "source_refs", "verdict": "fail", "detail": f"not in the dossier: {bad}"})
         if x.get("figure_ref") and x["figure_ref"] not in figure_ids:
             out.append({"unit": xid, "check": "figure_exists", "verdict": "fail", "detail": f"{x['figure_ref']!r}"})
-        if not x.get("figure_ref") and DEICTIC.search(str(x.get("stem") or "")):
+        if not x.get("figure_ref") and not x.get("figure_refs") and DEICTIC.search(str(x.get("stem") or "")):
             out.append({"unit": xid, "check": "deictic", "verdict": "fail", "detail": "stem points at a picture it does not have"})
         if x.get("node_code") not in nodes:
             out.append({"unit": xid, "check": "coverage", "verdict": "fail",
@@ -82,10 +132,40 @@ def check_exercises(exercises: list[dict], valid_ids: set[str], figure_ids: set[
     return out
 
 
+def check_extension(sections: list[dict], exercises: list[dict]) -> list[dict]:
+    """The extension box is optional reading and is never assessed: an exercise
+    whose claims are taught ONLY inside the extension fails (ch 1, 2026-10-25:
+    two questions marked the nucleoid). A section may not be extension alone."""
+    ext_refs, core_refs, out = set(), set(), []
+    for s in sections:
+        kinds = {b.get("type") for b in s.get("blocks") or []}
+        if kinds and kinds <= {"extension", "figure"}:
+            out.append({"unit": s.get("sid", "?"), "check": "scope", "verdict": "fail",
+                        "detail": "a section made only of extension material; fold it into a related section"})
+        for b in s.get("blocks") or []:
+            (ext_refs if b.get("type") == "extension" else core_refs).update(
+                r for r in b.get("source_refs") or [] if r.startswith(("claim:", "sec:", "gloss:")))
+    only_ext = ext_refs - core_refs
+    for x in exercises:
+        hit = only_ext & set(x.get("source_refs") or [])
+        if hit:
+            out.append({"unit": x.get("xid", "?"), "check": "assessment", "verdict": "fail",
+                        "detail": f"assesses extension-only content {sorted(hit)}; the extension is never assessed"})
+    return out
+
+
 def check_coverage(sections: list[dict], exercises: list[dict], plan: dict, nodes: set[str]) -> list[dict]:
     taught = {n for s in plan.get("sections", []) for n in s.get("node_codes") or []}
     tested = {x.get("node_code") for x in exercises}
     out = []
+    ext = [b for s in sections for b in s.get("blocks") or [] if b.get("type") == "extension"]
+    if len(ext) > 1:
+        out.append({"unit": "chapter", "check": "scope", "verdict": "fail",
+                    "detail": f"{len(ext)} extension boxes; at most one per chapter"})
+    for b in ext:
+        if len(str(b.get("text") or "").split()) > 90:
+            out.append({"unit": "chapter", "check": "scope", "verdict": "fail",
+                        "detail": f"extension box of {len(str(b.get('text')).split())} words (max 80)"})
     for n in sorted(nodes):
         if n not in taught:
             out.append({"unit": "chapter", "check": "coverage", "verdict": "fail", "detail": f"{n} is taught by no section"})

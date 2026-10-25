@@ -11,6 +11,7 @@ given. Length: 180-450 words of prose in total. Use typed blocks:
   figure          {"type":"figure","ref":"fig:… or asset:…","caption":str}
   think           {"type":"think","text":str}                          // a quick question to the reader; answer inside the text
   list            {"type":"list","items":[str]}
+  extension       {"type":"extension","text":str}                      // optional, ≤80 words: dossier content beyond the objective text; at most one per chapter
 
 Every block has "source_refs": [dossier ids]. Use **bold** for a key word the
 first time it appears. Place a figure block where the text first needs it,
