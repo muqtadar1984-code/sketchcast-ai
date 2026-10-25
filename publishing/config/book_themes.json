@@ -15,13 +15,29 @@
   "themes": {
     "life": {
       "label": "Living world",
-      "brand": "#1f7a4d", "brand_dark": "#145236", "brand_soft": "#e6f3ea", "accent": "#e08a1e",
-      "ink": "#1b2a22", "muted": "#5f6f66", "line": "#cfe0d5", "warn": "#fff3e3", "warn_edge": "#d9821a",
-      "think": "#1f7a4d", "extension": "#eef4ff", "extension_edge": "#9bb6e8",
-      "heading_font": "'Segoe UI Semibold', 'Segoe UI', 'Noto Sans', Arial, sans-serif",
+      "brand": "#2e6b52", "brand_dark": "#1d4a38", "brand_soft": "#e5ede3", "accent": "#c47a3a",
+      "ink": "#1f2a24", "muted": "#5f6b64", "line": "#d6ddd2", "warn": "#f7ebdd", "warn_edge": "#c47a3a",
+      "think": "#2b7a7f", "extension": "#ecf1f4", "extension_edge": "#9fb3bf",
+      "heading_font": "'Sitka Heading', 'Sitka Subheading', Georgia, 'Times New Roman', serif",
       "body_font": "'Segoe UI', 'Noto Sans', Arial, sans-serif",
       "motif": "organic",
-      "image_palette": "natural greens and warm earth tones with soft pink-violet for animal tissue"
+      "image_palette": "natural greens and warm earth tones with soft pink-violet for animal tissue",
+      "page": {
+        "notes": "Final Biology design, chosen 2026-10-25 under the founder's delegation (local only). Warm ivory paper, forest/sage with teal and ochre accents, serif display headings over a clean sans body, stepped thumb-index tabs.",
+        "paper": "#faf6ec",
+        "paper_deep": "#f3eedf",
+        "sage": "#8fae98",
+        "trim": {"width_mm": 210, "height_mm": 297},
+        "bleed_mm": 3,
+        "margins_mm": {"top": 21, "bottom": 22, "inner": 23, "outer": 19},
+        "body_size_pt": 10.5, "body_leading": 1.55,
+        "tab": {"width_mm": 8, "height_mm": 24, "first_top_mm": 46, "step_mm": 26, "fill": "#2e6b52", "text": "#faf6ec"},
+        "running_head": {"verso": "work", "recto": "chapter", "rule": "#cfd8cc"},
+        "folio": {"position": "outer", "font": "'Sitka Small', Georgia, serif"},
+        "opener": {"numeral": "outline", "hero": true, "objectives": true, "contents": true},
+        "practice": {"new_page": true, "answer_lines": true, "line_pitch_mm": 8.5},
+        "answers": {"new_page": true, "columns": 2}
+      }
     },
     "chemistry": {
       "label": "Matter and change",

@@ -43,7 +43,8 @@ def diagnose(pdf_path: str) -> dict:
                 a, b = spans[a_i]["bbox"], spans[b_i]["bbox"]
                 ox = min(a[2], b[2]) - max(a[0], b[0])
                 oy = min(a[3], b[3]) - max(a[1], b[1])
-                if ox > 2 and oy > 3:
+                same = spans[a_i]["text"] == spans[b_i]["text"] and max(abs(u - v) for u, v in zip(a, b)) < 2
+                if ox > 2 and oy > 3 and not same:   # a stroke drawn over its own fill is one glyph run
                     hard.append({"page": i, "check": "text overlaps text",
                                  "detail": f"{spans[a_i]['text'][:30]!r} / {spans[b_i]['text'][:30]!r}"})
         for tb in text_boxes:
@@ -57,7 +58,10 @@ def diagnose(pdf_path: str) -> dict:
         pix = page.get_pixmap(dpi=36, colorspace=fitz.csGRAY)
         rows = [pix.samples[r * pix.stride:r * pix.stride + pix.width] for r in range(pix.height)]
         top, bottom = int(pix.height * 0.07), int(pix.height * 0.93)
-        blank = sum(1 for r in rows[top:bottom] if min(r) > 245) / max(1, bottom - top)
+        # 'no ink' is measured against the page's own paper (ivory, tinted bands), not white
+        from collections import Counter
+        paper = Counter(v for r in rows[top:bottom] for v in r).most_common(1)[0][0]
+        blank = sum(1 for r in rows[top:bottom] if min(r) >= paper - 10) / max(1, bottom - top)
         pages.append({"page": i, "unused_share": round(blank, 2), "images": imgs, "text_blocks": len(text_boxes)})
     return {"pages": pages, "hard": hard, "warnings": warn, "page_count": len(doc)}
 

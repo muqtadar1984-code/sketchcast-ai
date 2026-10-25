@@ -43,6 +43,56 @@ def _download(http, base: str, path: str) -> bytes:
     return r.content
 
 
+def matte(png: bytes, tol: int = 24) -> bytes | None:
+    """A generated illustration on a plain light background → the same picture
+    with a TRANSPARENT background (founder 2026-10-25: no white rectangles on
+    tinted paper; never a global blend mode that shifts colours). The
+    background colour is sampled at the corners; only background CONNECTED to
+    the border is removed (a light area inside the subject stays), and the edge
+    is feathered. Returns None when the matte is not trustworthy (too little or
+    too much removed), so the caller keeps the original. Photos never come here."""
+    import io
+    from PIL import Image, ImageChops, ImageDraw, ImageFilter
+    im = Image.open(io.BytesIO(png)).convert("RGB")
+    w, h = im.size
+    k = max(4, w // 64)
+    corners = [im.crop(b).resize((1, 1), Image.Resampling.BOX).getpixel((0, 0))
+               for b in ((0, 0, k, k), (w - k, 0, w, k), (0, h - k, k, h), (w - k, h - k, w, h))]
+    bg = tuple(sorted(c[i] for c in corners)[len(corners) // 2] for i in range(3))
+    if min(bg) < 200:
+        return None                                     # not a light plain background
+    import numpy as np
+    a = np.asarray(im).astype(np.float32)
+    bgv = np.array(bg, dtype=np.float32)
+    dist = np.abs(a - bgv).max(axis=2)
+    mx, mn = a.max(axis=2), a.min(axis=2)
+    sat = (mx - mn) / np.maximum(mx, 1)
+    # the background family: close to the paper colour, or a soft shadow /
+    # gradient of it (light and nearly grey)
+    fam = (dist < tol) | ((sat < 0.10) & (dist < 70) & (mx > 150))
+    near = Image.fromarray((fam * 255).astype(np.uint8)).copy()   # writable: fromarray shares a read-only buffer
+    seeds = [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1), (w // 2, 0), (w // 2, h - 1), (0, h // 2), (w - 1, h // 2)]
+    for s in seeds:
+        if near.getpixel(s) == 255:
+            ImageDraw.floodfill(near, s, 128, thresh=0)
+    region = np.asarray(near) == 128                     # background CONNECTED to the border only
+    share = float(region.mean())
+    if not 0.12 < share < 0.95:
+        return None
+    # difference matte: inside that region a pixel is as opaque as it is
+    # different from the paper, so a shadow becomes a real soft shadow and the
+    # picture looks unchanged on a paper of the same tone
+    alpha = np.ones((h, w), dtype=np.float32)
+    alpha[region] = np.clip(dist[region] / 70.0, 0, 1) ** 0.9
+    alpha = np.asarray(Image.fromarray((alpha * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(0.8))) / 255.0
+    safe = np.maximum(alpha, 1e-3)[..., None]
+    rgb = np.clip((a - (1 - alpha[..., None]) * bgv) / safe, 0, 255)    # un-premultiply: colours stay true
+    out = np.dstack([rgb, alpha * 255]).astype(np.uint8)
+    buf = io.BytesIO()
+    Image.fromarray(out, "RGBA").save(buf, "PNG", optimize=True)
+    return buf.getvalue()
+
+
 def asset_bytes(http, base: str, asset: dict) -> bytes:
     """A library asset from storage, or a book asset from the local store."""
     if asset.get("local_path"):
@@ -102,9 +152,6 @@ def figure_svg(png: bytes, vision: dict, labels: list[str]) -> tuple[str, list[s
 
 
 CSS = """
-@page { size: A4; margin: 18mm 17mm 20mm;
-  @top-right { font: 8pt 'Segoe UI', Arial, sans-serif; color: #8a94a6; }
-  @bottom-center { content: counter(page); font: 9pt 'Segoe UI', Arial, sans-serif; color: #5b6475; } }
 figure.place { margin: 2pt 0 8pt; break-inside: avoid; background: #fff; }
 .box, .watch, .ex { display: flow-root; }   /* a box sits BESIDE a floated figure, never under it */
 figure.place svg { width: 100%; height: auto; display: block; }
@@ -238,6 +285,10 @@ def _group(b: dict, figs: dict) -> str:
         f = figs[items[i]["ref"]]
         cid = f"c{abs(hash((items[i]['ref'], cx, cy))) % 10**8}"
         clip_el = (f'<clipPath id="{cid}"><circle cx="{cx}" cy="{cy}" r="{clip}"/></clipPath>' if clip else "")
+        if f.get("kind") == "photo" and not clip:
+            # a print-style mount for a photograph: white border, hairline edge
+            clip_el += (f'<rect x="{cx - w / 2 - 5:.0f}" y="{cy - h / 2 - 5:.0f}" width="{w + 10}" height="{h + 10}" '
+                        f'fill="#fff" stroke="#cfd6cc" stroke-width="0.8" rx="2"/>')
         return (clip_el + f'<image href="{f["img"]}" x="{cx - w / 2:.0f}" y="{cy - h / 2:.0f}" width="{w}" height="{h}" '
                 f'preserveAspectRatio="xMidYMid meet"' + (f' clip-path="url(#{cid})"' if clip else "") + "/>")
 
@@ -268,7 +319,7 @@ def _group(b: dict, figs: dict) -> str:
             out.append(f'<path class="rel" d="M{cx},{30 + ih + 30} L{cx},{ty - circ / 2 - 4}" marker-end="url(#ah)"/>')
             if r.get("label"):
                 out.append(f'<rect x="{cx - cw / 2 + 12}" y="{30 + ih + 34 + gap / 2 - 13}" width="{cw - 24}" '
-                           f'height="{18 if len(r["label"]) <= label_chars + 6 else 32}" fill="#fff"/>')
+                           f'height="{18 if len(r["label"]) <= label_chars + 6 else 32}" style="fill:var(--paper,#fff)"/>')
                 out.append(lines(r["label"], "gs", cx, 30 + ih + 34 + gap / 2, label_chars + 6))
             out.append(pic(t, cx, ty, circ, circ, clip=circ / 2 - 2 if zoom else None))
             if zoom:
@@ -280,8 +331,10 @@ def _group(b: dict, figs: dict) -> str:
     # pictures need (≈30% each), never stretched to the full measure (ch 1:
     # two photos blown up to full width pushed a page break and left half a page empty)
     cap = "" if rel else f' style="max-width:{min(100, 32 * len(items))}%;margin-left:auto;margin-right:auto"'
-    return (f'<figure class="{_place(b)} group"{cap}>{"".join(out)}<figcaption>{md(b.get("caption"))}{credits}'
-            f'</figcaption></figure>')
+    num = f'<span class="fignum">{b["_fig"]}</span> ' if b.get("_fig") else ""
+    photos = all(figs[i["ref"]].get("kind") == "photo" for i in items)
+    return (f'<figure class="{_place(b)} group{" photo" if photos else ""}"{cap}>{"".join(out)}<figcaption>{num}'
+            f'{md(b.get("caption"))}{credits}</figcaption></figure>')
 
 
 def _block(b: dict, figs: dict) -> str:
@@ -314,8 +367,9 @@ def _block(b: dict, figs: dict) -> str:
             return f'<div class="gap">Figure {html.escape(str(b.get("ref")))} is missing.</div>'
         miss = (f'<div class="missing-labels">Labels with no detected region (not placed): '
                 f'{html.escape(", ".join(f["unplaced"]))}</div>' if f["unplaced"] else "")
-        return (f'<figure class="{_place(b)}">{f["svg"]}<figcaption>{md(b.get("caption") or f["caption"])}'
-                f'{_credit(f)}</figcaption>{miss}</figure>')
+        num = f'<span class="fignum">{b["_fig"]}</span> ' if b.get("_fig") else ""
+        return (f'<figure class="{_place(b)} {f.get("kind", "illustration")}">{f["svg"]}<figcaption>{num}'
+                f'{md(b.get("caption") or f["caption"])}{_credit(f)}</figcaption>{miss}</figure>')
     return f"<p>{md(json.dumps(b))}</p>"
 
 
@@ -353,6 +407,7 @@ def _figures(doc: dict, dossier: dict, env_file: Path) -> dict:
                                                   (a["description"] or "").strip()), maxsplit=1)[0]
         parts = [] if a.get("kind") == "photo" else [p for p in a["parts"] if _norm(p) and _norm(p) in talk]
         src[a["id"]] = (a["_asset"], parts, first, a.get("credit"))
+    kinds = {a["id"]: ("photo" if a.get("kind") == "photo" else "illustration") for a in dossier["library_assets"]}
     url, key = load_env(env_file)
     out = {}
     with client(url, key) as http:
@@ -361,10 +416,48 @@ def _figures(doc: dict, dossier: dict, env_file: Path) -> dict:
                 continue
             asset, labels, caption, credit = src[ref]
             png = asset_bytes(http, url, asset)
-            svg, unplaced = figure_svg(png, asset.get("vision") or {"w": 1, "h": 1}, labels)
-            out[ref] = {"svg": svg, "unplaced": unplaced, "caption": caption, "credit": credit,
-                        "img": "data:image/png;base64," + base64.b64encode(png).decode()}
+            kind = kinds.get(ref, "illustration")
+            # illustrations are matted onto the paper; a photograph is never altered
+            shown = (matte(png) or png) if kind == "illustration" else png
+            svg, unplaced = figure_svg(shown, asset.get("vision") or {"w": 1, "h": 1}, labels)
+            out[ref] = {"svg": svg, "unplaced": unplaced, "caption": caption, "credit": credit, "kind": kind,
+                        "img": "data:image/png;base64," + base64.b64encode(shown).decode()}
     return out
+
+
+def hero_image(slug: str, chapter: int) -> str | None:
+    """The chapter opener's artwork: the local book asset `book:hero_chNN`
+    (made through the same publisher-grade style system), matted. None when the
+    book has none — the opener then stands on typography alone."""
+    try:
+        from publishing import localdb
+        conn = localdb.connect()
+        row = conn.execute("select path from pub.book_assets where key=%s", (f"book:hero_ch{chapter:02d}",)).fetchone()
+    except Exception:  # noqa: BLE001 — the opener must render without a database
+        return None
+    if not row or not Path(row["path"]).exists():
+        return None
+    png = Path(row["path"]).read_bytes()
+    return "data:image/png;base64," + base64.b64encode(_vignette(matte(png) or png)).decode()
+
+
+def _vignette(png: bytes, start: float = 0.62) -> bytes:
+    """Fade a picture's edges to transparent in its own alpha, so the hero
+    melts into the opener band. Baked into the pixels: a CSS mask would print
+    as a 72 dpi raster."""
+    import io
+    import numpy as np
+    from PIL import Image
+    im = Image.open(io.BytesIO(png)).convert("RGBA")
+    a = np.asarray(im).copy()
+    h, w = a.shape[:2]
+    y, x = np.ogrid[:h, :w]
+    r = np.sqrt(((x - w / 2) / (w / 2)) ** 2 + ((y - h / 2) / (h / 2)) ** 2)
+    fade = np.clip((1.0 - r) / (1.0 - start), 0, 1)
+    a[..., 3] = (a[..., 3] * fade).astype(np.uint8)
+    out = io.BytesIO()
+    Image.fromarray(a).save(out, "PNG")
+    return out.getvalue()
 
 
 def _photo_row(refs: list[str], figs: dict, context: dict | None = None) -> str:
@@ -413,51 +506,230 @@ def _sort(x: dict) -> tuple[str, str]:
     return q, key
 
 
-def chapter_html(doc: dict, figs: dict) -> str:
+BOOK_CSS = """
+/* ── editorial system: every colour and face comes from the theme's tokens ── */
+html { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+body { color: var(--ink); font-family: var(--bfont); }
+h1, h2, h3, .op-numeral, .op-title { font-family: var(--hfont); }
+p { margin: 0 0 6.5pt; orphans: 3; widows: 3; }
+strong { color: var(--brand-dark); }
+
+/* chapter opener — its own page */
+.opener { break-after: page; position: relative; min-height: 238mm; }
+.op-head { display: grid; grid-template-columns: 1fr 46%; gap: 4mm; align-items: center; height: 96mm; }
+.op-kicker { font: 600 8pt var(--bfont); letter-spacing: .22em; text-transform: uppercase; color: var(--brand); }
+.op-numeral { display: block; width: 42mm; height: 27mm; margin: 8mm 0 3mm; overflow: visible; }
+.op-title { font-size: 30pt; line-height: 1.08; color: var(--brand-dark); margin: 0 0 3mm; font-weight: 600; }
+.op-meta { font-size: 8.6pt; color: var(--muted); letter-spacing: .02em; }
+.op-meta .chip { display: inline-block; border: .8pt solid var(--line); border-radius: 10pt; padding: 0 6pt; margin: 0 4pt 3pt 0;
+  background: rgba(255,255,255,.55); }
+.op-hero { width: 100%; height: auto; display: block; }
+.op-intro { font: italic 12.2pt/1.55 var(--hfont); color: var(--ink); margin: 14mm 0 7mm; padding-left: 4mm;
+  border-left: 2.2pt solid var(--accent); }
+.op-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; margin-bottom: 5mm; }
+.op-card { background: rgba(255,255,255,.6); border: .8pt solid var(--line); border-radius: 5pt; padding: 4mm 5mm; font-size: 9.6pt; }
+.op-card h4 { margin: 0 0 2mm; font: 600 8pt var(--bfont); letter-spacing: .16em; text-transform: uppercase; color: var(--brand); }
+.op-card ol { margin: 0; padding: 0; list-style: none; } .op-card li { margin: 0 0 1.4mm; display: grid; grid-template-columns: 9mm 1fr; }
+.op-card li .sn { display: block; color: var(--brand); font-weight: 600; }
+.op-card .code { font-weight: 700; color: var(--brand-dark); margin-right: 3pt; }
+.op-words { margin-top: 5mm; } .op-words h4 { margin: 0 0 2mm; font: 600 8pt var(--bfont); letter-spacing: .16em; text-transform: uppercase; color: var(--brand); }
+.op-words span { display: inline-block; margin: 0 2mm 2mm 0; padding: .6mm 3mm; border-radius: 10pt; background: var(--soft); color: var(--brand-dark); font-size: 9.4pt; }
+a { color: var(--brand); text-decoration-color: var(--line); }
+
+/* sections */
+h2 { font-size: 17pt; font-weight: 600; color: var(--brand-dark); margin: 9mm 0 3mm; padding: 0; border: none;
+  break-after: avoid; display: flex; align-items: baseline; gap: 3mm; clear: both; }
+h2 .sn { font: 600 10pt var(--bfont); color: #fff; background: var(--brand); border-radius: 3pt; padding: 1pt 5pt; position: relative; top: -2pt; }
+h2:after { content: ""; flex: 1; border-bottom: .6pt solid var(--line); margin-left: 2mm; position: relative; top: -3pt; }
+h3 { font: 600 9pt var(--bfont); letter-spacing: .18em; text-transform: uppercase; color: var(--brand); margin: 6mm 0 2mm; }
+
+/* callouts */
+.box { border-radius: 4pt; padding: 3mm 4.5mm; margin: 3.5mm 0; break-inside: avoid; }
+.key_term { background: var(--soft); border-left: 2.6pt solid var(--brand); }
+.key_term strong { font-variant: small-caps; letter-spacing: .03em; font-size: 1.05em; }
+.key_idea { background: rgba(255,255,255,.55); border: .8pt solid var(--line); border-left: 2.6pt solid var(--accent); font-weight: 600; }
+.key_idea:before { content: "Key idea"; display: block; font: 600 7.4pt var(--bfont); letter-spacing: .18em; text-transform: uppercase; color: var(--accent); margin-bottom: 1mm; }
+.misconception { background: var(--warn); border-left: 2.6pt solid var(--warn-edge); }
+.misconception .tag { color: var(--warn-edge); font-weight: 600; letter-spacing: .16em; }
+.misconception .wrong { text-decoration: line-through; text-decoration-color: var(--warn-edge); color: #7a5536; }
+.think { border: 1pt dashed var(--think); background: rgba(255,255,255,.35); padding-left: 12mm; position: relative; }
+.think:before { content: "?"; position: absolute; left: 3.5mm; top: 3mm; width: 6mm; height: 6mm; border-radius: 50%;
+  background: var(--think); color: #fff; font: 700 9pt/6mm var(--hfont); text-align: center; }
+.think strong:first-child { color: var(--think); }
+.extension { background: var(--ext); border: .8pt solid var(--ext-edge); font-size: 9.6pt; }
+.extension .tag { color: #5d7280; }
+.watch { background: rgba(255,255,255,.6); border: .8pt solid var(--line); border-left: 2.6pt solid var(--think); border-radius: 4pt;
+  padding: 2.5mm 4.5mm; font-size: 9.4pt; }
+
+/* figures */
+figure.place { background: transparent; }
+figcaption { font: 8.6pt/1.4 var(--bfont); color: var(--muted); text-align: left; margin-top: 2mm; }
+figcaption .fignum { font-weight: 700; color: var(--brand-dark); letter-spacing: .03em; margin-right: 2pt; }
+figure.photo > svg { background: #fff; padding: 1.4mm; border: .6pt solid #cfd6cc; border-radius: 2pt;
+  box-shadow: 0 .8pt 2.6pt rgba(40,50,40,.18); box-sizing: border-box; }
+figure.group.photo > svg { background: transparent; padding: 0; border: none; box-shadow: none; }
+.credit { font-size: 7.2pt; color: #8b958e; }
+
+/* practice — its own pages: calm, numbered, room to write */
+.practice { break-before: page; }
+.practice-head { border-bottom: 1.2pt solid var(--brand); margin-bottom: 4mm; padding-bottom: 2mm; }
+.practice-head h2 { margin: 0; } .practice-head h2:after { display: none; }
+.practice-head p { margin: 1mm 0 0; color: var(--muted); font-size: 9.4pt; }
+.tier { display: flex; align-items: center; gap: 2.5mm; margin: 6mm 0 2.5mm; font: 600 9pt var(--bfont);
+  letter-spacing: .14em; text-transform: uppercase; color: var(--brand); }
+.tier .dots { letter-spacing: 1pt; color: var(--accent); }
+.ex { margin: 0 0 5mm; break-inside: avoid; }
+.ex .q { display: grid; grid-template-columns: 9mm 1fr auto; gap: 0 1mm; }
+.ex .qn { font: 700 10pt var(--hfont); color: var(--brand); }
+.ex .marks { color: var(--muted); font-size: 8.4pt; white-space: nowrap; padding-left: 3mm; }
+.ex ol.opts { columns: 2; column-gap: 8mm; list-style: upper-alpha; margin: 1.5mm 0 0 15mm; padding: 0; }
+.ex ol.opts li { break-inside: avoid; margin-bottom: 1mm; }
+.ex .body { margin-left: 10mm; }
+.lines { margin: 2mm 0 0 10mm; }
+.lines i { display: block; height: calc(var(--pitch) - .6pt); border-bottom: .6pt solid #c3ccc0; }
+.blank { display: inline-block; min-width: 32mm; border-bottom: .8pt solid #9fab9f; }
+
+/* answers — same identity, compact, two columns */
+.answers { break-before: page; }
+.answers .cols { columns: 2; column-gap: 8mm; column-rule: .5pt solid var(--line); font-size: 9pt; line-height: 1.45; }
+.answers .ans { break-inside: avoid; margin: 0 0 3.2mm; }
+.answers .ans .an { font-weight: 700; color: var(--brand); }
+.answers .ans .key { font-weight: 600; color: var(--brand-dark); }
+.answers .ans { color: #33403a; }
+.answers .ans ul { margin: 1mm 0 0; padding-left: 4mm; } .answers .ans li { margin: 0; }
+.answers h3 { column-span: all; }
+.credits { column-span: all; font-size: 7.6pt; color: var(--muted); margin-top: 6mm; border-top: .6pt solid var(--line); padding-top: 2mm; }
+.credits ul { margin: 1mm 0 0; padding-left: 4mm; }
+"""
+
+
+def _pretty_curriculum(code: str) -> str:
+    """'cambridge_ls_science_0893' → 'Cambridge Lower Secondary Science (0893)'."""
+    words = str(code or "").split("_")
+    names = {"cambridge": "Cambridge", "ls": "Lower Secondary", "cbse": "CBSE", "igcse": "IGCSE"}
+    num = words[-1] if words and words[-1].isdigit() else ""
+    body = " ".join(names.get(w, w.capitalize()) for w in (words[:-1] if num else words))
+    return f"{body} ({num})" if num else body
+
+
+def _key_words(doc: dict) -> str:
+    """The chapter's vocabulary for the opener, in reading order: its key-term
+    boxes and the words its paragraphs set in bold. Navigation only — nothing
+    is written here that the chapter does not already say."""
+    import re
+    seen, words = set(), []
+    for s in doc["sections"]:
+        for b in s.get("blocks") or []:
+            if b.get("type") == "key_term" and b.get("term"):
+                found = [b["term"]]
+            elif b.get("type") == "paragraph":
+                found = re.findall(r"\*\*([^*]{2,40})\*\*", b.get("text") or "")
+            else:
+                found = []
+            for w in found:
+                # emphasis is not vocabulary: adverbs ('typically') stay in the text only
+                if w.lower().endswith("ly") or " " not in w and any(w.lower() in x.lower() for x in words):
+                    continue
+                if w.lower().rstrip("s") not in seen:
+                    seen.add(w.lower().rstrip("s"))
+                    words.append(w)
+    if not words:
+        return ""
+    return '<div class="op-words"><h4>Key words</h4>' + "".join(f"<span>{html.escape(w)}</span>" for w in words) + "</div>"
+
+
+def _lines(x: dict, pitch: float) -> str:
+    """Writing space sized to the marks (practice pages keep room to work)."""
+    if x.get("item_type") not in ("short_answer", "long_answer"):
+        return ""
+    marks = int(x.get("marks") or 1)
+    n = max(3, marks * 2 + (1 if x.get("item_type") == "long_answer" else 0))
+    return f'<div class="lines" style="--pitch:{pitch}mm">' + "<i></i>" * n + "</div>"
+
+
+def chapter_html(doc: dict, figs: dict, edition: str = "digital") -> str:
+    from publishing.manuscript.theme import css_vars, for_work, page, page_css
     ch, w = doc["chapter"], doc["work"]
-    from publishing.manuscript.theme import css_vars, for_work, motif_svg
     theme = for_work(w["slug"])
-    running = f'Chapter {ch["number"]} · {ch["title"]}'.replace('"', "'")
-    body = [f'<div class="chapter-head">{motif_svg(theme)}<div class="num">Chapter {ch["number"]}</div>'
-            f'<h1>{md(ch["title"])}</h1>'
-            f'<div class="meta">{md(w["title"])} · ages {md(w["age_band"])} · Cambridge Lower Secondary '
-            f'{", ".join(ch["node_codes"])}</div></div>', f'<p class="opening">{md(doc["plan"].get("opening"))}</p>']
+    pg = page(theme)
+    n = ch["number"]
+    subject = str(w["title"]).split(":")[0].strip()
+    # numbering: sections n.1 …, figures n.1 … in reading order
+    fig_no = 0
+    for s in doc["sections"]:
+        for b in s.get("blocks") or []:
+            if b.get("type") in ("figure", "figure_group"):
+                fig_no += 1
+                b["_fig"] = f"Figure {n}.{fig_no}"
+    body = []
+    # ── opener ──────────────────────────────────────────────────────────────
+    hero = hero_image(w["slug"], n) if pg["opener"].get("hero") else None
+    objectives = "".join(f'<p><span class="code">{html.escape(o["code"])}</span>{md(o["text"])}</p>'
+                         for o in ch.get("objectives") or [])
+    contents = "".join(f'<li><span class="sn">{n}.{i}</span>{md(s["heading"])}</li>'
+                       for i, s in enumerate(doc["sections"], 1))
+    video = ""
     if doc.get("videos"):
         links = " · ".join(f'<a href="https://www.youtube.com/watch?v={v.split(":", 1)[1]}">'
                            f'youtube.com/watch?v={v.split(":", 1)[1]}</a>' for v in doc["videos"])
-        body.append(f'<div class="watch"><strong>Watch the SketchCast lesson on this topic:</strong> {links}</div>')
+        video = f'<div class="watch"><strong>Watch the lesson</strong> on the SketchCast channel: {links}</div>'
+    stage = sorted({o["code"][0] for o in ch.get("objectives") or [] if o["code"][:1].isdigit()})
+    chips = [f'<span class="chip">{html.escape(_pretty_curriculum(w.get("curriculum")))}</span>']
+    if stage:
+        chips.append(f'<span class="chip">Stage {", ".join(stage)}</span>')
+    chips.append(f'<span class="chip">Ages {html.escape(str(w.get("age_band")).replace("-", "–"))}</span>')
+    body.append(
+        '<section class="opener"><div class="op-head"><div>'
+        f'<div class="op-kicker">{html.escape(subject)} · Chapter {n}</div>'
+        f'<svg class="op-numeral" viewBox="0 0 120 77"><text x="0" y="70" font-family="{html.escape(theme["heading_font"])}" '
+        f'font-size="92" font-weight="700" fill="none" stroke="{theme["brand"]}" stroke-width="1.8">{n:02d}</text></svg>'
+        f'<h1 class="op-title">{md(ch["title"])}</h1>'
+        f'<div class="op-meta">{"".join(chips)}</div></div>'
+        + (f'<div><img class="op-hero" src="{hero}" alt=""></div>' if hero else "<div></div>") + "</div>"
+        f'<p class="op-intro">{md(doc["plan"].get("opening"))}</p>'
+        '<div class="op-cards">'
+        + (f'<div class="op-card"><h4>Learning objective</h4>{objectives}</div>' if pg["opener"].get("objectives") else "")
+        + (f'<div class="op-card"><h4>In this chapter</h4><ol>{contents}</ol></div>' if pg["opener"].get("contents") else "")
+        + f'</div>{video}{_key_words(doc)}</section>')
+    # ── teaching sections ───────────────────────────────────────────────────
     thinks = []
-    for s in doc["sections"]:
-        body.append(f"<h2>{md(s['heading'])}</h2>")
+    for i, s in enumerate(doc["sections"], 1):
+        body.append(f'<h2><span class="sn">{n}.{i}</span>{md(s["heading"])}</h2>')
         for b in s.get("blocks") or []:
             if b.get("type") == "think" and b.get("answer"):
-                thinks.append((s["heading"], b))
+                thinks.append(b)
             body.append(_block(b, figs))
-    body.append("<h2>Practice</h2>")
-    for tier, name in (("guided", "Getting started"), ("independent", "On your own"), ("challenge", "Challenge")):
+    # ── practice ────────────────────────────────────────────────────────────
+    pitch = pg["practice"].get("line_pitch_mm", 8.5)
+    body.append('<section class="practice"><div class="practice-head"><h2>Practice</h2>'
+                '<p>Work through the questions in order. The answers and worked solutions are at the end of the chapter.</p></div>')
+    tiers = (("guided", "Getting started", "●○○"), ("independent", "On your own", "●●○"), ("challenge", "Challenge", "●●●"))
+    for tier, name, dots in tiers:
         xs = [x for x in doc["exercises"] if x.get("tier") == tier]
         if not xs:
             continue
-        body.append(f"<h3>{name}</h3>")
+        body.append(f'<div class="tier"><span class="dots">{dots}</span>{name}</div>')
         for x in xs:
             if x.get("item_type") == "match" and x.get("pairs"):
-                opts, _ = _match(x)
+                extra, _ = _match(x)
             elif x.get("item_type") == "sort" and x.get("items"):
-                opts, _ = _sort(x)
+                extra, _ = _sort(x)
             else:
-                opts = ("<ol class='opts'>" + "".join(f"<li>{md(o)}</li>" for o in x["options"]) + "</ol>"
-                        if x.get("options") else "")
-            # a question's pictures print as tiles with what the question says about
-            # them, never with a caption (a caption can give the answer away)
+                extra = ("<ol class='opts'>" + "".join(f"<li>{md(o)}</li>" for o in x["options"]) + "</ol>"
+                         if x.get("options") else "")
             refs = ([x["figure_ref"]] if x.get("figure_ref") else []) + list(x.get("figure_refs") or [])
-            fig = _photo_row(refs, figs, x.get("figure_context"))
-            body.append(f'<div class="ex"><strong>{x["xid"].upper()}.</strong> {md(x["stem"])} '
-                        f'<span class="marks">[{x.get("marks")}]</span>{opts}{fig}</div>')
-    body.append('<div class="answers"><h2>Answers and worked solutions</h2>')
+            pics = _photo_row(refs, figs, x.get("figure_context"))
+            stem = md(x["stem"]).replace("____", '<span class="blank"></span>')
+            lines = _lines(x, pitch) if pg["practice"].get("answer_lines") else ""
+            body.append(f'<div class="ex"><div class="q"><span class="qn">{x["xid"].upper()}</span><span>{stem}</span>'
+                        f'<span class="marks">[{x.get("marks")}]</span></div><div class="body">{extra}{pics}</div>{lines}</div>')
+    body.append("</section>")
+    # ── answers ─────────────────────────────────────────────────────────────
+    body.append('<section class="answers"><h2>Answers and worked solutions</h2><div class="cols">')
     if thinks:
-        body.append('<h3>Think about it</h3><ol class="think-answers">' +
-                    "".join(f'<li><em>{md(b.get("text"))}</em><br>{md(b.get("answer"))}</li>' for _, b in thinks) +
-                    "</ol><h3>Practice</h3>")
+        body.append("<h3>Think about it</h3>" + "".join(
+            f'<div class="ans"><em>{md(b.get("text"))}</em><br>{md(b.get("answer"))}</div>' for b in thinks))
+        body.append("<h3>Practice</h3>")
     for x in doc["exercises"]:
         if x.get("item_type") == "match" and x.get("pairs"):
             answer = _match(x)[1]
@@ -467,16 +739,16 @@ def chapter_html(doc: dict, figs: dict) -> str:
             answer = md(x["answer"])
         scheme = "".join(f'<li>{md(p.get("point"))} <span class="marks">({p.get("marks")})</span></li>'
                          for p in x.get("marking_scheme") or [])
-        body.append(f'<div class="ex"><strong>{x["xid"].upper()}.</strong> <strong>{answer}</strong><br>'
-                    f'{md(x.get("worked_solution"))}<div class="marks">Mark scheme:</div><ul>{scheme}</ul></div>')
-    body.append("</div>")
+        body.append(f'<div class="ans"><span class="an">{x["xid"].upper()}</span> <span class="key">{answer}</span><br>'
+                    f'{md(x.get("worked_solution"))}<ul>{scheme}</ul></div>')
     credits = sorted({credit_line(c) for f in figs.values() if (c := f.get("credit"))})
     if credits:
-        body.append('<div class="credits"><strong>Picture credits.</strong><ul>' +
-                    "".join(f"<li>{c}</li>" for c in credits) + "</ul></div>")
-    page_style = f'@page {{ @top-right {{ content: "{html.escape(running)}"; }} }} @page :first {{ @top-right {{ content: none; }} }}'
+        body.append('<div class="credits"><strong>Picture credits.</strong> Generated illustrations are original '
+                    'SketchCast artwork. Photographs:<ul>' + "".join(f"<li>{c}</li>" for c in credits) + "</ul></div>")
+    body.append("</div></section>")
+    css = css_vars(theme) + CSS + BOOK_CSS + page_css(theme, n, ch["title"], w["title"], edition)
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'><title>{html.escape(ch['title'])}</title>"
-            f"<style>{css_vars(theme)}{CSS}{page_style}</style></head><body>{''.join(body)}</body></html>")
+            f"<style>{css}</style></head><body>{''.join(body)}</body></html>")
 
 
 def review_html(doc: dict) -> str:
@@ -568,6 +840,24 @@ def _print(page: Path, pdf: Path) -> Path:
         return alt
 
 
+def _underlay(pdf: Path, slug: str, chapter: int, edition: str) -> None:
+    """Put the theme's page art (paper, tab, opener band, head rule) beneath
+    every page: page 1 is the opener, then versos on even and rectos on odd
+    folios. Vector in, vector out; the text layer is untouched."""
+    import fitz
+    from publishing.manuscript.theme import backgrounds, for_work
+    art = {k: fitz.open(stream=fitz.open("svg", stream=v).convert_to_pdf(), filetype="pdf")
+           for k, v in backgrounds(for_work(slug), chapter, edition).items()}
+    doc = fitz.open(pdf)
+    for i, page in enumerate(doc, 1):
+        page.show_pdf_page(page.rect, art["first" if i == 1 else "verso" if i % 2 == 0 else "recto"], 0, overlay=False)
+    tmp = pdf.with_name(pdf.stem + ".underlay.pdf")
+    doc.save(tmp, garbage=3, deflate=True)
+    doc.close()
+    import os
+    os.replace(tmp, pdf)
+
+
 def _layout_score(diag: dict) -> float:
     """Lower is better: hard defects dominate; then dead space on pages other
     than the last beyond a generous allowance (whitespace is a signal, so only
@@ -612,6 +902,12 @@ def render(doc: dict, dossier: dict, env_file: Path, out_dir: Path) -> dict:
     best = min(tried, key=lambda t: t[0])
     page.write_text(chapter_html(best[2], figs), encoding="utf-8")
     pdf = _print(page, pdf)
+    _underlay(pdf, doc["work"]["slug"], n, "digital")
+    # the print edition: same pages, trim + bleed, tabs running into the bleed
+    print_page = out_dir / f"ch{n:02d}-print.html"
+    print_page.write_text(chapter_html(best[2], figs, edition="print"), encoding="utf-8")
+    print_pdf = _print(print_page, out_dir / f"ch{n:02d}-print.pdf")
+    _underlay(print_pdf, doc["work"]["slug"], n, "print")
     doc["layout_choice"] = {"chosen": best[1], "candidates": [(name, round(score, 3)) for score, name, _ in tried]}
     packet = out_dir / f"ch{n:02d}-gate-d-review.html"
     packet.write_text(review_html(doc), encoding="utf-8")
@@ -620,5 +916,5 @@ def render(doc: dict, dossier: dict, env_file: Path, out_dir: Path) -> dict:
     packet.write_text(review_html(doc).replace("</body></html>", report_html(diag) + "</body></html>"),
                       encoding="utf-8")
     (out_dir / f"ch{n:02d}-diagnostics.json").write_text(json.dumps(diag, indent=1), encoding="utf-8")
-    return {"html": str(page), "pdf": str(pdf), "review": str(packet), "hard_defects": len(diag["hard"]),
+    return {"html": str(page), "pdf": str(pdf), "print_pdf": str(print_pdf), "review": str(packet), "hard_defects": len(diag["hard"]),
             "pages": diag["page_count"]}

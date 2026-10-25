@@ -119,3 +119,33 @@ def test_image_style_is_chosen_by_genre_not_subject():
     assert {"natural_history", "scientific_3d", "apparatus", "process", "never_generate"} <= set(s["genres"])
     p = B.prompt_for("a ripple tank", "apparatus", {"image_palette": "deep blues"})
     assert s["genres"]["apparatus"]["style"] in p and "deep blues" in p and "no text" in p.lower()
+
+
+def test_page_design_is_token_driven_and_print_has_bleed():
+    from publishing.manuscript.theme import backgrounds, for_work, page, page_css
+    t = for_work("cells-structure-function-organisation")
+    assert page(t)["paper"] == "#faf6ec"
+    digital, printed = page_css(t, 1, "T", "W"), page_css(t, 1, "T", "W", "print")
+    assert "size: 210mm 297mm" in digital and "size: 216mm 303mm" in printed
+    assert "url(" not in digital          # Edge cannot print @page images: art is underlaid instead
+    art = backgrounds(t, 3, "digital")
+    assert set(art) == {"first", "verso", "recto"} and b"#faf6ec" in art["recto"]
+    # the tab steps down by chapter
+    assert backgrounds(t, 1)["recto"] != art["recto"]
+
+
+def test_unconfigured_theme_falls_back_to_plain_page():
+    from publishing.manuscript.theme import page
+    p = page({"brand": "#000"})
+    assert p["paper"] == "#ffffff" and p["tab"] is None
+
+
+def test_opener_key_words_are_drawn_from_the_chapter_only():
+    from publishing.manuscript.render import _key_words
+    doc = {"sections": [{"blocks": [
+        {"type": "paragraph", "text": "A **cell** is small. Notice **typically**."},
+        {"type": "key_term", "term": "unicellular organism", "text": "x"},
+        {"type": "paragraph", "text": "**unicellular** again, and **cells**."}]}]}
+    out = _key_words(doc)
+    assert "cell" in out and "unicellular organism" in out
+    assert "typically" not in out and out.count("<span>") == 2
