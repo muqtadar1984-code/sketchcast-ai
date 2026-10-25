@@ -589,7 +589,15 @@ strong { color: var(--brand-dark); }
 .op-card ol { margin: 0; padding: 0; list-style: none; } .op-card li { margin: 0 0 1.4mm; display: grid; grid-template-columns: 9mm 1fr; }
 .op-card li .sn { display: block; color: var(--brand); font-weight: 600; }
 .op-card .code { font-weight: 700; color: var(--brand-dark); margin-right: 3pt; }
-.op-words { margin-top: 5mm; } .op-words h4 { margin: 0 0 2mm; font: 600 8pt var(--bfont); letter-spacing: .16em; text-transform: uppercase; color: var(--brand); }
+.op-words { margin-top: 5mm; }
+.opener.dense .op-head { height: 88mm; } .opener.dense .op-intro { margin: 14mm 0 4mm; font-size: 11pt; }
+.opener.dense .op-card { font-size: 8.4pt; padding: 3mm 4mm; } .opener.dense .op-card li { margin-bottom: .6mm; }
+.opener.dense .op-card p { margin: 0 0 1.6mm; } .opener.dense .op-cards { margin-bottom: 3mm; }
+.opener.dense .watch { font-size: 8.4pt; padding: 2mm 4mm; } .opener.dense .op-words span { font-size: 8.4pt; }
+.opener.dense .op-numeral { margin-top: 4mm; height: 22mm; width: 34mm; } .opener.dense .op-title { font-size: 22pt; }
+.opener.dense .op-cards { grid-template-columns: 1fr; gap: 3mm; }
+.opener.dense .op-card { columns: 2; column-gap: 7mm; } .opener.dense .op-card h4 { column-span: all; }
+.opener.dense .op-card p, .opener.dense .op-card li { break-inside: avoid; } .op-words h4 { margin: 0 0 2mm; font: 600 8pt var(--bfont); letter-spacing: .16em; text-transform: uppercase; color: var(--brand); }
 .op-words span { display: inline-block; margin: 0 2mm 2mm 0; padding: .6mm 3mm; border-radius: 10pt; background: var(--soft); color: var(--brand-dark); font-size: 9.4pt; }
 a { color: var(--brand); text-decoration-color: var(--line); }
 
@@ -680,6 +688,9 @@ def _pretty_curriculum(code: str) -> str:
     return f"{body} ({num})" if num else body
 
 
+KEY_WORDS_MAX = 18
+
+
 def _key_words(doc: dict) -> str:
     """The chapter's vocabulary for the opener, in reading order: its key-term
     boxes and the words its paragraphs set in bold. Navigation only — nothing
@@ -703,6 +714,9 @@ def _key_words(doc: dict) -> str:
                     words.append(w)
     if not words:
         return ""
+    # the opener is one page: the chapter's key-term boxes come first, so a long list keeps the defined terms
+    terms = [b["term"] for sec in doc["sections"] for b in sec.get("blocks") or [] if b.get("type") == "key_term"]
+    words = ([w for w in words if w in terms] + [w for w in words if w not in terms])[:KEY_WORDS_MAX]
     return '<div class="op-words"><h4>Key words</h4>' + "".join(f"<span>{html.escape(w)}</span>" for w in words) + "</div>"
 
 
@@ -742,12 +756,14 @@ def chapter_html(doc: dict, figs: dict, edition: str = "digital", first_page: in
                            f'youtube.com/watch?v={v.split(":", 1)[1]}</a>' for v in doc["videos"])
         video = f'<div class="watch"><strong>Watch the lesson</strong> on the SketchCast channel: {links}</div>'
     stage = sorted({o["code"][0] for o in ch.get("objectives") or [] if o["code"][:1].isdigit()})
+    # an opener with several objectives or a long contents list is set denser, so it stays one page
+    dense = len(ch.get("objectives") or []) > 1 or len(doc["sections"]) > 6 or len(doc.get("videos") or []) > 1
     chips = [f'<span class="chip">{html.escape(_pretty_curriculum(w.get("curriculum")))}</span>']
     if stage:
         chips.append(f'<span class="chip">Stage {", ".join(stage)}</span>')
     chips.append(f'<span class="chip">Ages {html.escape(str(w.get("age_band")).replace("-", "–"))}</span>')
     body.append(
-        '<section class="opener"><div class="op-head"><div>'
+        f'<section class="opener{" dense" if dense else ""}"><div class="op-head"><div>'
         f'<div class="op-kicker">{html.escape(subject)} · Chapter {n}</div>'
         f'<svg class="op-numeral" viewBox="0 0 120 77"><text x="0" y="70" font-family="{html.escape(theme["heading_font"])}" '
         f'font-size="92" font-weight="700" fill="none" stroke="{theme["brand"]}" stroke-width="1.8">{n:02d}</text></svg>'
@@ -756,9 +772,9 @@ def chapter_html(doc: dict, figs: dict, edition: str = "digital", first_page: in
         + (f'<div><img class="op-hero" src="{hero}" alt=""></div>' if hero else "<div></div>") + "</div>"
         f'<p class="op-intro">{md(doc["plan"].get("opening"))}</p>'
         '<div class="op-cards">'
-        + (f'<div class="op-card"><h4>Learning objective</h4>{objectives}</div>' if pg["opener"].get("objectives") else "")
+        + (f'<div class="op-card"><h4>Learning objective{"s" if len(ch.get("objectives") or []) > 1 else ""}</h4>{objectives}</div>' if pg["opener"].get("objectives") else "")
         + (f'<div class="op-card"><h4>In this chapter</h4><ol>{contents}</ol></div>' if pg["opener"].get("contents") else "")
-        + f'</div>{video}{_key_words(doc)}</section>')
+        + f'</div>{video}{"" if dense else _key_words(doc)}</section>')
     # ── teaching sections ───────────────────────────────────────────────────
     thinks = []
     for i, s in enumerate(doc["sections"], 1):

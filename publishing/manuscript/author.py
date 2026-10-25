@@ -76,7 +76,10 @@ class Run:
                            "model": getattr(self.reviewer, "model", "?"), "in": u.get("input_tokens"),
                            "out": u.get("output_tokens"), "usd": u.get("estimated_cost_usd") or 0,
                            "secs": round(time.time() - t0, 1)})
-        return reply.get("data") or {}
+        data = reply.get("data") or {}
+        if isinstance(data, list):        # a verdict wrapped in a list is still one verdict
+            data = next((x for x in data if isinstance(x, dict)), {})
+        return data
 
     def call(self, role: str, card: str, task: str, max_tokens: int, unit: str) -> dict:
         cli = self.reviewer if role == "reviewer" else self.author
