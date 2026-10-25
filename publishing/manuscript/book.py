@@ -62,7 +62,7 @@ section {{ break-after: page; }}
 .cover h1 {{ font: 700 40pt/1.08 var(--hfont); color: var(--brand-dark); margin: 4mm 0 3mm; }}
 .cover .sub {{ font: italic 17pt/1.3 var(--hfont); color: var(--ink); margin: 0 0 6mm; max-width: 150mm; }}
 .cover .meta {{ font-size: 10pt; color: var(--muted); }}
-.cover-hero {{ position: absolute; right: {14 + b}mm; top: {82 + b}mm; width: 118mm; }}
+.cover-hero {{ position: absolute; right: {16 + b}mm; top: {96 + b}mm; width: 104mm; }}
 .cover .foot {{ position: absolute; left: {22 + b}mm; right: {22 + b}mm; bottom: {16 + b}mm; color: {p['paper']};
   display: flex; justify-content: space-between; align-items: flex-end; font-size: 10pt; }}
 .cover .foot .brand {{ font: 700 15pt var(--hfont); letter-spacing: .02em; }}
