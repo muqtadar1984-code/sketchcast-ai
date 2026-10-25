@@ -893,6 +893,7 @@ def _print(page: Path, pdf: Path) -> Path:
     import os
     import time
     import tempfile
+    pdf = pdf.resolve()                    # Edge resolves a relative output path from its own directory
     tmp = pdf.with_name(f"{pdf.stem}.printing-{os.getpid()}-{int(time.time() * 1000)}.pdf")
     # each print gets its own browser profile: parallel renders sharing the default
     # profile are refused by Edge, which still exits 0 (book run, 2026-10-25)
