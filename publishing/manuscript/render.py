@@ -274,7 +274,11 @@ def _group(b: dict, figs: dict) -> str:
             out.append(lines(items[t].get("label"), "gl", cx, ty + circ / 2 + 20, label_chars))
     out.append("</svg>")
     credits = "".join(_credit(figs[i["ref"]]) for i in items)
-    return (f'<figure class="{_place(b)} group">{"".join(out)}<figcaption>{md(b.get("caption"))}{credits}'
+    # a group without relations is a row of pictures: it takes the width its
+    # pictures need (≈30% each), never stretched to the full measure (ch 1:
+    # two photos blown up to full width pushed a page break and left half a page empty)
+    cap = "" if rel else f' style="max-width:{min(100, 32 * len(items))}%;margin-left:auto;margin-right:auto"'
+    return (f'<figure class="{_place(b)} group"{cap}>{"".join(out)}<figcaption>{md(b.get("caption"))}{credits}'
             f'</figcaption></figure>')
 
 
@@ -537,19 +541,62 @@ def review_html(doc: dict) -> str:
             f"<th>out</th><th>usd</th><th>time</th></tr>{calls}</table></body></html>")
 
 
-def render(doc: dict, dossier: dict, env_file: Path, out_dir: Path) -> dict:
-    n = doc["chapter"]["number"]
-    figs = _figures(doc, dossier, env_file)
-    page = out_dir / f"ch{n:02d}.html"
-    page.write_text(chapter_html(doc, figs), encoding="utf-8")
-    packet = out_dir / f"ch{n:02d}-gate-d-review.html"
-    packet.write_text(review_html(doc), encoding="utf-8")
-    pdf = out_dir / f"ch{n:02d}.pdf"
+def _print(page: Path, pdf: Path) -> None:
     subprocess.run([EDGE, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
                     f"--print-to-pdf={pdf}", page.resolve().as_uri()], check=True, timeout=120,
                    capture_output=True)
+
+
+def _layout_score(diag: dict) -> float:
+    """Lower is better: hard defects dominate; then dead space on pages other
+    than the last beyond a generous allowance (whitespace is a signal, so only
+    the excess counts); then page count, lightly."""
+    pages = diag["pages"][:-1] if len(diag["pages"]) > 1 else []
+    return 100 * len(diag["hard"]) + sum(max(0.0, p["unused_share"] - 0.30) for p in pages) + 0.05 * diag["page_count"]
+
+
+def _alternatives(doc: dict) -> list[tuple[str, dict]]:
+    """Layout candidates (D6): the authored layout, and each full/centre picture
+    ROW (a group with no relation arrows) set beside the text at half width.
+    Placement only — content and the author's other choices never change."""
+    import copy
+    out = [("as authored", doc)]
+    for si, s in enumerate(doc["sections"]):
+        for bi, b in enumerate(s.get("blocks") or []):
+            lay = b.get("layout") or {}
+            if b.get("type") == "figure_group" and not b.get("relations") and \
+                    lay.get("placement", "centre") in ("full", "centre"):
+                alt = copy.deepcopy(doc)
+                blocks = alt["sections"][si]["blocks"]
+                blk = blocks.pop(bi)
+                blk["layout"] = {**lay, "placement": "beside-right", "width": "half",
+                                 "why": (lay.get("why") or "") + " [renderer: set beside the text to avoid a page gap]"}
+                # a beside figure precedes the text it sits beside: move it before the paragraph that introduces it
+                blocks.insert(max(0, bi - 1), blk)
+                out.append((f"{s['sid']} picture row beside the text", alt))
+    return out[:4]
+
+
+def render(doc: dict, dossier: dict, env_file: Path, out_dir: Path) -> dict:
     from publishing.manuscript.layout_check import diagnose, report_html
+    n = doc["chapter"]["number"]
+    figs = _figures(doc, dossier, env_file)
+    page = out_dir / f"ch{n:02d}.html"
+    pdf = out_dir / f"ch{n:02d}.pdf"
+    tried = []
+    for name, cand in _alternatives(doc):
+        page.write_text(chapter_html(cand, figs), encoding="utf-8")
+        _print(page, pdf)
+        d = diagnose(str(pdf))
+        tried.append((_layout_score(d), name, cand))
+    best = min(tried, key=lambda t: t[0])
+    page.write_text(chapter_html(best[2], figs), encoding="utf-8")
+    _print(page, pdf)
+    doc["layout_choice"] = {"chosen": best[1], "candidates": [(name, round(score, 3)) for score, name, _ in tried]}
+    packet = out_dir / f"ch{n:02d}-gate-d-review.html"
+    packet.write_text(review_html(doc), encoding="utf-8")
     diag = diagnose(str(pdf))
+    diag["layout_choice"] = doc["layout_choice"]
     packet.write_text(review_html(doc).replace("</body></html>", report_html(diag) + "</body></html>"),
                       encoding="utf-8")
     (out_dir / f"ch{n:02d}-diagnostics.json").write_text(json.dumps(diag, indent=1), encoding="utf-8")
