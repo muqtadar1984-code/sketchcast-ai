@@ -85,6 +85,11 @@ class Run:
         cli = self.reviewer if role == "reviewer" else self.author
         t0 = time.time()
         reply = cli.analyze(task, system=_system(card), max_tokens=max_tokens, cache_prefix=self.prefix)
+        if reply.get("truncated") and card in ("review", "gates"):
+            # a long chapter's review can run on; ask once more for the serious findings only
+            reply = cli.analyze(task + "\n\nKeep the reply compact: at most 25 findings, the most serious first, "
+                                "each detail in one or two sentences.", system=_system(card),
+                                max_tokens=max_tokens, cache_prefix=self.prefix)
         if reply.get("truncated"):
             raise RuntimeError(f"{card} for {unit}: reply hit the output cap ({max_tokens})")
         u = reply.get("usage") or {}
