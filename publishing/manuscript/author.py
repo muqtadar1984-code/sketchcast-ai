@@ -130,7 +130,7 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) 
 
     plan = run.call("author", "plan", head + "Plan this chapter. Blueprint intent:\n" +
                     json.dumps({k: ch[k] for k in ("purpose", "blueprint_sections", "assessment", "illustration_needs")},
-                               ensure_ascii=False, indent=1), 4000, "plan")
+                               ensure_ascii=False, indent=1), 9000, "plan")
 
     def one(sec):
         others = [s["heading"] for s in plan["sections"] if s["sid"] != sec["sid"]]
@@ -742,9 +742,13 @@ def store(conn, d: dict, doc: dict) -> None:
         for f in [f for f in doc["checks"] if f["unit"] == x["xid"]]:
             conn.execute("insert into pub.validation_results (unit_uid, revision_id, check_name, verdict, detail) "
                          "values (%s,%s,%s,%s,%s)", (uid, rid, f["check"], f["verdict"], Jsonb(f)))
+    known = {r["uid"] for r in conn.execute("select uid from pub.units where edition_id=%s", (ed,)).fetchall()}
     for f in doc["review"].get("findings") or []:
+        # a reviewer may name a unit loosely ("s3.b2", "chapter", "x5-x7"): file it on the unit if it
+        # exists, else on the chapter, never fail the store over a label
+        uid = f"{ch['uid']}-{str(f.get('unit') or '').split('.')[0]}"
         conn.execute("insert into pub.validation_results (unit_uid, check_name, verdict, detail) values (%s,%s,%s,%s)",
-                     (f"{ch['uid']}-{f.get('unit')}" if f.get("unit") else ch["uid"], f"review:{f.get('kind')}",
+                     (uid if uid in known else ch["uid"], f"review:{f.get('kind')}",
                       "fail" if f.get("severity") == "blocker" else "warn", Jsonb(f)))
     for c in doc["costs"]:
         conn.execute("insert into pub.cost_events (work_uid, stage, provider, model, input_tokens, output_tokens, usd, "
