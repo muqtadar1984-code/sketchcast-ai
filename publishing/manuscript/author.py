@@ -110,6 +110,12 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) 
             "".join(f"  {o['code']}: {o['text']}\n" for o in ch.get("objectives") or []) +
             "Skills its exercises may practise:\n" +
             "".join(f"  {o['code']}: {o['text']}\n" for o in ch.get("skills") or []))
+    # the founder's Gate D direction for THIS chapter (data, not code): every
+    # author and gate call reads it beside the dossier
+    notes = out_dir / f"ch{chapter:02d}-editorial-notes.md"
+    if notes.exists():
+        head += "EDITORIAL DIRECTION approved by the publisher at Gate D (follow it):\n" + \
+            notes.read_text(encoding="utf-8") + "\n"
     photo_ids = {a["id"] for a in d["library_assets"] if a.get("kind") == "photo"}
     skills = {o["code"] for o in ch.get("skills") or []}
 

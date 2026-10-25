@@ -49,6 +49,19 @@ def _commons(url: str) -> dict | None:
                          "date": val("DateTimeOriginal") or val("DateTime")}}
 
 
+def _flickr(url: str) -> dict | None:
+    """Flickr's oEmbed endpoint gives the photo's own title, author and licence
+    (its HTML page does not render them for a script)."""
+    r = httpx.get("https://www.flickr.com/services/oembed/", headers=UA, timeout=30,
+                  params={"url": url, "format": "json"})
+    if r.status_code >= 400:
+        return None
+    j = r.json()
+    return {"title": _strip(j.get("title", "")), "description": "", "author": _strip(j.get("author_name", "")),
+            "licence_seen": j.get("license") or "",
+            "evidence": {"source": "flickr-oembed", "license_url": j.get("license_url"), "license_id": j.get("license_id")}}
+
+
 def _page(url: str) -> dict | None:
     r = httpx.get(url, headers=UA, timeout=30, follow_redirects=True)
     if r.status_code >= 400:
@@ -66,7 +79,8 @@ def _page(url: str) -> dict | None:
 def fetch(source_url: str) -> dict:
     """Identity from the source; never raises (an unreachable source = unverified)."""
     try:
-        got = _commons(source_url) if "commons.wikimedia.org" in source_url else _page(source_url)
+        got = (_commons(source_url) if "commons.wikimedia.org" in source_url else
+               _flickr(source_url) if "flickr.com" in source_url else _page(source_url))
     except Exception as exc:  # noqa: BLE001
         got = None
         err = str(exc)[:200]

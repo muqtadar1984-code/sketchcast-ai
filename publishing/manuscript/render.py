@@ -124,7 +124,7 @@ table.match td.n { width: 1.6em; font-weight: 700; } table.match td.l { width: 3
 .sortbox { display: flex; gap: 10pt; margin: 4pt 0; } .sortbox .cat { flex: 1; border: 1pt dashed var(--line);
   border-radius: 5pt; padding: 4pt 7pt; min-height: 46pt; font-weight: 600; }
 .sortitems { margin: 4pt 0; font-size: 10.5pt; }
-.photos.tiles figure img { height: 150px; width: 100%; object-fit: cover; }
+.photos.tiles figure img { height: 150px; width: 100%; object-fit: contain; }  /* whole photo, never cropped */
 .photos .ctx { display: block; font-size: 9pt; color: var(--ink); margin-top: 2pt; }
 .think-answers { font-size: 10pt; } .think-answers li { margin-bottom: 4pt; }
 .credits a { color: inherit; }

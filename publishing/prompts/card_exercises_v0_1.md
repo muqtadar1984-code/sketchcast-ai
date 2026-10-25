@@ -21,7 +21,11 @@ follow from what the picture visibly shows PLUS information the question gives
 something a picture cannot show — e.g. a single visible cell does not by itself
 prove the organism has one cell; the number of cells in view is not evidence
 of whether the source organism is unicellular. Use each photo only as its
-dossier SOURCE identity describes it.
+dossier SOURCE identity describes it. "figure_context" and the stem may say
+WHERE a sample came from ("pond water", "an onion bulb") — never WHAT category
+it belongs to ("part of a larger living thing", "a whole organism") when that
+category is what the learner must decide. Mix the pictures so the categories
+are not all the same.
 
 VARIETY. No two exercises test the same claim. At most one true/false item, and
 if there are several closed items their answers must not follow a pattern. A
