@@ -37,8 +37,8 @@ def _norm(s: str) -> str:
     return re.sub(r"[\s_]+", " ", str(s or "").strip().lower())
 
 
-def _download(http, path: str) -> bytes:
-    r = http.get(f"/storage/v1/object/{BUCKET}/{path}")
+def _download(http, base: str, path: str) -> bytes:
+    r = http.get(f"{base}/storage/v1/object/{BUCKET}/{path}")   # absolute: the client's base is /rest/v1
     r.raise_for_status()
     return r.content
 
@@ -150,15 +150,29 @@ def _block(b: dict, figs: dict) -> str:
 
 
 def _figures(doc: dict, dossier: dict, env_file: Path) -> dict:
-    """Every fig:/asset: id the draft places, as a labelled SVG."""
-    want = {b.get("ref") for s in doc["sections"] for b in s.get("blocks") or [] if b.get("type") == "figure"}
-    want |= {x.get("figure_ref") for x in doc["exercises"] if x.get("figure_ref")}
+    """Every fig:/asset: id the draft places, as a labelled SVG. A pinned
+    article figure carries its reviewed labels. A library asset's part names
+    are internal ("prokaryotic cell region"), so it is labelled only with the
+    parts the surrounding text actually talks about."""
+    want, context = set(), {}
+    for s in doc["sections"]:
+        prose = " ".join(str(v) for b in s.get("blocks") or [] for k, v in b.items()
+                         if k not in ("type", "source_refs", "ref")).lower()
+        for b in s.get("blocks") or []:
+            if b.get("type") == "figure":
+                want.add(b.get("ref"))
+                context[b.get("ref")] = context.get(b.get("ref"), "") + " " + prose
+    for x in doc["exercises"]:
+        if x.get("figure_ref"):
+            want.add(x["figure_ref"])
+            context[x["figure_ref"]] = context.get(x["figure_ref"], "") + " " + str(x.get("stem")).lower()
     src = {}
     for t in dossier["topics"]:
         for f in t["figures"]:
             src[f["id"]] = (f["_asset"], [l["label"] for l in f["_labels"]], f["caption"])
     for a in dossier["library_assets"]:
-        src[a["id"]] = (a["_asset"], a["parts"], a["description"])
+        talk = context.get(a["id"], "")
+        src[a["id"]] = (a["_asset"], [p for p in a["parts"] if _norm(p) and _norm(p) in talk], a["description"])
     url, key = load_env(env_file)
     out = {}
     with client(url, key) as http:
@@ -166,7 +180,7 @@ def _figures(doc: dict, dossier: dict, env_file: Path) -> dict:
             if ref not in src or not src[ref][0]:
                 continue
             asset, labels, caption = src[ref]
-            svg, unplaced = figure_svg(_download(http, asset["storage_path"]), asset.get("vision") or {}, labels)
+            svg, unplaced = figure_svg(_download(http, url, asset["storage_path"]), asset.get("vision") or {}, labels)
             out[ref] = {"svg": svg, "unplaced": unplaced, "caption": caption}
     return out
 

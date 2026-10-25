@@ -15,6 +15,8 @@ answers. Do two things.
    figure         a reference to a picture with no figure block, or a figure that does not show what the text says
    exercise       an ambiguous stem, more than one defensible answer, or a question needing knowledge outside the dossier
    clarity        a sentence a learner is likely to misread
+   scope          content the book's table of contents gives to ANOTHER chapter, taught here
+                  beyond a one-line pointer forward (major; a whole section of it is a blocker)
    Severity: blocker (must fix before print), major (should fix), minor (polish).
    Report only real problems; an empty list is a valid answer.
 

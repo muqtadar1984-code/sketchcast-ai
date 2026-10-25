@@ -6,7 +6,7 @@ given. Length: 180-450 words of prose in total. Use typed blocks:
   paragraph       {"type":"paragraph","text":str}
   key_term        {"type":"key_term","term":str,"text":str}            // term + its meaning, from the glossary
   key_idea        {"type":"key_idea","text":str}                       // one boxed sentence worth remembering
-  misconception   {"type":"misconception","wrong":str,"right":str}     // only from a dossier misc: entry
+  misconception   {"type":"misconception","wrong":str,"right":str}     // only a misc: entry listed in YOUR plan entry's source_refs
   worked_example  {"type":"worked_example","problem":str,"steps":[str],"answer":str}   // only from a we: entry
   figure          {"type":"figure","ref":"fig:… or asset:…","caption":str}
   think           {"type":"think","text":str}                          // a quick question to the reader; answer inside the text
