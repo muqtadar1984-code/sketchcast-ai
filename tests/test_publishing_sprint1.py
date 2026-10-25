@@ -374,3 +374,28 @@ def test_stage_c_hints_name_each_gap():
     h = _hints_for({"detail": "640 words < 1000; 1 worked examples < 3; sections do not cover ['7Ae.02']",
                     "word_count": 640}, {"7Ae.02": "Laws of arithmetic"}, "maths", "chapter 2 'X' — y")
     assert "1,000 words (now 640)" in h and "at least 3 fully worked" in h and "7Ae.02: Laws of arithmetic" in h
+
+
+# -- kit rebuild (Stage C) ---------------------------------------------------------
+def test_kit_rebuild_header_matches_the_portal():
+    from publishing.kit_rebuild import header_lines
+    cam = {"id": "c1", "code": "cambridge_ls_maths_0862", "name": "Cambridge Lower Secondary Mathematics 0862"}
+    maps = [{"curriculum_nodes": {"code": c, "title": "t", "grade": g, "curricula": cam}}
+            for c, g in [("9As.03", "9"), ("7As.03", "7"), ("8As.03", "8"), ("7As.03", "7")]]
+    assert header_lines(maps) == ["Cambridge Lower Secondary Mathematics 0862 cambridge_ls_maths_0862 · 7As.03, 8As.03, 9As.03"]
+    cbse = {"id": "c2", "code": "cbse_maths_041", "name": "CBSE Mathematics (Class 6-10)"}
+    maps = [{"curriculum_nodes": {"code": "cbse:9:U3:01", "title": "Coordinate Geometry", "grade": "9", "curricula": cbse}}]
+    assert header_lines(maps) == ["CBSE Mathematics (Class 6-10) cbse_maths_041 · 9 · Coordinate Geometry"]
+
+
+def test_kit_rebuild_client_allows_only_the_portals_writes():
+    from publishing.kit_rebuild import NotAllowed, _client
+    c = _client("https://example.supabase.co", "k")
+    c._transport = httpx.MockTransport(lambda r: httpx.Response(201, json=[{"id": "x"}]))
+    assert c.post("/rpc/reject_topic_kit", json={}).status_code == 201
+    assert c.post("/jobs", json={"type": "topic_questions"}).status_code == 201
+    assert c.patch("/topics", json={}).status_code == 201
+    for bad in [lambda: c.post("/jobs", json={"type": "presentation"}), lambda: c.post("/rpc/approve_topic_kit", json={}),
+                lambda: c.delete("/topics"), lambda: c.patch("/topic_articles", json={}), lambda: c.post("/topics", json={})]:
+        with pytest.raises(NotAllowed):
+            bad()
