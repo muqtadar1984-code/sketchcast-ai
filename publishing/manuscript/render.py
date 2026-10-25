@@ -892,11 +892,19 @@ def _print(page: Path, pdf: Path) -> Path:
     one). A locked target gets a timestamped sibling instead, never a stale file."""
     import os
     import time
+    import tempfile
     tmp = pdf.with_name(f"{pdf.stem}.printing-{os.getpid()}-{int(time.time() * 1000)}.pdf")
-    subprocess.run([EDGE, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
-                    f"--print-to-pdf={tmp}", page.resolve().as_uri()], check=True, timeout=120,
-                   capture_output=True)
-    if not tmp.exists() or tmp.stat().st_size < 1000:
+    # each print gets its own browser profile: parallel renders sharing the default
+    # profile are refused by Edge, which still exits 0 (book run, 2026-10-25)
+    for attempt in (1, 2, 3):
+        with tempfile.TemporaryDirectory(prefix="edge-print-") as profile:
+            subprocess.run([EDGE, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
+                            f"--user-data-dir={profile}", f"--print-to-pdf={tmp}", page.resolve().as_uri()],
+                           check=True, timeout=180, capture_output=True)
+        if tmp.exists() and tmp.stat().st_size >= 1000:
+            break
+        time.sleep(3 * attempt)
+    else:
         raise RuntimeError(f"Edge did not write {tmp.name}")
     try:
         os.replace(tmp, pdf)
