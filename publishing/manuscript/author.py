@@ -29,7 +29,8 @@ log = logging.getLogger("publishing.manuscript")
 PROMPTS = ROOT / "prompts"
 CONSTITUTION = "constitution_v0_2"
 CARDS = {"plan": "card_chapter_plan_v0_1", "section": "card_draft_section_v0_1",
-         "exercises": "card_exercises_v0_1", "review": "card_review_v0_1", "gates": "card_gates_v0_1"}
+         "exercises": "card_exercises_v0_1", "review": "card_review_v0_1", "gates": "card_gates_v0_1",
+         "expand_plan": "card_expand_plan_v0_1", "expand": "card_expand_section_v0_1"}
 AUTHOR, REVIEWER = "anthropic", "gemini"
 
 
@@ -61,7 +62,15 @@ class Run:
     def look(self, png: bytes, prompt: str, unit: str) -> dict:
         """The reviewer LOOKS at a placed picture (a text review never sees one)."""
         t0 = time.time()
-        reply = self.reviewer.analyze_image(png, prompt, max_tokens=800)
+        for wait in (20, 45, 90, 0):
+            try:
+                reply = self.reviewer.analyze_image(png, prompt, max_tokens=800)
+                break
+            except Exception as e:  # noqa: BLE001 — a shared-pool 429 is capacity, not a verdict; wait it out
+                if "429" not in str(e) and "RESOURCE_EXHAUSTED" not in str(e) or not wait:
+                    raise
+                log.warning("reviewer rate-limited on %s; retrying in %ss", unit, wait)
+                time.sleep(wait)
         u = reply.get("usage") or {}
         self.costs.append({"stage": "figure_fit", "unit": unit, "provider": REVIEWER,
                            "model": getattr(self.reviewer, "model", "?"), "in": u.get("input_tokens"),
@@ -259,6 +268,190 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) 
                                                           encoding="utf-8")
     store(conn, d, chapter_doc)
     return chapter_doc
+
+
+def expand_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path, pages: str = "6 to 8",
+                   pictures: int = 3, max_busy: int = 0) -> dict:
+    """Teach MORE in an APPROVED chapter (founder 2026-10-25: "expand the theory
+    to 6-8 pages, with 2 or 3 more images"). The approved blocks are LOCKED —
+    `check_preserved` fails any change to them — and the approved exercises are
+    kept as they are. New text and new book illustrations go through the same
+    three gates as a first draft, with up to two revise rounds. Pictures are
+    made only while production has at most `max_busy` jobs in flight (0 by
+    default; the founder may allow the free share of the catalogue slots)."""
+    from publishing.guard import production_queue
+    from publishing.manuscript import book_assets
+    from publishing.manuscript.theme import for_work
+    _load_model_env(env_file)
+    src = out_dir / f"ch{chapter:02d}-draft.json"
+    approved = json.loads(src.read_text(encoding="utf-8"))
+    keep = out_dir / f"ch{chapter:02d}-draft.approved-v1.json"
+    if not keep.exists():
+        keep.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    old_sections, exercises, plan = approved["sections"], approved["exercises"], approved["plan"]
+    d = D.build(conn, slug, chapter, env_file)
+    run = Run(d)
+    ch = d["chapter"]
+    head = (f"Book: {d['work']['title']} — ages {d['work']['age_band']}, {d['work']['curriculum']}.\n"
+            f"Chapter {ch['number']}: {ch['title']}. Objectives (the scope):\n" +
+            "".join(f"  {o['code']}: {o['text']}\n" for o in ch.get("objectives") or []) +
+            "The whole book (teach ONLY this chapter's ideas):\n" + "".join(
+                f"  {c['sort']}. {c['title']}\n" for c in conn.execute(
+                    "select sort, title from pub.blueprint_chapters where blueprint_id=(select id from pub.blueprints "
+                    "where work_uid=(select uid from pub.works where slug=%s) order by revision desc limit 1) "
+                    "order by sort", (slug,)).fetchall()))
+    notes = out_dir / f"ch{chapter:02d}-editorial-notes.md"
+    if notes.exists():
+        head += "EDITORIAL DIRECTION approved at Gate D (follow it):\n" + notes.read_text(encoding="utf-8") + "\n"
+    # a checkpoint after each costly stage: a rate limit late in the run must not
+    # throw away the plan, the pictures or the drafted sections
+    work_file = out_dir / f"ch{chapter:02d}-expand-work.json"
+    work = json.loads(work_file.read_text(encoding="utf-8")) if work_file.exists() else {}
+
+    def save():
+        work_file.write_text(json.dumps(work, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+
+    by = f"founder:expand-ch{chapter:02d}"
+    ready = [dict(r) for r in conn.execute("select key, concept, description from pub.book_assets where approved_by=%s",
+                                           (by,)).fetchall()]
+    if "xplan" not in work:
+        work["xplan"] = run.call(
+            "author", "expand_plan", head + f"Target: about {pages} printed pages of teaching; {pictures} new "
+            "pictures.\nPictures ALREADY MADE for this expansion (reuse a key when it fits; it counts toward the "
+            "number):\n" + json.dumps(ready, ensure_ascii=False) + "\nApproved chapter:\n" +
+            json.dumps({"opening": plan.get("opening"), "sections": old_sections}, ensure_ascii=False),
+            6000, "expand_plan")
+        save()
+    xplan = work["xplan"]
+    # new illustrations: through the publisher-grade style system, only while production is quiet
+    if "made" not in work:
+        made, refused = [], []
+        for pic in (xplan.get("new_pictures") or [])[:pictures]:
+            key = pic["key"] if str(pic.get("key", "")).startswith("book:") else "book:" + str(pic.get("key"))
+            if any(r["key"] == key for r in ready):
+                made.append({**pic, "key": key, "reused": True})
+                continue
+            q = production_queue(env_file)
+            if q["busy"] > max_busy:
+                raise RuntimeError(f"production has {q['busy']} queued/processing job(s) {q['types']}; "
+                                   "not generating images")
+            got = book_assets.generate(conn, key, pic.get("teaches") or pic["subject"], pic["subject"],
+                                       ROOT.parent.parent / "study-guide-sprint1" / "book-assets", by,
+                                       theme=for_work(slug))
+            (refused if got.get("error") else made).append({**pic, **got, "key": key})
+        work.update(made=made, refused=refused)
+        save()
+    made, refused = work["made"], work["refused"]
+    if made:                               # the dossier now offers the new pictures
+        d = D.build(conn, slug, chapter, env_file)
+        run.d, run.prefix = d, "CHAPTER DOSSIER (the complete content boundary):\n" + D.for_prompt(d)
+    valid = D.ids(d)
+    figure_ids = {f["id"] for t in d["topics"] for f in t["figures"]} | {a["id"] for a in d["library_assets"]}
+    adds = {s["sid"]: s for s in xplan.get("sections") or []}
+
+    def one(sec):
+        pics = [{k: p.get(k) for k in ("key", "subject", "teaches", "label")} for p in made if p.get("sid") == sec["sid"]]
+        return run.call("author", "expand", head + "Approved section (every block LOCKED):\n" +
+                        json.dumps(sec, ensure_ascii=False) + "\nPlanned additions:\n" +
+                        json.dumps(adds.get(sec["sid"]) or {}, ensure_ascii=False) + "\nNew pictures to place:\n" +
+                        json.dumps(pics, ensure_ascii=False), 9000, sec["sid"])
+
+    if "sections" not in work:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            work["sections"] = list(pool.map(one, old_sections))
+        save()
+    sections = work["sections"]
+    for sec in sections:                   # a picture block names its picture in `ref`, whatever key the model used
+        for blk in sec.get("blocks") or []:
+            if blk.get("type") == "figure" and not blk.get("ref"):
+                blk["ref"] = next((blk[k] for k in ("asset", "fig", "key", "src") if str(blk.get(k, "")).startswith(
+                    ("book:", "asset:", "fig:"))), None)
+    nodes, photo_ids = set(ch["node_codes"]), {a["id"] for a in d["library_assets"] if a.get("kind") == "photo"}
+    skills = {o["code"] for o in ch.get("skills") or []}
+
+    def checks():
+        return (V.check_preserved(old_sections, sections) + V.check_sections(sections, valid, figure_ids)
+                + V.check_picture_reuse(sections)
+                + V.check_exercises(exercises, valid, figure_ids, nodes, photo_ids, skills)
+                + V.check_extension(sections, exercises) + V.check_coverage(sections, exercises, plan, nodes))
+
+    def review(unit):
+        fig = figure_fit(run, sections, env_file)
+        vex = visual_exercises(run, exercises, env_file)
+        r = run.call("reviewer", "review", head + "Chapter (the publisher approved the earlier text; review the "
+                     "WHOLE chapter as a learner will read it):\n" + json.dumps(
+                         {"opening": plan.get("opening"), "sections": sections}, ensure_ascii=False), 12000, unit)
+        r["gates"] = run.call("reviewer", "gates", head + "Chapter to gate:\n" + json.dumps(
+            {"sections": sections, "exercises": exercises}, ensure_ascii=False), 9000, f"{unit}:gates")
+        fail = [f for f in fig["findings"] if f.get("severity") == "blocker"] + vex["findings"]
+        r["gates"]["visual"] = {"figures": fig["verdicts"], "exercises": vex["verdicts"], "removed": sorted(fig["removed"]),
+                                "gaps": fig["gaps"], "failures": fail}
+        r["gates"]["visual_gate"] = "fail" if fail else "pass"
+        r["gates"]["content_gate"] = r["gates"].get("coverage_gate")
+        r["human_review"] = fig["human_review"] + vex["human_review"]
+        r.setdefault("findings", []).extend(fig["findings"] + vex["findings"])
+        return r
+
+    findings, rv, rounds = checks(), review("review"), []
+    for rnd in (1, 2):
+        g = rv.get("gates") or {}
+        serious = [f for f in rv.get("findings") or [] if f.get("severity") in ("blocker", "major")]
+        serious += [{"unit": b.get("unit"), "kind": "scope", "severity": "major", "quote": b.get("quote"),
+                     "detail": "beyond the objectives: cut the ADDED text that says it"} for b in g.get("beyond_scope") or []]
+        serious += [{"unit": f["unit"].split(".")[0], "kind": f"check:{f['check']}", "severity": "blocker",
+                     "detail": f["detail"]} for f in findings if f["verdict"] == "fail"]
+        by_unit: dict[str, list] = {}
+        for f in serious:
+            by_unit.setdefault(str(f.get("unit")).split(".")[0], []).append(f)
+        if not any(s["sid"] in by_unit for s in sections):
+            break
+        rounds.append({"round": rnd, "findings": rv.get("findings"), "gates": g, "checks": findings})
+
+        def fix(pair, by_unit=by_unit, rnd=rnd):
+            sec, old = pair
+            fs = by_unit.get(sec["sid"])
+            if not fs:
+                return sec
+            return run.call("author", "expand", head + "Revise this EXPANDED section so every finding below is "
+                            "resolved. Change only ADDED blocks; the approved blocks stay exactly as in the approved "
+                            "section.\nApproved section (LOCKED):\n" + json.dumps(old, ensure_ascii=False) +
+                            "\nCurrent expansion:\n" + json.dumps(sec, ensure_ascii=False) + "\nFindings:\n" +
+                            json.dumps(fs, ensure_ascii=False), 9000, f"{sec['sid']}:revise{rnd}")
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            sections = list(pool.map(fix, zip(sections, old_sections)))
+        findings, rv = checks(), review(f"review:{rnd + 1}")
+    # the visual gate may tidy a caption; an APPROVED caption is locked text, so it wins
+    for new, old in zip(sections, old_sections):
+        approved_caps = {(b.get("type"), b.get("ref") or json.dumps(b.get("items"), sort_keys=True)): b.get("caption")
+                         for b in old.get("blocks") or [] if b.get("type") in ("figure", "figure_group")}
+        for b in new.get("blocks") or []:
+            k = (b.get("type"), b.get("ref") or json.dumps(b.get("items"), sort_keys=True))
+            if k in approved_caps:
+                b["caption"] = approved_caps[k]
+    findings = checks()
+    work.update(final_sections=sections, review=rv, rounds=rounds, checks=findings)
+    save()
+    g = rv.get("gates") or {}
+    rv["rounds"] = rounds
+    rv["ready_for_gate_d"] = (g.get("coverage_gate") == "pass" and g.get("assessment_gate") == "pass"
+                              and g.get("visual_gate") == "pass" and not any(f["verdict"] == "fail" for f in findings)
+                              and not any(f.get("severity") == "blocker" for f in rv.get("findings") or []))
+    for s in plan["sections"]:
+        new = next((x for x in sections if x["sid"] == s["sid"]), {})
+        s["figure_refs"] = sorted({b["ref"] for b in new.get("blocks") or [] if b.get("ref")} |
+                                  {i["ref"] for b in new.get("blocks") or [] if b.get("type") == "figure_group"
+                                   for i in b.get("items") or [] if isinstance(i, dict) and i.get("ref")})
+    doc = {**approved, "work": d["work"], "chapter": ch, "plan": plan, "sections": sections, "checks": findings,
+           "review": rv, "costs": approved.get("costs", []) + run.costs,
+           "expansion": {"plan": xplan, "pictures_made": made, "pictures_refused": refused,
+                         "usd": round(sum(c["usd"] or 0 for c in run.costs), 2)},
+           "prompt_versions": {**approved.get("prompt_versions", {}), "expand_plan": CARDS["expand_plan"],
+                               "expand": CARDS["expand"]}}
+    (out_dir / f"ch{chapter:02d}-dossier-full.json").write_text(json.dumps(d, ensure_ascii=False, default=str),
+                                                                encoding="utf-8")
+    src.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
+    store(conn, d, doc)
+    return doc
 
 
 def fold_extension_sections(sections: list[dict], plan: dict) -> None:

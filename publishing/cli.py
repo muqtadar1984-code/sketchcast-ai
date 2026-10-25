@@ -45,6 +45,14 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("slug")
     c.add_argument("number", type=int)
     c.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
+    ex = sub.add_parser("expand-chapter", help="teach more in an approved chapter: locked text + new blocks + pictures")
+    ex.add_argument("slug")
+    ex.add_argument("number", type=int)
+    ex.add_argument("--pages", default="6 to 8")
+    ex.add_argument("--pictures", type=int, default=3)
+    ex.add_argument("--max-busy", type=int, default=0,
+                    help="founder-approved: make pictures while production has at most this many jobs in flight")
+    ex.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
     rc = sub.add_parser("render-chapter", help="re-render a drafted chapter from its saved files")
     rc.add_argument("slug")
     rc.add_argument("number", type=int)
@@ -86,13 +94,18 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "gate-r":
         from publishing.pins import gate_r
         print(json.dumps(gate_r(conn, args.slug), indent=1, default=str))
-    elif args.cmd in ("chapter", "render-chapter"):
+    elif args.cmd in ("chapter", "render-chapter", "expand-chapter"):
         from publishing.manuscript.author import draft_chapter
         from publishing.manuscript.render import render
         from publishing.report import OUT
         out = OUT / "manuscripts" / args.slug
         if args.cmd == "chapter":
             doc = draft_chapter(conn, args.slug, args.number, args.env_file, out)
+        elif args.cmd == "expand-chapter":
+            from publishing.manuscript.author import expand_chapter
+            doc = expand_chapter(conn, args.slug, args.number, args.env_file, out, args.pages, args.pictures, args.max_busy)
+            print(json.dumps({"ready_for_gate_d": doc["review"]["ready_for_gate_d"],
+                              **{k: v for k, v in doc["expansion"].items() if k != "plan"}}, indent=1, default=str))
         else:
             doc = json.loads((out / f"ch{args.number:02d}-draft.json").read_text(encoding="utf-8"))
         full = json.loads((out / f"ch{args.number:02d}-dossier-full.json").read_text(encoding="utf-8"))

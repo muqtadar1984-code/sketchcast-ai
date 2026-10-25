@@ -149,3 +149,18 @@ def test_opener_key_words_are_drawn_from_the_chapter_only():
     out = _key_words(doc)
     assert "cell" in out and "unicellular organism" in out
     assert "typically" not in out and out.count("<span>") == 2
+
+
+def test_expansion_keeps_every_approved_block_verbatim():
+    from publishing.manuscript.validate import check_preserved
+    old = [{"sid": "s1", "heading": "H", "blocks": [{"type": "paragraph", "text": "A."},
+                                                     {"type": "key_idea", "text": "B."}]}]
+    grown = [{"sid": "s1", "heading": "H", "blocks": [{"type": "paragraph", "text": "A."},
+                                                       {"type": "paragraph", "text": "New."},
+                                                       {"type": "key_idea", "text": "B."}]}]
+    assert check_preserved(old, grown) == []
+    reworded = [{"sid": "s1", "heading": "H", "blocks": [{"type": "paragraph", "text": "A, reworded."},
+                                                          {"type": "key_idea", "text": "B."}]}]
+    assert [f["check"] for f in check_preserved(old, reworded)] == ["preserved"]
+    swapped = [{"sid": "s1", "heading": "H", "blocks": list(reversed(old[0]["blocks"]))}]
+    assert check_preserved(old, swapped)

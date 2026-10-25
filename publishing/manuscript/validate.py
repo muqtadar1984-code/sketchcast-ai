@@ -6,6 +6,7 @@ offered for Gate D until the finding is fixed or a person waives it.
 """
 from __future__ import annotations
 
+import json
 import re
 
 # A sentence that points at a picture. A section that says this must place a
@@ -222,4 +223,63 @@ def check_coverage(sections: list[dict], exercises: list[dict], plan: dict, node
             out.append({"unit": "chapter", "check": "coverage", "verdict": "fail", "detail": f"{n} is taught by no section"})
         if n not in tested:
             out.append({"unit": "chapter", "check": "coverage", "verdict": "fail", "detail": f"{n} is tested by no exercise"})
+    return out
+
+
+LOCKED_FIELDS = ("type", "text", "term", "wrong", "right", "answer", "caption", "ref", "items", "relations")
+
+
+def check_preserved(approved: list[dict], expanded: list[dict]) -> list[dict]:
+    """An EXPANSION of an approved chapter (founder 2026-10-25) may add blocks but
+    never change one: every approved block appears verbatim, in its order."""
+    out = []
+    new_by_sid = {s["sid"]: s for s in expanded}
+    for old in approved:
+        new = new_by_sid.get(old["sid"])
+        if not new:
+            out.append({"unit": old["sid"], "check": "preserved", "verdict": "fail", "detail": "section missing"})
+            continue
+        if new.get("heading") != old.get("heading"):
+            out.append({"unit": old["sid"], "check": "preserved", "verdict": "fail",
+                        "detail": f"heading changed: keep {old.get('heading')!r}"})
+        key = lambda b: json.dumps({k: b.get(k) for k in LOCKED_FIELDS if k in b}, sort_keys=True, ensure_ascii=False)
+        stream, at = [key(b) for b in new.get("blocks") or []], 0
+        for b in old.get("blocks") or []:
+            try:
+                at = stream.index(key(b), at) + 1
+            except ValueError:
+                out.append({"unit": old["sid"], "check": "preserved", "verdict": "fail",
+                            "detail": f"approved {b.get('type')} block changed, moved or dropped; restore it exactly: "
+                                      + key(b)[:400]})
+    return out
+
+
+LOCKED_FIELDS = ("type", "text", "term", "wrong", "right", "answer", "caption", "ref", "items", "relations")
+
+
+def check_preserved(approved: list[dict], expanded: list[dict]) -> list[dict]:
+    """An EXPANSION of an approved chapter (founder 2026-10-25) may add blocks but
+    never change one: every approved block appears verbatim, in its order."""
+    out = []
+    new_by_sid = {s["sid"]: s for s in expanded}
+
+    def key(b):
+        return json.dumps({k: b.get(k) for k in LOCKED_FIELDS if k in b}, sort_keys=True, ensure_ascii=False)
+
+    for old in approved:
+        new = new_by_sid.get(old["sid"])
+        if not new:
+            out.append({"unit": old["sid"], "check": "preserved", "verdict": "fail", "detail": "section missing"})
+            continue
+        if new.get("heading") != old.get("heading"):
+            out.append({"unit": old["sid"], "check": "preserved", "verdict": "fail",
+                        "detail": f"heading changed: keep {old.get('heading')!r}"})
+        stream, at = [key(b) for b in new.get("blocks") or []], 0
+        for b in old.get("blocks") or []:
+            try:
+                at = stream.index(key(b), at) + 1
+            except ValueError:
+                out.append({"unit": old["sid"], "check": "preserved", "verdict": "fail",
+                            "detail": f"approved {b.get('type')} block changed, moved or dropped; restore it "
+                                      f"exactly: {key(b)[:400]}"})
     return out

@@ -83,7 +83,8 @@ def matte(png: bytes, tol: int = 24) -> bytes | None:
     # different from the paper, so a shadow becomes a real soft shadow and the
     # picture looks unchanged on a paper of the same tone
     alpha = np.ones((h, w), dtype=np.float32)
-    alpha[region] = np.clip(dist[region] / 70.0, 0, 1) ** 0.9
+    # a studio gradient within a few levels of the paper is background, not shadow
+    alpha[region] = np.clip((dist[region] - 16.0) / 54.0, 0, 1) ** 0.9
     alpha = np.asarray(Image.fromarray((alpha * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(0.8))) / 255.0
     safe = np.maximum(alpha, 1e-3)[..., None]
     rgb = np.clip((a - (1 - alpha[..., None]) * bgv) / safe, 0, 255)    # un-premultiply: colours stay true
@@ -255,6 +256,8 @@ def _place(b: dict) -> str:
     """CSS classes from the author's layout intent (D5). The intent comes from
     the content; the renderer only enforces sane widths."""
     lay = b.get("layout") or {}
+    if isinstance(lay, str):               # a bare placement ("beside-right") is a layout too
+        lay = {"placement": lay}
     p = lay.get("placement") if lay.get("placement") in ("beside-right", "beside-left", "full", "centre") else "centre"
     w = {"third": "w-third", "half": "w-half", "two-thirds": "w-two-thirds"}.get(lay.get("width"), "w-half")
     return f"place {p}" + (f" {w}" if p.startswith("beside") else "")
@@ -358,6 +361,11 @@ def _block(b: dict, figs: dict) -> str:
         return _group(b, figs)
     if t == "list":
         return "<ul>" + "".join(f"<li>{md(i)}</li>" for i in b.get("items") or []) + "</ul>"
+    if t == "table":
+        head = "".join(f"<th>{md(h)}</th>" for h in b.get("headers") or [])
+        rows = "".join("<tr>" + "".join(f"<td>{md(c)}</td>" for c in r) + "</tr>" for r in b.get("rows") or [])
+        cap = f"<figcaption>{md(b.get('caption'))}</figcaption>" if b.get("caption") else ""
+        return f'<figure class="tbl"><table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table>{cap}</figure>'
     if t == "extension":
         return (f'<div class="box extension"><div class="tag">Extension — beyond the curriculum objective, '
                 f'not assessed</div>{md(b.get("text"))}</div>')
@@ -418,7 +426,7 @@ def _figures(doc: dict, dossier: dict, env_file: Path) -> dict:
             png = asset_bytes(http, url, asset)
             kind = kinds.get(ref, "illustration")
             # illustrations are matted onto the paper; a photograph is never altered
-            shown = (matte(png) or png) if kind == "illustration" else png
+            shown = _feather(matte(png) or png) if kind == "illustration" else png
             svg, unplaced = figure_svg(shown, asset.get("vision") or {"w": 1, "h": 1}, labels)
             out[ref] = {"svg": svg, "unplaced": unplaced, "caption": caption, "credit": credit, "kind": kind,
                         "img": "data:image/png;base64," + base64.b64encode(shown).decode()}
@@ -439,6 +447,27 @@ def hero_image(slug: str, chapter: int) -> str | None:
         return None
     png = Path(row["path"]).read_bytes()
     return "data:image/png;base64," + base64.b64encode(_vignette(matte(png) or png)).decode()
+
+
+def _feather(png: bytes, margin: float = 0.07) -> bytes:
+    """An illustration whose edge is still opaque after matting (a soft floor
+    shadow, a studio gradient) fades out over its outer margin instead of
+    showing a pale rectangle on the paper. A cleanly matted picture is untouched."""
+    import io
+    import numpy as np
+    from PIL import Image
+    im = Image.open(io.BytesIO(png)).convert("RGBA")
+    a = np.asarray(im).copy()
+    h, w = a.shape[:2]
+    edge = np.concatenate([a[0, :, 3], a[-1, :, 3], a[:, 0, 3], a[:, -1, 3]])
+    if edge.mean() < 40:
+        return png
+    y, x = np.ogrid[:h, :w]
+    d = np.minimum(np.minimum(x, w - 1 - x) / (w * margin), np.minimum(y, h - 1 - y) / (h * margin))
+    a[..., 3] = (a[..., 3] * np.clip(d, 0, 1)).astype(np.uint8)
+    out = io.BytesIO()
+    Image.fromarray(a).save(out, "PNG")
+    return out.getvalue()
 
 
 def _vignette(png: bytes, start: float = 0.62) -> bytes:
@@ -569,6 +598,14 @@ figure.photo > svg { background: #fff; padding: 1.4mm; border: .6pt solid #cfd6c
   box-shadow: 0 .8pt 2.6pt rgba(40,50,40,.18); box-sizing: border-box; }
 figure.group.photo > svg { background: transparent; padding: 0; border: none; box-shadow: none; }
 .credit { font-size: 7.2pt; color: #8b958e; }
+
+/* comparison tables: header in the brand wash, first column as row labels */
+figure.tbl { margin: 4mm 0; break-inside: avoid; }
+figure.tbl table { width: 100%; border-collapse: collapse; font-size: 9.4pt; line-height: 1.4; }
+figure.tbl th { text-align: left !important; background: var(--soft); color: var(--brand-dark); font-weight: 600; text-align: left; padding: 2mm 3mm;
+  border-bottom: 1pt solid var(--brand); }
+figure.tbl td { text-align: left; padding: 1.8mm 3mm; border-bottom: .5pt solid var(--line); vertical-align: top; }
+figure.tbl td:first-child { font-weight: 600; color: var(--brand-dark); width: 28%; }
 
 /* practice — its own pages: calm, numbered, room to write */
 .practice { break-before: page; }

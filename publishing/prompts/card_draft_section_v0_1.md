@@ -14,6 +14,7 @@ given. Length: 180-450 words of prose in total. Use typed blocks:
                    "caption":str,"layout":LAYOUT}                      // related pictures composed as ONE visual
   think           {"type":"think","text":str,"answer":str}             // a question to the reader; the answer is printed at the end of the chapter, never in the box
   list            {"type":"list","items":[str]}
+  table           {"type":"table","headers":[str],"rows":[[str]],"caption":str}   // a comparison of 2-3 things on a few properties
   extension       {"type":"extension","text":str}                      // optional, ≤80 words, at most one per chapter
 
 LAYOUT is {"placement":"beside-right|beside-left|full|centre","width":"third|half|two-thirds|full","why":str}.
