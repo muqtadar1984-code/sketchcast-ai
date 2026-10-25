@@ -372,7 +372,7 @@ def expand_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path,
     for sec in sections:                   # a picture block names its picture in `ref`, whatever key the model used
         for blk in sec.get("blocks") or []:
             if blk.get("type") == "figure" and not blk.get("ref"):
-                blk["ref"] = next((blk[k] for k in ("asset", "fig", "key", "src") if str(blk.get(k, "")).startswith(
+                blk["ref"] = next((blk[k] for k in ("asset", "asset_id", "fig", "figure", "id", "key", "src") if str(blk.get(k, "")).startswith(
                     ("book:", "asset:", "fig:"))), None)
     nodes, photo_ids = set(ch["node_codes"]), {a["id"] for a in d["library_assets"] if a.get("kind") == "photo"}
     skills = {o["code"] for o in ch.get("skills") or []}
