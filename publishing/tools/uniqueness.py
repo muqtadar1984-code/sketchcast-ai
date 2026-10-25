@@ -329,8 +329,7 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, thresho
                 vex = A.visual_exercises(run_, doc["exercises"], env_file)
                 checks = (V.check_sections(doc["sections"], valid, fids) + V.check_picture_reuse(doc["sections"]) +
                           V.check_exercises(doc["exercises"], valid, fids, set(ch["node_codes"]), photos, skills))
-            gates = run_.call("reviewer", "gates", "Chapter to gate:
-" + json.dumps(
+            gates = run_.call("reviewer", "gates", "Chapter to gate:\n" + json.dumps(
                 {"sections": doc["sections"], "exercises": doc["exercises"]}, ensure_ascii=False), 9000, "uniqueness:regate")
             fails = [f for f in fit["findings"] if f.get("severity") == "blocker"] + vex["findings"]
             g = doc["review"].setdefault("gates", {})
