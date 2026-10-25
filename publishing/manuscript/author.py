@@ -180,7 +180,7 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) 
         vex = visual_exercises(run, exercises, env_file)
         r = run.call("reviewer", "review", head + "Drafted chapter:\n" + json.dumps(
             {"opening": plan.get("opening"), "sections": sections, "exercises": blind()}, ensure_ascii=False,
-            indent=1), 12000, unit)
+            indent=1), 24000, unit)
         r["gates"] = run.call("reviewer", "gates", head + "Chapter to gate:\n" + json.dumps(
             {"sections": sections, "exercises": exercises}, ensure_ascii=False, indent=1), 9000, f"{unit}:gates")
         visual_fail = [f for f in fig["findings"] if f.get("severity") == "blocker"] + vex["findings"]
@@ -380,7 +380,7 @@ def expand_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path,
         vex = visual_exercises(run, exercises, env_file)
         r = run.call("reviewer", "review", head + "Chapter (the publisher approved the earlier text; review the "
                      "WHOLE chapter as a learner will read it):\n" + json.dumps(
-                         {"opening": plan.get("opening"), "sections": sections}, ensure_ascii=False), 12000, unit)
+                         {"opening": plan.get("opening"), "sections": sections}, ensure_ascii=False), 24000, unit)
         r["gates"] = run.call("reviewer", "gates", head + "Chapter to gate:\n" + json.dumps(
             {"sections": sections, "exercises": exercises}, ensure_ascii=False), 9000, f"{unit}:gates")
         fail = [f for f in fig["findings"] if f.get("severity") == "blocker"] + vex["findings"]
