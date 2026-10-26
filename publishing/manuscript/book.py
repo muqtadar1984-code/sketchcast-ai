@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 import re
 import logging
 from datetime import date
@@ -177,7 +178,10 @@ def compile_book(slug: str, first: int, last: int, env_file: Path, label: str, p
     pdf_of = {c["number"]: next(Path(x) for x in parts if x != "blank" and Path(x).name.startswith(f"book-ch{c['number']:02d}"))
               for c in chapters}
     index = BM.index_pages(BM.index_terms(pairs, gloss), [(c["number"], pdf_of[c["number"]], c["start"]) for c in chapters])
-    rev2 = out / "rev3" if (out / "rev3" / "coverage-matrix.json").exists() else out / "rev2"
+    # the current revision's coverage (PUBLISH_REV), else the latest earlier one (founder 2026-10-26: Revision 4
+    # printed Revision 3's table because this was fixed to rev3)
+    rev2 = next((out / r for r in (os.getenv("PUBLISH_REV", ""), "rev4", "rev3", "rev2")
+                 if r and (out / r / "coverage-matrix.json").exists()), out / "rev2")
     matrix = json.loads((rev2 / "coverage-matrix.json").read_text(encoding="utf-8")) if (rev2 / "coverage-matrix.json").exists() else {}
     coverage = json.loads((rev2 / "coverage.json").read_text(encoding="utf-8")) if (rev2 / "coverage.json").exists() else {}
     credits = []
