@@ -34,7 +34,7 @@ def _chapter_pdf(doc: dict, full: dict, env_file: Path, out: Path, first_page: i
 
 
 def _front_html(work: dict, theme: dict, chapters: list[dict], label: str, prepared_for: str,
-                edition: str, hero: str | None) -> str:
+                edition: str, hero: str | None, preface: str = "", back: list[tuple[str, int]] = ()) -> str:
     from publishing.manuscript.render import _pretty_curriculum
     from publishing.manuscript.theme import css_vars, page
     p = page(theme)
@@ -45,6 +45,9 @@ def _front_html(work: dict, theme: dict, chapters: list[dict], label: str, prepa
     today = date.today().strftime("%B %Y")
     toc = "".join(f'<tr><td class="n">{c["number"]}</td><td>{html.escape(c["title"])}</td>'
                   f'<td class="pg">{c["start"]}</td></tr>' for c in chapters)
+    toc += "".join(f'<tr><td class="n"></td><td>{html.escape(t)}</td><td class="pg">{pg}</td></tr>' for t, pg in back)
+    pre = ("<section class='preface'><h2>Preface</h2>" + "".join(
+        f"<p>{html.escape(x)}</p>" for x in preface.splitlines() if x.strip()) + "</section>") if preface else ""
     hero_img = f'<img class="cover-hero" src="{hero}" alt="">' if hero else ""
     curriculum = html.escape(_pretty_curriculum(work.get("curriculum")))
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{html.escape(work['title'])}</title><style>
@@ -83,6 +86,7 @@ table.toc td.n {{ width: 14mm; font: 700 14pt var(--hfont); color: var(--brand);
 table.toc td.pg {{ width: 14mm; text-align: right; color: var(--brand-dark); font-weight: 600; }}
 .about h3 {{ font: 600 9pt var(--bfont); letter-spacing: .16em; text-transform: uppercase; color: var(--brand); margin: 6mm 0 2mm; }}
 .about .row {{ display: grid; grid-template-columns: 42mm 1fr; gap: 4mm; margin: 0 0 3mm; align-items: start; }}
+.preface p {{ font-size: 10.5pt; line-height: 1.6; margin: 0 0 3mm; }}
 .chip {{ font-size: 8.4pt; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; padding: 1.4mm 3mm;
   border-radius: 3pt; }}
 </style></head><body>
@@ -104,6 +108,7 @@ text, pictures and page design will change before publication.</p>
 <p>Illustrations are original SketchCast artwork. Photographs are used under the licences named in each chapter's
 picture credits, with their authors credited.</p>
 <p>Curriculum references: {curriculum}. Learning objective codes are shown at the start of each chapter.</p></section>
+{pre}
 <section><h2>Contents</h2><table class="toc">{toc}</table></section>
 <section class="about"><h2>How this book works</h2>
 <p>Each chapter teaches one part of the curriculum, in short numbered sections, and ends with practice and answers.</p>
@@ -155,16 +160,56 @@ def compile_book(slug: str, first: int, last: int, env_file: Path, label: str, p
         parts.append(pdf)
         at += pages
     work = docs[0][1]["work"]
+    # back matter: coverage, glossary, index, sources — derived from the chapters (see backmatter.py)
+    from publishing.manuscript import backmatter as BM
+    from publishing.manuscript.render import credit_line
+    pairs = [(n, d) for n, d, _ in docs]
+    gloss = BM.glossary(pairs)
+    pdf_of = {c["number"]: next(Path(x) for x in parts if x != "blank" and Path(x).name.startswith(f"book-ch{c['number']:02d}"))
+              for c in chapters}
+    index = BM.index_pages(BM.index_terms(pairs, gloss), [(c["number"], pdf_of[c["number"]], c["start"]) for c in chapters])
+    rev2 = out / "rev2"
+    matrix = json.loads((rev2 / "coverage-matrix.json").read_text(encoding="utf-8")) if (rev2 / "coverage-matrix.json").exists() else {}
+    coverage = json.loads((rev2 / "coverage.json").read_text(encoding="utf-8")) if (rev2 / "coverage.json").exists() else {}
+    credits = []
+    for n, d, full in docs:
+        used = set()
+        for s_ in d["sections"]:
+            for blk in s_["blocks"]:
+                used.add(blk.get("ref"))
+                used |= {i.get("ref") for i in blk.get("items") or [] if isinstance(i, dict)}
+        for x in d["exercises"]:
+            used |= {x.get("figure_ref"), *(x.get("figure_refs") or [])}
+        for a_ in full.get("library_assets") or []:
+            if a_["id"] in used and a_.get("credit") and a_.get("kind") == "photo":
+                title = (a_.get("identity") or {}).get("source_title") or a_["credit"].get("title")
+                cl = credit_line({**a_["credit"], "title": title})
+                if cl not in credits:
+                    credits.append(cl)
+    back_start = at + (1 if at % 2 == 0 else 0)
+    back_pdf, back = None, []
+    if matrix:
+        bh = build / f"back-{edition}.html"
+        bh.write_text(BM.back_html(work, theme, gloss, index, matrix, coverage, credits, back_start, edition),
+                      encoding="utf-8")
+        back_pdf = fitz.open(_print(bh, build / f"back-{edition}.pdf"))
+        for title in ("Curriculum coverage", "Glossary", "Index", "Sources and picture credits"):
+            i = next((k for k, pg in enumerate(back_pdf) if pg.get_text().lstrip().startswith(title)), None)
+            if i is not None:
+                back.append((title, back_start + i))
+    pref = BM.preface(slug, pairs, out) if matrix else ""
     front_html = build / f"front-{edition}.html"
-    front_html.write_text(_front_html(work, theme, chapters, label, prepared_for, edition, hero_image(slug, 1)),
-                          encoding="utf-8")
+    front_html.write_text(_front_html(work, theme, chapters, label, prepared_for, edition, hero_image(slug, 1),
+                                      pref, back), encoding="utf-8")
     front = fitz.open(_print(front_html, build / f"front-{edition}.pdf"))
+
     p = page(theme)
     book = fitz.open()
     book.insert_pdf(front)
     if len(book) % 2:                       # chapter 1 opens on a right-hand page
         _blank(book, p, edition)
-    toc = [[1, "Cover", 1], [1, "Contents", 5]]
+    contents_at = next(i for i, pg in enumerate(front) if pg.get_text().lstrip().startswith("Contents")) + 1
+    toc = [[1, "Cover", 1], [1, "Contents", contents_at]]
     for part in parts:
         if part == "blank":
             _blank(book, p, edition)
@@ -173,6 +218,12 @@ def compile_book(slug: str, first: int, last: int, env_file: Path, label: str, p
         book.insert_pdf(fitz.open(part))
         c = next(c for c in chapters if Path(part).name.startswith(f"book-ch{c['number']:02d}"))
         toc.append([1, f"Chapter {c['number']}: {c['title']}", start])
+    if back_pdf is not None:
+        if len(book) % 2:                   # the back matter opens on a right-hand page too
+            _blank(book, p, edition)
+        offset = len(book) + 1 - back_start
+        book.insert_pdf(back_pdf)
+        toc += [[1, t, pg + offset] for t, pg in back]
     book.set_toc(toc)
     book.set_metadata({"title": work["title"], "author": "SketchCast", "subject": label,
                        "keywords": "; ".join(k for k in (label, prepared_for) if k)})
