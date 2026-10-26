@@ -279,7 +279,7 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, rnd: in
                         [{**c, "unit": s["sid"]} for c in got.get("changes") or []] or
                         [{"id": f["id"], "what": "applied", "unit": s["sid"]} for f in fs])
 
-            if rnd >= 4 and acc:
+            if rnd >= int(os.getenv("CHAPTER_MODE_FROM", "4")) and acc:
                 got = {}
                 for _ in range(3):
                     got = (author.analyze(CORRECT_CHAPTER.format(
