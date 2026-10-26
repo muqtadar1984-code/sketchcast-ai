@@ -51,6 +51,9 @@ def _front_html(work: dict, theme: dict, chapters: list[dict], label: str, prepa
         f"<p>{html.escape(x)}</p>" for x in preface.splitlines() if x.strip()) + "</section>") if preface else ""
     hero_img = f'<img class="cover-hero" src="{hero}" alt="">' if hero else ""
     curriculum = html.escape(_pretty_curriculum(work.get("curriculum")))
+    from publishing.tools.academic_audit import curriculum as _cur
+    note = _cur(work.get("curriculum")).get("alignment_note")
+    alignment = f"<p>{html.escape(note)}</p>" if note else ""
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{html.escape(work['title'])}</title><style>
 {css_vars(theme)}
 @page {{ size: {W}mm {H}mm; margin: {m['top'] + b}mm {m['outer'] + b}mm {m['bottom'] + b}mm {m['inner'] + b}mm;
@@ -108,7 +111,7 @@ text, pictures and page design will change before publication.</p>
 <p>© {date.today().year} SketchCast. All rights reserved.</p>
 <p>Illustrations are original SketchCast artwork. Photographs are used under the licences named in each chapter's
 picture credits, with their authors credited.</p>
-<p>Curriculum references: {curriculum}. Learning objective codes are shown at the start of each chapter.</p></section>
+<p>Curriculum references: {curriculum}. Learning objective codes are shown at the start of each chapter.</p>{alignment}</section>
 {pre}
 <section><h2>Contents</h2><table class="toc">{toc}</table></section>
 <section class="about"><h2>How this book works</h2>

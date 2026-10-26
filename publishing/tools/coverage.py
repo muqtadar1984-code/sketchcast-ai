@@ -27,11 +27,11 @@ from pathlib import Path
 
 log = logging.getLogger("publishing.coverage")
 
-MAP = """Map Chapter {n} of a study guide (ages {age}) to the Cambridge Lower Secondary Science 0893 objectives below.
+MAP = """Map Chapter {n} of a study guide (ages {age}) to the {curriculum} objectives below.
 For EVERY section and EVERY question give the codes it genuinely teaches (sections) or assesses (questions) —
 content codes AND Thinking and Working Scientifically (TWS) and Science in Context (SIC) codes. Only what a teacher
 would agree it addresses; [] when none. Then, for the chapter as a whole, say in one sentence for each content
-code outside Biology (if any) why it belongs in this chapter.
+code outside the book's own subject strands (if any) why it belongs in this chapter.
 
 Objectives:
 {objectives}
@@ -46,7 +46,7 @@ Reply with JSON: {{"sections": {{"s1": [codes]}}, "exercises": {{"x1": [codes]}}
 def run(slug: str, first: int, last: int, env_file: Path) -> dict:
     from publishing.blueprint import _load_model_env, author_client
     from publishing.report import OUT
-    from publishing.tools.academic_audit import SYSTEM, _ask, chapter_text
+    from publishing.tools.academic_audit import _ask, chapter_text, curriculum, system_for
     import os
     _load_model_env(env_file)
     os.environ["GEMINI_THINKING_ARTIFACT"] = "HIGH"
@@ -61,7 +61,8 @@ def run(slug: str, first: int, last: int, env_file: Path) -> dict:
         doc = json.loads((out / f"ch{n:02d}-draft.json").read_text(encoding="utf-8"))
         full = json.loads((out / f"ch{n:02d}-dossier-full.json").read_text(encoding="utf-8"))
         data, cost = _ask(cli, MAP.format(n=n, age=doc["work"]["age_band"], objectives=obj_text,
-                                          chapter=chapter_text(doc, full)))
+                                          curriculum=curriculum(doc["work"]["curriculum"])["name"],
+                                          chapter=chapter_text(doc, full)), system_for(doc["work"]))
         return n, {"title": doc["chapter"]["title"], "blueprint": doc["chapter"]["node_codes"],
                    "sections": {s["sid"]: s["heading"] for s in doc["sections"]},
                    "map": data, "usd": cost.get("usd")}

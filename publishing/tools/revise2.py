@@ -39,7 +39,7 @@ log = logging.getLogger("publishing.revise2")
 ADJUDICATE = """Another reviewer raised the findings below about Chapter {n} of a study guide for ages {age}
 ({curriculum}). You are a second, independent examiner. For EACH finding, rule: "agree" (it is a real problem and
 the fix is right), "partly" (a real problem, but give a better fix), or "disagree" (not a problem at this level —
-say why). Judge against the chapter text below and the Cambridge 0893 objectives.
+say why). Judge against the chapter text below and the curriculum objectives it cites.
 
 Findings:
 {findings}
@@ -54,8 +54,7 @@ CORRECT_SECTION = """Apply these accepted corrections to ONE section of Chapter 
 same fields, same order). A correction may: change wording in a block; delete a block (out-of-scope or purely
 repeated teaching); shorten a block; move out-of-scope material into ONE short optional block of type "extension"
 only if the chapter has none and the material is worth a glimpse. Scientific accuracy comes first; then the
-Cambridge 0893 scope (cell structures at this level are limited to cell membrane, cytoplasm, nucleus, cell wall,
-chloroplast, mitochondria and sap vacuole); then concision. Keep the voice plain, for ages 11-14. Keep **bold**
+curriculum scope (where an objective limits a topic, "limited to ...", nothing beyond that list); then concision. Keep the voice plain, for ages 11-14. Keep **bold**
 only for a key word's first appearance in the chapter.
 
 If a correction says a PICTURE is wrong, either give that block a "new_picture": {{"key": "book:<short_snake_name>",
@@ -93,8 +92,7 @@ Some problems remain that span several blocks: a term removed in one place but s
 changed but questions or mark schemes still relying on the old one, out-of-scope material only partly removed,
 a caption that no longer matches its picture, a reference to a picture that is not there. Resolve EVERY problem
 below across the WHOLE chapter so the chapter is consistent with itself, scientifically accurate and inside the
-Cambridge 0893 scope (cell structures at this level: cell membrane, cytoplasm, nucleus, cell wall, chloroplast,
-mitochondria, sap vacuole). Where a question depends on teaching that was removed, either restore a short, correct
+curriculum scope (where an objective limits a topic, "limited to ...", nothing beyond that list). Where a question depends on teaching that was removed, either restore a short, correct
 teaching sentence or rewrite the question — whichever keeps the objective covered. A challenge question must ask the
 learner to apply, interpret or reason, not repeat a printed sentence. Change nothing the problems do not touch.
 
@@ -170,7 +168,7 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, rnd: in
     from publishing.manuscript import dossier as Dm
     from publishing.manuscript.theme import for_work
     from publishing.report import OUT
-    from publishing.tools.academic_audit import SYSTEM, _ask, _validators, chapter_text
+    from publishing.tools.academic_audit import _ask, _validators, chapter_text, system_for
     _load_model_env(env_file)
     out = OUT / "manuscripts" / slug
     audit_dir, corr_dir = out / "rev2" / "audit", out / "rev2" / "corrections"
@@ -224,7 +222,7 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, rnd: in
                     n=n, age=w["age_band"], curriculum=w["curriculum"],
                     findings=json.dumps([{k: f.get(k) for k in ("id", "severity", "category", "where", "quote",
                                                                  "problem", "fix")} for f in mine], ensure_ascii=False),
-                    chapter=chapter_text(doc, full)))
+                    chapter=chapter_text(doc, full)), system_for(w))
                 for r in data.get("rulings") or []:
                     rulings[r.get("id")] = {**r, "by": other}
                 state.setdefault("costs", []).append({"stage": "adjudicate", "validator": other, **cost})
@@ -232,7 +230,7 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, rnd: in
             cf.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
         known = set(json.loads((audit_dir / "objectives-0893.json").read_text(encoding="utf-8")))
         fake = lambda f: f["agreement"] == "SINGLE" and any(
-            c not in known for c in re.findall(r"[789][A-Z][A-Za-z]{1,4}\.\d{2}", str(f.get("problem"))))
+            c not in known for c in re.findall(r"\b[789][A-Z][A-Za-z]{1,4}\.\d{2}\b", str(f.get("problem"))))
         state["rejected_bad_code"] = [f["id"] for f in audit["findings"] if fake(f)]
         acc = [f for f in accepted(audit, state["rulings"]) if not _about_audit_input(f) and not fake(f)]
         state["not_applicable"] = [f["id"] for f in audit["findings"] if _about_audit_input(f)]
@@ -349,7 +347,7 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, rnd: in
             for name, cli in vals.items():
                 data, cost = _ask(cli, VERIFY.format(n=n, age=w["age_band"], curriculum=w["curriculum"],
                                                      applied=json.dumps(applied_list, ensure_ascii=False),
-                                                     chapter=chapter_text(doc, full)))
+                                                     chapter=chapter_text(doc, full)), system_for(w))
                 ver[name] = data
                 state.setdefault("costs", []).append({"stage": "verify", "validator": name, **cost})
             state["verification"] = ver

@@ -550,16 +550,55 @@ def _vignette(png: bytes, start: float = 0.62) -> bytes:
     return out.getvalue()
 
 
-def _photo_row(refs: list[str], figs: dict, context: dict | None = None) -> str:
-    """Uniform tiles, lettered, each with what the question says about it."""
+TIER_ORDER = ("guided", "independent", "challenge")
+
+
+def question_order(doc: dict) -> list[dict]:
+    """The questions in their printed sequence: by tier (Getting started, On your own, Challenge), then in the
+    order the chapter lists them within a tier."""
+    xs = doc.get("exercises") or []
+    rank = {t: i for i, t in enumerate(TIER_ORDER)}
+    return sorted(xs, key=lambda x: (rank.get(x.get("tier"), len(TIER_ORDER)), xs.index(x)))
+
+
+def question_numbers(doc: dict) -> dict[str, str]:
+    """Stable internal id (x7) → the number printed (X3). Numbers are given AFTER ordering, so the practice pages,
+    the answers, the coverage table and the reports all use one sequence (founder 2026-10-26, Revision 3)."""
+    return {x["xid"]: f"X{i}" for i, x in enumerate(question_order(doc), 1)}
+
+
+def renumber_text(text, numbers: dict[str, str]):
+    """Rewrite cross-references ('see X7') inside a question's text to the printed numbers."""
+    if not isinstance(text, str) or not numbers:
+        return text
+    return re.sub(r"\bX(\d+)\b", lambda m: numbers.get(f"x{m.group(1)}", m.group(0)), text)
+
+
+PICTURE_WORD = r"(?:photograph|photo|picture|drawing|diagram|image|figure|sample)s?"
+
+
+def _photo_row(refs: list[str], figs: dict, context: dict | None = None, stem: str = "") -> str:
+    """Uniform tiles, each with the letter the QUESTION uses for it, and — only when it is short — what the
+    question says about it. A long description is the picture's alt text, never printed under it (founder
+    2026-10-26: internal descriptions were printed as captions)."""
+    context = context or {}
+    shown = [r for r in refs if figs.get(r)]
+    keys = sorted(k for k in context if isinstance(k, str) and len(k) == 1 and k.isalpha())
+    named = sorted(set(re.findall(PICTURE_WORD + r"\s+([A-H])\b", stem or "", flags=re.I)))
+    if len(keys) == len(shown) and keys:
+        letters = keys                                  # the question's own letters
+    elif len(named) == len(shown) and named:
+        letters = named
+    else:
+        letters = list("ABCDEFGH"[:len(shown)])
     tiles = []
-    for i, r in enumerate(refs):
-        f = figs.get(r)
-        if f:
-            letter = "ABCDEFGH"[i]
-            ctx = (context or {}).get(letter)
-            tiles.append(f'<figure><img src="{f["img"]}" alt=""><figcaption><span class="pl">{letter}</span>'
-                         + (f'<span class="ctx">{md(ctx)}</span>' if ctx else "") + f'{_credit(f)}</figcaption></figure>')
+    for letter, r in zip(letters, shown):
+        f = figs[r]
+        ctx = context.get(letter) or context.get(r)
+        short = ctx if ctx and len(str(ctx).split()) <= 14 and "(not a photograph)" not in str(ctx) else ""
+        alt = html.escape(str(ctx or ""), quote=True)
+        tiles.append(f'<figure><img src="{f["img"]}" alt="{alt}"><figcaption><span class="pl">{letter}</span>'
+                     + (f'<span class="ctx">{md(short)}</span>' if short else "") + f'{_credit(f)}</figcaption></figure>')
     return f'<div class="photos tiles">{"".join(tiles)}</div>' if tiles else ""
 
 
@@ -827,8 +866,10 @@ def chapter_html(doc: dict, figs: dict, edition: str = "digital", first_page: in
     body.append('<section class="practice"><div class="practice-head"><h2>Practice</h2>'
                 '<p>Work through the questions in order. The answers and worked solutions are at the end of the chapter.</p></div>')
     tiers = (("guided", "Getting started", "●○○"), ("independent", "On your own", "●●○"), ("challenge", "Challenge", "●●●"))
+    numbers = question_numbers(doc)
+    ordered = question_order(doc)
     for tier, name, dots in tiers:
-        xs = [x for x in doc["exercises"] if x.get("tier") == tier]
+        xs = [x for x in ordered if x.get("tier") == tier]
         if not xs:
             continue
         body.append(f'<div class="tier"><span class="dots">{dots}</span>{name}</div>')
@@ -841,10 +882,10 @@ def chapter_html(doc: dict, figs: dict, edition: str = "digital", first_page: in
                 extra = ("<ol class='opts'>" + "".join(f"<li>{md(o)}</li>" for o in x["options"]) + "</ol>"
                          if x.get("options") else "")
             refs = ([x["figure_ref"]] if x.get("figure_ref") else []) + list(x.get("figure_refs") or [])
-            pics = _photo_row(refs, figs, x.get("figure_context"))
-            stem = md(x["stem"]).replace("____", '<span class="blank"></span>')
+            pics = _photo_row(refs, figs, x.get("figure_context"), x.get("stem") or "")
+            stem = md(renumber_text(x["stem"], numbers)).replace("____", '<span class="blank"></span>')
             lines = _lines(x, pitch) if pg["practice"].get("answer_lines") else ""
-            body.append(f'<div class="ex"><div class="q"><span class="qn">{x["xid"].upper()}</span><span>{stem}</span>'
+            body.append(f'<div class="ex"><div class="q"><span class="qn">{numbers[x["xid"]]}</span><span>{stem}</span>'
                         f'<span class="marks">[{x.get("marks")}]</span></div><div class="body">{extra}{pics}</div>{lines}</div>')
     body.append("</section>")
     # ── answers ─────────────────────────────────────────────────────────────
@@ -853,17 +894,17 @@ def chapter_html(doc: dict, figs: dict, edition: str = "digital", first_page: in
         body.append("<h3>Think about it</h3>" + "".join(
             f'<div class="ans"><em>{md(b.get("text"))}</em><br>{md(b.get("answer"))}</div>' for b in thinks))
         body.append("<h3>Practice</h3>")
-    for x in doc["exercises"]:
+    for x in question_order(doc):              # answers in the same printed sequence as the questions
         if x.get("item_type") == "match" and x.get("pairs"):
             answer = _match(x)[1]
         elif x.get("item_type") == "sort" and x.get("items"):
             answer = _sort(x)[1]
         else:
-            answer = md(x["answer"])
-        scheme = "".join(f'<li>{md(p.get("point"))} <span class="marks">({p.get("marks")})</span></li>'
+            answer = md(renumber_text(x["answer"], numbers))
+        scheme = "".join(f'<li>{md(renumber_text(p.get("point"), numbers))} <span class="marks">({p.get("marks")})</span></li>'
                          for p in x.get("marking_scheme") or [])
-        body.append(f'<div class="ans"><span class="an">{x["xid"].upper()}</span> <span class="key">{answer}</span><br>'
-                    f'{md(x.get("worked_solution"))}<ul>{scheme}</ul></div>')
+        body.append(f'<div class="ans"><span class="an">{numbers[x["xid"]]}</span> <span class="key">{answer}</span><br>'
+                    f'{md(renumber_text(x.get("worked_solution"), numbers))}<ul>{scheme}</ul></div>')
     credits = sorted({credit_line(c) for f in figs.values() if (c := f.get("credit"))})
     if credits:
         body.append('<div class="credits"><strong>Picture credits.</strong> Generated illustrations are original '

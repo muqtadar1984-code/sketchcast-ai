@@ -35,10 +35,23 @@ from pathlib import Path
 
 log = logging.getLogger("publishing.academic_audit")
 
-SYSTEM = ("You are a senior Cambridge Lower Secondary Science examiner and a biology subject expert reviewing a "
-          "study-guide manuscript before publication. You did not write it. Be exact and sceptical: a statement is "
-          "wrong if a well-informed biology teacher would mark it wrong for learners aged 11-14, or if it would "
-          "plant a misconception later study must undo. Do not report matters of taste.")
+def curriculum(code: str) -> dict:
+    from publishing.schemas import ROOT
+    cfg = json.loads((ROOT / "config" / "curricula.json").read_text(encoding="utf-8"))
+    return {"name": code, "examiner": "a senior examiner for this curriculum", "context_strands": [], **cfg.get(code, {})}
+
+
+def system_for(work: dict) -> str:
+    c = curriculum(work.get("curriculum"))
+    subject = str(work.get("title") or "").split(":")[0].strip().lower() or "the subject"
+    return (f"You are {c['examiner']} and a {subject} subject expert reviewing a study-guide manuscript before "
+            "publication. You did not write it. Be exact and sceptical: a statement is wrong if a well-informed "
+            f"{subject} teacher would mark it wrong for learners aged {work.get('age_band')}, or if it would plant a "
+            "misconception later study must undo. Do not report matters of taste.")
+
+
+SYSTEM = "You are a senior examiner and subject expert reviewing a study-guide manuscript you did not write."
+
 
 TASK = """Audit Chapter {n} of "{book}" (ages {age}, {curriculum}). The chapter is given below exactly as printed:
 teaching blocks with ids (sid.bN), figures with their captions and source identities, and every question (xid)
@@ -78,16 +91,29 @@ Reply with JSON only: {{"findings": [...], "mapping": {{"sections": {{"s1": [cod
 "tiers": [...], "repetition": [...]}}"""
 
 
-def _objectives(env_file: Path) -> dict[str, str]:
-    """The 0893 nodes the book could touch: biology strands, TWS, SIC — and the
-    non-biology content codes the book's own blueprint cites (e.g. 8Pf.07)."""
+def _strand(code: str) -> str | None:
+    m = re.match(r"^\d+([A-Za-z]+)\.", code or "")
+    return m.group(1) if m else None
+
+
+def _objectives(env_file: Path, code: str, blueprint: set[str]) -> dict[str, str]:
+    """The curriculum nodes the book could touch: every node in the strands of the book's own content codes and
+    their sibling strands (same first letter, e.g. the Bp strand beside Bs), the curriculum's context strands
+    (skills, science in context), and every blueprint code itself."""
     from publishing.guard import client, load_env
     url, key = load_env(env_file)
+    own = {_strand(c) for c in blueprint if _strand(c)}
+    families = {st[:1] for st in own if len(st) == 2}
+    context = set(curriculum(code)["context_strands"])
     with client(url, key) as http:
-        cur = http.get("/curricula", params={"select": "id", "code": "eq.cambridge_ls_science_0893"}).json()[0]["id"]
+        cur = http.get("/curricula", params={"select": "id", "code": f"eq.{code}"}).json()[0]["id"]
         rows = http.get("/curriculum_nodes", params={"select": "code,title", "curriculum_id": f"eq.{cur}"}).json()
-    keep = re.compile(r"^[789](Bs|Bp|TWS[a-z]|SIC)\.|^8Pf\.07$")
-    return {r["code"]: r["title"] for r in rows if keep.match(r["code"] or "")}
+    keep = {}
+    for r in rows:
+        st = _strand(r["code"])
+        if r["code"] in blueprint or (st and (st in context or (len(st) == 2 and st[:1] in families))):
+            keep[r["code"]] = r["title"]
+    return keep
 
 
 def chapter_text(doc: dict, full: dict) -> str:
@@ -178,11 +204,11 @@ def _validators():
     return {"gemini-3.5-flash(HIGH)": author_client("gemini"), "claude-opus-5-5(adaptive,high)": OpusValidator()}
 
 
-def _ask(cli, prompt: str) -> tuple[dict, dict]:
+def _ask(cli, prompt: str, system: str = SYSTEM) -> tuple[dict, dict]:
     t0 = time.time()
     for attempt in (1, 2, 3):
         try:
-            r = cli.analyze(prompt, system=SYSTEM, max_tokens=32000)
+            r = cli.analyze(prompt, system=system, max_tokens=32000)
             if r.get("truncated"):
                 raise RuntimeError("reply truncated")
             data = r.get("data")
@@ -251,7 +277,10 @@ def run(slug: str, first: int, last: int, env_file: Path) -> dict:
     out = OUT / "manuscripts" / slug
     audit_dir = out / "rev2" / "audit"
     audit_dir.mkdir(parents=True, exist_ok=True)
-    objectives = _objectives(env_file)
+    drafts = [json.loads((out / f"ch{n:02d}-draft.json").read_text(encoding="utf-8")) for n in range(1, last + 1)
+              if (out / f"ch{n:02d}-draft.json").exists()]
+    blueprint = {c for d in drafts for c in d["chapter"]["node_codes"]}
+    objectives = _objectives(env_file, drafts[0]["work"]["curriculum"], blueprint)
     (audit_dir / "objectives-0893.json").write_text(json.dumps(objectives, indent=1, ensure_ascii=False), encoding="utf-8")
     obj_text = "\n".join(f"{k}: {v}" for k, v in sorted(objectives.items()))
     docs = {n: json.loads((out / f"ch{n:02d}-draft.json").read_text(encoding="utf-8")) for n in range(1, last + 1)
@@ -274,7 +303,7 @@ def run(slug: str, first: int, last: int, env_file: Path) -> dict:
                              chapter=chapter_text(doc, full))
         reports, costs = {}, {}
         with ThreadPoolExecutor(max_workers=2) as pool:
-            futs = {name: pool.submit(_ask, cli, prompt) for name, cli in vals.items()}
+            futs = {name: pool.submit(_ask, cli, prompt, system_for(doc["work"])) for name, cli in vals.items()}
             for name, fu in futs.items():
                 reports[name], costs[name] = fu.result()
         result = {"chapter": n, "validators": costs, "raw": reports, **merge(reports)}

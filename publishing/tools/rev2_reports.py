@@ -124,6 +124,8 @@ def build(slug: str) -> list[Path]:
     reports = rev2 / "reports"
     reports.mkdir(exist_ok=True)
     docs = {n: json.loads((out / f"ch{n:02d}-draft.json").read_text(encoding="utf-8")) for n in range(1, 11)}
+    from publishing.tools.academic_audit import curriculum as _curriculum
+    cname = _curriculum(docs[1]["work"]["curriculum"])["name"]
     # ── 1. corrections log ──────────────────────────────────────────────────
     rows, diffs, tot = [], [], {"accepted": 0, "resolved": 0, "open": 0, "P0": 0, "P0_resolved": 0, "changed_units": 0}
     p0_list, open_items, rejected, ch1_changes = [], [], [], ""
@@ -176,8 +178,7 @@ def build(slug: str) -> list[Path]:
         if n == 1:
             ch1_changes = block
     log_html = (f"<!doctype html><meta charset=utf-8><title>Corrections log</title><style>{CSS}</style>"
-                f"<h1>Scientific and assessment corrections log</h1><p class=lead>Revision 2 of the Biology study guide "
-                f"(Cells). Every correction accepted from the independent audit (Gemini 3.5 Flash at high reasoning, "
+                f"<h1>Scientific and assessment corrections log</h1><p class=lead>" + esc(docs[1]['work']['title']) + ". Every correction accepted from the independent audit (Gemini 3.5 Flash at high reasoning, "
                 f"Claude Opus 5.5 at high effort — never the model that wrote the text), how it was decided, and whether "
                 f"both validators confirmed it resolved.</p>"
                 f"<div class=kpi><b>{tot['accepted']}</b>corrections accepted</div><div class=kpi><b>{tot['resolved']}</b>"
@@ -202,7 +203,7 @@ def build(slug: str) -> list[Path]:
     other = [c for c, v in matrix.items() if c not in book and v["status"] != "not covered"]
     missing_tws = [c for c, v in matrix.items() if ("TWS" in c or "SIC" in c) and v["status"] == "not covered"]
     cov_html = (f"<!doctype html><meta charset=utf-8><title>Curriculum coverage</title><style>{CSS}</style>"
-                "<h1>Curriculum coverage matrix</h1><p class=lead>Cambridge Lower Secondary Science (0893). Every section "
+                "<h1>Curriculum coverage matrix</h1><p class=lead>" + esc(cname) + ". Every section "
                 "and question of the corrected chapters was mapped by an independent validator (Gemini 3.5 Flash, high "
                 "reasoning); only codes in the framework are counted.</p>"
                 "<h2>Chapters</h2><table><tr><th>Ch</th><th>Title</th><th>Content objectives (blueprint)</th>"
@@ -227,7 +228,7 @@ def build(slug: str) -> list[Path]:
                "curriculum-mapped, editorially refined draft. Local only: nothing published or deployed.</p>"
                "<div class=note><b>What this is, and is not.</b> Two AI validators from different model families, neither "
                "of them the author, audited every chapter, ruled on each other's findings and verified the corrections. "
-               "This is a strong check, not a substitute for a qualified biology teacher or examiner. Before publication, "
+               "This is a strong check, not a substitute for a qualified subject teacher or examiner. Before publication, "
                "an independent subject expert should read the book, starting with the open items below.</div>"
                f"<h2>Totals</h2><div class=kpi><b>{tot['accepted']}</b>corrections accepted</div><div class=kpi><b>"
                f"{tot['resolved']}</b>verified resolved</div><div class=kpi><b>{tot['open']}</b>open</div>"

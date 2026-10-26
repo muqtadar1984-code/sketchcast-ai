@@ -181,3 +181,18 @@ def test_restore_locked_undoes_a_reworded_or_dropped_block():
     assert check_preserved(old, fixed) == []
     texts = [b.get("text") or b.get("ref") for b in fixed[0]["blocks"]]
     assert texts[0] == "Added first." and "Added later." in texts and "book:amoeba" not in texts
+
+
+def test_questions_are_numbered_after_ordering_and_pictures_keep_the_questions_letters():
+    from publishing.manuscript.render import _photo_row, question_numbers, question_order, renumber_text
+    doc = {"exercises": [{"xid": "x1", "tier": "guided"}, {"xid": "x2", "tier": "challenge"},
+                         {"xid": "x3", "tier": "guided"}, {"xid": "x4", "tier": "independent"}]}
+    assert [x["xid"] for x in question_order(doc)] == ["x1", "x3", "x4", "x2"]
+    assert question_numbers(doc) == {"x1": "X1", "x3": "X2", "x4": "X3", "x2": "X4"}
+    assert renumber_text("as in X3 and X2", question_numbers(doc)) == "as in X2 and X4"
+    figs = {"p": {"img": "data:,", "credit": None}}
+    row = _photo_row(["p"], figs, {"C": "A sample scraped from a cheek"}, "Look at photograph C.")
+    assert '<span class="pl">C</span>' in row and "A sample scraped" in row
+    long = "A colour drawing (not a photograph) of a single leaf cut open in cross-section showing every layer"
+    row = _photo_row(["p"], figs, {"A": long}, "Look at drawing A.")
+    assert '<span class="ctx">' not in row and "alt=\"A colour drawing" in row

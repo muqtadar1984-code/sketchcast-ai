@@ -111,7 +111,7 @@ def back_html(work: dict, theme: dict, gloss: list[dict], index: dict[str, list[
     cov = (f"<h2>Curriculum coverage</h2><p class='lead'>How this book covers the {esc(curriculum)} objectives it "
            "targets. 'Taught in' gives chapter.section; 'Assessed in' gives practice questions. Mapped independently "
            "of the book's author.</p>"
-           f"<h3>Biology content objectives</h3><table class='cov'>{head}{rows(content)}</table>"
+           f"<h3>Content objectives</h3><table class='cov'>{head}{rows(content)}</table>"
            + (f"<h3>Other objectives the book touches</h3><table class='cov'>{head}{rows(other_content)}</table>" if other_content else "")
            + ("<div class='note'><strong>Cross-subject links.</strong> " + " ".join(
                f"{esc(x.get('code'))}: {esc(x.get('why'))}" for x in cross) + "</div>" if cross else "")
@@ -127,9 +127,13 @@ def back_html(work: dict, theme: dict, gloss: list[dict], index: dict[str, list[
             letters = L
             idx.append(f"<div class='L'>{esc(L)}</div>")
         idx.append(f"<div class='i'>{esc(t)}<span>{', '.join(map(str, index[t]))}</span></div>")
+    from publishing.tools.academic_audit import curriculum as _curriculum
+    cur = _curriculum(work.get("curriculum"))
     src = ("<h2>Sources and picture credits</h2>"
-           f"<p><strong>Curriculum.</strong> Cambridge Assessment International Education, <em>Cambridge Lower Secondary "
-           f"Science Curriculum Framework (0893)</em>. Objective codes and wording in this book follow that framework.</p>"
+           f"<p><strong>Curriculum.</strong> {esc(cur.get('owner', ''))}, <em>{esc(cur.get('framework', cur['name']))}</em>"
+           + (f" ({esc(cur['framework_url'])})" if cur.get("framework_url") else "")
+           + ". Objective codes and wording in this book follow that framework.</p>"
+           + (f"<p>{esc(cur['alignment_note'])}</p>" if cur.get("alignment_note") else "")
            "<p><strong>Text and illustrations.</strong> The teaching text, questions and illustrations are original "
            "SketchCast work unless credited below.</p>"
            "<p><strong>Photographs.</strong> Used under the licences named, with their authors credited:</p><ul>"
