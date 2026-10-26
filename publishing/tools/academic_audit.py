@@ -91,11 +91,13 @@ def _objectives(env_file: Path) -> dict[str, str]:
 
 
 def chapter_text(doc: dict, full: dict) -> str:
-    desc = {a["id"]: (a.get("kind"), (a.get("description") or "")[:240],
+    first = lambda d: re.split(r"(?<=[.!?])\s", re.sub(r"^(SOURCE|UNVERIFIED identity):\s*", "", (d or "").strip()),
+                               maxsplit=1)[0][:300]          # a whole first sentence, never a cut-off fragment
+    desc = {a["id"]: (a.get("kind"), first(a.get("description")),
                       ((a.get("identity") or {}).get("source_title") or "")) for a in full.get("library_assets") or []}
     for t in full.get("topics") or []:
         for f in t["figures"]:
-            desc[f["id"]] = ("diagram", (f.get("caption") or "")[:240], "")
+            desc[f["id"]] = ("diagram", first(f.get("caption")), "")
     out = [f"Chapter {doc['chapter']['number']}: {doc['chapter']['title']}",
            "Objectives: " + "; ".join(f"{o['code']} {o['text']}" for o in doc["chapter"].get("objectives") or []),
            f"Opening: {doc['plan'].get('opening')}"]
@@ -108,7 +110,8 @@ def chapter_text(doc: dict, full: dict) -> str:
                 refs = [b.get("ref")] if t == "figure" else [i.get("ref") for i in b.get("items") or [] if isinstance(i, dict)]
                 labels = [i.get("label") for i in b.get("items") or [] if isinstance(i, dict)]
                 pics = "; ".join(f"{r} = {desc.get(r)}" for r in refs)
-                out.append(f"[{bid} {t}] caption: {b.get('caption')} | labels: {labels} | pictures: {pics}")
+                out.append(f"[{bid} {t}] PRINTED caption: {b.get('caption')} | labels: {labels} | "
+                           f"(NOT printed — what each picture shows, from its source record: {pics})")
             elif t == "misconception":
                 out.append(f"[{bid} misconception] wrong: {b.get('wrong')} | right: {b.get('right')}")
             elif t == "key_term":

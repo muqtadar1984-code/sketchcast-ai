@@ -110,12 +110,20 @@ def _unit_of(where: str) -> str:
     w = str(where or "").strip()
     if re.match(r"^x\d+", w):
         return "exercises"
-    m = re.match(r"^(s\d+)", w)
+    m = re.match(r"^(?:fig:)?(s\d+)", w)          # "s3.b7" and "fig:s3.b7" both live in section s3
     if m:
         return m.group(1)
     if w.startswith("fig:"):
         return "fig:" + w[4:]
     return "chapter"
+
+
+def _about_audit_input(f: dict) -> bool:
+    """A finding about a picture's SOURCE DESCRIPTION (shown to the validators, never printed) — e.g. 'the
+    illustration description is truncated', 'asset metadata' — is not a problem on the page."""
+    t = (str(f.get("problem")) + " " + str(f.get("quote"))).lower()
+    return any(k in t for k in ("truncat", "asset metadata", "metadata instruction", "generation brief",
+                                "description of the illustration", "illustration description", "layer groups"))
 
 
 def accepted(audit: dict, rulings: dict) -> list[dict]:
@@ -203,7 +211,8 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, rnd: in
                 state.setdefault("costs", []).append({"stage": "adjudicate", "validator": other, **cost})
             state["rulings"] = rulings
             cf.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
-        acc = accepted(audit, state["rulings"])
+        acc = [f for f in accepted(audit, state["rulings"]) if not _about_audit_input(f)]
+        state["not_applicable"] = [f["id"] for f in audit["findings"] if _about_audit_input(f)]
         if rnd > 1:
             for f in acc:
                 if f.get("category") == "figure" or "picture" in str(f.get("problem")).lower():
