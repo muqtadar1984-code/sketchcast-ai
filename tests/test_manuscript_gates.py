@@ -199,6 +199,7 @@ def test_questions_are_numbered_after_ordering_and_pictures_keep_the_questions_l
 
 
 def test_back_matter_heading_is_found_after_the_folio():
+    from pathlib import Path
     import re
     page_text = "183\nCurriculum coverage\nHow this book covers"
     assert re.sub(r"^\s*\d+\s*", "", page_text).startswith("Curriculum coverage")
