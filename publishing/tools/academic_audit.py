@@ -204,6 +204,13 @@ def _same(a: dict, b: dict) -> bool:
     return len(ta & tb) / max(1, min(len(ta), len(tb))) >= 0.3
 
 
+def _conf(f: dict) -> float:
+    try:
+        return float(f.get("confidence") or 0)
+    except (TypeError, ValueError):       # a validator may write "high"
+        return {"high": 0.9, "medium": 0.6, "low": 0.3}.get(str(f.get("confidence")).lower(), 0.0)
+
+
 def merge(reports: dict[str, dict]) -> dict:
     names = list(reports)
     merged, used = [], set()
@@ -221,7 +228,7 @@ def merge(reports: dict[str, dict]) -> dict:
     for j, fb in enumerate(reports[b].get("findings") or []):
         if j not in used:
             merged.append({**fb, "agreement": "SINGLE", "by": [b]})
-    merged.sort(key=lambda f: (f.get("severity", "P2"), f["agreement"] != "CONFIRMED", -(f.get("confidence") or 0)))
+    merged.sort(key=lambda f: (str(f.get("severity", "P2")), f["agreement"] != "CONFIRMED", -_conf(f)))
     # mapping: a code counts when either validator assigns it; both = stronger evidence
     mapping: dict[str, dict] = {"sections": {}, "exercises": {}}
     for kind in ("sections", "exercises"):

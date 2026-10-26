@@ -32,6 +32,8 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from publishing.tools.academic_audit import _conf
+
 log = logging.getLogger("publishing.revise2")
 
 ADJUDICATE = """Another reviewer raised the findings below about Chapter {n} of a study guide for ages {age}
@@ -119,7 +121,7 @@ def _unit_of(where: str) -> str:
 def accepted(audit: dict, rulings: dict) -> list[dict]:
     out = []
     for f in audit["findings"]:
-        sev, conf = f.get("severity", "P2"), float(f.get("confidence") or 0)
+        sev, conf = f.get("severity", "P2"), _conf(f)
         r = rulings.get(f["id"])
         if f["agreement"] == "CONFIRMED":
             ok = True
