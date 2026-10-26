@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -171,7 +172,8 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, rnd: in
     from publishing.tools.academic_audit import _ask, _validators, chapter_text, system_for
     _load_model_env(env_file)
     out = OUT / "manuscripts" / slug
-    audit_dir, corr_dir = out / "rev2" / "audit", out / "rev2" / "corrections"
+    rev = os.getenv("PUBLISH_REV", "rev2")                         # each revision keeps its own records
+    audit_dir, corr_dir = out / rev / "audit", out / rev / "corrections"
     corr_dir.mkdir(parents=True, exist_ok=True)
     author = author_client("anthropic")       # built first: it reads the Claude backend when it is made
     vals = _validators()

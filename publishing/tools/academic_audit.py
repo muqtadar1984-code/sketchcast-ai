@@ -275,7 +275,7 @@ def run(slug: str, first: int, last: int, env_file: Path) -> dict:
     from publishing.report import OUT
     _load_model_env(env_file)
     out = OUT / "manuscripts" / slug
-    audit_dir = out / "rev2" / "audit"
+    audit_dir = out / os.getenv("PUBLISH_REV", "rev2") / "audit"     # each revision keeps its own records
     audit_dir.mkdir(parents=True, exist_ok=True)
     drafts = [json.loads((out / f"ch{n:02d}-draft.json").read_text(encoding="utf-8")) for n in range(1, last + 1)
               if (out / f"ch{n:02d}-draft.json").exists()]
