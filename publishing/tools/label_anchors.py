@@ -113,37 +113,75 @@ class OpusEyes:
             return {}
 
 
-def anchor(png: bytes, names: list[str], gem, eyes: OpusEyes, rounds: int = 3) -> dict:
+def _coords(text: str, w: int, h: int) -> list[tuple[float, float]]:
+    """Points a reviewer named in words, e.g. 'around (465,525)'."""
+    out = []
+    for x, y in re.findall(r"\(\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\)", str(text or "")):
+        x, y = float(x), float(y)
+        if 0 <= x <= w and 0 <= y <= h:
+            out.append((x, y))
+    return out
+
+
+def _verify(model_look, png: bytes, cands: list[tuple[str, float, float]]) -> dict[int, dict]:
+    numbered = [(i + 1, x, y) for i, (_, x, y) in enumerate(cands)]
+    ver = model_look(_dots(png, numbered), VERIFY.format(
+        dots="\n".join(f"dot {i + 1}: {name}" for i, (name, _, _) in enumerate(cands))))
+    return {int(d.get("n", 0)): d for d in (ver or {}).get("dots") or [] if str(d.get("n", "")).isdigit()}
+
+
+def anchor(png: bytes, names: list[str], gem, eyes: OpusEyes, rounds: int = 4) -> dict:
+    """Points proposed by one model are verified by the OTHER: Gemini proposes and Opus verifies; where Opus
+    rejects a point and says where the structure is, that point is verified by Gemini. A label is kept only with
+    a verified point."""
     from PIL import Image
     w, h = Image.open(io.BytesIO(png)).size
+    gem_look = lambda img, prompt: (gem.analyze_image(img, prompt, max_tokens=16000) or {}).get("data") or {}
     verified, history, todo, feedback = {}, [], list(names), ""
+    suggestions: dict[str, list[tuple[float, float]]] = {}
     for rnd in range(1, rounds + 1):
         if not todo:
             break
-        got = (gem.analyze_image(png, PROPOSE.format(w=w, h=h, names=json.dumps(todo), feedback=feedback),
-                                 max_tokens=4000) or {}).get("data") or {}
+        # 1. points Opus named for rejected labels, checked by Gemini
+        from_opus = [(n, *suggestions[n][0]) for n in todo if suggestions.get(n)]
+        if from_opus:
+            rul = _verify(gem_look, png, from_opus)
+            for i, (name, x, y) in enumerate(from_opus):
+                r = rul.get(i + 1) or {}
+                suggestions[name] = suggestions[name][1:]
+                if r.get("verdict") == "ok":
+                    verified[name] = [round(x, 1), round(y, 1)]
+            history.append({"round": rnd, "by": "opus→gemini", "points": from_opus, "rulings": list(rul.values())})
+            todo = [n for n in todo if n not in verified]
+            if not todo:
+                break
+        # 2. Gemini proposes the rest, Opus verifies
+        got = {}
+        for _ in range(3):                          # a reply cut off by the thinking budget is asked again
+            got = (gem.analyze_image(png, PROPOSE.format(w=w, h=h, names=json.dumps(todo), feedback=feedback),
+                                     max_tokens=24000) or {}).get("data") or {}
+            if (isinstance(got, dict) and got.get("points")) or isinstance(got, list):
+                break
         if isinstance(got, list):
             got = {"points": got}
-        pts = [p for p in got.get("points") or [] if p.get("visible") is not False and p.get("name") in todo
+        pts = [(p["name"], float(p["x"]), float(p["y"])) for p in got.get("points") or []
+               if p.get("visible") is not False and p.get("name") in todo
                and isinstance(p.get("x"), (int, float)) and isinstance(p.get("y"), (int, float))
                and 0 <= p["x"] <= w and 0 <= p["y"] <= h]
-        invisible = [p.get("name") for p in got.get("points") or [] if p.get("visible") is False]
         if not pts:
-            history.append({"round": rnd, "proposed": got, "note": "no usable points"})
-            break
-        numbered = [(i + 1, float(p["x"]), float(p["y"])) for i, p in enumerate(pts)]
-        ver = eyes.look(_dots(png, numbered), VERIFY.format(
-            dots="\n".join(f"dot {i + 1}: {p['name']}" for i, p in enumerate(pts))))
-        rulings = {int(d.get("n", 0)): d for d in ver.get("dots") or [] if str(d.get("n", "")).isdigit()}
+            history.append({"round": rnd, "by": "gemini→opus", "note": "no usable points", "proposed": got})
+            continue
+        rul = _verify(eyes.look, png, pts)
         wrong = []
-        for i, p in enumerate(pts):
-            r = rulings.get(i + 1) or {}
+        for i, (name, x, y) in enumerate(pts):
+            r = rul.get(i + 1) or {}
             if r.get("verdict") == "ok":
-                verified[p["name"]] = [round(p["x"], 1), round(p["y"], 1)]
+                verified[name] = [round(x, 1), round(y, 1)]
             else:
-                wrong.append({"name": p["name"], "you_placed": [p["x"], p["y"]], "reviewer_saw": r.get("sits_on"),
+                wrong.append({"name": name, "you_placed": [x, y], "reviewer_saw": r.get("sits_on"),
                               "where_it_is": r.get("where_it_is")})
-        history.append({"round": rnd, "points": pts, "rulings": list(rulings.values()), "invisible": invisible})
+                suggestions[name] = _coords(r.get("where_it_is"), w, h)
+        history.append({"round": rnd, "by": "gemini→opus", "points": pts, "rulings": list(rul.values())})
         todo = [x["name"] for x in wrong]
         feedback = ("A reviewer checked your previous points. These were NOT on the named structure; place them "
                     "again: " + json.dumps(wrong, ensure_ascii=False)) if wrong else ""
@@ -196,13 +234,22 @@ def run(slug: str, first: int, last: int, env_file: Path) -> dict:
                 j = jobs.setdefault(ref, {"png": fg["png"], "names": [], "where": []})
                 j["names"] += [m for m in names if m not in j["names"]]
                 j["where"].append(f"ch{n}")
-    todo = {ref: j for ref, j in jobs.items()
-            if set(j["names"]) - set((ann.get(ref) or {}).get("anchors", {})) - set((ann.get(ref) or {}).get("unverified", []))}
+    # only what is not yet verified is (re)tried; verified points are kept
+    todo = {}
+    for ref, j in jobs.items():
+        have = set((ann.get(ref) or {}).get("anchors", {}))
+        missing = [n for n in j["names"] if n not in have]
+        if missing:
+            todo[ref] = {**j, "names": missing}
 
     def one(item):
         ref, j = item
         try:
-            return ref, anchor(j["png"], j["names"], gem, eyes)
+            res = anchor(j["png"], j["names"], gem, eyes)
+            prev = ann.get(ref) or {}
+            res["anchors"] = {**(prev.get("anchors") or {}), **res["anchors"]}
+            res["history"] = (prev.get("history") or []) + res["history"]
+            return ref, res
         except Exception as e:  # noqa: BLE001 — one picture must not stop the book
             log.warning("%s failed: %s", ref, e)
             return ref, {"error": str(e)[:300], "anchors": {}, "unverified": j["names"]}
