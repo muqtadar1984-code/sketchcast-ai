@@ -18,3 +18,6 @@ venv/
 
 # Pinterest probe output (scripts/pinterest_probe.py) — local only
 probe-out/
+
+# SK packager output (clips, audio, manifests) — built artefacts, never committed
+out/
