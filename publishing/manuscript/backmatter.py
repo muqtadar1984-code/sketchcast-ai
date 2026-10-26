@@ -32,11 +32,23 @@ def glossary(docs: list[tuple[int, dict]]) -> list[dict]:
                     e = out.setdefault(k, {"term": b["term"].strip(), "meaning": b.get("text", "").strip(), "chapters": []})
                     if n not in e["chapters"]:
                         e["chapters"].append(n)
-    return sorted(out.values(), key=lambda e: e["term"].lower())
+    return sorted(({**e, "term": _glossary_case(e["term"], docs)} for e in out.values()), key=lambda e: e["term"].lower())
+
+
+def _glossary_case(term: str, docs: list[tuple[int, dict]]) -> str:
+    """One house style: lower case, unless the term is an abbreviation (DNA) or the chapters write it with a
+    capital in mid-sentence (a genus name such as Amoeba)."""
+    if not term or term.isupper() or term[:1].islower():
+        return term
+    text = " ".join(str(b.get("text") or "") for _, d in docs for s in d["sections"] for b in s.get("blocks") or [])
+    mid = re.search(r"[a-z,;]\s+\*{0,2}_?\*?" + re.escape(term) + r"\b", text)
+    return term if mid else term[:1].lower() + term[1:]
 
 
 FUNCTION_WORDS = {"in", "on", "to", "the", "a", "an", "at", "of", "by", "for", "and", "or", "is", "are", "step",
-                  "up", "out", "into", "from", "with", "contributes", "notice", "look", "how", "why", "what", "when"}
+                  "up", "out", "into", "from", "with", "contributes", "contribute", "notice", "look", "how", "why",
+                  "what", "when", "share", "shares", "contents", "content", "same", "both", "each", "every", "all",
+                  "one", "two", "more", "less", "only", "not", "no", "very", "much", "many", "most", "some"}
 
 
 def _index_worthy(w: str) -> bool:
@@ -109,8 +121,9 @@ def back_html(work: dict, theme: dict, gloss: list[dict], index: dict[str, list[
                   for x in (ch.get("map") or {}).get("cross_subject") or []}.values())
     head = "<tr><th>Code</th><th>Objective</th><th>Taught in (chapter.section)</th><th>Assessed in</th><th>Status</th></tr>"
     cov = (f"<h2>Curriculum coverage</h2><p class='lead'>How this book covers the {esc(curriculum)} objectives it "
-           "targets. 'Taught in' gives chapter.section; 'Assessed in' gives practice questions. Mapped independently "
-           "of the book's author.</p>"
+           "targets. 'Taught in' gives chapter.section; 'Assessed in' gives practice questions by their printed numbers. "
+           "A claim is listed only where two separate reviews, neither by the book's author, agreed on it and quoted the "
+           "evidence from the text. 'Assessed only' marks a gap: a question with no matching teaching.</p>"
            f"<h3>Content objectives</h3><table class='cov'>{head}{rows(content)}</table>"
            + (f"<h3>Other objectives the book touches</h3><table class='cov'>{head}{rows(other_content)}</table>" if other_content else "")
            + ("<div class='note'><strong>Cross-subject links.</strong> " + " ".join(
@@ -134,7 +147,7 @@ def back_html(work: dict, theme: dict, gloss: list[dict], index: dict[str, list[
            + (f" ({esc(cur['framework_url'])})" if cur.get("framework_url") else "")
            + ". Objective codes and wording in this book follow that framework.</p>"
            + (f"<p>{esc(cur['alignment_note'])}</p>" if cur.get("alignment_note") else "")
-           "<p><strong>Text and illustrations.</strong> The teaching text, questions and illustrations are original "
+           + "<p><strong>Text and illustrations.</strong> The teaching text, questions and illustrations are original "
            "SketchCast work unless credited below.</p>"
            "<p><strong>Photographs.</strong> Used under the licences named, with their authors credited:</p><ul>"
            + "".join(f"<li>{c}</li>" for c in credits) + "</ul>")
@@ -154,7 +167,7 @@ table.cov {{ width: 100%; border-collapse: collapse; font-size: 7.8pt; line-heig
 table.cov th {{ text-align: left; background: var(--soft); color: var(--brand-dark); padding: 1.4mm 2mm; }}
 table.cov td {{ padding: 1.2mm 2mm; border-bottom: .4pt solid var(--line); vertical-align: top; }}
 table.cov tr {{ break-inside: avoid; }} td.c {{ font-weight: 700; color: var(--brand-dark); white-space: nowrap; }}
-td.st {{ white-space: nowrap; }} td.st.not {{ color: #a3542b; font-weight: 600; }} td.st.taught {{ color: var(--brand); }}
+td.st {{ white-space: nowrap; }} td.st.not, td.st.assessed {{ color: #a3542b; font-weight: 600; }} td.st.taught {{ color: var(--brand); }}
 .note {{ background: var(--soft); border-left: 2.4pt solid var(--brand); padding: 2.5mm 4mm; margin: 4mm 0; font-size: 8.6pt; }}
 .gl {{ columns: 2; column-gap: 8mm; }} .g {{ break-inside: avoid; margin: 0 0 2.2mm; }}
 .g .t {{ font-weight: 700; color: var(--brand-dark); }} .g .ch {{ color: var(--muted); font-size: 8pt; white-space: nowrap; }}

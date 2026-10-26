@@ -621,7 +621,9 @@ def credit_line(c: dict) -> str:
     lic = html.escape(c.get("licence") or "")
     lu = licence_url(c.get("licence") or "")
     lic = f'<a href="{lu}">{lic}</a>' if lu else lic
-    return f"{title} by {who}, {src}, {lic}. Resized for print."
+    addresses = "; ".join(x for x in (f"source: {html.escape(c['url'])}" if c.get("url") else "",
+                                       f"licence: {lu}" if lu else "") if x)
+    return f"{title} by {who}, {src}, {lic}. Resized for print." + (f" <span class='addr'>({addresses})</span>" if addresses else "")
 
 
 def _sort(x: dict) -> tuple[str, str]:

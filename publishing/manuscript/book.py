@@ -154,7 +154,11 @@ def compile_book(slug: str, first: int, last: int, env_file: Path, label: str, p
             log.warning("chapter %d has no draft yet; left out", n)
     # chapters first (their lengths set the contents page numbers); each opens on a right-hand (odd) page
     parts, chapters, at = [], [], 1
+    seen_videos: set[str] = set()
     for n, doc, full in docs:
+        # a lesson video is printed with the first chapter it belongs to, never repeated (founder 2026-10-26)
+        doc = {**doc, "videos": [v for v in doc.get("videos") or [] if v not in seen_videos]}
+        seen_videos |= set(doc["videos"])
         if at % 2 == 0:
             parts.append("blank")
             at += 1
@@ -172,7 +176,7 @@ def compile_book(slug: str, first: int, last: int, env_file: Path, label: str, p
     pdf_of = {c["number"]: next(Path(x) for x in parts if x != "blank" and Path(x).name.startswith(f"book-ch{c['number']:02d}"))
               for c in chapters}
     index = BM.index_pages(BM.index_terms(pairs, gloss), [(c["number"], pdf_of[c["number"]], c["start"]) for c in chapters])
-    rev2 = out / "rev2"
+    rev2 = out / "rev3" if (out / "rev3" / "coverage-matrix.json").exists() else out / "rev2"
     matrix = json.loads((rev2 / "coverage-matrix.json").read_text(encoding="utf-8")) if (rev2 / "coverage-matrix.json").exists() else {}
     coverage = json.loads((rev2 / "coverage.json").read_text(encoding="utf-8")) if (rev2 / "coverage.json").exists() else {}
     credits = []
