@@ -422,7 +422,42 @@ def test_a_malformed_objective_item_is_left_off_the_quiz_not_marked_free():
     assert bank_item_to_question({"item_type": "match", "stem": "S", "answer": {"pairs": [{"left": "a", "right": "b"}]}}) is None
     assert bank_item_to_question({"item_type": "numerical", "stem": "S", "answer": {"value": 3}}) is None
     good = {"item_type": "true_false", "stem": "S", "answer": {"value": True}, "marks": "2"}
-    assert bank_questions([{"item_type": "mcq", "stem": "bad"}, good]) == [{"id": "q1", "type": "true_false", "prompt": "S", "answer": True, "marks": 2}]
+    assert bank_questions([{"item_type": "mcq", "stem": "bad"}, good]) == [
+        {"id": "q1", "type": "true_false", "prompt": "S", "answer": True, "marks": 2,
+         "bank_item_id": None, "objective_ref": None, "teaching_objective_id": None}]
+
+
+def test_a_quiz_question_keeps_its_bank_item_and_objective():
+    from docgen.questions import bank_questions
+
+    items = [
+        {"id": "b-skip", "item_type": "short_answer", "stem": "Explain.", "answer": {"text": "x"}, "objective_ref": "o9"},
+        {"id": "b-1", "item_type": "true_false", "stem": "S1", "answer": {"value": True}, "objective_ref": "o1",
+         "teaching_objective_id": "to-77"},
+        {"id": "b-2", "item_type": "fill_blank", "stem": "S2", "answer": {"text": "cell"}, "objective_ref": "o2"},
+    ]
+    qs = bank_questions(items)
+    # The player's ids stay q1.. (the skipped subjective item takes none); the bank identity rides along.
+    assert [(q["id"], q["bank_item_id"], q["objective_ref"], q["teaching_objective_id"]) for q in qs] == [
+        ("q1", "b-1", "o1", "to-77"), ("q2", "b-2", "o2", None)]
+
+
+def test_the_written_quiz_file_carries_the_bank_identity_but_not_for_a_student(tmp_path, uploads):
+    import json
+
+    bank = _objective_bank([("true_false", 1, {"value": False}, {"teaching_objective_id": "to-1"}),
+                            ("fill_blank", 2, {"text": "XQZFILL"}, {})])
+    sb = _sb(bank, {**SET, "question_ids": [it["id"] for it in bank]}, BLUEPRINT)
+    render_question_set(sb, GEN, "gen-ws", tmp_path, "owner/gen-ws", {}, "en")
+    qs = json.loads((tmp_path / "questions.json").read_text(encoding="utf-8"))["questions"]
+    by_bank = {q["bank_item_id"]: q for q in qs}
+    assert set(by_bank) == {"b001", "b002"}, "both gradable items traced to their topic_questions rows"
+    assert by_bank["b001"]["id"] == "q1" and by_bank["b001"]["objective_ref"] == "o1"
+    assert by_bank["b001"]["teaching_objective_id"] == "to-1"
+    assert by_bank["b002"]["id"] == "q2" and by_bank["b002"]["objective_ref"] == "o2" and by_bank["b002"]["teaching_objective_id"] is None
+    # The app's stripQuiz builds the student copy field by field (id, type, prompt, marks, options/left, image),
+    # so these keys are server-only by construction; the answer fields the file also holds are the proof of the contract.
+    assert by_bank["b001"]["answer"] is False
 
 
 def test_a_quiz_upload_failure_degrades_to_print_only(tmp_path, uploads, monkeypatch):

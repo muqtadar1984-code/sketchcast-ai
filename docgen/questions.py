@@ -211,11 +211,36 @@ def _bank_marks(item: dict, default: int = 1) -> int:
         return default
 
 
+def _bank_trace(item: dict) -> dict:
+    """The identity that ties an emitted question back to the bank:
+    ``bank_item_id`` (the topic_questions row id), ``objective_ref`` and
+    ``teaching_objective_id``. Always present, None when the item has none."""
+    def _s(key: str):
+        v = item.get(key)
+        return str(v).strip() or None if v is not None else None
+    return {"bank_item_id": _s("id"), "objective_ref": _s("objective_ref"),
+            "teaching_objective_id": _s("teaching_objective_id")}
+
+
 def bank_item_to_question(item: dict) -> dict | None:
     """One approved bank item as a player question (no id — the caller
     numbers), or None when the item is subjective or malformed (an MCQ with
     no option under its answer key, a match with no pairs): a question the
-    engine cannot mark must not reach the paper as a free mark."""
+    engine cannot mark must not reach the paper as a free mark.
+
+    Every question also carries ``bank_item_id``, ``objective_ref`` and
+    ``teaching_objective_id`` (None when the item has none) so a student's
+    answer can be traced to the objective it assesses. These are SERVER-ONLY:
+    the app's ``stripQuiz`` (src/app/api/quiz/logic.ts) builds the student
+    copy field by field, so they never reach a student, and ``scoreQuiz``
+    ignores them."""
+    q = _bank_item_core(item)
+    if q is not None:
+        q.update(_bank_trace(item))
+    return q
+
+
+def _bank_item_core(item: dict) -> dict | None:
     if not isinstance(item, dict):
         return None
     t = str(item.get("item_type") or "").strip()
@@ -260,7 +285,8 @@ def bank_questions(items: list[dict]) -> list[dict]:
     """The gradable questions of a composed set, numbered q1.. in the set's
     order with the subjective items SKIPPED (not renumbered around — the
     printed sheet has its own numbering per section, so the two never
-    matched anyway)."""
+    matched anyway). ``id`` is the player's; the bank identity rides along
+    as ``bank_item_id`` (see ``bank_item_to_question``)."""
     out: list[dict] = []
     for it in items:
         q = bank_item_to_question(it)
