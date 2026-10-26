@@ -147,7 +147,8 @@ def chapter_text(doc: dict, full: dict) -> str:
             elif t == "list":
                 out.append(f"[{bid} list] " + " / ".join(map(str, b.get("items") or [])))
             elif t == "table":
-                out.append(f"[{bid} table] {b.get('headers')} " + " | ".join(map(str, b.get("rows") or [])))
+                head = b.get("headers") or b.get("columns") or b.get("header")
+                out.append(f"[{bid} table] headings: {head} | rows: " + " | ".join(map(str, b.get("rows") or [])))
             elif t == "worked_example":
                 out.append(f"[{bid} worked_example] {b.get('problem')} steps: {b.get('steps')} answer: {b.get('answer')}")
             else:

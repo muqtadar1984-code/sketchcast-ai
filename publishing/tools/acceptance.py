@@ -73,15 +73,15 @@ def run(slug: str, answers: bool) -> dict:
         r["letters"] = bad_letters
         r["descriptions_printed"] = long_notes
         # numbered parts named by a question must be drawn on its picture; specimen notes it relies on must print
-        from publishing.manuscript.render import DESCRIBES_PICTURE, annotations_for
+        from publishing.manuscript.render import DESCRIBES_PICTURE, annotations_for, point_for
         from publishing.tools.label_anchors import NUMBERED
         ann = annotations_for(slug)
         missing_markers, notes_missing = [], []
         for x in question_order(doc):
             refs = ([x["figure_ref"]] if x.get("figure_ref") else []) + list(x.get("figure_refs") or [])
             if refs and NUMBERED.search(x.get("stem") or ""):
-                pts = {k for ref in refs for k in ((ann.get(ref) or {}).get("anchors") or {})}
-                if not x.get("markers") or any(v not in pts for v in x["markers"].values()):
+                pts = {k: v for ref in refs for k, v in ((ann.get(ref) or {}).get("anchors") or {}).items()}
+                if not x.get("markers") or any(point_for(v, pts) is None for v in x["markers"].values()):
                     missing_markers.append(nums[x["xid"]])
             for k, v in (x.get("figure_context") or {}).items():
                 if v and len(str(v).split()) <= 30 and not DESCRIBES_PICTURE.search(str(v)) and                         " ".join(str(v).split()[:6]) not in " ".join(text.split()):

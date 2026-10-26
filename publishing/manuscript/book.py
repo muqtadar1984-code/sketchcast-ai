@@ -220,7 +220,9 @@ def compile_book(slug: str, first: int, last: int, env_file: Path, label: str, p
     if len(book) % 2:                       # chapter 1 opens on a right-hand page
         _blank(book, p, edition)
     contents_at = next(i for i, pg in enumerate(front) if pg.get_text().lstrip().startswith("Contents")) + 1
-    toc = [[1, "Cover", 1], [1, "Contents", contents_at]]
+    preface_at = next((i + 1 for i, pg in enumerate(front) if pg.get_text().lstrip().startswith("Preface")), None)
+    toc = [[1, "Cover", 1]] + ([[1, "Preface", preface_at]] if preface_at else []) + [[1, "Contents", contents_at]]
+    toc.sort(key=lambda t: t[2])
     for part in parts:
         if part == "blank":
             _blank(book, p, edition)
@@ -236,6 +238,11 @@ def compile_book(slug: str, first: int, last: int, env_file: Path, label: str, p
         book.insert_pdf(back_pdf)
         toc += [[1, t, pg + offset] for t, pg in back]
     book.set_toc(toc)
+    if edition == "print":                  # declare the trim inside the bleed, so a printer's preflight sees both
+        bl = p["bleed_mm"] * 72 / 25.4
+        for pg in book:
+            pg.set_bleedbox(pg.mediabox)
+            pg.set_trimbox(fitz.Rect(pg.mediabox.x0 + bl, pg.mediabox.y0 + bl, pg.mediabox.x1 - bl, pg.mediabox.y1 - bl))
     book.set_metadata({"title": work["title"], "author": "SketchCast", "subject": label,
                        "keywords": "; ".join(k for k in (label, prepared_for) if k)})
     name = f"{slug}-{label.lower().replace(' ', '-')}-{edition}.pdf"

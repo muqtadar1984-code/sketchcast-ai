@@ -96,6 +96,7 @@ below across the WHOLE chapter so the chapter is consistent with itself, scienti
 curriculum scope (where an objective limits a topic, "limited to ...", nothing beyond that list). Where a question depends on teaching that was removed, either restore a short, correct
 teaching sentence or rewrite the question — whichever keeps the objective covered. A challenge question must ask the
 learner to apply, interpret or reason, not repeat a printed sentence. Change nothing the problems do not touch.
+Never remove a picture block: where a caption claims more than its picture shows, rewrite the caption.
 
 Problems:
 {fixes}
@@ -160,6 +161,29 @@ def accepted(audit: dict, rulings: dict) -> list[dict]:
             fix = (r or {}).get("fix") if r and r["verdict"] == "partly" and r.get("fix") else f.get("fix")
             out.append({**f, "fix": fix, "ruling": r})
     return out
+
+
+def keep_pictures(before: list[dict], after: list[dict]) -> list[tuple[str, str]]:
+    """A whole-chapter rewrite may not drop a picture (founder 2026-10-26, Revision 4: eight figures vanished).
+    Each figure missing from `after` goes back after the block that preceded it, or at its old index."""
+    have = {b.get("ref") for s in after for b in s.get("blocks") or [] if b.get("type") == "figure"}
+    by_sid = {s.get("sid"): s for s in after}
+    kept = []
+    for s in before:
+        tgt = (by_sid.get(s.get("sid")) or {}).get("blocks")
+        if tgt is None:
+            continue
+        for i, b in enumerate(s.get("blocks") or []):
+            if b.get("type") != "figure" or b.get("ref") in have:
+                continue
+            prev, pos = (s["blocks"][i - 1] if i else None), None
+            for j, c in enumerate(tgt if prev else []):
+                if c.get("type") == prev.get("type") and (c.get("text") or "")[:60] == (prev.get("text") or "")[:60]:
+                    pos = j + 1
+                    break
+            tgt.insert(min(i, len(tgt)) if pos is None else pos, json.loads(json.dumps(b)))
+            kept.append((s.get("sid"), b.get("ref")))
+    return kept
 
 
 def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, rnd: int = 1) -> dict:
@@ -289,8 +313,11 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, rnd: in
                     if isinstance(got.get("sections"), list) and isinstance(got.get("exercises"), list):
                         break
                 if isinstance(got.get("sections"), list) and len(got["sections"]) == len(doc["sections"]):
+                    kept = keep_pictures(doc["sections"], got["sections"])
                     doc["sections"], doc["exercises"] = got["sections"], got["exercises"] or doc["exercises"]
                     applied += [{**c, "unit": "chapter"} for c in got.get("changes") or []]
+                    applied += [{"id": ref, "what": "picture the rewrite dropped was put back", "unit": sid}
+                                for sid, ref in kept]
                 else:
                     applied += [{"id": f["id"], "what": "NOT APPLIED: chapter reply unusable"} for f in acc]
                 by_unit = {}

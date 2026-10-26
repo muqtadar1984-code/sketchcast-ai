@@ -37,6 +37,17 @@ def _norm(s: str) -> str:
     return re.sub(r"[\s_]+", " ", str(s or "").strip().lower())
 
 
+def point_for(name: str, points: dict):
+    """The verified point for a part a question names: exact, or a point whose name ends the part's name
+    ('sap vacuole' → 'vacuole'), so a fuller name in the answer still finds its structure."""
+    want = _norm(name)
+    pts = {_norm(k): v for k, v in (points or {}).items()}
+    if want in pts:
+        return pts[want]
+    tails = [k for k in pts if want.endswith(" " + k)]
+    return pts[max(tails, key=len)] if tails else None
+
+
 def _download(http, base: str, path: str) -> bytes:
     r = http.get(f"{base}/storage/v1/object/{BUCKET}/{path}")   # absolute: the client's base is /rest/v1
     r.raise_for_status()
@@ -175,8 +186,56 @@ def _png_size(png: bytes) -> tuple[float, float]:
     return float(w), float(h)
 
 
+def _strip_svg_anchored(png: bytes, labels: list[str], anchors: dict) -> tuple[str, list[str]]:
+    """A wide strip of panels (founder 2026-10-26, Fig. 9.4): a side column's leader would cross the other panels
+    to reach its own, so each label sits above or below its point with a short vertical leader instead. A label
+    goes to the nearer edge, or to the other edge when it would touch its neighbour; the strip takes the full width
+    the side columns would have used."""
+    w, h = _png_size(png)
+    width = IMG_W + 2 * COL_W
+    scale = width / w
+    ih = h * scale
+    rows: dict[str, list] = {"T": [], "B": []}
+    unplaced = []
+    pts = []
+    for lab in labels:
+        pt = anchors.get(lab) or anchors.get(_norm(lab))
+        if pt:
+            pts.append((lab, pt[0] * scale, pt[1] * scale))
+        else:
+            unplaced.append(lab)
+    for lab, x, y in sorted(pts, key=lambda t: t[1]):
+        half = len(lab) * 3.9 + 4
+        cx = min(max(x, half), width - half)
+        pref = "T" if y < ih / 2 else "B"
+        other = "B" if pref == "T" else "T"
+        fits = lambda r: not rows[r] or rows[r][-1][3] + 6 <= cx - half    # noqa: E731
+        row = pref if fits(pref) else other if fits(other) else pref
+        last = rows[row][-1] if rows[row] else None
+        if last is not None and last[3] + 6 > cx - half:
+            cx = last[3] + 6 + half
+        rows[row].append((lab, x, y, cx + half, cx))
+    top = LINE_H + 6 if rows["T"] else 0
+    height = top + ih + (LINE_H + 6 if rows["B"] else 0)
+    parts = []
+    for row, items in rows.items():
+        for lab, x, y, _, cx in items:
+            ty = top - 10 if row == "T" else top + ih + LINE_H - 4
+            ly = top - 6 if row == "T" else top + ih + 4
+            parts.append(f'<line x1="{cx:.1f}" y1="{ly:.1f}" x2="{x:.1f}" y2="{top + y:.1f}" class="leader"/>'
+                         f'<circle cx="{x:.1f}" cy="{top + y:.1f}" r="2.4" class="dot"/>'
+                         f'<text x="{cx:.1f}" y="{ty:.1f}" text-anchor="middle" class="lab">{html.escape(lab)}</text>')
+    b64 = base64.b64encode(png).decode()
+    svg = (f'<svg viewBox="0 0 {width} {height:.0f}" role="img">'
+           f'<image href="data:image/png;base64,{b64}" x="0" y="{top}" width="{width}" height="{ih:.1f}"/>'
+           + "".join(parts) + "</svg>")
+    return svg, unplaced
+
+
 def _figure_svg_anchored(png: bytes, labels: list[str], anchors: dict) -> tuple[str, list[str]]:
     w, h = _png_size(png)
+    if w >= 3 * h:
+        return _strip_svg_anchored(png, labels, anchors)
     scale = IMG_W / w
     ih = h * scale
     sides = {"L": [], "R": []}
@@ -223,7 +282,7 @@ def _marked_tile(f: dict, markers: dict, alt: str) -> str:
     r = max(w, h) * 0.028
     dots = []
     for num, name in sorted(markers.items(), key=lambda kv: str(kv[0])):
-        pt = pts.get(name) or pts.get(_norm(name))
+        pt = point_for(name, pts)
         if not pt:
             continue
         x, y = pt
@@ -301,6 +360,7 @@ figcaption { font-size: 9.5pt; color: var(--muted); margin-top: 3pt; }
 .match ol.ma { list-style: decimal; } .match ol.mb { list-style: upper-alpha; }
 .photos { display: flex; gap: 10pt; justify-content: center; margin: 6pt 0; break-inside: avoid; }
 .photos figure { margin: 0; width: 31%; } .photos img { width: 100%; border-radius: 4pt; }
+.photos figure.marked { width: 62%; } .photos.tiles figure.marked svg { height: auto; max-height: 300px; }
 .photos .pl { font-weight: 700; }
 .credits { font-size: 8.5pt; color: var(--muted); margin-top: 14pt; border-top: 1pt solid var(--line); padding-top: 6pt; }
 """
@@ -702,7 +762,8 @@ def _photo_row(refs: list[str], figs: dict, context: dict | None = None, stem: s
         short = ctx if ctx and len(str(ctx).split()) <= 30 and not DESCRIBES_PICTURE.search(str(ctx)) else ""
         alt = html.escape(str(ctx or ""), quote=True)
         pic = (_marked_tile(f, markers, alt) if markers and f.get("png") else f'<img src="{f["img"]}" alt="{alt}">')
-        tiles.append(f'<figure>{pic}<figcaption><span class="pl">{letter}</span>'
+        marked = ' class="marked"' if markers and f.get("png") else ""   # numbers must be readable at print size
+        tiles.append(f'<figure{marked}>{pic}<figcaption><span class="pl">{letter}</span>'
                      + (f'<span class="ctx">{md(short)}</span>' if short else "") + f'{_credit(f)}</figcaption></figure>')
     return f'<div class="photos tiles">{"".join(tiles)}</div>' if tiles else ""
 

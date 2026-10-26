@@ -9,6 +9,8 @@ graphics have no dpi and are never measured for it.
 """
 from __future__ import annotations
 
+import re
+
 FLOOR_DPI = 150      # below this a raster picture is visibly soft at its printed size: a hard defect
 PRINT_DPI = 300      # the print target: below it is a warning, never a failure on its own
 
@@ -49,7 +51,8 @@ def diagnose(pdf_path: str) -> dict:
                                  "detail": f"{spans[a_i]['text'][:30]!r} / {spans[b_i]['text'][:30]!r}"})
         # measured on SPANS: a diagram's left and right labels share a line and merge into one text
         # block that spans the picture between them, which is not text drawn over the picture
-        for tb in [sp["bbox"] for sp in spans]:
+        # a question's numbered marker (1, 2, 3 …) is drawn on its picture on purpose
+        for tb in [sp["bbox"] for sp in spans if not re.fullmatch(r"\d{1,2}", sp["text"].strip())]:
             for im in imgs:
                 bx = im["bbox"]
                 ox = min(tb[2], bx[2]) - max(tb[0], bx[0])

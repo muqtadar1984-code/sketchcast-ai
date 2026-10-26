@@ -205,3 +205,35 @@ def test_back_matter_heading_is_found_after_the_folio():
     assert re.sub(r"^\s*\d+\s*", "", page_text).startswith("Curriculum coverage")
     src = (Path(__file__).resolve().parents[1] / "publishing" / "manuscript" / "book.py").read_text(encoding="utf-8")
     assert r're.sub(r"^\s*\d+\s*"' in src
+
+
+def test_a_chapter_rewrite_cannot_drop_a_picture():
+    from publishing.tools.revise2 import keep_pictures
+    before = [{"sid": "s1", "blocks": [{"type": "paragraph", "text": "Intro."},
+                                        {"type": "figure", "ref": "book:a", "caption": "A."},
+                                        {"type": "paragraph", "text": "After."}]}]
+    after = [{"sid": "s1", "blocks": [{"type": "paragraph", "text": "New first."},
+                                       {"type": "paragraph", "text": "Intro."},
+                                       {"type": "paragraph", "text": "After."}]}]
+    assert keep_pictures(before, after) == [("s1", "book:a")]
+    assert [b.get("ref") for b in after[0]["blocks"]] == [None, None, "book:a", None]
+    assert keep_pictures(before, after) == []
+
+
+def test_a_wide_strip_puts_labels_over_their_own_panel():
+    import io, re
+    from PIL import Image
+    buf = io.BytesIO(); Image.new("RGB", (1600, 250), "white").save(buf, "PNG")
+    anchors = {"cell": [330, 60], "nucleus": [610, 128], "chromosome": [865, 100], "gene": [1120, 145]}
+    svg, unplaced = R._figure_svg_anchored(buf.getvalue(), list(anchors), anchors)
+    assert unplaced == []
+    for x1, x2 in re.findall(r'<line x1="([\d.]+)" y1="[\d.]+" x2="([\d.]+)"', svg):
+        assert abs(float(x1) - float(x2)) < 40      # near-vertical: no leader crosses into another panel
+
+
+def test_a_numbered_part_finds_its_point_under_a_shorter_name():
+    pts = {"vacuole": [1, 2], "cell membrane": [3, 4]}
+    assert R.point_for("sap vacuole", pts) == [1, 2]
+    assert R.point_for("Cell membrane", pts) == [3, 4]
+    assert R.point_for("nucleus", pts) is None
+    assert R.point_for("membrane", pts) is None          # a part is never matched to a longer, different name
