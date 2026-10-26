@@ -133,7 +133,7 @@ def accepted(audit: dict, rulings: dict) -> list[dict]:
     return out
 
 
-def run(slug: str, first: int, last: int, env_file: Path, max_busy: int) -> dict:
+def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, rnd: int = 1) -> dict:
     from publishing import localdb
     from publishing.blueprint import _load_model_env, author_client
     from publishing.guard import production_queue
@@ -152,13 +152,32 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int) -> dict
     summary = {}
 
     def chapter(n: int) -> tuple[int, dict]:
-        cf = corr_dir / f"ch{n:02d}.json"
+        cf = corr_dir / (f"ch{n:02d}.json" if rnd == 1 else f"ch{n:02d}-r{rnd}.json")
         state = json.loads(cf.read_text(encoding="utf-8")) if cf.exists() else {}
         if state.get("done"):
             return n, state
-        audit = json.loads((audit_dir / f"ch{n:02d}-audit.json").read_text(encoding="utf-8"))
-        for i, f in enumerate(audit["findings"]):
-            f["id"] = _fid(n, i)
+        if rnd == 1:
+            audit = json.loads((audit_dir / f"ch{n:02d}-audit.json").read_text(encoding="utf-8"))
+            for i, f in enumerate(audit["findings"]):
+                f["id"] = _fid(n, i)
+        else:
+            # the previous round's unresolved corrections (already accepted) and the new problems its
+            # verification found, merged across the two validators like an audit
+            from publishing.tools.academic_audit import merge
+            prev = json.loads((corr_dir / (f"ch{n:02d}.json" if rnd == 2 else f"ch{n:02d}-r{rnd - 1}.json"))
+                              .read_text(encoding="utf-8"))
+            prev_audit = json.loads((audit_dir / f"ch{n:02d}-audit.json").read_text(encoding="utf-8"))
+            for i, f in enumerate(prev_audit["findings"]):
+                f["id"] = _fid(n, i)
+            prev_by_id = {f["id"]: f for f in prev_audit["findings"]}
+            prev_by_id.update({f["id"]: f for f in prev.get("round_findings") or []})
+            carry = [{**prev_by_id[i], "agreement": "CONFIRMED"} for i in prev.get("unresolved") or [] if i in prev_by_id]
+            fresh = merge({k: {"findings": v} for k, v in (prev.get("new_findings") or {}).items()})["findings"]
+            fresh = [f for f in fresh if f.get("severity") in ("P0", "P1")]
+            audit = {"findings": carry + fresh}
+            for i, f in enumerate(audit["findings"]):
+                f["id"] = f["id"] if f.get("id") and f in carry else f"ch{n:02d}-R{rnd}-{i:03d}"
+            state["round_findings"] = audit["findings"]
         doc = json.loads((out / f"ch{n:02d}-draft.json").read_text(encoding="utf-8"))
         full = json.loads((out / f"ch{n:02d}-dossier-full.json").read_text(encoding="utf-8"))
         state.setdefault("original", copy.deepcopy({k: doc[k] for k in ("sections", "exercises")}))
@@ -183,6 +202,11 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int) -> dict
             state["rulings"] = rulings
             cf.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
         acc = accepted(audit, state["rulings"])
+        if rnd > 1:
+            for f in acc:
+                if f.get("category") == "figure" or "picture" in str(f.get("problem")).lower():
+                    f["fix"] = (str(f.get("fix") or "") + " — In this round do NOT ask for a new picture: delete the "
+                                "wrong figure block, or drop the question's picture refs and rewrite it to need none.")
         state["accepted"] = [f["id"] for f in acc]
         # ── correct, unit by unit ─────────────────────────────────────────────
         if "applied" not in state:
@@ -304,7 +328,7 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int) -> dict
                           "pictures": st.get("pictures"),
                           "usd": round(sum(c.get("usd") or 0 for c in st.get("costs") or []), 2)}
             log.info("ch%d: %s", n, summary[n])
-    (corr_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str), encoding="utf-8")
+    (corr_dir / f"summary-r{rnd}.json").write_text(json.dumps(summary, indent=1, default=str), encoding="utf-8")
     return summary
 
 
@@ -315,10 +339,11 @@ def main() -> None:
     a.add_argument("first", type=int)
     a.add_argument("last", type=int)
     a.add_argument("--max-busy", type=int, default=0)
+    a.add_argument("--round", type=int, default=1, help="2+: work on the previous round's unresolved and new findings")
     a.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
     x = a.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    print(json.dumps(run(x.slug, x.first, x.last, x.env_file, x.max_busy), indent=1, default=str))
+    print(json.dumps(run(x.slug, x.first, x.last, x.env_file, x.max_busy, x.round), indent=1, default=str))
 
 
 if __name__ == "__main__":
