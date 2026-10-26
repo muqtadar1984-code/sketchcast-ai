@@ -141,7 +141,8 @@ def _about_audit_input(f: dict) -> bool:
     illustration description is truncated', 'asset metadata' — is not a problem on the page."""
     t = (str(f.get("problem")) + " " + str(f.get("quote"))).lower()
     return any(k in t for k in ("truncat", "asset metadata", "metadata instruction", "generation brief",
-                                "description of the illustration", "illustration description", "layer groups"))
+                                "description of the illustration", "illustration description", "layer groups",
+                                "source metadata", "question ids", "out of numerical order", "printed sequence"))
 
 
 def accepted(audit: dict, rulings: dict) -> list[dict]:
