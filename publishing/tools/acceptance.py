@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 
@@ -38,7 +39,7 @@ def run(slug: str, answers: bool) -> dict:
     from publishing.report import OUT
     out = OUT / "manuscripts" / slug
     res: dict = {"chapters": {}}
-    rev = out / "rev3" if (out / "rev3" / "coverage.json").exists() else out / "rev2"
+    rev = next((out / r for r in (os.getenv("PUBLISH_REV", ""), "rev3", "rev2") if r and (out / r / "coverage.json").exists()))
     for n in range(1, 11):
         f = out / f"ch{n:02d}-draft.json"
         if not f.exists():
@@ -71,6 +72,25 @@ def run(slug: str, answers: bool) -> dict:
                     long_notes.append({"q": nums[x["xid"]], "note": str(v)[:80]})
         r["letters"] = bad_letters
         r["descriptions_printed"] = long_notes
+        # numbered parts named by a question must be drawn on its picture; specimen notes it relies on must print
+        from publishing.manuscript.render import DESCRIBES_PICTURE, annotations_for
+        from publishing.tools.label_anchors import NUMBERED
+        ann = annotations_for(slug)
+        missing_markers, notes_missing = [], []
+        for x in question_order(doc):
+            refs = ([x["figure_ref"]] if x.get("figure_ref") else []) + list(x.get("figure_refs") or [])
+            if refs and NUMBERED.search(x.get("stem") or ""):
+                pts = {k for ref in refs for k in ((ann.get(ref) or {}).get("anchors") or {})}
+                if not x.get("markers") or any(v not in pts for v in x["markers"].values()):
+                    missing_markers.append(nums[x["xid"]])
+            for k, v in (x.get("figure_context") or {}).items():
+                if v and len(str(v).split()) <= 30 and not DESCRIBES_PICTURE.search(str(v)) and                         " ".join(str(v).split()[:6]) not in " ".join(text.split()):
+                    notes_missing.append({"q": nums[x["xid"]], "note": str(v)[:60]})
+        r["markers_missing"] = missing_markers
+        r["specimen_notes_missing"] = notes_missing
+        lab = [(ref, v) for ref, v in ann.items() if any(c in v.get("where", []) for c in (f"ch{n}",))]
+        r["labels_verified"] = sum(len(v.get("anchors") or {}) for _, v in lab)
+        r["labels_withheld"] = [(ref[:24], v.get("unverified")) for ref, v in lab if v.get("unverified")]
         diag = json.loads((out / f"ch{n:02d}-diagnostics.json").read_text())
         r["hard_layout_defects"] = len(diag["hard"])
         res["chapters"][n] = r
@@ -110,14 +130,19 @@ def run(slug: str, answers: bool) -> dict:
         "figure_letter_mismatches": sum(len(c["letters"]) for c in s.values()),
         "long_descriptions_printed": sum(len(c["descriptions_printed"]) for c in s.values()),
         "hard_layout_defects": sum(c["hard_layout_defects"] for c in s.values()),
+        "numbered_questions_without_markers": sum(len(c["markers_missing"]) for c in s.values()),
+        "specimen_notes_missing": sum(len(c["specimen_notes_missing"]) for c in s.values()),
+        "labels_on_verified_points": sum(c["labels_verified"] for c in s.values()),
+        "labels_withheld_unverified": sum(len(u) for c in s.values() for _, u in c["labels_withheld"]),
         "coverage_claims_without_evidence": len(weak),
         "objectives_assessed_without_teaching": len(res["coverage"]["assessed_only"]),
     }
     if answers:
         res["summary"]["answer_keys"] = {v: sum(1 for k in res["answer_keys"].values() for c in k["checks"] if c.get("verdict") == v)
                                          for v in ("correct", "wrong", "ambiguous")}
-    (out / "rev3").mkdir(exist_ok=True)
-    (out / "rev3" / "acceptance.json").write_text(json.dumps(res, indent=1, ensure_ascii=False), encoding="utf-8")
+    rev_dir = out / os.getenv("PUBLISH_REV", "rev3")
+    rev_dir.mkdir(exist_ok=True)
+    (rev_dir / "acceptance.json").write_text(json.dumps(res, indent=1, ensure_ascii=False), encoding="utf-8")
     return res["summary"]
 
 
