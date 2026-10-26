@@ -77,7 +77,7 @@ def run(slug: str, first: int, last: int, env_file: Path) -> dict:
     vals = _validators()
     names = list(vals)
     out = OUT / "manuscripts" / slug
-    rev = out / "rev3"
+    rev = out / os.getenv("PUBLISH_REV", "rev3")
     rev.mkdir(exist_ok=True)
     objectives = json.loads((out / "rev2" / "audit" / "objectives-0893.json").read_text(encoding="utf-8"))
     obj_text = "\n".join(f"{k}: {v}" for k, v in sorted(objectives.items()))
@@ -123,15 +123,101 @@ def run(slug: str, first: int, last: int, env_file: Path) -> dict:
     return {"counts": counts, "usd": round(sum(c["usd"] for c in chapters.values()), 2)}
 
 
+RECHECK = """Does this {kind} {verb} the objective below? Judge strictly: TEACH means it explains what the objective says;
+ASSESS means answering it requires the learner to do what the objective says.
+
+Objective {code}: {text}
+
+{kind_cap}:
+{unit}
+
+Reply with JSON: {{"verdict": "yes"|"no", "evidence": "exact quoted words, or why not"}}"""
+
+
+def recheck(slug: str, env_file: Path, codes: list[str] | None = None) -> dict:
+    """A second, focused look at objectives whose status may be wrong (founder 2026-10-27: 8Bp.04 was 'assessed
+    only' though Chapter 3 teaches aerobic respiration in mitochondria). Candidates are the units EITHER validator
+    linked to the objective, plus sections sharing its key words; a claim is added only when BOTH validators say
+    yes on the focused question, with evidence."""
+    import re
+    from publishing.blueprint import _load_model_env
+    from publishing.manuscript.render import question_numbers
+    from publishing.report import OUT
+    from publishing.tools.academic_audit import _ask, _validators, system_for
+    _load_model_env(env_file)
+    os.environ["GEMINI_THINKING_ARTIFACT"] = "HIGH"
+    vals = _validators()
+    out = OUT / "manuscripts" / slug
+    rev = out / os.getenv("PUBLISH_REV", "rev3")
+    cov = json.loads((rev / "coverage.json").read_text(encoding="utf-8"))
+    matrix = json.loads((rev / "coverage-matrix.json").read_text(encoding="utf-8"))
+    todo = codes or [c for c, m in matrix.items() if m["status"] in ("taught only", "assessed only (no teaching found)")]
+    stop = {"the", "and", "of", "to", "in", "a", "an", "is", "that", "with", "for", "by", "as", "know", "describe",
+            "understand", "explain", "including", "limited", "their", "its", "be", "are", "on", "how", "use"}
+    log_ = []
+    for code in todo:
+        words = {w for w in re.findall(r"[a-z]{4,}", matrix[code]["text"].lower()) if w not in stop}
+        for n, c in cov.items():
+            doc = json.loads((out / f"ch{int(n):02d}-draft.json").read_text(encoding="utf-8"))
+            secs = {sx["sid"]: sx for sx in doc["sections"]}
+            xs = {x["xid"]: x for x in doc["exercises"]}
+            claimed = {("sections", u) for name, m in c["validators"].items() for u, items in (m.get("sections") or {}).items()
+                       for it in items or [] if (it.get("code") if isinstance(it, dict) else it) == code}
+            claimed |= {("exercises", u) for name, m in c["validators"].items() for u, items in (m.get("exercises") or {}).items()
+                        for it in items or [] if (it.get("code") if isinstance(it, dict) else it) == code}
+            for sid, sx in secs.items():
+                text = " ".join(str(b.get("text") or "") for b in sx["blocks"]).lower()
+                if len([w for w in words if w in text]) >= max(2, len(words) // 3):
+                    claimed.add(("sections", sid))
+            for kind, unit in sorted(claimed):
+                if code in (c["map"][kind].get(unit) or []):
+                    continue
+                body = (json.dumps(secs[unit], ensure_ascii=False) if kind == "sections" and unit in secs
+                        else json.dumps(xs.get(unit), ensure_ascii=False))
+                if body in ("null", "{}"):
+                    continue
+                votes = []
+                for name, cli in vals.items():
+                    data, _ = _ask(cli, RECHECK.format(kind="section" if kind == "sections" else "question",
+                                                       kind_cap="Section" if kind == "sections" else "Question",
+                                                       verb="teach" if kind == "sections" else "assess",
+                                                       code=code, text=matrix[code]["text"], unit=body[:12000]),
+                                   system_for(doc["work"]))
+                    votes.append(data)
+                ok = all(str(v.get("verdict")).lower() == "yes" for v in votes)
+                log_.append({"code": code, "chapter": n, kind: unit, "added": ok,
+                             "evidence": [v.get("evidence") for v in votes]})
+                if ok:
+                    c["map"][kind].setdefault(unit, []).append(code)
+                    c["agreed"][kind].setdefault(unit, {})[code] = {"evidence": votes[0].get("evidence"),
+                                                                    "evidence_2": votes[1].get("evidence"),
+                                                                    "via": "focused recheck"}
+    (rev / "coverage.json").write_text(json.dumps(cov, indent=1, ensure_ascii=False), encoding="utf-8")
+    for code, text in sorted(matrix.items()):
+        taught = [f"{n}.{sid[1:]}" for n, c in cov.items() for sid, cs in c["map"]["sections"].items() if code in cs]
+        assessed = [f"Ch{n} {c['numbers'].get(x, x.upper())}" for n, c in cov.items()
+                    for x, cs in c["map"]["exercises"].items() if code in cs]
+        matrix[code].update(taught=taught, assessed=assessed, status=(
+            "taught and assessed" if taught and assessed else "taught only" if taught
+            else "assessed only (no teaching found)" if assessed else "not covered"))
+    (rev / "coverage-matrix.json").write_text(json.dumps(matrix, indent=1, ensure_ascii=False), encoding="utf-8")
+    (rev / "coverage-recheck.json").write_text(json.dumps(log_, indent=1, ensure_ascii=False), encoding="utf-8")
+    return {c: matrix[c]["status"] for c in todo}
+
+
 def main() -> None:
     from publishing.cli import DEFAULT_ENV
     a = argparse.ArgumentParser()
     a.add_argument("slug")
     a.add_argument("first", type=int)
     a.add_argument("last", type=int)
+    a.add_argument("--recheck", nargs="*", help="focused second look; optionally only these codes")
     a.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
     x = a.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if x.recheck is not None:
+        print(json.dumps(recheck(x.slug, x.env_file, x.recheck or None), indent=1))
+        return
     print(json.dumps(run(x.slug, x.first, x.last, x.env_file), indent=1))
 
 
