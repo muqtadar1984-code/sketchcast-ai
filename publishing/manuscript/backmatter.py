@@ -35,13 +35,26 @@ def glossary(docs: list[tuple[int, dict]]) -> list[dict]:
     return sorted(out.values(), key=lambda e: e["term"].lower())
 
 
+FUNCTION_WORDS = {"in", "on", "to", "the", "a", "an", "at", "of", "by", "for", "and", "or", "is", "are", "step",
+                  "up", "out", "into", "from", "with", "contributes", "notice", "look", "how", "why", "what", "when"}
+
+
+def _index_worthy(w: str) -> bool:
+    """A bold phrase earns an index line when it names something: no clause punctuation, at most three words,
+    not an adverb, and not led by a function word ('In a gas', 'Step 1: …', 'contributes to')."""
+    w = w.strip()
+    words = w.split()
+    return (bool(words) and ":" not in w and len(words) <= 3 and not w.lower().endswith("ly")
+            and words[0].lower() not in FUNCTION_WORDS and not any(ch.isdigit() for ch in w))
+
+
 def index_terms(docs: list[tuple[int, dict]], gloss: list[dict]) -> list[str]:
     terms = {e["term"] for e in gloss}
     for _, doc in docs:
         for s in doc["sections"]:
             for b in s.get("blocks") or []:
                 for w in re.findall(r"\*\*([^*]{3,40})\*\*", str(b.get("text") or "")):
-                    if not w.lower().endswith("ly"):
+                    if _index_worthy(w):
                         terms.add(w.strip())
     seen, out = set(), []
     for t in sorted(terms, key=str.lower):
