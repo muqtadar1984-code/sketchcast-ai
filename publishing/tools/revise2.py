@@ -206,9 +206,16 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int) -> dict
                 fs = by_unit.get(s["sid"])
                 if not fs:
                     return s, []
-                got = author.analyze(CORRECT_SECTION.format(n=n, title=doc["chapter"]["title"], age=w["age_band"],
-                                                            fixes=fx(fs), section=json.dumps(s, ensure_ascii=False)),
-                                     max_tokens=12000)["data"]
+                got = None
+                for _ in range(3):                 # a reply that is not the JSON asked for is asked again
+                    got = (author.analyze(CORRECT_SECTION.format(n=n, title=doc["chapter"]["title"], age=w["age_band"],
+                                                                 fixes=fx(fs), section=json.dumps(s, ensure_ascii=False)),
+                                          max_tokens=16000) or {}).get("data")
+                    if isinstance(got, dict) and isinstance(got.get("blocks"), list):
+                        break
+                else:
+                    return s, [{"id": f["id"], "what": "NOT APPLIED: the correction reply was unusable", "unit": s["sid"]}
+                               for f in fs]
                 return ({"sid": s["sid"], "heading": got.get("heading") or s["heading"], "blocks": got["blocks"]},
                         [{**c, "unit": s["sid"]} for c in got.get("changes") or []] or
                         [{"id": f["id"], "what": "applied", "unit": s["sid"]} for f in fs])
@@ -219,10 +226,14 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int) -> dict
             applied += [c for r in res for c in r[1]]
             chapter_level = by_unit.get("chapter") or []
             if by_unit.get("exercises") or chapter_level:
-                got = author.analyze(CORRECT_EXERCISES.format(
-                    n=n, title=doc["chapter"]["title"], age=w["age_band"],
-                    fixes=fx((by_unit.get("exercises") or []) + [f for f in chapter_level if f.get("category") == "assessment"]),
-                    exercises=json.dumps(doc["exercises"], ensure_ascii=False)), max_tokens=32000)["data"]
+                got = {}
+                for _ in range(3):
+                    got = (author.analyze(CORRECT_EXERCISES.format(
+                        n=n, title=doc["chapter"]["title"], age=w["age_band"],
+                        fixes=fx((by_unit.get("exercises") or []) + [f for f in chapter_level if f.get("category") == "assessment"]),
+                        exercises=json.dumps(doc["exercises"], ensure_ascii=False)), max_tokens=32000) or {}).get("data") or {}
+                    if isinstance(got, dict) and isinstance(got.get("exercises"), list):
+                        break
                 byx = {x.get("xid"): x for x in got.get("exercises") or []}
                 doc["exercises"] = [byx.get(x["xid"], x) for x in doc["exercises"]]
                 applied += [{**c, "unit": "exercises"} for c in got.get("changes") or []]
