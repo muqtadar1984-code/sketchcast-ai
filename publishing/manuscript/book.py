@@ -175,7 +175,7 @@ def compile_book(slug: str, first: int, last: int, env_file: Path, label: str, p
         toc.append([1, f"Chapter {c['number']}: {c['title']}", start])
     book.set_toc(toc)
     book.set_metadata({"title": work["title"], "author": "SketchCast", "subject": label,
-                       "keywords": f"{label}; {prepared_for}"})
+                       "keywords": "; ".join(k for k in (label, prepared_for) if k)})
     name = f"{slug}-{label.lower().replace(' ', '-')}-{edition}.pdf"
     dest = out / name
     book.save(dest, garbage=3, deflate=True)
