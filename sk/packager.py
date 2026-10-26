@@ -43,6 +43,9 @@ log = logging.getLogger("sk.packager")
 
 WORLD_W, WORLD_H = 1280, 720
 ILLUSTRATION_H = 560.0
+ILLUSTRATION_W = 520.0
+LABEL_GAP = 48.0  # min vertical gap between labels (the renderer shoves overlapping text around otherwise)
+PX_PER_CHAR = {36: 15.0, 32: 13.5, 30: 12.5, 26: 11.0, 24: 10.0}
 MAX_NARRATION_WORDS = 170
 MAX_BOARD_LINES = 7
 MAX_LINE_CHARS = 42
@@ -179,8 +182,12 @@ def grounding(sentence: str, blocks: list[str]) -> float:
     toks = {t for t in _norm_tokens(sentence) if t not in _STOP}
     if not toks:
         return 0.0
+    # A spoken sentence often joins two neighbouring blocks ("Measure the
+    # image with a ruler, then use: magnification = …"), so adjacent pairs
+    # count as one source too.
+    sources = list(blocks) + [blocks[i] + " " + blocks[i + 1] for i in range(len(blocks) - 1)]
     best = 0.0
-    for b in blocks:
+    for b in sources:
         bt = set(_norm_tokens(b))
         best = max(best, len(toks & bt) / len(toks))
     return best
@@ -328,7 +335,9 @@ def scene_for(plan: dict, words: list[dict], narration: str, figures: list[Figur
             ill = None
         else:
             x0, y0, x1, y1 = b.box
-            scale = ILLUSTRATION_H / max(1.0, y1 - y0)
+            # Fit the picture in a 520×560 box on the left: a landscape asset
+            # (a slide, a graph) must not push the labels off the board.
+            scale = min(ILLUSTRATION_H / max(1.0, y1 - y0), ILLUSTRATION_W / max(1.0, x1 - x0))
             probe.elements[0].scale = scale
             r = renderer_factory(probe)
             x0, y0, x1, y1 = r.bound["ill"].box
@@ -349,7 +358,11 @@ def scene_for(plan: dict, words: list[dict], narration: str, figures: list[Figur
             hit_ill = {"box": [round(x0, 1), round(y0, 1), round(x1, 1), round(y1, 1)], "regions": {k: [round(v, 1) for v in box] for k, box in regions.items()}}
     hit_ill = locals().get("hit_ill")
 
-    n_label = 0
+    # Labels: one tidy column just right of the picture, in region order top
+    # to bottom, never closer than LABEL_GAP (the renderer otherwise shoves
+    # overlapping text to wherever it finds room — s2 had labels floating
+    # 200 px above their parts). Leader arrows go from the label to the part.
+    labels = []
     for item in plan["board"]:
         if item["kind"] != "label" or not ill:
             continue
@@ -357,30 +370,46 @@ def scene_for(plan: dict, words: list[dict], narration: str, figures: list[Figur
         if not reg:
             log.info("label %s: no region on the asset — skipped", item["part"])
             continue
-        n_label += 1
+        labels.append((item, reg))
+    labels.sort(key=lambda ir: (ir[1][1] + ir[1][3]) / 2)
+    ill_x1 = label_right_edge  # the picture's right edge (0 when no picture)
+    lx = ill_x1 + 70
+    last_y = -1e9
+    label_bottom = 0.0
+    for n_label, (item, reg) in enumerate(labels, 1):
         cy = (reg[1] + reg[3]) / 2
-        lx = reg[2] + 70
-        text_w = 14 * len(item["text"]) + 20
+        y = max(cy, last_y + LABEL_GAP)
+        last_y = y
+        label_bottom = max(label_bottom, y)
+        text_w = PX_PER_CHAR[26] * len(item["text"]) + 20
         label_right_edge = max(label_right_edge, lx + text_w)
         t0, _ = cue_of(item, 1000 * n_label)
-        elements.append({"id": f"l{n_label}", "type": "text", "text": item["text"], "at": (lx, cy), "role": "label", "size": 26, "anchor": "lm"})
-        elements.append({"id": f"a{n_label}", "type": "arrow", "tail": (lx - 8, cy), "head": (reg[2] + 4, cy), "color": "muted"})
+        elements.append({"id": f"l{n_label}", "type": "text", "text": item["text"], "at": (lx, y), "role": "label", "size": 26, "anchor": "lm"})
+        elements.append({"id": f"a{n_label}", "type": "arrow", "tail": (lx - 8, y), "head": (reg[2] + 4, cy), "color": "muted"})
         actions.append({"verb": "draw", "target": f"a{n_label}", "at": {"sec": sec(t0)}, "duration": 0.5})
         actions.append({"verb": "write", "target": f"l{n_label}", "at": {"sec": sec(t0 + 400)}, "duration": 0.6})
 
-    col_x = max(120.0 if not ill else label_right_edge + 50, 120.0)
-    col_x = min(col_x, 860.0)
-    row_y = 100.0
+    # Written lines: a column to the right of the picture. With labels, the
+    # lines start BELOW the last label (same column) so nothing overlaps;
+    # a line that would run off the right edge shrinks its font to fit.
+    if ill and labels:
+        col_x, row_y = lx, label_bottom + 70.0
+    elif ill:
+        col_x, row_y = ill_x1 + 70.0, 100.0
+    else:
+        col_x, row_y = 120.0, 100.0
     row_gap = 62.0
     size_for = {"term": 36, "label": 30, "caption": 26}
     for item in plan["board"]:
         if item["kind"] != "write":
             continue
-        if row_y > WORLD_H - 150:
+        if row_y > WORLD_H - 90:
             log.info("write %s: no room left on the board — skipped", item["id"])
             continue
         t0, t1 = cue_of(item, 2000)
         size = size_for.get(item["role"], 32)
+        while size > 24 and col_x + PX_PER_CHAR.get(size, 13.5) * len(item["text"]) > WORLD_W - 40:
+            size = {36: 32, 32: 30, 30: 26, 26: 24}[size]
         elements.append({"id": item["id"], "type": "text", "text": item["text"], "at": (col_x, row_y), "role": item["role"] if item["role"] != "term" else "term", "size": size, "anchor": "lm"})
         actions.append({"verb": "write", "target": item["id"], "at": {"sec": sec(t0)}, "duration": max(0.8, min(8.0, sec(max(t1 - t0, 1200))))})
         row_y += row_gap
@@ -551,10 +580,13 @@ def main(argv: list[str] | None = None) -> int:
     graph_units = []
     failures = []
     for u in units:
-        if want and u.key not in want:
-            continue
         udir = chap_dir / u.key / "explain-main"
         seg_path = udir / "segment.json"
+        if want and u.key not in want:
+            # Not rebuilt this run, but an existing segment still belongs in the graph.
+            if seg_path.exists():
+                graph_units.append((u, json.loads(seg_path.read_text(encoding="utf-8"))))
+            continue
         if args.resume and seg_path.exists():
             seg = json.loads(seg_path.read_text(encoding="utf-8"))
             if seg.get("draft_hash") == dh and (args.dry or (udir / "clip.mp4").exists()):
