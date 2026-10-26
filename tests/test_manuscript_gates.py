@@ -196,3 +196,11 @@ def test_questions_are_numbered_after_ordering_and_pictures_keep_the_questions_l
     long = "A colour drawing (not a photograph) of a single leaf cut open in cross-section showing every layer"
     row = _photo_row(["p"], figs, {"A": long}, "Look at drawing A.")
     assert '<span class="ctx">' not in row and "alt=\"A colour drawing" in row
+
+
+def test_back_matter_heading_is_found_after_the_folio():
+    import re
+    page_text = "183\nCurriculum coverage\nHow this book covers"
+    assert re.sub(r"^\s*\d+\s*", "", page_text).startswith("Curriculum coverage")
+    src = (Path(__file__).resolve().parents[1] / "publishing" / "manuscript" / "book.py").read_text(encoding="utf-8")
+    assert r're.sub(r"^\s*\d+\s*"' in src

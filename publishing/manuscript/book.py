@@ -202,7 +202,9 @@ def compile_book(slug: str, first: int, last: int, env_file: Path, label: str, p
                       encoding="utf-8")
         back_pdf = fitz.open(_print(bh, build / f"back-{edition}.pdf"))
         for title in ("Curriculum coverage", "Glossary", "Index", "Sources and picture credits"):
-            i = next((k for k, pg in enumerate(back_pdf) if re.sub(r"^s*d+s*", "", pg.get_text()).startswith(title)), None)
+            # a page's text begins with its folio ("183 Curriculum coverage …"), so the number is skipped first
+            i = next((k for k, pg in enumerate(back_pdf)
+                      if re.sub(r"^\s*\d+\s*", "", pg.get_text()).startswith(title)), None)
             if i is not None:
                 back.append((title, back_start + i))
     pref = BM.preface(slug, pairs, out) if matrix else ""
