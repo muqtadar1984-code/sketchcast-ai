@@ -1,0 +1,12 @@
+{
+  "notes": "Per-curriculum facts the engine prints or prompts with. Founder 2026-10-26 (Revision 3): the book is curriculum-ALIGNED; it must never imply endorsement by the curriculum owner.",
+  "cambridge_ls_science_0893": {
+    "name": "Cambridge Lower Secondary Science (0893)",
+    "examiner": "a senior Cambridge Lower Secondary Science examiner",
+    "owner": "Cambridge Assessment International Education",
+    "framework": "Cambridge Lower Secondary Science Curriculum Framework (0893)",
+    "framework_url": "https://www.cambridgeinternational.org/programmes-and-qualifications/cambridge-lower-secondary/curriculum/science/",
+    "context_strands": ["TWS", "SIC"],
+    "alignment_note": "This book is written to align with the Cambridge Lower Secondary Science Curriculum Framework (0893). It is not endorsed by, or affiliated with, Cambridge Assessment International Education."
+  }
+}

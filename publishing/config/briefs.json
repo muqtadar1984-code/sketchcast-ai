@@ -1,0 +1,232 @@
+[
+  {
+    "slug": "mastering-linear-equations",
+    "working_title": "Algebra: Mastering Linear Equations",
+    "intent": "A complete study guide that takes a learner from the language of algebra to confidently forming, solving and graphing linear equations, linear inequalities and simultaneous linear equations.",
+    "subject_strand": "mathematics/algebra",
+    "profile": "maths",
+    "primary_curriculum": "cambridge_ls_maths_0862",
+    "crosswalk_curricula": [
+      "cbse_maths_041"
+    ],
+    "grades": [
+      "7",
+      "8",
+      "9"
+    ],
+    "age_band": "11-14",
+    "strand_prefixes": [
+      "Ae",
+      "As"
+    ],
+    "crosswalk_prefixes": [
+      "ALG",
+      "U2",
+      "U3"
+    ],
+    "catalogue_subjects": [
+      "Mathematics"
+    ],
+    "directives": {
+      "decided": "2026-10-24",
+      "notes": [
+        "Keep the real-life graphs and rates of change topic (7-9As.07)."
+      ],
+      "must_include": [
+        "7As.07",
+        "8As.07",
+        "9As.07"
+      ]
+    }
+  },
+  {
+    "slug": "angles-triangles-geometric-reasoning",
+    "working_title": "Geometry: Angles, Triangles and Geometric Reasoning",
+    "intent": "A complete study guide on angle facts, parallel lines, triangles, polygons, congruence and similarity, constructions, Pythagoras' theorem and multi-step geometric reasoning with justified answers.",
+    "subject_strand": "mathematics/geometry",
+    "profile": "maths",
+    "primary_curriculum": "cambridge_ls_maths_0862",
+    "crosswalk_curricula": [
+      "cbse_maths_041"
+    ],
+    "grades": [
+      "7",
+      "8",
+      "9"
+    ],
+    "age_band": "11-14",
+    "strand_prefixes": [
+      "Gg"
+    ],
+    "crosswalk_prefixes": [
+      "GEO",
+      "U4"
+    ],
+    "catalogue_subjects": [
+      "Mathematics"
+    ],
+    "directives": {
+      "decided": "2026-10-24",
+      "blocked_until": "The Cambridge 0862 geometry objectives (7Gg.01-11, 8Gg, remaining 9Gg) are loaded into the seed from the official framework and verified by a person.",
+      "notes": []
+    }
+  },
+  {
+    "slug": "forces-and-motion",
+    "working_title": "Physics: Forces and Motion",
+    "intent": "A complete study guide on forces and their effects: measuring forces, gravity, mass and weight, friction and air resistance, balanced and unbalanced forces, speed and distance-time graphs, turning forces, pressure, and density with floating and sinking.",
+    "subject_strand": "science/physics",
+    "profile": "science",
+    "primary_curriculum": "cambridge_ls_science_0893",
+    "crosswalk_curricula": [
+      "cbse_science_086"
+    ],
+    "grades": [
+      "7",
+      "8",
+      "9"
+    ],
+    "age_band": "11-14",
+    "strand_prefixes": [
+      "Pf"
+    ],
+    "crosswalk_prefixes": [],
+    "extra_node_codes": [
+      "9Cp.02",
+      "9Cp.03"
+    ],
+    "catalogue_subjects": [
+      "Science",
+      "Physics",
+      "Chemistry",
+      "Biology"
+    ],
+    "directives": {
+      "decided": "2026-10-24",
+      "notes": [
+        "Turning forces and moments (8Pf.04) stay inside the existing topic 'forces-and-motion', which will be revised to cover what forces are, balanced and unbalanced forces, and moments. Do not propose a separate moments topic.",
+        "The vacuum objective (7Pf.04) is taught by ONE topic shared with the Chemistry book. Use exactly this proposed title: 'Vacuum: Space Without Matter and Motion Without Air Resistance'.",
+        "Density (9Cp.02, 9Cp.03) is taught by a topic shared with the Chemistry book. Use exactly this proposed title: 'Density: Mass in a Given Volume'."
+      ],
+      "must_include": [
+        "8Pf.04",
+        "7Pf.04"
+      ],
+      "required_new_topics": [
+        "Density: Mass in a Given Volume",
+        "Vacuum: Space Without Matter and Motion Without Air Resistance"
+      ],
+      "forbidden_new_topics": [
+        "Turning Forces and Moments"
+      ]
+    }
+  },
+  {
+    "slug": "atoms-elements-chemical-reactions",
+    "working_title": "Chemistry: Atoms, Elements and Chemical Reactions",
+    "intent": "A complete study guide from the particle model and atomic structure through elements, the periodic table, compounds and mixtures, to chemical reactions, word and symbol equations, conservation of mass, energy changes, rates, reactivity of metals and acids and alkalis.",
+    "subject_strand": "science/chemistry",
+    "profile": "science",
+    "primary_curriculum": "cambridge_ls_science_0893",
+    "crosswalk_curricula": [
+      "cbse_science_086"
+    ],
+    "grades": [
+      "7",
+      "8",
+      "9"
+    ],
+    "age_band": "11-14",
+    "strand_prefixes": [
+      "Cm",
+      "Cc",
+      "Cp"
+    ],
+    "crosswalk_prefixes": [],
+    "catalogue_subjects": [
+      "Science",
+      "Physics",
+      "Chemistry",
+      "Biology"
+    ],
+    "directives": {
+      "decided": "2026-10-24",
+      "notes": [
+        "Keep the bonding chapter: molecules and covalent bonds, ions and ionic bonds, simple and giant structures (9Cm.02-05, 9Cp.04).",
+        "Vacuum (7Cm.05), electrostatic attraction inside the atom (8Cm.03) and purity/impure products (8Cm.04, 8Cc.04) each stay a separate, lesson-sized new topic.",
+        "The vacuum topic is shared with the Physics book. Use exactly this proposed title: 'Vacuum: Space Without Matter and Motion Without Air Resistance'.",
+        "Solutions and concentration (8Cp.01), solubility of salts with temperature (8Cc.05) and inert substances (8Cc.06) belong to another book: Solutions and Separation.",
+        "Density (9Cp.02, 9Cp.03) is taught ONCE, by a topic shared with the Physics book. Use exactly this proposed title: 'Density: Mass in a Given Volume'."
+      ],
+      "must_include": [
+        "9Cm.02",
+        "9Cm.03",
+        "9Cm.04",
+        "9Cm.05",
+        "9Cp.04",
+        "7Cm.05",
+        "8Cm.03",
+        "8Cm.04",
+        "8Cc.04"
+      ],
+      "required_new_topics": [
+        "Density: Mass in a Given Volume",
+        "Vacuum: Space Without Matter and Motion Without Air Resistance"
+      ],
+      "must_exclude": [
+        "8Cc.05",
+        "8Cc.06",
+        "8Cp.01"
+      ]
+    }
+  },
+  {
+    "slug": "cells-structure-function-organisation",
+    "working_title": "Biology: Cells - Structure, Function and Organisation",
+    "intent": "A complete study guide on cells as the unit of life: microscopy, animal and plant cell structures and their functions, specialised cells, movement of substances into and out of cells, and the organisation of cells into tissues, organs and organ systems.",
+    "subject_strand": "science/biology",
+    "profile": "science",
+    "primary_curriculum": "cambridge_ls_science_0893",
+    "crosswalk_curricula": [
+      "cbse_science_086"
+    ],
+    "grades": [
+      "7",
+      "8",
+      "9"
+    ],
+    "age_band": "11-14",
+    "strand_prefixes": [
+      "Bs"
+    ],
+    "crosswalk_prefixes": [],
+    "extra_node_codes": [
+      "8Pf.07"
+    ],
+    "catalogue_subjects": [
+      "Science",
+      "Physics",
+      "Chemistry",
+      "Biology"
+    ],
+    "directives": {
+      "decided": "2026-10-24",
+      "notes": [
+        "Teach the cell itself first: cells as the unit of life, microscopes and magnification, cell structures, plant and animal cells compared, specialised cells, diffusion, and tissues/organs/organ systems.",
+        "Then ONE chapter 'organisation in action' that uses ONLY existing catalogue topics as case studies: blood, the respiratory system and gas exchange, and transport in plants. No new topics in that chapter.",
+        "Include a chapter on chromosomes, genes and DNA (9Bs.03), linked to the nucleus.",
+        "The human excretory system (9Bs.02) belongs to another book."
+      ],
+      "must_include": [
+        "9Bs.03",
+        "7Bs.05"
+      ],
+      "must_exclude": [
+        "9Bs.02"
+      ],
+      "forbidden_new_topics": [
+        "The Human Excretory System"
+      ]
+    }
+  }
+]
