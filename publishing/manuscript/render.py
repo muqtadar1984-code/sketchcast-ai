@@ -101,8 +101,14 @@ def asset_bytes(http, base: str, asset: dict) -> bytes:
     return _download(http, base, asset["storage_path"])
 
 
-def figure_svg(png: bytes, vision: dict, labels: list[str]) -> tuple[str, list[str]]:
-    """The picture with its labels as vector overlays. Returns (svg, unplaced)."""
+def figure_svg(png: bytes, vision: dict, labels: list[str], anchors: dict | None = None) -> tuple[str, list[str]]:
+    """The picture with its labels as vector overlays. Returns (svg, unplaced).
+
+    With `anchors` (verified points ON each structure, from the book's annotation data) every leader ends on its
+    structure; a label without a verified point is not printed (founder 2026-10-27: a wrong label is worse than
+    none). Without annotation data the older region-edge placement is used."""
+    if anchors is not None:
+        return _figure_svg_anchored(png, labels, anchors)
     w, h = float(vision.get("w") or 0), float(vision.get("h") or 0)
     if (w <= 1 or h <= 1) and png[:8] == b"\x89PNG\r\n\x1a\n":
         w, h = float(int.from_bytes(png[16:20], "big")), float(int.from_bytes(png[20:24], "big"))
@@ -162,6 +168,73 @@ def figure_svg(png: bytes, vision: dict, labels: list[str]) -> tuple[str, list[s
     return svg, unplaced
 
 
+def _png_size(png: bytes) -> tuple[float, float]:
+    from PIL import Image
+    import io
+    w, h = Image.open(io.BytesIO(png)).size
+    return float(w), float(h)
+
+
+def _figure_svg_anchored(png: bytes, labels: list[str], anchors: dict) -> tuple[str, list[str]]:
+    w, h = _png_size(png)
+    scale = IMG_W / w
+    ih = h * scale
+    sides = {"L": [], "R": []}
+    unplaced = []
+    for lab in labels:
+        pt = anchors.get(lab) or anchors.get(_norm(lab))
+        if not pt:
+            unplaced.append(lab)
+            continue
+        x, y = pt[0] * scale, pt[1] * scale
+        sides["L" if x < IMG_W / 2 else "R"].append((lab, x, y))
+    b64 = base64.b64encode(png).decode()
+    if not sides["L"] and not sides["R"]:
+        return (f'<svg viewBox="0 0 {IMG_W} {ih:.0f}" role="img"><image href="data:image/png;base64,{b64}" '
+                f'x="0" y="0" width="{IMG_W}" height="{ih:.1f}"/></svg>'), unplaced
+    col = max([COL_W] + [len(lab) * 8.4 + 18 for items in sides.values() for lab, _, _ in items])
+    total_w, height, parts = IMG_W + 2 * col, ih, []
+    for side, items in sides.items():
+        items.sort(key=lambda t: t[2])                # ordered by height: leaders cannot cross
+        y = -LINE_H
+        for lab, ax, ay in items:
+            y = max(y + LINE_H, ay + 4)
+            ly = min(y, ih + LINE_H * len(items))
+            height = max(height, ly + 8)
+            if side == "L":
+                tx, anchor, lx = col - 8, "end", col - 4
+            else:
+                tx, anchor, lx = col + IMG_W + 8, "start", col + IMG_W + 4
+            px = col + ax
+            parts.append(f'<line x1="{lx:.1f}" y1="{ly - 4:.1f}" x2="{px:.1f}" y2="{ay:.1f}" class="leader"/>'
+                         f'<circle cx="{px:.1f}" cy="{ay:.1f}" r="2.4" class="dot"/>'
+                         f'<text x="{tx:.1f}" y="{ly:.1f}" text-anchor="{anchor}" class="lab">{html.escape(lab)}</text>')
+    svg = (f'<svg viewBox="0 0 {total_w} {height:.0f}" role="img">'
+           f'<image href="data:image/png;base64,{b64}" x="{col}" y="0" width="{IMG_W}" height="{ih:.1f}"/>'
+           + "".join(parts) + "</svg>")
+    return svg, unplaced
+
+
+def _marked_tile(f: dict, markers: dict, alt: str) -> str:
+    """A question picture with numbered markers (1, 2, 3 …) on verified points, for questions that name 'part 1'."""
+    png = f["png"]
+    w, h = _png_size(png)
+    pts = f.get("markers_at") or {}
+    r = max(w, h) * 0.028
+    dots = []
+    for num, name in sorted(markers.items(), key=lambda kv: str(kv[0])):
+        pt = pts.get(name) or pts.get(_norm(name))
+        if not pt:
+            continue
+        x, y = pt
+        dots.append(f'<circle cx="{x:.0f}" cy="{y:.0f}" r="{r:.0f}" fill="#fff" stroke="#1d4a38" stroke-width="{r * 0.16:.1f}"/>'
+                    f'<text x="{x:.0f}" y="{y + r * 0.36:.0f}" text-anchor="middle" font-family="Segoe UI, Arial" '
+                    f'font-weight="700" font-size="{r * 1.1:.0f}" fill="#1d4a38">{html.escape(str(num))}</text>')
+    b64 = base64.b64encode(png).decode()
+    return (f'<svg viewBox="0 0 {w:.0f} {h:.0f}" role="img" aria-label="{alt}">'
+            f'<image href="data:image/png;base64,{b64}" x="0" y="0" width="{w:.0f}" height="{h:.0f}"/>{"".join(dots)}</svg>')
+
+
 CSS = """
 figure.place { margin: 2pt 0 8pt; break-inside: avoid; background: #fff; }
 .box, .watch, .ex { display: flow-root; }   /* a box sits BESIDE a floated figure, never under it */
@@ -186,7 +259,7 @@ table.match td.n { width: 1.6em; font-weight: 700; } table.match td.l { width: 3
 .sortbox { display: flex; gap: 10pt; margin: 4pt 0; } .sortbox .cat { flex: 1; border: 1pt dashed var(--line);
   border-radius: 5pt; padding: 4pt 7pt; min-height: 46pt; font-weight: 600; }
 .sortitems { margin: 4pt 0; font-size: 10.5pt; }
-.photos.tiles figure img { height: 150px; width: 100%; object-fit: contain; }  /* whole photo, never cropped */
+.photos.tiles figure svg, .photos.tiles figure img { height: 150px; width: 100%; object-fit: contain; }  /* whole photo, never cropped */
 .photos .ctx { display: block; font-size: 9pt; color: var(--ink); margin-top: 2pt; }
 .think-answers { font-size: 10pt; } .think-answers li { margin-bottom: 4pt; }
 .credits a { color: inherit; }
@@ -399,7 +472,7 @@ def _block(b: dict, figs: dict) -> str:
     return f"<p>{md(json.dumps(b))}</p>"
 
 
-def _figures(doc: dict, dossier: dict, env_file: Path) -> dict:
+def _figures(doc: dict, dossier: dict, env_file: Path, annotations: dict | None = None) -> dict:
     """Every fig:/asset: id the draft places, as a labelled SVG. A pinned
     article figure carries its reviewed labels. A library asset's part names
     are internal ("prokaryotic cell region"), so it is labelled only with the
@@ -450,10 +523,34 @@ def _figures(doc: dict, dossier: dict, env_file: Path) -> dict:
                 vision = _crop_vision(vision, png, box)      # label regions move with the crop
             else:
                 shown = png
-            svg, unplaced = figure_svg(shown, vision, labels)
+            labels = dedupe_labels(labels)
+            ann = (annotations or {}).get(ref) or {}
+            svg, unplaced = figure_svg(shown, vision, labels, anchors=ann.get("anchors"))
             out[ref] = {"svg": svg, "unplaced": unplaced, "caption": caption, "credit": credit, "kind": kind,
-                        "img": "data:image/png;base64," + base64.b64encode(shown).decode()}
+                        "img": "data:image/png;base64," + base64.b64encode(shown).decode(),
+                        "png": shown, "labels": labels, "markers_at": ann.get("anchors") or {}}
     return out
+
+
+def dedupe_labels(labels: list[str]) -> list[str]:
+    """One label per structure: 'green chloroplast' and 'chloroplast' name the same thing — keep the plain name."""
+    out = []
+    for lab in labels:
+        n = _norm(lab)
+        if any(_norm(o) != n and _norm(o) in n.split() + [n] or (_norm(o) != n and n.endswith(" " + _norm(o)))
+               for o in labels):
+            continue
+        if n not in [_norm(o) for o in out]:
+            out.append(lab)
+    return out
+
+
+def annotations_for(slug: str) -> dict:
+    """The book's verified label anchors (publishing/tools/label_anchors.py): ref → {"anchors": {label: [x, y]},
+    "size": [w, h]}, in the pixels of the picture as printed (after matting and cropping)."""
+    from publishing.report import OUT
+    f = OUT / "manuscripts" / slug / "annotations.json"
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
 
 
 def hero_image(slug: str, chapter: int) -> str | None:
@@ -577,7 +674,12 @@ def renumber_text(text, numbers: dict[str, str]):
 PICTURE_WORD = r"(?:photograph|photo|picture|drawing|diagram|image|figure|sample)s?"
 
 
-def _photo_row(refs: list[str], figs: dict, context: dict | None = None, stem: str = "") -> str:
+DESCRIBES_PICTURE = re.compile(r"\b(drawing|diagram|illustration|depict|depicts|shown as|placed (left|side)|"
+                               r"zooms?|not a photograph|composition|in (the )?(left|middle|right) part)\b", re.I)
+
+
+def _photo_row(refs: list[str], figs: dict, context: dict | None = None, stem: str = "",
+               markers: dict | None = None) -> str:
     """Uniform tiles, each with the letter the QUESTION uses for it, and — only when it is short — what the
     question says about it. A long description is the picture's alt text, never printed under it (founder
     2026-10-26: internal descriptions were printed as captions)."""
@@ -595,9 +697,12 @@ def _photo_row(refs: list[str], figs: dict, context: dict | None = None, stem: s
     for letter, r in zip(letters, shown):
         f = figs[r]
         ctx = context.get(letter) or context.get(r)
-        short = ctx if ctx and len(str(ctx).split()) <= 14 and "(not a photograph)" not in str(ctx) else ""
+        # a specimen note (where the sample came from) is information the question needs, so it is printed; a
+        # description of what a drawing depicts gives the answer away and stays alt text (founder 2026-10-27)
+        short = ctx if ctx and len(str(ctx).split()) <= 30 and not DESCRIBES_PICTURE.search(str(ctx)) else ""
         alt = html.escape(str(ctx or ""), quote=True)
-        tiles.append(f'<figure><img src="{f["img"]}" alt="{alt}"><figcaption><span class="pl">{letter}</span>'
+        pic = (_marked_tile(f, markers, alt) if markers and f.get("png") else f'<img src="{f["img"]}" alt="{alt}">')
+        tiles.append(f'<figure>{pic}<figcaption><span class="pl">{letter}</span>'
                      + (f'<span class="ctx">{md(short)}</span>' if short else "") + f'{_credit(f)}</figcaption></figure>')
     return f'<div class="photos tiles">{"".join(tiles)}</div>' if tiles else ""
 
@@ -884,7 +989,7 @@ def chapter_html(doc: dict, figs: dict, edition: str = "digital", first_page: in
                 extra = ("<ol class='opts'>" + "".join(f"<li>{md(o)}</li>" for o in x["options"]) + "</ol>"
                          if x.get("options") else "")
             refs = ([x["figure_ref"]] if x.get("figure_ref") else []) + list(x.get("figure_refs") or [])
-            pics = _photo_row(refs, figs, x.get("figure_context"), x.get("stem") or "")
+            pics = _photo_row(refs, figs, x.get("figure_context"), x.get("stem") or "", x.get("markers"))
             stem = md(renumber_text(x["stem"], numbers)).replace("____", '<span class="blank"></span>')
             lines = _lines(x, pitch) if pg["practice"].get("answer_lines") else ""
             body.append(f'<div class="ex"><div class="q"><span class="qn">{numbers[x["xid"]]}</span><span>{stem}</span>'
@@ -1085,7 +1190,7 @@ def _alternatives(doc: dict) -> list[tuple[str, dict]]:
 def render(doc: dict, dossier: dict, env_file: Path, out_dir: Path) -> dict:
     from publishing.manuscript.layout_check import diagnose, report_html
     n = doc["chapter"]["number"]
-    figs = _figures(doc, dossier, env_file)
+    figs = _figures(doc, dossier, env_file, annotations_for(doc["work"]["slug"]))
     page = out_dir / f"ch{n:02d}.html"
     pdf = out_dir / f"ch{n:02d}.pdf"
     tried = []

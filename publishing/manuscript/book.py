@@ -23,12 +23,13 @@ log = logging.getLogger("publishing.book")
 
 
 def _chapter_pdf(doc: dict, full: dict, env_file: Path, out: Path, first_page: int, edition: str) -> Path:
-    from publishing.manuscript.render import _alternatives, _figures, _print, _underlay, chapter_html
+    from publishing.manuscript.render import _alternatives, _figures, _print, _underlay, annotations_for, chapter_html
     n = doc["chapter"]["number"]
     chosen = (doc.get("layout_choice") or {}).get("chosen", "as authored")
     cand = next((c for name, c in _alternatives(doc) if name == chosen), doc)
     page = out / f"book-ch{n:02d}-{edition}.html"
-    page.write_text(chapter_html(cand, _figures(cand, full, env_file), edition, first_page), encoding="utf-8")
+    page.write_text(chapter_html(cand, _figures(cand, full, env_file, annotations_for(doc["work"]["slug"])), edition,
+                                 first_page), encoding="utf-8")
     pdf = _print(page, out / f"book-ch{n:02d}-{edition}.pdf")
     _underlay(pdf, doc["work"]["slug"], n, edition)
     return pdf
