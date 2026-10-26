@@ -422,16 +422,41 @@ def test_enums_and_references_are_enforced_or_repaired():
     assert validate_item({**base, "item_type": "True-False"}, art)[0]["item_type"] == "true_false"
     assert validate_item({**base, "stem": "  "}, art) == (None, ["true_false: empty stem"])
     assert validate_item("not an object", art) == (None, ["item is not an object"])
-    # An unknown objective falls back to the nearest by content words (the stem names cells and organisms → o1).
+    # An unknown objective is NOT re-mapped: the model's value is kept, the row is flagged unmapped, and the note
+    # names the nearest by content words (the stem names cells and organisms → o1) for a reviewer.
     item, notes = validate_item({**base, "objective_ref": "o9", "claim_ref": "c9"}, art)
-    assert item["objective_ref"] == "o1" and item["claim_ref"] is None
+    assert item["objective_ref"] == "o9" and item["objective_unmapped"] is True and item["claim_ref"] is None
     assert notes == ["claim reference dropped: c9", "objective o9 unknown; nearest is o1"]
-    # Nothing shared (and no claim to steer by) → None, with the note.
+    # No objective at all stays None (not guessed), still flagged; nothing shared → "none near".
     item, notes = validate_item({**base, "objective_ref": "", "claim_ref": "", "stem": "Zzz qqq?"}, art)
-    assert item["objective_ref"] is None and notes == ["objective ? unknown; none near"]
-    # The cited claim's section steers the fallback: a stem about "this structure" + claim c3 → o3 (plant/animal).
-    item, _ = validate_item({**base, "objective_ref": "x", "claim_ref": "c3", "stem": "Is this only in one kind?"}, art)
-    assert item["objective_ref"] == "o3"
+    assert item["objective_ref"] is None and item["objective_unmapped"] is True
+    assert notes == ["objective ? unknown; none near"]
+    # The cited claim's section still steers the SUGGESTION: a stem about "this structure" + claim c3 → o3.
+    item, notes = validate_item({**base, "objective_ref": "x", "claim_ref": "c3", "stem": "Is this only in one kind?"}, art)
+    assert item["objective_ref"] == "x" and item["objective_unmapped"] is True
+    assert notes == ["objective x unknown; nearest is o3"]
+    # A valid objective is untouched and carries no flag.
+    item, notes = validate_item({**base, "objective_ref": "o2"}, art)
+    assert item["objective_ref"] == "o2" and "objective_unmapped" not in item and notes == []
+
+
+def test_an_unmapped_item_is_written_as_a_tagged_draft_and_counted():
+    stray = {**GOOD["items"][2], "objective_ref": "o9", "stem": "Is a cell the unit of life?", "tags": ["a", "b", "c", "d", "e"]}
+    reply = {"items": [*GOOD["items"], stray]}
+    sb, model = _sb(), FakeModel(reply)
+    summary = run_questions_job(sb, _job(), client=model)
+
+    rows = _bank(sb)
+    (odd,) = [r for r in rows if r["stem"] == stray["stem"]]
+    assert odd["objective_ref"] == "o9", "the model's value is kept, not replaced by the nearest"
+    assert odd["status"] == "draft", "an unmapped item is never auto-approved"
+    assert odd["tags"] == ["objective-unmapped", "a", "b", "c", "d"], "the marker leads, so the 5-tag cap drops another"
+    assert all("objective_unmapped" not in r for r in rows), "not a topic_questions column: never inserted"
+    assert all("objective-unmapped" not in r["tags"] for r in rows if r is not odd)
+    assert summary["unmapped"] == 1
+    assert any("objective o9 unknown; nearest is" in n for n in summary["repairs"])
+    # An unmapped item counts for no objective, so coverage is measured on the mapped ones only.
+    assert summary["coverage"] == {"o1": 3, "o2": 3, "o3": 4}
 
 
 def test_marks_and_seconds_default_by_type_and_a_scheme_s_sum_wins():
