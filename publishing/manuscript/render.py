@@ -781,6 +781,9 @@ def chapter_html(doc: dict, figs: dict, edition: str = "digital", first_page: in
     hero = hero_image(w["slug"], n) if pg["opener"].get("hero") else None
     objectives = "".join(f'<p><span class="code">{html.escape(o["code"])}</span>{md(o["text"])}</p>'
                          for o in ch.get("objectives") or [])
+    if doc.get("tws"):                         # Thinking and Working Scientifically, mapped independently (Rev 2)
+        objectives += ('<p class="tws"><span class="code">Thinking and Working Scientifically:</span> '
+                       + ", ".join(html.escape(c) for c in doc["tws"]) + "</p>")
     if len(ch.get("objectives") or []) > 4:   # a review chapter revisits the book's objectives: show their codes
         objectives = '<p class="codes">' + " ".join(f'<span class="code">{html.escape(o["code"])}</span>'
                                                      for o in ch["objectives"]) + "</p>"

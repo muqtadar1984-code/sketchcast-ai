@@ -92,7 +92,8 @@ def back_html(work: dict, theme: dict, gloss: list[dict], index: dict[str, list[
     tws = [c for c, v in matrix.items() if "TWS" in c and v["status"] != "not covered"]
     sic = [c for c, v in matrix.items() if "SIC" in c and v["status"] != "not covered"]
     tws_missing = [c for c, v in matrix.items() if "TWS" in c and v["status"] == "not covered"]
-    cross = [x for ch in coverage.values() for x in (ch.get("map") or {}).get("cross_subject") or []]
+    cross = list({x.get("code"): x for ch in reversed(list(coverage.values()))
+                  for x in (ch.get("map") or {}).get("cross_subject") or []}.values())
     head = "<tr><th>Code</th><th>Objective</th><th>Taught in (chapter.section)</th><th>Assessed in</th><th>Status</th></tr>"
     cov = (f"<h2>Curriculum coverage</h2><p class='lead'>How this book covers the {esc(curriculum)} objectives it "
            "targets. 'Taught in' gives chapter.section; 'Assessed in' gives practice questions. Mapped independently "
