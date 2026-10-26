@@ -1,6 +1,6 @@
 [
  {
-  "id": "004aef91-1e93-45d3-8557-19a6b42d823f",
+  "id": "6c72e698-8593-41ba-8681-6e888fe77f68",
   "src_id": "357b9f8c-aa4e-489d-811e-2701adae1a23",
   "chapter": 2,
   "content": "Look at your hand. It looks like one smooth piece, but it is not. All living organisms are made of cells. A cell is the smallest unit of an organism that can carry out the processes of life.",
@@ -12,7 +12,7 @@
   "has_embedding": false
  },
  {
-  "id": "720b8a10-7675-4af1-94cd-8efb159324f0",
+  "id": "867a0766-6511-41f7-9b8b-7d55256a3d6f",
   "src_id": "5b9e5c09-2a31-4754-b488-e4044b6407a6",
   "chapter": 2,
   "content": "Common mistake: Only animals and plants are made of cells. Correct idea: All living organisms are made of cells, including fungi and microorganisms such as bacteria. Many microorganisms consist of just one cell.",
@@ -24,7 +24,7 @@
   "has_embedding": false
  },
  {
-  "id": "bda4e3ac-ebe3-4276-8fab-8e4c41638b5f",
+  "id": "c6c874bc-2739-424b-acfc-e82cb7bb9781",
   "src_id": "7c610a06-2cb6-4a59-ab47-7c71df60521f",
   "chapter": 2,
   "content": "Some organisms, such as humans, oak trees and mushrooms, are made of millions or billions of cells working together. These are multicellular organisms. Other organisms are just one cell that carries out every life process by itself. These are unicellular organisms.",
@@ -36,7 +36,7 @@
   "has_embedding": false
  },
  {
-  "id": "a1eb57af-f50e-479f-9785-7914e7e635e6",
+  "id": "d4ba317f-ac49-4d2f-a82b-29e30f2a88b2",
   "src_id": "1206e39a-c5e1-4384-a1a6-53a89576b5aa",
   "chapter": 2,
   "content": "One cell, every life process: Amoeba, Paramecium, yeast and bacteria. The single cell does all the work itself. Many cells, working together: humans, oak trees and mushrooms.",
@@ -48,7 +48,7 @@
   "has_embedding": false
  },
  {
-  "id": "d5f53a1d-f6ec-4302-abc3-595487bca0c5",
+  "id": "d9cfacba-c981-4d6a-819a-2a31d64b166a",
   "src_id": "1fb4463f-e33d-4cd5-89a1-fb527c2f260a",
   "chapter": 2,
   "content": "microorganism: A living thing too small to be seen without a microscope. Microorganisms are typically single-celled.",
@@ -60,7 +60,7 @@
   "has_embedding": false
  },
  {
-  "id": "3ca772ed-e7c3-4928-a889-5d7c076c564c",
+  "id": "26427dd1-23c7-4cc7-a62e-3c037a3458e4",
   "src_id": "0cc8901b-0c7a-4d7c-b8f7-2f8e37aed68e",
   "chapter": 2,
   "content": "The word \"typically\" matters. A few microorganisms are multicellular, but the large majority you will meet at this level are just one cell each.",
@@ -72,7 +72,7 @@
   "has_embedding": false
  },
  {
-  "id": "c5a802fe-4ce3-4158-923d-2084fa62d51f",
+  "id": "d4fe7132-4dfa-4209-986d-ced492921b4d",
   "src_id": "4223d5af-ba22-4444-be27-7e6c91a621fe",
   "chapter": 2,
   "content": "A photograph of a Paramecium, a microorganism made of just one cell, taken through a microscope.",
@@ -84,7 +84,7 @@
   "has_embedding": false
  },
  {
-  "id": "b0c4dda5-788e-48df-a725-0869851a3673",
+  "id": "0a7a8e62-5708-4a4c-a97f-a952eb2e8ad2",
   "src_id": "7e2a4e09-7dba-410e-8f6b-43c6d7ad795f",
   "chapter": 2,
   "content": "Bacteria, Amoeba, Paramecium, Chlorella and yeast are all examples of single-celled microorganisms. The photograph shows Paramecium, a microorganism that is only one cell.",
@@ -96,7 +96,7 @@
   "has_embedding": false
  },
  {
-  "id": "d24d5b72-d45d-4966-8695-2baa8bae6078",
+  "id": "37f4ec70-98f1-44d6-bab6-507d344e80f1",
   "src_id": "7fa02d66-7832-42fb-a88f-3bac450b8953",
   "chapter": 2,
   "content": "Cells are measured in micrometres (symbol µm). One micrometre is one thousandth of a millimetre, so 1 mm = 1000 µm. A typical animal cell is about 10 to 30 µm across, and many bacteria are only 1 to 5 µm long. The human eye can see objects down to roughly 0.1 mm, which is 100 µm. So individual cells are usually invisible to the unaided eye. We need a microscope to see them.",
@@ -108,7 +108,7 @@
   "has_embedding": false
  },
  {
-  "id": "8eea5fe8-b749-4c2a-aff9-a2f284a9db10",
+  "id": "3fd659e3-a8be-4d11-b4a7-5289e5c48a70",
   "src_id": "eedd5c1e-7c44-4349-a058-23bb043fbcfd",
   "chapter": 2,
   "content": "Picture one millimetre cut into a thousand equal parts. Each part is one micrometre. To change the eye's limit of 0.1 mm into micrometres, use 1 mm = 1000 µm. Then 0.1 mm is 100 µm.",
@@ -120,7 +120,7 @@
   "has_embedding": false
  },
  {
-  "id": "ccbe581a-b09a-4567-a8e4-a3a376123315",
+  "id": "cd425d6d-efa0-4dc6-bdf0-62964b3efa61",
   "src_id": "9d5764e0-c5b4-4b48-8273-e8b157b98d12",
   "chapter": 2,
   "content": "A speck only just visible to the eye, and a magnified view of tiny organisms (not to scale).",
@@ -132,7 +132,7 @@
   "has_embedding": false
  },
  {
-  "id": "628c1197-464a-4ed2-a9f2-5f4e17c2f390",
+  "id": "6b85d473-6f82-488a-9a8a-47b92427e319",
   "src_id": "fc2873e0-3b11-4746-bc09-221fba96bc97",
   "chapter": 2,
   "content": "Now compare the numbers. The smallest thing the eye can pick out is about 100 µm. A typical animal cell is 10 to 30 µm across, so it is several times smaller than that limit. A bacterium of 1 to 5 µm is smaller still. However carefully you look, these cells are simply too small for the eye to find. The picture shows the same idea: the speck is the smallest the eye can see, and the tiny organisms in the magnified circle are far smaller than the speck.",
@@ -144,7 +144,7 @@
   "has_embedding": false
  },
  {
-  "id": "2f4dc3b8-fbd9-4afd-a702-606a69556b15",
+  "id": "351539cc-082c-4202-9aaa-20ed62134c34",
   "src_id": "7199a268-4942-4249-9bbd-75633e927c92",
   "chapter": 2,
   "content": "The microscope changed this. It allowed scientists to discover cells and to confirm that every organism they examined is built from them.",
@@ -156,7 +156,7 @@
   "has_embedding": false
  },
  {
-  "id": "f20d408b-4766-40bc-a843-779978edd647",
+  "id": "ccf129f4-d682-4471-9b02-121cc1495e81",
   "src_id": "2ecef717-a082-42a3-bc44-b276a12fa88c",
   "chapter": 2,
   "content": "All organisms are made of cells, microorganisms are typically single-celled, and cells are so small that we need a microscope to see them.",
@@ -168,7 +168,7 @@
   "has_embedding": false
  },
  {
-  "id": "ff5a964b-bd46-4cc4-8bee-12af093d6087",
+  "id": "2461a885-a098-41de-87da-bc2521b06dd2",
   "src_id": "12ec87bb-2a27-4b15-830a-beb65938632d",
   "chapter": 2,
   "content": "A student says an organism must be made of many cells to count as alive. Is the student right? Use what you know about unicellular organisms to explain.",
@@ -180,7 +180,7 @@
   "has_embedding": false
  },
  {
-  "id": "347a9832-d614-4cda-be6b-1c194521940d",
+  "id": "27d44157-169f-45fc-bc15-a7f383d3ade8",
   "src_id": "6a200dc2-b005-4d4f-a811-abb7a300626a",
   "chapter": 2,
   "content": "A labelled light microscope, showing its main parts and the path of light from the light source to the eye.",
@@ -192,7 +192,7 @@
   "has_embedding": false
  },
  {
-  "id": "13f27fb5-f140-4dcb-a309-48096e49f1f7",
+  "id": "bb0b3cd1-4b6f-4cdc-b107-90fa6c50b731",
   "src_id": "d2c279c3-db2e-4228-9f70-7d299386207a",
   "chapter": 2,
   "content": "A light microscope uses light and glass lenses to show cells that are too small to see with the eye alone. The specimen is the sample being looked at. Each part of the microscope has its own job.",
@@ -204,7 +204,7 @@
   "has_embedding": false
  },
  {
-  "id": "9ed1adf7-a15e-4216-83e8-9b53c7c49793",
+  "id": "c5b6ce9c-3ffd-40f6-9e17-735ce572d6ee",
   "src_id": "40c95ffd-8823-4a8e-a335-854e3bca185b",
   "chapter": 2,
   "content": "eyepiece lens: The lens at the top of the microscope that you look through.",
@@ -216,7 +216,7 @@
   "has_embedding": false
  },
  {
-  "id": "f8e0e4d2-eb55-4400-97d3-ec4a5a2747b2",
+  "id": "eb0a8c19-57f9-4a55-aa29-a0bd68e6b92a",
   "src_id": "ffff2de8-d19b-4a74-afa6-3742c7c18cb3",
   "chapter": 2,
   "content": "objective lens: One of the lenses on the nosepiece, close to the specimen. They are mounted on a rotating nosepiece, which brings the one you choose over the slide.",
@@ -228,7 +228,7 @@
   "has_embedding": false
  },
  {
-  "id": "9c004071-f80b-4307-978f-50f7fd420e76",
+  "id": "840d4fe9-15d6-40ca-957a-52425aa7e790",
   "src_id": "e7466afa-0dcc-4c2c-aa2d-cc5d5b3c2af4",
   "chapter": 2,
   "content": "The slide rests on the stage, the flat platform, and the stage clips hold it in place. Two knobs bring the image into focus. The coarse focus knob moves the lens or stage a large distance to bring the image roughly into focus. The fine focus knob makes small adjustments to sharpen it.",
@@ -240,7 +240,7 @@
   "has_embedding": false
  },
  {
-  "id": "05c2336e-c28b-49cc-96bb-a884d495f088",
+  "id": "2a346439-736d-4377-bf07-5b8a368edb57",
   "src_id": "66639f93-cbf2-4252-98df-26986bcd6116",
   "chapter": 2,
   "content": "It helps to have every part and its job in one place. Use this list to look a part up while you study the picture.",
@@ -252,7 +252,7 @@
   "has_embedding": false
  },
  {
-  "id": "88dff59e-918b-473d-841b-895f0bacc7fd",
+  "id": "d3beb479-c63f-41c2-a120-bbcb3aa67d34",
   "src_id": "86fee1e4-1c8f-4906-a8e9-ca4e6dc787df",
   "chapter": 2,
   "content": "Eyepiece lens: the lens you look through. It magnifies the image. Objective lenses: a set of lenses of different strengths, mounted on the rotating nosepiece. Nosepiece: turns to bring the objective lens you choose over the slide. Stage: the flat platform that supports the slide. Stage clips: hold the slide in position. Light source: sends light up through the specimen. Coarse focus knob: moves the lens or stage a large distance, so the image is roughly in focus. Fine focus knob: moves it a very small distance, to sharpen the image. Arm: the curved part that joins the top of the microscope to the base. You hold it, with the base, when carrying the microscope. Base: the heavy foot that keeps the microscope stable.",
@@ -264,7 +264,7 @@
   "has_embedding": false
  },
  {
-  "id": "ffae34d8-427c-4f68-8315-4be84b3a415c",
+  "id": "41687956-3be6-42fd-831b-1854692bf091",
   "src_id": "eceac50a-599f-45ea-bce4-0e56e6e4a520",
   "chapter": 2,
   "content": "The arm and the heavy base hold everything together and keep the microscope steady. The light source sends light up through a hole in the stage. The light then passes through the specimen, up through the objective lens and the eyepiece lens, and into your eye.",
@@ -276,7 +276,7 @@
   "has_embedding": false
  },
  {
-  "id": "f648267c-238b-47da-b2bc-75137c72f388",
+  "id": "ed34d22e-cff2-4a5e-9194-94e41e012c42",
   "src_id": "2a7095ec-86ac-4d53-88bf-8ee42bac0c36",
   "chapter": 2,
   "content": "Follow the light along its journey, one step at a time:",
@@ -288,7 +288,7 @@
   "has_embedding": false
  },
  {
-  "id": "0a84d7e3-573d-4380-b70b-bce95639f184",
+  "id": "ad1d1b1d-6c13-49d7-836f-2013a77275c6",
   "src_id": "46abf0d4-2d32-4a90-99a5-2758bd34afeb",
   "chapter": 2,
   "content": "The light starts at the light source. It passes up through the hole in the stage. It passes through the thin specimen. It then goes through the objective lens. It goes on through the eyepiece lens. It reaches your eye.",
@@ -300,7 +300,7 @@
   "has_embedding": false
  },
  {
-  "id": "a996d926-43dd-49f3-8c0a-312476bd33f5",
+  "id": "491299b0-5ea6-4f9b-9d88-03111bc4b440",
   "src_id": "5218c700-3bd0-4137-851f-872b9c49e95c",
   "chapter": 2,
   "content": "Each step depends on the one before it. If the light never gets through the specimen, there is nothing for the objective lens and eyepiece lens to show your eye.",
@@ -312,7 +312,7 @@
   "has_embedding": false
  },
  {
-  "id": "0fb233ec-51f5-47e9-bed6-7e9eac76fbfc",
+  "id": "6db4dcb5-4e88-4448-aeb6-4829f629aaea",
   "src_id": "0ede1b95-659c-4ca1-bd10-c224ff20a9f7",
   "chapter": 2,
   "content": "Light must pass through the specimen, so the specimen has to be thin and at least partly transparent.",
@@ -324,7 +324,7 @@
   "has_embedding": false
  },
  {
-  "id": "dee064ec-0739-4854-a946-614e6847c799",
+  "id": "2990b451-dbe5-43eb-bfae-449fb860051b",
   "src_id": "2b960375-fdce-4201-aa63-ce3a3f0086e6",
   "chapter": 2,
   "content": "This is why a thick or solid specimen is a problem. Light has to pass through the specimen to reach the lenses, and a thick specimen would block it. A thin, partly transparent specimen lets the light through, so the lenses can show you what is in it.",
@@ -336,7 +336,7 @@
   "has_embedding": false
  },
  {
-  "id": "c50c1168-45ff-4c9f-a07b-ad047bed8314",
+  "id": "c9ea7af6-64ad-4650-a7f1-e6356185b31d",
   "src_id": "6b55e663-ec6d-402e-a2da-d6f331eefc26",
   "chapter": 2,
   "content": "The two focus knobs do different jobs, and you use them together. First the coarse focus knob makes a large movement, so the image is roughly in focus. Then the fine focus knob makes a tiny movement, so the image becomes sharp.",
@@ -348,7 +348,7 @@
   "has_embedding": false
  },
  {
-  "id": "ed7f0a08-914f-4736-946d-426eae609c53",
+  "id": "a84692ab-9982-4668-af48-0f7001559a94",
   "src_id": "2bd7e20f-fe55-41dd-a34f-f13603ebab9a",
   "chapter": 2,
   "content": "Look back at the path of light. Which two lenses does the light pass through after it has gone through the specimen, and in which order?",
@@ -360,7 +360,7 @@
   "has_embedding": false
  },
  {
-  "id": "6e4e7ac8-356b-4878-ba5b-35b683347be1",
+  "id": "6704f3e9-72ce-430c-b415-3d281ca88ec5",
   "src_id": "22437417-635d-4960-bb9a-36fb11d08bd8",
   "chapter": 2,
   "content": "Eyepiece and objective lenses come in different strengths. The eyepiece is commonly ×10, and the objective lenses are commonly ×4, ×10 and ×40. You do not need to use these numbers yet.",
@@ -372,7 +372,7 @@
   "has_embedding": false
  },
  {
-  "id": "5e41d98e-56d8-400f-8d25-b2d3acf4fa8d",
+  "id": "a5bd110c-89d7-49ea-95ae-b0b4e15034bf",
   "src_id": "adfb379e-b9dd-4e20-bcdb-4fc86579a7c3",
   "chapter": 2,
   "content": "Carry the microscope with two hands: one holds the arm and the other supports the base. Put it on a flat, stable surface and switch on the light.",
@@ -384,7 +384,7 @@
   "has_embedding": false
  },
  {
-  "id": "55089baa-6f1c-43a4-8bd3-a5c144b95466",
+  "id": "598e56c6-261d-4ede-9171-b72cd4c2b136",
   "src_id": "7dddbda9-9d7a-4638-9f6a-2b5d849902fe",
   "chapter": 2,
   "content": "Turn the nosepiece until the lowest-power objective lens (the shortest one, usually ×4) is over the stage. Put the slide on the stage with the specimen over the hole, and hold it with the stage clips. Looking from the side, use the coarse focus knob to bring the objective lens close to the slide without touching it. Now look through the eyepiece. Turn the coarse focus knob so the lens and slide move apart until the image appears, then sharpen it with the fine focus knob. Move the slide so the part you want is in the centre of the view. For more detail, turn to the next objective lens and refocus using the fine focus knob only.",
@@ -396,7 +396,7 @@
   "has_embedding": false
  },
  {
-  "id": "efcbde9d-52be-4d63-9757-6f8041e667b1",
+  "id": "4d80eab3-bc89-4e73-8645-b819be0c1248",
   "src_id": "92abd6d8-df54-43a2-b656-318aff8e8172",
   "chapter": 2,
   "content": "Each step has a reason, so you do not have to memorise them blindly. Two hands, one on the arm and one under the base, keep the whole microscope supported. A flat, stable surface means it cannot slip while you work. The lowest-power lens comes first because it is the easiest one to find your specimen with. You watch from the side while you bring the lens close to the slide, because from the eyepiece you cannot see how near the lens is, and it must not touch the slide. Only then do you look through the eyepiece and move the lens and slide apart. Going in this direction means the lens moves away from the slide, not towards it.",
@@ -408,7 +408,7 @@
   "has_embedding": false
  },
  {
-  "id": "d40d5ca1-eb59-49c0-9a38-79b5fee49440",
+  "id": "f8cb7a12-394b-496d-a38a-8b37b7aa43e0",
   "src_id": "aa6da2a4-7490-4970-928c-ce755eb46fbd",
   "chapter": 2,
   "content": "Why start at the lowest power? It gives a wide field of view, so the specimen is easy to find. Raising the power narrows the field of view and makes the image darker, so the specimen must already be in the centre or it can easily be lost.",
@@ -420,7 +420,7 @@
   "has_embedding": false
  },
  {
-  "id": "e5f81f97-26e1-4c40-849e-aef8ede84bca",
+  "id": "fb54e56a-d47a-44a4-99b4-5d4a2d81b3c8",
   "src_id": "535e30ff-d65e-422c-a01b-d903efe4af11",
   "chapter": 2,
   "content": "Here is what changes when you move from a lower power to a higher power:",
@@ -432,7 +432,7 @@
   "has_embedding": false
  },
  {
-  "id": "8ce74832-685f-49bc-b4d5-e2abd5914404",
+  "id": "274ffe7f-d8c4-45c4-b13f-828ac1d4f09e",
   "src_id": "608fb015-5079-4ce6-bcd2-74c57d42c3a0",
   "chapter": 2,
   "content": "Low power: a wide field of view, so you can see a large part of the slide and find the specimen easily. Higher power: a narrower field of view, so you see only a small part of the slide. Low power: a brighter image. Higher power: a darker image. Higher power: the specimen is larger, but if it is not already in the centre it is easily lost from view.",
@@ -444,7 +444,7 @@
   "has_embedding": false
  },
  {
-  "id": "212bda8f-ff32-4de5-ab3f-849330b96c30",
+  "id": "1d33f717-ecfb-4839-86b0-f242736344ec",
   "src_id": "5d26b392-bb6b-4a44-a14f-d3f8f4f91585",
   "chapter": 2,
   "content": "Common mistake: The coarse focus knob can be used at any power. Correct idea: At high power the coarse knob can drive the objective lens into the slide, breaking the coverslip and damaging the lens. Once a higher-power objective is in place, use only the fine focus knob.",
@@ -456,7 +456,7 @@
   "has_embedding": false
  },
  {
-  "id": "543050b6-7bbc-445f-8bf3-08aa31cbcc12",
+  "id": "8502b48a-8ff2-4ae6-8476-7842aa9570bc",
   "src_id": "30a2caf3-67df-42ec-bacd-1ee68fccb7e0",
   "chapter": 2,
   "content": "Start at the lowest power, centre the specimen, and use only the fine focus knob once you change to a higher-power lens.",
@@ -468,7 +468,7 @@
   "has_embedding": false
  },
  {
-  "id": "8841bfb2-21bd-4e3e-9ad3-44aa9447df04",
+  "id": "811f80b0-2db5-4766-9dc8-6ef48115d382",
   "src_id": "664fb84d-c647-4540-b90d-7c449d8ed761",
   "chapter": 2,
   "content": "Try this situation. You have just turned to a higher-power objective lens and the image looks blurred. First, decide which knob to use. The fine focus knob is the right one, because it makes very small adjustments that sharpen the image. Next, ask what could go wrong with the other knob. At high power the objective lens sits very close to the slide, so a large movement of the coarse focus knob could push the lens into the slide. That would crack the coverslip and could damage the lens.",
@@ -480,7 +480,7 @@
   "has_embedding": false
  },
  {
-  "id": "5c4d75b1-f320-4594-b1dc-85d639ee3ac1",
+  "id": "f80325bc-a6aa-4ad4-a81a-3848e52a1c6a",
   "src_id": "bf450401-568b-4824-acc3-2eb030118c66",
   "chapter": 2,
   "content": "When you have finished, put the microscope away carefully:",
@@ -492,7 +492,7 @@
   "has_embedding": false
  },
  {
-  "id": "bbfa7654-b6ab-4820-976c-f3b18a473d9d",
+  "id": "051ceb2a-de56-4781-8242-56312b67e613",
   "src_id": "bbd2b850-2707-4e7c-b0cc-f4621a849685",
   "chapter": 2,
   "content": "Turn back to the lowest-power objective lens. Remove the slide from the stage. Switch off the light. Store the microscope covered. Clean the lenses only with lens tissue.",
@@ -504,7 +504,7 @@
   "has_embedding": false
  },
  {
-  "id": "dba5649d-39f9-4dfe-863d-291bd748c266",
+  "id": "63d3eb95-08e6-4825-85f3-c61b00a2a71e",
   "src_id": "da57b121-2362-471b-aef3-4d4b857fe996",
   "chapter": 2,
   "content": "You have swung a higher-power objective lens into place and the view looks blurred. Which focus knob will you reach for, and what could go wrong if you chose the other one?",
@@ -516,7 +516,7 @@
   "has_embedding": false
  },
  {
-  "id": "d72d8633-39e6-4d5f-a468-44949d3205cb",
+  "id": "89715ec3-2b76-481f-8959-ca0df4dd1455",
   "src_id": "c829c05c-c59d-40b2-9790-a045659c02d9",
   "chapter": 2,
   "content": "To see cells, you first have to prepare them. A temporary slide, also called a wet mount, is a quick preparation that lasts only while you make your observation. The specimen must be thin enough for light to pass through, so a single layer of cells is ideal.",
@@ -528,7 +528,7 @@
   "has_embedding": false
  },
  {
-  "id": "a202f00a-24a3-4b1a-a819-b85d1a622f84",
+  "id": "5fbbef5a-f7bc-4fb1-8440-1cc55baab3e5",
   "src_id": "77574b68-85ef-4c37-a51b-09e8192edaab",
   "chapter": 2,
   "content": "Why a single layer? Light has to pass up through the specimen to reach the lenses. A thin, see-through peel lets the light through. A thick chunk of onion or cheek would block it, and you would see nothing useful.",
@@ -540,7 +540,7 @@
   "has_embedding": false
  },
  {
-  "id": "87a535b9-11d2-49db-9d16-3caeda6bd573",
+  "id": "8b65526a-1170-43ad-a785-644c7832c090",
   "src_id": "7926fe1d-3f3f-451f-b477-e57feb9632e7",
   "chapter": 2,
   "content": "Preparing a temporary slide of onion epidermis and how the cells appear under the microscope (not to scale).",
@@ -552,7 +552,7 @@
   "has_embedding": false
  },
  {
-  "id": "b3d48547-ffd8-449d-a230-87c283331e41",
+  "id": "abaa5431-4e4b-47cb-9481-56b4b1009550",
   "src_id": "78df57e9-1900-4bc1-9a17-acad4984bb6e",
   "chapter": 2,
   "content": "Onion epidermis (plant cells). Follow these steps in order.",
@@ -564,7 +564,7 @@
   "has_embedding": false
  },
  {
-  "id": "c85fe060-fc8c-4ba0-b416-377c2bf9ffb3",
+  "id": "dd8ed835-3789-4347-8a23-26eea862055e",
   "src_id": "e26eebe9-94a7-4670-99d3-a53bdcf3936d",
   "chapter": 2,
   "content": "Peeling onion epidermis using forceps to make a temporary slide.",
@@ -576,7 +576,7 @@
   "has_embedding": false
  },
  {
-  "id": "fe7055e5-0ee1-467c-bb8f-13e3697bd2b7",
+  "id": "4a825530-119d-43b7-b757-e911db8973ef",
   "src_id": "9805eaa0-a528-49a4-8fc6-f11ce48e2b96",
   "chapter": 2,
   "content": "Cut an onion and peel off a thin, transparent layer of skin from the inside of a fleshy leaf. It is so thin that light passes straight through it. Lay the piece flat on a clean slide using forceps. Add one drop of iodine solution. This is the stain, and it will make the nucleus show up. Lower a coverslip at an angle using a mounted needle. This pushes air out instead of sealing it in. Blot away any extra liquid with filter paper.",
@@ -588,7 +588,7 @@
   "has_embedding": false
  },
  {
-  "id": "b08acff7-2c18-4586-b590-f243840987b2",
+  "id": "08b038da-a5a4-40c5-8883-4456c31fe180",
   "src_id": "7c6e48f2-8d31-4256-b9fa-a8c358649a86",
   "chapter": 2,
   "content": "Cheek cells (animal cells). The steps are similar, but the cells come from your own cheek.",
@@ -600,7 +600,7 @@
   "has_embedding": false
  },
  {
-  "id": "b374eafe-7c2e-4bcf-b1a3-d322a8d7dc87",
+  "id": "40511c51-f03a-4e42-aa35-a70999ec783f",
   "src_id": "bcd63714-0b4a-4b7c-b974-d50069aaa099",
   "chapter": 2,
   "content": "Gently scrape the inside of your cheek with a clean cotton bud. Smear the cells onto a drop of water or stain on a slide. Lower a coverslip in the same way, at an angle. A stain such as methylene blue makes the cells visible. Throw away or disinfect used cotton buds and slides as your teacher directs.",
@@ -612,7 +612,7 @@
   "has_embedding": false
  },
  {
-  "id": "975a57ca-6785-4242-ae51-6839ebe067de",
+  "id": "59eaf78c-3941-4cec-bff7-c0b948312693",
   "src_id": "2c20930c-b43c-4a61-aa67-7a7c64629b35",
   "chapter": 2,
   "content": "coverslip: A thin square of glass or plastic placed over a specimen on a slide to hold it flat and protect the lens.",
@@ -624,7 +624,7 @@
   "has_embedding": false
  },
  {
-  "id": "70dde02d-4ed7-4767-8d3a-d08634100891",
+  "id": "9de5a160-409f-48d0-860e-ffcb5148804f",
   "src_id": "812a863e-e147-481a-a0d8-89faaf5b44e6",
   "chapter": 2,
   "content": "Lowering the coverslip at an angle stops air bubbles being trapped under it. The coverslip also keeps the specimen in a thin, even layer, protects the objective lens from the liquid and reduces drying out.",
@@ -636,7 +636,7 @@
   "has_embedding": false
  },
  {
-  "id": "c7cd56db-a883-4460-91e3-b1a89ff2fa80",
+  "id": "61149913-7b06-4e58-909e-59b0a844dca1",
   "src_id": "1a456761-fa17-4672-b8ff-d1025b133da4",
   "chapter": 2,
   "content": "So the coverslip does three jobs. It holds the specimen flat in a thin, even layer. It keeps liquid off the objective lens. It slows drying out. Each job helps you get a clear view.",
@@ -648,7 +648,7 @@
   "has_embedding": false
  },
  {
-  "id": "fdcb82fb-6165-41ac-bb77-646834308a4b",
+  "id": "fc7bd87b-7c18-42bc-a226-17c73cd12550",
   "src_id": "47e6b7dc-f58f-49e0-a536-949735146ec8",
   "chapter": 2,
   "content": "stain: A coloured chemical that is taken up by cell structures, making them easier to see.",
@@ -660,7 +660,7 @@
   "has_embedding": false
  },
  {
-  "id": "6ce41af2-9666-43f2-9e10-e365f8521c48",
+  "id": "8e7c0913-9cf2-488f-b142-77faf9b0b100",
   "src_id": "433b1787-eff9-4bea-aca0-69bb9bb17945",
   "chapter": 2,
   "content": "Cells are mostly colourless and transparent, so their parts are hard to see. A stain is absorbed more strongly by some structures, such as the nucleus, which then stand out. Iodine stains the nucleus of onion cells yellow-brown, while a stain such as methylene blue gives a blue colour.",
@@ -672,7 +672,7 @@
   "has_embedding": false
  },
  {
-  "id": "7d3ab2cb-161b-4e34-bc7c-bca4e988e128",
+  "id": "243da58b-1e47-41d3-b8d4-a060b8aa4c23",
   "src_id": "5bf032cb-3fd4-4d24-924d-2d6e9c654162",
   "chapter": 2,
   "content": "Common mistake: Cells are naturally coloured, so the colour seen under the microscope is their real colour. Correct idea: Most cells are almost colourless and transparent. The colour you see is usually from the stain, which highlights structures such as the nucleus.",
@@ -684,7 +684,7 @@
   "has_embedding": false
  },
  {
-  "id": "047ca947-b0b5-4435-859c-69cd6d18930e",
+  "id": "b3ca56ff-84f5-45b7-9708-43a78cf0841a",
   "src_id": "ad33c4b2-9e86-49ce-a349-bd591c457464",
   "chapter": 2,
   "content": "Lowering a coverslip onto a specimen on a microscope slide (not to scale).",
@@ -696,7 +696,7 @@
   "has_embedding": false
  },
  {
-  "id": "e56102c9-390b-4fad-980e-ef72c1f58725",
+  "id": "19924efd-cb20-45cc-86e9-0fea5bc3d05e",
   "src_id": "7a171323-e459-4182-a956-69c81a64971f",
   "chapter": 2,
   "content": "Under the microscope, onion cells are regular and brick-shaped and fit closely together, each with a visible cell wall and nucleus. Cheek cells are irregular, rounded and flattened, with a visible nucleus and no cell wall.",
@@ -708,7 +708,7 @@
   "has_embedding": false
  },
  {
-  "id": "3792c368-6d47-411b-b684-793d73de8bb1",
+  "id": "223c18dd-78ee-4dfb-9cbb-ee1a8d03ff57",
   "src_id": "c3ac0d70-9771-45be-a435-8a482219277d",
   "chapter": 2,
   "content": "Onion epidermal cells and cheek cells under the microscope Feature Onion epidermal cells (plant) Cheek cells (animal) Shape Regular and brick-shaped Irregular, rounded and flattened Cell wall Visible cell wall No cell wall Nucleus Visible nucleus Visible nucleus How they fit together Fit closely together Often lie separately, overlapping or folded",
@@ -720,7 +720,7 @@
   "has_embedding": false
  },
  {
-  "id": "07c21be4-5c67-4976-9b1d-2c0478624030",
+  "id": "9f1c1ed5-b53d-47d5-b7a1-0a8785b8be3e",
   "src_id": "3047f470-e91a-4a34-8479-e92095014fc6",
   "chapter": 2,
   "content": "Why is a stain added when you prepare a slide of cheek cells?",
@@ -732,7 +732,7 @@
   "has_embedding": false
  },
  {
-  "id": "c701005f-1bb1-4111-acde-5bbb41c873e2",
+  "id": "823abdd0-6c7b-4e5a-9247-970a1bac16c6",
   "src_id": "19961503-405f-4642-8483-1aae0ad6caa9",
   "chapter": 2,
   "content": "A microscope makes an image bigger than the real thing. Magnification tells you how many times larger the image appears than the real object. It has no unit, and it is written with a multiplication sign, for example ×400.",
@@ -744,7 +744,7 @@
   "has_embedding": false
  },
  {
-  "id": "3190a938-9eb4-40ee-9ebf-d8a378fce4de",
+  "id": "2b6ebcc0-a132-453e-b3e0-cab20ff10703",
   "src_id": "849c8d2d-919e-49d9-803f-238168add5e0",
   "chapter": 2,
   "content": "total magnification: The magnification of the eyepiece lens multiplied by the magnification of the objective lens.",
@@ -756,7 +756,7 @@
   "has_embedding": false
  },
  {
-  "id": "8fba79b3-17b0-4ac7-9c89-84ebfe8f99d2",
+  "id": "bdea4ed3-d30c-43b5-b09f-4f17a59aed68",
   "src_id": "b694b064-b5d2-4a10-b471-f3deea994517",
   "chapter": 2,
   "content": "The two lenses work together, so their magnifications are multiplied. A ×10 eyepiece with a ×40 objective gives ×400. With the same ×10 eyepiece, a ×4 objective gives ×40 and a ×10 objective gives ×100.",
@@ -768,7 +768,7 @@
   "has_embedding": false
  },
  {
-  "id": "f3e49453-23a4-44e6-9b22-e3f783d659a3",
+  "id": "c07043b4-a150-4848-8475-a35ec055eedc",
   "src_id": "c46a8651-9547-4fa5-8359-5da49632fbf7",
   "chapter": 2,
   "content": "Here are all three objective lenses of one microscope with the same ×10 eyepiece. Look at the pattern: each time, the total is the eyepiece number multiplied by the objective number.",
@@ -780,7 +780,7 @@
   "has_embedding": false
  },
  {
-  "id": "29918734-5021-4bb5-8a58-bfc940d015e4",
+  "id": "9d01b49b-884b-489c-af5f-1f44f295f274",
   "src_id": "88b73054-276a-435a-b50f-4d101aa6ed1c",
   "chapter": 2,
   "content": "Eyepiece ×10 with objective ×4: 10 × 4 = ×40 total. Eyepiece ×10 with objective ×10: 10 × 10 = ×100 total. Eyepiece ×10 with objective ×40: 10 × 40 = ×400 total.",
@@ -792,7 +792,7 @@
   "has_embedding": false
  },
  {
-  "id": "f51569ac-92ce-4aa0-a74f-ba38b479e98d",
+  "id": "c1c1ae45-3969-42f3-9316-88093b038f33",
   "src_id": "44763129-1908-426d-a830-9e822c4d6f8d",
   "chapter": 2,
   "content": "Common mistake: Total magnification is found by adding the eyepiece and objective magnifications. Correct idea: The two magnifications are multiplied. An eyepiece of ×10 and an objective of ×40 give ×400, not ×50.",
@@ -804,7 +804,7 @@
   "has_embedding": false
  },
  {
-  "id": "03524aa8-7f42-411d-a28d-a231ecd7f392",
+  "id": "1f432022-a529-4b94-8bf4-c161d50c5892",
   "src_id": "1abe248e-2200-40a1-840a-fc8ab0a84153",
   "chapter": 2,
   "content": "A microscope has a ×10 eyepiece lens and a ×4 objective lens in use. What is the total magnification?",
@@ -816,7 +816,7 @@
   "has_embedding": false
  },
  {
-  "id": "4ab469c1-b7fa-41cd-970b-7929a33b7236",
+  "id": "7a8d2e64-4ec9-4135-8353-1a3c2be66c31",
   "src_id": "d065f9ec-fb56-4dee-aa34-ba7837406f04",
   "chapter": 2,
   "content": "You can also work out the magnification of a drawing or photograph. Measure the image with a ruler, then use:",
@@ -828,7 +828,7 @@
   "has_embedding": false
  },
  {
-  "id": "d69abf39-df0f-4247-a423-d1070a47f9a1",
+  "id": "02260ba5-9e83-4a8e-8120-1c03d1031fa6",
   "src_id": "e464d908-08b9-466c-8129-c52be3161bfe",
   "chapter": 2,
   "content": "magnification = image size ÷ actual size, which can be rearranged to actual size = image size ÷ magnification.",
@@ -840,7 +840,7 @@
   "has_embedding": false
  },
  {
-  "id": "ef7fe7be-9f80-4677-b2aa-0522831aa1f7",
+  "id": "e37a4c24-4bba-47dd-ac39-9712b5b55da8",
   "src_id": "71d5b713-debe-442a-a19b-76e66e201fc1",
   "chapter": 2,
   "content": "Measure the image along the same line you would measure on the real specimen, usually its length or width. A drawing is an enlarged image, so its size is not the actual size. A big drawing of a very small cell simply means high magnification.",
@@ -852,7 +852,7 @@
   "has_embedding": false
  },
  {
-  "id": "9e055fcd-a68c-42f4-817d-681581e71d72",
+  "id": "1d70448e-0e95-40c0-ac78-d18195f44bad",
   "src_id": "9aacf1b8-1544-43ac-b7c9-ffed5a45ee26",
   "chapter": 2,
   "content": "Think about a drawing of a cell that is 50 mm long. It is tempting to say the cell itself is 50 mm long. But the drawing is the image, and the image is enlarged. How much bigger the drawing is than the real cell depends on the magnification. To find the real size, you must divide the image size by the magnification.",
@@ -864,7 +864,7 @@
   "has_embedding": false
  },
  {
-  "id": "7920bf04-17e5-44eb-aec7-8edb63249653",
+  "id": "e8a23bda-8f5d-4e06-9e33-46abd197819b",
   "src_id": "f9507e61-1ebe-46c1-b851-45aacc5e7037",
   "chapter": 2,
   "content": "The units must match before you divide. Cells are so small that their actual size is better given in micrometres (µm). Since 1 mm = 1000 µm, convert a length in millimetres to micrometres by multiplying by 1000.",
@@ -876,7 +876,7 @@
   "has_embedding": false
  },
  {
-  "id": "99feede2-5f48-4c9f-8532-492b429c5ed4",
+  "id": "1afb4ddc-effb-4186-9f5e-eb64bf9631a7",
   "src_id": "b3d213c8-ed90-48fc-b69e-3a359746d836",
   "chapter": 2,
   "content": "To change millimetres (mm) into micrometres (µm), multiply by 1000. Before you divide, check that the image size and the actual size are in the same unit. Check that the magnification has no unit: it is just a number with ×.",
@@ -888,7 +888,7 @@
   "has_embedding": false
  },
  {
-  "id": "f28d9203-64ed-4230-8bdb-18e58c161882",
+  "id": "bcb22a77-f4d0-4766-8224-6db5e9a3b513",
   "src_id": "3ee780eb-6341-40df-9d3d-4f670a0c0a47",
   "chapter": 2,
   "content": "For example, 0.06 mm × 1000 = 60 µm. Always do the conversion before you give your final answer in micrometres.",
@@ -900,7 +900,7 @@
   "has_embedding": false
  },
  {
-  "id": "9f5ba1f4-8900-4119-a918-5ceb492b1aab",
+  "id": "b87a43d1-afb9-43e4-b596-35826d19244c",
   "src_id": "228b23c4-16c0-4631-b223-f75786a8f8ae",
   "chapter": 2,
   "content": "A student's drawing of a cheek cell is 48 mm wide. The magnification of the drawing is ×800. Find the actual width of the cell in micrometres. Use actual size = image size ÷ magnification. 48 ÷ 800 = 0.06 mm. Convert to micrometres by multiplying by 1000: 0.06 × 1000 = 60 µm. 60 µm",
@@ -912,7 +912,7 @@
   "has_embedding": false
  },
  {
-  "id": "137025a9-93fa-4651-b396-8839cf3d910c",
+  "id": "2434a6ea-eb49-4f80-b61c-b4396aa50f15",
   "src_id": "810e26e9-34dd-4df8-baca-50c882abc512",
   "chapter": 2,
   "content": "Sometimes you are asked for the magnification instead. Here the image and the actual cell are both given, so you use magnification = image size ÷ actual size.",
@@ -924,7 +924,7 @@
   "has_embedding": false
  },
  {
-  "id": "1cdfbc64-1f80-45f9-8304-12c91eaba378",
+  "id": "1a105e58-c8f7-4286-8995-08b27595135f",
   "src_id": "c573f806-72be-47ea-850a-a5f103385a86",
   "chapter": 2,
   "content": "A drawing of a cell is 52 mm long. The actual cell is 0.13 mm long. Find the magnification of the drawing. Use magnification = image size ÷ actual size. Both lengths are already in millimetres, so the units match. 52 ÷ 0.13 = 400. ×400",
@@ -936,7 +936,7 @@
   "has_embedding": false
  },
  {
-  "id": "23568dac-6b81-4193-94ec-18ffa04a77ad",
+  "id": "ac679c75-236d-4893-b903-118c9b533339",
   "src_id": "dcc8cb6c-6cd1-48b2-8c59-95ba825cfc61",
   "chapter": 2,
   "content": "How do you decide which version of the formula to use? Write down what you are given and what you want to find. A formula triangle helps: put image size on top, and magnification and actual size side by side below it. Cover the quantity you want, and the triangle shows the calculation.",
@@ -948,7 +948,7 @@
   "has_embedding": false
  },
  {
-  "id": "55af568d-8892-4e79-b5bf-54091012249e",
+  "id": "e00a9543-59e3-49af-ae98-bc29513ca3fe",
   "src_id": "e134f8ed-fdfa-45f8-b6e7-f6c2a0a08e2a",
   "chapter": 2,
   "content": "To find magnification, cover magnification: image size ÷ actual size. To find actual size, cover actual size: image size ÷ magnification. To find image size, cover image size: magnification × actual size.",
@@ -960,7 +960,7 @@
   "has_embedding": false
  },
  {
-  "id": "4ac54c68-da79-4706-9ae9-e5452fe60408",
+  "id": "bc03a07e-95bc-4e73-a488-11a78335c3ec",
   "src_id": "23194349-117d-41b9-8955-7bd4b78e6c98",
   "chapter": 2,
   "content": "Common mistake: A higher magnification always gives a better view of the specimen. Correct idea: Higher magnification makes the image larger but narrows the field of view and darkens the image. Beyond the resolution limit of a light microscope, extra magnification only makes the image blurrier, so the lowest power that shows the needed detail is best.",
@@ -972,7 +972,7 @@
   "has_embedding": false
  },
  {
-  "id": "1a4ffc77-990a-4785-9d27-abb52239f26e",
+  "id": "53bbc1d9-9557-4d33-9970-2ea41411c123",
   "src_id": "cd10a95a-38c9-45ed-8094-9b5808044d6a",
   "chapter": 2,
   "content": "Resolution is the ability to show two points that are close together as separate points. A light microscope has a resolution limit set by the wavelength of light. Past that limit, a bigger image shows no extra detail.",
@@ -984,7 +984,7 @@
   "has_embedding": false
  },
  {
-  "id": "43843976-fe64-45eb-a15b-1561c8a7d977",
+  "id": "b1d3ab0a-4d9b-45ad-b070-ced57fec9566",
   "src_id": "b263bce5-8b73-442a-ba8a-3ccd036c0afa",
   "chapter": 2,
   "content": "A biological drawing is a scientific record. It must show what you can actually see, accurately and clearly.",
@@ -996,7 +996,7 @@
   "has_embedding": false
  },
  {
-  "id": "4a24421c-c815-44d7-a3b7-c737e89c7868",
+  "id": "d0ca916b-11e2-44d7-9b84-a24217337887",
   "src_id": "c0d1061d-e4b4-41be-ac9d-8348193efb02",
   "chapter": 2,
   "content": "Use a sharp pencil and draw clear, continuous single lines. Do not shade or colour. Draw only a few representative cells, not the whole field of view, and show their true shapes. Draw label lines with a ruler. The lines must not cross, and each must touch the part it labels. Give the drawing a title that names the specimen, and state the magnification used, for example \"Onion epidermal cells, ×100\".",
@@ -1008,7 +1008,7 @@
   "has_embedding": false
  },
  {
-  "id": "37248c6c-6934-4761-bccb-69731aea804b",
+  "id": "a0a22332-7b2f-4eec-9e23-6d3c07544ffd",
   "src_id": "53f7f104-0b5a-4349-9c15-0f0118e8f0fc",
   "chapter": 2,
   "content": "A drawing needs a title, a stated magnification and ruled, non-crossing label lines.",
@@ -1020,7 +1020,7 @@
   "has_embedding": false
  },
  {
-  "id": "c751ce0b-9d66-4dac-bdee-7969fc67b4fe",
+  "id": "e5e9decd-163f-40e1-a165-2417c2b17430",
   "src_id": "55d19d50-f576-411c-b382-f5bbb9419312",
   "chapter": 2,
   "content": "Compare a good drawing with a poor one. A good drawing uses single, clear pencil lines. A poor one is shaded or coloured in. A good drawing shows a few representative cells. A poor one tries to copy the whole field of view. In a good drawing the label lines are drawn with a ruler, touch the part they label and never cross. In a poor one they are drawn freehand and tangle across each other. Write the labels horizontally, to the side of the drawing, so they are easy to read.",
@@ -1032,7 +1032,7 @@
   "has_embedding": false
  },
  {
-  "id": "7717e4b2-a74d-4e2e-a73d-9abca8e4b604",
+  "id": "40e4d1a2-4683-416a-a7bd-24591f3f83d4",
   "src_id": "aeea69d1-fecf-4d50-94fa-a04110d02dc9",
   "chapter": 2,
   "content": "Think about what each kind of cell should show. A drawing of plant cells should show the cell wall and the nucleus. If you can see them, add the cytoplasm and a large vacuole. A drawing of cheek cells should show the boundary of the cell membrane, the cytoplasm and the nucleus. Remember that onion cells have a cell wall and cheek cells do not. Draw only the features you can actually see. The stain and the focus can change how the same structures look, so do not add a part just because you expect to find it.",
@@ -1044,7 +1044,7 @@
   "has_embedding": false
  },
  {
-  "id": "b01ff399-8119-4be6-a226-2f041e1a2e22",
+  "id": "678c1d11-7194-4f69-8567-f204b74ff4a4",
   "src_id": "17dc9293-de40-402a-82c2-e6810a3abeaf",
   "chapter": 2,
   "content": "The magnification in your title is the microscope magnification you used (eyepiece × objective). The magnification of your drawing is different. You can only calculate it if you know the actual size of the cell, for example if your teacher gives it to you: magnification of drawing = length of drawing ÷ actual length, with both in the same unit.",
@@ -1056,7 +1056,7 @@
   "has_embedding": false
  },
  {
-  "id": "a5c7f740-ff63-45b8-9112-8e2031c6552c",
+  "id": "b905a686-281b-4feb-9cab-6972b22e08fe",
   "src_id": "745bcfa7-db3a-4a3c-879c-8a3aedea20f2",
   "chapter": 2,
   "content": "Is there a title that names the specimen? Is the magnification stated? Does the drawing fill about half the page? Are the label lines ruled, touching the part, and not crossing? Is there no shading and no colour? Are the cells drawn in their true shapes?",
@@ -1068,7 +1068,7 @@
   "has_embedding": false
  },
  {
-  "id": "918b44dc-f15a-4821-87e0-4f9f418b8ba5",
+  "id": "ee776ca0-e420-42b9-a8a3-bc75322f381f",
   "src_id": "1cda2543-3344-4f45-ba13-417e11505d14",
   "chapter": 2,
   "content": "Why is it better to draw only a few representative cells, with their true shapes, than to copy every cell you can see?",

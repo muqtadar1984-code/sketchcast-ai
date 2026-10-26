@@ -159,3 +159,24 @@ python -I spike/sk_r1/bench.py --summary               # re-print the tables fro
 ```
 
 Files: `questions.json` (set + rubric), `bench.py`, `schema.sql`, `teardown.sql`, `corpus_dump.json` / `corpus_listing.txt` (what was indexed, used for the gold judgements), `results.json` (every call: rows, scores, `db_ms`, `e2e_ms`), `summary.md` (tables incl. per-question ranks), `embed_info.json`, `thresholds.json`.
+
+## 9. Titan re-run (2026-10-27, after the IAM allow)
+
+The founder attached `bedrock:InvokeModel` on `amazon.titan-embed-text-v2:0` to the `sketchcast-ops` user on 2026-10-27, and the bench was re-run unchanged with `--embedder titan` (`spike/sk_r1/`; the Gemini outputs were moved to `spike/sk_r1/gemini-run/`). Same branch, same 50 questions, same rubric, 3 repeats; the `sk_r1_*` objects were re-created from `schema.sql` and all 90 real blocks re-embedded (4,489 Titan tokens, **$0.00009**, 90 calls, p50 401 ms per call from this machine).
+
+| group | method | recall@5 block | MRR block | recall@5 unit | MRR unit | empty |
+|---|---|---|---|---|---|---|
+| in_chapter (30) | fts_and | 0.33 | 0.30 | 0.40 | 0.38 | 18 |
+| in_chapter (30) | fts_or | 0.90 | 0.68 | 1.00 | 0.83 | 0 |
+| in_chapter (30) | **vec** | **1.00** | **0.94** | 1.00 | 1.00 | 0 |
+| in_chapter (30) | hybrid_and | 1.00 | 0.93 | 1.00 | 1.00 | 0 |
+| in_chapter (30) | hybrid_or | 1.00 | 0.93 | 1.00 | 1.00 | 0 |
+| alt_example (6) | vec / hybrid_and | 1.00 | 0.89 | 1.00 | 1.00 | 0 |
+| alt_example (6) | hybrid_or | 1.00 | 0.81 | 1.00 | 0.92 | 0 |
+| injection with a real question (4) | vec / hybrid_* | 1.00 | 0.75–0.80 | 1.00 | 1.00 | 0 |
+
+Titan finds the q04 formula block that Gemini ranked 6th (vec recall@5 1.00 vs 0.97); hybrid_or no longer adds anything over vec alone on this set. Off-chapter: 0/8 false positives for vec and both hybrids; injection: 6/6 HTTP 200, 0 rows outside the filter, 0 empty; filter proof: 0 rows from the fake product/chapter copies in 750 returned rows.
+
+**The gate must be re-calibrated for Titan, as §6 said.** Titan's cosine scores sit lower than Gemini's: in-chapter top-1 minimum **0.44** (Gemini 0.73), off-chapter top-1 maximum **0.20** (Gemini 0.60). The fixed 0.60 gate therefore wrongly rejects 10 of 36 in-chapter/alternative questions on Titan, while any value in 0.21–0.43 gives 0 false positives and 0 wrong rejections. **Recommended Titan gate: 0.32** (the midpoint; margin 0.12 either side). The gate value belongs beside the model id in the provider config, never hard-coded.
+
+Latency (DB-side p50 / e2e p50 from this machine): fts_and 0.26 / 394 ms, vec 0.99 / 405 ms, hybrid_or 1.52 / 407 ms; the query embedding on Titan costs 401 ms p50 / 488 ms p95 from Malaysia to us-east-1, which is the cross-Pacific hop, not the model — from a Vercel function in us-east-1 the same call should be well under 100 ms. Recommendation unchanged: pgvector + hybrid (or vec alone, which ties on this set) behind `RetrievalProvider`, Titan v2 as the embedder, gate on the vector score at 0.32. Note for the app: Vercel signs into AWS through `AWS_ROLE_ARN`, not the `sketchcast-ops` user, so that role needs the same Titan allow before the provider ships.
