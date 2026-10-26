@@ -88,6 +88,25 @@ Questions:
 
 Reply with JSON: {{"exercises": [ … all questions … ], "changes": [{{"id": str, "what": str}}]}}"""
 
+CORRECT_CHAPTER = """Earlier rounds corrected Chapter {n} ({title}) of a study guide for ages {age} block by block.
+Some problems remain that span several blocks: a term removed in one place but still used elsewhere, a definition
+changed but questions or mark schemes still relying on the old one, out-of-scope material only partly removed,
+a caption that no longer matches its picture, a reference to a picture that is not there. Resolve EVERY problem
+below across the WHOLE chapter so the chapter is consistent with itself, scientifically accurate and inside the
+Cambridge 0893 scope (cell structures at this level: cell membrane, cytoplasm, nucleus, cell wall, chloroplast,
+mitochondria, sap vacuole). Where a question depends on teaching that was removed, either restore a short, correct
+teaching sentence or rewrite the question — whichever keeps the objective covered. A challenge question must ask the
+learner to apply, interpret or reason, not repeat a printed sentence. Change nothing the problems do not touch.
+
+Problems:
+{fixes}
+
+Chapter (sections and questions):
+{chapter_json}
+
+Reply with JSON: {{"sections": [ … every section, in order … ], "exercises": [ … every question … ],
+"changes": [{{"id": str, "what": str}}]}}"""
+
 VERIFY = """These corrections were applied to Chapter {n} of a study guide (ages {age}, {curriculum}). For EACH
 correction, check the REVISED chapter and rule "resolved" or "not_resolved" (with why). Then list any NEW problem
 the revision introduced (a new error, a broken reference, an answer key that no longer matches, a contradiction),
@@ -211,7 +230,11 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, rnd: in
                 state.setdefault("costs", []).append({"stage": "adjudicate", "validator": other, **cost})
             state["rulings"] = rulings
             cf.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
-        acc = [f for f in accepted(audit, state["rulings"]) if not _about_audit_input(f)]
+        known = set(json.loads((audit_dir / "objectives-0893.json").read_text(encoding="utf-8")))
+        fake = lambda f: f["agreement"] == "SINGLE" and any(
+            c not in known for c in re.findall(r"[789][A-Z][A-Za-z]{1,4}\.\d{2}", str(f.get("problem"))))
+        state["rejected_bad_code"] = [f["id"] for f in audit["findings"] if fake(f)]
+        acc = [f for f in accepted(audit, state["rulings"]) if not _about_audit_input(f) and not fake(f)]
         state["not_applicable"] = [f["id"] for f in audit["findings"] if _about_audit_input(f)]
         if rnd > 1:
             for f in acc:
@@ -255,6 +278,21 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, rnd: in
                         [{**c, "unit": s["sid"]} for c in got.get("changes") or []] or
                         [{"id": f["id"], "what": "applied", "unit": s["sid"]} for f in fs])
 
+            if rnd >= 4 and acc:
+                got = {}
+                for _ in range(3):
+                    got = (author.analyze(CORRECT_CHAPTER.format(
+                        n=n, title=doc["chapter"]["title"], age=w["age_band"], fixes=fx(acc),
+                        chapter_json=json.dumps({"sections": doc["sections"], "exercises": doc["exercises"]},
+                                                ensure_ascii=False)), max_tokens=60000) or {}).get("data") or {}
+                    if isinstance(got.get("sections"), list) and isinstance(got.get("exercises"), list):
+                        break
+                if isinstance(got.get("sections"), list) and len(got["sections"]) == len(doc["sections"]):
+                    doc["sections"], doc["exercises"] = got["sections"], got["exercises"] or doc["exercises"]
+                    applied += [{**c, "unit": "chapter"} for c in got.get("changes") or []]
+                else:
+                    applied += [{"id": f["id"], "what": "NOT APPLIED: chapter reply unusable"} for f in acc]
+                by_unit = {}
             with ThreadPoolExecutor(max_workers=4) as pool:
                 res = list(pool.map(fix_section, doc["sections"]))
             doc["sections"] = [r[0] for r in res]

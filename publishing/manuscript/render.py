@@ -378,7 +378,7 @@ def _block(b: dict, figs: dict) -> str:
     if t == "list":
         return "<ul>" + "".join(f"<li>{md(i)}</li>" for i in b.get("items") or []) + "</ul>"
     if t == "table":
-        head = "".join(f"<th>{md(h)}</th>" for h in b.get("headers") or [])
+        head = "".join(f"<th>{md(h)}</th>" for h in b.get("headers") or b.get("columns") or b.get("header") or [])
         rows = "".join("<tr>" + "".join(f"<td>{md(c)}</td>" for c in r) + "</tr>" for r in b.get("rows") or [])
         cap = f"<figcaption>{md(b.get('caption'))}</figcaption>" if b.get("caption") else ""
         return f'<figure class="tbl"><table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table>{cap}</figure>'
