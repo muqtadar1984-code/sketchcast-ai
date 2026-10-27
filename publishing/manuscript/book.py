@@ -36,12 +36,39 @@ def _chapter_pdf(doc: dict, full: dict, env_file: Path, out: Path, first_page: i
     return pdf
 
 
+def _kdp_pages(work: dict, kdp: dict, curriculum: str, alignment: str) -> tuple[str, str]:
+    """The KDP edition's copyright page and its "use this book online" page, from the book's kdp.json. A missing
+    ISBN or edition code prints a visible placeholder; the build then reports the interior as a proof."""
+    e = html.escape
+    isbn = e(kdp.get("isbn") or "TO BE ASSIGNED")
+    imprint = (f"<section class='imprint'><p><strong>{e(kdp.get('title') or work['title'])}</strong></p>"
+               f"<p>{e(kdp.get('edition_label') or 'First edition')}, {date.today().strftime('%B %Y')}.</p>"
+               f"<p>Published by {e(kdp.get('publisher') or kdp.get('author') or '')}.</p><p>ISBN {isbn}</p>"
+               f"<p>© {date.today().year} {e(kdp.get('author') or '')}. All rights reserved. {e(kdp.get('licence') or '')}</p>"
+               f"<p>{e(kdp.get('ai_statement') or '')}</p>"
+               f"<p>Curriculum references: {curriculum}. Learning objective codes are shown at the start of each "
+               f"chapter.</p>{alignment}</section>")
+    code = e(kdp.get("edition_code") or "CODE TO BE ISSUED")
+    url = e(kdp.get("portal_url") or "ADDRESS TO BE CONFIRMED")
+    online = (f"<section class='online'><h2>Use this book online</h2>"
+              f"<p>Your copy of this book comes with online access: read it on any device, practise with instant "
+              f"feedback, and learn with SK, the SketchCast tutor, chapter by chapter.</p>"
+              f"<ol><li>Go to <strong>{url}</strong> and sign in or create a free account.</li>"
+              f"<li>Choose <strong>{e(kdp.get("activate_label") or "Activate my book")}</strong> and enter the book code below.</li>"
+              f"<li>Enter the order number from your purchase. Each order number activates one account.</li></ol>"
+              f"<div class='code'><span>Book code</span><strong>{code}</strong></div>"
+              f"<p class='small'>Online access, the tutor's allowance and how to renew it are described at the address "
+              f"above.</p></section>")
+    return imprint, online
+
+
 def _front_html(work: dict, theme: dict, chapters: list[dict], label: str, prepared_for: str,
-                edition: str, hero: str | None, preface: str = "", back: list[tuple[str, int]] = ()) -> str:
+                edition: str, hero: str | None, preface: str = "", back: list[tuple[str, int]] = (),
+                kdp: dict | None = None) -> str:
     from publishing.manuscript.render import _pretty_curriculum
-    from publishing.manuscript.theme import css_vars, page
+    from publishing.manuscript.theme import bleed, css_vars, page
     p = page(theme)
-    b = p["bleed_mm"] if edition == "print" else 0
+    b = bleed(p, edition)
     W, H = p["trim"]["width_mm"] + 2 * b, p["trim"]["height_mm"] + 2 * b
     m = p["margins_mm"]
     title, _, sub = str(work["title"]).replace(" - ", " – ").partition(":")
@@ -56,6 +83,20 @@ def _front_html(work: dict, theme: dict, chapters: list[dict], label: str, prepa
     from publishing.tools.academic_audit import curriculum as _cur
     note = _cur(work.get("curriculum")).get("alignment_note")
     alignment = f"<p>{html.escape(note)}</p>" if note else ""
+    draft_chip = "" if kdp else f'<span class="draft">{html.escape(label)}</span>'
+    title_chip = "" if kdp else f'<div class="label">{html.escape(label)} · {today}</div>'
+    imprint = (f"""<section class="imprint">
+<p><strong>{html.escape(str(work['title']).replace(' - ', ' – '))}</strong></p>
+<p>{html.escape(label)}, {today}. Prepared by SketchCast{(' for ' + html.escape(prepared_for)) if prepared_for else ''}.
+This is a working draft shared for review and discussion. It is not for sale or further distribution, and its
+text, pictures and page design will change before publication.</p>
+<p>© {date.today().year} SketchCast. All rights reserved.</p>
+<p>Illustrations are original SketchCast artwork. Photographs are used under the licences named in each chapter's
+picture credits, with their authors credited.</p>
+<p>Curriculum references: {curriculum}. Learning objective codes are shown at the start of each chapter.</p>{alignment}</section>""")
+    online = ""
+    if kdp:
+        imprint, online = _kdp_pages(work, kdp, curriculum, alignment)
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{html.escape(work['title'])}</title><style>
 {css_vars(theme)}
 @page {{ size: {W}mm {H}mm; margin: {m['top'] + b}mm {m['outer'] + b}mm {m['bottom'] + b}mm {m['inner'] + b}mm;
@@ -95,25 +136,23 @@ table.toc td.pg {{ width: 14mm; text-align: right; color: var(--brand-dark); fon
 .preface p {{ font-size: 10.5pt; line-height: 1.6; margin: 0 0 3mm; }}
 .chip {{ font-size: 8.4pt; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; padding: 1.4mm 3mm;
   border-radius: 3pt; }}
+.online ol {{ font-size: 11pt; line-height: 1.7; padding-left: 6mm; }}
+.online .code {{ margin: 10mm 0 6mm; border: 1pt solid var(--brand); border-radius: 6pt; padding: 6mm 8mm;
+  display: flex; justify-content: space-between; align-items: center; }}
+.online .code span {{ font: 600 9pt var(--bfont); letter-spacing: .16em; text-transform: uppercase; color: var(--brand); }}
+.online .code strong {{ font: 700 20pt var(--hfont); letter-spacing: .12em; color: var(--brand-dark); }}
+.online .small {{ font-size: 9pt; color: var(--muted); }}
 </style></head><body>
 <section class="cover"><div class="band"></div><div class="inner">
 <div class="kicker">{html.escape(title.strip())}</div><h1>{html.escape(sub.strip() or title.strip())}</h1>
 <p class="sub">A study guide for ages {html.escape(str(work.get('age_band')).replace('-', '–'))}</p>
 <div class="meta">{curriculum}</div></div>{hero_img}
-<div class="foot"><span class="brand">SketchCast</span><span class="draft">{html.escape(label)}</span></div></section>
+<div class="foot"><span class="brand">SketchCast</span>{draft_chip}</div></section>
 <section></section>
 <section class="title"><h1>{html.escape(title.strip())}</h1><p class="sub">{html.escape(sub.strip())}</p>
 <div class="rule"></div><p>{curriculum}</p><p>Ages {html.escape(str(work.get('age_band')).replace('-', '–'))}</p>
-<p>SketchCast</p><div class="label">{html.escape(label)} · {today}</div></section>
-<section class="imprint">
-<p><strong>{html.escape(str(work['title']).replace(' - ', ' – '))}</strong></p>
-<p>{html.escape(label)}, {today}. Prepared by SketchCast{(' for ' + html.escape(prepared_for)) if prepared_for else ''}.
-This is a working draft shared for review and discussion. It is not for sale or further distribution, and its
-text, pictures and page design will change before publication.</p>
-<p>© {date.today().year} SketchCast. All rights reserved.</p>
-<p>Illustrations are original SketchCast artwork. Photographs are used under the licences named in each chapter's
-picture credits, with their authors credited.</p>
-<p>Curriculum references: {curriculum}. Learning objective codes are shown at the start of each chapter.</p>{alignment}</section>
+<p>SketchCast</p>{title_chip}</section>
+{imprint}
 {pre}
 <section><h2>Contents</h2><table class="toc">{toc}</table></section>
 <section class="about"><h2>How this book works</h2>
@@ -133,6 +172,7 @@ picture credits, with their authors credited.</p>
 <p>Questions come in three levels: <strong>Getting started</strong> ●○○, <strong>On your own</strong> ●●○ and
 <strong>Challenge</strong> ●●●. Written answers have lines to work on, sized to the marks. Answers, worked solutions
 and mark points follow each chapter.</p></section>
+{online}
 </body></html>"""
 
 
@@ -146,6 +186,7 @@ def compile_book(slug: str, first: int, last: int, env_file: Path, label: str, p
     build = out / "book"
     build.mkdir(exist_ok=True)
     theme = for_work(slug)
+    kdp = json.loads((out / "kdp.json").read_text(encoding="utf-8")) if edition == "kdp" else None
     docs = []
     for n in range(first, last + 1):
         f = out / f"ch{n:02d}-draft.json"
@@ -215,8 +256,13 @@ def compile_book(slug: str, first: int, last: int, env_file: Path, label: str, p
     pref = BM.preface(slug, pairs, out) if matrix else ""
     front_html = build / f"front-{edition}.html"
     front_html.write_text(_front_html(work, theme, chapters, label, prepared_for, edition, hero_image(slug, 1),
-                                      pref, back), encoding="utf-8")
+                                      pref, back, kdp), encoding="utf-8")
     front = fitz.open(_print(front_html, build / f"front-{edition}.pdf"))
+    if kdp:     # the cover becomes the wrap's front panel; the interior opens on the title page, a right-hand page
+        cover = fitz.open()
+        cover.insert_pdf(front, from_page=0, to_page=0)
+        cover.save(build / "kdp-front-cover.pdf")
+        front.delete_pages(from_page=0, to_page=1)
 
     p = page(theme)
     book = fitz.open()
@@ -225,7 +271,7 @@ def compile_book(slug: str, first: int, last: int, env_file: Path, label: str, p
         _blank(book, p, edition)
     contents_at = next(i for i, pg in enumerate(front) if pg.get_text().lstrip().startswith("Contents")) + 1
     preface_at = next((i + 1 for i, pg in enumerate(front) if pg.get_text().lstrip().startswith("Preface")), None)
-    toc = [[1, "Cover", 1]] + ([[1, "Preface", preface_at]] if preface_at else []) + [[1, "Contents", contents_at]]
+    toc = ([] if kdp else [[1, "Cover", 1]]) + ([[1, "Preface", preface_at]] if preface_at else []) + [[1, "Contents", contents_at]]
     toc.sort(key=lambda t: t[2])
     for part in parts:
         if part == "blank":
@@ -251,16 +297,39 @@ def compile_book(slug: str, first: int, last: int, env_file: Path, label: str, p
                        "keywords": "; ".join(k for k in (label, prepared_for) if k)})
     name = f"{slug}-{label.lower().replace(' ', '-')}-{edition}.pdf"
     dest = out / name
+    if kdp:
+        return _finish_kdp(book, kdp, theme, p, build, out, dest)
     book.save(dest, garbage=3, deflate=True)
     (build / "chapters.json").write_text(json.dumps(chapters, indent=1), encoding="utf-8")
     log.info("book: %d pages → %s", len(book), dest)
     return dest
 
 
+def _finish_kdp(book, kdp: dict, theme: dict, p: dict, build: Path, out: Path, dest: Path) -> Path:
+    """The KDP package: interior with the spine-side bleed cut off, the wrap cover, the sheet, and the list of what
+    still blocks upload."""
+    from publishing.manuscript import kdp as K
+    from publishing.manuscript.theme import KDP_BLEED_MM
+    whole = build / "kdp-interior-uncut.pdf"
+    book.save(whole, garbage=3, deflate=True)
+    interior = dest.with_name(dest.stem + "-interior.pdf")
+    cover = dest.with_name(dest.stem + "-cover.pdf")
+    inner = K.cut_spine_bleed(whole, interior, KDP_BLEED_MM)
+    wrap = K.cover_wrap(build / "kdp-front-cover.pdf", cover, inner["pages"], kdp, theme, p, KDP_BLEED_MM)
+    facts = {"interior_file": interior.name, "cover_file": cover.name, "blockers": K.blockers(kdp),
+             "measurements": {**inner, **wrap}}
+    K.sheet(kdp, facts, dest.with_name(dest.stem + "-sheet.html"))
+    (build / "kdp-facts.json").write_text(json.dumps(facts, indent=1), encoding="utf-8")
+    log.info("KDP: %d pages, %s; %s", inner["pages"], wrap, "PROOF: " + "; ".join(facts["blockers"])
+             if facts["blockers"] else "ready to upload")
+    return interior
+
+
 def _blank(book, p: dict, edition: str) -> None:
     """A plain paper page (no folio), so the next chapter opens on a right-hand page."""
     import fitz
-    b = p["bleed_mm"] if edition == "print" else 0
+    from publishing.manuscript.theme import bleed
+    b = bleed(p, edition)
     mm = 72 / 25.4
     W, H = (p["trim"]["width_mm"] + 2 * b) * mm, (p["trim"]["height_mm"] + 2 * b) * mm
     pg = book.new_page(width=W, height=H)
@@ -276,7 +345,7 @@ def main() -> None:
     a.add_argument("last", type=int)
     a.add_argument("--label", default="First draft manuscript")
     a.add_argument("--prepared-for", default="")
-    a.add_argument("--edition", default="digital", choices=("digital", "print"))
+    a.add_argument("--edition", default="digital", choices=("digital", "print", "kdp"))
     a.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
     x = a.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")

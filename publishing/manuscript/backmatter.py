@@ -95,9 +95,9 @@ def index_pages(terms: list[str], chapter_pdfs: list[tuple[int, Path, int]]) -> 
 def back_html(work: dict, theme: dict, gloss: list[dict], index: dict[str, list[int]], matrix: dict,
               coverage: dict, credits: list[str], first_page: int, edition: str) -> str:
     from publishing.manuscript.render import _pretty_curriculum
-    from publishing.manuscript.theme import css_vars, page
+    from publishing.manuscript.theme import bleed, css_vars, page
     p = page(theme)
-    b = p["bleed_mm"] if edition == "print" else 0
+    b = bleed(p, edition)
     W, H = p["trim"]["width_mm"] + 2 * b, p["trim"]["height_mm"] + 2 * b
     m = p["margins_mm"]
     folio = f"font: 9pt {p['folio']['font']}; color: {theme['brand_dark']};"

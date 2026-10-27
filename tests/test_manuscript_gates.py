@@ -237,3 +237,51 @@ def test_a_numbered_part_finds_its_point_under_a_shorter_name():
     assert R.point_for("Cell membrane", pts) == [3, 4]
     assert R.point_for("nucleus", pts) is None
     assert R.point_for("membrane", pts) is None          # a part is never matched to a longer, different name
+
+
+def test_kdp_bleed_is_cut_from_the_spine_side_only(tmp_path):
+    import fitz
+    from publishing.manuscript import kdp as K
+    from publishing.manuscript.theme import KDP_BLEED_MM, bleed
+    p = {"bleed_mm": 3}
+    assert (bleed(p, "print"), bleed(p, "kdp"), bleed(p, "digital")) == (3, KDP_BLEED_MM, 0)
+    mm, b = 72 / 25.4, KDP_BLEED_MM
+    W, H = (210 + 2 * b) * mm, (297 + 2 * b) * mm
+    src = fitz.open()
+    for i in range(2):                         # page 1 right-hand, page 2 left-hand; mark each OUTSIDE edge
+        pg = src.new_page(width=W, height=H)
+        x = W - 2 if i == 0 else 2
+        pg.draw_rect(fitz.Rect(x - 1, H / 2 - 1, x + 1, H / 2 + 1), color=(1, 0, 0), fill=(1, 0, 0))
+    src.save(tmp_path / "in.pdf")
+    facts = K.cut_spine_bleed(tmp_path / "in.pdf", tmp_path / "out.pdf", b)
+    # KDP: the page is the trim + 0.125 in wide and + 0.25 in tall; the trim box is the trim
+    assert all(abs(x - y) < 0.02 for x, y in zip(facts["page_mm"] + facts["trim_mm"], [210 + b, 297 + 2 * b, 210, 297]))
+    out = fitz.open(tmp_path / "out.pdf")
+    right, left = out[0], out[1]
+    # the outside-edge mark survives on both: right edge of a right-hand page, left edge of a left-hand page
+    assert right.get_pixmap(clip=fitz.Rect(right.rect.width - 4, H / 2 - 2, right.rect.width, H / 2 + 2)).color_count() > 1
+    assert left.get_pixmap(clip=fitz.Rect(0, H / 2 - 2, 4, H / 2 + 2)).color_count() > 1
+    assert right.trimbox.x0 == 0 and abs(left.trimbox.x0 - b * mm) < 0.01   # trim sits on the spine edge
+
+
+def test_kdp_spine_and_blockers():
+    from publishing.manuscript import kdp as K
+    assert K.blockers({"isbn": "978", "edition_code": "X", "price_usd": 24.99, "portal_url": "https://x"}) == []
+    assert len(K.blockers({})) == 4
+    runs = K._plain("<p><b>One</b> two.</p><ul><li>A</li><li>B</li></ul>")
+    assert runs == [("p", "One two."), ("li", "A"), ("li", "B")]
+
+
+def test_sk_bundle_needs_an_approval_that_still_matches():
+    import hashlib, json as _j
+    from publishing.tools.sk_bundle import _approval
+    doc = {"sections": [{"sid": "s1", "blocks": []}], "exercises": []}
+    h = hashlib.sha256(_j.dumps({"sections": doc["sections"], "exercises": doc["exercises"]}, sort_keys=True,
+                                ensure_ascii=False).encode("utf-8")).hexdigest()
+    book = [{"revision": "rev9", "label": "Revision 9", "by": "founder", "at": "2026-10-27", "basis": "x"}]
+    assert _approval(doc, book, "rev9")["kind"] == "book"
+    assert _approval(doc, book, "rev8") is None                        # a book approval covers its own revision only
+    stamped = {**doc, "gate_d": {"status": "approved", "content_sha256": h, "by": "founder", "at": "2026-10-26"}}
+    assert _approval(stamped, [], "rev8")["kind"] == "gate_d"
+    edited = {**stamped, "exercises": [{"xid": "x1"}]}                  # content changed after the stamp
+    assert _approval(edited, [], "rev8") is None
