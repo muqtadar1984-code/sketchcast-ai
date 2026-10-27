@@ -1,0 +1,27 @@
+{
+  "version": "v1-2026-10-25",
+  "notes": "Founder 2026-10-25: book images must reach publisher quality (reference: semi-3D rendered textbook cell illustrations) for EVERY topic and subject. Styles are chosen by VISUAL GENRE, never by subject. The image model never draws labels: they are vector overlays that the visual gate checks.",
+  "base": "Publisher-grade illustration for a premium full-colour secondary-school study guide from a leading educational publisher. Scientifically accurate in every visible detail, richly detailed and polished, high production value, consistent soft studio lighting from the upper left, gentle shadows and real depth. Isolated on a clean, very light warm-white background with generous margins so the subject can sit beside text. Absolutely no text, letters, numbers, labels, leader lines, arrows, captions, watermarks or logos anywhere in the image.",
+  "genres": {
+    "natural_history": {
+      "use_for": "whole living organisms (animals, plants, fungi, people), body exteriors, everyday real-world objects, foods, materials as they look to the eye",
+      "style": "Natural-history plate quality: realistic, finely rendered textures (fur, feathers, leaf veins, bark, skin, fabric, metal), accurate anatomy and proportions, natural colours, the whole subject in a natural pose, three-quarter or side view."
+    },
+    "scientific_3d": {
+      "use_for": "anything structural, microscopic, internal or particle-level: cells and their parts, tissues, organs, microorganisms, viruses, DNA and chromosomes, atoms, molecules, crystals and lattices, particles of solids, liquids and gases, Earth's layers and rock strata, the inside of machines",
+      "style": "High-end 3D scientific render: physically based materials, translucent membranes and glossy surfaces where real, subsurface scattering, a clean cutaway or cross-section that reveals the inner structure, crisp edges, rich colours that follow textbook conventions, the subject in sharp focus; the look of a premium biology, chemistry or physics textbook render, never a flat cartoon or a watercolour."
+    },
+    "apparatus": {
+      "use_for": "laboratory equipment and set-ups, measuring instruments, electrical circuits built from real components, machines, vehicles, tools, models used in experiments",
+      "style": "Precise product-style 3D render of real apparatus: correct proportions and parts, realistic glass, metal, plastic and liquid materials, components arranged exactly as the set-up requires, neutral studio lighting, slightly elevated three-quarter view."
+    },
+    "process": {
+      "use_for": "processes, cycles, systems and sequences (the water cycle, food chains, digestion, circulation, weather, plate movement, energy transfer) where several parts and their relationship must be seen together",
+      "style": "Premium illustrated system scene in a semi-3D painted style: every stage or part clearly separated and readable, consistent scale within the scene, generous space between parts so vector arrows and labels can be added afterwards, a calm, harmonious palette."
+    },
+    "never_generate": {
+      "use_for": "geometry, graphs, charts, number lines, maps with exact positions, circuit symbols, chemical structural formulae, anything defined by exact measurements, angles or values",
+      "style": "Not drawn by an image model: the engine draws it deterministically as an exact vector figure."
+    }
+  }
+}

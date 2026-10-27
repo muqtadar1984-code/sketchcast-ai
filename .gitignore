@@ -18,6 +18,8 @@ venv/
 
 # Pinterest probe output (scripts/pinterest_probe.py) — local only
 probe-out/
+# publishing engine: local-only DB venv
+.venv-localdb/
 
 # SK packager output (clips, audio, manifests) — built artefacts, never committed
 out/

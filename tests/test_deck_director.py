@@ -793,3 +793,86 @@ def test_a_word_wider_than_its_box_breaks_instead_of_failing(tmp_path, model):
         assert not [f for f in rep.faults if "wider than its box" in f], el["type"]
         texts = [b.text for b in rep.boxes if b.kind == "text"]
         assert el.get("text", el.get("expr")) in texts   # the record (and QA) keeps the plain text
+
+
+# ── 2026-10-25: a found photo is what its SOURCE says it is ───────────────
+
+def _need(**kw):
+    return S.AssetNeed(**({"id": "A1", "need": "micrograph", "subject": "Amoeba under a microscope",
+                           "purpose": "a single-celled organism"} | kw))
+
+
+def test_a_source_naming_pathology_the_request_did_not_ask_for_is_refused():
+    need = _need()
+    assert A.identity_conflict("Amebic colitis (H&E)", "", need)
+    assert A.identity_conflict("File:Red_blood_cells_infected_with_malaria.jpg", "", _need(subject="red blood cells"))
+    assert A.identity_conflict("File:Histopathology_of_pulmonary_congestion_and_siderophages.jpg", "",
+                               _need(subject="white blood cell"))
+    assert not A.identity_conflict("Amoeba proteus", "a free-living amoeba", need)
+    # asked for on purpose: a lesson about malaria may show the parasite
+    assert not A.identity_conflict("Malaria parasite in blood", "", _need(subject="malaria parasite in red blood cells"))
+
+
+def test_the_source_title_names_the_shelved_photo_and_the_request_is_kept_apart(tmp_path, model):
+    ctx = C.build(model, article=ARTICLE)
+    deck = S.normalise(spec_raw())
+    shelf = A.LocalShelf(tmp_path / "shelf")
+    photo = _png(tmp_path / "w.png")
+    seen_prompts = []
+
+    def photos(q, http=None):
+        return [{"title": "Amebic colitis (H&E)", "url": "https://x/a.jpg", "page": "https://flickr.com/p/a",
+                 "w": 1024, "h": 768, "mime": "image/jpeg", "licence": "CC BY 2.0", "author": "Ed",
+                 "provider": "flickr", "description": "Amebic colitis (H&E)"},
+                {"title": "Bicycle wheel", "url": "https://x/w.jpg", "page": "https://flickr.com/p/1",
+                 "w": 1024, "h": 768, "mime": "image/jpeg", "licence": "CC BY 2.0", "author": "Ann",
+                 "provider": "flickr", "description": "A bicycle wheel with spokes"}]
+
+    class Http:
+        def get(self, url, **kw):
+            assert "a.jpg" not in url, "a pathology hit is refused before it is downloaded"
+            class R:
+                content = photo.read_bytes()
+                def raise_for_status(self):
+                    pass
+            return R()
+
+    class Looks:
+        def analyze_image(self, path, prompt, max_tokens=0):
+            seen_prompts.append(prompt)
+            return {"data": {"shows_subject": True, "relevance": 9, "quality": 8, "classroom_safe": True,
+                             "has_text": False, "scientifically_wrong": False, "source_agrees": True}}
+
+    rep = A.resolve(deck, tmp=tmp_path / "t1", shelf=shelf, ctx=ctx, budget=A.Budget(), spend=A.Spend(),
+                    generate=lambda p, a: (None, "", 0.0), photos=photos, http=Http(), vision_client=Looks())
+    a1 = rep.pictures["A1"]
+    assert a1.source_title == "Bicycle wheel" and a1.subject != a1.source_title
+    assert any('SOURCE calls it: "Bicycle wheel"' in p for p in seen_prompts), "the vision check hears the source"
+    row = A._row(a1, "d", {})
+    assert row["description"].startswith("Bicycle wheel") and row["deck"]["requested"] == a1.subject
+
+
+def test_a_licensed_hit_the_source_contradicts_is_refused():
+    base = {"shows_subject": True, "relevance": 9, "quality": 9, "classroom_safe": True, "is_the_thing_itself": True}
+    assert A.verdict_ok(base | {"source_agrees": True}, "licensed")
+    assert not A.verdict_ok(base | {"source_agrees": False}, "licensed")
+
+
+def test_a_shelved_photo_whose_source_names_pathology_is_not_reused(tmp_path, model):
+    ctx = C.build(model, article=ARTICLE)
+    deck = S.normalise(spec_raw())
+    assets = deck.assets.values() if isinstance(deck.assets, dict) else deck.assets
+    need = next(n for n in assets if n.need in ("photo", "micrograph"))
+
+    class Shelf:
+        def find(self, key):
+            return {"asset_key": key, "path": str(_png(tmp_path / "s.png")), "provenance": "flickr",
+                    "source": '{"url": "https://commons.wikimedia.org/wiki/File:Red_blood_cells_infected_with_malaria.jpg",'
+                              ' "licence": "Public domain", "author": "NIAID"}', "vision": {}}
+
+        def save(self, *a, **k):
+            return {}
+    rep = A.resolve(deck, tmp=tmp_path / "t", shelf=Shelf(), ctx=ctx, budget=A.Budget(max_new_images=0),
+                    spend=A.Spend(), generate=lambda p, a: (None, "", 0.0), photos=lambda q, http=None: [])
+    assert rep.pictures.get(need.id) is None or rep.pictures[need.id].origin != "shelf" or \
+        "malaria" in need.subject.lower()

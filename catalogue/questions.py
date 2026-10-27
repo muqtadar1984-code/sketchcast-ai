@@ -30,10 +30,14 @@ Every reply item is VALIDATED in code (``validate_item``), never trusted:
   * ``item_type``, ``difficulty`` (1..5) and ``cognitive_level`` must be in
     their enums (British "analyse" — the American spelling and Bloom's
     synonyms are folded); ``answer_mode`` is DERIVED from the type;
-  * ``objective_ref`` must be an article objective id, else the nearest
-    objective by content-word overlap with the stem and the cited claim's
-    section — or None — with a repair note; ``claim_ref`` must be a claim id
-    or is dropped with a note;
+  * ``objective_ref`` must be an article objective id. Otherwise the model's
+    value is KEPT (never silently re-mapped: mastery may only come from a
+    validated objective map), the row is flagged ``objective_unmapped`` and
+    the repair note names the nearest objective by content-word overlap with
+    the stem and the cited claim's section — or none — for a reviewer to map.
+    The flag is not a column: ``_prepare`` turns it into the
+    ``objective-unmapped`` tag, and every item lands as a DRAFT anyway;
+  * ``claim_ref`` must be a claim id or is dropped with a note;
   * MCQ: exactly 4 options keyed A–D with distinct texts, the answer key
     among them, and EVERY distractor carrying ``why_wrong`` — an MCQ that
     fails any of these is REJECTED (a distractor nobody can explain is a
@@ -72,7 +76,8 @@ than ``MIN_PER_OBJECTIVE`` (2) items from this job is named in ONE more call
 asking for ``TOPUP_PER_OBJECTIVE`` items each; its items go through the same
 validation and write. The summary in ``jobs.stage``: ``{topic_id, article_id,
 language, requested, mix, written, duplicates, rejected: [reasons…],
-repairs: [notes…], coverage: {objective_id: n}, topup}``.
+repairs: [notes…], coverage: {objective_id: n}, topup, unmapped: n}`` (``unmapped`` =
+items written with an objective the article does not have).
 
 Idempotent per job row: a re-run of a job whose stage says ``step: done``
 finishes without another call; a re-run of one killed mid-way asks the model
@@ -97,6 +102,7 @@ log = logging.getLogger("worker.questions")
 JOB_TYPE = "topic_questions"
 DEFAULT_LANGUAGE = "en"
 STATUS_DRAFT = "draft"
+UNMAPPED_TAG = "objective-unmapped"  # persisted form of a row's ``objective_unmapped`` flag
 STATUS_APPROVED = "approved"
 FIGURE_RENDERED = "rendered"
 
@@ -605,15 +611,17 @@ def validate_item(raw: object, article: dict) -> tuple[Optional[dict], list[str]
         notes.append(f"claim reference dropped: {claim_ref}")
         claim_ref = None
     objective_ids = {o["id"] for o in (article.get("objectives") or []) if isinstance(o, dict) and _s(o.get("id"))}
-    objective_ref = _s(raw.get("objective_ref")) or None
-    if objective_ref not in objective_ids:
+    objective_ref = _s(raw.get("objective_ref"))[:64] or None
+    objective_unmapped = objective_ref not in objective_ids
+    if objective_unmapped:
         claim = claim_ids.get(claim_ref) if claim_ref else None
         section = next((s for s in (article.get("sections") or [])
                         if isinstance(s, dict) and claim and s.get("id") == claim.get("section_id")), None)
         near = nearest_objective(article, stem, claim.get("text") if claim else None,
                                  section.get("heading") if section else None)
+        # The nearest objective is a SUGGESTION for the reviewer, in the
+        # note only: the row keeps what the model said (or None).
         notes.append(f"objective {objective_ref or '?'} unknown; " + (f"nearest is {near}" if near else "none near"))
-        objective_ref = near
 
     default_marks, default_secs = TYPE_DEFAULTS[itype]
     est = _int(raw.get("est_seconds"))
@@ -762,6 +770,8 @@ def validate_item(raw: object, article: dict) -> tuple[Optional[dict], list[str]
             figure_key=(options or {}).get("figure_key") if itype == "diagram_label" else None,
             labels=[lb["label"] for lb in answer.get("labels", [])] if itype == "diagram_label" else None),
     }
+    if objective_unmapped:
+        row["objective_unmapped"] = True
     return row, notes
 
 
@@ -908,7 +918,12 @@ def _prepare(rows: list[dict], topic_id: str, article_id: str, language: str, kn
             dup += 1
             continue
         known.add(r["content_hash"])
-        out.append({"topic_id": topic_id, "article_id": article_id, "language": language, "status": STATUS_DRAFT, **r})
+        row = {"topic_id": topic_id, "article_id": article_id, "language": language, "status": STATUS_DRAFT, **r}
+        # ``objective_unmapped`` is not a topic_questions column: persist it
+        # as a tag (first, so the 5-tag cap never drops it) and drop the key.
+        if row.pop("objective_unmapped", False):
+            row["tags"] = [UNMAPPED_TAG, *(t for t in row.get("tags") or [] if t != UNMAPPED_TAG)][:5]
+        out.append(row)
     return out, dup
 
 
@@ -1029,8 +1044,9 @@ def author_questions(sb, job_id: str, params: dict, client=None) -> dict:
     db.set_progress(sb, job_id, 95)
 
     stage.pop("topup_objectives", None)
+    unmapped = sum(1 for r in written_rows if UNMAPPED_TAG in (r.get("tags") or []))
     stage.update({"step": "done", "written": written, "duplicates": duplicates, "rejected": rejected[:60],
-                  "repairs": repairs[:60], "coverage": coverage, "topup": topup,
+                  "repairs": repairs[:60], "coverage": coverage, "topup": topup, "unmapped": unmapped,
                   "still_under": sorted(under_covered(article, coverage))})
     return stage
 
