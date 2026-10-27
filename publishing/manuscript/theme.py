@@ -48,6 +48,15 @@ PAGE_DEFAULTS = {
 }
 
 
+KDP_BLEED_MM = 3.175     # KDP paperback: 0.125 in on the top, bottom and outside edge (the spine side is trimmed later)
+
+
+def bleed(p: dict, edition: str) -> float:
+    """Bleed for an edition: the theme's for print, KDP's own for the KDP interior, none on screen. Pages are
+    laid out with the bleed on all four sides; the KDP build removes the spine-side strip after printing."""
+    return {"print": p["bleed_mm"], "kdp": KDP_BLEED_MM}.get(edition, 0)
+
+
 def page(t: dict) -> dict:
     """The theme's page treatment, every key defaulted (a theme without a
     `page` block still renders: plain white, no tabs)."""
@@ -67,7 +76,7 @@ def _bg_svg(t: dict, p: dict, side: str, chapter: int, edition: str) -> str:
     running-head hairline. Drawn as the page background so nothing in the text
     flow can collide with it."""
     import base64
-    b = p["bleed_mm"] if edition == "print" else 0
+    b = bleed(p, edition)
     W, H = p["trim"]["width_mm"] + 2 * b, p["trim"]["height_mm"] + 2 * b
     m = p["margins_mm"]
     out = [f'<rect width="{W}" height="{H}" fill="{p["paper"]}"/>']
@@ -104,7 +113,7 @@ def page_css(t: dict, chapter: int, chapter_title: str, work_title: str, edition
     book, recto: the chapter) and folios on the outer corners. The opening
     page carries none of them — the chapter opener is its own design."""
     p = page(t)
-    b = p["bleed_mm"] if edition == "print" else 0
+    b = bleed(p, edition)
     W, H = p["trim"]["width_mm"] + 2 * b, p["trim"]["height_mm"] + 2 * b
     m = p["margins_mm"]
     head = "font: 7.6pt " + t["body_font"] + "; color: " + t["muted"] + "; letter-spacing: .06em; text-transform: uppercase;"
@@ -139,7 +148,7 @@ def _first_bg(t: dict, p: dict, edition: str, chapter: int = 1) -> str:
     chapter identity, the motif inside it, and the tab."""
     import base64
     import re as _re
-    b = p["bleed_mm"] if edition == "print" else 0
+    b = bleed(p, edition)
     W, H = p["trim"]["width_mm"] + 2 * b, p["trim"]["height_mm"] + 2 * b
     band = b + 112
     motif = motif_svg(t, 600, 200)
