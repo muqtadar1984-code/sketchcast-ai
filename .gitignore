@@ -20,3 +20,6 @@ venv/
 probe-out/
 # publishing engine: local-only DB venv
 .venv-localdb/
+
+# SK packager output (clips, audio, manifests) — built artefacts, never committed
+out/
