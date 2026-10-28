@@ -79,6 +79,25 @@ class ImagesIncomplete(RuntimeError):
             f"instead.")
 
 
+class ContentRefused(ImagesIncomplete):
+    """The asset gate (shared/asset_gate.py, G2) judged a picture NOT to show
+    what the lesson labels, regenerated it once, and the new one failed too
+    (or never arrived). Same family as ImagesIncomplete — the lesson has
+    pictures it cannot ship — so every caller that already handles a missing
+    picture handles this; `missing` maps key -> `content_wrong: <what the
+    picture actually shows>`."""
+
+    def __init__(self, missing: dict, total: int):
+        super().__init__(missing, total)
+        parts = [f"{k}: {r}" for k, r in sorted(self.missing.items())]
+        shown = "; ".join(parts[:6]) + ("…" if len(parts) > 6 else "")
+        self.args = (
+            f"asset gate refused the lesson: {len(self.missing)}/{self.total} "
+            f"picture(s) do not show what the plan labels, after one regeneration "
+            f"each — {shown}. Nothing was rendered; ASSET_GATE=warn logs instead "
+            f"of refusing.",)
+
+
 def image_gate_mode() -> str:
     import os
     v = str(os.getenv("IMAGE_GATE", "") or "").strip().lower()

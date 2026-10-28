@@ -203,6 +203,11 @@ def row_vision(row: dict[str, Any] | None) -> dict[str, Any]:
     v = (row or {}).get("vision")
     if not isinstance(v, dict) or not v:
         return {}
+    if not any(k in v for k in ("regions", "annotated_for", "baked_text", "w", "h")):
+        # a document that carries only the asset gate's verdicts (`gate`,
+        # shared/asset_gate.py) is not an annotation: "not annotated", still
+        # re-askable
+        return {}
     return vision_payload(v.get("regions"), v.get("annotated_for"),
                           bool(v.get("baked_text")), v.get("w") or 0,
                           v.get("h") or 0)
@@ -1096,13 +1101,23 @@ def colour_shelf_enabled() -> bool:
         not in ("0", "false", "no", "off")
 
 
-def find_colour(key: str, *, sb=None) -> dict[str, Any] | None:
+def find_colour(key: str, *, sb=None, prompt: str | None = None) -> dict[str, Any] | None:
     """The shelf row for a COLOUR key — by exact asset_key, never by meaning,
     never by canonical key, never a variant spelling. None for a key that is
     not a colour key, when the shelf is off, offline, or on a miss. The
     oldest approved row wins, so the picture every language has already
     been reviewed with stays the picture. `sb` lets the Kit Translator ask
-    with the client it already holds."""
+    with the client it already holds.
+
+    `prompt` is the REQUEST the row would serve. With it, each row is put to
+    the asset gate's reuse check (shared/asset_gate.same_subject) in shelf
+    order and a row judged `different` is passed over for the next: an exact
+    key is not an exact picture. Kit eef426bd asked `two_cells` for a plant
+    cell beside an animal cell and this function served `two_cells__colour`,
+    drawn for a bacterium beside a eukaryote — same key, same layout, wrong
+    organisms — and the lesson labelled the bacterium "Plant cell". Without
+    `prompt` (the Kit Translator, which reuses a picture already reviewed
+    with the kit) the lookup is the old exact-key one."""
     from spike.scene_engine.colour import is_colour_key
     k = str(key or "")
     if not is_colour_key(k) or not colour_shelf_enabled():
@@ -1120,9 +1135,22 @@ def find_colour(key: str, *, sb=None) -> dict[str, Any] | None:
     for row in rows:
         # belt and braces with the query: the row must BE this colour key and
         # hold bytes the renderer can use (a PNG; the colour path has no SVG)
-        if (str(row.get("asset_key") or "") == k and row.get("storage_path")
+        if not (str(row.get("asset_key") or "") == k and row.get("storage_path")
                 and row_format(row) == "png"):
-            return {**row, "match_score": 1.0, "match_source": "exact"}
+            continue
+        if str(row.get("status") or "approved").lower() in _REFUSED_STATUSES:
+            continue
+        hit = {**row, "match_score": 1.0, "match_source": "exact"}
+        if prompt is not None:
+            verdict, refuse = _reuse_gate(k, prompt, row)
+            if refuse:
+                logger.info("visual library: colour shelf row %s for %s refused by "
+                            "the asset gate — %s", row.get("id"), k,
+                            (verdict or {}).get("reason"))
+                continue
+            if verdict is not None:
+                hit["gate"] = verdict
+        return hit
     return None
 
 
@@ -1131,11 +1159,58 @@ def hydrate_colour(key: str, prompt: str, cache_dir: Path,
     """Put the shelf's picture for a colour key where the renderer looks, or
     return None so the caller may draw. The download and the meta.json are
     `hydrate`'s (provenance visual_library, the vision payload lifted the
-    same way); only the LOOKUP differs — exact, see find_colour."""
-    hit = find_colour(key)
+    same way); only the LOOKUP differs — exact, see find_colour, which is
+    handed the request so the asset gate can refuse a row drawn for
+    something else under the same key."""
+    hit = find_colour(key, prompt=prompt)
     if not hit:
         return None
     return hydrate(key, prompt, cache_dir, context, asset_format="png", hit=hit)
+
+
+# ── the asset gate's hooks into the lookup ───────────────────────────────────
+# shared/asset_gate.py judges a candidate row against the REQUEST before the
+# row is hydrated (G1). The import is lazy: the gate imports this module for
+# its token and prompt helpers.
+_REFUSED_STATUSES = frozenset({"rejected", "retired"})
+
+
+def _reuse_gate(key: str, prompt: str, row: dict[str, Any]) -> tuple[dict[str, Any] | None, bool]:
+    """(the gate's verdict or None when it is off, whether to pass this row
+    over). Never raises: a gate that cannot answer says `unsure`, and the
+    content check at the composer's seam then judges the picture itself."""
+    try:
+        from shared import asset_gate
+        return asset_gate.reuse_verdict(key, prompt, row)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("visual library: asset gate reuse check failed for %s: %s", key, exc)
+        return None, False
+
+
+def _candidate_identity(row: dict[str, Any] | None) -> str:
+    """What makes a refused candidate THIS row and not another: its id, or for
+    a local index row (no id) its file."""
+    row = row or {}
+    return str(row.get("id") or row.get("local_cache_path")
+               or f"{row.get('asset_key')}|{row_format(row)}")
+
+
+def _publish_gate(asset_key: str, prompt: str, asset_path: Path,
+                  digest: str) -> dict[str, Any] | None:
+    """G3: the gate's content verdict on a fresh picture against its own
+    prompt, or None when the gate is off or could not answer. Never raises."""
+    try:
+        from shared import asset_gate
+        if not asset_gate.gate_on():
+            return None
+        verdict = asset_gate.verify_asset(asset_path, prompt, prompt_part_names(prompt),
+                                          content_hash=digest, key=str(asset_key),
+                                          force=True)
+        return verdict if verdict.get("ok") is not None else None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("visual library: asset gate publish check failed for %s: %s",
+                       asset_key, exc)
+        return None
 
 
 def register_local(row: dict[str, Any]) -> None:
@@ -1151,7 +1226,10 @@ def register_local(row: dict[str, Any]) -> None:
     rows = _local_candidates()
     ident = _index_identity(row)
     rows = [r for r in rows if _index_identity(r) != ident]
-    rows.append(row)
+    # a row the asset gate rejected (publish_generated, G3) is published for
+    # the record and must never be a candidate — here or remotely
+    if str(row.get("status") or "approved").lower() not in _REFUSED_STATUSES:
+        rows.append(row)
     _write_local_index(rows)
 
 
@@ -1211,28 +1289,49 @@ def _find_one(key: str, prompt: str, context: dict[str, Any] | None = None,
     # `guarded`: only rows whose OWN key shares a core token with the request
     # may be served. best_match() without it still sees everything, so the
     # near-miss evidence the threshold argument runs on keeps flowing.
-    best, best_score, source = best_match(key, prompt, context, _ctx=ctx,
-                                          guarded=True,
-                                          asset_format=asset_format)
-    if best is None or best_score < threshold:
-        # One line per DECISION, carrying the score and the guard's own
-        # reason. Hard-coding "the keys share no concept token" here was true
-        # while that was the only way to be refused; the contrast rule refuses
-        # pairs that share two, so a fixed reason would tell an operator the
-        # opposite of what happened on the very line they grep.
-        # The unguarded scan exists ONLY for that line: a spelling retry skips
-        # both, so aliasing costs one scan rather than two.
-        if explain:
-            near, near_score, _ = best_match(key, prompt, context, _ctx=ctx,
-                                             asset_format=asset_format)
-            if near is not None and near_score >= threshold:
-                why = _guard_refusal(key, near)
-                if why:
-                    logger.info("visual library: refused %s <- %s (score %.2f) — "
-                                "%s", key, near.get("asset_key"), near_score, why)
-        return None
-    return {**best, "match_score": round(best_score, 4),
-            "match_source": source, "context": ctx.__dict__}
+    #
+    # The best row is then put to the asset gate's reuse check (G1,
+    # shared/asset_gate.py): a confident score says the two descriptions use
+    # the same WORDS, not that they show the same THING. A row the gate judges
+    # `different` is set aside and the next-best candidate is scored — a few
+    # rounds, then the library gives up and the caller draws fresh.
+    from shared.asset_gate import CANDIDATE_ROUNDS
+    excluded: set[str] = set()
+    for _round in range(max(1, CANDIDATE_ROUNDS)):
+        best, best_score, source = best_match(key, prompt, context, _ctx=ctx,
+                                              guarded=True,
+                                              asset_format=asset_format,
+                                              exclude=excluded)
+        if best is None or best_score < threshold:
+            # One line per DECISION, carrying the score and the guard's own
+            # reason. Hard-coding "the keys share no concept token" here was true
+            # while that was the only way to be refused; the contrast rule refuses
+            # pairs that share two, so a fixed reason would tell an operator the
+            # opposite of what happened on the very line they grep.
+            # The unguarded scan exists ONLY for that line: a spelling retry skips
+            # both, so aliasing costs one scan rather than two.
+            if explain and not excluded:
+                near, near_score, _ = best_match(key, prompt, context, _ctx=ctx,
+                                                 asset_format=asset_format)
+                if near is not None and near_score >= threshold:
+                    why = _guard_refusal(key, near)
+                    if why:
+                        logger.info("visual library: refused %s <- %s (score %.2f) — "
+                                    "%s", key, near.get("asset_key"), near_score, why)
+            return None
+        verdict, refuse = _reuse_gate(key, prompt, best)
+        if refuse:
+            logger.info("visual library: %s <- %s (score %.2f) refused by the asset "
+                        "gate — %s", key, best.get("asset_key"), best_score,
+                        (verdict or {}).get("reason"))
+            excluded.add(_candidate_identity(best))
+            continue
+        hit = {**best, "match_score": round(best_score, 4),
+               "match_source": source, "context": ctx.__dict__}
+        if verdict is not None:
+            hit["gate"] = verdict
+        return hit
+    return None
 
 
 def threshold_now() -> float:
@@ -1355,7 +1454,8 @@ def _format_filter_refused(exc: Exception) -> bool:
 
 def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
                *, _ctx: LibraryContext | None = None, guarded: bool = False,
-               asset_format: str | None = None):
+               asset_format: str | None = None,
+               exclude: set[str] | None = None):
     """The best candidate and its score, WITHOUT applying the threshold.
 
     Split out of find() so a near-miss is observable. find() returns None
@@ -1373,15 +1473,25 @@ def best_match(key: str, prompt: str, context: dict[str, Any] | None = None,
     authority, because an un-migrated database has no asset_format column and
     a legacy row carries NULL.
 
+    `exclude` names candidates (by `_candidate_identity`) the asset gate has
+    already refused for this request, so `_find_one` can ask for the next
+    best. A row whose status is rejected or retired is never a candidate:
+    the remote query asks for approved rows, but the local index and a fake
+    client in a test do not, and the gate writes those statuses now.
+
     Returns (row | None, score, source) where source is 'local' or 'remote'.
     """
     ctx = _ctx or infer_context(key, prompt, context)
     want_format = normalize_format(asset_format) if asset_format else None
+    exclude = exclude or set()
 
     def _eligible(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if want_format is not None:
             candidates = [r for r in candidates
                           if row_format(r) == want_format]
+        candidates = [r for r in candidates
+                      if str(r.get("status") or "approved").lower() not in _REFUSED_STATUSES
+                      and (not exclude or _candidate_identity(r) not in exclude)]
         # a table on the shelf is refused BEFORE scoring, guarded or not:
         # the unguarded scan exists to record near-misses as evidence, and
         # a grid of empty cells is not evidence of anything
@@ -1826,13 +1936,18 @@ def merge_vision(stored: dict[str, Any] | None,
                           new["w"], new["h"])
 
 
-def _stored_annotation(sb, asset_id: str) -> tuple[dict[str, Any], list[str]]:
-    """(the row's vision payload, its group_ids) — or ({}, []) for a row this
-    client cannot read.
+def _stored_annotation(sb, asset_id: str) -> tuple[dict[str, Any], list[str], dict[str, Any]]:
+    """(the row's vision payload, its group_ids, the asset gate's `gate`
+    document) — or ({}, [], {}) for a row this client cannot read.
 
     ``select("*")`` on purpose: naming ``vision`` would make this fail on a
     database that predates 0105, which is every database in the deploy window
     and precisely when the group columns still need reading.
+
+    The gate document rides in the same jsonb column beside the annotation
+    (``vision.gate``, shared/asset_gate.py); row_vision normalises it away,
+    so it is returned raw here for record_vision to put back — otherwise
+    every vision write-back would erase the verdicts the gate had cached.
     """
     try:
         res = sb.table("visual_assets").select("*").eq(
@@ -1841,8 +1956,10 @@ def _stored_annotation(sb, asset_id: str) -> tuple[dict[str, Any], list[str]]:
     except Exception as exc:  # noqa: BLE001
         logger.debug("visual library: could not read %s before recording "
                      "its annotation: %s", asset_id, exc)
-        return {}, []
-    return row_vision(row), row_group_ids(row)
+        return {}, [], {}
+    raw = row.get("vision") if isinstance(row.get("vision"), dict) else {}
+    gate = raw.get("gate") if isinstance(raw.get("gate"), dict) else {}
+    return row_vision(row), row_group_ids(row), gate
 
 
 def record_vision(asset_id: str, payload: dict[str, Any] | None) -> bool:
@@ -1882,7 +1999,7 @@ def record_vision(asset_id: str, payload: dict[str, Any] | None) -> bool:
     # Read first. The update replaces these columns whole, so what goes back
     # has to be the union of the row and this container — see merge_vision on
     # why a narrower local baseline is the normal case, not the corner one.
-    stored, stored_groups = _stored_annotation(sb, asset_id)
+    stored, stored_groups, stored_gate = _stored_annotation(sb, asset_id)
     payload = merge_vision(stored, payload)
     groups = vision_group_ids(payload)
     if not stored or (stored["w"], stored["h"]) == (payload["w"], payload["h"]):
@@ -1894,6 +2011,10 @@ def record_vision(asset_id: str, payload: dict[str, Any] | None) -> bool:
         # image of other dimensions. Those names are not parts of THIS asset,
         # and group_ids is a promise the renderer then has to keep.
         groups = list(dict.fromkeys(stored_groups + groups))
+    if stored_gate:
+        # the gate's cached verdicts live beside the annotation; a write-back
+        # of boxes must not cost the row what it already knows about itself
+        payload = {**payload, "gate": stored_gate}
     full = {"vision": payload, "group_ids": groups, "group_count": len(groups)}
     try:
         sb.table("visual_assets").update(full).eq("id", str(asset_id)).execute()
@@ -1913,6 +2034,88 @@ def record_vision(asset_id: str, payload: dict[str, Any] | None) -> bool:
         logger.info("visual library: could not record the parts of %s "
                     "either: %s", asset_id, exc)
     return False
+
+
+def read_gate(asset_id: str) -> dict[str, Any]:
+    """The asset gate's cached verdicts on a row: ``vision.gate`` raw, or {}.
+    Shape: {"reuse": {<prompt sha1>: {verdict, reason, model, at, ...}},
+    "content": {<prompt sha1>: {ok, parts, reason, model, content_hash, at}}}."""
+    sb = _sb()
+    if sb is None or not asset_id:
+        return {}
+    try:
+        _, _, gate = _stored_annotation(sb, str(asset_id))
+        return gate
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def record_gate(asset_id: str, section: str, prompt_hash: str,
+                entry: dict[str, Any]) -> bool:
+    """Cache one asset-gate verdict on its row (``vision.gate.<section>.<prompt
+    hash>``), so a (picture, request) pair is judged once ever rather than
+    once per container. Read-modify-write of the whole jsonb document, like
+    record_vision and for the same PostgREST reason; the annotation beside it
+    is carried through untouched. Never raises."""
+    if not asset_id or not section or not prompt_hash:
+        return False
+    sb = _sb()
+    if sb is None:
+        return False
+    try:
+        res = sb.table("visual_assets").select("*").eq(
+            "id", str(asset_id)).limit(1).execute()
+        row = ((getattr(res, "data", None) or [None])[0]) or {}
+        raw = dict(row.get("vision")) if isinstance(row.get("vision"), dict) else {}
+        gate = dict(raw.get("gate")) if isinstance(raw.get("gate"), dict) else {}
+        bucket = dict(gate.get(section)) if isinstance(gate.get(section), dict) else {}
+        bucket[str(prompt_hash)] = dict(entry)
+        gate[section] = bucket
+        raw["gate"] = gate
+        sb.table("visual_assets").update({"vision": raw}).eq("id", str(asset_id)).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        if _looks_like_missing_column(exc):
+            logger.info("visual library: schema predates 0105; the asset gate's "
+                        "verdict on %s is not cached", asset_id)
+        else:
+            logger.warning("visual library: could not record the asset gate's "
+                           "verdict on %s: %s", asset_id, exc)
+        return False
+
+
+def reject_asset(asset_id: str, reason: str) -> bool:
+    """Demote a row to ``rejected`` (G2: its picture does not show what its
+    requests label). The storage object stays — the row is history, not
+    rubbish — but ``find``/``find_colour``/``best_match`` never serve a
+    rejected row again, and the local index drops it. Never raises; False
+    means the database did not take the change (the local index did)."""
+    if not asset_id:
+        return False
+    sid = str(asset_id)
+    try:
+        rows = _local_candidates()
+        kept = [r for r in rows if str(r.get("id") or "") != sid]
+        if len(kept) != len(rows):
+            _write_local_index(kept)
+    except Exception:  # noqa: BLE001
+        pass
+    sb = _sb()
+    if sb is None:
+        return False
+    try:
+        sb.table("visual_assets").update({"status": "rejected"}).eq("id", sid).execute()
+        logger.warning("visual library: %s REJECTED by the asset gate — %s", sid, reason)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("visual library: could not reject %s: %s", sid, exc)
+        return False
+    try:
+        record_gate(sid, "rejected", "reason", {"reason": str(reason)[:300],
+                                                "at": __import__("time").strftime(
+                                                    "%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime())})
+    except Exception:  # noqa: BLE001
+        pass
+    return True
 
 
 def publish_generated(asset_key: str, prompt: str, asset_path: Path,
@@ -2025,6 +2228,31 @@ def publish_generated(asset_key: str, prompt: str, asset_path: Path,
         group_ids = list(verdict.group_ids)
     ctx = infer_context(asset_key, prompt, context)
     digest = hashlib.sha256(data).hexdigest()
+    # THE PUBLISH GATE (G3, shared/asset_gate.py). A fresh PNG is shown to
+    # the gate's model with its own prompt before it becomes `approved`:
+    # the renderer's checks so far are coverage, baked text and "did vision
+    # box the parts" — none of them asks whether the picture IS the thing.
+    # A picture that is not goes in as `rejected`: it exists for the record
+    # (and so its hash is never re-uploaded) and is never served. Under
+    # ASSET_GATE=warn the verdict is logged and the row stays approved.
+    status, quality = "approved", md.get(
+        "quality", "svg_contract_validated" if fmt == "svg"
+        else COLOUR_QUALITY if colour else "renderer_validated")
+    gate_doc: dict[str, Any] = {}
+    if fmt == "png" and not is_avatar_key(asset_key):
+        verdict = _publish_gate(asset_key, prompt, asset_path, digest)
+        if verdict is not None:
+            from shared.asset_gate import content_gate_doc, gate_mode
+            gate_doc = content_gate_doc(verdict)
+            if verdict.get("ok") is False:
+                if gate_mode() == "strict":
+                    status, quality = "rejected", "gate_content_rejected"
+                    logger.warning("visual library: publishing %s as REJECTED — the asset "
+                                   "gate says the picture is not the request: %s",
+                                   asset_key, verdict.get("reason"))
+                else:
+                    logger.warning("ASSET_GATE=warn: strict would have published %s as "
+                                   "rejected — %s", asset_key, verdict.get("reason"))
     row = {
         "asset_key": str(asset_key),
         "canonical_key": canonical_key(asset_key),
@@ -2034,7 +2262,7 @@ def publish_generated(asset_key: str, prompt: str, asset_path: Path,
         "grade": ctx.grade,
         "topic": ctx.topic,
         "concepts": list(ctx.concepts),
-        "status": "approved",
+        "status": status,
         "provenance": "generated",
         "content_hash": digest,
         # what the asset actually passed, not a generic word: an SVG cleared
@@ -2043,9 +2271,7 @@ def publish_generated(asset_key: str, prompt: str, asset_path: Path,
         # a colour-shelf row says so here: the key carries the suffix and
         # the row carries the contract it passed (asset_type stays 'visual';
         # its check constraint admits nothing else)
-        "quality": md.get(
-            "quality", "svg_contract_validated" if fmt == "svg"
-            else COLOUR_QUALITY if colour else "renderer_validated"),
+        "quality": quality,
         "asset_format": fmt,
         "group_ids": group_ids,
         "group_count": len(group_ids),
@@ -2053,13 +2279,15 @@ def publish_generated(asset_key: str, prompt: str, asset_path: Path,
         # the whole avatar roster entered the educational library.
         **avatar_fields(asset_key),
     }
-    if vision:
+    if vision or gate_doc:
         # Sent only when there is something to say. '{}' is the column
         # default, so a row with no annotation — every SVG, and any PNG whose
         # prompt named no parts — gains nothing by carrying the key and would
         # pay for it: until 0105 is applied, naming the column costs one
-        # refused insert per publish (see _insert_row).
-        row["vision"] = vision
+        # refused insert per publish (see _insert_row). The gate's verdict
+        # on the picture's own prompt rides beside the annotation so the
+        # content check at the composer's seam is a cache hit, not a call.
+        row["vision"] = {**vision, **({"gate": gate_doc} if gate_doc else {})}
     register_local(row)
 
     sb = _sb()
