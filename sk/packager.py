@@ -16,13 +16,23 @@ Per unit (one per `plan.sections[]` of a chNN-draft.json):
               cues resolved to seconds from the word marks.
   5. RENDER   the production video renderer → clip.mp4 + hitmap.json.
   6. MANIFEST segment.json (contracts §3.2) and the chapter's graph.json (§3.1).
+  7. VOICES   a second narration track in the OTHER gender (sk/voices.py):
+              aligned to the rendered track item by item and muxed onto a copy
+              of the clip's video stream → audio-<gender>.mp3 + clip-<gender>.mp4,
+              both recorded in segment.json["voices"] keyed by gender. The
+              player picks the track that matches the tutor's look (founder,
+              2026-10-27: default look = the man, so a male track is needed).
 
 Checkpoints: a unit whose segment.json exists for the same draft hash is
 skipped (`--resume`), so a provider failure re-runs only the failed unit.
 
 Run with the worker venv from the repo root:
   python -m sk.packager --draft <chNN-draft.json> --product <slug> --chapter 2 \
-      --out out/sk [--units s5,s2] [--resume] [--voice edge-aria] [--dry]
+      --out out/sk [--units s5,s2] [--resume] [--voice edge-aria] [--dry] \
+      [--second-voice edge-guy|none]
+  python -m sk.packager --voices-only --product <slug> --chapter 2 --out out/sk
+      adds the second track to an ALREADY BUILT chapter (no Claude, no render,
+      no Supabase): only TTS + ffmpeg, a minute per chapter.
 """
 
 from __future__ import annotations
@@ -39,9 +49,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from sk.voices import add_voice_track, default_track
+
 log = logging.getLogger("sk.packager")
 
 WORLD_W, WORLD_H = 1280, 720
+# The free Edge voice for the OTHER look: Guy for a female default, Aria for a
+# male one. `--second-voice` overrides (en-IN-PrabhatNeural is not in the
+# registry yet; add a TTSVoice row to use it).
+SECOND_VOICE = {"female": "edge-guy", "male": "edge-aria"}
 ILLUSTRATION_H = 560.0
 ILLUSTRATION_W = 520.0
 LABEL_GAP = 48.0  # min vertical gap between labels (the renderer shoves overlapping text around otherwise)
@@ -467,12 +483,60 @@ AUTO_MARKABLE = {"mcq", "true_false", "fill_blank", "match", "numeric", "multipl
 # ── 7. The build ─────────────────────────────────────────────────────────────
 
 
-def build_unit(unit: Unit, figures: list[Figure], out_dir: Path, *, client, voice: str, resolver, hand_loader, dry: bool) -> dict:
+def voice_gender(voice_id: str) -> str:
+    """"female" | "male" from the TTS registry (unknown → female, the historic default)."""
+    from shared.tts.registry import get_voice
+
+    return {"m": "male", "male": "male"}.get(str(getattr(get_voice(voice_id), "gender", "") or "").lower(), "female")
+
+
+def second_voice_for(default_voice: str, requested: str | None) -> str | None:
+    """The voice of the second track: `requested` ("auto" → the registry's
+    free voice of the other gender; "" / "none" → no second track)."""
+    if requested is None or requested.strip().lower() in ("", "none", "off"):
+        return None
+    if requested.strip().lower() == "auto":
+        return SECOND_VOICE[voice_gender(default_voice)]
+    return requested.strip()
+
+
+def add_second_voice(seg_dir: Path, seg: dict, second: str | None, *, dry: bool) -> dict:
+    """segment["voices"]: the rendered track under its gender plus, when
+    `second` is set, the aligned second track under ITS gender. A second voice
+    of the same gender as the default is refused (the player keys on gender)."""
+    from shared.tts import synthesize
+
+    voices = {seg.get("voice_gender", "female"): default_track(seg)}
+    if second:
+        g = voice_gender(second)
+        if g in voices:
+            raise ValueError(f"second voice {second} is {g} like the default {seg['voice']}; pick the other gender")
+        voices[g] = add_voice_track(seg_dir, seg, second, g, synthesize=synthesize, norm_words=norm_words, dry=dry)
+    seg["voices"] = voices
+    return seg
+
+
+def asset_entry(unit_key: str, seg: dict | None) -> dict:
+    """The graph asset for a unit's main explain: segment + (B4's wish) its
+    clip and hit map, plus `clips` by gender when the segment has voices."""
+    base = f"{unit_key}/explain-main/"
+    a = {"asset_id": f"{unit_key}-explain-main", "kind": "explain", "style": "main", "segment": base + "segment.json", "origin": "prepared"}
+    if seg:
+        if seg.get("clip", {}).get("uri"):
+            a["clip"] = base + seg["clip"]["uri"]
+        if seg.get("hitmap"):
+            a["hitmap"] = base + seg["hitmap"]
+        clips = {g: base + t["clip"]["uri"] for g, t in (seg.get("voices") or {}).items() if t.get("clip", {}).get("uri")}
+        if clips:
+            a["clips"] = clips
+    return a
+
+
+def build_unit(unit: Unit, figures: list[Figure], out_dir: Path, *, client, voice: str, resolver, hand_loader, dry: bool, second_voice: str | None = None) -> dict:
     from spike.scene_engine.encode import FPS, encode_scene
     from spike.scene_engine.render import SceneRenderer
     from spike.scene_engine.schema import Scene
     from shared.tts import synthesize
-    from shared.tts.registry import get_voice
 
     out_dir.mkdir(parents=True, exist_ok=True)
     t_start = time.time()
@@ -514,7 +578,7 @@ def build_unit(unit: Unit, figures: list[Figure], out_dir: Path, *, client, voic
            "elements": {eid: {"box": [round(v, 1) for v in r.bound[eid].box]} for eid in r.bound},
            "asset": {"ill": hit_info["illustration"]} if hit_info.get("illustration") else {}, "timeline": timeline}
     (out_dir / "hitmap.json").write_text(json.dumps(hit, indent=1), encoding="utf-8")
-    gender = {"m": "male", "male": "male"}.get(str(getattr(get_voice(voice), "gender", "") or "").lower(), "female")
+    gender = voice_gender(voice)
     segment = {
         "segment_id": f"{unit.key}-explain-main", "asset_kind": "explain", "style": "main", "unit_key": unit.key,
         "language": "en", "voice": voice, "voice_gender": gender,
@@ -533,28 +597,86 @@ def build_unit(unit: Unit, figures: list[Figure], out_dir: Path, *, client, voic
         ok = encode_scene(r.frames(audio_secs, FPS), total, str(mp3), out_dir / "clip.mp4", FPS)
         if not ok:
             raise RuntimeError(f"unit {unit.key}: encode failed")
+    # The other look's track, aligned to this one and muxed onto the same video.
+    add_second_voice(out_dir, segment, second_voice, dry=dry)
     segment["build"] = {"wall_s": round(time.time() - t_start, 1), "dry": dry}
     (out_dir / "segment.json").write_text(json.dumps(segment, indent=1, ensure_ascii=False), encoding="utf-8")
     return segment
 
 
+def add_voices_to_chapter(chap_dir: Path, second: str, *, force: bool = False, dry: bool = False) -> int:
+    """`--voices-only`: give every built unit under `chap_dir` its second
+    track (skipping units that already have one unless `force`), then refresh
+    graph.json's assets and `built_from.voices`. Returns the number of units
+    that failed."""
+    failures = 0
+    for seg_path in sorted(chap_dir.glob("*/explain-main/segment.json")):
+        seg = json.loads(seg_path.read_text(encoding="utf-8"))
+        default_gender = seg.get("voice_gender", "female")
+        want = second_voice_for(seg["voice"], second)
+        if not want:
+            log.info("%s: no second voice requested", seg_path.parent.parent.name)
+            continue
+        g = voice_gender(want)
+        if not force and g in (seg.get("voices") or {}) and g != default_gender:
+            log.info("%s: %s track present — skipped (use --force to redo)", seg_path.parent.parent.name, g)
+            continue
+        try:
+            add_second_voice(seg_path.parent, seg, want, dry=dry)
+            seg_path.write_text(json.dumps(seg, indent=1, ensure_ascii=False), encoding="utf-8")
+            al = seg["voices"][g]["alignment"]
+            log.info("%s: %s track %s — %d/%d items aligned, atempo %s, worst landing %d ms, overflow %d ms", seg_path.parent.parent.name, g, want,
+                     al["matched_items"], al["items"], al["atempo"], al["max_abs_offset_ms"], al["overflow_ms"])
+        except Exception as e:  # noqa: BLE001 — one unit must not lose the others
+            log.exception("%s: second track FAILED: %s", seg_path.parent.parent.name, e)
+            failures += 1
+    graph_path = chap_dir / "graph.json"
+    if graph_path.exists():
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+        voices: dict[str, str] = {}
+        for u in graph.get("units", []):
+            seg_path = chap_dir / u["unit_key"] / "explain-main" / "segment.json"
+            if not seg_path.exists():
+                continue
+            seg = json.loads(seg_path.read_text(encoding="utf-8"))
+            for g, t in (seg.get("voices") or {}).items():
+                voices.setdefault(g, t["voice"])
+            entry = asset_entry(u["unit_key"], seg)
+            u["assets"] = [entry if a.get("asset_id") == entry["asset_id"] else a for a in u.get("assets", [])] or [entry]
+        graph.setdefault("built_from", {})["voices"] = voices
+        graph_path.write_text(json.dumps(graph, indent=1, ensure_ascii=False), encoding="utf-8")
+        log.info("graph refreshed: %s (voices %s)", graph_path, voices)
+    return failures
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="SK B3 package builder")
-    ap.add_argument("--draft", required=True)
+    ap.add_argument("--draft", default="")
     ap.add_argument("--product", required=True)
     ap.add_argument("--chapter", type=int, required=True)
     ap.add_argument("--out", default="out/sk")
     ap.add_argument("--units", default="", help="comma-separated section sids; default all")
     ap.add_argument("--voice", default="edge-aria")
+    ap.add_argument("--second-voice", default="auto", help="the other look's voice: a registry id, 'auto' (free voice of the other gender), or 'none'")
     ap.add_argument("--model", default=os.getenv("SK_AUTHOR_MODEL", "claude-sonnet-5-5"))
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--dry", action="store_true", help="author + voice + scene + hit map, no frames")
+    ap.add_argument("--voices-only", action="store_true", help="only add the second track to an already built chapter under --out")
+    ap.add_argument("--force", action="store_true", help="with --voices-only: redo a track that is already there")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     from dotenv import load_dotenv
 
     load_dotenv()
+    chap_dir = Path(args.out) / args.product / f"ch{args.chapter:02d}"
+    if args.voices_only:
+        if not chap_dir.exists():
+            ap.error(f"--voices-only: {chap_dir} does not exist")
+        return 1 if add_voices_to_chapter(chap_dir, args.second_voice, force=args.force, dry=args.dry) else 0
+    if not args.draft:
+        ap.error("--draft is required (unless --voices-only)")
+
     from supabase import create_client
     from shared.claude_client import ClaudeClient
     from spike.scene_engine.raster_assets import load_hand, make_resolver
@@ -565,8 +687,8 @@ def main(argv: list[str] | None = None) -> int:
     sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
     client = ClaudeClient(model=args.model)
     dh = draft_hash(draft)
-    chap_dir = Path(args.out) / args.product / f"ch{args.chapter:02d}"
     chap_dir.mkdir(parents=True, exist_ok=True)
+    second = second_voice_for(args.voice, args.second_voice)
 
     # One resolver for all units: every figure key it may need, with the
     # library description as its prompt (the ladder ignores keys without one).
@@ -594,7 +716,7 @@ def main(argv: list[str] | None = None) -> int:
                 graph_units.append((u, seg))
                 continue
         try:
-            seg = build_unit(u, fig_by_unit.get(u.key, []), udir, client=client, voice=args.voice, resolver=resolver, hand_loader=hand_loader, dry=args.dry)
+            seg = build_unit(u, fig_by_unit.get(u.key, []), udir, client=client, voice=args.voice, resolver=resolver, hand_loader=hand_loader, dry=args.dry, second_voice=second)
             seg["draft_hash"] = dh
             seg_path.write_text(json.dumps(seg, indent=1, ensure_ascii=False), encoding="utf-8")
             graph_units.append((u, seg))
@@ -606,12 +728,13 @@ def main(argv: list[str] | None = None) -> int:
     graph = {
         "graph_id": f"{args.product}-ch{args.chapter:02d}-v1", "product": args.product, "chapter": args.chapter, "version": 1,
         "language": "en", "status": "draft", "draft_hash": dh,
-        "built_from": {"draft": Path(args.draft).name, "author_model": args.model, "voice": args.voice},
+        "built_from": {"draft": Path(args.draft).name, "author_model": args.model, "voice": args.voice,
+                       "voices": {g: t["voice"] for _, s in graph_units for g, t in (s.get("voices") or {}).items()}},
         "units": [
             {
                 "unit_key": u.key, "title": u.heading, "order": u.order, "node_codes": u.node_codes,
                 "prereqs": [units[u.order - 1].key] if u.order > 0 else [],
-                "assets": [{"asset_id": f"{u.key}-explain-main", "kind": "explain", "style": "main", "segment": f"{u.key}/explain-main/segment.json", "origin": "prepared"}],
+                "assets": [asset_entry(u.key, seg)],
                 "checks": {"item_indexes": ex_by_unit.get(u.key, []), "assignment": "heuristic (stem↔unit text overlap)",
                             "auto_markable": sum(1 for i in ex_by_unit.get(u.key, []) if str(exercises[i].get("item_type") or "") in AUTO_MARKABLE)},
                 "figures": seg.get("figures", []),
