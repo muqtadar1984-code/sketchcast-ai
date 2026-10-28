@@ -1,0 +1,6 @@
+# What the book engine needs on top of the worker's requirements.txt (the books runner image only;
+# Railway's worker never installs this). publishing/cli.py, localdb.py and the drafting tools import
+# psycopg at module level, so even the coverage stage fails without it (run 15, 2026-10-28).
+psycopg[binary]>=3.1
+# the runner calls S3 itself (publishing/runner/files.py); declared even though anthropic[bedrock] pulls it in
+boto3>=1.34
