@@ -68,7 +68,7 @@ BUDGET_ENV = "ASSET_GATE_CALLS_PER_LESSON"
 DEFAULT_MODEL = "claude-haiku-5-5"
 DEFAULT_BUDGET = 8
 REUSE_PROMPT_VERSION = "gate-reuse-v1"
-CONTENT_PROMPT_VERSION = "gate-content-v1"
+CONTENT_PROMPT_VERSION = "gate-content-v2"
 SAME, DIFFERENT, UNSURE = "same", "different", "unsure"
 # how many candidates _find_one may refuse before it gives up on the library
 CANDIDATE_ROUNDS = 3
@@ -78,15 +78,25 @@ _MAX_PROMPT_CHARS = 1500
 
 
 def gate_mode() -> str:
-    """`off`, `warn` or `strict` (the default and the meaning of `1`)."""
+    """`off`, `warn` (the default) or `strict` (`1`/`on`/`true`/`yes`/`strict`).
+
+    The default moved from strict to warn on 2026-10-28: the first strict run
+    refused a correct lesson on two false positives (a prokaryote/eukaryote
+    picture failed over layer-group NAMES; a plant cell failed because its
+    vacuole was blue and "nothing depicts a turgid or wilted state"). Under
+    warn, G2/G3 verdicts are logged and the ledger still pays for them, so
+    precision can be measured on real kits before strict blocks renders again.
+    G1 (text reuse-check) refuses a `different` row in BOTH warn and strict —
+    that refusal never fails a job, it only makes the worker draw fresh.
+    """
     v = str(os.getenv(GATE_ENV, "") or "").strip().lower()
     if v in ("0", "off", "false", "no"):
         return "off"
-    if v == "warn":
-        return "warn"
-    if v and v not in ("1", "on", "true", "yes", "strict"):
-        logger.warning("%s=%r is not off/warn/strict; using strict", GATE_ENV, v)
-    return "strict"
+    if v in ("1", "on", "true", "yes", "strict"):
+        return "strict"
+    if v and v != "warn":
+        logger.warning("%s=%r is not off/warn/strict; using warn", GATE_ENV, v)
+    return "warn"
 
 
 def gate_on() -> bool:
@@ -379,18 +389,20 @@ def _trail() -> dict:
 
 def reuse_verdict(key: str, prompt: str, row: dict) -> tuple[dict | None, bool]:
     """What `_find_one` / `find_colour` ask: (verdict or None when off, refuse?).
-    `refuse` is True only under strict for a `different` verdict; `warn` logs
-    the same verdict and reuses anyway. `unsure` reuses and flags `needs_g2`."""
+    `refuse` is True for a `different` verdict under warn AND strict (2026-10-28:
+    a G1 refusal never fails a job — the worker draws fresh — so the cheap,
+    high-precision text check acts in both modes). `unsure` reuses and flags
+    `needs_g2`."""
     mode = gate_mode()
     if mode == "off":
         return None, False
     v = same_subject(prompt, str(row.get("description") or ""), row=row, key=key)
     v = dict(v)
     v["needs_g2"] = v["verdict"] == UNSURE
-    refuse = mode == "strict" and v["verdict"] == DIFFERENT
-    if v["verdict"] == DIFFERENT and mode == "warn":
-        logger.warning("ASSET_GATE=warn: strict would have refused %s <- %s — %s",
-                       key, row.get("asset_key"), v.get("reason"))
+    refuse = v["verdict"] == DIFFERENT
+    if refuse:
+        logger.warning("ASSET GATE reuse refused %s <- %s (%s) — %s",
+                       key, row.get("asset_key"), mode, v.get("reason"))
     from shared.asset_keys import canonical_key
     rec = _trail().setdefault(canonical_key(key), {"refused": [], "verdict": None})
     rec["verdict"] = v["verdict"]
@@ -438,17 +450,22 @@ def _content_prompt(requested: str, part_names: list[str],
     pairs = "; ".join(f'"{t}" -> {l}' for t, l in (label_layer_pairs or []))
     return (
         f"[{CONTENT_PROMPT_VERSION}] A lesson will write labels and draw arrows onto this "
-        "picture. Judge whether the picture shows what was requested.\n\n"
+        "picture. Judge ONLY whether the picture shows the requested SUBJECT, so that the "
+        "labels would be true of what they point at.\n\n"
         f"REQUESTED: {requested[:_MAX_PROMPT_CHARS]}\n"
         f"NAMED PARTS (regions the lesson may point at): {', '.join(part_names) or '(none)'}\n"
         f"LABELS THE LESSON WILL WRITE: {pairs or '(none listed)'}\n\n"
-        "For each named part say whether the drawing in that region is that thing: "
-        "\"ok\" (drawn and is that thing), \"wrong\" (something else is drawn there), "
-        "\"missing\" (not drawn). Then overall: does the picture depict the requested "
-        "subject, so that the labels would be true of what they point at? A picture of "
-        "a different organism, object or process is NOT ok however similar the layout. "
-        "Answer exactly:\n"
-        '{"ok": true | false, "parts": {"<part>": "ok" | "wrong" | "missing"}, '
+        "First, SUBJECT: is the thing drawn the requested organism, object or process "
+        "(\"same\"), or a different one however similar the layout (\"different\")? "
+        "A bacterium is not a plant cell; a frog is not a fish; a circle is not a sphere.\n"
+        "Then for each named part: \"ok\" (that part is drawn there), \"wrong\" (a different "
+        "thing is drawn where that part would be), \"missing\" (not drawn).\n"
+        "DO NOT fail the picture for: a missing part, colours, shading, style, simplification, "
+        "extra detail, the state of the thing (e.g. turgid or wilted), the exact pose or "
+        "layout, or the NAMES of the parts or layer groups — these are not what is being "
+        "judged. Only a different subject, or a region that clearly shows something else, "
+        "is wrong. Answer exactly:\n"
+        '{"subject": "same" | "different", "parts": {"<part>": "ok" | "wrong" | "missing"}, '
         '"reason": "<one sentence naming what the picture actually shows>"}'
     )
 
@@ -500,7 +517,15 @@ def verify_asset(png_path: Path | str, requested_prompt: str,
         for p, v in judged.items():
             if v not in ("ok", "wrong", "missing"):
                 judged[p] = "missing"
-        ok = bool(data.get("ok")) and not any(v == "wrong" for v in judged.values())
+        # v2 verdict: the SUBJECT decides; a "missing" part never fails a picture
+        # (2026-10-28 false positives). An old-style `ok` answer is honoured when
+        # the model gave no subject.
+        subject = str(data.get("subject") or "").strip().lower()
+        if subject in ("same", "different"):
+            subject_ok = subject == "same"
+        else:
+            subject_ok = bool(data.get("ok", True))
+        ok = subject_ok and not any(v == "wrong" for v in judged.values())
         entry = {"ok": ok, "parts": judged, "reason": str(data.get("reason") or "")[:300],
                  "model": out.get("model"), "prompt_version": CONTENT_PROMPT_VERSION,
                  "content_hash": chash, "prompt_hash": phash, "at": _now_iso()}
