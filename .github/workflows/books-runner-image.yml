@@ -1,0 +1,42 @@
+# Builds the books runner image (publishing/runner/Dockerfile) and pushes it to ECR, where the
+# Fargate task definition `sketchcast-books-runner` pulls `:latest`.
+#
+# Inert until the founder creates the AWS role and sets the repository VARIABLE
+# BOOKS_RUNNER_ROLE_ARN (Settings → Secrets and variables → Actions → Variables): GitHub signs in
+# to AWS with OIDC, so no AWS key is stored in GitHub. Without the variable the job is skipped.
+name: books-runner-image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "publishing/**"
+      - "shared/**"
+      - "requirements.txt"
+
+permissions:
+  id-token: write     # OIDC sign-in to AWS
+  contents: read
+
+jobs:
+  build:
+    if: vars.BOOKS_RUNNER_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+      REPOSITORY: sketchcast-books-runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.BOOKS_RUNNER_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and push
+        run: |
+          IMAGE="${{ steps.ecr.outputs.registry }}/${REPOSITORY}"
+          docker build -f publishing/runner/Dockerfile -t "$IMAGE:${GITHUB_SHA}" -t "$IMAGE:latest" .
+          docker push "$IMAGE:${GITHUB_SHA}"
+          docker push "$IMAGE:latest"

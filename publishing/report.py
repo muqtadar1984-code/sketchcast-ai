@@ -6,13 +6,15 @@ run and that run's dependency plan.
 from __future__ import annotations
 
 import html
+import os
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 from publishing.planner import publish_days
 
-OUT = Path(__file__).resolve().parents[2] / "study-guide-sprint1"
+# PUBLISH_OUT: the books runner's working folder (publishing/runner) — same layout, somewhere else
+OUT = Path(os.getenv("PUBLISH_OUT") or Path(__file__).resolve().parents[2] / "study-guide-sprint1")
 CHECKS = ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B9", "B10", "B11"]
 MARK = {"pass": ("✓", "ok"), "warn": ("!", "warn"), "fail": ("✗", "bad"), "n/a": ("–", "na")}
 CADENCES = [1, 3, 5]
