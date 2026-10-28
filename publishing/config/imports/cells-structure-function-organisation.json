@@ -334,6 +334,31 @@
     "_why": "Deliverables only (founder 2026-10-27). book/ holds build intermediates; chNN.* are chapter build outputs the engine re-makes (the Gate D packets keep each chapter's reviewed PDFs); paper-samples/review-pages are design explorations; chNN-gate-d-review.html is the same packet page kept inside chNN-gate-d/.",
     "include_paths": [
       "book/kdp-facts.json"
-    ]
+    ],
+    "keep": [
+      "revision-4-1/*",
+      "*-revision-4.1-*",
+      "kdp.json",
+      "book/kdp-facts.json",
+      "kdp-build.log",
+      "sk-bundle.json",
+      "sk-import-rev4-1.sql",
+      "first-draft-manuscript/*",
+      "send-out/*",
+      "*correction*log*",
+      "*qa*report*",
+      "*coverage*matrix*",
+      "*acceptance*report*",
+      "*addendum*",
+      "*before and after*",
+      "*gate-d*approved.txt",
+      "ch01-correction-proposal.md"
+    ],
+    "_keep_why": "Founder 2026-10-28: keep only the current revision's PDFs (and the data behind its KDP and SK editions), the files that were sent out (send-out/ is the parked publisher pack, kept as an open item) and the QA/correction logs. Everything else is in the database already (text, approvals, findings) or superseded.",
+    "screen_copy": {
+      "min_bytes": 40000000,
+      "dpi": 150,
+      "_why": "Founder 2026-10-28: PDFs were very slow (~100 MB each). View a 150 dpi copy (~15 MB); the full file stays the download."
+    }
   }
 }
