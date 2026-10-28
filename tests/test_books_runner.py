@@ -127,3 +127,21 @@ def test_the_rest_store_refuses_writes_outside_the_run_tables():
                          ("GET", "/jobs"), ("POST", "/jobs"), ("PATCH", "/pub_artifacts")):
         with pytest.raises(RuntimeError, match="refuses"):
             s.http.request(method, path, json={})
+
+
+def test_audit_collect_reads_cost_per_validator_and_counts_findings(tmp_path):
+    (tmp_path / "audit").mkdir()
+    (tmp_path / "audit" / "ch01-audit.json").write_text(json.dumps({
+        "chapter": 1, "validators": {"gemini": {"usd": 0.16, "in": 10, "out": 20}, "opus": {"usd": 0.37, "in": 11, "out": 21}},
+        "findings": [{"severity": "P1", "agreement": "SINGLE"}, {"severity": "P0", "agreement": "CONFIRMED"}]}))
+    (tmp_path / "audit" / "ch02-audit.json").write_text(json.dumps({
+        "chapter": 2, "validators": {"gemini": {"usd": 0.1}}, "findings": [{"severity": "P2", "agreement": "CONFIRMED"}]}))
+    usd, lines, summary = stages.STAGES["academic_audit"].collect(tmp_path)
+    assert usd == 0.63 and len(lines) == 3 and lines[0]["input_tokens"] == 10
+    assert summary == {"chapters": 2, "findings": {"P0": 1, "P1": 1, "P2": 1, "confirmed": 2, "single": 1}}
+
+
+def test_audit_writes_into_the_run_folder():
+    stage, params = stages.validate("academic_audit", {"first": 2, "last": 3})
+    assert stage.env("b", params, "runs/run-9") == {"PUBLISH_REV": "runs/run-9"}
+    assert stage.argv("b", params, "runs/run-9")[-4:-2] == ["2", "3"]
