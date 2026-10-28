@@ -53,6 +53,23 @@ def _coverage_collect(out: Path) -> tuple[float, list[dict], dict]:
     return round(sum(x["usd"] for x in lines), 4), lines, {"counts": counts, "objectives": len(matrix)}
 
 
+def _audit_collect(out: Path) -> tuple[float, list[dict], dict]:
+    """One cost line per chapter and validator; the summary counts findings by severity and agreement."""
+    lines, totals = [], {"P0": 0, "P1": 0, "P2": 0, "confirmed": 0, "single": 0}
+    for f in sorted((out / "audit").glob("ch[0-9][0-9]-audit.json")):
+        rec = json.loads(f.read_text(encoding="utf-8"))
+        for model, c in (rec.get("validators") or {}).items():
+            lines.append({"chapter": int(rec["chapter"]), "role": "validator", "model": model,
+                          "usd": round(float(c.get("usd") or 0), 4),
+                          "input_tokens": c.get("in"), "output_tokens": c.get("out")})
+        for fd in rec.get("findings") or []:
+            if fd.get("severity") in ("P0", "P1", "P2"):
+                totals[fd["severity"]] += 1
+            totals["confirmed" if fd.get("agreement") == "CONFIRMED" else "single"] += 1
+    chapters = len({ln["chapter"] for ln in lines})
+    return round(sum(ln["usd"] for ln in lines), 4), lines, {"chapters": chapters, "findings": totals}
+
+
 def _check_collect(out: Path) -> tuple[float, list[dict], dict]:
     return 0.0, [], json.loads((out / "check.json").read_text(encoding="utf-8"))["summary"]
 
@@ -72,6 +89,15 @@ STAGES: dict[str, Stage] = {s.key: s for s in [
         # the tool writes into <book>/<PUBLISH_REV>/ — point it at this run's folder
         env=lambda slug, p, rel: {"PUBLISH_REV": rel},
         collect=_coverage_collect,
+    ),
+    Stage(
+        key="academic_audit", title="Academic audit", step="audit", uses_models=True,
+        params={"first": 1, "last": 10},
+        # reads the book and the curriculum (production, GET only); writes <run>/audit/chNN-audit.json + summary.json
+        argv=lambda slug, p, rel: [sys.executable, "-m", "publishing.tools.academic_audit", slug,
+                                   *map(str, _chapters(p)), "--env-file", "__RUNNER_EMPTY_ENV__"],
+        env=lambda slug, p, rel: {"PUBLISH_REV": rel},
+        collect=_audit_collect,
     ),
 ]}
 

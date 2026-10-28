@@ -14,7 +14,8 @@ DIST = {"PIL": "pillow", "fitz": "pymupdf", "docx": "python-docx", "bidi": "pyth
 NOT_ON_A_STAGE_PATH = {"pgserver", "agent2_analysis"}
 # repo folders the image does not copy: reached only inside drafting functions (S3 copies spike/ when it adds drafting)
 NOT_COPIED = {"spike", "agent2_analysis", "catalogue", "maths", "worker"}
-ENTRY = ["publishing.runner.__main__", "publishing.runner.check", "publishing.tools.coverage"]
+ENTRY = ["publishing.runner.__main__", "publishing.runner.check", "publishing.tools.coverage",
+         "publishing.tools.academic_audit"]
 
 
 def _declared() -> set[str]:
