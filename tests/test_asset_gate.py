@@ -113,13 +113,15 @@ ROW_PLANT = {"id": "row-plant", "asset_key": "two_cells", "canonical_key": "cell
 
 
 class TestTheSwitch:
-    def test_strict_is_the_default(self, monkeypatch):
+    def test_warn_is_the_default(self, monkeypatch):
+        # 2026-10-28: strict refused a correct lesson on two false positives;
+        # warn logs and pays for the verdicts so precision can be measured first.
         monkeypatch.delenv(ag.GATE_ENV, raising=False)
-        assert ag.gate_mode() == "strict"
+        assert ag.gate_mode() == "warn"
 
     @pytest.mark.parametrize("raw,mode", [("0", "off"), ("off", "off"), ("false", "off"),
                                           ("warn", "warn"), ("1", "strict"),
-                                          ("strict", "strict"), ("nonsense", "strict")])
+                                          ("strict", "strict"), ("nonsense", "warn")])
     def test_the_spellings(self, monkeypatch, raw, mode):
         monkeypatch.setenv(ag.GATE_ENV, raw)
         assert ag.gate_mode() == mode
@@ -268,14 +270,16 @@ class TestG1Decisions:
         hit = vl.find("two_cells", PLANT_ANIMAL)
         assert hit["id"] == "row-bact" and hit["gate"]["needs_g2"] is True
 
-    def test_warn_logs_and_reuses_anyway(self, monkeypatch, caplog):
+    def test_warn_refuses_a_different_row_too(self, monkeypatch, caplog):
+        """G1 acts in warn mode as well: a refusal here never fails a job, the
+        worker just draws fresh — so the cheap text check always protects reuse."""
         _gate(monkeypatch, "warn")
         self._candidates(monkeypatch, ROW_BACTERIUM)
         with caplog.at_level("WARNING", logger="shared.asset_gate"):
             hit = vl.find("two_cells", PLANT_ANIMAL)
-        assert hit["id"] == "row-bact" and hit["gate"]["verdict"] == "different"
-        assert ag.g1_trail("two_cells")["refused"] == []
-        assert "ASSET_GATE=warn" in caplog.text
+        assert hit is None
+        assert [r["id"] for r in ag.g1_trail("two_cells")["refused"]] == ["row-bact"]
+        assert "reuse refused" in caplog.text
 
     def test_off_leaves_the_hit_untouched(self, monkeypatch):
         fake = _gate(monkeypatch, "0")
@@ -415,6 +419,49 @@ class TestG2VerifyAsset:
         fake = _gate(monkeypatch)
         fake.vision = lambda p, q: {"ok": True, "parts": {"plant_wall": "missing"}, "reason": "x"}
         assert ag.verify_asset(_png(tmp_path / "a.png"), PLANT_ANIMAL, PARTS)["ok"] is True
+
+    # ── v2 verdicts (2026-10-28): the SUBJECT decides, nit-picks never fail ──
+    def test_v2_the_prompt_says_what_not_to_judge(self):
+        prompt = ag._content_prompt(PLANT_ANIMAL, PARTS, [("Plant cell", "plant_cell_left")])
+        assert "gate-content-v2" in prompt
+        assert "DO NOT fail the picture for" in prompt
+        assert '"subject": "same" | "different"' in prompt
+
+    def test_v2_a_different_subject_fails(self, monkeypatch, tmp_path):
+        fake = _gate(monkeypatch)
+        fake.vision = lambda p, q: {"subject": "different", "parts": {},
+                                    "reason": "a bacterium beside a eukaryote"}
+        assert ag.verify_asset(_png(tmp_path / "a.png"), PLANT_ANIMAL, PARTS)["ok"] is False
+
+    def test_v2_same_subject_with_missing_parts_and_a_fussy_reason_passes(self, monkeypatch, tmp_path):
+        """The live false positive: a plant cell whose vacuole was blue and showed
+        no turgid/wilted state must not be refused."""
+        fake = _gate(monkeypatch)
+        fake.vision = lambda p, q: {"subject": "same",
+                                    "parts": {"plant_wall": "ok", "plant_vacuole": "missing"},
+                                    "reason": "a plant cell; the interior is blue rather than a "
+                                              "central vacuole and nothing depicts a turgid state"}
+        v = ag.verify_asset(_png(tmp_path / "a.png"), PLANT_ANIMAL, PARTS)
+        assert v["ok"] is True and v["parts"]["plant_vacuole"] == "missing"
+
+    def test_v2_same_subject_but_a_wrong_region_fails(self, monkeypatch, tmp_path):
+        fake = _gate(monkeypatch)
+        fake.vision = lambda p, q: {"subject": "same", "parts": {"plant_cell_left": "wrong"},
+                                    "reason": "x"}
+        assert ag.verify_asset(_png(tmp_path / "a.png"), PLANT_ANIMAL, PARTS)["ok"] is False
+
+    def test_v2_layer_group_names_alone_cannot_fail(self, monkeypatch, tmp_path):
+        """The other live false positive: a prokaryote/eukaryote picture that
+        'matches the requested layout' but whose layer-group names differ."""
+        fake = _gate(monkeypatch)
+        fake.vision = lambda p, q: {"subject": "same",
+                                    "parts": {"prokaryote_cell": "missing", "eukaryote_cell": "missing"},
+                                    "reason": "a small cell with a DNA tangle and a larger cell with "
+                                              "a nucleus, matching the requested layout"}
+        v = ag.verify_asset(_png(tmp_path / "b.png"), "Two cells: a prokaryote and a eukaryote. "
+                            "Name the layer groups exactly: prokaryote_cell, eukaryote_cell",
+                            ["prokaryote_cell", "eukaryote_cell"])
+        assert v["ok"] is True
 
     def test_a_pair_is_judged_once(self, monkeypatch, tmp_path):
         fake = _gate(monkeypatch)
