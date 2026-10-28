@@ -1,15 +1,25 @@
 """Draft ONE chapter (Phase 5 vertical slice; the same code drafts every chapter
 of every book in Phase 7 — no subject branches).
 
-    dossier → chapter_plan → draft_section ×N (parallel) → exercises
-            → deterministic checks → independent review (other model family)
+    dossier → chapter_plan (page target + new pictures) → book illustrations
+            → draft_section ×N (parallel, ONE pass at the page target) → exercises
+            → deterministic checks (incl. cross-chapter repeats)
+            → independent review + gates in ONE call (other model family)
+            → ≤2 revise rounds, each re-checking only the units it changed
             → stored as unit revisions with source_refs, costs, findings
+
+Book cost plan (founder 2026-10-26, target $25-30 a book at the same quality):
+the separate expand rewrite is gone for new drafts (expand_chapter stays for
+books mid-flight), review and gates share one reviewer call, revise rounds
+re-check only what changed, and each chapter is told what earlier chapters
+already use so the uniqueness pass is a check, not a rewrite.
 
 Roles (D5): publish_author = Claude on Bedrock, publish_reviewer = Gemini on
 Vertex. The dossier is the cached prefix of every author call.
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -28,10 +38,21 @@ from publishing.schemas import ROOT
 log = logging.getLogger("publishing.manuscript")
 PROMPTS = ROOT / "prompts"
 CONSTITUTION = "constitution_v0_2"
-CARDS = {"plan": "card_chapter_plan_v0_1", "section": "card_draft_section_v0_1",
+CARDS = {"plan": "card_chapter_plan_v0_2", "section": "card_draft_section_v0_2",
          "exercises": "card_exercises_v0_1", "review": "card_review_v0_1", "gates": "card_gates_v0_1",
+         "review_gates": "card_review_gates_v0_1",
          "expand_plan": "card_expand_plan_v0_1", "expand": "card_expand_section_v0_1"}
 AUTHOR, REVIEWER = "anthropic", "gemini"
+# one-pass drafting (cost plan change 1): the page target a NEW draft is written
+# to, the pictures it may commission, and the words that count as "met" — the
+# batch driver's old "already near 6 pages" line, so a met draft skips expand
+PAGES, PICTURES = "6 to 8", 3
+WORDS_PER_PAGE = 330                     # ~330 words fill a teaching page with its pictures
+ONE_PASS_MIN_WORDS = 1700
+# output caps: a longer one-pass section and the merged review+gates reply get
+# room enough never to hit the cap (a capped reply fails the chapter)
+SECTION_TOKENS, REVIEW_TOKENS = 9000, 32000
+ASSETS = ROOT.parent.parent / "study-guide-sprint1" / "book-assets"
 
 
 def _ulid() -> str:
@@ -85,7 +106,7 @@ class Run:
         cli = self.reviewer if role == "reviewer" else self.author
         t0 = time.time()
         reply = cli.analyze(task, system=_system(card), max_tokens=max_tokens, cache_prefix=self.prefix)
-        if reply.get("truncated") and card in ("review", "gates"):
+        if reply.get("truncated") and card in ("review", "gates", "review_gates"):
             # a long chapter's review can run on; ask once more for the serious findings only
             reply = cli.analyze(task + "\n\nKeep the reply compact: at most 25 findings, the most serious first, "
                                 "each detail in one or two sentences.", system=_system(card),
@@ -98,21 +119,239 @@ class Run:
                            "out": u.get("output_tokens"), "usd": u.get("estimated_cost_usd") or 0,
                            "secs": round(time.time() - t0, 1)})
         data = reply["data"]
+        if isinstance(data, list):        # a reply wrapped in a list is still one reply
+            data = next((x for x in data if isinstance(x, dict)), data)
         if not isinstance(data, dict) or data.get("error"):
             raise RuntimeError(f"{card} for {unit}: model returned {str(data)[:300]}")
         return data
 
 
-def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) -> dict:
-    _load_model_env(env_file)
-    d = D.build(conn, slug, chapter, env_file)
-    out_dir.mkdir(parents=True, exist_ok=True)
+def teaching_words(sections: list[dict]) -> int:
+    """Words of teaching text as the batch driver has always counted them."""
+    return sum(len(str(b.get(k, "")).split()) for s in sections for b in s.get("blocks") or []
+               for k in ("text", "wrong", "right", "caption"))
+
+
+def page_target(pages: str) -> str:
+    """'6 to 8' → the words that fill those pages; any other wording is passed on as it is."""
+    nums = [int(t) for t in str(pages).replace("-", " ").split() if t.isdigit()]
+    if len(nums) == 2:
+        return (f"Page target: about {pages} printed pages of teaching, i.e. about {nums[0] * WORDS_PER_PAGE} to "
+                f"{nums[1] * WORDS_PER_PAGE} words of prose across the sections.\n")
+    return f"Page target: about {pages} printed pages of teaching (~{WORDS_PER_PAGE} words a page).\n"
+
+
+def earlier_note(earlier: dict, what: str) -> str:
+    """What earlier chapters already use (cost plan change 4), for one kind of call:
+    'plan' and 'section' get the pictures (a section also the Think questions),
+    'exercises' the pictures and every earlier question."""
+    if not earlier or not (earlier.get("pictures") or earlier.get("questions")):
+        return ""
+    out = ""
+    if earlier.get("pictures"):
+        out += ("Pictures already used in earlier chapters (every chapter has its own: never place these): " +
+                json.dumps(sorted(earlier["pictures"])) + "\n")
+    qs = earlier.get("questions") or []
+    if what == "section":
+        thinks = [x.get("text") for m, xid, _, x in qs if str(xid).startswith("think:")]
+        if thinks:
+            out += "Think questions earlier chapters already asked (ask none of these again): " + \
+                json.dumps(thinks, ensure_ascii=False)[:8000] + "\n"
+    if what == "exercises" and qs:
+        out += ("Questions earlier chapters already asked (repeat none: test this chapter's ideas with a different "
+                "context, example, organism, situation or question form):\n" +
+                json.dumps([{"chapter": m, "stem": x.get("stem") or x.get("text"), "answer": x.get("answer")}
+                            for m, xid, _, x in qs], ensure_ascii=False)[:40000] + "\n")
+    return out
+
+
+def picture_key(key, chapter: int) -> str:
+    """A new illustration's key is the chapter's own: `book:` + name + `_chNN`, so
+    it can never overwrite (on conflict) a picture another chapter was approved with."""
+    k = str(key or "picture").strip()
+    k = k if k.startswith("book:") else "book:" + k
+    return k if k.endswith(f"_ch{chapter:02d}") else f"{k}_ch{chapter:02d}"
+
+
+def make_pictures(conn, slug: str, chapter: int, wanted: list[dict], limit: int, max_busy: int,
+                  env_file: Path) -> tuple[list, list]:
+    """The plan's new illustrations, through the publisher-grade style system, only
+    while production is quiet (at most `max_busy` jobs in flight; the founder's
+    standing rule). A picture this draft already made is reused, so a resumed run
+    pays nothing twice; a key some other run owns is refused, never overwritten."""
+    from publishing.guard import production_queue
+    from publishing.manuscript import book_assets
+    from publishing.manuscript.theme import for_work
+    by = f"founder:draft-ch{chapter:02d}"
+    made, refused = [], []
+    for pic in (wanted or [])[:max(0, limit)]:
+        if not isinstance(pic, dict) or not pic.get("subject"):
+            continue
+        key = picture_key(pic.get("key"), chapter)
+        row = conn.execute("select approved_by from pub.book_assets where key=%s", (key,)).fetchone()
+        if row:
+            if row["approved_by"] == by:
+                made.append({**pic, "key": key, "reused": True})
+            else:
+                refused.append({**pic, "key": key, "error": f"key already belongs to {row['approved_by']}"})
+            continue
+        q = production_queue(env_file)
+        if q["busy"] > max_busy:
+            raise RuntimeError(f"production has {q['busy']} queued/processing job(s) {q['types']}; "
+                               "not generating images")
+        got = book_assets.generate(conn, key, pic.get("teaches") or pic["subject"], pic["subject"], ASSETS, by,
+                                   theme=for_work(slug))
+        (refused if got.get("error") else made).append({**pic, **got, "key": key})
+    return made, refused
+
+
+# ── merged review + gates (cost plan change 2) ────────────────────────────────
+GATE_KEYS = ("coverage", "beyond_scope", "assessment", "coverage_gate", "assessment_gate")
+BLIND_KEYS = ("xid", "tier", "item_type", "stem", "options", "pairs", "categories", "figure_ref", "figure_refs",
+              "figure_context")
+
+
+def blind_view(exercises: list[dict]) -> list[dict]:
+    """Everything the learner sees, nothing of the key: a sort task's items and
+    categories are printed, so the reviewer must see them too."""
+    out = []
+    for x in exercises:
+        b = {k: v for k, v in x.items() if k in BLIND_KEYS}
+        if x.get("items"):
+            b["items"] = [i.get("text") if isinstance(i, dict) else i for i in x["items"]]
+        out.append(b)
+    return out
+
+
+def answer_key(exercises: list[dict]) -> list[dict]:
+    """What the gates need beyond the learner's view: answers, solutions, schemes
+    (and a sort task's categories per item)."""
+    return [{"xid": x.get("xid"), **{k: v for k, v in x.items() if k not in BLIND_KEYS}} for x in exercises]
+
+
+def review_gates_task(opening, sections: list[dict], exercises: list[dict], changed: dict | None = None,
+                      prior: dict | None = None) -> str:
+    """The reviewer's task: the learner's view first, the answer key LAST, so the
+    blind re-solve is written before the key is consulted. After a revise round
+    (`changed`), the revised units are judged in full and the rest is context."""
+    dump = lambda o: json.dumps(o, ensure_ascii=False, indent=1)  # noqa: E731
+    if changed is None:
+        return ("Drafted chapter (the learner's view; exercises WITHOUT answers):\n" +
+                dump({"opening": opening, "sections": sections, "exercises": blind_view(exercises)}) +
+                "\n\nANSWER KEY (for Gate 2; write blind_answers before consulting it):\n" + dump(answer_key(exercises)))
+    cs, cx = changed["sections"], changed["exercises"]
+    rev_x = [x for x in exercises if x.get("xid") in cx]
+    return ("RE-CHECK after a revision round. Judge the REVISED units in full and the chapter as a whole for "
+            "coverage and chapter-wide problems; the unchanged units were reviewed already and are context only.\n"
+            "Revised sections:\n" + dump([s for s in sections if s.get("sid") in cs]) +
+            "\nRevised exercises (the learner's view):\n" + dump(blind_view(rev_x)) +
+            "\nThe earlier findings these revisions had to resolve (say in a finding if one is still unresolved):\n" +
+            dump(prior or {}) +
+            "\nUnchanged units (context only):\n" +
+            dump({"opening": opening, "sections": [s for s in sections if s.get("sid") not in cs],
+                  "exercises": blind_view([x for x in exercises if x.get("xid") not in cx])}) +
+            "\n\nANSWER KEY of the revised exercises (for Gate 2; write blind_answers before consulting it):\n" +
+            dump(answer_key(rev_x)))
+
+
+def split_review(data) -> tuple[dict, dict]:
+    """One reviewer reply → (review, gates) in the shapes the separate calls had,
+    so everything downstream (render, packet, importer) reads them unchanged.
+    Takes the gates flat or nested under "gates", and a list-wrapped reply."""
+    if isinstance(data, list):
+        data = next((x for x in data if isinstance(x, dict)), {})
+    data = dict(data or {})
+    nested = data.pop("gates", None)
+    if isinstance(data.get("review"), dict):
+        data = {**data.pop("review"), **data}
+    gates = dict(nested) if isinstance(nested, dict) else {}
+    for k in GATE_KEYS:
+        if k in data:
+            gates.setdefault(k, data.pop(k))
+    if not isinstance(data.get("findings"), list):
+        data["findings"] = []
+    return data, gates
+
+
+def _unit(f: dict) -> str:
+    return str(f.get("unit") or f.get("xid") or "").split(".")[0]
+
+
+def changed_units(old_sections: list[dict], sections: list[dict], old_exercises: list[dict],
+                  exercises: list[dict]) -> dict:
+    """The sections and exercises a revise round actually changed (by content)."""
+    def by(items, key):
+        return {str(i.get(key)): json.dumps(i, sort_keys=True, ensure_ascii=False) for i in items}
+    os_, ns = by(old_sections, "sid"), by(sections, "sid")
+    ox, nx = by(old_exercises, "xid"), by(exercises, "xid")
+    return {"sections": {k for k, v in ns.items() if os_.get(k) != v},
+            "exercises": {k for k, v in nx.items() if ox.get(k) != v}}
+
+
+def merge_visual(prev: dict, new: dict, changed: set, alive: set) -> dict:
+    """A visual-gate result after a re-check: the new verdicts for the changed
+    units, the earlier ones for every unit that did not change."""
+    out = {k: [v for v in prev.get(k) or [] if _unit(v) in alive and _unit(v) not in changed] + list(new.get(k) or [])
+           for k in ("verdicts", "findings", "human_review")}
+    if "removed" in prev or "removed" in new:
+        out["removed"] = set(prev.get("removed") or ()) | set(new.get("removed") or ())
+        out["gaps"] = list(prev.get("gaps") or []) + [g for g in new.get("gaps") or [] if g not in (prev.get("gaps") or [])]
+    return out
+
+
+def merge_recheck(prev_review: dict, prev_gates: dict, review: dict, gates: dict, changed: dict,
+                  xids: list[str], alive: set) -> tuple[dict, dict]:
+    """A re-check judged only the changed units (plus chapter-wide coverage):
+    findings, blind answers and assessment verdicts of unchanged units carry
+    forward; a fresh verdict on any unit wins over an old one."""
+    ch = changed["sections"] | changed["exercises"]
+    seen, findings = set(), []
+    for f in list(review.get("findings") or []) + [f for f in prev_review.get("findings") or []
+                                                   if _unit(f) in alive and _unit(f) not in ch]:
+        k = (_unit(f), str(f.get("detail")))
+        if k not in seen:
+            seen.add(k)
+            findings.append(f)
+
+    def per_xid(old, new):
+        o = {str(a.get("xid")): a for a in old or [] if isinstance(a, dict) and str(a.get("xid")) not in ch}
+        n = {str(a.get("xid")): a for a in new or [] if isinstance(a, dict)}
+        return [n.get(x) or o[x] for x in xids if x in n or x in o]
+
+    out_r = {**prev_review, **{k: v for k, v in review.items() if k not in ("findings", "blind_answers")},
+             "findings": findings, "blind_answers": per_xid(prev_review.get("blind_answers"), review.get("blind_answers")),
+             "recheck": sorted(ch)}
+    out_g = {**prev_gates, **{k: v for k, v in gates.items() if k != "assessment"},
+             "assessment": per_xid(prev_gates.get("assessment"), gates.get("assessment"))}
+    out_g["assessment_gate"] = "fail" if gates.get("assessment_gate") == "fail" or any(
+        a.get("verdict") == "fail" for a in out_g["assessment"]) else "pass"
+    return out_r, out_g
+
+
+EMPTY_FIT = {"gaps": [], "findings": [], "removed": set(), "verdicts": [], "human_review": []}
+EMPTY_VEX = {"findings": [], "human_review": [], "verdicts": []}
+
+
+def _write_dossier(out_dir: Path, chapter: int, d: dict) -> None:
     (out_dir / f"ch{chapter:02d}-dossier.json").write_text(D.for_prompt(d), encoding="utf-8")
     (out_dir / f"ch{chapter:02d}-dossier-full.json").write_text(json.dumps(d, ensure_ascii=False, default=str),
                                                                 encoding="utf-8")
-    valid = D.ids(d)
-    figure_ids = {f["id"] for t in d["topics"] for f in t["figures"]} | {a["id"] for a in d["library_assets"]}
-    nodes = set(d["chapter"]["node_codes"])
+
+
+def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path, pages: str | None = PAGES,
+                  pictures: int = PICTURES, max_busy: int = 0) -> dict:
+    """Draft one chapter at its page target in ONE pass (founder 2026-10-26).
+    `pages=None, pictures=0` drafts the short first version the expand stage
+    used to grow; the record says which (`one_pass`)."""
+    from publishing.tools.uniqueness import earlier_chapters
+    _load_model_env(env_file)
+    d = D.build(conn, slug, chapter, env_file)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _write_dossier(out_dir, chapter, d)
+    # what the chapters before this one already use: told to every author call,
+    # and a repeat is a failed check the revise rounds fix (cost plan change 4)
+    earlier = earlier_chapters(out_dir, chapter)
+    used = earlier["pictures"]
     run = Run(d)
     ch = d["chapter"]
     toc = "\n".join(f"  {c['sort']}. {c['title']} {c['node_codes']}" for c in conn.execute(
@@ -133,28 +372,68 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) 
     if notes.exists():
         head += "EDITORIAL DIRECTION approved by the publisher at Gate D (follow it):\n" + \
             notes.read_text(encoding="utf-8") + "\n"
-    photo_ids = {a["id"] for a in d["library_assets"] if a.get("kind") == "photo"}
     skills = {o["code"] for o in ch.get("skills") or []}
+    nodes = set(ch["node_codes"])
+    # a checkpoint after each costly stage: a busy production queue or a rate
+    # limit must not throw away the plan, the pictures or the drafted sections
+    work_file = out_dir / f"ch{chapter:02d}-draft-work.json"
+    work = json.loads(work_file.read_text(encoding="utf-8")) if work_file.exists() else {}
 
-    plan = run.call("author", "plan", head + "Plan this chapter. Blueprint intent:\n" +
-                    json.dumps({k: ch[k] for k in ("purpose", "blueprint_sections", "assessment", "illustration_needs")},
-                               ensure_ascii=False, indent=1), 9000, "plan")
+    def save():
+        work_file.write_text(json.dumps(work, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+
+    if "plan" not in work:
+        work["plan"] = run.call(
+            "author", "plan", head + (page_target(pages) if pages else "") +
+            (f"Picture budget: up to {pictures} new colour illustrations.\n" if pictures else "") +
+            earlier_note(earlier, "plan") + "Plan this chapter. Blueprint intent:\n" +
+            json.dumps({k: ch[k] for k in ("purpose", "blueprint_sections", "assessment", "illustration_needs")},
+                       ensure_ascii=False, indent=1), 9000, "plan")
+        save()
+    plan = copy.deepcopy(work["plan"])
+    if not pictures:
+        plan["new_pictures"] = []
+    if "made" not in work:
+        work["made"], work["refused"] = (make_pictures(conn, slug, chapter, plan.get("new_pictures") or [], pictures,
+                                                       max_busy, env_file) if pictures else ([], []))
+        save()
+    made, refused = work["made"], work["refused"]
+    plan.setdefault("visual_gaps", []).extend({"need": p.get("subject"), "why": f"illustration refused: "
+                                               f"{str(p.get('error'))[:200]}"} for p in refused)
+    if made:                               # the dossier now offers the new pictures
+        d = D.build(conn, slug, chapter, env_file)
+        run.d, run.prefix = d, "CHAPTER DOSSIER (the complete content boundary):\n" + D.for_prompt(d)
+        _write_dossier(out_dir, chapter, d)
+    valid = D.ids(d)
+    figure_ids = {f["id"] for t in d["topics"] for f in t["figures"]} | {a["id"] for a in d["library_assets"]}
+    # an earlier chapter's photographs are not this chapter's to use in an observation task
+    photo_ids = {a["id"] for a in d["library_assets"] if a.get("kind") == "photo"} - used
 
     def one(sec):
         others = [s["heading"] for s in plan["sections"] if s["sid"] != sec["sid"]]
+        pics = [{k: p.get(k) for k in ("key", "subject", "teaches", "label")} for p in made if p.get("sid") == sec["sid"]]
         return run.call("author", "section", head + f"Opening of the chapter: {plan.get('opening')}\n"
-                        f"Other sections (do not repeat them): {others}\nWrite this section:\n" +
-                        json.dumps(sec, ensure_ascii=False, indent=1), 5000, sec["sid"])
+                        f"Other sections (do not repeat them): {others}\n" +
+                        (f"Target for this section: about {sec['target_words']} words of prose.\n"
+                         if sec.get("target_words") else "") +
+                        ("New pictures made for this section (place each):\n" + json.dumps(pics, ensure_ascii=False) +
+                         "\n" if pics else "") +
+                        earlier_note(earlier, "section") + "Write this section:\n" +
+                        json.dumps(sec, ensure_ascii=False, indent=1), SECTION_TOKENS, sec["sid"])
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        sections = list(pool.map(one, plan["sections"]))
+    if "sections" not in work:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            work["sections"] = list(pool.map(one, plan["sections"]))
+        save()
+    sections = copy.deepcopy(work["sections"])
     dedupe(sections)
     fit = figure_fit(run, sections, env_file)
     plan.setdefault("visual_gaps", []).extend(fit["gaps"])
     figure_ids -= fit["removed"]          # an exercise may not use a picture the fit check threw out
     for s in plan["sections"]:
         s["figure_refs"] = [r for r in s.get("figure_refs") or [] if r not in fit["removed"]]
-    ex = run.call("author", "exercises", head + "Chapter plan:\n" + json.dumps(plan, ensure_ascii=False, indent=1) +
+    ex = run.call("author", "exercises", head + earlier_note(earlier, "exercises") + "Chapter plan:\n" +
+                  json.dumps(plan, ensure_ascii=False, indent=1) +
                   "\nSection headings: " + json.dumps([s["heading"] for s in sections]), 9000, "exercises")
     exercises = ex.get("exercises") or []
 
@@ -163,34 +442,45 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) 
                 + V.check_picture_reuse(sections)
                 + V.check_exercises(exercises, valid, figure_ids, nodes, photo_ids, skills)
                 + V.check_extension(sections, exercises)
-                + V.check_coverage(sections, exercises, plan, nodes))
+                + V.check_coverage(sections, exercises, plan, nodes)
+                + V.check_cross_chapter(sections, exercises, used, earlier["questions"]))
 
-    def blind():
-        # everything the learner sees, nothing of the key: a sort task's items and
-        # categories are printed, so the reviewer must see them too
-        out = []
-        for x in exercises:
-            b = {k: v for k, v in x.items() if k in ("xid", "tier", "item_type", "stem", "options", "pairs",
-                                                      "categories", "figure_ref", "figure_refs", "figure_context")}
-            if x.get("items"):
-                b["items"] = [i.get("text") for i in x["items"]]
-            out.append(b)
-        return out
+    state: dict = {}
 
-    def do_review(unit, fig=None):
+    def do_review(unit, fig=None, changed=None, prior=None):
         """Three independent gates (founder 2026-10-25, D1): CONTENT, VISUAL,
         ASSESSMENT. The visual gate looks at the actual pictures, figures and
-        question pictures alike, and flags what it cannot judge with confidence."""
+        question pictures alike, and flags what it cannot judge with confidence.
+        Content and assessment come from ONE reviewer call with the review (cost
+        plan change 2). After a revise round (`changed`), only the changed units
+        are looked at and re-judged (change 3); the rest carry their verdicts."""
         nonlocal figure_ids
-        if fig is None:                    # after a revision: the sections may place new pictures
-            fig = figure_fit(run, sections, env_file)
-            figure_ids -= fig["removed"]
-        vex = visual_exercises(run, exercises, env_file)
-        r = run.call("reviewer", "review", head + "Drafted chapter:\n" + json.dumps(
-            {"opening": plan.get("opening"), "sections": sections, "exercises": blind()}, ensure_ascii=False,
-            indent=1), 24000, unit)
-        r["gates"] = run.call("reviewer", "gates", head + "Chapter to gate:\n" + json.dumps(
-            {"sections": sections, "exercises": exercises}, ensure_ascii=False, indent=1), 9000, f"{unit}:gates")
+        alive = {s["sid"] for s in sections} | {x.get("xid") for x in exercises}
+        if changed is None:
+            if fig is None:
+                fig = figure_fit(run, sections, env_file)
+                figure_ids -= fig["removed"]
+            vex = visual_exercises(run, exercises, env_file)
+            model, gates = split_review(run.call("reviewer", "review_gates", head + review_gates_task(
+                plan.get("opening"), sections, exercises), REVIEW_TOKENS, unit))
+        else:
+            cs, cx = changed["sections"], changed["exercises"]
+            new_fig = figure_fit(run, [s for s in sections if s["sid"] in cs], env_file) if cs else EMPTY_FIT
+            figure_ids -= new_fig["removed"]
+            fig = merge_visual(state["fig"], new_fig, cs, alive)
+            vex = merge_visual(state["vex"], visual_exercises(run, [x for x in exercises if x.get("xid") in cx],
+                                                              env_file) if cx else EMPTY_VEX, cx, alive)
+            if cs or cx:
+                model, gates = merge_recheck(state["model"], state["gates"], *split_review(run.call(
+                    "reviewer", "review_gates", head + review_gates_task(plan.get("opening"), sections, exercises,
+                                                                         changed, prior), REVIEW_TOKENS, unit)),
+                    changed, [x.get("xid") for x in exercises], alive)
+            else:                          # nothing changed: the last verdicts stand, no model call
+                model, gates = copy.deepcopy(state["model"]), copy.deepcopy(state["gates"])
+                model["recheck"] = []
+        state.update(model=copy.deepcopy(model), gates=copy.deepcopy(gates), fig=fig, vex=vex)
+        r = model
+        r["gates"] = gates
         visual_fail = [f for f in fig["findings"] if f.get("severity") == "blocker"] + vex["findings"]
         r["gates"]["visual"] = {"figures": fig["verdicts"], "exercises": vex["verdicts"], "removed": sorted(fig["removed"]),
                                 "gaps": fig["gaps"], "failures": visual_fail}
@@ -230,9 +520,10 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) 
     findings = checks()
     review = do_review("review", fig=fit)
     rounds = []
+    avoid = earlier_note({"pictures": used}, "plan")
     # REVISE (§4 review → revise), at most twice: the author resolves every
-    # blocker and major finding, failed gate item and failed check; the chapter
-    # is then checked, reviewed and gated again. What is left goes to Gate D.
+    # blocker and major finding, failed gate item and failed check; what the
+    # round changed is then checked, reviewed and gated again. What is left goes to Gate D.
     for rnd in (1, 2):
         if is_ready(review, findings):
             break
@@ -241,39 +532,51 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path) 
             break
         rounds.append({"round": rnd, "findings": review.get("findings"), "gates": review.get("gates"),
                        "checks": findings})
+        before_s, before_x = copy.deepcopy(sections), copy.deepcopy(exercises)
 
         def fix(sec, by_unit=by_unit, rnd=rnd):
             fs = by_unit.get(sec["sid"])
             if not fs:
                 return sec
             spec = next((p for p in plan["sections"] if p["sid"] == sec["sid"]), {})
-            return run.call("author", "section", head + "Revise this section so that every finding below is "
+            return run.call("author", "section", head + avoid + "Revise this section so that every finding below is "
                             "resolved, staying inside the dossier. Keep what is right; change only what the findings "
                             "require; keep every figure block you still need.\nPlan entry:\n" +
                             json.dumps(spec, ensure_ascii=False) + "\nCurrent draft:\n" +
                             json.dumps(sec, ensure_ascii=False) + "\nFindings:\n" + json.dumps(fs, ensure_ascii=False),
-                            5000, f"{sec['sid']}:revise{rnd}")
+                            SECTION_TOKENS, f"{sec['sid']}:revise{rnd}")
         with ThreadPoolExecutor(max_workers=4) as pool:
             sections = list(pool.map(fix, sections))
         dedupe(sections)
         fold_extension_sections(sections, plan)
         ex_fs = [f for u, fs in by_unit.items() if u.startswith("x") or u in ("exercises", "chapter") for f in fs]
         if ex_fs:
-            ex = run.call("author", "exercises", head + "Revise the exercises so every finding below is resolved; "
-                          "return the full set. Never assess the optional extension box.\nCurrent exercises:\n" +
+            ex = run.call("author", "exercises", head + avoid + "Revise the exercises so every finding below is "
+                          "resolved; return the full set. Never assess the optional extension box.\nCurrent exercises:\n" +
                           json.dumps(exercises, ensure_ascii=False) + "\nFindings:\n" +
                           json.dumps(ex_fs, ensure_ascii=False), 9000, f"exercises:revise{rnd}")
             exercises = ex.get("exercises") or exercises
+        changed = changed_units(before_s, sections, before_x, exercises)
         findings = checks()
-        review = do_review(f"review:{rnd + 1}")
+        review = do_review(f"review:{rnd + 1}", changed=changed,
+                           prior={u: fs for u, fs in by_unit.items() if u in changed["sections"] | changed["exercises"]})
     review["rounds"] = rounds
     review["ready_for_gate_d"] = is_ready(review, findings)
+    words = teaching_words(sections)
     chapter_doc = {"chapter": ch, "work": d["work"], "plan": plan, "sections": sections, "exercises": exercises,
                    "checks": findings, "review": review, "costs": run.costs,
                    "videos": sorted({v for t in d["topics"] for v in t["videos"]}),
-                   "prompt_versions": {"constitution": CONSTITUTION, **CARDS}}
+                   "prompt_versions": {"constitution": CONSTITUTION, **CARDS},
+                   # what the batch driver reads to skip the expand stage (cost plan change 1)
+                   "one_pass": {"pages": pages, "words": words,
+                                "target_words": sum(int(s.get("target_words") or 0) for s in plan["sections"]) or None,
+                                "met": bool(pages) and words >= ONE_PASS_MIN_WORDS,
+                                "pictures_made": made, "pictures_refused": refused,
+                                "earlier_pictures_avoided": len(used), "earlier_questions_checked": len(earlier["questions"]),
+                                "usd": round(sum(c["usd"] or 0 for c in run.costs), 2)}}
     (out_dir / f"ch{chapter:02d}-draft.json").write_text(json.dumps(chapter_doc, ensure_ascii=False, indent=1),
                                                           encoding="utf-8")
+    work_file.unlink(missing_ok=True)     # the draft holds everything now; a redraft starts fresh
     store(conn, d, chapter_doc)
     return chapter_doc
 
