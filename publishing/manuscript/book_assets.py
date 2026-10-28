@@ -11,7 +11,7 @@ subject picks up the same quality with no code. Labels are never drawn by the
 image model; they stay vector overlays the visual gate checks.
 
 The picture is made with the worker's own image call (the library's model and
-credentials), at the largest size the model offers, and must pass a vision
+credentials), at 2K (BOOK_IMAGE_SIZE), and must pass a vision
 check — accurate, no text, suitable, AND publisher-grade — or it is retried
 once and then refused. It is stored in the LOCAL book store
 (``pub.book_assets``), never in the shared production library, so the video
@@ -26,6 +26,11 @@ from pathlib import Path
 from publishing.schemas import ROOT
 
 STYLES = ROOT / "config" / "book_image_styles.json"
+# Book cost plan (founder 2026-10-26, change 5): Vertex returned 1024 px even
+# when 4K was asked for, and 4K is billed at 2000 output tokens against 1120 for
+# 1K/2K on the Pro image model (shared/image_models.py). 2K costs the same as 1K
+# there, so it is the size asked for; IMAGE_SIZE_FIGURE still overrides it.
+BOOK_IMAGE_SIZE = "2K"
 
 CHECK = """You are the art director of a premium educational publisher. Judge this generated illustration.
 Intended subject: "{subject}". Intended genre: {genre} — {style}
@@ -66,7 +71,7 @@ def generate(conn, key: str, concept: str, subject: str, out_dir: Path, approved
     """Make one book asset; returns the stored row, or {'error': …} without storing."""
     os.environ.setdefault("LLM_BACKEND", "bedrock")
     os.environ.setdefault("PUBLISH_GEMINI_MODEL", "gemini-3.5-flash")
-    os.environ.setdefault("IMAGE_SIZE_FIGURE", "4K")        # the largest the model offers; clamped if not
+    os.environ.setdefault("IMAGE_SIZE_FIGURE", BOOK_IMAGE_SIZE)
     from publishing.blueprint import author_client
     from shared.image_models import FIGURE
     from spike.scene_engine import raster_assets as R

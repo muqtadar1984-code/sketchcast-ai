@@ -232,6 +232,51 @@ def check_coverage(sections: list[dict], exercises: list[dict], plan: dict, node
     return out
 
 
+REPEAT_THRESHOLD = 0.5      # the uniqueness pass's own threshold, so a draft that passes here passes there
+
+
+def check_cross_chapter(sections: list[dict], exercises: list[dict], used_pictures: set[str],
+                        earlier_questions: list, threshold: float = REPEAT_THRESHOLD) -> list[dict]:
+    """Every chapter is its own (founder 2026-10-26): no picture, question or
+    Think box repeats one in an EARLIER chapter. Checked at draft time, so the
+    revise rounds fix a repeat and the later uniqueness pass only confirms it.
+    `earlier_questions` are (chapter, xid, content, question) tuples from
+    uniqueness.earlier_chapters."""
+    from publishing.tools.uniqueness import _content, best_repeat
+    out = []
+    for s in sections:
+        for b in s.get("blocks") or []:
+            refs = ([b.get("ref")] if b.get("type") == "figure" else
+                    [i.get("ref") for i in b.get("items") or [] if isinstance(i, dict)]
+                    if b.get("type") == "figure_group" else [])
+            for r in refs:
+                if r in used_pictures:
+                    out.append({"unit": s.get("sid", "?"), "check": "cross_chapter", "verdict": "fail",
+                                "detail": f"{r} is already used in an earlier chapter; every chapter has its own "
+                                          "pictures: choose another dossier picture or none"})
+            if b.get("type") == "think" and earlier_questions:
+                best = best_repeat(_content(b), b, earlier_questions)
+                if best[0] >= threshold:
+                    out.append({"unit": s.get("sid", "?"), "check": "cross_chapter", "verdict": "fail",
+                                "detail": f"the Think box repeats chapter {best[1]} {best[2]} "
+                                          f"({str(best[3].get('stem') or best[3].get('text'))[:160]!r}); ask it "
+                                          "from a fresh angle"})
+    for x in exercises:
+        xid = x.get("xid", "?")
+        for r in ([x.get("figure_ref")] if x.get("figure_ref") else []) + list(x.get("figure_refs") or []):
+            if r in used_pictures:
+                out.append({"unit": xid, "check": "cross_chapter", "verdict": "fail",
+                            "detail": f"{r} is already used in an earlier chapter; use a picture of this chapter's own"})
+        if earlier_questions:
+            best = best_repeat(_content(x), x, earlier_questions)
+            if best[0] >= threshold:
+                out.append({"unit": xid, "check": "cross_chapter", "verdict": "fail",
+                            "detail": f"repeats chapter {best[1]} {best[2]} "
+                                      f"({str(best[3].get('stem') or best[3].get('text'))[:160]!r}): test the same "
+                                      "objective with a different context, example or question form"})
+    return out
+
+
 LOCKED_FIELDS = ("type", "text", "term", "wrong", "right", "answer", "caption", "ref", "items", "relations")
 
 

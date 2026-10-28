@@ -44,6 +44,10 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("chapter", help="Stage E: draft, check, review and render one chapter (local + model calls)")
     c.add_argument("slug")
     c.add_argument("number", type=int)
+    c.add_argument("--pages", default="6 to 8", help="one-pass page target (book cost plan, 2026-10-26)")
+    c.add_argument("--pictures", type=int, default=3, help="new illustrations the one-pass draft may commission")
+    c.add_argument("--max-busy", type=int, default=0,
+                   help="founder-approved: make pictures while production has at most this many jobs in flight")
     c.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
     ex = sub.add_parser("expand-chapter", help="teach more in an approved chapter: locked text + new blocks + pictures")
     ex.add_argument("slug")
@@ -100,7 +104,8 @@ def main(argv: list[str] | None = None) -> int:
         from publishing.report import OUT
         out = OUT / "manuscripts" / args.slug
         if args.cmd == "chapter":
-            doc = draft_chapter(conn, args.slug, args.number, args.env_file, out)
+            doc = draft_chapter(conn, args.slug, args.number, args.env_file, out, args.pages, args.pictures,
+                                args.max_busy)
         elif args.cmd == "expand-chapter":
             from publishing.manuscript.author import expand_chapter
             doc = expand_chapter(conn, args.slug, args.number, args.env_file, out, args.pages, args.pictures, args.max_busy)

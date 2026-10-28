@@ -4,12 +4,19 @@ pipeline — draft, expand to 6-8 teaching pages with images, theme, render").
 
     draft → opener hero → expand (locked draft + new teaching + pictures) → render → packet
 
+Book cost plan (founder 2026-10-26): a new draft is written at the 6-8 page
+target with its pictures in ONE pass, so the expand stage, which re-output
+every locked block just to add text, is skipped when the draft met the target
+(--expand auto, the default). A draft short of the target, or one made before
+the change (no one_pass record), is still expanded as before; --expand
+always|never overrides.
+
 Every stage is skipped when its output already exists, so a run that stops (a
 rate limit, a busy production queue) is resumed by running it again. A failed
 chapter is recorded and the run moves on. Local only: the only production
 traffic is reads and the image/text model calls the pipeline already makes.
 
-    python -m publishing.tools.book_chapters <slug> 2 10 [--max-busy 3]
+    python -m publishing.tools.book_chapters <slug> 2 10 [--max-busy 3] [--expand auto|always|never]
 """
 from __future__ import annotations
 
@@ -29,6 +36,8 @@ from publishing.schemas import ROOT
 log = logging.getLogger("publishing.book_chapters")
 ASSETS = ROOT.parent.parent / "study-guide-sprint1" / "book-assets"
 LONG_DRAFT_WORDS = 1700
+EXPAND_MODES = ("auto", "always", "never")
+PICTURES = 3                               # new illustrations a chapter gets, one-pass or expanded
 
 HERO = """You art-direct the opening illustration of a chapter in a premium study guide for ages {age}.
 Chapter {n}: {title}. What the chapter teaches: {purpose}
@@ -88,7 +97,7 @@ def packet(out: Path, n: int, doc: dict, result: dict) -> Path:
     figs = sum(1 for s in doc["sections"] for b in s["blocks"] if b.get("type") in ("figure", "figure_group"))
     serious = [f for f in rv.get("findings") or [] if f.get("severity") in ("blocker", "major")]
     fails = [f for f in doc.get("checks") or [] if f.get("verdict") == "fail"]
-    x = doc.get("expansion") or {}
+    x = doc.get("expansion") or doc.get("one_pass") or {}
     md = [f"# Chapter {n}: {doc['chapter']['title']} — Gate D packet", "",
           f"Local draft, not published. Pages: {result['pages']}. Hard layout defects: {result['hard_defects']}.",
           f"Teaching text: {words} words in {len(doc['sections'])} sections; {figs} figures; "
@@ -112,8 +121,23 @@ def packet(out: Path, n: int, doc: dict, result: dict) -> Path:
     return p
 
 
-def run(slug: str, first: int, last: int, env_file: Path, max_busy: int) -> list[dict]:
-    from publishing.manuscript.author import draft_chapter, expand_chapter
+def needs_expand(doc: dict, mode: str = "auto") -> tuple[bool, str]:
+    """Whether the expand stage runs for this draft, and why (recorded in the run state)."""
+    if doc.get("expansion"):
+        return False, "already expanded"
+    if mode == "never":
+        return False, "expand disabled (--expand never)"
+    if mode == "always":
+        return True, "expand forced (--expand always)"
+    op = doc.get("one_pass") or {}
+    if op.get("met"):
+        return False, f"skipped: the one-pass draft met the page target ({op.get('words')} words)"
+    return True, (f"one-pass draft short of the page target ({op.get('words')} words)" if op
+                  else "draft made before one-pass drafting")
+
+
+def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, expand: str = "auto") -> list[dict]:
+    from publishing.manuscript.author import PAGES, draft_chapter, expand_chapter, teaching_words
     from publishing.manuscript.render import render
     out = OUT / "manuscripts" / slug
     status_file = out / f"book-run-ch{first:02d}-{last:02d}.json"
@@ -128,22 +152,28 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int) -> list
             draft = out / f"ch{n:02d}-draft.json"
             if not draft.exists():
                 log.info("ch%d: drafting", n)
-                draft_chapter(conn, slug, n, env_file, out)
+                draft_chapter(conn, slug, n, env_file, out, PAGES, PICTURES, max_busy)
             doc = json.loads(draft.read_text(encoding="utf-8"))
             if "hero" not in st:
                 st["hero"] = hero(conn, doc, env_file, max_busy)
                 conn.commit()
+            go, why = needs_expand(doc, expand)
             if not doc.get("expansion"):
-                log.info("ch%d: expanding", n)
-                words = sum(len(str(b.get(k, "")).split()) for sec in doc["sections"] for b in sec["blocks"]
-                            for k in ("text", "wrong", "right", "caption"))
+                st["expand"] = why
+            if go:
+                log.info("ch%d: expanding (%s)", n, why)
+                words = teaching_words(doc["sections"])
                 # ~330 words fill a teaching page with its pictures: a draft already near 6 pages gets its
                 # pictures and only the explanation they need, so no chapter runs far past 8 pages
                 target = "6 to 8" if words < LONG_DRAFT_WORDS else (
                     "no more than 8 — the draft is already long, so add the new pictures and only the short "
                     "explanation each needs; add no other text")
                 st["draft_words"] = words
-                doc = expand_chapter(conn, slug, n, env_file, out, target, 3, max_busy)
+                # pictures the one-pass draft already made count toward the chapter's three
+                pics = max(0, PICTURES - len((doc.get("one_pass") or {}).get("pictures_made") or []))
+                doc = expand_chapter(conn, slug, n, env_file, out, target, pics, max_busy)
+            elif not doc.get("expansion"):
+                st["draft_words"] = teaching_words(doc["sections"])
             full = json.loads((out / f"ch{n:02d}-dossier-full.json").read_text(encoding="utf-8"))
             result = render(doc, full, env_file, out)
             doc = json.loads(draft.read_text(encoding="utf-8"))
@@ -168,10 +198,12 @@ def main() -> None:
     p.add_argument("first", type=int)
     p.add_argument("last", type=int)
     p.add_argument("--max-busy", type=int, default=0)
+    p.add_argument("--expand", choices=EXPAND_MODES, default="auto",
+                   help="auto: expand only a draft short of the page target (or made before one-pass drafting)")
     p.add_argument("--env-file", type=Path, default=DEFAULT_ENV)
     a = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    print(json.dumps(run(a.slug, a.first, a.last, a.env_file, a.max_busy), indent=1, default=str))
+    print(json.dumps(run(a.slug, a.first, a.last, a.env_file, a.max_busy, a.expand), indent=1, default=str))
 
 
 if __name__ == "__main__":

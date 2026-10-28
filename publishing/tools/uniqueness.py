@@ -100,6 +100,31 @@ def similar(a: str, b: str) -> float:
     return max(jac, SequenceMatcher(None, a, b).ratio())
 
 
+def best_repeat(c: str, x: dict, earlier_q: list) -> tuple:
+    """The earlier question most like this one: (score, chapter, xid, question).
+    Alike in substance (stem, options, pairs, answer) OR alike to the eye (the
+    stem as printed). Shared with the draft-time check (validate.check_cross_chapter)
+    so the drafting run and this pass judge a repeat the same way."""
+    stem = _norm(x.get("stem") or x.get("text"))
+
+    def score(ec, ex):
+        look = SequenceMatcher(None, stem, _norm(ex.get("stem") or ex.get("text"))).ratio()
+        return max(similar(c, ec), look if look >= 0.8 else 0.0)
+
+    return max(((score(ec, ex), m, exid, ex) for m, exid, ec, ex in earlier_q),
+               default=(0, 0, "", {}), key=lambda t: t[0])
+
+
+def earlier_chapters(out: Path, n: int) -> dict:
+    """What chapters before `n` already use (founder 2026-10-26: unique questions
+    AND pictures per chapter): the picture refs (every chapter's opener art
+    counts), and the questions as (chapter, xid, content, question) tuples."""
+    docs = {m: json.loads((out / f"ch{m:02d}-draft.json").read_text(encoding="utf-8"))
+            for m in range(1, n) if (out / f"ch{m:02d}-draft.json").exists()}
+    pictures = {r for d in docs.values() for r in _refs(d)} | {f"book:hero_ch{m:02d}" for m in docs}
+    return {"pictures": pictures, "questions": [(m, xid, c, x) for m, d in docs.items() for xid, c, x in _questions(d)]}
+
+
 def _questions(doc: dict) -> list[tuple[str, str, dict]]:
     out = [(x["xid"], _content(x), x) for x in doc["exercises"]]
     for s in doc["sections"]:
@@ -242,15 +267,7 @@ def run(slug: str, first: int, last: int, env_file: Path, max_busy: int, thresho
         # ── questions ─────────────────────────────────────────────────────────
         flagged = {}
         for xid, c, x in _questions(doc):
-            # alike in substance (stem, options, pairs, answer) OR alike to the eye (the stem as printed)
-            stem = _norm(x.get("stem") or x.get("text"))
-
-            def score(ec, ex):
-                look = SequenceMatcher(None, stem, _norm(ex.get("stem") or ex.get("text"))).ratio()
-                return max(similar(c, ec), look if look >= 0.8 else 0.0)
-
-            best = max(((score(ec, ex), m, exid, ex) for m, exid, ec, ex in earlier_q),
-                       default=(0, 0, "", {}), key=lambda t: t[0])
+            best = best_repeat(c, x, earlier_q)
             if best[0] >= threshold:
                 flagged[xid] = {"repeats": f"chapter {best[1]} {best[2]}", "score": round(best[0], 2),
                                 "earlier": (best[3].get("stem") or best[3].get("text"))}
