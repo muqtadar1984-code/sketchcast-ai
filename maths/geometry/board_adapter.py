@@ -32,6 +32,14 @@ MIN_PX_PER_UNIT = 18.0
 # draw the same triangle as 0.7, 2.4 and 2.5 — so its legibility is its DRAWN
 # size, not pixels per unit: its longest side must reach this many pixels.
 MIN_FIGURE_PX = 240.0
+# A GRIDDED figure (axes, a number line, a chart) that the panel cannot hold
+# at the per-unit floor may draw at this share of it as a LAST resort, never
+# below: its tick and point labels are sized in board pixels, so they stay
+# the same size; only the grid squares shrink, 18 → 15 px. A two-line
+# Telugu question left a 288 px panel for a coordinate figure 16.5 units tall
+# (17.45 px/unit) and the kit failed twice on it (Coordinates and Plotting
+# Linear Graphs, te, 2026-10-25); the English one-line question leaves 334.
+GRIDDED_RELAX = 15.0 / 18.0
 STROKE_PX = 3.2
 MARK_PX = 2.2
 AXIS_PX = 2.0               # a symmetry axis drawn across the figure
@@ -130,12 +138,13 @@ def _min_px(m: Model, panel: Optional[Rect] = None) -> float:
     y in [-8, 8] at step 2 is as legible as a line over [-4, 4] at step 1;
     the labels are sized in board pixels, not units, either way)."""
     step = m.axes.step if m.axes is not None else (m.number_line.step if m.number_line is not None else 1.0)
-    if float(step) > 1.0:
-        return MIN_PX_PER_UNIT / float(step)
-    if _gridded(m):
+    if float(step) > 1.0 or _gridded(m):
         # axes, a number line, a chart, a solid: units are numbers the eye
-        # reads off the grid, so the floor stays per unit
-        return MIN_PX_PER_UNIT
+        # reads off the grid, so the floor stays per unit (per step) — but
+        # when the PANEL is passed (the refusal fallback in figure_board)
+        # the grid may tighten to GRIDDED_RELAX of it rather than be refused
+        base = MIN_PX_PER_UNIT / float(step) if float(step) > 1.0 else MIN_PX_PER_UNIT
+        return base * GRIDDED_RELAX if panel is not None and _gridded(m) else base
     floor = MIN_PX_PER_UNIT
     if m.circles and not m.polygons and not m.angle_ids:
         # a circle alone (its centre, a radius or a diameter): nothing in it

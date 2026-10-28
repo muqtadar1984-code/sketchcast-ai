@@ -57,9 +57,18 @@ _THOUSANDS_RE = re.compile(r"^-?\d{1,3}(?:,\d{3})+(?:\.\d+)?$")
 _CODE_RE = re.compile(r"\b\d{1,2}[A-Za-z]{1,3}\.\d{1,3}\b|\b[a-z]+:\d{1,2}:[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)*\b")
 
 
+# A coordinate pair written without its space — "(3,7)" — is two numbers, not
+# the decimal-comma 3.7 that "1,5" is in French prose: the Telugu quiz stem
+# "బిందువు (3,7) y=2x+1 …" was refused twice as "maths in the stem altered"
+# for "The point (3, 7) lies on the graph of y = 2x + 1." (Coordinates and
+# Plotting Linear Graphs, te, 2026-10-25). The pair gets its space back.
+_PAIR_RE = re.compile(r"\((\s*-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?\s*)\)")
+
+
 def normalize_numerals(text: str) -> str:
-    """Every digit as ASCII, every decimal mark as ``.``; nothing else moves."""
-    return str(text or "").translate(_DIGIT_MAP)
+    """Every digit as ASCII, every decimal mark as ``.``, a coordinate pair
+    "(3,7)" spaced as "(3, 7)"; nothing else moves."""
+    return _PAIR_RE.sub(r"(\1, \2)", str(text or "").translate(_DIGIT_MAP))
 
 
 # "2D", "3D", "3-D": a WORD (two-/three-dimensional), not a value. A
@@ -752,16 +761,27 @@ def maths_spans(text: str) -> list[str]:
     out: list[str] = []
     text = _conjunctions_as_words(_ordinal_hyphens(normalize_numerals(str(text or ""))))
     for m in _SPAN_RE.finditer(_WORD_HYPHEN_RE.sub("‐", text)):
-        span = _trim_brackets(" ".join(m.group(0).split()))
-        # "a 15-meter pole", "I 3 times": an English article or pronoun set
-        # next to a number with no operator between is not a variable — no
-        # translation keeps it (Pythagoras kit, Arabic, 2026-10-20: "a 15")
-        span = _ARTICLE_RE.sub("", span).strip()
-        # maths carries a digit, or a variable WITH an operator — a bare
-        # operator between words ("A - B" in prose, a stray dash) is not
-        if span and _SPAN_CORE_RE.search(span) and (re.search(r"\d", span) or re.search(r"[A-Za-zα-ωΑ-Ω]", span)):
-            out.append(span)
+        # two expressions set side by side with no operator between — "(3, 7)
+        # y = 2x + 1", when a translation drops the words that stood between
+        # them ("lies on the graph of") — are two spans, not one whose ")"
+        # pairs with nothing (Coordinates and Plotting Linear Graphs, te,
+        # 2026-10-25, refused twice as "unbalanced brackets 7) y = 2x + 1")
+        for part in _JUXTAPOSED_RE.split(" ".join(m.group(0).split())):
+            span = _trim_brackets(part)
+            # "a 15-meter pole", "I 3 times": an English article or pronoun set
+            # next to a number with no operator between is not a variable — no
+            # translation keeps it (Pythagoras kit, Arabic, 2026-10-20: "a 15")
+            span = _ARTICLE_RE.sub("", span).strip()
+            # maths carries a digit, or a variable WITH an operator — a bare
+            # operator between words ("A - B" in prose, a stray dash) is not
+            if span and _SPAN_CORE_RE.search(span) and (re.search(r"\d", span) or re.search(r"[A-Za-zα-ωΑ-Ω]", span)):
+                out.append(span)
     return out
+
+
+# A closing bracket, a space, then a new expression (a letter, a digit or an
+# opening bracket) — no operator joins them, so they are two spans.
+_JUXTAPOSED_RE = re.compile(r"(?<=\))\s+(?=[A-Za-zα-ωΑ-Ω0-9(])")
 
 
 # A decimal COMMA between digits ("273,15", "3,14") is the French, Spanish
