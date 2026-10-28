@@ -46,6 +46,8 @@ app._session_factory = TestSession
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "slow: spawns real processes / runs ffmpeg; still part of the suite")
+    config.addinivalue_line(
+        "markers", "live: spends on a real model; skipped unless ASSET_GATE_LIVE=1")
 
 
 @pytest.fixture(autouse=True)
@@ -154,3 +156,25 @@ def _no_live_visual_library(monkeypatch):
                 "SUPABASE_ANON_KEY", "SUPABASE_KEY"):
         monkeypatch.delenv(var, raising=False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_live_asset_gate(monkeypatch):
+    """The asset gate (shared/asset_gate.py) is ON by default and its model is
+    Claude on Bedrock, whose credentials come from the AWS default chain — a
+    developer machine with ~/.aws/credentials would make every publish and
+    every library hit in the suite a REAL Haiku call. Two defences: the gate
+    is off unless a test switches it on, and the client factory refuses, so a
+    gate test that forgets its fake fails loudly instead of spending. The one
+    live test (ASSET_GATE_LIVE=1) restores both for itself. Verdict caches and
+    the per-lesson budget start empty for every test."""
+    from shared import asset_gate
+    monkeypatch.setenv(asset_gate.GATE_ENV, "0")
+
+    def _refuse():
+        raise RuntimeError("the asset gate reached for a live model inside a test; "
+                           "monkeypatch shared.asset_gate._CLIENT_FACTORY")
+    monkeypatch.setattr(asset_gate, "_CLIENT_FACTORY", _refuse)
+    asset_gate.reset_caches()
+    yield
+    asset_gate.reset_caches()

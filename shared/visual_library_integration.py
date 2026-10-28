@@ -146,6 +146,10 @@ def _hydrate_local_library(key: str, prompt: str, cache: Path,
             md.update({"provenance": "visual_library",
                        "library_asset_id": hit.get("id"),
                        "asset_format": asset_format})
+            if hit.get("gate"):
+                # the asset gate's reuse verdict travels with the file, so the
+                # content check at the seam knows an `unsure` reuse needs it
+                md["gate"] = hit["gate"]
             (target.parent / "meta.json").write_text(json.dumps(md, indent=2), encoding="utf-8")
         logger.info("visual library local hit: %s <- %s (%s, score %.2f)",
                     key, hit.get("asset_key"), asset_format,
@@ -179,6 +183,39 @@ def _cache_provenance(asset_dir: Path) -> str:
     except Exception:  # noqa: BLE001
         return ""
     return str(md.get("provenance") or "") if isinstance(md, dict) else ""
+
+
+def _reuse_suspended(key: str) -> bool:
+    """Whether the asset gate has suspended library reuse for `key` on this
+    thread (its G2 regeneration). Never raises; a gate that cannot answer
+    leaves reuse on."""
+    try:
+        from shared.asset_gate import reuse_suspended
+        return bool(reuse_suspended(key))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _gate_fields(key: str, final: dict[str, Any], hydrated: bool) -> dict[str, Any]:
+    """The decision line's account of the asset gate's reuse check (G1):
+    the verdict on the row served (from the hydrated meta.json), the rows it
+    passed over, and `gate_reason: gate_g1_different` when every candidate
+    was refused and the lesson drew instead of reusing. Never raises."""
+    try:
+        from shared.asset_gate import g1_trail
+        trail = g1_trail(key)
+    except Exception:  # noqa: BLE001
+        trail = {"refused": [], "verdict": None}
+    served = final.get("gate") if isinstance(final.get("gate"), dict) else {}
+    refused = list(trail.get("refused") or [])
+    out: dict[str, Any] = {
+        "gate_g1": served.get("verdict") if hydrated and served else None,
+        "gate_g1_source": served.get("source") if hydrated and served else None,
+        "gate_g1_refused": [r.get("id") or r.get("asset_key") for r in refused],
+    }
+    if refused and not hydrated:
+        out["gate_reason"] = "gate_g1_different"
+    return out
 
 
 def _refresh_from_library(key: str, prompt: str, cache: Path) -> dict[str, Any] | None:
@@ -306,8 +343,15 @@ def _patch() -> None:
         # library's reviewed asset for the same key: refresh it. An entry the
         # library already supplied keeps today's fast path and costs no
         # lookup. See _refresh_from_library.
+        # The asset gate's regeneration (G2, shared/asset_gate.py) draws a
+        # key FRESH: the library has just rejected the picture it served for
+        # it, and a second library answer is what the regeneration exists to
+        # avoid. The generator path below is otherwise unchanged, so the new
+        # picture is still annotated and published (G3 judges it).
+        reuse_off = _reuse_suspended(key)
         refreshed = None
-        if existed_before and not avatar and library_over_generated_cache_enabled() \
+        if existed_before and not avatar and not reuse_off \
+                and library_over_generated_cache_enabled() \
                 and _cache_provenance(asset_dir) == "generated":
             refreshed = _refresh_from_library(key, prompt, cache)
             if refreshed is not None:
@@ -348,6 +392,9 @@ def _patch() -> None:
             # First reuse a previously generated asset already present on the
             # worker. Then try the durable Supabase library. Only after both
             # fail does the original function get permission to call Gemini.
+            elif reuse_off:
+                logger.info("visual library: reuse suspended for %s by the asset gate; "
+                            "drawing fresh", key)
             elif not _hydrate_local_library(key, prompt, cache, "png"):
                 try:
                     hydrate(key, prompt, cache, context(), asset_format="png")
@@ -442,6 +489,11 @@ def _patch() -> None:
             "library_asset_id": final.get("library_asset_id"),
             # a raster asset has vision-annotated regions, not groups
             "group_count": None,
+            # what the asset gate's reuse check (G1) did for this request:
+            # the verdict on the row that was served, and the rows it passed
+            # over as `different`. `gate_reason` names the outcome when the
+            # library had a candidate and the gate refused every one.
+            **_gate_fields(key, final, hydrated),
         })
         return result
 
@@ -467,7 +519,10 @@ def _patch() -> None:
         png = asset_dir / "asset.png"
         existed_before = png.exists()
         hit = None
-        if not existed_before and shelf:
+        if not existed_before and shelf and _reuse_suspended(key):
+            logger.info("visual library: colour shelf suspended for %s by the asset "
+                        "gate; drawing fresh", key)
+        elif not existed_before and shelf:
             try:
                 hit = hydrate_colour(key, prompt, cache, context())
             except Exception as exc:  # noqa: BLE001 — reuse is an optimisation, never a failure
@@ -546,6 +601,7 @@ def _patch() -> None:
             # library's, and see whether the switch was on for this request
             "colour": True,
             "colour_shelf": shelf,
+            **_gate_fields(key, final, hydrated),
         })
         return result
 

@@ -1130,6 +1130,10 @@ def compose_episode_videos(
     _gate_missing: dict[str, str] = {}
     _gate_total = 0
     _gate_fault: Exception | None = None
+    # THE CONTENT GATE (shared/asset_gate.py, G2): key -> why the picture is
+    # not the thing the plan labels, after one regeneration. Raised with the
+    # image gate below, outside the swallowing except.
+    _content_refused: dict[str, str] = {}
     if _scene_flag():
         try:
             from spike.scene_engine.asset_warm import (collect_lesson_assets,
@@ -1192,6 +1196,32 @@ def compose_episode_videos(
                 # promise (the parts it points at) and the artwork's delivery
                 # (the regions it actually has) are both in hand and both still
                 # free to change. The check itself costs nothing.
+                #
+                # First the CONTENT gate (shared/asset_gate.py, G2): is each
+                # picture the thing the plan is about to label? One vision
+                # call per distinct diagram, cached on the row. A wrong
+                # picture is rejected in the library, redrawn once with reuse
+                # off and re-judged; still wrong, and the lesson is refused
+                # below with the image gate (a bad video is worse than no
+                # video). Then the anchor repair, so a redrawn picture's
+                # regions are checked like any other's.
+                from shared import asset_gate as _asset_gate
+                from spike.scene_engine.anchor_repair import scenes_of as _scenes_of
+                _content = _asset_gate.verify_lesson_assets(
+                    _entries, scenes=_scenes_of(slide_segments, script_segments),
+                    pending_keys=_pending_keys)
+                _content_refused = dict(_content.get("refused") or {})
+                phase_clock.count("asset_gate_checked", int(_content.get("checked") or 0))
+                phase_clock.count("asset_gate_regenerated",
+                                  len(_content.get("regenerated") or ()))
+                if _content_refused and _gate_mode == "strict":
+                    raise _GateRefusal()
+                if _content_refused:
+                    logger.warning("IMAGE_GATE=warn: strict would have refused this "
+                                   "lesson — the asset gate rejected %d picture(s): %s",
+                                   len(_content_refused),
+                                   "; ".join(f"{k}={r}" for k, r in
+                                             sorted(_content_refused.items())[:6]))
                 _repair_anchor_regions(slide_segments, script_segments,
                                        _pending_keys)
         except _GateRefusal:
@@ -1204,9 +1234,11 @@ def compose_episode_videos(
         # warm-up fault never fails a lesson. A strict gate cannot honour
         # that: a lesson whose pictures were never checked is exactly the
         # lesson it exists to refuse. Both refusals carry the cause.
-        from spike.scene_engine.asset_warm import ImagesIncomplete
+        from spike.scene_engine.asset_warm import ContentRefused, ImagesIncomplete
         if _gate_missing:
             raise ImagesIncomplete(_gate_missing, _gate_total)
+        if _content_refused:
+            raise ContentRefused(_content_refused, _gate_total)
         if _gate_fault is not None:
             raise ImagesIncomplete(
                 {"<warm pass>": f"failed: {type(_gate_fault).__name__}"},

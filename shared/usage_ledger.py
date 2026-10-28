@@ -51,7 +51,25 @@ def _blank() -> dict:
             "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "cost_usd": 0.0,
             "by_model": {},
             "image_calls": 0, "images": 0, "images_usd": 0.0, "images_by_model": {},
-            "tts_calls": 0, "tts_chars": 0, "tts_usd": 0.0, "tts_by_provider": {}}
+            "tts_calls": 0, "tts_chars": 0, "tts_usd": 0.0, "tts_by_provider": {},
+            # the asset gate's share of the TEXT spend above (shared/asset_gate.py):
+            # a split-out of cost_usd, never added to total_usd
+            "gate_calls": 0, "gate_usd": 0.0, "gate_by_check": {}}
+
+
+def _add_gate(tot: dict, entry: dict) -> None:
+    """A `service="asset_gate"` line. The call's tokens and money were ALREADY
+    folded into the text buckets by ClaudeClient.track_tokens (the gate is an
+    ordinary ClaudeClient caller); this line only says which CHECK spent it,
+    so the kit's cost line can show the gate on its own without counting the
+    same dollars twice."""
+    usd = _money(entry)
+    check = str(entry.get("check") or "unknown")
+    row = tot["gate_by_check"].setdefault(check, {"calls": 0, "usd": 0.0})
+    tot["gate_calls"] += 1
+    tot["gate_usd"] = round(tot["gate_usd"] + usd, 6)
+    row["calls"] += 1
+    row["usd"] = round(row["usd"] + usd, 6)
 
 
 def _money(entry: dict) -> float:
@@ -129,6 +147,8 @@ def add(entry: dict, generation_id: str | None = None) -> None:
                 _add_image(tot, entry)
             elif service == "tts":
                 _add_tts(tot, entry)
+            elif service == "asset_gate":
+                _add_gate(tot, entry)
             else:
                 _add_text(tot, entry)
         except (TypeError, ValueError):
