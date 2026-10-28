@@ -46,3 +46,11 @@ def test_findings_status_follows_the_corrections_record():
     out = bi._findings("w", "r2", 3, audit, corr)
     assert [f["status"] for f in out] == ["applied", "rejected", "deferred"]
     assert out[0]["decision"]["verified"] is True
+
+
+def test_file_kinds_match_whole_words():
+    # "log" inside "Biology" once filed every full manuscript as a report
+    assert bi._kind_of("revision-4-1/SketchCast Biology - Cells - Revision 4.1 (digital).pdf") == "book_pdf"
+    assert bi._kind_of("rev4/Revision 4 - Correction log.pdf") == "qa_report"
+    assert bi._kind_of("revision-4-1/Revision 4.1 - Addendum and QA.pdf") == "qa_report"
+    assert bi._kind_of("cells-revision-4.1-kdp-interior.pdf") == "kdp"

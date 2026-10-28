@@ -42,6 +42,7 @@ import hashlib
 import json
 import logging
 import mimetypes
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -464,7 +465,8 @@ def _kind_of(rel: str) -> str:
     if "kdp" in name:
         return "kdp"
     if ext == "pdf":
-        if any(w in name for w in ("log", "report", "matrix", "addendum", "acceptance", "qa", "before and after")):
+        # whole words only: "log" inside "Biology" once filed every full manuscript as a report
+        if re.search(r"(?<![a-z])(log|report|matrix|addendum|acceptance|qa|before and after)(?![a-z])", name):
             return "qa_report"
         return "book_pdf"
     return {"json": "record", "jsonl": "record", "png": "image", "sql": "sql", "html": "page", "md": "note",
@@ -484,6 +486,8 @@ def _artifacts(book: Path, cfg: dict, uid: str, slug: str, t: dict) -> tuple[lis
             continue
         if not any(fnmatch.fnmatch(p.name.lower(), g) for g in rules["include"]):
             continue
+        if rules.get("keep") and not any(fnmatch.fnmatch(rel.lower(), g.lower()) for g in rules["keep"]):
+            continue                      # not on the keep list: the database or a later revision covers it
         sha, size = _file_sha(p), p.stat().st_size
         by_sha[sha].append(rel)
         first_copy = len(by_sha[sha]) == 1
@@ -498,7 +502,55 @@ def _artifacts(book: Path, cfg: dict, uid: str, slug: str, t: dict) -> tuple[lis
                                    "sha256": sha, "content_type": ctype, "storage": "s3", "storage_key": key})
         if first_copy:
             uploads.append({"path": str(p), "key": key, "bytes": size, "sha256": sha, "content_type": ctype})
+    _screen_copies(rules.get("screen_copy"), slug, t["pub_artifacts"], uploads)
     return uploads, [v for v in by_sha.values() if len(v) > 1]
+
+
+def screen_copy(src: Path, dst: Path, dpi: int) -> Path:
+    """A copy for reading on screen: images resampled to `dpi`, text and vector art untouched. garbage=1, not 4
+    (4 breaks the Type 3 heading font, as the email copy of the first draft showed)."""
+    import fitz
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_suffix(".tmp.pdf")
+    doc = fitz.open(src)
+    doc.rewrite_images(dpi_threshold=dpi + 20, dpi_target=dpi, quality=80)
+    doc.save(tmp, garbage=1, deflate=True)
+    pages = doc.page_count
+    doc.close()
+    check = fitz.open(tmp)
+    ok = check.page_count == pages
+    check.close()
+    if not ok:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"screen copy of {src.name} lost pages")
+    tmp.replace(dst)
+    return dst
+
+
+def _screen_copies(cfg: dict | None, slug: str, arts: list[dict], uploads: list[dict]) -> None:
+    """Large PDFs get a screen copy (cached by the source's sha256, so a rebuild reuses it); the artifact keeps
+    its full file as the download and gains `screen_key` for viewing."""
+    if not cfg:
+        return
+    cache = OUT / "book-app" / "screens" / slug
+    made: dict[str, tuple[str, int]] = {}
+    by_key = {u["key"]: u for u in uploads}
+    for a in arts:
+        if not a["rel_path"].lower().endswith(".pdf") or (a["bytes"] or 0) < cfg["min_bytes"]:
+            continue
+        if a["sha256"] not in made:
+            src = Path(by_key[a["storage_key"]]["path"]) if a["storage_key"] in by_key else None
+            if src is None:
+                continue
+            dst = cache / f"{a['sha256'][:16]}-{cfg['dpi']}.pdf"
+            if not dst.exists():
+                log.info("screen copy of %s", a["rel_path"])
+                screen_copy(src, dst, cfg["dpi"])
+            key = a["storage_key"].replace(f"books/{slug}/", f"books/{slug}/screen/", 1)
+            uploads.append({"path": str(dst), "key": key, "bytes": dst.stat().st_size, "sha256": _file_sha(dst),
+                            "content_type": "application/pdf"})
+            made[a["sha256"]] = (key, dst.stat().st_size)
+        a["screen_key"], a["screen_bytes"] = made[a["sha256"]]
 
 
 # ── load ─────────────────────────────────────────────────────────────────────
