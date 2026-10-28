@@ -1,0 +1,339 @@
+{
+  "_note": "Import map for one book folder into the book app's store (books.sketchcast.app, Slice 1, 2026-10-27). Facts that live only in reports or the founder's words (Gates A/B, KDP decisions, open items, stage dates) are recorded here from HANDOVER-BIOLOGY-TO-BOOK-EDITOR.md; everything else is read from the book folder.",
+  "slug": "cells-structure-function-organisation",
+  "work_uid": "cells-structure-function-organisation",
+  "title": "Cells – Structure, Function and Organisation",
+  "subtitle": "A Biology Study Guide for Ages 11–14",
+  "subject_strand": "science/biology",
+  "status": "compiled",
+  "chapters": [
+    1,
+    10
+  ],
+  "revisions": [
+    {
+      "key": "r0",
+      "label": "First approved drafts",
+      "summary": "Each chapter's first draft before expansion (Gate D packets).",
+      "snapshot": "chNN-draft.approved-v1.json"
+    },
+    {
+      "key": "r1",
+      "label": "First draft manuscript",
+      "summary": "Expanded, unique, themed: the 195-page first draft.",
+      "snapshot": "rev2/r1-snapshot/chNN-draft.json"
+    },
+    {
+      "key": "r2",
+      "label": "Revision 2",
+      "summary": "Independent academic audit (Gemini 3.5 Flash + Claude Opus 5.5), corrections, coverage, QA.",
+      "snapshot": "rev3/r2-snapshot/chNN-draft.json"
+    },
+    {
+      "key": "r3",
+      "label": "Revision 3",
+      "summary": "Answer keys verified, evidence-based coverage, acceptance.",
+      "snapshot": "rev4/r3-snapshot/chNN-draft.json"
+    },
+    {
+      "key": "r4",
+      "label": "Revision 4",
+      "summary": "Verified label anchors, picture questions, osmosis, final audit, 8 restored figures.",
+      "snapshot": "rev4/pre-gaps/chNN-draft.json"
+    },
+    {
+      "key": "r4.1",
+      "label": "Revision 4.1",
+      "summary": "Coverage gaps closed (9TWSa.03, 7TWSc.05, 9Bp.01); coverage table fixed.",
+      "snapshot": "chNN-draft.json"
+    }
+  ],
+  "current_revision": "r4.1",
+  "book_approval_revisions": {
+    "rev4": "r4",
+    "rev4-1": "r4.1"
+  },
+  "audits": [
+    {
+      "revision_key": "r2",
+      "audit": "rev2/audit",
+      "corrections": "rev2/corrections/chNN.json"
+    },
+    {
+      "revision_key": "r4",
+      "audit": "rev4/audit",
+      "corrections": "rev4/corrections/chNN.json"
+    }
+  ],
+  "stages": [
+    {
+      "key": "scope",
+      "title": "Scope, blueprint and coverage plan",
+      "summary": "Gates A and B: the book's scope from Cambridge 0893 Stages 7–9, the blueprint and the catalogue completion plan.",
+      "on": [
+        "2026-10-24",
+        "2026-10-24"
+      ],
+      "sources": [
+        "../../STAGE-C-PLAN.md",
+        "../../FINDINGS.md",
+        "../../MORNING-BRIEFING.md"
+      ]
+    },
+    {
+      "key": "drafting",
+      "title": "Chapter drafting",
+      "summary": "Each chapter drafted by Claude Sonnet 5.5 from its pinned dossier and gated by Gemini (content, visual, assessment).",
+      "on": [
+        "2026-10-25",
+        "2026-10-25"
+      ],
+      "revision_key": "r0",
+      "sources": [
+        "chNN-dossier.json",
+        "chNN-draft.approved-v1.json",
+        "book-run-*.json"
+      ]
+    },
+    {
+      "key": "expansion",
+      "title": "Expansion to 6–8 teaching pages with new images",
+      "summary": "Approved blocks locked; new teaching and new book illustrations through the same gates.",
+      "on": [
+        "2026-10-25",
+        "2026-10-26"
+      ],
+      "sources": [
+        "expanded/",
+        "chNN-expand-work.json"
+      ]
+    },
+    {
+      "key": "theme_gate_d",
+      "title": "Theme and chapter Gate D packets",
+      "summary": "The life theme (ivory paper, stepped tabs, 3 mm bleed) and one Gate D packet per chapter.",
+      "on": [
+        "2026-10-25",
+        "2026-10-26"
+      ],
+      "sources": [
+        "final-theme/",
+        "chNN-gate-d/"
+      ]
+    },
+    {
+      "key": "uniqueness",
+      "title": "Uniqueness",
+      "summary": "No question, Think box or picture repeats an earlier chapter (opener art included).",
+      "on": [
+        "2026-10-26",
+        "2026-10-26"
+      ],
+      "sources": [
+        "uniqueness-report.json"
+      ]
+    },
+    {
+      "key": "first_draft",
+      "title": "First draft manuscript",
+      "summary": "The compiled 195-page first draft, sent as a publisher-neutral draft.",
+      "on": [
+        "2026-10-26",
+        "2026-10-26"
+      ],
+      "revision_key": "r1",
+      "sources": [
+        "first-draft-manuscript/"
+      ]
+    },
+    {
+      "key": "revision_2",
+      "title": "Revision 2: academic audit and corrections",
+      "summary": "Two independent validators (never the author model), adjudication, unit-by-unit corrections, verification, coverage matrix, QA report.",
+      "on": [
+        "2026-10-26",
+        "2026-10-26"
+      ],
+      "revision_key": "r2",
+      "sources": [
+        "rev2/",
+        "revision-2/"
+      ]
+    },
+    {
+      "key": "revision_3",
+      "title": "Revision 3: answer keys and acceptance",
+      "summary": "Answer keys verified, evidence-based coverage, acceptance report.",
+      "on": [
+        "2026-10-26",
+        "2026-10-26"
+      ],
+      "revision_key": "r3",
+      "sources": [
+        "rev3/",
+        "revision-3/"
+      ]
+    },
+    {
+      "key": "revision_4",
+      "title": "Revision 4: label anchors, picture questions, final audit",
+      "summary": "Verified label anchors (annotations.json), picture questions, osmosis, final audit, 8 restored figures.",
+      "on": [
+        "2026-10-26",
+        "2026-10-26"
+      ],
+      "revision_key": "r4",
+      "sources": [
+        "rev4/",
+        "revision-4/",
+        "annotations.json"
+      ]
+    },
+    {
+      "key": "revision_4_1",
+      "title": "Revision 4.1: coverage gaps closed",
+      "summary": "Teaching and questions for 9TWSa.03, 7TWSc.05 and 9Bp.01; coverage table bug fixed.",
+      "on": [
+        "2026-10-27",
+        "2026-10-27"
+      ],
+      "revision_key": "r4.1",
+      "sources": [
+        "rev4-1/",
+        "revision-4-1/"
+      ]
+    },
+    {
+      "key": "kdp",
+      "title": "KDP paperback edition",
+      "summary": "Interior, cover and sheet built by the engine. A PROOF until ISBN, edition code, price and portal address are set. Upload is manual by the founder.",
+      "on": [
+        "2026-10-27",
+        null
+      ],
+      "status": "open",
+      "revision_key": "r4.1",
+      "sources": [
+        "kdp.json",
+        "book/kdp-facts.json",
+        "kdp-build.log"
+      ]
+    },
+    {
+      "key": "sk_export",
+      "title": "SK export",
+      "summary": "The SK edition bundle and its import SQL. Not loaded into production (separate founder decision).",
+      "on": [
+        "2026-10-27",
+        null
+      ],
+      "status": "open",
+      "revision_key": "r4.1",
+      "sources": [
+        "sk-bundle.json",
+        "sk-import-rev4-1.sql"
+      ]
+    }
+  ],
+  "approvals": [
+    {
+      "kind": "gate_a",
+      "scope": "book",
+      "stage_key": "scope",
+      "label": "Gate A: content-first architecture",
+      "approved_by": "founder",
+      "approved_on": "2026-10-24",
+      "basis": "Architecture rev 2 approved (content-first, D2, D12–D14)."
+    },
+    {
+      "kind": "gate_b",
+      "scope": "book",
+      "stage_key": "scope",
+      "label": "Gate B: scope (blueprint revision 4)",
+      "approved_by": "founder",
+      "approved_on": "2026-10-24",
+      "basis": "Gate B approved for Biology blueprint r4."
+    },
+    {
+      "kind": "kdp",
+      "scope": "book",
+      "stage_key": "kdp",
+      "revision_key": "r4.1",
+      "label": "KDP edition decisions P1–P7",
+      "approved_by": "founder",
+      "approved_on": "2026-10-27",
+      "basis": "Book distribution and access plan P1–P7 approved; upload stays manual."
+    }
+  ],
+  "open_items": [
+    {
+      "key": "kdp_isbn",
+      "title": "KDP: ISBN",
+      "detail": "P4: ISBN from Malaysia PNM. The current proof still shows 'ISBN ISBN' on the copyright page (fixed in the engine; the next build clears it).",
+      "owner": "founder"
+    },
+    {
+      "key": "kdp_price",
+      "title": "KDP: price",
+      "detail": "P3: list price not set.",
+      "owner": "founder"
+    },
+    {
+      "key": "kdp_book_code",
+      "title": "KDP: book (edition) code",
+      "detail": "Issued by the SK session once BOOK_CODE_SECRET is set.",
+      "owner": "SK session"
+    },
+    {
+      "key": "kdp_portal",
+      "title": "KDP: portal address",
+      "detail": "Planned: app.sketchcast.app/activate, button 'Activate my book' (app PR #143).",
+      "owner": "SK session"
+    },
+    {
+      "key": "sk_loading",
+      "title": "SK: only Chapter 2 is loaded in production",
+      "detail": "The importer (app #139) has run only on a scratch DB. Chapter 10 (review) has no catalogue topic, so its questions have no bank; most units have fewer than 3 auto-markable items.",
+      "owner": "SK session"
+    },
+    {
+      "key": "publisher_pack",
+      "title": "Publisher send-out pack",
+      "detail": "Parked by the founder.",
+      "owner": "founder",
+      "status": "parked"
+    }
+  ],
+  "artifacts": {
+    "include": [
+      "*.pdf",
+      "*.html",
+      "*.json",
+      "*.sql",
+      "*.md",
+      "*.txt",
+      "*.log",
+      "*.png",
+      "*.jsonl"
+    ],
+    "exclude_dirs": [
+      "book",
+      "paper-samples",
+      "review-pages"
+    ],
+    "exclude_files": [
+      "chNN.html",
+      "chNN.pdf",
+      "chNN-print.html",
+      "chNN-print.pdf",
+      "ch01-194632.pdf",
+      "ch01-194644.pdf",
+      "ch01-shot.png",
+      "chNN-gate-d-review.html"
+    ],
+    "_why": "Deliverables only (founder 2026-10-27). book/ holds build intermediates; chNN.* are chapter build outputs the engine re-makes (the Gate D packets keep each chapter's reviewed PDFs); paper-samples/review-pages are design explorations; chNN-gate-d-review.html is the same packet page kept inside chNN-gate-d/.",
+    "include_paths": [
+      "book/kdp-facts.json"
+    ]
+  }
+}
