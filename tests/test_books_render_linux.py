@@ -79,3 +79,20 @@ def test_the_render_proof_stage(tmp_path):
     (tmp_path / "proof.json").write_text(json.dumps({"chapter": 1, "renders": [
         {"font": "Literata", "folder": "literata", "pages": 9, "hard_defects": 0, "embedded_fonts": ["x"]}]}))
     assert stage.collect(tmp_path) == (0.0, [], {"chapter": 1, "renders": [{"font": "Literata", "pages": 9, "hard_defects": 0}]})
+
+
+def test_source_serif_4_follows_every_windows_only_serif():
+    """Founder 2026-10-29 (D3): Source Serif 4 replaces Sitka (and Georgia) on the books runner; this PC keeps
+    rendering the approved Biology in Sitka, because Sitka stays first in the stack."""
+    import json
+    from publishing.manuscript.theme import THEMES
+    cfg = json.loads(THEMES.read_text(encoding="utf-8"))
+    life = cfg["themes"]["life"]
+    assert life["heading_font"].startswith("'Sitka Heading'")
+    for t in cfg["themes"].values():
+        stacks = [t["heading_font"], ((t.get("page") or {}).get("folio") or {}).get("font", "")]
+        for stack in stacks:
+            if any(f in stack for f in ("Sitka", "Georgia")):
+                assert "'Source Serif 4'" in stack, stack
+                first_open = stack.index("'Source Serif 4'")
+                assert all(stack.index(f) < first_open for f in ("Sitka",) if f in stack), stack
