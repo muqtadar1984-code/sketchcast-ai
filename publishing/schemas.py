@@ -6,6 +6,7 @@ brief's strand prefixes, the capability kinds a blueprint asks for).
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -26,6 +27,19 @@ CAPABILITY_KINDS = {
 }
 
 
+class Waiver(BaseModel):
+    """A person's decision that one failing check does not block one book (founder 2026-10-29). The check is still
+    run and recorded; its failure becomes a warning that names who waived it, when and why."""
+    work: str                                # the book's slug — a waiver never reaches another book
+    topic_id: str
+    check: str                               # a CheckCode, e.g. "B6"
+    language: str | None = "en"
+    sub_status: str | None = None            # only this kind of failure (e.g. "stale_article"); None = any
+    by: str
+    date: str
+    reason: str
+
+
 class ReadinessPolicy(BaseModel):
     id: str
     languages: list[str]
@@ -35,6 +49,7 @@ class ReadinessPolicy(BaseModel):
     require_figures_rendered: bool = True
     thumbnail_warning_ok: bool = True
     notes: str = ""
+    waivers: list[Waiver] = []
 
     @field_validator("languages")
     @classmethod
@@ -46,7 +61,11 @@ class ReadinessPolicy(BaseModel):
     @classmethod
     def load(cls, path: Path | None = None) -> "ReadinessPolicy":
         p = path or ROOT / "config" / "readiness_policy.json"
-        return cls.model_validate(json.loads(p.read_text(encoding="utf-8")))
+        policy = cls.model_validate(json.loads(p.read_text(encoding="utf-8")))
+        # waivers editors record in the book app (pub_readiness_waivers), handed over by the books runner
+        extra = json.loads(os.getenv("PUBLISH_WAIVERS") or "[]")
+        policy.waivers += [Waiver.model_validate(w) for w in extra]
+        return policy
 
 
 class Directives(BaseModel):
