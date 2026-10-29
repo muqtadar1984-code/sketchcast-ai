@@ -32,6 +32,9 @@ class Stage:
     uses_models: bool = False
     writes_source: bool = False        # S1 stages only read the book; a stage that edits it comes in S3
     needs_assets: bool = False         # pulls the shared book-assets/ (the book's own pictures) as well
+    needs_source: bool = True          # pulls the book's source set (a book not drafted yet has none)
+    uses_pubdb: bool = False           # restores the shared publishing database (publishing/runner/pubdb.py)
+    writes_pubdb: bool = False         # … and pushes it back afterwards; one such run at a time
     step: str = ""
     params: dict = field(default_factory=dict)   # name → default, validated before the run starts
 
@@ -77,6 +80,11 @@ def _proof_collect(out: Path) -> tuple[float, list[dict], dict]:
                      "renders": [{k: r[k] for k in ("font", "pages", "hard_defects")} for r in proof["renders"]]}
 
 
+def _readiness_collect(out: Path) -> tuple[float, list[dict], dict]:
+    r = json.loads((out / "readiness.json").read_text(encoding="utf-8"))
+    return 0.0, [], {k: r[k] for k in ("pct", "ready", "outstanding_by_state")}
+
+
 def _check_collect(out: Path) -> tuple[float, list[dict], dict]:
     return 0.0, [], json.loads((out / "check.json").read_text(encoding="utf-8"))["summary"]
 
@@ -113,7 +121,16 @@ STAGES: dict[str, Stage] = {s.key: s for s in [
         argv=lambda slug, p, rel: [sys.executable, "-m", "publishing.runner.render_proof", slug, rel, str(int(p["chapter"]))],
         collect=_proof_collect,
     ),
+    Stage(
+        key="readiness", title="Readiness re-check", step="audit", needs_source=False, uses_pubdb=True,
+        writes_pubdb=True,
+        # free: a fresh catalogue snapshot (GET-only) + the readiness audit, recorded in the shared publishing database
+        argv=lambda slug, p, rel: [sys.executable, "-m", "publishing.runner.readiness", slug, rel],
+        collect=_readiness_collect,
+    ),
 ]}
+
+WRITES_PUBDB = [k for k, s in STAGES.items() if s.writes_pubdb]
 
 
 def validate(stage_key: str, params: dict) -> tuple[Stage, dict]:

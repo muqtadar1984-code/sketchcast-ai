@@ -20,7 +20,7 @@ import time
 import traceback
 from pathlib import Path
 
-from publishing.runner import files, stages
+from publishing.runner import files, pubdb, stages
 from publishing.runner.store import FileStore, RestStore, now
 
 HEARTBEAT_S, FLUSH_S, FLUSH_LINES = 15, 2.0, 25
@@ -71,16 +71,30 @@ def execute(store, bucket, run_id: int, work: Path) -> str:
         return "skipped"
     log = EventLog(store, run_id)
     status, usd, summary, error = "failed", None, {}, None
+    pg = None
     try:
         stage, params = stages.validate(run["stage_key"], run.get("params") or {})
+        work.mkdir(parents=True, exist_ok=True)
         slug = store.work_slug(run["work_uid"])
         run_rel = f"runs/run-{run_id}"
         book = work / "manuscripts" / slug
-        log.add(f"{stage.title}: pulling the book's source set", kind="progress")
-        store.update(run_id, progress={"step": "pull", "note": "pulling the book's files"})
-        got = files.pull_source(bucket, slug, book)
-        log.add(f"pulled {got['files']} files ({got['bytes'] / 1e6:.1f} MB), every one hash-checked", kind="progress")
+        if stage.needs_source:
+            log.add(f"{stage.title}: pulling the book's source set", kind="progress")
+            store.update(run_id, progress={"step": "pull", "note": "pulling the book's files"})
+            got = files.pull_source(bucket, slug, book)
+            log.add(f"pulled {got['files']} files ({got['bytes'] / 1e6:.1f} MB), every one hash-checked", kind="progress")
         extra_env = {}
+        if stage.uses_pubdb:
+            if stage.writes_pubdb:
+                busy = store.others_running(run_id, stages.WRITES_PUBDB)
+                if busy:
+                    raise RuntimeError(f"run #{busy[0]} is writing the publishing database; start this one when it ends")
+            pulled = pubdb.pull(bucket, work / "pubdb.sql.gz")
+            pg, pg_url = pubdb.start_server(work / "pgdata")
+            pubdb.restore(work / "pubdb.sql.gz", pg_url)
+            extra_env["PUBDB_URL"] = pg_url
+            log.add(f"restored the publishing database ({pulled['bytes'] / 1e6:.1f} MB, {pulled['sha256'][:12]}, "
+                    f"from {pulled['source']} {pulled['taken_at'][:16]})", kind="progress")
         if stage.needs_assets:
             assets = work / "book-assets"
             got = files.pull_assets(bucket, assets)
@@ -136,6 +150,10 @@ def execute(store, bucket, run_id: int, work: Path) -> str:
             usd, lines, summary = stage.collect(book / run_rel)
             store.insert("pub_cost_lines", [{**ln, "work_uid": run["work_uid"], "stage_key": run["stage_key"],
                                              "run_id": run_id, "provider": None} for ln in lines])
+            if stage.writes_pubdb:
+                pubdb.dump(pg_url, work / "pubdb-out.sql.gz")
+                m = pubdb.push(bucket, work / "pubdb-out.sql.gz", f"run:{run_id}", pulled["sha256"])
+                log.add(f"saved the publishing database back ({m['sha256'][:12]})", kind="progress")
             status = "done"
         store.upsert_step({"run_id": run_id, "chapter": None, "step": stage.step, "status": status if status != "cancelled" else "failed",
                            "finished_at": now(), "usd": usd, "error": error,
@@ -144,6 +162,11 @@ def execute(store, bucket, run_id: int, work: Path) -> str:
         error = f"{type(e).__name__}: {e}"
         log.add(traceback.format_exc(), level="error", kind="error")
     finally:
+        if pg is not None:
+            try:
+                pg.cleanup()                  # stop the run's embedded Postgres
+            except Exception:  # noqa: BLE001 — the task ends anyway
+                pass
         log.add(f"run {status}" + (f" · ${usd:.2f}" if usd else ""), level="error" if status == "failed" else "info",
                 kind="progress")
         log.flush()

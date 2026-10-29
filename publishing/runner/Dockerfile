@@ -4,8 +4,8 @@
 #   docker build -f publishing/runner/Dockerfile -t sketchcast-books-runner .
 #
 # Railway never sees this file: it builds the worker with Nixpacks from the repo root.
-# Drafting on the server (S3, next) still adds: COPY spike/ (book_assets imports spike.scene_engine inside its
-# image functions) and pgserver for the local catalogue mirror.
+# The local publishing database runs inside each run as an embedded Postgres (pgserver, runner-requirements.txt);
+# drafting's picture code lives in spike/scene_engine (book_assets imports it inside its image functions).
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 PYTHONIOENCODING=utf-8 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -34,6 +34,8 @@ RUN pip install -r requirements.txt -r runner-requirements.txt
 # only what a book run imports: the engine, the shared model clients, the prompts and configs they read
 COPY publishing/ publishing/
 COPY shared/ shared/
+COPY spike/__init__.py spike/__init__.py
+COPY spike/scene_engine/ spike/scene_engine/
 
 ENV PUBLISH_BROWSER=/usr/bin/chromium
 RUN useradd --create-home runner && chown -R runner /app
