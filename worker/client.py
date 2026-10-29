@@ -67,7 +67,13 @@ OBSERVER_JOB_TYPES = frozenset({"support_diagnose", "issue_resolve", "topic_harv
                                 "kit_translate",
                                 # the Pinterest Pin Engine (app 0154): they read
                                 # catalogue rows and write pinterest_* tables
-                                "pin_draft", "pin_post", "pin_boards", "pin_recheck", "pin_stats"})
+                                "pin_draft", "pin_post", "pin_boards", "pin_recheck", "pin_stats",
+                                # deck pages for the Board (2026-10-28): reads a
+                                # FINISHED deck's pptx and writes only its
+                                # slide_png / deck_pages_json rows; were it a
+                                # builder, claiming it would relabel the deck and
+                                # process_generation would REBUILD it
+                                "deck_pages"})
 
 
 def generation_to_mirror(job: Optional[dict]) -> Optional[str]:

@@ -809,6 +809,31 @@ def _find_segments(o):
     return None
 
 
+def _deck_pages_after_build(sb: Client, generation_id: str, base: str, deck_path, dest: str,
+                            tmp: str | Path) -> None:
+    """The deck's pages for the Classroom Board (agent5_slides.deck_pages):
+    a PNG per slide plus the text map, rendered right after the deck_pptx row
+    is written. BEST-EFFORT by design — the .pptx IS the deck job's artifact
+    and is already registered; a missing renderer, a slow one (over
+    BUILD_RENDER_SECONDS) or a storage hiccup costs the Board its pages, which
+    a ``deck_pages`` job can make later, never the teacher their deck.
+    ``DECK_PAGES=0`` switches it off."""
+    if os.getenv("DECK_PAGES", "1") == "0":
+        return
+    t0 = _time.monotonic()
+    try:
+        from agent5_slides import deck_pages as DP
+
+        owner_id = base[: -len(generation_id) - 1] if base.endswith("/" + generation_id) else base.split("/", 1)[0]
+        res = DP.export_deck_pages(Path(deck_path), Path(tmp) / "deck_pages",
+                                   timeout=DP.BUILD_RENDER_SECONDS, reuse_qa=True)
+        DP.publish_deck_pages(sb, generation_id, owner_id, dest, res)
+    except Exception as exc:  # noqa: BLE001 — a bonus, never the deck job's failure
+        logger.warning("deck %s: Board pages not made after %.1fs (%s: %s); a deck_pages job can make "
+                       "them later", generation_id, _time.monotonic() - t0, type(exc).__name__,
+                       str(exc)[:300])
+
+
 def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chapter: dict,
                    analysis: dict, client, params: dict, branding: dict, lesson_lang: str,
                    lesson_dir: str, tmp: str | Path, base: str, unit_label: str,
@@ -856,6 +881,7 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
         dest = f"{base}/deck.pptx"
         db.upload_artifact(sb, deck_path, dest)
         db.add_artifact_row(sb, generation_id, "deck_pptx", dest)
+        _deck_pages_after_build(sb, generation_id, base, deck_path, dest, tmp)
         db.set_progress(sb, job_id, 96)
         return f"{book.get('title', 'Document')} · {unit_label} · Slide deck"
 
@@ -896,6 +922,7 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
         dest = f"{base}/deck.pptx"
         db.upload_artifact(sb, deck_path, dest)
         db.add_artifact_row(sb, generation_id, "deck_pptx", dest)
+        _deck_pages_after_build(sb, generation_id, base, deck_path, dest, tmp)
         db.set_progress(sb, job_id, 96)
         return f"{book.get('title', 'Document')} · {unit_label} · Slide deck"
 
@@ -946,6 +973,7 @@ def _generate_deck(sb: Client, job_id: str, generation_id: str, book: dict, chap
     dest = f"{base}/deck.pptx"
     db.upload_artifact(sb, deck_path, dest)
     db.add_artifact_row(sb, generation_id, "deck_pptx", dest)
+    _deck_pages_after_build(sb, generation_id, base, deck_path, dest, tmp)
     db.set_progress(sb, job_id, 96)
     return f"{book.get('title', 'Document')} · {unit_label} · Slide deck"
 
