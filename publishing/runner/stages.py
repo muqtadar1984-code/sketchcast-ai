@@ -36,6 +36,7 @@ class Stage:
     source_optional: bool = False      # … and may start without one (drafting a new book's first chapter)
     uses_pubdb: bool = False           # restores the shared publishing database (publishing/runner/pubdb.py)
     writes_pubdb: bool = False         # … and pushes it back afterwards; one such run at a time
+    into_book: bool = False            # the drafted chapter becomes part of the book (publishing/runner/book_chapters)
     # files of an EARLIER run this stage starts from: (slug, params) -> [(bucket key, path under the book folder)]
     prefetch: Callable[[str, dict], list[tuple[str, str]]] | None = None
     step: str = ""
@@ -170,6 +171,16 @@ STAGES: dict[str, Stage] = {s.key: s for s in [
         needs_assets=True, uses_pubdb=True, source_optional=True, params={"chapter": 1},
         # paid: the engine's one-pass draft + render, written to the run folder only; no new pictures; the publishing
         # database is read (dossier, Gate R pins) but not pushed back
+        argv=lambda slug, p, rel: [sys.executable, "-m", "publishing.runner.draft", slug, rel, str(int(p["chapter"]))],
+        collect=_draft_collect,
+    ),
+    Stage(
+        key="draft_chapter", title="Draft a chapter into the book", step="drafting", uses_models=True,
+        needs_assets=True, uses_pubdb=True, writes_pubdb=True, source_optional=True, into_book=True,
+        params={"chapter": 1},
+        # paid: the same one-pass draft + render as the trial, then the chapter joins the book (its revision on the
+        # Chapters board, its files in the source set, its units in the publishing database). Refused at $0 when the
+        # chapter's current text is Gate D approved. No new pictures (production image jobs stay with quiet hours).
         argv=lambda slug, p, rel: [sys.executable, "-m", "publishing.runner.draft", slug, rel, str(int(p["chapter"]))],
         collect=_draft_collect,
     ),

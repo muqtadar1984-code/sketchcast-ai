@@ -79,6 +79,11 @@ def execute(store, bucket, run_id: int, work: Path) -> str:
         slug = store.work_slug(run["work_uid"])
         run_rel = f"runs/run-{run_id}"
         book = work / "manuscripts" / slug
+        if stage.into_book:
+            from publishing.runner import book_chapters
+            refused = book_chapters.refusal(store, run["work_uid"], int(params["chapter"]))
+            if refused:
+                raise RuntimeError(refused)
         if stage.needs_source and stage.source_optional and not files.has_source(bucket, slug):
             book.mkdir(parents=True, exist_ok=True)
             log.add(f"{stage.title}: the book has no drafted chapters in storage yet — starting from none", kind="progress")
@@ -168,6 +173,11 @@ def execute(store, bucket, run_id: int, work: Path) -> str:
                 pubdb.dump(pg_url, work / "pubdb-out.sql.gz")
                 m = pubdb.push(bucket, work / "pubdb-out.sql.gz", f"run:{run_id}", pulled["sha256"])
                 log.add(f"saved the publishing database back ({m['sha256'][:12]})", kind="progress")
+            if stage.into_book:
+                placed = book_chapters.publish(store, bucket, run["work_uid"], slug, book, run_rel, int(params["chapter"]))
+                summary = {**summary, "book": placed}
+                log.add(f"chapter {params['chapter']} is in the book: revision {placed['revision']}"
+                        + (" (new; other chapters carried forward)" if placed["new_revision"] else ""), kind="progress")
             status = "done"
         store.upsert_step({"run_id": run_id, "chapter": None, "step": stage.step, "status": status if status != "cancelled" else "failed",
                            "finished_at": now(), "usd": usd, "error": error,
