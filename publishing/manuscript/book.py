@@ -26,11 +26,24 @@ log = logging.getLogger("publishing.book")
 def _chapter_pdf(doc: dict, full: dict, env_file: Path, out: Path, first_page: int, edition: str) -> Path:
     from publishing.manuscript.render import _alternatives, _figures, _print, _underlay, annotations_for, chapter_html
     n = doc["chapter"]["number"]
-    chosen = (doc.get("layout_choice") or {}).get("chosen", "as authored")
-    cand = next((c for name, c in _alternatives(doc) if name == chosen), doc)
     page = out / f"book-ch{n:02d}-{edition}.html"
-    page.write_text(chapter_html(cand, _figures(cand, full, env_file, annotations_for(doc["work"]["slug"])), edition,
-                                 first_page), encoding="utf-8")
+    figs = _figures(doc, full, env_file, annotations_for(doc["work"]["slug"]))
+    chosen = (doc.get("layout_choice") or {}).get("chosen")
+    if chosen:
+        cand = next((c for name, c in _alternatives(doc) if name == chosen), doc)
+    else:
+        # a draft saved without its layout choice (before 2026-10-30 the choice was made in memory and not written
+        # back): run the chapter's layout search here, the same candidates and score as render() — placement and
+        # spacing only, the text never changes
+        from publishing.manuscript.layout_check import diagnose
+        from publishing.manuscript.render import _layout_score
+        tried = []
+        for name, c in _alternatives(doc):
+            page.write_text(chapter_html(c, figs, edition, first_page), encoding="utf-8")
+            tried.append((_layout_score(diagnose(str(_print(page, out / f"book-ch{n:02d}-{edition}.pdf")))), name, c))
+        score, chosen, cand = min(tried, key=lambda t: t[0])
+        log.info("chapter %d: no saved layout choice; chose %r (%.2f)", n, chosen, score)
+    page.write_text(chapter_html(cand, figs, edition, first_page), encoding="utf-8")
     pdf = _print(page, out / f"book-ch{n:02d}-{edition}.pdf")
     _underlay(pdf, doc["work"]["slug"], n, edition)
     return pdf

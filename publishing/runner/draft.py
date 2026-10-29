@@ -56,6 +56,12 @@ def main() -> None:
         conn.commit()
         full = json.loads((out / f"ch{chapter:02d}-dossier-full.json").read_text(encoding="utf-8"))
         r = render(doc, full, env_file, out)
+        # keep the layout the search chose with the saved draft (the compile prints the chapter in it) — only
+        # that key: render() labels figure blocks in memory, and the saved text must stay exactly as drafted
+        saved = out / f"ch{chapter:02d}-draft.json"
+        kept = json.loads(saved.read_text(encoding="utf-8"))
+        kept["layout_choice"] = doc.get("layout_choice")
+        saved.write_text(json.dumps(kept, ensure_ascii=False, indent=1), encoding="utf-8")
     finally:
         for f in copied:
             f.unlink(missing_ok=True)
