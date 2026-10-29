@@ -77,3 +77,13 @@ def test_the_readiness_stage():
     stage, params = stages.validate("readiness", {})
     assert params == {} and not stage.needs_source and stage.uses_pubdb and stage.writes_pubdb
     assert "readiness" in stages.WRITES_PUBDB and "coverage" not in stages.WRITES_PUBDB
+
+
+def test_readiness_summary_carries_the_gaps(tmp_path):
+    (tmp_path / "readiness.json").write_text(json.dumps({
+        "pct": 25.0, "ready": False, "outstanding_by_state": {"missing_topic": 1},
+        "gaps": [{"title": "Calculating Speed", "topic_id": None, "steps": [{"order": 1, "step": "Create the topic"}]}],
+        "curriculum": {"id": "c1", "code": "x", "name": "X"}}))
+    usd, lines, summary = stages.STAGES["readiness"].collect(tmp_path)
+    assert usd == 0.0 and lines == []
+    assert summary["gaps"][0]["title"] == "Calculating Speed" and summary["curriculum"]["id"] == "c1"
