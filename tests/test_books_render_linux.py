@@ -115,3 +115,21 @@ def test_overlap_check_ignores_slivers_but_not_collisions(tmp_path):
     p = tmp_path / "collision.pdf"
     doc.save(p)
     assert [h for h in diagnose(str(p))["hard"] if h["check"] == "text overlaps text"]
+
+
+def test_compile_runs_the_layout_search_for_a_draft_without_a_saved_choice(monkeypatch, tmp_path):
+    from publishing.manuscript import book, render
+    import publishing.manuscript.layout_check as lc
+    printed = []
+    monkeypatch.setattr(render, "_figures", lambda *a, **k: {})
+    monkeypatch.setattr(render, "annotations_for", lambda slug: {})
+    monkeypatch.setattr(render, "chapter_html", lambda cand, figs, edition, first: cand.get("_density") or "authored")
+    monkeypatch.setattr(render, "_print", lambda page, pdf: (printed.append(page.read_text()), pdf)[1])
+    monkeypatch.setattr(render, "_underlay", lambda *a: None)
+    scores = {"authored": {"hard": [], "pages": [{"unused_share": 0.9}, {"unused_share": 0.1}], "page_count": 2},
+              "snug": {"hard": [], "pages": [{"unused_share": 0.1}], "page_count": 1},
+              "tight": {"hard": [1], "pages": [{"unused_share": 0.0}], "page_count": 1}}
+    monkeypatch.setattr(lc, "diagnose", lambda path: scores[printed[-1]])
+    doc = {"chapter": {"number": 1}, "work": {"slug": "lin"}, "sections": []}
+    book._chapter_pdf(doc, {}, tmp_path / "e.env", tmp_path, 1, "digital")
+    assert printed[-1] == "snug"              # the fullest layout without defects is the one printed

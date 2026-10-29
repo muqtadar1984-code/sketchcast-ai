@@ -54,15 +54,21 @@ def main() -> None:
     for name in ("draft.json", "dossier-full.json", "dossier.json"):
         if (src / f"ch{chapter:02d}-{name}").exists():
             (out / f"ch{chapter:02d}-{name}").write_bytes((src / f"ch{chapter:02d}-{name}").read_bytes())
+    store(conn, full, doc)                               # the units, from the text as drafted (before render labels it)
+    conn.commit()
     env_file = out / "empty.env"
     env_file.write_text("", encoding="utf-8")
     r = render(doc, full, env_file, out)
+    # keep the layout the search chose with the saved draft (the compile prints the chapter in it) — only
+    # that key: render() labels figure blocks in memory, and the saved text must stay exactly as drafted
+    saved = out / f"ch{chapter:02d}-draft.json"
+    kept = json.loads(saved.read_text(encoding="utf-8"))
+    kept["layout_choice"] = doc.get("layout_choice")
+    saved.write_text(json.dumps(kept, ensure_ascii=False, indent=1), encoding="utf-8")
     env_file.unlink(missing_ok=True)
     for f in out.iterdir():                              # the HTML pages embed every picture
         if f.suffix == ".html" and not f.name.endswith("-review.html"):
             f.unlink()
-    store(conn, full, doc)
-    conn.commit()
     summary = {"chapter": chapter, "from_run": source, "ready_for_gate_d": True,
                "words": doc["one_pass"]["words"], "target_words": doc["one_pass"]["target_words"],
                "met": doc["one_pass"]["met"], "sections": len(doc["sections"]), "exercises": len(doc["exercises"]),
