@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import fitz
@@ -284,6 +285,8 @@ class _Q:
             if any(r.get("kind") == "boom" for r in new):
                 raise RuntimeError("connection reset")
             self.sb.log.append(("insert", self.table, [dict(r) for r in new]))
+            if self.sb.stamp_inserts:   # the column default, now()
+                new = [{"created_at": db._stamp(datetime.now(timezone.utc)), **r} for r in new]
             rows.extend(dict(r) for r in new)
             return _Res(new)
         if self.op == "delete":
@@ -320,6 +323,7 @@ class FakeSB:
     def __init__(self, no_0166=False):
         self.tables = {"artifacts": [], "generations": [], "jobs": []}
         self.log, self.removed, self.no_0166 = [], [], no_0166
+        self.stamp_inserts = False
         self.storage = _Storage(self)
 
     def table(self, name):
@@ -556,6 +560,170 @@ def test_a_render_failure_is_the_jobs_error_not_the_generations(uploads, downloa
     job = sb.tables["jobs"][0]
     assert job["status"] == "error" and "DeckRenderUnavailable" in job["error"]
     assert sb.tables["generations"][0]["status"] == "done"
+
+
+# ── repeat presses: two jobs for one deck render it once ────────────────
+
+
+def _at(minutes: float) -> str:
+    """A PostgREST-shaped stamp ``minutes`` from a fixed moment."""
+    base = datetime(2026, 10, 29, 10, 0, tzinfo=timezone.utc)
+    return db._stamp(base + timedelta(minutes=minutes))
+
+
+def _pages(sb, created: str, n: int = 2, gen: str = "g1"):
+    sb.tables["artifacts"].extend({"generation_id": gen, "kind": "slide_png", "created_at": created,
+                                   "storage_path": f"u1/{gen}/deck_pages/slide_{i:02d}.png"}
+                                  for i in range(1, n + 1))
+
+
+def _assert_skipped(sb, before, calls, uploads, downloads, note):
+    job = sb.tables["jobs"][0]
+    assert job["status"] == "done" and job["error"] is None
+    assert job["stage"]["phase"] == "skipped"
+    assert job["stage"]["note"].startswith(note), job["stage"]["note"]
+    assert calls == [], "a skipped job never calls the renderer"
+    assert uploads == [] and downloads == [], "nor downloads the deck or uploads a page"
+    assert sb.tables["artifacts"] == before, "the pages already there are left as they are"
+    assert sb.tables["generations"][0]["status"] == "done"
+    assert not [e for e in sb.log if e[1] == "generations"], "generations.status is never written"
+
+
+def test_a_render_newer_than_the_press_is_not_redone(uploads, downloads):
+    from worker.deck_pages_job import process_deck_pages
+
+    sb = _job_sb()
+    sb.tables["jobs"][0]["created_at"] = _at(0)          # pressed at 10:00
+    _pages(sb, _at(0.5))                                 # another render finished 10:00:30
+    before = [dict(r) for r in sb.tables["artifacts"]]
+    calls = []
+    process_deck_pages(sb, sb.tables["jobs"][0], renderer=_fake_renderer(calls))
+    _assert_skipped(sb, before, calls, uploads, downloads, "skipped: rendered at ")
+    assert _at(0.5) in sb.tables["jobs"][0]["stage"]["note"]
+
+
+def test_pages_older_than_the_press_are_rendered_again(uploads, downloads):
+    from worker.deck_pages_job import process_deck_pages
+
+    sb = _job_sb()
+    sb.tables["jobs"][0]["created_at"] = _at(0)
+    _pages(sb, _at(-60), n=3)                            # last hour's render: the press asks for a new one
+    calls = []
+    process_deck_pages(sb, sb.tables["jobs"][0], renderer=_fake_renderer(calls))
+    job = sb.tables["jobs"][0]
+    assert job["status"] == "done" and "stage" not in job
+    assert len(calls) == 1 and downloads == ["u1/g1/deck.pptx"]
+    assert [k for k, _ in _kinds(sb)].count("slide_png") == 2, "the old three replaced by the new two"
+
+
+def test_another_job_already_rendering_this_deck_wins(uploads, downloads):
+    from worker.deck_pages_job import process_deck_pages
+
+    sb = _job_sb()
+    sb.tables["jobs"][0].update(created_at=_at(0.1), claimed_at=_at(0.2))
+    sb.tables["jobs"].append({"id": "j0", "type": "deck_pages", "status": "processing", "generation_id": None,
+                              "params": {"generation_id": "g1"}, "created_at": _at(0), "claimed_at": _at(0.15)})
+    before = [dict(r) for r in sb.tables["artifacts"]]
+    calls = []
+    process_deck_pages(sb, sb.tables["jobs"][0], renderer=_fake_renderer(calls))
+    _assert_skipped(sb, before, calls, uploads, downloads, "skipped: another render in progress")
+    assert sb.tables["jobs"][1]["status"] == "processing", "the other job is not touched"
+
+
+def test_two_simultaneous_claims_never_both_skip(uploads, downloads):
+    """j1 was claimed FIRST: the later claim (j2, still processing) must not
+    make it yield, or each would yield to the other and the deck gets none."""
+    from worker.deck_pages_job import process_deck_pages, skip_reason
+
+    sb = _job_sb()
+    sb.tables["jobs"][0].update(created_at=_at(0), claimed_at=_at(0.1))
+    sb.tables["jobs"].append({"id": "j2", "type": "deck_pages", "status": "processing", "generation_id": None,
+                              "params": {"generation_id": "g1"}, "created_at": _at(0.05),
+                              "claimed_at": _at(0.2)})
+    assert skip_reason(sb, sb.tables["jobs"][1]) == "skipped: another render in progress"
+    calls = []
+    process_deck_pages(sb, sb.tables["jobs"][0], renderer=_fake_renderer(calls))
+    assert sb.tables["jobs"][0]["status"] == "done" and len(calls) == 1
+
+
+def test_only_the_same_decks_jobs_and_pages_count(uploads, downloads):
+    from worker.deck_pages_job import process_deck_pages
+
+    sb = _job_sb()
+    sb.tables["jobs"][0].update(created_at=_at(1), claimed_at=_at(1))
+    sb.tables["jobs"] += [
+        {"id": "jx", "type": "deck_pages", "status": "processing", "generation_id": None,
+         "params": {"generation_id": "other"}, "created_at": _at(0), "claimed_at": _at(0)},
+        {"id": "jq", "type": "deck_pages", "status": "queued", "generation_id": None,
+         "params": {"generation_id": "g1"}, "created_at": _at(0), "claimed_at": None},
+    ]
+    _pages(sb, _at(5), n=1, gen="other")                 # another deck's newer pages
+    calls = []
+    process_deck_pages(sb, sb.tables["jobs"][0], renderer=_fake_renderer(calls))
+    assert sb.tables["jobs"][0]["status"] == "done" and len(calls) == 1
+
+
+def test_a_failed_check_renders_anyway(uploads, downloads, monkeypatch):
+    import worker.deck_pages_job as J
+
+    sb = _job_sb()
+    sb.tables["jobs"][0]["created_at"] = _at(0)
+
+    def broken(*a):
+        raise RuntimeError("timeout")
+
+    monkeypatch.setattr(J, "_newest_render", broken)
+    calls = []
+    J.process_deck_pages(sb, sb.tables["jobs"][0], renderer=_fake_renderer(calls))
+    assert sb.tables["jobs"][0]["status"] == "done" and len(calls) == 1
+
+
+@pytest.mark.parametrize("raw,iso", [
+    ("2026-10-29T10:00:00.12345+00:00", "2026-10-29T10:00:00.123450+00:00"),
+    ("2026-10-29T10:00:00Z", "2026-10-29T10:00:00+00:00"),
+    ("2026-10-29 18:00:00.1+08:00", "2026-10-29T10:00:00.100000+00:00"),
+    ("2026-10-29T10:00:00", "2026-10-29T10:00:00+00:00"),
+])
+def test_postgrest_stamps_are_read(raw, iso):
+    from worker.deck_pages_job import _when
+
+    assert _when(raw).isoformat() == iso
+    assert _when(None) is None and _when("") is None and _when("not a time") is None
+
+
+def test_the_builds_own_render_and_a_later_job_coexist(monkeypatch, tmp_path, uploads, downloads):
+    """The deck build exports its pages itself (_deck_pages_after_build). A
+    press queued BEFORE that render finished is satisfied by it; a press
+    queued after it renders again."""
+    from worker import process
+    from worker.deck_pages_job import process_deck_pages
+
+    monkeypatch.setenv("DECK_PAGES", "1")
+    real_export = DP.export_deck_pages
+    monkeypatch.setattr(DP, "export_deck_pages",
+                        lambda pptx, work, renderer=None, **kw: real_export(pptx, work, renderer or _fake_renderer(),
+                                                                          **kw))
+    sb = _job_sb()
+    sb.stamp_inserts = True
+    sb.tables["jobs"][0]["created_at"] = db._stamp(datetime.now(timezone.utc) - timedelta(minutes=1))
+    deck = _pptx(tmp_path / "build" / "deck.pptx", [{"title": "A"}, {"title": "B"}, {"title": "C"}])
+    process._deck_pages_after_build(sb, "g1", "u1/g1", deck, "u1/g1/deck.pptx", tmp_path / "build")
+    assert [k for k, _ in _kinds(sb)].count("slide_png") == 3, "the build published its pages"
+    before = [dict(r) for r in sb.tables["artifacts"]]
+    n_uploads = len(uploads)
+    calls = []
+    process_deck_pages(sb, sb.tables["jobs"][0], renderer=_fake_renderer(calls))
+    assert sb.tables["jobs"][0]["stage"]["note"].startswith("skipped: rendered at ")
+    assert calls == [] and downloads == [] and len(uploads) == n_uploads
+    assert sb.tables["artifacts"] == before
+
+    later = {"id": "j9", "type": "deck_pages", "status": "processing", "generation_id": None,
+             "params": {"generation_id": "g1"},
+             "created_at": db._stamp(datetime.now(timezone.utc) + timedelta(seconds=1))}
+    sb.tables["jobs"].append(later)
+    process_deck_pages(sb, later, renderer=_fake_renderer(calls))
+    assert sb.tables["jobs"][1]["status"] == "done" and "stage" not in sb.tables["jobs"][1]
+    assert len(calls) == 1 and downloads == ["u1/g1/deck.pptx"]
 
 
 # ── dispatch: an observer, on its own lane, never process_generation ────
