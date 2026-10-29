@@ -188,3 +188,19 @@ def test_draft_copies_only_earlier_chapters_and_the_notes(tmp_path):
     copied = earlier_drafts(book, out, 3)
     assert sorted(p.name for p in copied) == ["ch01-draft.json", "ch02-draft.json"]
     assert (out / "ch03-editorial-notes.md").read_text() == "keep it short" and not (out / "ch03-draft.json").exists()
+
+
+def test_file_store_hands_over_active_waivers(tmp_path):
+    p = tmp_path / "store.json"
+    p.write_text(json.dumps({"pub_works": [], "pub_runs": [], "pub_readiness_waivers": [
+        {"work_uid": "w", "topic_id": "t1", "check_code": "B6", "language": "en", "sub_status": "stale_article",
+         "reason": "kit still fine", "waived_by": "ed@x", "waived_at": "2026-10-29T12:00:00Z", "revoked_at": None},
+        {"work_uid": "w", "topic_id": "t2", "check_code": "B4", "language": "en", "sub_status": None,
+         "reason": "r", "waived_by": "ed@x", "waived_at": "2026-10-29T12:00:00Z", "revoked_at": "2026-10-29T13:00:00Z"},
+        {"work_uid": "other", "topic_id": "t3", "check_code": "B4", "language": "en", "sub_status": None,
+         "reason": "r", "waived_by": "ed@x", "waived_at": "2026-10-29T12:00:00Z", "revoked_at": None}]}))
+    from publishing.schemas import Waiver
+    got = FileStore(p).waivers("w", "book-w")
+    assert [Waiver.model_validate(w).topic_id for w in got] == ["t1"]
+    assert got[0] == {"work": "book-w", "topic_id": "t1", "check": "B6", "language": "en", "sub_status": "stale_article",
+                      "by": "ed@x", "date": "2026-10-29", "reason": "kit still fine"}
