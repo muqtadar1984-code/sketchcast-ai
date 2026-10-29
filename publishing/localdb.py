@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import psycopg
 from psycopg.rows import dict_row
@@ -26,7 +26,13 @@ def db_url() -> str:
     if not url:
         raise NotLocal("PUBDB_URL is not set; start the local server with "
                        "`python -m publishing.cli db-start`")
-    host = urlparse(url).hostname or ""
+    parts = urlparse(url)
+    host = parts.hostname or ""
+    # a Unix-domain socket (the embedded server on Linux — the books runner — gives
+    # postgresql://user:@/db?host=/tmp/...) is local by construction: it has no network address at all
+    socket_dir = parse_qs(parts.query).get("host", [""])[0]
+    if not host and socket_dir.startswith("/"):
+        return url
     if host not in LOCAL_HOSTS:
         raise NotLocal(f"PUBDB_URL host {host!r} is not local; refusing")
     return url
