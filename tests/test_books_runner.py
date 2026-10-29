@@ -204,3 +204,10 @@ def test_file_store_hands_over_active_waivers(tmp_path):
     assert [Waiver.model_validate(w).topic_id for w in got] == ["t1"]
     assert got[0] == {"work": "book-w", "topic_id": "t1", "check": "B6", "language": "en", "sub_status": "stale_article",
                       "by": "ed@x", "date": "2026-10-29", "reason": "kit still fine"}
+
+
+def test_a_book_with_no_source_set_yet_is_detected(tmp_path):
+    b = _bucket(tmp_path, {"ch01-draft.json": b"{}"})
+    assert files.has_source(b, SLUG)
+    assert not files.has_source(b, "mastering-linear-equations")
+    assert stages.STAGES["draft_trial"].source_optional and not stages.STAGES["check_files"].source_optional

@@ -79,7 +79,10 @@ def execute(store, bucket, run_id: int, work: Path) -> str:
         slug = store.work_slug(run["work_uid"])
         run_rel = f"runs/run-{run_id}"
         book = work / "manuscripts" / slug
-        if stage.needs_source:
+        if stage.needs_source and stage.source_optional and not files.has_source(bucket, slug):
+            book.mkdir(parents=True, exist_ok=True)
+            log.add(f"{stage.title}: the book has no drafted chapters in storage yet — starting from none", kind="progress")
+        elif stage.needs_source:
             log.add(f"{stage.title}: pulling the book's source set", kind="progress")
             store.update(run_id, progress={"step": "pull", "note": "pulling the book's files"})
             got = files.pull_source(bucket, slug, book)
