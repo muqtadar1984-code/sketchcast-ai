@@ -103,6 +103,12 @@ def execute(store, bucket, run_id: int, work: Path) -> str:
                 log.add(f"{len(waivers)} readiness waiver(s) recorded in the app apply to this book", kind="progress")
             log.add(f"restored the publishing database ({pulled['bytes'] / 1e6:.1f} MB, {pulled['sha256'][:12]}, "
                     f"from {pulled['source']} {pulled['taken_at'][:16]})", kind="progress")
+        if stage.prefetch:
+            for key, rel in stage.prefetch(slug, params):
+                dst = book / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes(bucket.get(key))
+            log.add(f"{stage.title}: fetched the earlier run's files", kind="progress")
         if stage.needs_assets:
             assets = work / "book-assets"
             got = files.pull_assets(bucket, assets)

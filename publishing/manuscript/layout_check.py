@@ -46,7 +46,11 @@ def diagnose(pdf_path: str) -> dict:
                 ox = min(a[2], b[2]) - max(a[0], b[0])
                 oy = min(a[3], b[3]) - max(a[1], b[1])
                 same = spans[a_i]["text"] == spans[b_i]["text"] and max(abs(u - v) for u, v in zip(a, b)) < 2
-                if ox > 2 and oy > 3 and not same:   # a stroke drawn over its own fill is one glyph run
+                # a real collision covers a real share of the smaller run in BOTH directions; a 1–3 pt sliver is a
+                # fallback glyph's box (a minus sign drawn from another font) or two line boxes of one heading touching
+                small_w = min(a[2] - a[0], b[2] - b[0])
+                small_h = min(a[3] - a[1], b[3] - b[1])
+                if ox > max(2, 0.3 * small_w) and oy > max(3, 0.3 * small_h) and not same:
                     hard.append({"page": i, "check": "text overlaps text",
                                  "detail": f"{spans[a_i]['text'][:30]!r} / {spans[b_i]['text'][:30]!r}"})
         # measured on SPANS: a diagram's left and right labels share a line and merge into one text

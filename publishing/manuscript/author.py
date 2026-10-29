@@ -165,6 +165,18 @@ def earlier_note(earlier: dict, what: str) -> str:
     return out
 
 
+def figures_note(d: dict, used: set) -> str:
+    """The catalogue figures this chapter's dossier offers, named in the plan request (founder 2026-10-29: a trial
+    chapter used none of the two it was offered). Offered, never required: the author places those that teach this
+    chapter's ideas and says why in visual_gaps when it uses none."""
+    figs = [f for t in d.get("topics") or [] for f in t.get("figures") or [] if f["id"] not in used]
+    if not figs:
+        return ""
+    return ("Catalogue figures offered for this chapter (already drawn and approved; cite the fig: id in a figure "
+            "block where one teaches an idea of THIS chapter; if you use none, say why in visual_gaps):\n" +
+            "".join(f"  {f['id']}: {f.get('caption') or f.get('key')}\n" for f in figs))
+
+
 def picture_key(key, chapter: int) -> str:
     """A new illustration's key is the chapter's own: `book:` + name + `_chNN`, so
     it can never overwrite (on conflict) a picture another chapter was approved with."""
@@ -386,7 +398,7 @@ def draft_chapter(conn, slug: str, chapter: int, env_file: Path, out_dir: Path, 
         work["plan"] = run.call(
             "author", "plan", head + (page_target(pages) if pages else "") +
             (f"Picture budget: up to {pictures} new colour illustrations.\n" if pictures else "") +
-            earlier_note(earlier, "plan") + "Plan this chapter. Blueprint intent:\n" +
+            figures_note(d, used) + earlier_note(earlier, "plan") + "Plan this chapter. Blueprint intent:\n" +
             json.dumps({k: ch[k] for k in ("purpose", "blueprint_sections", "assessment", "illustration_needs")},
                        ensure_ascii=False, indent=1), 9000, "plan")
         save()

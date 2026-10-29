@@ -96,3 +96,22 @@ def test_source_serif_4_follows_every_windows_only_serif():
                 assert "'Source Serif 4'" in stack, stack
                 first_open = stack.index("'Source Serif 4'")
                 assert all(stack.index(f) < first_open for f in ("Sitka",) if f in stack), stack
+
+
+def test_overlap_check_ignores_slivers_but_not_collisions(tmp_path):
+    import fitz
+    from publishing.manuscript.layout_check import diagnose
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((100, 100), "In the expression 5x", fontsize=11)
+    page.insert_text((214, 100), "- 3x + 7", fontsize=11)          # a neighbour's box nudged ~1-2 pt in
+    p = tmp_path / "sliver.pdf"
+    doc.save(p)
+    assert not [h for h in diagnose(str(p))["hard"] if h["check"] == "text overlaps text"]
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((100, 200), "Left label text", fontsize=11)
+    page.insert_text((120, 202), "Right label text", fontsize=11)   # drawn over each other
+    p = tmp_path / "collision.pdf"
+    doc.save(p)
+    assert [h for h in diagnose(str(p))["hard"] if h["check"] == "text overlaps text"]

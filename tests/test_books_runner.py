@@ -211,3 +211,13 @@ def test_a_book_with_no_source_set_yet_is_detected(tmp_path):
     assert files.has_source(b, SLUG)
     assert not files.has_source(b, "mastering-linear-equations")
     assert stages.STAGES["draft_trial"].source_optional and not stages.STAGES["check_files"].source_optional
+
+
+def test_render_trial_fetches_the_earlier_runs_draft():
+    s = stages.STAGES["render_trial"]
+    assert not s.uses_models and not s.needs_source and s.needs_assets
+    assert s.prefetch("lin", {"run": 27, "chapter": 1}) == [
+        ("books/lin/runs/run-27/ch01-draft.json", "trial-source/ch01-draft.json"),
+        ("books/lin/runs/run-27/ch01-dossier-full.json", "trial-source/ch01-dossier-full.json")]
+    with pytest.raises(ValueError):
+        stages.validate("render_trial", {"run": 0, "chapter": 1})
