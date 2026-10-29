@@ -85,6 +85,33 @@ def _readiness_collect(out: Path) -> tuple[float, list[dict], dict]:
     return 0.0, [], {k: r.get(k) for k in ("pct", "ready", "outstanding_by_state", "gaps", "curriculum")}
 
 
+def _gate_r_collect(out: Path) -> tuple[float, list[dict], dict]:
+    """The readiness summary's keys (the app's Overview card and Gaps tab read either run) plus what Gate R pinned."""
+    r = json.loads((out / "gate_r.json").read_text(encoding="utf-8"))
+    keep = ("passed", "pct", "pins", "edition_id", "policy", "gaps", "curriculum")
+    states: dict[str, int] = {}
+    for o in r.get("outstanding") or []:
+        states[o["state"]] = states.get(o["state"], 0) + 1
+    return 0.0, [], {**{k: r[k] for k in keep if k in r}, "ready": bool(r.get("passed")),
+                     "outstanding_by_state": states, **({"pct": 100.0} if r.get("passed") else {})}
+
+
+def _draft_collect(out: Path) -> tuple[float, list[dict], dict]:
+    """One cost line per model and step kind, from the draft's own ledger (`costs` in chNN-draft.json)."""
+    summary = json.loads((out / "draft.json").read_text(encoding="utf-8"))
+    doc = json.loads((out / f"ch{int(summary['chapter']):02d}-draft.json").read_text(encoding="utf-8"))
+    by: dict[tuple[str, str], dict] = {}
+    for c in doc.get("costs") or []:
+        k = (str(c.get("stage") or "?"), str(c.get("model") or "?"))
+        ln = by.setdefault(k, {"chapter": int(summary["chapter"]), "role": k[0], "model": k[1], "usd": 0.0,
+                               "input_tokens": 0, "output_tokens": 0})
+        ln["usd"] += float(c.get("usd") or 0)
+        ln["input_tokens"] += int(c.get("in") or 0)
+        ln["output_tokens"] += int(c.get("out") or 0)
+    lines = [{**ln, "usd": round(ln["usd"], 4)} for ln in by.values()]
+    return round(sum(ln["usd"] for ln in lines), 4), lines, summary
+
+
 def _check_collect(out: Path) -> tuple[float, list[dict], dict]:
     return 0.0, [], json.loads((out / "check.json").read_text(encoding="utf-8"))["summary"]
 
@@ -127,6 +154,21 @@ STAGES: dict[str, Stage] = {s.key: s for s in [
         # free: a fresh catalogue snapshot (GET-only) + the readiness audit, recorded in the shared publishing database
         argv=lambda slug, p, rel: [sys.executable, "-m", "publishing.runner.readiness", slug, rel],
         collect=_readiness_collect,
+    ),
+    Stage(
+        key="gate_r", title="Gate R (pin the sources)", step="gate_r", needs_source=False, uses_pubdb=True,
+        writes_pubdb=True,
+        # free: fresh snapshot + Gate R; pins the sources and opens the edition ONLY at 100% ready, else changes nothing
+        argv=lambda slug, p, rel: [sys.executable, "-m", "publishing.runner.gate_r", slug, rel],
+        collect=_gate_r_collect,
+    ),
+    Stage(
+        key="draft_trial", title="Draft one chapter (trial, into the run folder)", step="drafting", uses_models=True,
+        needs_assets=True, uses_pubdb=True, params={"chapter": 1},
+        # paid: the engine's one-pass draft + render, written to the run folder only; no new pictures; the publishing
+        # database is read (dossier, Gate R pins) but not pushed back
+        argv=lambda slug, p, rel: [sys.executable, "-m", "publishing.runner.draft", slug, rel, str(int(p["chapter"]))],
+        collect=_draft_collect,
     ),
 ]}
 

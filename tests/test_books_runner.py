@@ -145,3 +145,46 @@ def test_audit_writes_into_the_run_folder():
     stage, params = stages.validate("academic_audit", {"first": 2, "last": 3})
     assert stage.env("b", params, "runs/run-9") == {"PUBLISH_REV": "runs/run-9"}
     assert stage.argv("b", params, "runs/run-9")[-4:-2] == ["2", "3"]
+
+
+def test_gate_r_and_draft_stages_are_registered():
+    g = stages.STAGES["gate_r"]
+    assert g.writes_pubdb and not g.needs_source and not g.uses_models
+    d = stages.STAGES["draft_trial"]
+    # the trial reads the publishing database but never pushes it back, and pulls the book (earlier chapters) + assets
+    assert d.uses_models and d.uses_pubdb and not d.writes_pubdb and d.needs_source and d.needs_assets
+    assert "draft_trial" not in stages.WRITES_PUBDB
+    assert stages.validate("draft_trial", {"chapter": 3})[1] == {"chapter": 3}
+
+
+def test_gate_r_collect(tmp_path):
+    (tmp_path / "gate_r.json").write_text(json.dumps({"passed": False, "pct": 99.2, "ready": False, "run_id": 7,
+                                                      "outstanding": [{"state": "needs_improvement"}],
+                                                      "gaps": [{"title": "x"}], "curriculum": None}))
+    usd, lines, summary = stages.STAGES["gate_r"].collect(tmp_path)
+    assert usd == 0 and lines == [] and summary == {"passed": False, "pct": 99.2, "gaps": [{"title": "x"}], "curriculum": None,
+                                                    "ready": False, "outstanding_by_state": {"needs_improvement": 1}}
+
+
+def test_draft_collect_groups_the_ledger(tmp_path):
+    (tmp_path / "draft.json").write_text(json.dumps({"chapter": 2, "usd": 1.5, "ready_for_gate_d": True}))
+    (tmp_path / "ch02-draft.json").write_text(json.dumps({"costs": [
+        {"stage": "section", "model": "sonnet", "usd": 0.5, "in": 10, "out": 5},
+        {"stage": "section", "model": "sonnet", "usd": 0.25, "in": 4, "out": 2},
+        {"stage": "review", "model": "flash", "usd": 0.75, "in": 100, "out": 9}]}))
+    usd, lines, summary = stages.STAGES["draft_trial"].collect(tmp_path)
+    assert usd == 1.5 and summary["ready_for_gate_d"] is True
+    sec = next(ln for ln in lines if ln["role"] == "section")
+    assert sec == {"chapter": 2, "role": "section", "model": "sonnet", "usd": 0.75, "input_tokens": 14, "output_tokens": 7}
+
+
+def test_draft_copies_only_earlier_chapters_and_the_notes(tmp_path):
+    from publishing.runner.draft import earlier_drafts
+    book, out = tmp_path / "book", tmp_path / "book" / "runs" / "run-1"
+    out.mkdir(parents=True)
+    for m in (1, 2, 3):
+        (book / f"ch{m:02d}-draft.json").write_text("{}")
+    (book / "ch03-editorial-notes.md").write_text("keep it short")
+    copied = earlier_drafts(book, out, 3)
+    assert sorted(p.name for p in copied) == ["ch01-draft.json", "ch02-draft.json"]
+    assert (out / "ch03-editorial-notes.md").read_text() == "keep it short" and not (out / "ch03-draft.json").exists()
