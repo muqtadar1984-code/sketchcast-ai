@@ -198,6 +198,15 @@ STAGES: dict[str, Stage] = {s.key: s for s in [
         collect=lambda out: (0.0, [], json.loads((out / "draft.json").read_text(encoding="utf-8"))),
     ),
     Stage(
+        key="compile_book", title="Compile the book", step="compile", needs_assets=True,
+        params={"first": 1, "last": 10},
+        # free: the engine's compile of every drafted chapter in the range (front matter, running page numbers,
+        # coverage, glossary, index, credits); records each chapter's text hash for Gate E
+        argv=lambda slug, p, rel: [sys.executable, "-m", "publishing.runner.compile", slug, rel,
+                                   *map(str, _chapters(p))],
+        collect=lambda out: (0.0, [], json.loads((out / "compile.json").read_text(encoding="utf-8"))),
+    ),
+    Stage(
         key="render_trial", title="Re-render a trial chapter (no new draft)", step="render", needs_source=False,
         needs_assets=True, params={"run": 1, "chapter": 1},
         # free: lays out an earlier trial draft again with the current renderer (layout fixes, fonts) — the text is

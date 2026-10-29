@@ -35,7 +35,7 @@ def test_manifest_keeps_other_files_and_replaces_by_rel():
 
 def _store(tmp, **tables):
     p = tmp / "store.json"
-    p.write_text(json.dumps({"pub_works": [{"uid": W, "slug": W}], "pub_runs": [], **tables}))
+    p.write_text(json.dumps({"pub_works": [{"uid": W, "slug": W, "status": "scope_approved"}], "pub_runs": [], **tables}))
     return FileStore(p)
 
 
@@ -65,6 +65,8 @@ def test_publish_places_the_chapter_and_adds_it_to_the_source_set(tmp_path):
     got = bc.publish(store, bucket, W, W, book, "runs/run-9", 2)
     assert got["revision"] == "d1" and not got["new_revision"] and got["source_files"] == 2
     assert sorted(c["chapter"] for c in store.chapter_rows(W, "d1")) == [1, 2]
+    work = json.loads((tmp_path / "store.json").read_text())["pub_works"][0]
+    assert work["current_revision"] == "d1" and work["status"] == "drafting"   # Gate D approves in d1
     m = json.loads(bucket.get(f"books/{W}/source/{files.MANIFEST}"))
     assert [f["rel"] for f in m["files"]] == ["ch02-dossier-full.json", "ch02-draft.json"]
     assert m["files"][1]["key"] == f"books/{W}/runs/run-9/ch02-draft.json"
@@ -94,3 +96,11 @@ def test_adopt_trial_takes_only_a_current_trial_and_costs_nothing(tmp_path):
     assert "Gate R first" in stale({"edition_id": 2, "pin_run_id": 9}, None)
     (tmp_path / "draft.json").write_text(json.dumps({"chapter": 1, "usd": 0.0, "drafted_for_usd": 2.32}))
     assert s.collect(tmp_path)[:2] == (0.0, [])
+
+
+def test_compile_book_stage_is_free_and_reads_the_source_set(tmp_path):
+    s = stages.STAGES["compile_book"]
+    assert not s.uses_models and s.needs_source and s.needs_assets and not s.writes_pubdb
+    assert s.argv("lin", {"first": 1, "last": 3}, "runs/run-1")[-2:] == ["1", "3"]
+    (tmp_path / "compile.json").write_text(json.dumps({"pdf": "b.pdf", "pages": 14, "chapters": [], "missing": [2]}))
+    assert s.collect(tmp_path) == (0.0, [], {"pdf": "b.pdf", "pages": 14, "chapters": [], "missing": [2]})

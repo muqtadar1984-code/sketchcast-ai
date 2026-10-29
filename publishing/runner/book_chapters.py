@@ -87,6 +87,7 @@ def publish(store, bucket, work_uid: str, slug: str, book: Path, run_rel: str, c
             for c in latest_rows if carry and c["chapter"] != chapter]
     rows.append(chapter_row(work_uid, key, doc, figures, f"{run_rel}/ch{chapter:02d}-draft.json"))
     store.insert("pub_chapter_revisions", rows)
+    store.set_current_revision(work_uid, key)
 
     entries = []
     for name in CHAPTER_FILES:

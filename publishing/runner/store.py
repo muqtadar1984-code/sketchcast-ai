@@ -12,7 +12,8 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-WRITE = {"PATCH": {"pub_runs", "pub_run_steps"},
+WRITE = {"PATCH": {"pub_runs", "pub_run_steps",
+                   "pub_works"},       # only set_current_revision below: the revision a drafted chapter went into
          "POST": {"pub_run_events", "pub_run_steps", "pub_artifacts", "pub_cost_lines",
                   # a chapter drafted into the book (publishing/runner/book_chapters.py): insert-only, immutable rows
                   "pub_book_revisions", "pub_chapter_revisions"}}
@@ -20,6 +21,9 @@ WRITE = {"PATCH": {"pub_runs", "pub_run_steps"},
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+PLANNING = ("scoping", "scope_approved")
 
 
 def _waiver(w: dict, slug: str) -> dict:
@@ -74,6 +78,14 @@ class RestStore:
 
     def book_revisions(self, uid: str) -> list[dict]:
         return self._get("pub_book_revisions", work_uid=f"eq.{uid}", select="key,ordinal,label")
+
+    def set_current_revision(self, uid: str, key: str) -> None:
+        """The book's current revision is the one a chapter was just drafted into (the app approves Gate D only in
+        the current revision); a book still being planned moves to drafting. Nothing else on the work changes."""
+        [w] = self._get("pub_works", uid=f"eq.{uid}", select="status")
+        fields = {"current_revision": key, **({"status": "drafting"} if w["status"] in PLANNING else {})}
+        with self.lock:
+            self._ok(self.http.patch("/pub_works", params={"uid": f"eq.{uid}"}, json=fields))
 
     def chapter_rows(self, uid: str, revision_key: str) -> list[dict]:
         return self._get("pub_chapter_revisions", work_uid=f"eq.{uid}", revision_key=f"eq.{revision_key}",
@@ -161,6 +173,15 @@ class FileStore:
 
     def book_revisions(self, uid: str) -> list[dict]:
         return [r for r in self._load().get("pub_book_revisions", []) if r["work_uid"] == uid]
+
+    def set_current_revision(self, uid: str, key: str) -> None:
+        with self.lock:
+            d = self._load()
+            w = next(w for w in d["pub_works"] if w["uid"] == uid)
+            w["current_revision"] = key
+            if w.get("status") in PLANNING:
+                w["status"] = "drafting"
+            self._save(d)
 
     def chapter_rows(self, uid: str, revision_key: str) -> list[dict]:
         return [c for c in self._load().get("pub_chapter_revisions", [])
