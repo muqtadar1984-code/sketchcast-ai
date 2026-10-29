@@ -185,6 +185,19 @@ STAGES: dict[str, Stage] = {s.key: s for s in [
         collect=_draft_collect,
     ),
     Stage(
+        key="adopt_trial", title="Put a trial draft into the book", step="drafting", needs_assets=True,
+        uses_pubdb=True, writes_pubdb=True, source_optional=True, into_book=True, params={"run": 1, "chapter": 1},
+        # free: an earlier trial draft (ready for Gate D, written from the CURRENT Gate R sources) joins the book
+        # without paying to draft it again; laid out with the current renderer, text unchanged
+        prefetch=lambda slug, p: [(f"books/{slug}/runs/run-{int(p['run'])}/ch{int(p['chapter']):02d}-{f}",
+                                   f"trial-source/ch{int(p['chapter']):02d}-{f}")
+                                  for f in ("draft.json", "dossier-full.json", "dossier.json")],
+        argv=lambda slug, p, rel: [sys.executable, "-m", "publishing.runner.adopt", slug, rel,
+                                   str(int(p["chapter"])), str(int(p["run"]))],
+        # the trial's own run already recorded what drafting cost: adopting it costs nothing and records nothing
+        collect=lambda out: (0.0, [], json.loads((out / "draft.json").read_text(encoding="utf-8"))),
+    ),
+    Stage(
         key="render_trial", title="Re-render a trial chapter (no new draft)", step="render", needs_source=False,
         needs_assets=True, params={"run": 1, "chapter": 1},
         # free: lays out an earlier trial draft again with the current renderer (layout fixes, fonts) — the text is

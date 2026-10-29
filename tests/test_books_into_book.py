@@ -80,3 +80,17 @@ def test_draft_chapter_stage_writes_the_book_and_the_database():
     s = stages.STAGES["draft_chapter"]
     assert s.into_book and s.writes_pubdb and s.uses_models and s.source_optional and "draft_chapter" in stages.WRITES_PUBDB
     assert not stages.STAGES["draft_trial"].into_book
+
+
+def test_adopt_trial_takes_only_a_current_trial_and_costs_nothing(tmp_path):
+    from publishing.runner.adopt import stale
+    s = stages.STAGES["adopt_trial"]
+    assert s.into_book and s.writes_pubdb and not s.uses_models
+    assert [k for k, _ in s.prefetch("lin", {"run": 27, "chapter": 1})] == [
+        "books/lin/runs/run-27/ch01-draft.json", "books/lin/runs/run-27/ch01-dossier-full.json",
+        "books/lin/runs/run-27/ch01-dossier.json"]
+    assert stale({"edition_id": 2, "pin_run_id": 9}, {"id": 2, "pin_run_id": 9}) is None
+    assert "draft the chapter again" in stale({"edition_id": 2, "pin_run_id": 8}, {"id": 2, "pin_run_id": 9})
+    assert "Gate R first" in stale({"edition_id": 2, "pin_run_id": 9}, None)
+    (tmp_path / "draft.json").write_text(json.dumps({"chapter": 1, "usd": 0.0, "drafted_for_usd": 2.32}))
+    assert s.collect(tmp_path)[:2] == (0.0, [])
