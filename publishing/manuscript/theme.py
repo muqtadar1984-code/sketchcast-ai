@@ -8,6 +8,7 @@ contours, rule), never by subject, so one renderer serves every book.
 from __future__ import annotations
 
 import json
+import os
 import math
 
 from publishing.schemas import ROOT
@@ -24,7 +25,13 @@ def for_work(slug: str) -> dict:
         strand = str(brief.get("subject_strand") or "")
         name = next((t for p, t in sorted(cfg["by_strand"].items(), key=lambda kv: -len(kv[0]))
                      if strand.startswith(p)), cfg["default"])
-    return {"name": name, **cfg["themes"][name]}
+    theme = {"name": name, **cfg["themes"][name]}
+    # a font trial (books runner, founder D3 2026-10-28: Sitka is Windows-only, pick an open serif) overrides the
+    # theme's fonts for one render without touching the theme itself
+    for key, var in (("heading_font", "PUBLISH_HEADING_FONT"), ("body_font", "PUBLISH_BODY_FONT")):
+        if os.getenv(var):
+            theme[key] = os.environ[var]
+    return theme
 
 
 def css_vars(t: dict) -> str:

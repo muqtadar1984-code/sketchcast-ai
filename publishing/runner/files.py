@@ -49,10 +49,21 @@ class DirBucket:
         p.write_bytes(body)
 
 
+SHARED_ASSETS = "books/_shared/book-assets/"
+
+
+def pull_assets(bucket, dest: Path) -> dict:
+    """The shared book-assets/ (the books' own illustrations and opener art), hash-checked like the source set."""
+    return _pull(bucket, SHARED_ASSETS, dest)
+
+
 def pull_source(bucket, slug: str, book: Path) -> dict:
     """Every file in the manifest, written to <book>/<rel> and checked against its sha256. Raises on a mismatch:
     a run must never start from a book that did not come back whole."""
-    prefix = f"books/{slug}/source/"
+    return _pull(bucket, f"books/{slug}/source/", book)
+
+
+def _pull(bucket, prefix: str, book: Path) -> dict:
     manifest = json.loads(bucket.get(prefix + MANIFEST))
     n = size = 0
     for f in manifest["files"]:

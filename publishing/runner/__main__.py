@@ -80,6 +80,13 @@ def execute(store, bucket, run_id: int, work: Path) -> str:
         store.update(run_id, progress={"step": "pull", "note": "pulling the book's files"})
         got = files.pull_source(bucket, slug, book)
         log.add(f"pulled {got['files']} files ({got['bytes'] / 1e6:.1f} MB), every one hash-checked", kind="progress")
+        extra_env = {}
+        if stage.needs_assets:
+            assets = work / "book-assets"
+            got = files.pull_assets(bucket, assets)
+            extra_env["PUBLISH_ASSETS"] = str(assets)
+            log.add(f"pulled the book pictures: {got['files']} files ({got['bytes'] / 1e6:.1f} MB), hash-checked",
+                    kind="progress")
         (book / run_rel).mkdir(parents=True, exist_ok=True)
 
         empty_env = work / "empty.env"
@@ -88,7 +95,7 @@ def execute(store, bucket, run_id: int, work: Path) -> str:
         if stage.uses_models:
             from shared.claude_client import _ensure_google_credentials
             _ensure_google_credentials()          # GOOGLE_APPLICATION_CREDENTIALS_JSON → a file the command inherits
-        env = {**os.environ, "PUBLISH_OUT": str(work), "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8",
+        env = {**os.environ, "PUBLISH_OUT": str(work), "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", **extra_env,
                **stage.env(slug, params, run_rel)}
         store.upsert_step({"run_id": run_id, "chapter": None, "step": stage.step, "status": "running",
                            "started_at": now()})

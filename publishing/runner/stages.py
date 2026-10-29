@@ -31,6 +31,7 @@ class Stage:
     collect: Callable[[Path], tuple[float, list[dict], dict]] = lambda out: (0.0, [], {})
     uses_models: bool = False
     writes_source: bool = False        # S1 stages only read the book; a stage that edits it comes in S3
+    needs_assets: bool = False         # pulls the shared book-assets/ (the book's own pictures) as well
     step: str = ""
     params: dict = field(default_factory=dict)   # name → default, validated before the run starts
 
@@ -70,6 +71,12 @@ def _audit_collect(out: Path) -> tuple[float, list[dict], dict]:
     return round(sum(ln["usd"] for ln in lines), 4), lines, {"chapters": chapters, "findings": totals}
 
 
+def _proof_collect(out: Path) -> tuple[float, list[dict], dict]:
+    proof = json.loads((out / "proof.json").read_text(encoding="utf-8"))
+    return 0.0, [], {"chapter": proof["chapter"],
+                     "renders": [{k: r[k] for k in ("font", "pages", "hard_defects")} for r in proof["renders"]]}
+
+
 def _check_collect(out: Path) -> tuple[float, list[dict], dict]:
     return 0.0, [], json.loads((out / "check.json").read_text(encoding="utf-8"))["summary"]
 
@@ -99,6 +106,13 @@ STAGES: dict[str, Stage] = {s.key: s for s in [
         env=lambda slug, p, rel: {"PUBLISH_REV": rel},
         collect=_audit_collect,
     ),
+    Stage(
+        key="render_proof", title="Font proof (render one chapter)", step="render", needs_assets=True,
+        params={"chapter": 1},
+        # free: renders the chapter on Linux once per candidate heading font (founder D3: Sitka is Windows-only)
+        argv=lambda slug, p, rel: [sys.executable, "-m", "publishing.runner.render_proof", slug, rel, str(int(p["chapter"]))],
+        collect=_proof_collect,
+    ),
 ]}
 
 
@@ -113,4 +127,6 @@ def validate(stage_key: str, params: dict) -> tuple[Stage, dict]:
     merged = {**stage.params, **params}
     if "first" in stage.params:
         _chapters(merged)
+    if "chapter" in stage.params and not (1 <= int(merged["chapter"]) <= 99):
+        raise ValueError(f"chapter must be 1–99, got {merged['chapter']}")
     return stage, merged

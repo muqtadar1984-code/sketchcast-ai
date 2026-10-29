@@ -26,6 +26,42 @@ EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 IMG_W, COL_W, LINE_H = 330, 140, 23
 
 
+def browser() -> list[str]:
+    """The headless browser that prints the pages, as the start of its command line: PUBLISH_BROWSER when set, else
+    Edge on Windows (this machine), else Chromium on Linux (the books runner image). Chromium in a container runs as an
+    unprivileged user without the kernel sandbox it would need, so it gets --no-sandbox there."""
+    import os
+    import shutil
+    named = os.getenv("PUBLISH_BROWSER")
+    if named:
+        return [named] + (["--no-sandbox"] if os.name != "nt" else [])
+    if os.name == "nt" and Path(EDGE).exists():
+        return [EDGE]
+    for name in ("chromium", "chromium-browser", "google-chrome", "msedge"):
+        found = shutil.which(name)
+        if found:
+            return [found] + (["--no-sandbox"] if os.name != "nt" else [])
+    raise RuntimeError("no headless browser found (set PUBLISH_BROWSER)")
+
+
+def assets_dir() -> Path:
+    """Where the book's own pictures live: PUBLISH_ASSETS (the books runner pulls them there), else the publishing
+    folder's book-assets/ as on this machine."""
+    import os
+    from publishing.report import OUT
+    return Path(os.getenv("PUBLISH_ASSETS") or OUT / "book-assets")
+
+
+def local_asset(path: str) -> Path:
+    """A stored picture path as it exists here. Dossiers record the path of the machine that drafted them
+    ('..\\study-guide-sprint1\\book-assets\\x.png', 'C:\\Users\\…\\book-assets\\x.png'); elsewhere the same file is
+    found by its name in assets_dir()."""
+    p = Path(path)
+    if p.exists():
+        return p
+    return assets_dir() / re.split(r"[\\/]", path)[-1]
+
+
 def md(text: str) -> str:
     t = html.escape(str(text or ""))
     t = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", t)
@@ -108,7 +144,7 @@ def matte(png: bytes, tol: int = 24) -> bytes | None:
 def asset_bytes(http, base: str, asset: dict) -> bytes:
     """A library asset from storage, or a book asset from the local store."""
     if asset.get("local_path"):
-        return Path(asset["local_path"]).read_bytes()
+        return local_asset(asset["local_path"]).read_bytes()
     return _download(http, base, asset["storage_path"])
 
 
@@ -616,16 +652,19 @@ def annotations_for(slug: str) -> dict:
 def hero_image(slug: str, chapter: int) -> str | None:
     """The chapter opener's artwork: the local book asset `book:hero_chNN`
     (made through the same publisher-grade style system), matted. None when the
-    book has none — the opener then stands on typography alone."""
+    book has none — the opener then stands on typography alone. Without the local
+    database (the books runner) the same file is found by its name, hero_chNN.png."""
+    path = None
     try:
         from publishing import localdb
         conn = localdb.connect()
         row = conn.execute("select path from pub.book_assets where key=%s", (f"book:hero_ch{chapter:02d}",)).fetchone()
+        path = local_asset(row["path"]) if row else None
     except Exception:  # noqa: BLE001 — the opener must render without a database
+        path = assets_dir() / f"hero_ch{chapter:02d}.png"
+    if not path or not path.exists():
         return None
-    if not row or not Path(row["path"]).exists():
-        return None
-    png = Path(row["path"]).read_bytes()
+    png = path.read_bytes()
     return "data:image/png;base64," + base64.b64encode(_vignette(matte(png) or png)).decode()
 
 
@@ -1166,14 +1205,17 @@ def _print(page: Path, pdf: Path) -> Path:
     # profile are refused by Edge, which still exits 0 (book run, 2026-10-25)
     for attempt in (1, 2, 3):
         with tempfile.TemporaryDirectory(prefix="edge-print-") as profile:
-            subprocess.run([EDGE, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
-                            f"--user-data-dir={profile}", f"--print-to-pdf={tmp}", page.resolve().as_uri()],
-                           check=False, timeout=180, capture_output=True)   # success = the file exists (checked below)
+            try:
+                subprocess.run([*browser(), "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
+                                f"--user-data-dir={profile}", f"--print-to-pdf={tmp}", page.resolve().as_uri()],
+                               check=False, timeout=180, capture_output=True)   # success = the file exists (below)
+            except subprocess.TimeoutExpired:
+                pass                        # a hung print is a failed attempt like any other (killed by run())
         if tmp.exists() and tmp.stat().st_size >= 1000:
             break
         time.sleep(3 * attempt)
     else:
-        raise RuntimeError(f"Edge did not write {tmp.name}")
+        raise RuntimeError(f"the browser did not write {tmp.name}")
     try:
         os.replace(tmp, pdf)
         return pdf
