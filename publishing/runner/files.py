@@ -93,6 +93,15 @@ def pull_assets(bucket, dest: Path) -> dict:
     return _pull(bucket, SHARED_ASSETS, dest)
 
 
+def has_source(bucket, slug: str) -> bool:
+    """Whether the book has a source set in storage at all (a book not drafted yet has none)."""
+    try:
+        bucket.get_with_etag(f"books/{slug}/source/{MANIFEST}")
+        return True
+    except KeyError:
+        return False
+
+
 def pull_source(bucket, slug: str, book: Path) -> dict:
     """Every file in the manifest, written to <book>/<rel> and checked against its sha256. Raises on a mismatch:
     a run must never start from a book that did not come back whole."""

@@ -33,6 +33,7 @@ class Stage:
     writes_source: bool = False        # S1 stages only read the book; a stage that edits it comes in S3
     needs_assets: bool = False         # pulls the shared book-assets/ (the book's own pictures) as well
     needs_source: bool = True          # pulls the book's source set (a book not drafted yet has none)
+    source_optional: bool = False      # … and may start without one (drafting a new book's first chapter)
     uses_pubdb: bool = False           # restores the shared publishing database (publishing/runner/pubdb.py)
     writes_pubdb: bool = False         # … and pushes it back afterwards; one such run at a time
     step: str = ""
@@ -164,7 +165,7 @@ STAGES: dict[str, Stage] = {s.key: s for s in [
     ),
     Stage(
         key="draft_trial", title="Draft one chapter (trial, into the run folder)", step="drafting", uses_models=True,
-        needs_assets=True, uses_pubdb=True, params={"chapter": 1},
+        needs_assets=True, uses_pubdb=True, source_optional=True, params={"chapter": 1},
         # paid: the engine's one-pass draft + render, written to the run folder only; no new pictures; the publishing
         # database is read (dossier, Gate R pins) but not pushed back
         argv=lambda slug, p, rel: [sys.executable, "-m", "publishing.runner.draft", slug, rel, str(int(p["chapter"]))],
