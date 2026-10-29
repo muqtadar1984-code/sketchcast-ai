@@ -95,6 +95,24 @@ def _kw(text: str) -> list[str]:
     return list(dict.fromkeys(w for w in words if w not in STOP))[:6]
 
 
+def scope(art: dict, want: set[str]) -> tuple[list[dict], list[tuple[int, dict]], str]:
+    """The pinned article's sections and worked examples for THIS chapter, and how they were chosen.
+
+    Normally a section is in when its ``covers`` share a code with the chapter's objectives for this topic, and a
+    worked example when it belongs to such a section or covers such a code. An article whose sections carry no
+    ``covers`` at all (30 of 43 approved maths articles, written before sections were tagged — founder 2026-10-29)
+    would contribute nothing that way, so it contributes the WHOLE article: the blueprint already assigned the topic
+    to this chapter, and the author is told to teach only this chapter's objectives."""
+    sections = art.get("sections") or []
+    if sections and not any(x.get("covers") for x in sections):
+        return sections, list(enumerate(art.get("worked_examples") or [], 1)), "whole_article_untagged"
+    secs = [x for x in sections if want & set(x.get("covers") or [])]
+    sids = {x["id"] for x in secs}
+    wes = [(i, w) for i, w in enumerate(art.get("worked_examples") or [], 1)
+           if (w.get("section_id") in sids) or want & set(w.get("covers") or [])]
+    return secs, wes, "tagged_sections"
+
+
 def build(conn, slug: str, chapter: int, env_file: Path) -> dict:
     work = conn.execute("select * from pub.works where slug=%s", (slug,)).fetchone()
     ed = conn.execute("select * from pub.editions where work_uid=%s and language='en' order by edition_no desc limit 1",
@@ -132,7 +150,7 @@ def build(conn, slug: str, chapter: int, env_file: Path) -> dict:
                 raise RuntimeError(f"{s}: pinned article v{pin['article_version']} is now "
                                    f"v{art['version']}/{art['status']} — re-run Gate R")
             want = nodes & set(r["node_codes"] or nodes)
-            secs = [x for x in art["sections"] or [] if want & set(x.get("covers") or [])]
+            secs, wes, chosen = scope(art, want)
             sids = {x["id"] for x in secs}
             text = " ".join(x.get("body_md", "") for x in secs).lower()
             gloss = [g for g in art["glossary"] or [] if g["term"].lower() in text]
@@ -141,8 +159,6 @@ def build(conn, slug: str, chapter: int, env_file: Path) -> dict:
                     if any(t in (m.get("misconception", "") + m.get("correction", "")).lower() for t in gterms)]
             claims = [c for c in art["claims"] or [] if c.get("section_id") in sids]
             cids = {c["id"] for c in claims}
-            wes = [(i, w) for i, w in enumerate(art["worked_examples"] or [], 1)
-                   if (w.get("section_id") in sids) or want & set(w.get("covers") or [])]
             fkeys = {k for x in secs for k in x.get("figure_keys") or []}
             figs = [f for f in _q(http, "/article_figures", select="*", article_id=f"eq.{art['id']}")
                     if f["figure_key"] in fkeys and f["status"] in ("rendered", "approved") and f["visual_asset_id"]]
@@ -154,6 +170,7 @@ def build(conn, slug: str, chapter: int, env_file: Path) -> dict:
                      if q.get("claim_ref") in cids]
             out["topics"].append({
                 "slug": s, "title": topic["title"], "role": r["role"], "article": {"id": art["id"], "version": art["version"]},
+                "scope": chosen,
                 "videos": [f"video:{v}" for v in pin["youtube_video_ids"]],
                 "sections": [{"id": f"sec:{s}:{x['id']}", "heading": x.get("heading"), "covers": x.get("covers"),
                               "body_md": x.get("body_md")} for x in secs],
