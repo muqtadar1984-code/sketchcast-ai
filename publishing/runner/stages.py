@@ -82,7 +82,7 @@ def _proof_collect(out: Path) -> tuple[float, list[dict], dict]:
 
 def _readiness_collect(out: Path) -> tuple[float, list[dict], dict]:
     r = json.loads((out / "readiness.json").read_text(encoding="utf-8"))
-    return 0.0, [], {k: r[k] for k in ("pct", "ready", "outstanding_by_state")}
+    return 0.0, [], {k: r.get(k) for k in ("pct", "ready", "outstanding_by_state", "gaps", "curriculum")}
 
 
 def _check_collect(out: Path) -> tuple[float, list[dict], dict]:
