@@ -252,6 +252,24 @@ def _finish(req: dict, tid, title, checks: list[CheckResult]) -> TopicAudit:
                       failing=failing, warnings=warnings)
 
 
+def apply_waivers(audit: TopicAudit, req: dict, waivers: list) -> TopicAudit:
+    """A waived failure becomes a warning that says who waived it, when and why (the check and its evidence stay on
+    record); the topic's state is then recomputed. `waivers` are already this book's."""
+    if not waivers or not audit.topic_id:
+        return audit
+    checks, hit = [], False
+    for c in audit.checks:
+        w = next((w for w in waivers if c.verdict == "fail" and w.topic_id == str(audit.topic_id) and w.check == c.code
+                  and w.language == c.language and (w.sub_status is None or w.sub_status == c.sub_status)), None)
+        if w:
+            hit = True
+            c = c.model_copy(update={"verdict": "warn", "detail": f"waived by {w.by} on {w.date}: {w.reason} "
+                                                                  f"(was: {c.detail})",
+                                     "evidence": {**c.evidence, "waiver": w.model_dump()}})
+        checks.append(c)
+    return _finish(req, audit.topic_id, audit.title, checks) if hit else audit
+
+
 def readiness(audits: list[TopicAudit]) -> dict:
     """Readiness over DISTINCT topics (a topic used by two chapters counts once)."""
     seen: dict = {}
@@ -303,7 +321,8 @@ def run_audits(conn, slug: str) -> list[int]:
             req = {"index": r["id"], "topic_slug": slugs.get(str(r["topic_id"])) if r["topic_id"] else None,
                    "proposed_title": r["proposed_title"], "role": r["role"], "node_codes": r["node_codes"],
                    "chapter": r["chapter"]}
-            a = audit_topic(cat, req, policy, w["brief"]["profile"])
+            a = apply_waivers(audit_topic(cat, req, policy, w["brief"]["profile"]), req,
+                              [x for x in policy.waivers if x.work == w["slug"]])
             audits.append(a)
             for c in a.checks:
                 conn.execute(

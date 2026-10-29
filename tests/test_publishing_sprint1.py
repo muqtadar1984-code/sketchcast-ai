@@ -1,3 +1,4 @@
+import json
 """Sprint 1 publishing engine: audit, planner, blueprint checks and guards.
 
 Every catalogue here is a hand-built fixture. No test touches production or
@@ -404,3 +405,31 @@ def test_kit_rebuild_client_allows_only_the_portals_writes():
                 lambda: c.delete("/topics"), lambda: c.patch("/topic_articles", json={}), lambda: c.post("/topics", json={})]:
         with pytest.raises(NotAllowed):
             bad()
+
+
+def test_a_waiver_turns_one_books_stale_kit_into_a_warning(monkeypatch):
+    from publishing.audit import _finish, apply_waivers
+    from publishing.schemas import Waiver
+    kw = base_catalogue()
+    kw["kits"][0]["article_id"] = "a0"                       # the EN kit was built from an older article version
+    kw["kits"][1]["article_id"] = "a0"
+    cat, a = run(kw, codes=("7Xx.01",))
+    assert verdict(a, "B6", "en").sub_status == "stale_article" and a.state == "kit_or_publication_incomplete"
+    req = {"index": 1, "topic_slug": "topic-one", "proposed_title": None, "role": "core", "node_codes": ["7Xx.01"],
+           "chapter": 1}
+    w = Waiver(work="book-a", topic_id="t1", check="B6", sub_status="stale_article", by="founder", date="2026-10-29",
+               reason="v1 kit still teaches it")
+    waived = apply_waivers(a, req, [w])
+    b6 = verdict(waived, "B6", "en")
+    assert b6.verdict == "warn" and "waived by founder" in b6.detail and b6.evidence["waiver"]["reason"]
+    assert "B6/en" not in waived.failing
+    # another kind of failure on the same check is not covered by a sub_status waiver
+    other = Waiver(**{**w.model_dump(), "sub_status": "no_kit"})
+    assert verdict(apply_waivers(a, req, [other]), "B6", "en").verdict == "fail"
+
+
+def test_waivers_from_the_book_app_are_merged(monkeypatch):
+    monkeypatch.setenv("PUBLISH_WAIVERS", json.dumps([{"work": "b", "topic_id": "t", "check": "B4", "by": "editor@x",
+                                                        "date": "2026-10-29", "reason": "ok"}]))
+    p = ReadinessPolicy.load()
+    assert p.waivers[-1].by == "editor@x" and any(w.work == "mastering-linear-equations" for w in p.waivers)

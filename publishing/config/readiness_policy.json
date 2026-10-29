@@ -1,10 +1,27 @@
 {
-  "id": "v2-2026-10-25-en",
-  "languages": ["en"],
+  "id": "v3-2026-10-29-en",
+  "languages": [
+    "en"
+  ],
   "min_words": 1000,
-  "min_worked_examples": {"maths": 3, "science": 1},
+  "min_worked_examples": {
+    "maths": 3,
+    "science": 1
+  },
   "min_bank_maturity": "good",
   "require_figures_rendered": true,
   "thumbnail_warning_ok": true,
-  "notes": "D12 approved 2026-10-24: thumbnail-only publication errors are warnings. D14 approved 2026-10-24: balanced depth policy. FOUNDER 2026-10-25: 'ignore Malay for now, proceed with English as per the plan' - the English manuscript may be drafted on English readiness alone (D2 waived for the EN edition); the Malay BOOK edition still waits for the Malay catalogue (v1-2026-10-24 had languages en+ms)."
+  "notes": "D12 approved 2026-10-24: thumbnail-only publication errors are warnings. D14 approved 2026-10-24: balanced depth policy. FOUNDER 2026-10-25: 'ignore Malay for now, proceed with English as per the plan' - the English manuscript may be drafted on English readiness alone (D2 waived for the EN edition); the Malay BOOK edition still waits for the Malay catalogue (v1-2026-10-24 had languages en+ms). FOUNDER 2026-10-29: a failing check may be waived for one book (waivers below, or by an editor in the book app); a waived check is recorded as a warning naming who waived it.",
+  "waivers": [
+    {
+      "work": "mastering-linear-equations",
+      "topic_id": "db78e489-0222-4a18-ad6d-16d213958398",
+      "check": "B6",
+      "language": "en",
+      "sub_status": "stale_article",
+      "by": "founder",
+      "date": "2026-10-29",
+      "reason": "article v2 only added a worked example and redrew two figures; the v1 English kit and its public video still teach the topic, so they are not rebuilt for the book"
+    }
+  ]
 }
