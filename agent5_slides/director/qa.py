@@ -165,10 +165,13 @@ try {
 """
 
 
-def render_images(pptx: Path, out_dir: Path, pdf: Optional[Path] = None) -> tuple[list[Path], str]:
+def render_images(pptx: Path, out_dir: Path, pdf: Optional[Path] = None,
+                  timeout: int = 600) -> tuple[list[Path], str]:
     """Slides as PNGs (and the deck as a PDF). PowerPoint via COM on Windows;
     LibreOffice + pdftoppm elsewhere. Returns ([], reason) when neither is
-    available — QA then runs its deterministic half only and says so."""
+    available — QA then runs its deterministic half only and says so.
+    ``timeout`` bounds each renderer subprocess (the deck-pages export
+    passes a short one so a stuck render never holds a deck job)."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in out_dir.glob("slide_*.png"):
@@ -180,7 +183,7 @@ def render_images(pptx: Path, out_dir: Path, pdf: Optional[Path] = None) -> tupl
             subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1),
                             "-Pptx", str(Path(pptx).resolve()), "-OutDir", str(out_dir.resolve()),
                             "-Pdf", str(Path(pdf).resolve()) if pdf else ""],
-                           check=True, capture_output=True, timeout=600)
+                           check=True, capture_output=True, timeout=timeout)
             return sorted(out_dir.glob("slide_*.png")), "powerpoint"
         except Exception as exc:  # noqa: BLE001
             logger.warning("qa: PowerPoint render failed (%s)", exc)
@@ -192,10 +195,10 @@ def render_images(pptx: Path, out_dir: Path, pdf: Optional[Path] = None) -> tupl
             profile = (out_dir / "_lo_profile").resolve().as_uri()
             subprocess.run([soffice, f"-env:UserInstallation={profile}", "--headless", "--convert-to", "pdf",
                             "--outdir", str(out_dir), str(pptx)],
-                           check=True, capture_output=True, timeout=600)
+                           check=True, capture_output=True, timeout=timeout)
             made = out_dir / (Path(pptx).stem + ".pdf")
             subprocess.run(["pdftoppm", "-png", "-r", "120", str(made), str(out_dir / "slide")],
-                           check=True, capture_output=True, timeout=600)
+                           check=True, capture_output=True, timeout=timeout)
             for p in out_dir.glob("slide-*.png"):
                 p.rename(out_dir / f"slide_{int(p.stem.split('-')[-1]):02d}.png")
             if pdf:

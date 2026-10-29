@@ -77,6 +77,16 @@ def sample_pdf_path():
 
 
 @pytest.fixture(autouse=True)
+def _no_deck_pages_render_by_default(monkeypatch):
+    """Every deck a test builds would otherwise be rendered to Board pages
+    (worker.process._deck_pages_after_build) by a REAL renderer — PowerPoint
+    over COM on a Windows dev box. The deck-pages tests switch it back on and
+    inject their own renderer."""
+    monkeypatch.setenv("DECK_PAGES", "0")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _visual_library_is_offline_by_default(monkeypatch):
     """No test may reach the PRODUCTION visual library.
 

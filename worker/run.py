@@ -92,6 +92,14 @@ MAX_CATALOGUE_JOBS = max(1, int(os.getenv("MAX_CATALOGUE_JOBS", "2")))
 # Teachers are not under this rule: it reads only params.catalogue rows.
 MAX_CATALOGUE_KITS = max(1, int(os.getenv("MAX_CATALOGUE_KITS", "1")))
 VIDEO_JOB_TYPES = ["presentation"]
+# deck_pages (2026-10-28): render a finished deck's slides to PNG + its text
+# map for the Classroom Board. No model or image quota — LibreOffice CPU
+# only — but nobody's lesson waits on it either, so it is claimed only when
+# no user builder is queued, and at most this many at once in one process,
+# so a backfill of every old deck can never hold the threads a teacher's
+# next job needs.
+DECK_PAGES_JOB_TYPES = ["deck_pages"]
+MAX_DECK_PAGES_JOBS = max(1, int(os.getenv("MAX_DECK_PAGES_JOBS", "1")))
 
 # Documents (papers / plans / activities / case studies / exams) are fast — one
 # model call + a .docx — so they jump AHEAD of long video renders, the same
@@ -126,7 +134,10 @@ DOC_JOB_TYPES = ["lesson_plan", "activity", "worksheet", "exam_paper", "case_stu
 # here and claimed only on the last lane (catalogue/pinterest/).
 OBSERVER_JOB_TYPES = ["support_diagnose", "issue_resolve", "topic_harvest", "topic_derive", "topic_article",
                       "figure_render", "topic_questions", "topic_publish", "kit_translate",
-                      "pin_draft", "pin_post", "pin_boards", "pin_recheck", "pin_stats"]
+                      "pin_draft", "pin_post", "pin_boards", "pin_recheck", "pin_stats",
+                      # deck pages (2026-10-28): reads a finished deck, owns
+                      # no generation status; its own lane, below the users'
+                      "deck_pages"]
 CATALOGUE_JOB_TYPES = ["topic_harvest", "topic_derive", "topic_article", "figure_render", "topic_questions",
                        "topic_publish", "topic_supersede", "youtube_playlists",
                        "youtube_enrich", "kit_previews", "announcement_email",
@@ -306,6 +317,20 @@ def _videos_in_flight() -> int:
 def _catalogue_jobs_in_flight() -> int:
     with _inflight_lock:
         return sum(1 for j in _inflight_jobs.values() if j.get("type") in CATALOGUE_JOB_TYPES)
+
+
+def _deck_pages_in_flight() -> int:
+    with _inflight_lock:
+        return sum(1 for j in _inflight_jobs.values() if j.get("type") in DECK_PAGES_JOB_TYPES)
+
+
+def _claim_deck_pages(sb):
+    """The deck-pages lane: reached only when lanes 1-3 found nothing (no
+    support job, document or user builder queued), and only while this
+    process has a deck-pages slot free."""
+    if _deck_pages_in_flight() >= MAX_DECK_PAGES_JOBS:
+        return None
+    return db.claim_next_job(sb, job_type=DECK_PAGES_JOB_TYPES)
 
 
 def _video_slots_full() -> bool:
@@ -546,6 +571,9 @@ def run_once(sb) -> bool:
       3. Documents — a teacher's papers/plans; one model call + a .docx.
       4. Everything else — video lessons (presentation, at most
          MAX_VIDEO_JOBS at once in this process), index_book.
+      4b. Deck pages (deck_pages): a finished deck's slides rendered for
+         the Board — only when nothing above is queued, MAX_DECK_PAGES_JOBS
+         at once in this process.
       5. Catalogue observers — topic harvests (download + CPU), topic
          derives (one text call per sub-strand), topic articles (one text
          call), figure renders (image calls, self-pausing) and question
@@ -585,6 +613,7 @@ def run_once(sb) -> bool:
         db.claim_next_job(sb, job_type=["support_diagnose", "issue_resolve"], catalogue=False)
         or db.claim_next_job(sb, job_type=DOC_JOB_TYPES, catalogue=False)
         or db.claim_next_job(sb, exclude_types=_user_builder_exclusions(), catalogue=False)  # every user builder, videos capped
+        or _claim_deck_pages(sb)                                     # Board pages of a finished deck: below every user builder
         or db.claim_catalogue_observer_job(sb, _catalogue_observer_types(sb), MAX_CATALOGUE_JOBS)  # harvest / derive / …: only when nothing else waits; MAX_CATALOGUE_JOBS at once, decided in the database
         or _claim_catalogue_generation(sb)                          # kits: no live user builder + off-peak
     )
@@ -685,6 +714,10 @@ def run_once(sb) -> bool:
             from catalogue.pinterest.stats import run_stats_job
 
             run_stats_job(sb, job)  # self-contained: finishes its own row, done or error
+        elif job_type == "deck_pages":
+            from worker.deck_pages_job import process_deck_pages
+
+            process_deck_pages(sb, job)  # self-contained: finishes its own row, done or error; never the generation's
         elif job_type == "announcement_email":
             from shared.announcement import run_announcement_job
 
@@ -772,7 +805,8 @@ def run_once(sb) -> bool:
         # A catalogue kit's failure is the reviewer's, in the portal (the kit
         # row goes 'failed' with the reason): filing a console issue under
         # the system account would only spend a diagnosis call on nobody.
-        if (_support_agent_enabled() and job_type not in ("support_diagnose", "issue_resolve", "index_book", *CATALOGUE_JOB_TYPES)
+        if (_support_agent_enabled() and job_type not in ("support_diagnose", "issue_resolve", "index_book", *DECK_PAGES_JOB_TYPES,
+                                                       *CATALOGUE_JOB_TYPES)
                 and not _is_catalogue_job(job)):
             _auto_file_support_issue(sb, job, str(exc))
     finally:
