@@ -16,7 +16,8 @@ NOT_ON_A_STAGE_PATH = {"agent2_analysis"}
 NOT_COPIED = {"spike", "agent2_analysis", "catalogue", "maths", "worker"}
 ENTRY = ["publishing.runner.__main__", "publishing.runner.check", "publishing.tools.coverage",
          "publishing.tools.academic_audit", "publishing.runner.render_proof", "publishing.manuscript.render",
-         "publishing.runner.readiness", "publishing.runner.pubdb", "publishing.tools.pubdb_sync"]
+         "publishing.runner.readiness", "publishing.runner.pubdb", "publishing.tools.pubdb_sync",
+         "publishing.runner.gate_r", "publishing.runner.draft", "publishing.manuscript.author"]
 
 
 def _declared() -> set[str]:
