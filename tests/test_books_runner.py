@@ -159,9 +159,11 @@ def test_gate_r_and_draft_stages_are_registered():
 
 def test_gate_r_collect(tmp_path):
     (tmp_path / "gate_r.json").write_text(json.dumps({"passed": False, "pct": 99.2, "ready": False, "run_id": 7,
-                                                      "outstanding": [], "gaps": [{"title": "x"}], "curriculum": None}))
+                                                      "outstanding": [{"state": "needs_improvement"}],
+                                                      "gaps": [{"title": "x"}], "curriculum": None}))
     usd, lines, summary = stages.STAGES["gate_r"].collect(tmp_path)
-    assert usd == 0 and lines == [] and summary == {"passed": False, "pct": 99.2, "gaps": [{"title": "x"}], "curriculum": None}
+    assert usd == 0 and lines == [] and summary == {"passed": False, "pct": 99.2, "gaps": [{"title": "x"}], "curriculum": None,
+                                                    "ready": False, "outstanding_by_state": {"needs_improvement": 1}}
 
 
 def test_draft_collect_groups_the_ledger(tmp_path):

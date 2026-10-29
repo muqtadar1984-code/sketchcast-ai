@@ -86,9 +86,14 @@ def _readiness_collect(out: Path) -> tuple[float, list[dict], dict]:
 
 
 def _gate_r_collect(out: Path) -> tuple[float, list[dict], dict]:
+    """The readiness summary's keys (the app's Overview card and Gaps tab read either run) plus what Gate R pinned."""
     r = json.loads((out / "gate_r.json").read_text(encoding="utf-8"))
     keep = ("passed", "pct", "pins", "edition_id", "policy", "gaps", "curriculum")
-    return 0.0, [], {k: r[k] for k in keep if k in r}
+    states: dict[str, int] = {}
+    for o in r.get("outstanding") or []:
+        states[o["state"]] = states.get(o["state"], 0) + 1
+    return 0.0, [], {**{k: r[k] for k in keep if k in r}, "ready": bool(r.get("passed")),
+                     "outstanding_by_state": states, **({"pct": 100.0} if r.get("passed") else {})}
 
 
 def _draft_collect(out: Path) -> tuple[float, list[dict], dict]:
