@@ -433,3 +433,24 @@ def test_waivers_from_the_book_app_are_merged(monkeypatch):
                                                         "date": "2026-10-29", "reason": "ok"}]))
     p = ReadinessPolicy.load()
     assert p.waivers[-1].by == "editor@x" and any(w.work == "mastering-linear-equations" for w in p.waivers)
+
+
+def test_an_untagged_article_gives_the_chapter_the_whole_article():
+    from publishing.manuscript.dossier import scope
+    art = {"sections": [{"id": "s1", "covers": []}, {"id": "s2", "covers": []}],
+           "worked_examples": [{"id": "w1", "problem": "p"}, {"id": "w2", "problem": "q"}]}
+    secs, wes, how = scope(art, {"7Ae.01"})
+    assert [x["id"] for x in secs] == ["s1", "s2"] and [i for i, _ in wes] == [1, 2] and how == "whole_article_untagged"
+    tagged = {"sections": [{"id": "s1", "covers": ["7Ae.01"]}, {"id": "s2", "covers": ["9Xx.01"]}],
+              "worked_examples": [{"section_id": "s1"}, {"section_id": "s2"}, {"covers": ["7Ae.01"]}]}
+    secs, wes, how = scope(tagged, {"7Ae.01"})
+    assert [x["id"] for x in secs] == ["s1"] and [i for i, _ in wes] == [1, 3] and how == "tagged_sections"
+
+
+def test_untagged_sections_are_a_b4_warning_not_a_failure():
+    kw = base_catalogue()
+    for s in kw["articles"][0]["sections"]:
+        s["covers"] = []
+    cat, a = run(kw)
+    b4 = verdict(a, "B4", "en")
+    assert b4.verdict == "warn" and b4.sub_status == "sections_untagged" and "B4/en" not in a.failing

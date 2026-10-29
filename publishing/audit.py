@@ -147,9 +147,17 @@ def audit_topic(cat: CatalogueView, req: dict, policy: ReadinessPolicy, profile:
         # content shortfall needs a revised article. The planner relies on
         # this distinction.
         only_figures = bool(problems) and all(p.startswith("figures not rendered") for p in problems)
-        checks.append(_fail("B4", "en", "; ".join(problems), sub="figures_only" if only_figures else "content",
-                            **ev) if problems
-                      else _pass("B4", "en", f"{wc} words, {wex} worked examples", **ev))
+        untagged = bool(art.get("sections")) and not covers
+        if problems:
+            checks.append(_fail("B4", "en", "; ".join(problems), sub="figures_only" if only_figures else "content", **ev))
+        elif untagged:
+            # the objectives test above cannot run without tags; a book chapter then draws on the whole article
+            # (publishing.manuscript.dossier.scope) — recorded, not blocking (founder 2026-10-29)
+            checks.append(CheckResult(code="B4", language="en", verdict="warn", sub_status="sections_untagged",
+                                      detail=f"{wc} words, {wex} worked examples; sections carry no curriculum tags, so "
+                                             "a chapter uses the whole article", evidence=ev))
+        else:
+            checks.append(_pass("B4", "en", f"{wc} words, {wex} worked examples", **ev))
     else:
         checks.append(_na("B4", "en"))
 
