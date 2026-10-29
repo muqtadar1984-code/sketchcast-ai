@@ -36,6 +36,8 @@ class Stage:
     source_optional: bool = False      # … and may start without one (drafting a new book's first chapter)
     uses_pubdb: bool = False           # restores the shared publishing database (publishing/runner/pubdb.py)
     writes_pubdb: bool = False         # … and pushes it back afterwards; one such run at a time
+    # files of an EARLIER run this stage starts from: (slug, params) -> [(bucket key, path under the book folder)]
+    prefetch: Callable[[str, dict], list[tuple[str, str]]] | None = None
     step: str = ""
     params: dict = field(default_factory=dict)   # name → default, validated before the run starts
 
@@ -171,6 +173,17 @@ STAGES: dict[str, Stage] = {s.key: s for s in [
         argv=lambda slug, p, rel: [sys.executable, "-m", "publishing.runner.draft", slug, rel, str(int(p["chapter"]))],
         collect=_draft_collect,
     ),
+    Stage(
+        key="render_trial", title="Re-render a trial chapter (no new draft)", step="render", needs_source=False,
+        needs_assets=True, params={"run": 1, "chapter": 1},
+        # free: lays out an earlier trial draft again with the current renderer (layout fixes, fonts) — the text is
+        # the earlier run's, unchanged
+        prefetch=lambda slug, p: [(f"books/{slug}/runs/run-{int(p['run'])}/ch{int(p['chapter']):02d}-{f}.json",
+                                   f"trial-source/ch{int(p['chapter']):02d}-{f}.json") for f in ("draft", "dossier-full")],
+        argv=lambda slug, p, rel: [sys.executable, "-m", "publishing.runner.render_trial", slug, rel,
+                                   str(int(p["chapter"])), str(int(p["run"]))],
+        collect=lambda out: (0.0, [], json.loads((out / "render.json").read_text(encoding="utf-8"))),
+    ),
 ]}
 
 WRITES_PUBDB = [k for k, s in STAGES.items() if s.writes_pubdb]
@@ -189,4 +202,6 @@ def validate(stage_key: str, params: dict) -> tuple[Stage, dict]:
         _chapters(merged)
     if "chapter" in stage.params and not (1 <= int(merged["chapter"]) <= 99):
         raise ValueError(f"chapter must be 1–99, got {merged['chapter']}")
+    if "run" in stage.params and int(merged["run"]) < 1:
+        raise ValueError(f"run must be an earlier run's number, got {merged['run']}")
     return stage, merged

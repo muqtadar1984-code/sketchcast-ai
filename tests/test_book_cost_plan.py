@@ -342,3 +342,18 @@ def test_book_images_are_requested_at_2k_by_default(monkeypatch):
     assert "error" in got and B.BOOK_IMAGE_SIZE == "2K"
     assert asked and all(m.size == "2K" for m in asked)
     assert all(m.output_tokens == 1120 for m in asked), "2K is billed as 1K on Pro; 4K would be 2000"
+
+
+def test_the_plan_request_names_the_catalogue_figures_on_offer():
+    from publishing.manuscript.author import figures_note
+    d = {"topics": [{"figures": [{"id": "fig:a", "caption": "A cost graph"}, {"id": "fig:b", "key": "tariff"}]}]}
+    note = figures_note(d, {"fig:b"})
+    assert "fig:a: A cost graph" in note and "fig:b" not in note and "visual_gaps" in note
+    assert figures_note({"topics": [{"figures": []}]}, set()) == ""
+
+
+def test_the_layout_search_tries_tighter_spacing_and_applies_it():
+    from publishing.manuscript import render
+    names = [n for n, _ in render._alternatives({"sections": []})]
+    assert names[:3] == ["as authored", "as authored, snug spacing", "as authored, tight spacing"]
+    assert set(render.DENSITY_CSS) == {"snug", "tight"}

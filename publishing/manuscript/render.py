@@ -1118,6 +1118,7 @@ def chapter_html(doc: dict, figs: dict, edition: str = "digital", first_page: in
                     'SketchCast artwork. Photographs:<ul>' + "".join(f"<li>{c}</li>" for c in credits) + "</ul></div>")
     body.append("</div></section>")
     css = css_vars(theme) + CSS + BOOK_CSS + page_css(theme, n, ch["title"], w["title"], edition)
+    css += DENSITY_CSS.get(doc.get("_density") or "", "")
     if first_page != 1:                     # inside a whole book the folios run on from the chapter before
         css += f"html {{ counter-reset: page {first_page - 1}; }}"
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'><title>{html.escape(ch['title'])}</title>"
@@ -1243,6 +1244,15 @@ def _underlay(pdf: Path, slug: str, chapter: int, edition: str) -> None:
     os.replace(tmp, pdf)
 
 
+# Spacing variants the layout search may try (founder 2026-10-29: a chapter's last lines spilled onto their own page
+# before the forced breaks of Practice and Answers). Spacing only — the text, its order and the type size never change.
+DENSITY_CSS = {
+    "snug": "body{line-height:1.44} .box{margin:2.8mm 0} h2{margin:7mm 0 2.6mm} h3{margin:4.8mm 0 1.8mm} .ex{margin:0 0 4mm}",
+    "tight": "body{line-height:1.38} .box{margin:2.2mm 0;padding:2.6mm 4mm} h2{margin:5.5mm 0 2.2mm} "
+             "h3{margin:4mm 0 1.5mm} .ex{margin:0 0 3.2mm}",
+}
+
+
 def _layout_score(diag: dict) -> float:
     """Lower is better: hard defects dominate; then dead space on pages other
     than the last beyond a generous allowance (whitespace is a signal, so only
@@ -1257,6 +1267,8 @@ def _alternatives(doc: dict) -> list[tuple[str, dict]]:
     Placement only — content and the author's other choices never change."""
     import copy
     out = [("as authored", doc)]
+    for density in DENSITY_CSS:
+        out.append((f"as authored, {density} spacing", {**doc, "_density": density}))
     for si, s in enumerate(doc["sections"]):
         for bi, b in enumerate(s.get("blocks") or []):
             lay = b.get("layout") or {}
