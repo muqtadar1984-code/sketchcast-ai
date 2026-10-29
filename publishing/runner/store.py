@@ -60,6 +60,15 @@ class RestStore:
             raise RuntimeError(f"no book {uid!r} in the store")
         return rows[0]["slug"]
 
+    def others_running(self, run_id: int, stage_keys: list[str]) -> list[int]:
+        """Ids of OTHER runs that are running one of these stages (the publishing database has one writer at a time)."""
+        if not stage_keys:
+            return []
+        with self.lock:
+            r = self._ok(self.http.get("/pub_runs", params={"status": "eq.running", "id": f"neq.{run_id}",
+                                                            "stage_key": f"in.({','.join(stage_keys)})", "select": "id"}))
+        return [row["id"] for row in r.json()]
+
     def update(self, run_id: int, **fields) -> None:
         with self.lock:
             self._ok(self.http.patch("/pub_runs", params={"id": f"eq.{run_id}"},
@@ -114,6 +123,11 @@ class FileStore:
             d = self._load()
             next(r for r in d["pub_runs"] if r["id"] == run_id).update(fields)
             self._save(d)
+
+    def others_running(self, run_id: int, stage_keys: list[str]) -> list[int]:
+        with self.lock:
+            return [r["id"] for r in self._load()["pub_runs"]
+                    if r["id"] != run_id and r.get("status") == "running" and r.get("stage_key") in stage_keys]
 
     def cancel_requested(self, run_id: int) -> bool:
         with self.lock:

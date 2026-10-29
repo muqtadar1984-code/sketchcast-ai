@@ -11,11 +11,12 @@ DIST = {"PIL": "pillow", "fitz": "pymupdf", "docx": "python-docx", "bidi": "pyth
         "arabic_reshaper": "arabic-reshaper", "edge_tts": "edge-tts", "imageio_ffmpeg": "imageio-ffmpeg",
         "yaml": "pyyaml", "dotenv": "python-dotenv", "botocore": "boto3"}
 # reachable only on paths a stage does not take today (each was checked by hand; S3 revisits pgserver)
-NOT_ON_A_STAGE_PATH = {"pgserver", "agent2_analysis"}
+NOT_ON_A_STAGE_PATH = {"agent2_analysis"}
 # repo folders the image does not copy: reached only inside drafting functions (S3 copies spike/ when it adds drafting)
 NOT_COPIED = {"spike", "agent2_analysis", "catalogue", "maths", "worker"}
 ENTRY = ["publishing.runner.__main__", "publishing.runner.check", "publishing.tools.coverage",
-         "publishing.tools.academic_audit", "publishing.runner.render_proof", "publishing.manuscript.render"]
+         "publishing.tools.academic_audit", "publishing.runner.render_proof", "publishing.manuscript.render",
+         "publishing.runner.readiness", "publishing.runner.pubdb", "publishing.tools.pubdb_sync"]
 
 
 def _declared() -> set[str]:

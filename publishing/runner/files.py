@@ -35,6 +35,27 @@ class S3Bucket:
         self.s3.put_object(Bucket=self.name, Key=key, Body=body, ContentType=content_type,
                            ChecksumAlgorithm="SHA256", Metadata={"sha256": sha256(body)})
 
+    def get_with_etag(self, key: str) -> tuple[bytes, str]:
+        """The object and its ETag; KeyError when it does not exist."""
+        try:
+            r = self.s3.get_object(Bucket=self.name, Key=key)
+        except self.s3.exceptions.NoSuchKey as e:
+            raise KeyError(key) from e
+        return r["Body"].read(), r["ETag"]
+
+    def put_if_match(self, key: str, body: bytes, content_type: str, etag: str | None) -> None:
+        """Write only if the object is still at `etag` (None: only if it does not exist yet). S3 conditional write."""
+        from botocore.exceptions import ClientError
+        from publishing.runner.pubdb import PreconditionFailed
+        cond = {"IfMatch": etag} if etag else {"IfNoneMatch": "*"}
+        try:
+            self.s3.put_object(Bucket=self.name, Key=key, Body=body, ContentType=content_type,
+                               ChecksumAlgorithm="SHA256", Metadata={"sha256": sha256(body)}, **cond)
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") in ("PreconditionFailed", "ConditionalRequestConflict"):
+                raise PreconditionFailed(key) from e
+            raise
+
 
 class DirBucket:
     def __init__(self, root: Path):
@@ -47,6 +68,21 @@ class DirBucket:
         p = self.root / key
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(body)
+
+    def get_with_etag(self, key: str) -> tuple[bytes, str]:
+        p = self.root / key
+        if not p.exists():
+            raise KeyError(key)
+        body = p.read_bytes()
+        return body, sha256(body)
+
+    def put_if_match(self, key: str, body: bytes, content_type: str, etag: str | None) -> None:
+        from publishing.runner.pubdb import PreconditionFailed
+        p = self.root / key
+        now = sha256(p.read_bytes()) if p.exists() else None
+        if now != etag:
+            raise PreconditionFailed(key)
+        self.put(key, body, content_type)
 
 
 SHARED_ASSETS = "books/_shared/book-assets/"
