@@ -10,6 +10,7 @@ cancelled. A heartbeat every 15 s keeps `heartbeat_at` fresh and honours Cancel 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -93,6 +94,10 @@ def execute(store, bucket, run_id: int, work: Path) -> str:
             pg, pg_url = pubdb.start_server(work / "pgdata")
             pubdb.restore(work / "pubdb.sql.gz", pg_url)
             extra_env["PUBDB_URL"] = pg_url
+            waivers = store.waivers(run["work_uid"], slug)
+            extra_env["PUBLISH_WAIVERS"] = json.dumps(waivers)
+            if waivers:
+                log.add(f"{len(waivers)} readiness waiver(s) recorded in the app apply to this book", kind="progress")
             log.add(f"restored the publishing database ({pulled['bytes'] / 1e6:.1f} MB, {pulled['sha256'][:12]}, "
                     f"from {pulled['source']} {pulled['taken_at'][:16]})", kind="progress")
         if stage.needs_assets:

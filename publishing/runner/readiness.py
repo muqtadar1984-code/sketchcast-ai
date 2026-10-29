@@ -49,12 +49,20 @@ def gaps(conn, slug: str) -> dict:
             "order": s["step_order"], "step": s["step"], "job_type": s["job_type"], "language": s["language"],
             "usd": float(s["est_cost_usd"]) if s["est_cost_usd"] is not None else None,
             "review_min": s["est_review_min"], "note": s["throughput_note"]})
+    detail = collections.defaultdict(list)
+    for c in conn.execute("select required_topic_id, check_code, language, verdict, sub_status, evidence->>'detail' as "
+                          "detail from pub.audit_items where run_id = %s and verdict in ('fail', 'warn') "
+                          "order by required_topic_id, id", (run["id"],)).fetchall():
+        detail[c["required_topic_id"]].append({"code": c["check_code"], "language": c["language"],
+                                               "verdict": c["verdict"], "sub_status": c["sub_status"],
+                                               "detail": c["detail"]})
     out = []
     for r in rows:
         out.append({"title": r["title"], "topic_id": str(r["topic_id"]) if r["topic_id"] else None,
                     "topic_slug": r["topic_slug"], "topic_status": r["topic_status"], "chapter": r["chapter"],
                     "chapter_title": r["chapter_title"], "node_codes": r["node_codes"], "role": r["role"],
-                    "state": r["state"], "failing": r["failing_checks"], "steps": steps[r["id"]]})
+                    "state": r["state"], "failing": r["failing_checks"], "checks": detail[r["id"]],
+                    "steps": steps[r["id"]]})
     return {"gaps": out, "curriculum": {"id": str(cur["id"]), "code": cur["code"], "name": cur["name"]} if cur else None}
 
 

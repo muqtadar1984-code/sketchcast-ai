@@ -20,6 +20,12 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _waiver(w: dict, slug: str) -> dict:
+    return {"work": slug, "topic_id": str(w["topic_id"]), "check": w["check_code"], "language": w.get("language"),
+            "sub_status": w.get("sub_status"), "by": w["waived_by"], "date": str(w["waived_at"])[:10],
+            "reason": w["reason"]}
+
+
 class RestStore:
     def __init__(self, url: str | None = None, key: str | None = None):
         import httpx
@@ -59,6 +65,17 @@ class RestStore:
         if not rows:
             raise RuntimeError(f"no book {uid!r} in the store")
         return rows[0]["slug"]
+
+    def waivers(self, uid: str, slug: str) -> list[dict]:
+        """The book's active readiness waivers (editors record them on the Gaps tab, migration 0168), in the shape
+        publishing.schemas.Waiver reads. Before 0168 is applied there are none."""
+        with self.lock:
+            r = self.http.get("/pub_readiness_waivers", params={"work_uid": f"eq.{uid}", "revoked_at": "is.null",
+                                                                "select": "topic_id,check_code,language,sub_status,"
+                                                                          "reason,waived_by,waived_at"})
+        if r.status_code == 404 or (r.status_code >= 400 and "pub_readiness_waivers" in r.text):
+            return []
+        return [_waiver(w, slug) for w in self._ok(r).json()]
 
     def others_running(self, run_id: int, stage_keys: list[str]) -> list[int]:
         """Ids of OTHER runs that are running one of these stages (the publishing database has one writer at a time)."""
@@ -123,6 +140,10 @@ class FileStore:
             d = self._load()
             next(r for r in d["pub_runs"] if r["id"] == run_id).update(fields)
             self._save(d)
+
+    def waivers(self, uid: str, slug: str) -> list[dict]:
+        return [_waiver(w, slug) for w in self._load().get("pub_readiness_waivers", [])
+                if w["work_uid"] == uid and not w.get("revoked_at")]
 
     def others_running(self, run_id: int, stage_keys: list[str]) -> list[int]:
         with self.lock:
