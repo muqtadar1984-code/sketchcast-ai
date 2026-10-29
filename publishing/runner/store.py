@@ -13,7 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 WRITE = {"PATCH": {"pub_runs", "pub_run_steps"},
-         "POST": {"pub_run_events", "pub_run_steps", "pub_artifacts", "pub_cost_lines"}}
+         "POST": {"pub_run_events", "pub_run_steps", "pub_artifacts", "pub_cost_lines",
+                  # a chapter drafted into the book (publishing/runner/book_chapters.py): insert-only, immutable rows
+                  "pub_book_revisions", "pub_chapter_revisions"}}
 
 
 def now() -> str:
@@ -65,6 +67,22 @@ class RestStore:
         if not rows:
             raise RuntimeError(f"no book {uid!r} in the store")
         return rows[0]["slug"]
+
+    def _get(self, table: str, **params) -> list[dict]:
+        with self.lock:
+            return self._ok(self.http.get(f"/{table}", params=params)).json()
+
+    def book_revisions(self, uid: str) -> list[dict]:
+        return self._get("pub_book_revisions", work_uid=f"eq.{uid}", select="key,ordinal,label")
+
+    def chapter_rows(self, uid: str, revision_key: str) -> list[dict]:
+        return self._get("pub_chapter_revisions", work_uid=f"eq.{uid}", revision_key=f"eq.{revision_key}",
+                         select="work_uid,revision_key,chapter,title,body,content_sha256,figure_refs,words,questions,"
+                                "source_path")
+
+    def gate_d_approvals(self, uid: str, chapter: int) -> list[dict]:
+        return self._get("pub_approvals", work_uid=f"eq.{uid}", kind="eq.gate_d", chapter=f"eq.{chapter}",
+                         select="content_sha256,revision_key")
 
     def waivers(self, uid: str, slug: str) -> list[dict]:
         """The book's active readiness waivers (editors record them on the Gaps tab, migration 0168), in the shape
@@ -140,6 +158,17 @@ class FileStore:
             d = self._load()
             next(r for r in d["pub_runs"] if r["id"] == run_id).update(fields)
             self._save(d)
+
+    def book_revisions(self, uid: str) -> list[dict]:
+        return [r for r in self._load().get("pub_book_revisions", []) if r["work_uid"] == uid]
+
+    def chapter_rows(self, uid: str, revision_key: str) -> list[dict]:
+        return [c for c in self._load().get("pub_chapter_revisions", [])
+                if c["work_uid"] == uid and c["revision_key"] == revision_key]
+
+    def gate_d_approvals(self, uid: str, chapter: int) -> list[dict]:
+        return [a for a in self._load().get("pub_approvals", [])
+                if a["work_uid"] == uid and a.get("kind") == "gate_d" and a.get("chapter") == chapter]
 
     def waivers(self, uid: str, slug: str) -> list[dict]:
         return [_waiver(w, slug) for w in self._load().get("pub_readiness_waivers", [])
