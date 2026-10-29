@@ -18,7 +18,7 @@ from pathlib import Path
 # (folder, label, heading font stack); the body font is the theme's own stack ('Segoe UI', 'Noto Sans', …), which on
 # Linux resolves to Noto Sans
 FONTS = [
-    ("as-designed", "As designed (Sitka is not available on Linux: shows the fallback serif)", None),
+    ("as-designed", "As designed (the theme's own stack: Source Serif 4 on Linux since 2026-10-29)", None),
     ("source-serif-4", "Source Serif 4", "'Source Serif 4', Georgia, serif"),
     ("literata", "Literata", "'Literata', Georgia, serif"),
 ]

@@ -1,6 +1,6 @@
 {
-  "version": "v1-2026-10-25",
-  "notes": "Founder 2026-10-25: each book gets a design theme suited to it. A brief may name its theme (briefs.json `theme`); otherwise the first `by_strand` prefix matching the book's subject_strand picks it; `default` last. Adding a book or a subject adds a theme here, never code.",
+  "version": "v1.1-2026-10-29",
+  "notes": "Founder 2026-10-25: each book gets a design theme suited to it. A brief may name its theme (briefs.json `theme`); otherwise the first `by_strand` prefix matching the book's subject_strand picks it; `default` last. Adding a book or a subject adds a theme here, never code. Founder 2026-10-29 (D3): Source Serif 4 is the open serif after every Windows-only serif (Sitka, Georgia), so the books runner (Linux) renders it while this PC still renders the approved Sitka.",
   "by_strand": {
     "science/biology": "life",
     "science/chemistry": "chemistry",
@@ -18,7 +18,7 @@
       "brand": "#2e6b52", "brand_dark": "#1d4a38", "brand_soft": "#e5ede3", "accent": "#c47a3a",
       "ink": "#1f2a24", "muted": "#5f6b64", "line": "#d6ddd2", "warn": "#f7ebdd", "warn_edge": "#c47a3a",
       "think": "#2b7a7f", "extension": "#ecf1f4", "extension_edge": "#9fb3bf",
-      "heading_font": "'Sitka Heading', 'Sitka Subheading', Georgia, 'Times New Roman', serif",
+      "heading_font": "'Sitka Heading', 'Sitka Subheading', 'Source Serif 4', Georgia, 'Times New Roman', serif",
       "body_font": "'Segoe UI', 'Noto Sans', Arial, sans-serif",
       "motif": "organic",
       "image_palette": "natural greens and warm earth tones with soft pink-violet for animal tissue",
@@ -33,7 +33,7 @@
         "body_size_pt": 10.5, "body_leading": 1.55,
         "tab": {"width_mm": 8, "height_mm": 24, "first_top_mm": 46, "step_mm": 26, "fill": "#2e6b52", "text": "#faf6ec"},
         "running_head": {"verso": "work", "recto": "chapter", "rule": "#cfd8cc"},
-        "folio": {"position": "outer", "font": "'Sitka Small', Georgia, serif"},
+        "folio": {"position": "outer", "font": "'Sitka Small', 'Source Serif 4', Georgia, serif"},
         "opener": {"numeral": "outline", "hero": true, "objectives": true, "contents": true},
         "practice": {"new_page": true, "answer_lines": true, "line_pitch_mm": 8.5},
         "answers": {"new_page": true, "columns": 2}
@@ -94,7 +94,7 @@
       "brand": "#8a3b2e", "brand_dark": "#5c271f", "brand_soft": "#f6ebe7", "accent": "#b88a2a",
       "ink": "#2a1d1a", "muted": "#6e605c", "line": "#e8d8d2", "warn": "#fbf3e2", "warn_edge": "#b88a2a",
       "think": "#8a3b2e", "extension": "#eef2f6", "extension_edge": "#a7b6c6",
-      "heading_font": "Georgia, 'Times New Roman', serif",
+      "heading_font": "Georgia, 'Source Serif 4', 'Times New Roman', serif",
       "body_font": "'Segoe UI', 'Noto Sans', Arial, sans-serif",
       "motif": "rule",
       "image_palette": "warm parchment, brick red and antique gold"
