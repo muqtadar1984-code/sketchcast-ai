@@ -107,9 +107,71 @@ def test_a_final_needs_gate_e_and_carries_the_compiled_pdf_and_cover(tmp_path):
 def test_release_stage_is_registered():
     s = stages.STAGES["release"]
     assert s.makes_release and not s.uses_models and not s.writes_pubdb
-    assert stages.validate("release", {"final": 1})[1] == {"final": 1}
+    assert stages.validate("release", {"final": 1})[1] == {"final": 1, "reissue": 0}
     with pytest.raises(ValueError):
         stages.validate("release", {"final": 2})
+    with pytest.raises(ValueError):
+        stages.validate("release", {"final": 1, "reissue": 3})
+
+
+def _book_pdf_with_bookmarks(chapters=(1, 2)):
+    import fitz
+    d = fitz.open()
+    toc = [[1, "Cover", 1]]
+    d.new_page().insert_text((72, 72), "cover")
+    for n in chapters:
+        start = d.page_count + 1
+        for p in range(2):
+            d.new_page().insert_text((72, 72), f"chapter {n} page {p + 1}")
+        toc.append([1, f"Chapter {n}: Title {n}", start])
+    d.new_page().insert_text((72, 72), "index")
+    toc.append([1, "Index", d.page_count])
+    d.set_toc(toc)
+    return d.tobytes()
+
+
+def test_a_final_slices_chapter_pdfs_from_the_book_and_can_be_reissued(tmp_path):
+    import fitz
+    from publishing.runner.release import chapter_slices
+    pdf = _book_pdf_with_bookmarks()
+    sl = chapter_slices(pdf)
+    assert sorted(sl) == [1, 2] and all(fitz.open(stream=b, filetype="pdf").page_count == 2 for b in sl.values())
+    store, bucket, rows = _setup(tmp_path, approved=(1, 2))
+    bucket.put(f"books/{W}/runs/run-30/book.pdf", pdf, "application/pdf")
+    d = json.loads((tmp_path / "store.json").read_text())
+    d["pub_runs"].append({"id": 30, "work_uid": W, "stage_key": "compile_book", "status": "done",
+                          "detail": {"summary": {"pdf": "book.pdf", "pdf_sha256": files.sha256(pdf), "pages": 6,
+                                                 "chapters": [{"number": r["chapter"], "content_sha256": r["content_sha256"]}
+                                                              for r in rows]}}})
+    d["pub_approvals"].append({"id": 200, "work_uid": W, "kind": "gate_e", "revision_key": "d1", "content_sha256": files.sha256(pdf)})
+    (tmp_path / "store.json").write_text(json.dumps(d))
+    first = publish_release(store, bucket, RUN, W, {"final": 1})
+    b = json.loads(bucket.get(first["bundle_key"]))
+    ch2 = fitz.open(stream=bucket.get(b["chapters"][1]["pdf"]["key"]), filetype="pdf")   # the approved book's own pages
+    assert ch2.page_count == 2 and "chapter 2 page 1" in ch2[0].get_text()
+    again = publish_release(store, bucket, RUN, W, {"final": 1, "reissue": 1})
+    assert again["edition_key"] == "en-1.1" and again["supersedes"] == first["release_id"]
+    assert [r["edition_key"] for r in store.releases(W) if not r["superseded_by"]] == ["en-1.1"]
+
+
+def test_an_imported_book_finds_its_extras_through_the_source_manifest(tmp_path):
+    """Biology's rows carry the PC's source_path; the files live under books/<slug>/source/ (the manifest)."""
+    store, bucket, rows = _setup(tmp_path, approved=(1, 2))
+    d = json.loads((tmp_path / "store.json").read_text())
+    for r in d["pub_chapter_revisions"]:
+        n = r["chapter"]
+        src = r["source_path"]
+        bucket.put(f"books/{W}/source/ch{n:02d}-draft.json", bucket.get(f"books/{W}/{src}"), "application/json")
+        bucket.put(f"books/{W}/source/ch{n:02d}-dossier-full.json",
+                   bucket.get(f"books/{W}/{src.rsplit('/', 1)[0]}/ch{n:02d}-dossier-full.json"), "application/json")
+        r["source_path"] = f"rev4-1/ch{n:02d}-draft.json"                   # a PC path that is not in the bucket
+    (tmp_path / "store.json").write_text(json.dumps(d))
+    bucket.put(f"books/{W}/source/{files.MANIFEST}", json.dumps({"files": [
+        {"rel": f"ch{n:02d}-{f}", "key": f"books/{W}/source/ch{n:02d}-{f}"} for n in (1, 2)
+        for f in ("draft.json", "dossier-full.json")]}).encode(), "application/json")
+    got = publish_release(store, bucket, RUN, W, {"final": 0})
+    b = json.loads(bucket.get(got["bundle_key"]))
+    assert b["chapters"][0]["videos"] == ["video:abc"] and b["chapters"][0]["topics"][0]["slug"] == "t1"
 
 
 def test_a_book_approval_of_the_revision_covers_its_chapters(tmp_path):
