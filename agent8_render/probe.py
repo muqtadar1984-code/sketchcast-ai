@@ -42,6 +42,9 @@ class VideoProbe:
     audio_codec: str | None = None
     width: int | None = None
     height: int | None = None
+    # the video stream's frame rate as ffprobe/ffmpeg state it ("24/1",
+    # "30000/1001", "24"): what a re-encode passes to -r to keep it
+    frame_rate: str | None = None
     errors: list[str] = field(default_factory=list)
     tool: str = "ffprobe"
 
@@ -76,6 +79,8 @@ def ffprobe_exe() -> str | None:
 _DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d\d):(\d\d(?:\.\d+)?)")
 _VIDEO_RE = re.compile(r"Stream #\d+:\d+.*?: Video: (\w+).*?(\d{2,5})x(\d{2,5})")
 _AUDIO_RE = re.compile(r"Stream #\d+:\d+.*?: Audio: (\w+)")
+_FPS_RE = re.compile(r"Stream #\d+:\d+.*?: Video: .*?(\d+(?:\.\d+)?) fps")
+_RATE_RE = re.compile(r"^\d+(?:\.\d+)?(?:/[1-9]\d*)?$")
 
 
 def _header_ffprobe(path: Path, exe: str) -> VideoProbe:
@@ -103,6 +108,8 @@ def _header_ffprobe(path: Path, exe: str) -> VideoProbe:
                 out.width, out.height = int(st.get("width") or 0) or None, int(st.get("height") or 0) or None
             except (TypeError, ValueError):
                 pass
+            rate = str(st.get("r_frame_rate") or st.get("avg_frame_rate") or "").strip()
+            out.frame_rate = rate if _RATE_RE.match(rate) and not rate.startswith("0") else None
         elif kind == "audio" and out.audio_codec is None:
             out.audio_codec = str(st.get("codec_name") or "") or None
     return out
@@ -122,6 +129,9 @@ def _header_ffmpeg(path: Path, exe: str) -> VideoProbe:
     if v:
         out.video_codec = v.group(1)
         out.width, out.height = int(v.group(2)), int(v.group(3))
+    f = _FPS_RE.search(text)
+    if f and not f.group(1).startswith("0"):
+        out.frame_rate = f.group(1)
     a = _AUDIO_RE.search(text)
     if a:
         out.audio_codec = a.group(1)

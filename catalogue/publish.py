@@ -51,6 +51,10 @@ Per part, in order (``publish_part``):
      bucket. Parts are ordered by their PART NUMBER, never by storage path:
      the names are ``lesson.mp4``, ``lesson_part2.mp4`` … ``lesson_part10.mp4``
      and a string sort puts part 10 before part 2 and part 1 last;
+     the upload is a temporary 1440p re-encode of that file
+     (``catalogue.youtube_upscale``; ``YOUTUBE_UPLOAD_HEIGHT``), so YouTube
+     gives it its high-bitrate encode. The stored artifact is never changed,
+     and a failed re-encode uploads the original;
   3. resumable upload with the title (``"<Topic>"``, or ``"<Topic> — Part k
      of N"`` when N > 1) and the description ``build_description`` composed:
      the summary, the curriculum codes (the SAME lines the documents' header
@@ -121,6 +125,7 @@ from typing import Iterable, Optional, Protocol, runtime_checkable
 
 from catalogue.harvest import clean_heading
 from catalogue.landing import REASON_PUBLISH, request_landing_rebuild
+from catalogue.youtube_upscale import youtube_upload_file
 from worker import client as db
 
 log = logging.getLogger("worker.publish")
@@ -1399,23 +1404,29 @@ def publish_part(sb, transport: YouTubeTransport, target: Target, part: dict, to
                     kit.get("id"), idx, video_id)
     else:
         local = download_artifact(sb, part["storage_path"], work / f"lesson_part{idx}.mp4")
-        token = uuid.uuid4().hex
-        write_publication(sb, {**key, "upload_token": token,
-                               "upload_started_at": datetime.now(timezone.utc).isoformat(),
-                               "error": UPLOADING_NOTE})
-        try:
-            video_id = _s(transport.upload_video(local, title=title, description=description,
-                                                 privacy=target.privacy, language=target.language,
-                                                 tags=tags_with_marker(tags, upload_tag(token))))
-        except Exception as exc:  # noqa: BLE001
-            reason = quota_reason(exc)
-            if not reason:
-                raise   # the token stays: the upload may have landed before the error
-            # Refused at the start of the upload, so nothing reached the
-            # channel: the token is cleared and the next run uploads without
-            # first asking the channel.
-            write_publication(sb, {**key, "upload_token": None, "error": f"waiting for YouTube quota ({reason})"})
-            raise QuotaExhausted(reason) from exc
+        # YouTube gets a 1440p copy (catalogue/youtube_upscale.py), made
+        # BEFORE the intent row so upload_started_at still marks the upload
+        # itself. The stored artifact is never touched; the copy is deleted
+        # when this block exits, and a failed copy uploads ``local`` as it is.
+        with youtube_upload_file(local, work) as upload_path:
+            token = uuid.uuid4().hex
+            write_publication(sb, {**key, "upload_token": token,
+                                   "upload_started_at": datetime.now(timezone.utc).isoformat(),
+                                   "error": UPLOADING_NOTE})
+            try:
+                video_id = _s(transport.upload_video(upload_path, title=title, description=description,
+                                                     privacy=target.privacy, language=target.language,
+                                                     tags=tags_with_marker(tags, upload_tag(token))))
+            except Exception as exc:  # noqa: BLE001
+                reason = quota_reason(exc)
+                if not reason:
+                    raise   # the token stays: the upload may have landed before the error
+                # Refused at the start of the upload, so nothing reached the
+                # channel: the token is cleared and the next run uploads without
+                # first asking the channel.
+                write_publication(sb, {**key, "upload_token": None,
+                                       "error": f"waiting for YouTube quota ({reason})"})
+                raise QuotaExhausted(reason) from exc
         if not video_id:
             raise RuntimeError(f"part {idx}: the upload returned no video id")
         spend(sb, target.channel, "videos.insert")
