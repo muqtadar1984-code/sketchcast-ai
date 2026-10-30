@@ -162,3 +162,19 @@ def test_a_replaced_picture_is_read_from_the_books_bucket_as_png(monkeypatch):
     monkeypatch.setattr(files, "default_bucket", FakeBucket)
     png = render.asset_bytes(None, "", {"s3_key": "books/bio/edits/u.jpg"})
     assert png[:4] == b"\x89PNG" and Image.open(io.BytesIO(png)).size == (12, 8)
+
+
+def test_front_matter_edited_in_the_app_latest_accepted_text_wins():
+    from publishing.runner.compile import front_matter_overrides
+    from publishing.manuscript.book import ABOUT_INTRO, IMPRINT_NOTE, front_matter_texts
+    edits = [{"id": 3, "unit": "preface", "after_text": "Second preface. "}, {"id": 1, "unit": "preface", "after_text": "First"},
+             {"id": 2, "unit": "imprint", "after_text": "  "}, {"id": 4, "unit": "cover", "after_text": "not a piece"}]
+    fm = front_matter_overrides(edits)
+    assert fm == {"preface": "Second preface."}
+    assert front_matter_texts(fm, "engine preface") == {"preface": "Second preface.", "imprint": IMPRINT_NOTE, "about": ABOUT_INTRO}
+    assert front_matter_texts({}, "engine preface")["preface"] == "engine preface"
+
+
+def test_compile_reads_the_front_matter_first():
+    from publishing.runner.stages import STAGES
+    assert STAGES["compile_book"].front_matter and not STAGES["draft_chapter"].front_matter

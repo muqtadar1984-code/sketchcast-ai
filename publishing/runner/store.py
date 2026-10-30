@@ -114,6 +114,11 @@ class RestStore:
         return self._get("pub_runs", work_uid=f"eq.{uid}", stage_key="eq.compile_book", status="eq.done",
                          order="id.desc", select="id,detail")
 
+    def front_matter_edits(self, uid: str) -> list[dict]:
+        """The book's accepted front-matter edits (made in the app's reader, migration 0176), oldest first."""
+        return self._get("pub_book_edits", work_uid=f"eq.{uid}", kind="eq.front_matter", status="eq.accepted",
+                         order="id", select="id,unit,after_text")
+
     def publish_release(self, row: dict) -> int:
         with self.lock:
             return int(self._ok(self.http.post("/rpc/pub_release_publish", json={"release": row})).json())
@@ -225,6 +230,10 @@ class FileStore:
     def compile_runs(self, uid: str) -> list[dict]:
         return sorted((r for r in self._load()["pub_runs"] if r["work_uid"] == uid and r["stage_key"] == "compile_book"
                        and r["status"] == "done"), key=lambda r: -r["id"])
+
+    def front_matter_edits(self, uid: str) -> list[dict]:
+        return sorted((e for e in self._load().get("pub_book_edits", []) if e["work_uid"] == uid
+                       and e.get("kind") == "front_matter" and e.get("status") == "accepted"), key=lambda e: e["id"])
 
     def publish_release(self, row: dict) -> int:
         """What pub_release_publish() does, for tests: insert, supersede the previous live one."""

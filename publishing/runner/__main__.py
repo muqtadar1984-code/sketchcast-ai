@@ -108,6 +108,12 @@ def execute(store, bucket, run_id: int, work: Path) -> str:
                 log.add(f"{len(waivers)} readiness waiver(s) recorded in the app apply to this book", kind="progress")
             log.add(f"restored the publishing database ({pulled['bytes'] / 1e6:.1f} MB, {pulled['sha256'][:12]}, "
                     f"from {pulled['source']} {pulled['taken_at'][:16]})", kind="progress")
+        if stage.front_matter:
+            from publishing.runner.compile import FRONT_MATTER_FILE, front_matter_overrides
+            fm = front_matter_overrides(store.front_matter_edits(run["work_uid"]))
+            (book / FRONT_MATTER_FILE).write_text(json.dumps(fm, ensure_ascii=False), encoding="utf-8")
+            if fm:
+                log.add(f"front matter edited in the app: {', '.join(sorted(fm))}", kind="progress")
         if stage.syncs_chapter:
             n = int(params["chapter"])
             rev = store.work(run["work_uid"]).get("current_revision")

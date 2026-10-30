@@ -39,6 +39,7 @@ class Stage:
     into_book: bool = False            # the drafted chapter becomes part of the book (publishing/runner/book_chapters)
     makes_release: bool = False        # the run publishes a book release (publishing/runner/release.py)
     syncs_chapter: bool = False        # fetch the chapter's edited text first; afterwards its files join the source set
+    front_matter: bool = False         # fetch the front matter edited in the app (preface, imprint note, about) first
     # files of an EARLIER run this stage starts from: (slug, params) -> [(bucket key, path under the book folder)]
     prefetch: Callable[[str, dict], list[tuple[str, str]]] | None = None
     step: str = ""
@@ -200,7 +201,7 @@ STAGES: dict[str, Stage] = {s.key: s for s in [
         collect=lambda out: (0.0, [], json.loads((out / "draft.json").read_text(encoding="utf-8"))),
     ),
     Stage(
-        key="compile_book", title="Compile the book", step="compile", needs_assets=True,
+        key="compile_book", title="Compile the book", step="compile", needs_assets=True, front_matter=True,
         params={"first": 1, "last": 10},
         # free: the engine's compile of every drafted chapter in the range (front matter, running page numbers,
         # coverage, glossary, index, credits); records each chapter's text hash for Gate E
