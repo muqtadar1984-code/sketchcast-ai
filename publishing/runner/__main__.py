@@ -173,6 +173,12 @@ def execute(store, bucket, run_id: int, work: Path) -> str:
                 pubdb.dump(pg_url, work / "pubdb-out.sql.gz")
                 m = pubdb.push(bucket, work / "pubdb-out.sql.gz", f"run:{run_id}", pulled["sha256"])
                 log.add(f"saved the publishing database back ({m['sha256'][:12]})", kind="progress")
+            if stage.makes_release:
+                from publishing.runner.release import publish_release
+                made = publish_release(store, bucket, run, slug, params)
+                summary = {**summary, **made}
+                log.add(f"released {made['release_kind']} {made['edition_key']}: chapters {made['chapters']}"
+                        + (f" (supersedes release #{made['supersedes']})" if made["supersedes"] else ""), kind="progress")
             if stage.into_book:
                 placed = book_chapters.publish(store, bucket, run["work_uid"], slug, book, run_rel, int(params["chapter"]))
                 summary = {**summary, "book": placed}

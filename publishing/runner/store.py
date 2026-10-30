@@ -16,7 +16,10 @@ WRITE = {"PATCH": {"pub_runs", "pub_run_steps",
                    "pub_works"},       # only set_current_revision below: the revision a drafted chapter went into
          "POST": {"pub_run_events", "pub_run_steps", "pub_artifacts", "pub_cost_lines",
                   # a chapter drafted into the book (publishing/runner/book_chapters.py): insert-only, immutable rows
-                  "pub_book_revisions", "pub_chapter_revisions"}}
+                  "pub_book_revisions", "pub_chapter_revisions",
+                  # a book release (publishing/runner/release.py): the publish function inserts the row and marks
+                  # the previous live release superseded in one transaction (app migration 0172)
+                  "pub_release_publish"}}
 
 
 def now() -> str:
@@ -95,6 +98,25 @@ class RestStore:
     def gate_d_approvals(self, uid: str, chapter: int) -> list[dict]:
         return self._get("pub_approvals", work_uid=f"eq.{uid}", kind="eq.gate_d", chapter=f"eq.{chapter}",
                          select="content_sha256,revision_key")
+
+    def work(self, uid: str) -> dict:
+        return self._get("pub_works", uid=f"eq.{uid}", select="*")[0]
+
+    def approvals(self, uid: str) -> list[dict]:
+        return self._get("pub_approvals", work_uid=f"eq.{uid}",
+                         select="id,kind,scope,chapter,revision_key,content_sha256,approved_by,approved_on")
+
+    def releases(self, uid: str) -> list[dict]:
+        return self._get("pub_releases", work_uid=f"eq.{uid}", order="id",
+                         select="id,release_kind,edition_key,language,chapters,gate_e_approval_id,superseded_by,withdrawn_at")
+
+    def compile_runs(self, uid: str) -> list[dict]:
+        return self._get("pub_runs", work_uid=f"eq.{uid}", stage_key="eq.compile_book", status="eq.done",
+                         order="id.desc", select="id,detail")
+
+    def publish_release(self, row: dict) -> int:
+        with self.lock:
+            return int(self._ok(self.http.post("/rpc/pub_release_publish", json={"release": row})).json())
 
     def waivers(self, uid: str, slug: str) -> list[dict]:
         """The book's active readiness waivers (editors record them on the Gaps tab, migration 0168), in the shape
@@ -190,6 +212,32 @@ class FileStore:
     def gate_d_approvals(self, uid: str, chapter: int) -> list[dict]:
         return [a for a in self._load().get("pub_approvals", [])
                 if a["work_uid"] == uid and a.get("kind") == "gate_d" and a.get("chapter") == chapter]
+
+    def work(self, uid: str) -> dict:
+        return next(w for w in self._load()["pub_works"] if w["uid"] == uid)
+
+    def approvals(self, uid: str) -> list[dict]:
+        return [a for a in self._load().get("pub_approvals", []) if a["work_uid"] == uid]
+
+    def releases(self, uid: str) -> list[dict]:
+        return [r for r in self._load().get("pub_releases", []) if r["work_uid"] == uid]
+
+    def compile_runs(self, uid: str) -> list[dict]:
+        return sorted((r for r in self._load()["pub_runs"] if r["work_uid"] == uid and r["stage_key"] == "compile_book"
+                       and r["status"] == "done"), key=lambda r: -r["id"])
+
+    def publish_release(self, row: dict) -> int:
+        """What pub_release_publish() does, for tests: insert, supersede the previous live one."""
+        with self.lock:
+            d = self._load()
+            rows = d.setdefault("pub_releases", [])
+            new_id = 1 + max((r["id"] for r in rows), default=0)
+            for r in rows:
+                if r["work_uid"] == row["work_uid"] and r["release_kind"] == row["release_kind"] and                         r["language"] == row["language"] and not r.get("superseded_by") and not r.get("withdrawn_at"):
+                    r["superseded_by"] = new_id
+            rows.append({**row, "id": new_id, "superseded_by": None, "withdrawn_at": None})
+            self._save(d)
+            return new_id
 
     def waivers(self, uid: str, slug: str) -> list[dict]:
         return [_waiver(w, slug) for w in self._load().get("pub_readiness_waivers", [])
