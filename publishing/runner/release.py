@@ -24,12 +24,20 @@ SCHEMA = "sketchcast.book-release/1"
 HASH_RULE = "sha256(json.dumps({sections, exercises}, sort_keys=True, ensure_ascii=False))"
 
 
+def approval_for(approvals: list[dict], row: dict) -> dict | None:
+    """What approves a chapter row's text: a Gate D approval of exactly that text, else the book-level approval of the
+    row's revision (Biology's Revision 4.1 was approved as a whole) — the book app's rule (approval.ts / decide.ts
+    printedApproval) and the engine's sk_bundle."""
+    gd = next((a for a in approvals if a.get("kind") == "gate_d" and a.get("chapter") == row["chapter"]
+               and a.get("content_sha256") == row["content_sha256"]), None)
+    return gd or next((a for a in approvals if a.get("kind") == "book" and a.get("revision_key") == row["revision_key"]), None)
+
+
 def draft_chapters(rows: list[dict], approvals: list[dict]) -> list[tuple[dict, dict]]:
-    """(chapter row, its Gate D approval) for every chapter of the revision whose current text is approved."""
-    gd = [a for a in approvals if a.get("kind") == "gate_d"]
+    """(chapter row, what approves it) for every chapter of the revision whose current text is approved."""
     out = []
     for r in sorted(rows, key=lambda r: r["chapter"]):
-        a = next((a for a in gd if a.get("chapter") == r["chapter"] and a["content_sha256"] == r["content_sha256"]), None)
+        a = approval_for(approvals, r)
         if a:
             out.append((r, a))
     return out
@@ -111,10 +119,9 @@ def publish_release(store, bucket, run: dict, slug: str, params: dict) -> dict:
         chosen = []
         for c in compiled["detail"]["summary"]["chapters"]:
             r = rows.get(c["number"])
-            a = next((a for a in approvals if a.get("kind") == "gate_d" and a.get("chapter") == c["number"]
-                      and a["content_sha256"] == c["content_sha256"]), None)
+            a = approval_for(approvals, r) if r else None
             if not r or r["content_sha256"] != c["content_sha256"] or not a:
-                raise RuntimeError(f"chapter {c['number']}: the compiled text is not revision {rev}'s Gate D approved text")
+                raise RuntimeError(f"chapter {c['number']}: the compiled text is not revision {rev}'s approved text")
             chosen.append((r, a))
         if live and live.get("gate_e_approval_id") == gate_e["id"]:
             raise RuntimeError(f"Gate E approval {gate_e['id']} is already released as {live['edition_key']}")
@@ -130,13 +137,14 @@ def publish_release(store, bucket, run: dict, slug: str, params: dict) -> dict:
             if extra.get("folder") else None
         figures.update(body.get("figures") or {})
         chapters.append({"chapter": n, "title": r["title"], "content_sha256": r["content_sha256"],
-                         "approval": {"kind": "gate_d", "id": a["id"], "by": a.get("approved_by"), "on": a.get("approved_on")},
+                         "approval": {"kind": a.get("kind"), "id": a["id"], "by": a.get("approved_by"), "on": a.get("approved_on")},
                          "objectives": extra.get("objectives") or (body.get("chapter") or {}).get("objectives") or [],
                          "sections": body.get("sections") or [], "exercises": body.get("exercises") or [],
                          "review": body.get("review"), "videos": extra.get("videos") or [], "topics": extra.get("topics") or [],
                          "pdf": {"key": pdf[0], "sha256": pdf[1]} if pdf else None})
         row_chapters.append({"chapter": n, "title": r["title"], "content_sha256": r["content_sha256"],
-                             "gate_d_approval_id": a["id"], "pdf_key": pdf[0] if pdf else None})
+                             "gate_d_approval_id": a["id"] if a.get("kind") == "gate_d" else None,
+                             "approval_id": a["id"], "approval_kind": a.get("kind"), "pdf_key": pdf[0] if pdf else None})
 
     digital = cover = None
     if compiled:

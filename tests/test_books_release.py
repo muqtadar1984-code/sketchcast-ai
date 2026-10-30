@@ -110,3 +110,16 @@ def test_release_stage_is_registered():
     assert stages.validate("release", {"final": 1})[1] == {"final": 1}
     with pytest.raises(ValueError):
         stages.validate("release", {"final": 2})
+
+
+def test_a_book_approval_of_the_revision_covers_its_chapters(tmp_path):
+    store, bucket, rows = _setup(tmp_path, approved=())
+    d = json.loads((tmp_path / "store.json").read_text())
+    d["pub_approvals"].append({"id": 7, "work_uid": W, "kind": "book", "scope": "book", "revision_key": "d1"})
+    (tmp_path / "store.json").write_text(json.dumps(d))
+    got = publish_release(store, bucket, RUN, W, {"final": 0})
+    assert got["chapters"] == [1, 2]
+    b = json.loads(bucket.get(got["bundle_key"]))
+    assert b["chapters"][0]["approval"]["kind"] == "book" and b["chapters"][0]["approval"]["id"] == 7
+    row = store.releases(W)[-1]["chapters"][0]
+    assert row["approval_kind"] == "book" and row["gate_d_approval_id"] is None and row["approval_id"] == 7
