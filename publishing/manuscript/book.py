@@ -75,9 +75,26 @@ def _kdp_pages(work: dict, kdp: dict, curriculum: str, alignment: str) -> tuple[
     return imprint, online
 
 
+# The front matter an editor may change in the book app (phase 3c); these are the engine's own texts.
+IMPRINT_NOTE = ("This is a working draft shared for review and discussion. It is not for sale or further distribution, "
+                "and its text, pictures and page design will change before publication.")
+ABOUT_INTRO = "Each chapter teaches one part of the curriculum, in short numbered sections, and ends with practice and answers."
+
+
+def front_matter_texts(overrides: dict, preface: str) -> dict[str, str]:
+    """The three editable front-matter texts as they will print: an editor's text where there is one, else the
+    engine's (the preface: the book's written preface)."""
+    return {"preface": overrides.get("preface") or preface, "imprint": overrides.get("imprint") or IMPRINT_NOTE,
+            "about": overrides.get("about") or ABOUT_INTRO}
+
+
+def _paras(text: str) -> str:
+    return "".join(f"<p>{html.escape(x)}</p>" for x in text.splitlines() if x.strip())
+
+
 def _front_html(work: dict, theme: dict, chapters: list[dict], label: str, prepared_for: str,
                 edition: str, hero: str | None, preface: str = "", back: list[tuple[str, int]] = (),
-                kdp: dict | None = None) -> str:
+                kdp: dict | None = None, imprint_note: str = IMPRINT_NOTE, about_intro: str = ABOUT_INTRO) -> str:
     from publishing.manuscript.render import _pretty_curriculum
     from publishing.manuscript.theme import bleed, css_vars, page
     p = page(theme)
@@ -89,8 +106,7 @@ def _front_html(work: dict, theme: dict, chapters: list[dict], label: str, prepa
     toc = "".join(f'<tr><td class="n">{c["number"]}</td><td>{html.escape(c["title"])}</td>'
                   f'<td class="pg">{c["start"]}</td></tr>' for c in chapters)
     toc += "".join(f'<tr><td class="n"></td><td>{html.escape(t)}</td><td class="pg">{pg}</td></tr>' for t, pg in back)
-    pre = ("<section class='preface'><h2>Preface</h2>" + "".join(
-        f"<p>{html.escape(x)}</p>" for x in preface.splitlines() if x.strip()) + "</section>") if preface else ""
+    pre = ("<section class='preface'><h2>Preface</h2>" + _paras(preface) + "</section>") if preface else ""
     hero_img = f'<img class="cover-hero" src="{hero}" alt="">' if hero else ""
     curriculum = html.escape(_pretty_curriculum(work.get("curriculum")))
     from publishing.tools.academic_audit import curriculum as _cur
@@ -101,8 +117,7 @@ def _front_html(work: dict, theme: dict, chapters: list[dict], label: str, prepa
     imprint = (f"""<section class="imprint">
 <p><strong>{html.escape(str(work['title']).replace(' - ', ' – '))}</strong></p>
 <p>{html.escape(label)}, {today}. Prepared by SketchCast{(' for ' + html.escape(prepared_for)) if prepared_for else ''}.
-This is a working draft shared for review and discussion. It is not for sale or further distribution, and its
-text, pictures and page design will change before publication.</p>
+{html.escape(imprint_note)}</p>
 <p>© {date.today().year} SketchCast. All rights reserved.</p>
 <p>Illustrations are original SketchCast artwork. Photographs are used under the licences named in each chapter's
 picture credits, with their authors credited.</p>
@@ -169,7 +184,7 @@ table.toc td.pg {{ width: 14mm; text-align: right; color: var(--brand-dark); fon
 {pre}
 <section><h2>Contents</h2><table class="toc">{toc}</table></section>
 <section class="about"><h2>How this book works</h2>
-<p>Each chapter teaches one part of the curriculum, in short numbered sections, and ends with practice and answers.</p>
+{_paras(about_intro)}
 <h3>In each chapter</h3>
 <div class="row"><span class="chip" style="background:var(--soft);color:var(--brand-dark)">Key term</span>
 <span>A word you need, with its meaning, the first time it is used.</span></div>
@@ -266,10 +281,14 @@ def compile_book(slug: str, first: int, last: int, env_file: Path, label: str, p
                       if re.sub(r"^\s*\d+\s*", "", pg.get_text()).startswith(title)), None)
             if i is not None:
                 back.append((title, back_start + i))
-    pref = BM.preface(slug, pairs, out) if matrix else ""
+    # the front matter edited in the book app (the runner writes it here before a compile), else the engine's own
+    fm_file = out / "front-matter.json"
+    overrides = json.loads(fm_file.read_text(encoding="utf-8")) if fm_file.exists() else {}
+    fm = front_matter_texts(overrides, "" if overrides.get("preface") else (BM.preface(slug, pairs, out) if matrix else ""))
+    (build / "front-matter.json").write_text(json.dumps(fm, ensure_ascii=False, indent=1), encoding="utf-8")
     front_html = build / f"front-{edition}.html"
     front_html.write_text(_front_html(work, theme, chapters, label, prepared_for, edition, hero_image(slug, 1),
-                                      pref, back, kdp), encoding="utf-8")
+                                      fm["preface"], back, kdp, fm["imprint"], fm["about"]), encoding="utf-8")
     front = fitz.open(_print(front_html, build / f"front-{edition}.pdf"))
     if kdp:     # the cover becomes the wrap's front panel; the interior opens on the title page, a right-hand page
         cover = fitz.open()
