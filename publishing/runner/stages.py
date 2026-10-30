@@ -37,6 +37,7 @@ class Stage:
     uses_pubdb: bool = False           # restores the shared publishing database (publishing/runner/pubdb.py)
     writes_pubdb: bool = False         # … and pushes it back afterwards; one such run at a time
     into_book: bool = False            # the drafted chapter becomes part of the book (publishing/runner/book_chapters)
+    makes_release: bool = False        # the run publishes a book release (publishing/runner/release.py)
     # files of an EARLIER run this stage starts from: (slug, params) -> [(bucket key, path under the book folder)]
     prefetch: Callable[[str, dict], list[tuple[str, str]]] | None = None
     step: str = ""
@@ -207,6 +208,14 @@ STAGES: dict[str, Stage] = {s.key: s for s in [
         collect=lambda out: (0.0, [], json.loads((out / "compile.json").read_text(encoding="utf-8"))),
     ),
     Stage(
+        key="release", title="Release the book (Library and SK)", step="release", needs_source=False,
+        makes_release=True, params={"final": 0},
+        # free: final=1 releases the Gate E approved compile; final=0 releases the Gate-D-approved chapters of the
+        # current revision as a draft. The work happens in the runner (publishing/runner/release.py); the command
+        # only marks the step in the log
+        argv=lambda slug, p, rel: [sys.executable, "-c", "print('preparing the release')"],
+    ),
+    Stage(
         key="render_trial", title="Re-render a trial chapter (no new draft)", step="render", needs_source=False,
         needs_assets=True, params={"run": 1, "chapter": 1},
         # free: lays out an earlier trial draft again with the current renderer (layout fixes, fonts) — the text is
@@ -235,6 +244,8 @@ def validate(stage_key: str, params: dict) -> tuple[Stage, dict]:
         _chapters(merged)
     if "chapter" in stage.params and not (1 <= int(merged["chapter"]) <= 99):
         raise ValueError(f"chapter must be 1–99, got {merged['chapter']}")
+    if "final" in stage.params and int(merged["final"]) not in (0, 1):
+        raise ValueError(f"final must be 0 (draft) or 1 (final), got {merged['final']}")
     if "run" in stage.params and int(merged["run"]) < 1:
         raise ValueError(f"run must be an earlier run's number, got {merged['run']}")
     return stage, merged

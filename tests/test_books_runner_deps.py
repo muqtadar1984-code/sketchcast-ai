@@ -18,7 +18,7 @@ ENTRY = ["publishing.runner.__main__", "publishing.runner.check", "publishing.to
          "publishing.tools.academic_audit", "publishing.runner.render_proof", "publishing.manuscript.render",
          "publishing.runner.readiness", "publishing.runner.pubdb", "publishing.tools.pubdb_sync",
          "publishing.runner.gate_r", "publishing.runner.draft", "publishing.manuscript.author",
-         "publishing.runner.render_trial", "publishing.runner.book_chapters", "publishing.runner.adopt", "publishing.runner.compile", "publishing.manuscript.book"]
+         "publishing.runner.render_trial", "publishing.runner.book_chapters", "publishing.runner.adopt", "publishing.runner.compile", "publishing.manuscript.book", "publishing.runner.release"]
 
 
 def _declared() -> set[str]:
