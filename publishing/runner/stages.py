@@ -38,6 +38,7 @@ class Stage:
     writes_pubdb: bool = False         # … and pushes it back afterwards; one such run at a time
     into_book: bool = False            # the drafted chapter becomes part of the book (publishing/runner/book_chapters)
     makes_release: bool = False        # the run publishes a book release (publishing/runner/release.py)
+    syncs_chapter: bool = False        # fetch the chapter's edited text first; afterwards its files join the source set
     # files of an EARLIER run this stage starts from: (slug, params) -> [(bucket key, path under the book folder)]
     prefetch: Callable[[str, dict], list[tuple[str, str]]] | None = None
     step: str = ""
@@ -214,6 +215,14 @@ STAGES: dict[str, Stage] = {s.key: s for s in [
         # current revision as a draft. The work happens in the runner (publishing/runner/release.py); the command
         # only marks the step in the log
         argv=lambda slug, p, rel: [sys.executable, "-c", "print('preparing the release')"],
+    ),
+    Stage(
+        key="sync_chapter", title="Lay out an edited chapter", step="render", needs_assets=True, syncs_chapter=True,
+        params={"chapter": 1},
+        # free: after edits in the book app made a new chapter revision, the chapter's draft file takes the edited
+        # text (hash-checked), is laid out again, and becomes the book's source for that chapter
+        argv=lambda slug, p, rel: [sys.executable, "-m", "publishing.runner.sync_chapter", slug, rel, str(int(p["chapter"]))],
+        collect=lambda out: (0.0, [], json.loads((out / "sync.json").read_text(encoding="utf-8"))),
     ),
     Stage(
         key="render_trial", title="Re-render a trial chapter (no new draft)", step="render", needs_source=False,

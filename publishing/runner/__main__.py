@@ -108,6 +108,16 @@ def execute(store, bucket, run_id: int, work: Path) -> str:
                 log.add(f"{len(waivers)} readiness waiver(s) recorded in the app apply to this book", kind="progress")
             log.add(f"restored the publishing database ({pulled['bytes'] / 1e6:.1f} MB, {pulled['sha256'][:12]}, "
                     f"from {pulled['source']} {pulled['taken_at'][:16]})", kind="progress")
+        if stage.syncs_chapter:
+            n = int(params["chapter"])
+            rev = store.work(run["work_uid"]).get("current_revision")
+            row = next((c for c in store.chapter_rows(run["work_uid"], rev) if c["chapter"] == n), None) if rev else None
+            if not row:
+                raise RuntimeError(f"chapter {n} has no text in the book's current revision {rev!r}")
+            dst = book / "edit-source" / f"ch{n:02d}-row.json"
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(json.dumps(row, ensure_ascii=False), encoding="utf-8")
+            log.add(f"{stage.title}: chapter {n}, revision {rev}", kind="progress")
         if stage.prefetch:
             for key, rel in stage.prefetch(slug, params):
                 dst = book / rel
@@ -173,6 +183,10 @@ def execute(store, bucket, run_id: int, work: Path) -> str:
                 pubdb.dump(pg_url, work / "pubdb-out.sql.gz")
                 m = pubdb.push(bucket, work / "pubdb-out.sql.gz", f"run:{run_id}", pulled["sha256"])
                 log.add(f"saved the publishing database back ({m['sha256'][:12]})", kind="progress")
+            if stage.syncs_chapter:
+                from publishing.runner import book_chapters
+                added = book_chapters.add_to_source(bucket, slug, book, run_rel, int(params["chapter"]))
+                log.add(f"the book's source set now uses this run's chapter files ({len(added)})", kind="progress")
             if stage.makes_release:
                 from publishing.runner.release import publish_release
                 made = publish_release(store, bucket, run, slug, params)

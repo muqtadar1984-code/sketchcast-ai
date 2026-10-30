@@ -71,6 +71,27 @@ def manifest_with(manifest: dict | None, entries: list[dict]) -> dict:
     return {**(manifest or {}), "files": sorted(keep + entries, key=lambda f: f["rel"])}
 
 
+def add_to_source(bucket, slug: str, book: Path, run_rel: str, chapter: int) -> list[dict]:
+    """The run's chapter files join the book's source set by reference (conditional write of the manifest)."""
+    out = book / run_rel
+    entries = []
+    for name in CHAPTER_FILES:
+        p = out / f"ch{chapter:02d}-{name}"
+        if p.exists():
+            body = p.read_bytes()
+            entries.append({"rel": p.name, "key": f"books/{slug}/{run_rel}/{p.name}", "bytes": len(body),
+                            "sha256": files.sha256(body)})
+    mkey = f"books/{slug}/source/{files.MANIFEST}"
+    try:
+        raw, etag = bucket.get_with_etag(mkey)
+        manifest = json.loads(raw)
+    except KeyError:
+        manifest, etag = None, None
+    bucket.put_if_match(mkey, json.dumps(manifest_with(manifest, entries), indent=1).encode("utf-8"),
+                        "application/json", etag)
+    return entries
+
+
 def publish(store, bucket, work_uid: str, slug: str, book: Path, run_rel: str, chapter: int) -> dict:
     """Place the drafted chapter in the book (prod rows) and its files in the book's source set."""
     from publishing.tools.books_import import figure_map
@@ -89,20 +110,6 @@ def publish(store, bucket, work_uid: str, slug: str, book: Path, run_rel: str, c
     store.insert("pub_chapter_revisions", rows)
     store.set_current_revision(work_uid, key)
 
-    entries = []
-    for name in CHAPTER_FILES:
-        p = out / f"ch{chapter:02d}-{name}"
-        if p.exists():
-            body = p.read_bytes()
-            entries.append({"rel": p.name, "key": f"books/{slug}/{run_rel}/{p.name}", "bytes": len(body),
-                            "sha256": files.sha256(body)})
-    mkey = f"books/{slug}/source/{files.MANIFEST}"
-    try:
-        raw, etag = bucket.get_with_etag(mkey)
-        manifest = json.loads(raw)
-    except KeyError:
-        manifest, etag = None, None
-    bucket.put_if_match(mkey, json.dumps(manifest_with(manifest, entries), indent=1).encode("utf-8"),
-                        "application/json", etag)
+    entries = add_to_source(bucket, slug, book, run_rel, chapter)
     return {"revision": key, "new_revision": bool(new_rev), "carried_forward": len(rows) - 1,
             "source_files": len(entries), "content_sha256": rows[-1]["content_sha256"]}

@@ -104,3 +104,15 @@ def test_compile_book_stage_is_free_and_reads_the_source_set(tmp_path):
     assert s.argv("lin", {"first": 1, "last": 3}, "runs/run-1")[-2:] == ["1", "3"]
     (tmp_path / "compile.json").write_text(json.dumps({"pdf": "b.pdf", "pages": 14, "chapters": [], "missing": [2]}))
     assert s.collect(tmp_path) == (0.0, [], {"pdf": "b.pdf", "pages": 14, "chapters": [], "missing": [2]})
+
+
+def test_sync_chapter_merges_the_edited_text_and_keeps_everything_else():
+    from publishing.runner.sync_chapter import merged
+    from publishing.tools.books_import import canonical_sha
+    draft = {**_doc(2, "old text"), "checks": [{"x": 1}], "work": {"slug": W}, "costs": [{"usd": 1}]}
+    edited = _doc(2, "new text")
+    row = bc.chapter_row(W, "d2", edited, {}, "runs/run-50/ch02-draft.json")
+    doc = merged(draft, row["body"])
+    assert canonical_sha(doc) == row["content_sha256"] and doc["checks"] == [{"x": 1}] and doc["work"] == {"slug": W}
+    s = stages.STAGES["sync_chapter"]
+    assert s.syncs_chapter and not s.uses_models and s.needs_source and s.needs_assets
