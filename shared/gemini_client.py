@@ -376,6 +376,9 @@ class GeminiClient:
         chunks = 0
         started = time.monotonic()
         last_text = started
+        # SSE is UTF-8 by definition (WHATWG); a text/event-stream reply without a charset makes requests fall back
+        # to ISO-8859-1 and every non-ASCII character comes out double-encoded ("x − 7" → "x â 7")
+        res.encoding = "utf-8"
         try:
             for raw in res.iter_lines(decode_unicode=True):
                 now = time.monotonic()
