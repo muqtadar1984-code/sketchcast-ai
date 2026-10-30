@@ -142,9 +142,20 @@ def matte(png: bytes, tol: int = 24) -> bytes | None:
 
 
 def asset_bytes(http, base: str, asset: dict) -> bytes:
-    """A library asset from storage, or a book asset from the local store."""
+    """A library asset from storage, a book asset from the local store, or a picture replaced in the book app (an
+    s3_key in the books bucket, normalised to PNG — the upload may be a JPEG or WebP)."""
     if asset.get("local_path"):
         return local_asset(asset["local_path"]).read_bytes()
+    if asset.get("s3_key"):
+        import io
+        from PIL import Image
+        from publishing.runner.files import default_bucket
+        raw = default_bucket().get(asset["s3_key"])
+        if raw[:8] == b"\x89PNG\r\n\x1a\n":
+            return raw
+        buf = io.BytesIO()
+        Image.open(io.BytesIO(raw)).convert("RGBA").save(buf, "PNG")
+        return buf.getvalue()
     return _download(http, base, asset["storage_path"])
 
 

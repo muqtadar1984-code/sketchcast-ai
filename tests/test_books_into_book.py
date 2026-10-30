@@ -116,3 +116,49 @@ def test_sync_chapter_merges_the_edited_text_and_keeps_everything_else():
     assert canonical_sha(doc) == row["content_sha256"] and doc["checks"] == [{"x": 1}] and doc["work"] == {"slug": W}
     s = stages.STAGES["sync_chapter"]
     assert s.syncs_chapter and not s.uses_models and s.needs_source and s.needs_assets
+
+
+def test_sync_chapter_adds_pictures_replaced_in_the_app_as_sources():
+    from publishing.runner.sync_chapter import with_uploads
+    from publishing.tools.books_import import figure_map
+    dossier = {"topics": [{"figures": [{"id": "fig:a"}]}], "library_assets": [{"id": "lib:b", "_asset": {"storage_path": "x.png"}}]}
+    figures = {
+        "fig:a": {"store": "visual-assets", "path": "a.png"},
+        "edit:img7": {"store": "s3", "path": "books/bio/edits/u.png", "kind": "photo", "caption": "New", "size": [40, 30], "credit": {"note": "n"}},
+        "book:hero": {"store": "s3", "path": "books/_shared/book-assets/hero.png"},
+    }
+    out = with_uploads(dossier, figures)
+    added = [a for a in out["library_assets"] if a["id"] == "edit:img7"]
+    assert len(out["library_assets"]) == 2 and added
+    assert added[0]["_asset"] == {"s3_key": "books/bio/edits/u.png", "vision": {"w": 40, "h": 30}}
+    assert added[0]["parts"] == [] and added[0]["kind"] == "photo"
+    assert with_uploads(out, figures) == out                       # added once, never twice
+    assert dossier["library_assets"] == [{"id": "lib:b", "_asset": {"storage_path": "x.png"}}]   # the input is untouched
+
+
+def test_figure_map_names_a_replaced_picture_by_its_books_bucket_key(tmp_path):
+    import json
+    from publishing.tools.books_import import figure_map
+    d = {"topics": [], "library_assets": [{"id": "edit:img7", "kind": "photo", "description": "New. More",
+                                           "_asset": {"s3_key": "books/bio/edits/u.png", "vision": {"w": 4, "h": 3}}}]}
+    (tmp_path / "ch02-dossier-full.json").write_text(json.dumps(d), encoding="utf-8")
+    f = figure_map(tmp_path, "bio")["edit:img7"]
+    assert f["store"] == "s3" and f["path"] == "books/bio/edits/u.png" and f["kind"] == "photo"
+
+
+def test_a_replaced_picture_is_read_from_the_books_bucket_as_png(monkeypatch):
+    import io
+    from PIL import Image
+    from publishing.manuscript import render
+    from publishing.runner import files
+    buf = io.BytesIO()
+    Image.new("RGB", (12, 8), "red").save(buf, "JPEG")
+
+    class FakeBucket:
+        def get(self, key):
+            assert key == "books/bio/edits/u.jpg"
+            return buf.getvalue()
+
+    monkeypatch.setattr(files, "default_bucket", FakeBucket)
+    png = render.asset_bytes(None, "", {"s3_key": "books/bio/edits/u.jpg"})
+    assert png[:4] == b"\x89PNG" and Image.open(io.BytesIO(png)).size == (12, 8)

@@ -229,6 +229,8 @@ def main() -> None:
     x = a.parse_args()
     store = FileStore(Path(x.store[5:])) if x.store.startswith("file:") else RestStore()
     bucket = files.DirBucket(Path(x.bucket[4:])) if x.bucket.startswith("dir:") else files.S3Bucket()
+    if x.bucket.startswith("dir:"):
+        os.environ["BOOKS_BUCKET_DIR"] = x.bucket[4:]          # the stages' own processes read the same folder
     work = x.work or Path(tempfile.mkdtemp(prefix="book-run-"))
     status = execute(store, bucket, x.run_id, work)
     sys.exit(0 if status in ("done", "skipped", "cancelled") else 1)

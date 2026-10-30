@@ -88,6 +88,13 @@ class DirBucket:
 SHARED_ASSETS = "books/_shared/book-assets/"
 
 
+def default_bucket():
+    """The bucket a stage's own process reads from: the runner's --bucket dir:<folder> (passed on as
+    BOOKS_BUCKET_DIR), else the books bucket on S3."""
+    d = os.getenv("BOOKS_BUCKET_DIR")
+    return DirBucket(Path(d)) if d else S3Bucket()
+
+
 def pull_assets(bucket, dest: Path) -> dict:
     """The shared book-assets/ (the books' own illustrations and opener art), hash-checked like the source set."""
     return _pull(bucket, SHARED_ASSETS, dest)
