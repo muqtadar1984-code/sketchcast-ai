@@ -209,7 +209,7 @@ STAGES: dict[str, Stage] = {s.key: s for s in [
     ),
     Stage(
         key="release", title="Release the book (Library and SK)", step="release", needs_source=False,
-        makes_release=True, params={"final": 0},
+        makes_release=True, params={"final": 0, "reissue": 0},
         # free: final=1 releases the Gate E approved compile; final=0 releases the Gate-D-approved chapters of the
         # current revision as a draft. The work happens in the runner (publishing/runner/release.py); the command
         # only marks the step in the log
@@ -246,6 +246,8 @@ def validate(stage_key: str, params: dict) -> tuple[Stage, dict]:
         raise ValueError(f"chapter must be 1–99, got {merged['chapter']}")
     if "final" in stage.params and int(merged["final"]) not in (0, 1):
         raise ValueError(f"final must be 0 (draft) or 1 (final), got {merged['final']}")
+    if "reissue" in stage.params and int(merged["reissue"]) not in (0, 1):
+        raise ValueError(f"reissue must be 0 or 1, got {merged['reissue']}")
     if "run" in stage.params and int(merged["run"]) < 1:
         raise ValueError(f"run must be an earlier run's number, got {merged['run']}")
     return stage, merged

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 
 from publishing.runner import files
@@ -69,22 +70,67 @@ def _copy(bucket, src: str, dst: str, ctype: str) -> tuple[str, str] | None:
     return dst, files.sha256(body)
 
 
-def _chapter_extras(bucket, slug: str, source_path: str) -> dict:
-    """Videos, objectives and the catalogue topics the chapter was written from: its saved draft and dossier."""
-    folder = source_path.rsplit("/", 1)[0]
+def _manifest(bucket, slug: str) -> dict[str, str]:
+    """The book's source set: file name → bucket key (an imported book keeps them under source/, an app-drafted
+    chapter's entries point into its run folder)."""
     try:
-        doc = json.loads(bucket.get(f"books/{slug}/{source_path}"))
+        m = json.loads(bucket.get(f"books/{slug}/source/{files.MANIFEST}"))
     except Exception:  # noqa: BLE001
         return {}
-    n = int(doc["chapter"]["number"])
-    topics = []
-    try:
-        full = json.loads(bucket.get(f"books/{slug}/{folder}/ch{n:02d}-dossier-full.json"))
-        topics = [{"slug": t.get("slug"), "title": t.get("title"), "article": t.get("article")} for t in full.get("topics") or []]
-    except Exception:  # noqa: BLE001
-        pass
-    return {"videos": doc.get("videos") or [], "objectives": (doc.get("chapter") or {}).get("objectives") or [],
-            "topics": topics, "folder": folder}
+    return {f["rel"]: f.get("key") or f"books/{slug}/source/{f['rel']}" for f in m.get("files") or []}
+
+
+def _chapter_extras(bucket, slug: str, row: dict, manifest: dict[str, str]) -> dict:
+    """Videos, objectives and the catalogue topics the chapter was written from — its saved draft and dossier — and
+    where its own rendered PDF would be. Found through the source set first (Biology's rows were imported with the
+    PC's paths), else the row's source_path; a draft whose text is not the row's text is never used."""
+    from publishing.tools.books_import import canonical_sha
+    n = int(row["chapter"])
+    candidates = [manifest.get(f"ch{n:02d}-draft.json")]
+    if row.get("source_path"):
+        candidates.append(f"books/{slug}/{row['source_path']}")
+    for draft_key in [k for k in candidates if k]:
+        try:
+            doc = json.loads(bucket.get(draft_key))
+        except Exception:  # noqa: BLE001
+            continue
+        if canonical_sha(doc) != row["content_sha256"]:
+            continue
+        folder = draft_key.rsplit("/", 1)[0]
+        topics = []
+        for dossier in (manifest.get(f"ch{n:02d}-dossier-full.json"), f"{folder}/ch{n:02d}-dossier-full.json"):
+            try:
+                full = json.loads(bucket.get(dossier)) if dossier else None
+            except Exception:  # noqa: BLE001
+                full = None
+            if full:
+                topics = [{"slug": t.get("slug"), "title": t.get("title"), "article": t.get("article")}
+                          for t in full.get("topics") or []]
+                break
+        return {"videos": doc.get("videos") or [], "objectives": (doc.get("chapter") or {}).get("objectives") or [],
+                "topics": topics, "pdf_key": f"{folder}/ch{n:02d}.pdf"}
+    return {}
+
+
+CHAPTER_BOOKMARK = re.compile(r"Chapter (\d+)\b")
+
+
+def chapter_slices(pdf: bytes) -> dict[int, bytes]:
+    """The approved book PDF cut at its chapter bookmarks ("Chapter N: …", written by the compile): each chapter's
+    pages exactly as Gate E approved them, for the reader that opens a book chapter by chapter."""
+    import fitz
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    top = [(t[1], t[2]) for t in doc.get_toc() if t[0] == 1]
+    out = {}
+    for i, (title, start) in enumerate(top):
+        m = CHAPTER_BOOKMARK.match(title)
+        if not m:
+            continue
+        end = (top[i + 1][1] - 1) if i + 1 < len(top) else doc.page_count
+        part = fitz.open()
+        part.insert_pdf(doc, from_page=start - 1, to_page=end - 1)
+        out[int(m.group(1))] = part.tobytes(garbage=3, deflate=True)
+    return out
 
 
 def publish_release(store, bucket, run: dict, slug: str, params: dict) -> dict:
@@ -123,18 +169,40 @@ def publish_release(store, bucket, run: dict, slug: str, params: dict) -> dict:
             if not r or r["content_sha256"] != c["content_sha256"] or not a:
                 raise RuntimeError(f"chapter {c['number']}: the compiled text is not revision {rev}'s approved text")
             chosen.append((r, a))
-        if live and live.get("gate_e_approval_id") == gate_e["id"]:
-            raise RuntimeError(f"Gate E approval {gate_e['id']} is already released as {live['edition_key']}")
+        if live and live.get("gate_e_approval_id") == gate_e["id"] and not int(params.get("reissue", 0)):
+            raise RuntimeError(f"Gate E approval {gate_e['id']} is already released as {live['edition_key']} "
+                               "(reissue=1 releases it again, superseding it)")
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    key = edition_key(kind, language, [r["edition_key"] for r in store.releases(uid)], today)
+    existing = [r["edition_key"] for r in store.releases(uid)]
+    if kind == "final" and live and live.get("gate_e_approval_id") == gate_e["id"]:
+        stem = live["edition_key"].split(".")[0]                 # the same edition again: en-1 → en-1.1, en-1.2 …
+        key = f"{stem}.{1 + sum(1 for k in existing if k.startswith(stem + '.'))}"
+    else:
+        key = edition_key(kind, language, existing, today)
     base = f"books/{slug}/editions/{key}"
+    manifest = _manifest(bucket, slug)
+    digital = cover = None
+    slices: dict[int, bytes] = {}
+    if compiled:
+        s = compiled["detail"]["summary"]
+        digital = _copy(bucket, f"books/{slug}/runs/run-{compiled['id']}/{s['pdf']}", f"{base}/{s['pdf']}", "application/pdf")
+        if digital:
+            import fitz
+            book_pdf = bucket.get(digital[0])
+            png = fitz.open(stream=book_pdf, filetype="pdf")[0].get_pixmap(dpi=110).tobytes("png")
+            bucket.put(f"{base}/cover.png", png, "image/png")
+            cover = (f"{base}/cover.png", files.sha256(png))
+            slices = chapter_slices(book_pdf)
     chapters, figures, row_chapters = [], {}, []
     for r, a in chosen:
         n, body = r["chapter"], r["body"] or {}
-        extra = _chapter_extras(bucket, slug, r.get("source_path") or "")
-        pdf = _copy(bucket, f"books/{slug}/{extra['folder']}/ch{n:02d}.pdf", f"{base}/ch{n:02d}.pdf", "application/pdf") \
-            if extra.get("folder") else None
+        extra = _chapter_extras(bucket, slug, r, manifest)
+        if n in slices:                                          # a final: the chapter's pages of the approved book
+            bucket.put(f"{base}/ch{n:02d}.pdf", slices[n], "application/pdf")
+            pdf = (f"{base}/ch{n:02d}.pdf", files.sha256(slices[n]))
+        else:
+            pdf = _copy(bucket, extra["pdf_key"], f"{base}/ch{n:02d}.pdf", "application/pdf") if extra.get("pdf_key") else None
         figures.update(body.get("figures") or {})
         chapters.append({"chapter": n, "title": r["title"], "content_sha256": r["content_sha256"],
                          "approval": {"kind": a.get("kind"), "id": a["id"], "by": a.get("approved_by"), "on": a.get("approved_on")},
@@ -145,17 +213,6 @@ def publish_release(store, bucket, run: dict, slug: str, params: dict) -> dict:
         row_chapters.append({"chapter": n, "title": r["title"], "content_sha256": r["content_sha256"],
                              "gate_d_approval_id": a["id"] if a.get("kind") == "gate_d" else None,
                              "approval_id": a["id"], "approval_kind": a.get("kind"), "pdf_key": pdf[0] if pdf else None})
-
-    digital = cover = None
-    if compiled:
-        s = compiled["detail"]["summary"]
-        digital = _copy(bucket, f"books/{slug}/runs/run-{compiled['id']}/{s['pdf']}", f"{base}/{s['pdf']}", "application/pdf")
-        if digital:
-            import fitz
-            doc = fitz.open(stream=bucket.get(digital[0]), filetype="pdf")
-            png = doc[0].get_pixmap(dpi=110).tobytes("png")
-            bucket.put(f"{base}/cover.png", png, "image/png")
-            cover = (f"{base}/cover.png", files.sha256(png))
 
     bundle = {
         "schema": SCHEMA,
