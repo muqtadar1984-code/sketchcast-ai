@@ -139,7 +139,8 @@ def figure_map(book: Path, slug: str) -> dict[str, dict]:
         for x in d.get("library_assets") or []:
             a = x.get("_asset") or {}
             v = a.get("vision") or {}
-            out.setdefault(x["id"], {"store": "visual-assets", "path": a.get("storage_path"),
+            out.setdefault(x["id"], {"store": "s3" if a.get("s3_key") else "visual-assets",
+                                     "path": a.get("s3_key") or a.get("storage_path"),
                                      "kind": "photo" if x.get("kind") == "photo" else "illustration",
                                      "caption": (x.get("description") or "").split(". ")[0], "labels": [],
                                      "size": [v.get("w"), v.get("h")], "credit": x.get("credit")})

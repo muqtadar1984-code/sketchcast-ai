@@ -24,6 +24,23 @@ def merged(draft: dict, body: dict) -> dict:
     return {**draft, "sections": body["sections"], "exercises": body["exercises"]}
 
 
+def with_uploads(dossier: dict, figures: dict) -> dict:
+    """The chapter's dossier with the pictures replaced in the book app (phase 3b) added as picture sources, so the
+    layout and every later compile can print them: each is a book picture in the books bucket (figures[ref] = {"store":
+    "s3", "path": "books/<slug>/edits/…"}) that no dossier source already names. A replaced picture carries no labels:
+    the old picture's labels were measured on the old picture."""
+    known = {f["id"] for t in dossier.get("topics") or [] for f in t.get("figures") or []}
+    known |= {a["id"] for a in dossier.get("library_assets") or []}
+    added = [
+        {"id": ref, "kind": f.get("kind") or "illustration", "description": f.get("caption") or "", "parts": [],
+         "credit": f.get("credit"), "_asset": {"s3_key": f["path"], "vision": {"w": (f.get("size") or [None])[0] or 1,
+                                                                              "h": (f.get("size") or [None, None])[1] or 1}}}
+        for ref, f in sorted((figures or {}).items())
+        if ref not in known and f.get("store") == "s3" and "/edits/" in str(f.get("path") or "")
+    ]
+    return {**dossier, "library_assets": list(dossier.get("library_assets") or []) + added} if added else dossier
+
+
 def main() -> None:
     from publishing.manuscript.render import render
     from publishing.tools.books_import import canonical_sha
@@ -43,7 +60,9 @@ def main() -> None:
             (out / src.name).write_bytes(src.read_bytes())
     saved = out / f"ch{chapter:02d}-draft.json"
     saved.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
-    full = json.loads((out / f"ch{chapter:02d}-dossier-full.json").read_text(encoding="utf-8"))
+    full_file = out / f"ch{chapter:02d}-dossier-full.json"
+    full = with_uploads(json.loads(full_file.read_text(encoding="utf-8")), row["body"].get("figures") or {})
+    full_file.write_text(json.dumps(full, ensure_ascii=False, indent=1), encoding="utf-8")
     env_file = out / "empty.env"
     env_file.write_text("", encoding="utf-8")
     r = render(dict(doc), full, env_file, out)
